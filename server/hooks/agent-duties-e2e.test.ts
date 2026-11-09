@@ -238,7 +238,11 @@ function harness(
           async detach() {
             detachedIds.push(id);
           },
-          async archive() {},
+          async archive() {
+            archivedIds.push(id);
+            const a = agents.get(id);
+            if (a) a.archivedAt = new Date().toISOString();
+          },
           timeline: {
             async refetch() {
               return { entries: timelineByAgent.get(id) ?? [] };
@@ -1486,6 +1490,89 @@ test(
         "utf8",
       );
       assert.deepEqual((await h.sweepDoneWorkers(now)).sort(), ["w-pass", "w-unv-pass"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "unit-digest-running: spawnDigest skips a running/queued worker (retries on next idle) and turn_started archives an in-flight digest via fast path",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = {
+      id: "w-run",
+      title: "Bug12 · click audit",
+      cwd: CWD,
+      status: "running",
+      provider: "antigravity-cli",
+      model: "gemini-4-argon",
+      labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "click audit" },
+    };
+    const agents = new Map<string, any>([["w-run", w]]);
+    const createdDigests: any[] = [];
+    const finishResolvers: (() => void)[] = [];
+    const h = harness(agents, { briefRoot });
+    let listCalls = 0;
+    const origList = (h.paseo.agents as any).list.bind(h.paseo.agents);
+    (h.paseo.agents as any).list = async (...args: any[]) => {
+      listCalls++;
+      return origList(...args);
+    };
+    (h.paseo.agents as any).create = async (payload: any) => {
+      const id = `dig-${createdDigests.length + 1}`;
+      const d = { id, ...payload, status: "initializing", queued: { ahead: 1 }, archivedAt: null };
+      createdDigests.push(d);
+      agents.set(id, d);
+      return {
+        id,
+        agent: d,
+        waitForFinish: () => new Promise<void>((r) => finishResolvers.push(r)),
+      };
+    };
+    try {
+      // 0. turn_started when no digest is tracked takes the fast path without calling paseo.agents.list
+      const listBefore = listCalls;
+      await h.onTurnStarted(w);
+      await wait(20);
+      assert.equal(listCalls, listBefore, "turn_started without a tracked digest does not call paseo.agents.list");
+
+      // 1. turn_ended while worker is still running -> skipped, digested not marked
+      await h.onTurnEnded(w);
+      assert.equal(createdDigests.length, 0, "no digest created while worker is running");
+
+      // 2. turn_ended while worker is queued/initializing -> skipped
+      w.status = "initializing";
+      w.queued = { ahead: 2 };
+      await h.onTurnEnded(w);
+      assert.equal(createdDigests.length, 0, "no digest created while worker is queued");
+
+      // 3. worker finishes its turn (status idle) -> digest spawns with same turnId (not blocked by earlier skip)
+      delete w.queued;
+      w.status = "idle";
+      await h.onTurnEnded(w);
+      assert.equal(createdDigests.length, 1, "digest created once worker is idle");
+      assert.ok(
+        String(createdDigests[0].prompt).includes("If the worker is currently running or queued"),
+        "digest prompt instructs to log nothing if worker is running or queued",
+      );
+
+      // 4. (M2) Even in the same epoch after dig-1 finishes, if a busy turn_ended is skipped, the next real idle still digests
+      finishResolvers.shift()?.();
+      await wait(20);
+      w.status = "running";
+      await h.onTurnEnded(w);
+      assert.equal(createdDigests.length, 1, "busy turn_ended skipped");
+      w.status = "idle";
+      await h.onTurnEnded(w);
+      assert.equal(createdDigests.length, 2, "next real idle after busy guard skip spawns a new digest");
+
+      // 5. worker starts a new turn while dig-2 is still queued/running -> dig-2 is archived directly without listing
+      const listBeforeCancel = listCalls;
+      w.status = "running";
+      await h.onTurnStarted(w);
+      await wait(20);
+      assert.ok(h.archivedIds.includes("dig-2") || createdDigests[1].archivedAt, "stale in-flight digest archived on worker turn_started");
+      assert.equal(listCalls, listBeforeCancel, "tracked digest archived directly without calling paseo.agents.list");
     } finally {
       h.stop?.();
     }

@@ -222,13 +222,17 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         killTree(child);
       });
 
+      let running = false;
       async function pump() {
         if (promptInFlight || !queue.length || stopped) return;
         promptInFlight = true;
         const next = queue.shift();
         let text = next.text;
         if (pendingSystem) { text = `${pendingSystem}\n\n${text}`; pendingSystem = ''; } // ACP has no system slot: lead the first turn with it
-        emit('status', { status: 'running' });
+        if (!running) {
+          running = true;
+          emit('status', { status: 'running' });
+        }
         // ACP image content blocks need the agent's promptCapabilities.image; without it say so instead of dropping silently.
         const images = next.images ?? [];
         if (images.length && !imageCapable) {
@@ -265,8 +269,12 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           emit('turn_done', done);
         } catch (e) { emit('error', { message: e.message }); }
         promptInFlight = false;
-        emit('status', { status: 'idle' });
-        pump();
+        if (queue.length && !stopped) {
+          pump();
+        } else if (running) {
+          running = false;
+          emit('status', { status: 'idle' });
+        }
       }
       return {
         send(text, { images = [] } = {}) {

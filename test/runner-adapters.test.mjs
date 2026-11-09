@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
-import { RunnerBackend, toAgent } from '../server/backend/runner-backend.mjs';
+import { RunnerBackend, toAgent, reduceTurn } from '../server/backend/runner-backend.mjs';
 import { ACP_PROVIDERS, createAcpAdapter, pickModel, parseAcpUsage } from '../runner/adapters/acp.mjs';
 import { priceFor, estimateCostUsd } from '../runner/adapters/pricing.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
@@ -480,4 +480,46 @@ test('agy without a transcript falls back to the summed turn usage (documented u
     await tick(); await tick(); await tick();
     assert.equal(runner.timeline(id).find((e) => e.type === 'usage' && e.inputTokens).contextTokens, 900);
   } finally { delete process.env.VS_AGY_HOME; }
+});
+
+test('acp steered prompt: does not emit idle or turn_ended while adapter queue is non-empty; emits idle once at true end', async () => {
+  const pendingPrompts = [];
+  const spawnImpl = fakeSpawn((m, child) => {
+    if (m.method === 'initialize') child.push({ jsonrpc: '2.0', id: m.id, result: { protocolVersion: 1 } });
+    if (m.method === 'session/new') child.push({ jsonrpc: '2.0', id: m.id, result: { sessionId: 'S' } });
+    if (m.method === 'session/prompt') pendingPrompts.push({ id: m.id, text: m.params.prompt[0].text, child });
+  });
+  const runner = new Runner({ dir: tmp(), adapters: { 'antigravity-cli': fakeAdapter(spawnImpl, 'antigravity-cli') } });
+  const id = runner.create({ provider: 'antigravity-cli', cwd: '.', prompt: 'first prompt' });
+  await tick(); await tick();
+  assert.equal(pendingPrompts.length, 1);
+  assert.equal(runner.status(id).status, 'running');
+
+  // Steer a second prompt while the first session/prompt is still in flight
+  runner.send(id, 'steered continuation');
+  await tick();
+
+  // Complete the first session/prompt: adapter must immediately pump the second without emitting idle in between
+  pendingPrompts[0].child.push({ jsonrpc: '2.0', id: pendingPrompts[0].id, result: { stopReason: 'end_turn' } });
+  await tick(); await tick();
+  assert.equal(pendingPrompts.length, 2, 'second steered prompt pumped immediately');
+  assert.equal(pendingPrompts[1].text, 'steered continuation');
+  assert.equal(runner.status(id).status, 'running', 'agent remains running while steered prompt is in flight');
+  assert.deepEqual(
+    runner.timeline(id).filter((e) => e.type === 'status').map((e) => e.status),
+    ['running'],
+    'no intermediate idle or duplicate running emitted between steered prompts',
+  );
+
+  // Complete the second session/prompt: now queue is empty, so idle is emitted once at the true end
+  pendingPrompts[1].child.push({ jsonrpc: '2.0', id: pendingPrompts[1].id, result: { stopReason: 'end_turn' } });
+  await tick(); await tick();
+  assert.equal(runner.status(id).status, 'idle');
+  const statuses = runner.timeline(id).filter((e) => e.type === 'status').map((e) => e.status);
+  assert.deepEqual(statuses, ['running', 'idle'], 'idle emitted only once at the true end of the steered turn');
+
+  // Verify reduceTurn produces a single turn_started and a single turn_ended across the entire steered turn
+  const t = { status: 'initializing', awaiting: false, errored: false, cancelled: false };
+  const transitions = runner.timeline(id).map((e) => reduceTurn(t, e)).filter(Boolean);
+  assert.deepEqual(transitions.map((tr) => tr.kind), ['turn_started', 'turn_ended']);
 });
