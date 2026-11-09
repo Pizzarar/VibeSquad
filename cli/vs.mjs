@@ -1910,7 +1910,10 @@ export async function requestWorkerSweep({ apply = false, port = Number(process.
 export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s), readStdin) {
   if (verb === "archive" && flags.sweep) {
     if (flags._.length) throw new Error("usage: vs archive --sweep [--apply]");
-    out(JSON.stringify(await requestWorkerSweep({ apply: Boolean(flags.apply) }), null, 2) + "\n");
+    const report = await requestWorkerSweep({ apply: Boolean(flags.apply) });
+    out(JSON.stringify(report, null, 2) + "\n");
+    if (report?.busy) process.stderr.write("Warning: the 5-min sweep is running right now; nothing was evaluated. Retry in a moment.\n");
+    else if (report?.truncated) process.stderr.write("Warning: truncated: the agent list hit the 200 cap, so more agents exist than this report covers.\n");
     return 0;
   }
   loadPromptInput(verb, flags, readStdin);

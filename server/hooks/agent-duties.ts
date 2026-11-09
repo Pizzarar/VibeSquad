@@ -2995,7 +2995,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * B3: `sweepDoneWorkersReport` is the same predicate with `apply: false` (dry run: no marker, no archive) and a per-Squad/lane
      * breakdown of what it would archive and why the rest is kept; `apply: true` archives through the identical path.
      */
-    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention";
+    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention" | "no-squad";
     interface SweepItem { id: string; team: string; lane: string }
     interface SweepReport {
       dryRun: boolean;
@@ -3005,6 +3005,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       /** Per Squad (team) then lane: the ids in `archive`. */
       byLane: Record<string, Record<string, string[]>>;
       kept: Record<SweepKeepReason, SweepItem[]>;
+      /** The agent list hit the 200 cap: there may be more agents than this report covers. */
+      truncated?: boolean;
+      /** The 5-min tick is mid-sweep: nothing was evaluated, retry. */
+      busy?: boolean;
     }
     let sweeping = false;
     async function sweepDoneWorkersReport(opts: { apply?: boolean; now?: number } = {}): Promise<SweepReport> {
@@ -3015,13 +3019,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         archive: [],
         count: 0,
         byLane: {},
-        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [] },
+        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [], "no-squad": [] },
       };
       const paseo = paseoApi;
-      if (!paseo || sweeping) return report;
+      if (!paseo) return report;
+      if (sweeping) return { ...report, busy: true };
       sweeping = true;
       try {
         const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        if ((res.entries as any[]).length >= 200) report.truncated = true;
         const grace = deps.doneArchiveGraceMs ?? 30 * 60_000;
         const logIndex = new Map<string, DoneIndex>(); // once per team per sweep
         const kinds = new Map<string, Promise<"digest" | "manager" | "other">>(); // author id -> kind, once per sweep
@@ -3033,7 +3039,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               const labels = (fromList ?? (await snap(paseo, id)))?.labels ?? {};
               if (isDigestAgent(labels)) return "digest" as const;
               const role = String(labels.role ?? "").trim().toLowerCase();
-              return ["lead", "brainstorm", "overlord"].includes(role) ? ("manager" as const) : ("other" as const);
+              return ["lead", "brainstorm", "overlord"].includes(role) || isRetiredRole(role) ? ("manager" as const) : ("other" as const);
             })().catch(() => "other" as const);
             kinds.set(id, k);
           }
@@ -3058,7 +3064,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             keep("needs-attention");
             continue;
           }
-          if (!where) continue;
+          if (!where) {
+            keep("no-squad");
+            continue;
+          }
           let idx = logIndex.get(where.team);
           if (!idx) logIndex.set(where.team, (idx = await indexDoneEntries(where.team, authorKind)));
           const done = idx.get(a.id);
