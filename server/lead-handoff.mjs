@@ -203,6 +203,8 @@ export function highestLaneLeadOrd(agents, laneId, excludeId = "") {
   return max;
 }
 
+export const LEAD_COMPACT_FOCUS = "keep the plan, the blocks (status, branch, commit) and the worker ids";
+
 export function leadUsedTokens(lead, overrideTokens) {
   if (typeof overrideTokens === "number" && Number.isFinite(overrideTokens)) return overrideTokens;
   if (typeof lead?.usedTokens === "number" && Number.isFinite(lead.usedTokens)) return lead.usedTokens;
@@ -918,6 +920,18 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     const used = leadUsedTokens(lead, options.usedTokens);
     const { flagTokens, autoHandoffTokens, hardCapTokens } = thresholds;
+
+    // K2: before any stage, a Claude lead at the soft threshold is compacted in place once (idle only, tracked by vs.compacted-at).
+    // Anything but a clean "ok" under the soft threshold falls through to the unchanged ladder below.
+    if (typeof deps.compactStep === "function" && used >= flagTokens && !labels["vs.compacted-at"]) {
+      const res = await deps.compactStep(lead, { focus: LEAD_COMPACT_FOCUS, cap: flagTokens, kind: "lead", teamId, laneId }).catch(() => null);
+      if (res?.outcome === "ok") return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
+      // Mid-turn: usage upserts arrive with status=running. Wait for the idle upsert instead of nudging or handing off now (no stamp, no
+      // nudge). The hard cap is the exception: past it a running lead still goes to the forced handoff below.
+      if (res?.outcome === "skipped" && res.reason === "busy" && used < hardCapTokens) {
+        return { stage: "compact-deferred", triggered: false, usedTokens: used };
+      }
+    }
 
     // Stage 4: >= 300k Hard Ceiling Forced Handoff (fires at most once per lead).
     if (used >= hardCapTokens) {
