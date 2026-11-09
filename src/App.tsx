@@ -92,6 +92,7 @@ import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
 import { PinFocusHeader, PinRail } from "./PinRail";
+import { PIN_RAIL_SESSION_KEY, railCollapsed, SIDEBAR_SESSION_KEY, useNarrowViewport, useRailOverride } from "./railCollapse";
 import { PinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, useProfiles } from "./TeamActions";
@@ -1464,7 +1465,20 @@ export function App() {
   const [teamId, setTeamId] = useState(() => parseUrlState(location.search).team ?? (getRestoreLastView() ? localStorage.getItem("vs.team") : null) ?? views[0]?.team.id ?? "efi");
   const { needsSetup: profilesNeedSetup, setupDismissed: profilesSetupDismissed } = useProfiles();
   const [collapsedTeams, setCollapsedTeams] = useState<Set<string>>(() => readCollapsedTeams());
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
+  const [sidebarPref, setSidebarPref] = useState<boolean>(() => localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1");
+  const narrow = useNarrowViewport();
+  const [sidebarOverride, setSidebarOverride] = useRailOverride(SIDEBAR_SESSION_KEY);
+  const [pinRailOverride, setPinRailOverride] = useRailOverride(PIN_RAIL_SESSION_KEY);
+  const sidebarCollapsed = railCollapsed(narrow, sidebarOverride, sidebarPref);
+  const pinRailCollapsed = railCollapsed(narrow, pinRailOverride, false);
+  // Narrow windows keep the choice for the session only; the saved preference stays what the wide layout uses.
+  const setSidebarCollapsed = useCallback(
+    (c: boolean) => {
+      if (narrow) setSidebarOverride(c);
+      else setSidebarPref(c);
+    },
+    [narrow, setSidebarOverride],
+  );
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
   const [screen, setScreen] = useState<"teams">("teams");
   const [query, setQuery] = useState("");
@@ -1518,9 +1532,9 @@ export function App() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed ? "1" : "0");
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarPref ? "1" : "0");
     } catch {}
-  }, [sidebarCollapsed]);
+  }, [sidebarPref]);
 
   useEffect(() => {
     try {
@@ -1631,8 +1645,8 @@ export function App() {
   }, [sidebarViews]);
 
   const onToggleSidebarCollapse = useCallback(() => {
-    setSidebarCollapsed((c) => !c);
-  }, []);
+    setSidebarCollapsed(!sidebarCollapsed);
+  }, [setSidebarCollapsed, sidebarCollapsed]);
 
   const onStartResize = useCallback(
     (e: React.MouseEvent) => {
@@ -1656,7 +1670,7 @@ export function App() {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [sidebarCollapsed, sidebarWidth],
+    [sidebarCollapsed, sidebarWidth, setSidebarCollapsed],
   );
 
   const onAgent = useCallback((tid: string, aid: string) => {
@@ -1826,7 +1840,7 @@ export function App() {
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
@@ -2043,7 +2057,7 @@ export function App() {
       ) : (
         panesNode
       )}
-      {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} />}
+      {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
       <PinToast />
       <MobileBar />
       {uiScaleHud && (

@@ -6067,3 +6067,22 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .angel-bezel .sky-crt-name { pointer-events: none; }
 .angel-hit:disabled { cursor: default; }
 .angel-hit:not(:disabled):hover { cursor: pointer; }
+
+/* ── Narrow-window rails (src/railCollapse.ts): under 1600 css px the sidebar (.sidebar-collapsed, existing 56px rail) and the right pin rail
+   (.pin-rail-collapsed, 64px icon strip) start collapsed so the hub floor gets the width. The toggle in each expands it for the session. ── */
+.pin-rail-collapse-btn { flex: none; padding: 0 6px; }
+.app.pin-focus.pin-rail-collapsed { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 64px; }
+.app.pin-focus.pin-rail-collapsed.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 64px; }
+.app.pin-focus.hub-focus.pin-rail-collapsed { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 320px 64px; }
+.app.pin-focus.hub-focus.pin-rail-collapsed.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 320px 64px; }
+.pin-rail.compact .pin-rail-head { justify-content: center; padding: 0 4px; }
+.pin-rail.compact .pin-rail-col,
+.pin-rail.compact .pin-rail-head .muted,
+.pin-rail.compact .pin-rail-head .team-emblem,
+.pin-rail.compact .pin-rail-squad,
+.pin-rail.compact .pin-rail-checkin-wrap,
+.pin-rail.compact .pin-rail-active-buddy,
+.pin-rail.compact .pin-rail-section-label { display: none; }
+/* The tile keeps its skin cap (padding-top: --cap-pad); only the sides tighten so the avatar fits the 64px strip. */
+.pin-rail.compact .pin-rail-tile { justify-content: center; min-height: 0; padding-inline: 0; padding-bottom: 6px; }
+.pin-rail.compact .pin-rail-open { flex: none; flex-direction: column; gap: 2px; }

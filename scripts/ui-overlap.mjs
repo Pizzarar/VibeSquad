@@ -96,7 +96,10 @@ const mobileGrid = async (page) => { await page.evaluate(() => { localStorage.cl
 async function toHub(page, query = "") {
   if (query) await reload(page, query);
   await toPinGrid(page);
-  await click(page, `${tid(`sidebar-riffbot-${SQUAD}`)}:visible`);
+  // Under 1600 css px the sidebar starts as a 56px rail without the RiffBot row (src/railCollapse.ts): the pin grid's hub bar opens the same view.
+  const row = page.locator(tid(`sidebar-riffbot-${SQUAD}`)).locator("visible=true");
+  if (await row.count()) await row.first().click();
+  else await click(page, tid("hub-bar-btn"));
   await page.locator(tid("hub-pages")).waitFor({ timeout: 8000 });
   await page.locator(tid("sq-floor-page")).waitFor({ timeout: 8000 });
   await sleep(900);

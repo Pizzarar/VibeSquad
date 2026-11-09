@@ -124,7 +124,7 @@ function ActiveCheckin({ pin }: { pin: Pin }) {
   );
 }
 
-export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFocus; onPick: (pin: Pin) => void }) {
+export function PinRail({ view, focus, onPick, collapsed = false, onToggleCollapsed }: { view: TeamView; focus: PinFocus; onPick: (pin: Pin) => void; collapsed?: boolean; onToggleCollapsed?: () => void }) {
   const allPins = pinsForSquad(view);
   const { pinned } = allPins;
   const hubPin = hubPinForSquad(view);
@@ -134,8 +134,20 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
   const bs = active?.brainstorm;
   const drawerOpen = useFocusDrawerOpen();
   return (
-    <aside className="pin-rail" data-testid="pin-rail" aria-label={`${view.team.name} teams`}>
+    <aside className={`pin-rail${collapsed ? " compact" : ""}`} data-testid="pin-rail" aria-label={`${view.team.name} teams`}>
       <div className="pin-rail-head">
+        {onToggleCollapsed && (
+          <button
+            type="button"
+            className="btn ghost small pin-rail-collapse-btn"
+            data-testid="pin-rail-collapse-toggle"
+            aria-expanded={!collapsed}
+            title={collapsed ? "Expand teams rail" : "Collapse teams rail"}
+            onClick={onToggleCollapsed}
+          >
+            {collapsed ? "«" : "»"}
+          </button>
+        )}
         <TeamEmblem name={view.team.name} color={view.team.color} size={16} />
         <span className="pin-rail-squad">{view.team.name}</span>
         <span className="muted small">{pinned.length} teams</span>
