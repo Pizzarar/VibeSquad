@@ -229,7 +229,7 @@ test("route wiring in server/vibesquad-api.mjs and UI wiring in src/Composer.tsx
 
   const composerSrc = readFileSync(join(REPO_ROOT, "src", "Composer.tsx"), "utf8");
   assert.ok(composerSrc.includes("SecretInputPopover"));
-  assert.ok(composerSrc.includes('data-testid="composer-secret-btn"'));
-  assert.ok(composerSrc.includes('title="Insert sealed secret (written to 0600 temp file, never shown in chat)"'));
+  assert.ok(composerSrc.includes('testid: "composer-secret-btn"'));
+  assert.ok(composerSrc.includes('title: "Insert sealed secret (written to 0600 temp file, never shown in chat)"'));
   assert.ok(composerSrc.includes("🔒"));
 });
