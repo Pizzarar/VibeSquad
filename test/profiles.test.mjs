@@ -714,9 +714,10 @@ test("just-send-it rule: identical sentence in all three prompt sources, old ask
   }
 });
 
-test("B1 bug-routing rule (R11): same text in the shared prefix of all three sources, so every role gets it", () => {
+test("B1 bug-routing rule (R11, <=240 chars): same text in the shared prefix of all three sources, so every role gets it", () => {
   const RULE =
-    "- R11 (Bugs & fixes): Small root-cause fixes inside your own unit: just do them and report after. A bug you find, or a root-cause fix outside your own unit: don't ask, don't offer it as a question. Workers: put the item in your final message for the lead to send. Leads and Buddies: run `vs inbox add --lane <project bug lane> --from-brainstorm \"<item>\"` yourself, then keep working. A workaround ships only with its named follow-up already queued.";
+    "- R11 (Bugs & fixes): Fix small root causes in your own unit, report after. Found a bug or an out-of-unit fix? Queue it and keep working: leads/Buddies `vs inbox add --lane <bug lane> --from-brainstorm \"<item>\"`; workers: final message.";
+  assert.ok(RULE.length <= 240);
   assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R11");
   for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R11`);
   const root = resolve(import.meta.dirname, "..");
@@ -734,5 +735,17 @@ test("R12 owner-principles rule: same text in the shared prefix of all three sou
   const root = resolve(import.meta.dirname, "..");
   for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
     assert.ok(readFileSync(join(root, rel), "utf8").includes(RULE), `${rel}: missing R12`);
+  }
+});
+
+test("R13 act-on-lean rule: same text in the shared prefix of all three sources, <=240 chars, after R12", () => {
+  const RULE = "- R13 (Act on your lean): If you have a lean, act on it and report after: inbox triage, next steps, spikes. Ask only for scope changes, outward actions (push to others, release, external post), money, deletes or irreversible steps.";
+  assert.ok(RULE.length <= 240);
+  assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R13");
+  assert.ok(SHARED_NOTE_PREFIX.indexOf("R12 (Owner principles)") < SHARED_NOTE_PREFIX.indexOf(RULE));
+  for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R13`);
+  const root = resolve(import.meta.dirname, "..");
+  for (const rel of ["src/profiles.ts", "server/hooks/agent-duties.ts"]) {
+    assert.ok(readFileSync(join(root, rel), "utf8").includes(RULE), `${rel}: missing R13`);
   }
 });
