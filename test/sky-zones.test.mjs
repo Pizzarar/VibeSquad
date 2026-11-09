@@ -379,9 +379,9 @@ test("hotfix2: Overlord clicks follow the zone's agentId (real-shaped zones): of
   assert.equal(slamPrevOpenOnMount(true, false), true); // plain mount: no slam
   assert.equal(slamPrevOpenOnMount(true, true), false); // jump mount: flips false -> true, so the slam starts
   const v = slamView(slamStart(true, false), false);
-  assert.equal(v.zoomStep, 1);
-  assert.equal(v.windowShown, false);
-  assert.equal(v.face, "smacked");
+  assert.equal(v.swinging, true); // RS-c: the window starts swinging at once
+  assert.equal(v.swing, -80);
+  assert.equal(slamView({ dir: "open", t: 300 }, false).face, "smacked"); // the Overlord is hit when the window lands
 });
 
 test("hub spin-up H2: with no hub member cwd the Overlord starts in the Squad/lane working dir (resolveCwd); a member cwd still wins", async () => {

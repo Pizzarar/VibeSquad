@@ -4808,17 +4808,17 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-face-hit:focus-visible { outline: 3px solid var(--cyan); outline-offset: -6px; }
 .sky-chat-close { position: absolute; top: 6px; right: 8px; z-index: 4; min-width: 28px; height: 26px; padding: 0 8px; cursor: pointer; font-family: var(--arcade); font-size: 13px; color: var(--text); background: color-mix(in srgb, var(--bg) 80%, transparent); border: 1px solid var(--line); }
 .sky-chat-close:hover, .sky-chat-close:focus-visible { border-color: var(--cyan); color: var(--cyan-t); }
-/* The Overlord's chat drops over the right TV in a few hard steps. Riff's window is the RS-b slam instead (clock-driven in SkyZones: zoom-rect, hold, squash, shake, puff). Reduced motion = instant swap. */
+/* The Overlord's chat drops over the right TV in a few hard steps. Riff's window is the RS-b slam instead (clock-driven in SkyZones: hinge swing, squash, shake, puff, star). Reduced motion = instant swap. */
 .sky-chat-panel:not([hidden]):not(.sky-zone-riffbot) { animation: sky-chat-slam 180ms steps(4, end) both; }
-/* RS-b: while the dotted zoom-rect runs the real window is held back (opacity, not visibility: the composer can still take focus). */
-.sky-zone.is-slam-held { opacity: 0; pointer-events: none; }
-/* Shake + squash come from vars on .sky-zones (SkyZones sets them per clock step); the squash pins the bottom edge so the window thuds down. */
+/* RS-c: Riff's window is hinged on its left edge (the side nearest his TV) and swings into the Overlord: perspective + rotateY come per frame from --slam-swing on .sky-zones, the shake/squash from --slam-panel-tf. The chat panes' own counter-zoom (--chat-zoom) is on the children inside, so this transform composes with it. */
 .sky-zone.is-slam-fx { transform: var(--slam-tv-tf, none); transform-origin: 50% 100%; }
-.sky-zone.sky-chat-panel.is-slam-fx { transform: var(--slam-panel-tf, none); }
+.sky-zone.sky-chat-panel.is-slam-fx { transform: var(--slam-swing, translateX(0)) var(--slam-panel-tf, translateX(0)); transform-origin: 0 100%; backface-visibility: hidden; will-change: transform; }
+.sky-zone.sky-chat-panel.is-slam-closing { pointer-events: none; }
 .sky-slam-fx { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; }
-/* Win95 zoom-rect: a dotted XOR outline (difference blend keeps it readable on both skies); width/height/position inline, dot size = 3 device px. */
-.sky-zoom-rect { position: absolute; box-sizing: border-box; border: 2px dotted #fff; mix-blend-mode: difference; }
 .sky-slam-puff { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
+/* The smear rides inside the swinging window on its outer (right) edge, so it rotates with it; the cells are art px, the wrapper is scaled by k. */
+.sky-swing-smear { position: absolute; top: 0; z-index: 5; transform-origin: top left; pointer-events: none; image-rendering: pixelated; }
+.sky-swing-smear-cell { position: absolute; left: 0; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
 @keyframes sky-chat-slam { from { transform: translateX(14%); opacity: 0; } to { transform: none; opacity: 1; } }
 /* G7 virus takeover: the overlay sheet sits exactly over Riff's face (same contain/scale); never takes a click or focus. */
 .sky-takeover { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; pointer-events: none; z-index: 1; }
@@ -4881,7 +4881,6 @@ button.project-file-name:hover { text-decoration: underline; }
 @media (prefers-reduced-motion: reduce) {
   .sky-chat-panel:not([hidden]) { animation: none; }
   .sky-slam-fx { display: none; }
-  .sky-zone.is-slam-held { opacity: 1; pointer-events: auto; }
 }
 .sky-static {
   flex: 1;

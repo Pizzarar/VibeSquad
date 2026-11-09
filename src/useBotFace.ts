@@ -1,6 +1,6 @@
 // Shared bot-face plumbing (docs/PLAN_SKY_GODS_C2B.md G2): theme, reduced-motion, image probing, faces.json
 // loading and the talk/needs/blink/idle mode logic. The tower no longer draws faces; the sky zones do.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import {
   BLINK_MS,
   faceFrame,
@@ -25,7 +25,10 @@ import {
   SLAM_PUFF_JSON_URL,
   SLAM_REST,
   slamAdvance,
+  slamFxMs,
+  slamFxTiming,
   slamKey,
+  swingTransform,
   slamStart,
   slamView,
   validateSkyCrt,
@@ -208,12 +211,12 @@ export function useTakeoverClock(expanded: boolean, fps: number, n: number, redu
 export const useSlamPuffModel = (): SlamPuff | null => useJsonModel(SLAM_PUFF_JSON_URL, validateSlamPuff);
 
 /**
- * RS-b slam clock: every open/close flip of Riff's chat starts a fresh timeline (zoom-rect, landing, dizzy) that a rAF loop
+ * RS-b/RS-c slam clock: every open/close flip of Riff's chat starts a fresh timeline (swing, hit, dizzy) that a rAF loop
  * advances by the frame timestamps; the first mount is not a flip. Re-renders only when what is drawn changes (slamKey).
  * Reduced motion = no clock: the plain end state at once.
  */
 /** `playOnMount`: the chat mounts already open (Tower mini-face jump) and should still slam in. */
-export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | null, playOnMount = false): SlamView {
+export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | null, playOnMount = false, root?: RefObject<HTMLElement | null>): SlamView {
   const stateRef = useRef<SlamState>(SLAM_REST);
   const prevOpen = useRef(slamPrevOpenOnMount(open, playOnMount));
   const puffRef = useRef(puff);
@@ -227,8 +230,10 @@ export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | n
     prevOpen.current = open;
     stateRef.current = flipped ? slamStart(open, reduced) : SLAM_REST;
     const apply = () => {
-      const p = puffRef.current;
-      const v = slamView(stateRef.current, reducedRef.current, p ? { frames: p.frames.length, ms: p.ms } : null);
+      const v = slamView(stateRef.current, reducedRef.current, slamFxTiming(puffRef.current));
+      // The hinge angle changes every frame: written straight to the sky root's --slam-swing (not state), so the chat is not re-rendered per frame.
+      if (v.swing === null) root?.current?.style.removeProperty("--slam-swing");
+      else root?.current?.style.setProperty("--slam-swing", swingTransform(v.swing));
       const k = slamKey(v);
       if (k !== keyRef.current) {
         keyRef.current = k;
@@ -242,8 +247,7 @@ export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | n
     let raf = 0;
     let last: number | null = null;
     const tick = (now: number) => {
-      const p = puffRef.current;
-      stateRef.current = slamAdvance(stateRef.current, last === null ? 0 : now - last, p ? p.frames.length * p.ms : 0);
+      stateRef.current = slamAdvance(stateRef.current, last === null ? 0 : now - last, slamFxMs(slamFxTiming(puffRef.current)));
       last = now;
       apply();
       if (stateRef.current.dir !== "rest") raf = requestAnimationFrame(tick);
