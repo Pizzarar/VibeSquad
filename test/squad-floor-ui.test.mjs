@@ -50,7 +50,7 @@ test("SquadFloor falls back to the F1 placeholder when art fetch fails", () => {
 test("SquadFloor reuses the F1 tower model, not a duplicate", () => {
   assert.match(floor, /buildTower\(/);
   assert.match(floor, /transitionRiders\(/);
-  assert.match(floor, /floorFitScale\(box\.w, box\.h, dpr, native\.w, native\.h\)/);
+  assert.match(floor, /floorFitScale\(box\.w, box\.h, dpr, native\.w, native\.h, uiZoom\)/);
   assert.match(floor, /sliceAnchor\(/);
 });
 

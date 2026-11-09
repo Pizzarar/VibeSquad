@@ -3,6 +3,7 @@
 
 import type { CSSProperties } from "react";
 import type { AgentType } from "./teams";
+import { snapDeviceSize, useDpr, useUiScale } from "./uiScale";
 import { CAST_CELL, CAST_SHOWN, CAST_URL, CAST_VARIANTS, castCell } from "./cast";
 
 function hash(s: string): number {
@@ -116,7 +117,11 @@ export function Avatar({
   const tag = String((hash(id) % 90) + 10);
   const retired = agentType === "retired-lead";
   // Snap to 16 (half) or a whole multiple of 32 so the art never drops pixel rows or columns.
-  const snapped = size < 24 ? 16 : Math.max(CAST_SHOWN, Math.round(size / CAST_SHOWN) * CAST_SHOWN);
+  const nominal = size < 24 ? 16 : Math.max(CAST_SHOWN, Math.round(size / CAST_SHOWN) * CAST_SHOWN);
+  // SS5: the root UI zoom x OS dpr would land a 32 css px cell on fractional device px (0.75x at 1080/150%): snap to a whole multiple of 16 / 32 DEVICE px.
+  const dpr = useDpr();
+  const zoom = useUiScale();
+  const snapped = Number((snapDeviceSize(nominal, nominal < 24 ? 16 : CAST_SHOWN, dpr, zoom).css + 0.0001).toFixed(4));
   const scale = snapped / CAST_CELL;
   const cell = snapped;
   const { x, y } = castCell(id, agentType, variant);

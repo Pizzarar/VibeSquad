@@ -33,7 +33,7 @@ import {
 } from "./profiles";
 import {
   UI_SCALE_PRESETS,
-  resetUiScale,
+  resetAllScales,
   setChatScale,
   setUiScale,
   useChatScale,
@@ -546,7 +546,7 @@ export function TeamSettingsModal({
               type="button"
               className="btn ghost small"
               data-testid="ui-scale-reset"
-              onClick={() => resetUiScale(false)}
+              onClick={() => resetAllScales(false)}
             >
               Reset (100%)
             </button>

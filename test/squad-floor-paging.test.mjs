@@ -90,7 +90,7 @@ test("HP4 the floor never scrolls: fixed box, fit scale, one floor rendered", ()
   assert.doesNotMatch(comp, /scrollIntoView/);
   assert.equal(floorFitScale(1300, 800, 1), 2);
   assert.equal(floorFitScale(3000, 400, 1), 1);
-  assert.equal(floorFitScale(3000, 100, 1), 1);
+  assert.ok(Math.abs(floorFitScale(3000, 100, 1) - 100 / 360) < 1e-9); // SS5: no whole multiple fits the height -> fractional height fit, never clipped
   assert.equal(floorFitScale(0, 800, 1), 0); // unmeasured only
 });
 

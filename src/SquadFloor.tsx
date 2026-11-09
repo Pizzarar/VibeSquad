@@ -4,6 +4,7 @@
 // bubble all come from cast.json.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { openPinMember } from "./pinFocus";
+import { useUiScale } from "./uiScale";
 import { chromeSmallAdvance, chromeSmallGlyphStyle } from "./chromeFont";
 import { useImageOk, usePrefersReducedMotion, useTheme, type Theme } from "./useBotFace";
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
@@ -487,8 +488,9 @@ export function SquadFloor({ view }: SquadFloorProps) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
+  const uiZoom = useUiScale();
   const native = floorNativeSize(floor);
-  const scale = floorFitScale(box.w, box.h, dpr, native.w, native.h);
+  const scale = floorFitScale(box.w, box.h, dpr, native.w, native.h, uiZoom);
 
   // HP4 paging: one floor per screen, persisted; `blink` is the CRT collapse (out) / open (in) around the swap.
   const floorCount = tower.floors.length;
