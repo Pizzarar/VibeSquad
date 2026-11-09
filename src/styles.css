@@ -4736,7 +4736,7 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 
 /* ── Hub pages (src/HubPages.tsx, docs/PLAN_HUB_PAGES.md HP1-HP3): Sky / Tower switcher over one shared skyline backdrop ── */
-.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden auto; isolation: isolate; } /* FF-ui: if the TVs strip leaves the floor under its minimum, the page scrolls a little instead of hiding the floor */
+.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; isolation: isolate; }
 .hub-backdrop { position: absolute; inset: 0; z-index: -1; image-rendering: pixelated; pointer-events: none; background-color: #2a1b6b; }
 :root[data-theme="light"] .hub-backdrop { background-color: #95d3f2; }
 /* Fallback (A1 absent): today's sky band along the bottom over a vertical gradient. */
@@ -4746,8 +4746,14 @@ button.project-file-name:hover { text-decoration: underline; }
 /* FF-ui art rule: the floor box is never under --floor-need (the floor at 1 device px per native px, set by HubPages from floor.json), so the TVs band is the part that yields: it asks for 36vh and shrinks (flex-shrink) down to a slim strip. Chats only open in a band that is already tall; faces stay clickable in the slim strip. */
 .hub-sky-page { flex: 0 1 clamp(260px, 36vh, 440px); min-height: var(--sky-slim, 112px); display: flex; flex-direction: column; overflow: hidden; }
 .hub-sky-page .sky-zones { flex: 1 1 0; height: auto; min-height: 0; }
-/* Short windows (1280x720): an open sky chat gets a taller band (it was 240px: timeline gone, composer cut); the floor below takes the difference. */
-@media (max-height: 820px) { .hub-sky-page:has(.sky-chat-panel:not([hidden])) { flex-basis: clamp(330px, 46vh, 440px); min-height: 330px; } } /* an open chat keeps its 330px: the floor box keeps its need too, so the hub page scrolls instead */
+/* C5: at <=820px css height, the TVs band keeps its viewport-driven size (never branches on .sky-chat-panel), the floor dims, and an open sky chat overlays the floor half with composer + Stop pinned so the hub page never scrolls. */
+.hub-pages[data-short-height="true"] { --sky-slim: 96px; }
+.hub-pages[data-short-height="true"] .hub-sky-page, .hub-pages[data-short-height="true"] .sky-zones { overflow: visible; }
+.hub-pages[data-short-height="true"]:has(.sky-chat-panel:not([hidden])) .hub-tower-box, .hub-pages[data-short-height="true"]:has(.sky-chat-panel:not([hidden])) .sq-strip { opacity: 0.35; filter: brightness(0.45); }
+.hub-pages[data-short-height="true"]:has(.sky-chat-panel:not([hidden])) .hub-tower-box :is(.sq-floor-front, .sq-floor-cursor, .sq-floor-bubble) { pointer-events: auto; }
+.hub-pages[data-short-height="true"] .sky-zone.sky-chat-panel { position: absolute; grid-column: auto; grid-row: auto; top: 100%; left: 8px; right: 8px; z-index: 20; box-sizing: border-box; height: calc(var(--hub-page-h, 100vh) - 100% - 6px); max-height: calc(var(--hub-page-h, 100vh) - 100% - 6px); }
+.hub-pages[data-short-height="true"] .sky-zone.sky-chat-panel.is-slam-fx { transform: none; }
+@media (max-height: 820px) { .hub-pages { --sky-slim: 96px; } .hub-sky-page, .hub-pages .sky-zones { overflow: visible; } .hub-pages:has(.sky-chat-panel:not([hidden])) .hub-tower-box, .hub-pages:has(.sky-chat-panel:not([hidden])) .sq-strip { opacity: 0.35; filter: brightness(0.45); } .hub-pages:has(.sky-chat-panel:not([hidden])) .hub-tower-box :is(.sq-floor-front, .sq-floor-cursor, .sq-floor-bubble) { pointer-events: auto; } .hub-pages .sky-zone.sky-chat-panel { position: absolute; grid-column: auto; grid-row: auto; top: 100%; left: 8px; right: 8px; z-index: 20; box-sizing: border-box; height: calc(var(--hub-page-h, 100vh) - 100% - 6px); max-height: calc(var(--hub-page-h, 100vh) - 100% - 6px); } .hub-pages .sky-zone.sky-chat-panel.is-slam-fx { transform: none; } }
 /* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
 .hub-tower-box { flex: 1 0 var(--floor-need, 125px); min-height: var(--floor-need, 125px); overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */

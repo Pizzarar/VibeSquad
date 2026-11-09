@@ -40,3 +40,13 @@ export function backdropStyle(model: HubBackdrop, width: number, theme: "dark" |
     backgroundPosition: `${left}px calc(100% - ${plateInset}px)`,
   };
 }
+
+export const SHORT_CSS_HEIGHT_MAX = 820;
+
+/** C5: true when the window's effective CSS height (viewport height / UI scale) is <= 820px, so sky chat opens as an overlay over the floor half. */
+export function isShortCssHeight(viewportH: number, uiScale = 1): boolean {
+  if (!Number.isFinite(viewportH) || viewportH <= 0) return false;
+  const s = Number.isFinite(uiScale) && uiScale > 0 ? uiScale : 1;
+  return viewportH / s <= SHORT_CSS_HEIGHT_MAX + 1e-6;
+}
+
