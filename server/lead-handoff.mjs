@@ -1207,6 +1207,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
     // Defence in depth: the handoff_lead tool sends callerId, so re-check it from the caller's own record. Local-token holders
     // are the owner by design and stay trusted; legacy calls without callerId (auto/soft triggers) are unchanged.
     const forbid = (why) => Object.assign(new Error(`lead-handoff: forbidden: ${why}`), { status: 403 });
+    let forcedLog = null; // written only once a handoff really spawns (not on a deduped repeat or failed spawn)
     // The Overlord trigger is new and cross-lane: it always needs a verifiable callerId (no legacy callerId-less path).
     if (trigger === "overlord" && !body.callerId) throw forbid("overlord handoff needs a callerId");
     if (body.callerId && (trigger === "buddy" || trigger === "self" || trigger === "overlord")) {
@@ -1239,17 +1240,24 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
           if (callerId === lead.id || callerLane.id === leadLane.id) throw forbid("the Overlord may not use the overlord trigger on itself or its own lane");
           // O6 floor: a healthy lead under 100k is steered, not handed off. --force needs a steer and is logged.
           const steerNote = String(body.steer ?? "").trim().slice(0, 2000);
-          const floor = overlordFloorVerdict(lead, { force: body.force === true, steer: steerNote });
+          // List entries (fetchAgents/listAgents) omit lastPromptAt/lastProgressAt: enrich from the single-agent read so a wedged lead is seen as wedged.
+          let fresh = null;
+          if (lead.lastPromptAt === undefined) {
+            if (isRunnerId(lead.id)) fresh = readRunnerAgentSync(lead.id);
+            if (!fresh && connected && client && typeof backend.fetchAgent === "function") fresh = (await backend.fetchAgent(lead.id).catch(() => null))?.agent ?? null;
+          }
+          const floorLead = fresh ? { ...lead, lastPromptAt: fresh.lastPromptAt, lastProgressAt: fresh.lastProgressAt, status: fresh.status ?? lead.status, pendingPermissions: fresh.pendingPermissions ?? lead.pendingPermissions, requiresAttention: fresh.requiresAttention ?? lead.requiresAttention } : lead;
+          const floor = overlordFloorVerdict(floorLead, { force: body.force === true, steer: steerNote });
           if (floor.refuse) throw Object.assign(new Error(`lead-handoff: ${floor.message}`), { status: 409 });
           if (floor.forced) {
-            appendVsLogEntry({
+            forcedLog = {
               teamId: callerTeam.id,
               laneId: leadLane.id,
               agent: callerId,
               type: "decision",
               text: `Overlord ${callerId} forced a lead handoff below the ${LEAD_HANDOFF_MIN_TOKENS} floor: lane ${leadLane.id}, target ${lead.id}, ${floor.tokens} tokens. Steer: ${steerNote.slice(0, 160)}`,
               refs: [lead.id, callerId],
-            });
+            };
           }
         } else if (!callerLane || !leadLane || callerLane.id !== leadLane.id || !callerTeam || !leadTeam || callerTeam.id !== leadTeam.id) {
           throw forbid("caller is not a Buddy of the lead's lane");
@@ -1265,6 +1273,11 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
             retireImmediately: Boolean(body.retireImmediately),
             forceSynthesize: Boolean(body.forceSynthesize),
             job: body.job,
+          }).then((r) => {
+            if (forcedLog && r && r.ok !== false && r.triggered !== false && !r.deduped) {
+              try { appendVsLogEntry(forcedLog); } catch {}
+            }
+            return r;
           })
         : coordinator.evaluateLead(lead, {
             usedTokens: body.usedTokens,

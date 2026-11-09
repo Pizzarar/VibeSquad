@@ -366,13 +366,14 @@ async function handoffLead(ctx, args = {}) {
     if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${targetLane.lane.id}" (${target.id})`);
     if (target.id === callerId || targetLane.lane.id === callerLane.lane.id) throw new Error("cannot hand off a lead: the Overlord hands off other lanes' leads; use a plain handoff_lead for itself");
     trigger = "overlord";
-    // O6 floor (mirrored by the server re-check): a healthy lead under 100k is steered first; --force needs a steer.
-    const floor = (await import("../lead-handoff.mjs")).overlordFloorVerdict(target, { force: args.force === true, steer: clean(args.steer) });
-    if (floor.refuse) throw new Error(`cannot hand off a lead: ${floor.message}`);
     const age = Date.now() - Date.parse(target.createdAt ?? "");
     if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
     }
+    // O6 floor (mirrored by the server re-check): a healthy lead under 100k is steered first; --force needs a steer.
+    // The lane listing omits lastPromptAt/lastProgressAt, so read the lead itself before judging "wedged".
+    const floor = (await import("../lead-handoff.mjs")).overlordFloorVerdict((await fetchAgent(target.id)) ?? target, { force: args.force === true, steer: clean(args.steer) });
+    if (floor.refuse) throw new Error(`cannot hand off a lead: ${floor.message}`);
   } else if (callerRole === LEAD_ROLE) {
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
     // The lane is canonicalised through the registry like the Buddy branch; an empty or unknown lane is refused.
