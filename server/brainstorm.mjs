@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
-import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isLiveAgent, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isRetiredAgent, laneCodeFor, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
@@ -12,6 +12,7 @@ import { getBackend, sharedRunnerBackend } from "./backend/index.mjs";
 import { SPAWN_TIMING } from "./backend/runner-backend.mjs";
 import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, writeBriefFile } from "./brief-write.mjs";
 import { liveInFlightBlock } from "./in-flight.mjs";
+import { BOOT_CONTEXT_BUDGET, MORE_WORKERS_HINT, bootRoster, fitRows } from "./boot-roster.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
@@ -241,19 +242,19 @@ const sameLane = (a, laneId) => String(a?.labels?.lane || a?.labels?.lead || "")
  * Live Teams block for a hub boot prompt: one line per non-hub, non-removed lane with its state and its
  * live lead's `job`. `agents` null means the daemon list could not be read. Pure.
  */
-export function hubTeamsBlock({ team, agents }) {
-  const out = ["Teams in this Squad (live, generated at boot):"];
+export function hubTeamsBlock({ team, agents, budget = BOOT_CONTEXT_BUDGET }) {
+  const head = "Teams in this Squad (live, generated at boot):";
   const lanes = (team?.lanes ?? []).filter((l) => l.id !== "_other" && !isHubLane(team, l) && (l.state ?? "pinned") !== "removed" && !isHiddenLane(team, l));
-  if (!lanes.length) out.push("- (no Teams besides the hub yet)");
-  const live = agents == null ? null : agents.map((a) => a?.agent ?? a).filter((a) => isLiveAgent(a));
-  for (const l of lanes) {
+  if (!lanes.length) return [head, "- (no Teams besides the hub yet)"].join("\n");
+  const rows = lanes.map((l) => {
     const state = TEAM_STATES.has(l.state) ? l.state : "pinned";
-    const lead = live?.find((a) => sameLane(a, l.id) && effectiveAgentRole(a) === "lead");
+    const lead = agents == null ? null : bootRoster(agents, l.id).lead;
     const job = String(lead?.labels?.job ?? "").trim();
-    const who = live == null ? "lead unknown" : lead ? `lead working${job ? `: ${job}` : ""}` : "no lead running";
-    out.push(`- ${l.name || l.id} (\`${l.id}\`) · ${state} · ${who}`);
-  }
-  return out.join("\n");
+    const who = agents == null ? "lead unknown" : lead ? `lead working${job ? `: ${job}` : ""}` : "no lead running";
+    return `- ${l.name || l.id} (\`${l.id}\`) · ${state} · ${who}`;
+  });
+  const { kept, dropped } = fitRows(rows, budget - head.length - 1 - 40);
+  return [head, ...kept, ...(dropped ? [`- +${dropped} more Teams ${MORE_WORKERS_HINT}`] : [])].join("\n");
 }
 
 export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false, standing = false }) {
@@ -781,6 +782,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     });
 
     // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
+    try {
+      appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `boot-size role=brainstorm chars=${initialPrompt.length} brief=${summary.content.length}` });
+    } catch {}
     try {
       appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });
     } catch {}

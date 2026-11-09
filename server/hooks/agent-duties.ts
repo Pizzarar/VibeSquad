@@ -839,6 +839,11 @@ export function composeSpawnPromptParts(prefix: string, profileNotes: string, ra
   return parts;
 }
 
+/** The once-per-boot size metric line (docs/PLAN_LEAN_BOOT_1109.md B2). */
+export function bootSizeMetric(role: string, chars: number): string {
+  return `boot-size role=${role} chars=${chars}`;
+}
+
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
 export async function inspectGitSpawnState(cwd: string): Promise<string | null> {
   if (!cwd) return null;
@@ -1727,6 +1732,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         st.mark("lane-artifacts");
+        // B2: one `boot-size` metric per boot, measured on the final assembled prompt (prefix + notes + brief + artifacts).
+        if (next.systemPrompt || rawSysPrompt) {
+          const where = teamOf(envOrReqLabels, cwd);
+          if (where) {
+            try {
+              appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: bootSizeMetric(role, String(next.systemPrompt ?? rawSysPrompt ?? "").length) });
+            } catch (err) {
+              log(`boot-size metric write failed: ${err}`);
+            }
+          }
+        }
         if (leanApplies(next.provider ?? provider, env)) {
           next.providerOptions = leanProviderOptions(next.providerOptions, role);
           changed = true;
