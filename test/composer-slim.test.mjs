@@ -32,7 +32,9 @@ test("composer-slim: menu is a keyboard-reachable portaled popover", () => {
   assert.match(more, /aria-haspopup="menu"/);
   assert.match(more, /e\.key !== "Escape"/);
   assert.match(more, /addEventListener\("mousedown", away\)/);
+  assert.ok(more.includes("getComputedStyle(document.documentElement).zoom")); // placement divides by the root UI-scale zoom
   assert.match(more, /ArrowDown/);
+  assert.ok(more.includes('e.key === "Tab") return close(false)')); // Tab leaves and closes
   assert.match(more, /tab\.current\?\.focus\(\)/); // focus returns to the tab
   assert.match(more, /const close = \(refocus = true\)/);
 });

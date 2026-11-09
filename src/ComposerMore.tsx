@@ -30,7 +30,10 @@ export function ComposerMore({ items }: { items: ComposerMoreItem[] }) {
     if (!open || !tab.current || !list.current) return;
     const a = tab.current.getBoundingClientRect();
     const l = list.current.getBoundingClientRect();
-    setPos(placePinMenu(a, { w: l.width, h: l.height }, { w: window.innerWidth, h: window.innerHeight }));
+    // The root carries the UI-scale zoom (html { zoom }): rects are viewport px, but a fixed top/left on a body child is in zoomed CSS px.
+    const z = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
+    const sc = (r: DOMRect) => ({ left: r.left / z, right: r.right / z, top: r.top / z, bottom: r.bottom / z });
+    setPos(placePinMenu(sc(a), { w: l.width / z, h: l.height / z }, { w: window.innerWidth / z, h: window.innerHeight / z }));
   }, [open]);
 
   // Focus the first item once the list is placed (a visibility:hidden list can't take focus).
@@ -64,6 +67,7 @@ export function ComposerMore({ items }: { items: ComposerMoreItem[] }) {
   }, [open]);
 
   const onListKey = (e: React.KeyboardEvent) => {
+    if (e.key === "Tab") return close(false); // let focus move on naturally
     if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "Home" && e.key !== "End") return;
     const btns = Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)") ?? []);
     if (!btns.length) return;
