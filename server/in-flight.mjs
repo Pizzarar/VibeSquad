@@ -2,12 +2,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { effectiveAgentRole, isDigestAgent, isLiveAgent } from "./identity.mjs";
-
-function laneOf(agent) {
-  const l = agent?.labels ?? {};
-  return String(l.lane || l.lead || "").trim().toLowerCase();
-}
+import { BOOT_CONTEXT_BUDGET, MORE_WORKERS_HINT, bootRoster, fitRows } from "./boot-roster.mjs";
 
 /** Last `n` non-metric team-log entries for a lane, oldest first. Missing/garbled log gives []. */
 export function recentLaneLog({ teamId, laneId, n = 5, home }) {
@@ -29,29 +24,36 @@ export function recentLaneLog({ teamId, laneId, n = 5, home }) {
   return out.reverse();
 }
 
-/** `agents` null means the live list could not be read. */
-export function liveInFlightBlock({ agents, laneId, teamId, home }) {
-  const out = ["In flight (live, generated at boot; trust this over the hand-kept section in the brief):"];
+/** `agents` null means the live list could not be read. Capped at BOOT_CONTEXT_BUDGET chars (plan B2). */
+export function liveInFlightBlock({ agents, laneId, teamId, home, budget = BOOT_CONTEXT_BUDGET }) {
+  const head = "In flight (live, generated at boot; trust this over the hand-kept section in the brief):";
+  const row = (a) => `${String(a.title || a.id).trim()} [${a.status || "?"}${a.updatedAt ? `, active ${a.updatedAt}` : ""}]`;
+  const fixed = [];
+  let workerRows = [];
   if (agents == null) {
-    out.push("- Live agents: unavailable (could not read the daemon). Run `vs who all` before saying what is running.");
+    fixed.push("- Live agents: unavailable (could not read the daemon). Run `vs who all` before saying what is running.");
   } else {
-    const want = String(laneId ?? "").trim().toLowerCase();
-    const live = agents
-      .map((a) => a?.agent ?? a)
-      .filter((a) => isLiveAgent(a) && !isDigestAgent(a))
-      .filter((a) => laneOf(a) === want);
-    const row = (a) => `${String(a.title || a.id).trim()} [${a.status || "?"}${a.updatedAt ? `, active ${a.updatedAt}` : ""}]`;
-    const lead = live.filter((a) => effectiveAgentRole(a) === "lead").map(row);
-    const workers = live.filter((a) => effectiveAgentRole(a) === "worker").map(row);
-    out.push(`- Lead: ${lead.length ? lead.join("; ") : "none running"}`);
-    out.push(`- Workers: ${workers.length ? workers.join("; ") : "none running"}`);
+    const { lead, workers } = bootRoster(agents, laneId);
+    fixed.push(`- Lead: ${lead ? row(lead) : "none running"}`);
+    workerRows = workers.map(row);
   }
   const log = recentLaneLog({ teamId, laneId, home });
-  if (log.length) {
-    out.push("- Latest lane log:");
-    for (const e of log) out.push(`  - ${e.ts} ${e.agent} ${e.type}: ${String(e.text).slice(0, 240)}`);
-  } else {
-    out.push("- Latest lane log: (no entries)");
+  const logRows = log.map((e) => `  - ${e.ts} ${e.agent} ${e.type}: ${String(e.text).slice(0, 240)}`);
+  const logHead = log.length ? "- Latest lane log:" : "- Latest lane log: (no entries)";
+  // Fill order: header + lead, running workers, then the newest lane log lines, then `+N more`.
+  let room = budget - head.length - fixed.join("\n").length - 2 - logHead.length - 1 - 80;
+  // Workers ride inline on one line ("- Workers: a [running]; b [queued]; +N more → vs who all"), cut to the budget.
+  const wLabel = workerRows.length ? "- Workers: " : "- Workers: none running";
+  // Reserve room for the log first (up to half of what is left), so a long worker list never starves it.
+  const logNeed = logRows.reduce((n, r) => n + r.length + 1, 0);
+  const logReserve = Math.min(logNeed, Math.floor(room / 2));
+  const w = fitRows(workerRows.map((r) => `${r}; `), Math.max(0, room - logReserve - wLabel.length));
+  room -= w.used + wLabel.length;
+  const l = fitRows([...logRows].reverse(), Math.max(0, room));
+  const out = [head, ...fixed];
+  if (agents != null) {
+    out.push(workerRows.length ? `${wLabel}${w.kept.join("").replace(/; $/, "")}${w.dropped ? `; +${w.dropped} more ${MORE_WORKERS_HINT}` : ""}` : wLabel);
   }
+  if (!log.length || l.kept.length) out.push(logHead, ...l.kept.reverse());
   return out.join("\n");
 }

@@ -3,34 +3,20 @@
 import { briefRootFor } from "./brief-path.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { effectiveAgentRole, isDigestAgent, isLiveAgent } from "./identity.mjs";
+import { bootRoster } from "./boot-roster.mjs";
 import { writeBriefFile } from "./brief-write.mjs";
 
 export const WHOS_HERE_HEADING = "## Who's here";
 
-function laneOf(agent) {
-  const l = agent?.labels ?? {};
-  return String(l.lane || l.lead || "").trim().toLowerCase();
-}
-
 export function whosHereBody(agents, laneId) {
-  const want = String(laneId ?? "").trim().toLowerCase();
-  const live = (Array.isArray(agents) ? agents : [])
-    .map((a) => a?.agent ?? a)
-    .filter((a) => isLiveAgent(a) && !isDigestAgent(a))
-    .filter((a) => laneOf(a) === want);
-  const titles = (role) =>
-    live
-      .filter((a) => effectiveAgentRole(a) === role)
-      .map((a) => String(a.title || "").trim())
-      .filter(Boolean);
-  const workers = live.filter((a) => effectiveAgentRole(a) === "worker").length;
-  const bs = titles("brainstorm");
-  const lead = titles("lead");
+  const { lead, workers, buddies } = bootRoster(agents, laneId);
+  const titles = (list) => list.map((a) => String(a.title || "").trim()).filter(Boolean);
+  const bs = titles(buddies);
+  const leads = titles(lead ? [lead] : []);
   return [
     `- Brainstorm: ${bs.length ? bs.join("; ") : "none running (click the pin to start one)"}`,
-    `- Lead: ${lead.length ? lead.join("; ") : "none"}`,
-    `- Workers: ${workers}`,
+    `- Lead: ${leads.length ? leads.join("; ") : "none"}`,
+    `- Workers: ${workers.length}`,
   ].join("\n");
 }
 

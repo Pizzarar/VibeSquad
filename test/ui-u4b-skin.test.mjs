@@ -95,7 +95,8 @@ test('one UI font: everything in the tool surfaces is --mono (brand block, termi
 
 test('U4b surfaces carry no U3 painted layers (only the --u3-px kit pixel is referenced)', () => {
   const used = new Set([...u4.matchAll(/var\((--u3-[\w-]+)\)/g)].map((m) => m[1]));
-  assert.deepEqual([...used].filter((v) => v !== '--u3-px'), []);
+  const allowed = new Set(['--u3-px', '--u3-ink-text', '--u3-lt-text']); // kit pixel + flat ink text colours (V1b-2 contrast rows); painted layers stay banned
+  assert.deepEqual([...used].filter((v) => !allowed.has(v)), []);
   assert.doesNotMatch(u4.replace(/\/\*[\s\S]*?\*\//g, ''), /border-image(?:-source)?:\s*(?!none)\S/);
   assert.doesNotMatch(u4.replace(/\/\*[\s\S]*?\*\//g, ''), /url\(/);
 });
