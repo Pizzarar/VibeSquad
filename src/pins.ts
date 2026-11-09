@@ -591,6 +591,13 @@ export function snapChipSize(dpr: number, zoom: number): { device: number; css: 
   return snapDeviceSize(24, 16, dpr, zoom);
 }
 
+/** Bug chip roach sheet (3 frames: idle, twitch x2); same 16/32 native pick as chipIconSrc. */
+export function bugRoachSheetSrc(theme: string, devicePx = 32): string {
+  const t = theme === "light" ? "light" : "dark";
+  const use2x = Number.isFinite(devicePx) && devicePx > 0 ? Math.round(devicePx) % 32 === 0 : true;
+  return `/ui/bug-roach-${t}${use2x ? "@2x" : ""}.png`;
+}
+
 /**
  * Pick the exact integer-scale PNG for `devicePx`:
  * - Multiples of 32 device px (32, 64) use `@2x.png` (32x32 native -> 1x, 2x integer scale).
