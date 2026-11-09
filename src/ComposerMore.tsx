@@ -2,7 +2,7 @@
 // Portaled to <body>, fixed + viewport-clamped (PLAN_RAIL_MENU_CLIP M1, same placement as the pin ⋯ menu).
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { placePinMenu } from "./pinMenuPlace";
+import { placePinMenuZoomed, rootZoom } from "./pinMenuPlace";
 
 export type ComposerMoreItem = {
   key: string;
@@ -30,10 +30,8 @@ export function ComposerMore({ items }: { items: ComposerMoreItem[] }) {
     if (!open || !tab.current || !list.current) return;
     const a = tab.current.getBoundingClientRect();
     const l = list.current.getBoundingClientRect();
-    // The root carries the UI-scale zoom (html { zoom }): rects are viewport px, but a fixed top/left on a body child is in zoomed CSS px.
-    const z = parseFloat(getComputedStyle(document.documentElement).zoom) || 1;
-    const sc = (r: DOMRect) => ({ left: r.left / z, right: r.right / z, top: r.top / z, bottom: r.bottom / z });
-    setPos(placePinMenu(sc(a), { w: l.width / z, h: l.height / z }, { w: window.innerWidth / z, h: window.innerHeight / z }));
+    // The root carries the UI-scale zoom (html { zoom }): rects are viewport px, a fixed top/left on a body child is zoomed CSS px.
+    setPos(placePinMenuZoomed(a, { w: l.width, h: l.height }, { w: window.innerWidth, h: window.innerHeight }, rootZoom()));
   }, [open]);
 
   // Focus the first item once the list is placed (a visibility:hidden list can't take focus).

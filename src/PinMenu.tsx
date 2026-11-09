@@ -2,7 +2,7 @@
 // Edit brief · Rename · Show plumbing · Mark complete (step 5, src/PinDone.tsx) · Remove team… (src/PinRemove.tsx).
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { placePinMenu } from "./pinMenuPlace";
+import { placePinMenuZoomed, rootZoom } from "./pinMenuPlace";
 import { patchLane, type Pin } from "./pins";
 import { saveTeams, type TeamsUpdater } from "./teams";
 import { openBriefEditor, renamePin } from "./pinActions";
@@ -46,10 +46,11 @@ export function PinMenu({ pin, onShowPlumbing, onEditBrief }: Props) {
       if (!btn.current) return;
       const a = btn.current.getBoundingClientRect();
       const l = el.getBoundingClientRect();
-      const next = placePinMenu(
+      const next = placePinMenuZoomed(
         a,
         { w: l.width, h: l.height },
         { w: window.innerWidth, h: window.innerHeight },
+        rootZoom(),
       );
       setPos((cur) =>
         cur && cur.top === next.top && cur.left === next.left ? cur : next,

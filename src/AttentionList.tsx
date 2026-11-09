@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { rootZoom } from "./pinMenuPlace";
 import {
   answerItem,
   attentionItems,
@@ -117,7 +118,8 @@ function Popover({ view, anchor, onClose, onOpen }: { view: TeamView; anchor: DO
   }, [items.length, onClose]);
   const clearable = items.filter((i) => i.kind !== "permission");
   const counted = countedItems(items).length;
-  const style = { top: Math.min(anchor.bottom + 6, window.innerHeight - 120), left: Math.max(8, Math.min(anchor.left, window.innerWidth - 360)) };
+  const z = rootZoom(); // fixed top/left are zoomed CSS px; the anchor rect and viewport are not
+  const style = { top: Math.min(anchor.bottom / z + 6, window.innerHeight / z - 120), left: Math.max(8, Math.min(anchor.left / z, window.innerWidth / z - 360)) };
   return createPortal(
     <div className="attn-pop" ref={ref} style={style} role="dialog" aria-label={`${view.team.name} needs you`} data-testid="attn-list">
       <div className="attn-head">

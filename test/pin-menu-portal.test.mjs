@@ -57,3 +57,18 @@ test("PinMenu Esc is consumed in the capture phase (before the focus bar's bubbl
   assert.match(src, /new ResizeObserver\(/);
   assert.match(src, /ro\.disconnect\(\)/);
 });
+
+test("placePinMenuZoomed divides viewport px by the root zoom (4K html zoom 1.25)", async () => {
+  const { placePinMenuZoomed } = await import("../src/pinMenuPlace.ts");
+  const z = 1.25;
+  // Same layout as the 500x800 case, measured in viewport px under zoom 1.25.
+  const a = box(400 * z, 100 * z, 24 * z, 20 * z);
+  assert.deepEqual(placePinMenuZoomed(a, { w: size.w * z, h: size.h * z }, { w: view.w * z, h: view.h * z }, z), { top: 124, left: 244 });
+  assert.deepEqual(placePinMenuZoomed(box(400, 100), size, view, 1), { top: 124, left: 244 });
+});
+
+test("PinMenu and AttentionList place through the root zoom", () => {
+  for (const f of ["PinMenu", "AttentionList"]) {
+    assert.match(fs.readFileSync(resolve(ROOT, `src/${f}.tsx`), "utf8"), /rootZoom\(\)/, f);
+  }
+});
