@@ -94,3 +94,15 @@ test("drawer wiring: no local queue state, store used, cancel restores all", () 
   const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
   assert.match(main, /startComposerQueueFlusher|composerQueue/);
 });
+
+test("queue: requeueQueued puts taken items back in front (Send now failure)", () => {
+  q.__resetQueueForTest();
+  q.enqueueQueued("a4", item("x", "one"));
+  const taken = q.takeQueued("a4");
+  q.enqueueQueued("a4", item("y", "two"));
+  q.requeueQueued("a4", taken);
+  assert.deepEqual(q.getQueued("a4").map((i) => i.text), ["one", "two"]);
+  assert.equal(q.removeQueued, undefined, "removeQueued export dropped");
+  const drawer = readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
+  assert.match(drawer, /catch \(e\) \{\s*requeueQueued\(agent\.id, items\);\s*setSendError\(`Send failed/);
+});

@@ -160,7 +160,7 @@ type ComposerProps = {
   onToggleInboxPopover: () => void;
   queuedItems?: QueuedTurnItem[];
   onSendQueuedNow?: () => void;
-  onCancelQueued?: (id?: string) => void;
+  onCancelQueued?: () => void;
 };
 
 export function Composer({
@@ -484,7 +484,7 @@ export function Composer({
               className="btn ghost small composer-queued-cancel-btn"
               data-testid="composer-queued-cancel-btn"
               title="Remove queued message and restore to draft"
-              onClick={() => onCancelQueued(queuedItems[0].id)}
+              onClick={() => onCancelQueued()}
             >
               ✕
             </button>

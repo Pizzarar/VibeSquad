@@ -11,7 +11,7 @@ import { useDraft } from "./drafts";
 import { isRemote } from "./remoteSession";
 import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
-import { enqueueQueued, restoreText, takeQueued, useQueued } from "./composerQueue";
+import { enqueueQueued, requeueQueued, restoreText, takeQueued, useQueued } from "./composerQueue";
 import { flushQueued } from "./composerQueueWire";
 import {
   attentionOf,
@@ -451,8 +451,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     const items = takeQueued(agent.id);
     if (!items.length) return;
     const combinedText = restoreText(items);
-    await flushQueued(agent.id, combinedText, items.flatMap((q) => q.images ?? []));
-    setLastSteered(combinedText);
+    try {
+      await flushQueued(agent.id, combinedText, items.flatMap((q) => q.images ?? []));
+      setLastSteered(combinedText);
+    } catch (e) {
+      requeueQueued(agent.id, items);
+      setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
   // Cancel restores every queued item (text joined, all images), not just the first.

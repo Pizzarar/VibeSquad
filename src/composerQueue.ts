@@ -61,12 +61,9 @@ export function takeQueued(agentId: string): QueuedTurnItem[] {
   return items;
 }
 
-/** Cancel one item (or the first); returns it. */
-export function removeQueued(agentId: string, id?: string): QueuedTurnItem | undefined {
-  const items = getQueued(agentId);
-  const removed = id ? items.find((q) => q.id === id) : items[0];
-  if (removed) setList(agentId, items.filter((q) => q !== removed));
-  return removed;
+/** Put items back at the front of the queue (a send failed after they were taken). */
+export function requeueQueued(agentId: string, items: QueuedTurnItem[]) {
+  setList(agentId, [...items, ...getQueued(agentId)]);
 }
 
 export const restoreText = (items: QueuedTurnItem[]): string => items.map((q) => q.text).join("\n\n");
@@ -90,7 +87,7 @@ export function startQueueFlusher(deps: FlushDeps): () => void {
       deps
         .send(agentId, restoreText(items), items.flatMap((q) => q.images ?? []))
         .catch(() => {
-          setList(agentId, [...items, ...getQueued(agentId)]);
+          requeueQueued(agentId, items);
         })
         .finally(() => {
           inflight.delete(agentId);
