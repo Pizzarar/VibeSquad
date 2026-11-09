@@ -422,25 +422,61 @@ export const skyLeftBot = (landed: boolean): FaceBot => (landed ? "overlord" : "
 /** Nothing left to animate: expanded and fully in, or collapsed and fully out. */
 export const takeoverSettled = (pos: number, expanded: boolean, n: number): boolean => (expanded ? pos >= n : pos <= 0);
 
-// ── RS-b Riff slam (docs/PLAN_NEON_OFFICE.md RS): Riff's chat window zooms out of his TV and slams into the Overlord ──
+// ── RS-c Riff swing-window slam (docs/PLAN_RIFF_SWING.md): Riff's chat window swings on a hinge into the Overlord's TV ──
 export type SlamDir = "rest" | "open" | "close";
 /** The slam clock: `t` ms since the open/close began. `rest` = nothing animating (t 0). */
 export type SlamState = { dir: SlamDir; t: number };
 export const SLAM_REST: SlamState = { dir: "rest", t: 0 };
-/** Timings (ms). The zoom is a few hard steps (Win95 zoom-rect), then the window lands: 1-frame squash, bezel shake, puff. */
-export const SLAM = { zoomMs: 250, zoomSteps: 4, squashMs: 90, shakeMs: 240, shakeStepMs: 30, dizzyMs: 1000 } as const;
+/** Timings (ms). The window swings in on its hinge (ease-in, ~300ms), hits (1-frame squash, bezel shake, puff, SMACK star), recoils off the Overlord's TV (back to nearly edge-on, held through the shake so his hurt face is on show) and then swings back flat (settleMs). Close swings it shut gently. */
+export const SLAM = { swingMs: 300, closeMs: 300, squashMs: 90, shakeMs: 240, shakeStepMs: 30, recoilMs: 20, settleMs: 200, dizzyMs: 1000 } as const;
+/** The swing: rotateY(deg) about the hinge edge. Opens from SWING_FROM_DEG (nearly edge-on, outer edge toward the viewer) to flat; the hit recoils to SWING_REBOUND_DEG (the outer edge swung AWAY, so the window leaves his TV face uncovered), holds, then eases flat. */
+export const SWING_FROM_DEG = -80;
+export const SWING_REBOUND_DEG = 88;
+/** The smear is drawn for this slice of the open swing (progress 0..1): the fast part, just before the hit. */
+export const SWING_SMEAR: readonly [number, number] = [0.45, 1];
 /** Bezel shake offsets (CSS px at 1080; 2-3px), one per shakeStepMs, ending still. */
 export const SLAM_SHAKE_DX: readonly number[] = [9, -9, 7, -7, 5, -5, 2, -2];
 /** Squash on the landing frame: wider and shorter, anchored on the bottom edge. */
 export const SLAM_SQUASH = { x: 1.08, y: 0.92 } as const;
+/** Ease-in (accelerating to the hit) and ease-in-out (the gentle close). */
+export const swingEaseIn = (p: number): number => { const c = Math.min(1, Math.max(0, p)); return c * c * c; };
+export const swingEaseInOut = (p: number): number => { const c = Math.min(1, Math.max(0, p)); return c * c * (3 - 2 * c); };
 
-/** @art slam-puff.json (RS-a): a one-row sheet of `frames` cells, played once at `ms` per frame; `scale` is the 1080 integer scale. */
-export type SlamPuff = { frameW: number; frameH: number; frames: { x: number; y: number }[]; scale: number; ms: number };
+/** @art slam-puff.json (RS-a): a one-row sheet of `frames` cells, played once at `ms` per frame; `scale` is the 1080 integer scale. RS-c adds optional `smack` (impact star) and `smear` (window-edge smear) cells on the same sheet. */
+export type SlamSmack = { frameW: number; frameH: number; frames: { x: number; y: number }[]; ms: number };
+export type SlamSmear = { frameW: number; frameH: number; frame: { x: number; y: number }; edgeX: number; slice: { top: number; bottom: number } };
+export type SlamPuff = { frameW: number; frameH: number; frames: { x: number; y: number }[]; scale: number; ms: number; smack?: SlamSmack; smear?: SlamSmear };
 export const SLAM_PUFF_JSON_URL = "/office/slam-puff.json";
 export const SLAM_PUFF_URL = (theme: SkyTheme) => `/office/slam-puff-${theme}.png`;
+const xyList = (list: unknown): { x: number; y: number }[] | null => {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const out: { x: number; y: number }[] = [];
+  for (const f of list) {
+    if (f && typeof f === "object" && frameNum((f as { x?: unknown }).x) && frameNum((f as { y?: unknown }).y)) out.push({ x: (f as { x: number }).x, y: (f as { y: number }).y });
+    else return null;
+  }
+  return out;
+};
+/** Optional keys: anything invalid is dropped (the effect is skipped), never an error for the whole sheet. */
+function readSmack(j: unknown): SlamSmack | undefined {
+  if (!j || typeof j !== "object") return undefined;
+  const { frameW, frameH, frameList, ms } = j as Record<string, unknown>;
+  const frames = xyList(frameList);
+  return posInt(frameW) && posInt(frameH) && frames ? { frameW, frameH, frames, ms: posNum(ms) ? ms : 90 } : undefined;
+}
+function readSmear(j: unknown): SlamSmear | undefined {
+  if (!j || typeof j !== "object") return undefined;
+  const { frameW, frameH, frameList, edgeX, slice } = j as Record<string, unknown>;
+  const frames = xyList(frameList);
+  const sl = slice && typeof slice === "object" ? (slice as Record<string, unknown>) : {};
+  const top = frameNum(sl.top) ? sl.top : 0;
+  const bottom = frameNum(sl.bottom) ? sl.bottom : 0;
+  if (!posInt(frameW) || !posInt(frameH) || !frames || top + bottom >= frameH) return undefined;
+  return { frameW, frameH, frame: frames[0], edgeX: frameNum(edgeX) && edgeX <= frameW ? edgeX : frameW, slice: { top, bottom } };
+}
 export function validateSlamPuff(json: unknown): { ok: true; value: SlamPuff } | { ok: false; error: string } {
   if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
-  const { frameW, frameH, frames, frameList, scale, ms } = json as Record<string, unknown>;
+  const { frameW, frameH, frames, frameList, scale, ms, smack, smear } = json as Record<string, unknown>;
   if (!posInt(frameW) || !posInt(frameH)) return { ok: false, error: "frameW/frameH must be positive integers" };
   const list: { x: number; y: number }[] = [];
   if (Array.isArray(frameList) && frameList.length > 0) {
@@ -451,87 +487,145 @@ export function validateSlamPuff(json: unknown): { ok: true; value: SlamPuff } |
   } else if (posInt(frames)) {
     for (let i = 0; i < frames; i++) list.push({ x: i * frameW, y: 0 });
   } else return { ok: false, error: "frames missing" };
-  return { ok: true, value: { frameW, frameH, frames: list, scale: posInt(scale) ? scale : 3, ms: posNum(ms) ? ms : 60 } };
+  return { ok: true, value: { frameW, frameH, frames: list, scale: posInt(scale) ? scale : 3, ms: posNum(ms) ? ms : 60, smack: readSmack(smack), smear: readSmear(smear) } };
 }
 
-/** Whole timeline length. Open: the zoom, then the landing effects (the longer of the shake and the puff). Close: the reverse zoom + the dizzy second run together. */
-export function slamTotalMs(dir: SlamDir, puffMs = 0): number {
-  if (dir === "open") return SLAM.zoomMs + Math.max(SLAM.shakeMs, puffMs);
-  if (dir === "close") return Math.max(SLAM.zoomMs, SLAM.dizzyMs);
+/** What the clock needs of the art: puff + smack frame counts / ms. */
+export type SlamFxTiming = { frames: number; ms: number; smackFrames?: number; smackMs?: number };
+export const slamFxTiming = (p: SlamPuff | null): SlamFxTiming | null => (p ? { frames: p.frames.length, ms: p.ms, smackFrames: p.smack?.frames.length ?? 0, smackMs: p.smack?.ms ?? 0 } : null);
+/** Length of the hit's effects: the longer of the puff and the SMACK star. */
+export const slamFxMs = (p?: SlamFxTiming | null): number => (p ? Math.max(p.frames * p.ms, (p.smackFrames ?? 0) * (p.smackMs ?? 0)) : 0);
+
+/** Whole timeline length. Open: the swing, then the landing effects (the longer of the shake and the puff/star). Close: the swing shut + the dizzy second run together. */
+export function slamTotalMs(dir: SlamDir, fxMs = 0): number {
+  if (dir === "open") return SLAM.swingMs + Math.max(SLAM_HIT_MS, fxMs);
+  if (dir === "close") return Math.max(SLAM.closeMs, SLAM.dizzyMs);
   return 0;
 }
 /** A fresh clock for an open/close flip (reduced motion → rest: the swap is instant). */
 export const slamStart = (open: boolean, reduced: boolean): SlamState => (reduced ? SLAM_REST : { dir: open ? "open" : "close", t: 0 });
 /** One tick: advance `t`, and fall back to rest once the timeline is done. */
-export function slamAdvance(s: SlamState, dtMs: number, puffMs = 0): SlamState {
+export function slamAdvance(s: SlamState, dtMs: number, fxMs = 0): SlamState {
   if (s.dir === "rest") return s;
   const t = s.t + Math.max(0, dtMs);
-  return t >= slamTotalMs(s.dir, puffMs) ? SLAM_REST : { dir: s.dir, t };
+  return t >= slamTotalMs(s.dir, fxMs) ? SLAM_REST : { dir: s.dir, t };
 }
 
 export type SlamView = {
-  /** Dotted zoom-rect step (1..zoomSteps) being drawn, or null. Open grows 1→N, close shrinks N→1. */
-  zoomStep: number | null;
-  /** False while the window is still zooming in (the real chat appears when the rect lands). */
-  windowShown: boolean;
+  /** Swing rotateY in deg about the hinge (0 = flat), or null when the window is not swinging (nothing applied). Per-frame: NOT part of slamKey. */
+  swing: number | null;
+  /** True while the swing/bounce is running (the panel carries the transform): the coarse, keyed form of `swing`. */
+  swinging: boolean;
+  /** Closing: the panel stays up until it has swung shut. */
+  closing: boolean;
+  /** The smear frame is drawn on the window's outer edge (the fast part of the open swing). */
+  smear: boolean;
+  /** Riff shoves: his shove face on the left TV through the swing and the hit. */
+  shove: boolean;
   squash: boolean;
   /** Bezel shake offset in CSS px at 1080 (0 = still). */
   shakeDx: number;
   /** Puff frame index, or null (not landed yet / done). */
   puffFrame: number | null;
-  /** Face the Overlord's TV is forced to: smacked through the open, dizzy after the close; null = normal. */
+  /** SMACK star frame index at the hit, or null. */
+  smackFrame: number | null;
+  /** Face the Overlord's TV is forced to: smacked from the hit, dizzy after the close; null = normal. */
   face: "smacked" | "dizzy" | null;
 };
-export const SLAM_IDLE_VIEW: SlamView = { zoomStep: null, windowShown: true, squash: false, shakeDx: 0, puffFrame: null, face: null };
+export const SLAM_IDLE_VIEW: SlamView = { swing: null, swinging: false, closing: false, smear: false, shove: false, squash: false, shakeDx: 0, puffFrame: null, smackFrame: null, face: null };
 
-/** Everything the UI draws at one moment of the slam clock. `puff` = { frames, ms } when the puff art exists. Reduced motion (or rest) = the plain end state. */
-export function slamView(s: SlamState, reduced: boolean, puff?: { frames: number; ms: number } | null): SlamView {
+/** Length of the whole hit phase after the contact: recoil + hold (the shake) + settle back flat. */
+export const SLAM_HIT_MS = SLAM.shakeMs + SLAM.settleMs;
+/** The hinge angle at `t` ms into an open: the swing in, then the hit's recoil (fast out, held while the Overlord shows his hurt face), then the settle flat. */
+export function swingAngleOpen(t: number): number {
+  if (t < SLAM.swingMs) return SWING_FROM_DEG * (1 - swingEaseIn(t / SLAM.swingMs));
+  const lt = t - SLAM.swingMs;
+  if (lt < SLAM.recoilMs) return SWING_REBOUND_DEG * (1 - (1 - lt / SLAM.recoilMs) ** 2);
+  if (lt < SLAM.shakeMs) return SWING_REBOUND_DEG;
+  return lt >= SLAM_HIT_MS ? 0 : SWING_REBOUND_DEG * (1 - swingEaseInOut((lt - SLAM.shakeMs) / SLAM.settleMs));
+}
+/** Close: a gentle swing shut (ease-in-out), flat → edge-on. */
+export const swingAngleClose = (t: number): number => SWING_FROM_DEG * swingEaseInOut(t / SLAM.closeMs) + 0;
+
+/** Everything the UI draws at one moment of the slam clock. Reduced motion (or rest) = the plain end state. */
+export function slamView(s: SlamState, reduced: boolean, fx?: SlamFxTiming | null): SlamView {
   if (reduced || s.dir === "rest") return SLAM_IDLE_VIEW;
-  const stepMs = SLAM.zoomMs / SLAM.zoomSteps;
   if (s.dir === "close") {
-    const zoomStep = s.t < SLAM.zoomMs ? SLAM.zoomSteps - Math.min(SLAM.zoomSteps - 1, Math.floor(s.t / stepMs)) : null;
-    return { ...SLAM_IDLE_VIEW, zoomStep, face: s.t < SLAM.dizzyMs ? "dizzy" : null };
+    const shut = s.t < SLAM.closeMs;
+    return { ...SLAM_IDLE_VIEW, swing: shut ? swingAngleClose(s.t) : null, swinging: shut, closing: shut, face: s.t < SLAM.dizzyMs ? "dizzy" : null };
   }
-  if (s.t < SLAM.zoomMs) return { ...SLAM_IDLE_VIEW, zoomStep: 1 + Math.min(SLAM.zoomSteps - 1, Math.floor(s.t / stepMs)), windowShown: false, face: "smacked" };
-  const lt = s.t - SLAM.zoomMs; // ms since landing
-  const hit = lt < SLAM.shakeMs; // the impact: the dotted box stays on the Overlord TV and the real chat waits until the hit settles
-  const pf = puff && puff.frames > 0 ? Math.floor(lt / puff.ms) : -1;
+  if (s.t < SLAM.swingMs) {
+    const p = s.t / SLAM.swingMs;
+    return { ...SLAM_IDLE_VIEW, swing: swingAngleOpen(s.t), swinging: true, smear: p >= SWING_SMEAR[0] && p < SWING_SMEAR[1], shove: true, face: null };
+  }
+  const lt = s.t - SLAM.swingMs; // ms since the hit
+  const pf = fx && fx.frames > 0 ? Math.floor(lt / fx.ms) : -1;
+  const sf = fx && fx.smackFrames && fx.smackMs ? Math.floor(lt / fx.smackMs) : -1;
+  const bouncing = lt < SLAM_HIT_MS;
   return {
     ...SLAM_IDLE_VIEW,
-    zoomStep: hit ? SLAM.zoomSteps : null,
-    windowShown: !hit,
+    swing: bouncing ? swingAngleOpen(s.t) : null,
+    swinging: bouncing,
+    shove: bouncing,
     squash: lt < SLAM.squashMs,
     shakeDx: lt < SLAM.shakeMs ? (SLAM_SHAKE_DX[Math.floor(lt / SLAM.shakeStepMs)] ?? 0) : 0,
-    puffFrame: pf >= 0 && puff && pf < puff.frames ? pf : null,
+    puffFrame: pf >= 0 && fx && pf < fx.frames ? pf : null,
+    smackFrame: sf >= 0 && fx && sf < (fx.smackFrames ?? 0) ? sf : null,
     face: "smacked",
   };
 }
-/** Stable string of a view; the clock re-renders only when it changes. */
-export const slamKey = (v: SlamView): string => `${v.zoomStep ?? "-"}:${v.windowShown ? 1 : 0}:${v.squash ? 1 : 0}:${v.shakeDx}:${v.puffFrame ?? "-"}:${v.face ?? "-"}`;
+/** Stable string of a view; the clock re-renders only when it changes (the per-frame `swing` angle is written straight to the DOM instead). */
+export const slamKey = (v: SlamView): string => `${v.swinging ? 1 : 0}:${v.closing ? 1 : 0}:${v.smear ? 1 : 0}:${v.shove ? 1 : 0}:${v.squash ? 1 : 0}:${v.shakeDx}:${v.puffFrame ?? "-"}:${v.smackFrame ?? "-"}:${v.face ?? "-"}`;
 
 /** The mode to force on the Overlord's face: the slam's, skipped when faces.json lacks that key. */
 export const slamFaceForce = (v: SlamView, faces: FacesModel | null): Extract<FaceMode, "smacked" | "dizzy"> | null => (v.face && hasFaceMode(faces, "overlord", v.face) ? v.face : null);
+/** Riff's own face while he shoves the window; skipped when faces.json lacks `shove`. */
+export const slamRiffForce = (v: SlamView, faces: FacesModel | null): Extract<FaceMode, "shove"> | null => (v.shove && hasFaceMode(faces, "riffbot", "shove") ? "shove" : null);
 
 /** The zone transform under the slam: the shake (snapped to device px) and the landing squash (pinned on the bottom edge by the caller); null = none. */
 export function slamTransform(dx: number, squash: boolean, dpr = 1): string | null {
   const t = [dx ? `translateX(${snapPx(dx, dpr)}px)` : "", squash ? `scale(${SLAM_SQUASH.x}, ${SLAM_SQUASH.y})` : ""].filter(Boolean).join(" ");
   return t || null;
 }
+/** Perspective distance as a multiple of the window width: scales with the window, so the swing looks the same at every size. */
+export const SWING_PERSPECTIVE_K = 1.8;
+/**
+ * Perspective distance (px) for a window `widthPx` wide at hinge angle `deg`. The outer edge (toward the viewer for deg < 0) projects to
+ * W*cos(a)*P/(P - W*sin(a)); P >= W*cot(a/2) keeps that <= W, i.e. the edge never leaves the flat window's own box (so it stays inside the sky band
+ * and the smear is never pushed out of it). Capped so the near-flat angles stay finite.
+ */
+export function swingPerspectivePx(deg: number, widthPx: number): number {
+  const w = widthPx > 0 ? widthPx : 1;
+  const a = (Math.abs(deg) * Math.PI) / 180;
+  if (deg >= 0 || a < 0.02) return w * SWING_PERSPECTIVE_K;
+  return w * Math.min(60, Math.max(SWING_PERSPECTIVE_K, 1 / Math.tan(a / 2)));
+}
+/** Where the window's outer edge lands (px from the hinge) at angle `deg` under swingPerspectivePx: the projected edge the layout has to keep in bounds. */
+export function swingEdgeX(deg: number, widthPx: number): number {
+  const a = (deg * Math.PI) / 180;
+  const p = swingPerspectivePx(deg, widthPx);
+  const z = -widthPx * Math.sin(a); // deg < 0: the outer edge comes toward the viewer
+  return (widthPx * Math.cos(a) * p) / (p - z);
+}
+/** The CSS transform of the hinge angle (perspective + rotateY; the origin is the hinge edge, set in CSS). */
+export const swingTransform = (deg: number, widthPx = 1000): string => `perspective(${Math.round(swingPerspectivePx(deg, widthPx))}px) rotateY(${Math.round(deg * 100) / 100}deg)`;
 
 export type Rect = { left: number; top: number; width: number; height: number };
-/** The dotted outline at `step` of `steps`: Riff's TV rect grown (or shrunk back) toward the chat's rect; left/top/width/height snapped to whole device px. */
-export function slamRect(from: Rect, to: Rect, step: number, steps = SLAM.zoomSteps, dpr = 1): Rect {
-  const p = Math.min(1, Math.max(0, step / steps));
-  const mix = (a: number, b: number) => snapPx(a + (b - a) * p, dpr);
-  return { left: mix(from.left, to.left), top: mix(from.top, to.top), width: mix(from.width, to.width), height: mix(from.height, to.height) };
-}
 /** The face k at 1080 that slam-puff.json's `scale` (3) was drawn against: the puff grows with the face from there (so the burst keeps its size relative to the Overlord at 4K@120%). */
 export const SLAM_FACE_K_1080 = 7;
 /** Puff scale (CSS px per art px): the art's `scale` at the 1080 face k, grown in step with the face k elsewhere, always whole device px. */
 export const slamPuffScale = (puffScale: number, faceK: number, dpr = 1): number => crispScale(faceK > 0 ? (puffScale * faceK) / SLAM_FACE_K_1080 : puffScale, dpr);
 /** A puff cell's box centred on a window-edge point, snapped to whole device px. */
-export function slamPuffBox(at: { x: number; y: number }, cell: { w: number; h: number }, k: number, dpr = 1): Rect {
-  return { left: snapPx(at.x - (cell.w * k) / 2, dpr), top: snapPx(at.y - (cell.h * k) / 2, dpr), width: cell.w * k, height: cell.h * k };
+export function slamPuffBox(at: { x: number; y: number }, cell: { w: number; h: number }, k: number, dpr = 1, bounds?: { width: number; height: number } | null): Rect {
+  const width = cell.w * k;
+  const height = cell.h * k;
+  let left = at.x - width / 2;
+  let top = at.y - height / 2;
+  if (bounds && bounds.width >= width && bounds.height >= height) { // keep the whole puff inside the FX box (the sky's edge clips it otherwise)
+    left = Math.min(Math.max(left, 0), bounds.width - width);
+    top = Math.min(Math.max(top, 0), bounds.height - height);
+  }
+  return { left: snapPx(left, dpr), top: snapPx(top, dpr), width, height };
 }
 /** The four window corners where the puffs go off. */
 export const slamPuffPoints = (r: Rect): { x: number; y: number }[] => [

@@ -145,7 +145,7 @@ test("exit paths: Esc, outside click, x on the chat, face re-click are all wired
   assert.ok(sky.includes("skyOutsideCloses(!!t && !!root.current?.contains(t)"));
   assert.ok(sky.includes('document.addEventListener("pointerdown", down, true)'));
   assert.ok(sky.includes("onClick={onClose}") && sky.includes("onClick={onFace}"));
-  assert.ok(sky.includes("hidden={panel && !isOpen}"));
+  assert.ok(sky.includes("hidden={panel && !isOpen && !fx?.closing}"));
   assert.equal((sky.match(/<Zone /g) || []).length, 2 + 2); // two TVs + two chat panels
 });
 
