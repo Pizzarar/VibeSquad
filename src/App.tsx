@@ -111,6 +111,7 @@ import {
   cycleUiScalePreset,
   getUiScale,
   handleUiScaleKeyDown,
+  useChatScale,
   useUiScale,
   useUiScaleHud,
 } from "./uiScale";
@@ -1430,6 +1431,7 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
+  const chatScale = useChatScale();
   const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | "new-squad" | null>(null);
   const setFirstRunOpen = (open: boolean) => setModal(open ? "first-run" : null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
@@ -1491,7 +1493,7 @@ export function App() {
 
   useEffect(() => {
     applyUiScaleToDom(uiScale);
-  }, [uiScale]);
+  }, [uiScale, chatScale]);
 
   useEffect(() => {
     loadArchived(); // palette + date finder search archived agents too
