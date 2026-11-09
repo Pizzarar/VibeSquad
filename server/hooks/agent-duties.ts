@@ -939,7 +939,11 @@ export interface Deps {
   unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
 }
 
-/** Default unitBranchState: HEAD branch of the worker's cwd, merged when it is an ancestor of master (or main). */
+/**
+ * Default unitBranchState: HEAD branch of the worker's cwd. merged:true ONLY when that is a named non-master/main branch that
+ * is an ancestor of master/main. Anything unknown (no cwd, not a repo, detached HEAD, on master/main, no base branch,
+ * unmerged) is merged:false: default to keep.
+ */
 export function gitUnitBranchState(cwd: string | undefined): Promise<{ unit: string; merged: boolean }> {
   const git = (args: string[]) =>
     new Promise<{ ok: boolean; out: string }>((resolve) => {
@@ -954,13 +958,12 @@ export function gitUnitBranchState(cwd: string | undefined): Promise<{ unit: str
     });
   return (async () => {
     const head = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (!head.ok || !head.out || ["HEAD", "master", "main"].includes(head.out)) return { unit: "", merged: true };
+    if (!head.ok || !head.out || ["HEAD", "master", "main"].includes(head.out)) return { unit: "", merged: false };
     for (const base of ["master", "main"]) {
       const r = await git(["merge-base", "--is-ancestor", head.out, base]);
       if (r.ok) return { unit: head.out, merged: true };
     }
-    const hasBase = (await git(["rev-parse", "--verify", "--quiet", "master"])).ok || (await git(["rev-parse", "--verify", "--quiet", "main"])).ok;
-    return { unit: head.out, merged: !hasBase }; // no master/main to compare against: nothing to protect
+    return { unit: head.out, merged: false };
   })();
 }
 
@@ -2288,7 +2291,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return;
       }
       const labels = s.labels ?? {};
-      if (isDigestAgent(labels) || effectiveAgentRole({ labels }) !== "worker") {
+      if (isDigestAgent(labels) || String(labels.role ?? "").trim().toLowerCase() !== "worker") {
         doneReported.delete(agentId); // lead / Buddy / digest: never auto-closed
         return;
       }
@@ -2853,25 +2856,42 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
-    /** The newest `done` entry about `agentId` (its own report, or a verdict that refs it) in the team log; null when none. */
-    function lastDoneFor(team: string, agentId: string): LogEntry | null {
+    const FAIL_RE = /\bFAIL(ED)?\b/;
+    /** Only an explicit role=worker label is archivable: a missing/empty/unknown role normalizes to "worker" elsewhere. */
+    const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
+    type DoneIndex = Map<string, { own: LogEntry | null; failVerdictAt: number }>;
+    /**
+     * One pass over a team log: per agent, its OWN newest `done` entry (author === agent) and the newest FAIL verdict some
+     * other author (the digest) filed against it in refs. A ref alone never counts as the worker's report.
+     */
+    function indexDoneEntries(team: string): DoneIndex {
+      const idx: DoneIndex = new Map();
+      const slot = (id: string) => {
+        let s = idx.get(id);
+        if (!s) idx.set(id, (s = { own: null, failVerdictAt: 0 }));
+        return s;
+      };
       let text = "";
       try {
         text = fs.readFileSync(logPath(team), "utf8");
       } catch {
-        return null;
+        return idx;
       }
-      let last: LogEntry | null = null;
       for (const line of text.split(/\r?\n/)) {
         if (!line.includes('"done"')) continue;
         try {
           const e = JSON.parse(line) as LogEntry;
-          if (e.type === "done" && (e.agent === agentId || (e.refs ?? []).includes(agentId))) last = e;
+          if (e.type !== "done") continue;
+          if (e.agent) slot(e.agent).own = e;
+          if (FAIL_RE.test(e.text)) {
+            const at = Date.parse(e.ts);
+            for (const ref of e.refs ?? []) if (ref !== e.agent && Number.isFinite(at)) slot(ref).failVerdictAt = Math.max(slot(ref).failVerdictAt, at);
+          }
         } catch {
           // skip malformed
         }
       }
-      return last;
+      return idx;
     }
 
     /**
@@ -2889,20 +2909,31 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       try {
         const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
         const grace = deps.doneArchiveGraceMs ?? 30 * 60_000;
+        const logIndex = new Map<string, DoneIndex>(); // once per team per sweep
+        const branchState = new Map<string, Promise<{ unit: string; merged: boolean }>>(); // once per cwd per sweep
         for (const e of res.entries as any[]) {
           const a = { ...e.agent, labels: e.agent?.labels ?? {} } as AgentSnap;
           if (!a.id || a.archivedAt || a.internal || a.labels[AUTO_ARCHIVED_LABEL] === "1") continue;
-          if (isDigestAgent(a.labels) || effectiveAgentRole(a) !== "worker") continue;
+          if (isDigestAgent(a.labels) || !isExplicitWorker(a.labels)) continue;
           if (!["idle", "closed"].includes(String(a.status ?? "").toLowerCase())) continue;
           if (((a as any).pendingPermissions?.length ?? 0) > 0 || (a as any).requiresAttention) continue;
           const where = teamOf(a.labels, a.cwd);
           if (!where) continue;
-          const done = lastDoneFor(where.team, a.id);
+          let idx = logIndex.get(where.team);
+          if (!idx) logIndex.set(where.team, (idx = indexDoneEntries(where.team)));
+          const entry = idx.get(a.id);
+          const done = entry?.own;
           if (!done) continue;
           const at = Date.parse(done.ts);
           if (!Number.isFinite(at) || now - at < grace) continue;
-          if (/\bFAIL(ED)?\b/.test(done.text)) continue;
-          const state = await (deps.unitBranchState ?? gitUnitBranchState)(a.cwd).catch(() => ({ unit: "", merged: false }));
+          if (FAIL_RE.test(done.text) || (entry?.failVerdictAt ?? 0) >= at) continue; // FAIL (own or digest verdict): the fix round goes here
+          const cwdKey = a.cwd ?? "";
+          let pending = branchState.get(cwdKey);
+          if (!pending) {
+            pending = Promise.resolve((deps.unitBranchState ?? gitUnitBranchState)(a.cwd)).catch(() => ({ unit: "", merged: false }));
+            branchState.set(cwdKey, pending);
+          }
+          const state = await pending;
           if (!state.merged) continue;
           // Re-read right before archiving: a fix round may have started since the list.
           const fresh = await snap(paseo, a.id);

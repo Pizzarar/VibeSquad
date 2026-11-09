@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import {
   createPlugin,
+  gitUnitBranchState,
   deriveTeamForSpawn,
   isHubCwd,
   laneBriefBlock,
@@ -1294,3 +1296,115 @@ test(
     }
   }),
 );
+
+// ---------------------------------------------------------------------------
+// B1 review R1 — default to keep
+// ---------------------------------------------------------------------------
+
+test(
+  "B1 R1: the sweep needs an explicit role=worker; missing, empty, overlord and reviewer roles are kept",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, labels: Record<string, string>) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", ...labels },
+    });
+    const agents = new Map<string, any>([
+      ["w-ok", mk("w-ok", { role: "worker" })],
+      ["no-role", mk("no-role", {})],
+      ["empty-role", mk("empty-role", { role: "" })],
+      ["overlord", mk("overlord", { role: "overlord" })],
+      ["reviewer", mk("reviewer", { role: "reviewer" })],
+      ["lead-1", mk("lead-1", { role: "lead", lead: "vibesquad" })],
+    ]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (id: string) => JSON.stringify({ ts: new Date(now - 60 * 60_000).toISOString(), agent: id, lane: "vibesquad", type: "done", text: "PASS", refs: [] }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(join(vsHome, "teams", "vibesquad", "log.jsonl"), [...agents.keys()].map(line).join(""), "utf8");
+      assert.deepEqual(await h.sweepDoneWorkers(now), ["w-ok"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "B1 R1: only the worker's own done counts; another author's ref is not its report, a digest FAIL verdict keeps it, git state is read once per cwd",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, cwd = CWD) => ({
+      id, title: id, cwd, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker" },
+    });
+    const agents = new Map<string, any>([
+      ["w-ref-only", mk("w-ref-only")],
+      ["w-digest-fail", mk("w-digest-fail")],
+      ["w-ok-1", mk("w-ok-1")],
+      ["w-ok-2", mk("w-ok-2")],
+      ["lead-1", { ...mk("lead-1"), labels: { team: "vibesquad", lane: "vibesquad", role: "lead", lead: "vibesquad" } }],
+    ]);
+    const calls: Array<string | undefined> = [];
+    const h = harness(agents, { briefRoot, unitBranchState: async (cwd) => (calls.push(cwd), { unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const ts = (min: number) => new Date(now - min * 60_000).toISOString();
+      const line = (agent: string, text: string, min: number, refs: string[] = []) =>
+        JSON.stringify({ ts: ts(min), agent, lane: "vibesquad", type: "done", text, refs }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        line("lead-1", "PASS: lane note", 60, ["w-ref-only"]) +
+          line("w-digest-fail", "PASS: shipped", 90) +
+          line("digest-9", "FAIL: regression", 60, ["w-digest-fail"]) +
+          line("w-ok-1", "PASS", 60) +
+          line("w-ok-2", "PASS", 60),
+        "utf8",
+      );
+      assert.deepEqual((await h.sweepDoneWorkers(now)).sort(), ["w-ok-1", "w-ok-2"]);
+      assert.equal(calls.length, 1, "same cwd: one git lookup per sweep");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test("B1 R1: gitUnitBranchState keeps (merged:false) on every unknown; merged:true only for a named branch contained in master", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-b1-git-"));
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, stdio: "pipe" });
+  try {
+    assert.deepEqual(await gitUnitBranchState(undefined), { unit: "", merged: false }, "no cwd");
+    assert.deepEqual(await gitUnitBranchState(join(root, "missing")), { unit: "", merged: false }, "cwd absent");
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    assert.equal((await gitUnitBranchState(plain)).merged, false, "not a repo");
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "master");
+    writeFileSync(join(repo, "a.txt"), "a");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "a");
+    assert.equal((await gitUnitBranchState(repo)).merged, false, "on master");
+    git(repo, "checkout", "-q", "-b", "unit-merged");
+    assert.deepEqual(await gitUnitBranchState(repo), { unit: "unit-merged", merged: true }, "named branch contained in master");
+    git(repo, "checkout", "-q", "-b", "unit-open");
+    writeFileSync(join(repo, "b.txt"), "b");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "b");
+    assert.deepEqual(await gitUnitBranchState(repo), { unit: "unit-open", merged: false }, "unmerged branch");
+    git(repo, "checkout", "-q", "--detach");
+    assert.equal((await gitUnitBranchState(repo)).merged, false, "detached HEAD");
+    const nobase = join(root, "nobase");
+    mkdirSync(nobase);
+    git(nobase, "init", "-q", "-b", "trunk");
+    writeFileSync(join(nobase, "a.txt"), "a");
+    git(nobase, "add", ".");
+    git(nobase, "commit", "-q", "-m", "a");
+    git(nobase, "checkout", "-q", "-b", "unit-z");
+    assert.equal((await gitUnitBranchState(nobase)).merged, false, "no master/main base branch");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
