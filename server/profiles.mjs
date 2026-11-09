@@ -256,6 +256,7 @@ export const DEFAULT_PACK_PROFILES = [
   {
     id: "agent_profile_mut1e4lx_us7pdrypi8q",
     name: "Implement - Sonnet",
+    mcpExtras: ["playwright"],
     role: "worker",
     icon: "terminal",
     color: "orange",
@@ -268,6 +269,7 @@ export const DEFAULT_PACK_PROFILES = [
   {
     id: "agent_profile_mut1ermy_d30l6lq8qeh",
     name: "Implement - Opus",
+    mcpExtras: ["playwright"],
     role: "worker",
     icon: "terminal",
     color: "orange",
@@ -325,6 +327,7 @@ export const DEFAULT_PACK_PROFILES = [
   {
     id: "agent_profile_mut1flqr_vtuwucehsdk",
     name: "Review - Sonnet",
+    mcpExtras: ["playwright"],
     role: "worker",
     icon: "search",
     color: "orange",
@@ -337,6 +340,7 @@ export const DEFAULT_PACK_PROFILES = [
   {
     id: "agent_profile_mvdsk3gf_8xrqtncy3ly",
     name: "Review - Gemini",
+    mcpExtras: ["playwright"],
     role: "worker",
     icon: "search",
     color: "emerald",
@@ -392,6 +396,7 @@ export const DEFAULT_PACK_PROFILES = [
   {
     id: "agent_profile_mvso6xcl_hk9afi1fz2r",
     name: "Art Director - Gemini",
+    mcpExtras: ["playwright"],
     role: "worker",
     icon: "palette",
     color: "emerald",
@@ -409,6 +414,7 @@ export const DEFAULT_PACK_PROFILES = [
   {
     id: "agent_profile_mvwjrb2k_enr1rgj8hg5",
     name: "Art Painter - Opus",
+    mcpExtras: ["playwright"],
     role: "worker",
     provider: "claude",
     model: "claude-opus-5-5",
@@ -504,7 +510,18 @@ export function normalizeProfile(raw) {
   }
   out.notes = String(raw.notes ?? "");
   if (raw.brief !== undefined) out.brief = String(raw.brief);
+  if (Array.isArray(raw.mcpExtras) && raw.mcpExtras.length) out.mcpExtras = raw.mcpExtras.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
   return out;
+}
+
+// Opt-in MCP extras (e.g. "playwright" for UI live checks) for a profile name. A stored profile without the field
+// (saved before it existed) falls back to the shipped default of the same name.
+export function profileMcpExtras(name, profilesInput) {
+  const n = String(name ?? "").trim().toLowerCase();
+  if (!n) return [];
+  const same = (p) => String(p?.name ?? "").trim().toLowerCase() === n;
+  const stored = Array.isArray(profilesInput) ? profilesInput.find(same) : null;
+  return (stored?.mcpExtras ?? DEFAULT_PACK_PROFILES.find(same)?.mcpExtras ?? []);
 }
 
 export function toPaseoProfileShape(profile) {
