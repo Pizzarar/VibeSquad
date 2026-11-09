@@ -35,6 +35,7 @@ import {
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   laneWorkingDir,
@@ -127,6 +128,7 @@ import {
 
 export {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   performBrainstormRestart,
@@ -859,6 +861,8 @@ async function handleBrainstormRestart(req, res, rootDir) {
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
+    // O5: a denied callerId must not spend a budget slot (a worker could otherwise exhaust it and block real restarts).
+    await authorizeBuddyRestartRequest(body, rootDir);
     if (body.reason === "start-brainstorm" || body.agentId === "start-brainstorm") {
       if (overSpawnBudget(res)) return;
     } else {
@@ -870,7 +874,7 @@ async function handleBrainstormRestart(req, res, rootDir) {
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
