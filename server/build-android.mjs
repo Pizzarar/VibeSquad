@@ -223,6 +223,31 @@ export function signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, s
   return verifyApkCert({ javaExe, apksignerJar, apk: outApk, cwd, env: secretEnv, exec, pinPath, pinFirst, log });
 }
 
+/** Standard Android debug keystore (created by Gradle / Android Studio, never by us). Sideload builds only. */
+export const DEBUG_KEYSTORE_PATH = join(homedir(), ".android", "debug.keystore");
+const DEBUG_KEY_ALIAS = "androiddebugkey";
+const DEBUG_KEY_PASS = "android"; // public, documented Android debug-keystore password
+
+/**
+ * Signs a compact release APK with the standard Android debug keystore and verifies it (no release pin: never publishable).
+ * A missing keystore is a hard error; we never create one.
+ */
+export function signSideloadApk({ javaExe, apksignerJar, inputApk, outApk, cwd, exec = execFileSync, keystorePath = DEBUG_KEYSTORE_PATH, log = console.log }) {
+  if (!existsSync(keystorePath)) {
+    throw new Error(`Android debug keystore not found at ${keystorePath}: run one Gradle debug build or open an Android project in Android Studio once to create it`);
+  }
+  exec(
+    javaExe,
+    ["-jar", apksignerJar, "sign", "--ks", keystorePath, "--ks-key-alias", DEBUG_KEY_ALIAS, "--ks-pass", "env:VS_DEBUG_KS_PASS", "--key-pass", "env:VS_DEBUG_KS_PASS", "--out", outApk, inputApk],
+    { cwd, env: { ...process.env, VS_DEBUG_KS_PASS: DEBUG_KEY_PASS }, stdio: "inherit" },
+  );
+  const out = exec(javaExe, ["-jar", apksignerJar, "verify", "--print-certs", outApk], { cwd, encoding: "utf8" });
+  if (out) log(String(out).trimEnd());
+  const certSha256 = parseSignerSha256(out);
+  if (!certSha256) throw new Error("Could not read exactly one valid signer certificate SHA-256 from apksigner verify --print-certs output");
+  return { certSha256 };
+}
+
 function findApk(dir) {
   if (!existsSync(dir)) return null;
   const files = readdirSync(dir).filter((f) => f.endsWith(".apk"));
@@ -252,9 +277,14 @@ export function buildAndroidApk({
   exec = execFileSync,
   pinFirst = false,
   debug = false,
+  sideload = false,
   unsigned = false,
+  debugKeystorePath = DEBUG_KEYSTORE_PATH,
 } = {}) {
-  if (debug && unsigned) throw new Error("--debug and --unsigned cannot be combined");
+  // --debug is an alias of --sideload: a compact (stripped arm64) release build signed with the Android debug keystore.
+  sideload = sideload || debug;
+  debug = false;
+  if (sideload && unsigned) throw new Error("--debug/--sideload and --unsigned cannot be combined");
   const require = createRequire(import.meta.url);
   const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
   const androidEnv = resolveAndroidEnv(env);
@@ -316,12 +346,16 @@ export function buildAndroidApk({
     : "java";
   const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
   let certSha256;
-  if (debug || unsigned) {
-    // Sideload test builds: Gradle debug-signed (--debug) or raw unsigned (--unsigned, install needs apksigner). No release pin/keystore; never publishable.
-    console.log(`[build:android] 5/6 ${debug ? "Debug build (Gradle debug keystore)" : "Unsigned build"}: skipping release signing and cert pin.`);
+  if (sideload || unsigned) {
+    // Sideload test builds: compact release signed with the Android debug keystore (--sideload/--debug) or raw unsigned (--unsigned). No release pin/keystore; never publishable.
+    console.log(`[build:android] 5/6 ${sideload ? "Sideload build (Android debug keystore)" : "Unsigned build"}: skipping release signing and cert pin.`);
     // A stale release marker must never let release.mjs publish this test APK.
     rmSync(join(distDesktopDir, "android-build.json"), { force: true });
-    copyFileSync(apk, destApk);
+    if (sideload) {
+      ({ certSha256 } = signSideloadApk({ javaExe, apksignerJar, inputApk: apk, outApk: destApk, cwd: rootDir, exec, keystorePath: debugKeystorePath }));
+    } else {
+      copyFileSync(apk, destApk);
+    }
   } else if (apk.endsWith("-unsigned.apk")) {
     console.log("[build:android] 5/6 Signing APK...");
     const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv });
@@ -338,5 +372,5 @@ export function buildAndroidApk({
 
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename);
 if (isMain) {
-  buildAndroidApk({ pinFirst: process.argv.includes("--pin-first"), debug: process.argv.includes("--debug"), unsigned: process.argv.includes("--unsigned") });
+  buildAndroidApk({ pinFirst: process.argv.includes("--pin-first"), sideload: process.argv.includes("--debug") || process.argv.includes("--sideload"), unsigned: process.argv.includes("--unsigned") });
 }
