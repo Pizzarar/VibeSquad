@@ -32,7 +32,7 @@ test("HP5: one view = TVs band, strip, then the floor box that takes the rest of
   assert.equal((hp.match(/\{strip\}/g) || []).length, 2); // the view + the agent-open fallback
   assert.match(hp, /const PLATE_INSET = 0;/); // floor flush on the page bottom, no gap for the backdrop to offset
   assert.match(css, /\.hub-sky-page \{ flex: none;/); // the TVs band keeps its HP2 height
-  assert.match(css, /\.hub-tower-box \{ flex: 1; min-height: 0; overflow: hidden/);
+  assert.match(css, /\.hub-tower-box \{ flex: 1 0 125px; min-height: 125px; overflow: hidden/);
   assert.match(css, /\.hub-pages \.hub-tower-box \.sq-floor \{[^}]*height: auto;[^}]*overflow: hidden;[^}]*background: transparent;[^}]*border-top: 0/); // .sq-floor's own navy + cyan border would paint over the skyline gutters
   assert.match(css, /\.hub-tower-box \.sq-floor-stage \{ align-items: flex-end; \}/); // bottom edge flush
   assert.match(css, /\.hub-sky-page \.sky-zones \{ flex: none; height: clamp\(/); // HP2 cap

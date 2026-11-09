@@ -30,9 +30,18 @@ test('cast avatar: 32 css at 1080 / UI 150% was 48 device px (0.75x of the 64 ce
   assert.match(read('src/styles.css'), /\.cast-sprite \{[^}]*image-rendering: pixelated/);
 });
 
-test('brand mark: 16px art is a whole multiple of 16 device px, driven by --brand-mark-px, title cannot reach the status square', () => {
-  for (const [dpr, zoom] of CASES) assert.equal(snapDeviceSize(22, 16, dpr, zoom).device % 16, 0);
-  assert.equal(snapDeviceSize(22, 16, 1, 1.5).device, 32); // was 22 * 1.5 = 33 device px (2.06x)
+test('brand mark: 22px master is a whole multiple of 22 device px rounded UP, driven by --brand-mark-px, title cannot reach the status square', () => {
+  for (const dpr of [1, 1.2, 1.5, 2]) for (const zoom of [1, 1.25, 1.5, 1.75, 2]) {
+    const { device, css } = snapDeviceSize(22, 22, dpr, zoom, true);
+    assert.equal(device % 22, 0, `${dpr}x${zoom}`);
+    assert.ok(device >= 22 * dpr * zoom - 1e-6, `${dpr}x${zoom}: ${device} shrank below the target`);
+    assert.ok(device < 22 * dpr * zoom + 22, `${dpr}x${zoom}: ${device} overshoots by a whole step`);
+    assert.ok(Math.abs(css * dpr * zoom - device) < 1e-9);
+  }
+  assert.equal(snapDeviceSize(22, 22, 1.2, 1.5, true).device, 44); // 4K@120% x UI 150%: target 39.6 -> 44
+  assert.equal(snapDeviceSize(22, 22, 1, 1.5, true).device, 44); // 33 -> 44
+  assert.equal(snapDeviceSize(22, 22, 1, 1, true).device, 22);
+  for (const bad of [NaN, 0, -5, Infinity]) assert.equal(snapDeviceSize(bad, 22, 1.2, 1.5, true).device, 22, `target ${bad}`);
   const css = read('src/styles.css');
   assert.match(css, /\.brand-mark \{[^}]*width: var\(--brand-mark-px, 22px\)/);
   assert.match(css, /\.brand-text \{\s*min-width: 0;/);

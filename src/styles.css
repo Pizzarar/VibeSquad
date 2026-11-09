@@ -4725,7 +4725,7 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 
 /* ── Hub pages (src/HubPages.tsx, docs/PLAN_HUB_PAGES.md HP1-HP3): Sky / Tower switcher over one shared skyline backdrop ── */
-.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; isolation: isolate; }
+.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden auto; isolation: isolate; } /* FF-ui: if the TVs strip leaves the floor under its minimum, the page scrolls a little instead of hiding the floor */
 .hub-backdrop { position: absolute; inset: 0; z-index: -1; image-rendering: pixelated; pointer-events: none; background-color: #2a1b6b; }
 :root[data-theme="light"] .hub-backdrop { background-color: #95d3f2; }
 /* Fallback (A1 absent): today's sky band along the bottom over a vertical gradient. */
@@ -4737,7 +4737,7 @@ button.project-file-name:hover { text-decoration: underline; }
 /* Short windows (1280x720): an open sky chat gets a taller band (it was 240px: timeline gone, composer cut); the floor below takes the difference. */
 @media (max-height: 820px) { .hub-sky-page .sky-zones:has(.sky-chat-panel:not([hidden])) { height: clamp(330px, 46vh, 440px); } }
 /* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
-.hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.hub-tower-box { flex: 1 0 125px; min-height: 125px; overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
 .hub-tower-box .sq-floor-stage { align-items: flex-end; }
 .hub-tower-box .sq-floor-tower { background: transparent; border-top: 0; }
@@ -5017,7 +5017,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
   filter: drop-shadow(1px 0 0 var(--cyan)) drop-shadow(-1px 0 0 var(--cyan)) drop-shadow(0 1px 0 var(--cyan)) drop-shadow(0 -1px 0 var(--cyan));
 }
 .sq-floor-char:hover .sq-floor-sprite { animation: sq-floor-hop 120ms steps(1, end) forwards; }
-@keyframes sq-floor-hop { from { transform: translateY(0); } to { transform: translateY(-1px); } }
+@keyframes sq-floor-hop { from { transform: translateY(0); } to { transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) { .sq-floor-char:hover .sq-floor-sprite { animation: none; } }
 .sq-floor-bubble { position: absolute; display: block; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; }
 .sq-floor-plus {

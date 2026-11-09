@@ -82,12 +82,14 @@ export function kitPixel(dpr: number, zoom: number): { device: number; css: numb
 /**
  * SS5: a CSS size whose DEVICE-px size is a whole multiple of `step` (the art's native px, or half of it for a 2:1 downscale). The root
  * zoom and the OS dpr multiply, so a fixed CSS size lands on fractional device px (ragged rows). Picks n = max(1, round(cssTarget x zoom x dpr / step))
- * and returns { device: n x step, css: device / (zoom x dpr) }.
+ * and returns { device: n x step, css: device / (zoom x dpr) }. `up` rounds n UP (ceil) so the art never shrinks below the CSS target.
+ * A non-finite or <= 0 cssTarget falls back to the native size (n = 1).
  */
-export function snapDeviceSize(cssTarget: number, step: number, dpr: number, zoom: number): { device: number; css: number } {
+export function snapDeviceSize(cssTarget: number, step: number, dpr: number, zoom: number, up = false): { device: number; css: number } {
   const eff = Math.max(0.1, (Number.isFinite(dpr) && dpr > 0 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
   const st = Number.isFinite(step) && step > 0 ? step : 1;
-  const device = Math.max(1, Math.round((cssTarget * eff) / st)) * st;
+  const raw = Number.isFinite(cssTarget) && cssTarget > 0 ? (cssTarget * eff) / st : 1;
+  const device = Math.max(1, up ? Math.ceil(raw - 1e-9) : Math.round(raw)) * st;
   return { device, css: device / eff };
 }
 
@@ -98,8 +100,8 @@ export function applyKitPixelToDom(scale: number = currentScale): void {
   // +0.0001px keeps float error from rounding a device px down in border/background sizing.
   root.style.setProperty("--u3-px", `${(css + 0.0001).toFixed(4)}px`);
   root.dataset.u3Px = String(device);
-  // SS5: the sidebar brand mark (16px art, nominal 22 css px) is a whole multiple of 16 device px.
-  const brand = snapDeviceSize(22, 16, window.devicePixelRatio || 1, clampUiScale(scale));
+  // SS5: the sidebar brand mark (22px master, nominal 22 css px) is a whole multiple of 22 device px, rounded UP so it never shrinks below the target.
+  const brand = snapDeviceSize(22, 22, window.devicePixelRatio || 1, clampUiScale(scale), true);
   root.style.setProperty("--brand-mark-px", `${(brand.css + 0.0001).toFixed(4)}px`);
   root.dataset.brandMark = String(brand.device);
 }
