@@ -805,7 +805,7 @@ export function QuickBugsChip({
 }
 
 // ── Squads Home: one tile per squad, one level above the squad page (docs/PLAN_SQUADS_HOME.md §H1) ──
-function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; onSelectSquad: (id: string) => void; onOpenPin: PinHandler; onOpenAgent?: (teamId: string, agentId: string) => void }) {
+function SquadTile({ v, compact, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; compact: boolean; onSelectSquad: (id: string) => void; onOpenPin: PinHandler; onOpenAgent?: (teamId: string, agentId: string) => void }) {
   const { pinned } = pinsForSquad(v);
   const lead = pickLead(v.lanes);
   const ord = lead ? ordOf(lead.agent) : null;
@@ -814,7 +814,7 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
   const open = () => onSelectSquad(v.team.id);
   return (
     <div
-      className={`squad-home-tile ${v.needsYou > 0 ? "needs-you" : ""}`}
+      className={`squad-home-tile ${v.needsYou > 0 ? "needs-you" : ""} ${compact ? "compact" : ""}`}
       role="button"
       tabIndex={0}
       data-testid={`squad-home-tile-${v.team.id}`}
@@ -832,14 +832,20 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
         <span className="squad-home-tile-name">{v.team.name}</span>
         {v.needsYou > 0 && onOpenAgent ? (
           <AttentionBadge view={v} onOpen={(id) => onOpenAgent(v.team.id, id)} testId={`squad-home-needs-${v.team.id}`}>
-            {v.needsYou} need you
+            {compact ? v.needsYou : `${v.needsYou} need you`}
           </AttentionBadge>
         ) : (
-          <span className={`badge ${v.needsYou > 0 ? "alert" : "muted"}`} data-testid={`squad-home-needs-${v.team.id}`}>
-            {v.needsYou} need you
+          <span className={`badge ${v.needsYou > 0 ? "alert" : "muted"}`} data-testid={`squad-home-needs-${v.team.id}`} title={compact ? `${v.needsYou} need you` : undefined}>
+            {compact ? v.needsYou : `${v.needsYou} need you`}
           </span>
         )}
       </div>
+      {compact ? (
+        <div className="squad-home-lead-line muted small" data-testid={`squad-home-summary-${v.team.id}`}>
+          {pinned.length} {pinned.length === 1 ? "lane" : "lanes"} · {leadName} · {leadState}
+        </div>
+      ) : (
+        <>
       <div className="squad-home-huddle" data-testid={`squad-home-huddle-${v.team.id}`}>
         {pinned.map((pin) => (
           <button
@@ -870,11 +876,15 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
       <div className="squad-home-lead-line muted small" data-testid={`squad-home-lead-${v.team.id}`}>
         Lead: {leadName} · {leadState}
       </div>
+        </>
+      )}
     </div>
   );
 }
 
 const SQUAD_ROWS = 2;
+/** At app zoom >= this the squads grid collapses to one strip row of summary tiles so the Usage limit cards stay above the fold. */
+const SQUADS_COMPACT_SCALE = 1.25;
 
 export function SquadsHome({
   views,
@@ -889,6 +899,8 @@ export function SquadsHome({
   onNewSquad: () => void;
   onOpenAgent?: (teamId: string, agentId: string) => void;
 }) {
+  const compact = useUiScale() >= SQUADS_COMPACT_SCALE;
+  const rows = compact ? 1 : SQUAD_ROWS;
   const gridRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
   const [rowOffset, setRowOffset] = useState(0);
@@ -906,20 +918,33 @@ export function SquadsHome({
   }, []);
   const total = views.length + 1; // squads + the NEW SQUAD tile
   const totalRows = Math.ceil(total / cols);
-  const maxOffset = Math.max(0, totalRows - SQUAD_ROWS);
+  const maxOffset = Math.max(0, totalRows - rows);
   const offset = Math.min(rowOffset, maxOffset);
-  const paged = totalRows > SQUAD_ROWS;
+  const paged = totalRows > rows;
   useEffect(() => {
     if (rowOffset > maxOffset) setRowOffset(maxOffset);
   }, [rowOffset, maxOffset]);
   const step = (d: number) => setRowOffset(Math.max(0, Math.min(maxOffset, offset + d)));
   const first = offset * cols;
-  const slice = views.slice(first, first + SQUAD_ROWS * cols);
-  const showNew = views.length >= first && views.length < first + SQUAD_ROWS * cols;
+  const slice = views.slice(first, first + rows * cols);
+  const showNew = views.length >= first && views.length < first + rows * cols;
+  const pagerEl = (
+      <div className="squads-home-pager" data-testid="squads-home-pager" role="group" aria-label="Squad rows">
+        <button type="button" className="squads-pager-btn" data-testid="squads-pager-up" aria-label="Previous squad row" aria-disabled={offset <= 0} onClick={() => step(-1)}>
+          ▲
+        </button>
+        <span className="squads-pager-pos muted small" data-testid="squads-pager-pos">
+          {offset + 1}–{Math.min(totalRows, offset + rows)} / {totalRows}
+        </span>
+        <button type="button" className="squads-pager-btn" data-testid="squads-pager-down" aria-label="Next squad row" aria-disabled={offset >= maxOffset} onClick={() => step(1)}>
+          ▼
+        </button>
+      </div>
+  );
   return (
     <section className="squads-home" data-testid="squads-home">
       <div
-        className={`squads-section squads-home-pager-wrap ${paged ? "paged" : ""}`}
+        className={`squads-section squads-home-pager-wrap ${paged ? "paged" : ""} ${compact ? "compact" : ""}`}
         onKeyDown={(e) => {
           if (!paged || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
           if (e.target instanceof HTMLElement && e.target.closest(".squad-home-tile")) return;
@@ -927,10 +952,17 @@ export function SquadsHome({
           step(e.key === "ArrowUp" ? -1 : 1);
         }}
       >
-        <h2 className="squads-section-title" data-testid="squads-section-title">Squads</h2>
+        {compact ? (
+          <div className="squads-home-head">
+            <h2 className="squads-section-title" data-testid="squads-section-title">Squads</h2>
+            {paged && pagerEl}
+          </div>
+        ) : (
+          <h2 className="squads-section-title" data-testid="squads-section-title">Squads</h2>
+        )}
         <div className="squads-home-grid" ref={gridRef} data-testid="squads-home-grid">
           {slice.map((v) => (
-            <SquadTile key={v.team.id} v={v} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />
+            <SquadTile key={v.team.id} v={v} compact={compact} onSelectSquad={onSelectSquad} onOpenPin={onOpenPin} onOpenAgent={onOpenAgent} />
           ))}
           {showNew && (
             <button type="button" className="squad-home-tile pin-plus" data-testid="squad-home-new-tile" onClick={onNewSquad}>
@@ -939,19 +971,7 @@ export function SquadsHome({
             </button>
           )}
         </div>
-        {paged && (
-          <div className="squads-home-pager" data-testid="squads-home-pager" role="group" aria-label="Squad rows">
-            <button type="button" className="squads-pager-btn" data-testid="squads-pager-up" aria-label="Previous squad row" aria-disabled={offset <= 0} onClick={() => step(-1)}>
-              ▲
-            </button>
-            <span className="squads-pager-pos muted small" data-testid="squads-pager-pos">
-              {offset + 1}–{Math.min(totalRows, offset + SQUAD_ROWS)} / {totalRows}
-            </span>
-            <button type="button" className="squads-pager-btn" data-testid="squads-pager-down" aria-label="Next squad row" aria-disabled={offset >= maxOffset} onClick={() => step(1)}>
-              ▼
-            </button>
-          </div>
-        )}
+        {paged && !compact && pagerEl}
       </div>
       <UsageDashboard perfection={{ pin: perfectionPin(views), onOpen: onOpenPin }} />
     </section>
