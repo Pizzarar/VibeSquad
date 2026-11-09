@@ -525,3 +525,22 @@ test('runner status says the runner is on; a UI spawn on any lane (or none) hits
   assert.equal((await run({ labels: {}, config: {} })).code, 201, 'a create with no lane is a runner create too');
   assert.equal(spawned.length, 2);
 });
+
+test('K0: a compacted log event writes a `compacted agent=… before=… after=…` metric once', async () => {
+  const home = tmp();
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = home;
+  const errs = [];
+  const orig = console.error;
+  console.error = (...a) => errs.push(a.join(' '));
+  try {
+    const backend = new RunnerBackend({ client: { home, request: async () => { throw new Error('no fetch expected'); } }, buildPrefix: async () => '' });
+    await backend.handleLogEvent({ id: 'rn-k', event: { seq: 1, ts: 1, type: 'compacted', before: 150000, after: 30000, trigger: 'manual' } });
+  } finally {
+    console.error = orig;
+    if (prev === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prev;
+  }
+  assert.ok(errs.some((l) => l.includes('compacted agent=rn-k before=150000 after=30000 trigger=manual')), errs.join('\n'));
+  const log = readFileSync(path.join(home, 'teams', '_unassigned', 'log.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert.equal(log.filter((e) => e.type === 'metric' && e.text.startsWith('compacted ')).length, 1);
+});
