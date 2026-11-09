@@ -35,6 +35,7 @@ import {
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   laneWorkingDir,
@@ -127,6 +128,7 @@ import {
 
 export {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   performBrainstormRestart,
@@ -859,6 +861,8 @@ async function handleBrainstormRestart(req, res, rootDir) {
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
+    // O5: a denied callerId must not spend a budget slot (a worker could otherwise exhaust it and block real restarts).
+    await authorizeBuddyRestartRequest(body, rootDir);
     if (body.reason === "start-brainstorm" || body.agentId === "start-brainstorm") {
       if (overSpawnBudget(res)) return;
     } else {

@@ -438,6 +438,35 @@ export async function retireOtherLaneBuddies(client, { newId, teamId, laneId, to
 // same lane share one spawn, so a double-click or two open tabs can't create two Brainstorms.
 const startInFlight = new Map();
 
+/**
+ * O5: the route calls this BEFORE it spends an archive/spawn budget slot, so a denied callerId costs nothing. Throws a 403-tagged Error;
+ * no callerId (owner) or a start-brainstorm request passes. performBrainstormRestartOnce re-checks the same rule against its own records.
+ */
+export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
+  if (body?.callerId == null || body.callerId === "" || String(body?.agentId || "") === "start-brainstorm" || String(body?.reason || "").trim() === "start-brainstorm") return;
+  const callerId = String(body.callerId);
+  const forbid = (why) => Object.assign(new Error(`buddy restart: forbidden: ${why}`), { status: 403 });
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw forbid("bad callerId");
+  const targetId = String(body.agentId || "").trim();
+  if (!targetId) return; // performBrainstormRestart rejects a missing agentId
+  let client = null;
+  let backend = null;
+  const load = async (id) => {
+    if (isRunnerId(id)) return readRunnerAgentSync(id);
+    if (!client) {
+      client = body.agentClient || createAgentClient(rootDir);
+      backend = getBackend(client);
+      if (!body.agentClient && typeof backend.connect === "function") await backend.connect().catch(() => {});
+    }
+    return (await backend.fetchAgent?.(id)?.catch(() => null))?.agent ?? null;
+  };
+  const caller = await load(callerId);
+  if (!caller) throw forbid("caller not found");
+  const target = await load(targetId);
+  if (!target) return; // unknown target: the restart itself fails closed ("not a brainstorm agent")
+  assertBuddyRestartAllowed(caller, target, loadTeamsRegistry(rootDir));
+}
+
 export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
   const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
   if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir);

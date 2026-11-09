@@ -177,3 +177,32 @@ test("vs buddy restart: CLI usage errors", async () => {
     await assert.rejects(commandAgentVerb("buddy", { _: ["nope"], lane: "x" }, makeContext, () => {}), /usage: vs buddy restart/);
   } finally { t.cleanup(); }
 });
+
+test("route: a denied callerId is 403 and spends no archive/spawn budget slot", async () => {
+  const { createServer } = await import("node:http");
+  const { createVibesquadMiddleware, archiveBudget, spawnBudget, ARCHIVE_BUDGET_PER_MIN, SPAWN_BUDGET_PER_MIN } = await import("../server/vibesquad-api.mjs");
+  const { ownerHeaders } = await import("./helpers/local-owner.mjs");
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  const srv = createServer(createVibesquadMiddleware(t.dir));
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  try {
+    archiveBudget.reset();
+    spawnBudget.reset();
+    const total = Math.max(ARCHIVE_BUDGET_PER_MIN, SPAWN_BUDGET_PER_MIN) + 3;
+    for (let i = 0; i < total; i++) {
+      const r = await fetch(`http://127.0.0.1:${srv.address().port}/__vibesquad/brainstorm-restart`, {
+        method: "POST",
+        headers: ownerHeaders({ "content-type": "application/json" }),
+        body: JSON.stringify({ agentId: "rn-buddy", laneId: "site-polish", teamId: "site", reason: "x", callerId: "rn-nobody" }),
+      });
+      assert.equal(r.status, 403, `call ${i}`);
+    }
+    for (let i = 0; i < ARCHIVE_BUDGET_PER_MIN; i++) assert.ok(archiveBudget.take(), `archive slot ${i} still free`);
+    for (let i = 0; i < SPAWN_BUDGET_PER_MIN; i++) assert.ok(spawnBudget.take(), `spawn slot ${i} still free`);
+  } finally {
+    archiveBudget.reset();
+    spawnBudget.reset();
+    await new Promise((r) => srv.close(r));
+    t.cleanup();
+  }
+});
