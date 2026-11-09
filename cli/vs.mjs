@@ -827,9 +827,9 @@ function commandInbox(flags) {
   }
 
   if (sub === "list" || sub === "ls") {
-    const listStatus = flags.status ? String(flags.status) : "parked";
-    if (!INBOX_STATUSES.includes(listStatus)) {
-      throw new Error(`inbox list --status must be one of: ${INBOX_STATUSES.join(", ")}`);
+    const listStatus = flags.status ? String(flags.status) : "open";
+    if (listStatus !== "all" && listStatus !== "open" && !INBOX_STATUSES.includes(listStatus)) {
+      throw new Error(`inbox list --status must be one of: open, all, ${INBOX_STATUSES.join(", ")}`);
     }
     const cards = listInboxCards({
       laneId: flags.lane ? String(flags.lane) : undefined,
@@ -842,7 +842,7 @@ function commandInbox(flags) {
       return 0;
     }
     if (!cards.length) {
-      process.stdout.write("(0 parked ideas in Inbox)\n");
+      process.stdout.write("(0 ideas in Inbox)\n");
       return 0;
     }
     for (const c of cards) {

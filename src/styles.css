@@ -4037,7 +4037,6 @@ html, body, #root { overflow-x: hidden; }
 .usage-inbox-btn:disabled { opacity: 0.6; cursor: default; }
 .usage-inbox-accept { color: var(--mint-t); border-color: var(--mint-t); }
 .usage-inbox-reject { color: var(--pink-t); border-color: var(--pink-t); }
-.usage-review-err { color: var(--pink-t); }
 .squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, var(--bg)); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
 .squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
 .squad-home-tile.needs-you { border-color: var(--hot-pink); }

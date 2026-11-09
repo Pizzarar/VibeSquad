@@ -455,7 +455,9 @@ export function listInboxCards(filter = {}, rootDir = REPO_ROOT) {
   const status = filter.status || "";
 
   return cards.filter((c) => {
-    if (status && status !== "all" && c.status !== status) return false;
+    if (status === "open") {
+      if (c.status && c.status !== "parked" && c.status !== "accepted") return false;
+    } else if (status && status !== "all" && c.status !== status) return false;
     if (laneId && laneId !== "all" && String(c.laneId).toLowerCase() !== String(laneId).toLowerCase()) return false;
     if (teamId && teamId !== "all" && !matchesTeamFilter(c, teamId, teams)) return false;
     return true;
