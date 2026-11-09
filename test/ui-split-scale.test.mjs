@@ -46,3 +46,13 @@ test('chat containers carry the counter-zoom and the chat-snapped kit pixel', ()
 test('uiScale effect in App re-applies on chat scale change', () => {
   assert.match(read('src/App.tsx'), /applyUiScaleToDom\(uiScale\);\s*\}, \[uiScale, chatScale\]\)/);
 });
+
+test('SS2: a compact second slider + follow toggle live inside the existing scale section; HUD shows both', () => {
+  const modal = read('src/TeamSettingsModal.tsx');
+  const sec = modal.slice(modal.indexOf('data-testid="ui-scale-section"'), modal.indexOf('show("runner") && isHostMode'));
+  assert.match(sec, /data-testid="chat-scale-slider"/);
+  assert.match(sec, /data-testid="chat-scale-follow"/);
+  assert.match(sec, /setChatScale\(e\.target\.checked \? null : chatScale\)/);
+  assert.equal((modal.match(/data-testid="ui-scale-section"/g) ?? []).length, 1);
+  assert.match(read('src/App.tsx'), /CHAT · \{Math\.round\(chatScale \* 100\)\}%/);
+});

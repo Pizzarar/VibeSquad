@@ -2039,7 +2039,9 @@ export function App() {
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">
-          UI SCALE · {Math.round(uiScale * 100)}% <span className="muted">(Ctrl+0 to reset)</span>
+          UI SCALE · {Math.round(uiScale * 100)}%
+          {Math.round(chatScale * 100) !== Math.round(uiScale * 100) && <> · CHAT · {Math.round(chatScale * 100)}%</>}{" "}
+          <span className="muted">(Ctrl+0 to reset)</span>
         </div>
       )}
       {modal === "add-buddy" && view && (
