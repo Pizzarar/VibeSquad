@@ -1721,7 +1721,6 @@ code {
 .composer-thumb .thumb-name { font-size: 9px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-thumb .thumb-x, .composer-thumb .composer-thumb-remove { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; line-height: 16px; border-radius: 50%; border: 1px solid var(--line); background: var(--well); color: var(--pink-t); cursor: pointer; font-size: 13px; }
 .composer-thumb .thumb-x:hover, .composer-thumb .composer-thumb-remove:hover { background: var(--hot-pink); color: #fff; }
-.attach-img, .composer-attach-btn { align-self: stretch; }
 .tl-images { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
 .tl-images img { max-width: 160px; max-height: 120px; border: 1px solid var(--line); display: block; }
 
@@ -2206,11 +2205,6 @@ code {
 .tl-code-block pre { padding-top: 28px; white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; }
 .tl-table { display: block; max-width: 100%; overflow-x: auto; }
 .tl-assistant[data-selected="true"], .tl-user[data-selected="true"] { padding-top: 40px; }
-.composer-park-inbox-btn {
-  white-space: nowrap;
-  border-color: var(--violet);
-  color: var(--cyan-t);
-}
 
 /* ---- Unit BF-P3: Topic Brainstorms in the Sidebar & Soft Cap ---------------------- */
 .lane-topics {
@@ -2616,10 +2610,7 @@ code {
     min-height: 48px;
   }
 
-  footer.composer .btn,
-  .composer-attach,
-  .composer-attach-btn,
-  .attach-img {
+  footer.composer .btn {
     min-height: 48px;
     min-width: 48px;
     display: inline-flex;
@@ -4485,7 +4476,6 @@ button.project-file-name:hover { text-decoration: underline; }
 .mermaid-source-container { overflow-x: auto; }
 .tl-code { font-family: var(--mono); font-size: 11px; }
 .composer-menu { position: relative; display: inline-flex; align-items: center; }
-.composer-secret-btn { display: inline-flex; align-items: center; gap: 4px; }
 .composer-queued-banner { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .composer-queued-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-send-now-btn { flex: none; }
@@ -5977,3 +5967,13 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .pin-focus-bar .drawer-config-menu { position: static; }
 .pin-focus-bar .drawer-config-popover { top: calc(100% + 2px); }
 [data-testid="lead-token-meter"] .meter-readout { color: var(--text); }
+
+/* Slim composer (PLAN_CHAT_ROOM C4): ◂ tab on the composer edge opens the rarer controls; Stop is a small icon. */
+.composer-stop-btn { min-width: 0; padding-left: var(--sp-2, 8px); padding-right: var(--sp-2, 8px); }
+.composer-more-tab { flex: none; align-self: stretch; min-width: var(--sp-4, 16px); padding: 0 var(--sp-1, 4px); background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--text); border: 1px solid var(--line); opacity: 0.6; cursor: pointer; font: inherit; line-height: 1; }
+.composer-more-tab:hover, .composer-more-tab:focus-visible, .composer-more-tab[aria-expanded="true"] { opacity: 1; background: var(--panel); color: var(--cyan-t); }
+.composer-more-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1, 4px) 0; }
+.composer-more-item { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
+.composer-more-item:hover:not(:disabled), .composer-more-item:focus-visible { background: var(--navy); color: var(--cyan-t); outline: none; }
+.composer-more-item:disabled { opacity: 0.5; cursor: default; }
+@media (max-width: 760px) { .composer-more-tab { min-width: 32px; min-height: 48px; } .composer-more-item { min-height: 44px; } }
