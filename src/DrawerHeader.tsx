@@ -730,6 +730,7 @@ export function DrawerHeader({
   const [copyIdFlash, setCopyIdFlash] = useState(false);
   const [copyCwdFlash, setCopyCwdFlash] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const configMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
     setModelValue(agent.model ?? "");
@@ -739,6 +740,7 @@ export function DrawerHeader({
   // The internal fallback staging state must not leak into the next agent when this drawer re-renders for a new id.
   useEffect(() => {
     setInternalStagedSwitch(null);
+    if (configMenuRef.current) configMenuRef.current.open = false;
   }, [agent.id]);
 
   useEffect(() => {
@@ -789,11 +791,58 @@ export function DrawerHeader({
   const barSlot = usePinSlot("bar");
   const cardSlot = usePinSlot("card");
   // Whichever lane drawer (Buddy, Lead, worker, topic Buddy) is the left-pane tab owns the slots, so exactly one portals.
+  // In sky-gods takeover (chatOnly), the open sky panel owns the slots locally without mutating the shared panes store.
   // Not at <=900px where the rail hides the Active Buddy Card: there the full inline inspector comes back.
-  const shownHere = usePanes().leftActiveId === agent.id;
+  const [skyOpenAgentId, setSkyOpenAgentId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!chatOnly || typeof document === "undefined") return;
+    const sky = document.querySelector('[data-testid="sky-zones"]');
+    if (!sky) return;
+    const sync = () => {
+      const openBot = sky.getAttribute("data-open");
+      const panel = openBot && openBot !== "none" ? sky.querySelector(`.sky-chat-panel[data-sky-bot="${openBot}"]`) : null;
+      setSkyOpenAgentId(panel?.getAttribute("data-agent") || null);
+    };
+    sync();
+    const mo = new MutationObserver(sync);
+    mo.observe(sky, { attributes: true, attributeFilter: ["data-open"] });
+    return () => mo.disconnect();
+  }, [chatOnly]);
+
+  const leftActiveId = usePanes().leftActiveId;
+  const shownHere = chatOnly && skyOpenAgentId ? skyOpenAgentId === agent.id : leftActiveId === agent.id;
   const inLane = useInFocusedLane(agent.id);
   const railCardVisible = useRailCardVisible();
   const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
+
+  useEffect(() => {
+    if (!compact || !barSlot || !cardSlot) return;
+    barSlot.setAttribute("data-sky-owner", agent.id);
+    cardSlot.setAttribute("data-sky-owner", agent.id);
+    const onDown = (e: PointerEvent) => {
+      const el = configMenuRef.current;
+      if (el?.open && e.target instanceof Node && !el.contains(e.target)) el.open = false;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const el = configMenuRef.current;
+      if (el?.open) {
+        e.preventDefault();
+        el.open = false;
+      } else if (inboxPopoverOpen) {
+        e.preventDefault();
+        setInboxPopoverOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      if (barSlot.getAttribute("data-sky-owner") === agent.id) barSlot.removeAttribute("data-sky-owner");
+      if (cardSlot.getAttribute("data-sky-owner") === agent.id) cardSlot.removeAttribute("data-sky-owner");
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [compact, barSlot, cardSlot, agent.id, inboxPopoverOpen, setInboxPopoverOpen]);
 
   // Provider switch: one handler shared by the dropdown and the legacy ⇄ button (compact bar + full drawer).
   const switchToProvider = async (targetProviderId: string) => {
@@ -1473,11 +1522,11 @@ export function DrawerHeader({
       <>
         {createPortal(
           <>
-      <div className="drawer-head-compact" data-testid="drawer-head-compact">
+      <div className="drawer-head-compact" data-testid="drawer-head-compact" data-sky-owner={agent.id}>
         {compactIdentity}
         {providerSelect}
         {modelControl}
-        <details className="drawer-config-menu" data-testid="drawer-config-menu">
+        <details ref={configMenuRef} className="drawer-config-menu" data-testid="drawer-config-menu">
           <summary className="btn ghost small drawer-config-summary" data-testid="drawer-config-menu-btn" title="Thinking effort & permission mode">
             ⚙ {stagedThinking || "medium"} · {activeModeLabel} ▾
           </summary>
