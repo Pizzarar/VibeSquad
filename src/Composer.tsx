@@ -11,6 +11,7 @@ import type { DraftImageView } from "./imageDrafts";
 import { formatSize, stageFiles, type useAttachments } from "./attachments";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { SecretInputPopover } from "./SecretInputPopover";
+import { ComposerMore } from "./ComposerMore";
 import { composerKeyAction, usePref } from "./prefs";
 import {
   filterListing,
@@ -684,34 +685,31 @@ export function Composer({
             e.target.value = "";
           }}
         />
-        <button
-          className="btn ghost attach-img composer-attach composer-attach-btn"
-          title="Attach file or image"
-          onClick={() => fileInput.current?.click()}
-        >
-          📎
-        </button>
-        <button
-          type="button"
-          className="btn ghost composer-secret-btn"
-          title="Insert sealed secret (written to 0600 temp file, never shown in chat)"
-          aria-label="Secure Input"
-          data-testid="composer-secret-btn"
-          onClick={() => setSecretOpen((v) => !v)}
-        >
-          🔒
-        </button>
-        {isBs && (
-          <button
-            className="btn ghost composer-park-inbox-btn"
-            disabled={inboxParking}
-            title="Park composer draft (1 or multiple newline-separated ideas) straight into Idea Inbox (0 tokens)"
-            onClick={() => (draft.trim() ? onParkToInbox(draft, true) : onToggleInboxPopover())}
-            data-testid="composer-park-inbox-btn"
-          >
-            📥 Park in Inbox
-          </button>
-        )}
+        <ComposerMore
+          items={[
+            { key: "attach", label: "📎 Attach file or image", title: "Attach file or image", testid: "composer-attach-btn", onSelect: () => fileInput.current?.click() },
+            {
+              key: "secret",
+              label: "🔒 Secure input",
+              title: "Insert sealed secret (written to 0600 temp file, never shown in chat)",
+              ariaLabel: "Secure Input",
+              testid: "composer-secret-btn",
+              onSelect: () => setSecretOpen((v) => !v),
+            },
+            ...(isBs
+              ? [
+                  {
+                    key: "park",
+                    label: "📥 Park in Inbox",
+                    title: "Park composer draft (1 or multiple newline-separated ideas) straight into Idea Inbox (0 tokens)",
+                    testid: "composer-park-inbox-btn",
+                    disabled: inboxParking,
+                    onSelect: () => (draft.trim() ? onParkToInbox(draft, true) : onToggleInboxPopover()),
+                  },
+                ]
+              : []),
+          ]}
+        />
         <button className="btn" disabled={busy || (!draft.trim() && !imgs.images.length && !atts.items.length && !ctx.items.length)} onClick={send} title={agent.status === "running" ? "Queue for after current turn (or click Send this now to steer)" : undefined}>
           {agent.status === "running" ? "Queue" : "Send"}
         </button>
@@ -719,10 +717,11 @@ export function Composer({
           <button
             className="btn ghost composer-stop-btn"
             title="Stop the current turn (keeps the agent)"
+            aria-label="Stop"
             data-testid="composer-stop-btn"
             onClick={() => stopAgent(agent.id).catch((e) => atts.setNotice(`Couldn't stop: ${e instanceof Error ? e.message : String(e)}`))}
           >
-            ■ Stop
+            ■
           </button>
         )}
         {agent.status === "running" && (
