@@ -317,7 +317,71 @@ export function fixOfferBucket(dir, { since, until } = {}) {
   return r;
 }
 
-function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fixOffers } }) {
+// ================= O7 bucket 6: unrouted ops =================
+// Lead/handoff messages that mention a server restart, a runtime sync, or a Gotchas-style blocker
+// (OPS_MENTION) but were never routed to the Overlord (`vs send`) or @bug (`vs inbox add --lane
+// bug-chaser`) within the window. Report-only: no blocking, no penalties. Audit key `unrouted-ops:<date>`.
+export const OPS_MENTION_PATTERNS = [
+  /\bneeds? (a )?(server )?restart\b/i,
+  /\brestart (the )?(vs |vibesquad )?(server|runner)\b/i,
+  /\bruntime sync\b/i,
+  /\bsync (the )?runtime\b/i,
+  /\buntracked files?\b/i,
+  /\bnode_modules junction\b/i,
+  /\bflaky\b/i,
+];
+export const isOpsMention = (text) => typeof text === 'string' && OPS_MENTION_PATTERNS.some((p) => p.test(text));
+// A route to @bug: the literal `vs inbox add --lane bug-chaser` command an agent runs in a shell.
+const INBOX_ADD_RE = /vs inbox add\s+--lane[=\s]+bug-chaser/i;
+// A lead run is "routed" if, within the window, it actually sent the ops blocker to the Overlord
+// (a `send` tool whose recipient is an Overlord run) or added it to @bug's inbox. Detected from the
+// runner's `tool` events in the lead's own transcript (the send's `input.id` is the Overlord's run id).
+export function unroutedOpsBucket(dir, { since, until } = {}) {
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+  // Pass 1: run metadata + the set of Overlord (hub lead) run ids (role=lead on the hub lane, i.e. lane === team).
+  const meta = new Map();
+  for (const f of files) {
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === 'created') { meta.set(f.replace(/\.jsonl$/, ''), { role: e.meta?.role, lane: e.meta?.lane, team: e.meta?.team }); break; }
+    }
+  }
+  const overlordIds = new Set([...meta].filter(([, m]) => m.role === 'lead' && m.lane && m.lane === m.team).map(([id]) => id));
+  // Pass 2: feature-lane leads' ops mentions, suppressed when the run routed to Overlord/@bug in the window.
+  const r = { total: 0, mentions: 0, routed: 0, byLane: {}, examples: [] };
+  for (const f of files) {
+    const id = f.replace(/\.jsonl$/, '');
+    const m = meta.get(id);
+    if (!m || m.role !== 'lead' || overlordIds.has(id)) continue; // the Overlord is the sink, not a source.
+    const mentions = [];
+    let routed = false;
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type !== 'input' && e.type !== 'output' && e.type !== 'tool') continue;
+      if (since !== undefined && e.ts < since) continue;
+      if (until !== undefined && e.ts > until) continue;
+      if (e.type === 'tool') {
+        if (INBOX_ADD_RE.test(JSON.stringify(e))) routed = true;
+        else if (/send/i.test(String(e.name || ''))) { const to = e.input?.id ?? e.input?.agentId; if (typeof to === 'string' && overlordIds.has(to)) routed = true; }
+        continue;
+      }
+      if (typeof e.text === 'string' && isOpsMention(e.text)) mentions.push({ ts: e.ts, text: e.text });
+    }
+    if (!mentions.length) continue;
+    r.mentions += mentions.length;
+    if (routed) { r.routed += mentions.length; continue; }
+    const lane = m.lane || '(none)';
+    r.byLane[lane] = (r.byLane[lane] || 0) + mentions.length;
+    r.total += mentions.length;
+    for (const mn of mentions) r.examples.push({ run: id, lane, ts: mn.ts, tail: mn.text.trim().slice(-160) });
+  }
+  r.examples.sort((a, b) => (a.lane === b.lane ? a.ts - b.ts : a.lane < b.lane ? -1 : 1));
+  return r;
+}
+
+function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fixOffers, unroutedOps } }) {
   console.log('\n== waste report ==');
   console.log(`(1) rubber stamps: ${buckets['rubber stamp'] || 0} of ${ownerInputs} owner inputs`);
   console.log(`(2) owner-as-relay: strict (owner:true, report-shaped, VS notices/forwards excluded) = ${relay.strict}`);
@@ -336,6 +400,10 @@ function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fi
   console.log('    by lane:', JSON.stringify(fixOffers.byLane));
   console.log('    by role:', JSON.stringify(fixOffers.byRole));
   for (const x of fixOffers.examples.slice(0, 3)) console.log(`    e.g. ${x.run} ${x.lane}/${x.role}: ...${x.tail.slice(-120).replace(/\n/g, ' ')}`);
+  const day = new Date().toISOString().slice(0, 10);
+  console.log(`(6) unrouted ops (audit-key: unrouted-ops:${day}): ${unroutedOps.total} unrouted of ${unroutedOps.mentions} mentions (${unroutedOps.routed} routed)`);
+  console.log('    by lane:', JSON.stringify(unroutedOps.byLane));
+  for (const x of unroutedOps.examples.slice(0, 3)) console.log(`    e.g. ${x.run} ${x.lane}: ...${x.tail.slice(-100).replace(/\n/g, ' ')}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -343,7 +411,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const r = audit(args);
   if (args.waste) {
     const runs = loadRuns(args.dir);
-    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args) };
+    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args), unroutedOps: unroutedOpsBucket(args.dir, args) };
   }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
