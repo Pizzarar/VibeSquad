@@ -3526,7 +3526,7 @@ html, body, #root { overflow-x: hidden; }
 .sidebar-pins { display: flex; flex-direction: column; padding: 2px 0 6px; }
 .sidebar-riffbot-wrap { padding: var(--sp-1) var(--sp-2) 6px 14px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .sidebar-riffbot {
-  display: flex; align-items: center; gap: 6px; width: 100%;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; width: 100%;
   padding: 5px var(--sp-2); background: linear-gradient(135deg, var(--panel) 0%, var(--bg) 100%);
   border: 1px solid color-mix(in srgb, var(--line) 50%, transparent); border-left: 3px solid var(--emerald); border-radius: 4px;
   color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
@@ -3545,7 +3545,7 @@ html, body, #root { overflow-x: hidden; }
   border-radius: 3px; flex: none;
 }
 .sidebar-riffbot-title {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 0 auto; white-space: nowrap;
   color: var(--muted); font-size: 11px;
 }
 .sidebar-riffbot-state {
@@ -4734,6 +4734,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-backdrop.is-fallback.has-sky-band { background-size: auto 60%; background-position: left bottom; background-repeat: repeat-x; }
 .hub-sky-page { flex: none; display: flex; flex-direction: column; }
 .hub-sky-page .sky-zones { flex: none; height: clamp(260px, 36vh, 440px); }
+/* Short windows (1280x720): an open sky chat gets a taller band (it was 240px: timeline gone, composer cut); the floor below takes the difference. */
+@media (max-height: 820px) { .hub-sky-page .sky-zones:has(.sky-chat-panel:not([hidden])) { height: clamp(330px, 46vh, 440px); } }
 /* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
 .hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
@@ -5889,11 +5891,11 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Chat top bar: the crumbs before the current page keep their full label; only the current page shrinks (ellipsis). */
 .top-breadcrumb .breadcrumb-seg:not(.current) { flex: none; max-width: none; overflow: visible; }
-.top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: 0; }
+.top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: min(max-content, 12ch); } /* short lane names (BRAINSTORM) never ellipsize; long ones still do */
 /* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
 .pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
 /* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */
-.pane-tab { max-width: 220px; }
+.pane-tab { max-width: 260px; }
 /* Chat top bar at narrow widths: tighter gaps so the config summary is not cut by the pane edge. */
 .pin-focus-bar .drawer-head-compact { gap: var(--sp-1); }
 

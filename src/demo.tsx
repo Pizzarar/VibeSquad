@@ -97,6 +97,24 @@ const CAST: Spec[] = [
   { id: "demo-lead-site", who: "sonnet", title: "★ LEAD · Site polish", labels: { team: "site", lead: "site-polish", role: "lead" }, used: 12_000, cwd: "/path/to/example-site" },
 ];
 
+// More VibeSquad teams (lanes) so the floor pager has 3+ teams: 5 teams at 2 per floor = 3 floors (the last half empty) for the lift < > to page.
+CAST.push(
+  { id: "demo-lead-ui-bois", who: "sonnet", title: "★ UI BOIS ord9", labels: vs({ role: "lead", lane: "ui-bois", ord: "9" }), used: 52_000, ago: 2 },
+  { id: "demo-impl-ui-bois", who: "claude", title: "Implement - overlap guard", status: "running", labels: vs({ role: "worker", lane: "ui-bois", "paseo.parent-agent-id": "demo-lead-ui-bois" }), used: 31_000, ago: 3 },
+  { id: "demo-lead-art-dir", who: "gemini", title: "★ ART DIRECTION ord4", labels: vs({ role: "lead", lane: "art-direction", ord: "4" }), used: 70_000, ago: 8 },
+  { id: "demo-lead-runner", who: "codex", title: "★ RUNNER PILOT ord2", labels: vs({ role: "lead", lane: "runner-pilot", ord: "2" }), used: 20_000, ago: 12 },
+  { id: "demo-lead-wiki", who: "claude", title: "★ WIKI ord1", labels: vs({ role: "lead", lane: "wiki", ord: "1" }), used: 15_000, ago: 15 },
+);
+
+// ?riff=1: a live RiffBot + Overlord on the VibeSquad hub lane (lane label "riffbot"), so the Sky page can open Riff's chat,
+// slam him into the Overlord and land the takeover. Off by default: the plain demo's hub is idle ("Spin Up RiffBot").
+if (typeof location !== "undefined" && new URLSearchParams(location.search).has("riff")) {
+  CAST.push(
+    { id: "demo-hub-riff", who: "claude", title: "RiffBot · VibeSquad hub", status: "running", labels: vs({ role: "brainstorm", lane: "riffbot" }), used: 40_000, ago: 1 },
+    { id: "demo-hub-overlord", who: "gemini", title: "★ OVERLORD · VibeSquad hub", status: "running", labels: vs({ role: "lead", lane: "riffbot" }), used: 60_000, ago: 1 },
+  );
+}
+
 const ARCHIVED: Spec[] = [
   { id: "demo-arc-1", who: "claude", title: "Implement - step 1 scaffold", status: "closed", labels: vs({ role: "worker" }), used: 90_000, ago: 3000, extra: { archivedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() } },
   { id: "demo-arc-2", who: "gemini", title: "Audit - DSF", status: "closed", labels: vs({ role: "worker" }), used: 120_000, ago: 4000, extra: { archivedAt: new Date(Date.now() - 5 * 3_600_000).toISOString() } },
