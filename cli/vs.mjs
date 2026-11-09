@@ -908,6 +908,9 @@ function commandInbox(flags) {
       return 0;
     }
     if (flags.delete) {
+      if (resolveIdentity(flags, { recordWins: true }).agentId) {
+        throw new Error("deleting cards is owner-only; use --archive");
+      }
       const res = triageInboxCards({ action: "delete", cardId: String(flags.delete).trim(), baseHome });
       process.stdout.write(`deleted ${res.card.id}
 `);

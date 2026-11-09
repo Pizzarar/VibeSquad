@@ -60,3 +60,14 @@ test("assertInboxTriageCaller: lead/Buddy of the Squad pass, worker and other Sq
   assert.throws(() => assertInboxTriageCaller({ agentId: "rn-x", role: "lead", teamId: "vibesquad" }, ["zzz"], home), /not found/);
   assert.doesNotThrow(() => assertInboxTriageCaller({ agentId: "", role: "worker", teamId: "" }, ["c"], home));
 });
+
+test("--delete is owner-only: an agent is told to use --archive, the owner can delete", (t) => {
+  const { run, statuses } = setup(t);
+  const r = run(["--delete", "a"], { PASEO_AGENT_ID: "rn-not-a-real-agent" });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /deleting cards is owner-only; use --archive/);
+  assert.equal(statuses().a, "parked");
+  const o = run(["--delete", "a"]);
+  assert.equal(o.status, 0, o.stderr);
+  assert.equal(statuses().a, undefined);
+});
