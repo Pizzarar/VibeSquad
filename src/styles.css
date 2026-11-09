@@ -3926,7 +3926,9 @@ html, body, #root { overflow-x: hidden; }
 .usage-limit-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-limit-win { color: var(--cyan-t); font-family: var(--arcade); font-size: 10px; text-transform: uppercase; }
 .usage-estimate { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px dashed var(--amber); border-radius: 999px; color: var(--amber-t); text-transform: uppercase; }
-.usage-limit-pct { font-size: 28px; font-weight: 700; line-height: 1; color: var(--usage-c); white-space: nowrap; }
+.usage-limit-pct { font-size: 28px; font-weight: 700; line-height: 1; color: var(--mint-t); white-space: nowrap; }
+.usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
+.usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
 .usage-limit-pct small { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: var(--sp-2, 8px); }
 .usage-bar { height: 8px; background: var(--panel-alt); border-radius: 999px; overflow: hidden; }
 .usage-bar-thin { height: 5px; flex: 1; }
@@ -4013,7 +4015,8 @@ html, body, #root { overflow-x: hidden; }
 .usage-inbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
 .usage-inbox-row { border-left: 3px solid var(--cyan-t); padding: var(--sp-1, 4px) var(--sp-3, 12px); display: flex; flex-direction: column; gap: var(--sp-1, 4px); min-width: 0; }
 .usage-inbox-row[data-status="accepted"] { border-left-color: var(--mint-t); }
-.usage-inbox-row[data-status="closed"] { border-left-color: var(--muted); opacity: 0.75; }
+.usage-inbox-row[data-status="closed"] { border-left-color: var(--muted); }
+.usage-inbox-row[data-status="closed"] .usage-inbox-text { color: var(--muted); }
 .usage-inbox-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1, 4px) var(--sp-2, 8px); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
 .usage-inbox-src { font-weight: 700; }
 .usage-inbox-src-opus { color: var(--violet-t); }
@@ -4021,7 +4024,8 @@ html, body, #root { overflow-x: hidden; }
 .usage-inbox-src-bug { color: var(--amber-t); }
 .usage-inbox-src-perfection { color: var(--mint-t); }
 .usage-inbox-src-other { color: var(--muted); }
-.usage-inbox-state { color: var(--mint-t); }
+.usage-inbox-state { color: var(--muted); }
+.usage-inbox-row[data-status="accepted"] .usage-inbox-state { color: var(--mint-t); }
 .usage-inbox-note { word-break: break-word; color: var(--muted); }
 .usage-inbox-text { font-size: 12px; line-height: 1.45; word-break: break-word; }
 .usage-inbox-actions { display: flex; gap: var(--sp-2, 8px); }
@@ -5379,8 +5383,6 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .usage-estimate { background: var(--pastel-amber); border-color: var(--amber); }
 .usage-flag-storm { background: var(--pastel-amber); color: var(--text); border-color: var(--amber); }
 .usage-bar, .usage-review-select { box-shadow: var(--bevel-in); }
-.usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
-.usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
 
 /* ======================================================================
    U3c: painted airbrush kit (public/ui/u3/README.md) over the U2 skin. Each rule keeps its U2
