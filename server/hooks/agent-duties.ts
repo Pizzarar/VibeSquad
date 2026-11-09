@@ -2159,8 +2159,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             retries.delete(agent.id);
 
             const { snap: me, labels } = await labelsFor(paseo, agent);
-            await relayFromFormerLead(paseo, agent, labels);
             if (isDigestAgent(labels)) return;
+            await relayFromFormerLead(paseo, agent, labels);
 
             const role = effectiveAgentRole({ labels });
             if (role === "worker") {

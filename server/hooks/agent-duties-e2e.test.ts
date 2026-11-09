@@ -701,10 +701,19 @@ test(
       parentAgentId: "buddy-old",
       labels: { team: "vibesquad", lane: "feat-alpha", role: "worker" },
     };
+    const orphanDigest = {
+      id: "digest-9",
+      title: "digest worker-9",
+      cwd: CWD,
+      status: "idle",
+      parentAgentId: "buddy-old",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "digest" },
+    };
     const agents = new Map<string, any>([
       ["buddy-old", oldBuddy],
       ["lead-9", liveLead],
       ["worker-9", orphanWorker],
+      ["digest-9", orphanDigest],
     ]);
     const h = harness(agents, { briefRoot, timelineByAgent: new Map() });
     const relays = () => readLogEntries(vsHome).filter((e) => e.type === "metric" && e.text.startsWith("relay-old:"));
@@ -713,6 +722,10 @@ test(
       await wait(60);
       assert.equal(relays().length, 0, "live lead with a retired parent is not a relay source");
       assert.equal(h.sent.filter((s) => s.to === "lead-9" && s.text.includes("Relayed from former lead")).length, 0, "no self-wake");
+
+      await h.onTurnEnded(orphanDigest, { kind: "completed" });
+      await wait(60);
+      assert.equal(relays().length, 0, "digest under a retired parent does not relay-old");
 
       await h.onTurnEnded(orphanWorker, { kind: "completed" });
       await wait(60);
