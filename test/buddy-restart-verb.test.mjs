@@ -206,3 +206,82 @@ test("route: a denied callerId is 403 and spends no archive/spawn budget slot", 
     t.cleanup();
   }
 });
+
+test("pre-auth: a non-lead callerId is refused for a missing target, empty agentId and start-brainstorm, and spends no budget", async () => {
+  const { createServer } = await import("node:http");
+  const { createVibesquadMiddleware, archiveBudget, spawnBudget, ARCHIVE_BUDGET_PER_MIN, SPAWN_BUDGET_PER_MIN } = await import("../server/vibesquad-api.mjs");
+  const { ownerHeaders } = await import("./helpers/local-owner.mjs");
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  const srv = createServer(createVibesquadMiddleware(t.dir));
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  try {
+    archiveBudget.reset();
+    spawnBudget.reset();
+    const bodies = [
+      { callerId: "rn-nobody", agentId: "rn-nonexistent" },
+      { callerId: "rn-nobody", agentId: "" },
+      { callerId: "rn-nobody", agentId: "start-brainstorm", laneId: "site-polish", teamId: "site" },
+      { callerId: "rn-nobody", reason: "start-brainstorm", laneId: "site-polish", teamId: "site" },
+    ];
+    for (let i = 0; i < 12; i++) {
+      const r = await fetch(`http://127.0.0.1:${srv.address().port}/__vibesquad/brainstorm-restart`, {
+        method: "POST", headers: ownerHeaders({ "content-type": "application/json" }), body: JSON.stringify(bodies[i % bodies.length]),
+      });
+      assert.equal(r.status, 403, `call ${i}`);
+    }
+    for (let i = 0; i < ARCHIVE_BUDGET_PER_MIN; i++) assert.ok(archiveBudget.take(), `archive slot ${i}`);
+    for (let i = 0; i < SPAWN_BUDGET_PER_MIN; i++) assert.ok(spawnBudget.take(), `spawn slot ${i}`);
+  } finally {
+    archiveBudget.reset(); spawnBudget.reset();
+    await new Promise((r) => srv.close(r));
+    t.cleanup();
+  }
+  // And directly: a live lead naming start-brainstorm / a missing target / no agentId is refused too.
+  const u = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    for (const extra of [{ agentId: "start-brainstorm" }, { agentId: "rn-nonexistent" }, { agentId: "" }, { agentId: "rn-lead" }]) {
+      await assert.rejects(performBrainstormRestart({ callerId: "rn-lead", laneId: "site-polish", teamId: "site", agentClient: u.backend, baseHome: u.vsHome, profilesPath: u.profilesPath, ...extra }, u.dir), (e) => e.status === 403, JSON.stringify(extra));
+    }
+    assert.equal(u.calls.createAgent.length, 0);
+  } finally { u.cleanup(); }
+});
+
+test("a shared @<code> lane handle resolves inside the caller's own (non-primary) Squad", async () => {
+  const SHARED = [{ id: "first", name: "First", paths: ["first"], lanes: [{ id: "first-chaser", name: "First Chaser", code: "bug" }, { id: "first-hub", name: "Hub", hub: true }] },
+    { id: "second", name: "Second", paths: ["second"], lanes: [{ id: "second-chaser", name: "Second Chaser", code: "bug" }, { id: "second-hub", name: "Hub", hub: true }] }];
+  const mk = (id, role, lane) => ({ id, title: id, status: "idle", createdAt: "2026-11-01T00:00:00.000Z", labels: { team: "second", lane, role } });
+  const agents = [mk("rn-s-hub", "lead", "second-hub"), mk("rn-s-bug-buddy", "brainstorm", "second-chaser"), mk("rn-s-bug-lead", "lead", "second-chaser")];
+  const backend = { async fetchAgents() { return { entries: agents.map((agent) => ({ agent })) }; }, async fetchAgent(id) { return { agent: agents.find((a) => a.id === id) ?? null }; } };
+  const sent = [];
+  for (const [callerId, lane] of [["rn-s-hub", "second-hub"], ["rn-s-bug-lead", "second-chaser"]]) {
+    const ctx = createContext({ identity: { agentId: callerId, team: "second", lane, role: "lead" }, teams: SHARED, withBackend: async (_o, fn) => fn(backend) });
+    ctx.restartBuddyRequest = async (b) => { sent.push(b); return { ok: true, newAgentId: "rn-new" }; };
+    const r = await callTool(ctx, "restart_buddy", { lane: "@bug" });
+    assert.equal(r.team, "second");
+    assert.equal(r.lane, "second-chaser");
+  }
+  assert.equal(sent.length, 2);
+});
+
+test("CLI: main() parses --reason and --steer (no unknown-option error)", async () => {
+  const { main } = await import("../cli/vs.mjs");
+  const errs = [];
+  const prevEnv = { v: process.env.VS_AGENT_ID, p: process.env.PASEO_AGENT_ID };
+  delete process.env.VS_AGENT_ID; delete process.env.PASEO_AGENT_ID; // the suite may run inside an agent; the owner path is the CLI case here
+  const orig = process.stderr.write;
+  process.stderr.write = (s) => { errs.push(String(s)); return true; };
+  try {
+    // A lane that is not in any registry fails deterministically before any backend call (a rejected promise, not a parse error).
+    for (const argv of [["buddy", "restart", "--lane", "no-such-lane-zz", "--reason", "context full"], ["lead", "handoff", "--lane", "no-such-lane-zz", "--steer", "note"]]) {
+      const code = await Promise.resolve(main(argv)).catch((e) => { errs.push(`Error: ${e.message}`); return 1; });
+      assert.notEqual(code, 0);
+    }
+  } finally {
+    process.stderr.write = orig;
+    if (prevEnv.v !== undefined) process.env.VS_AGENT_ID = prevEnv.v;
+    if (prevEnv.p !== undefined) process.env.PASEO_AGENT_ID = prevEnv.p;
+  }
+  const text = errs.join("");
+  assert.ok(!/unknown option/.test(text), text);
+  assert.match(text, /not in the team registry/);
+});

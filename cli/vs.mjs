@@ -218,6 +218,8 @@ function teamByPath(cwd) {
 function parseArgs(argv) {
   const flags = { _: [], ref: [] };
   const valued = new Set([
+    "reason",
+    "steer",
     "agent",
     "team",
     "lane",

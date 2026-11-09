@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statS
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import os from "node:os";
-import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isRetiredAgent, laneCodeFor, loadTeamsRegistry, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isLiveAgent, isRetiredAgent, laneCodeFor, loadTeamsRegistry, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { assertBuddyRestartAllowed } from "./buddy-restart-auth.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
@@ -443,16 +443,19 @@ const startInFlight = new Map();
  * no callerId (owner) or a start-brainstorm request passes. performBrainstormRestartOnce re-checks the same rule against its own records.
  */
 export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
-  if (body?.callerId == null || body.callerId === "" || String(body?.agentId || "") === "start-brainstorm" || String(body?.reason || "").trim() === "start-brainstorm") return;
-  const callerId = String(body.callerId);
+  if (body?.callerId == null || body.callerId === "") return; // owner path
   const forbid = (why) => Object.assign(new Error(`buddy restart: forbidden: ${why}`), { status: 403 });
+  const callerId = String(body.callerId);
   if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw forbid("bad callerId");
-  const targetId = String(body.agentId || "").trim();
-  if (!targetId) return; // performBrainstormRestart rejects a missing agentId
   let client = null;
   let backend = null;
   const load = async (id) => {
-    if (isRunnerId(id)) return readRunnerAgentSync(id);
+    const listed = Array.isArray(body.agents) ? body.agents.map((a) => a?.agent ?? a).find((a) => a?.id === id) : null;
+    if (listed) return listed;
+    if (isRunnerId(id)) {
+      const rec = readRunnerAgentSync(id);
+      if (rec || !body.agentClient) return rec;
+    }
     if (!client) {
       client = body.agentClient || createAgentClient(rootDir);
       backend = getBackend(client);
@@ -460,14 +463,31 @@ export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
     }
     return (await backend.fetchAgent?.(id)?.catch(() => null))?.agent ?? null;
   };
-  const caller = await load(callerId);
-  if (!caller) throw forbid("caller not found");
-  const target = await load(targetId);
-  if (!target) return; // unknown target: the restart itself fails closed ("not a brainstorm agent")
-  assertBuddyRestartAllowed(caller, target, loadTeamsRegistry(rootDir));
+  try {
+    // The caller is validated first, before any target/start-brainstorm shortcut, so nothing a non-lead sends gets past here.
+    const caller = await load(callerId);
+    if (!caller) throw forbid("caller not found");
+    if (effectiveAgentRole(caller) !== "lead" || !isLiveAgent(caller)) throw forbid("only a live lead (or the owner) may restart a Buddy");
+    const targetId = String(body.agentId || "").trim();
+    if (targetId === "start-brainstorm" || String(body.reason || "").trim() === "start-brainstorm") throw forbid("callerId is not allowed on start-brainstorm (owner only)");
+    if (!targetId) throw forbid("agentId is required");
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(targetId)) throw forbid("bad agentId");
+    const target = await load(targetId);
+    if (!target) throw forbid("target Buddy not found");
+    if (!["brainstorm", "former-brainstorm"].includes(String(target.labels?.role ?? ""))) throw forbid("target is not a Buddy");
+    assertBuddyRestartAllowed(caller, target, loadTeamsRegistry(rootDir));
+  } finally {
+    if (client && !body.agentClient && typeof backend.close === "function") await backend.close().catch(() => {});
+  }
 }
 
 export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
+  // O5: a named caller is authorized before the request can join (or start) an in-flight restart.
+  if (body?.callerId != null && body.callerId !== "") return authorizeBuddyRestartRequest(body, rootDir).then(() => performBrainstormRestartDispatch(body, rootDir));
+  return performBrainstormRestartDispatch(body, rootDir);
+}
+
+function performBrainstormRestartDispatch(body, rootDir) {
   const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
   if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir);
   if (!isStart) {

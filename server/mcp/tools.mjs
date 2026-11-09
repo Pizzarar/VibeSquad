@@ -3,8 +3,8 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
-import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
-import { assertBuddyRestartAllowed, isLiveAgentRecord } from "../buddy-restart-auth.mjs";
+import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
+import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -454,14 +454,14 @@ async function restartBuddy(ctx, args = {}) {
   let caller = null;
   if (callerId) {
     caller = await fetchAgent(callerId);
-    if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || !isLiveAgentRecord(caller)) {
+    if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || !isLiveAgent(caller)) {
       throw new Error(`cannot restart a Buddy: ${callerId} is not a live lead (only the owner, the lane's lead or the Squad's Overlord may)`);
     }
     // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
-    const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams);
     const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+    const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
     if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot restart a Buddy: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
-    const target = askedLane ? findLaneInRegistry(askedLane, teams) : callerLane;
+    const target = askedLane ? findLaneInRegistry(askedLane, teams, callerTeam.id) : callerLane;
     if (!target) throw new Error(`cannot restart a Buddy: lane "${askedLane}" is not in the team registry`);
     if (target.team.id !== callerTeam.id) throw new Error(`cannot restart a Buddy: lane "${target.lane.id}" is in another Squad than the caller's "${callerTeam.id}"`);
     if (target.lane.id !== callerLane.lane.id && !isHubLane(callerTeam, callerLane.lane)) {
