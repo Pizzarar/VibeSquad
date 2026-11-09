@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
 import { createVibesquadMiddleware, handleAndroidApk } from "../server/vibesquad-api.mjs";
-import { buildAndroidApk, ensureAndroidDeepLinkIntentFilter, ensureAndroidSystemBarFit, resolveAndroidEnv } from "../server/build-android.mjs";
+import { buildAndroidApk, signSideloadApk, ensureAndroidDeepLinkIntentFilter, ensureAndroidSystemBarFit, resolveAndroidEnv } from "../server/build-android.mjs";
 import { buildLatestJson, syncVersionFiles } from "../server/release.mjs";
 import { checkGithubAndroidRelease, parseGithubReleaseVersion } from "../src/userName.ts";
 
@@ -230,30 +230,77 @@ describe("wiring (source inspection)", () => {
     assert.match(src, /"VibeSquad\.apk"/);
   });
 
-  test("buildAndroidApk: --debug and --unsigned conflict; sideload builds drop a stale android-build.json and skip signing", () => {
+  function stageApkRoot(name) {
+    const root = mkdtempSync(join(tmpdir(), "vs-apk-"));
+    const sdk = join(root, "sdk");
+    mkdirSync(join(sdk, "build-tools", "1.0.0"), { recursive: true });
+    const apkDir = join(root, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
+    mkdirSync(apkDir, { recursive: true });
+    writeFileSync(join(apkDir, name), "apk-bytes");
+    mkdirSync(join(root, "dist-desktop"), { recursive: true });
+    writeFileSync(join(root, "dist-desktop", "android-build.json"), "{}");
+    return { root, sdk };
+  }
+  const quiet = (fn) => {
+    const origLog = console.log;
+    console.log = () => {};
+    try { return fn(); } finally { console.log = origLog; }
+  };
+  const SIGNER = "certificate SHA-256 digest: " + "ab".repeat(32);
+
+  test("buildAndroidApk: --debug/--sideload conflict with --unsigned; --unsigned stages raw and drops android-build.json", () => {
     assert.throws(() => buildAndroidApk({ debug: true, unsigned: true }), /cannot be combined/);
-    for (const flag of ["debug", "unsigned"]) {
-      const root = mkdtempSync(join(tmpdir(), "vs-apk-"));
-      const sdk = join(root, "sdk");
-      mkdirSync(join(sdk, "build-tools", "1.0.0"), { recursive: true });
-      const apkDir = join(root, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", flag === "debug" ? "debug" : "release");
-      mkdirSync(apkDir, { recursive: true });
-      writeFileSync(join(apkDir, "app-universal-test.apk"), "apk-bytes");
-      mkdirSync(join(root, "dist-desktop"), { recursive: true });
-      writeFileSync(join(root, "dist-desktop", "android-build.json"), "{}");
+    assert.throws(() => buildAndroidApk({ sideload: true, unsigned: true }), /cannot be combined/);
+    const { root, sdk } = stageApkRoot("app-universal-test.apk");
+    const calls = [];
+    quiet(() => buildAndroidApk({ rootDir: root, env: { ...process.env, ANDROID_HOME: sdk }, exec: (cmd, args) => { calls.push([cmd, ...args]); }, unsigned: true }));
+    assert.equal(readFileSync(join(root, "dist-desktop", "VibeSquad.apk"), "utf8"), "apk-bytes");
+    assert.equal(existsSync(join(root, "dist-desktop", "android-build.json")), false);
+    assert.equal(calls.some((c) => c.includes("sign") || c.includes("verify")), false);
+  });
+
+  test("buildAndroidApk: --debug/--sideload builds the release variant (no --debug) and signs with the Android debug keystore via apksigner", () => {
+    for (const flag of ["debug", "sideload"]) {
+      const { root, sdk } = stageApkRoot("app-universal-release-unsigned.apk");
+      const home = mkdtempSync(join(tmpdir(), "vs-home-"));
+      mkdirSync(join(home, ".android"), { recursive: true });
+      writeFileSync(join(home, ".android", "debug.keystore"), "ks");
       const calls = [];
-      const origLog = console.log;
-      console.log = () => {};
-      try {
-        const out = buildAndroidApk({ rootDir: root, env: { ...process.env, ANDROID_HOME: sdk }, exec: (cmd, args) => { calls.push([cmd, ...args]); }, [flag]: true });
-        assert.equal(out.apkPath, join(root, "dist-desktop", "VibeSquad.apk"));
-      } finally {
-        console.log = origLog;
-      }
-      assert.equal(readFileSync(join(root, "dist-desktop", "VibeSquad.apk"), "utf8"), "apk-bytes");
+      const exec = (cmd, args) => {
+        calls.push([cmd, ...args]);
+        if (args.includes("verify")) return SIGNER;
+        if (args.includes("sign")) writeFileSync(args[args.indexOf("--out") + 1], "signed");
+      };
+      const out = quiet(() => buildAndroidApk({ rootDir: root, env: { ...process.env, ANDROID_HOME: sdk }, exec, [flag]: true, debugKeystorePath: join(home, ".android", "debug.keystore") }));
+      assert.equal(out.certSha256, "ab".repeat(32));
+      const tauri = calls.find((c) => c.includes("android") && c.includes("build"));
+      assert.ok(tauri && !tauri.includes("--debug"), "sideload must build the compact release variant");
+      const sign = calls.find((c) => c.includes("sign"));
+      assert.ok(sign.includes(join(home, ".android", "debug.keystore")));
+      assert.equal(sign[sign.indexOf("--ks-key-alias") + 1], "androiddebugkey");
+      assert.equal(sign[sign.indexOf("--ks-pass") + 1], "env:VS_DEBUG_KS_PASS");
+      assert.equal(sign[sign.indexOf("--key-pass") + 1], "env:VS_DEBUG_KS_PASS");
+      assert.equal(calls.some((c) => c.includes("keytool") || c.some((a) => /keytool/.test(String(a)))), false);
+      assert.equal(readFileSync(join(root, "dist-desktop", "VibeSquad.apk"), "utf8"), "signed");
       assert.equal(existsSync(join(root, "dist-desktop", "android-build.json")), false);
-      assert.equal(calls.some((c) => c.includes("sign") || c.includes("verify")), false);
     }
+  });
+
+  test("signSideloadApk: missing ~/.android/debug.keystore is a clear error and never creates one", () => {
+    const missing = join(mkdtempSync(join(tmpdir(), "vs-nks-")), "debug.keystore");
+    const calls = [];
+    assert.throws(() => signSideloadApk({ javaExe: "java", apksignerJar: "a.jar", inputApk: "in.apk", outApk: "out.apk", exec: (...a) => calls.push(a), keystorePath: missing }), /debug keystore not found.*Gradle/);
+    assert.equal(calls.length, 0);
+    assert.equal(existsSync(missing), false);
+  });
+
+  test("buildAndroidApk: release path (no flag) still signs with the release keystore + pin, not the debug keystore", () => {
+    const src = read("server/build-android.mjs");
+    assert.match(src, /ensureAndroidKeystore\(\{ env: androidEnv \}\)/);
+    assert.match(src, /signAndVerifyApk\(\{ javaExe, apksignerJar, keystorePath, alias, secretEnv/);
+    assert.doesNotMatch(src, /keytool/);
+    const body = src.slice(src.indexOf("} else if (apk.endsWith"));
+    assert.doesNotMatch(body.slice(0, body.indexOf("6/6")), /signSideloadApk|DEBUG_KEYSTORE/);
   });
 
   test("server/build-android.mjs builds aarch64 without --apk=true, uses arm64 flavor, Windows jniLibs fallback, and apksigner.jar", () => {
