@@ -145,3 +145,11 @@ test("PinIdeas: the 'Pinned' toast carries the fallback warning instead of overw
   assert.doesNotMatch(src, /onBriefFallback: warnBriefFallback/);
   assert.match(src, /withBriefWarning = \(msg: string, laneIds: string\[\]\) => \[msg, briefFallbackWarning\(laneIds\)\]\.filter\(Boolean\)\.join\(" · "\)/);
 });
+
+test("hub spin-up H2: GET brainstorm-summary returns the Squad's working dir for a hub lane with no agent or lane path, null when none resolves", async () => {
+  const hit = await (await doFetch("/__vibesquad/brainstorm-summary?lane=mg&teamId=mg")).json();
+  assert.equal(hit.ok, true);
+  assert.equal(hit.cwd, project);
+  const miss = await (await doFetch("/__vibesquad/brainstorm-summary?lane=ghost&teamId=nope")).json();
+  assert.equal(miss.cwd, null);
+});
