@@ -88,6 +88,8 @@ local function riff(C, s)
     f.line(28, 15, 31, 17, K); f.line(31, 17, 34, 15, K); f.line(37, 14, 41, 16, K); f.line(41, 16, 45, 14, K)
   elseif s.eyes == "yo" then
     pupil(f, 31 + (s.px or 0), 12, 2, 2); pupil(f, 41 + (s.px or 0), 12, 2, 2)
+  elseif s.eyes == "push" then                   -- shove (RS-c): pupils slammed right, at the Overlord
+    pupil(f, 32, 13, 2, 2); pupil(f, 43, 12, 2, 2)                              -- both hard right, up
   elseif s.eyes == "scared" then                 -- pin pupils that jitter
     local j = s.jit or 0
     f.rect(31 + j, 15, 1, 2, K); f.rect(42 - j, 15, 1, 2, K)
@@ -122,7 +124,7 @@ local function riff(C, s)
   end
 
   -- needs only: a hand pops UP from the bottom edge (row 47) beside the head and waves
-  if s.arm then
+  if s.arm and s.arm ~= "shove" then
     local a = C.arm
     if s.arm == 1 then
       a.poly({62,48, 63,27, 69,26, 69,48}, V); a.rect(63, 24, 6, 2, M)
@@ -137,8 +139,56 @@ local function riff(C, s)
     a.hline(63, 46, 6, K)                                                      -- sleeve meets the frame edge
   end
 
+  -- shove only (RS-c): ONE sleeve pops up from the bottom edge, clear of the bezel, topped by an open palm
+  -- (4 fingers up, small thumb, palm line); push ticks off the palm toward the Overlord
+  if s.arm == "shove" then                                                     -- one arm, x63..78, y8..47, clear of the bezel
+    C.arm.stamp(63, 8, [[
+|......k.k.k.k...|
+|.....kmkmkmkmk..|
+|.....kmkmkmkmk..|
+|.....kmkmkmkmk..|
+|.....kmmmmmmmk..|
+|.....kmmmmmmmk..|
+|...kkkmmmmmmmk..|
+|...kmmkmmmmmmk..|
+|....kmmmmmkmmk..|
+|....kmmmmmkmmk..|
+|....kmmmmmmmk...|
+|....kmmmmmmmk...|
+|....kkkkkkkkk...|
+|....kmmmmmmmk...|
+|....kkkkkkkkk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|....kvvvvvvvk...|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+|...kvvvvvvvk....|
+]])
+  end
+
   local fx = C.fx
-  if s.arm == 1 then fx.line(72, 15, 71, 13, K); fx.line(72, 20, 72, 19, K)    -- wave ticks
+  if s.arm == "shove" then
+    fx.vline(78, 9, 4, K); fx.vline(78, 15, 4, K)                              -- push ticks off the palm
+  elseif s.arm == 1 then fx.line(72, 15, 71, 13, K); fx.line(72, 20, 72, 19, K)    -- wave ticks
   elseif s.arm == 2 then fx.line(70, 12, 69, 10, K); fx.line(73, 15, 72, 13, K) end
   if s.yo then
     if s.flash then L.twinkle(fx, 15, 8, A, M, 2); L.twinkle(fx, 11, 28, P, nil, 1)
@@ -172,6 +222,7 @@ local RIFF_FRAMES = {
     droop = true, scared = true, jit = 0, shake = -1 },                                     -- scared   x640
   { eyes = "scared", wide = true, arrow = sh(CRASH, 0), lip = "wobble",
     droop = true, scared = true, jit = 1, shake = 1 },                                      -- scared   x720
+  { eyes = "push", arrow = GRIN_C, arm = "shove" },                                         -- shove    x800 (RS-c)
 }
 
 -- ---------- Overlord (80x48, owner H1c-v4 pick B: a giant brain fills the jar) ----------
