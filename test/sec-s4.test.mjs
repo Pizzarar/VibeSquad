@@ -124,6 +124,9 @@ describe("S4 over HTTP", () => {
       const cardId = JSON.parse(add.body).cards.at(-1).id;
       const tri = await post("/__vibesquad/inbox/triage", { action: "archive", cardId, baseHome: evil });
       assert.equal(tri.status, 200, tri.body);
+      // send ignores the injected baseHome too (unknown card id: fails before any backend is touched)
+      const snd = await post("/__vibesquad/inbox/send", { cardId: "no-such-card", baseHome: evil });
+      assert.equal(snd.status, 400, snd.body);
       assert.deepEqual(readdirSync(evil), [], "nothing written under the injected baseHome");
       assert.ok(existsSync(join(home, "inbox.json")), "the card went to the real home");
     } finally {

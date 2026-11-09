@@ -4,8 +4,9 @@ import os from "node:os";
 import { join, resolve } from "node:path";
 import { createAgentClient } from "./brainstorm.mjs";
 import { getBackend } from "./backend/index.mjs";
-import { effectiveAgentRole, isLiveAgent } from "./identity.mjs";
+import { resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { isHubLane } from "./lane-pure.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { updateJsonFileSync } from "./file-lock.mjs";
@@ -618,6 +619,13 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       const card = cards.find((c) => c.id === cardId);
       if (!card) throw new Error(`Card not found: ${cardId}`);
 
+      // A real move re-opens delivery: Send must reach the new lane (e.g. Overlord bounce after a "route this").
+      if (card.laneId !== laneId) {
+        delete card.deliveredTo;
+        delete card.deliveredLane;
+        delete card.deliveredToTitle;
+        delete card.deliveredAt;
+      }
       card.laneId = laneId;
       card.teamId = body.teamId ? String(body.teamId).trim() : teamIdForLane(laneId, card.text, teams);
       if (body.scope && INBOX_SCOPES.includes(body.scope)) {
@@ -691,23 +699,17 @@ const delivering = new Set();
 
 const UNASSIGNED_LANE = "_unassigned";
 
-const agentLabel = (a, key) => String(a?.labels?.[key] ?? "").trim().toLowerCase();
-
-/** Best live agent of `role` in (team, lane): running/idle beats resumable-closed, then most recently updated. */
-function pickLiveAgent(agents, { role, teamId, laneId }) {
-  const wantLane = String(laneId).toLowerCase();
-  const wantTeam = String(teamId || "").toLowerCase();
+/**
+ * The live agent `vs who <role> --lane <lane>` resolves: the same whoCandidate filter (cwd, lane alias/code, team) and
+ * resolveLeadWinner tie-break. A lane's Buddy front door is the one without a topic; topic Buddies are side threads.
+ */
+function pickLiveAgent(agents, { role, teamId, laneId, teams }) {
   const matches = agents
     .map((item) => item?.agent ?? item)
-    .filter((a) => a && isLiveAgent(a) && effectiveAgentRole({ ...a, status: undefined }) === role)
-    .filter((a) => (agentLabel(a, "lane") || agentLabel(a, "lead")) === wantLane)
-    .filter((a) => !wantTeam || !agentLabel(a, "team") || agentLabel(a, "team") === wantTeam);
-  // The lane's main Buddy has no topic; topic Buddies are side threads, not the lane's front door.
-  const main = role === "brainstorm" ? matches.filter((a) => !agentLabel(a, "topic")) : matches;
-  const pool = main.length ? main : matches;
-  const closed = (a) => (a.status === "closed" ? 1 : 0);
-  pool.sort((a, b) => closed(a) - closed(b) || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
-  return pool[0] ?? null;
+    .filter((a) => a && whoCandidate(a, { teams, wantTeamId: teamId, wantLane: laneId })?.role === role);
+  const topicOf = (a) => String(a.labels?.topic ?? a.labels?.["vs.inbox-card-id"] ?? "").trim();
+  const main = role === "brainstorm" ? matches.filter((a) => !topicOf(a)) : matches;
+  return resolveLeadWinner(main.length ? main : matches).winner;
 }
 
 function buildDeliveryText(card, { toOverlord }) {
@@ -719,7 +721,7 @@ function buildDeliveryText(card, { toOverlord }) {
     ...(toOverlord ? [`Title: ${card.title}`] : []),
     `Scope: ${card.scope || "other"}${merged ? ` · merged from ${merged}` : ""}`,
     "",
-    String(card.text || "").trim(),
+    defangPromptFences(String(card.text || "").trim()),
   ].join("\n");
 }
 
@@ -755,12 +757,12 @@ export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
         const team = teams.find((t) => t.id === teamId) ?? teams.find((t) => (t.lanes ?? []).some((l) => l.id === teamId));
         const hub = (team?.lanes ?? []).find((l) => isHubLane(team, l));
         targetLane = hub?.id || team?.id || teamId;
-        target = targetLane ? pickLiveAgent(agents, { role: "lead", teamId: team?.id || teamId, laneId: targetLane }) : null;
+        target = targetLane ? pickLiveAgent(agents, { role: "lead", teamId: team?.id || teamId, laneId: targetLane, teams }) : null;
         if (!target) throw new Error(`No live Overlord (hub lead) for Squad "${team?.id || teamId}" to route card #${cardId}`);
       } else {
         target =
-          pickLiveAgent(agents, { role: "brainstorm", teamId, laneId }) ||
-          pickLiveAgent(agents, { role: "lead", teamId, laneId });
+          pickLiveAgent(agents, { role: "brainstorm", teamId, laneId, teams }) ||
+          pickLiveAgent(agents, { role: "lead", teamId, laneId, teams });
         if (!target) throw new Error(`No live Buddy or lead in lane "${laneId}" to receive card #${cardId}`);
       }
       await backend.sendAgentPrompt(target.id, buildDeliveryText(card, { toOverlord }));
