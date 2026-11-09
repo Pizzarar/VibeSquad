@@ -12,7 +12,6 @@ import {
   SHARED_NOTE_PREFIX,
   importPaseoProfiles,
   loadProfiles,
-  openTopicBrainstorm,
   performBrainstormRestart,
   saveProfiles,
   seedDefaultPack,
@@ -248,29 +247,6 @@ test("4. Claude brainstorm spawned by restart or Inbox topic runs in modeId: 'au
     assert.equal(captured[0].config.modeId, "auto");
     assert.notEqual(captured[0].config.modeId, "default");
 
-    // 4b. Inbox topic brainstorm defaults to 'Brainstorm - Claude' -> modeId: 'auto'
-    const added = addInboxCards(
-      {
-        teamId: "vibesquad",
-        laneId: "vibesquad",
-        ideas: ["Profile store sync and diff view"],
-      },
-      env.dir,
-    );
-    const cardId = added.added[0].id;
-    const topicRes = await openTopicBrainstorm(
-      {
-        cardId,
-        teamId: "vibesquad",
-        laneId: "vibesquad",
-        agentClient: mockDaemon,
-        profilesPath: env.profilesPath,
-      },
-      env.dir,
-    );
-    assert.equal(topicRes.spawnConfig.modeId, "auto");
-    assert.equal(captured[1].config.modeId, "auto");
-    assert.equal(captured[1].labels.profile, "Brainstorm - Claude");
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;

@@ -13,6 +13,10 @@ export interface InboxCard {
   mergedFromIds?: string[];
   status: InboxStatus;
   topicAgentId?: string | null;
+  deliveredTo?: string | null;
+  deliveredLane?: string | null;
+  deliveredToTitle?: string | null;
+  deliveredAt?: string | null;
   summaryNote?: string | null;
   source?: string;
   createdAt: string;
@@ -91,3 +95,7 @@ export function triageInboxCards(
   mergedIds?: string[];
   cards: InboxCard[];
 };
+export function sendInboxCard(
+  body: { cardId: string; baseHome?: string; agentClient?: any },
+  rootDir?: string,
+): Promise<{ ok: true; already: boolean; card: InboxCard; cards: InboxCard[]; agentId?: string; lane?: string }>;

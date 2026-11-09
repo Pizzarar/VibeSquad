@@ -22,11 +22,8 @@ if (process.platform === "win32") {
 }
 import {
   addInboxCards,
-  handoffTopicBrainstorm,
   INBOX_STATUSES,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   assertInboxTriageCaller,
   triageInboxCards,
 } from "../server/inbox.mjs";
@@ -945,36 +942,7 @@ function commandInbox(flags) {
     throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
-  if (sub === "open-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    if (!cardId) throw new Error("inbox open-topic requires <cardId>");
-    return openTopicBrainstorm({ cardId, baseHome }).then((res) => {
-      process.stdout.write(`opened ${res.title} (${res.agentId}) for card #${res.card.id}\n`);
-      return 0;
-    });
-  }
-
-  if (sub === "handoff-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    const agentId = String(flags.agent || process.env.PASEO_AGENT_ID || "").trim();
-    const planNote = flags.note ? String(flags.note) : flags._.slice(1).join(" ").trim();
-    return handoffTopicBrainstorm({ cardId, agentId, planNote, baseHome }).then((res) => {
-      process.stdout.write(`handed off card #${res.card.id} (${res.card.title}); closed ${res.archivedAgentId || "topic chat"}\n`);
-      return 0;
-    });
-  }
-
-  if (sub === "park-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    const agentId = String(flags.agent || process.env.PASEO_AGENT_ID || "").trim();
-    const summaryNote = flags.note ? String(flags.note) : flags._.slice(1).join(" ").trim();
-    return parkTopicBrainstorm({ cardId, agentId, summaryNote, baseHome }).then((res) => {
-      process.stdout.write(`parked topic back to card #${res.card.id} (${res.card.title})\n`);
-      return 0;
-    });
-  }
-
-  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage | open-topic | handoff-topic | park-topic`);
+  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage`);
 }
 
 const WHO_TARGETS = new Set(["lead", "brainstorm", "buddy", "workers", "worker", "all"]);

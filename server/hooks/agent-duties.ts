@@ -143,6 +143,7 @@ export const HUB_LEAD_RULES = [
   "  1. Steer: idle/stalled lead → `vs send <lead> \"<steer>\"`, then `vs wait <lead> --timeout 90`.",
   "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
   "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Never raw-archive a lead.",
+  "- Inbox cards with no lane arrive as a `Route this:` message: bounce the card with the existing `vs inbox triage --bounce <cardId> --lane <lane>`, send it on to that lane's Buddy (`vs who brainstorm --lane <lane>`, then `vs send`), and `vs log decision` where it went. Never open a new agent for a card.",
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
 ].join("\n");
 

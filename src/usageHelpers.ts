@@ -290,9 +290,9 @@ export const BUG_CHASER_LANE = "bug-chaser";
 export const PERFECTION_LANE = "perfection";
 
 /** Bucket a card for the filter pills. Closed wins over accepted; accepted wins over queue. */
-export function inboxBucket(c: Pick<InboxCard, "status" | "topicAgentId">): Exclude<InboxFilter, "all"> {
+export function inboxBucket(c: Pick<InboxCard, "status" | "topicAgentId"> & { deliveredAt?: string | null }): Exclude<InboxFilter, "all"> {
   if (c.status === "rejected" || c.status === "archived") return "closed";
-  if (c.status === "accepted" || c.status === "handed-off" || c.topicAgentId) return "accepted";
+  if (c.status === "accepted" || c.status === "handed-off" || c.topicAgentId || c.deliveredAt) return "accepted";
   return "queue";
 }
 

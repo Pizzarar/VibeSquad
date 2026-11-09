@@ -2,24 +2,15 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import os from "node:os";
 import { join, resolve } from "node:path";
-import {
-  appendVsLogEntry,
-  archiveBuddyKeepingChildren,
-  createAgentClient,
-  readBrainstormSummary,
-  writeBrainstormSummary,
-} from "./brainstorm.mjs";
-import { laneWorkingDir } from "./brief-path.mjs";
+import { createAgentClient } from "./brainstorm.mjs";
 import { getBackend } from "./backend/index.mjs";
-import { findLaneInRegistry, formatDisplayTitle, laneCodeFor } from "./identity.mjs";
-import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { effectiveAgentRole, isLiveAgent } from "./identity.mjs";
+import { isHubLane } from "./lane-pure.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { updateJsonFileSync } from "./file-lock.mjs";
-import { defangPromptFences, isSpawnId } from "./write-guards.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
-const TITLE_MAX = 60;
 
 export const INBOX_SCOPES = ["art", "mechanic", "plugin", "UI", "infra", "docs", "other"];
 export const INBOX_LANES = ["main-game", "ui-lab", "plugins", "vibesquad", "site-polish"];
@@ -650,15 +641,12 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
         throw new Error(`Unknown inbox status "${patch.status}"`);
       }
 
-      // No topicAgentId: it names the agent park/handoff-topic archive, so only open-topic sets it.
       const allowed = [
         "status",
         "title",
         "text",
         "scope",
         "summaryNote",
-        "topicTitle",
-        "topicOpenedAt",
         "handedOffAt",
         "laneId",
         "teamId",
@@ -698,538 +686,103 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
   return { ok: true, ...result, cards };
 }
 
-function clipTitle(s) {
-  return s.length > TITLE_MAX ? s.slice(0, TITLE_MAX - 1) + "\u2026" : s;
+/** Cards being delivered right now: a double-click while the first send is in flight must not send twice. */
+const delivering = new Set();
+
+const UNASSIGNED_LANE = "_unassigned";
+
+const agentLabel = (a, key) => String(a?.labels?.[key] ?? "").trim().toLowerCase();
+
+/** Best live agent of `role` in (team, lane): running/idle beats resumable-closed, then most recently updated. */
+function pickLiveAgent(agents, { role, teamId, laneId }) {
+  const wantLane = String(laneId).toLowerCase();
+  const wantTeam = String(teamId || "").toLowerCase();
+  const matches = agents
+    .map((item) => item?.agent ?? item)
+    .filter((a) => a && isLiveAgent(a) && effectiveAgentRole({ ...a, status: undefined }) === role)
+    .filter((a) => (agentLabel(a, "lane") || agentLabel(a, "lead")) === wantLane)
+    .filter((a) => !wantTeam || !agentLabel(a, "team") || agentLabel(a, "team") === wantTeam);
+  // The lane's main Buddy has no topic; topic Buddies are side threads, not the lane's front door.
+  const main = role === "brainstorm" ? matches.filter((a) => !agentLabel(a, "topic")) : matches;
+  const pool = main.length ? main : matches;
+  const closed = (a) => (a.status === "closed" ? 1 : 0);
+  pool.sort((a, b) => closed(a) - closed(b) || String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+  return pool[0] ?? null;
 }
 
-function resolveLaneMeta(laneRaw, rootDir = REPO_ROOT) {
-  const teams = loadTeamsForInbox(rootDir);
-  const hit = findLaneInRegistry(laneRaw, teams);
-  if (hit) {
-    return {
-      teamId: hit.team.id,
-      laneId: hit.lane.id,
-      laneName: hit.lane.name || hit.lane.id,
-      laneUpper: String(hit.lane.name || hit.lane.id).toUpperCase(),
-      code: laneCodeFor(hit.lane.id, teams),
-    };
-  }
-  const fallbackLane = String(laneRaw || "vibesquad").trim() || "vibesquad";
-  return {
-    teamId: teamIdForLane(fallbackLane, "", teams),
-    laneId: fallbackLane,
-    laneName: fallbackLane.replace(/-/g, " "),
-    laneUpper: fallbackLane.replace(/-/g, " ").toUpperCase(),
-  };
-}
-
-export function buildTopicTitle(rawTitleOrText) {
-  const cleaned = String(rawTitleOrText || "")
-    .trim()
-    .replace(/\r?\n+/g, " ")
-    .replace(FILLER_PREFIX_RE, "")
-    .replace(/[,:;!?()[\]{}"'`]+/g, " ")
-    .trim();
-  if (!cleaned) return "Topic";
-
-  const rawWords = cleaned.split(/\s+/).filter(Boolean);
-  let chosen = rawWords.slice(0, 4);
-  if (rawWords.length > 4) {
-    const nonStop = rawWords.filter((w) => !STOPWORDS.has(w.toLowerCase().replace(/[^a-z0-9]/g, "")));
-    if (nonStop.length >= 2) {
-      chosen = nonStop.slice(0, 4);
-    }
-  }
-  while (chosen.length > 2 && STOPWORDS.has(chosen[chosen.length - 1].toLowerCase().replace(/[^a-z0-9]/g, ""))) {
-    chosen.pop();
-  }
-  return chosen
-    .map((w) => {
-      if (/^[A-Z0-9]{2,}$/.test(w)) return w;
-      return w.charAt(0).toUpperCase() + w.slice(1);
-    })
-    .join(" ");
-}
-
-export function buildTopicBrainstormPrompt({ card, topic, laneId, laneUpper, summaryContent, buddyName }) {
-  const fullTitle = buddyName || `BRAINSTORM · ${laneUpper} · ${topic}`;
+function buildDeliveryText(card, { toOverlord }) {
+  const merged = Array.isArray(card.mergedFromIds) && card.mergedFromIds.length ? card.mergedFromIds.map((id) => `#${id}`).join(", ") : "";
   return [
-    `You are a focused topic brainstorm (${fullTitle}) for Inbox card #${card.id}. Stay strictly on this topic. When the plan is ready and handed off to the lead, click 'Hand off & close topic' so the card is marked handed-off and this chat closes.`,
+    toOverlord
+      ? `Route this: inbox card #${card.id} has no lane. Bounce it to the right lane with \`vs inbox triage --bounce ${card.id} --lane <lane>\`, send it to that lane's Buddy, and \`vs log decision\` where it went.`
+      : `Inbox card #${card.id} for @${card.laneId}: ${card.title}`,
+    ...(toOverlord ? [`Title: ${card.title}`] : []),
+    `Scope: ${card.scope || "other"}${merged ? ` · merged from ${merged}` : ""}`,
     "",
-    `--- BEGIN INBOX CARD #${card.id} ---`,
-    `Title: ${card.title}`,
-    `Scope: ${card.scope || "other"}`,
-    `Lane: ${laneId}`,
-    ...(Array.isArray(card.mergedFromIds) && card.mergedFromIds.length
-      ? [`Merged from: ${card.mergedFromIds.join(", ")}`]
-      : []),
-    ...(card.summaryNote ? [`Prior Session Summary Note:\n${defangPromptFences(String(card.summaryNote).trim())}`] : []),
-    "",
-    defangPromptFences(String(card.text || "").trim()),
-    `--- END INBOX CARD #${card.id} ---`,
-    "",
-    `--- BEGIN docs/brainstorm/${laneId}.md ---`,
-    defangPromptFences(String(summaryContent || "").trim()),
-    `--- END docs/brainstorm/${laneId}.md ---`,
+    String(card.text || "").trim(),
   ].join("\n");
 }
 
-export async function openTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
+/**
+ * Send = deliver. Hands a card (merged sources are already folded into its text) to its lane's live Buddy,
+ * falling back to the lane lead; a card with no lane (or `_unassigned`) goes to the Squad's live Overlord to
+ * route. Reuses the runner send path; never creates an agent. Idempotent: a delivered card is not re-sent.
+ * body: { cardId, baseHome, agentClient? }.
+ */
+export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const cardId = String(body.cardId || body.id || "").trim();
-  if (!cardId) throw new Error("open-topic requires cardId");
-
-  const cards = readInboxCards(baseHome);
-  const card = cards.find((c) => c.id === cardId);
+  if (!cardId) throw new Error("send requires cardId");
+  const card = readInboxCards(baseHome).find((c) => c.id === cardId);
   if (!card) throw new Error(`Inbox card not found: ${cardId}`);
-
-  const meta = resolveLaneMeta(card.laneId, rootDir);
-  const laneId = meta.laneId;
-  const laneUpper = meta.laneUpper;
-  const teamId = meta.teamId || card.teamId || "vibesquad";
-
-  const summary = readBrainstormSummary(laneId, rootDir);
-  const topic = buildTopicTitle(card.title || card.text);
-  const buddyName = formatDisplayTitle({ role: "brainstorm", laneId, laneName: meta.laneName, code: meta.code, topic });
-  const newTitle = clipTitle(buddyName);
-  const now = new Date().toISOString();
-
-  const initialPrompt = buildTopicBrainstormPrompt({
-    card,
-    buddyName,
-    topic,
-    laneId,
-    laneUpper,
-    summaryContent: summary.content,
-  });
-
-  // Provider/model only pick among installed CLIs: anything that isn't a plain id is refused.
-  if (body.provider != null && body.provider !== "" && !isSpawnId(String(body.provider).replace("/", ":"))) throw new Error("bad provider");
-  if (body.model != null && body.model !== "" && !isSpawnId(String(body.model))) throw new Error("bad model");
-  const rawProvider = String(body.provider || "claude");
-  const fallbackProfileName = rawProvider.startsWith("antigravity") ? "Brainstorm - Gemini" : "Brainstorm - Claude";
-  const desiredProfileKey = String(body.profile || fallbackProfileName).trim();
-  const { profiles } = loadProfiles(body.profilesPath, { autoSeed: false });
-  const profile = findProfile(desiredProfileKey, profiles) || findProfile(fallbackProfileName, profiles);
-
-  const spawnCfg = profile
-    ? toPaseoSpawnConfig(profile)
-    : {
-        provider: rawProvider.includes("/") ? rawProvider.split("/")[0] : rawProvider,
-        model:
-          body.model ||
-          (rawProvider.includes("/")
-            ? rawProvider.split("/").slice(1).join("/")
-            : rawProvider.startsWith("antigravity")
-              ? "gemini-4-argon"
-              : "claude-opus-5-5"),
-        modeId: rawProvider.startsWith("antigravity-cli") ? "accept-edits" : "auto",
-        thinkingOptionId: "medium",
-        ...(rawProvider.startsWith("antigravity-cli")
-          ? { featureValues: { approvalPolicy: "skip", shareMcp: "on" } }
-          : {}),
-        notes: "",
-        systemPrompt: "",
-      };
-
-  const provider = spawnCfg.provider;
-  const model = spawnCfg.model;
-  const modeId = spawnCfg.modeId;
-  const thinkingOptionId = spawnCfg.thinkingOptionId;
-  const featureValues = spawnCfg.featureValues ? { ...spawnCfg.featureValues } : undefined;
-  // Derived server-side from the card's lane (confined to the project roots), never taken from the body.
-  const cwd = laneWorkingDir(teamId, laneId, rootDir) || rootDir;
-
-  const newLabels = {
-    team: teamId,
-    lane: laneId,
-    lead: laneId,
-    role: "brainstorm",
-    profile: profile?.name || fallbackProfileName,
-    topic,
-    "vs.inbox-card-id": card.id,
-    "vs.topic-scope": String(card.scope || "other"),
-    "vs.opened-at": now,
-  };
-
-  let created = null;
-  const injectedClient = body.agentClient || null;
-  const client = injectedClient || (body.skipBackend ? null : createAgentClient(rootDir));
-  const backend = getBackend(client);
-  if (client) {
-    let connected = Boolean(injectedClient);
-    try {
-      if (!injectedClient && typeof backend.connect === "function") {
-        await backend.connect();
-        connected = true;
-      }
-      if (connected && card.topicAgentId) {
-        let existingAgent = null;
-        if (typeof backend.fetchAgent === "function") {
-          const fetched = await backend.fetchAgent(card.topicAgentId).catch(() => null);
-          existingAgent = fetched?.agent ?? (fetched?.id ? fetched : null);
-        } else if (typeof backend.getAgent === "function") {
-          const fetched = await backend.getAgent(card.topicAgentId).catch(() => null);
-          existingAgent = fetched?.agent ?? (fetched?.id ? fetched : null);
-        }
-        if (existingAgent && !existingAgent.archivedAt && existingAgent.status !== "archived") {
-          const openTopicCards = cards
-            .filter((c) => c.status === "parked" && c.topicAgentId)
-            .sort((a, b) =>
-              String(a.topicOpenedAt || a.updatedAt || a.createdAt || "").localeCompare(
-                String(b.topicOpenedAt || b.updatedAt || b.createdAt || ""),
-              ),
-            );
-          const oldestCard = openTopicCards[0] || null;
-          return {
-            ok: true,
-            reused: true,
-            card,
-            cards,
-            agent: existingAgent,
-            agentId: card.topicAgentId,
-            topic,
-            title: existingAgent.title || card.topicTitle || newTitle,
-            initialPrompt,
-            summaryPath: summary.path,
-            spawnConfig: spawnCfg,
-            openTopicsCount: openTopicCards.length,
-            softCapExceeded: openTopicCards.length > 3,
-            oldestTopic: oldestCard
-              ? {
-                  cardId: oldestCard.id,
-                  agentId: oldestCard.topicAgentId,
-                  title: oldestCard.topicTitle || oldestCard.title,
-                }
-              : null,
-          };
-        }
-      }
-      if (connected && typeof backend.createAgent === "function") {
-        created = await backend.createAgent({
-          config: {
-            provider,
-            model,
-            cwd,
-            title: newTitle,
-            modeId,
-            thinkingOptionId,
-            ...(featureValues && Object.keys(featureValues).length ? { featureValues } : {}),
-            ...(spawnCfg.systemPrompt ? { systemPrompt: spawnCfg.systemPrompt } : {}),
-          },
-          initialPrompt,
-          labels: newLabels,
-          // Labels never reach the plugin's before(agent.create); env does, so the profile is forced at spawn.
-          env: { VS_ROLE: "brainstorm", ...(newLabels.profile ? { VS_PROFILE: newLabels.profile } : {}) },
-        });
-      }
-    } catch (err) {
-      created = null;
-    } finally {
-      if (!injectedClient && typeof backend.close === "function") {
-        await backend.close().catch(() => {});
-      }
-    }
-  }
-
-  if (!created) {
-    created = {
-      id: `bs-topic-${card.id}-${Date.now().toString(36)}`,
-      title: newTitle,
-      provider,
-      model,
-      modeId,
-      thinkingOptionId,
-      ...(featureValues ? { featureValues } : {}),
-      cwd,
-      status: "idle",
-      labels: newLabels,
-      createdAt: now,
-      updatedAt: now,
-      pendingPermissions: [],
-      requiresAttention: false,
-    };
-  } else {
-    created = {
-      ...created,
-      title: created.title || newTitle,
-      modeId: created.modeId ?? modeId,
-      thinkingOptionId: created.thinkingOptionId ?? thinkingOptionId,
-      ...(featureValues && !created.featureValues ? { featureValues } : {}),
-      labels: { ...(created.labels ?? {}), ...newLabels },
-    };
-  }
-
-  let updatedCard = card;
-  const writtenCards = updateInboxCardsSync(baseHome, (current) => {
-    const target = current.find((c) => c.id === card.id);
-    if (!target) throw new Error(`Inbox card not found: ${card.id}`);
-    target.topicAgentId = created.id;
-    target.topicTitle = created.title || newTitle;
-    target.topicOpenedAt = now;
-    target.status = "parked";
-    target.updatedAt = now;
-    updatedCard = target;
-    return current;
-  });
-
-  const openTopicCards = writtenCards
-    .filter((c) => c.status === "parked" && c.topicAgentId)
-    .sort((a, b) => String(a.topicOpenedAt || a.updatedAt || a.createdAt || "").localeCompare(String(b.topicOpenedAt || b.updatedAt || b.createdAt || "")));
-  const oldestCard = openTopicCards[0] || null;
-
-  return {
-    ok: true,
-    card: updatedCard,
-    cards: writtenCards,
-    agent: created,
-    agentId: created.id,
-    spawnConfig: spawnCfg,
-    topic,
-    title: created.title || newTitle,
-    initialPrompt,
-    summaryPath: summary.path,
-    openTopicsCount: openTopicCards.length,
-    softCapExceeded: openTopicCards.length > 3,
-    oldestTopic: oldestCard
-      ? {
-          cardId: oldestCard.id,
-          agentId: oldestCard.topicAgentId,
-          title: oldestCard.topicTitle || oldestCard.title,
-        }
-      : null,
-  };
-}
-
-/**
- * The agent park/handoff-topic may cancel and archive: the card's own topic Buddy, or a restarted one
- * (role=brainstorm carrying this card's vs.inbox-card-id). Any other agentId archives nothing.
- */
-async function topicArchiveTarget(client, card, reqAgentId) {
-  const backend = getBackend(client);
-  const own = String(card.topicAgentId || "").trim();
-  if (!reqAgentId || reqAgentId === own) return own || null;
-  if (typeof backend?.fetchAgent !== "function") return null;
-  const fetched = await backend.fetchAgent(reqAgentId).catch(() => null);
-  const labels = (fetched?.agent ?? fetched)?.labels ?? {};
-  return labels.role === "brainstorm" && labels["vs.inbox-card-id"] === card.id ? reqAgentId : null;
-}
-
-export async function handoffTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
-  const baseHome = body.baseHome;
-  const reqCardId = String(body.cardId || "").trim();
-  const reqAgentId = String(body.agentId || "").trim();
-  if (!reqCardId && !reqAgentId) {
-    throw new Error("handoff-topic requires cardId or agentId");
-  }
-
-  const cards = readInboxCards(baseHome);
-  const card = cards.find((c) => (reqCardId && c.id === reqCardId) || (reqAgentId && c.topicAgentId === reqAgentId));
-  if (!card) {
-    throw new Error(`Inbox card not found for ${reqCardId || reqAgentId}`);
-  }
-
-  const targetAgentId = reqAgentId || String(card.topicAgentId || "").trim();
-  const meta = resolveLaneMeta(card.laneId, rootDir);
-  const laneId = meta.laneId;
-  const teamId = card.teamId || meta.teamId || "vibesquad";
-
-  if (typeof body.summaryUpdate === "string" && body.summaryUpdate.trim()) {
-    writeBrainstormSummary(laneId, body.summaryUpdate, rootDir);
-  }
-  const summary = readBrainstormSummary(laneId, rootDir);
-
-  let usedTokens = Number(body.usedTokens) || 0;
-  let archivedAgentId = null;
-  const injectedClient = body.agentClient || null;
-  const client = injectedClient || (body.skipBackend ? null : createAgentClient(rootDir));
-  const backend = getBackend(client);
-  if (client && targetAgentId) {
-    let connected = Boolean(injectedClient);
-    try {
-      if (!injectedClient && typeof backend.connect === "function") {
-        await backend.connect();
-        connected = true;
-      }
-      archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
-      if (archivedAgentId) {
-        if (!usedTokens && typeof backend.fetchAgent === "function") {
-          const fetched = await backend.fetchAgent(archivedAgentId).catch(() => null);
-          const ag = fetched?.agent;
-          usedTokens =
-            Number(ag?.contextUsage?.usedTokens) ||
-            Number(ag?.lastUsage?.contextWindowUsedTokens) ||
-            Number(ag?.lastUsage?.inputTokens) ||
-            0;
-        }
-        if (typeof backend.cancelAgent === "function") {
-          await backend.cancelAgent(archivedAgentId).catch(() => {});
-        }
-        await archiveBuddyKeepingChildren(client, archivedAgentId);
-      }
-    } catch (err) {
-      // any backend failure is non-fatal
-    } finally {
-      if (!injectedClient && typeof backend.close === "function") {
-        await backend.close().catch(() => {});
-      }
-    }
-  }
-
-  const now = new Date().toISOString();
-  const planNote = typeof body.planNote === "string" && body.planNote.trim() ? body.planNote.trim() : "";
-
-  let updatedCard = card;
-  const writtenCards = updateInboxCardsSync(baseHome, (current) => {
-    const target = current.find((c) => c.id === card.id);
-    if (!target) throw new Error(`Inbox card not found: ${card.id}`);
-    target.status = "handed-off";
-    target.handedOffAt = now;
-    target.summaryNote = planNote || target.summaryNote || null;
-    target.topicAgentId = null;
-    target.updatedAt = now;
-    updatedCard = target;
-    return current;
-  });
-
-  const prevHome = process.env.VIBESQUAD_HOME;
-  if (baseHome) process.env.VIBESQUAD_HOME = baseHome;
+  if (card.deliveredAt || delivering.has(cardId)) return { ok: true, already: true, card, cards: readInboxCards(baseHome) };
+  delivering.add(cardId);
   try {
-    appendVsLogEntry({
-      teamId,
-      laneId,
-      agent: targetAgentId || "topic-brainstorm",
-      type: "handoff",
-      text: `topic-handoff (#${updatedCard.id} ${updatedCard.title}): ${updatedCard.summaryNote || "plan handed off to lead"}`,
-      refs: [updatedCard.id, summary.path],
-    });
-    appendVsLogEntry({
-      teamId,
-      laneId,
-      agent: targetAgentId || "topic-brainstorm",
-      type: "metric",
-      text: `tokens-per-plan-handoff: ${usedTokens} tok (topic #${updatedCard.id} ${updatedCard.title})`,
-      refs: [updatedCard.id, summary.path],
-    });
-  } finally {
-    if (baseHome) {
-      if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
-      else process.env.VIBESQUAD_HOME = prevHome;
-    }
-  }
-
-  return {
-    ok: true,
-    card: updatedCard,
-    cards: writtenCards,
-    archivedAgentId,
-    handedOffAt: now,
-    summaryPath: summary.path,
-  };
-}
-
-export async function parkTopicBrainstorm(body = {}, rootDir = REPO_ROOT) {
-  const baseHome = body.baseHome;
-  const reqCardId = String(body.cardId || "").trim();
-  const reqAgentId = String(body.agentId || "").trim();
-  if (!reqCardId && !reqAgentId) {
-    throw new Error("park-topic requires cardId or agentId");
-  }
-
-  const cards = readInboxCards(baseHome);
-  const card = cards.find((c) => (reqCardId && c.id === reqCardId) || (reqAgentId && c.topicAgentId === reqAgentId));
-  if (!card) {
-    throw new Error(`Inbox card not found for ${reqCardId || reqAgentId}`);
-  }
-
-  const targetAgentId = reqAgentId || String(card.topicAgentId || "").trim();
-  const rawNote = typeof body.summaryNote === "string" ? body.summaryNote.trim() : "";
-  const isDefaultPlaceholder = !rawNote || /^Parked from topic brainstorm$/i.test(rawNote);
-  let latestAssistantText = "";
-  let archivedAgentId = null;
-
-  const injectedClient = body.agentClient || null;
-  const client = injectedClient || (body.skipBackend ? null : createAgentClient(rootDir));
-  const backend = getBackend(client);
-  if (client && targetAgentId) {
-    let connected = Boolean(injectedClient);
+    const teams = loadTeamsForInbox(rootDir);
+    const laneId = String(card.laneId || "").trim();
+    const toOverlord = !laneId || laneId === UNASSIGNED_LANE;
+    const injectedClient = body.agentClient || null;
+    const client = injectedClient || createAgentClient(rootDir);
+    const backend = getBackend(client);
+    let target = null;
+    let targetLane = laneId;
     try {
-      if (!injectedClient && typeof backend.connect === "function") {
-        await backend.connect();
-        connected = true;
+      if (!injectedClient && typeof backend.connect === "function") await backend.connect();
+      const fetched = await backend.fetchAgents();
+      const agents = Array.isArray(fetched) ? fetched : (fetched?.entries ?? []);
+      const teamId = card.teamId || "";
+      if (toOverlord) {
+        const team = teams.find((t) => t.id === teamId) ?? teams.find((t) => (t.lanes ?? []).some((l) => l.id === teamId));
+        const hub = (team?.lanes ?? []).find((l) => isHubLane(team, l));
+        targetLane = hub?.id || team?.id || teamId;
+        target = targetLane ? pickLiveAgent(agents, { role: "lead", teamId: team?.id || teamId, laneId: targetLane }) : null;
+        if (!target) throw new Error(`No live Overlord (hub lead) for Squad "${team?.id || teamId}" to route card #${cardId}`);
+      } else {
+        target =
+          pickLiveAgent(agents, { role: "brainstorm", teamId, laneId }) ||
+          pickLiveAgent(agents, { role: "lead", teamId, laneId });
+        if (!target) throw new Error(`No live Buddy or lead in lane "${laneId}" to receive card #${cardId}`);
       }
-      archivedAgentId = connected ? await topicArchiveTarget(client, card, targetAgentId) : null;
-      if (archivedAgentId) {
-        if (isDefaultPlaceholder) {
-          let timeline = null;
-          if (typeof backend.fetchAgentTimeline === "function") {
-            timeline = await backend
-              .fetchAgentTimeline(archivedAgentId, { direction: "tail", limit: 20, projection: "projected" })
-              .catch(() => null);
-          } else if (typeof backend.getAgentTimeline === "function") {
-            timeline = await backend.getAgentTimeline(archivedAgentId).catch(() => null);
-          }
-          const entries = Array.isArray(timeline?.entries)
-            ? timeline.entries
-            : Array.isArray(timeline)
-              ? timeline
-              : [];
-          for (let i = entries.length - 1; i >= 0; i--) {
-            const it = entries[i]?.item ?? entries[i];
-            if (it && (it.type === "assistant_message" || it.role === "assistant")) {
-              const txt = String(it.text ?? it.content ?? "").trim();
-              if (txt) {
-                latestAssistantText = txt.slice(0, 400);
-                break;
-              }
-            }
-          }
-        }
-        if (typeof backend.cancelAgent === "function") {
-          await backend.cancelAgent(archivedAgentId).catch(() => {});
-        }
-        await archiveBuddyKeepingChildren(client, archivedAgentId);
-      }
-    } catch (err) {
-      // any backend failure is non-fatal
+      await backend.sendAgentPrompt(target.id, buildDeliveryText(card, { toOverlord }));
     } finally {
-      if (!injectedClient && typeof backend.close === "function") {
-        await backend.close().catch(() => {});
-      }
+      if (!injectedClient && typeof backend.close === "function") await backend.close().catch(() => {});
     }
-  }
 
-  const now = new Date().toISOString();
-  let parkedSummary = "";
-  if (!isDefaultPlaceholder && rawNote) {
-    parkedSummary = rawNote;
-  } else if (latestAssistantText) {
-    parkedSummary = latestAssistantText;
-  } else if (rawNote) {
-    parkedSummary = rawNote;
-  } else if (card.summaryNote) {
-    parkedSummary = card.summaryNote;
-  } else {
-    parkedSummary = `Parked topic summary (${card.topicTitle || card.title})`;
+    const now = new Date().toISOString();
+    let updated = card;
+    const written = updateInboxCardsSync(baseHome, (current) => {
+      const t = current.find((c) => c.id === cardId);
+      if (!t) throw new Error(`Inbox card not found: ${cardId}`);
+      t.deliveredTo = target.id;
+      t.deliveredLane = targetLane;
+      t.deliveredToTitle = target.title || "";
+      t.deliveredAt = now;
+      t.updatedAt = now;
+      updated = t;
+      return current;
+    });
+    return { ok: true, already: false, card: updated, cards: written, agentId: target.id, lane: targetLane };
+  } finally {
+    delivering.delete(cardId);
   }
-  let updatedCard = card;
-  const writtenCards = updateInboxCardsSync(baseHome, (current) => {
-    const target = current.find((c) => c.id === card.id);
-    if (!target) throw new Error(`Inbox card not found: ${card.id}`);
-    target.summaryNote = parkedSummary;
-    target.parkedSummary = parkedSummary;
-    target.status = "parked";
-    target.topicAgentId = null;
-    target.updatedAt = now;
-    updatedCard = target;
-    return current;
-  });
-
-  return {
-    ok: true,
-    card: updatedCard,
-    cards: writtenCards,
-    parkedSummary,
-    archivedAgentId,
-  };
 }

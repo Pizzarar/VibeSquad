@@ -1,16 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "./agentTypes";
-import { removeLocalAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { useDraft } from "./drafts";
-import { closeTab, openAgentInTab } from "./panes";
-import { getTeams, isTopicBrainstorm, titleFor, topicOfBrainstorm, useTeams } from "./teams";
+import { openAgentInTab } from "./panes";
+import { getTeams, useTeams } from "./teams";
 import { auditCardPin, laneDisplayName, type Pin } from "./pins";
 import { isRemote } from "./remoteSession";
 import type { TeamView } from "./teams";
 import type { InboxCard, InboxScope, TeamDef } from "./types";
-
-export const TOPIC_SOFT_CAP = 3;
 
 export function isTouchMobileLayout(): boolean {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
@@ -223,197 +220,26 @@ export async function triageInbox(body: {
   return { card: data.card, cards: cardsState };
 }
 
-export async function openTopicFromCard(opts: {
-  cardId: string;
-  provider?: string;
-  model?: string;
-}): Promise<{ card: InboxCard; agent: PaseoAgent; title: string }> {
-  const res = await fetch("/__vibesquad/inbox/open-topic", {
+/** Send = deliver: the card (and any merged sources) goes to its lane's live Buddy, or the Overlord when it has no lane. */
+export async function sendInboxCardClient(opts: { cardId: string }): Promise<{ card: InboxCard; cards: InboxCard[]; already: boolean }> {
+  const res = await fetch("/__vibesquad/inbox/send", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(opts),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error ?? `Open topic failed (${res.status})`);
+    throw new Error(data.error ?? `Send failed (${res.status})`);
   }
   if (Array.isArray(data.cards)) {
     cardsState = data.cards;
   } else if (data.card) {
     cardsState = cardsState.map((c) => (c.id === data.card.id ? data.card : c));
   }
-  const agent: PaseoAgent = data.agent;
-  if (agent?.id) {
-    upsertLocalAgent(agent);
-    openAgentInTab(agent.id);
-  }
-  flashInboxNotice(`Opened ${data.title || agent?.title || "topic brainstorm"}`);
+  if (!data.already) flashInboxNotice(`Sent #${opts.cardId} → @${data.lane ?? data.card?.deliveredLane ?? "lane"}`);
   emitInbox();
-  return { card: data.card, agent, title: data.title || agent?.title || "" };
+  return { card: data.card, cards: cardsState, already: Boolean(data.already) };
 }
-
-export async function handoffTopicBrainstormClient(opts: {
-  cardId?: string;
-  agentId: string;
-  planNote?: string;
-  summaryUpdate?: string;
-  usedTokens?: number;
-}): Promise<{ card?: InboxCard; cards: InboxCard[] }> {
-  const res = await fetch("/__vibesquad/inbox/handoff-topic", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(opts),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok && !DEMO) {
-    throw new Error(data.error ?? `Topic handoff failed (${res.status})`);
-  }
-  if (Array.isArray(data.cards)) {
-    cardsState = data.cards;
-  } else if (opts.cardId) {
-    cardsState = cardsState.map((c) =>
-      c.id === opts.cardId
-        ? { ...c, status: "handed-off", handedOffAt: new Date().toISOString(), topicAgentId: null }
-        : c,
-    );
-  }
-  removeLocalAgent(opts.agentId);
-  closeTab(opts.agentId);
-  flashInboxNotice(`Handed off #${data.card?.id ?? opts.cardId ?? "topic"} & closed chat`);
-  emitInbox();
-  return { card: data.card, cards: cardsState };
-}
-
-export async function parkTopicBrainstormClient(opts: {
-  cardId?: string;
-  agentId: string;
-  summaryNote?: string;
-}): Promise<{ card?: InboxCard; cards: InboxCard[] }> {
-  const res = await fetch("/__vibesquad/inbox/park-topic", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(opts),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok && !DEMO) {
-    throw new Error(data.error ?? `Park topic failed (${res.status})`);
-  }
-  if (Array.isArray(data.cards)) {
-    cardsState = data.cards;
-  } else if (opts.cardId) {
-    cardsState = cardsState.map((c) =>
-      c.id === opts.cardId
-        ? { ...c, status: "parked", topicAgentId: null, summaryNote: opts.summaryNote || c.summaryNote }
-        : c,
-    );
-  }
-  if (opts.agentId) {
-    removeLocalAgent(opts.agentId);
-    closeTab(opts.agentId);
-  }
-  flashInboxNotice(`Parked topic back to #${data.card?.id ?? opts.cardId ?? "card"}`);
-  emitInbox();
-  return { card: data.card, cards: cardsState };
-}
-
-export type OpenTopicEntry = {
-  agentId: string;
-  cardId: string;
-  title: string;
-  topic: string;
-  openedAt: string;
-  summaryNote: string;
-};
-
-export function useOpenTopicBrainstorms(): {
-  openTopics: OpenTopicEntry[];
-  count: number;
-  oldest: OpenTopicEntry | null;
-} {
-  const { agents } = usePaseo();
-  const cards = useInboxCards();
-
-  return useMemo(() => {
-    const byAgentId = new Map<string, OpenTopicEntry>();
-
-    for (const a of agents.values()) {
-      if (a.archivedAt || a.status === "closed" || !isTopicBrainstorm(a)) continue;
-      const l = (a.labels ?? {}) as Record<string, string>;
-      const cardId = l["vs.inbox-card-id"] || "";
-      const matchingCard = cardId ? cards.find((c) => c.id === cardId) : cards.find((c) => c.topicAgentId === a.id);
-      const topic = topicOfBrainstorm(a) || matchingCard?.title || a.title || a.id;
-      const title = a.title || matchingCard?.topicTitle || titleFor("brainstorm", l.lane ?? "", { topic, laneId: l.lane });
-      const openedAt = l["vs.opened-at"] || matchingCard?.topicOpenedAt || a.updatedAt || matchingCard?.updatedAt || "";
-      byAgentId.set(a.id, {
-        agentId: a.id,
-        cardId: matchingCard?.id || cardId,
-        title,
-        topic,
-        openedAt,
-        summaryNote: matchingCard?.summaryNote || `Parked topic summary: ${topic}`,
-      });
-    }
-
-    for (const c of cards) {
-      if (c.status === "parked" && c.topicAgentId && !byAgentId.has(c.topicAgentId)) {
-        byAgentId.set(c.topicAgentId, {
-          agentId: c.topicAgentId,
-          cardId: c.id,
-          title: c.topicTitle || c.title,
-          topic: c.title,
-          openedAt: c.topicOpenedAt || c.updatedAt || c.createdAt || "",
-          summaryNote: c.summaryNote || `Parked topic summary: ${c.title}`,
-        });
-      }
-    }
-
-    const openTopics = [...byAgentId.values()].sort((a, b) => a.openedAt.localeCompare(b.openedAt));
-    return {
-      openTopics,
-      count: openTopics.length,
-      oldest: openTopics[0] ?? null,
-    };
-  }, [agents, cards]);
-}
-
-export const TopicCapBanner = memo(function TopicCapBanner({ minCount = TOPIC_SOFT_CAP + 1 }: { minCount?: number }) {
-  const { count, oldest } = useOpenTopicBrainstorms();
-  const [parking, setParking] = useState(false);
-
-  if (count < minCount || !oldest) return null;
-
-  const handleParkOldest = async () => {
-    if (parking) return;
-    setParking(true);
-    try {
-      await parkTopicBrainstormClient({
-        cardId: oldest.cardId || undefined,
-        agentId: oldest.agentId,
-        summaryNote: oldest.summaryNote || `Parked topic summary (${oldest.title})`,
-      });
-    } catch (e) {
-      alert(`Park oldest topic failed: ${e}`);
-    } finally {
-      setParking(false);
-    }
-  };
-
-  return (
-    <div className="topic-cap-banner" role="status" data-testid="topic-cap-banner">
-      <span>
-        Soft cap: {count} topic brainstorms open (target ≤ {TOPIC_SOFT_CAP}). Park the oldest topic (<b>{oldest.title}</b>) back to its card?
-      </span>
-      <button
-        className="btn warn small btn-park-oldest-topic"
-        disabled={parking}
-        onClick={() => void handleParkOldest()}
-        data-testid="btn-park-oldest-topic"
-      >
-        {parking ? "Parking…" : "📥 Park oldest back to card"}
-      </button>
-    </div>
-  );
-});
 
 export const SidebarInboxBadge = memo(function SidebarInboxBadge({ onSelect }: { onSelect?: () => void }) {
   const cards = useInboxCards();
@@ -451,7 +277,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
   const [laneFilter, setLaneFilter] = useState<string>("all");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [openingId, setOpeningId] = useState<string | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [highlightId, setHighlightId] = useState<string | null>(null);
 
@@ -460,16 +286,16 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
     void Promise.resolve(onOpenLane?.(pin)).catch((e) => setError(`Could not open ${pin.lane.name}: ${e}`));
   };
 
-  const handleOpenTopic = async (cardId: string) => {
-    if (openingId) return;
-    setOpeningId(cardId);
+  const handleSend = async (cardId: string) => {
+    if (sendingId) return;
+    setSendingId(cardId);
     setError("");
     try {
-      await openTopicFromCard({ cardId });
+      await sendInboxCardClient({ cardId });
     } catch (e) {
       setError(String(e));
     } finally {
-      setOpeningId(null);
+      setSendingId(null);
     }
   };
 
@@ -599,7 +425,6 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
 
       {open && (
         <div className="inbox-body">
-          <TopicCapBanner minCount={TOPIC_SOFT_CAP} />
           <div className="inbox-composer">
             <textarea
               className="inbox-input"
@@ -717,15 +542,28 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
                         </span>
                       )}
                       <div className="inbox-card-triage">
-                        {!isRemote() && (
+                        {card.deliveredAt && card.deliveredTo ? (
                           <button
-                            className="btn small ok inbox-open-topic-btn"
-                            disabled={openingId === card.id}
-                            onClick={() => void handleOpenTopic(card.id)}
-                            title="Spawn or focus a scoped topic brainstorm (<Code> Buddy · <topic>) seeded only with this card + team brief"
-                            data-testid={`inbox-open-topic-${card.id}`}
+                            className="inbox-merged-badge inbox-delivered-tag"
+                            onClick={() => openAgentInTab(card.deliveredTo!)}
+                            title={`Delivered to ${card.deliveredToTitle || card.deliveredTo}: open the chat`}
+                            data-testid={`inbox-delivered-${card.id}`}
                           >
-                            {openingId === card.id ? "Opening…" : "💬 Open Topic"}
+                            → @{card.deliveredLane || card.laneId} · delivered
+                          </button>
+                        ) : (
+                          <button
+                            className="btn small ok inbox-send-btn"
+                            disabled={sendingId === card.id}
+                            onClick={() => void handleSend(card.id)}
+                            title={
+                              !card.laneId || card.laneId === "_unassigned"
+                                ? "Send to the Overlord to route (no lane yet)"
+                                : `Send this card (and anything merged into it) to @${card.laneId}'s Buddy`
+                            }
+                            data-testid={`inbox-send-${card.id}`}
+                          >
+                            {sendingId === card.id ? "Sending…" : "➤ Send"}
                           </button>
                         )}
                         <select

@@ -45,14 +45,10 @@ import {
 } from "./brainstorm.mjs";
 import {
   addInboxCards,
-  buildTopicBrainstormPrompt,
-  buildTopicTitle,
   getInboxPath,
-  handoffTopicBrainstorm,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   readInboxCards,
+  sendInboxCard,
   sortIdeaCard,
   triageInboxCards,
   writeInboxCards,
@@ -134,14 +130,10 @@ export {
   resetBrainstormRestartState,
   writeBrainstormSummary,
   addInboxCards,
-  buildTopicBrainstormPrompt,
-  buildTopicTitle,
   getInboxPath,
-  handoffTopicBrainstorm,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   readInboxCards,
+  sendInboxCard,
   sortIdeaCard,
   triageInboxCards,
   writeInboxCards,
@@ -233,7 +225,7 @@ export function sanitizeBody(body) {
 /** readBody + sanitizeBody: what every write handler that hands its body to a helper must use. */
 const readCleanBody = async (req) => sanitizeBody(await readBody(req));
 
-// Agent archives reachable over HTTP (brainstorm-restart, inbox park/handoff-topic) share one budget, so a
+// Agent archives reachable over HTTP (brainstorm-restart) share one budget, so a
 // loop over agent ids can't retire every Buddy at once.
 export const ARCHIVE_BUDGET_PER_MIN = 10;
 export const archiveBudget = createWindowLimiter({ max: ARCHIVE_BUDGET_PER_MIN });
@@ -932,44 +924,14 @@ async function handleInboxTriage(req, res, rootDir) {
   }
 }
 
-async function handleInboxOpenTopic(req, res, rootDir) {
+async function handleInboxSend(req, res, rootDir) {
   if (req.method !== "POST") {
     res.statusCode = 405;
     return res.end();
   }
   try {
     const body = await readCleanBody(req);
-    const result = await openTopicBrainstorm(body, rootDir);
-    return sendJson(res, 200, result);
-  } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
-  }
-}
-
-async function handleInboxHandoffTopic(req, res, rootDir) {
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    return res.end();
-  }
-  try {
-    const body = await readCleanBody(req);
-    if (overArchiveBudget(res)) return;
-    const result = await handoffTopicBrainstorm(body, rootDir);
-    return sendJson(res, 200, result);
-  } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
-  }
-}
-
-async function handleInboxParkTopic(req, res, rootDir) {
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    return res.end();
-  }
-  try {
-    const body = await readCleanBody(req);
-    if (overArchiveBudget(res)) return;
-    const result = await parkTopicBrainstorm(body, rootDir);
+    const result = await sendInboxCard(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
@@ -1521,12 +1483,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleInbox(req, res, rootDir);
       case "/__vibesquad/inbox/triage":
         return handleInboxTriage(req, res, rootDir);
-      case "/__vibesquad/inbox/open-topic":
-        return handleInboxOpenTopic(req, res, rootDir);
-      case "/__vibesquad/inbox/handoff-topic":
-        return handleInboxHandoffTopic(req, res, rootDir);
-      case "/__vibesquad/inbox/park-topic":
-        return handleInboxParkTopic(req, res, rootDir);
+      case "/__vibesquad/inbox/send":
+        return handleInboxSend(req, res, rootDir);
       case "/__vibesquad/push/vapid-public-key":
         return handlePushVapidPublicKey(req, res);
       case "/__vibesquad/push/subscribe":
