@@ -90,8 +90,9 @@ test("(c) Who's here refresh for the pinned lane", () => {
       L("a1", "BRAINSTORM · PINNED", "brainstorm"),
       L("a2", "(old) BRAINSTORM · PINNED", "former-brainstorm"),
       L("a3", "★ LEAD · PINNED ord1", "lead"),
-      L("a4", "w1", "worker"),
-      L("a5", "w2", "worker"),
+      L("a4", "w1", "worker", { status: "running" }),
+      L("a5", "w2", "worker", { status: "queued" }),
+      L("a7", "finished", "worker"), // idle = finished/parked: not in flight, not counted
       L("a6", "gone", "worker", { archivedAt: "2026-11-01" }),
       { id: "b1", title: "other", labels: { lane: "other", role: "worker" } },
     ];
