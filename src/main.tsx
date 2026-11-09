@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { start } from "./paseo";
+import { startComposerQueueFlusher } from "./composerQueueWire";
 import "./perfBoot";
 import { loadUserName } from "./userName";
 import { isRemote } from "./remoteSession";
@@ -18,6 +19,7 @@ const five = q.has("five-leads");
 const remote = isRemote();
 if (!cast && !five && !remote) {
   start();
+  startComposerQueueFlusher();
   loadUserName();
 }
 createRoot(document.getElementById("root")!).render(remote ? <RemotePairScreen /> : five ? <FiveLeads /> : cast ? <SpriteSheet /> : <App />);

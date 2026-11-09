@@ -11,6 +11,8 @@ import { useDraft } from "./drafts";
 import { isRemote } from "./remoteSession";
 import { createSendLock, guardedSend, restoredDraft } from "./sendGuard";
 import { blobsToPaseoImages, rememberSent, useImageDraft } from "./imageDrafts";
+import { enqueueQueued, requeueQueued, restoreText, takeQueued, useQueued } from "./composerQueue";
+import { flushQueued } from "./composerQueueWire";
 import {
   attentionOf,
   brainstormUsedTokens,
@@ -32,7 +34,7 @@ import { openAgentInTab, paneOfAgent } from "./panes";
 import { setLastBrainstormProfile } from "./pinActions";
 import { useTimeline, Timeline, TimelineErrorBoundary, stripBootPreamble } from "./Timeline";
 import { PermissionCard } from "./PermissionCard";
-import { Composer, formatBtwPrompt, shouldQueueOnSend, type QueuedTurnItem } from "./Composer";
+import { Composer, formatBtwPrompt, shouldQueueOnSend } from "./Composer";
 import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers, WorkingBar } from "./WorkingBar";
@@ -138,15 +140,6 @@ export async function triggerBrainstormRestart(opts: {
 /** `chatOnly` (sky-gods zones): messages + composer only. The right dock (Changes/Files/Terminal) is never rendered, never read from or written to the shared `vs.right-dock.open` key, and `vs:open-right-dock` is ignored. */
 type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean };
 
-async function flushQueued(agentId: string, text: string, images: Array<{ blob: Blob }>) {
-  if (images.length) {
-    await sendMessage(agentId, text, await blobsToPaseoImages(images), { activeTurnBehavior: "steer" });
-    rememberSent(agentId, text, images);
-  } else {
-    await sendMessage(agentId, text, undefined, { activeTurnBehavior: "steer" });
-  }
-}
-
 export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false }: DrawerProps) {
   useTeams();
   const labels = (agent.labels ?? {}) as Record<string, string>;
@@ -173,8 +166,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
   const [lastSteered, setLastSteered] = useState<string | null>(null);
-  const [queuedByAgent, setQueuedByAgent] = useState<Record<string, QueuedTurnItem[]>>({});
-  const queuedItems = queuedByAgent[agent.id] ?? [];
+  const queuedItems = useQueued(agent.id);
   const [permInputs, setPermInputs] = useState<Record<string, string>>({});
   const [dockOpen, setDockOpen] = useState(() => !chatOnly && localStorage.getItem("vs.right-dock.open") === "true");
 
@@ -245,19 +237,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     if (!chatOnly) localStorage.setItem("vs.right-dock.open", String(dockOpen));
   }, [dockOpen, chatOnly]);
-
-  useEffect(() => {
-    if (agent.status !== "running" && agent.status !== "closed" && queuedItems.length > 0) {
-      const combinedText = queuedItems.map((q) => q.text).join("\n\n");
-      const queuedBlobs = queuedItems.flatMap((q) => q.images ?? []);
-      setQueuedByAgent((prev) => {
-        const next = { ...prev };
-        delete next[agent.id];
-        return next;
-      });
-      void flushQueued(agent.id, combinedText, queuedBlobs);
-    }
-  }, [agent.id, agent.status, queuedItems.length]);
 
   useEffect(() => {
     if (chatOnly) return;
@@ -361,18 +340,12 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
         });
         const queuedText = appendContext(expanded, sentCtx);
         const queuedImages = imgs.images.map((im) => ({ name: im.name, mimeType: im.mimeType, blob: im.blob }));
-        setQueuedByAgent((prev) => ({
-          ...prev,
-          [agent.id]: [
-            ...(prev[agent.id] ?? []),
-            {
-              id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-              text: queuedText,
-              createdAt: Date.now(),
-              ...(queuedImages.length ? { images: queuedImages } : {}),
-            },
-          ],
-        }));
+        enqueueQueued(agent.id, {
+          id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          text: queuedText,
+          createdAt: Date.now(),
+          ...(queuedImages.length ? { images: queuedImages } : {}),
+        });
         clearDraft();
         imgs.clear();
         atts.clear();
@@ -475,29 +448,29 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const sendInterrupt = () => sendWithBehavior("interrupt");
 
   const sendQueuedNow = async () => {
-    const items = queuedByAgent[agent.id] ?? [];
+    const items = takeQueued(agent.id);
     if (!items.length) return;
-    const combinedText = items.map((q) => q.text).join("\n\n");
-    const queuedBlobs = items.flatMap((q) => q.images ?? []);
-    setQueuedByAgent((prev) => {
-      const next = { ...prev };
-      delete next[agent.id];
-      return next;
-    });
-    await flushQueued(agent.id, combinedText, queuedBlobs);
-    setLastSteered(combinedText);
+    const combinedText = restoreText(items);
+    try {
+      await flushQueued(agent.id, combinedText, items.flatMap((q) => q.images ?? []));
+      setLastSteered(combinedText);
+    } catch (e) {
+      requeueQueued(agent.id, items);
+      setSendError(`Send failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
   };
 
-  const cancelQueued = (id?: string) => {
-    const items = queuedByAgent[agent.id] ?? [];
-    const removed = id ? items.find((q) => q.id === id) : items[0];
-    setQueuedByAgent((prev) => {
-      const list = prev[agent.id] ?? [];
-      const rest = id ? list.filter((q) => q.id !== id) : list.slice(1);
-      return { ...prev, [agent.id]: rest };
-    });
-    if (removed && !draft.trim()) setDraft(removed.text);
-    if (removed?.images?.length) imgs.add(removed.images.map((im) => new File([im.blob], im.name, { type: im.mimeType })));
+  // Cancel restores every queued item (text joined, all images), not just the first.
+  const cancelQueued = () => {
+    const items = takeQueued(agent.id);
+    if (!items.length) return;
+    const restored = restoreText(items);
+    if (!draft.trim()) setDraft(restored);
+    else setDraft(`${restored}
+
+${draft}`);
+    const images = items.flatMap((q) => q.images ?? []);
+    if (images.length) imgs.add(images.map((im) => new File([im.blob], im.name, { type: im.mimeType })));
   };
 
   const onFeedback = async (verdict: "good" | "lost") => {
