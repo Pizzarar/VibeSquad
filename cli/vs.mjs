@@ -38,6 +38,7 @@ import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writ
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole as resolveEffectiveAgentRole,
+  findBugLane,
   findLaneInRegistry,
   findTeamInRegistry,
   isDigestAgent,
@@ -486,8 +487,8 @@ Usage:
   vs log <type> "<text>" [--ref <ref>...] [--digest]
   vs log --since-me [--limit <N>] [--peek]
   vs handoff [--out <path>]
-  vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm] [--source <tag>]
-  vs inbox list [--lane <lane>]
+  vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
+  vs inbox list [--lane <lane>|bug]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...> (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
@@ -804,6 +805,16 @@ function formatInboxCardLine(card) {
   return `[${card.id}] ${card.laneId} · ${card.scope} — ${card.title}${related}`;
 }
 
+/** `--lane bug` means the calling agent's own Squad bug lane (each Squad has its own); any other value is a lane id as typed. */
+function resolveInboxLaneFlag(flags) {
+  const raw = flags.lane ? String(flags.lane).trim() : "";
+  if (raw.replace(/^@+/, "").toLowerCase() !== "bug") return raw;
+  const me = resolveIdentity(flags);
+  const lane = findBugLane(me.team);
+  if (!lane) throw new Error(`Squad ${me.team?.id || "(unknown)"} has no bug lane; pass the lane id explicitly`);
+  return lane.id;
+}
+
 function commandInbox(flags) {
   const sub = String(flags._.shift() ?? "list").toLowerCase();
   const baseHome = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
@@ -815,7 +826,7 @@ function commandInbox(flags) {
     }
     const res = addInboxCards({
       ideas,
-      laneId: flags.lane ? String(flags.lane) : undefined,
+      laneId: flags.lane ? resolveInboxLaneFlag(flags) : undefined,
       teamId: flags.team ? String(flags.team) : undefined,
       source: flags.source ? String(flags.source) : flags.fromBrainstorm ? "brainstorm-dump" : "cli",
       splitDump: Boolean(flags.splitDump),
@@ -834,7 +845,7 @@ function commandInbox(flags) {
       throw new Error(`inbox list --status must be one of: open, all, ${INBOX_STATUSES.join(", ")}`);
     }
     const cards = listInboxCards({
-      laneId: flags.lane ? String(flags.lane) : undefined,
+      laneId: flags.lane ? resolveInboxLaneFlag(flags) : undefined,
       teamId: flags.team ? String(flags.team) : undefined,
       status: listStatus,
       baseHome,
