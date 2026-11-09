@@ -16,6 +16,7 @@ import android.net.http.SslCertificate
 import android.net.http.SslError
 import android.os.Build
 import android.util.Base64
+import android.webkit.CookieManager
 import android.webkit.WebView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebMessageCompat
@@ -188,11 +189,22 @@ object VsTrust {
         false
     }
 
+    // ---- cookies ----
+
+    /** Accept cookies and write them to disk now (WebView otherwise flushes lazily), so vs_device survives the pair redirect. */
+    fun persistCookies() {
+        val cm = CookieManager.getInstance()
+        cm.setAcceptCookie(true)
+        cm.flush()
+    }
+
     // ---- JS bridge (app origin only) ----
 
     fun install(webView: WebView) {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return // fail closed: no pairing possible
         val app = webView.context.applicationContext
+        // vs_device (HttpOnly, Secure, Strict) is set on the /pair response; make sure the WebView keeps it across restarts.
+        persistCookies()
         WebViewCompat.addWebMessageListener(webView, BRIDGE, APP_ORIGINS) { _, message: WebMessageCompat, _, isMainFrame, reply ->
             val data = message.data
             if (isMainFrame && data != null) handle(app, data, reply)
@@ -210,6 +222,7 @@ object VsTrust {
                     "pin" -> out.put("fp", pin(app, host, req.optString("fp")))
                     "probe" -> probe(app, host)
                     "forget" -> forget(app, host)
+                    "flush" -> persistCookies() // the app calls this on the #paired return trip, after the PC set vs_device
                     else -> throw IllegalArgumentException("unknown op")
                 }
                 out.put("ok", true)

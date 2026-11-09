@@ -710,13 +710,16 @@ export function handleEnter(req, res) {
     return res.end();
   }
   const app = appOrigin(req);
-  const href = app ? `/?${new URLSearchParams({ vs_app: app }).toString()}` : "/";
+  const paired = new URL(req.url ?? "/", "http://x").searchParams.get("paired") === "1";
+  // paired=1 (APK only: needs a whitelisted app origin) returns to the app's #paired screen; otherwise a fixed same-site "/".
+  const href = app && paired ? `${app}/#paired` : app ? `/?${new URLSearchParams({ vs_app: app }).toString()}` : "/";
   res.statusCode = 200;
   res.setHeader("content-type", "text/html; charset=utf-8");
   setNoFraming(res);
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   const safe = href.replace(/&/g, "&amp;");
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}"></head><body><a href="${safe}">Continue</a><script>location.replace(${JSON.stringify(href)})</script></body></html>`);
+  if (req.method === "HEAD") return res.end();
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}"></head><body><a href="${safe}">Continue</a><script>location.replace(${JSON.stringify(href).replace(/</g, "\\u003c")})</script></body></html>`);
 }
 
 export function handleCaCrt(req, res) {
@@ -757,8 +760,9 @@ export async function handlePairStart(req, res) {
   const expiresAt = codes.get(code);
   // `fp` (CA SHA-256, hex) lets the Android app pin this PC's VS CA at pairing (see src-tauri/android/VsTrust.kt).
   const fpQuery = pairFpQuery();
-  const pairUrl = `https://${meshnetHost}:${port}/pair?code=${code}${fpQuery}`;
-  const pairIpUrl = `https://${effectiveMeshnetIp}:${port}/pair?code=${code}${fpQuery}`;
+  const pairHost = meshnetHost || effectiveMeshnetIp || lanIp;
+  const pairUrl = `https://${pairHost}:${port}/pair?code=${code}${fpQuery}`;
+  const pairIpUrl = `https://${effectiveMeshnetIp || lanIp}:${port}/pair?code=${code}${fpQuery}`;
   const lanPairUrl = lanIp ? `https://${lanIp}:${port}/pair?code=${code}${fpQuery}` : null;
   sendJson(res, 200, {
     code,
@@ -820,9 +824,11 @@ export function handlePairRedeem(req, res) {
   saveDevices();
   res.statusCode = 302;
   res.setHeader("set-cookie", `${DEVICE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`);
-  // The APK saves its session only on this return trip, i.e. after the code was really redeemed.
+  // Not a direct redirect: the scan is a cross-site navigation, and a redirect chain started cross-site keeps Strict cookies
+  // from being sent. Land on the same-site /__vibesquad/enter page (a 200, which ends the chain); its client-side hop to "/"
+  // (browser) or `${app}/#paired` (APK, which saves its session only on that return trip) is same-site and carries vs_device.
   const app = appOrigin(req);
-  res.setHeader("location", app ? `${app}/#paired` : "/");
+  res.setHeader("location", app ? `/__vibesquad/enter?${new URLSearchParams({ paired: "1", vs_app: app }).toString()}` : "/__vibesquad/enter");
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   res.end();
 }

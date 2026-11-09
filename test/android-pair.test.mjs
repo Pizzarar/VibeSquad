@@ -326,7 +326,7 @@ describe("pairing is proven before it is saved (review fixes)", () => {
     const src = read("server/auth.mjs");
     assert.match(src, /\$\{app\}\/#unpaired/);
     assert.match(src, /\$\{app\}\/#failed/);
-    assert.match(src, /app \? `\$\{app\}\/#paired` : "\/"/);
+    assert.match(src, /app && paired \? `\$\{app\}\/#paired`/);
     assert.match(src, /TAURI_ORIGINS\.has\(o\)/);
   });
 });

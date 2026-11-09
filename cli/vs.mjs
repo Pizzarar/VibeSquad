@@ -38,6 +38,7 @@ import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writ
 import {
   UNASSIGNED_TEAM_ID,
   effectiveAgentRole as resolveEffectiveAgentRole,
+  findBugLane,
   findLaneInRegistry,
   findTeamInRegistry,
   isDigestAgent,
@@ -141,7 +142,7 @@ function resolveTeam(value) {
   return { id: safeSegment(raw.toLowerCase()), name: raw, lanes: [], paths: [], known: false };
 }
 
-function findLane(value) {
+function findLane(value, preferTeamId = "") {
   if (!value) return null;
   const stripped = String(value).trim().replace(/^@+/, "");
   const needle = stripped.toLowerCase();
@@ -153,7 +154,7 @@ function findLane(value) {
     }
   }
   // `@<code>` / `<code>` handles (e.g. @bug -> bug-chaser) and name matches.
-  return findLaneInRegistry(value, TEAM_DEFS);
+  return findLaneInRegistry(value, TEAM_DEFS, preferTeamId);
 }
 
 function matchTeamBySegments(targetPath) {
@@ -337,7 +338,7 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const laneFromLabels = labels.lane || labels.lead || "";
   const teamFromFlag = pick("team", "VS_TEAM");
   const laneRaw = laneFromFlag || (!teamFromFlag ? laneFromLabels : "");
-  const laneHit = findLane(laneRaw);
+  const laneHit = findLane(laneRaw, teamFromFlag || labels.team || "");
 
   // Team: explicit flag/env wins, then the lane's owning team, then the label,
   // then the folder. A --lane alone is enough to land in the right team.
@@ -486,8 +487,8 @@ Usage:
   vs log <type> "<text>" [--ref <ref>...] [--digest]
   vs log --since-me [--limit <N>] [--peek]
   vs handoff [--out <path>]
-  vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm] [--source <tag>]
-  vs inbox list [--lane <lane>]
+  vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
+  vs inbox list [--lane <lane>|bug]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...> (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
@@ -804,6 +805,21 @@ function formatInboxCardLine(card) {
   return `[${card.id}] ${card.laneId} · ${card.scope} — ${card.title}${related}`;
 }
 
+/** `--lane bug` means the calling agent's own Squad bug lane (each Squad has its own); any other value is a lane id as typed. Returns { laneId, teamId }: a lane that resolves to a known Squad carries that Squad's id (never a conflicting --team). */
+function resolveInboxScope(flags) {
+  const raw = flags.lane ? String(flags.lane).trim() : "";
+  const flagTeam = flags.team ? String(flags.team) : undefined;
+  if (!raw) return { laneId: undefined, teamId: flagTeam };
+  if (raw.replace(/^@+/, "").toLowerCase() !== "bug") {
+    const hit = findLane(raw, flagTeam || "");
+    return { laneId: raw, teamId: hit ? hit.team.id : flagTeam };
+  }
+  const me = resolveIdentity({ ...flags, lane: undefined }, { recordWins: true });
+  const lane = findBugLane(me.team);
+  if (!lane) throw new Error(`Squad ${me.team?.id || "(unknown)"} has no bug lane; pass the lane id explicitly`);
+  return { laneId: lane.id, teamId: me.team.id };
+}
+
 function commandInbox(flags) {
   const sub = String(flags._.shift() ?? "list").toLowerCase();
   const baseHome = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
@@ -815,8 +831,7 @@ function commandInbox(flags) {
     }
     const res = addInboxCards({
       ideas,
-      laneId: flags.lane ? String(flags.lane) : undefined,
-      teamId: flags.team ? String(flags.team) : undefined,
+      ...resolveInboxScope(flags),
       source: flags.source ? String(flags.source) : flags.fromBrainstorm ? "brainstorm-dump" : "cli",
       splitDump: Boolean(flags.splitDump),
       baseHome,
@@ -834,8 +849,7 @@ function commandInbox(flags) {
       throw new Error(`inbox list --status must be one of: open, all, ${INBOX_STATUSES.join(", ")}`);
     }
     const cards = listInboxCards({
-      laneId: flags.lane ? String(flags.lane) : undefined,
-      teamId: flags.team ? String(flags.team) : undefined,
+      ...resolveInboxScope(flags),
       status: listStatus,
       baseHome,
     });

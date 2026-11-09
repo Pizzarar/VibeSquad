@@ -226,7 +226,7 @@ export function topicOf(agentOrLabels) {
  * Look up a lane in the teams.json registry by id, alias, or name (case-insensitive).
  * Returns { team, lane } or null.
  */
-export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry()) {
+export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), preferTeamId = "") {
   const raw = String(laneQuery ?? "").trim();
   const hadAt = raw.startsWith("@");
   const q = raw.replace(/^@+/, "").trim().toLowerCase();
@@ -249,13 +249,19 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry()) {
     }
   }
   // Lane-code handles: `@bug` / `bug` resolve to the lane whose stored or generated code matches.
+  // Several Squads can share a code (standing bug lanes): the caller's own team wins, then a non-hidden lane (the pre-backfill holder: bug-chaser is standing but visible, backfilled lanes are hidden), then array order.
+  const hits = [];
   for (const team of teams) {
     const codes = laneCodesForTeam(team);
     for (const lane of team.lanes || []) {
       if (String(codes[lane.id] ?? "").toLowerCase() === q || String(lane.code ?? "").toLowerCase() === q) {
-        return { team, lane };
+        hits.push({ team, lane });
       }
     }
+  }
+  if (hits.length) {
+    const own = preferTeamId ? hits.find((h) => h.team.id === preferTeamId) : null;
+    return own ?? hits.find((h) => !h.lane.hidden) ?? hits[0];
   }
   return null;
 }

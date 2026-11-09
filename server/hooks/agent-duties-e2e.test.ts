@@ -665,6 +665,54 @@ test(
   }),
 );
 
+test(
+  "Stage 4b: a live lead spawned by a since-retired Buddy does not relay-old to itself; its worker children still do",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const oldBuddy = {
+      id: "buddy-old",
+      title: "(old) Fea Buddy",
+      cwd: CWD,
+      status: "idle",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "former-brainstorm" },
+    };
+    const liveLead = {
+      id: "lead-9",
+      title: "★ Fea9 · live",
+      cwd: CWD,
+      status: "idle",
+      parentAgentId: "buddy-old",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "9" },
+    };
+    const orphanWorker = {
+      id: "worker-9",
+      title: "Fea9 · worker",
+      cwd: CWD,
+      status: "idle",
+      parentAgentId: "buddy-old",
+      labels: { team: "vibesquad", lane: "feat-alpha", role: "worker" },
+    };
+    const agents = new Map<string, any>([
+      ["buddy-old", oldBuddy],
+      ["lead-9", liveLead],
+      ["worker-9", orphanWorker],
+    ]);
+    const h = harness(agents, { briefRoot, timelineByAgent: new Map() });
+    const relays = () => readLogEntries(vsHome).filter((e) => e.type === "metric" && e.text.startsWith("relay-old:"));
+    try {
+      await h.onTurnEnded(liveLead, { kind: "completed" });
+      await wait(60);
+      assert.equal(relays().length, 0, "live lead with a retired parent is not a relay source");
+      assert.equal(h.sent.filter((s) => s.to === "lead-9" && s.text.includes("Relayed from former lead")).length, 0, "no self-wake");
+
+      await h.onTurnEnded(orphanWorker, { kind: "completed" });
+      await wait(60);
+      assert.equal(relays().length, 1, "worker under a retired parent still relays");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // Stage 5 — MCP create_agent title-convention role inference (no labels / VS_ROLE)
 // ---------------------------------------------------------------------------

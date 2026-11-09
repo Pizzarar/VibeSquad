@@ -5948,14 +5948,14 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root[data-theme="light"] .pin-tile-bar .pin-tile-name { flex: 0 1 auto; background: var(--panel-hi); color: var(--text); padding: 0 var(--sp-2); box-shadow: var(--bevel); }
 /* scanlines: text layers above, and a sized tile instead of repeating-* so no scanline box is a layer over text */
 .usage-crt > * { position: relative; z-index: 1; }
-.usage-crt::after { background-image: linear-gradient(to bottom, transparent 2px, color-mix(in srgb, var(--text) 7%, transparent) 2px); background-size: 100% 3px; background-repeat: repeat; }
+.usage-crt::after { background-image: linear-gradient(to bottom, transparent var(--u3-px), color-mix(in srgb, var(--text) 7%, transparent) var(--u3-px)); background-size: 100% calc(var(--u3-px) * 2); background-repeat: repeat; }
 .sky-static > * { position: relative; z-index: 1; }
 .sky-static > button.btn { background: var(--bg); padding: 4px 8px; }
 .sky-static {
   background-image:
-    linear-gradient(0deg, rgba(255, 255, 255, 0.06) 2px, rgba(0, 0, 0, 0.18) 2px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 3px, rgba(0, 0, 0, 0.12) 3px);
-  background-size: 100% 4px, 7px 100%;
+    linear-gradient(0deg, rgba(255, 255, 255, 0.06) var(--u3-px), rgba(0, 0, 0, 0.18) var(--u3-px)),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) calc(var(--u3-px) * 2), rgba(0, 0, 0, 0.12) calc(var(--u3-px) * 2));
+  background-size: 100% calc(var(--u3-px) * 2), calc(var(--u3-px) * 4) 100%;
 }
 span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .card .talk-here { color: var(--text); }
