@@ -840,8 +840,18 @@ export function composeSpawnPromptParts(prefix: string, profileNotes: string, ra
 }
 
 /** The once-per-boot size metric line (docs/PLAN_LEAN_BOOT_1109.md B2). */
-export function bootSizeMetric(role: string, chars: number): string {
-  return `boot-size role=${role} chars=${chars}`;
+export function bootSizeMetric(
+  role: string,
+  chars: number,
+  parts?: { provider?: string; lane?: string; sys: number; plugin: number; artifact: number; brief: number; first: number },
+): string {
+  if (!parts) return `boot-size role=${role} chars=${chars}`;
+  // usa-22: per-part breakdown. total = final system prompt + first prompt; agent id is not yet known at before.agent.create.
+  const total = chars + parts.first;
+  return (
+    `boot-size role=${role} provider=${parts.provider || "unknown"} lane=${parts.lane || "-"} chars=${chars} total=${total}` +
+    ` sys=${parts.sys} plugin=${parts.plugin} artifact=${parts.artifact} brief=${parts.brief} first=${parts.first} estTok=${Math.ceil(total / 4)}`
+  );
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
@@ -1734,7 +1744,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");
+        let bootPluginChars = 0;
+        let bootBriefChars = 0;
+        let bootArtifactChars = 0;
         if (prefix && !rawSysPrompt.includes(EVERYONE_LAYER)) {
+          bootPluginChars = prefix.length;
           const parts = composeSpawnPromptParts(prefix, profileNotes, rawSysPrompt, gitState);
           next.systemPrompt = parts.join("\n\n");
           changed = true;
@@ -1770,6 +1784,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;
+              bootBriefChars = block.length;
               const where = teamOf(reqLabels, cwd);
               if (where) {
                 try {
@@ -1801,6 +1816,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (artBlock) {
               next.systemPrompt = [currentSys.trim(), artBlock].filter(Boolean).join("\n\n");
               changed = true;
+              bootArtifactChars = artBlock.length;
             }
           }
         }
@@ -1813,7 +1829,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const where = teamOf(envOrReqLabels, cwd);
           if (where) {
             try {
-              appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: bootSizeMetric(role, String(next.systemPrompt ?? rawSysPrompt ?? "").length) });
+              appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: bootSizeMetric(role, String(next.systemPrompt ?? rawSysPrompt ?? "").length, {
+                provider: finalProvider,
+                lane: where.lane || explicitLane,
+                sys: rawSysPrompt.length,
+                plugin: bootPluginChars,
+                artifact: bootArtifactChars,
+                brief: bootBriefChars,
+                first: String((request as any).prompt ?? (request as any).initialPrompt ?? "").length,
+              }) });
             } catch (err) {
               log(`boot-size metric write failed: ${err}`);
             }
