@@ -97,7 +97,8 @@ export const REPORT_HEAD = /^(@[\w-]+\b|[A-Z][\w★]*( [A-Z][\w★]*)?( \([^)]*\
 export const REPORT_EVIDENCE = /\b(PASS|FAIL|merged|DONE)\b|rn-[0-9a-f]{8,}|\b[0-9a-f]{7,9}\b/;
 export const isAgentReport = (t) => !isSystemNotice(t) && REPORT_HEAD.test(t) && REPORT_EVIDENCE.test(t);
 
-export const LEAD_HANDOFF_MIN_TOKENS = 100000;
+import { LEAD_HANDOFF_MIN_TOKENS } from '../server/identity.mjs';
+export { LEAD_HANDOFF_MIN_TOKENS };
 export const FIXTURE_CWD = /handoff-test/;
 export const FIX_UNIT = /(fix|followup|hotfix|regress|redo)/;
 export const FIX_WINDOW_MS = 24 * 3600 * 1000;

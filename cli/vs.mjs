@@ -1857,7 +1857,7 @@ export async function runAgentVerb(verb, flags, ctx) {
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
     };
   } else if (verb === "handoff_lead") {
-    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}) };
+    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
   } else if (verb === "restart_buddy") {
     args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}) };
   } else if (verb === "send") {

@@ -106,6 +106,9 @@ export function laneLeadMismatch(agentOrLabels, teams) {
 /**
  * Strictly label/status-based retired check (never inspects title/name).
  */
+/** Below this many context tokens a healthy lead is steered, not handed off (Overlord ladder step 3 floor; also the owner-stamp audit's bucket). */
+export const LEAD_HANDOFF_MIN_TOKENS = 100000;
+
 export function isRetiredAgent(agentOrLabels) {
   if (!agentOrLabels || typeof agentOrLabels !== "object") return false;
   const labels = extractLabels(agentOrLabels);
