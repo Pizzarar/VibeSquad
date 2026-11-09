@@ -1,0 +1,13 @@
+type TeamLike = { id: string; lanes?: any[]; [k: string]: any };
+export function seedStandingLane<T extends TeamLike>(team: T, kind: "bug" | "audit", existingTeams?: any[]): T;
+export function isHubLane(team: any, lane: any): boolean;
+export function cleanLaneCode(raw: unknown): string;
+export function laneCodeCandidates(lane: any): string[];
+export function laneCodesForTeam(team: any): Record<string, string>;
+export function freezeLaneCodes<L extends { id: string; [k: string]: any }>(lanes: L[]): L[];
+export function laneKindOf(lane: any): "bug" | "audit" | undefined;
+export function findBugLane(team: any): any;
+export function findAuditLane(team: any): any;
+export function isHiddenLane(team: any, lane: any): boolean;
+export const BUG_LANE_FALLBACK_IDS: string[];
+export const AUDIT_LANE_FALLBACK_IDS: string[];
