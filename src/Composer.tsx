@@ -48,7 +48,12 @@ export function filterSlash(cmds: string[], query: string): string[] {
   return cmds.filter((c) => c.replace(/^\//, "").toLowerCase().startsWith(q)).slice(0, 8);
 }
 
-export type QueuedTurnItem = { id: string; text: string; createdAt: number };
+export type QueuedTurnItem = {
+  id: string;
+  text: string;
+  createdAt: number;
+  images?: Array<{ name: string; mimeType: string; blob: Blob }>;
+};
 
 export function shouldQueueOnSend(agentStatus: string | undefined, forceImmediate = false): boolean {
   return agentStatus === "running" && !forceImmediate;
