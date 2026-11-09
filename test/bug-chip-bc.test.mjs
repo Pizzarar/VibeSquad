@@ -73,3 +73,9 @@ test("bug chip css: compact padding and gap", () => {
   const css = read("src/BugButton.css");
   assert.match(css, /\.bug-btn \{[^}]*gap: 4px[^}]*padding: 0 6px/);
 });
+
+test("bug chip tsx: count hidden at 0 (aria-label keeps the number), shown from 1", () => {
+  const tsx = read("src/BugButton.tsx");
+  assert.match(tsx, /counts\.total > 0 && <span className="bug-btn-n">\{counts\.total\}<\/span>/);
+  assert.match(tsx, /aria-label=\{`Bug Runner, \$\{counts\.total\} open, \$\{counts\.unseen\} new`\}/);
+});

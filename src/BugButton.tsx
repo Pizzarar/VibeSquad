@@ -98,7 +98,7 @@ export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin)
         aria-hidden="true"
         style={{ backgroundImage: roachOk ? `url(${sheet})` : undefined, width: css, height: css }}
       />
-      <span className="bug-btn-n">{counts.total}</span>
+      {counts.total > 0 && <span className="bug-btn-n">{counts.total}</span>}
     </button>
   );
 }
