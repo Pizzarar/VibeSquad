@@ -269,7 +269,7 @@ code {
 }
 
 .brand {
-  padding: 4px 6px 12px;
+  padding: 4px 4px 12px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -277,6 +277,8 @@ code {
 }
 
 .brand-text {
+  min-width: 0;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   font-family: var(--arcade);
@@ -297,6 +299,8 @@ code {
 .brand-mark {
   image-rendering: pixelated;
   flex: none;
+  width: var(--brand-mark-px, 22px);
+  height: var(--brand-mark-px, 22px);
 }
 
 .brand-mark-light {
@@ -312,6 +316,7 @@ code {
 }
 
 .conn {
+  flex: none;
   width: 9px;
   height: 9px;
   background: var(--amber);

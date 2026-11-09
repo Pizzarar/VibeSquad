@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 
 export const UI_SCALE_STORAGE_KEY = "vibesquad.uiScale";
 export const UI_SCALE_MIN = 0.8;
@@ -79,6 +79,18 @@ export function kitPixel(dpr: number, zoom: number): { device: number; css: numb
   return { device, css: device / eff };
 }
 
+/**
+ * SS5: a CSS size whose DEVICE-px size is a whole multiple of `step` (the art's native px, or half of it for a 2:1 downscale). The root
+ * zoom and the OS dpr multiply, so a fixed CSS size lands on fractional device px (ragged rows). Picks n = max(1, round(cssTarget x zoom x dpr / step))
+ * and returns { device: n x step, css: device / (zoom x dpr) }.
+ */
+export function snapDeviceSize(cssTarget: number, step: number, dpr: number, zoom: number): { device: number; css: number } {
+  const eff = Math.max(0.1, (Number.isFinite(dpr) && dpr > 0 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
+  const st = Number.isFinite(step) && step > 0 ? step : 1;
+  const device = Math.max(1, Math.round((cssTarget * eff) / st)) * st;
+  return { device, css: device / eff };
+}
+
 export function applyKitPixelToDom(scale: number = currentScale): void {
   if (typeof document === "undefined" || typeof window === "undefined") return;
   const { device, css } = kitPixel(window.devicePixelRatio || 1, clampUiScale(scale));
@@ -86,6 +98,10 @@ export function applyKitPixelToDom(scale: number = currentScale): void {
   // +0.0001px keeps float error from rounding a device px down in border/background sizing.
   root.style.setProperty("--u3-px", `${(css + 0.0001).toFixed(4)}px`);
   root.dataset.u3Px = String(device);
+  // SS5: the sidebar brand mark (16px art, nominal 22 css px) is a whole multiple of 16 device px.
+  const brand = snapDeviceSize(22, 16, window.devicePixelRatio || 1, clampUiScale(scale));
+  root.style.setProperty("--brand-mark-px", `${(brand.css + 0.0001).toFixed(4)}px`);
+  root.dataset.brandMark = String(brand.device);
 }
 
 /** Effective chat scale for a UI scale and an optional override (null = follow). */
@@ -212,6 +228,12 @@ export function resetUiScale(showHud = true): number {
   return setUiScale(1.0, { showHud });
 }
 
+/** Settings "Reset": UI scale back to 100% AND the chat override cleared (follow the UI scale). Ctrl+0 stays UI-only (resetUiScale). */
+export function resetAllScales(showHud = false): number {
+  setChatScale(null);
+  return resetUiScale(showHud);
+}
+
 export function cycleUiScalePreset(showHud = true): number {
   const idx = UI_SCALE_PRESETS.findIndex((p) => Math.abs(p - currentScale) < 0.01);
   const next = UI_SCALE_PRESETS[(idx + 1) % UI_SCALE_PRESETS.length];
@@ -235,6 +257,18 @@ export function useChatScale(): number {
 /** Whether chat text follows the UI scale. */
 export function useChatScaleLinked(): boolean {
   return useSyncExternalStore(subscribeUiScale, () => chatOverride === null, () => true);
+}
+
+/** devicePixelRatio, re-read on resize / monitor change. */
+export function useDpr(): number {
+  const [dpr, setDpr] = useState(() => (typeof window === "undefined" ? 1 : window.devicePixelRatio || 1));
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onResize = () => setDpr(window.devicePixelRatio || 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  return dpr;
 }
 
 export function useUiScaleHud(): boolean {
