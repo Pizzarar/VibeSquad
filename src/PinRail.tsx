@@ -19,7 +19,7 @@ import type { TeamView } from "./teams";
 import { laneCodeFor } from "./identity";
 import { Avatar, TeamEmblem } from "./pixel";
 import { Spinner } from "./QuickWinsUi";
-import { openPinMember } from "./pinFocus";
+import { openPinMember, useFocusDrawerOpen } from "./pinFocus";
 import { sendMessage } from "./paseo";
 import { CHECKIN_BUSY_MS, CHECKIN_BUSY_NOTE, checkinAction, leadLine, runCheckin } from "./railCheckin";
 
@@ -132,6 +132,7 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
   const active = withHidden.pinned.find((p) => p.lane.id === focus.laneId) ?? withHidden.done.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
   const others = pinned.filter((p) => p.lane.id !== focus.laneId);
   const bs = active?.brainstorm;
+  const drawerOpen = useFocusDrawerOpen();
   return (
     <aside className="pin-rail" data-testid="pin-rail" aria-label={`${view.team.name} teams`}>
       <div className="pin-rail-head">
@@ -167,8 +168,8 @@ export function PinRail({ view, focus, onPick }: { view: TeamView; focus: PinFoc
             )}
           </div>
           {active && !isHubPin(active) && <ActiveCheckin pin={active} />}
-          {active && focus.agentId && <SendToBar pin={active} />}
-          {!focus.agentId && (
+          {active && drawerOpen && <SendToBar pin={active} />}
+          {!drawerOpen && (
             <span className="muted small">{focus.gone ? "No active chat" : bs ? "Starting…" : "Starting a fresh Brainstorm…"}</span>
           )}
           {active && <PinTeamTree pin={active} />}
@@ -196,6 +197,7 @@ const isTyping = (t: EventTarget | null) =>
 function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: PinFocus; onSelectSquad: (id: string) => void }) {
   const hubPin = hubPinForSquad(view);
   const pin = pinsForSquad(view, { includeHidden: true }).pinned.find((p) => p.lane.id === focus.laneId) ?? (hubPin?.lane.id === focus.laneId ? hubPin : undefined);
+  const drawerOpen = useFocusDrawerOpen();
   const agentIdRef = useRef(focus.agentId);
   agentIdRef.current = focus.agentId;
 
@@ -242,7 +244,7 @@ function PinFocusBar({ view, focus, onSelectSquad }: { view: TeamView; focus: Pi
       <span className="pin-lane-handle" data-testid="pin-focus-handle">{handle}</span>
       {/* The focused drawer's DrawerHeader portals its compact controls here (src/pinSlots.ts). */}
       <div className="pin-focus-slot" ref={slotRef("bar")} />
-      {!focus.agentId && <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>}
+      {!drawerOpen && <span className="pin-focus-name">{pin?.lane.name ?? focus.laneId}</span>}
     </div>
   );
 }
@@ -262,6 +264,7 @@ export function PinFocusHeader(props: {
   spinUpError?: string | null;
 }) {
   const { view, focus, onStart, onSelectSquad, belowBar } = props;
+  const drawerOpen = useFocusDrawerOpen();
   const spinUpError = props.spinUpError ?? focus.spinUpError ?? null;
   const hubPin = hubPinForSquad(view);
   const allPins = pinsForSquad(view, { includeHidden: true });
@@ -353,7 +356,7 @@ export function PinFocusHeader(props: {
       ) : (
         <PinFocusBar view={view} focus={focus} onSelectSquad={onSelectSquad} />
       )}
-      {!focus.agentId && panel}
+      {!drawerOpen && panel}
     </>
   );
 }

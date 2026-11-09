@@ -9,9 +9,10 @@ import { isRetiredAgent } from "./identity";
 import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
+import { focusDrawerOpen } from "./ctxMenuLogic";
 import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
 import { getRestoreLastView } from "./prefs";
-import { dormantBuddyId, hubPinForSquad, liveBuddyId, pinsForSquad, type Pin } from "./pins";
+import { dormantBuddyId, hubPinForSquad, isHubPin, liveBuddyId, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived, subscribeTree } from "./ui";
 
@@ -187,6 +188,28 @@ export const useInFocusedLane = (agentId: string): boolean =>
     return !!f && (f.agentId === agentId || laneMemberIdsOf(focusedPin(f)).has(agentId));
   });
 
+const subscribeDrawer = (l: () => void) => {
+  const offs = [subscribe(l), subscribeTree(l), subscribePanes(l)];
+  return () => offs.forEach((off) => off());
+};
+/** The hub's Sky zone bots (RiffBot = Buddy, Overlord = Lead), mirroring skyZonesFor without importing it. */
+const hubZoneIds = (pin: Pin): string[] => [pin.brainstorm?.agent.id, pin.lead?.agent.id].filter((x): x is string => !!x);
+/** Is there a drawer in the middle for the focused lane (see focusDrawerOpen)? One answer for the header, rail, layout class and drawer header. */
+export const useFocusDrawerOpen = (): boolean =>
+  useSyncExternalStore(subscribeDrawer, () => {
+    const f = state.focus;
+    if (!f) return false;
+    const pin = focusedPin(f);
+    return focusDrawerOpen(f.agentId, getPanes().leftActiveId, laneMemberIdsOf(pin), pin && isHubPin(pin) ? hubZoneIds(pin) : []);
+  });
+
+// A rail click on a Sky bot must open its chat on the hub's sky (the sky keeps the chat in local state): HubPages watches this.
+let skyReq: { bot: "riffbot" | "overlord" | null; n: number } = { bot: null, n: 0 };
+const skyListeners = new Set<() => void>();
+export const getSkyRequest = () => skyReq;
+export const subscribeSkyRequest = (l: () => void) => (skyListeners.add(l), () => void skyListeners.delete(l));
+export const useSkyRequest = () => useSyncExternalStore(subscribeSkyRequest, getSkyRequest);
+
 /**
  * Open one of a pin's own agents (Lead, worker, topic Buddy or the Buddy) in the middle while the pin stays
  * focused and the rail stays visible. A pin that isn't focused yet is focused first.
@@ -195,6 +218,10 @@ export function openPinMember(pin: Pin, agentId: string) {
   const f = state.focus;
   if (!f || f.squadId !== pin.squad.id || f.laneId !== pin.lane.id) void focusPin(pin);
   show(agentId);
+  if (isHubPin(pin) && (agentId === pin.brainstorm?.agent.id || agentId === pin.lead?.agent.id)) {
+    skyReq = { bot: agentId === pin.brainstorm?.agent.id ? "riffbot" : "overlord", n: skyReq.n + 1 };
+    skyListeners.forEach((l) => l());
+  }
 }
 
 /** Explicitly spin up a Brainstorm / RiffBot chat for a selected pin when the user clicks Spin Up. */

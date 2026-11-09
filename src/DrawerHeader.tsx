@@ -793,7 +793,7 @@ export function DrawerHeader({
   const shownHere = usePanes().leftActiveId === agent.id;
   const inLane = useInFocusedLane(agent.id);
   const railCardVisible = useRailCardVisible();
-  const compact = !!pinFocus?.agentId && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
+  const compact = !!pinFocus && shownHere && inLane && railCardVisible && !!barSlot && !!cardSlot;
 
   // Provider switch: one handler shared by the dropdown and the legacy ⇄ button (compact bar + full drawer).
   const switchToProvider = async (targetProviderId: string) => {
