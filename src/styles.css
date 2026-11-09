@@ -4712,6 +4712,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-backdrop.is-fallback.has-sky-band { background-size: auto 60%; background-position: left bottom; background-repeat: repeat-x; }
 .hub-sky-page { flex: none; display: flex; flex-direction: column; }
 .hub-sky-page .sky-zones { flex: none; height: clamp(260px, 36vh, 440px); }
+/* Short windows (1280x720): an open sky chat gets a taller band (it was 240px: timeline gone, composer cut); the floor below takes the difference. */
+@media (max-height: 820px) { .hub-sky-page .sky-zones:has(.sky-chat-panel:not([hidden])) { height: clamp(330px, 46vh, 440px); } }
 /* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
 .hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
