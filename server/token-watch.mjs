@@ -12,7 +12,8 @@ import {
   loadTeamsConfig,
   resolveTeamAndLane,
 } from "./lead-handoff.mjs";
-import { performBrainstormRestart } from "./brainstorm.mjs";
+import { appendVsLogEntry, performBrainstormRestart } from "./brainstorm.mjs";
+import { BUDDY_COMPACT_FOCUS, COMPACTED_AT_LABEL, createCompactor, isClaudeAgent, isIdleForCompact } from "./compact-step.mjs";
 
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
 
@@ -43,6 +44,7 @@ export function startTokenWatcher({
   restartExtra = {},
   restartBuddy = (body) => performBrainstormRestart({ ...restartExtra, ...body }, rootDir),
   getBuddyThresholds = (agent) => loadBrainstormThresholds(agent, rootDir),
+  compactor,
   baseHome,
   profilesPath,
 } = {}) {
@@ -50,6 +52,14 @@ export function startTokenWatcher({
   const busy = new Set();
   const warned = new Set();
   const restarted = new Set();
+
+  // K2: compact-before-handoff (Claude only), logged to the agent's own lane. Shared by the Buddy path and the lead ladder.
+  const compact =
+    compactor ??
+    createCompactor({
+      runner,
+      log: ({ agent, text, teamId, laneId }) => appendVsLogEntry({ teamId, laneId, agent, type: "metric", text }),
+    });
 
   const coord =
     coordinator ??
@@ -67,6 +77,7 @@ export function startTokenWatcher({
           labels: p.labels,
           ...(p.env ? { env: p.env } : {}),
         }),
+      compactStep: (agent, opts) => compact.run(agent, opts),
       listAgents: async () => [...live.values()],
       getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch(() => null))?.agent ?? null,
       deleteHeartbeat: (id) => runner.deleteHeartbeat(id),
@@ -78,6 +89,19 @@ export function startTokenWatcher({
     const used = leadUsedTokens(agent);
     const { warnTokens, restartTokens } = getBuddyThresholds(agent);
     if (used >= restartTokens) {
+      if (isClaudeAgent(agent) && !labels[COMPACTED_AT_LABEL] && !compact.tried.has(agent.id)) {
+        // The Buddy updates its brief first (the warn nudge); a Buddy that jumped past the warn gets it now and is compacted once idle.
+        if (labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
+          warned.add(agent.id);
+          await runner.updateAgent(agent.id, { labels: { ...labels, [WARN_LABEL]: "1" } });
+          await runner.sendAgentPrompt(agent.id, BRAINSTORM_WARN_NUDGE);
+          return;
+        }
+        if (!isIdleForCompact(agent)) return; // never compact mid-turn: the idle snapshot re-evaluates
+        const { teamId, laneId } = resolveTeamAndLane(agent, rootDir);
+        const res = await compact.run(agent, { focus: BUDDY_COMPACT_FOCUS, cap: restartTokens, kind: "buddy", teamId, laneId });
+        if (res.outcome === "ok") return; // same id, smaller context: no restart
+      }
       restarted.add(agent.id);
       await restartBuddy({ agentId: agent.id, reason: "auto-token-limit", usedTokens: used, oldAgent: agent });
       return;
