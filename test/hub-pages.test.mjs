@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { backdropScale, backdropStyle, validateHubBackdrop } from "../src/hubPagesLogic.ts";
+import { backdropScale, backdropStyle, isShortCssHeight, validateHubBackdrop } from "../src/hubPagesLogic.ts";
 import { floorFitScale, floorNativeSize, validateFloor } from "../src/squadFloorLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
@@ -92,3 +92,18 @@ test("regression guard: Riff's TV face swap line is untouched", () => {
   assert.match(src("SkyZones.tsx"), /const shown = isRiff \? skyLeftBot\(landed\) : zone\.bot;/);
   assert.match(src("skyZonesLogic.ts"), /export const SKY_COLUMNS = "minmax\(0, 1fr\) minmax\(0, 1fr\)"/); // fixed 50/50
 });
+
+test("C5: at <=820px css height sky chat opens as an overlay over the floor half, floor dims, TVs band sizing never branches on .sky-chat-panel, and hub page never scrolls", () => {
+  assert.equal(isShortCssHeight(720, 1), true); // 1280x720
+  assert.equal(isShortCssHeight(1080, 1.5), true); // 1920x1080 at UI150 (720px css height)
+  assert.equal(isShortCssHeight(1080, 1), false); // 1920x1080 at UI100
+  assert.equal(isShortCssHeight(1800, 1), false); // 4K@1.2 (3200x1800)
+  assert.doesNotMatch(css, /\.hub-sky-page[^{]*:has\([^)]*\.sky-chat-panel/);
+  assert.doesNotMatch(css, /\.hub-sky-page[^{]*\.is-open/);
+  assert.doesNotMatch(css, /@media\s*\(max-height:\s*820px\)/);
+  assert.match(css, /\.hub-pages \{[^}]*overflow: hidden auto;/);
+  assert.match(css, /\.hub-pages\[data-short-height="true"\] \{[^}]*overflow: hidden;/);
+  assert.match(css, /\.hub-pages\[data-short-height="true"\]:has\(\.sky-chat-panel:not\(\[hidden\]\)\) \.hub-tower-box/);
+  assert.match(css, /\.hub-pages\[data-short-height="true"\] \.sky-zone\.sky-chat-panel \{[\s\S]*?position: absolute;[\s\S]*?top: 100%;/);
+});
+

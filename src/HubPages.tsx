@@ -2,7 +2,7 @@
 // then one floor filling the rest of the height with its bottom edge flush to the page bottom, all over the A1 skyline backdrop
 // (visible left and right of the floor).
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { HUB_BACKDROP_JSON, HUB_BACKDROP_URL, backdropStyle, validateHubBackdrop, type HubBackdrop } from "./hubPagesLogic";
+import { HUB_BACKDROP_JSON, HUB_BACKDROP_URL, backdropStyle, isShortCssHeight, validateHubBackdrop, type HubBackdrop } from "./hubPagesLogic";
 import { SKY_URL } from "./skyZonesLogic";
 import { floorNativeSize, floorNeedCssPx, floorOrPlaceholder } from "./squadFloorLogic";
 import { useUiScale } from "./uiScale";
@@ -69,19 +69,25 @@ export function HubPages({
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  const [pageH, setPageH] = useState(0);
+  const [vh, setVh] = useState(() => (typeof window !== "undefined" ? window.innerHeight : 1080));
+  const uiScale = useUiScale();
+  const shortHeight = isShortCssHeight(vh, uiScale);
   // FF-ui: the floor box is never shorter than the floor at 1 device px per native px; the TVs band (flex-shrink) gives up the height.
   const native = useFloorNative();
-  const floorNeed = floorNeedCssPx(native.h, useDpr(), useUiScale(), width, native.w);
+  const floorNeed = floorNeedCssPx(native.h, useDpr(), uiScale, width, native.w);
   useEffect(() => {
     const el = root.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((es) => es.forEach((e) => setWidth(e.contentRect.width)));
+    const ro = new ResizeObserver((es) => es.forEach((e) => { setWidth(e.contentRect.width); setPageH(e.contentRect.height); }));
     ro.observe(el);
-    return () => ro.disconnect();
+    const onResize = () => setVh(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => { ro.disconnect(); window.removeEventListener("resize", onResize); };
   }, [agentOpen]); // the root div only exists while the agent is not open
   if (agentOpen) return <>{strip}{tower}</>;
   return (
-    <div ref={root} className="hub-pages" data-testid="hub-pages" style={{ "--floor-need": `${floorNeed}px` } as CSSProperties}>
+    <div ref={root} className="hub-pages" data-testid="hub-pages" data-short-height={shortHeight ? "true" : undefined} style={{ "--floor-need": `${floorNeed}px`, ...(pageH > 0 ? { "--hub-page-h": `${pageH}px` } : null) } as CSSProperties}>
       <Backdrop width={width} />
       <div className="hub-sky-page" data-testid="hub-sky-page">
         {sky}

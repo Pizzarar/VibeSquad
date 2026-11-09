@@ -230,10 +230,12 @@ function Zone({
           onClick={onFace}
         />
       )}
-      <span ref={chip} className={`sky-crt-name${struck ? " is-struck" : ""}${labelArt && geom ? " has-art" : ""}${reduced ? " is-still" : ""}`} data-testid={`sky-name-${zone.bot}${panel ? "-panel" : ""}`} role={scrawl ? "img" : undefined} aria-label={scrawl ? (struck ? "Overlord (takeover)" : label) : undefined}>
-        <span className="sky-crt-name-text">{label}</span>
-        {scrawl && !(labelArt && geom) && <span className={`sky-label-scrawl${struck ? " is-on" : ""}`} data-testid="sky-label-scrawl" aria-hidden="true">OVERLORD</span>}
-      </span>
+      {!panel && (
+        <span ref={chip} className={`sky-crt-name${struck ? " is-struck" : ""}${labelArt && geom ? " has-art" : ""}${reduced ? " is-still" : ""}`} data-testid={`sky-name-${zone.bot}`} role={scrawl ? "img" : undefined} aria-label={scrawl ? (struck ? "Overlord (takeover)" : label) : undefined}>
+          <span className="sky-crt-name-text">{label}</span>
+          {scrawl && !(labelArt && geom) && <span className={`sky-label-scrawl${struck ? " is-on" : ""}`} data-testid="sky-label-scrawl" aria-hidden="true">OVERLORD</span>}
+        </span>
+      )}
       {scrawl && labelArt && geom && (
         <span className={`sky-label-art${struck ? " is-on" : ""}${reduced ? " is-still" : ""}`} data-testid="sky-label-art" aria-hidden="true" style={{ ...geom, backgroundImage: `url(${TAKEOVER_LABEL_URL(theme)})` }} />
       )}

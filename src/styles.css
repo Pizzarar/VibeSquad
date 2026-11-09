@@ -4545,12 +4545,14 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .drawer-working-chip:disabled { cursor: default; }
 .drawer-subagents-bar {
-  flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 10px; border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--cyan) 5%, transparent); max-height: 52px; overflow-y: auto;
+  flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: var(--sp-1, 4px); flex-wrap: nowrap; padding: 0; border: 0;
+  background: transparent; max-height: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+.drawer-subagents-bar::-webkit-scrollbar { display: none; }
+.drawer-head-compact > .drawer-subagents-bar { flex: 0 1 auto; min-width: 0; }
 .drawer-subagent-chip {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 220px; padding: 1px 8px; font-size: 11px; color: var(--text);
-  background: transparent; border: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 160px; padding: 1px var(--sp-2, 8px); font-size: 11px; color: var(--text);
+  background: color-mix(in srgb, var(--cyan) 5%, transparent); border: 1px solid var(--line); cursor: pointer; white-space: nowrap;
 }
 .drawer-subagent-chip:hover, .drawer-subagent-chip:focus-visible { border-color: var(--cyan); outline: none; }
 
@@ -4734,7 +4736,7 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 
 /* ── Hub pages (src/HubPages.tsx, docs/PLAN_HUB_PAGES.md HP1-HP3): Sky / Tower switcher over one shared skyline backdrop ── */
-.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden auto; isolation: isolate; } /* FF-ui: if the TVs strip leaves the floor under its minimum, the page scrolls a little instead of hiding the floor */
+.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden auto; isolation: isolate; }
 .hub-backdrop { position: absolute; inset: 0; z-index: -1; image-rendering: pixelated; pointer-events: none; background-color: #2a1b6b; }
 :root[data-theme="light"] .hub-backdrop { background-color: #95d3f2; }
 /* Fallback (A1 absent): today's sky band along the bottom over a vertical gradient. */
@@ -4744,8 +4746,13 @@ button.project-file-name:hover { text-decoration: underline; }
 /* FF-ui art rule: the floor box is never under --floor-need (the floor at 1 device px per native px, set by HubPages from floor.json), so the TVs band is the part that yields: it asks for 36vh and shrinks (flex-shrink) down to a slim strip. Chats only open in a band that is already tall; faces stay clickable in the slim strip. */
 .hub-sky-page { flex: 0 1 clamp(260px, 36vh, 440px); min-height: var(--sky-slim, 112px); display: flex; flex-direction: column; overflow: hidden; }
 .hub-sky-page .sky-zones { flex: 1 1 0; height: auto; min-height: 0; }
-/* Short windows (1280x720): an open sky chat gets a taller band (it was 240px: timeline gone, composer cut); the floor below takes the difference. */
-@media (max-height: 820px) { .hub-sky-page:has(.sky-chat-panel:not([hidden])) { flex-basis: clamp(330px, 46vh, 440px); min-height: 330px; } } /* an open chat keeps its 330px: the floor box keeps its need too, so the hub page scrolls instead */
+/* C5: at <=820px css height, the TVs band keeps its viewport-driven size (never branches on .sky-chat-panel), the floor dims, and an open sky chat overlays the floor half with composer + Stop pinned so the hub page never scrolls. */
+.hub-pages[data-short-height="true"] { --sky-slim: 96px; overflow: hidden; }
+.hub-pages[data-short-height="true"] .hub-sky-page, .hub-pages[data-short-height="true"] .sky-zones { overflow: visible; }
+.hub-pages[data-short-height="true"]:has(.sky-chat-panel:not([hidden])) .hub-tower-box, .hub-pages[data-short-height="true"]:has(.sky-chat-panel:not([hidden])) .sq-strip { opacity: 0.35; filter: brightness(0.45); }
+.hub-pages[data-short-height="true"]:has(.sky-chat-panel:not([hidden])) .hub-tower-box :is(.sq-floor-front, .sq-floor-cursor, .sq-floor-bubble) { pointer-events: auto; }
+.hub-pages[data-short-height="true"] .sky-zone.sky-chat-panel { position: absolute; grid-column: auto; grid-row: auto; top: 100%; left: 8px; right: 8px; z-index: 20; box-sizing: border-box; height: calc(var(--hub-page-h, 100vh) - 100% - 6px); max-height: calc(var(--hub-page-h, 100vh) - 100% - 6px); }
+.hub-pages[data-short-height="true"] .sky-zone.sky-chat-panel.is-slam-fx { transform: none; }
 /* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
 .hub-tower-box { flex: 1 0 var(--floor-need, 125px); min-height: var(--floor-need, 125px); overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
@@ -4823,8 +4830,8 @@ button.project-file-name:hover { text-decoration: underline; }
 /* The face is the TV's button: click opens (rest) / closes (open). Transparent, under the name tag. */
 .sky-face-hit { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .sky-face-hit:focus-visible { outline: 3px solid var(--cyan); outline-offset: -6px; }
-.sky-chat-close { position: absolute; top: 6px; right: 8px; z-index: 4; min-width: 28px; height: 26px; padding: 0 8px; cursor: pointer; font-family: var(--arcade); font-size: 13px; color: var(--text); background: color-mix(in srgb, var(--bg) 80%, transparent); border: 1px solid var(--line); }
-.sky-chat-close:hover, .sky-chat-close:focus-visible { border-color: var(--cyan); color: var(--cyan-t); }
+.sky-chat-close { position: absolute; top: 4px; right: 6px; z-index: 4; min-width: 22px; height: 20px; padding: 0 5px; cursor: pointer; font-family: var(--arcade); font-size: 11px; line-height: 1; color: var(--text); background: color-mix(in srgb, var(--bg) 55%, transparent); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); opacity: 0.72; }
+.sky-chat-close:hover, .sky-chat-close:focus-visible { opacity: 1; background: var(--panel); border-color: var(--cyan); color: var(--cyan-t); }
 /* The Overlord's chat drops over the right TV in a few hard steps. Riff's window is the RS-b slam instead (clock-driven in SkyZones: hinge swing, squash, shake, puff, star). Reduced motion = instant swap. */
 .sky-chat-panel:not([hidden]):not(.sky-zone-riffbot) { animation: sky-chat-slam 180ms steps(4, end) both; }
 /* RS-c: Riff's window is hinged on its left edge (the side nearest his TV) and swings into the Overlord: perspective + rotateY come per frame from --slam-swing on .sky-zones, the shake/squash from --slam-panel-tf. The chat panes' own counter-zoom (--chat-zoom) is on the children inside, so this transform composes with it. */
@@ -4872,8 +4879,9 @@ button.project-file-name:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
 }
-/* Chat panel: the whole screen, under a strip for the name tag and the ✕. */
-.sky-chat-panel .sky-crt-body { top: 38px; background: var(--bg); border-top: 1px solid var(--line); }
+/* C2: the chat panel has no header row (the left TV already names the bot); the body fills the screen under the floating corner ✕. */
+.sky-chat-panel .sky-crt-body { top: 0; background: var(--bg); }
+.sky-chat-panel .sky-resume { padding-right: 36px; }
 .sky-chat-panel { background: var(--bg); }
 /* The chips' bevel is taller than the bar's 52px cap: let a wrapped second row show instead of clipping it. */
 .sky-chat-panel .drawer-subagents-bar { max-height: none; }
@@ -5878,10 +5886,10 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .exposed-network-banner button, .read-only-banner button, .config-warning-banner button, .update-available-banner button { line-height: 1; padding-block: 0; }
 /* Context bar: the readout and actions start below the painted cap, not across its edge (DrawerHeader.tsx no longer sets inline padding). */
 .brainstorm-ctx-bar { padding: calc(var(--u3-px) * 6 + var(--sp-1)) var(--sp-2) var(--sp-1); }
-/* Worker chips above the composer: the name ellipsizes inside the chip (the chip is a flex row, so bare text could only be cut), and the bar is tall enough for two chip rows before it scrolls. */
-.drawer-subagents-bar { max-height: calc(var(--u3-px) * 28 + var(--sp-2) * 2); }
+/* Worker chips in the top bar (C3): the name ellipsizes inside the chip so bare text cannot be cut. */
+.drawer-subagents-bar { max-height: none; }
 .drawer-subagent-chip { min-width: 0; }
-.drawer-subagent-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-subagent-chip-name { display: block; min-width: 0; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Squads home huddle: portraits sit side by side (they were stacked with a -10px margin, so their click targets overlapped) and each pip sits under its own portrait instead of floating over the neighbour. */
 .squad-home-huddle { gap: var(--sp-2); padding-left: var(--sp-1); flex-wrap: wrap; align-items: flex-start; }
 .squad-home-portrait { display: inline-flex; flex-direction: column; align-items: center; gap: var(--sp-1); }
