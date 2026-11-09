@@ -458,6 +458,10 @@ export function setLastBrainstormProfile(profile: string): void {
 export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams" | "agents" | "onSpawned" | "profile"> & {
   lastProfile?: string;
   startBuddies?: boolean;
+  /** Mark the created/reopened lane as a permanent standing team (`standing: true`). */
+  standing?: boolean;
+  /** Also point the Squad's `quickLanes[quickLane]` at the created/reopened lane id. */
+  quickLane?: "bugs";
   /** Called when the server saved the brief in its runtime folder instead of the project's. */
   onBriefFallback?: (laneId: string) => void;
 };
@@ -514,6 +518,7 @@ export async function createPin(squadId: string, name: string, idea: string, dep
       state: "pinned",
       doneAt: undefined,
       removedAt: undefined,
+      ...(deps.standing ? { standing: true } : {}),
       ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}),
     };
     if (!DEMO) {
@@ -531,7 +536,11 @@ export async function createPin(squadId: string, name: string, idea: string, dep
     await (deps.saveTeams ?? saveTeams)((cur) =>
       (next = cur.map((t) =>
         t.id === squadId
-          ? { ...t, lanes: freezeLaneCodes(t.lanes.map((l) => (l.id === reopenTarget.id ? reopenedLane : l))) }
+          ? {
+              ...t,
+              lanes: freezeLaneCodes(t.lanes.map((l) => (l.id === reopenTarget.id ? reopenedLane : l))),
+              ...(deps.quickLane ? { quickLanes: { ...t.quickLanes, [deps.quickLane]: reopenedLane.id } } : {}),
+            }
           : t,
       )),
     );
@@ -554,13 +563,28 @@ export async function createPin(squadId: string, name: string, idea: string, dep
   const id = uniqueLaneId(slug, allLaneIds(teams));
   // Freeze the generated code on the lane so later registry changes never rename its agents.
   const code = laneCodesForTeam({ lanes: [...squad.lanes, { id, name: clean }] })[id];
-  const lane: PinLane = { id, name: clean, ...(code ? { code } : {}), state: "pinned", ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}) };
+  const lane: PinLane = {
+    id,
+    name: clean,
+    ...(code ? { code } : {}),
+    state: "pinned",
+    ...(deps.standing ? { standing: true } : {}),
+    ...(deps.lastProfile ? { lastProfile: deps.lastProfile } : {}),
+  };
   // Brief first: a failed write leaves no half-made pin behind.
   if (!DEMO && (await writeBrief(lane.id, newPinBrief(lane.id, clean, idea), doFetch, undefined, squadId))) deps.onBriefFallback?.(lane.id);
   // The brief write is async, so add the lane to whatever the registry holds by then.
   let next = teams;
   await (deps.saveTeams ?? saveTeams)((cur) =>
-    (next = cur.map((t) => (t.id === squadId && !t.lanes.some((l) => l.id === lane.id) ? { ...t, lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), lane]) } : t))),
+    (next = cur.map((t) =>
+      t.id === squadId && !t.lanes.some((l) => l.id === lane.id)
+        ? {
+            ...t,
+            lanes: freezeLaneCodes([...freezeLaneCodes(t.lanes), lane]),
+            ...(deps.quickLane ? { quickLanes: { ...t.quickLanes, [deps.quickLane]: lane.id } } : {}),
+          }
+        : t,
+    )),
   );
   return {
     squad: next.find((t) => t.id === squadId) ?? squad,
@@ -575,6 +599,15 @@ export async function createPin(squadId: string, name: string, idea: string, dep
     contextUsed: 0,
     topicBrainstorms: [],
   };
+}
+
+/** Create a Squad's standing Bugs team and record its id in `quickLanes.bugs` (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md C1). */
+export function createQuickBugsPin(squadId: string, deps: CreatePinDeps = {}): Promise<Pin> {
+  return createPin(squadId, "Bugs", "Triage and fix bugs for this project.", {
+    ...deps,
+    standing: true,
+    quickLane: "bugs",
+  });
 }
 
 export type SendIdeaDeps = OpenPinDeps & {

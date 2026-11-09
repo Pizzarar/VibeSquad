@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { cleanLaneCode, findAuditLane, findBugLane, isHubLane, laneCodesForTeam } from "./identity.mjs";
-import { takenLaneIds, uniqueLaneId } from "./pin-ideas.mjs";
+import { freezeLaneCodes, isHubLane, seedStandingLane } from "./lane-pure.mjs";
 import { resolveTeamsFilePath, teamsRevision, vibesquadHome, writeTeamsRegistry } from "./teams-file.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 
@@ -18,25 +17,7 @@ export const TEMPLATE_DEFAULTS = {
   leadHardCapTokens: 300_000,
 };
 
-const STANDING = {
-  bug: { id: "bug-runner", name: "Bug Runner", find: findBugLane },
-  audit: { id: "perfection", name: "Perfection", find: findAuditLane },
-};
-
-const freezeCodes = (lanes) => {
-  const codes = laneCodesForTeam({ lanes });
-  return lanes.map((l) => (cleanLaneCode(l.code) === codes[l.id] ? l : { ...l, code: codes[l.id] }));
-};
-
-/** The Squad with its standing, hidden lane of `kind` ("bug" Bug Runner / "audit" Perfection). Idempotent: a lane it already has (flagged or by fallback id) is kept. Lane ids are unique across Squads (`bug-runner-2`, ...). */
-export function seedStandingLane(team, kind, existingTeams = []) {
-  const spec = STANDING[kind];
-  if (spec.find(team)) return team;
-  const others = existingTeams.filter((t) => t.id !== team.id);
-  const taken = takenLaneIds([...others, team].flatMap((t) => t.lanes ?? []));
-  const lane = { id: uniqueLaneId(spec.id, taken), name: spec.name, kind, hidden: true, standing: true, state: "pinned" };
-  return { ...team, lanes: freezeCodes([...(team.lanes ?? []), lane]) };
-}
+export { seedStandingLane };
 export const seedBugLane = (team, existingTeams = []) => seedStandingLane(team, "bug", existingTeams);
 
 /** One Squad vs the template: `next` has the auto parts applied; `auto` / `logOnly` list rules ({ rule, detail? }). */
@@ -53,7 +34,7 @@ export function diffAgainstTemplate(team, allTeams = []) {
     next = { ...next, ...Object.fromEntries(fill) };
     for (const [k, v] of fill) auto.push({ rule: `add-${k}`, detail: String(v) });
   }
-  const frozen = freezeCodes(next.lanes ?? []);
+  const frozen = freezeLaneCodes(next.lanes ?? []);
   if (frozen.some((l, i) => l !== next.lanes[i])) {
     auto.push({ rule: "freeze-lane-codes", detail: frozen.filter((l, i) => l !== next.lanes[i]).map((l) => l.id).join(",") });
     next = { ...next, lanes: frozen };

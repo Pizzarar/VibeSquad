@@ -75,6 +75,16 @@ export function validateTeamsBody(teams) {
     if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("each team must be an object");
     if (typeof t.id !== "string" || !TEAM_ID.test(t.id)) throw new Error("bad team id");
     checkPaths(t, `team ${t.id}`);
+    if (t.quickLanes !== undefined) {
+      if (!t.quickLanes || typeof t.quickLanes !== "object" || Array.isArray(t.quickLanes)) {
+        throw new Error(`team ${t.id}: bad quickLanes`);
+      }
+      for (const v of Object.values(t.quickLanes)) {
+        if (v !== undefined && (typeof v !== "string" || !TEAM_ID.test(v))) {
+          throw new Error(`team ${t.id}: bad quickLanes`);
+        }
+      }
+    }
     if (t.lanes === undefined) continue;
     if (!Array.isArray(t.lanes) || t.lanes.length > MAX_LANES) throw new Error(`team ${t.id}: lanes must be an array`);
     for (const l of t.lanes) {

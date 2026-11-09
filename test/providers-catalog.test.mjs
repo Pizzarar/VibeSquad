@@ -1302,6 +1302,10 @@ test('usa-10: floor splits spend into clean vs rework/loops/fix/restart buckets'
 
 test('usa-10: review records store kpis and the prompt grades prior recommendations against KPI deltas', async () => {
   const home = tmp();
+  // Point the prompt at a temp file seeded with the built-in text so this test is independent of the
+  // @perfection-owned live USAGE_REVIEW_PROMPT.md (edited on purpose, prompt v2).
+  const promptFile = path.join(home, 'review-prompt.md');
+  fs.writeFileSync(promptFile, DEFAULT_USAGE_REVIEW_PROMPT, 'utf8');
   const prompts = [];
   const runOpus = async ({ prompt }) => { prompts.push(prompt); return { ok: true, text: 'route via gemini', ms: 1 }; };
   const runGemini = async () => ({ ok: true, text: 'reduce review rounds', ms: 1 });
@@ -1310,7 +1314,7 @@ test('usa-10: review records store kpis and the prompt grades prior recommendati
     merged: { units: [{ reviewRounds: 2, fixAfterMerge: false, costUsd: 1, inputTokens: 0, outputTokens: 0 }] },
     floor: { cleanShare: 0.5 },
   };
-  await runUsageReview({ home, trigger: 'manual', usage: usage1, runOpus, runGemini });
+  await runUsageReview({ home, trigger: 'manual', usage: usage1, runOpus, runGemini, promptPath: promptFile });
   const rec1 = readUsageReviews(home)[0];
   assert.ok(rec1.kpis, 'kpis stored on the review record');
   assert.equal(rec1.kpis.unitsMerged, 1);
@@ -1321,7 +1325,7 @@ test('usa-10: review records store kpis and the prompt grades prior recommendati
     merged: { units: [{ reviewRounds: 0, fixAfterMerge: false, costUsd: 1, inputTokens: 0, outputTokens: 0 }] },
     floor: { cleanShare: 1 },
   };
-  await runUsageReview({ home, trigger: 'manual', usage: usage2, runOpus, runGemini });
+  await runUsageReview({ home, trigger: 'manual', usage: usage2, runOpus, runGemini, promptPath: promptFile });
   const prompt2 = prompts[1];
   assert.match(prompt2, /Previous review Opus said: route via gemini/, 'prior opus bullet included');
   assert.match(prompt2, /KPI delta since last review/, 'kpi delta section present');
@@ -1467,12 +1471,15 @@ test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogu
 
 // ---------------------------------------------------------------- usa-19: prompt loader, path resolution, open-card dedupe, multi-Squad pooling
 
-test('usa-19: USAGE_REVIEW_PROMPT.md matches DEFAULT_USAGE_REVIEW_PROMPT verbatim and assembles a byte-identical prompt on day 1', () => {
+test('usa-19: loader returns the live repo prompt verbatim (independent of its content) and buildUsageReviewPrompt appends it', () => {
   const home = tmp();
   const repoRoot = path.resolve(import.meta.dirname, '..');
   const repoPromptFile = path.join(repoRoot, USAGE_REVIEW_PROMPT_REL_PATH);
-  assert.equal(fs.readFileSync(repoPromptFile, 'utf8').trim(), DEFAULT_USAGE_REVIEW_PROMPT, 'repo prompt file is verbatim');
-  assert.equal(loadUsageReviewPrompt({ runtimeRoot: repoRoot, envRoot: '' }), DEFAULT_USAGE_REVIEW_PROMPT);
+  // @perfection owns USAGE_REVIEW_PROMPT.md and edits it on purpose (prompt v2), so never assert it equals the
+  // built-in DEFAULT_USAGE_REVIEW_PROMPT. Instead assert the loader returns the repo file's own trimmed content.
+  const repoPrompt = fs.readFileSync(repoPromptFile, 'utf8').trim();
+  assert.ok(repoPrompt.length > 0, 'repo prompt file is non-empty');
+  assert.equal(loadUsageReviewPrompt({ runtimeRoot: repoRoot, envRoot: '' }), repoPrompt, 'loader returns the repo file content verbatim');
 
   const sampleUsage = {
     totals: { turns: 12, costUsd: 1.5, inputTokens: 4000, outputTokens: 800 },
@@ -1485,9 +1492,19 @@ test('usa-19: USAGE_REVIEW_PROMPT.md matches DEFAULT_USAGE_REVIEW_PROMPT verbati
     floor: { cleanShare: 0.9, cleanCostPerUnit: 0.45, reworkCostUsd: 0.15, loopAndAbandonedCostUsd: 0, fixAfterMergeCostUsd: 0, restartOverheadCostUsd: 0 },
   };
   const fromRepoFile = buildUsageReviewPrompt(sampleUsage, { home, runtimeRoot: repoRoot, envRoot: '' });
+  assert.ok(fromRepoFile.endsWith(`\n${repoPrompt}`), 'repo instruction text appended at the end');
+
+  // Byte-identity check stays, but against a temp root seeded with DEFAULT_USAGE_REVIEW_PROMPT (VIBESQUAD_ROOT
+  // pointed at the temp dir), not the live repo file.
+  const seededRoot = tmp();
+  const seededPromptFile = path.join(seededRoot, USAGE_REVIEW_PROMPT_REL_PATH);
+  fs.mkdirSync(path.dirname(seededPromptFile), { recursive: true });
+  fs.writeFileSync(seededPromptFile, DEFAULT_USAGE_REVIEW_PROMPT, 'utf8');
+  assert.equal(loadUsageReviewPrompt({ runtimeRoot: seededRoot, envRoot: seededRoot }), DEFAULT_USAGE_REVIEW_PROMPT, 'seeded temp root returns the built-in text verbatim');
+  const fromSeeded = buildUsageReviewPrompt(sampleUsage, { home, runtimeRoot: seededRoot, envRoot: seededRoot });
   const fromFallback = buildUsageReviewPrompt(sampleUsage, { home, promptPath: path.join(home, 'missing.md'), warn: () => {} });
-  assert.equal(fromRepoFile, fromFallback, 'assembled prompt is byte-identical on day 1');
-  assert.ok(fromRepoFile.endsWith(`\n${DEFAULT_USAGE_REVIEW_PROMPT}`), 'instruction text appended at the end');
+  assert.equal(fromSeeded, fromFallback, 'seeded prompt assembles a byte-identical prompt');
+  assert.ok(fromSeeded.endsWith(`\n${DEFAULT_USAGE_REVIEW_PROMPT}`), 'built-in instruction text appended at the end');
 });
 
 test('usa-19: resolveUsageReviewPromptPath resolves live repo via build-stamp.json or VIBESQUAD_ROOT so edits take effect without sync-runtime', () => {
@@ -1745,7 +1762,220 @@ test('usage: merged units pool across every Squad repo, tagged repo/squad, attri
     t += 60_000;
     clearUsageCache();
     assert.equal(getUsage({ home, now: () => t }).merged.units.filter((x) => x.repo === 'alpha').length, 2, 'after TTL: new HEAD picked up');
+    // Remove the synthetic ledger record so subsequent tests using the same fake shas (m1..m3) don't fold 'deadbeef'.
+    fs.rmSync(path.join(home, 'runner', 'usage-ledger.jsonl'), { force: true });
   } finally {
     if (prevRoot === undefined) delete process.env.VIBESQUAD_ROOT; else process.env.VIBESQUAD_ROOT = prevRoot;
+  }
+});
+
+// ---------------------------------------------------------------- usa-21: EXP2 review-round parse, verdict parse, sanctuary worktree attribution
+
+test('usa-21 (idea-38): review-round parser extracts max R<n> or fixN count from merge and branch subjects', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm7\n';
+    if (args[0] === 'log') {
+      return [
+        // 1) "Review-Gemini R1 FAIL -> R2 PASS" (ea23807 / 920254b pattern) -> 2
+        L('m7', 'm6 b7', sec(T0 + 70000), "Merge branch 'unit-argv-mcp-config': claude adapter passes --mcp-config [wf:sonnet] (@bug; Review-Gemini R1 FAIL -> R2 PASS)"),
+        L('b7', 'm6', sec(T0 + 65000), 'Claude adapter: pass --mcp-config via per-agent temp file'),
+        // 2) "R1 FAIL -> R2 FAIL -> R3 PASS" (8c87f2b pattern) -> 3
+        L('m6', 'm5 b6', sec(T0 + 60000), "Merge branch 'unit-wiki-link-check': guide-to-wiki test audits [wf:gemini] (@wik; Implement-Sonnet-as-reviewer R1 FAIL -> R2 FAIL -> R3 PASS)"),
+        L('b6', 'm5', sec(T0 + 55000), 'test(wiki): check link targets'),
+        // 3) "R1-R3 FAIL -> R4 PASS" (b5e230e pattern) -> 4
+        L('m5', 'm4 b5', sec(T0 + 50000), "Merge branch 'unit-digest-waste-dedupe': one digest per worker turn [wf:gemini] (@per; Implement-Sonnet-as-reviewer R1-R3 FAIL -> R4 PASS)"),
+        L('b5', 'm4', sec(T0 + 45000), 'fix(hooks): scope null-turnId digest dedupe'),
+        // 4) "R3 PASS 0/0/0" and "after R1 FAIL" -> 3
+        L('m4', 'm3 b4', sec(T0 + 40000), "Merge branch 'unit-after-r1': clean up after R1 FAIL, R3 PASS 0/0/0 [wf:sonnet] (@usa)"),
+        L('b4', 'm3', sec(T0 + 35000), 'feat: initial'),
+        // 5) "Review-Gemini R1 contrast FAIL -> ... fix1" -> max R<n> is 1, fix1 is 1 -> 1; with fix1+fix2 and no R<n> -> 2
+        L('m3', 'm2 b3', sec(T0 + 30000), "Merge branch 'unit-fix-counts': Sonnet read-only review PASS 0/0/1L -> fix1 -> fix2 [wf:gemini] (@usa)"),
+        L('b3', 'm2', sec(T0 + 25000), 'feat: loader'),
+        // 6) Rule names like R11 / R12 / R13 in subject must NOT count as review rounds; plain "Review-Gemini PASS 0/0/0" -> 0
+        L('m2', 'm1 b2', sec(T0 + 20000), "Merge branch 'unit-r11-act-on-lean': R11 tightened; new R13 act on your lean [wf:sonnet] (@per; Review-Gemini PASS 0/0/0)"),
+        L('b2', 'm1', sec(T0 + 15000), 'docs: R11 and R12 updates'),
+        // 7) Legacy side-commit "review r2" format still works -> 2
+        L('m1', 'a1 b1', sec(T0 + 10000), "Merge branch 'unit-legacy-r2' (@usa)"),
+        L('b1', 'a1', sec(T0 + 5000), 'fix(x): review r2 - address findings'),
+        L('a1', 'root', sec(T0), 'mainline'),
+        L('root', '', '0', 'init'),
+      ].join('\n');
+    }
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage', bug: 'bug-chaser', wik: 'wiki', per: 'perfection' } });
+  const roundsByUnit = Object.fromEntries(u.merged.units.map((x) => [x.unit, x.reviewRounds]));
+  assert.equal(roundsByUnit['unit-argv-mcp-config'], 2, 'R1 FAIL -> R2 PASS = 2 rounds');
+  assert.equal(roundsByUnit['unit-wiki-link-check'], 3, 'R1 FAIL -> R2 FAIL -> R3 PASS = 3 rounds');
+  assert.equal(roundsByUnit['unit-digest-waste-dedupe'], 4, 'R1-R3 FAIL -> R4 PASS = 4 rounds');
+  assert.equal(roundsByUnit['unit-after-r1'], 3, 'after R1 FAIL + R3 PASS 0/0/0 = 3 rounds');
+  assert.equal(roundsByUnit['unit-fix-counts'], 2, 'fix1 -> fix2 without R<n> = 2 rounds');
+  assert.equal(roundsByUnit['unit-r11-act-on-lean'], 0, 'R11/R13 rule names ignored, plain PASS = 0');
+  assert.equal(roundsByUnit['unit-legacy-r2'], 2, 'legacy side-commit review r2 preserved');
+
+  const sonnetWf = u.byWorkflow.find((w) => w.workflowMode === 'sonnet');
+  const geminiWf = u.byWorkflow.find((w) => w.workflowMode === 'gemini');
+  assert.ok(sonnetWf.avgReviewRounds > 0 && sonnetWf.firstTryPassRate < 1, 'sonnet arm reflects R2/R3 rework');
+  assert.ok(geminiWf.avgReviewRounds > 0 && geminiWf.firstTryPassRate < 1, 'gemini arm reflects R3/R4/fix2 rework');
+});
+
+test('usa-21 (idea-51): verdict parser accepts **PASS**, VERDICT: PASS, R2 PASS in first/last line, FAIL wins, ignores prose passes/passed', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+  const turns = Array.from({ length: LOOP_TURN_THRESHOLD + 1 }, () => ({ ts: T0 + 1000, type: 'turn_done' }));
+  const mkReviewer = (id, text) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 100, type: 'output', text },
+    ...turns,
+  ]);
+
+  // Should count as PASS:
+  mkReviewer('rn-bold-pass', '**PASS** — all checks green (`abc1234`, 42/42 tests).\n- Details here.');
+  mkReviewer('rn-verdict-pass', 'Reviewed diff and tests.\n- Guard intact.\nVERDICT: PASS (0H/0M/1L)');
+  mkReviewer('rn-r2-pass', 'Reported R2 PASS (`dd0baf1`, 35/35 tests passing) to lead.\nDone.');
+  mkReviewer('rn-backtick-pass', 'Summary line.\nCompleted at R5 `PASS` (0 findings).');
+
+  // Should NOT count as PASS (FAIL wins or prose only):
+  mkReviewer('rn-verdict-fail', 'Verdict: FAIL\n- 1H issue found.');
+  mkReviewer('rn-fail-wins-same-line', 'All tests **PASS** but FAIL here\nDetails.');
+  mkReviewer('rn-fail-wins-first-last', '**PASS** on unit tests\nOverall Verdict: FAIL (1H)');
+  writeAgent(home, 'rn-fail-wins-streamed', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 100, type: 'output', text: '**PASS** on unit tests\n' },
+    { ts: T0 + 200, type: 'output', text: 'Middle line.\nOverall Verdict: FAIL (1H)\n' },
+    ...turns,
+  ]);
+  mkReviewer('rn-prose-only', 'The test suite passes and all checks passed without errors.\nEverything passed.');
+
+  const u = getUsage({ home, git: noGit });
+  const revProfile = u.byProfile.find((p) => p.profile === 'Review - Gemini');
+  assert.equal(revProfile.runs, 9);
+  assert.equal(revProfile.passCount, 4, 'exactly the 4 PASS variants count');
+  assert.equal(revProfile.passRate, 0.444);
+  assert.deepEqual(
+    u.loops.flagged.map((l) => l.agentId).sort(),
+    ['rn-fail-wins-first-last', 'rn-fail-wins-same-line', 'rn-fail-wins-streamed', 'rn-prose-only', 'rn-verdict-fail'],
+    'all 5 non-PASS runs (including anchored PASS + unanchored FAIL and multi-chunk first-line PASS + last-line FAIL) are flagged as loops',
+  );
+});
+
+test('usa-21 (idea-39): sanctuary worktree attribution normalizes paths, disambiguates implementers from reviewers/digests, and keeps lane fallback + sameSquad', async () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+
+  // Unit 1: Windows sanctuary path with trailing backslash + uppercase drive, alongside Pre-check - Flash digest and Review - Gemini in the SAME worktree
+  const wt1 = 'C:\\Users\\alice\\AppData\\Local\\VibeSquad\\worktrees\\VibeSquad\\unit-sanctuary-sonnet\\';
+  writeAgent(home, 'rn-sonnet-impl', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: wt1, meta: { team: 'vibesquad', lane: 'usage', role: 'worker', profile: 'agent_profile_mut1e4lx_us7pdrypi8q', title: 'Usa1 · sonnet impl' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1.25 },
+  ]);
+  writeAgent(home, 'rn-sonnet-digest', [
+    { ts: T0 + 2000, type: 'created', provider: 'antigravity-cli', model: 'gemini-3.8-flash', cwd: wt1, meta: { team: 'vibesquad', lane: 'usage', role: 'worker', profile: 'Pre-check - Flash', title: 'Pre-check - Flash digest' } },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.01 },
+  ]);
+  writeAgent(home, 'rn-sonnet-rev', [
+    { ts: T0 + 3000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: wt1, meta: { team: 'vibesquad', lane: 'usage', role: 'worker', profile: 'Review - Gemini', title: 'Usa1 · review sonnet impl' } },
+    { ts: T0 + 3500, type: 'turn_done', costUsd: 0.2 },
+  ]);
+
+  // Unit 2: Forward-slash sanctuary path with lowercase drive, Gemini trial implementer + Implement-Sonnet-as-reviewer (ROLE: reviewer) in the SAME worktree
+  const wt2 = 'c:/Users/alice/AppData/Local/VibeSquad/worktrees/VibeSquad/unit-sanctuary-gemini/';
+  writeAgent(home, 'rn-gemini-impl', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: wt2, meta: { team: 'vibesquad', lane: 'perfection', role: 'worker', profile: 'Implement - Gemini (trial)', title: 'Per1 · gemini impl' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.45 },
+  ]);
+  writeAgent(home, 'rn-sonnet-as-rev', [
+    { ts: T0 + 2000, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: wt2, meta: { team: 'vibesquad', lane: 'perfection', role: 'worker', profile: 'Implement - Sonnet', title: 'Per1 · review gemini impl' } },
+    { ts: T0 + 2100, type: 'input', text: 'ROLE: reviewer (read-only: do NOT edit files or commit). Review branch unit-sanctuary-gemini.' },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.3 },
+  ]);
+
+  // Unit 3: DSP implementer in sanctuary worktree (with digest worker in same worktree)
+  const wt3 = 'C:/Users/alice/AppData/Local/VibeSquad/worktrees/VibeSquad/unit-sanctuary-dsp';
+  writeAgent(home, 'rn-dsp-impl', [
+    { ts: T0, type: 'created', provider: 'opencode', model: 'deepseek/deepseek-v4-pro', cwd: wt3, meta: { team: 'vibesquad', lane: 'usage', role: 'worker', profile: 'Work Order - DSP', title: 'Usa2 · dsp impl' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  writeAgent(home, 'rn-dsp-digest', [
+    { ts: T0 + 1500, type: 'created', provider: 'antigravity-cli', model: 'gemini-3.8-flash', cwd: wt3, meta: { team: 'vibesquad', lane: 'usage', role: 'worker', profile: 'Pre-check - Flash', title: 'Pre-check - Flash digest' } },
+    { ts: T0 + 2000, type: 'turn_done', costUsd: 0.01 },
+  ]);
+
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm3\n';
+    if (args[0] === 'log') {
+      return [
+        L('m3', 'm2 b3', sec(T0 + 30000), "Merge branch 'unit-sanctuary-dsp' [wf:dsp] (@usa)"),
+        L('b3', 'm2', sec(T0 + 25000), 'feat: dsp (@usa)'),
+        L('m2', 'm1 b2', sec(T0 + 20000), "Merge branch 'unit-sanctuary-gemini' [wf:gemini] (@per; Implement-Sonnet-as-reviewer R1 FAIL -> R2 PASS)"),
+        L('b2', 'm1', sec(T0 + 15000), 'feat: gemini (@per)'),
+        L('m1', 'a1 b1', sec(T0 + 10000), "Merge branch 'unit-sanctuary-sonnet' [wf:sonnet] (@usa; Review-Gemini R1 PASS)"),
+        L('b1', 'a1', sec(T0 + 5000), 'feat: sonnet (@usa)'),
+        L('a1', 'root', sec(T0), 'mainline'),
+        L('root', '', '0', 'init'),
+      ].join('\n');
+    }
+    return '';
+  };
+
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage', per: 'perfection' } });
+  const byUnit = Object.fromEntries(u.merged.units.map((x) => [x.unit, x]));
+  assert.equal(byUnit['unit-sanctuary-sonnet'].implementerAgentId, 'rn-sonnet-impl', 'Sonnet implementer wins over digest + Review-Gemini in same worktree; profile id normalized');
+  assert.equal(byUnit['unit-sanctuary-sonnet'].implementerProfile, 'Implement - Sonnet');
+  assert.equal(byUnit['unit-sanctuary-gemini'].implementerAgentId, 'rn-gemini-impl', 'Gemini implementer wins over Sonnet-as-reviewer in same worktree');
+  assert.equal(byUnit['unit-sanctuary-gemini'].reviewRounds, 2);
+
+  assert.equal(byProfileOf(u, 'Implement - Sonnet').mergedUnits, 1);
+  assert.equal(byProfileOf(u, 'Implement - Sonnet').costPerMergedUnit, 1.55, 'total profile cost (1.25 + 0.30) / 1 merged unit');
+  assert.equal(byProfileOf(u, 'Implement - Gemini (trial)').mergedUnits, 1);
+  assert.equal(byProfileOf(u, 'Implement - Gemini (trial)').costPerMergedUnit, 0.45);
+  assert.equal(byProfileOf(u, 'Work Order - DSP').mergedUnits, 1);
+
+  // Also verify sameSquad + lane fallback when unit.squad is set (e.g. pooled multi-repo unit)
+  const { execFileSync } = await import('node:child_process');
+  const repoDir = tmp();
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' };
+  const runG = (...args) => execFileSync('git', args, { cwd: repoDir, env: gitEnv, stdio: 'pipe', encoding: 'utf8' });
+  runG('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repoDir, 'f.txt'), '1\n');
+  runG('add', '.');
+  runG('commit', '-q', '-m', 'init');
+  runG('checkout', '-q', '-b', 'unit-sanctuary-dsp');
+  fs.writeFileSync(path.join(repoDir, 'f.txt'), '2\n');
+  runG('add', '.');
+  runG('commit', '-q', '-m', 'feat: dsp (@usa)');
+  runG('checkout', '-q', 'main');
+  runG('merge', '-q', '--no-ff', '-m', "Merge branch 'unit-sanctuary-dsp' [wf:dsp] (@usa)", 'unit-sanctuary-dsp');
+
+  const home2 = tmp();
+  fs.writeFileSync(path.join(home2, 'teams.json'), JSON.stringify({
+    teams: [{ id: 'vibesquad', paths: [repoDir], lanes: [{ id: 'usage', code: 'usa' }] }],
+  }));
+  writeAgent(home2, 'rn-dsp-impl', [
+    { ts: T0, type: 'created', provider: 'opencode', model: 'deepseek/deepseek-v4-pro', cwd: wt3, meta: { team: 'vibesquad', lane: 'usage', role: 'worker', profile: 'Work Order - DSP', title: 'Usa2 · dsp impl' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  writeAgent(home2, 'rn-other-squad', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: 'C:/Users/alice/AppData/Local/VibeSquad/worktrees/OtherRepo/unit-sanctuary-dsp', meta: { team: 'other-squad', lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', title: 'Other · impl' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 9.99 },
+  ]);
+  const prevRoot = process.env.VIBESQUAD_ROOT;
+  process.env.VIBESQUAD_ROOT = repoDir;
+  try {
+    clearUsageCache();
+    const uPooled = getUsage({ home: home2, now: () => T0 + 60000 });
+    const dspUnit = uPooled.merged.units.find((x) => x.unit === 'unit-sanctuary-dsp');
+    assert.equal(dspUnit.squad, 'vibesquad');
+    assert.equal(dspUnit.implementerAgentId, 'rn-dsp-impl', 'sameSquad guard excludes other-squad worker on the same unit name');
+    assert.equal(byProfileOf(uPooled, 'Work Order - DSP').mergedUnits, 1);
+    assert.equal(byProfileOf(uPooled, 'Implement - Sonnet').mergedUnits, 0);
+  } finally {
+    if (prevRoot === undefined) delete process.env.VIBESQUAD_ROOT;
+    else process.env.VIBESQUAD_ROOT = prevRoot;
   }
 });

@@ -80,5 +80,5 @@ test("composer-queue-btw: Composer renders queued banner and Send this now, Draw
   assert.match(drawer, /shouldQueueOnSend/);
   assert.match(drawer, /queuedItems=\{queuedItems\}/);
   assert.match(drawer, /onSendQueuedNow=\{\(\) => void sendQueuedNow\(\)\}/);
-  assert.match(drawer, /activeTurnBehavior: "steer"/);
+  assert.match(src("composerQueueWire.ts"), /activeTurnBehavior: "steer"/);
 });

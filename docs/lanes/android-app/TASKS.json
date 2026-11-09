@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-09T00:13:46.246Z",
+  "updatedAt": "2026-11-09T06:31:25.664Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -120,11 +120,53 @@
       "commit": "1ddac72"
     },
     {
+      "id": "unit-and-mesh-a2d",
+      "goal": "A2d (folds A2c): Restore Android APK download card/URL in PairDeviceModal.tsx, route handlePairRedeem 302 via /__vibesquad/enter (browser + APK #paired), fix empty meshnetHost QR URL, route /__vibesquad/enter in vibesquad-api.mjs (HEAD no-body), and build compact debug-signed sideload APK",
+      "files": [
+        "server/auth.mjs",
+        "server/vibesquad-api.mjs",
+        "src/PairDeviceModal.tsx",
+        "server/build-android.mjs",
+        "src-tauri/android/VsTrust.kt",
+        "test/android-pair.test.mjs",
+        "test/android-apk-route.test.mjs"
+      ],
+      "doneCheck": "node --test test/android-pair.test.mjs test/android-apk-route.test.mjs test/android-trust.test.mjs test/sec-s2-http.test.mjs test/public-release.test.mjs",
+      "status": "todo"
+    },
+    {
       "id": "unit-and-mesh-a2c",
-      "goal": "A2b Low: route /__vibesquad/enter in vibesquad-api dev middleware; HEAD sends no body",
+      "goal": "folded into A2d-1",
       "files": [],
       "doneCheck": "",
-      "status": "todo"
+      "status": "done"
+    },
+    {
+      "id": "unit-and-mesh-a2d1",
+      "goal": "redeem->enter hop, A2c, VsTrust cookies, meshnet host fallback (Tier A)",
+      "files": [],
+      "doneCheck": "",
+      "status": "done",
+      "branch": "unit-and-mesh-a2d1",
+      "commit": "d3105e4"
+    },
+    {
+      "id": "unit-and-mesh-a2d2",
+      "goal": "PairDeviceModal APK download + QR host fallback [wf:gemini]",
+      "files": [],
+      "doneCheck": "",
+      "status": "done",
+      "branch": "unit-and-mesh-a2d2",
+      "commit": "68d0947"
+    },
+    {
+      "id": "unit-and-mesh-a2d3",
+      "goal": "compact debug-signed sideload APK [wf:sonnet]",
+      "files": [],
+      "doneCheck": "",
+      "status": "done",
+      "branch": "unit-and-mesh-a2d3",
+      "commit": "d6eb8a7"
     }
   ]
 }

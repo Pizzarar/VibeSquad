@@ -44,6 +44,7 @@ function fakeAdapter(starts) {
       return {
         send(text) {
           emit('status', { status: 'running' });
+          if (text.startsWith('HOLD:')) return;
           const u = /^USAGE:(\d+)/.exec(text);
           if (u) emit('usage', { contextTokens: Number(u[1]) });
           emit('output', { text: `echo:${text}` });
@@ -73,6 +74,7 @@ async function boot({ agy = false } = {}) {
     runner, backend, starts, lifecycle,
     async close() {
       await stopRunnerLifecycle();
+      runner.shutdown();
       server.close();
       server.closeAllConnections?.();
     },
@@ -714,4 +716,76 @@ test('turn_ended: rapid or concurrent duplicate turn_ended triggers for the same
     await b.close();
   }
 });
+
+test('turn_ended: does not digest a worker that is still running or queued, and cancels an in-flight digest when the worker restarts', async () => {
+  const b = await boot({ agy: true });
+  try {
+    const w = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'build thing' }, { initialPrompt: 'PASS: built' }));
+    const first = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id), 8000, 'first digest agent');
+    await until(async () => (await b.backend.getAgent(first.id)).archivedAt, 8000, 'first digest finished');
+    const agent = await b.backend.getAgent(w.id);
+
+    // 1. Worker restarts (turn_started), then a stale/sub-step turn_ended fires while the worker is still running
+    await b.lifecycle.host.emit('agent.turn_started', { agent });
+    const origGetAgent = b.backend.getAgent.bind(b.backend);
+    let overrideStatus = 'running';
+    b.backend.getAgent = async (id) => {
+      const a = await origGetAgent(id);
+      if (id === w.id && overrideStatus) return { ...a, status: overrideStatus, ...(overrideStatus === 'initializing' ? { queued: { ahead: 0 } } : {}) };
+      return a;
+    };
+
+    await b.lifecycle.host.emit('agent.turn_ended', { agent: { ...agent, status: 'running' }, turnId: '301', outcome: { kind: 'completed' } });
+    overrideStatus = 'initializing';
+    await b.lifecycle.host.emit('agent.turn_ended', { agent: { ...agent, status: 'initializing', queued: { ahead: 0 } }, turnId: '302', outcome: { kind: 'completed' } });
+    await settle(250);
+    const digestsWhileBusy = (await b.backend.listAgents({ filter: { includeArchived: true } })).filter((a) => a.labels.digestFor === w.id);
+    assert.equal(digestsWhileBusy.length, 1, 'no digest spawned while target worker is running or queued');
+
+    // 2. When the worker actually goes idle on the next turn_ended, the digest spawns (not poisoned by the skipped turn_ended)
+    overrideStatus = null;
+    b.backend.getAgent = origGetAgent;
+    await b.lifecycle.host.emit('agent.turn_ended', { agent: { ...agent, status: 'idle' }, turnId: '303', outcome: { kind: 'completed' } });
+    const second = await until(async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && a.id !== first.id), 8000, 'digest spawns on real idle');
+    await until(async () => (await b.backend.getAgent(second.id)).archivedAt, 8000, 'second digest finished');
+
+    // 2b. Even without a new turn_started (same epoch, null turnId), if a busy turn_ended is skipped, the next real idle still digests
+    await b.lifecycle.host.emit('agent.turn_ended', { agent: { ...agent, status: 'running' }, turnId: null, outcome: { kind: 'completed' } });
+    await settle(150);
+    assert.equal(
+      (await b.backend.listAgents({ filter: { includeArchived: true } })).filter((a) => a.labels.digestFor === w.id).length,
+      2,
+      'busy turn_ended skipped without spawning a digest',
+    );
+    await b.lifecycle.host.emit('agent.turn_ended', { agent: { ...agent, status: 'idle' }, turnId: null, outcome: { kind: 'completed' } });
+    const third = await until(
+      async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && a.id !== first.id && a.id !== second.id),
+      8000,
+      'next real idle after busy skip still digests even in same epoch with null turnId',
+    );
+    await until(async () => (await b.backend.getAgent(third.id)).archivedAt, 8000, 'third digest finished');
+
+    // 3. If a tracked digest is in-flight when the worker starts a new turn (turn_started), the stale digest is archived via fast path
+    const origCreateAgent = b.backend.createAgent.bind(b.backend);
+    b.backend.createAgent = async (payload) => {
+      if (payload?.labels?.digestFor === w.id) {
+        return origCreateAgent({ ...payload, prompt: 'HOLD: stale digest', initialPrompt: 'HOLD: stale digest' });
+      }
+      return origCreateAgent(payload);
+    };
+    await b.lifecycle.host.emit('agent.turn_started', { agent });
+    await b.lifecycle.host.emit('agent.turn_ended', { agent: { ...agent, status: 'idle' }, turnId: '304', outcome: { kind: 'completed' } });
+    const staleDigest = await until(
+      async () => (await b.backend.listAgents({ filter: { includeArchived: true } })).find((a) => a.labels.digestFor === w.id && ![first.id, second.id, third.id].includes(a.id)),
+      8000,
+      'tracked in-flight digest spawned',
+    );
+    assert.equal((await b.backend.getAgent(staleDigest.id)).archivedAt, null, 'stale digest is initially active');
+    await b.lifecycle.host.emit('agent.turn_started', { agent });
+    await until(async () => (await b.backend.getAgent(staleDigest.id)).archivedAt, 8000, 'stale digest archived on worker turn_started');
+  } finally {
+    await b.close();
+  }
+});
+
 
