@@ -1841,19 +1841,25 @@ test('usa-21 (idea-51): verdict parser accepts **PASS**, VERDICT: PASS, R2 PASS 
 
   // Should NOT count as PASS (FAIL wins or prose only):
   mkReviewer('rn-verdict-fail', 'Verdict: FAIL\n- 1H issue found.');
-  mkReviewer('rn-fail-wins-same-line', 'R1 FAIL -> needs fix before PASS\nDetails.');
+  mkReviewer('rn-fail-wins-same-line', 'All tests **PASS** but FAIL here\nDetails.');
   mkReviewer('rn-fail-wins-first-last', '**PASS** on unit tests\nOverall Verdict: FAIL (1H)');
+  writeAgent(home, 'rn-fail-wins-streamed', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 100, type: 'output', text: '**PASS** on unit tests\n' },
+    { ts: T0 + 200, type: 'output', text: 'Middle line.\nOverall Verdict: FAIL (1H)\n' },
+    ...turns,
+  ]);
   mkReviewer('rn-prose-only', 'The test suite passes and all checks passed without errors.\nEverything passed.');
 
   const u = getUsage({ home, git: noGit });
   const revProfile = u.byProfile.find((p) => p.profile === 'Review - Gemini');
-  assert.equal(revProfile.runs, 8);
+  assert.equal(revProfile.runs, 9);
   assert.equal(revProfile.passCount, 4, 'exactly the 4 PASS variants count');
-  assert.equal(revProfile.passRate, 0.5);
+  assert.equal(revProfile.passRate, 0.444);
   assert.deepEqual(
     u.loops.flagged.map((l) => l.agentId).sort(),
-    ['rn-fail-wins-first-last', 'rn-fail-wins-same-line', 'rn-prose-only', 'rn-verdict-fail'],
-    'only the 4 non-PASS runs are flagged as loops',
+    ['rn-fail-wins-first-last', 'rn-fail-wins-same-line', 'rn-fail-wins-streamed', 'rn-prose-only', 'rn-verdict-fail'],
+    'all 5 non-PASS runs (including anchored PASS + unanchored FAIL and multi-chunk first-line PASS + last-line FAIL) are flagged as loops',
   );
 });
 

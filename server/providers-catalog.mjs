@@ -318,26 +318,22 @@ function foldEvent(st, ev) {
       st.runningSince = undefined;
     }
   } else if (ev.type === "input") {
-    st.tail = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
-    st.firstLine = "";
+    if (st.msgVerdict === "PASS") st.priorPass = true;
+    else if (st.msgVerdict === "FAIL") st.priorPass = false;
+    st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
     st.lastLine = "";
     st.curLine = "";
+    st.msgVerdict = null;
+    st.pass = st.priorPass;
     if (!st.roleOnly && typeof ev.text === "string" && /^\s*(?:ROLE:\s*reviewer\b|You are (?:acting as )?a READ-ONLY\b)/i.test(ev.text)) {
       st.roleOnly = true;
     }
   } else if (ev.type === "output") {
     if (typeof ev.text === "string") {
-      st.tail = (st.tail + ev.text).slice(-400);
       foldOutputLines(st, ev.text);
-      const firstV = lineVerdict(st.firstLine);
-      const lastLine = st.curLine.trim() && !/^\s*⚠/.test(st.curLine) ? st.curLine.trim() : st.lastLine;
-      const lastV = lineVerdict(lastLine);
-      if (firstV === "FAIL" || lastV === "FAIL") {
-        // FAIL in the first/last line of the current message does not set pass
-      } else if (firstV === "PASS" || lastV === "PASS") {
-        st.pass = true;
-      }
+      st.msgVerdict = messageVerdict(st);
+      st.pass = st.msgVerdict === "FAIL" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
@@ -401,11 +397,20 @@ function foldOutputLines(st, chunk) {
   }
 }
 
-/** Verdict on a single line: FAIL wins over PASS; uppercase PASS/FAIL only with word boundaries (ignores "passes"/"passed"). */
+/** Verdict on a single line: any uppercase \bFAIL\b wins over PASS; uppercase PASS/FAIL only with word boundaries (ignores "passes"/"passed"). */
 function lineVerdict(line) {
   if (!line || typeof line !== "string") return null;
-  if (VERDICT_LINE_FAIL_RE.test(line) && /\bFAIL\b/.test(line)) return "FAIL";
+  if (/\bFAIL\b/.test(line)) return "FAIL";
   if (VERDICT_LINE_PASS_RE.test(line) && /\bPASS\b/.test(line)) return "PASS";
+  return null;
+}
+
+function messageVerdict(st) {
+  const firstV = lineVerdict(st.firstLine);
+  const lastLine = st.curLine.trim() && !/^\s*⚠/.test(st.curLine) ? st.curLine.trim() : st.lastLine;
+  const lastV = lineVerdict(lastLine);
+  if (firstV === "FAIL" || lastV === "FAIL") return "FAIL";
+  if (firstV === "PASS" || lastV === "PASS") return "PASS";
   return null;
 }
 
@@ -429,7 +434,7 @@ function readTail(file, from, to) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", firstLine: "", firstLineDone: false, lastLine: "", curLine: "", roleOnly: false, pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, firstLine: "", firstLineDone: false, lastLine: "", curLine: "", msgVerdict: null, priorPass: false, roleOnly: false, pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -447,10 +452,8 @@ function refreshFile(file, stat) {
 
 /** A run (agent log) with more turns than this and no PASS in its output is flagged as a likely loop. */
 export const LOOP_TURN_THRESHOLD = 40;
-// Verdict token on the first or last non-empty line: at line start or after ** / ` / "VERDICT:" / "Verdict:" / "R<n>" (uppercase PASS/FAIL, word boundary).
+// Verdict token on the first or last non-empty line: at line start or after ** / ` / "VERDICT:" / "Verdict:" / "R<n>" (uppercase PASS, word boundary).
 const VERDICT_LINE_PASS_RE = /(?:^[ \t>*_#`-]*|(?:^|[\s>*_#`(-])(?:\*{1,3}|`|(?:(?:verdict|r\d+)\b[ \t:*_`-]*))[ \t*_`]*)\bPASS\b/i;
-const VERDICT_LINE_FAIL_RE = /(?:^[ \t>*_#`-]*|(?:^|[\s>*_#`(-])(?:\*{1,3}|`|(?:(?:verdict|r\d+)\b[ \t:*_`-]*))[ \t*_`]*)\bFAIL\b/i;
-const PASS_RE = VERDICT_LINE_PASS_RE;
 const COORDINATION_ROLES = new Set(["brainstorm", "lead"]);
 const ROLE_ORDER = ["brainstorm", "lead", "worker"];
 // v2 efficiency signals (usa-5): statuses that close a working interval, spawn-storm windows/thresholds, fix-after-merge.
