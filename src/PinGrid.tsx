@@ -13,7 +13,7 @@ import { chipIconSrc, hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, 
 import { createQuickBugsPin, keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
 import { openPinMember, usePinFocus } from "./pinFocus";
 import { useIsShown } from "./panes";
-import { IdeaBox, IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
+import { IdeaBox, IdeaPlusTile, noteSendTo, SendToCard, showPinToast, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
 import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
@@ -762,18 +762,18 @@ export function QuickBugsChip({
         e.stopPropagation();
         if (busy) return;
         if (pin) {
-          void Promise.resolve(onOpen(pin)).catch((err) => alert(`Could not start ${pin.lane.name}: ${err}`));
+          void Promise.resolve(onOpen(pin)).catch((err) => showPinToast(`Could not start ${pin.lane.name}: ${err}`));
           return;
         }
         setBusy(true);
         void createQuickBugsPin(view.team.id)
           .then((created) => Promise.resolve(onOpen(created)))
-          .catch((err) => alert(`Could not create Bugs team: ${err}`))
+          .catch((err) => showPinToast(`Could not create Bugs team: ${err}`))
           .finally(() => setBusy(false));
       }}
     >
       <span className="quick-chip-art" style={{ width: css, height: css }}>
-        {bugsOk ? (
+        {bugsOk && (
           <img
             className="quick-chip-img"
             src={bugsAsset.src}
@@ -782,23 +782,18 @@ export function QuickBugsChip({
             aria-hidden="true"
             draggable={false}
           />
-        ) : (
-          <span className="quick-chip-fallback" aria-hidden="true">🐞</span>
         )}
-        {leadRunning &&
-          (dotOk ? (
-            <img
-              className="quick-chip-dot"
-              data-testid={`squad-bugs-dot-${view.team.id}`}
-              src={dotAsset.src}
-              srcSet={dotAsset.srcSet}
-              alt=""
-              aria-hidden="true"
-              draggable={false}
-            />
-          ) : (
-            <span className="quick-chip-dot-fallback" data-testid={`squad-bugs-dot-${view.team.id}`} aria-hidden="true" />
-          ))}
+        {leadRunning && dotOk && (
+          <img
+            className="quick-chip-dot"
+            data-testid={`squad-bugs-dot-${view.team.id}`}
+            src={dotAsset.src}
+            srcSet={dotAsset.srcSet}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+          />
+        )}
       </span>
       {needsYou > 0 && (
         <span className="badge alert quick-chip-needs" data-testid={`squad-bugs-needs-${view.team.id}`}>
@@ -835,7 +830,6 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
       <div className="squad-home-tile-head">
         <TeamEmblem name={v.team.name} color={v.team.color} size={28} />
         <span className="squad-home-tile-name">{v.team.name}</span>
-        <QuickBugsChip view={v} onOpen={onOpenPin} testId={`squad-home-bugs-chip-${v.team.id}`} />
         {v.needsYou > 0 && onOpenAgent ? (
           <AttentionBadge view={v} onOpen={(id) => onOpenAgent(v.team.id, id)} testId={`squad-home-needs-${v.team.id}`}>
             {v.needsYou} need you

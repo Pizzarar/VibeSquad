@@ -6040,17 +6040,6 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   pointer-events: none;
 }
 .quick-chip-dot { position: absolute; inset: 0; }
-.quick-chip-fallback { font-size: 13px; line-height: 1; }
-.quick-chip-dot-fallback {
-  position: absolute;
-  right: 2px;
-  top: 2px;
-  width: 4px;
-  height: 4px;
-  background: var(--emerald);
-  border: 1px solid #000;
-  pointer-events: none;
-}
 .quick-chip-needs {
   position: absolute;
   right: -2px;
@@ -6060,16 +6049,4 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   padding: 0 3px;
   min-height: 0;
   pointer-events: none;
-}
-.sidebar.collapsed .quick-chip { display: none; }
-.team-head-line { gap: 2px; }
-.team-head-line .team-head { gap: 4px; padding-left: 5px; padding-right: 4px; }
-.team-head-line .team-head > .badge { padding: 0 3px; font-size: 9px; }
-.team-head-line > .badge.alert { padding: 1px 4px; font-size: 10px; }
-.team-head-line > .bug-btn { padding: 2px 4px; gap: 2px; }
-.team-head-line > .tchip { padding: 2px 3px; }
-@media (max-width: 1000px), (max-height: 760px) {
-  .sidebar:not(.collapsed) { padding-left: 4px; padding-right: 4px; }
-  .sidebar:not(.collapsed) .team-head > .badge,
-  .sidebar:not(.collapsed) .team-head > .team-emblem { display: none; }
 }

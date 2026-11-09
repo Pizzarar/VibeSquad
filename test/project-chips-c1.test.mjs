@@ -361,10 +361,14 @@ test("QuickBugsChip UI wiring: A0 art assets exist, useImageOk skip-if-absent, p
   assert.match(pinGridSrc, /useImageOk\(bugsAsset\.src\)/);
   assert.match(pinGridSrc, /useImageOk\(dotAsset\.src\)/);
   assert.match(pinGridSrc, /squad-bugs-chip-\$\{view\.team\.id\}/);
-  assert.match(pinGridSrc, /squad-home-bugs-chip-\$\{v\.team\.id\}/);
+  assert.match(pinGridSrc, /showPinToast\(`Could not start \$\{pin\.lane\.name\}/);
+  assert.match(pinGridSrc, /showPinToast\(`Could not create Bugs team:/);
+  assert.doesNotMatch(pinGridSrc, /squad-home-bugs-chip/);
+  assert.doesNotMatch(pinGridSrc, /quick-chip-fallback|🐞/);
   assert.doesNotMatch(pinGridSrc, /QuickWorkflowsChip|squad-workflows-chip/);
-  assert.match(appSrc, /<QuickBugsChip view=\{v\} onOpen=\{onPin\} \/>/);
-  assert.match(appSrc, /team-header-bugs-chip-\$\{view\.team\.id\}/);
+  assert.doesNotMatch(appSrc, /<QuickBugsChip view=\{v\}/);
+  assert.match(appSrc, /<QuickBugsChip view=\{view\} onOpen=\{props\.onQuickStart\} \/>/);
   assert.match(cssSrc, /\.quick-chip-img[\s\S]*?image-rendering:\s*pixelated/);
   assert.match(cssSrc, /\.quick-chip-dot\s*\{\s*position:\s*absolute;\s*inset:\s*0;\s*\}/);
+  assert.doesNotMatch(cssSrc, /\.sidebar:not\(\.collapsed\)\s+\.team-head\s*>\s*\.badge/);
 });

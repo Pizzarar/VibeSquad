@@ -285,7 +285,6 @@ const SidebarTeam = memo(function SidebarTeam({
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
         {firstAlert && <AttentionBadge view={v} onOpen={pick} hubQueueInstead />}
-        {v.team.id !== UNASSIGNED.id && <QuickBugsChip view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && <BugButton view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && (
           <button
@@ -1048,7 +1047,7 @@ const TeamPage = memo(function TeamPage(props: {
             <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
             <TeamNameEdit team={view.team} />
             {view.team.id !== UNASSIGNED.id && (
-              <QuickBugsChip view={view} onOpen={props.onQuickStart} testId={`team-header-bugs-chip-${view.team.id}`} />
+              <QuickBugsChip view={view} onOpen={props.onQuickStart} />
             )}
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
@@ -1086,7 +1085,7 @@ const TeamPage = memo(function TeamPage(props: {
           <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
           <TeamNameEdit team={view.team} />
           {view.team.id !== UNASSIGNED.id && (
-            <QuickBugsChip view={view} onOpen={props.onQuickStart} testId={`team-header-bugs-chip-${view.team.id}`} />
+            <QuickBugsChip view={view} onOpen={props.onQuickStart} />
           )}
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}
