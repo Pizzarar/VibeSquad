@@ -124,7 +124,7 @@ test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in 
 
 test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
   const app = fs.readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(app, /belowBar=\{pinFocus\.agentId \? undefined : <HubBar/);
+  assert.match(app, /belowBar=\{drawerOpen \? undefined : <HubBar/);
   const css = fs.readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.pin-rail \.signal\.running,[\s\S]*?\.pane-tab \.signal\.running \{\s*animation: none;/);
 });

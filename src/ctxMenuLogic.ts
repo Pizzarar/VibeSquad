@@ -23,3 +23,12 @@ export function hubOpenAgent(focusAgentId: string | null | undefined, activeId: 
   const shown = activeId && laneMemberIds.has(activeId) ? activeId : focusAgentId;
   return !!shown && !zoneIds.includes(shown);
 }
+
+/**
+ * Does the focused lane have a drawer in the middle? True with a focused Buddy, and also when a Lead / worker of the lane
+ * is the active tab while the Buddy is missing (pinFocus.agentId null): without that the "no drawer" layout hid the
+ * clicked agent and showed the Spin Up panel instead. Sky zone bots never count: the sky owns them.
+ */
+export function focusDrawerOpen(focusAgentId: string | null | undefined, activeId: string | null | undefined, laneMemberIds: ReadonlySet<string>, zoneIds: readonly string[]): boolean {
+  return !!focusAgentId || (!!activeId && laneMemberIds.has(activeId) && !zoneIds.includes(activeId));
+}

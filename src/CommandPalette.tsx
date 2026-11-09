@@ -192,7 +192,7 @@ function AgentOpConfirmHost() {
       else {
         const failed = await stopAgents(req.agents.map((a) => a.id));
         if (failed.length) {
-          setErr(`Could not stop ${failed.length} of ${req.agents.length}.`);
+          setErr(`Could not ${req.verb === "Interrupt" ? "interrupt" : "stop"} ${failed.length} of ${req.agents.length}.`);
           setBusy(false);
           return;
         }
@@ -205,7 +205,7 @@ function AgentOpConfirmHost() {
   };
   return (
     <div className="modal-back" onMouseDown={close}>
-      <div className="shortcut-modal" data-testid={isDelete ? "agent-delete-confirm" : "bulk-stop-confirm"} role="alertdialog" aria-label={isDelete ? "Delete agent" : "Stop agents"} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="shortcut-modal" data-testid={isDelete ? "agent-delete-confirm" : "bulk-stop-confirm"} role="alertdialog" aria-label={isDelete ? "Delete agent" : `${req.verb ?? "Stop"} agents`} onMouseDown={(e) => e.stopPropagation()}>
         {req.kind === "delete" ? (
           <>
             <h3>Delete agent permanently?</h3>
@@ -222,7 +222,7 @@ function AgentOpConfirmHost() {
           <>
             <h3>{req.title}</h3>
             <p>
-              Stops the current run of {req.agents.length} agent{req.agents.length === 1 ? "" : "s"}. They stay available and can be prompted again.
+              {req.verb === "Interrupt" ? "Interrupts" : "Stops"} the current run of {req.agents.length} agent{req.agents.length === 1 ? "" : "s"}. They stay available and can be prompted again.
             </p>
             <ul data-testid="bulk-stop-list" style={{ maxHeight: 220, overflow: "auto", paddingLeft: 18, margin: "6px 0" }}>
               {req.agents.map((a) => (
