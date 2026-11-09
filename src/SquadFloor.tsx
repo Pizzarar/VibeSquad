@@ -4,6 +4,7 @@
 // bubble all come from cast.json.
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { openPinMember } from "./pinFocus";
+import { chromeSmallAdvance, chromeSmallGlyphStyle } from "./chromeFont";
 import { useImageOk, usePrefersReducedMotion, useTheme, type Theme } from "./useBotFace";
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import {
@@ -16,6 +17,7 @@ import {
   FLOOR_BLINK_MS,
   FLOOR_INDEX_KEY,
   floorCounterText,
+  fitSignText,
   floorFitScale,
   floorNativeSize,
   floorOrPlaceholder,
@@ -240,6 +242,85 @@ function Band({
         }
       })}
     </>
+  );
+}
+
+/** HP6: a team name lettered onto its painted sign plate with the small chrome font (1 sheet px = 1 plate px, so it stays crisp at any integer floor scale). */
+function TeamSign({ sign, name, testId }: { sign?: Rect; name: string | null; testId: string }) {
+  if (!sign) return null;
+  const vacant = name === null;
+  const label = vacant ? "VACANT" : name;
+  const fit = fitSignText(label, sign.w, chromeSmallAdvance);
+  const used = [...fit.text].reduce((n, ch) => n + Math.max(chromeSmallAdvance(ch) + fit.track, 1), 0);
+  return (
+    <span
+      className={`sq-floor-sign${vacant ? " is-vacant" : ""}`}
+      data-testid={testId}
+      data-fit={fit.ellipsis ? "ellipsis" : fit.track ? "tight" : "full"}
+      role="img"
+      aria-label={vacant ? "No team on this side" : name}
+      title={vacant ? "No team on this side" : name}
+      style={{ left: sign.x, top: sign.y, width: sign.w, height: sign.h }}
+    >
+      <span className="sq-floor-sign-text" aria-hidden="true" style={{ left: Math.max(Math.floor((sign.w - used) / 2), 1) }}>
+        {[...fit.text].map((ch, i) => {
+          const st = chromeSmallGlyphStyle(ch, fit.track);
+          return st ? <span key={i} className="sq-floor-sign-glyph" style={st} /> : null;
+        })}
+      </span>
+    </span>
+  );
+}
+
+/** HP6: while someone rides, the closed doors painted on the plate would hide the rider, so draw the doors open on the car interior. */
+function LiftOpen({ doorA, doorB, car }: { doorA: Rect; doorB: Rect; car: Rect }) {
+  const x = doorA.x + 1;
+  const w = doorB.x + doorB.w - doorA.x - 2;
+  const h = doorA.h - 6;
+  return (
+    <span className="sq-floor-lift-open" data-testid="sq-floor-lift-open" aria-hidden="true" style={{ left: x, top: doorA.y, width: w, height: h }}>
+      <span className="sq-floor-lift-open-car" style={{ left: car.x - x, top: car.y - doorA.y, width: car.w, height: car.h - 6 }} />
+      <span className="sq-floor-lift-open-door is-left" />
+      <span className="sq-floor-lift-open-door is-right" />
+    </span>
+  );
+}
+
+function LiftPager({ elevator, current, count, arrows, onPrev, onNext }: { elevator: FloorModel["elevator"]; current: number; count: number; arrows: { prev: boolean; next: boolean }; onPrev: () => void; onNext: () => void }) {
+  const { counter, callPrev, callNext } = elevator;
+  const at = (r: Rect): CSSProperties => ({ left: r.x, top: r.y, width: r.w, height: r.h });
+  return (
+    <span className="sq-floor-lift" role="group" aria-label="Lift: change floor" data-testid="sq-floor-lift">
+      {counter && (
+        <span className="sq-floor-counter" data-testid="sq-floor-counter" aria-live="polite" aria-label={`Floor ${floorCounterText(current)} of ${count}`} style={at(counter)}>
+          {floorCounterText(current)}
+        </span>
+      )}
+      {callPrev && (
+        <button
+          type="button"
+          className={`sq-floor-arrow${arrows.prev ? " has-needs" : ""}`}
+          data-testid="sq-floor-prev"
+          aria-label={arrows.prev ? "Previous floor (someone needs you up there)" : "Previous floor"}
+          title="Previous floor (←)"
+          disabled={current <= 0}
+          style={at(callPrev)}
+          onClick={onPrev}
+        />
+      )}
+      {callNext && (
+        <button
+          type="button"
+          className={`sq-floor-arrow${arrows.next ? " has-needs" : ""}`}
+          data-testid="sq-floor-next"
+          aria-label={arrows.next ? "Next floor (someone needs you down there)" : "Next floor"}
+          title="Next floor (→)"
+          disabled={current >= count - 1}
+          style={at(callNext)}
+          onClick={onNext}
+        />
+      )}
+    </span>
   );
 }
 
@@ -518,7 +599,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
             title={`${r.title} · riding`}
             style={{
               left: elevator.x + elevator.w / 2 + (i % 2 === 0 ? -6 : 6),
-              top: elevator.y + elevator.h,
+              top: elevator.y + elevator.h - 2,
               animationDuration: `${RIDE_MS}ms`,
               ...(cast ? { width: cast.cell, height: cast.cell } : {}),
             }}
@@ -539,10 +620,6 @@ export function SquadFloor({ view }: SquadFloorProps) {
   });
 
   const towerScale = (w: number, h: number): CSSProperties => ({ width: w * scale, height: h * scale });
-
-  // HP5: the < n > pager rides on the shaft, centred on the lift car and just above it (mid-shaft); position comes from floor.json, scaled.
-  const car = floor.elevator.car;
-  const liftStyle: CSSProperties = { left: (car.x + car.w / 2) * scale, top: car.y * scale };
 
   const floorBoxes: ReactNode = (
     <>
@@ -589,6 +666,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
                     <>
                       <StatsTv placement={f.teamA} tv={floor.teamA.statsTv} reduced={reduced} onOpen={(id) => openAgent(f.teamA.laneId, id)} />
                       {f.teamB && <StatsTv placement={f.teamB} tv={floor.teamB.statsTv} reduced={reduced} onOpen={(id) => openAgent(f.teamB!.laneId, id)} />}
+                      {riders.some((r) => r.floor === f.index) && <LiftOpen doorA={floor.elevator.doorA} doorB={floor.elevator.doorB} car={floor.elevator.car} />}
                     </>
                   }
                   extras={ridersOn(f.index, floor.elevator.car)}
@@ -596,6 +674,9 @@ export function SquadFloor({ view }: SquadFloorProps) {
                     <>
                       <LobbyPlus placement={f.teamA} lobby={floor.teamA.lobby} />
                       {f.teamB && <LobbyPlus placement={f.teamB} lobby={floor.teamB.lobby} />}
+                      <TeamSign sign={floor.teamA.sign} name={f.teamA.name} testId="sq-floor-sign-a" />
+                      <TeamSign sign={floor.teamB.sign} name={f.teamB ? f.teamB.name : null} testId="sq-floor-sign-b" />
+                      {floorCount > 0 && <LiftPager elevator={floor.elevator} current={current} count={floorCount} arrows={arrows} onPrev={() => goRef.current(-1)} onNext={() => goRef.current(1)} />}
                     </>
                   }
                 />
@@ -607,35 +688,6 @@ export function SquadFloor({ view }: SquadFloorProps) {
               )}
             </div>
           ))}
-        {floorCount > 0 && (
-        <div className="sq-floor-lift" role="group" aria-label="Lift: change floor" data-testid="sq-floor-lift" style={liftStyle}>
-          <button
-            type="button"
-            className={`sq-floor-arrow${arrows.prev ? " has-needs" : ""}`}
-            data-testid="sq-floor-prev"
-            aria-label={arrows.prev ? "Previous floor (someone needs you up there)" : "Previous floor"}
-            title="Previous floor (←)"
-            disabled={current <= 0}
-            onClick={() => goRef.current(-1)}
-          >
-            ‹
-          </button>
-          <span className="sq-floor-counter" data-testid="sq-floor-counter" aria-live="polite" aria-label={`Floor ${floorCounterText(current)} of ${floorCount}`}>
-            {floorCounterText(current)}
-          </span>
-          <button
-            type="button"
-            className={`sq-floor-arrow${arrows.next ? " has-needs" : ""}`}
-            data-testid="sq-floor-next"
-            aria-label={arrows.next ? "Next floor (someone needs you down there)" : "Next floor"}
-            title="Next floor (→)"
-            disabled={current >= floorCount - 1}
-            onClick={() => goRef.current(1)}
-          >
-            ›
-          </button>
-        </div>
-      )}
         </div>
         )}
       </div>

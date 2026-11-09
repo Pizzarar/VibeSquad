@@ -51,7 +51,8 @@ local function team(t)
   -- statsTv (F4): the wall CRT's glass rect; optional for the parser, so only written when the slice exists
   return '{"lead":'..R(t..".lead")..',"buddyOffice":'..R(t..".buddyOffice")..
     ',"desks":['..table.concat(d, ",")..'],"lobby":'..R(t..".lobby")..
-    (S[t..".statsTv"] and ',"statsTv":'..R(t..".statsTv") or '')..'}'
+    (S[t..".statsTv"] and ',"statsTv":'..R(t..".statsTv") or '')..
+    (S[t..".sign"] and ',"sign":'..R(t..".sign") or '')..'}'
 end
 -- screens (Contract v2): the roof band is its own plate (public/office/roof-*.png); rects in ROOF-plate px.
 -- riffbot/overlord = the CRT glass (one face cell from faces.json), elevatorTop = 32x32 sprite cell.
@@ -63,7 +64,9 @@ local scr = '{"plate":"roof","w":'..roof.width..',"h":'..roof.height..
   ',"riffbot":'..R("screens.riffbot")..',"overlord":'..R("screens.overlord")..
   ',"elevatorTop":'..R("screens.elevatorTop")..'}'
 local json = '{"w":'..spr.width..',"h":'..spr.height..',"front":true,\n "teamA":'..team("teamA")..',\n "teamB":'..team("teamB")..
-  ',\n "elevator":{"doorA":'..R("elevator.doorA")..',"doorB":'..R("elevator.doorB")..',"car":'..R("elevator.car")..'},'..
+  ',\n "elevator":{"doorA":'..R("elevator.doorA")..',"doorB":'..R("elevator.doorB")..',"car":'..R("elevator.car")..
+  (S["elevator.counter"] and ',"counter":'..R("elevator.counter")..',"callPrev":'..R("elevator.callPrev")..
+    ',"callNext":'..R("elevator.callNext") or '')..'},'..
   '\n "screens":'..scr..'}\n'
 local f = io.open(root.."/public/office/floor.json", "wb"); f:write(json); f:close()
 print("wrote floor.json ("..#spr.slices.." slices)")

@@ -75,7 +75,7 @@ test("HP4 needs-you dot lands on the arrow toward that floor", () => {
   assert.deepEqual(needsYouArrows(f, 4), { prev: true, next: false });
   assert.deepEqual(needsYouArrows(floors(false, false), 0), { prev: false, next: false });
   assert.match(comp, /has-needs/);
-  assert.match(css, /\.sq-floor-arrow\.has-needs::after/);
+  assert.match(css, /\.sq-floor-arrow\.has-needs \{[^}]*background: var\(--pink-fill\)/); // HP6: the call plate lights up (no corner dot)
 });
 
 test("HP4 reduced motion is instant: no blink state, no animation", () => {

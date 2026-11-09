@@ -39,11 +39,11 @@ test("HP5: one view = TVs band, strip, then the floor box that takes the rest of
   assert.doesNotMatch(css, /\.hub-(pages|backdrop)[^{]*\{[^}]*(transition|animation)/);
 });
 
-test("HP5: the < n > pager rides the shaft: absolute, centred on the lift car from floor.json, above it", () => {
+test("HP6: the lift is the pager: counter + call buttons are floor.json slots inside the scaled band, no floating box", () => {
   const sf = src("SquadFloor.tsx");
-  assert.match(sf, /left: \(car\.x \+ car\.w \/ 2\) \* scale, top: car\.y \* scale/);
-  assert.match(sf, /data-testid="sq-floor-lift"[^>]*style=\{liftStyle\}/);
-  assert.match(css, /\.sq-floor-lift \{ position: absolute;[^}]*translate\(-50%, calc\(-100% - 4px\)\)/);
+  assert.doesNotMatch(sf, /liftStyle/);
+  assert.match(sf, /data-testid="sq-floor-lift"/);
+  assert.match(css, /\.sq-floor-lift \{ display: contents; \}/);
   assert.match(css, /\.sq-floor-tower \{ position: relative;/);
   assert.doesNotMatch(sf, /FLOOR_NATIVE_(WIDTH|HEIGHT)/); // plate size is read from floor.json (floorNativeSize), not hardcoded
 });

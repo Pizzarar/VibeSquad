@@ -20,3 +20,24 @@ export function chromeGlyphStyle(ch: string): { width: string; height: string; b
   const [x, y, w, h, adv] = g;
   return { width: kit(w), height: kit(h), backgroundPosition: `${kit(-x)} ${kit(-y)}`, marginRight: kit(adv - w) };
 }
+
+// Small chrome font (font-chrome-small-{dark,light}.png, 208x41), mirrored from font-chrome-small.json. glyph = [x, y, w, h, advance] in sheet px.
+export const CHROME_FONT_SMALL = {
+  sheetW: 208,
+  sheetH: 41,
+  fallback: "?",
+  glyphs: {"'":[185,14,5,13,3],"-":[177,14,7,13,5]," ":[66,28,6,13,4],"!":[161,14,5,13,3],"#":[44,28,10,13,8],"&":[0,28,9,13,7],"(":[10,28,6,13,4],")":[17,28,6,13,4],",":[155,14,5,13,3],".":[149,14,5,13,3],"/":[197,14,9,13,7],":":[191,14,5,13,3],"?":[167,14,9,13,7],"@":[55,28,10,13,8],"_":[34,28,9,13,7],"+":[24,28,9,13,7],"0":[51,14,9,13,7],"1":[61,14,7,13,5],"2":[69,14,9,13,7],"3":[79,14,9,13,7],"4":[89,14,9,13,7],"5":[99,14,9,13,7],"6":[109,14,9,13,7],"7":[119,14,9,13,7],"8":[129,14,9,13,7],"9":[139,14,9,13,7],"A":[0,0,9,13,7],"B":[10,0,9,13,7],"C":[20,0,9,13,7],"D":[30,0,9,13,7],"E":[40,0,9,13,7],"F":[50,0,9,13,7],"G":[60,0,9,13,7],"H":[70,0,9,13,7],"I":[80,0,7,13,5],"J":[88,0,9,13,7],"K":[98,0,9,13,7],"L":[108,0,9,13,7],"M":[118,0,10,13,8],"N":[129,0,9,13,7],"O":[139,0,9,13,7],"P":[149,0,9,13,7],"Q":[159,0,9,13,7],"R":[169,0,9,13,7],"S":[179,0,9,13,7],"T":[189,0,9,13,7],"U":[199,0,9,13,7],"V":[0,14,9,13,7],"W":[10,14,10,13,8],"X":[21,14,9,13,7],"Y":[31,14,9,13,7],"Z":[41,14,9,13,7]} as Record<string, readonly [number, number, number, number, number]>,
+};
+
+const smallGlyph = (ch: string) => CHROME_FONT_SMALL.glyphs[ch.toUpperCase()] ?? CHROME_FONT_SMALL.glyphs[CHROME_FONT_SMALL.fallback];
+
+/** Advance of one small-font glyph in sheet px (0 when the font has neither the char nor the fallback). */
+export const chromeSmallAdvance = (ch: string): number => smallGlyph(ch)?.[4] ?? 0;
+
+/** Style for one small-font glyph in plain px (the floor band is already scaled by an integer, so 1 sheet px = 1 plate px). `track` tightens the advance. */
+export function chromeSmallGlyphStyle(ch: string, track = 0): { width: number; height: number; backgroundPosition: string; marginRight: number } | null {
+  const g = smallGlyph(ch);
+  if (!g) return null;
+  const [x, y, w, h, adv] = g;
+  return { width: w, height: h, backgroundPosition: `${-x}px ${-y}px`, marginRight: Math.max(adv + track, 1) - w };
+}
