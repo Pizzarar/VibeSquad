@@ -21,6 +21,7 @@ import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
+import { groupToolRuns, isFailedTool, isSubAgentTool, toolRunToggleKey, type ToolRunGroup } from "./toolRuns";
 import { getPanes } from "./panes";
 import { recoveredBlips } from "./transientBlip";
 import { SubagentList } from "./SubagentList";
@@ -91,9 +92,7 @@ export function formatToolError(err: any): string {
   }
 }
 
-export function isFailedTool(it: any, d: any): boolean {
-  return it.status === "failed" || it.status === "error" || !!it.error || (d.exitCode != null && d.exitCode !== 0);
-}
+export { isFailedTool, isSubAgentTool };
 
 /**
  * Strip a provider-switch boot preamble off a user message so the timeline shows only the user's actual words.
@@ -111,10 +110,6 @@ export function stripBootPreamble(text: string): string {
     return text.slice(text.lastIndexOf(pendingMarker) + pendingMarker.length);
   }
   return text;
-}
-
-export function isSubAgentTool(it: any, d: any): boolean {
-  return d.type === "sub_agent" || it.name === "Task" || !!(d.subAgentId || d.agentId || it.subagentId);
 }
 
 export function isCompaction(it: any): boolean {
@@ -1151,6 +1146,91 @@ function PinnedTodo({ entry }: { entry: Entry }) {
   );
 }
 
+function ToolRunRow({
+  run,
+  agentId,
+  onParkText,
+  onRewound,
+  latestReasoningEntry,
+  blips,
+  selectedEntryKey,
+  onSelectEntryKey,
+  pendingJumpSeq,
+  onUserToggle,
+}: {
+  run: Extract<ToolRunGroup<Entry>, { kind: "run" }>;
+  agentId: string;
+  onParkText?: (text: string) => void;
+  onRewound?: (e: Entry) => void;
+  latestReasoningEntry?: Entry;
+  blips: ReturnType<typeof recoveredBlips>;
+  selectedEntryKey: string | null;
+  onSelectEntryKey: (key: string) => void;
+  pendingJumpSeq: number | null;
+  onUserToggle?: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (
+      pendingJumpSeq != null &&
+      run.entries.some((x, k) => (x.seqStart ?? run.startIndex + k) === pendingJumpSeq)
+    ) {
+      setExpanded(true);
+    }
+  }, [pendingJumpSeq, run]);
+  const firstSeq = run.entries[0]?.seqStart ?? run.startIndex;
+  const toggle = () => {
+    onUserToggle?.();
+    setExpanded((v) => !v);
+  };
+  return (
+    <>
+      {!expanded && <i hidden data-tl-seq={firstSeq} />}
+      <div
+        data-testid="tl-tool-run"
+        role="button"
+        tabIndex={0}
+        aria-expanded={expanded}
+        className="tl tl-tool"
+        style={{ cursor: "pointer" }}
+        onClick={toggle}
+        onKeyDown={(ev) => {
+          if (toolRunToggleKey(ev.key)) {
+            ev.preventDefault();
+            toggle();
+          }
+        }}
+      >
+        <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+        <span className="tool-name">{run.count} tool calls</span>
+        {run.truncatedNames && <span className="muted"> · {run.truncatedNames}</span>}
+      </div>
+      {expanded &&
+        run.entries.map((entry, k) => {
+          const idx = run.startIndex + k;
+          const key = String(entry.seqStart ?? idx);
+          return (
+            <Fragment key={key}>
+              <i hidden data-tl-seq={entry.seqStart ?? idx} />
+              <TimelineErrorBoundary fallbackLabel={`item #${idx}`}>
+                <TimelineItem
+                  e={entry}
+                  agentId={agentId}
+                  onParkText={onParkText}
+                  onRewound={onRewound}
+                  latestReasoning={entry === latestReasoningEntry}
+                  blip={blips.get(entry) ?? null}
+                  selected={selectedEntryKey === key}
+                  onSelect={() => onSelectEntryKey(key)}
+                />
+              </TimelineErrorBoundary>
+            </Fragment>
+          );
+        })}
+    </>
+  );
+}
+
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 
 type TimelineProps = {
@@ -1207,13 +1287,15 @@ export function Timeline({
   const curSeq = useRef<number | null>(null);
   const reqId = useRef(0);
   const [pendingJump, setPendingJump] = useState<{ seq: number; n: number } | null>(null);
+  const [collapseTools] = usePref("chat.collapseToolCalls");
   const base = cut ? truncateAfter(entries, cut) : entries;
-  const shown = filterEntries(base, filter);
+  const filtered = filterEntries(base, filter);
+  const shown = useMemo(() => groupToolRuns(filtered, collapseTools), [filtered, collapseTools]);
   const blips = useMemo(() => recoveredBlips(base, agentStatus, formatToolError), [base, agentStatus]);
   const slowFirstLoad = useDelayedBusy(!loaded && entries.length === 0);
   const slowMore = useDelayedBusy(loadingMore);
   const slowSearch = useDelayedBusy(searching);
-  const pinnedTodo = findPinnedTodo(shown);
+  const pinnedTodo = findPinnedTodo(filtered);
 
   const allPending = useSyncExternalStore(subscribePending, getPending);
   const pendingHere = pendingFor(allPending, agentId);
@@ -1429,7 +1511,7 @@ export function Timeline({
             {TIMELINE_FILTERS.map((f) => (
               <button key={f} className={`chip tl-filter${filter === f ? " on" : ""}`} data-testid={`tl-filter-${f}`} onClick={() => setFilter(f)}>{f}</button>
             ))}
-            {filter !== "all" && <span className="tl-bar-count">{shown.length}/{base.length}</span>}
+            {filter !== "all" && <span className="tl-bar-count">{filtered.length}/{base.length}</span>}
           </div>
           {barMsg && <div className="tl-bar-msg" data-testid="tl-bar-msg">{barMsg}</div>}
           {promptsOpen && (
@@ -1472,21 +1554,37 @@ export function Timeline({
         )
       )}
       {shown.map((e, i) => (
-        <Fragment key={e.seqStart ?? i}>
-        <i hidden data-tl-seq={e.seqStart ?? i} />
-        <TimelineErrorBoundary fallbackLabel={`item #${i}`}>
-          <TimelineItem
-            e={e}
+        e.kind === "run" ? (
+          <ToolRunRow
+            key={`run-${e.entries[0]?.seqStart ?? e.startIndex}`}
+            run={e}
             agentId={agentId}
             onParkText={onParkText}
             onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
-            latestReasoning={e === entries[latestReasoningIndex(entries)]}
-            blip={blips.get(e) ?? null}
-            selected={selectedEntryKey === String(e.seqStart ?? i)}
-            onSelect={() => setSelectedEntryKey((k) => (k === String(e.seqStart ?? i) ? null : String(e.seqStart ?? i)))}
+            latestReasoningEntry={entries[latestReasoningIndex(entries)]}
+            blips={blips}
+            selectedEntryKey={selectedEntryKey}
+            onSelectEntryKey={(key) => setSelectedEntryKey((k) => (k === key ? null : key))}
+            pendingJumpSeq={pendingJump?.seq ?? null}
+            onUserToggle={() => { pinned.current = false; }}
+          />
+        ) : (
+        <Fragment key={e.entry.seqStart ?? e.index}>
+        <i hidden data-tl-seq={e.entry.seqStart ?? e.index} />
+        <TimelineErrorBoundary fallbackLabel={`item #${e.index}`}>
+          <TimelineItem
+            e={e.entry}
+            agentId={agentId}
+            onParkText={onParkText}
+            onRewound={(x) => { cutLen.current = entries.length; setCut(x); }}
+            latestReasoning={e.entry === entries[latestReasoningIndex(entries)]}
+            blip={blips.get(e.entry) ?? null}
+            selected={selectedEntryKey === String(e.entry.seqStart ?? e.index)}
+            onSelect={() => setSelectedEntryKey((k) => (k === String(e.entry.seqStart ?? e.index) ? null : String(e.entry.seqStart ?? e.index)))}
           />
         </TimelineErrorBoundary>
         </Fragment>
+        )
       ))}
       {queuedAhead !== undefined && (
         <div className="tl tl-note info" data-testid="tl-queued">
