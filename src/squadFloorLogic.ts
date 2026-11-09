@@ -38,6 +38,8 @@ export type TeamSlices = {
   lobby?: Rect;
   /** F4b: the wall stats TV's screen glass (about 40x28 floor px); optional. When valid, overflow workers show as blips on it instead of in the lobby. */
   statsTv?: Rect;
+  /** HP6: the painted (blank) team-name plate on the wall; the UI letters the team name onto it. Optional (skip-if-absent). */
+  sign?: Rect;
 };
 
 export type PenthouseModel = {
@@ -69,7 +71,7 @@ export type FloorModel = {
   size?: { w: number; h: number };
   teamA: TeamSlices;
   teamB: TeamSlices;
-  elevator: { doorA: Rect; doorB: Rect; car: Rect };
+  elevator: { doorA: Rect; doorB: Rect; car: Rect; /** HP6: the lift readout slot, and the ‹ › call-button plates beside the doors; each optional. */ counter?: Rect; callPrev?: Rect; callNext?: Rect };
   /** Old top band (S1). Used only when `screens` is absent; the placeholder supplies one when neither exists. */
   penthouse?: PenthouseModel;
   /** Art10 CRT screens; wins over `penthouse`. */
@@ -109,7 +111,19 @@ function teamSlicesOf(v: unknown): TeamSlices | null {
   // A statsTv with a non-positive size can't hold a blip: drop it so the team falls back to the lobby.
   const tv = v.statsTv === undefined ? null : rectOf(v.statsTv);
   const statsTv = tv && tv.w > 0 && tv.h > 0 ? tv : undefined;
-  return { lead, buddyOffice, desks, ...(lobby ? { lobby } : {}), ...(statsTv ? { statsTv } : {}) };
+  const sg = v.sign === undefined ? null : rectOf(v.sign);
+  const sign = sg && sg.w > 0 && sg.h > 0 ? sg : undefined;
+  return { lead, buddyOffice, desks, ...(lobby ? { lobby } : {}), ...(statsTv ? { statsTv } : {}), ...(sign ? { sign } : {}) };
+}
+
+/** HP6 additive elevator slots: each kept only when it is a rect with a positive size. */
+function slotRects(e: Record<string, unknown>): { counter?: Rect; callPrev?: Rect; callNext?: Rect } {
+  const out: { counter?: Rect; callPrev?: Rect; callNext?: Rect } = {};
+  for (const k of ["counter", "callPrev", "callNext"] as const) {
+    const r = e[k] === undefined ? null : rectOf(e[k]);
+    if (r && r.w > 0 && r.h > 0) out[k] = r;
+  }
+  return out;
 }
 
 function penthouseOf(v: unknown): PenthouseModel | undefined {
@@ -148,7 +162,7 @@ export function validateFloor(json: unknown): Validation<FloorModel> {
   if (!teamB) return fail("floor.json teamB is missing lead, buddyOffice or desks");
   const elevator =
     isObject(json.elevator) && rectOf(json.elevator.doorA) && rectOf(json.elevator.doorB) && rectOf(json.elevator.car)
-      ? { doorA: rectOf(json.elevator.doorA)!, doorB: rectOf(json.elevator.doorB)!, car: rectOf(json.elevator.car)! }
+      ? { doorA: rectOf(json.elevator.doorA)!, doorB: rectOf(json.elevator.doorB)!, car: rectOf(json.elevator.car)!, ...slotRects(json.elevator) }
       : null;
   if (!elevator) return fail("floor.json elevator is missing doorA, doorB or car");
   const penthouse = penthouseOf(json.penthouse);
@@ -734,6 +748,38 @@ export function parseStoredFloor(raw: string | null | undefined, count: number):
 /** The lift readout: 1-based, two digits ("07"). */
 export function floorCounterText(index: number): string {
   return String(Math.max(Math.trunc(index) + 1, 1)).padStart(2, "0");
+}
+
+// ── HP6: team-name signs (chrome small font, plate px) ───────────────────────
+
+/** Small chrome font cells are 13 tall with a 10px ink; advances are in sheet px, drawn 1:1 in plate px. */
+export type SignText = { text: string; track: 0 | -1; ellipsis: boolean };
+const SIGN_INSET = 4; // 2px of plate border either side
+const SIGN_ELLIPSIS = "...";
+
+/** Width of `text` in plate px at a tracking (advance + track per glyph, floor 1), plus 2px of trailing outline. */
+export function signTextWidth(text: string, adv: (ch: string) => number, track: 0 | -1): number {
+  let w = 2;
+  for (const ch of text) w += Math.max(adv(ch) + track, 1);
+  return w;
+}
+
+/**
+ * Fit a team name onto a sign `maxW` plate px wide: natural tracking first, then one step tighter, then cut
+ * letters and add "..." (the full name stays in the tooltip). Empty names give an empty text.
+ */
+export function fitSignText(name: string, maxW: number, adv: (ch: string) => number): SignText {
+  const text = name.trim().replace(/\s+/g, " ").toUpperCase();
+  const room = maxW - SIGN_INSET;
+  if (!text) return { text: "", track: 0, ellipsis: false };
+  for (const track of [0, -1] as const) if (signTextWidth(text, adv, track) <= room) return { text, track, ellipsis: false };
+  const chars = [...text];
+  while (chars.length > 1) {
+    chars.pop();
+    const cut = chars.join("").trimEnd() + SIGN_ELLIPSIS;
+    if (signTextWidth(cut, adv, -1) <= room) return { text: cut, track: -1, ellipsis: true };
+  }
+  return { text: SIGN_ELLIPSIS, track: -1, ellipsis: true };
 }
 
 /** A dot on the prev arrow when needs-you sits on an earlier floor, on the next arrow when it sits on a later one. */
