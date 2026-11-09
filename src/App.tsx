@@ -45,6 +45,7 @@ import {
 } from "./teams";
 import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
+import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
@@ -86,7 +87,7 @@ import { fetchHubCwd, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesF
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
@@ -1730,7 +1731,7 @@ export function App() {
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
   const hubSpinUpErr = hubSpinUpError(pinFocus, hubPinNow);
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
-  const hubAgentOpen = hubFocused && !!pinFocus?.agentId && !!pinFocusView && !skyZoneIds(skyZonesFor(pinFocusView)).includes(pinFocus.agentId);
+  const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
   const skyOwned = useMemo(() => (hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined), [hubFocused, hubAgentOpen, pinFocusView]);
   const hidePanes = pinLayout && pinsHome && !pinFocused;

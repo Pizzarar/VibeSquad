@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
+import { scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import { Ago, cleanTitle } from "./ui";
@@ -73,7 +74,7 @@ export function snippetAround(text: string, q: string, radius = 50): string | nu
 }
 
 export type CtxItem = { label: string; run: () => void };
-export type CtxMenuState = { x: number; y: number; items: CtxItem[] } | null;
+export type CtxMenuState = { x: number; y: number; items: CtxItem[]; anchor?: Element | null } | null;
 
 export function agentCtxItems(m: { id: string; cwd?: string | null; title?: string | null; status?: string | null; archivedAt?: string | null; labels?: Record<string, string> | null }, a: { open: () => void; split: () => void; archive: () => void }): CtxItem[] {
   return [
@@ -115,10 +116,10 @@ const setCtx = (s: CtxMenuState) => {
   ctxListeners.forEach((l) => l());
 };
 
-export function openContextMenu(e: { clientX: number; clientY: number; preventDefault: () => void; stopPropagation: () => void }, items: CtxItem[]) {
+export function openContextMenu(e: { clientX: number; clientY: number; currentTarget?: unknown; preventDefault: () => void; stopPropagation: () => void }, items: CtxItem[]) {
   e.preventDefault();
   e.stopPropagation();
-  setCtx({ x: e.clientX, y: e.clientY, items });
+  setCtx({ x: e.clientX, y: e.clientY, items, anchor: (e.currentTarget as Element | null) ?? null });
 }
 
 function ContextMenuHost() {
@@ -131,12 +132,13 @@ function ContextMenuHost() {
     const close = () => setCtx(null);
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
     window.addEventListener("click", close);
-    window.addEventListener("scroll", close, true);
+    const onScroll = (e: Event) => scrollClosesCtxMenu(e.target, s.anchor) && close();
+    window.addEventListener("scroll", onScroll, true);
     window.addEventListener("blur", close);
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("click", close);
-      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("blur", close);
       window.removeEventListener("keydown", onKey);
     };
@@ -242,7 +244,7 @@ function AgentOpConfirmHost() {
             Cancel
           </button>
           <button className="btn bad" data-testid="agent-op-confirm" onClick={() => void run()} disabled={busy}>
-            {busy ? "Working…" : req.kind === "delete" ? "Delete permanently" : `Stop ${req.agents.length}`}
+            {busy ? "Working…" : req.kind === "delete" ? "Delete permanently" : `${req.verb ?? "Stop"} ${req.agents.length}`}
           </button>
         </div>
       </div>
@@ -250,7 +252,7 @@ function AgentOpConfirmHost() {
   );
 }
 
-/** Team ⋯ menu entries (stop all running agents in the team, with a confirm). */
+/** Team ⋯ menu entries (stop / interrupt all running agents in the team, each with a confirm). Both cancel the current turn through stopAgents: the runner has no bare-interrupt route. */
 export function teamCtxItems(view: TeamView): CtxItem[] {
   const targets = bulkStopTargets(
     view.members.map((m) => ({ agent: m.agent, teamId: view.team.id })),
@@ -261,6 +263,12 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
       label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
       run: () => {
         if (targets.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${view.team.name}?`, agents: targets });
+      },
+    },
+    {
+      label: targets.length ? `Interrupt All Running (${targets.length})…` : "Interrupt All Running (none running)",
+      run: () => {
+        if (targets.length) requestAgentOp({ kind: "stop", verb: "Interrupt", title: `Interrupt all running agents in ${view.team.name}?`, agents: targets });
       },
     },
   ];
