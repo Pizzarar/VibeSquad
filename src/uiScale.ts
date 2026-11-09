@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 
 export const UI_SCALE_STORAGE_KEY = "vibesquad.uiScale";
 export const UI_SCALE_MIN = 0.8;
@@ -274,18 +274,6 @@ export function useChatScale(): number {
 /** Whether chat text follows the UI scale. */
 export function useChatScaleLinked(): boolean {
   return useSyncExternalStore(subscribeUiScale, () => chatOverride === null, () => true);
-}
-
-/** devicePixelRatio, re-read on resize / monitor change. */
-export function useDpr(): number {
-  const [dpr, setDpr] = useState(() => (typeof window === "undefined" ? 1 : window.devicePixelRatio || 1));
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const onResize = () => setDpr(window.devicePixelRatio || 1);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-  return dpr;
 }
 
 export function useUiScaleHud(): boolean {
