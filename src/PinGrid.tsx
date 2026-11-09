@@ -9,8 +9,8 @@ import { isRunnerId, runnerHandle } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, SEND_TO_MARKER, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
-import { keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
+import { chipIconSrc, hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, quickBugsChipState, SEND_TO_MARKER, snapChipSize, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { createQuickBugsPin, keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
 import { openPinMember, usePinFocus } from "./pinFocus";
 import { useIsShown } from "./panes";
 import { IdeaBox, IdeaPlusTile, noteSendTo, SendToCard, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
@@ -25,6 +25,8 @@ import { laneCodeFor } from "./identity";
 import { cleanTitle } from "./ui";
 import { PixelIcon } from "./PixelIcon";
 import { pickLead } from "./pinFocusLogic";
+import { useDpr, useImageOk, useTheme } from "./useBotFace";
+import { useUiScale } from "./uiScale";
 
 // ── FULL toggle (persisted) ──────────────────────────────────────────────────
 const FULL_VIEW_KEY = "vibesquad.squadFullView";
@@ -724,6 +726,89 @@ export function PinGrid({
   );
 }
 
+// ── Project header Bugs quick-chip (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md C1) ──
+export function QuickBugsChip({
+  view,
+  onOpen,
+  testId,
+}: {
+  view: TeamView;
+  onOpen: PinHandler;
+  testId?: string;
+}) {
+  const theme = useTheme();
+  const dpr = useDpr();
+  const zoom = useUiScale();
+  const { device, css } = snapChipSize(dpr, zoom);
+  const bugsAsset = chipIconSrc("bugs", theme, device);
+  const dotAsset = chipIconSrc("dot", theme, device);
+  const bugsOk = useImageOk(bugsAsset.src);
+  const dotOk = useImageOk(dotAsset.src);
+  const [busy, setBusy] = useState(false);
+  const { pin, leadRunning, needsYou } = quickBugsChipState(view);
+  const missing = !pin;
+  const label = missing
+    ? `Create Bugs team for ${view.team.name}`
+    : `${pin.lane.name || "Bugs"}${leadRunning ? " · lead running" : ""}${needsYou > 0 ? ` · ${needsYou} need you` : ""}`;
+  return (
+    <button
+      type="button"
+      className={`quick-chip quick-chip-bugs ${missing ? "missing" : ""} ${leadRunning ? "lead-running" : ""} ${needsYou > 0 ? "needs-you" : ""}`}
+      data-testid={testId ?? `squad-bugs-chip-${view.team.id}`}
+      title={label}
+      aria-label={label}
+      disabled={busy}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (busy) return;
+        if (pin) {
+          void Promise.resolve(onOpen(pin)).catch((err) => alert(`Could not start ${pin.lane.name}: ${err}`));
+          return;
+        }
+        setBusy(true);
+        void createQuickBugsPin(view.team.id)
+          .then((created) => Promise.resolve(onOpen(created)))
+          .catch((err) => alert(`Could not create Bugs team: ${err}`))
+          .finally(() => setBusy(false));
+      }}
+    >
+      <span className="quick-chip-art" style={{ width: css, height: css }}>
+        {bugsOk ? (
+          <img
+            className="quick-chip-img"
+            src={bugsAsset.src}
+            srcSet={bugsAsset.srcSet}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+          />
+        ) : (
+          <span className="quick-chip-fallback" aria-hidden="true">🐞</span>
+        )}
+        {leadRunning &&
+          (dotOk ? (
+            <img
+              className="quick-chip-dot"
+              data-testid={`squad-bugs-dot-${view.team.id}`}
+              src={dotAsset.src}
+              srcSet={dotAsset.srcSet}
+              alt=""
+              aria-hidden="true"
+              draggable={false}
+            />
+          ) : (
+            <span className="quick-chip-dot-fallback" data-testid={`squad-bugs-dot-${view.team.id}`} aria-hidden="true" />
+          ))}
+      </span>
+      {needsYou > 0 && (
+        <span className="badge alert quick-chip-needs" data-testid={`squad-bugs-needs-${view.team.id}`}>
+          {needsYou}
+        </span>
+      )}
+    </button>
+  );
+}
+
 // ── Squads Home: one tile per squad, one level above the squad page (docs/PLAN_SQUADS_HOME.md §H1) ──
 function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; onSelectSquad: (id: string) => void; onOpenPin: PinHandler; onOpenAgent?: (teamId: string, agentId: string) => void }) {
   const { pinned } = pinsForSquad(v);
@@ -750,6 +835,7 @@ function SquadTile({ v, onSelectSquad, onOpenPin, onOpenAgent }: { v: TeamView; 
       <div className="squad-home-tile-head">
         <TeamEmblem name={v.team.name} color={v.team.color} size={28} />
         <span className="squad-home-tile-name">{v.team.name}</span>
+        <QuickBugsChip view={v} onOpen={onOpenPin} testId={`squad-home-bugs-chip-${v.team.id}`} />
         {v.needsYou > 0 && onOpenAgent ? (
           <AttentionBadge view={v} onOpen={(id) => onOpenAgent(v.team.id, id)} testId={`squad-home-needs-${v.team.id}`}>
             {v.needsYou} need you

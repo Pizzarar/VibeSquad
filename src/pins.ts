@@ -3,7 +3,9 @@
 // This file is the shared contract for the pinned-team UI. Keep it pure (no fetch, no React):
 // steps 1 (sidebar + grid), 2 (focus rail) and 3 (resolver + quick start) all build on it.
 import type { LaneDef, Member, TeamDef, TeamView } from "./teams.ts";
+import { attentionItems, countedItems } from "./attentionItems.ts";
 import { UNASSIGNED, brainstormUsedTokens, findAuditLane, countsAsNeedsYou, formerNewest, isFormerBrainstormMember, isHiddenLane, isHubLane, isTopicBrainstorm } from "./teams.ts";
+import { snapDeviceSize } from "./uiScale.ts";
 export { topicOfBrainstorm } from "./teams.ts";
 
 /** "removed" lanes stay in teams.json (brief + history kept) but are hidden everywhere. */
@@ -474,3 +476,130 @@ export const liveBuddyId = (pin: Pin): string | null => (isLive(pin.brainstorm) 
  * opens it read-only with the Spin Up picker above it. Null for a truly dormant pin (no Buddy at all) and while one is live.
  */
 export const dormantBuddyId = (pin: Pin): string | null => (pin.brainstorm && !pin.brainstorm.agent.archivedAt && pin.brainstorm.agent.status === "closed" ? pin.brainstorm.agent.id : null);
+
+// ── Project header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md, C1 Bugs chip) ──
+
+export type QuickLanes = { bugs?: string };
+export type QuickChipKey = "bugs" | "dot";
+export type QuickChipState = {
+  pin: Pin | null;
+  leadRunning: boolean;
+  needsYou: number;
+};
+
+const BUG_CHASER_ID_RE = /^bug-chaser(?:$|-)/i;
+
+/**
+ * Resolve a Squad's standing Bugs lane:
+ * 1) Explicit `team.quickLanes?.bugs` (matching a non-removed lane id or alias).
+ * 2) Fallback when unset: the Squad's standing non-removed lane whose id matches `bug-chaser*`.
+ * Returns null when the Squad has no Bugs lane yet (chip offers "Create Bugs team").
+ */
+export function resolveQuickBugsLane(team: Pick<TeamDef, "lanes" | "quickLanes"> | null | undefined): PinLane | null {
+  const lanes = (team?.lanes ?? []) as PinLane[];
+  const explicit = team?.quickLanes?.bugs?.trim().toLowerCase();
+  if (explicit) {
+    const hit = lanes.find(
+      (l) =>
+        !isRemovedLane(l) &&
+        (l.id.toLowerCase() === explicit || (l.aliases ?? []).some((a) => a.toLowerCase() === explicit)),
+    );
+    if (hit) return hit;
+  }
+  return lanes.find((l) => !isRemovedLane(l) && Boolean(l.standing) && BUG_CHASER_ID_RE.test(l.id)) ?? null;
+}
+
+function laneMembersInView(view: TeamView, lane: PinLane, pin?: Pin | null): Member[] {
+  const keys = new Set([lane.id.toLowerCase(), ...(lane.aliases ?? []).map((a) => a.toLowerCase())]);
+  const byId = new Map<string, Member>();
+  const add = (m: Member | null | undefined) => {
+    if (m?.agent?.id && !byId.has(m.agent.id)) byId.set(m.agent.id, m);
+  };
+  const laneView = (view.lanes ?? []).find((l) => keys.has(l.lane.id.toLowerCase()));
+  if (laneView) {
+    for (const m of laneView.members ?? []) add(m);
+  } else {
+    for (const m of view.members ?? []) {
+      const labels = (m.agent.labels ?? {}) as Record<string, string>;
+      const lid = (m.laneId ?? labels.lane ?? labels.lead ?? "").trim().toLowerCase();
+      if (keys.has(lid)) add(m);
+    }
+  }
+  if (pin) {
+    add(pin.brainstorm);
+    add(pin.lead);
+    for (const w of pin.workers ?? []) add(w);
+    for (const tb of pin.topicBrainstorms ?? []) add(tb);
+  }
+  return [...byId.values()];
+}
+
+/** Resolve the Squad's Bugs quick-chip Pin (hidden lanes included), or null when none exists yet. */
+export function quickBugsPinForSquad(view: TeamView | null | undefined): Pin | null {
+  if (!view?.team?.id || view.team.id === UNASSIGNED.id) return null;
+  const lane = resolveQuickBugsLane(view.team);
+  if (!lane) return null;
+  const all = pinsForSquad(view, { includeHidden: true });
+  const existing = [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id);
+  if (existing) return existing;
+  const inLane = laneMembersInView(view, lane);
+  const newest = (a: Member, b: Member) => (b.agent.updatedAt ?? "").localeCompare(a.agent.updatedAt ?? "");
+  const mainBsCands = inLane.filter((m) => m.kind === "brainstorm" && !isTopicBrainstorm(m) && !m.agent.archivedAt);
+  const liveBs = mainBsCands.filter(isLive).sort(newest);
+  const formerBs = inLane.filter(isFormerBrainstormMember).sort(formerNewest);
+  const brainstorm = liveBs[0] ?? mainBsCands.sort(newest)[0] ?? formerBs[0] ?? null;
+  const lead = inLane.filter((m) => m.kind === "lead" && isLive(m)).sort(newest)[0] ?? null;
+  const workers = live(inLane.filter((m) => m.kind === "worker"));
+  const topicBrainstorms = inLane.filter((m) => m.kind === "brainstorm" && isTopicBrainstorm(m) && isLive(m)).sort(newest);
+  const idx = view.team.lanes.findIndex((l) => l.id === lane.id);
+  return {
+    squad: view.team,
+    lane,
+    state: pinStateOf(lane),
+    order: lane.order ?? (idx >= 0 ? idx : 0),
+    brainstorm,
+    lead,
+    workers,
+    needsYou: countedItems(attentionItems(inLane)).length,
+    running: inLane.filter((m) => m.agent.status === "running").length,
+    contextUsed: brainstorm ? brainstormUsedTokens(brainstorm.agent) : 0,
+    topicBrainstorms,
+    duplicateBrainstorms: liveBs.slice(1),
+  };
+}
+
+/** Derive the Bugs quick-chip state for a Squad: resolved Pin (or null), live lead running dot, and attentionItems needs-you count. */
+export function quickBugsChipState(view: TeamView | null | undefined): QuickChipState {
+  const pin = quickBugsPinForSquad(view);
+  if (!pin || !view) return { pin: null, leadRunning: false, needsYou: 0 };
+  const members = laneMembersInView(view, pin.lane, pin);
+  const leadRunning = Boolean(pin.lead && isLive(pin.lead) && pin.lead.agent.status === "running");
+  const needsYou = countedItems(attentionItems(members)).length;
+  return { pin, leadRunning, needsYou };
+}
+
+/** Pure teams-array updater that sets `quickLanes` fields on one Squad. */
+export function patchQuickLanes(teams: TeamDef[], squadId: string, patch: Partial<QuickLanes>): TeamDef[] {
+  return teams.map((t) => (t.id === squadId ? { ...t, quickLanes: { ...t.quickLanes, ...patch } } : t));
+}
+
+/**
+ * Snap the 16x16 / 32x32 chip icon to an integer multiple of 16 device px (target 24 CSS px -> 32 device px at 1x..1.5x,
+ * 48 device px at >=1.75x) so 1080@125% lands on 32 device px (25.6 CSS px) instead of 48 device px (38.4 CSS px).
+ */
+export function snapChipSize(dpr: number, zoom: number): { device: number; css: number } {
+  return snapDeviceSize(24, 16, dpr, zoom);
+}
+
+/**
+ * Pick the exact integer-scale PNG for `devicePx`:
+ * - Multiples of 32 device px (32, 64) use `@2x.png` (32x32 native -> 1x, 2x integer scale).
+ * - Odd multiples of 16 device px (16, 48) use `.png` (16x16 native -> 1x, 3x integer scale).
+ */
+export function chipIconSrc(key: QuickChipKey, theme: string, devicePx = 32): { src: string; srcSet: string } {
+  const t = theme === "light" ? "light" : "dark";
+  const base = `/ui/chip-${key}-${t}`;
+  const use2x = Number.isFinite(devicePx) && devicePx > 0 ? Math.round(devicePx) % 32 === 0 : true;
+  const src = use2x ? `${base}@2x.png` : `${base}.png`;
+  return { src, srcSet: `${src} 1x` };
+}

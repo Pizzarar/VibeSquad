@@ -84,7 +84,7 @@ import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
 import { fetchHubCwd, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
-import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, usePinsHome, useSquadsHome } from "./pinFocus";
@@ -285,6 +285,7 @@ const SidebarTeam = memo(function SidebarTeam({
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
         {firstAlert && <AttentionBadge view={v} onOpen={pick} hubQueueInstead />}
+        {v.team.id !== UNASSIGNED.id && <QuickBugsChip view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && <BugButton view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && (
           <button
@@ -1046,6 +1047,9 @@ const TeamPage = memo(function TeamPage(props: {
           <h1>
             <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
             <TeamNameEdit team={view.team} />
+            {view.team.id !== UNASSIGNED.id && (
+              <QuickBugsChip view={view} onOpen={props.onQuickStart} testId={`team-header-bugs-chip-${view.team.id}`} />
+            )}
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
             </span>
@@ -1081,6 +1085,9 @@ const TeamPage = memo(function TeamPage(props: {
         <h1>
           <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
           <TeamNameEdit team={view.team} />
+          {view.team.id !== UNASSIGNED.id && (
+            <QuickBugsChip view={view} onOpen={props.onQuickStart} testId={`team-header-bugs-chip-${view.team.id}`} />
+          )}
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}
             <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span> · {view.members.length} AGENTS
