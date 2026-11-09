@@ -83,37 +83,46 @@ export function resolvePairModalUrls({
   const isLan = networkMode === "lan" && Boolean(lanIp);
   const effectiveIpMode = useIpMode || !meshnetHost;
 
+  const hasUsableUrlHost = (u?: string | null) => Boolean(u && !/^https?:\/\/(?=:|\s|\/|$)/i.test(u.trim()));
+
   const caUrl = isLan
     ? pair?.lanCaUrl || meta?.lanCaUrl || `http://${lanIp}:${port}/ca.crt`
-    : pair?.caHttpUrl || meta?.caHttpUrl || `http://${ip}:${port}/ca.crt`;
+    : pair?.caHttpUrl || meta?.caHttpUrl || (ip ? `http://${ip}:${port}/ca.crt` : "");
 
   const setupUrl = isLan
     ? pair?.lanDesktopInstallerUrl || meta?.lanDesktopInstallerUrl || `http://${lanIp}:${port}/VibeSquad-setup.exe`
-    : pair?.desktopSetupHttpUrl || `http://${ip}:${port}/VibeSquad-setup.exe`;
+    : pair?.desktopSetupHttpUrl || (ip ? `http://${ip}:${port}/VibeSquad-setup.exe` : "");
 
-  const androidApkAvailable = Boolean(pair?.androidApkAvailable || meta?.androidApkAvailable);
-  const apkUrl = isLan
-    ? pair?.lanAndroidApkUrl || meta?.lanAndroidApkUrl || `http://${lanIp}:${port}/VibeSquad.apk`
-    : pair?.androidApkHttpUrl || meta?.androidApkHttpUrl || `http://${ip}:${port}/VibeSquad.apk`;
+  const rawApkUrl = isLan
+    ? pair?.lanAndroidApkUrl || meta?.lanAndroidApkUrl || (lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : "")
+    : pair?.androidApkHttpUrl || meta?.androidApkHttpUrl || (ip ? `http://${ip}:${port}/VibeSquad.apk` : "");
+  const apkUrl = hasUsableUrlHost(rawApkUrl) ? rawApkUrl : "";
+  const androidApkAvailable = Boolean((pair?.androidApkAvailable || meta?.androidApkAvailable) && apkUrl);
 
-  const fallbackPairUrl =
+  const rawFallbackPairUrl =
     pair?.pairUrl && host ? pair.pairUrl.replace(/^https:\/\/(?=:|\s|$)/, `https://${host}`) : pair?.pairUrl || "";
+  const fallbackPairUrl = hasUsableUrlHost(rawFallbackPairUrl) ? rawFallbackPairUrl : "";
+  const candidatePairIpUrl = hasUsableUrlHost(pair?.pairIpUrl) ? pair!.pairIpUrl! : "";
+  const candidateLanPairUrl = hasUsableUrlHost(pair?.lanPairUrl) ? pair!.lanPairUrl! : "";
 
   const activePairUrl = pair
-    ? isLan && pair.lanPairUrl
-      ? pair.lanPairUrl
-      : effectiveIpMode
-        ? pair.pairIpUrl || fallbackPairUrl
-        : fallbackPairUrl
+    ? isLan && candidateLanPairUrl
+      ? candidateLanPairUrl
+      : !isLan && !host
+        ? ""
+        : effectiveIpMode
+          ? candidatePairIpUrl || fallbackPairUrl
+          : fallbackPairUrl || candidatePairIpUrl
     : "";
 
-  const activeQrSvg = pair
-    ? isLan && pair.lanQrSvg
-      ? pair.lanQrSvg
-      : effectiveIpMode
-        ? pair.qrSvgIp || pair.qrSvg || ""
-        : pair.qrSvg || ""
-    : "";
+  const activeQrSvg =
+    pair && activePairUrl
+      ? isLan && pair.lanQrSvg
+        ? pair.lanQrSvg
+        : effectiveIpMode
+          ? pair.qrSvgIp || pair.qrSvg || ""
+          : pair.qrSvg || ""
+      : "";
 
   return {
     meshnetHost,
@@ -132,8 +141,14 @@ export function resolvePairModalUrls({
   };
 }
 
-export function PairDeviceModal({ onClose }: { onClose: () => void }) {
-  const [pair, setPair] = useState<PairStartResponse | null>(null);
+export function PairDeviceModal({
+  onClose,
+  initialPair = null,
+}: {
+  onClose: () => void;
+  initialPair?: PairStartResponse | null;
+}) {
+  const [pair, setPair] = useState<PairStartResponse | null>(initialPair);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [meta, setMeta] = useState<{
     caFingerprint: Fingerprint;
@@ -148,7 +163,9 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
     androidApkHttpUrl: string | null;
     androidApkAvailable: boolean;
   } | null>(null);
-  const [networkMode, setNetworkMode] = useState<"lan" | "meshnet">("lan");
+  const [networkMode, setNetworkMode] = useState<"lan" | "meshnet">(() =>
+    initialPair && !initialPair.lanIp ? "meshnet" : "lan",
+  );
   const [useIpMode, setUseIpMode] = useState(false);
   const [showFullFp, setShowFullFp] = useState(false);
   const [showWinHelp, setShowWinHelp] = useState(false);
@@ -462,13 +479,14 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                 <span className="muted">(Meshnet)</span>
               </>
             )}
+            {!lanIp && !host && !ip && <span className="muted small">No LAN or Meshnet address detected.</span>}
           </div>
           <div className="muted small" style={{ marginTop: 4 }}>
             Type either address into the Desktop App&apos;s Server Address field along with the 6-digit code above.
           </div>
         </div>
 
-        {androidApkAvailable && (
+        {androidApkAvailable && apkUrl && (
           <div className="preview" style={{ marginBottom: 0 }} data-testid="android-apk-card">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
               <div>
@@ -581,7 +599,7 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                 )}
               </div>
 
-              {pair && remainingSec > 0 ? (
+              {pair && remainingSec > 0 && activePairUrl ? (
                 <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
                   <div
                     style={{ width: 148, height: 148, flex: "none", background: "#fff", padding: 4, border: "2px solid var(--cyan)" }}
@@ -616,7 +634,13 @@ export function PairDeviceModal({ onClose }: { onClose: () => void }) {
                 </div>
               ) : (
                 <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <span className="muted small">{busy ? "Generating one-time pairing code…" : "Pairing code expired or unavailable."}</span>
+                  <span className="muted small">
+                    {busy
+                      ? "Generating one-time pairing code…"
+                      : pair && remainingSec > 0 && !activePairUrl
+                        ? "No LAN or Meshnet address available for pairing."
+                        : "Pairing code expired or unavailable."}
+                  </span>
                   <button className="btn ok small" disabled={busy} onClick={startPairing}>
                     ↻ New QR Code
                   </button>
