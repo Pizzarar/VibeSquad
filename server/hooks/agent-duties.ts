@@ -2312,7 +2312,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       let relay = isSelfFormer;
       let targetId = String(agent.id ?? "former-lead");
       const parentId = agent.parentAgentId as string | undefined;
-      if (!relay && parentId) {
+      // Only a child that is not itself a live holder: a live lead/Buddy spawned by a since-retired Buddy (or lead) is the
+      // wake target, so relaying its turn ends wakes itself (site-polish: relay-old x19 on every lead turn).
+      const liveHolder = ["lead", "brainstorm"].includes(String(effectiveAgentRole({ labels }) ?? ""));
+      if (!relay && parentId && !liveHolder) {
         const parent = await snap(paseo, parentId);
         if (isRetiredRole(parent?.labels.role)) {
           relay = true;

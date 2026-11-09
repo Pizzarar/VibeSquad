@@ -1,3 +1,4 @@
+import { persistTemplateReconcile } from "./bug-lane-backfill.mjs";
 import { createServer, get } from "node:http";
 import { guardHandler, installUncaughtGuard } from "./safe-handler.mjs";
 import { createServer as createHttpsServer } from "node:https";
@@ -464,6 +465,8 @@ if (isMain) {
       const sup = superviseRunner(sharedRunnerBackend());
       server.once("close", () => sup.stop());
     }
+    // Before the audit seeding below, so a backfilled Perfection lane gets its schedule on this same start.
+    try { persistTemplateReconcile(rootDir); } catch (e) { console.warn("template reconcile failed:", e?.message ?? e); }
     void sharedSchedules().then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));

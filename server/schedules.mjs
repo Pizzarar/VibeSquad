@@ -312,7 +312,7 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
       return view(s);
     },
 
-    /** Idempotent: one daily new-agent entry per Squad's audit lane, keyed by `seed`. Squads without an audit lane or an existing repo folder are skipped; user-deleted seeds stay deleted. Returns the created ids. */
+    /** Idempotent: one daily new-agent entry (created paused) per Squad's audit lane, keyed by `seed`. Squads without an audit lane or an existing repo folder are skipped; user-deleted seeds stay deleted. Returns the created ids. */
     seedAuditSchedules(teams = [], rootDir = process.cwd()) {
       const created = [];
       for (const team of Array.isArray(teams) ? teams : []) {
@@ -326,7 +326,8 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
         const v = store.create({ name: `Daily audit: ${team.name ?? team.id}`, prompt: AUDIT_PROMPT, cadence: AUDIT_CADENCE, target: { type: "new-agent", config: { ...cfg, cwd } } });
         const list = load();
         const raw = list.find((x) => x.id === v.id);
-        Object.assign(raw, { seed, team: team.id, lane: lane.id, profile: name });
+        // Audits are off by default (paid, daily): a new seed starts paused. The seed key makes this once-only, so a schedule the user resumes is never re-paused.
+        Object.assign(raw, { seed, team: team.id, lane: lane.id, profile: name, status: "paused", nextRunAt: null });
         save(list);
         created.push(v.id);
       }

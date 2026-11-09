@@ -16,7 +16,7 @@ process.env.VIBESQUAD_MESHNET_IP = "100.64.0.7";
 
 const auth = await import("../server/auth.mjs");
 const { normalizeFp, parsePairInput, toAndroidDeepLink } = await import("../src/remoteSession.ts");
-const { createTrustClient, nativeTrust } = await import("../src/vsTrust.ts");
+const { createTrustClient, flushCookies, nativeTrust } = await import("../src/vsTrust.ts");
 const { ensureAndroidTrustKotlin } = await import("../server/build-android.mjs");
 
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
@@ -73,6 +73,22 @@ describe("native pin bridge (web side)", () => {
       { op: "probe", host: "pc.example:4180" },
       { op: "forget", host: "pc.example:4180" },
     ]);
+  });
+
+  test("flushCookies sends the flush op, is a no-op outside the APK and never rejects", async () => {
+    const { n, sent } = fakeNative(() => ({ ok: true }));
+    await flushCookies({ VsTrust: n });
+    assert.deepEqual(sent.map(({ id, ...r }) => r), [{ op: "flush" }]);
+    await flushCookies({});
+    const refuse = fakeNative(() => ({ ok: false, error: "unknown op" }));
+    await flushCookies({ VsTrust: refuse.n });
+    await flushCookies({ VsTrust: { postMessage() {}, onmessage: null } }, 10); // silent native: times out, still resolves
+  });
+
+  test("the pair screen flushes before opening the PC and the APK /pair request carries vs_app", () => {
+    const src = readFileSync(new URL("../src/RemotePairScreen.tsx", import.meta.url), "utf8");
+    assert.ok(src.includes("flushCookies().then(() => openServer(host))"));
+    assert.ok(src.includes("pairRedeemUrl(hostN, codeN, undefined, location.origin)"));
   });
 
   test("a native refusal (fingerprint mismatch) rejects with its message; silence times out", async () => {

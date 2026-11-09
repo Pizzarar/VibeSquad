@@ -5,8 +5,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  buildCatalog, clearProbeCache, clearUsageCache, getModels, getProviders, getUsage, handleProvidersApi, intervalMs, LOOP_TURN_THRESHOLD,
-  loadRunnerSettings, normalizeRunnerSettings, oneShotReviewRun, parseReviewBullets, probeProviders, probeStats, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, runUsageReview, saveRunnerSettings, syncUsageLedger, usageStats,
+  buildCatalog, buildUsageReviewPrompt, clearProbeCache, clearUsageCache, DEFAULT_USAGE_REVIEW_PROMPT, getModels, getProviders, getUsage, handleProvidersApi, intervalMs,
+  loadRunnerSettings, loadUsageReviewPrompt, LOOP_TURN_THRESHOLD, normalizeRunnerSettings, oneShotReviewRun, parseReviewBullets, probeProviders, probeStats,
+  readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, resetUsageReviewPromptWarnForTest, resolveUsageReviewPromptPath,
+  runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 import { realVibesquadHome } from '../server/test-guard.mjs';
@@ -1350,7 +1352,7 @@ test('usa-10: GET /usage-export returns json or markdown, 400 on bad format', as
   assert.equal(post.code, 405);
 });
 
-// ---------------------------------------------------------------- usa-15: auto-route review bullets to bug-chaser inbox
+// ---------------------------------------------------------------- usa-15 / usa-19: auto-route review bullets to perfection inbox
 
 test('usa-15: parseReviewBullets strips markers/headings, skips the self-grade line, caps and truncates', () => {
   const text = [
@@ -1382,11 +1384,11 @@ test('usa-15: parseReviewBullets skips the first line of a multi-line reply and 
   assert.deepEqual(parseReviewBullets(''), []);
 });
 
-test('usa-15: runUsageReview routes deduped bullets to the bug-chaser inbox and records sentCardIds', async () => {
+test('usa-15 / usa-19: runUsageReview routes deduped bullets to the perfection inbox and records sentCardIds', async () => {
   const home = tmp();
   const root = path.resolve(import.meta.dirname, '..');
-  const seed = addInboxCards(
-    { ideas: ['Route implementation to Gemini'], laneId: 'bug-chaser', teamId: 'vibesquad', source: 'seed', baseHome: home },
+  addInboxCards(
+    { ideas: ['Route implementation to Gemini'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home },
     root,
   );
 
@@ -1394,7 +1396,7 @@ test('usa-15: runUsageReview routes deduped bullets to the bug-chaser inbox and 
     ok: true,
     text: [
       'Grade: prior review improved KPIs.',
-      '- Route implementation to Gemini', // deduped against the seed card
+      '- Route implementation to Gemini', // deduped against the open perfection seed card
       '- Cache tool results to cut re-fetching', // new opus bullet
       '- Cache tool results to cut re-fetching', // deduped against the previous opus bullet
     ].join('\n'),
@@ -1413,24 +1415,25 @@ test('usa-15: runUsageReview routes deduped bullets to the bug-chaser inbox and 
   const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 2 } }, runOpus, runGemini });
   assert.equal(rec.sentCardIds.length, 2, 'two non-duplicate bullets routed');
 
-  const cards = readInboxCards(home).filter((c) => c.laneId === 'bug-chaser');
+  const cards = readInboxCards(home).filter((c) => c.laneId === 'perfection');
   assert.equal(cards.length, 3, 'seed + 2 routed');
   assert.equal(cards.filter((c) => c.text === 'Route implementation to Gemini').length, 1, 'seed not duplicated');
   assert.ok(cards.some((c) => c.text === 'Cache tool results to cut re-fetching' && c.source === 'usage-review:opus'));
   assert.ok(cards.some((c) => c.text === 'Reduce review rounds by pre-checking the plan' && c.source === 'usage-review:gemini'));
+  assert.equal(readInboxCards(home).filter((c) => c.laneId === 'bug-chaser').length, 0, 'nothing routed to bug-chaser');
 
   const recs = readUsageReviews(home);
   assert.equal(recs.length, 1);
   assert.deepEqual(recs[0].sentCardIds, rec.sentCardIds);
 });
 
-test('usa-15: a model that fails to return ok contributes no inbox cards', async () => {
+test('usa-15 / usa-19: a model that fails to return ok contributes no inbox cards', async () => {
   const home = tmp();
   const runOpus = async () => ({ ok: false, error: 'quota exceeded', ms: 1 });
   const runGemini = async () => ({ ok: true, text: 'No prior review.\n- Reduce review rounds.', ms: 1 });
   const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
   assert.equal(rec.sentCardIds.length, 1, 'only the gemini bullet routed');
-  const cards = readInboxCards(home).filter((c) => c.laneId === 'bug-chaser');
+  const cards = readInboxCards(home).filter((c) => c.laneId === 'perfection');
   assert.equal(cards.length, 1);
   assert.equal(cards[0].source, 'usage-review:gemini');
 });
@@ -1447,7 +1450,7 @@ test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogu
   const home = tmp();
   const root = path.resolve(import.meta.dirname, '..');
   const seeded = addInboxCards(
-    { ideas: ['Route implementation to Gemini'], laneId: 'bug-chaser', teamId: 'vibesquad', source: 'seed', baseHome: home },
+    { ideas: ['Route implementation to Gemini'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home },
     root,
   );
   const cardId = seeded.added[0].id;
@@ -1460,4 +1463,200 @@ test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogu
 
   assert.throws(() => triageInboxCards({ action: 'update', cardId, patch: { status: 'bogus' }, baseHome: home }, root), /Unknown inbox status "bogus"/);
   assert.throws(() => triageInboxCards({ action: 'update', cardId, patch: { status: 'accept' }, baseHome: home }, root), /Unknown inbox status "accept"/);
+});
+
+// ---------------------------------------------------------------- usa-19: prompt loader, path resolution, open-card dedupe, multi-Squad pooling
+
+test('usa-19: USAGE_REVIEW_PROMPT.md matches DEFAULT_USAGE_REVIEW_PROMPT verbatim and assembles a byte-identical prompt on day 1', () => {
+  const home = tmp();
+  const repoRoot = path.resolve(import.meta.dirname, '..');
+  const repoPromptFile = path.join(repoRoot, USAGE_REVIEW_PROMPT_REL_PATH);
+  assert.equal(fs.readFileSync(repoPromptFile, 'utf8').trim(), DEFAULT_USAGE_REVIEW_PROMPT, 'repo prompt file is verbatim');
+  assert.equal(loadUsageReviewPrompt({ runtimeRoot: repoRoot, envRoot: '' }), DEFAULT_USAGE_REVIEW_PROMPT);
+
+  const sampleUsage = {
+    totals: { turns: 12, costUsd: 1.5, inputTokens: 4000, outputTokens: 800 },
+    limits: [{ provider: 'claude', window: 'weekly', usedPct: 42, resetsAt: '2026-11-12T00:00:00.000Z' }],
+    byProfile: [{ provider: 'claude', profile: 'Implement - Sonnet', role: 'worker', runs: 3, turns: 12, costUsd: 1.5, passRate: 1, costPerMergedUnit: 0.5, avgReviewRounds: 0.3, fixAfterMergeRate: 0 }],
+    merged: { perLane: [{ lane: 'usage', mergedUnits: 3, reviewRounds: 1, costPerMergedUnit: 0.5, fixAfterMergeRate: 0 }] },
+    lanes: [{ lane: 'usage', handoffs: 1, workPct: 0.75 }],
+    byWorkflow: [{ workflowMode: 'sonnet+gemini-review', units: 3, firstTryPassRate: 1, costPerUnit: 0.5, costPer100Loc: 0.25, fixAfterMergeRate: 0 }],
+    cohorts: { recent: { units: 3, firstTryPassRate: 1, costPerUnit: 0.5, fixAfterMergeRate: 0 }, prior: { units: 2, firstTryPassRate: 0.5, costPerUnit: 0.8, fixAfterMergeRate: 0 }, delta: { firstTryPassRate: 0.5, costPerUnit: -0.3, fixAfterMergeRate: 0 } },
+    floor: { cleanShare: 0.9, cleanCostPerUnit: 0.45, reworkCostUsd: 0.15, loopAndAbandonedCostUsd: 0, fixAfterMergeCostUsd: 0, restartOverheadCostUsd: 0 },
+  };
+  const fromRepoFile = buildUsageReviewPrompt(sampleUsage, { home, runtimeRoot: repoRoot, envRoot: '' });
+  const fromFallback = buildUsageReviewPrompt(sampleUsage, { home, promptPath: path.join(home, 'missing.md'), warn: () => {} });
+  assert.equal(fromRepoFile, fromFallback, 'assembled prompt is byte-identical on day 1');
+  assert.ok(fromRepoFile.endsWith(`\n${DEFAULT_USAGE_REVIEW_PROMPT}`), 'instruction text appended at the end');
+});
+
+test('usa-19: resolveUsageReviewPromptPath resolves live repo via build-stamp.json or VIBESQUAD_ROOT so edits take effect without sync-runtime', () => {
+  const liveRepo = tmp();
+  const runtimeDir = tmp();
+  const overrideRepo = tmp();
+
+  // Simulated runtime copy: no docs/ in runtimeDir, only build-stamp.json pointing at liveRepo/.git
+  fs.writeFileSync(
+    path.join(runtimeDir, 'build-stamp.json'),
+    JSON.stringify({ commit: 'abc1234', repo: path.join(liveRepo, '.git'), builtAt: '2026-11-09T00:00:00.000Z' }),
+    'utf8',
+  );
+  const livePromptFile = path.join(liveRepo, USAGE_REVIEW_PROMPT_REL_PATH);
+  fs.mkdirSync(path.dirname(livePromptFile), { recursive: true });
+  fs.writeFileSync(livePromptFile, 'Custom instruction v1 from Workflows.', 'utf8');
+
+  assert.equal(
+    resolveUsageReviewPromptPath({ runtimeRoot: runtimeDir, envRoot: '' }),
+    path.join(path.resolve(liveRepo), USAGE_REVIEW_PROMPT_REL_PATH),
+    'runtime build-stamp.json resolves to the live repo checkout',
+  );
+  assert.equal(
+    loadUsageReviewPrompt({ runtimeRoot: runtimeDir, envRoot: '' }),
+    'Custom instruction v1 from Workflows.',
+  );
+
+  // Edit the live repo file without touching runtimeDir -> next load sees v2 immediately
+  fs.writeFileSync(livePromptFile, 'Custom instruction v2 after live repo edit.\n', 'utf8');
+  assert.equal(
+    loadUsageReviewPrompt({ runtimeRoot: runtimeDir, envRoot: '' }),
+    'Custom instruction v2 after live repo edit.',
+    'edit to live repo takes effect immediately without sync-runtime',
+  );
+
+  // VIBESQUAD_ROOT (envRoot) overrides both runtimeDir and build-stamp.json
+  assert.equal(
+    resolveUsageReviewPromptPath({ runtimeRoot: runtimeDir, envRoot: overrideRepo }),
+    path.join(path.resolve(overrideRepo), USAGE_REVIEW_PROMPT_REL_PATH),
+    'envRoot override wins over build-stamp.json',
+  );
+
+  // Dev checkout (no build-stamp.json, no envRoot) resolves directly against runtimeRoot
+  const devRepo = tmp();
+  assert.equal(
+    resolveUsageReviewPromptPath({ runtimeRoot: devRepo, envRoot: '' }),
+    path.join(path.resolve(devRepo), USAGE_REVIEW_PROMPT_REL_PATH),
+  );
+});
+
+test('usa-19: missing or blank USAGE_REVIEW_PROMPT.md falls back to built-in text and warns only once per process', () => {
+  const dir = tmp();
+  const missingFile = path.join(dir, 'does-not-exist.md');
+  const emptyFile = path.join(dir, 'empty.md');
+  fs.writeFileSync(emptyFile, '   \n\t  ', 'utf8');
+
+  resetUsageReviewPromptWarnForTest();
+  const warnings = [];
+  const warn = (msg) => warnings.push(msg);
+
+  assert.equal(loadUsageReviewPrompt({ promptPath: missingFile, warn }), DEFAULT_USAGE_REVIEW_PROMPT);
+  assert.equal(loadUsageReviewPrompt({ promptPath: missingFile, warn }), DEFAULT_USAGE_REVIEW_PROMPT);
+  assert.equal(loadUsageReviewPrompt({ promptPath: emptyFile, warn }), DEFAULT_USAGE_REVIEW_PROMPT);
+  assert.equal(warnings.length, 1, 'fallback warning logged at most once per process');
+  assert.match(warnings[0], /usage-review:.*using built-in fallback/);
+
+  // After reset, an empty file also warns once and falls back
+  resetUsageReviewPromptWarnForTest();
+  const warnings2 = [];
+  assert.equal(loadUsageReviewPrompt({ promptPath: emptyFile, warn: (m) => warnings2.push(m) }), DEFAULT_USAGE_REVIEW_PROMPT);
+  assert.equal(loadUsageReviewPrompt({ promptPath: emptyFile, warn: (m) => warnings2.push(m) }), DEFAULT_USAGE_REVIEW_PROMPT);
+  assert.equal(warnings2.length, 1);
+  assert.match(warnings2[0], /empty/);
+});
+
+test('usa-19: routeReviewToInbox dedupes only against open (parked/accepted) perfection cards, not closed perfection or bug-chaser cards', async () => {
+  const home = tmp();
+  const root = path.resolve(import.meta.dirname, '..');
+
+  // 1) Open perfection cards (parked + accepted) should dedupe
+  addInboxCards({ ideas: ['Parked perfection recommendation'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home }, root);
+  const acc = addInboxCards({ ideas: ['Accepted perfection recommendation'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home }, root);
+  triageInboxCards({ action: 'update', cardId: acc.added[0].id, patch: { status: 'accepted' }, baseHome: home }, root);
+
+  // 2) Closed perfection cards (rejected, archived, handed-off) must NOT block re-routing
+  const rej = addInboxCards({ ideas: ['Rejected workflow tweak'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home }, root);
+  triageInboxCards({ action: 'update', cardId: rej.added[0].id, patch: { status: 'rejected' }, baseHome: home }, root);
+  const arch = addInboxCards({ ideas: ['Archived routing rule'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home }, root);
+  triageInboxCards({ action: 'update', cardId: arch.added[0].id, patch: { status: 'archived' }, baseHome: home }, root);
+  const hand = addInboxCards({ ideas: ['Handed off cap adjustment'], laneId: 'perfection', teamId: 'vibesquad', source: 'seed', baseHome: home }, root);
+  triageInboxCards({ action: 'update', cardId: hand.added[0].id, patch: { status: 'handed-off' }, baseHome: home }, root);
+
+  // 3) Open bug-chaser card must NOT dedupe perfection bullets
+  addInboxCards({ ideas: ['Shift implementation to Gemini'], laneId: 'bug-chaser', teamId: 'vibesquad', source: 'seed', baseHome: home }, root);
+
+  const runOpus = async () => ({
+    ok: true,
+    text: [
+      'Grade: KPIs steady.',
+      '- Parked perfection recommendation', // deduped (parked)
+      '- Accepted perfection recommendation', // deduped (accepted)
+      '- Rejected workflow tweak', // allowed (was rejected)
+      '- Archived routing rule', // allowed (was archived)
+    ].join('\n'),
+    ms: 1,
+  });
+  const runGemini = async () => ({
+    ok: true,
+    text: [
+      'Grade: KPIs steady.',
+      '- Handed off cap adjustment', // allowed (was handed-off)
+      '- Shift implementation to Gemini', // allowed (only open in bug-chaser, not perfection)
+    ].join('\n'),
+    ms: 1,
+  });
+
+  const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 5 } }, runOpus, runGemini });
+  assert.equal(rec.sentCardIds.length, 4, 'only the 4 bullets not open in perfection are added');
+  const addedCards = readInboxCards(home).filter((c) => rec.sentCardIds.includes(c.id));
+  assert.equal(addedCards.length, 4);
+  assert.ok(addedCards.every((c) => c.laneId === 'perfection' && c.status === 'parked'));
+  assert.deepEqual(
+    addedCards.map((c) => [c.text, c.source]),
+    [
+      ['Rejected workflow tweak', 'usage-review:opus'],
+      ['Archived routing rule', 'usage-review:opus'],
+      ['Handed off cap adjustment', 'usage-review:gemini'],
+      ['Shift implementation to Gemini', 'usage-review:gemini'],
+    ],
+  );
+});
+
+test('usa-19: getUsage and readUsageLogSignals pool agent runs, logs, handoffs, and lane codes across multiple Squads', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+
+  // Two Squads in teams.json: vibesquad + a second Squad ("other-squad")
+  fs.writeFileSync(
+    path.join(home, 'teams.json'),
+    JSON.stringify({
+      teams: [
+        { id: 'vibesquad', name: 'VibeSquad', lanes: [{ id: 'usage', code: 'usa' }] },
+        { id: 'other-squad', name: 'Other Squad', lanes: [{ id: 'combat-loop', code: 'cbt' }] },
+      ],
+    }),
+    'utf8',
+  );
+
+  writeAgent(home, 'rn-vs', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1.25 },
+  ]);
+  writeAgent(home, 'rn-other', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'g', meta: { lane: 'combat-loop', role: 'worker', profile: 'Implement - Gemini' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.75 },
+  ]);
+
+  // Log signals and handoffs from both Squads
+  writeLog(home, 'teams/vibesquad/log.jsonl', L_ENTRY(T0 + 2000, 'rn-lead', 'usage', 'decision', '@usa: pool all squads'));
+  writeLog(home, 'teams/other-squad/log.jsonl', L_ENTRY(T0 + 3000, 'rn-other-w', 'combat-loop', 'blocker', 'other-squad turn cap hit'));
+  writeLog(home, 'logs/other-squad--combat-loop.jsonl', L_ENTRY(T0 + 4000, 'rn-other-b', 'combat-loop', 'handoff', 'combat plan ready'));
+
+  const u = getUsage({ home, git: noGit });
+  assert.equal(u.totals.turns, 2, 'turns pooled across both Squads');
+  assert.equal(u.totals.costUsd, 2, 'cost pooled across both Squads');
+  assert.deepEqual(u.byLane.map((l) => l.lane).sort(), ['combat-loop', 'usage']);
+
+  const prompt = buildUsageReviewPrompt(u, { home });
+  assert.match(prompt, /@usa: pool all squads/, 'vibesquad team log note included');
+  assert.match(prompt, /other-squad turn cap hit/, 'other-squad team log friction included');
 });

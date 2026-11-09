@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadProfiles, profileMcpExtras } from "../profiles.mjs";
 import { RunnerClient, runnerHome } from "./runner-client.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
@@ -495,6 +496,12 @@ export class RunnerBackend {
         if (v !== undefined && v !== "") meta[k] = v;
       }
       for (const [k, v] of Object.entries(labels)) if (!FIRST_CLASS.includes(k) && v !== undefined) meta.labels[k] = String(v);
+      // Opt-in MCP extras (e.g. playwright for UI live checks) come from the profile; an explicit vs.mcp label wins.
+      if (meta.profile && meta.labels["vs.mcp"] === undefined) {
+        let stored; try { stored = loadProfiles(undefined, { autoSeed: false }).profiles; } catch { /* defaults only */ }
+        const extras = profileMcpExtras(meta.profile, stored);
+        if (extras.length) meta.labels["vs.mcp"] = extras.join(",");
+      }
       // Claude permission modes only mean something to claude; for ACP providers modeId is the agent's own ACP mode.
       if (config.modeId) {
         if (config.provider === "claude") { if (CLAUDE_PERMISSION_MODES.has(config.modeId)) meta.permissionMode = config.modeId; }
