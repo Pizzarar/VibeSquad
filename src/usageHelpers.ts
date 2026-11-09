@@ -281,10 +281,10 @@ export function buildProfiles(d: UsageData): ProfileView[] {
 
 export type InboxFilter = "all" | "queue" | "accepted" | "closed";
 export const INBOX_FILTERS: { key: InboxFilter; label: string }[] = [
-  { key: "all", label: "All sent" },
-  { key: "queue", label: "In queue" },
-  { key: "accepted", label: "Accepted / in flight" },
-  { key: "closed", label: "Rejected / closed" },
+  { key: "all", label: "ALL" },
+  { key: "queue", label: "IN QUEUE" },
+  { key: "accepted", label: "ACCEPTED" },
+  { key: "closed", label: "REJECTED" },
 ];
 export const BUG_CHASER_LANE = "bug-chaser";
 export const PERFECTION_LANE = "perfection";
@@ -324,13 +324,16 @@ export function filterInbox(cards: InboxCard[], f: InboxFilter): InboxCard[] {
   return f === "all" ? cards : cards.filter((c) => inboxBucket(c) === f);
 }
 
-export type SourceBadge = { key: "opus" | "gemini"; label: string };
-/** Only usage-review cards get a source badge; other origins are implied by the lane badge. */
-export function inboxSourceBadge(source: string | undefined): SourceBadge | null {
-  const s = (source ?? "").toLowerCase();
-  if (s === "usage-review:opus") return { key: "opus", label: "Opus" };
-  if (s === "usage-review:gemini") return { key: "gemini", label: "Gemini" };
-  return null;
+export type InboxFromKey = "opus" | "gemini" | "bug" | "perfection" | "other";
+/** Mail-style sender for the CRT row: usage-review cards name the reviewing model, the rest name their lane. */
+export function inboxFrom(c: Pick<InboxCard, "laneId" | "source">): { key: InboxFromKey; label: string } {
+  const s = (c.source ?? "").toLowerCase();
+  if (s === "usage-review:opus") return { key: "opus", label: "OPUS" };
+  if (s === "usage-review:gemini") return { key: "gemini", label: "GEM" };
+  const lane = inboxLaneBadge(c.laneId);
+  if (lane.key === "bug") return { key: "bug", label: "BUG" };
+  if (lane.key === "perfection") return { key: "perfection", label: "PERF" };
+  return { key: "other", label: lane.label.toUpperCase() };
 }
 
 export function inboxStatusLabel(c: Pick<InboxCard, "status" | "topicAgentId">): string {
@@ -364,12 +367,6 @@ export function efficiencySummary(cohorts: { recent: { firstTryPassRate?: number
   const parts = ["Efficiency & Clean-Run Floor"];
   if (cohorts) parts.push(`1st-try PASS ${pctText(cohorts.recent.firstTryPassRate)}`);
   if (floor) parts.push(`clean ${pctText(floor.cleanShare)} (${usdText(floor.cleanCostPerUnit)}/unit)`);
-  return parts.join(" · ");
-}
-
-export function reviewSummary(counts: { queue: number; accepted: number; closed: number }, status: string): string {
-  const parts = ["Bug & Perfection Triage Inbox", `${counts.queue} in queue`, `${counts.accepted} accepted`, `${counts.closed} rejected`];
-  if (status) parts.push(status);
   return parts.join(" · ");
 }
 

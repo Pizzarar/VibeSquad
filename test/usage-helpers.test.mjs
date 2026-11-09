@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxSourceBadge, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, reviewSummary, usageOpenKey, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -309,10 +309,11 @@ test("bug inbox helpers: lane filter, buckets, counts, source badges", () => {
   assert.equal(inboxBucket(cards[1]), "accepted", "topicAgentId counts as in flight");
   assert.deepEqual(filterInbox(bug, "closed").map((c) => c.id).sort(), ["dddd", "eeeee"]);
   assert.equal(filterInbox(bug, "all").length, 6);
-  assert.deepEqual(inboxSourceBadge("usage-review:opus"), { key: "opus", label: "Opus" });
-  assert.equal(inboxSourceBadge("usage-review:gemini").key, "gemini");
-  assert.equal(inboxSourceBadge("cli"), null);
-  assert.equal(inboxSourceBadge(undefined), null);
+  assert.deepEqual(inboxFrom({ source: "usage-review:opus", laneId: "bug-chaser" }), { key: "opus", label: "OPUS" });
+  assert.deepEqual(inboxFrom({ source: "usage-review:gemini" }), { key: "gemini", label: "GEM" });
+  assert.deepEqual(inboxFrom({ source: "cli", laneId: "bug-chaser" }), { key: "bug", label: "BUG" });
+  assert.deepEqual(inboxFrom({ laneId: "perfection" }), { key: "perfection", label: "PERF" });
+  assert.deepEqual(inboxFrom({ laneId: "ui-lab" }), { key: "other", label: "UI-LAB" });
 });
 
 test("collapsed-section rollup summaries", () => {
@@ -324,8 +325,6 @@ test("collapsed-section rollup summaries", () => {
   assert.equal(rolesSummary(null, 0, 1), "Roles, Loops & Storms · coord — / exec — · 0 loops · 1 storm");
   assert.equal(efficiencySummary({ recent: { firstTryPassRate: 0.8 } }, { cleanShare: 0.6, cleanCostPerUnit: 1.5 }), "Efficiency & Clean-Run Floor · 1st-try PASS 80% · clean 60% ($1.50/unit)");
   assert.equal(efficiencySummary(null, null), "Efficiency & Clean-Run Floor");
-  assert.equal(reviewSummary({ queue: 3, accepted: 2, closed: 1 }, "waiting for new turns"), "Bug & Perfection Triage Inbox · 3 in queue · 2 accepted · 1 rejected · waiting for new turns");
-  assert.equal(reviewSummary({ queue: 0, accepted: 0, closed: 0 }, ""), "Bug & Perfection Triage Inbox · 0 in queue · 0 accepted · 0 rejected");
   assert.equal(usageOpenKey("roles"), "vs.usage.open.roles");
 });
 

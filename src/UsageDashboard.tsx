@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { efficiencySummary, reviewSummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxLaneBadge, inboxSourceBadge, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
@@ -37,8 +37,18 @@ async function postUsageReview(body: { interval?: string; runNow?: boolean }): P
   return j;
 }
 
-/** Triage inbox: bug-chaser / perfection cards and usage-review bullets with 1-click Accept / Reject. */
-function BugInbox({ now }: { now: number }) {
+type TriageCrtProps = {
+  now: number;
+  review: UsageReview | null | undefined;
+  running: boolean;
+  status: string;
+  error: string | null;
+  onInterval: (interval: string) => void;
+  onRun: () => void;
+};
+
+/** CRT mail terminal: bug-chaser / perfection cards and usage-review bullets with 1-click Accept / Reject. */
+function TriageCrt({ now, review, running, status, error, onInterval, onRun }: TriageCrtProps) {
   const all = useInboxCards();
   const cards = useMemo(() => bugInboxCards(all), [all]);
   const [filter, setFilter] = useState<InboxFilter>("all");
@@ -47,68 +57,85 @@ function BugInbox({ now }: { now: number }) {
   useEffect(() => { void refreshInboxCards(); }, []);
   const counts = inboxCounts(cards);
   const shown = filterInbox(cards, filter);
-  const triage = async (cardId: string, status: "accepted" | "rejected") => {
+  const triage = async (cardId: string, next: "accepted" | "rejected") => {
     setBusy(cardId);
     setErr(null);
     try {
-      await triageInbox({ action: "update", cardId, patch: { status } });
+      await triageInbox({ action: "update", cardId, patch: { status: next } });
     } catch (e) {
       setErr(String((e as Error)?.message ?? e));
     } finally {
       setBusy(null);
     }
   };
+  const failure = error ?? err;
   return (
-    <div className="usage-bug-inbox" data-testid="usage-bug-inbox">
-      <div className="usage-inbox-tabs" role="tablist" aria-label="Bug Chaser inbox filter">
-        {INBOX_FILTERS.map((f) => (
-          <button
-            key={f.key}
-            type="button"
-            role="tab"
-            aria-selected={filter === f.key}
-            className={`usage-inbox-tab${filter === f.key ? " is-active" : ""}`}
-            data-filter={f.key}
-            onClick={() => setFilter(f.key)}
-          >
-            {f.label} <span className="usage-inbox-count">{counts[f.key]}</span>
-          </button>
-        ))}
+    <section className="usage-crt" data-testid="usage-review">
+      <div className="usage-crt-bar">
+        <span className="usage-crt-title">MAIL://BUG-AND-PERFECTION</span>
+        {review && (
+          <div className="usage-review-controls">
+            <select className="usage-review-select" value={review.interval} onChange={(e) => onInterval(e.target.value)} aria-label="Usage review interval">
+              {USAGE_REVIEW_INTERVALS.map((iv) => (
+                <option key={iv} value={iv}>{USAGE_REVIEW_LABELS[iv]}</option>
+              ))}
+            </select>
+            <button type="button" className="usage-review-run" onClick={onRun} disabled={running}>
+              {running ? "running…" : "Run now"}
+            </button>
+          </div>
+        )}
+        {status && <span className="usage-review-status small">{status}</span>}
+        <div className="usage-inbox-tabs" role="tablist" aria-label="Bug Chaser inbox filter">
+          {INBOX_FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              role="tab"
+              aria-selected={filter === f.key}
+              className={`usage-inbox-tab${filter === f.key ? " is-active" : ""}`}
+              data-filter={f.key}
+              onClick={() => setFilter(f.key)}
+            >
+              [{f.label}] <span className="usage-inbox-count">{counts[f.key]}</span>
+            </button>
+          ))}
+        </div>
       </div>
-      {err && <div className="usage-review-error small">{err}</div>}
-      {shown.length === 0 ? (
-        <div className="usage-empty muted small">{cards.length === 0 ? "no bug-chaser cards yet — review suggestions land here" : "nothing in this filter"}</div>
-      ) : (
-        <ul className="usage-inbox-list">
-          {shown.map((c) => {
-            const src = inboxSourceBadge(c.source);
-            const bucket = inboxBucket(c);
-            const lane = inboxLaneBadge(c.laneId);
-            const t = Date.parse(c.createdAt);
-            return (
-              <li key={c.id} className="usage-inbox-row" data-testid="usage-bug-inbox-row" data-status={bucket}>
-                <div className="usage-inbox-meta small">
-                  <span className={`usage-inbox-badge usage-inbox-status-${bucket}`}>{inboxStatusLabel(c)}</span>
-                  {src && <span className={`usage-inbox-badge usage-inbox-src-${src.key}`}>{src.label}</span>}
-                  <span className={`usage-inbox-badge usage-inbox-lane-${lane.key}`}>{lane.label}</span>
-                  <span className="usage-inbox-badge usage-inbox-scope">{c.scope}</span>
-                  <span className="muted">{inboxIdLabel(c.id)}</span>
-                  {Number.isFinite(t) && <span className="muted">{relTime(t, now)}</span>}
-                </div>
-                <div className="usage-inbox-text">{c.text}</div>
-                {c.summaryNote && <div className="usage-inbox-note small muted">{c.summaryNote}</div>}
-                {bucket === "queue" && (
-                  <div className="usage-inbox-actions">
-                    <button type="button" className="usage-inbox-btn usage-inbox-accept" disabled={busy === c.id} onClick={() => triage(c.id, "accepted")}>Accept</button>
-                    <button type="button" className="usage-inbox-btn usage-inbox-reject" disabled={busy === c.id} onClick={() => triage(c.id, "rejected")}>Reject</button>
+      <div className="usage-bug-inbox" data-testid="usage-bug-inbox">
+        {failure && <div className="usage-review-error small">{failure}</div>}
+        {shown.length === 0 ? (
+          <div className="usage-empty muted small">{cards.length === 0 ? "no bug-chaser cards yet — review suggestions land here" : "nothing in this filter"}</div>
+        ) : (
+          <ul className="usage-inbox-list">
+            {shown.map((c) => {
+              const from = inboxFrom(c);
+              const bucket = inboxBucket(c);
+              const t = Date.parse(c.createdAt);
+              return (
+                <li key={c.id} className="usage-inbox-row" data-testid="usage-bug-inbox-row" data-status={bucket}>
+                  <div className="usage-inbox-meta small">
+                    <span>FROM <span className={`usage-inbox-src usage-inbox-src-${from.key}`}>[{from.label}]</span></span>
+                    <span>· @{c.laneId || "other"}</span>
+                    <span>· {inboxIdLabel(c.id)}</span>
+                    {Number.isFinite(t) && <span>· {relTime(t, now)}</span>}
+                    {bucket !== "queue" && <span className="usage-inbox-state">· {inboxStatusLabel(c)}</span>}
                   </div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
+                  <div className="usage-inbox-text">{c.text}</div>
+                  {c.summaryNote && <div className="usage-inbox-note small">{c.summaryNote}</div>}
+                  {bucket === "queue" && (
+                    <div className="usage-inbox-actions">
+                      <button type="button" className="usage-inbox-btn usage-inbox-accept" disabled={busy === c.id} onClick={() => triage(c.id, "accepted")}>[Y] ACCEPT</button>
+                      <button type="button" className="usage-inbox-btn usage-inbox-reject" disabled={busy === c.id} onClick={() => triage(c.id, "rejected")}>[N] REJECT</button>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -119,17 +146,20 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   const estimate = l.source === "estimate";
   return (
     <div className={`usage-limit usage-${level}`} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
-      <span className="usage-limit-head">
+      <div className="usage-limit-head">
         <span className="usage-limit-name">{providerLabel(l.provider)}</span>
         <span className="usage-limit-win">{WINDOW_LABEL[l.window] ?? l.window}</span>
         {estimate && <span className="usage-estimate" title="Local estimate from our own token counts, not a provider-reported number">estimate</span>}
-      </span>
-      <span className="usage-limit-pct">{100 - Math.round(used)}% left<small>({Math.round(used)}% used)</small></span>
+      </div>
+      <div className="usage-limit-pct">{100 - Math.round(used)}% left<small>({Math.round(used)}% used)</small></div>
       <div className="usage-bar" role="progressbar" aria-valuenow={Math.round(used)} aria-valuemin={0} aria-valuemax={100}>
         <div className="usage-bar-fill" style={{ width: `${used}%` }} />
       </div>
-      <span className="usage-limit-meta small" title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
-      <span className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"} · {etaText(l)}</span>
+      <div className="usage-limit-meta small">
+        <span title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
+        <span>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"}</span>
+      </div>
+      <div className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{etaText(l)}</div>
     </div>
   );
 }
@@ -266,12 +296,15 @@ export function UsageDashboard() {
   const rows = useMemo(() => (data ? sortRows(buildRows(data), sort.key, sort.dir) : []), [data, sort]);
   const profiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
   const workflows = useMemo(() => sortWorkflows(data?.byWorkflow), [data]);
-  const allInbox = useInboxCards();
-  const inboxTotals = useMemo(() => inboxCounts(bugInboxCards(allInbox)), [allInbox]);
+
+  const review = data?.usageReview;
+  const running = Boolean(review?.inFlight) || reviewBusy;
+  const reviewStatus = usageReviewStatus(review, now);
 
   if (!data) {
     return (
       <div className="squads-dashboard" data-testid="squads-dashboard">
+        <TriageCrt now={now} review={review} running={running} status={reviewStatus} error={reviewError} onInterval={changeInterval} onRun={runNow} />
         <div className="muted small">{error ? `Usage unavailable: ${error}` : "Loading usage…"}</div>
       </div>
     );
@@ -281,12 +314,10 @@ export function UsageDashboard() {
   const roles = foldRoles(data.byRole ?? []);
   const roleTotal = roles.reduce((s, r) => s + r.inputTokens + r.outputTokens, 0);
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
-  const review = data.usageReview;
-  const running = Boolean(review?.inFlight) || reviewBusy;
-  const reviewStatus = usageReviewStatus(review, now);
 
   return (
     <div className="squads-dashboard" data-testid="squads-dashboard">
+      <TriageCrt now={now} review={review} running={running} status={reviewStatus} error={reviewError} onInterval={changeInterval} onRun={runNow} />
       <div className="usage-title">Usage</div>
       <div className="usage-limits" data-testid="usage-limits">
         {limits.length === 0 ? (
@@ -552,33 +583,6 @@ export function UsageDashboard() {
         </Collapse>
       )}
 
-      {review && (
-        <Collapse id="review" testid="usage-review-collapse" summary={reviewSummary(inboxTotals, reviewStatus)}>
-        <section className="usage-review" data-testid="usage-review">
-          <div className="usage-review-head">
-            <div className="usage-sub">Usage Review · Opus &amp; Gemini</div>
-            <div className="usage-review-controls">
-              <select
-                className="usage-review-select"
-                value={review.interval}
-                onChange={(e) => changeInterval(e.target.value)}
-                aria-label="Usage review interval"
-              >
-                {USAGE_REVIEW_INTERVALS.map((iv) => (
-                  <option key={iv} value={iv}>{USAGE_REVIEW_LABELS[iv]}</option>
-                ))}
-              </select>
-              <button type="button" className="usage-review-run" onClick={runNow} disabled={running}>
-                {running ? "running…" : "Run now"}
-              </button>
-            </div>
-          </div>
-          <div className="usage-review-status small">{reviewStatus}</div>
-          {reviewError && <div className="usage-review-error small">{reviewError}</div>}
-          <BugInbox now={now} />
-        </section>
-        </Collapse>
-      )}
     </div>
   );
 }
