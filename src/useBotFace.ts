@@ -1,6 +1,7 @@
 // Shared bot-face plumbing (docs/PLAN_SKY_GODS_C2B.md G2): theme, reduced-motion, image probing, faces.json
 // loading and the talk/needs/blink/idle mode logic. The tower no longer draws faces; the sky zones do.
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { imageRetryDelay } from "./fetchTimeout";
 import {
   BLINK_MS,
   faceFrame,
@@ -112,12 +113,22 @@ export function useImageOk(url: string | null): boolean {
       return;
     }
     let alive = true;
-    const img = new Image();
-    img.onload = () => alive && setOk(true);
-    img.onerror = () => alive && setOk(false);
-    img.src = url;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const probe = (attempt: number) => {
+      const img = new Image();
+      img.onload = () => alive && setOk(true);
+      img.onerror = () => {
+        if (!alive) return;
+        setOk(false);
+        const d = imageRetryDelay(attempt); // one failed probe (busy runtime) must not hide art that exists
+        if (d != null) timer = setTimeout(() => alive && probe(attempt + 1), d);
+      };
+      img.src = url;
+    };
+    probe(0);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [url]);
   return ok;
