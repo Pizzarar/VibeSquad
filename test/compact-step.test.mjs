@@ -167,7 +167,7 @@ test("buddy mid-turn is not compacted; it waits for idle", async () => {
   w.stop();
 });
 
-test("buddy that jumped past the warn gets the brief nudge first, then is compacted once idle", async () => {
+test("buddy that jumped past the warn: no /compact until the brief turn ends, then compacted", async () => {
   const { r, restarts, watch } = setup("ok");
   const b = buddy("rn-b");
   delete b.labels[WARN_LABEL];
@@ -176,7 +176,13 @@ test("buddy that jumped past the warn gets the brief nudge first, then is compac
   r.usage("rn-b", 160_000);
   await tick(60);
   assert.deepEqual(r.sent.map((s) => s.text), [BRAINSTORM_WARN_NUDGE]);
-  r.usage("rn-b", 160_001); // brief turn done, idle again
+  r.usage("rn-b", 160_001); // stale "idle" upsert before the brief turn starts: must NOT compact
+  r.usage("rn-b", 160_002);
+  await tick(100);
+  assert.equal(compacts(r).length, 0);
+  assert.equal(restarts.length, 0);
+  r.emit({ kind: "turn_ended", agentId: "rn-b", outcome: { kind: "completed" } });
+  r.usage("rn-b", 160_003);
   await tick(250);
   assert.equal(compacts(r).length, 1);
   assert.equal(restarts.length, 0);
@@ -209,12 +215,30 @@ test("lead: still over / timeout -> the unchanged ladder runs (hard cap successo
   }
 });
 
-test("lead: running lead is not compacted; the ladder proceeds as before", async () => {
+test("lead: running lead past the soft flag defers: no nudge, no stamp, compacted on the idle upsert", async () => {
   const { r, watch } = setup("ok");
   r.agents.set("rn-l", { ...lead("rn-l"), status: "running" });
   const w = watch();
   r.usage("rn-l", LEAD_FLAG_DEFAULT + 5);
   await tick(100);
-  assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE]);
+  assert.equal(r.sent.length, 0);
+  assert.equal(r.created.length, 0);
+  assert.equal(r.agents.get("rn-l").labels["handoff-nudged"], undefined);
+  assert.equal(r.agents.get("rn-l").labels["needs-you"], undefined);
+  r.agents.get("rn-l").status = "idle";
+  r.usage("rn-l", LEAD_FLAG_DEFAULT + 6);
+  await tick(250);
+  assert.deepEqual(r.sent.map((s) => s.text), [`/compact ${LEAD_COMPACT_FOCUS}`]);
+  w.stop();
+});
+
+test("lead: running lead past the hard cap still goes to the forced handoff (no deferral)", async () => {
+  const { r, watch } = setup("ok");
+  r.agents.set("rn-l", { ...lead("rn-l"), status: "running" });
+  const w = watch();
+  r.usage("rn-l", LEAD_HARD_CAP_DEFAULT + 1);
+  await tick(300);
+  assert.equal(compacts(r).length, 0);
+  assert.equal(r.created.length, 1);
   w.stop();
 });

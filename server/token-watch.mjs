@@ -19,6 +19,7 @@ const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirn
 
 export const BRAINSTORM_WARN_DEFAULT = 80_000;
 export const BRAINSTORM_RESTART_DEFAULT = 150_000;
+export const BRIEF_WAIT_MS = 300_000; // longest a Buddy's compaction/restart waits for its brief-update turn to end
 export const WARN_LABEL = "vs.token-warned";
 export const BRAINSTORM_WARN_NUDGE =
   "Context check: you are past the warn threshold. Update your brief now (docs/brainstorm/<lane>.md, short diff: Decided / Open / In flight). At the hard limit VS retires you and the next pin click starts a fresh Brainstorm from the brief.";
@@ -45,6 +46,7 @@ export function startTokenWatcher({
   restartBuddy = (body) => performBrainstormRestart({ ...restartExtra, ...body }, rootDir),
   getBuddyThresholds = (agent) => loadBrainstormThresholds(agent, rootDir),
   compactor,
+  briefWaitMs = BRIEF_WAIT_MS,
   baseHome,
   profilesPath,
 } = {}) {
@@ -52,6 +54,7 @@ export function startTokenWatcher({
   const busy = new Set();
   const warned = new Set();
   const restarted = new Set();
+  const briefPending = new Map(); // id -> ms the warn nudge (brief update) was sent; cleared by that agent's turn_ended
 
   // K2: compact-before-handoff (Claude only), logged to the agent's own lane. Shared by the Buddy path and the lead ladder.
   const compact =
@@ -83,6 +86,14 @@ export function startTokenWatcher({
       deleteHeartbeat: (id) => runner.deleteHeartbeat(id),
     });
 
+  // The brief-update turn must END before /compact: an "idle" upsert can still arrive between sending the nudge and its turn starting.
+  async function sendBriefNudge(agent, labels) {
+    warned.add(agent.id);
+    briefPending.set(agent.id, Date.now());
+    await runner.updateAgent(agent.id, { labels: { ...labels, [WARN_LABEL]: "1" } });
+    await runner.sendAgentPrompt(agent.id, BRAINSTORM_WARN_NUDGE);
+  }
+
   async function evaluateBuddy(agent) {
     const labels = agent.labels ?? {};
     if (labels["vs.restarted-into"] || restarted.has(agent.id)) return;
@@ -92,11 +103,12 @@ export function startTokenWatcher({
       if (isClaudeAgent(agent) && !labels[COMPACTED_AT_LABEL] && !compact.tried.has(agent.id)) {
         // The Buddy updates its brief first (the warn nudge); a Buddy that jumped past the warn gets it now and is compacted once idle.
         if (labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
-          warned.add(agent.id);
-          await runner.updateAgent(agent.id, { labels: { ...labels, [WARN_LABEL]: "1" } });
-          await runner.sendAgentPrompt(agent.id, BRAINSTORM_WARN_NUDGE);
+          await sendBriefNudge(agent, labels);
           return;
         }
+        const sentAt = briefPending.get(agent.id);
+        if (sentAt !== undefined && Date.now() - sentAt < briefWaitMs) return; // brief turn still open: its turn_ended re-evaluates
+        briefPending.delete(agent.id);
         if (!isIdleForCompact(agent)) return; // never compact mid-turn: the idle snapshot re-evaluates
         const { teamId, laneId } = resolveTeamAndLane(agent, rootDir);
         const res = await compact.run(agent, { focus: BUDDY_COMPACT_FOCUS, cap: restartTokens, kind: "buddy", teamId, laneId });
@@ -107,9 +119,7 @@ export function startTokenWatcher({
       return;
     }
     if (used >= warnTokens && labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
-      warned.add(agent.id);
-      await runner.updateAgent(agent.id, { labels: { ...labels, [WARN_LABEL]: "1" } });
-      await runner.sendAgentPrompt(agent.id, BRAINSTORM_WARN_NUDGE);
+      await sendBriefNudge(agent, labels);
     }
   }
 
@@ -124,6 +134,7 @@ export function startTokenWatcher({
   const stop = runner.subscribeEvents((ev) => {
     const agents = ev.kind === "roster" ? ev.agents ?? [] : ev.kind === "agent" && ev.agent ? [ev.agent] : [];
     if (ev.kind === "remove") live.delete(ev.agentId);
+    if (ev.kind === "turn_ended" && ev.agentId) briefPending.delete(ev.agentId);
     for (const agent of agents) {
       if (!agent?.id) continue;
       live.set(agent.id, agent);
