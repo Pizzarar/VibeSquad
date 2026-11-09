@@ -91,6 +91,7 @@ test('compact_boundary without metadata still emits compacted (undefined counts)
   assert.equal(events.filter((e) => e.type === 'compacted').length, 1);
   assert.equal(events.filter((e) => e.type === 'compacted')[0].before, undefined);
   assert.ok(!events.some((e) => e.type === 'usage'));
+});
 
 // K4: lean tool load. Default = vibesquad MCP only + no user settings; extras are opt-in per profile / label.
 function startArgs(t, meta) {
@@ -103,16 +104,30 @@ function startArgs(t, meta) {
   return { args, servers: JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers };
 }
 
-test('K4: default args are strict-MCP (vibesquad only), skip user settings, and never use --bare or --disable-slash-commands', (t) => {
+test('K4: default args are strict-MCP (vibesquad only), turn synced plugins off, keep the user setting source, never --bare', (t) => {
   const { args, servers } = startArgs(t, { profile: 'Implement - Sonnet' });
   assert.ok(args.includes('--strict-mcp-config'));
-  assert.equal(args[args.indexOf('--setting-sources') + 1], 'project,local');
+  assert.ok(!args.includes('--setting-sources'), 'user settings + ~/.claude/CLAUDE.md must still load');
+  const off = JSON.parse(args[args.indexOf('--settings') + 1]).enabledPlugins;
+  for (const n of ['engineering', 'productivity', 'cowork-plugin-management', 'data']) assert.equal(off[`${n}@synced`], false);
   assert.deepEqual(Object.keys(servers), ['vibesquad']);
+  assert.equal(args[args.indexOf('--allowedTools') + 1], 'mcp__vibesquad');
   assert.ok(!args.includes('--bare') && !args.includes('--disable-slash-commands'));
 });
 
-test('K4: Playwright is opt-in by profile or vs.mcp label', (t) => {
-  assert.deepEqual(Object.keys(startArgs(t, { profile: 'Art Painter - Opus' }).servers), ['vibesquad', 'playwright']);
-  assert.deepEqual(Object.keys(startArgs(t, { profile: 'Implement - Sonnet', labels: { 'vs.mcp': 'Playwright' } }).servers), ['vibesquad', 'playwright']);
-  assert.deepEqual(Object.keys(startArgs(t, { labels: { 'vs.mcp': 'other' } }).servers), ['vibesquad']);
+test('K4: Playwright is opt-in via the vs.mcp label and is pre-allowed', (t) => {
+  const on = startArgs(t, { labels: { 'vs.mcp': 'Playwright' } });
+  assert.deepEqual(Object.keys(on.servers), ['vibesquad', 'playwright']);
+  assert.ok(on.args.includes('mcp__playwright'));
+  const off = startArgs(t, { labels: { 'vs.mcp': 'other' } });
+  assert.deepEqual(Object.keys(off.servers), ['vibesquad']);
+  assert.ok(!off.args.includes('mcp__playwright'));
+});
+
+test('K4: profiles opt into playwright by mcpExtras field (stored value wins, default pack is the fallback)', async () => {
+  const { profileMcpExtras, DEFAULT_PACK_PROFILES } = await import('../server/profiles.mjs');
+  for (const n of ['Review - Gemini', 'Review - Sonnet', 'Implement - Sonnet', 'Implement - Opus', 'Art Director - Gemini', 'Art Painter - Opus']) assert.deepEqual(profileMcpExtras(n), ['playwright'], n);
+  assert.deepEqual(profileMcpExtras('Lead - Claude'), []);
+  assert.deepEqual(profileMcpExtras('Review - Sonnet', [{ name: 'Review - Sonnet', mcpExtras: [] }]), []);
+  assert.ok(DEFAULT_PACK_PROFILES.length > 0);
 });

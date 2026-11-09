@@ -8,21 +8,29 @@ import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 import { parseClaudeRateLimit } from '../limits.mjs';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 
 export const DEFAULT_PERMISSION_MODE = 'auto';
 export const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'];
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']; // claude --effort levels
 export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEFAULT_PERMISSION_MODE;
 
-// K4: runner agents load only the vibesquad MCP (--strict-mcp-config) and no user-level plugin/connector set
-// (--setting-sources project,local drops the user settings that enable data/engineering/productivity/cowork plugins).
-// VS hooks run on the runner lifecycle bus, not CLI settings, so nothing is lost. Never --bare (skips hooks) or
-// --disable-slash-commands (/compact must keep working).
-export const CLAUDE_SETTING_SOURCES = 'project,local';
-// Extras are opt-in: profiles that live-check UI, or any agent labelled vs.mcp=playwright (comma list).
-export const PLAYWRIGHT_PROFILES = ['Art Painter - Opus'];
-export const wantsPlaywright = (meta = {}) => PLAYWRIGHT_PROFILES.includes(meta.profile) || String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes('playwright');
+// K4: runner agents load only the vibesquad MCP (--strict-mcp-config) and none of the synced user plugins
+// (data/engineering/productivity/cowork connectors + skills, ~2.3k tokens/call), turned off via --settings enabledPlugins.
+// The user setting source stays: ~/.claude/CLAUDE.md and user settings (global git/push rules) must reach every agent.
+// VS hooks run on the runner lifecycle bus, not CLI settings. Never --bare (skips hooks) or --disable-slash-commands (/compact).
+export const SYNCED_PLUGINS = ['engineering', 'productivity', 'cowork-plugin-management', 'data'];
+export function pluginsOffSettings(home = os.homedir()) {
+  const names = new Set(SYNCED_PLUGINS);
+  try { // also any other synced plugin on this machine: <synced>/<account>/<name>.meta.json
+    const root = path.join(home, '.claude', 'plugins', 'synced');
+    for (const acct of readdirSync(root)) for (const f of readdirSync(path.join(root, acct))) if (f.endsWith('.meta.json')) names.add(f.slice(0, -'.meta.json'.length));
+  } catch { /* no synced plugins */ }
+  return JSON.stringify({ enabledPlugins: Object.fromEntries([...names].map((n) => [`${n}@synced`, false])) });
+}
+// Extras are opt-in: a profile with mcpExtras:["playwright"] (server/profiles.mjs; the backend stamps it as the vs.mcp label)
+// or any agent labelled vs.mcp=playwright (comma list).
+export const wantsPlaywright = (meta = {}) => String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes('playwright');
 // Reuse the owner's own playwright server config (browser/headless flags) when present, else a headless default.
 export function playwrightSpec(home = os.homedir()) {
   try {
@@ -46,17 +54,18 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (model) args.push('--model', model);
       args.push('--permission-mode', effectivePermissionMode(meta));
       if (CLAUDE_EFFORTS.includes(meta.thinkingOptionId)) args.push('--effort', meta.thinkingOptionId);
-      args.push('--setting-sources', CLAUDE_SETTING_SOURCES);
+      args.push('--settings', pluginsOffSettings());
       if (mcp) {
         const spec = mcpServerSpec({ env, path: mcpPath });
         // Via a file too: server args/env grow without bound toward the same 32,767-char cap.
         const file = mcpFile(id);
         mkdirSync(path.dirname(file), { recursive: true });
+        const extra = wantsPlaywright(meta);
         const servers = { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } };
-        if (wantsPlaywright(meta)) servers.playwright = playwrightSpec();
+        if (extra) servers.playwright = playwrightSpec();
         writeFileSync(file, JSON.stringify({ mcpServers: servers }), 'utf8');
         args.push('--strict-mcp-config', '--mcp-config', file);
-        args.push('--allowedTools', `mcp__${spec.name}`);
+        args.push('--allowedTools', `mcp__${spec.name}`, ...(extra ? ['mcp__playwright'] : []));
       }
       // The prompt goes via a file, never argv: a long role prompt blows the Windows 32,767-char command-line cap (spawn ENAMETOOLONG).
       // Rewritten on every start/resume so a parked agent restarts with the same prompt.
