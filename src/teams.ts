@@ -69,6 +69,8 @@ export type TeamDef = {
   leadHardCapTokens?: number;
   /** Per-Squad "Vibe mode": Buddy auto-dispatches routine work. Off when absent. */
   vibeMode?: boolean;
+  /** Per-Squad standing lane pointers for header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md). */
+  quickLanes?: { bugs?: string };
 };
 export type TeamConfig = TeamDef;
 
