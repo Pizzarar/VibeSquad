@@ -34,10 +34,15 @@ const smallGlyph = (ch: string) => CHROME_FONT_SMALL.glyphs[ch.toUpperCase()] ??
 /** Advance of one small-font glyph in sheet px (0 when the font has neither the char nor the fallback). */
 export const chromeSmallAdvance = (ch: string): number => smallGlyph(ch)?.[4] ?? 0;
 
-/** Style for one small-font glyph in plain px (the floor band is already scaled by an integer, so 1 sheet px = 1 plate px). `track` tightens the advance. */
-export function chromeSmallGlyphStyle(ch: string, track = 0): { width: number; height: number; backgroundPosition: string; marginRight: number } | null {
+/** Width of one small-font glyph cell in sheet px (what the cell paints, unlike the advance). */
+/** Glyph cell height in sheet px (13), from the sheet. */
+export const CHROME_SMALL_CELL_H = Math.max(...Object.values(CHROME_FONT_SMALL.glyphs).map((g) => g[3]));
+export const chromeSmallCell = (ch: string): number => smallGlyph(ch)?.[2] ?? 0;
+
+/** Style for one small-font glyph in plain px (the floor band is already scaled by an integer, so 1 sheet px = 1 plate px). `track` tightens the advance; `open` butts the cells edge to edge (margin 0) so neighbours never overlap their outlines. */
+export function chromeSmallGlyphStyle(ch: string, track = 0, open = false): { width: number; height: number; backgroundPosition: string; marginRight: number } | null {
   const g = smallGlyph(ch);
   if (!g) return null;
   const [x, y, w, h, adv] = g;
-  return { width: w, height: h, backgroundPosition: `${-x}px ${-y}px`, marginRight: Math.max(adv + track, 1) - w };
+  return { width: w, height: h, backgroundPosition: `${-x}px ${-y}px`, marginRight: open ? 0 : Math.max(adv + track, 1) - w };
 }

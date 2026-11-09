@@ -82,12 +82,14 @@ export function kitPixel(dpr: number, zoom: number): { device: number; css: numb
 /**
  * SS5: a CSS size whose DEVICE-px size is a whole multiple of `step` (the art's native px, or half of it for a 2:1 downscale). The root
  * zoom and the OS dpr multiply, so a fixed CSS size lands on fractional device px (ragged rows). Picks n = max(1, round(cssTarget x zoom x dpr / step))
- * and returns { device: n x step, css: device / (zoom x dpr) }.
+ * and returns { device: n x step, css: device / (zoom x dpr) }. `up` rounds n UP (ceil) so the art never shrinks below the CSS target.
+ * A non-finite or <= 0 cssTarget falls back to the native size (n = 1).
  */
-export function snapDeviceSize(cssTarget: number, step: number, dpr: number, zoom: number): { device: number; css: number } {
+export function snapDeviceSize(cssTarget: number, step: number, dpr: number, zoom: number, up = false): { device: number; css: number } {
   const eff = Math.max(0.1, (Number.isFinite(dpr) && dpr > 0 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
   const st = Number.isFinite(step) && step > 0 ? step : 1;
-  const device = Math.max(1, Math.round((cssTarget * eff) / st)) * st;
+  const raw = Number.isFinite(cssTarget) && cssTarget > 0 ? (cssTarget * eff) / st : 1;
+  const device = Math.max(1, up ? Math.ceil(raw - 1e-9) : Math.round(raw)) * st;
   return { device, css: device / eff };
 }
 
@@ -95,12 +97,13 @@ export function snapDeviceSize(cssTarget: number, step: number, dpr: number, zoo
  * SS5b: snap square pixel art of native `native` px to a whole integer scale (1x, 2x, 3x ...) so it never upscales
  * by a fraction. Unlike snapDeviceSize (which snaps to the nearest whole `step`, letting a non-divisor art blur),
  * this picks the largest integer multiple of `native` that fits the intended device size (`cssTarget x zoom x dpr`),
- * minimum one `native`. The brand mark is 22x22 native, so its device px is always 22 / 44 / 66 ...
+ * minimum one `native` (`up` takes the smallest multiple that is >= the target instead; NaN / <= 0 target = one `native`). The brand mark is 22x22 native, so its device px is always 22 / 44 / 66 ...
  */
-export function snapNativeSize(cssTarget: number, native: number, dpr: number, zoom: number): { device: number; css: number } {
+export function snapNativeSize(cssTarget: number, native: number, dpr: number, zoom: number, up = false): { device: number; css: number } {
   const eff = Math.max(0.1, (Number.isFinite(dpr) && dpr > 0 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1));
   const n = Number.isFinite(native) && native > 0 ? native : 1;
-  const device = n * Math.max(1, Math.floor((cssTarget * eff) / n));
+  const raw = Number.isFinite(cssTarget) && cssTarget > 0 ? (cssTarget * eff) / n : 1;
+  const device = n * Math.max(1, up ? Math.ceil(raw - 1e-9) : Math.floor(raw));
   return { device, css: device / eff };
 }
 
@@ -111,9 +114,9 @@ export function applyKitPixelToDom(scale: number = currentScale): void {
   // +0.0001px keeps float error from rounding a device px down in border/background sizing.
   root.style.setProperty("--u3-px", `${(css + 0.0001).toFixed(4)}px`);
   root.dataset.u3Px = String(device);
-  // SS5b: the sidebar brand mark is 22x22 native, so it snaps to 22 / 44 / 66 device px (a whole integer scale) —
-  // never a fractional upscale like snapDeviceSize(22, 16, ...) = 32 device px = 1.455x that blurs the pixel art.
-  const brand = snapNativeSize(22, 22, window.devicePixelRatio || 1, clampUiScale(scale));
+  // SS5b + FF-ui: the sidebar brand mark is 22x22 native, so it snaps to a whole integer scale (22 / 44 / 66 device px, never a fractional upscale),
+  // rounded UP so it never shrinks below the 22 css px target; a NaN / <= 0 target falls back to 1x.
+  const brand = snapNativeSize(22, 22, window.devicePixelRatio || 1, clampUiScale(scale), true);
   root.style.setProperty("--brand-mark-px", `${(brand.css + 0.0001).toFixed(4)}px`);
   root.dataset.brandMark = String(brand.device);
 }

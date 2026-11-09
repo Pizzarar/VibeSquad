@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { openPinMember } from "./pinFocus";
 import { useUiScale } from "./uiScale";
-import { chromeSmallAdvance, chromeSmallGlyphStyle } from "./chromeFont";
+import { chromeSmallAdvance, CHROME_SMALL_CELL_H, chromeSmallCell, chromeSmallGlyphStyle } from "./chromeFont";
 import { useImageOk, usePrefersReducedMotion, useTheme, type Theme } from "./useBotFace";
 import { gridPinsForSquad, hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import {
@@ -13,13 +13,16 @@ import {
   blipMotion,
   buildTower,
   clampFloorIndex,
-  cursorInButton,
+  cursorOffset,
   FLOOR_CURSOR_JSON_URL,
   FLOOR_BLINK_MS,
   FLOOR_INDEX_KEY,
   floorCounterText,
   fitSignText,
+  signTextWidth,
   floorFitScale,
+  floorKitScale,
+  riderSpot,
   floorNativeSize,
   floorOrPlaceholder,
   isTypingTarget,
@@ -113,14 +116,14 @@ type CursorArt = { model: FloorCursor; url: string; reduced: boolean };
 
 type SeatProps = {
   item: BandItem;
-  cursor: CursorArt | null;
+  /** Hover / keyboard focus (:focus-visible) reports the seat so the band can draw the selector arrow above the front overlay. */
+  onPoint: (kind: "hover" | "focus", agentId: string | null) => void;
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
 };
 
-function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, cursor }: SeatProps) {
-  const at = cursor && cast ? cursorInButton(cast, cursor.model) : null;
+function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, onPoint }: SeatProps) {
   const frame: Frame | null = cast ? spriteFrame(cast, agent.role, agent.pose, frameIndex, agent.variant) : null;
   const hasSprite = !!(sheet && frame);
   const status = POSE_LABEL[agent.pose] ?? agent.pose;
@@ -132,25 +135,11 @@ function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, cursor
       title={`${agent.title} · ${status}`}
       style={{ left: anchor.x, top: anchor.y, ...(cast ? { width: cast.cell, height: cast.cell } : {}) }}
       onClick={onOpen}
+      onMouseEnter={() => onPoint("hover", agent.agentId)}
+      onMouseLeave={() => onPoint("hover", null)}
+      onFocus={(e) => e.currentTarget.matches(":focus-visible") && onPoint("focus", agent.agentId)}
+      onBlur={() => onPoint("focus", null)}
     >
-      {cursor && at && (
-        <span
-          className="sq-floor-cursor"
-          aria-hidden="true"
-          style={
-            {
-              left: at.left,
-              top: at.top,
-              width: cursor.model.cell.w,
-              height: cursor.model.cell.h,
-              backgroundImage: `url(${cursor.url})`,
-              "--cur-w": `${cursor.model.cell.w}px`,
-              "--cur-frames": cursor.model.frames,
-              ...(cursor.reduced ? { animation: "none" } : { animationDuration: `${cursor.model.frames / cursor.model.fps}s` }),
-            } as unknown as CSSProperties
-          }
-        />
-      )}
       {hasSprite ? (
         <span
           className="sq-floor-sprite"
@@ -160,6 +149,29 @@ function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, cursor
         <span className="sq-floor-sprite sq-floor-sprite-fallback" />
       )}
     </button>
+  );
+}
+
+/** The FS-b selector arrow, drawn in the bubbles layer (above the front overlay) over the hovered / keyboard-focused seat. */
+function SeatCursor({ anchor, cast, cursor }: { anchor: Anchor; cast: CastModel; cursor: CursorArt }) {
+  const at = cursorOffset(cast, cursor.model);
+  return (
+    <span
+      className="sq-floor-cursor"
+      aria-hidden="true"
+      style={
+        {
+          left: anchor.x + at.x,
+          top: anchor.y + at.y,
+          width: cursor.model.cell.w,
+          height: cursor.model.cell.h,
+          backgroundImage: `url(${cursor.url})`,
+          "--cur-w": `${cursor.model.cell.w}px`,
+          "--cur-frames": cursor.model.frames,
+          ...(cursor.reduced ? { animation: "none" } : { animationDuration: `${cursor.model.frames / cursor.model.fps}s` }),
+        } as unknown as CSSProperties
+      }
+    />
   );
 }
 
@@ -213,6 +225,12 @@ function Band({
   cursor: CursorArt | null;
 }) {
   const sorted = sortByAnchorY(items);
+  // Hover and keyboard focus are tracked apart: leaving with the mouse must not hide the arrow of a seat that still has :focus-visible.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const pointed = hoveredId ?? focusedId;
+  const onPoint = (kind: "hover" | "focus", id: string | null) => (kind === "hover" ? setHoveredId(id) : setFocusedId(id));
+  const pointedItem = cursor && cast ? sorted.find((it) => it.agent.agentId === pointed) : undefined;
   const layers = bandLayers(!!frontSrc);
   return (
     <>
@@ -224,7 +242,7 @@ function Band({
             return (
               <span key={layer} style={{ display: "contents" }}>
                 {sorted.map((it) => (
-                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} cursor={cursor} />
+                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} onPoint={onPoint} />
                 ))}
                 {extras}
               </span>
@@ -237,6 +255,7 @@ function Band({
                 {sorted.map((it) => (
                   <SeatBubble key={it.agent.agentId} item={it} cast={cast} sheet={sheet} />
                 ))}
+                {pointedItem && cast && cursor && <SeatCursor anchor={pointedItem.anchor} cast={cast} cursor={cursor} />}
                 {overlays}
               </span>
             );
@@ -252,20 +271,24 @@ function TeamSign({ sign, name, testId }: { sign?: Rect; name: string | null; te
   const vacant = name === null;
   const label = vacant ? "VACANT" : name;
   const fit = fitSignText(label, sign.w, chromeSmallAdvance);
-  const used = [...fit.text].reduce((n, ch) => n + Math.max(chromeSmallAdvance(ch) + fit.track, 1), 0);
+  // The 13px glyph cells stay 1:1 (the sign rect is 16 tall, so x1.5 would not fit); when the name fits with the cells butted edge to edge
+  // (no negative margins, no overlapping outlines) it is drawn that way, else it keeps the tracked/tight fit.
+  const open = !fit.ellipsis && signTextWidth(fit.text, chromeSmallCell, 0) <= sign.w - 2;
+  const used = [...fit.text].reduce((n, ch) => n + (open ? chromeSmallCell(ch) : Math.max(chromeSmallAdvance(ch) + fit.track, 1)), 0);
+  const top = Math.floor((sign.h - CHROME_SMALL_CELL_H) / 2); // centred in the rect (floor.json), not a fixed -1
   return (
     <span
       className={`sq-floor-sign${vacant ? " is-vacant" : ""}`}
       data-testid={testId}
-      data-fit={fit.ellipsis ? "ellipsis" : fit.track ? "tight" : "full"}
+      data-fit={fit.ellipsis ? "ellipsis" : open ? "open" : fit.track ? "tight" : "full"}
       role="img"
       aria-label={vacant ? "No team on this side" : name}
       title={vacant ? "No team on this side" : name}
       style={{ left: sign.x, top: sign.y, width: sign.w, height: sign.h }}
     >
-      <span className="sq-floor-sign-text" aria-hidden="true" style={{ left: Math.max(Math.floor((sign.w - used) / 2), 1) }}>
+      <span className="sq-floor-sign-text" aria-hidden="true" style={{ left: Math.max(Math.floor((sign.w - used) / 2), 1), top }}>
         {[...fit.text].map((ch, i) => {
-          const st = chromeSmallGlyphStyle(ch, fit.track);
+          const st = chromeSmallGlyphStyle(ch, fit.track, open);
           return st ? <span key={i} className="sq-floor-sign-glyph" style={st} /> : null;
         })}
       </span>
@@ -274,15 +297,16 @@ function TeamSign({ sign, name, testId }: { sign?: Rect; name: string | null; te
 }
 
 /** HP6: while someone rides, the closed doors painted on the plate would hide the rider, so draw the doors open on the car interior. */
-function LiftOpen({ doorA, doorB, car }: { doorA: Rect; doorB: Rect; car: Rect }) {
-  const x = doorA.x + 1;
-  const w = doorB.x + doorB.w - doorA.x - 2;
-  const h = doorA.h - 6;
+function LiftOpen({ doorA, doorB, car, kit }: { doorA: Rect; doorB: Rect; car: Rect; kit: number }) {
+  // Covers the painted closed doors edge to edge (the whole door height, no closed-door strip left under it); every number is a floor.json rect.
+  const x = doorA.x;
+  const w = doorB.x + doorB.w - doorA.x;
+  const panel = { width: Math.round(3 * kit) };
   return (
-    <span className="sq-floor-lift-open" data-testid="sq-floor-lift-open" aria-hidden="true" style={{ left: x, top: doorA.y, width: w, height: h }}>
-      <span className="sq-floor-lift-open-car" style={{ left: car.x - x, top: car.y - doorA.y, width: car.w, height: car.h - 6 }} />
-      <span className="sq-floor-lift-open-door is-left" />
-      <span className="sq-floor-lift-open-door is-right" />
+    <span className="sq-floor-lift-open" data-testid="sq-floor-lift-open" aria-hidden="true" style={{ left: x, top: doorA.y, width: w, height: doorA.h }}>
+      <span className="sq-floor-lift-open-car" style={{ left: car.x - x, top: car.y - doorA.y, width: car.w, height: car.h }} />
+      <span className="sq-floor-lift-open-door is-left" style={panel} />
+      <span className="sq-floor-lift-open-door is-right" style={panel} />
     </span>
   );
 }
@@ -594,17 +618,21 @@ export function SquadFloor({ view }: SquadFloorProps) {
       .filter((r) => r.floor === floorIndex)
       .map((r, i) => {
         const frame = cast ? spriteFrame(cast, r.role, "ride", 0, r.variant) : null;
+        const spot = riderSpot(elevator, i, floorKitScale(native));
         return (
           <span
             key={r.agentId}
             className="sq-floor-rider"
             title={`${r.title} · riding`}
-            style={{
-              left: elevator.x + elevator.w / 2 + (i % 2 === 0 ? -6 : 6),
-              top: elevator.y + elevator.h - 2,
-              animationDuration: `${RIDE_MS}ms`,
-              ...(cast ? { width: cast.cell, height: cast.cell } : {}),
-            }}
+            style={
+              {
+                left: spot.left,
+                top: spot.top,
+                "--ride-rise": `${spot.rise}px`,
+                animationDuration: `${RIDE_MS}ms`,
+                ...(cast ? { width: cast.cell, height: cast.cell } : {}),
+              } as CSSProperties
+            }
           >
             {sheet && frame ? (
               <span className="sq-floor-sprite" style={{ backgroundImage: `url(${sheet})`, backgroundPosition: `-${frame.x}px -${frame.y}px` }} />
@@ -668,7 +696,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
                     <>
                       <StatsTv placement={f.teamA} tv={floor.teamA.statsTv} reduced={reduced} onOpen={(id) => openAgent(f.teamA.laneId, id)} />
                       {f.teamB && <StatsTv placement={f.teamB} tv={floor.teamB.statsTv} reduced={reduced} onOpen={(id) => openAgent(f.teamB!.laneId, id)} />}
-                      {riders.some((r) => r.floor === f.index) && <LiftOpen doorA={floor.elevator.doorA} doorB={floor.elevator.doorB} car={floor.elevator.car} />}
+                      {riders.some((r) => r.floor === f.index) && <LiftOpen doorA={floor.elevator.doorA} doorB={floor.elevator.doorB} car={floor.elevator.car} kit={floorKitScale(native)} />}
                     </>
                   }
                   extras={ridersOn(f.index, floor.elevator.car)}

@@ -4715,19 +4715,20 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 
 /* ── Hub pages (src/HubPages.tsx, docs/PLAN_HUB_PAGES.md HP1-HP3): Sky / Tower switcher over one shared skyline backdrop ── */
-.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden; isolation: isolate; }
+.hub-pages { grid-column: 1; grid-row: 2 / -1; position: relative; display: flex; flex-direction: column; min-height: 0; overflow: hidden auto; isolation: isolate; } /* FF-ui: if the TVs strip leaves the floor under its minimum, the page scrolls a little instead of hiding the floor */
 .hub-backdrop { position: absolute; inset: 0; z-index: -1; image-rendering: pixelated; pointer-events: none; background-color: #2a1b6b; }
 :root[data-theme="light"] .hub-backdrop { background-color: #95d3f2; }
 /* Fallback (A1 absent): today's sky band along the bottom over a vertical gradient. */
 .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #070a22, #18225e 62%, #3b3278); }
 :root[data-theme="light"] .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #7fc4f5, #bfe3fb 62%, #eef8ff); }
 .hub-backdrop.is-fallback.has-sky-band { background-size: auto 60%; background-position: left bottom; background-repeat: repeat-x; }
-.hub-sky-page { flex: none; display: flex; flex-direction: column; }
-.hub-sky-page .sky-zones { flex: none; height: clamp(260px, 36vh, 440px); }
+/* FF-ui art rule: the floor box is never under --floor-need (the floor at 1 device px per native px, set by HubPages from floor.json), so the TVs band is the part that yields: it asks for 36vh and shrinks (flex-shrink) down to a slim strip. Chats only open in a band that is already tall; faces stay clickable in the slim strip. */
+.hub-sky-page { flex: 0 1 clamp(260px, 36vh, 440px); min-height: var(--sky-slim, 112px); display: flex; flex-direction: column; overflow: hidden; }
+.hub-sky-page .sky-zones { flex: 1 1 0; height: auto; min-height: 0; }
 /* Short windows (1280x720): an open sky chat gets a taller band (it was 240px: timeline gone, composer cut); the floor below takes the difference. */
-@media (max-height: 820px) { .hub-sky-page .sky-zones:has(.sky-chat-panel:not([hidden])) { height: clamp(330px, 46vh, 440px); } }
+@media (max-height: 820px) { .hub-sky-page:has(.sky-chat-panel:not([hidden])) { flex-basis: clamp(330px, 46vh, 440px); min-height: 330px; } } /* an open chat keeps its 330px: the floor box keeps its need too, so the hub page scrolls instead */
 /* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
-.hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
+.hub-tower-box { flex: 1 0 var(--floor-need, 125px); min-height: var(--floor-need, 125px); overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
 .hub-tower-box .sq-floor-stage { align-items: flex-end; }
 .hub-tower-box .sq-floor-tower { background: transparent; border-top: 0; }
@@ -4951,7 +4952,7 @@ button.project-file-name:hover { text-decoration: underline; }
 /* HP6: team-name signs. Glyphs are the small chrome font at 1:1 plate px (cell 13, ink 10) inside the 11px plate. */
 .sq-floor-sign { position: absolute; z-index: 3; display: block; overflow: hidden; image-rendering: pixelated; }
 .sq-floor-sign.is-vacant { opacity: 0.55; }
-.sq-floor-sign-text { position: absolute; top: -1px; display: flex; align-items: flex-start; white-space: nowrap; font-size: 0; line-height: 0; }
+.sq-floor-sign-text { position: absolute; top: 0; display: flex; align-items: flex-start; white-space: nowrap; font-size: 0; line-height: 0; }
 .sq-floor-sign-glyph { flex: none; display: block; background: var(--u3-font-chrome-small) 0 0 / 208px 41px no-repeat; image-rendering: pixelated; }
 /* HP6: lift open while someone rides: the doors painted on the plate are closed, so cover them with the car interior and two slid-back door panels. */
 .sq-floor-lift-open { position: absolute; display: block; overflow: hidden; background: #0e0a24; image-rendering: pixelated; }
@@ -4973,7 +4974,7 @@ button.project-file-name:hover { text-decoration: underline; }
   background: var(--panel-hi);
 }
 .sq-floor-box-elevator { background: var(--panel-alt); border-color: var(--slate); }
-.sq-floor-front { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; pointer-events: none; image-rendering: pixelated; }
+.sq-floor-front { position: absolute; z-index: 2; left: 0; top: 0; width: 100%; height: 100%; display: block; pointer-events: none; image-rendering: pixelated; }
 .sq-floor-char {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -4995,10 +4996,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .sq-floor-sprite-fallback { background: var(--coral); border: 1px solid var(--line); box-sizing: border-box; }
 /* FS-a: a 1px silhouette that hugs the sprite's own pixels (4 hard drop-shadows, no blur) + a 1px stepped hop on hover. */
 /* the global U2 focus ring is !important; the silhouette below is the focus indicator here */
-/* FS-b: the selector arrow shows on keyboard focus only (2-frame bob from floor-cursor.json; reduced motion = static frame 0). */
-.sq-floor-cursor { display: none; position: absolute; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; background-position: 0 0; animation: sq-floor-cursor-bob steps(var(--cur-frames, 2), jump-none) infinite; }
-.sq-floor-char:focus-visible { z-index: 3; }
-.sq-floor-char:focus-visible .sq-floor-cursor { display: block; }
+/* FS-b: the selector arrow shows on hover and keyboard focus (SquadFloor draws it in the bubbles layer, above .sq-floor-front; 2-frame bob from floor-cursor.json; reduced motion = static frame 0). */
+.sq-floor-cursor { display: block; z-index: 3; position: absolute; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; background-position: 0 0; animation: sq-floor-cursor-bob steps(var(--cur-frames, 2), jump-none) infinite; }
 @keyframes sq-floor-cursor-bob { from { background-position: 0 0; } to { background-position: calc(var(--cur-w) * (1 - var(--cur-frames, 2))) 0; } }
 @media (prefers-reduced-motion: reduce) { .sq-floor-cursor { animation: none; } }
 button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none !important; }
@@ -5007,9 +5006,9 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
   filter: drop-shadow(1px 0 0 var(--cyan)) drop-shadow(-1px 0 0 var(--cyan)) drop-shadow(0 1px 0 var(--cyan)) drop-shadow(0 -1px 0 var(--cyan));
 }
 .sq-floor-char:hover .sq-floor-sprite { animation: sq-floor-hop 120ms steps(1, end) forwards; }
-@keyframes sq-floor-hop { from { transform: translateY(0); } to { transform: translateY(-1px); } }
+@keyframes sq-floor-hop { from { transform: translateY(0); } to { transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) { .sq-floor-char:hover .sq-floor-sprite { animation: none; } }
-.sq-floor-bubble { position: absolute; display: block; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; }
+.sq-floor-bubble { position: absolute; z-index: 3; display: block; pointer-events: none; image-rendering: pixelated; background-repeat: no-repeat; }
 .sq-floor-plus {
   position: absolute;
   transform: translateY(-100%);
@@ -5111,11 +5110,11 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 @media (prefers-reduced-motion: reduce) {
   .sq-floor-blip.is-pulse, .sq-floor-blip.is-blink, .sq-floor-tv-beat { animation: none; }
 }
-.sq-floor-rider { position: absolute; transform: translate(-50%, -100%); line-height: 0; animation: sq-floor-ride linear forwards; }
+.sq-floor-rider { --ride-rise: 12px; position: absolute; transform: translate(-50%, -100%); line-height: 0; animation: sq-floor-ride linear forwards; }
 .sq-floor-rider .sq-floor-sprite-fallback { width: 16px; height: 16px; }
 @keyframes sq-floor-ride {
   from { transform: translate(-50%, -100%); opacity: 1; }
-  to { transform: translate(-50%, calc(-100% - 12px)); opacity: 0.2; }
+  to { transform: translate(-50%, calc(-100% - var(--ride-rise))); opacity: 0.2; } /* --ride-rise = 12 contract px x the floor.json kit scale, set inline by SquadFloor */
 }
 @media (prefers-reduced-motion: reduce) { .sq-floor-rider { animation: none; } }
 

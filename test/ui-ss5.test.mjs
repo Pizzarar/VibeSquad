@@ -42,6 +42,18 @@ test('brand mark: 22x22 native art snaps to a whole 22-multiple (never a fractio
   // was snapDeviceSize(22, 16, ...): 32 device px = 32/22 = 1.455x non-integer scale that blurs the pixel art
   assert.equal(snapNativeSize(22, 22, 1, 1.5).device, 22);
   assert.equal(snapNativeSize(22, 22, 1.5, 1.5).device, 44);
+  // FF-ui: rounded UP + a NaN / <= 0 guard
+  for (const dpr of [1, 1.2, 1.5, 2]) for (const zoom of [1, 1.25, 1.5, 1.75, 2]) {
+    const { device, css } = snapNativeSize(22, 22, dpr, zoom, true);
+    assert.equal(device % 22, 0, `${dpr}x${zoom}`);
+    assert.ok(device >= 22 * dpr * zoom - 1e-6, `${dpr}x${zoom}: ${device} shrank below the target`);
+    assert.ok(device < 22 * dpr * zoom + 22, `${dpr}x${zoom}: ${device} overshoots by a whole step`);
+    assert.ok(Math.abs(css * dpr * zoom - device) < 1e-9);
+  }
+  assert.equal(snapNativeSize(22, 22, 1.2, 1.5, true).device, 44);
+  assert.equal(snapNativeSize(22, 22, 1, 1.5, true).device, 44);
+  assert.equal(snapNativeSize(22, 22, 1, 1, true).device, 22);
+  for (const bad of [NaN, 0, -5, Infinity]) assert.equal(snapNativeSize(bad, 22, 1.2, 1.5, true).device, 22, `target ${bad}`);
   const css = read('src/styles.css');
   assert.match(css, /\.brand-mark \{[^}]*width: var\(--brand-mark-px, 22px\)/);
   assert.match(css, /\.brand-text \{\s*min-width: 0;/);
@@ -78,4 +90,25 @@ test('Settings Reset clears the chat override, Ctrl+0 (resetUiScale) leaves it',
   assert.equal(getChatScaleOverride(), null);
   const modal = read('src/TeamSettingsModal.tsx');
   assert.match(modal, /data-testid="ui-scale-reset"\s+onClick=\{\(\) => resetAllScales\(false\)\}/);
+});
+
+test('FF-ui floor snap: the (960x498) is always a whole device-px multiple, never a row-dropping fraction (no 1/n)', () => {
+  const fit = (w, h, dpr, zoom) => floorFitScale(w, h, dpr, 960, 498, zoom);
+  const devPer = (s, dpr, zoom) => s * dpr * zoom;
+  // 1080 UI 100%: the hub gives the floor box its need (498 css) -> 1x
+  assert.equal(devPer(fit(1880, 498, 1, 1), 1, 1), 1);
+  // 1080 UI 150%: need = ceil(498 / 1.5) = 332 css, 1250 wide -> 1x device (the old rule gave 1/2)
+  assert.equal(devPer(fit(1250, 332, 1, 1.5), 1, 1.5), 1);
+  assert.equal(devPer(fit(2000, 1000, 1, 1), 1, 1), 2);
+  // 4K @120%: device 3840x2160. UI 100%: stage css 2583 x 1083 -> 2x; UI 150%: css 1722 x 722 -> 2x device
+  assert.equal(devPer(fit(2583, 1083, 1.2, 1), 1.2, 1), 2);
+  assert.equal(devPer(fit(1722, 722, 1.2, 1.5), 1.2, 1.5), 2);
+  // every result with room for 1x is exactly k device px per art px, fits the box (1 device px of measuring slack), never 0
+  for (const [dpr, zoom] of [[1, 1], [1, 1.5], [1.2, 1], [1.2, 1.5]]) {
+    for (let h = 150; h <= 1400; h += 37) {
+      const s = fit(1800, h, dpr, zoom), d = devPer(s, dpr, zoom);
+      assert.ok(s > 0 && 960 * s <= 1800 + 1e-6 && 498 * s <= h + 1 / (dpr * zoom) + 1e-6, `${h}@${dpr}x${zoom}: ${s}`);
+      if (h * dpr * zoom >= 498) assert.ok(Math.abs(d - Math.round(d)) < 1e-9 && d >= 1, `${h}@${dpr}x${zoom}: ${d} device px per art px`);
+    }
+  }
 });

@@ -805,25 +805,46 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
 }
 
 /**
- * Scale for a single floor in a fixed box: a whole DEVICE-pixel multiple fitting both width and height, so the pixel art stays crisp.
+ * Scale for a single floor in a fixed box: a whole device-pixel multiple, never below 1 device px per native px.
  * `zoom` is the root UI zoom (src/uiScale.ts): the box is measured in zoomed CSS px, so a device px is 1 / (dpr x zoom) of a CSS px and the
  * snap must use that product (SS5: at 1080 + UI 150% the old dpr-only snap gave a 1.5x shimmer and a clipped floor).
- * It never returns 0 for a measured box (a narrow hub pane or a UI-scale zoom used to blank the tower): when no whole device-px multiple fits
- * (below one device pixel per native pixel, either way) it falls back to a fractional fit of the width and height, so the floor is never clipped.
- * 0 only when there is no width yet.
+ * - The largest whole multiple that fits both ways, `k / (dpr x zoom)`, with 1 device px of measuring slack (zoom rounding).
+ * - Art rule (FF-ui): no 1/2..1/4 fractions. The hub gives the floor a box of at least floorNeedCssPx (the TVs band yields the height), so a
+ *   normal window always lands on k >= 1.
+ * - Last resort, only when the box is narrower than the native floor (960 device px wide: a hub column under ~960 / zoom CSS px) or the
+ *   caller gives no height room: fit fractionally so the floor is never clipped and never 0. 0 only when there is no width yet.
  */
 export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLOOR_NATIVE_WIDTH, nativeH = FLOOR_NATIVE_HEIGHT, zoom = 1): number {
   if (!Number.isFinite(boxW) || boxW <= 0) return 0;
   const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
   const hasH = Number.isFinite(boxH) && boxH > 0;
-  const crisp = Math.floor((boxW * ratio) / nativeW) / ratio; // whole device-pixel multiple of the width
-  if (crisp >= 1 / ratio) {
-    if (!hasH) return crisp;
-    const byHeight = Math.floor((boxH * ratio) / nativeH) / ratio;
-    if (byHeight >= 1 / ratio) return Math.min(crisp, byHeight);
-    return Math.min(crisp, boxH / nativeH); // no whole multiple fits the height: fractional, never clipped
-  }
-  return hasH ? Math.min(boxW / nativeW, boxH / nativeH) : boxW / nativeW; // narrower than 1 device px per native px: fit fractionally rather than vanish
+  const room = (w: number, h: number) => Math.min((w * ratio) / nativeW, hasH ? (h * ratio) / nativeH : Infinity);
+  const whole = Math.floor(room(boxW + 1 / ratio, boxH + 1 / ratio) + 1e-9);
+  if (whole >= 1) return whole / ratio;
+  return room(boxW, boxH) / ratio; // last resort: fractional fit rather than clip or vanish
+}
+
+/** The floor plate's art scale against the 640-wide contract (floor.json w / 640): 1.5 for the x1.5 kit. Per-px CSS/TS numbers derive from this. */
+export function floorKitScale(size: { w: number }): number {
+  return size.w > 0 ? size.w / FLOOR_NATIVE_WIDTH : 1;
+}
+
+/**
+ * CSS px (in the root-zoomed space) the floor needs to be drawn at 1 device px per native px: native height / (dpr x zoom), rounded up.
+ * The hub keeps the floor box at least this tall; the sky TVs band yields the rest. When the column is narrower than the native floor
+ * (`colW` CSS px, 0 = unknown) 1x cannot fit sideways anyway (last-resort fractional fit in floorFitScale), so the need shrinks with the
+ * width the floor will really be drawn at, and the TVs keep the height the floor cannot use.
+ */
+export function floorNeedCssPx(nativeH: number, dpr = 1, zoom = 1, colW = 0, nativeW = FLOOR_NATIVE_WIDTH): number {
+  const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
+  const sideways = colW > 0 && nativeW > 0 ? Math.min(1, (colW * ratio) / nativeW) : 1;
+  return Math.ceil((nativeH * sideways) / ratio);
+}
+
+/** A rider's spot over the lift: the first rider stands on the car's centre line (car.x + car.w/2); more alternate either side by 6 contract px x the kit scale. `rise` is the ride travel (12 contract px x kit). */
+export function riderSpot(car: Rect, index: number, kit: number): { left: number; top: number; rise: number } {
+  const side = index === 0 ? 0 : index % 2 === 1 ? 1 : -1;
+  return { left: car.x + car.w / 2 + side * Math.ceil(index / 2) * 6 * kit, top: car.y + car.h - 2 * kit, rise: 12 * kit };
 }
 
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────
@@ -846,15 +867,15 @@ export function validateFloorCursor(json: unknown): Validation<FloorCursor> {
 
 /**
  * Where the arrow cell sits, relative to the seat anchor (floor art px; the band's integer scale multiplies it).
- * The tip (`anchor` pixel of frame 0) lands on seat.x, and the cell top rides the bubble's vertical offset, so the
- * tip sits beside the "!" bubble without overlapping it. Nothing here is a hardcoded number.
+ * The tip (`anchor` pixel of frame 0) lands on seat.x, and the cell sits 1.5 cell-heights above the sprite cell top
+ * (FF-ui: clear of tall hair; the old bubble-offset rule put it at -12 and it touched the hair). Derived from cast.cell and floor-cursor.json only.
  */
-export function cursorOffset(cast: Pick<CastModel, "bubble">, cursor: FloorCursor): { x: number; y: number } {
-  return { x: -cursor.anchor.x, y: cast.bubble.offset.y };
+export function cursorOffset(cast: Pick<CastModel, "cell">, cursor: FloorCursor): { x: number; y: number } {
+  return { x: -cursor.anchor.x, y: -cast.cell - Math.round(cursor.cell.h * 1.5) };
 }
 
 /** The same placement in the seat button's own box (its top-left is seat − (cell/2, cell)). */
-export function cursorInButton(cast: Pick<CastModel, "bubble" | "cell">, cursor: FloorCursor): { left: number; top: number } {
+export function cursorInButton(cast: Pick<CastModel, "cell">, cursor: FloorCursor): { left: number; top: number } {
   const o = cursorOffset(cast, cursor);
   return { left: o.x + cast.cell / 2, top: o.y + cast.cell };
 }

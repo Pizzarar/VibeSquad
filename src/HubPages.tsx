@@ -1,9 +1,11 @@
 // Hub view (docs/PLAN_HUB_PAGES.md HP5): one view, no tabs. The big RiffBot + Overlord TVs band on top, the needs-you strip,
 // then one floor filling the rest of the height with its bottom edge flush to the page bottom, all over the A1 skyline backdrop
 // (visible left and right of the floor).
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { HUB_BACKDROP_JSON, HUB_BACKDROP_URL, backdropStyle, validateHubBackdrop, type HubBackdrop } from "./hubPagesLogic";
 import { SKY_URL } from "./skyZonesLogic";
+import { floorNativeSize, floorNeedCssPx, floorOrPlaceholder } from "./squadFloorLogic";
+import { useUiScale } from "./uiScale";
 import { useDpr, useImageOk, useTheme } from "./useBotFace";
 
 const PLATE_INSET = 0; // HP5: the floor plate sits flush on the page bottom (no road / ground strip, no gap)
@@ -21,6 +23,22 @@ function useHubBackdrop(): HubBackdrop | null {
     };
   }, []);
   return model;
+}
+
+/** The floor plate's native size from floor.json (the placeholder 640x360 until it loads): the floor box must hold this many device px, so the TVs band yields. */
+function useFloorNative(): { w: number; h: number } {
+  const [size, setSize] = useState(() => floorNativeSize(floorOrPlaceholder(undefined)));
+  useEffect(() => {
+    let alive = true;
+    fetch("/office/floor.json")
+      .then((r) => (r.ok ? r.json() : undefined))
+      .catch(() => undefined)
+      .then((json) => alive && setSize(floorNativeSize(floorOrPlaceholder(json))));
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return size;
 }
 
 /** The layer behind the TVs and the floor: the A1 skyline when json + PNG load, else today's sky band over a gradient. */
@@ -51,16 +69,19 @@ export function HubPages({
 }) {
   const root = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
+  // FF-ui: the floor box is never shorter than the floor at 1 device px per native px; the TVs band (flex-shrink) gives up the height.
+  const native = useFloorNative();
+  const floorNeed = floorNeedCssPx(native.h, useDpr(), useUiScale(), width, native.w);
   useEffect(() => {
     const el = root.current;
     if (!el || typeof ResizeObserver === "undefined") return;
     const ro = new ResizeObserver((es) => es.forEach((e) => setWidth(e.contentRect.width)));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [agentOpen]); // the root div only exists while the agent is not open
   if (agentOpen) return <>{strip}{tower}</>;
   return (
-    <div ref={root} className="hub-pages" data-testid="hub-pages">
+    <div ref={root} className="hub-pages" data-testid="hub-pages" style={{ "--floor-need": `${floorNeed}px` } as CSSProperties}>
       <Backdrop width={width} />
       <div className="hub-sky-page" data-testid="hub-sky-page">
         {sky}
