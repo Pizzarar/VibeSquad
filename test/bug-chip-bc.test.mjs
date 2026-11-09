@@ -36,3 +36,9 @@ test("bug chip tsx: skip-if-absent, keeps testids", () => {
   assert.match(tsx, /data-testid=\{`bug-btn-\$\{teamId\}`\}/);
   assert.match(tsx, /bugRoachSheetSrc\(theme, device\)/);
 });
+
+test("bug chip tsx: absent sheet renders an empty sized box, never the emoji", () => {
+  const tsx = read("src/BugButton.tsx");
+  assert.ok(!tsx.includes("🐞"));
+  assert.match(tsx, /backgroundImage: roachOk \?/);
+});

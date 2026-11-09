@@ -92,16 +92,12 @@ export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin)
         void Promise.resolve(onOpen(pin)).catch((e) => alert(`Could not start Bug Runner: ${e}`));
       }}
     >
-      {roachOk ? (
-        <span
-          className="bug-btn-roach"
-          data-testid={`bug-roach-${teamId}`}
-          aria-hidden="true"
-          style={{ backgroundImage: `url(${sheet})`, width: css, height: css }}
-        />
-      ) : (
-        <span aria-hidden="true">🐞</span>
-      )}
+      <span
+        className="bug-btn-roach"
+        data-testid={`bug-roach-${teamId}`}
+        aria-hidden="true"
+        style={{ backgroundImage: roachOk ? `url(${sheet})` : undefined, width: css, height: css }}
+      />
       <span className="bug-btn-n">{counts.total}</span>
     </button>
   );
