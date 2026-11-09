@@ -152,6 +152,7 @@ function harness(
     cappedProviders?: any;
     usageProviders?: any[];
     leadWakeCooldownMs?: number;
+    unitBranchState?: (cwd: string | undefined) => Promise<{ unit: string; merged: boolean }>;
     /** Test hook for flushWake's snap(): null -> null snapshot, a string -> the agent with that status. */
     snapStatusOverride?: (id: string) => string | null | undefined;
   },
@@ -184,6 +185,7 @@ function harness(
     retryBaseMs: 10,
     firstPromptRedeliverMs: 60_000,
     leadWakeCooldownMs: opts.leadWakeCooldownMs ?? 40,
+    ...(opts.unitBranchState ? { unitBranchState: opts.unitBranchState } : {}),
     ...(opts.cappedProviders !== undefined ? { cappedProviders: opts.cappedProviders } : {}),
     ...(opts.usageProviders !== undefined ? { usageProviders: opts.usageProviders } : {}),
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
@@ -252,6 +254,7 @@ function harness(
     stop,
     archivedIds,
     scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
+    sweepDoneWorkers: (stop as any).sweepDoneWorkers as (now?: number) => Promise<string[]>,
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
     },
@@ -1153,6 +1156,54 @@ test(
       h.scanLogs(false);
       await wait(3300);
       assert.deepEqual(h.archivedIds, ["w-1"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "B1: the done sweep archives only long-done, merged, non-FAIL idle/closed workers; never leads, Buddies, running or in-grace workers",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, role: string, extra: any = {}, status = "idle") => ({
+      id, title: id, cwd: id === "w-unmerged" ? "/unmerged" : CWD, status, provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role, ...extra },
+    });
+    const agents = new Map<string, any>([
+      ["w-old", mk("w-old", "worker", {}, "closed")],
+      ["w-old-idle", mk("w-old-idle", "worker")],
+      ["w-running", mk("w-running", "worker", {}, "running")],
+      ["w-fresh", mk("w-fresh", "worker")],
+      ["w-fail", mk("w-fail", "worker")],
+      ["w-unmerged", mk("w-unmerged", "worker")],
+      ["lead-1", mk("lead-1", "lead", { lead: "vibesquad" })],
+      ["buddy-1", mk("buddy-1", "brainstorm")],
+    ]);
+    const h = harness(agents, {
+      briefRoot,
+      unitBranchState: async (cwd) => (cwd === "/unmerged" ? { unit: "unit-x", merged: false } : { unit: "unit-ok", merged: true }),
+    });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (id: string, text: string, ageMin: number) =>
+        JSON.stringify({ ts: new Date(now - ageMin * 60_000).toISOString(), agent: id, lane: "vibesquad", type: "done", text, refs: [] }) + "\n";
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      await h.onTurnEnded(agents.get("lead-1")); // hands the plugin its paseo handle; scanLogs below stays baseline-free (history)
+      writeFileSync(
+        file,
+        ["w-old", "w-old-idle", "w-running", "lead-1", "buddy-1", "w-unmerged"].map((id) => line(id, "PASS: shipped", 45)).join("") +
+          line("w-fresh", "PASS: shipped", 5) +
+          line("w-fail", "FAIL: tests red", 90),
+        "utf8",
+      );
+      const archived = await h.sweepDoneWorkers(now);
+      assert.deepEqual(archived.sort(), ["w-old", "w-old-idle"]);
+      assert.deepEqual(h.archivedIds.sort(), ["w-old", "w-old-idle"]);
+      const metrics = readFileSync(file, "utf8").split("\n").filter((l) => l.includes("worker-auto-archive"));
+      assert.equal(metrics.length, 2);
+      assert.ok(metrics.some((l) => l.includes("worker-auto-archive id=w-old unit=unit-ok")));
+      assert.deepEqual(await h.sweepDoneWorkers(now), [], "archived workers are not archived twice");
     } finally {
       h.stop?.();
     }
