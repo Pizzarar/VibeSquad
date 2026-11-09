@@ -716,7 +716,7 @@ test("just-send-it rule: identical sentence in all three prompt sources, old ask
 
 test("B1 bug-routing rule (R11, <=240 chars): same text in the shared prefix of all three sources, so every role gets it", () => {
   const RULE =
-    "- R11 (Bugs & fixes): Fix small root causes in your own unit, report after. Found a bug or an out-of-unit fix? Queue it and keep working: leads/Buddies `vs inbox add --lane <bug lane> --from-brainstorm \"<item>\"`; workers: final message.";
+    "- R11 (Bugs & fixes): Fix small in-unit root causes, report after. Other bugs/fixes: queue, keep working (leads/Buddies: `vs inbox add --lane <bug lane> --from-brainstorm \"<item>\"`; workers: final msg). Workarounds need a queued follow-up.";
   assert.ok(RULE.length <= 240);
   assert.ok(SHARED_NOTE_PREFIX.includes(RULE), "server SHARED_NOTE_PREFIX missing R11");
   for (const p of PACK) assert.ok(p.notes.includes(RULE), `${p.name}: note missing R11`);
