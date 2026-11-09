@@ -103,6 +103,8 @@ export function spinUpOverlord(
     profile: OverlordProfile | undefined;
     profileName: string;
     defaults?: { modeId?: string; approvalPolicy?: string; sandbox?: string; shareMcp?: boolean };
+    /** Squad/lane working dir for a hub with no agent yet (fetchHubCwd); only asked when no hub member has a cwd. */
+    resolveCwd?: (hub: Pin) => Promise<string | null | undefined>;
   },
 ): Promise<string> {
   const hub = hubPinForSquad(view);
@@ -119,8 +121,9 @@ export function spinUpOverlord(
 async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUpOverlord>[1]): Promise<string> {
   const lane = hub.lane.id;
   const inHub = (view.members ?? []).filter((m) => (m.laneId ?? "").toLowerCase() === lane.toLowerCase());
-  const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd;
-  if (!cwd) throw new Error("No working directory known for the hub; start RiffBot first");
+  // Same order as server/brainstorm.mjs: the agent's own cwd, else the Squad/lane folder from the registry.
+  const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd || (await deps.resolveCwd?.(hub).catch(() => null));
+  if (!cwd) throw new Error(`No working directory known for the ${view.team.name ?? view.team.id} hub: add a project folder to the Squad`);
   const ord = Math.max(0, ...inHub.filter((m) => m.kind === "lead" || m.kind === "old-lead").map((m) => ordOf(m.agent))) + 1;
   const p = deps.profile;
   const gemini = deps.profileName === "Lead - Gemini";
@@ -148,6 +151,18 @@ async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUp
     if (m.kind === "lead" && !m.agent.archivedAt && m.agent.status === "closed") await deps.retire?.(m)?.catch?.(() => {});
   }
   return r.id;
+}
+
+/** The hub lane's working dir from the server's laneWorkingDir (brainstorm-summary GET), or null. Needs no agent. */
+export async function fetchHubCwd(hub: Pin, doFetch: typeof fetch = fetch): Promise<string | null> {
+  const res = await doFetch(`/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(hub.lane.id)}&teamId=${encodeURIComponent(hub.squad.id)}`);
+  const body = (await res.json().catch(() => ({}))) as { cwd?: unknown };
+  return res.ok && typeof body.cwd === "string" && body.cwd ? body.cwd : null;
+}
+
+/** H3: the failed Spin Up error to show on the hub page, only while the focus is the hub lane's. */
+export function hubSpinUpError(focus: { laneId: string; spinUpError?: string | null } | null | undefined, hub: Pin | null | undefined): string | null {
+  return focus && hub && focus.laneId === hub.lane.id ? focus.spinUpError || null : null;
 }
 
 /** Agent ids the sky zones own; the hub page shows the normal focus view for any other agent. */
