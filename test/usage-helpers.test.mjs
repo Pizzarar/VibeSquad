@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { buildProfiles, buildRows, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxSourceBadge, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, reviewSummary, usageOpenKey, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -264,4 +264,80 @@ test("lowCostCoverage / sortWorkflows", () => {
   const rows = [{ workflowMode: "b", units: 1 }, { workflowMode: "a", units: 1 }, { workflowMode: "z", units: 5 }];
   assert.deepEqual(sortWorkflows(rows).map((r) => r.workflowMode), ["z", "a", "b"]);
   assert.deepEqual(sortWorkflows(undefined), []);
+});
+
+test("humanizeProfile + buildProfiles fold raw agent_profile_* ids into one row", () => {
+  const base = { provider: "claude", role: "worker", workingMs: 0, idleMs: 0, passRate: 1, avgReviewRounds: 2, costPerMergedUnit: 2, fixAfterMergeRate: 0 };
+  const d = {
+    limits: [], lanes: [], byRole: [],
+    byProfile: [
+      { ...base, profile: "agent_profile_aaa", runs: 1, turns: 10, mergedUnits: 1 },
+      { ...base, profile: "agent_profile_bbb", runs: 3, turns: 20, mergedUnits: 3, costPerMergedUnit: 4 },
+      { ...base, profile: "Implement - Sonnet", runs: 1, turns: 5, mergedUnits: 1 },
+    ],
+  };
+  assert.equal(humanizeProfile("agent_profile_xyz"), "(unlabelled profile)");
+  assert.equal(humanizeProfile("Lead"), "Lead");
+  const rows = buildProfiles(d);
+  assert.equal(rows.length, 2);
+  const orphan = rows.find((r) => r.profile === "(unlabelled profile)");
+  assert.equal(orphan.runs, 4);
+  assert.equal(orphan.turns, 30);
+  assert.equal(orphan.mergedUnits, 4);
+  assert.equal(orphan.costPerMergedUnit, 3.5);
+});
+
+test("bug inbox helpers: lane filter, buckets, counts, source badges", () => {
+  const mk = (id, status, extra = {}) => ({ id, text: id, title: id, teamId: "vibesquad", laneId: "bug-chaser", scope: "infra", status, createdAt: `2026-11-0${id.length}T00:00:00Z`, updatedAt: "", ...extra });
+  const cards = [
+    mk("a", "parked", { source: "usage-review:opus" }),
+    mk("bb", "parked", { topicAgentId: "ag1", source: "usage-review:gemini" }),
+    mk("ccc", "accepted"),
+    mk("dddd", "rejected"),
+    mk("eeeee", "archived"),
+    mk("f", "handed-off"),
+    { ...mk("x", "parked"), laneId: "other-lane" },
+  ];
+  const bug = bugInboxCards(cards);
+  assert.equal(bug.length, 6, "other lanes excluded");
+  assert.equal(isTriageCard({ laneId: "perfection" }), true);
+  assert.equal(isTriageCard({ laneId: "ui-lab", source: "usage-review:opus" }), true, "usage-review source included from any lane");
+  assert.equal(isTriageCard({ laneId: "ui-lab", source: "cli" }), false);
+  assert.deepEqual(inboxLaneBadge("bug-chaser"), { key: "bug", label: "Bug" });
+  assert.deepEqual(inboxLaneBadge("Perfection"), { key: "perfection", label: "Perfection" });
+  assert.deepEqual(inboxCounts(bug), { all: 6, queue: 1, accepted: 3, closed: 2 });
+  assert.equal(inboxBucket(cards[1]), "accepted", "topicAgentId counts as in flight");
+  assert.deepEqual(filterInbox(bug, "closed").map((c) => c.id).sort(), ["dddd", "eeeee"]);
+  assert.equal(filterInbox(bug, "all").length, 6);
+  assert.deepEqual(inboxSourceBadge("usage-review:opus"), { key: "opus", label: "Opus" });
+  assert.equal(inboxSourceBadge("usage-review:gemini").key, "gemini");
+  assert.equal(inboxSourceBadge("cli"), null);
+  assert.equal(inboxSourceBadge(undefined), null);
+});
+
+test("collapsed-section rollup summaries", () => {
+  assert.equal(laneSummary([{ costUsd: 1.5, merged: 2, looped: 1 }, { costUsd: 2, merged: 1 }]), "Lane breakdown · 2 lanes · $3.50 · 3 merged · 1 loop");
+  assert.equal(profileSummary([{}]), "Implementer / Profile comparison · 1 profile");
+  assert.equal(workflowSummary({ routingSavingsUsd: 120, parallelSpeedup: 2.5 }, 3), "Savings & Workflow Era · saved $120 vs Opus · 2.5x speedup · 3 modes");
+  assert.equal(workflowSummary(null, 1), "Savings & Workflow Era · 1 mode");
+  assert.equal(rolesSummary(0.25, 2, 0), "Roles, Loops & Storms · coord 25% / exec 75% · 2 loops · 0 storms");
+  assert.equal(rolesSummary(null, 0, 1), "Roles, Loops & Storms · coord — / exec — · 0 loops · 1 storm");
+  assert.equal(efficiencySummary({ recent: { firstTryPassRate: 0.8 } }, { cleanShare: 0.6, cleanCostPerUnit: 1.5 }), "Efficiency & Clean-Run Floor · 1st-try PASS 80% · clean 60% ($1.50/unit)");
+  assert.equal(efficiencySummary(null, null), "Efficiency & Clean-Run Floor");
+  assert.equal(reviewSummary({ queue: 3, accepted: 2, closed: 1 }, "waiting for new turns"), "Bug & Perfection Triage Inbox · 3 in queue · 2 accepted · 1 rejected · waiting for new turns");
+  assert.equal(reviewSummary({ queue: 0, accepted: 0, closed: 0 }, ""), "Bug & Perfection Triage Inbox · 0 in queue · 0 accepted · 0 rejected");
+  assert.equal(usageOpenKey("roles"), "vs.usage.open.roles");
+});
+
+
+test("buildProfiles fold weights workPct by working+idle ms across 3 orphan rows", () => {
+  const base = { provider: "claude", role: "worker", runs: 1, turns: 1, passRate: 1, avgReviewRounds: 0, costPerMergedUnit: null, mergedUnits: 0, fixAfterMergeRate: 0 };
+  const d = { limits: [], lanes: [], byRole: [], byProfile: [
+    { ...base, profile: "agent_profile_a", workingMs: 100, idleMs: 0 },
+    { ...base, profile: "agent_profile_b", workingMs: 0, idleMs: 100 },
+    { ...base, profile: "agent_profile_c", workingMs: 0, idleMs: 100 },
+  ] };
+  const rows = buildProfiles(d);
+  assert.equal(rows.length, 1);
+  assert.ok(Math.abs(rows[0].workPct - 1 / 3) < 1e-9, "1/3 working, not pairwise-halved 0.25");
 });

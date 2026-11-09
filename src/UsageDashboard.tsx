@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct, type LimitRow, type ReviewResult, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { efficiencySummary, reviewSummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxLaneBadge, inboxSourceBadge, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -36,19 +37,75 @@ async function postUsageReview(body: { interval?: string; runNow?: boolean }): P
   return j;
 }
 
-function ReviewCard({ label, result, accent }: { label: string; result?: ReviewResult; accent: string }) {
-  const lines = reviewBullets(result);
-  const failed = Boolean(result && !result.ok);
+/** Triage inbox: bug-chaser / perfection cards and usage-review bullets with 1-click Accept / Reject. */
+function BugInbox({ now }: { now: number }) {
+  const all = useInboxCards();
+  const cards = useMemo(() => bugInboxCards(all), [all]);
+  const [filter, setFilter] = useState<InboxFilter>("all");
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { void refreshInboxCards(); }, []);
+  const counts = inboxCounts(cards);
+  const shown = filterInbox(cards, filter);
+  const triage = async (cardId: string, status: "accepted" | "rejected") => {
+    setBusy(cardId);
+    setErr(null);
+    try {
+      await triageInbox({ action: "update", cardId, patch: { status } });
+    } catch (e) {
+      setErr(String((e as Error)?.message ?? e));
+    } finally {
+      setBusy(null);
+    }
+  };
   return (
-    <div className={`usage-review-card ${accent}`} data-testid={`usage-review-${label.toLowerCase()}`}>
-      <div className="usage-review-card-head">{label}</div>
-      {lines.length === 0 ? (
-        <div className="usage-review-empty">no review yet</div>
+    <div className="usage-bug-inbox" data-testid="usage-bug-inbox">
+      <div className="usage-inbox-tabs" role="tablist" aria-label="Bug Chaser inbox filter">
+        {INBOX_FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            role="tab"
+            aria-selected={filter === f.key}
+            className={`usage-inbox-tab${filter === f.key ? " is-active" : ""}`}
+            data-filter={f.key}
+            onClick={() => setFilter(f.key)}
+          >
+            {f.label} <span className="usage-inbox-count">{counts[f.key]}</span>
+          </button>
+        ))}
+      </div>
+      {err && <div className="usage-review-error small">{err}</div>}
+      {shown.length === 0 ? (
+        <div className="usage-empty muted small">{cards.length === 0 ? "no bug-chaser cards yet — review suggestions land here" : "nothing in this filter"}</div>
       ) : (
-        <ul className="usage-review-bullets">
-          {lines.map((ln, i) => (
-            <li key={i} className={failed ? "usage-review-err" : undefined}>{ln}</li>
-          ))}
+        <ul className="usage-inbox-list">
+          {shown.map((c) => {
+            const src = inboxSourceBadge(c.source);
+            const bucket = inboxBucket(c);
+            const lane = inboxLaneBadge(c.laneId);
+            const t = Date.parse(c.createdAt);
+            return (
+              <li key={c.id} className="usage-inbox-row" data-testid="usage-bug-inbox-row" data-status={bucket}>
+                <div className="usage-inbox-meta small">
+                  <span className={`usage-inbox-badge usage-inbox-status-${bucket}`}>{inboxStatusLabel(c)}</span>
+                  {src && <span className={`usage-inbox-badge usage-inbox-src-${src.key}`}>{src.label}</span>}
+                  <span className={`usage-inbox-badge usage-inbox-lane-${lane.key}`}>{lane.label}</span>
+                  <span className="usage-inbox-badge usage-inbox-scope">{c.scope}</span>
+                  <span className="muted">{inboxIdLabel(c.id)}</span>
+                  {Number.isFinite(t) && <span className="muted">{relTime(t, now)}</span>}
+                </div>
+                <div className="usage-inbox-text">{c.text}</div>
+                {c.summaryNote && <div className="usage-inbox-note small muted">{c.summaryNote}</div>}
+                {bucket === "queue" && (
+                  <div className="usage-inbox-actions">
+                    <button type="button" className="usage-inbox-btn usage-inbox-accept" disabled={busy === c.id} onClick={() => triage(c.id, "accepted")}>Accept</button>
+                    <button type="button" className="usage-inbox-btn usage-inbox-reject" disabled={busy === c.id} onClick={() => triage(c.id, "rejected")}>Reject</button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
@@ -62,21 +119,40 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   const estimate = l.source === "estimate";
   return (
     <div className={`usage-limit usage-${level}`} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
-      <div className="usage-limit-head">
+      <span className="usage-limit-head">
         <span className="usage-limit-name">{providerLabel(l.provider)}</span>
         <span className="usage-limit-win">{WINDOW_LABEL[l.window] ?? l.window}</span>
         {estimate && <span className="usage-estimate" title="Local estimate from our own token counts, not a provider-reported number">estimate</span>}
-      </div>
-      <div className="usage-limit-pct">{Math.round(used)}<small>% used</small></div>
+      </span>
+      <span className="usage-limit-pct">{100 - Math.round(used)}% left<small>({Math.round(used)}% used)</small></span>
       <div className="usage-bar" role="progressbar" aria-valuenow={Math.round(used)} aria-valuemin={0} aria-valuemax={100}>
         <div className="usage-bar-fill" style={{ width: `${used}%` }} />
       </div>
-      <div className="usage-limit-meta small">
-        <span title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
-        <span>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"}</span>
-      </div>
-      <div className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{etaText(l)}</div>
+      <span className="usage-limit-meta small" title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
+      <span className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"} · {etaText(l)}</span>
     </div>
+  );
+}
+
+/** Collapsed-by-default section; open state persists in localStorage under vs.usage.open.<id>. */
+function Collapse({ id, testid, summary, className, children }: { id: string; testid: string; summary: string; className?: string; children: ReactNode }) {
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem(usageOpenKey(id)) === "1"; } catch { return false; }
+  });
+  return (
+    <details
+      className={`usage-collapse${className ? ` ${className}` : ""}`}
+      data-testid={testid}
+      open={open}
+      onToggle={(e) => {
+        const o = e.currentTarget.open;
+        setOpen(o);
+        try { localStorage.setItem(usageOpenKey(id), o ? "1" : "0"); } catch { /* storage unavailable */ }
+      }}
+    >
+      <summary className="usage-collapse-head">{summary}</summary>
+      {children}
+    </details>
   );
 }
 
@@ -190,6 +266,8 @@ export function UsageDashboard() {
   const rows = useMemo(() => (data ? sortRows(buildRows(data), sort.key, sort.dir) : []), [data, sort]);
   const profiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
   const workflows = useMemo(() => sortWorkflows(data?.byWorkflow), [data]);
+  const allInbox = useInboxCards();
+  const inboxTotals = useMemo(() => inboxCounts(bugInboxCards(allInbox)), [allInbox]);
 
   if (!data) {
     return (
@@ -218,6 +296,7 @@ export function UsageDashboard() {
         )}
       </div>
 
+      <Collapse id="roles" testid="usage-roles-collapse" summary={rolesSummary(data.coordination?.coordinationShare, flagged.length, storms.length)}>
       <div className="usage-split">
         <div className="usage-roles" data-testid="usage-roles">
           <div className="usage-sub">Role split</div>
@@ -262,7 +341,9 @@ export function UsageDashboard() {
           </div>
         )}
       </div>
+      </Collapse>
 
+      <Collapse id="lanes" testid="usage-lane-collapse" summary={laneSummary(rows)}>
       <div className="usage-table-wrap">
         <table className="usage-table" data-testid="usage-lane-table">
           <thead>
@@ -301,10 +382,10 @@ export function UsageDashboard() {
           </tbody>
         </table>
       </div>
+      </Collapse>
 
       {data.byProfile && (
-        <div className="usage-profiles">
-          <div className="usage-sub">Implementer / Profile comparison</div>
+        <Collapse id="profiles" testid="usage-profile-collapse" className="usage-profiles" summary={profileSummary(profiles)}>
           {profiles.length === 0 ? (
             <div className="small muted">no profile data yet</div>
           ) : (
@@ -343,12 +424,12 @@ export function UsageDashboard() {
               </table>
             </div>
           )}
-        </div>
+        </Collapse>
       )}
 
       {(data.cohorts || data.floor) && (
+        <Collapse id="efficiency" testid="usage-efficiency-collapse" summary={efficiencySummary(data.cohorts, data.floor)}>
         <section className="usage-efficiency" data-testid="usage-efficiency-strip">
-          <div className="usage-sub">Efficiency trend &amp; clean-run floor</div>
           {data.cohorts && (
             <>
               <div className="usage-cohort-tiles">
@@ -394,9 +475,11 @@ export function UsageDashboard() {
             </div>
           )}
         </section>
+        </Collapse>
       )}
 
       {(data.savings || workflows.length > 0) && (
+        <Collapse id="workflows" testid="usage-workflows-collapse" summary={workflowSummary(data.savings, workflows.length)}>
         <section className="usage-workflows" data-testid="usage-workflows">
           <div className="usage-review-head">
             <div className="usage-sub">Savings vs solo workflow &amp; A/B workflow era</div>
@@ -426,7 +509,6 @@ export function UsageDashboard() {
               </div>
             </div>
           )}
-          <div className="usage-sub">Workflow era</div>
           {workflows.length === 0 ? (
             <div className="small muted">no merged units tagged yet</div>
           ) : (
@@ -467,9 +549,11 @@ export function UsageDashboard() {
             </div>
           )}
         </section>
+        </Collapse>
       )}
 
       {review && (
+        <Collapse id="review" testid="usage-review-collapse" summary={reviewSummary(inboxTotals, reviewStatus)}>
         <section className="usage-review" data-testid="usage-review">
           <div className="usage-review-head">
             <div className="usage-sub">Usage Review · Opus &amp; Gemini</div>
@@ -491,11 +575,9 @@ export function UsageDashboard() {
           </div>
           <div className="usage-review-status small">{reviewStatus}</div>
           {reviewError && <div className="usage-review-error small">{reviewError}</div>}
-          <div className="usage-review-grid">
-            <ReviewCard label="Opus" accent="usage-review-opus" result={review.last?.opus} />
-            <ReviewCard label="Gemini" accent="usage-review-gemini" result={review.last?.gemini} />
-          </div>
+          <BugInbox now={now} />
         </section>
+        </Collapse>
       )}
     </div>
   );

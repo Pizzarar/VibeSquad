@@ -117,6 +117,9 @@ export function openAndScrollToInbox() {
   }
 }
 
+/** Open ideas: parked, or accepted from triage (still actionable). Rejected/archived/handed-off leave the list. */
+const isOpenIdea = (c: InboxCard) => c.status === "parked" || c.status === "accepted";
+
 export function useInboxCards(): InboxCard[] {
   return useSyncExternalStore(subscribeInbox, getInboxCardsSnapshot);
 }
@@ -415,7 +418,7 @@ export const TopicCapBanner = memo(function TopicCapBanner({ minCount = TOPIC_SO
 export const SidebarInboxBadge = memo(function SidebarInboxBadge({ onSelect }: { onSelect?: () => void }) {
   const cards = useInboxCards();
   const open = useInboxOpen();
-  const parkedCount = useMemo(() => cards.filter((c) => c.status === "parked").length, [cards]);
+  const parkedCount = useMemo(() => cards.filter(isOpenIdea).length, [cards]);
 
   useEffect(() => {
     void refreshInboxCards();
@@ -482,7 +485,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
     };
   }, []);
 
-  const parkedCards = useMemo(() => cards.filter((c) => c.status === "parked"), [cards]);
+  const parkedCards = useMemo(() => cards.filter(isOpenIdea), [cards]);
   useTeams();
   const laneName = (id: string) => laneDisplayName(getTeams(), id);
   const teamLaneIds = useMemo(() => new Set((team.lanes ?? []).map((l) => l.id.toLowerCase())), [team]);
@@ -707,6 +710,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
                         {card.scope}
                       </span>
                       <strong className="inbox-card-title">{card.title}</strong>
+                      {card.status === "accepted" && <span className="inbox-merged-badge">accepted</span>}
                       {card.mergedFromIds && card.mergedFromIds.length > 0 && (
                         <span className="inbox-merged-badge" title={`Merged from: ${card.mergedFromIds.join(", ")}`}>
                           merged ({card.mergedFromIds.map((id) => `#${id}`).join(", ")})

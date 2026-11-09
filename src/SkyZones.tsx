@@ -365,7 +365,7 @@ export function SkyZones({
   const slamOpening = open === "riffbot" && !slam.windowShown;
   const slamOn = slam.squash || slam.shakeDx !== 0;
   const slamStyle: Record<string, string> = {};
-  const tvTf = slamTransform(slam.shakeDx, false, dpr);
+  const tvTf = slamTransform(slam.shakeDx, slam.squash, dpr);
   const panelTf = slamTransform(slam.shakeDx, slam.squash, dpr);
   if (tvTf) slamStyle["--slam-tv-tf"] = tvTf;
   if (panelTf) slamStyle["--slam-panel-tf"] = panelTf;

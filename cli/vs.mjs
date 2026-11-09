@@ -23,6 +23,7 @@ if (process.platform === "win32") {
 import {
   addInboxCards,
   handoffTopicBrainstorm,
+  INBOX_STATUSES,
   listInboxCards,
   openTopicBrainstorm,
   parkTopicBrainstorm,
@@ -230,6 +231,9 @@ function parseArgs(argv) {
     "scope",
     "delete",
     "archive",
+    "accept",
+    "reject",
+    "setStatus",
     "card",
     "note",
     "binDir",
@@ -823,10 +827,14 @@ function commandInbox(flags) {
   }
 
   if (sub === "list" || sub === "ls") {
+    const listStatus = flags.status ? String(flags.status) : "open";
+    if (listStatus !== "all" && listStatus !== "open" && !INBOX_STATUSES.includes(listStatus)) {
+      throw new Error(`inbox list --status must be one of: open, all, ${INBOX_STATUSES.join(", ")}`);
+    }
     const cards = listInboxCards({
       laneId: flags.lane ? String(flags.lane) : undefined,
       teamId: flags.team ? String(flags.team) : undefined,
-      status: flags.status ? String(flags.status) : "parked",
+      status: listStatus,
       baseHome,
     });
     if (flags.json) {
@@ -834,7 +842,7 @@ function commandInbox(flags) {
       return 0;
     }
     if (!cards.length) {
-      process.stdout.write("(0 parked ideas in Inbox)\n");
+      process.stdout.write("(0 ideas in Inbox)\n");
       return 0;
     }
     for (const c of cards) {
@@ -872,6 +880,17 @@ function commandInbox(flags) {
       process.stdout.write(`bounced ${res.card.id} → ${res.card.laneId} (${res.card.teamId})\n`);
       return 0;
     }
+    if (flags.accept || flags.reject || flags.setStatus) {
+      const cardId = String(flags.accept || flags.reject || flags.setStatus).trim();
+      const status = flags.accept ? "accepted" : flags.reject ? "rejected" : String(flags.status || "").trim();
+      if (!INBOX_STATUSES.includes(status)) {
+        throw new Error(`inbox triage status must be one of: ${INBOX_STATUSES.join(", ")}`);
+      }
+      const res = triageInboxCards({ action: "update", cardId, patch: { status }, baseHome });
+      process.stdout.write(`${res.card.id} → ${res.card.status}
+`);
+      return 0;
+    }
     if (flags.archive || flags.delete) {
       const action = flags.archive ? "archive" : "delete";
       const cardId = String(flags.archive || flags.delete).trim();
@@ -879,7 +898,7 @@ function commandInbox(flags) {
       process.stdout.write(`${action}d ${res.card.id}\n`);
       return 0;
     }
-    throw new Error("inbox triage needs --merge <targetId> <sourceId...> or --bounce <cardId> --lane <newLane>");
+    throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, or --set-status <cardId> --status <status>");
   }
 
   if (sub === "open-topic") {
