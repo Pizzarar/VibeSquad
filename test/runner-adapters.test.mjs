@@ -444,3 +444,19 @@ test('fix1: resumed session skips the context-delta estimate on its first turn (
   assert.equal(events.some((e) => e.type === 'usage' && e.estimated), false);
   assert.equal(events.some((e) => e.type === 'usage' && e.inputTokens), false);
 });
+
+test('acp context meter is per model call, not the tool-loop sum (agy sends no usage_update)', async () => {
+  // 4 model calls (3 tool rounds) with prompts of 100k..130k: PromptResponse.usage is their SUM (460k in, 4k out).
+  const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-argon-medium', [
+    (c, m) => {
+      for (const t of ['t1', 't2', 't3']) upd(c, { sessionUpdate: 'tool_call', toolCallId: t, title: 'x', kind: 'read' });
+      c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 100000, cachedReadTokens: 360000, outputTokens: 4000 } } });
+    },
+  ]);
+  await tick(); await tick(); await tick();
+  const u = runner.timeline(id).find((e) => e.type === 'usage' && e.inputTokens);
+  assert.equal(u.inputTokens, 460000, 'per-turn input stays the cumulative sum for spend');
+  assert.equal(u.outputTokens, 4000);
+  assert.ok(u.contextTokens >= 100000 && u.contextTokens <= 140000, `context ${u.contextTokens} should be one call's prompt, not the 464k sum`);
+  assert.equal(runner.status(id).usage?.contextTokens ?? u.contextTokens, u.contextTokens);
+});

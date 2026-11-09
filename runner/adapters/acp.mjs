@@ -9,6 +9,16 @@ import { estimateCostUsd } from './pricing.mjs';
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 && v !== null && v !== '' ? Number(v) : undefined);
 
+// PromptResponse.usage SUMS every model call of the turn's tool loop (real opencode turn: usage_update.used 268981 vs
+// input 806154 = 3 calls x ~268k), so it is not the context size. With no usage_update (agy), approximate the LAST call's
+// prompt (what claude.mjs reports) as the per-call average of prompt+reply tokens, never below the previous turn's context.
+// calls is the tool_call count + 1, which can overcount parallel tool calls: that errs low, not at the old 3-7x too high.
+export function lastCallContext(tok, calls, ctxStart) {
+  const n = Math.max(1, calls);
+  const perCall = Math.round(tok.inputTokens / n) + Math.round(tok.outputTokens / n); // prompt + reply, like claude's input+output
+  return Math.min(tok.inputTokens + tok.outputTokens, Math.max(perCall, ctxStart ?? 0));
+}
+
 // ACP PromptResponse.usage (camelCase per spec; snake_case tolerated). Per the real opencode/agy payloads inputTokens
 // EXCLUDES cache, so the returned inputTokens is the whole prompt size (fresh + cache read + cache write), like claude.mjs.
 // thoughtTokens are billed as output: added unless totalTokens shows they are already inside outputTokens.
@@ -83,6 +93,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let replaying = false; // session/load replays the old transcript as session/update; our log already has it
       let activeModel = model;
       let ctxNow = 0; // latest usage_update.used (context size)
+      let turnToolCalls = 0; // tool_call updates this turn: model calls in the tool loop = this + 1
       let ctxPrev = resume ? null : 0; // context size at the end of the previous turn; null = unknown (resumed session restored an unseen history)
       let reportedCost; // agent-reported cumulative session cost (usage_update.cost), if any
       let costTotal = 0; // cumulative session cost, same convention as claude's total_cost_usd (the fold diffs it)
@@ -101,7 +112,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           switch (u.sessionUpdate) {
             case 'agent_message_chunk': if (u.content?.type === 'text') emit('output', { text: u.content.text }); break;
             case 'agent_thought_chunk': if (u.content?.type === 'text') emit('thought', { text: u.content.text }); break;
-            case 'tool_call': emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
+            case 'tool_call': turnToolCalls++; emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
             case 'usage_update':
               if (Number.isFinite(u.used)) { ctxNow = u.used; emit('usage', { contextTokens: u.used, contextMax: u.size }); }
               // some agents report a cumulative session cost here; it beats our price-table estimate
@@ -206,6 +217,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         const prompt = [{ type: 'text', text }, ...(imageCapable ? images.map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType })) : [])];
         try {
           const ctxStart = ctxPrev;
+          turnToolCalls = 0;
           const r = await request('session/prompt', { sessionId, prompt });
           // Real per-turn tokens from PromptResponse.usage; else estimate from context-size growth (marked estimated).
           let tok = parseAcpUsage(r?.usage);
@@ -220,7 +232,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           let turnCost = null;
           if (tok) {
             // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
-            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : tok.inputTokens + tok.outputTokens, inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
+            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : lastCallContext(tok, turnToolCalls + 1, ctxStart), inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
             turnCost = estimateCostUsd(activeModel, tok);
           }
           const done = { stopReason: r?.stopReason };
