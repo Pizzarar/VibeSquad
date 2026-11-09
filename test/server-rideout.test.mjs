@@ -37,8 +37,12 @@ test("Squads Home is carried in the URL (?view=squads) so a reconnect restores i
   assert.match(src("src/App.tsx"), /squadsHome: pinLayout && pinsHome && squadsHome/);
 });
 
-test("lead role pack tells leads to restart the server only when needed and log it", () => {
-  assert.match(src("server/hooks/agent-duties.ts"), /Restart the VibeSquad server only when a merged change needs it, and log it/);
+test("lead pack routes server restarts to the Overlord/@bug; only the Overlord pack restarts", async () => {
+  const { HUB_LEAD_RULES, LEAD_FALLBACK_PACK } = await import("../server/hooks/agent-duties.ts");
+  assert.doesNotMatch(LEAD_FALLBACK_PACK, /Restart the VibeSquad server/);
+  assert.match(LEAD_FALLBACK_PACK, /Hand server restarts, post-merge runtime syncs and cross-lane tree blockers/);
+  assert.match(LEAD_FALLBACK_PACK, /vs inbox add --lane bug-chaser/);
+  assert.match(HUB_LEAD_RULES, /restart the VibeSquad server only when a merged change needs it, log `vs log metric/);
 });
 
 test("useDraft persists composer drafts per agent in localStorage", () => {
