@@ -31,11 +31,11 @@ test("HP5: one view = TVs band, strip, then the floor box that takes the rest of
   assert.ok(order[0] > 0 && order[0] < order[1] && order[1] < order[2], "TVs, strip, floor in that order");
   assert.equal((hp.match(/\{strip\}/g) || []).length, 2); // the view + the agent-open fallback
   assert.match(hp, /const PLATE_INSET = 0;/); // floor flush on the page bottom, no gap for the backdrop to offset
-  assert.match(css, /\.hub-sky-page \{ flex: none;/); // the TVs band keeps its HP2 height
-  assert.match(css, /\.hub-tower-box \{ flex: 1 0 125px; min-height: 125px; overflow: hidden/);
+  assert.match(css, /\.hub-sky-page \{ flex: 0 1 clamp\(260px, 36vh, 440px\); min-height: var\(--sky-slim, 112px\);/); // FF-ui: the TVs band asks for its HP2 height and yields (shrinks to a slim strip) so the floor keeps its need
+  assert.match(css, /\.hub-tower-box \{ flex: 1 0 var\(--floor-need, 125px\); min-height: var\(--floor-need, 125px\); overflow: hidden/);
   assert.match(css, /\.hub-pages \.hub-tower-box \.sq-floor \{[^}]*height: auto;[^}]*overflow: hidden;[^}]*background: transparent;[^}]*border-top: 0/); // .sq-floor's own navy + cyan border would paint over the skyline gutters
   assert.match(css, /\.hub-tower-box \.sq-floor-stage \{ align-items: flex-end; \}/); // bottom edge flush
-  assert.match(css, /\.hub-sky-page \.sky-zones \{ flex: none; height: clamp\(/); // HP2 cap
+  assert.match(css, /\.hub-sky-page \.sky-zones \{ flex: 1 1 0; height: auto; min-height: 0; \}/); // fills whatever band the page gives it
   assert.doesNotMatch(css, /\.hub-(pages|backdrop)[^{]*\{[^}]*(transition|animation)/);
 });
 

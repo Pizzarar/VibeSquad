@@ -90,8 +90,8 @@ test("HP4 the floor never scrolls: fixed box, fit scale, one floor rendered", ()
   assert.doesNotMatch(comp, /scrollIntoView/);
   assert.equal(floorFitScale(1300, 800, 1), 2);
   assert.equal(floorFitScale(3000, 400, 1), 1);
-  assert.equal(floorFitScale(3000, 100, 1), 0.25); // 1/4 device px fits (100/360 = 0.277): a clean fraction, never an arbitrary 0.277 that drops uneven rows
-  assert.ok(Math.abs(floorFitScale(3000, 60, 1) - 60 / 360) < 1e-9); // under 1/4: fractional fallback, never 0 and never clipped
+  assert.ok(Math.abs(floorFitScale(3000, 100, 1) - 100 / 360) < 1e-9); // FF-ui: no 1/n branch; the hub keeps the box >= 1x, so under 1x is only the last-resort fractional fit (never 0, never clipped)
+  assert.ok(Math.abs(floorFitScale(3000, 60, 1) - 60 / 360) < 1e-9);
   assert.equal(floorFitScale(0, 800, 1), 0); // unmeasured only
 });
 
@@ -134,25 +134,29 @@ test("FS-b json validates; bad json is rejected (skip-if-absent)", () => {
   assert.equal(validateFloorCursor({ ...cursorJson, cell: { w: 13 } }).ok, false);
 });
 
-test("FS-b placement: tip lands on seat.x, cell top rides bubble.offset.y (Art9, read from the json)", () => {
+test("FS-b placement: tip lands on seat.x, cell sits 1.5 cell-heights above the sprite cell (clear of tall hair; read from the json)", () => {
   const cursor = validateFloorCursor(cursorJson).value;
-  const cast = { cell: castJson.cell, bubble: castJson.bubble };
-  assert.deepEqual(cursorOffset(cast, cursor), { x: -cursor.anchor.x, y: castJson.bubble.offset.y });
-  // tip = cell origin + anchor = (seat.x, seat.y + bubble.offset.y + anchor.y)
+  const cast = { cell: castJson.cell };
+  const lift = Math.round(cursor.cell.h * 1.5);
+  assert.deepEqual(cursorOffset(cast, cursor), { x: -cursor.anchor.x, y: -castJson.cell - lift });
   const o = cursorOffset(cast, cursor);
-  assert.deepEqual({ x: o.x + cursor.anchor.x, y: o.y + cursor.anchor.y }, { x: 0, y: castJson.bubble.offset.y + cursor.anchor.y });
-  assert.deepEqual(cursorInButton(cast, cursor), { left: o.x + castJson.cell / 2, top: o.y + castJson.cell });
+  // in the seat button's own box the cell top is -(1.5 x cell.h) = -18 for the 13x12 arrow (it was -12 and touched tall hair)
+  assert.deepEqual(cursorInButton(cast, cursor), { left: o.x + castJson.cell / 2, top: -lift });
+  assert.ok(cursorInButton(cast, cursor).top <= -cursor.cell.h - 4, "at least 4 art px of air above the sprite cell");
   // follows the json values, not constants
-  assert.deepEqual(cursorOffset({ bubble: { offset: { x: 0, y: -10 } } }, { ...cursor, anchor: { x: 2, y: 1 } }), { x: -2, y: -10 });
+  assert.deepEqual(cursorOffset({ cell: 20 }, { ...cursor, cell: { w: 4, h: 8 }, anchor: { x: 2, y: 1 } }), { x: -2, y: -32 });
 });
 
-test("FS-b wiring: skip-if-absent, focus-only, reduced motion static", () => {
+test("FS-b wiring: skip-if-absent, hover + keyboard focus, drawn above the front overlay, reduced motion static", () => {
   assert.match(comp, /useImageOk\(cursorModel \? CURSOR_URL\(theme\) : null\)/);
   assert.match(comp, /cast && cursorModel && cursorImgOk \? \{/);
-  assert.match(comp, /cursor && at && \(/);
+  assert.match(comp, /pointedItem && cast && cursor && <SeatCursor /); // drawn in the bubbles layer, above the front overlay
+  assert.match(comp, /onMouseEnter=\{\(\) => onPoint\(agent\.agentId\)\}/); // hover shows it
+  assert.match(comp, /e\.currentTarget\.matches\(":focus-visible"\) && onPoint/); // keyboard focus shows it, pointer focus does not
   assert.match(comp, /cursor\.reduced \? \{ animation: "none" \}/);
-  assert.match(css, /\.sq-floor-cursor \{ display: none;[^}]*image-rendering: pixelated/);
-  assert.match(css, /\.sq-floor-char:focus-visible \.sq-floor-cursor \{ display: block; \}/);
-  assert.doesNotMatch(css, /\.sq-floor-char:hover \.sq-floor-cursor/);
+  assert.match(css, /\.sq-floor-front \{ position: absolute; z-index: 2;/);
+  assert.match(css, /\.sq-floor-cursor \{ display: block; z-index: 3;[^}]*image-rendering: pixelated/);
+  assert.match(css, /\.sq-floor-bubble \{ position: absolute; z-index: 3;/);
+  assert.doesNotMatch(css, /\.sq-floor-char:focus-visible \{ z-index/); // a focused seat must not paint its legs over the desk panel
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.sq-floor-cursor \{ animation: none; \} \}/);
 });

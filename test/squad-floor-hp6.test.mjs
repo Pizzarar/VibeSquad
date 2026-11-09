@@ -87,10 +87,10 @@ test("HP6 signs: full name in the tooltip, empty B shows VACANT, glyphs are inte
 
 test("HP6 lift opens while someone rides, and the rider starts at the car's new bottom", () => {
   assert.match(comp, /riders\.some\(\(r\) => r\.floor === f\.index\) && <LiftOpen /);
-  assert.match(comp, /top: elevator\.y \+ elevator\.h - 2/);
+  assert.match(comp, /riderSpot\(elevator, i, floorKitScale\(native\)\)/); // spot derives from the floor.json car rect + kit scale
   assert.match(comp, /ridersOn\(f\.index, floor\.elevator\.car\)/);
   assert.match(css, /\.sq-floor-lift-open \{[^}]*position: absolute/);
-  assert.match(css, /to \{ transform: translate\(-50%, calc\(-100% - 12px\)\); opacity: 0\.2; \}/); // stays inside the doorway
+  assert.match(css, /to \{ transform: translate\(-50%, calc\(-100% - var\(--ride-rise\)\)\); opacity: 0\.2; \}/); // stays inside the doorway; --ride-rise comes from the kit scale
   assert.ok(floorJson.elevator.car.y > 0);
   // the open doors sit under the sprites (wall slot), the jambs + threshold front layer stays on top
   assert.match(comp, /wall=\{[\s\S]*?<LiftOpen[\s\S]*?\}\n\s+extras=/);
