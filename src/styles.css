@@ -2803,6 +2803,14 @@ html {
   zoom: var(--vs-ui-scale, 1);
 }
 
+/* SS1/SS3: chat regions counter-zoom so root zoom x --chat-zoom = the chat scale; the kit pixel inside is snapped for that scale. */
+:root { --chat-zoom: 1; --u3-px-chat: 2px; }
+.drawer-shell > .timeline,
+.drawer .composer {
+  zoom: var(--chat-zoom, 1);
+  --u3-px: var(--u3-px-chat, 2px);
+}
+
 .small,
 .brand-sub,
 .badge,
@@ -3051,6 +3059,15 @@ html {
   accent-color: var(--cyan);
   cursor: pointer;
 }
+
+.ts-chat-scale-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ts-chat-scale-row .ui-scale-readout { font-size: 12px; padding: 1px 8px; }
+.ts-chat-scale-link { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
 
 .ts-scale-presets {
   display: flex;

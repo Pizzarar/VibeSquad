@@ -6,6 +6,8 @@ export const UI_SCALE_MAX = 2.0;
 export const UI_SCALE_STEP = 0.1;
 export const UI_SCALE_SLIDER_STEP = 0.05;
 export const UI_SCALE_PRESETS = [1.0, 1.15, 1.25, 1.5, 1.75] as const;
+/** Chat text scale: unset (null) follows the UI scale; set, it is the effective scale inside the chat regions. */
+export const CHAT_SCALE_STORAGE_KEY = "vibesquad.chatScale";
 
 const HUD_DURATION_MS = 1800;
 
@@ -40,7 +42,22 @@ export function readStoredUiScale(): number | null {
   }
 }
 
+export function readStoredChatScale(): number | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(CHAT_SCALE_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed < UI_SCALE_MIN || parsed > UI_SCALE_MAX) return null;
+    return clampUiScale(parsed);
+  } catch {
+    return null;
+  }
+}
+
 let currentScale: number = readStoredUiScale() ?? detectDefaultUiScale();
+/** null = follow the UI scale. */
+let chatOverride: number | null = readStoredChatScale();
 let hudVisible = false;
 let hudTimer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
@@ -71,6 +88,32 @@ export function applyKitPixelToDom(scale: number = currentScale): void {
   root.dataset.u3Px = String(device);
 }
 
+/** Effective chat scale for a UI scale and an optional override (null = follow). */
+export function effectiveChatScale(ui: number, override: number | null): number {
+  return override === null ? clampUiScale(ui) : clampUiScale(override);
+}
+
+/** Counter-zoom for chat regions under the root zoom: root zoom x this = the chat scale. */
+export function chatZoom(ui: number, override: number | null): number {
+  const u = clampUiScale(ui);
+  return Math.round((effectiveChatScale(u, override) / u) * 10000) / 10000;
+}
+
+/**
+ * Chat regions run at ui x chatZoom = chatScale, so their kit pixel is snapped for the chat scale (SS3):
+ * --u3-px-chat replaces --u3-px inside the counter-zoomed containers (see styles.css).
+ */
+export function applyChatScaleToDom(ui: number = currentScale, override: number | null = chatOverride): void {
+  if (typeof document === "undefined" || typeof window === "undefined") return;
+  const root = document.documentElement;
+  const eff = effectiveChatScale(ui, override);
+  const { device, css } = kitPixel(window.devicePixelRatio || 1, eff);
+  root.style.setProperty("--chat-zoom", String(chatZoom(ui, override)));
+  root.style.setProperty("--u3-px-chat", `${(css + 0.0001).toFixed(4)}px`);
+  root.dataset.chatScale = String(Math.round(eff * 100));
+  root.dataset.u3PxChat = String(device);
+}
+
 export function applyUiScaleToDom(scale: number = currentScale): void {
   if (typeof document === "undefined") return;
   const s = clampUiScale(scale);
@@ -79,15 +122,16 @@ export function applyUiScaleToDom(scale: number = currentScale): void {
   root.style.zoom = String(s);
   root.dataset.uiScale = String(Math.round(s * 100));
   applyKitPixelToDom(s);
+  applyChatScaleToDom(s);
 }
 
 // devicePixelRatio changes (window moved between monitors, OS scale change, browser zoom) re-snap the kit pixel.
 if (typeof window !== "undefined") {
-  window.addEventListener("resize", () => applyKitPixelToDom());
+  window.addEventListener("resize", () => { applyKitPixelToDom(); applyChatScaleToDom(); });
   try {
     const watch = () => {
       const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-      mq.addEventListener("change", () => { applyKitPixelToDom(); watch(); }, { once: true });
+      mq.addEventListener("change", () => { applyKitPixelToDom(); applyChatScaleToDom(); watch(); }, { once: true });
     };
     watch();
   } catch {
@@ -97,6 +141,16 @@ if (typeof window !== "undefined") {
 
 export function getUiScale(): number {
   return currentScale;
+}
+
+/** Effective chat scale (the override, or the UI scale when following). */
+export function getChatScale(): number {
+  return effectiveChatScale(currentScale, chatOverride);
+}
+
+/** null when chat text follows the UI scale. */
+export function getChatScaleOverride(): number | null {
+  return chatOverride;
 }
 
 export function isUiScaleHudVisible(): boolean {
@@ -133,6 +187,23 @@ export function setUiScale(nextScale: number, options?: { showHud?: boolean; per
   return clamped;
 }
 
+/** Set the chat text scale; null clears the override so chat follows the UI scale again. */
+export function setChatScale(next: number | null, options?: { showHud?: boolean; persist?: boolean }): number {
+  chatOverride = next === null ? null : clampUiScale(next);
+  if (options?.persist !== false && typeof window !== "undefined") {
+    try {
+      if (chatOverride === null) window.localStorage.removeItem(CHAT_SCALE_STORAGE_KEY);
+      else window.localStorage.setItem(CHAT_SCALE_STORAGE_KEY, String(chatOverride));
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+  }
+  applyChatScaleToDom(currentScale, chatOverride);
+  if (options?.showHud) showUiScaleHud();
+  else notify();
+  return getChatScale();
+}
+
 export function stepUiScale(delta: number, showHud = true): number {
   return setUiScale(currentScale + delta, { showHud });
 }
@@ -154,6 +225,16 @@ export function subscribeUiScale(listener: () => void): () => void {
 
 export function useUiScale(): number {
   return useSyncExternalStore(subscribeUiScale, getUiScale, () => 1.0);
+}
+
+/** Effective chat scale; re-renders on UI or chat scale change. */
+export function useChatScale(): number {
+  return useSyncExternalStore(subscribeUiScale, getChatScale, () => 1.0);
+}
+
+/** Whether chat text follows the UI scale. */
+export function useChatScaleLinked(): boolean {
+  return useSyncExternalStore(subscribeUiScale, () => chatOverride === null, () => true);
 }
 
 export function useUiScaleHud(): boolean {

@@ -112,6 +112,7 @@ import {
   cycleUiScalePreset,
   getUiScale,
   handleUiScaleKeyDown,
+  useChatScale,
   useUiScale,
   useUiScaleHud,
 } from "./uiScale";
@@ -1431,6 +1432,7 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
+  const chatScale = useChatScale();
   const [modal, setModal] = useState<"new-agent" | "add-buddy" | "settings" | "pair-device" | "about" | "help" | "diagnostics" | "first-run" | "new-squad" | null>(null);
   const setFirstRunOpen = (open: boolean) => setModal(open ? "first-run" : null);
   const [firstRunStatus, setFirstRunStatus] = useState<FirstRunStatus | null>(null);
@@ -1492,7 +1494,7 @@ export function App() {
 
   useEffect(() => {
     applyUiScaleToDom(uiScale);
-  }, [uiScale]);
+  }, [uiScale, chatScale]);
 
   useEffect(() => {
     loadArchived(); // palette + date finder search archived agents too
@@ -2040,7 +2042,9 @@ export function App() {
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">
-          UI SCALE · {Math.round(uiScale * 100)}% <span className="muted">(Ctrl+0 to reset)</span>
+          UI SCALE · {Math.round(uiScale * 100)}%
+          {Math.round(chatScale * 100) !== Math.round(uiScale * 100) && <> · CHAT · {Math.round(chatScale * 100)}%</>}{" "}
+          <span className="muted">(Ctrl+0 to reset)</span>
         </div>
       )}
       {modal === "add-buddy" && view && (

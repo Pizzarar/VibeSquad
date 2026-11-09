@@ -34,7 +34,10 @@ import {
 import {
   UI_SCALE_PRESETS,
   resetUiScale,
+  setChatScale,
   setUiScale,
+  useChatScale,
+  useChatScaleLinked,
   useUiScale,
 } from "./uiScale";
 
@@ -295,6 +298,9 @@ export function TeamSettingsModal({
   const isHostMode = desktopStatus.serverMode !== "remote";
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
+  const chatScale = useChatScale();
+  const chatLinked = useChatScaleLinked();
+  const chatScalePct = Math.round(chatScale * 100);
   const patch = (i: number, p: Partial<TeamDef>) => setTeams((ts) => ts.map((t, j) => (j === i ? { ...t, ...p } : t)));
   const patchLane = (i: number, k: number, p: Partial<TeamDef["lanes"][number]>) =>
     patch(i, { lanes: teams[i].lanes.map((x, j) => (j === k ? { ...x, ...p } : x)) });
@@ -544,6 +550,31 @@ export function TeamSettingsModal({
             >
               Reset (100%)
             </button>
+          </div>
+          <div className="ts-chat-scale-row" data-testid="chat-scale-row">
+            <label className="field-label" htmlFor="chat-scale-slider">Chat text</label>
+            <input
+              id="chat-scale-slider"
+              type="range"
+              min={80}
+              max={200}
+              step={5}
+              value={chatScalePct}
+              aria-label="Chat text scale"
+              data-testid="chat-scale-slider"
+              className="ui-scale-slider"
+              onChange={(e) => setChatScale(Number(e.target.value) / 100)}
+            />
+            <span className="ui-scale-readout" data-testid="chat-scale-value">{chatScalePct}%</span>
+            <label className="small muted ts-chat-scale-link">
+              <input
+                type="checkbox"
+                checked={chatLinked}
+                data-testid="chat-scale-follow"
+                onChange={(e) => setChatScale(e.target.checked ? null : chatScale)}
+              />{" "}
+              Follow UI scale
+            </label>
           </div>
         </div>
       </section>}
