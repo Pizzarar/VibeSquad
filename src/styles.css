@@ -5946,3 +5946,33 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-cohort-prior { font-variant-numeric: tabular-nums; }
 .usage-floor-callout { color: var(--text); }
 
+
+/* ---- V1b-2 art hits (docs/lanes/ui-bois/V1B_ART_HITS.md 81-105): label colours >= 4.5:1 on the pastel fills, no scanline/border over text ---- */
+/* teal/pink/amber pastel chips: ink labels (the dark theme used the light --text = 1.0-2.4:1) */
+:is(.badge, .unit-tag, .def-badge, .status-pill, .lane-tag, .warn-badge, .verdict, .changes-file-badge, .project-badge, .alert-pill, .pill, .pill.diag, .brainstorm-ctx-pill, .quota-pill):not(.alert):not(.label-pill) { color: var(--on-pastel) !important; }
+.alert-pill :is(.alert-owner, .alert-type, .alert-who) { color: var(--on-pastel); }
+.runs-the-work, .pill.runs-work { color: var(--on-pastel); }
+/* meter readout and text on the pink/violet selected / lead card */
+.card:is(.sel, .card-lead) :is(.card-title, .muted.small, .muted.small > span, .meter-readout) { color: var(--on-pastel); }
+/* light theme: provider glyph colours are inline (cyan/coral on blush = 1.0-2.0), so the label takes the text colour */
+:root[data-theme="light"] .prov-inline { color: var(--text) !important; font-weight: 700; }
+:root[data-theme="light"] .row-actions .btn.confirm:not(.armed), :root[data-theme="light"] .card-top-right .btn.confirm:not(.armed) { color: var(--u3-ink-text); }
+/* pin tile title bar varies violet..magenta in the light theme: give the name a flat plate */
+:root[data-theme="light"] .pin-tile-bar .pin-tile-name { flex: 0 1 auto; background: var(--panel-hi); color: var(--text); padding: 0 var(--sp-2); box-shadow: var(--bevel); }
+/* scanlines: text layers above, and a sized tile instead of repeating-* so no scanline box is a layer over text */
+.usage-crt > * { position: relative; z-index: 1; }
+.usage-crt::after { background-image: linear-gradient(to bottom, transparent 2px, color-mix(in srgb, var(--text) 7%, transparent) 2px); background-size: 100% 3px; background-repeat: repeat; }
+.sky-static > * { position: relative; z-index: 1; }
+.sky-static > button { background: var(--bg); padding: 4px 8px; }
+.sky-static {
+  background-image:
+    linear-gradient(0deg, rgba(255, 255, 255, 0.06) 2px, rgba(0, 0, 0, 0.18) 2px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 3px, rgba(0, 0, 0, 0.12) 3px);
+  background-size: 100% 4px, 7px 100%;
+}
+.badge.lan-status-dot.warn { color: var(--text) !important; }
+:root[data-theme="light"] .talk-here { color: var(--on-pastel); }
+:root[data-theme="light"] button[data-testid^="team-head-"] > .badge { color: var(--u3-lt-text) !important; }
+.card-top-right .btn.confirm:not(.armed) { color: var(--u3-ink-text) !important; }
+/* a closed details keeps no laid-out content under its bottom border */
+.usage-collapse:not([open]) > :not(summary) { display: none; }
