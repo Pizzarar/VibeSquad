@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { snapDeviceSize, setUiScale, setChatScale, resetAllScales, resetUiScale, getChatScaleOverride, getUiScale } from '../src/uiScale.ts';
+import { snapDeviceSize, snapNativeSize, setUiScale, setChatScale, resetAllScales, resetUiScale, getChatScaleOverride, getUiScale } from '../src/uiScale.ts';
 import { floorFitScale } from '../src/squadFloorLogic.ts';
 
 const read = (p) => fs.readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -30,9 +30,18 @@ test('cast avatar: 32 css at 1080 / UI 150% was 48 device px (0.75x of the 64 ce
   assert.match(read('src/styles.css'), /\.cast-sprite \{[^}]*image-rendering: pixelated/);
 });
 
-test('brand mark: 16px art is a whole multiple of 16 device px, driven by --brand-mark-px, title cannot reach the status square', () => {
-  for (const [dpr, zoom] of CASES) assert.equal(snapDeviceSize(22, 16, dpr, zoom).device % 16, 0);
-  assert.equal(snapDeviceSize(22, 16, 1, 1.5).device, 32); // was 22 * 1.5 = 33 device px (2.06x)
+test('brand mark: 22x22 native art snaps to a whole 22-multiple (never a fractional upscale), driven by --brand-mark-px, title cannot reach the status square', () => {
+  for (const dpr of [1, 1.2, 1.5]) {
+    for (const zoom of [1, 1.25, 1.5]) {
+      const { device, css } = snapNativeSize(22, 22, dpr, zoom);
+      assert.equal(device % 22, 0, `device ${device} is not a multiple of 22 @ dpr ${dpr} x zoom ${zoom}`);
+      assert.ok(device >= 22, `device ${device} below the 22 minimum @ dpr ${dpr} x zoom ${zoom}`);
+      assert.ok(whole(css * dpr * zoom), `css ${css} -> ${css * dpr * zoom} device px @ dpr ${dpr} x zoom ${zoom}`);
+    }
+  }
+  // was snapDeviceSize(22, 16, ...): 32 device px = 32/22 = 1.455x non-integer scale that blurs the pixel art
+  assert.equal(snapNativeSize(22, 22, 1, 1.5).device, 22);
+  assert.equal(snapNativeSize(22, 22, 1.5, 1.5).device, 44);
   const css = read('src/styles.css');
   assert.match(css, /\.brand-mark \{[^}]*width: var\(--brand-mark-px, 22px\)/);
   assert.match(css, /\.brand-text \{\s*min-width: 0;/);
