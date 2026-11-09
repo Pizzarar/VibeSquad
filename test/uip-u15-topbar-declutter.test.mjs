@@ -52,7 +52,7 @@ describe("U15: dockBtns (DrawerHeader.tsx)", () => {
 
 describe("U15: drawer-config-menu (DrawerHeader.tsx)", () => {
   test("thinkingSelect + modeSelect are wrapped in a details sub-menu", () => {
-    const open = dh.indexOf('<details className="drawer-config-menu" data-testid="drawer-config-menu">');
+    const open = dh.search(/<details(?:\s+ref=\{configMenuRef\})?\s+className="drawer-config-menu"\s+data-testid="drawer-config-menu">/);
     const close = dh.indexOf("</details>");
     assert.ok(open > -1 && close > open, "details block found");
     const details = dh.slice(open, close);

@@ -119,7 +119,7 @@ test("PinRail: active Buddy card on top, other Buddies below, no inert 'Open in 
   assert.match(pr, /ref=\{slotRef\("bar"\)\}/, "the single bar hosts the compact controls slot");
   assert.match(dh, /createPortal\(/, "DrawerHeader portals the compact bar + inspector in pin-focus");
   assert.match(dh, /const compact = !!pinFocus(?:\?\.agentId)? && shownHere && inLane && railCardVisible/, "only the shown lane drawer (Buddy, Lead, worker, topic) goes compact");
-  assert.match(dh, /shownHere = usePanes\(\)\.leftActiveId === agent\.id/, "a single owner of the slots: the left active tab");
+  assert.match(dh, /const leftActiveId = usePanes\(\)\.leftActiveId;\s*\n\s*const shownHere = chatOnly && skyOpenAgentId \? skyOpenAgentId === agent\.id : leftActiveId === agent\.id;/, "a single owner of the slots: the active sky panel (when chatOnly) or left active tab");
 });
 
 test("pin-focus hides the RiffBot HubBar while a chat drawer is open", () => {
