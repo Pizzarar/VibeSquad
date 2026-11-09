@@ -326,7 +326,7 @@ function SlamFx({ root, view, faces, puff }: { root: React.RefObject<HTMLDivElem
   );
   return (
     <span ref={box} className="sky-slam-fx" aria-hidden="true" data-testid="sky-slam-fx" data-puff-frame={view.puffFrame ?? ""} data-smack-frame={view.smackFrame ?? ""}>
-      {to && puff && puffOk && frame && k > 0 && slamPuffPoints(to).map((pt, i) => sprite(String(i), "sky-slam-puff", slamPuffBox(pt, { w: puff.frameW, h: puff.frameH }, k, dpr), { w: puff.frameW, h: puff.frameH }, frame))}
+      {to && puff && puffOk && frame && k > 0 && slamPuffPoints(to).map((pt, i) => sprite(String(i), "sky-slam-puff", slamPuffBox(pt, { w: puff.frameW, h: puff.frameH }, k, dpr, host), { w: puff.frameW, h: puff.frameH }, frame))}
       {to && smack && puffOk && star && k > 0 && sprite("smack", "sky-slam-smack", slamPuffBox({ x: to.left + to.width / 2, y: to.top + to.height / 2 }, { w: smack.frameW, h: smack.frameH }, k, dpr), { w: smack.frameW, h: smack.frameH }, star)}
     </span>
   );

@@ -233,7 +233,7 @@ export function useSlamClock(open: boolean, reduced: boolean, puff: SlamPuff | n
       const v = slamView(stateRef.current, reducedRef.current, slamFxTiming(puffRef.current));
       // The hinge angle changes every frame: written straight to the sky root's --slam-swing (not state), so the chat is not re-rendered per frame.
       if (v.swing === null) root?.current?.style.removeProperty("--slam-swing");
-      else root?.current?.style.setProperty("--slam-swing", swingTransform(v.swing));
+      else root?.current?.style.setProperty("--slam-swing", swingTransform(v.swing, root.current.querySelector<HTMLElement>(".sky-chat-panel")?.offsetWidth));
       const k = slamKey(v);
       if (k !== keyRef.current) {
         keyRef.current = k;

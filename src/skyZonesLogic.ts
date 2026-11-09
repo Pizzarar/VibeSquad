@@ -427,11 +427,11 @@ export type SlamDir = "rest" | "open" | "close";
 /** The slam clock: `t` ms since the open/close began. `rest` = nothing animating (t 0). */
 export type SlamState = { dir: SlamDir; t: number };
 export const SLAM_REST: SlamState = { dir: "rest", t: 0 };
-/** Timings (ms). The window swings in on its hinge (ease-in, ~300ms), hits (1-frame squash, bezel shake, puff, SMACK star) and bounces back flat. Close swings it shut gently. */
-export const SLAM = { swingMs: 300, closeMs: 300, squashMs: 90, shakeMs: 240, shakeStepMs: 30, dizzyMs: 1000 } as const;
-/** The swing: rotateY(deg) about the hinge edge. Opens from SWING_FROM_DEG (nearly edge-on, outer edge toward the viewer) to flat; the hit bounces back SWING_BOUNCE_DEG then eases flat. */
+/** Timings (ms). The window swings in on its hinge (ease-in, ~300ms), hits (1-frame squash, bezel shake, puff, SMACK star), recoils off the Overlord's TV (back to nearly edge-on, held through the shake so his hurt face is on show) and then swings back flat (settleMs). Close swings it shut gently. */
+export const SLAM = { swingMs: 300, closeMs: 300, squashMs: 90, shakeMs: 240, shakeStepMs: 30, recoilMs: 20, settleMs: 200, dizzyMs: 1000 } as const;
+/** The swing: rotateY(deg) about the hinge edge. Opens from SWING_FROM_DEG (nearly edge-on, outer edge toward the viewer) to flat; the hit recoils to SWING_REBOUND_DEG (the outer edge swung AWAY, so the window leaves his TV face uncovered), holds, then eases flat. */
 export const SWING_FROM_DEG = -80;
-export const SWING_BOUNCE_DEG = -12;
+export const SWING_REBOUND_DEG = 88;
 /** The smear is drawn for this slice of the open swing (progress 0..1): the fast part, just before the hit. */
 export const SWING_SMEAR: readonly [number, number] = [0.45, 1];
 /** Bezel shake offsets (CSS px at 1080; 2-3px), one per shakeStepMs, ending still. */
@@ -498,7 +498,7 @@ export const slamFxMs = (p?: SlamFxTiming | null): number => (p ? Math.max(p.fra
 
 /** Whole timeline length. Open: the swing, then the landing effects (the longer of the shake and the puff/star). Close: the swing shut + the dizzy second run together. */
 export function slamTotalMs(dir: SlamDir, fxMs = 0): number {
-  if (dir === "open") return SLAM.swingMs + Math.max(SLAM.shakeMs, fxMs);
+  if (dir === "open") return SLAM.swingMs + Math.max(SLAM_HIT_MS, fxMs);
   if (dir === "close") return Math.max(SLAM.closeMs, SLAM.dizzyMs);
   return 0;
 }
@@ -534,13 +534,15 @@ export type SlamView = {
 };
 export const SLAM_IDLE_VIEW: SlamView = { swing: null, swinging: false, closing: false, smear: false, shove: false, squash: false, shakeDx: 0, puffFrame: null, smackFrame: null, face: null };
 
-/** Peak of sin(pi p)(1-p) on [0,1] (at p~0.35): the bounce is normalised so it really reaches SWING_BOUNCE_DEG. */
-const BOUNCE_SHAPE_PEAK = 0.5795;
-/** The hinge angle at `t` ms into an open (swing in, then the hit's bounce-back settling flat). */
+/** Length of the whole hit phase after the contact: recoil + hold (the shake) + settle back flat. */
+export const SLAM_HIT_MS = SLAM.shakeMs + SLAM.settleMs;
+/** The hinge angle at `t` ms into an open: the swing in, then the hit's recoil (fast out, held while the Overlord shows his hurt face), then the settle flat. */
 export function swingAngleOpen(t: number): number {
   if (t < SLAM.swingMs) return SWING_FROM_DEG * (1 - swingEaseIn(t / SLAM.swingMs));
-  const p = (t - SLAM.swingMs) / SLAM.shakeMs;
-  return p >= 1 ? 0 : (SWING_BOUNCE_DEG * Math.sin(Math.PI * p) * (1 - p)) / BOUNCE_SHAPE_PEAK + 0;
+  const lt = t - SLAM.swingMs;
+  if (lt < SLAM.recoilMs) return SWING_REBOUND_DEG * (1 - (1 - lt / SLAM.recoilMs) ** 2);
+  if (lt < SLAM.shakeMs) return SWING_REBOUND_DEG;
+  return lt >= SLAM_HIT_MS ? 0 : SWING_REBOUND_DEG * (1 - swingEaseInOut((lt - SLAM.shakeMs) / SLAM.settleMs));
 }
 /** Close: a gentle swing shut (ease-in-out), flat → edge-on. */
 export const swingAngleClose = (t: number): number => SWING_FROM_DEG * swingEaseInOut(t / SLAM.closeMs) + 0;
@@ -559,14 +561,14 @@ export function slamView(s: SlamState, reduced: boolean, fx?: SlamFxTiming | nul
   const lt = s.t - SLAM.swingMs; // ms since the hit
   const pf = fx && fx.frames > 0 ? Math.floor(lt / fx.ms) : -1;
   const sf = fx && fx.smackFrames && fx.smackMs ? Math.floor(lt / fx.smackMs) : -1;
-  const bouncing = lt < SLAM.shakeMs;
+  const bouncing = lt < SLAM_HIT_MS;
   return {
     ...SLAM_IDLE_VIEW,
     swing: bouncing ? swingAngleOpen(s.t) : null,
     swinging: bouncing,
     shove: bouncing,
     squash: lt < SLAM.squashMs,
-    shakeDx: bouncing ? (SLAM_SHAKE_DX[Math.floor(lt / SLAM.shakeStepMs)] ?? 0) : 0,
+    shakeDx: lt < SLAM.shakeMs ? (SLAM_SHAKE_DX[Math.floor(lt / SLAM.shakeStepMs)] ?? 0) : 0,
     puffFrame: pf >= 0 && fx && pf < fx.frames ? pf : null,
     smackFrame: sf >= 0 && fx && sf < (fx.smackFrames ?? 0) ? sf : null,
     face: "smacked",
@@ -585,9 +587,28 @@ export function slamTransform(dx: number, squash: boolean, dpr = 1): string | nu
   const t = [dx ? `translateX(${snapPx(dx, dpr)}px)` : "", squash ? `scale(${SLAM_SQUASH.x}, ${SLAM_SQUASH.y})` : ""].filter(Boolean).join(" ");
   return t || null;
 }
-export const SWING_PERSPECTIVE_PX = 1800;
+/** Perspective distance as a multiple of the window width: scales with the window, so the swing looks the same at every size. */
+export const SWING_PERSPECTIVE_K = 1.8;
+/**
+ * Perspective distance (px) for a window `widthPx` wide at hinge angle `deg`. The outer edge (toward the viewer for deg < 0) projects to
+ * W*cos(a)*P/(P - W*sin(a)); P >= W*cot(a/2) keeps that <= W, i.e. the edge never leaves the flat window's own box (so it stays inside the sky band
+ * and the smear is never pushed out of it). Capped so the near-flat angles stay finite.
+ */
+export function swingPerspectivePx(deg: number, widthPx: number): number {
+  const w = widthPx > 0 ? widthPx : 1;
+  const a = (Math.abs(deg) * Math.PI) / 180;
+  if (deg >= 0 || a < 0.02) return w * SWING_PERSPECTIVE_K;
+  return w * Math.min(60, Math.max(SWING_PERSPECTIVE_K, 1 / Math.tan(a / 2)));
+}
+/** Where the window's outer edge lands (px from the hinge) at angle `deg` under swingPerspectivePx: the projected edge the layout has to keep in bounds. */
+export function swingEdgeX(deg: number, widthPx: number): number {
+  const a = (deg * Math.PI) / 180;
+  const p = swingPerspectivePx(deg, widthPx);
+  const z = -widthPx * Math.sin(a); // deg < 0: the outer edge comes toward the viewer
+  return (widthPx * Math.cos(a) * p) / (p - z);
+}
 /** The CSS transform of the hinge angle (perspective + rotateY; the origin is the hinge edge, set in CSS). */
-export const swingTransform = (deg: number): string => `perspective(${SWING_PERSPECTIVE_PX}px) rotateY(${Math.round(deg * 100) / 100}deg)`;
+export const swingTransform = (deg: number, widthPx = 1000): string => `perspective(${Math.round(swingPerspectivePx(deg, widthPx))}px) rotateY(${Math.round(deg * 100) / 100}deg)`;
 
 export type Rect = { left: number; top: number; width: number; height: number };
 /** The face k at 1080 that slam-puff.json's `scale` (3) was drawn against: the puff grows with the face from there (so the burst keeps its size relative to the Overlord at 4K@120%). */
@@ -595,8 +616,16 @@ export const SLAM_FACE_K_1080 = 7;
 /** Puff scale (CSS px per art px): the art's `scale` at the 1080 face k, grown in step with the face k elsewhere, always whole device px. */
 export const slamPuffScale = (puffScale: number, faceK: number, dpr = 1): number => crispScale(faceK > 0 ? (puffScale * faceK) / SLAM_FACE_K_1080 : puffScale, dpr);
 /** A puff cell's box centred on a window-edge point, snapped to whole device px. */
-export function slamPuffBox(at: { x: number; y: number }, cell: { w: number; h: number }, k: number, dpr = 1): Rect {
-  return { left: snapPx(at.x - (cell.w * k) / 2, dpr), top: snapPx(at.y - (cell.h * k) / 2, dpr), width: cell.w * k, height: cell.h * k };
+export function slamPuffBox(at: { x: number; y: number }, cell: { w: number; h: number }, k: number, dpr = 1, bounds?: { width: number; height: number } | null): Rect {
+  const width = cell.w * k;
+  const height = cell.h * k;
+  let left = at.x - width / 2;
+  let top = at.y - height / 2;
+  if (bounds && bounds.width >= width && bounds.height >= height) { // keep the whole puff inside the FX box (the sky's edge clips it otherwise)
+    left = Math.min(Math.max(left, 0), bounds.width - width);
+    top = Math.min(Math.max(top, 0), bounds.height - height);
+  }
+  return { left: snapPx(left, dpr), top: snapPx(top, dpr), width, height };
 }
 /** The four window corners where the puffs go off. */
 export const slamPuffPoints = (r: Rect): { x: number; y: number }[] => [

@@ -8,7 +8,11 @@ import {
   SLAM_REST,
   SLAM_SHAKE_DX,
   SLAM_SQUASH,
-  SWING_BOUNCE_DEG,
+  SWING_REBOUND_DEG,
+  SLAM_HIT_MS,
+  swingEdgeX,
+  swingPerspectivePx,
+  faceContain,
   SWING_FROM_DEG,
   SWING_SMEAR,
   slamAdvance,
@@ -73,7 +77,7 @@ test("smear: only the fast late slice of the swing", () => {
   assert.equal(at("open", SLAM.swingMs).smear, false);
 });
 
-test("the hit (hotfix2): squash one beat, visible shake, puff + SMACK star, Overlord smacked, the window bounces back 10-15 deg and settles flat", () => {
+test("the hit (hotfix2): squash one beat, visible shake, puff + SMACK star, Overlord smacked, the window recoils off his TV and settles flat", () => {
   const hit = SLAM.swingMs;
   const v0 = at("open", hit);
   assert.equal(v0.face, "smacked");
@@ -88,13 +92,12 @@ test("the hit (hotfix2): squash one beat, visible shake, puff + SMACK star, Over
   assert.equal(SLAM_SHAKE_DX.length * SLAM.shakeStepMs, SLAM.shakeMs);
   assert.equal(v0.shakeDx, SLAM_SHAKE_DX[0]);
   assert.equal(at("open", hit + SLAM.shakeMs - 1).shakeDx, SLAM_SHAKE_DX.at(-1));
-  let bounce = 0;
-  for (let d = 0; d < SLAM.shakeMs; d += 5) bounce = Math.max(bounce, Math.abs(swingAngleOpen(hit + d)));
-  assert.ok(bounce >= Math.abs(SWING_BOUNCE_DEG) * 0.7 && bounce <= 15, `bounce peaks ${bounce} deg`);
-  assert.ok(Math.abs(SWING_BOUNCE_DEG) >= 10 && Math.abs(SWING_BOUNCE_DEG) <= 15);
+  let rebound = 0;
+  for (let d = 0; d < SLAM_HIT_MS; d += 5) rebound = Math.max(rebound, swingAngleOpen(hit + d));
+  assert.equal(rebound, SWING_REBOUND_DEG, "the window recoils away from the TV (positive: outer edge swung away)");
   assert.equal(swingAngleOpen(hit), 0, "flat at the instant of the hit");
-  assert.equal(swingAngleOpen(hit + SLAM.shakeMs), 0, "flat when settled");
-  const settled = at("open", hit + SLAM.shakeMs);
+  assert.equal(swingAngleOpen(hit + SLAM_HIT_MS), 0, "flat when settled");
+  const settled = at("open", hit + SLAM_HIT_MS);
   assert.equal(settled.swing, null, "nothing applied once settled: the chat is a plain window");
   assert.equal(settled.swinging, false);
   assert.equal(settled.shakeDx, 0);
@@ -109,18 +112,18 @@ test("no art: the swing + hit still play, just without the burst / star", () => 
   assert.equal(v.puffFrame, null);
   assert.equal(v.smackFrame, null);
   assert.equal(v.squash, true);
-  assert.equal(slamTotalMs("open", 0), SLAM.swingMs + SLAM.shakeMs);
+  assert.equal(slamTotalMs("open", 0), SLAM.swingMs + SLAM_HIT_MS);
   const noStar = at("open", SLAM.swingMs + 10, false, { frames: 4, ms: 60 });
   assert.equal(noStar.smackFrame, null);
   assert.equal(noStar.puffFrame, 0);
 });
 
-test("open timeline ends at the longer of shake and puff/star, then rests", () => {
+test("open timeline ends at the longer of the hit phase and puff/star, then rests", () => {
   assert.equal(slamFxMs(fx), 240);
   assert.equal(slamFxMs({ frames: 1, ms: 10, smackFrames: 4, smackMs: 100 }), 400);
   assert.equal(slamFxMs(null), 0);
   const total = slamTotalMs("open", 240);
-  assert.equal(total, SLAM.swingMs + 240);
+  assert.equal(total, SLAM.swingMs + SLAM_HIT_MS);
   let s = slamStart(true, false);
   s = slamAdvance(s, total - 1, 240);
   assert.equal(s.dir, "open");
@@ -191,7 +194,7 @@ test("a missing smacked / dizzy / shove key is skipped (the face stays on its no
   assert.equal(slamFaceForce(at("close", 10), some), "dizzy");
   assert.equal(slamFaceForce(at("close", SLAM.dizzyMs), some), null);
   assert.equal(slamRiffForce(at("open", 10), some), "shove");
-  assert.equal(slamRiffForce(at("open", SLAM.swingMs + SLAM.shakeMs), some), null, "Riff relaxes once the window settles");
+  assert.equal(slamRiffForce(at("open", SLAM.swingMs + SLAM_HIT_MS), some), null, "Riff relaxes once the window settles");
   assert.equal(slamRiffForce(at("close", 10), some), null);
   assert.equal(slamFaceForce(at("open", 10), null), null);
   assert.equal(slamRiffForce(at("open", 10), null), null);
@@ -276,4 +279,42 @@ test("wiring: clock, Overlord face force, Riff shove force, swing var, kept-open
   assert.match(h, /export function useSlamClock/);
   assert.match(h, /setProperty\("--slam-swing"/);
   assert.match(h, /requestAnimationFrame\(tick\)/);
+});
+
+// RS-c UI fixes (Art10 FAIL): the smear edge stays in the band, the Overlord's hurt face is never covered, the puffs stay in bounds.
+const WIDTHS = [1590, 960, 560]; // window width at 3200 / 1920 / 1140 css-px skies (half the sky less padding)
+test("swing: the projected outer edge never leaves the window's own box (inside the sky band) at any size or angle", () => {
+  for (const w of WIDTHS) {
+    for (let t = 0; t <= SLAM.swingMs; t += 5) {
+      const a = swingAngleOpen(t);
+      const x = swingEdgeX(a, w);
+      assert.ok(x <= w + 0.5, `w=${w} t=${t} a=${a.toFixed(1)}: edge at ${x.toFixed(0)} > ${w}`);
+    }
+    // the old fixed 1800px perspective pushed the 1308px edge out to ~3000 at -59deg
+    assert.ok(swingEdgeX(-59, w) <= w + 0.5);
+  }
+  assert.ok(swingPerspectivePx(-59, 1000) !== swingPerspectivePx(-59, 500), "perspective scales with the window width");
+  assert.equal(swingPerspectivePx(-59, 2000), 2 * swingPerspectivePx(-59, 1000));
+});
+
+test("the Overlord's face stays uncovered while the window recoils (hit..hold), then it settles back flat", () => {
+  for (const w of WIDTHS) {
+    const h = Math.round(w * 0.55);
+    const face = faceContain({ w: 80, h: 48 }, { w, h }, 1.2);
+    for (let lt = 20; lt <= SLAM.shakeMs; lt += 5) {
+      const edge = swingEdgeX(swingAngleOpen(SLAM.swingMs + lt), w);
+      assert.ok(edge <= face.left, `w=${w} lt=${lt}: window edge ${edge.toFixed(0)} covers the face (left ${face.left})`);
+    }
+  }
+  assert.equal(swingAngleOpen(SLAM.swingMs + SLAM.shakeMs - 1), SWING_REBOUND_DEG);
+  assert.equal(at("open", SLAM.swingMs + 100).face, "smacked");
+});
+
+test("slamPuffBox: the puff is kept whole inside the FX box (right-edge puffs were clipped in half)", () => {
+  const bounds = { width: 1000, height: 600 };
+  const edge = slamPuffBox({ x: 1000, y: 0 }, { w: 32, h: 32 }, 3, 1, bounds);
+  assert.deepEqual([edge.left, edge.top], [1000 - 96, 0]);
+  const mid = slamPuffBox({ x: 500, y: 300 }, { w: 32, h: 32 }, 3, 1, bounds);
+  assert.deepEqual([mid.left, mid.top], [452, 252]);
+  assert.equal(slamPuffBox({ x: 1000, y: 0 }, { w: 32, h: 32 }, 3, 1).left, 952, "no bounds = unclamped");
 });
