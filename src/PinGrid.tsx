@@ -841,7 +841,7 @@ function SquadTile({ v, compact, onSelectSquad, onOpenPin, onOpenAgent }: { v: T
         )}
       </div>
       {compact ? (
-        <div className="squad-home-lead-line muted small" data-testid={`squad-home-summary-${v.team.id}`}>
+        <div className="squad-home-summary-line muted small" data-testid={`squad-home-summary-${v.team.id}`}>
           {pinned.length} {pinned.length === 1 ? "lane" : "lanes"} · {leadName} · {leadState}
         </div>
       ) : (
@@ -883,8 +883,19 @@ function SquadTile({ v, compact, onSelectSquad, onOpenPin, onOpenAgent }: { v: T
 }
 
 const SQUAD_ROWS = 2;
-/** At app zoom >= this the squads grid collapses to one strip row of summary tiles so the Usage limit cards stay above the fold. */
-const SQUADS_COMPACT_SCALE = 1.25;
+/** Below this much layout height (window height / app zoom, in css px) the squads grid collapses to one strip row of summary tiles so the Usage limit cards stay above the fold. */
+const SQUADS_COMPACT_BELOW_H = 1000;
+
+function useLayoutHeight(): number {
+  const scale = useUiScale();
+  const [h, setH] = useState(() => (typeof window === "undefined" ? 2000 : window.innerHeight));
+  useEffect(() => {
+    const on = () => setH(window.innerHeight);
+    window.addEventListener("resize", on);
+    return () => window.removeEventListener("resize", on);
+  }, []);
+  return h / scale;
+}
 
 export function SquadsHome({
   views,
@@ -899,7 +910,7 @@ export function SquadsHome({
   onNewSquad: () => void;
   onOpenAgent?: (teamId: string, agentId: string) => void;
 }) {
-  const compact = useUiScale() >= SQUADS_COMPACT_SCALE;
+  const compact = useLayoutHeight() < SQUADS_COMPACT_BELOW_H;
   const rows = compact ? 1 : SQUAD_ROWS;
   const gridRef = useRef<HTMLDivElement>(null);
   const [cols, setCols] = useState(4);
