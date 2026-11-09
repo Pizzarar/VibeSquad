@@ -649,6 +649,15 @@ export function rolePack(role: string, cwd: string, vibeMode = false, isHub = fa
 
 const MAX_BRIEF_CHARS = 20_000;
 const MAX_SNAPSHOT_CHARS = 600;
+/** Spawn-prompt caps: the file stays the source of truth; the prompt gets the head plus a pointer. */
+export const MAX_INJECT_BRIEF_CHARS = 6_000;
+export const MAX_INJECT_OPEN_UNITS = 30;
+
+function clipForPrompt(text: string, max: number, pointer: string): string {
+  if (text.length <= max) return text;
+  const cut = text.lastIndexOf("\n", max);
+  return `${text.slice(0, cut > max / 2 ? cut : max)}\n[... ${text.length - max} more chars not shown; read ${pointer}]`;
+}
 
 export function briefPathFor(root: string, lane: string): string {
   const slug = String(lane ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
@@ -672,7 +681,7 @@ export function laneBriefBlock(root: string, lane: string): string {
   return [
     `Lane brief for \`${lane}\`: read it before anything else; it is the Buddy handoff.`,
     briefBeginMarker(lane),
-    defangPromptFences(text.slice(0, MAX_BRIEF_CHARS)),
+    defangPromptFences(clipForPrompt(text, MAX_INJECT_BRIEF_CHARS, `docs/brainstorm/${lane}.md`)),
     `--- END docs/brainstorm/${lane}.md ---`,
   ].join("\n");
 }
@@ -705,8 +714,13 @@ export function laneArtifactBlock(root: string, lane: string): string {
     if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
       const open = doc.units.filter((u: { status?: unknown }) => String(u?.status ?? "").trim().toLowerCase() !== "done");
       const doneCount = doc.units.length - open.length;
-      tasks = JSON.stringify({ ...doc, units: open }, null, 2);
-      if (doneCount > 0) doneNote = `\n${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`;
+      const shown = open.slice(0, MAX_INJECT_OPEN_UNITS);
+      tasks = JSON.stringify({ ...doc, units: shown }, null, 2);
+      const moreOpen = open.length - shown.length;
+      if (doneCount > 0 || moreOpen > 0) {
+        const counts = [moreOpen > 0 ? `${moreOpen} more open units` : "", doneCount > 0 ? `${doneCount} done units` : ""].filter(Boolean);
+        doneNote = `\n${counts.join(", ")} (full list: docs/lanes/${safeLane}/TASKS.json)`;
+      }
     } else {
       tasks = `TASKS.json unreadable (see docs/lanes/${safeLane}/TASKS.json)`;
     }
@@ -717,10 +731,10 @@ export function laneArtifactBlock(root: string, lane: string): string {
     `Lane Artifact (docs/lanes/${safeLane}/ — durable source of truth across restarts & provider switches):`,
   ];
   if (spec) {
-    parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(spec.slice(0, MAX_BRIEF_CHARS))}`);
+    parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(clipForPrompt(spec, MAX_INJECT_BRIEF_CHARS, `docs/lanes/${safeLane}/SPEC.md`))}`);
   }
   if (tasks) {
-    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}${doneNote}`);
+    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(clipForPrompt(tasks, MAX_BRIEF_CHARS, `docs/lanes/${safeLane}/TASKS.json`))}${doneNote}`);
   }
   parts.push(`<!-- vibesquad:lane-artifact:end -->`);
   return parts.join("\n");
@@ -807,6 +821,22 @@ export function firstDispatchMetricText(
 
 export function injectedPrefix(role: string, cwd: string, vibeMode = false, isHub = false): string {
   return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode, isHub)].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Layers the spawn prompt: prefix, then the profile notes, then the caller's own text, then git state.
+ * The caller's systemPrompt is usually the profile notes verbatim (toPaseoSpawnConfig sets
+ * systemPrompt = notes), so it gets the same prefix-line dedupe as the notes. Otherwise the stripped
+ * notes copy is not a substring of the raw caller copy and both ride along (the R1-R12 block and
+ * "Project rules first" twice, ~3.7 KB).
+ */
+export function composeSpawnPromptParts(prefix: string, profileNotes: string, rawSysPrompt: string, gitState: string | null): string[] {
+  const existing = dedupeNotesAgainst(rawSysPrompt.trim(), prefix);
+  const parts = [prefix];
+  if (profileNotes && !existing.includes(profileNotes)) parts.push(profileNotes);
+  if (existing) parts.push(existing);
+  if (gitState && !existing.includes("Starting git state (snapshot at spawn")) parts.push(gitState);
+  return parts;
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
@@ -1626,17 +1656,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");
         if (prefix && !rawSysPrompt.includes(EVERYONE_LAYER)) {
-          const existing = rawSysPrompt.trim();
-          const parts = [prefix];
-          if (profileNotes && !existing.includes(profileNotes)) {
-            parts.push(profileNotes);
-          }
-          if (existing) {
-            parts.push(existing);
-          }
-          if (gitState && !existing.includes("Starting git state (snapshot at spawn")) {
-            parts.push(gitState);
-          }
+          const parts = composeSpawnPromptParts(prefix, profileNotes, rawSysPrompt, gitState);
           next.systemPrompt = parts.join("\n\n");
           changed = true;
           const where = teamOf(envOrReqLabels, cwd);
