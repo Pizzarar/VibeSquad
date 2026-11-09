@@ -20,7 +20,7 @@ import {
   serverUrl,
   type RemoteError,
 } from "./remoteSession";
-import { createTrustClient, nativeTrust, type TrustClient } from "./vsTrust";
+import { createTrustClient, flushCookies, nativeTrust, type TrustClient } from "./vsTrust";
 
 const PROBE_MS = 5000;
 
@@ -165,7 +165,11 @@ export function RemotePairScreen() {
 
   // Just paired: open the server's UI now that the session is saved.
   useEffect(() => {
-    if (ret.open) openServer(ret.open);
+    if (ret.open) {
+      // Persist vs_device (set on the /pair redirect) before leaving for the PC.
+      const host = ret.open;
+      void flushCookies().then(() => openServer(host));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

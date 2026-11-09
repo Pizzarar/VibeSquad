@@ -32,7 +32,7 @@ import {
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
-import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
+import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
   createAgentClient,
@@ -1446,6 +1446,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
+    if (path === "/__vibesquad/enter") return handleEnter(req, res);
     if (path === "/__vibesquad/local-login") return handleLocalLogin(req, res);
     if (path === "/__vibesquad/local-login/nonce") return handleLocalLoginNonce(req, res);
     const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
