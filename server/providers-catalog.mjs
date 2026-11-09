@@ -1348,7 +1348,7 @@ export function oneShotReviewRun(cmd, args) {
 const defaultRunOpus = oneShotReviewRun("claude", ["-p", "--model", "claude-opus-5-5"]);
 const defaultRunGemini = oneShotReviewRun("agy", ["-p"]);
 
-// ---------------------------------------------------------------- usa-15: auto-route review bullets to bug-chaser inbox
+// ---------------------------------------------------------------- usa-15 / usa-19: auto-route review bullets to perfection inbox
 
 const REVIEW_BULLET_LEAD_RE = /^(?:[-*•+]\s+|\d+[.)]\s+)+/;
 const REVIEW_GRADE_RE = /^grade\b|previous review|no prior review/i;

@@ -47,7 +47,7 @@ type TriageCrtProps = {
   onRun: () => void;
 };
 
-/** CRT mail terminal: bug-chaser / perfection cards and usage-review bullets with 1-click Accept / Reject. */
+/** CRT mail terminal: perfection / inbox triage cards and usage-review bullets with 1-click Accept / Reject. */
 function TriageCrt({ now, review, running, status, error, onInterval, onRun }: TriageCrtProps) {
   const all = useInboxCards();
   const cards = useMemo(() => bugInboxCards(all), [all]);
@@ -105,7 +105,7 @@ function TriageCrt({ now, review, running, status, error, onInterval, onRun }: T
       <div className="usage-bug-inbox" data-testid="usage-bug-inbox">
         {failure && <div className="usage-review-error small">{failure}</div>}
         {shown.length === 0 ? (
-          <div className="usage-empty muted small">{cards.length === 0 ? "no bug-chaser cards yet — review suggestions land here" : "nothing in this filter"}</div>
+          <div className="usage-empty muted small">{cards.length === 0 ? "no inbox cards yet" : "nothing in this filter"}</div>
         ) : (
           <ul className="usage-inbox-list">
             {shown.map((c) => {
