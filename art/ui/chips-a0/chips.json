@@ -1,0 +1,14 @@
+{
+  "unit": "A0 Squad-header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md)",
+  "native": 16,
+  "master2x": 32,
+  "display": "calc(var(--u3-px) * 16) = 32 device px at 4K@120% and 1080 (same box as .pixel-icon / S2b icons)",
+  "themes": ["dark", "light"],
+  "path": "public/ui/chip-<key>-<theme>.png (16x16), public/ui/chip-<key>-<theme>@2x.png (32x32)",
+  "keys": {
+    "bugs": "Bugs chip: goofy beetle",
+    "workflows": "Workflows chip: experiment flask",
+    "dot": "Lead-running badge: solid MINT dot in the top-right of the same 16/32 box; stack it over the chip img (position:absolute; inset 0)"
+  },
+  "notes": "needs-you count is text (@ui-bois), not art. Bug eyes keep x>=10 (16) / x>=20 (32) clear so the dot never covers them."
+}
