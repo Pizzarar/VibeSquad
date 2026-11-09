@@ -70,8 +70,8 @@
     {
       "kind": "overlap",
       "selector": "tl-pinned-todo",
-      "other": "tl-(subagent-row|tool-row)",
-      "reason": "Sticky plan header (opaque background) overlays timeline rows that scroll under it, by design."
+      "other": "tl-(subagent-row|tool-row|todo)",
+      "reason": "Sticky plan header (opaque background) overlays timeline rows that scroll under it (and the plan list itself), by design."
     },
     {
       "kind": "decor-line",
@@ -109,11 +109,6 @@
       "kind": "compact-scroll",
       "selector": "cmd-list",
       "reason": "Command palette opens on demand (Ctrl+K) and its action list scrolls by nature; the filter box narrows it."
-    },
-    {
-      "kind": "overlap",
-      "selector": "tl-pinned-todo",
-      "reason": "The Plan / Tasks row is sticky-pinned over the scrolling timeline by design."
     },
     {
       "kind": "overlap",

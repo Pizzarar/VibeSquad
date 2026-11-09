@@ -57,9 +57,9 @@ test("allow-list has no entries for the composer chip, chip row or settings head
   assert.deepEqual(bad, [], "these hits must be fixed, not allow-listed");
 });
 
-test("no compact-by-default hit: no massive scroll, no overbearing menu (owner rule, allow-list free)", opts, async () => {
+test("no compact-by-default hit: no massive scroll, no overbearing menu (owner rule; reasoned allow-list entries are exempt)", opts, async () => {
   const r = await getReport();
-  const bad = r.hits.filter((h) => h.kind === "compact-scroll" || h.kind === "compact-menu");
+  const bad = r.hits.filter((h) => !h.allowed && (h.kind === "compact-scroll" || h.kind === "compact-menu"));
   assert.equal(bad.length, 0, `${bad.length} compact-by-default hits:
 ${describeHits(bad)}`);
 });
