@@ -3504,7 +3504,7 @@ html, body, #root { overflow-x: hidden; }
 .sidebar-pins { display: flex; flex-direction: column; padding: 2px 0 6px; }
 .sidebar-riffbot-wrap { padding: var(--sp-1) var(--sp-2) 6px 14px; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); }
 .sidebar-riffbot {
-  display: flex; align-items: center; gap: 6px; width: 100%;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; width: 100%;
   padding: 5px var(--sp-2); background: linear-gradient(135deg, var(--panel) 0%, var(--bg) 100%);
   border: 1px solid color-mix(in srgb, var(--line) 50%, transparent); border-left: 3px solid var(--emerald); border-radius: 4px;
   color: var(--text); font: inherit; font-size: 12px; text-align: left; cursor: pointer;
@@ -3523,7 +3523,7 @@ html, body, #root { overflow-x: hidden; }
   border-radius: 3px; flex: none;
 }
 .sidebar-riffbot-title {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: 1 0 auto; white-space: nowrap;
   color: var(--muted); font-size: 11px;
 }
 .sidebar-riffbot-state {
@@ -5887,7 +5887,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .exposed-network-banner > span, .read-only-banner > span, .config-warning-banner > span, .update-available-banner > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Chat top bar: the crumbs before the current page keep their full label; only the current page shrinks (ellipsis). */
 .top-breadcrumb .breadcrumb-seg:not(.current) { flex: none; max-width: none; overflow: visible; }
-.top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: 0; }
+.top-breadcrumb .breadcrumb-seg.current { flex: 0 1 auto; min-width: min(max-content, 12ch); } /* short lane names (BRAINSTORM) never ellipsize; long ones still do */
 /* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
 .pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
 /* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */

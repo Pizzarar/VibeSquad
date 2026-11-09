@@ -26,6 +26,17 @@
 
 @media (max-width: 1000px), (max-height: 760px) {
   .sidebar:not(.collapsed) { width: 170px; }
+  /* V1b-2: at 170px the footer icon row (zoom, scripts, help, about, settings) and the VIBE OS tagline outgrow the sidebar; the sidebar
+     is overflow:hidden but a click on the cut-off button scrolls it sideways and clips the whole sidebar. Wrap instead of overflow. */
+  .sidebar .sidebar-footer-row, .sidebar .sidebar-footer-left, .sidebar .sidebar-footer-right { flex-wrap: wrap; }
+  .sidebar .brand-sub { white-space: normal; letter-spacing: 0.5px; max-width: 100%; }
+  .sidebar .sidebar-teams-header { flex-wrap: wrap; }
+  /* The hub focus bar (breadcrumb + @handle + compact drawer controls) outgrows the ~715px middle column at 1280x720: the
+     BRAINSTORM crumb crushes to 27px and the working chip is pushed past the edge. Let the slot drop to its own row instead. */
+  .app .pin-focus-bar { height: auto; min-height: 44px; flex-wrap: wrap; row-gap: 2px; }
+  .app .pin-focus-bar .pin-focus-slot { flex: 1 1 360px; }
+  .app .pin-focus-bar .drawer-head-compact { flex-wrap: wrap; height: auto; min-height: 44px; row-gap: 8px; }
+  .handoff-row.unassigned-row > * { min-width: 0; overflow-wrap: anywhere; }
   .drawer-head { padding: 4px 8px; }
   .timeline { min-height: 180px; }
   .composer { position: sticky; bottom: 0; flex-shrink: 0; }

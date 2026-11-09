@@ -33,3 +33,19 @@ Needs-you pips and badges (`pin-needs-*`, `squad-home-needs-*`), `pin-menu-*` "â
 
 ## Provider badge (Aub R1.3, known `r1-provider-badge-over-avatar`)
 Fixed in layout: the avatar now keeps a 12px gutter (`AVATAR_BADGE_GUTTER`, `src/pixel.tsx`) and the badge sits beside the sprite, not over it. If you redraw the badge or the cast frame, keep the badge inside that 12px gutter (about 10x12 px).
+
+## V1b-2 (re-run on master 7bc5b8b + new surfaces; branch `unit-ui-overlap-v1b2`)
+
+Matrix: 4k@1.2 (3200x1800 css, dpr 1.2), 1920x1080, 1280x720, dark + light. New surfaces: `sky-idle`, `sky-rest`, `sky-riff-open`, `sky-riff-landed` (demo `?riff=1` gives the hub a live RiffBot + Overlord), `hub-tower`, `hub-tabs`, `rail-squads-icon`, `pin-grid-teams-toggle`. Result: 40 failing @art rows (37 contrast, 3 decor-line) + 37 warn-only decor-suspect. Re-run: `node scripts/ui-overlap.mjs --sizes 4k,1080,720 --no-fail`, crops in `scratch/shots/v1a-*`.
+
+The earlier 13 V1b contrast rows are fixed on master except the ones below that still reproduce. Almost all new rows are the FULL plumbing view (TEAMS toggle, `squad-full-toggle` -> `main.team-page`), which no earlier surface rendered:
+
+| Group | Selectors | Worst ratio | Theme |
+|---|---|---|---|
+| Teal / pink fill chips with pale text | `span.lane-tag`, `.unit-tag`, `.badge`, `.warn-badge`, `.pill.error/.needs-you/.permission`, `.alert-pill` (`.alert-owner/.alert-type/.alert-who`), `.drawer-labels-list .chip`, `.role-tag`, `talk-here-badge`, `runs-the-work-badge` | 1.0-2.5 | light + dark |
+| Muted text on card fills | `.card-lead .card-body .muted.small span`, `.card.sel .muted.small`, `.card-title` on pink | 1.2-2.6 | light |
+| Provider inline label | `span.prov-inline` (cyan/orange on pale row) | 1.0-2.0 | light |
+| Ghost confirm button | `.row-actions button.btn.confirm` (Running row) | 1.13 | light |
+| Meter readout | `lead-token-meter .meter-readout` | 1.66 | light |
+
+Lines through text (3): `button[data-testid="sky-start-overlord"]` and `.sky-static-text` (`sky-static-overlord` repeating-gradient scanline, unchanged since V1b, see above), plus one `focus-lead` decor-line. The Squads rail icon (`rail-squads-icon`) and the hub page switcher (`hub-tabs`) are clean at all sizes and themes.
