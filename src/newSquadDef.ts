@@ -5,23 +5,15 @@ import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
-  findAuditLane,
   type TeamDef,
 } from "./teams.ts";
 import { allLaneIds, slugLaneId, uniqueLaneId, type PinLane } from "./pins.ts";
-import { seedBugLane } from "../server/bug-lane-backfill.mjs";
+import { seedStandingLane } from "../server/bug-lane-backfill.mjs";
 import { freezeLaneCodes } from "./identity.ts";
 
 /** Seeds the Squad's standing, hidden Bug Runner and Perfection (audit) lanes. Idempotent: a lane the Squad already has (flagged or by fallback id) is kept as is. Lane ids are unique across Squads, so a second Squad gets `bug-runner-2`. */
 export function withBugLane(team: TeamDef, existingTeams: TeamDef[] = []): TeamDef {
-  const others = existingTeams.filter((t) => t.id !== team.id);
-  let next = team;
-  next = seedBugLane(next, existingTeams) as TeamDef;
-  if (!findAuditLane(next)) {
-    const lane: PinLane = { id: uniqueLaneId("perfection", allLaneIds([...others, next])), name: "Perfection", kind: "audit", hidden: true, standing: true, state: "pinned" };
-    next = { ...next, lanes: freezeLaneCodes([...next.lanes, lane]) };
-  }
-  return next;
+  return seedStandingLane(seedStandingLane(team, "bug", existingTeams), "audit", existingTeams) as TeamDef;
 }
 
 export function buildNewSquadTeamDef(opts: {

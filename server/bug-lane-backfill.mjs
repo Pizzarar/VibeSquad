@@ -1,44 +1,124 @@
+import fs from "node:fs";
 import path from "node:path";
-import { cleanLaneCode, findBugLane, laneCodesForTeam } from "./identity.mjs";
+import { cleanLaneCode, findAuditLane, findBugLane, isHubLane, laneCodesForTeam } from "./identity.mjs";
 import { takenLaneIds, uniqueLaneId } from "./pin-ideas.mjs";
-import { resolveTeamsFilePath, writeTeamsRegistry } from "./teams-file.mjs";
+import { resolveTeamsFilePath, vibesquadHome, writeTeamsRegistry } from "./teams-file.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+
+// Template reconcile (G3): old Squads are diffed against what buildNewSquadTeamDef (src/newSquadDef.ts) makes today.
+// Additive, no-user-value parts are added at server start; anything else is only logged as a `template-drift` metric.
+// test/bug-lane-backfill.test.mjs keeps TEMPLATE_DEFAULTS in step with the TS template.
+
+export const TEMPLATE_DEFAULTS = {
+  color: "#00f0ff",
+  brainstormWarnTokens: 80_000,
+  brainstormRestartTokens: 150_000,
+  leadFlagTokens: 150_000,
+  leadAutoHandoffTokens: 250_000,
+  leadHardCapTokens: 300_000,
+};
+
+const STANDING = {
+  bug: { id: "bug-runner", name: "Bug Runner", find: findBugLane },
+  audit: { id: "perfection", name: "Perfection", find: findAuditLane },
+};
 
 const freezeCodes = (lanes) => {
   const codes = laneCodesForTeam({ lanes });
   return lanes.map((l) => (cleanLaneCode(l.code) === codes[l.id] ? l : { ...l, code: codes[l.id] }));
 };
 
-/** The Squad with its standing, hidden Bug Runner lane. Idempotent: a bug lane it already has (flagged or by fallback id) is kept. Lane ids are unique across Squads (`bug-runner-2`, ...). The audit (Perfection) lane is never seeded here. */
-export function seedBugLane(team, existingTeams = []) {
-  if (findBugLane(team)) return team;
+/** The Squad with its standing, hidden lane of `kind` ("bug" Bug Runner / "audit" Perfection). Idempotent: a lane it already has (flagged or by fallback id) is kept. Lane ids are unique across Squads (`bug-runner-2`, ...). */
+export function seedStandingLane(team, kind, existingTeams = []) {
+  const spec = STANDING[kind];
+  if (spec.find(team)) return team;
   const others = existingTeams.filter((t) => t.id !== team.id);
   const taken = takenLaneIds([...others, team].flatMap((t) => t.lanes ?? []));
-  const lane = { id: uniqueLaneId("bug-runner", taken), name: "Bug Runner", kind: "bug", hidden: true, standing: true, state: "pinned" };
+  const lane = { id: uniqueLaneId(spec.id, taken), name: spec.name, kind, hidden: true, standing: true, state: "pinned" };
   return { ...team, lanes: freezeCodes([...(team.lanes ?? []), lane]) };
 }
+export const seedBugLane = (team, existingTeams = []) => seedStandingLane(team, "bug", existingTeams);
 
-/** Adds the missing bug lane to every Squad in the list. Returns the same array when nothing changed. */
-export function backfillBugLanes(teams) {
+/** One Squad vs the template: `next` has the auto parts applied; `auto` / `logOnly` list rules ({ rule, detail? }). */
+export function diffAgainstTemplate(team, allTeams = []) {
+  const auto = [];
+  let next = team;
+  for (const kind of ["bug", "audit"]) {
+    const seeded = seedStandingLane(next, kind, allTeams);
+    if (seeded !== next) auto.push({ rule: `add-${kind}-lane`, detail: seeded.lanes.at(-1).id });
+    next = seeded;
+  }
+  const fill = Object.entries(TEMPLATE_DEFAULTS).filter(([k]) => next[k] === undefined || next[k] === null);
+  if (fill.length) {
+    next = { ...next, ...Object.fromEntries(fill) };
+    for (const [k, v] of fill) auto.push({ rule: `add-${k}`, detail: String(v) });
+  }
+  const frozen = freezeCodes(next.lanes ?? []);
+  if (frozen.some((l, i) => l !== next.lanes[i])) {
+    auto.push({ rule: "freeze-lane-codes", detail: frozen.filter((l, i) => l !== next.lanes[i]).map((l) => l.id).join(",") });
+    next = { ...next, lanes: frozen };
+  }
+  const logOnly = [];
+  if (!(next.lanes ?? []).some((l) => isHubLane(next, l))) logOnly.push({ rule: "no-hub-lane" });
+  if (!Array.isArray(next.paths) || !next.paths.length) logOnly.push({ rule: "no-paths" });
+  return { next, auto, logOnly };
+}
+
+/** Reconciles every Squad. `teams` is returned as is when nothing changed. */
+export function reconcileTemplate(teams) {
+  const auto = [];
+  const logOnly = [];
   let changed = false;
   const out = [];
   for (const t of teams) {
-    const next = seedBugLane(t, [...out, ...teams.slice(out.length + 1)]);
-    if (next !== t) changed = true;
-    out.push(next);
+    const d = diffAgainstTemplate(t, [...out, ...teams.slice(out.length + 1)]);
+    if (d.next !== t) changed = true;
+    out.push(d.next);
+    auto.push(...d.auto.map((a) => ({ team: t.id, ...a })));
+    logOnly.push(...d.logOnly.map((a) => ({ team: t.id, ...a })));
   }
-  return changed ? out : teams;
+  return { teams: changed ? out : teams, auto, logOnly };
 }
 
-/** At server start: persist the backfill once. Never writes the bundled teams.example.json. */
-export function persistBugLaneBackfill(rootDir) {
+/** Adds the missing bug and audit lanes (and the other additive template parts) to every Squad. */
+export const backfillBugLanes = (teams) => reconcileTemplate(teams).teams;
+
+const SEEN_FILE = "template-drift-seen.json";
+
+/** Team log + lane log line, the shape `vs log metric` writes. */
+function logDriftMetric(team, text, home) {
+  const lane = (team.lanes ?? []).find((l) => isHubLane(team, l))?.id ?? team.id;
+  const line = JSON.stringify({ ts: new Date().toISOString(), agent: "template-drift", lane, type: "metric", text }) + "\n";
+  fs.mkdirSync(path.join(home, "teams", team.id), { recursive: true });
+  fs.appendFileSync(path.join(home, "teams", team.id, "log.jsonl"), line, "utf8");
+  fs.mkdirSync(path.join(home, "logs"), { recursive: true });
+  fs.appendFileSync(path.join(home, "logs", `${team.id}--${lane}.jsonl`), line, "utf8");
+}
+
+/** At server start: persist the additive reconcile once, then log a `template-drift` metric per Squad for what is left (only when that Squad's drift changed since last logged). Never writes teams.example.json. */
+export function persistTemplateReconcile(rootDir) {
   const file = resolveTeamsFilePath(rootDir);
-  if (path.basename(file) === "teams.example.json") return { changed: false };
+  if (path.basename(file) === "teams.example.json") return { changed: false, auto: [], logOnly: [] };
   const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null });
   const teams = r.ok && r.data && Array.isArray(r.data.teams) ? r.data.teams : null;
-  if (!teams) return { changed: false };
-  const next = backfillBugLanes(teams);
-  if (next === teams) return { changed: false };
-  writeTeamsRegistry({ ...r.data, teams: next }, rootDir);
-  return { changed: true, added: next.filter((t, i) => t !== teams[i]).map((t) => ({ team: t.id, lane: findBugLane(t).id })) };
+  if (!teams) return { changed: false, auto: [], logOnly: [] };
+  const rec = reconcileTemplate(teams);
+  const changed = rec.teams !== teams;
+  if (changed) writeTeamsRegistry({ ...r.data, teams: rec.teams }, rootDir);
+  const home = vibesquadHome();
+  const seenFile = path.join(home, SEEN_FILE);
+  const seen = readJsonFileWithBom(seenFile, { fallback: {} }).value ?? {};
+  const seenNext = { ...seen };
+  for (const t of rec.teams) {
+    const rules = rec.logOnly.filter((d) => d.team === t.id).map((d) => d.rule).sort().join(",");
+    if ((seen[t.id] ?? "") === rules) continue;
+    seenNext[t.id] = rules;
+    if (rules) {
+      try { logDriftMetric(t, `template-drift: ${t.id} differs from the new-Squad template, not auto-fixed: ${rules}`, home); } catch {}
+    }
+  }
+  if (JSON.stringify(seenNext) !== JSON.stringify(seen)) {
+    try { fs.mkdirSync(home, { recursive: true }); fs.writeFileSync(seenFile, JSON.stringify(seenNext, null, 2) + "\n", "utf8"); } catch {}
+  }
+  return { changed, auto: rec.auto, logOnly: rec.logOnly };
 }

@@ -1,4 +1,4 @@
-import { persistBugLaneBackfill } from "./bug-lane-backfill.mjs";
+import { persistTemplateReconcile } from "./bug-lane-backfill.mjs";
 import { createServer, get } from "node:http";
 import { guardHandler, installUncaughtGuard } from "./safe-handler.mjs";
 import { createServer as createHttpsServer } from "node:https";
@@ -460,12 +460,13 @@ if (isMain) {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
     setImmediate(() => runBriefOrphanSweep(rootDir));
-    setImmediate(() => { try { persistBugLaneBackfill(rootDir); } catch (e) { console.warn("bug lane backfill failed:", e?.message ?? e); } });
     // This server is the runner's only owner: start it now and keep it up (backoff). All other callers only connect.
     if (shouldSuperviseRunner()) {
       const sup = superviseRunner(sharedRunnerBackend());
       server.once("close", () => sup.stop());
     }
+    // Before the audit seeding below, so a backfilled Perfection lane gets its schedule on this same start.
+    try { persistTemplateReconcile(rootDir); } catch (e) { console.warn("template reconcile failed:", e?.message ?? e); }
     void sharedSchedules().then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));
