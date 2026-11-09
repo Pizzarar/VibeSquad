@@ -8,9 +8,12 @@ import {
   formatToolRunLabel,
   groupToolRuns,
   isFailedTool,
+  isFinishedOkStatus,
   isFoldableToolEntry,
+  isRunExpanded,
   isRunningTool,
   isSubAgentTool,
+  toggleRunExpanded,
   toolRunToggleKey,
   uniqueToolNames,
 } from "../src/toolRuns.ts";
@@ -103,20 +106,36 @@ test("failed tool call breaks the run and stays its own entry", () => {
   );
 });
 
-test("running / in-progress / pending tool call stays visible and breaks the run", () => {
-  for (const status of ["running", "in_progress", "pending"]) {
+test("whitelist of finished-OK states: running, in_progress, pending, awaiting-permission, waiting, queued never fold", () => {
+  for (const okStatus of ["completed", "done", "success", "", undefined, null]) {
+    assert.equal(isFinishedOkStatus(okStatus), true, `expected ${String(okStatus)} to be finished-OK`);
+    assert.equal(isFoldableToolEntry(tc("Read", { status: okStatus })), true);
+  }
+  for (const status of [
+    "running",
+    "in_progress",
+    "pending",
+    "awaiting-permission",
+    "awaiting_permission",
+    "waiting",
+    "queued",
+  ]) {
+    assert.equal(isFinishedOkStatus(status), false, `expected ${status} NOT to be finished-OK`);
     assert.equal(isRunningTool({ type: "tool_call", name: "Bash", status }), true);
     assert.equal(isFoldableToolEntry(tc("Bash", { status })), false);
   }
   const entries = [
-    tc("Grep"),
-    tc("Read"),
-    tc("Bash", { status: "running" }),
+    tc("Grep", { status: "done" }),
+    tc("Read", { status: "success" }),
+    tc("Bash", { status: "awaiting-permission" }),
+    tc("Edit", { status: undefined }),
+    tc("Write", { status: "completed" }),
+    tc("PowerShell", { status: "queued" }),
   ];
   const grouped = groupToolRuns(entries, true);
   assert.deepEqual(
     grouped.map((g) => (g.kind === "run" ? `run:${g.count}` : `entry:${g.entry.item.name}`)),
-    ["run:2", "entry:Bash"],
+    ["run:2", "entry:Bash", "run:2", "entry:PowerShell"],
   );
 });
 
@@ -143,7 +162,38 @@ test("pref off (collapseToolCalls = false) leaves every row unchanged", () => {
   assert.ok(grouped.every((g, i) => g.kind === "entry" && g.entry === entries[i] && g.index === i));
 });
 
-test("keyboard helper and Timeline wiring: aria-expanded, Enter/Space, collapseToolCalls gate", () => {
+test("expanded run state stays stable when a neighbouring call finishes and shifts the run's first entry", () => {
+  // Call #10 is running while #11 and #12 are completed and folded into a run that the user expands.
+  const before = [
+    tc("Bash", { status: "running" }, {}, 10),
+    tc("Grep", { status: "completed" }, {}, 11),
+    tc("Read", { status: "completed" }, {}, 12),
+  ];
+  const groupedBefore = groupToolRuns(before, true);
+  assert.equal(groupedBefore[1].kind, "run");
+  let expandedKeys = new Set();
+  assert.equal(isRunExpanded(groupedBefore[1], expandedKeys), false);
+  expandedKeys = toggleRunExpanded(groupedBefore[1], expandedKeys);
+  assert.equal(isRunExpanded(groupedBefore[1], expandedKeys), true);
+
+  // Now call #10 finishes and call #13 also finishes: the run's first entry is now seqStart=10 (was 11).
+  const after = [
+    tc("Bash", { status: "completed" }, {}, 10),
+    tc("Grep", { status: "completed" }, {}, 11),
+    tc("Read", { status: "completed" }, {}, 12),
+    tc("Edit", { status: "completed" }, {}, 13),
+  ];
+  const groupedAfter = groupToolRuns(after, true);
+  assert.equal(groupedAfter.length, 1);
+  assert.equal(groupedAfter[0].kind, "run");
+  assert.equal(isRunExpanded(groupedAfter[0], expandedKeys), true, "merged run stays expanded");
+
+  // Toggling the merged run collapses all members.
+  expandedKeys = toggleRunExpanded(groupedAfter[0], expandedKeys);
+  assert.equal(isRunExpanded(groupedAfter[0], expandedKeys), false);
+});
+
+test("keyboard helper and Timeline wiring: aria-expanded, aria-hidden caret, Enter/Space, collapseToolCalls gate", () => {
   assert.equal(toolRunToggleKey("Enter"), true);
   assert.equal(toolRunToggleKey(" "), true);
   assert.equal(toolRunToggleKey("Escape"), false);
@@ -154,6 +204,9 @@ test("keyboard helper and Timeline wiring: aria-expanded, Enter/Space, collapseT
 
   const tl = fs.readFileSync(path.join(root, "src/Timeline.tsx"), "utf8");
   assert.match(tl, /groupToolRuns/);
+  assert.match(tl, /isRunExpanded/);
+  assert.match(tl, /toggleRunExpanded/);
   assert.match(tl, /data-testid="tl-tool-run"/);
   assert.match(tl, /aria-expanded=/);
+  assert.match(tl, /<span aria-hidden="true" style=\{\{ cursor: "pointer" \}\}>\{expanded \? "▾" : "▸"\}<\/span>/);
 });

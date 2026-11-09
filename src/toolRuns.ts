@@ -1,6 +1,6 @@
 // Pure helpers for folding consecutive successful tool_call entries into a single compact run (PLAN_CHAT_ROOM C1).
-// Running / in-progress / pending tool calls stay visible as their own row (breaking any preceding run) so active
-// execution progress is never hidden inside a collapsed summary.
+// Only finished-OK tool calls (completed/done/success/no status, non-failed, non-sub-agent) are eligible to fold;
+// any running, in-progress, pending, awaiting-permission, waiting, or queued call stays visible and breaks the run.
 
 export type ToolEntry = { item?: any; timestamp?: string; seqStart?: number };
 
@@ -16,6 +16,8 @@ export type ToolRunGroup<E extends ToolEntry = ToolEntry> =
       label: string;
     };
 
+const FINISHED_OK_STATUSES = new Set(["completed", "done", "success", ""]);
+
 export function isFailedTool(it: any, d: any = it?.detail ?? {}): boolean {
   return Boolean(
     it && (it.status === "failed" || it.status === "error" || !!it.error || (d?.exitCode != null && d.exitCode !== 0)),
@@ -26,16 +28,24 @@ export function isSubAgentTool(it: any, d: any = it?.detail ?? {}): boolean {
   return Boolean(it && (d?.type === "sub_agent" || it.name === "Task" || !!(d?.subAgentId || d?.agentId || it.subagentId)));
 }
 
-/** Running / in-progress / pending tool calls stay visible as their own row and break any tool run. */
+/** Whitelist of finished-OK states: completed, done, success, or no status. */
+export function isFinishedOkStatus(status: unknown): boolean {
+  if (status == null) return true;
+  return typeof status === "string" && FINISHED_OK_STATUSES.has(status.trim());
+}
+
+/** Any non-finished-OK, non-failed status (running, in_progress, pending, awaiting_permission, waiting, queued, etc.). */
 export function isRunningTool(it: any): boolean {
-  return Boolean(it && (it.status === "running" || it.status === "in_progress" || it.status === "pending"));
+  if (!it || typeof it !== "object") return false;
+  if (isFailedTool(it, it.detail ?? {})) return false;
+  return !isFinishedOkStatus(it.status);
 }
 
 export function isFoldableToolEntry(e: ToolEntry | null | undefined): boolean {
   const it = e?.item;
   if (!it || typeof it !== "object" || it.type !== "tool_call") return false;
   const d = it.detail ?? {};
-  if (isSubAgentTool(it, d) || isFailedTool(it, d) || isRunningTool(it)) return false;
+  if (isSubAgentTool(it, d) || isFailedTool(it, d) || !isFinishedOkStatus(it.status)) return false;
   return true;
 }
 
@@ -66,6 +76,34 @@ export function formatToolRunLabel(count: number, names: string[], maxNames = 3)
 
 export function toolRunToggleKey(key: string): boolean {
   return key === "Enter" || key === " " || key === "Spacebar";
+}
+
+export function toolEntryRunKey(e: ToolEntry, fallbackIndex: number): string {
+  if (e?.seqStart != null) return `seq:${e.seqStart}`;
+  if (e?.item?.callId != null && e.item.callId !== "") return `call:${e.item.callId}`;
+  return `idx:${fallbackIndex}`;
+}
+
+export function isRunExpanded(
+  run: { entries: ToolEntry[]; startIndex: number },
+  expandedKeys: ReadonlySet<string>,
+): boolean {
+  return run.entries.some((e, k) => expandedKeys.has(toolEntryRunKey(e, run.startIndex + k)));
+}
+
+export function toggleRunExpanded(
+  run: { entries: ToolEntry[]; startIndex: number },
+  expandedKeys: ReadonlySet<string>,
+  force?: boolean,
+): Set<string> {
+  const next = new Set(expandedKeys);
+  const expand = force ?? !isRunExpanded(run, expandedKeys);
+  for (let k = 0; k < run.entries.length; k++) {
+    const key = toolEntryRunKey(run.entries[k], run.startIndex + k);
+    if (expand) next.add(key);
+    else next.delete(key);
+  }
+  return next;
 }
 
 export function groupToolRuns<E extends ToolEntry>(

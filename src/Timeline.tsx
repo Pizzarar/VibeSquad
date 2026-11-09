@@ -21,7 +21,7 @@ import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
-import { groupToolRuns, isFailedTool, isSubAgentTool, toolRunToggleKey, type ToolRunGroup } from "./toolRuns";
+import { groupToolRuns, isFailedTool, isRunExpanded, isSubAgentTool, toggleRunExpanded, toolRunToggleKey, type ToolRunGroup } from "./toolRuns";
 import { getPanes } from "./panes";
 import { recoveredBlips } from "./transientBlip";
 import { SubagentList } from "./SubagentList";
@@ -1156,7 +1156,9 @@ function ToolRunRow({
   selectedEntryKey,
   onSelectEntryKey,
   pendingJumpSeq,
-  onUserToggle,
+  expanded,
+  onToggle,
+  onExpandForJump,
 }: {
   run: Extract<ToolRunGroup<Entry>, { kind: "run" }>;
   agentId: string;
@@ -1167,22 +1169,19 @@ function ToolRunRow({
   selectedEntryKey: string | null;
   onSelectEntryKey: (key: string) => void;
   pendingJumpSeq: number | null;
-  onUserToggle?: () => void;
+  expanded: boolean;
+  onToggle: () => void;
+  onExpandForJump: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     if (
       pendingJumpSeq != null &&
       run.entries.some((x, k) => (x.seqStart ?? run.startIndex + k) === pendingJumpSeq)
     ) {
-      setExpanded(true);
+      onExpandForJump();
     }
   }, [pendingJumpSeq, run]);
   const firstSeq = run.entries[0]?.seqStart ?? run.startIndex;
-  const toggle = () => {
-    onUserToggle?.();
-    setExpanded((v) => !v);
-  };
   return (
     <>
       {!expanded && <i hidden data-tl-seq={firstSeq} />}
@@ -1193,15 +1192,15 @@ function ToolRunRow({
         aria-expanded={expanded}
         className="tl tl-tool"
         style={{ cursor: "pointer" }}
-        onClick={toggle}
+        onClick={onToggle}
         onKeyDown={(ev) => {
           if (toolRunToggleKey(ev.key)) {
             ev.preventDefault();
-            toggle();
+            onToggle();
           }
         }}
       >
-        <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+        <span aria-hidden="true" style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
         <span className="tool-name">{run.count} tool calls</span>
         {run.truncatedNames && <span className="muted"> · {run.truncatedNames}</span>}
       </div>
@@ -1275,6 +1274,7 @@ export function Timeline({
     setCut(null);
   }, [agentId]);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
+  const [expandedRunKeys, setExpandedRunKeys] = useState<Set<string>>(() => new Set());
   const [filter, setFilter] = useState<TimelineFilter>("all");
   const [barOpen, setBarOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -1340,6 +1340,7 @@ export function Timeline({
 
   useEffect(() => {
     setFilter("all"); setBarOpen(false); setQuery(""); setHits([]); setHitIdx(-1); setPrompts([]); setPromptsOpen(false); setBarMsg("");
+    setExpandedRunKeys(new Set());
     curSeq.current = null;
     reqId.current++;
     setPendingJump(null); setSearching(false);
@@ -1566,7 +1567,12 @@ export function Timeline({
             selectedEntryKey={selectedEntryKey}
             onSelectEntryKey={(key) => setSelectedEntryKey((k) => (k === key ? null : key))}
             pendingJumpSeq={pendingJump?.seq ?? null}
-            onUserToggle={() => { pinned.current = false; }}
+            expanded={isRunExpanded(e, expandedRunKeys)}
+            onToggle={() => {
+              pinned.current = false;
+              setExpandedRunKeys((prev) => toggleRunExpanded(e, prev));
+            }}
+            onExpandForJump={() => setExpandedRunKeys((prev) => (isRunExpanded(e, prev) ? prev : toggleRunExpanded(e, prev, true)))}
           />
         ) : (
         <Fragment key={e.entry.seqStart ?? e.index}>
