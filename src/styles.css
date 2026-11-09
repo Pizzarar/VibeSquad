@@ -6059,11 +6059,12 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   pointer-events: none;
 }
 
-/* C2: the Perfection angel strip on top of the Usage panel: the sky-god bezel (.sky-zone, same FaceStage) at the face's integer scale, cloud fill (inline from sky-clouds.json) on either side. --angel-k = nominal CSS px per art px: 7 at 4K@120%, 5 at 1080, 3 at the 1280x720 floor (compact: ~150px tall there). */
+/* C2: the Perfection angel strip on top of the Usage panel: the sky-god bezel (.sky-zone, same FaceStage) at the face's integer scale, cloud fill (inline from sky-clouds.json) on either side. --angel-k = nominal CSS px per art px: 7 at 4K@120%, 5 at 1080, 2 at the 1280x720 floor (compact: ~125px tall there). */
 .angel-strip { --angel-k: 5; display: flex; justify-content: center; align-items: flex-end; padding: 10px 8px 0; margin-bottom: 8px; background-color: var(--sky-top, #2a1b6b); border: 1px solid var(--line); overflow: hidden; image-rendering: pixelated; }
 .angel-bezel { box-sizing: content-box; flex: none; width: calc(160px * var(--angel-k)); max-width: calc(100% - 48px); height: calc(48px * var(--angel-k)); margin-bottom: 8px; }
 .angel-bezel .sky-crt-name { pointer-events: none; }
 .angel-hit:disabled { cursor: default; }
 .angel-hit:not(:disabled):hover { cursor: pointer; }
 @media (min-width: 2400px) { .angel-strip { --angel-k: 7; } }
-@media (max-width: 1500px), (max-height: 760px) { .angel-strip { --angel-k: 3; } }
+@media (max-width: 1500px) { .angel-strip { --angel-k: 3; } }
+@media (max-height: 760px) { .angel-strip { --angel-k: 2; } }
