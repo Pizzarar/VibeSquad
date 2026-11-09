@@ -10,8 +10,13 @@ export const FILE_LOCK_TIMEOUT_MS = 5000;
 export const FILE_LOCK_STALE_MS = 30000;
 const POLL_MS = 10;
 
-const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
-const sleepSync = (ms) => Atomics.wait(sleepBuf, 0, 0, ms);
+// Created lazily: SharedArrayBuffer is undefined in a non-crossOriginIsolated browser, and this module must never throw on import.
+let sleepBuf = null;
+const sleepSync = (ms) => {
+  if (typeof SharedArrayBuffer === "undefined") return;
+  sleepBuf ??= new Int32Array(new SharedArrayBuffer(4));
+  Atomics.wait(sleepBuf, 0, 0, ms);
+};
 
 /**
  * Remove the lock only if it is still the one we judged stale. Serialised through <lock>.reap so two waiters

@@ -8,7 +8,7 @@ import {
   type TeamDef,
 } from "./teams.ts";
 import { allLaneIds, slugLaneId, uniqueLaneId, type PinLane } from "./pins.ts";
-import { seedStandingLane } from "../server/bug-lane-backfill.mjs";
+import { seedStandingLane } from "../server/lane-pure.mjs";
 import { freezeLaneCodes } from "./identity.ts";
 
 /** Seeds the Squad's standing, hidden Bug Runner and Perfection (audit) lanes. Idempotent: a lane the Squad already has (flagged or by fallback id) is kept as is. Lane ids are unique across Squads, so a second Squad gets `bug-runner-2`. */
