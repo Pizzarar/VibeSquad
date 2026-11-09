@@ -261,6 +261,7 @@ function harness(
     archivedIds,
     scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
     sweepDoneWorkers: (stop as any).sweepDoneWorkers as (now?: number) => Promise<string[]>,
+    sweepDoneWorkersReport: (stop as any).sweepDoneWorkersReport as (o?: { apply?: boolean; now?: number }) => Promise<any>,
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
     },
@@ -1573,6 +1574,62 @@ test(
       await wait(20);
       assert.ok(h.archivedIds.includes("dig-2") || createdDigests[1].archivedAt, "stale in-flight digest archived on worker turn_started");
       assert.equal(listCalls, listBeforeCancel, "tracked digest archived directly without calling paseo.agents.list");
+
+// ---------------------------------------------------------------------------
+// B3 — one-time sweep: dry run lists, apply archives exactly that set (same predicate)
+// ---------------------------------------------------------------------------
+
+test(
+  "B3: dry run archives nothing and groups would-archive per Squad/lane plus kept by reason; apply archives exactly the dry-run set",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, over: Record<string, any> = {}, labels: Record<string, string> = {}) => ({
+      id, title: id, cwd: `/repo/${id}`, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker", ...labels }, ...over,
+    });
+    const agents = new Map<string, any>([
+      ["w-ok", mk("w-ok")],
+      ["w-ok-other-lane", mk("w-ok-other-lane", {}, { lane: "bug-chaser" })],
+      ["w-fail", mk("w-fail")],
+      ["w-unmerged", mk("w-unmerged")],
+      ["w-unknown", mk("w-unknown")],
+      ["w-grace", mk("w-grace")],
+      ["w-running", mk("w-running", { status: "running" })],
+      ["lead-1", mk("lead-1", {}, { role: "lead", lead: "vibesquad" })],
+    ]);
+    const branch = async (cwd?: string) =>
+      cwd === "/repo/w-unmerged" ? { unit: "u", merged: false } : cwd === "/repo/w-unknown" ? { unit: "", merged: false } : { unit: "u", merged: true };
+    const h = harness(agents, { briefRoot, unitBranchState: branch });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (agent: string, text: string, min: number) =>
+        JSON.stringify({ ts: new Date(now - min * 60_000).toISOString(), agent, lane: "vibesquad", type: "done", text, refs: [] }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        ["w-ok", "w-ok-other-lane", "w-unmerged", "w-unknown"].map((id) => line(id, "PASS", 60)).join("") +
+          line("w-fail", "FAIL: broke", 60) + line("w-grace", "PASS", 5) + line("w-running", "PASS", 60),
+        "utf8",
+      );
+      const dry = await h.sweepDoneWorkersReport({ now });
+      assert.equal(dry.dryRun, true);
+      assert.deepEqual(h.archivedIds, [], "dry run makes no archive calls");
+      assert.equal(agents.get("w-ok").labels["vs.auto-archived"], undefined, "dry run sets no marker");
+      assert.equal(dry.count, 2);
+      assert.deepEqual(dry.archive.map((i: any) => i.id).sort(), ["w-ok", "w-ok-other-lane"]);
+      assert.deepEqual(dry.byLane, { vibesquad: { vibesquad: ["w-ok"], "bug-chaser": ["w-ok-other-lane"] } });
+      const ids = (r: string) => dry.kept[r].map((i: any) => i.id);
+      assert.deepEqual(ids("fail"), ["w-fail"]);
+      assert.deepEqual(ids("unmerged"), ["w-unmerged"]);
+      assert.deepEqual(ids("unknown-branch"), ["w-unknown"]);
+      assert.deepEqual(ids("in-grace"), ["w-grace"]);
+      assert.deepEqual(ids("not-idle"), ["w-running"]);
+      assert.deepEqual(ids("not-worker"), ["lead-1"]);
+
+      const applied = await h.sweepDoneWorkersReport({ apply: true, now });
+      assert.equal(applied.dryRun, false);
+      assert.deepEqual(h.archivedIds.slice().sort(), dry.archive.map((i: any) => i.id).sort(), "apply archives exactly the dry-run set");
+      assert.equal(agents.get("w-ok").labels["vs.auto-archived"], "1");
     } finally {
       h.stop?.();
     }

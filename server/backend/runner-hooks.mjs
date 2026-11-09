@@ -112,6 +112,7 @@ export async function createRunnerHookHost(backend, { startWatcher = false, deps
   return {
     plugin,
     scanLogs: dispose.scanLogs,
+    sweepDoneWorkersReport: dispose.sweepDoneWorkersReport,
     dispose,
     /** Run the `before` handlers for `name` in order. For `agent.create` payload is `{ request }` and the result is the rewritten request (or undefined). */
     async before(name, payload) {
