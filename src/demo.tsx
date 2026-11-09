@@ -183,6 +183,9 @@ export function demoTimeline(agentId: string): { item: unknown; seqStart: number
   const items = [
     { type: "user_message", text: "Run the neon-noir Painter + Director loop. Painter renders a 4x gallery PNG; Director critiques against the brief." },
     { type: "assistant_message", text: "Dispatching Art Painter - Opus and Art Director - Gemini. Painter draws and renders the gallery; Director judges the PNG and returns numbered fixes." },
+    { type: "tool_call", name: "Grep", status: "completed", detail: { query: "palette" } },
+    { type: "tool_call", name: "PowerShell", status: "completed", detail: { type: "shell", command: "node scripts/check-cast.mjs" } },
+    { type: "tool_call", name: "Edit", status: "completed", detail: { filePath: "src/pixel.tsx" } },
     { type: "tool_call", name: "create_agent", status: "completed", detail: { type: "plain", label: "Art Painter - Opus · neon-noir" } },
     { type: "tool_call", name: "create_agent", status: "completed", detail: { type: "plain", label: "Art Director - Gemini · neon-noir" } },
     { type: "tool_call", name: "Agent", status: "running", detail: { type: "sub_agent", subAgentType: "Explore", description: "check handoff budget numbers" } },
