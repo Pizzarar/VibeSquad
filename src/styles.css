@@ -5949,7 +5949,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 
 /* ---- V1b-2 art hits (docs/lanes/ui-bois/V1B_ART_HITS.md 81-105): label colours >= 4.5:1 on the pastel fills, no scanline/border over text ---- */
 /* teal/pink/amber pastel chips: ink labels (the dark theme used the light --text = 1.0-2.4:1) */
-:is(.badge, .unit-tag, .def-badge, .status-pill, .lane-tag, .warn-badge, .verdict, .changes-file-badge, .project-badge, .alert-pill, .pill, .pill.diag, .brainstorm-ctx-pill, .quota-pill):not(.alert):not(.label-pill) { color: var(--on-pastel) !important; }
+:is(.badge, .unit-tag, .def-badge, .status-pill, .lane-tag, .warn-badge, .verdict, .changes-file-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill):not(.alert):not(.label-pill):not(:where(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) *) { color: var(--on-pastel) !important; } /* U4b surfaces (5784) keep their own label colours */
 .alert-pill :is(.alert-owner, .alert-type, .alert-who) { color: var(--on-pastel); }
 /* light theme: provider glyph colours are inline (cyan/coral on blush = 1.0-2.0), so the label takes the text colour */
 :root[data-theme="light"] .prov-inline { color: var(--text) !important; font-weight: 700; }
