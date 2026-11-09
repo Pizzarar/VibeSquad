@@ -180,3 +180,37 @@ test('fixOfferBucket counts per lane and role', () => {
   assert.deepEqual(r.byRole, { brainstorm: 1, worker: 1 });
   assert.equal(fixOfferBucket(dir, { since: 3 }).total, 0);
 });
+
+// ---- bucket 5, lean-asks: fixtures are trimmed real Bug Chaser Buddy (rn-0f72f9afc220) endings. ----
+import { leanAsk } from '../scripts/audit-owner-stamps.mjs';
+const LEAN_ASKS = [
+  'Separately, the inbox sweep is finished and verified live after the restart (full test run: 2556 passed, 0 failed). Ideas 20 and 28 still need your call; my leans are above.',
+  'The 23 idle hub leads point to too many agents, not agents that are too big.\n\n**Lean:** one research worker first, read-only. It measures where the tokens go. Then I write the plan.\n\nRun the spike?',
+  'The API only answers the app window, which is the 403 Hub2 expected, and `vs inbox` has no archive command.\n\nPlease archive these cards in the Inbox: 28, 17-19 and 23-27. I have noted this in the brief.',
+];
+const NOT_LEAN_ASKS = [
+  'The sweep is finished and verified. Ideas 20 and 28 still need your call; no lean from me either way, both look fine.', // no lean
+  '**Lean:** drop the old build and ship the new one. This changes the scope of the release, so need your call before I touch it.', // scope/release
+  'My lean is to delete the stale branches. Run the cleanup? It removes them for good, so say so first.', // delete
+  'Got it, I will drop it. If "Queued, 0 ahead" ever sits there for more than a few seconds, send it back and I will look.', // not an ask
+  'Your calls: 1. idea-20: I lean towards sending it. 2. idea-28: I lean towards archiving it. What is next?', // no confirm ask
+  'Want me to fix the sidebar width now? My lean is yes, it is a one line change in the css file for the hub.', // plain fix-offer: counted by offersFix, not twice
+];
+test('leanAsk counts owner-confirm asks with a stated lean and 403 blocked asks', () => {
+  LEAN_ASKS.forEach((t, i) => assert.equal(leanAsk(t), true, `hit ${i}`));
+});
+test('leanAsk skips no-lean, scope/public/money/delete asks and plain fix-offers', () => {
+  NOT_LEAN_ASKS.forEach((t, i) => assert.equal(leanAsk(t), false, `near-miss ${i}`));
+});
+test('fixOfferBucket counts lean-asks into the total with a kind tag', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'la-'));
+  fs.writeFileSync(path.join(dir, 'rn-l.jsonl'), [
+    JSON.stringify({ type: 'created', ts: 1, meta: { lane: 'bug-chaser', role: 'brainstorm' } }),
+    JSON.stringify({ type: 'output', ts: 2, text: LEAN_ASKS[1] }),
+    JSON.stringify({ type: 'output', ts: 3, text: NOT_LEAN_ASKS[3] }),
+  ].join('\n'));
+  const r = fixOfferBucket(dir);
+  assert.equal(r.total, 1);
+  assert.equal(r.leanAsks, 1);
+  assert.equal(r.examples[0].kind, 'lean-ask');
+});

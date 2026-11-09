@@ -270,8 +270,30 @@ export function offersFix(text) {
   return true;
 }
 
+// Lean-ask: the agent ends by asking the owner to confirm something it already has a lean on ("my leans are above",
+// "Lean: ... Run the spike?"), or a failed inbox archive/triage (403) that ends in an owner ask. Not counted: asks about
+// scope changes, public actions, money or deletes (RISKY_STEP + LEAN_SKIP), or anything offersFix already counts.
+export const LEAN_MARK = /(?<!\bno )\blean(s|ing)?\b|\bmy (pick|recommendation)\b|\bi (recommend|suggest)\b/i;
+export const LEAN_ASK_PATTERNS = [
+  /\b(still )?needs? your (call|ok|go|decision)\b/i,
+  /^[^\n]{0,12}\b(run|send|spawn|start|dispatch|go ahead with|queue|park)\b[^.?\n]{0,60}\?\s*$/im,
+];
+export const BLOCKED_MARK = /\b403\b|only (answers|accepts)[^.]{0,50}(app|desktop) window|no archive command/i;
+export const BLOCKED_ASK = /\b(please|can you) (archive|close|triage|accept|reject)\b|\bneeds? your call\b/i;
+export const LEAN_SKIP = /\b(scope|public|publicly|push(ing)? to|money|budget|spend|paid|cost|delet\w*|remove all)\b|\$\d/i;
+export function leanAsk(text) {
+  if (typeof text !== 'string') return false;
+  const t = text.trim();
+  if (t.length < 40 || offersFix(t)) return false;
+  const tail = t.slice(-900), close = t.slice(-450).split(/\n\s*\n/).slice(-2).join('\n');
+  if (RISKY_STEP.test(close) || LEAN_SKIP.test(close)) return false;
+  const ask = LEAN_ASK_PATTERNS.some((p) => p.test(close));
+  if (ask && LEAN_MARK.test(tail)) return true;
+  return BLOCKED_MARK.test(tail) && BLOCKED_ASK.test(close);
+}
+
 export function fixOfferBucket(dir, { since, until } = {}) {
-  const r = { total: 0, outputs: 0, byLane: {}, byRole: {}, byLaneRole: {}, examples: [] };
+  const r = { total: 0, leanAsks: 0, outputs: 0, byLane: {}, byRole: {}, byLaneRole: {}, examples: [] };
   for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.jsonl'))) {
     let meta = {};
     for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
@@ -281,13 +303,15 @@ export function fixOfferBucket(dir, { since, until } = {}) {
       if (e.type !== 'output' || typeof e.text !== 'string') continue;
       if ((since !== undefined && e.ts < since) || (until !== undefined && e.ts > until)) continue;
       r.outputs++;
-      if (!offersFix(e.text)) continue;
+      const kind = offersFix(e.text) ? 'fix-offer' : leanAsk(e.text) ? 'lean-ask' : null;
+      if (!kind) continue;
+      if (kind === 'lean-ask') r.leanAsks++;
       const lane = meta.lane || '(none)', role = meta.role || '(none)', lr = `${lane}/${role}`;
       r.total++;
       r.byLane[lane] = (r.byLane[lane] || 0) + 1;
       r.byRole[role] = (r.byRole[role] || 0) + 1;
       r.byLaneRole[lr] = (r.byLaneRole[lr] || 0) + 1;
-      r.examples.push({ run: f.replace(/\.jsonl$/, ''), lane, role, ts: e.ts, tail: e.text.trim().slice(-200) });
+      r.examples.push({ kind, run: f.replace(/\.jsonl$/, ''), lane, role, ts: e.ts, tail: e.text.trim().slice(-200) });
     }
   }
   return r;
@@ -308,7 +332,7 @@ function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fi
   console.log('    multi-worker:', JSON.stringify(fixers.multiWorker.slice(0, 15)));
   console.log('    lane bounce:', JSON.stringify(fixers.laneBounce.slice(0, 10)));
   console.log('    fix after merge:', JSON.stringify(fixers.fixAfterMerge.slice(0, 10)));
-  console.log(`(5) fix offered as a question: ${fixOffers.total} of ${fixOffers.outputs} agent outputs`);
+  console.log(`(5) fix offered as a question (incl. ${fixOffers.leanAsks} lean-asks): ${fixOffers.total} of ${fixOffers.outputs} agent outputs`);
   console.log('    by lane:', JSON.stringify(fixOffers.byLane));
   console.log('    by role:', JSON.stringify(fixOffers.byRole));
   for (const x of fixOffers.examples.slice(0, 3)) console.log(`    e.g. ${x.run} ${x.lane}/${x.role}: ...${x.tail.slice(-120).replace(/\n/g, ' ')}`);

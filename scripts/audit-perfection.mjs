@@ -105,7 +105,10 @@ export function transcriptFindings({ dir, since, until, repo = process.cwd(), no
     out.push({ key: `multi-implementer:${day}`, text: `${multi.length} units merged in the window used 2+ implementers (fixer passed around): ${listed}${more}.`, evidence: `audit-owner-stamps bucket 4 multiWorker, merges on master in window` });
   }
   const fo = fixOfferBucket(dir, range);
-  for (const e of fo.examples.slice(0, 5)) out.push({ key: `fix-offer:${e.run}`, text: `${e.lane}/${e.role} offered a fix as a question instead of doing it (R11).`, evidence: `transcript ${e.run} ts ${e.ts}: ...${e.tail.slice(-120).replace(/\s+/g, ' ')}` });
+  if (fo.total) {
+    const eg = fo.examples.slice(0, 3).map((e) => `${e.run} ${e.lane}/${e.role} [${e.kind}]`).join('; ');
+    out.push({ key: `fix-offers:${day}`, text: `${fo.total} agent turns ended asking the owner instead of acting (${fo.total - fo.leanAsks} fix-offers, ${fo.leanAsks} lean-asks where the agent already had a lean) (R11).`, evidence: `audit-owner-stamps bucket 5, by lane ${JSON.stringify(fo.byLane)}, e.g. ${eg}` });
+  }
   return out;
 }
 
