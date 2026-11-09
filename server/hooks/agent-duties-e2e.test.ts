@@ -261,6 +261,7 @@ function harness(
     archivedIds,
     scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
     sweepDoneWorkers: (stop as any).sweepDoneWorkers as (now?: number) => Promise<string[]>,
+    sweepDoneWorkersReport: (stop as any).sweepDoneWorkersReport as (o?: { apply?: boolean; now?: number }) => Promise<any>,
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
     },
@@ -1573,6 +1574,106 @@ test(
       await wait(20);
       assert.ok(h.archivedIds.includes("dig-2") || createdDigests[1].archivedAt, "stale in-flight digest archived on worker turn_started");
       assert.equal(listCalls, listBeforeCancel, "tracked digest archived directly without calling paseo.agents.list");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// B3 — one-time sweep: dry run lists, apply archives exactly that set (same predicate)
+// ---------------------------------------------------------------------------
+
+test(
+  "B3: dry run archives nothing and groups would-archive per Squad/lane plus kept by reason; apply archives exactly the dry-run set",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, over: Record<string, any> = {}, labels: Record<string, string> = {}) => ({
+      id, title: id, cwd: `/repo/${id}`, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker", ...labels }, ...over,
+    });
+    const agents = new Map<string, any>([
+      ["w-ok", mk("w-ok")],
+      ["w-ok-other-lane", mk("w-ok-other-lane", {}, { lane: "bug-chaser" })],
+      ["w-ok-squad2", mk("w-ok-squad2", {}, { team: "squad2", lane: "squad2-lane" })],
+      ["w-nosquad", mk("w-nosquad", { cwd: "/elsewhere/w-nosquad" }, { team: "", lane: "" })],
+      ["fl-1", mk("fl-1", {}, { role: "former-lead" })],
+      ["fb-1", mk("fb-1", {}, { role: "former-brainstorm" })],
+      ["w-fail", mk("w-fail")],
+      ["w-unmerged", mk("w-unmerged")],
+      ["w-unknown", mk("w-unknown")],
+      ["w-grace", mk("w-grace")],
+      ["w-running", mk("w-running", { status: "running" })],
+      ["lead-1", mk("lead-1", {}, { role: "lead", lead: "vibesquad" })],
+    ]);
+    const branch = async (cwd?: string) =>
+      cwd === "/repo/w-unmerged" ? { unit: "u", merged: false } : cwd === "/repo/w-unknown" ? { unit: "", merged: false } : { unit: "u", merged: true };
+    const h = harness(agents, { briefRoot, unitBranchState: branch });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (agent: string, text: string, min: number) =>
+        JSON.stringify({ ts: new Date(now - min * 60_000).toISOString(), agent, lane: "vibesquad", type: "done", text, refs: [] }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      mkdirSync(join(vsHome, "teams", "squad2"), { recursive: true });
+      writeFileSync(join(vsHome, "teams", "squad2", "log.jsonl"), line("w-ok-squad2", "PASS", 60), "utf8");
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        ["w-ok", "w-ok-other-lane", "w-unmerged", "w-unknown"].map((id) => line(id, "PASS", 60)).join("") +
+          line("w-fail", "FAIL: broke", 60) + line("w-grace", "PASS", 5) + line("w-running", "PASS", 60),
+        "utf8",
+      );
+      const dry = await h.sweepDoneWorkersReport({ now });
+      assert.equal(dry.dryRun, true);
+      assert.deepEqual(h.archivedIds, [], "dry run makes no archive calls");
+      assert.equal(agents.get("w-ok").labels["vs.auto-archived"], undefined, "dry run sets no marker");
+      assert.equal(dry.count, 3);
+      assert.deepEqual(dry.archive.map((i: any) => i.id).sort(), ["w-ok", "w-ok-other-lane", "w-ok-squad2"]);
+      assert.deepEqual(dry.byLane, { vibesquad: { vibesquad: ["w-ok"], "bug-chaser": ["w-ok-other-lane"] }, squad2: { "squad2-lane": ["w-ok-squad2"] } });
+      const ids = (r: string) => dry.kept[r].map((i: any) => i.id);
+      assert.deepEqual(ids("fail"), ["w-fail"]);
+      assert.deepEqual(ids("unmerged"), ["w-unmerged"]);
+      assert.deepEqual(ids("unknown-branch"), ["w-unknown"]);
+      assert.deepEqual(ids("in-grace"), ["w-grace"]);
+      assert.deepEqual(ids("not-idle"), ["w-running"]);
+      assert.deepEqual(ids("not-worker").sort(), ["fb-1", "fl-1", "lead-1"], "retired roles are managers, never swept");
+      assert.deepEqual(ids("no-squad"), ["w-nosquad"]);
+      assert.equal(dry.truncated, undefined);
+      assert.equal(dry.busy, undefined);
+
+      const applied = await h.sweepDoneWorkersReport({ apply: true, now });
+      assert.equal(applied.dryRun, false);
+      assert.deepEqual(h.archivedIds.slice().sort(), dry.archive.map((i: any) => i.id).sort(), "apply archives exactly the dry-run set");
+      assert.equal(agents.get("w-ok").labels["vs.auto-archived"], "1");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "B3: report flags truncated at the 200 cap, busy while another sweep runs, and a retired lead's verdict-shaped ref never credits a worker",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, labels: Record<string, string> = {}) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker", ...labels },
+    });
+    const agents = new Map<string, any>([["w-x", mk("w-x")], ["fl-1", mk("fl-1", { role: "former-lead" })], ["lead-1", mk("lead-1", { role: "lead", lead: "vibesquad" })]]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        JSON.stringify({ ts: new Date(now - 60 * 60_000).toISOString(), agent: "fl-1", lane: "vibesquad", type: "done", text: "PASS: ok", refs: ["w-x"] }) + "\n",
+        "utf8",
+      );
+      await h.onTurnEnded(agents.get("lead-1"));
+      const [first, second] = await Promise.all([h.sweepDoneWorkersReport({ now }), h.sweepDoneWorkersReport({ now })]);
+      assert.equal(first.busy, undefined);
+      assert.equal(second.busy, true, "a concurrent report says busy, not a silent count 0");
+      assert.deepEqual(first.kept["no-done-report"].map((i: any) => i.id), ["w-x"], "former-lead is a manager: its ref is not w-x's report");
+      for (let i = 0; i < 200; i++) agents.set(`pad-${i}`, mk(`pad-${i}`, { role: "lead" }));
+      assert.equal((await h.sweepDoneWorkersReport({ now })).truncated, true);
     } finally {
       h.stop?.();
     }

@@ -54,6 +54,13 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
       const agents = await backend.listAgents().catch(() => []); // runner not started yet = no agents
       return sendJson(res, 200, { enabled: true, agents });
     }
+    if (parts[0] === "sweep" && parts.length === 1 && req.method === "POST") {
+      // B3: the 5-min long-done worker sweep, run once over every Squad. Dry run unless the body says apply:true.
+      const body = await readBody(req);
+      const host = await backend.hookHost();
+      if (!host?.sweepDoneWorkersReport) return sendJson(res, 503, { error: "hooks are not running on this server" });
+      return sendJson(res, 200, await host.sweepDoneWorkersReport({ apply: body?.apply === true }));
+    }
     if (parts[0] === "spawn" && req.method === "POST") {
       const body = await readBody(req);
       return sendJson(res, 201, { agent: await backend.createAgent(body) });

@@ -2992,15 +2992,42 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * path as `vs archive` / closeFinishedWorker (deps.archiveAgent + the auto-archived marker, so a later send revives).
      * Skips leads, Buddies, Overlord, digests (role must be worker), running/permission-blocked workers, a last report that says
      * FAIL, and workers whose unit branch is not merged yet (fix rounds go to them). Returns the archived ids.
+     * B3: `sweepDoneWorkersReport` is the same predicate with `apply: false` (dry run: no marker, no archive) and a per-Squad/lane
+     * breakdown of what it would archive and why the rest is kept; `apply: true` archives through the identical path.
      */
+    type SweepKeepReason = "fail" | "unmerged" | "unknown-branch" | "in-grace" | "not-worker" | "no-done-report" | "not-idle" | "needs-attention" | "no-squad";
+    interface SweepItem { id: string; team: string; lane: string }
+    interface SweepReport {
+      dryRun: boolean;
+      /** Dry run: who WOULD be archived. Apply: who was. */
+      archive: SweepItem[];
+      count: number;
+      /** Per Squad (team) then lane: the ids in `archive`. */
+      byLane: Record<string, Record<string, string[]>>;
+      kept: Record<SweepKeepReason, SweepItem[]>;
+      /** The agent list hit the 200 cap: there may be more agents than this report covers. */
+      truncated?: boolean;
+      /** The 5-min tick is mid-sweep: nothing was evaluated, retry. */
+      busy?: boolean;
+    }
     let sweeping = false;
-    async function sweepDoneWorkers(now = Date.now()): Promise<string[]> {
+    async function sweepDoneWorkersReport(opts: { apply?: boolean; now?: number } = {}): Promise<SweepReport> {
+      const apply = opts.apply === true;
+      const now = opts.now ?? Date.now();
+      const report: SweepReport = {
+        dryRun: !apply,
+        archive: [],
+        count: 0,
+        byLane: {},
+        kept: { fail: [], unmerged: [], "unknown-branch": [], "in-grace": [], "not-worker": [], "no-done-report": [], "not-idle": [], "needs-attention": [], "no-squad": [] },
+      };
       const paseo = paseoApi;
-      if (!paseo || sweeping) return [];
+      if (!paseo) return report;
+      if (sweeping) return { ...report, busy: true };
       sweeping = true;
-      const archivedIds: string[] = [];
       try {
         const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        if ((res.entries as any[]).length >= 200) report.truncated = true;
         const grace = deps.doneArchiveGraceMs ?? 30 * 60_000;
         const logIndex = new Map<string, DoneIndex>(); // once per team per sweep
         const kinds = new Map<string, Promise<"digest" | "manager" | "other">>(); // author id -> kind, once per sweep
@@ -3012,7 +3039,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               const labels = (fromList ?? (await snap(paseo, id)))?.labels ?? {};
               if (isDigestAgent(labels)) return "digest" as const;
               const role = String(labels.role ?? "").trim().toLowerCase();
-              return ["lead", "brainstorm", "overlord"].includes(role) ? ("manager" as const) : ("other" as const);
+              return ["lead", "brainstorm", "overlord"].includes(role) || isRetiredRole(role) ? ("manager" as const) : ("other" as const);
             })().catch(() => "other" as const);
             kinds.set(id, k);
           }
@@ -3022,18 +3049,41 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         for (const e of res.entries as any[]) {
           const a = { ...e.agent, labels: e.agent?.labels ?? {} } as AgentSnap;
           if (!a.id || a.archivedAt || a.internal || a.labels[AUTO_ARCHIVED_LABEL] === "1") continue;
-          if (isDigestAgent(a.labels) || !isExplicitWorker(a.labels)) continue;
-          if (!["idle", "closed"].includes(String(a.status ?? "").toLowerCase())) continue;
-          if (((a as any).pendingPermissions?.length ?? 0) > 0 || (a as any).requiresAttention) continue;
           const where = teamOf(a.labels, a.cwd);
-          if (!where) continue;
+          const item: SweepItem = { id: a.id, team: where?.team ?? "-", lane: where?.lane ?? String(a.labels.lane ?? "-") };
+          const keep = (reason: SweepKeepReason) => void report.kept[reason].push(item);
+          if (isDigestAgent(a.labels) || !isExplicitWorker(a.labels)) {
+            keep("not-worker");
+            continue;
+          }
+          if (!["idle", "closed"].includes(String(a.status ?? "").toLowerCase())) {
+            keep("not-idle");
+            continue;
+          }
+          if (((a as any).pendingPermissions?.length ?? 0) > 0 || (a as any).requiresAttention) {
+            keep("needs-attention");
+            continue;
+          }
+          if (!where) {
+            keep("no-squad");
+            continue;
+          }
           let idx = logIndex.get(where.team);
           if (!idx) logIndex.set(where.team, (idx = await indexDoneEntries(where.team, authorKind)));
           const done = idx.get(a.id);
-          if (!done) continue;
+          if (!done) {
+            keep("no-done-report");
+            continue;
+          }
           const at = Date.parse(done.ts);
-          if (!Number.isFinite(at) || now - at < grace) continue;
-          if (FAIL_RE.test(done.text)) continue; // newest verdict is FAIL (incl. "UNVERIFIED (digest failed): FAIL"): the fix round goes here
+          if (!Number.isFinite(at) || now - at < grace) {
+            keep("in-grace");
+            continue;
+          }
+          if (FAIL_RE.test(done.text)) {
+            keep("fail"); // newest verdict is FAIL (incl. "UNVERIFIED (digest failed): FAIL"): the fix round goes here
+            continue;
+          }
           const cwdKey = a.cwd ?? "";
           let pending = branchState.get(cwdKey);
           if (!pending) {
@@ -3041,26 +3091,36 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             branchState.set(cwdKey, pending);
           }
           const state = await pending;
-          if (!state.merged) continue;
-          // Re-read right before archiving: a fix round may have started since the list.
-          const fresh = await snap(paseo, a.id);
-          if (!fresh || fresh.archivedAt || !["idle", "closed"].includes(String(fresh.status ?? "").toLowerCase())) continue;
-          await deps.setLabels(a.id, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((err: unknown) => log(`auto-archive marker failed for ${a.id}: ${err}`));
-          try {
-            await deps.archiveAgent(a.id);
-          } catch (err) {
-            log(`worker sweep archive failed for ${a.id}: ${err}`);
+          if (!state.merged) {
+            keep(state.unit ? "unmerged" : "unknown-branch");
             continue;
           }
-          archivedIds.push(a.id);
-          appendLog(where.team, { agent: a.id, lane: where.lane, type: "metric", text: `worker-auto-archive id=${a.id} unit=${state.unit || a.labels.unit || "-"}`, refs: [a.id] });
+          if (apply) {
+            // Re-read right before archiving: a fix round may have started since the list.
+            const fresh = await snap(paseo, a.id);
+            if (!fresh || fresh.archivedAt || !["idle", "closed"].includes(String(fresh.status ?? "").toLowerCase())) continue;
+            await deps.setLabels(a.id, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((err: unknown) => log(`auto-archive marker failed for ${a.id}: ${err}`));
+            try {
+              await deps.archiveAgent(a.id);
+            } catch (err) {
+              log(`worker sweep archive failed for ${a.id}: ${err}`);
+              continue;
+            }
+            appendLog(where.team, { agent: a.id, lane: where.lane, type: "metric", text: `worker-auto-archive id=${a.id} unit=${state.unit || a.labels.unit || "-"}`, refs: [a.id] });
+          }
+          report.archive.push(item);
+          ((report.byLane[item.team] ??= {})[item.lane] ??= []).push(item.id);
         }
+        report.count = report.archive.length;
       } catch (err) {
         log(`worker sweep failed: ${err}`);
       } finally {
         sweeping = false;
       }
-      return archivedIds;
+      return report;
+    }
+    async function sweepDoneWorkers(now = Date.now()): Promise<string[]> {
+      return (await sweepDoneWorkersReport({ apply: true, now })).archive.map((i) => i.id);
     }
 
     scanLogs(true); // baseline offsets
@@ -3089,6 +3149,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
     (dispose as any).scanLogs = scanLogs;
     (dispose as any).sweepDoneWorkers = sweepDoneWorkers;
+    (dispose as any).sweepDoneWorkersReport = sweepDoneWorkersReport;
     (dispose as any).handoffCoordinator = handoffCoordinator;
     (dispose as any).confirmTakeover = handoffCoordinator.confirmTakeover;
     (dispose as any).sendAgentPrompt = (req: any, ctx?: any) =>

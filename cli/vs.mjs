@@ -53,7 +53,7 @@ import {
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
-import { localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
+import { LOCAL_TOKEN_HEADER, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
   readLaneSpec,
   writeLaneSpec,
@@ -279,6 +279,7 @@ function parseArgs(argv) {
     "print",
     "stdin",
     "apply",
+    "sweep",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -506,6 +507,7 @@ Usage:
   vs inspect <agent>   full agent record
   vs stop <agent>   interrupt an agent's current turn
   vs archive <agent>   archive a single agent
+  vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
@@ -1890,7 +1892,30 @@ export function loadPromptInput(verb, flags, readStdin = () => fs.readFileSync(0
   return flags;
 }
 
+// B3 (lean boot): one-time sweep of long-done workers over the running server's runner route (the hook host lives there).
+export async function requestWorkerSweep({ apply = false, port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
+  const token = readLocalToken(file);
+  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
+  const res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/runner/sweep`, {
+    method: "POST",
+    headers: { [LOCAL_TOKEN_HEADER]: token, "content-type": "application/json" },
+    body: JSON.stringify({ apply }),
+    signal: AbortSignal.timeout(120_000),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`sweep refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
+  return body;
+}
+
 export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s), readStdin) {
+  if (verb === "archive" && flags.sweep) {
+    if (flags._.length) throw new Error("usage: vs archive --sweep [--apply]");
+    const report = await requestWorkerSweep({ apply: Boolean(flags.apply) });
+    out(JSON.stringify(report, null, 2) + "\n");
+    if (report?.busy) process.stderr.write("Warning: the 5-min sweep is running right now; nothing was evaluated. Retry in a moment.\n");
+    else if (report?.truncated) process.stderr.write("Warning: truncated: the agent list hit the 200 cap, so more agents exist than this report covers.\n");
+    return 0;
+  }
   loadPromptInput(verb, flags, readStdin);
   if (verb === "lead") {
     if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>] [--steer \"<note>\"]");
