@@ -26,3 +26,9 @@ export function placePinMenuZoomed(anchor: Box, size: { w: number; h: number }, 
   const a = { left: anchor.left / z, right: anchor.right / z, top: anchor.top / z, bottom: anchor.bottom / z };
   return placePinMenu(a, { w: size.w / z, h: size.h / z }, { w: view.w / z, h: view.h / z });
 }
+
+/** Clamp a context menu opened at viewport-px (clientX, clientY) into the zoomed CSS px a fixed left/top uses; `size` is the zoomed CSS px the menu is assumed to occupy. */
+export function clampCtxMenu(x: number, y: number, size: { w: number; h: number }, view: { w: number; h: number }, zoom: number): { left: number; top: number } {
+  const z = zoom > 0 ? zoom : 1;
+  return { left: Math.max(4, Math.min(x / z, view.w / z - size.w)), top: Math.max(4, Math.min(y / z, view.h / z - size.h)) };
+}

@@ -1,3 +1,4 @@
+import { clampCtxMenu, rootZoom } from "./pinMenuPlace";
 import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
@@ -145,10 +146,9 @@ function ContextMenuHost() {
     };
   }, [s]);
   if (!s) return null;
-  const x = Math.min(s.x, window.innerWidth - 230);
-  const y = Math.min(s.y, window.innerHeight - 40 * s.items.length - 12);
+  const pos = clampCtxMenu(s.x, s.y, { w: 230, h: 40 * s.items.length + 12 }, { w: window.innerWidth, h: window.innerHeight }, rootZoom());
   return (
-    <div className="ctx-menu" data-testid="custom-context-menu" role="menu" style={{ left: Math.max(4, x), top: Math.max(4, y) }} onContextMenu={(e) => e.preventDefault()}>
+    <div className="ctx-menu" data-testid="custom-context-menu" role="menu" style={pos} onContextMenu={(e) => e.preventDefault()}>
       {s.items.map((it) => (
         <button
           key={it.label}

@@ -72,3 +72,15 @@ test("PinMenu and AttentionList place through the root zoom", () => {
     assert.match(fs.readFileSync(resolve(ROOT, `src/${f}.tsx`), "utf8"), /rootZoom\(\)/, f);
   }
 });
+
+test("clampCtxMenu clamps viewport-px click points into zoomed CSS px", async () => {
+  const { clampCtxMenu } = await import("../src/pinMenuPlace.ts");
+  const z = 1.25;
+  // Click at the bottom-right corner of a 1000x800 css viewport, measured in viewport px.
+  const p = clampCtxMenu(1000 * z, 800 * z, { w: 230, h: 100 }, { w: 1000 * z, h: 800 * z }, z);
+  assert.deepEqual(p, { left: 1000 - 230, top: 800 - 100 });
+  assert.deepEqual(clampCtxMenu(1, 2, { w: 230, h: 100 }, { w: 1000, h: 800 }, 1), { left: 4, top: 4 });
+  for (const f of ["CommandPalette", "FilesPanel"]) {
+    assert.match(fs.readFileSync(resolve(ROOT, `src/${f}.tsx`), "utf8"), /clampCtxMenu\(.*rootZoom\(\)/, f);
+  }
+});
