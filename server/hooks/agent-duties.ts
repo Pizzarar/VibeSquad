@@ -119,6 +119,7 @@ export const BRAINSTORM_PACK = [
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
   "- If the user raises something that belongs to another Team, send it directly: `vs inbox add --lane <lane> --from-brainstorm \"<idea>\"` or `send` to that lane's Buddy, then tell the owner in one line. Only when the target lane is unclear, fall back to a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Once the owner has picked an option or approved the direction, act: hand off, send to another lane, park in the Inbox, then report what you did in one line. Ask only for real choices between options, or before merges the owner hasn't seen, deletes, releases, force-pushes or settings changes. Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
+  "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 /** Appended to the Buddy pack only for the Squad's hub Buddy (RiffBot; isHubLane contract). Team Buddies never get it. */
@@ -143,6 +144,7 @@ export const HUB_LEAD_RULES = [
   "  1. Steer: idle/stalled lead → `vs send <lead> \"<steer>\"`, then `vs wait <lead> --timeout 90`.",
   "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
   "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Never raw-archive a lead.",
+  "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
 ].join("\n");
 
@@ -164,7 +166,8 @@ export const LEAD_FALLBACK_PACK = [
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
   "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
   "- Only one full `npm test` runs at a time machine-wide (the wrapper refuses a second): workers run only the tests for their own files; the lead hands out the full-suite slot.",
-  "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
+  "- Hand server restarts, post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites e.g. public-release.test.mjs, worktree node_modules junction gaps, flaky shared tests) to the Overlord (`vs who lead --lane vibesquad`, then `vs send`) or @bug (`vs inbox add --lane bug-chaser \"<item>\"`). Never leave them only in handoff Gotchas or owner replies.",
+  "- New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 export const ROLE_PACKS = {
