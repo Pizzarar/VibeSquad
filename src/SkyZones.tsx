@@ -142,6 +142,7 @@ function Zone({
   onSpinUp,
   busy = false,
   fx = null,
+  slamArt = null,
 }: {
   zone: SkyZone;
   /** Riff's TV: the Overlord's zone (its face lands here when the Overlord's chat is open). */
@@ -171,8 +172,10 @@ function Zone({
   onSpinUp?: () => void;
   /** The Overlord spawn is running: its Spin Up / Resume button is disabled. */
   busy?: boolean;
-  /** RS-b/RS-c: the slam applies to this zone: `shake` = the transform vars on the sky root move it (hinge swing / shake / squash); `closing` = the panel stays up until it has swung shut; `smear` = the slam art, drawn on the window's outer edge. */
-  fx?: { shake?: boolean; closing?: boolean; smear?: SlamPuff | null } | null;
+  /** RS-b/RS-c: the slam applies to this zone: `shake` = the transform vars on the sky root move it (hinge swing / shake / squash); `closing` = the panel stays up until it has swung shut; `smear` = draw the smear on the window's outer edge. */
+  fx?: { shake?: boolean; closing?: boolean; smear?: boolean } | null;
+  /** RS-c: Riff's panel only: the slam art, probed at rest so the smear never loads mid-swing. */
+  slamArt?: SlamPuff | null;
 }) {
   const label = LABEL[zone.bot];
   // T1: Riff's TV label gets struck through with OVERLORD scrawled over it while the takeover is on (in with it, reversed when it ends).
@@ -200,9 +203,10 @@ function Zone({
   const off = zone.bot === "overlord" && !zone.agentId; // a closed Overlord keeps its zone (history + Resume)
   // RS-c: the motion smear on the swinging window's outer edge (9-sliced vertically: top cap, 8-row tiles, bottom cap), skipped without the art.
   const sec = useRef<HTMLElement>(null);
-  const smearArt = fx?.smear?.smear;
-  const smearOn = useImageOk(panel && smearArt ? SLAM_PUFF_URL(theme) : null) && !!smearArt;
-  const smearK = smearOn && fx?.smear && sec.current ? slamPuffScale(fx.smear.scale, faceContain(faces?.cell ?? { w: 80, h: 48 }, { w: sec.current.clientWidth, h: sec.current.clientHeight }, dpr).k, dpr) : 0;
+  const smearArt = slamArt?.smear;
+  const smearLoaded = useImageOk(panel && smearArt ? SLAM_PUFF_URL(theme) : null) && !!smearArt;
+  const smearOn = smearLoaded && !!fx?.smear;
+  const smearK = smearOn && slamArt && sec.current ? slamPuffScale(slamArt.scale, faceContain(faces?.cell ?? { w: 80, h: 48 }, { w: sec.current.clientWidth, h: sec.current.clientHeight }, dpr).k, dpr) : 0;
   const idle = !panel && zone.bot === "riffbot" && !zone.agentId; // RiffBot not running: dimmed whole face + a bottom Spin Up strip
   return (
     <section
@@ -414,7 +418,7 @@ export function SkyZones({
     >
       <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared")) ?? slamRiffForce(slam, faces)} takeover={takeover} labelModel={labelModel} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} force={slamFaceForce(slam, faces)} fx={slamOn ? { shake: true } : null} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
-      <Zone panel zone={zones.riffbot} faces={faces} frameStyle={frameStyle} fx={slamOn || slam.closing ? { shake: slamOn, closing: slam.closing, smear: slam.smear ? puff : null } : null} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone panel zone={zones.riffbot} slamArt={puff} faces={faces} frameStyle={frameStyle} fx={slamOn || slam.closing ? { shake: slamOn, closing: slam.closing, smear: slam.smear } : null} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
       <SlamFx root={root} view={slam} faces={faces} puff={puff} />
       <span className={`sky-wall${wallStyle ? " has-art" : ""}`} data-testid="sky-wall" aria-hidden="true" style={wallStyle ?? skyWallFallbackStyle(dpr)} />
       <Zone panel zone={zones.overlord} faces={faces} frameStyle={frameStyle} isOpen={open === "overlord"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
