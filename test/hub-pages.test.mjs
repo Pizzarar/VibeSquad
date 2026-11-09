@@ -100,7 +100,9 @@ test("C5: at <=820px css height sky chat opens as an overlay over the floor half
   assert.equal(isShortCssHeight(1800, 1), false); // 4K@1.2 (3200x1800)
   assert.doesNotMatch(css, /\.hub-sky-page[^{]*:has\([^)]*\.sky-chat-panel/);
   assert.doesNotMatch(css, /\.hub-sky-page[^{]*\.is-open/);
-  assert.match(css, /\.hub-pages \{[^}]*overflow: hidden;/);
+  assert.doesNotMatch(css, /@media\s*\(max-height:\s*820px\)/);
+  assert.match(css, /\.hub-pages \{[^}]*overflow: hidden auto;/);
+  assert.match(css, /\.hub-pages\[data-short-height="true"\] \{[^}]*overflow: hidden;/);
   assert.match(css, /\.hub-pages\[data-short-height="true"\]:has\(\.sky-chat-panel:not\(\[hidden\]\)\) \.hub-tower-box/);
   assert.match(css, /\.hub-pages\[data-short-height="true"\] \.sky-zone\.sky-chat-panel \{[\s\S]*?position: absolute;[\s\S]*?top: 100%;/);
 });

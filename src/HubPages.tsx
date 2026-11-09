@@ -71,10 +71,11 @@ export function HubPages({
   const [width, setWidth] = useState(0);
   const [pageH, setPageH] = useState(0);
   const [vh, setVh] = useState(() => (typeof window !== "undefined" ? window.innerHeight : 1080));
-  const shortHeight = isShortCssHeight(vh, useUiScale());
+  const uiScale = useUiScale();
+  const shortHeight = isShortCssHeight(vh, uiScale);
   // FF-ui: the floor box is never shorter than the floor at 1 device px per native px; the TVs band (flex-shrink) gives up the height.
   const native = useFloorNative();
-  const floorNeed = floorNeedCssPx(native.h, useDpr(), useUiScale(), width, native.w);
+  const floorNeed = floorNeedCssPx(native.h, useDpr(), uiScale, width, native.w);
   useEffect(() => {
     const el = root.current;
     if (!el || typeof ResizeObserver === "undefined") return;
