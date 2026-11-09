@@ -1093,6 +1093,43 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const digested = new Map<string, string>(); // worker id -> last digested turn key (`${epoch}:${turnId}`)
     const turnEpoch = new Map<string, number>(); // worker id -> monotonically increasing turn counter (incremented on turn_started)
     const inflightDigests = new Map<string, number>(); // worker id -> turn epoch of the digest currently in flight
+    const inflightDigestIds = new Map<string, string>(); // worker id -> digest agent id currently in flight
+
+    const isWorkerBusy = (a: any): boolean => {
+      if (!a) return false;
+      const st = String(a.status ?? "").trim().toLowerCase();
+      return st === "running" || st === "initializing" || st === "queued" || st === "starting" || Boolean(a.queued);
+    };
+
+    const cancelStaleDigests = async (paseo: Paseo, workerId: string) => {
+      const tracked = inflightDigestIds.get(workerId);
+      const hadInflight = inflightDigests.delete(workerId);
+      if (!tracked && !hadInflight) return;
+      if (tracked) {
+        inflightDigestIds.delete(workerId);
+        await Promise.resolve()
+          .then(() => paseo.agents.ref(tracked).archive())
+          .catch(() => deps.archiveAgent(tracked))
+          .catch(() => {});
+        return;
+      }
+      try {
+        const res = await paseo.agents.list?.({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        for (const entry of (res?.entries ?? []) as any[]) {
+          const a = entry?.agent ?? entry;
+          const id = String(a?.id ?? "").trim();
+          if (!id || a?.archivedAt || a?.status === "closed") continue;
+          if (a?.labels?.digestFor === workerId) {
+            await Promise.resolve()
+              .then(() => paseo.agents.ref(id).archive())
+              .catch(() => deps.archiveAgent(id))
+              .catch(() => {});
+          }
+        }
+      } catch {
+        /* best effort */
+      }
+    };
     const retries = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
@@ -2165,6 +2202,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!workerId) return;
       // An archived worker never spawns a new digest.
       if (worker.archivedAt || snapWorker?.archivedAt || labels[AUTO_ARCHIVED_LABEL] === "1") return;
+      // Never digest a worker that is still running or queued (e.g. a sub-step turn_ended or immediate resume before the hook ran).
+      // Clear `digested` so the next real idle turn_ended always spawns the digest, even if turn_started was missed or turnId is null.
+      if (isWorkerBusy(worker) || isWorkerBusy(snapWorker)) {
+        digested.delete(workerId);
+        void cancelStaleDigests(paseo, workerId);
+        return;
+      }
       const tid = String(turnId ?? "").trim();
       const epoch = turnEpoch.get(workerId) ?? 0;
       const key = `${epoch}:${tid}`;
@@ -2182,7 +2226,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           : `run \`vs status ${worker.id}\` / read its last assistant message and any report it names. Do not modify files.`,
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
-        `Use FAIL if the worker reported errors, failing tests, or did not finish. If its report states neither PASS nor FAIL, log nothing. Then stop.`,
+        `Use FAIL if the worker reported errors, failing tests, or did not finish. If the worker is currently running or queued, or its report states neither PASS nor FAIL, log nothing. Then stop.`,
       ].join("\n");
 
       const startedAt = Date.now();
@@ -2204,6 +2248,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
       };
       const fallback = async (why: string) => {
+        if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
+        const fresh = await snap(paseo, workerId);
+        if (isWorkerBusy(fresh)) return;
         const last = await lastAssistantText(paseo, worker.id);
         if (!statesVerdict(last)) return;
         const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
@@ -2222,6 +2269,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const digestModeId = digestProfile?.modeId || DIGEST_MODE_ID;
         const digestThinking = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
         const digestFeatures = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
+        // Re-check right before creating the digest: if the worker started a new turn while we resolved profiles, abort.
+        if ((turnEpoch.get(workerId) ?? 0) !== epoch) {
+          if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+          return;
+        }
         const handle = await paseo.agents.create({
           config: {
             provider: digestProvider,
@@ -2236,9 +2288,22 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           env: { VS_PROFILE: DIGEST_PROFILE },
           autoArchive: true,
         });
+        const createdDigestId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+        if (createdDigestId) {
+          if ((turnEpoch.get(workerId) ?? 0) !== epoch) {
+            if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+            await Promise.resolve()
+              .then(() => paseo.agents.ref(createdDigestId).archive())
+              .catch(() => deps.archiveAgent(createdDigestId))
+              .catch(() => {});
+            return;
+          }
+          inflightDigestIds.set(workerId, createdDigestId);
+        }
         // Backstop: if the digest agent errors out, write the entry directly.
         void Promise.resolve(handle?.waitForFinish?.(10 * 60_000))
           .then((res: any) => {
+            if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
             if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
               return fallback("failed");
             }
@@ -2248,6 +2313,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           .catch(() => fallback("errored"))
           .finally(() => {
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+            if (createdDigestId && inflightDigestIds.get(workerId) === createdDigestId) inflightDigestIds.delete(workerId);
           });
       } catch (err) {
         if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
@@ -2651,7 +2717,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           if (agent?.id) {
             doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
             turnEpoch.set(agent.id, (turnEpoch.get(agent.id) ?? 0) + 1);
-            inflightDigests.delete(agent.id);
+            void cancelStaleDigests(paseo, String(agent.id));
           }
           try {
             const me = await snap(paseo, agent.id);
