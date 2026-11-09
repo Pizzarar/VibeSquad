@@ -175,6 +175,16 @@ test("slamTransform: shake + squash share one transform; none is null", () => {
   assert.match(slamTransform(0, true), /^scale\(/);
 });
 
+test("landing squash rides the visible Overlord TV transform, pinned at the bottom (M1)", () => {
+  // During the hit the chat panel is at opacity 0 (is-slam-held), so the squash must be on the Overlord TV's --slam-tv-tf.
+  const z = src("SkyZones.tsx");
+  assert.match(z, /const tvTf = slamTransform\(slam\.shakeDx, slam\.squash, dpr\);/);
+  assert.doesNotMatch(z, /const tvTf = slamTransform\(slam\.shakeDx, false, dpr\);/);
+  // The Overlord TV is the visible is-slam-fx element, anchored on its bottom edge so the squash thuds down.
+  const css = src("styles.css");
+  assert.match(css, /\.sky-zone\.is-slam-fx \{ transform: var\(--slam-tv-tf, none\); transform-origin: 50% 100%; \}/);
+});
+
 test("validateSlamPuff: the shipped json, and bad input is rejected / defaulted", () => {
   const j = JSON.parse(readFileSync(new URL("../public/office/slam-puff.json", import.meta.url), "utf8"));
   const v = validateSlamPuff(j);
