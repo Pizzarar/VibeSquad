@@ -699,6 +699,26 @@ export function sendUnpaired(req, res) {
   sendHtml(res, 401, "Unpaired device", UNPAIRED_MESSAGE, app && { href: `${app}/#unpaired`, label: "Back to the app to pair again", auto: true });
 }
 
+/**
+ * Unauthenticated same-site hop for the APK. vs_device is SameSite=Strict, and the app (http://tauri.localhost) opens the
+ * PC with a cross-site top-level navigation, which withholds it. This page only bounces to "/" (a fixed target, no token,
+ * no open redirect); that second navigation is initiated by a page on this site, so Strict cookies are sent.
+ */
+export function handleEnter(req, res) {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const app = appOrigin(req);
+  const href = app ? `/?${new URLSearchParams({ vs_app: app }).toString()}` : "/";
+  res.statusCode = 200;
+  res.setHeader("content-type", "text/html; charset=utf-8");
+  setNoFraming(res);
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  const safe = href.replace(/&/g, "&amp;");
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}"></head><body><a href="${safe}">Continue</a><script>location.replace(${JSON.stringify(href)})</script></body></html>`);
+}
+
 export function handleCaCrt(req, res) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;

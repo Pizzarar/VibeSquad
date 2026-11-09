@@ -45,6 +45,7 @@ import {
 } from "./teams";
 import { isHubLaneId, titleFor } from "./teams";
 import { AgentPanes } from "./AgentPanes";
+import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
@@ -82,11 +83,11 @@ import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
-import { overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
+import { fetchHubCwd, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, spinUpPin, usePinFocus, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
@@ -1697,6 +1698,7 @@ export function App() {
     [],
   );
   const onSpinUpPin = useCallback(
+    // A failed start is already recorded on pinFocus.spinUpError (spinUpPin), which the hub page shows under the TVs.
     (pin: Pin, profile?: string) => void spinUpPin(pin, profile).catch(() => {}),
     [],
   );
@@ -1712,6 +1714,7 @@ export function App() {
       profile,
       profileName,
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
+      resolveCwd: (hub) => fetchHubCwd(hub),
     })
       .catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`))
       .finally(() => setOverlordBusy(false));
@@ -1726,13 +1729,16 @@ export function App() {
   const pinFocused = !!pinFocusView;
   const hubPinNow = pinFocusView ? hubPinForSquad(pinFocusView) : null;
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
+  const hubSpinUpErr = hubSpinUpError(pinFocus, hubPinNow);
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
-  const hubAgentOpen = hubFocused && !!pinFocus?.agentId && !!pinFocusView && !skyZoneIds(skyZonesFor(pinFocusView)).includes(pinFocus.agentId);
+  const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
   const skyOwned = useMemo(() => (hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined), [hubFocused, hubAgentOpen, pinFocusView]);
+  const drawerOpen = useFocusDrawerOpen();
+  const skyReq = useSkyRequest(); // a rail click on RiffBot / Overlord remounts the TVs with that bot's chat open
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
-  const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !pinFocus?.agentId });
+  const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);
@@ -1806,13 +1812,13 @@ export function App() {
     <AgentPanes
       onSuccessor={paneSuccessor}
       excludeIds={skyOwned}
-      header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={pinFocus.agentId ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
+      header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={drawerOpen ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
     />
   ) : null;
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${pinFocus?.agentId ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
@@ -2019,9 +2025,8 @@ export function App() {
           {panesNode}
           {pinFocusView && (
             <HubPages
-              view={pinFocusView}
               agentOpen={hubAgentOpen}
-              sky={(open) => <SkyZones view={pinFocusView} initialOpen={open} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
+              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}</>}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />

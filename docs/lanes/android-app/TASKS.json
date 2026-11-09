@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-08T20:46:19.378Z",
+  "updatedAt": "2026-11-09T00:13:46.246Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -109,6 +109,22 @@
       "status": "done",
       "branch": "unit-and-mesh-a3",
       "commit": "8647863"
+    },
+    {
+      "id": "unit-and-mesh-a2b",
+      "goal": "APK cookie: Strict vs_device withheld on cross-site nav from tauri.localhost -> unpaired",
+      "files": [],
+      "doneCheck": "",
+      "status": "done",
+      "branch": "unit-and-mesh-a2b",
+      "commit": "1ddac72"
+    },
+    {
+      "id": "unit-and-mesh-a2c",
+      "goal": "A2b Low: route /__vibesquad/enter in vibesquad-api dev middleware; HEAD sends no body",
+      "files": [],
+      "doneCheck": "",
+      "status": "todo"
     }
   ]
 }

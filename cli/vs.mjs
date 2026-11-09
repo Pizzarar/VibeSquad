@@ -23,9 +23,11 @@ if (process.platform === "win32") {
 import {
   addInboxCards,
   handoffTopicBrainstorm,
+  INBOX_STATUSES,
   listInboxCards,
   openTopicBrainstorm,
   parkTopicBrainstorm,
+  assertInboxTriageCaller,
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
@@ -230,6 +232,10 @@ function parseArgs(argv) {
     "scope",
     "delete",
     "archive",
+    "park",
+    "accept",
+    "reject",
+    "setStatus",
     "card",
     "note",
     "binDir",
@@ -482,7 +488,7 @@ Usage:
   vs handoff [--out <path>]
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm] [--source <tag>]
   vs inbox list [--lane <lane>]
-  vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
+  vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...> (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
   vs spec [show] [--lane <lane>] [--team <team>]
@@ -629,6 +635,7 @@ function listAgentsViaRunner() {
     usage: null,
     lastUsage: a.lastUsage ?? null,
     resumable: a.resumable === true,
+    lost: a.lost === true,
     createdAt: a.createdAt ?? null,
     updatedAt: a.updatedAt ?? null,
   }));
@@ -822,10 +829,14 @@ function commandInbox(flags) {
   }
 
   if (sub === "list" || sub === "ls") {
+    const listStatus = flags.status ? String(flags.status) : "open";
+    if (listStatus !== "all" && listStatus !== "open" && !INBOX_STATUSES.includes(listStatus)) {
+      throw new Error(`inbox list --status must be one of: open, all, ${INBOX_STATUSES.join(", ")}`);
+    }
     const cards = listInboxCards({
       laneId: flags.lane ? String(flags.lane) : undefined,
       teamId: flags.team ? String(flags.team) : undefined,
-      status: flags.status ? String(flags.status) : "parked",
+      status: listStatus,
       baseHome,
     });
     if (flags.json) {
@@ -833,7 +844,7 @@ function commandInbox(flags) {
       return 0;
     }
     if (!cards.length) {
-      process.stdout.write("(0 parked ideas in Inbox)\n");
+      process.stdout.write("(0 ideas in Inbox)\n");
       return 0;
     }
     for (const c of cards) {
@@ -843,6 +854,16 @@ function commandInbox(flags) {
   }
 
   if (sub === "triage") {
+    // One gate for every mutating triage action. Empty agent id = the owner at a local shell: accepted trust
+    // model (an agent could edit inbox.json directly anyway). An agent id with no runner record fails closed.
+    const gate = (cardIds, { ownerOnly = false } = {}) => {
+      const me = resolveIdentity(flags, { recordWins: true });
+      if (me.agentId && !(isRunnerId(me.agentId) && readRunnerAgentSync(me.agentId))) {
+        throw new Error(`inbox triage denied: agent ${me.agentId} has no runner record, so its role/Squad cannot be verified`);
+      }
+      if (ownerOnly && me.agentId) throw new Error("deleting cards is owner-only; use --archive");
+      assertInboxTriageCaller({ agentId: me.agentId, role: me.role, teamId: me.team.id }, cardIds, baseHome);
+    };
     if (flags.merge) {
       const mergeStr = String(flags.merge).trim();
       let targetId = mergeStr;
@@ -852,6 +873,7 @@ function commandInbox(flags) {
         targetId = parts[0];
         sourceIds = [...parts.slice(1), ...sourceIds];
       }
+      gate([targetId, ...sourceIds]);
       const res = triageInboxCards({ action: "merge", targetId, sourceIds, baseHome });
       process.stdout.write(`merged [${res.mergedIds.join(", ")}] → ${res.card.id} (${res.card.title})\n`);
       return 0;
@@ -860,6 +882,7 @@ function commandInbox(flags) {
       const cardId = String(flags.bounce).trim();
       const laneId = String(flags.lane || flags._[0] || "").trim();
       if (!laneId) throw new Error("inbox triage --bounce <cardId> requires --lane <newLane>");
+      gate([cardId]);
       const res = triageInboxCards({
         action: "bounce",
         cardId,
@@ -871,14 +894,39 @@ function commandInbox(flags) {
       process.stdout.write(`bounced ${res.card.id} → ${res.card.laneId} (${res.card.teamId})\n`);
       return 0;
     }
-    if (flags.archive || flags.delete) {
-      const action = flags.archive ? "archive" : "delete";
-      const cardId = String(flags.archive || flags.delete).trim();
-      const res = triageInboxCards({ action, cardId, baseHome });
-      process.stdout.write(`${action}d ${res.card.id}\n`);
+    if (flags.accept || flags.reject || flags.setStatus) {
+      const cardId = String(flags.accept || flags.reject || flags.setStatus).trim();
+      const status = flags.accept ? "accepted" : flags.reject ? "rejected" : String(flags.status || "").trim();
+      if (!INBOX_STATUSES.includes(status)) {
+        throw new Error(`inbox triage status must be one of: ${INBOX_STATUSES.join(", ")}`);
+      }
+      gate([cardId]);
+      const res = triageInboxCards({ action: "update", cardId, patch: { status }, baseHome });
+      process.stdout.write(`${res.card.id} → ${res.card.status}
+`);
       return 0;
     }
-    throw new Error("inbox triage needs --merge <targetId> <sourceId...> or --bounce <cardId> --lane <newLane>");
+    if (flags.archive || flags.park) {
+      const verb = flags.archive ? "archive" : "park";
+      const cardIds = [String(flags.archive || flags.park), ...flags._].map((s) => String(s).trim()).filter(Boolean);
+      gate(cardIds);
+      for (const cardId of cardIds) {
+        const res = verb === "archive"
+          ? triageInboxCards({ action: "archive", cardId, baseHome })
+          : triageInboxCards({ action: "update", cardId, patch: { status: "parked" }, baseHome });
+        process.stdout.write(`${verb === "archive" ? "archived" : "parked"} ${res.card.id}
+`);
+      }
+      return 0;
+    }
+    if (flags.delete) {
+      gate([], { ownerOnly: true });
+      const res = triageInboxCards({ action: "delete", cardId: String(flags.delete).trim(), baseHome });
+      process.stdout.write(`deleted ${res.card.id}
+`);
+      return 0;
+    }
+    throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
   if (sub === "open-topic") {
@@ -995,7 +1043,7 @@ async function commandWho(flags) {
     const hit = whoCandidate(a, { teams: TEAM_DEFS, wantTeamId, wantLane, squadWide, removedLanes });
     if (!hit) continue;
     const { teamId, lane, role } = hit;
-    const status = String(a.status ?? "unknown").trim();
+    const status = a.lost ? "lost" : String(a.status ?? "unknown").trim();
     const title = String(a.title ?? a.name ?? "").trim();
 
     if (target === "lead" && role !== "lead") continue;

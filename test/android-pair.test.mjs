@@ -330,3 +330,33 @@ describe("pairing is proven before it is saved (review fixes)", () => {
     assert.match(src, /TAURI_ORIGINS\.has\(o\)/);
   });
 });
+
+describe("APK entry survives SameSite=Strict (vs_device is withheld on a cross-site navigation)", () => {
+  test("the app opens the PC through the same-site /__vibesquad/enter hop", async () => {
+    const { serverUrl } = await import("../src/remoteSession.ts");
+    assert.equal(serverUrl("pc.example:4180", "http://tauri.localhost"), "https://pc.example:4180/__vibesquad/enter?vs_app=http%3A%2F%2Ftauri.localhost");
+  });
+
+  test("handleEnter is a fixed same-site bounce to '/', no token, no open redirect, cookie stays Strict", async () => {
+    const { handleEnter } = await import("../server/auth.mjs");
+    const run = (url, method = "GET") => {
+      const headers = {};
+      const res = { statusCode: 0, body: "", setHeader: (k, v) => void (headers[k.toLowerCase()] = v), getHeader: (k) => headers[k.toLowerCase()], end(b) { this.body = b ?? ""; } };
+      handleEnter({ url, method, headers: {} }, res);
+      return { res, headers };
+    };
+    const ok = run("/__vibesquad/enter?vs_app=http%3A%2F%2Ftauri.localhost");
+    assert.equal(ok.res.statusCode, 200);
+    assert.equal(ok.headers.location, undefined, "a 3xx would keep the cross-site chain; the hop must be a client navigation");
+    assert.equal(ok.headers["set-cookie"], undefined);
+    assert.match(ok.res.body, /location\.replace\("\/\?vs_app=http%3A%2F%2Ftauri\.localhost"\)/);
+    const evil = run("/__vibesquad/enter?vs_app=https%3A%2F%2Fevil.example&next=https://evil.example");
+    assert.match(evil.res.body, /location\.replace\("\/"\)/);
+    assert.doesNotMatch(evil.res.body, /evil/);
+    assert.equal(run("/__vibesquad/enter", "POST").res.statusCode, 405);
+    const auth = read("server/auth.mjs");
+    assert.match(auth, /\$\{DEVICE_COOKIE\}=\$\{token\}; HttpOnly; Secure; SameSite=Strict/);
+    const serve = read("server/serve.mjs");
+    assert.ok(serve.indexOf('"/__vibesquad/enter"') < serve.indexOf("sendUnpaired(req, res)"), "enter must be served before the auth gate");
+  });
+});

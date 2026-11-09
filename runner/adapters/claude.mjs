@@ -56,6 +56,14 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         let m;
         try { m = JSON.parse(line); } catch { emit('raw', { line }); return; }
         if (m.type === 'system' && m.subtype === 'init') emit('session', { sessionId: m.session_id, model: m.model });
+        else if (m.type === 'system' && m.subtype === 'compact_boundary') {
+          // K0 probe 11-08: a `/compact <focus>` user turn emits this with compact_metadata {trigger, pre_tokens, post_tokens, ...}.
+          // No assistant usage follows until the next real turn, so post_tokens is the "after" and also resets the context meter now.
+          const c = m.compact_metadata ?? {};
+          const num = (v) => (Number.isFinite(v) ? v : undefined);
+          emit('compacted', { before: num(c.pre_tokens), after: num(c.post_tokens), trigger: c.trigger, durationMs: num(c.duration_ms) });
+          if (Number.isFinite(c.post_tokens)) emit('usage', { contextTokens: c.post_tokens, inputTokens: c.post_tokens, outputTokens: 0 });
+        }
         else if (m.type === 'rate_limit_event') {
           for (const w of parseClaudeRateLimit(m)) emit('limit', { provider: 'claude', ...w, source: 'provider' });
         } else if (m.type === 'assistant') {

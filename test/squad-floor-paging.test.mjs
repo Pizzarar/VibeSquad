@@ -75,7 +75,7 @@ test("HP4 needs-you dot lands on the arrow toward that floor", () => {
   assert.deepEqual(needsYouArrows(f, 4), { prev: true, next: false });
   assert.deepEqual(needsYouArrows(floors(false, false), 0), { prev: false, next: false });
   assert.match(comp, /has-needs/);
-  assert.match(css, /\.sq-floor-arrow\.has-needs::after/);
+  assert.match(css, /\.sq-floor-arrow\.has-needs \{[^}]*background: var\(--pink-fill\)/); // HP6: the call plate lights up (no corner dot)
 });
 
 test("HP4 reduced motion is instant: no blink state, no animation", () => {
@@ -91,7 +91,20 @@ test("HP4 the floor never scrolls: fixed box, fit scale, one floor rendered", ()
   assert.equal(floorFitScale(1300, 800, 1), 2);
   assert.equal(floorFitScale(3000, 400, 1), 1);
   assert.equal(floorFitScale(3000, 100, 1), 1);
-  assert.equal(floorFitScale(600, 800, 1), 0);
+  assert.equal(floorFitScale(0, 800, 1), 0); // unmeasured only
+});
+
+test("hotfix2: a narrow hub pane (the owner's ~1140px window, then x1.2 UI-scale zoom) never blanks the tower", () => {
+  // 1370 physical px at dpr 1.2 = ~1140 css; after the 120% zoom and the gutters the stage is well under the 640 native width.
+  for (const w of [950, 950 / 1.2, 790, 640 / 1.2, 600, 480, 320, 100]) {
+    const s = floorFitScale(w, 500, 1.2);
+    assert.ok(s > 0 && s < 1.0001 && Number.isFinite(s), `stage ${w}: scale ${s}`);
+    assert.ok(640 * s <= w + 0.001, `stage ${w}: fits width`);
+    assert.ok(360 * s <= 500 + 0.001, `stage ${w}: fits height`);
+  }
+  assert.equal(floorFitScale(1300, 800, 1), 2); // crisp integer scale kept wherever >=1 fits
+  assert.match(comp, /scale > 0 && \(/); // drawn for any positive fit, not just >= 1
+  assert.match(comp, /scale !== 1 \?/); // fractional fits get the transform too
 });
 
 test("FS-a the square outline is gone; silhouette + stepped hop replace it", () => {

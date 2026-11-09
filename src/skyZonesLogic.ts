@@ -103,6 +103,8 @@ export function spinUpOverlord(
     profile: OverlordProfile | undefined;
     profileName: string;
     defaults?: { modeId?: string; approvalPolicy?: string; sandbox?: string; shareMcp?: boolean };
+    /** Squad/lane working dir for a hub with no agent yet (fetchHubCwd); only asked when no hub member has a cwd. */
+    resolveCwd?: (hub: Pin) => Promise<string | null | undefined>;
   },
 ): Promise<string> {
   const hub = hubPinForSquad(view);
@@ -119,8 +121,9 @@ export function spinUpOverlord(
 async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUpOverlord>[1]): Promise<string> {
   const lane = hub.lane.id;
   const inHub = (view.members ?? []).filter((m) => (m.laneId ?? "").toLowerCase() === lane.toLowerCase());
-  const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd;
-  if (!cwd) throw new Error("No working directory known for the hub; start RiffBot first");
+  // Same order as server/brainstorm.mjs: the agent's own cwd, else the Squad/lane folder from the registry.
+  const cwd = hub.brainstorm?.agent.cwd || inHub.find((m) => m.agent.cwd)?.agent.cwd || (await deps.resolveCwd?.(hub).catch(() => null));
+  if (!cwd) throw new Error(`No working directory known for the ${view.team.name ?? view.team.id} hub: add a project folder to the Squad`);
   const ord = Math.max(0, ...inHub.filter((m) => m.kind === "lead" || m.kind === "old-lead").map((m) => ordOf(m.agent))) + 1;
   const p = deps.profile;
   const gemini = deps.profileName === "Lead - Gemini";
@@ -148,6 +151,18 @@ async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUp
     if (m.kind === "lead" && !m.agent.archivedAt && m.agent.status === "closed") await deps.retire?.(m)?.catch?.(() => {});
   }
   return r.id;
+}
+
+/** The hub lane's working dir from the server's laneWorkingDir (brainstorm-summary GET), or null. Needs no agent. */
+export async function fetchHubCwd(hub: Pin, doFetch: typeof fetch = fetch): Promise<string | null> {
+  const res = await doFetch(`/__vibesquad/brainstorm-summary?lane=${encodeURIComponent(hub.lane.id)}&teamId=${encodeURIComponent(hub.squad.id)}`);
+  const body = (await res.json().catch(() => ({}))) as { cwd?: unknown };
+  return res.ok && typeof body.cwd === "string" && body.cwd ? body.cwd : null;
+}
+
+/** H3: the failed Spin Up error to show on the hub page, only while the focus is the hub lane's. */
+export function hubSpinUpError(focus: { laneId: string; spinUpError?: string | null } | null | undefined, hub: Pin | null | undefined): string | null {
+  return focus && hub && focus.laneId === hub.lane.id ? focus.spinUpError || null : null;
 }
 
 /** Agent ids the sky zones own; the hub page shows the normal focus view for any other agent. */
@@ -295,6 +310,13 @@ export type SkyOpen = FaceBot | null;
 /** Who can be opened: RiffBot needs a chat agent (live or dormant); the Overlord needs to be live (no static, no closed one). */
 export type SkyCan = { riffbot: boolean; overlord: boolean };
 /**
+ * Which TVs open a chat. Keyed on the zone's agentId, not its live `member`: a closed Overlord keeps its zone (history + Resume Overlord,
+ * member is null) and must stay clickable; with no Overlord at all (no agentId) the TV is static + Spin Up and nothing opens.
+ */
+export const skyCanOpen = (z: Pick<SkyZones, "riffbot" | "overlord">): SkyCan => ({ riffbot: !!z.riffbot.agentId, overlord: !!z.overlord.agentId });
+/** The slam clock's first `prev open`: a chat that mounts already open (a Tower mini-face jump) still plays the slam once. */
+export const slamPrevOpenOnMount = (open: boolean, playOnMount: boolean): boolean => (playOnMount ? false : open);
+/**
  * A click on a TV's face. At rest the bot opens (if it can). While anything is open the left TV shows the open bot's face
  * (Riff's own, or the Overlord that took it over), so clicking it again closes; the right TV is under the chat and cannot be clicked.
  */
@@ -406,11 +428,11 @@ export type SlamDir = "rest" | "open" | "close";
 export type SlamState = { dir: SlamDir; t: number };
 export const SLAM_REST: SlamState = { dir: "rest", t: 0 };
 /** Timings (ms). The zoom is a few hard steps (Win95 zoom-rect), then the window lands: 1-frame squash, bezel shake, puff. */
-export const SLAM = { zoomMs: 250, zoomSteps: 4, squashMs: 60, shakeMs: 150, shakeStepMs: 30, dizzyMs: 1000 } as const;
+export const SLAM = { zoomMs: 250, zoomSteps: 4, squashMs: 90, shakeMs: 240, shakeStepMs: 30, dizzyMs: 1000 } as const;
 /** Bezel shake offsets (CSS px at 1080; 2-3px), one per shakeStepMs, ending still. */
-export const SLAM_SHAKE_DX: readonly number[] = [3, -3, 2, -2, 1];
+export const SLAM_SHAKE_DX: readonly number[] = [9, -9, 7, -7, 5, -5, 2, -2];
 /** Squash on the landing frame: wider and shorter, anchored on the bottom edge. */
-export const SLAM_SQUASH = { x: 1.03, y: 0.96 } as const;
+export const SLAM_SQUASH = { x: 1.08, y: 0.92 } as const;
 
 /** @art slam-puff.json (RS-a): a one-row sheet of `frames` cells, played once at `ms` per frame; `scale` is the 1080 integer scale. */
 export type SlamPuff = { frameW: number; frameH: number; frames: { x: number; y: number }[]; scale: number; ms: number };
@@ -472,9 +494,12 @@ export function slamView(s: SlamState, reduced: boolean, puff?: { frames: number
   }
   if (s.t < SLAM.zoomMs) return { ...SLAM_IDLE_VIEW, zoomStep: 1 + Math.min(SLAM.zoomSteps - 1, Math.floor(s.t / stepMs)), windowShown: false, face: "smacked" };
   const lt = s.t - SLAM.zoomMs; // ms since landing
+  const hit = lt < SLAM.shakeMs; // the impact: the dotted box stays on the Overlord TV and the real chat waits until the hit settles
   const pf = puff && puff.frames > 0 ? Math.floor(lt / puff.ms) : -1;
   return {
     ...SLAM_IDLE_VIEW,
+    zoomStep: hit ? SLAM.zoomSteps : null,
+    windowShown: !hit,
     squash: lt < SLAM.squashMs,
     shakeDx: lt < SLAM.shakeMs ? (SLAM_SHAKE_DX[Math.floor(lt / SLAM.shakeStepMs)] ?? 0) : 0,
     puffFrame: pf >= 0 && puff && pf < puff.frames ? pf : null,

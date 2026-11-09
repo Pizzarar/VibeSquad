@@ -5,7 +5,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, SLAM, SLAM_PUFF_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, slamFaceForce, slamPuffBox, slamPuffPoints, slamPuffScale, slamRect, slamTransform, takeoverLabelGeom, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type SlamPuff, type SlamView, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, skyCanOpen, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, SLAM, SLAM_PUFF_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, slamFaceForce, slamPuffBox, slamPuffPoints, slamPuffScale, slamRect, slamTransform, takeoverLabelGeom, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type SlamPuff, type SlamView, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useSlamClock, useSlamPuffModel, useTakeoverClock, useTakeoverLabelModel, useTakeoverModel, useTheme } from "./useBotFace";
@@ -354,18 +354,18 @@ export function SkyZones({
   const wallStyle = skyWallStyle(crt?.wall, crt?.scale ?? 1, useImageOk(wallUrl) ? wallUrl : null, dpr);
 
   // G8: the TVs never resize. `openRaw` is set by clicks only; the Overlord talking never opens anything.
-  const can: SkyCan = { riffbot: !!zones.riffbot.agentId, overlord: !!zones.overlord.member };
+  const can: SkyCan = skyCanOpen(zones);
   const [openRaw, setOpen] = useState<SkyOpen>(initialOpen);
   const open = skyEffectiveOpen(openRaw, can); // the Overlord closing under an open chat drops back to rest
   const root = useRef<HTMLDivElement>(null);
   const openRef = useRef<SkyOpen>(null);
   openRef.current = open;
   // RS-b: Riff's window zooms out of his TV and slams into the Overlord; the clock restarts on every open/close of it.
-  const slam = useSlamClock(open === "riffbot", reduced, puff);
+  const slam = useSlamClock(open === "riffbot", reduced, puff, initialOpen === "riffbot");
   const slamOpening = open === "riffbot" && !slam.windowShown;
   const slamOn = slam.squash || slam.shakeDx !== 0;
   const slamStyle: Record<string, string> = {};
-  const tvTf = slamTransform(slam.shakeDx, false, dpr);
+  const tvTf = slamTransform(slam.shakeDx, slam.squash, dpr);
   const panelTf = slamTransform(slam.shakeDx, slam.squash, dpr);
   if (tvTf) slamStyle["--slam-tv-tf"] = tvTf;
   if (panelTf) slamStyle["--slam-panel-tf"] = panelTf;

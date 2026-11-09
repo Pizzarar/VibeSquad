@@ -34,7 +34,7 @@ export async function reloadAgent(id: string): Promise<void> {
 
 export type OpRequest =
   | { kind: "delete"; agent: OpAgent }
-  | { kind: "stop"; title: string; agents: OpAgent[] };
+  | { kind: "stop"; title: string; agents: OpAgent[]; verb?: "Stop" | "Interrupt" };
 
 let pending: OpRequest | null = null;
 const subs = new Set<() => void>();

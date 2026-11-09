@@ -3917,21 +3917,23 @@ html, body, #root { overflow-x: hidden; }
 .squads-dashboard { margin: 0; min-width: 0; max-width: 100%; box-sizing: border-box; padding: var(--sp-4); border: 1px solid var(--line); border-radius: 10px; background: var(--panel); display: flex; flex-direction: column; gap: var(--sp-4); }
 .usage-title { font-family: var(--arcade); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--cyan-t); }
 .usage-sub { font-family: var(--arcade); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
-.usage-limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.usage-limits { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: var(--sp-3, 12px); }
 .usage-empty { grid-column: 1 / -1; padding: 12px; border: 1px dashed var(--line); border-radius: 8px; }
-.usage-limit { display: flex; flex-direction: column; gap: 6px; padding: 12px; background: var(--navy); border: 1px solid var(--line); border-radius: 10px; --usage-c: var(--emerald); }
+.usage-limit { display: flex; flex-direction: column; gap: var(--sp-2, 8px); padding: var(--sp-3, 12px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; --usage-c: var(--emerald); }
 .usage-limit.usage-warn { --usage-c: var(--amber); }
 .usage-limit.usage-hot { --usage-c: var(--hot-pink); border-color: var(--hot-pink); }
-.usage-limit-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.usage-limit-head { display: flex; align-items: center; gap: var(--sp-2, 8px); min-width: 0; }
 .usage-limit-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-limit-win { color: var(--cyan-t); font-family: var(--arcade); font-size: 10px; text-transform: uppercase; }
 .usage-estimate { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px dashed var(--amber); border-radius: 999px; color: var(--amber-t); text-transform: uppercase; }
-.usage-limit-pct { font-family: var(--display); font-size: 28px; color: var(--usage-c); line-height: 1; }
-.usage-limit-pct small { font-size: 11px; color: var(--muted); margin-left: 4px; }
+.usage-limit-pct { font-size: 28px; font-weight: 700; line-height: 1; color: var(--mint-t); white-space: nowrap; }
+.usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
+.usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
+.usage-limit-pct small { font-size: 11px; font-weight: 400; color: var(--muted); margin-left: var(--sp-2, 8px); }
 .usage-bar { height: 8px; background: var(--panel-alt); border-radius: 999px; overflow: hidden; }
 .usage-bar-thin { height: 5px; flex: 1; }
 .usage-bar-fill { height: 100%; background: var(--usage-c, var(--cyan)); box-shadow: var(--bevel); border-radius: 999px; }
-.usage-limit-meta { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+.usage-limit-meta { display: flex; justify-content: space-between; gap: var(--sp-2, 8px); color: var(--muted); }
 .usage-eta { color: var(--muted); }
 .usage-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 .usage-eta-warn { color: var(--amber-t); }
@@ -3953,16 +3955,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-row-loop { background: var(--hot-pink-dim); }
 .usage-high { color: var(--pink-t); font-weight: 700; }
 
-/* ---- usa-8: Usage Review · Opus & Gemini ---- */
-.usage-review {
-  margin-top: var(--sp-5, 24px);
-  padding: var(--sp-4, 16px);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3, 12px);
-}
+/* ---- usa-8 / usa-18: Usage Review controls + CRT mail terminal ---- */
 .usage-review-head {
   display: flex;
   align-items: center;
@@ -4003,45 +3996,43 @@ html, body, #root { overflow-x: hidden; }
   border: 1px solid var(--pink-t);
   padding: var(--sp-2, 8px);
 }
-.usage-review-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--sp-3, 12px);
-}
-@media (max-width: 800px) { .usage-review-grid { grid-template-columns: 1fr; } }
-.usage-review-card {
-  background: var(--well);
-  border: 1px solid var(--line);
-  border-left: 3px solid var(--cyan-t);
-  padding: var(--sp-3, 12px);
-  min-width: 0;
-}
-.usage-review-card.usage-review-opus { border-left-color: var(--violet-t); }
-.usage-review-card.usage-review-gemini { border-left-color: var(--cyan-t); }
-.usage-review-card-head {
-  font-family: var(--arcade);
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  margin-bottom: var(--sp-2, 8px);
-}
-.usage-review-card.usage-review-opus .usage-review-card-head { color: var(--violet-t); }
-.usage-review-card.usage-review-gemini .usage-review-card-head { color: var(--cyan-t); }
-.usage-review-empty { color: var(--violet-t); font-size: 12px; }
-.usage-review-bullets {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1, 4px);
-  font-size: 12px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-.usage-review-bullets li { padding: 0; }
-.usage-review-err { color: var(--pink-t); }
+.usage-collapse { border: 1px solid var(--line); background: var(--well); padding: var(--sp-2, 8px) var(--sp-3, 12px); }
+.usage-collapse[open] { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-collapse-head { cursor: pointer; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.usage-collapse-head:hover, .usage-collapse-head:focus-visible { color: var(--cyan-t); }
+.usage-collapse > .usage-efficiency, .usage-collapse > .usage-workflows { margin-top: 0; padding: 0; border: 0; background: none; }
+.usage-crt { position: relative; display: flex; flex-direction: column; gap: var(--sp-2, 8px); padding: var(--sp-3, 12px); background: var(--well); border: 4px solid var(--line); border-radius: 14px; box-shadow: var(--bevel-in), var(--hard), inset 0 0 28px color-mix(in srgb, var(--cyan-t) 14%, transparent); overflow: hidden; }
+.usage-crt::after { content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: inherit; background: repeating-linear-gradient(to bottom, transparent 0, transparent 2px, color-mix(in srgb, var(--text) 7%, transparent) 2px, color-mix(in srgb, var(--text) 7%, transparent) 3px); }
+.usage-crt-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2, 8px) var(--sp-3, 12px); padding-bottom: var(--sp-2, 8px); border-bottom: 1px solid var(--cyan-t); }
+.usage-crt-title { color: var(--cyan-t); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
+.usage-crt-bar .usage-inbox-tabs { margin-left: auto; }
+.usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-2, 8px); max-height: 220px; overflow-y: auto; }
+.usage-inbox-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
+.usage-inbox-tab { background: none; border: 0; color: var(--muted); padding: 0 var(--sp-1, 4px); font: inherit; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
+.usage-inbox-tab:hover, .usage-inbox-tab:focus-visible { color: var(--cyan-t); }
+.usage-inbox-tab.is-active { color: var(--cyan-t); text-decoration: underline; }
+.usage-inbox-count { font-variant-numeric: tabular-nums; color: var(--text); }
+.usage-inbox-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-inbox-row { border-left: 3px solid var(--cyan-t); padding: var(--sp-1, 4px) var(--sp-3, 12px); display: flex; flex-direction: column; gap: var(--sp-1, 4px); min-width: 0; }
+.usage-inbox-row[data-status="accepted"] { border-left-color: var(--mint-t); }
+.usage-inbox-row[data-status="closed"] { border-left-color: var(--muted); }
+.usage-inbox-row[data-status="closed"] .usage-inbox-text { color: var(--muted); }
+.usage-inbox-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1, 4px) var(--sp-2, 8px); color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.usage-inbox-src { font-weight: 700; }
+.usage-inbox-src-opus { color: var(--violet-t); }
+.usage-inbox-src-gemini { color: var(--cyan-t); }
+.usage-inbox-src-bug { color: var(--amber-t); }
+.usage-inbox-src-perfection { color: var(--mint-t); }
+.usage-inbox-src-other { color: var(--muted); }
+.usage-inbox-state { color: var(--muted); }
+.usage-inbox-row[data-status="accepted"] .usage-inbox-state { color: var(--mint-t); }
+.usage-inbox-note { word-break: break-word; color: var(--muted); }
+.usage-inbox-text { font-size: 12px; line-height: 1.45; word-break: break-word; }
+.usage-inbox-actions { display: flex; gap: var(--sp-2, 8px); }
+.usage-inbox-btn { background: var(--panel-hi); border: 1px solid var(--line); padding: var(--sp-1, 4px) var(--sp-3, 12px); font: inherit; font-size: 11px; letter-spacing: 0.08em; cursor: pointer; }
+.usage-inbox-btn:disabled { opacity: 0.6; cursor: default; }
+.usage-inbox-accept { color: var(--mint-t); border-color: var(--mint-t); }
+.usage-inbox-reject { color: var(--pink-t); border-color: var(--pink-t); }
 .squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, var(--bg)); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
 .squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
 .squad-home-tile.needs-you { border-color: var(--hot-pink); }
@@ -4719,24 +4710,12 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #070a22, #18225e 62%, #3b3278); }
 :root[data-theme="light"] .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #7fc4f5, #bfe3fb 62%, #eef8ff); }
 .hub-backdrop.is-fallback.has-sky-band { background-size: auto 60%; background-position: left bottom; background-repeat: repeat-x; }
-.hub-tabs { flex: none; display: flex; gap: 4px; padding: 4px 10px; justify-content: flex-end; }
-.hub-tab { font-family: var(--arcade); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 14px; border: 2px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
-.hub-tab.is-on { color: var(--text); border-color: var(--cyan); }
-.hub-tab:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
-.hub-sky-page, .hub-tower-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* HP2: the sky TVs are capped so the faces do not eat the screen; the skyline shows below them. The portrait stays integer-scaled inside. */
+.hub-sky-page { flex: none; display: flex; flex-direction: column; }
 .hub-sky-page .sky-zones { flex: none; height: clamp(260px, 36vh, 440px); }
-.hub-tower-sky { flex: none; display: flex; justify-content: space-between; align-items: flex-end; padding: 2px 18px 6px; }
-.hub-mini-face { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--text); }
-.hub-mini-face:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
-.hub-mini-screen { position: relative; display: block; overflow: hidden; border: 2px solid var(--line); background: var(--sky-face-bg-custom, #2a1b6b); box-sizing: content-box; }
-:root[data-theme="light"] .hub-mini-screen { background: var(--sky-face-bg-custom, #95d3f2); }
-.hub-mini-riffbot .hub-mini-screen { border-color: var(--cyan); }
-.hub-mini-overlord .hub-mini-screen { border-color: var(--violet); }
-.hub-mini-name { font-family: var(--arcade); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 1px 6px; }
-/* The tower gets a fixed-height, non-scrolling box (HP4 shows one floor per screen); the gutters beside it are the backdrop, so the tower strip is transparent here. */
+/* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
 .hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
+.hub-tower-box .sq-floor-stage { align-items: flex-end; }
 .hub-tower-box .sq-floor-tower { background: transparent; border-top: 0; }
 
 /* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
@@ -4917,7 +4896,7 @@ button.project-file-name:hover { text-decoration: underline; }
   border-top: 2px solid var(--cyan);
 }
 .sq-floor-stage { flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-.sq-floor-tower { display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
+.sq-floor-tower { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
 .sq-floor-band-wrap { position: relative; flex: none; }
 /* CRT blink between floors: collapse to a line, then open again. Two ~100ms halves, CSS only; reduced motion swaps instantly (no class is ever set). */
 .sq-floor-band-wrap.is-blink-out { animation: sq-floor-blink-out 100ms steps(4, end) forwards; }
@@ -4925,45 +4904,48 @@ button.project-file-name:hover { text-decoration: underline; }
 @keyframes sq-floor-blink-out { 0% { transform: scaleY(1); filter: brightness(1); } 60% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } }
 @keyframes sq-floor-blink-in { 0% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } 40% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(1); filter: brightness(1); } }
 @media (prefers-reduced-motion: reduce) { .sq-floor-band-wrap.is-blink-out, .sq-floor-band-wrap.is-blink-in { animation: none; } }
-/* The lift bar: < 07 > under the shaft, so paging reads as the elevator. */
-.sq-floor-lift { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 0 6px; }
+/* HP6: the lift is the pager. The painted counter and call plates are slots in floor.json (plate px, inside the scaled band): the number is lettered into the counter, the call buttons sit on the plates beside the doors. */
+.sq-floor-lift { display: contents; }
 .sq-floor-counter {
-  min-width: 3ch;
-  padding: 1px 8px;
-  text-align: center;
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
   font-family: var(--arcade);
-  font-size: 16px;
-  letter-spacing: 0.1em;
+  font-size: 8px;
+  line-height: 1;
+  letter-spacing: 0;
   color: var(--cyan-t);
-  background: var(--bg);
-  border: 1px solid var(--line);
+  pointer-events: none;
 }
 .sq-floor-arrow {
-  position: relative;
-  width: 28px;
-  height: 24px;
+  position: absolute;
+  z-index: 3;
   padding: 0;
-  font-family: var(--arcade);
-  font-size: 18px;
-  line-height: 1;
-  color: var(--text);
-  background: var(--panel-hi);
-  border: 1px solid var(--line);
+  margin: 0;
+  border: 0;
+  background: transparent;
   cursor: pointer;
 }
-.sq-floor-arrow:hover:not(:disabled),
-.sq-floor-arrow:focus-visible { background: var(--text); color: var(--bg); }
-.sq-floor-arrow:disabled { opacity: 0.35; cursor: default; }
-.sq-floor-arrow.has-needs::after {
-  content: "";
-  position: absolute;
-  top: -3px;
-  right: -3px;
-  width: 8px;
-  height: 8px;
-  background: var(--pink-fill);
-  border: 1px solid var(--bg);
-}
+.sq-floor-arrow:hover:not(:disabled) { background: rgba(255, 255, 255, 0.18); }
+.sq-floor-arrow:focus-visible { outline: 1px solid var(--cyan-t); outline-offset: 0; }
+.sq-floor-arrow:disabled { cursor: default; background: rgba(7, 4, 15, 0.5); }
+/* Needs-you up/down there: the plate lights pink and blinks (reduced motion: steady). */
+.sq-floor-arrow.has-needs { background: var(--pink-fill); box-shadow: inset 0 0 0 1px #fff; animation: sq-floor-call-lit 900ms steps(2, end) infinite; }
+@keyframes sq-floor-call-lit { 50% { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .sq-floor-arrow.has-needs { animation: none; } }
+/* HP6: team-name signs. Glyphs are the small chrome font at 1:1 plate px (cell 13, ink 10) inside the 11px plate. */
+.sq-floor-sign { position: absolute; z-index: 3; display: block; overflow: hidden; image-rendering: pixelated; }
+.sq-floor-sign.is-vacant { opacity: 0.55; }
+.sq-floor-sign-text { position: absolute; top: -1px; display: flex; align-items: flex-start; white-space: nowrap; font-size: 0; line-height: 0; }
+.sq-floor-sign-glyph { flex: none; display: block; background: var(--u3-font-chrome-small) 0 0 / 208px 41px no-repeat; image-rendering: pixelated; }
+/* HP6: lift open while someone rides: the doors painted on the plate are closed, so cover them with the car interior and two slid-back door panels. */
+.sq-floor-lift-open { position: absolute; display: block; overflow: hidden; background: #0e0a24; image-rendering: pixelated; }
+.sq-floor-lift-open-car { position: absolute; display: block; background: linear-gradient(#2a1b6b 0 70%, #543f8a 70% 100%); }
+.sq-floor-lift-open-door { position: absolute; top: 0; bottom: 0; width: 3px; background: #4fd6cf; box-shadow: inset 0 0 0 1px #07040f; }
+.sq-floor-lift-open-door.is-left { left: 0; }
+.sq-floor-lift-open-door.is-right { right: 0; }
 .sq-floor-band {
   position: relative;
   overflow: hidden;
@@ -5120,7 +5102,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .sq-floor-rider .sq-floor-sprite-fallback { width: 16px; height: 16px; }
 @keyframes sq-floor-ride {
   from { transform: translate(-50%, -100%); opacity: 1; }
-  to { transform: translate(-50%, -260%); opacity: 0.2; }
+  to { transform: translate(-50%, calc(-100% - 12px)); opacity: 0.2; }
 }
 @media (prefers-reduced-motion: reduce) { .sq-floor-rider { animation: none; } }
 
@@ -5370,7 +5352,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .pin-rail-active-head .pin-menu { display: inline-flex; align-items: center; }
 
 /* ---- U2 item 6: Usage Dashboard (src/UsageDashboard.tsx). Chart fills keep the P0 accents, no glow. ---- */
-.squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+.squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms {
   background-color: var(--panel);
   background-image: var(--cap-imgs);
   background-size: var(--cap-size);
@@ -5392,8 +5374,6 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .usage-estimate { background: var(--pastel-amber); border-color: var(--amber); }
 .usage-flag-storm { background: var(--pastel-amber); color: var(--text); border-color: var(--amber); }
 .usage-bar, .usage-review-select { box-shadow: var(--bevel-in); }
-.usage-limit.usage-warn .usage-limit-pct { color: var(--amber-t); }
-.usage-limit.usage-hot .usage-limit-pct { color: var(--pink-t); }
 
 /* ======================================================================
    U3c: painted airbrush kit (public/ui/u3/README.md) over the U2 skin. Each rule keeps its U2
@@ -5565,7 +5545,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .modal, .idea-inbox, .ts-team, .ws-row, .pin-menu-list, .ctx-menu, .cmd-palette, .shortcut-modal, .daemon-disconnect-card,
 .drawer-features-menu, .drawer-sandbox-panel, .drawer-config-popover, .card, .drawer-head, .sidebar-legend, .pin-rail-tile,
-.brainstorm-ctx-bar, .squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+.brainstorm-ctx-bar, .squads-dashboard, .usage-limit, .usage-roles, .usage-loops, .usage-storms {
   background-color: var(--panel-hi); image-rendering: pixelated;
 }
 .handoff-panel, .pin-tile, .pin-rail-active-buddy {
@@ -5583,7 +5563,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .ts-team, .ws-row, .handoff-panel, .pin-menu-list, .ctx-menu, .drawer-features-menu, .drawer-sandbox-panel,
 .drawer-config-popover, .pin-rail-active-buddy, .pin-rail-tile, .team-head, .card, .squads-dashboard,
-.usage-limit, .usage-roles, .usage-loops, .usage-storms, .usage-review, .usage-review-card {
+.usage-limit, .usage-roles, .usage-loops, .usage-storms {
   border-image: var(--u3-panel-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
 }
 .card.card-lead, .card.card-secondary-lead.card-lead-needs-you { border-image-source: var(--u3-panel-frame-pink); }
@@ -5911,10 +5891,10 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* plain confirm (Archive) and warn (Cancel & Resume) buttons */
 :root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
 :root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
-/* ⇄ Handoff (Aub's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
+/* ⇄ Handoff (owner's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
 :root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
-:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image: none !important; color: var(--text) !important; text-shadow: none; }
+:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
 
 /* usa-11: efficiency trend, clean-run floor, savings, workflow era */
 .usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }

@@ -23,6 +23,7 @@ import {
   getTls,
   mintLocalLoginNonce,
   handleCaCrt,
+  handleEnter,
   handlePairRedeem,
   isAllowedHostHeader,
   lockDownVibesquadHome,
@@ -398,6 +399,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if (path === "/pair" && req.method === "GET") {
       return handlePairRedeem(req, res);
     }
+    if (path === "/__vibesquad/enter") return handleEnter(req, res);
     const dev = authenticate(req);
     if (!dev) return sendUnpaired(req, res);
     return handle(req, res);

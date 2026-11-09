@@ -38,6 +38,8 @@ export type TeamSlices = {
   lobby?: Rect;
   /** F4b: the wall stats TV's screen glass (about 40x28 floor px); optional. When valid, overflow workers show as blips on it instead of in the lobby. */
   statsTv?: Rect;
+  /** HP6: the painted (blank) team-name plate on the wall; the UI letters the team name onto it. Optional (skip-if-absent). */
+  sign?: Rect;
 };
 
 export type PenthouseModel = {
@@ -65,9 +67,11 @@ export type ScreensModel = {
 };
 
 export type FloorModel = {
+  /** Plate size from floor.json `w`/`h` (HP5: the ground strip is cropped, so the height is no longer 360); absent = the native 640x360. */
+  size?: { w: number; h: number };
   teamA: TeamSlices;
   teamB: TeamSlices;
-  elevator: { doorA: Rect; doorB: Rect; car: Rect };
+  elevator: { doorA: Rect; doorB: Rect; car: Rect; /** HP6: the lift readout slot, and the ‹ › call-button plates beside the doors; each optional. */ counter?: Rect; callPrev?: Rect; callNext?: Rect };
   /** Old top band (S1). Used only when `screens` is absent; the placeholder supplies one when neither exists. */
   penthouse?: PenthouseModel;
   /** Art10 CRT screens; wins over `penthouse`. */
@@ -107,7 +111,19 @@ function teamSlicesOf(v: unknown): TeamSlices | null {
   // A statsTv with a non-positive size can't hold a blip: drop it so the team falls back to the lobby.
   const tv = v.statsTv === undefined ? null : rectOf(v.statsTv);
   const statsTv = tv && tv.w > 0 && tv.h > 0 ? tv : undefined;
-  return { lead, buddyOffice, desks, ...(lobby ? { lobby } : {}), ...(statsTv ? { statsTv } : {}) };
+  const sg = v.sign === undefined ? null : rectOf(v.sign);
+  const sign = sg && sg.w > 0 && sg.h > 0 ? sg : undefined;
+  return { lead, buddyOffice, desks, ...(lobby ? { lobby } : {}), ...(statsTv ? { statsTv } : {}), ...(sign ? { sign } : {}) };
+}
+
+/** HP6 additive elevator slots: each kept only when it is a rect with a positive size. */
+function slotRects(e: Record<string, unknown>): { counter?: Rect; callPrev?: Rect; callNext?: Rect } {
+  const out: { counter?: Rect; callPrev?: Rect; callNext?: Rect } = {};
+  for (const k of ["counter", "callPrev", "callNext"] as const) {
+    const r = e[k] === undefined ? null : rectOf(e[k]);
+    if (r && r.w > 0 && r.h > 0) out[k] = r;
+  }
+  return out;
 }
 
 function penthouseOf(v: unknown): PenthouseModel | undefined {
@@ -146,12 +162,13 @@ export function validateFloor(json: unknown): Validation<FloorModel> {
   if (!teamB) return fail("floor.json teamB is missing lead, buddyOffice or desks");
   const elevator =
     isObject(json.elevator) && rectOf(json.elevator.doorA) && rectOf(json.elevator.doorB) && rectOf(json.elevator.car)
-      ? { doorA: rectOf(json.elevator.doorA)!, doorB: rectOf(json.elevator.doorB)!, car: rectOf(json.elevator.car)! }
+      ? { doorA: rectOf(json.elevator.doorA)!, doorB: rectOf(json.elevator.doorB)!, car: rectOf(json.elevator.car)!, ...slotRects(json.elevator) }
       : null;
   if (!elevator) return fail("floor.json elevator is missing doorA, doorB or car");
   const penthouse = penthouseOf(json.penthouse);
   const screens = screensOf(json.screens);
-  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(screens ? { screens } : {}), ...(json.front === true ? { front: true } : {}) } };
+  const size = isNum(json.w) && isNum(json.h) && json.w > 0 && json.h > 0 ? { w: json.w, h: json.h } : null;
+  return { ok: true, value: { ...(size ? { size } : {}), teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(screens ? { screens } : {}), ...(json.front === true ? { front: true } : {}) } };
 }
 
 /** Validate cast.json. Unknown roles/poses/fields are kept; `fallback` may be `{}`; nothing about the sheet is hardcoded. */
@@ -244,6 +261,11 @@ export function validateCast(json: unknown): Validation<CastModel> {
 /** Native floor size per the contract (one plate, two teams). */
 export const FLOOR_NATIVE_WIDTH = 640;
 export const FLOOR_NATIVE_HEIGHT = 360;
+
+/** The plate's native size: floor.json `w`/`h` when given, else the 640x360 contract. */
+export function floorNativeSize(floor: Pick<FloorModel, "size">): { w: number; h: number } {
+  return floor.size ?? { w: FLOOR_NATIVE_WIDTH, h: FLOOR_NATIVE_HEIGHT };
+}
 
 /** Built-in placeholder floor.json shape (640x360 floor + 640x200 penthouse + lobby slices). */
 export function placeholderFloor(): FloorModel {
@@ -728,6 +750,38 @@ export function floorCounterText(index: number): string {
   return String(Math.max(Math.trunc(index) + 1, 1)).padStart(2, "0");
 }
 
+// ── HP6: team-name signs (chrome small font, plate px) ───────────────────────
+
+/** Small chrome font cells are 13 tall with a 10px ink; advances are in sheet px, drawn 1:1 in plate px. */
+export type SignText = { text: string; track: 0 | -1; ellipsis: boolean };
+const SIGN_INSET = 4; // 2px of plate border either side
+const SIGN_ELLIPSIS = "...";
+
+/** Width of `text` in plate px at a tracking (advance + track per glyph, floor 1), plus 2px of trailing outline. */
+export function signTextWidth(text: string, adv: (ch: string) => number, track: 0 | -1): number {
+  let w = 2;
+  for (const ch of text) w += Math.max(adv(ch) + track, 1);
+  return w;
+}
+
+/**
+ * Fit a team name onto a sign `maxW` plate px wide: natural tracking first, then one step tighter, then cut
+ * letters and add "..." (the full name stays in the tooltip). Empty names give an empty text.
+ */
+export function fitSignText(name: string, maxW: number, adv: (ch: string) => number): SignText {
+  const text = name.trim().replace(/\s+/g, " ").toUpperCase();
+  const room = maxW - SIGN_INSET;
+  if (!text) return { text: "", track: 0, ellipsis: false };
+  for (const track of [0, -1] as const) if (signTextWidth(text, adv, track) <= room) return { text, track, ellipsis: false };
+  const chars = [...text];
+  while (chars.length > 1) {
+    chars.pop();
+    const cut = chars.join("").trimEnd() + SIGN_ELLIPSIS;
+    if (signTextWidth(cut, adv, -1) <= room) return { text: cut, track: -1, ellipsis: true };
+  }
+  return { text: SIGN_ELLIPSIS, track: -1, ellipsis: true };
+}
+
 /** A dot on the prev arrow when needs-you sits on an earlier floor, on the next arrow when it sits on a later one. */
 export function needsYouArrows(floors: readonly Floor[], current: number): { prev: boolean; next: boolean } {
   const idx = needsYouFloors(floors);
@@ -751,16 +805,22 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
 }
 
 /**
- * Scale for a single floor in a fixed box: whole device-pixel multiple fitting both width and height.
- * Never overflows when the box fits 1x; a box shorter than one native floor still draws 1x (clipped, no scrollbar). 0 when too narrow.
+ * Scale for a single floor in a fixed box: a whole device-pixel multiple fitting both width and height, so the pixel art stays crisp.
+ * It never returns 0 for a measured box (a narrow hub pane or a UI-scale zoom used to blank the tower: at dpr 1.2 a stage under 768 css px
+ * has no whole CSS-px scale): below one device pixel per native pixel it falls back to a fractional fit of the width (and height).
+ * A box shorter than one native floor still draws at the width fit, clipped, no scrollbar. 0 only when there is no width yet.
  */
-export function floorFitScale(boxW: number, boxH: number, dpr = 1): number {
-  const byWidth = integerScale(boxW, dpr);
-  if (byWidth <= 0) return 0;
+export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLOOR_NATIVE_WIDTH, nativeH = FLOOR_NATIVE_HEIGHT): number {
+  if (!Number.isFinite(boxW) || boxW <= 0) return 0;
   const ratio = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
-  if (!Number.isFinite(boxH) || boxH <= 0) return byWidth;
-  const byHeight = Math.floor((boxH * ratio) / FLOOR_NATIVE_HEIGHT) / ratio;
-  return byHeight >= 1 ? Math.min(byWidth, byHeight) : 1;
+  const hasH = Number.isFinite(boxH) && boxH > 0;
+  const crisp = Math.floor((boxW * ratio) / nativeW) / ratio; // whole device-pixel multiple of the width
+  if (crisp >= 1 / ratio) {
+    if (!hasH) return crisp;
+    const byHeight = Math.floor((boxH * ratio) / nativeH) / ratio;
+    return byHeight >= 1 / ratio ? Math.min(crisp, byHeight) : Math.min(crisp, Math.max(byHeight, 1 / ratio));
+  }
+  return boxW / nativeW; // narrower than 1 device px per native px: fit the width fractionally rather than vanish
 }
 
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────

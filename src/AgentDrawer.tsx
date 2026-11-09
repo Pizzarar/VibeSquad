@@ -138,6 +138,15 @@ export async function triggerBrainstormRestart(opts: {
 /** `chatOnly` (sky-gods zones): messages + composer only. The right dock (Changes/Files/Terminal) is never rendered, never read from or written to the shared `vs.right-dock.open` key, and `vs:open-right-dock` is ignored. */
 type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean };
 
+async function flushQueued(agentId: string, text: string, images: Array<{ blob: Blob }>) {
+  if (images.length) {
+    await sendMessage(agentId, text, await blobsToPaseoImages(images), { activeTurnBehavior: "steer" });
+    rememberSent(agentId, text, images);
+  } else {
+    await sendMessage(agentId, text, undefined, { activeTurnBehavior: "steer" });
+  }
+}
+
 export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false }: DrawerProps) {
   useTeams();
   const labels = (agent.labels ?? {}) as Record<string, string>;
@@ -240,12 +249,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   useEffect(() => {
     if (agent.status !== "running" && agent.status !== "closed" && queuedItems.length > 0) {
       const combinedText = queuedItems.map((q) => q.text).join("\n\n");
+      const queuedBlobs = queuedItems.flatMap((q) => q.images ?? []);
       setQueuedByAgent((prev) => {
         const next = { ...prev };
         delete next[agent.id];
         return next;
       });
-      void sendMessage(agent.id, combinedText, undefined, { activeTurnBehavior: "steer" });
+      void flushQueued(agent.id, combinedText, queuedBlobs);
     }
   }, [agent.id, agent.status, queuedItems.length]);
 
@@ -341,23 +351,35 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     setSendError(null);
     lastBehavior.current = behavior;
 
-    if (
-      behavior === "steer" &&
-      shouldQueueOnSend(agent.status, forceImmediate) &&
-      !stagedSwitch &&
-      !imgs.images.length &&
-      !atts.items.length &&
-      !ctxSrc.items.length &&
-      overrideText === undefined
-    ) {
-      setQueuedByAgent((prev) => ({
-        ...prev,
-        [agent.id]: [
-          ...(prev[agent.id] ?? []),
-          { id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: formattedBase, createdAt: Date.now() },
-        ],
-      }));
-      clearDraft();
+    if (behavior === "steer" && shouldQueueOnSend(agent.status, forceImmediate) && !stagedSwitch && overrideText === undefined) {
+      // Attachments queue like text: snapshot the composed text + image blobs now, the idle flush sends both.
+      try {
+        const composed = await composeMessage(formattedBase, sentFiles);
+        const expanded = await expandFolderMentions(composed, agent.provider, async (dir) => {
+          const res = await vsListDirectory(agent.cwd ?? "", dir);
+          return res.entries.map((e) => ({ path: e.path, kind: e.kind }));
+        });
+        const queuedText = appendContext(expanded, sentCtx);
+        const queuedImages = imgs.images.map((im) => ({ name: im.name, mimeType: im.mimeType, blob: im.blob }));
+        setQueuedByAgent((prev) => ({
+          ...prev,
+          [agent.id]: [
+            ...(prev[agent.id] ?? []),
+            {
+              id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              text: queuedText,
+              createdAt: Date.now(),
+              ...(queuedImages.length ? { images: queuedImages } : {}),
+            },
+          ],
+        }));
+        clearDraft();
+        imgs.clear();
+        atts.clear();
+        ctxSrc.clear();
+      } catch (e) {
+        setSendError(`Queue failed: ${e instanceof Error ? e.message : String(e)}`);
+      }
       return;
     }
 
@@ -456,12 +478,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
     const items = queuedByAgent[agent.id] ?? [];
     if (!items.length) return;
     const combinedText = items.map((q) => q.text).join("\n\n");
+    const queuedBlobs = items.flatMap((q) => q.images ?? []);
     setQueuedByAgent((prev) => {
       const next = { ...prev };
       delete next[agent.id];
       return next;
     });
-    await sendMessage(agent.id, combinedText, undefined, { activeTurnBehavior: "steer" });
+    await flushQueued(agent.id, combinedText, queuedBlobs);
     setLastSteered(combinedText);
   };
 
@@ -474,6 +497,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
       return { ...prev, [agent.id]: rest };
     });
     if (removed && !draft.trim()) setDraft(removed.text);
+    if (removed?.images?.length) imgs.add(removed.images.map((im) => new File([im.blob], im.name, { type: im.mimeType })));
   };
 
   const onFeedback = async (verdict: "good" | "lost") => {

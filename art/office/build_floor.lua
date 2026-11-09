@@ -1,4 +1,4 @@
--- H1d floor plate (docs/art/STYLE_BIBLE.md, owner ruling 3a): art/office/floor.aseprite, 640x360 INDEXED (P0),
+-- H1d floor plate (docs/art/STYLE_BIBLE.md, owner ruling 3a): art/office/floor.aseprite, 640x332 INDEXED (P0),
 -- hand-placed shapes only. Same hand as the H0 cast + the H1a gallery floor crop: chunky FRONT-VIEW furniture,
 -- every object its own 1px INK outline (obj() below outlines each piece on its own, so overlaps stay
 -- separated), flat fills, MARBLE shine pixels, Bayer dither only in the sunset through the windows.
@@ -6,7 +6,8 @@
 -- corner, a row of 5 cubicles along the back wall, a bench of two staggered rows (3 + 3) with the lead's desk
 -- at its head, the stats TV (wall CRT) by the lift, a break nook, the lobby mat. Every seat faces the back
 -- wall (sprites sit with their backs to the camera); monitors sit right of the head like the H0 sprites.
--- Back wall 0..95 (top rail 0..3, skirting 89..95), floor 96..331, slab + floor below from 332.
+-- Back wall 0..95 (top rail 0..3, skirting 89..95), floor 96..330, INK floor edge 331 = the plate's bottom edge
+-- (HP5: no slab / floor-below strip, the hub floor sits flush on the page bottom). Lift car mid-shaft (HP5).
 -- Layers (bottom->top): bg (sky through the windows), building, furniture, signs, light, front.
 -- "front" = the overlay that covers sprites (Buddy office glass front, lead desk modesty panel, lift car
 -- front + door jambs); also part of the plate, export_floor.lua writes it alone as floor-front-*.png.
@@ -18,13 +19,12 @@
 local root = app.params.root
 local L = dofile(root.."/art/cast/hypno/lib.lua")
 local pal = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" }
-local W, H = 640, 360
+local W, H = 640, 332
 local K = { k=15, v=8, p=9, c=10, a=11, s=14, m=4, t=7, g=12, y=13, l=3, h=2, n=1 }
 local INK, V, P, CO, A_, S_, M, T, G, Y = L.INK, L.VIOLET, L.PINK, L.CORAL, L.AMBER, L.SKIN, L.MARBLE, L.TEAL, L.MINT, L.SKY
 local PANEL, PHI, LINE = L.PANEL, L.PHI, L.LINE
 
-local FLOOR0, FLOOR1 = 96, 331
-local SLAB = 332
+local FLOOR0, FLOOR1 = 96, 330
 local WIN0, WIN1 = 24, 62       -- window glass rows (bullpen run); sill under it
 
 local spr = L.new(W, H, pal)
@@ -89,8 +89,19 @@ local A = {
 for i=0,4 do A.cubes[#A.cubes+1] = {CUBE0 + i*CUBEP + 5, 112, 32, 32} end
 A.desks = {}
 for _, k in ipairs({"bench1", "bench2", "cubes"}) do for _, d in ipairs(A[k]) do A.desks[#A.desks+1] = d end end
-local EL = { doorA = {290, 256, 11, 48}, car = {304, 270, 32, 32} }
+-- HP6 addendum (no open shaft): the lift is a solid lobby wall with one closed door pair at floor level;
+-- LIFT_Y = top of the door frame. doorA/doorB = the two closed leaves over the car opening, car = the rider cell
+-- behind them (the UI shows it when it opens the doors).
+local LIFT_Y = 250
+local EL = { doorA = {304, LIFT_Y+6, 16, 48}, car = {304, LIFT_Y+22, 32, 32} }
 EL.doorB = mirR(EL.doorA)
+-- HP6 (docs/PLAN_FLOOR_LABELS.md): UI-written slots. counter = the INK digit face of the lift indicator,
+-- callPrev/callNext = the wall call-button plates beside the door frame (clear of doors + car),
+-- sign = the blank lettering field of each team's amber sign plate (UI draws the team name in the chrome font).
+EL.counter = {306, LIFT_Y-12, 28, 8}
+EL.callPrev = {290, LIFT_Y+18, 10, 14}
+EL.callNext = mirR(EL.callPrev)
+A.sign = {116, 8, 74, 11}
 
 -- ======================= bg: sunset through the windows (the only dither on the plate) =======================
 do
@@ -191,32 +202,31 @@ do
   c.rect(px0, 97, px1-px0+1, 2, M)
   c.rect(px0, 99, px1-px0+1, 10, S_)
   for x=px0+5, px1-3, 9 do c.px(x, 103 + (x//9) % 3, CO) end
-  -- slab cut-away + the floor below's ceiling (dollhouse tower read)
-  c.hline(0, SLAB, 288, INK); c.rect(0, SLAB+1, 288, 3, V); c.hline(0, SLAB+1, 288, M); c.hline(0, SLAB+4, 288, INK)
-  c.rect(0, SLAB+5, 288, 6, LINE); c.hline(0, SLAB+11, 288, INK)
-  c.rect(0, SLAB+12, 288, H-SLAB-12, PANEL)
-  for _, lx in ipairs({24, 104, 184, 248}) do
-    c.rect(lx, SLAB+14, 24, 6, INK); c.rect(lx+1, SLAB+15, 22, 4, M); c.hline(lx+1, SLAB+18, 22, LINE); c.px(lx+2, SLAB+15, M)
-  end
+  -- floor front edge: one INK row, the plate's bottom (HP5: no slab / floor-below strip)
+  c.hline(0, H-1, 288, INK)
   -- outer building wall
-  c.rect(0, 0, 4, H, INK); c.vline(1, 4, SLAB-4, M); c.vline(2, 4, SLAB-4, LINE)
+  c.rect(0, 0, 4, H, INK); c.vline(1, 4, H-6, M); c.vline(2, 4, H-6, LINE)
   mirror(c)
 
-  -- lift core x 288..351: marble column, glass shaft, chunky outlines
+  -- lift core x 288..351 (HP6: solid lift-lobby wall, no shaft): MARBLE pilasters, a PANEL_HI wall panel with the
+  -- back wall's plus-stars, a lobby floor strip in front of the doors, chunky INK outlines
   c.rect(288, 0, 64, H, M)
   c.vline(288, 0, H, INK); c.vline(351, 0, H, INK)
   c.vline(350, 1, H-1, LINE); c.vline(349, 1, H-1, LINE)
   c.hline(288, 0, 64, INK); c.rect(289, 1, 62, 2, V); c.hline(288, 3, 64, INK)
-  for _, v in ipairs({{293,44},{344,96},{294,166},{343,214}}) do
-    c.px(v[1], v[2], LINE); c.px(v[1]+1, v[2]+1, LINE); c.px(v[1]+1, v[2]+2, LINE); c.px(v[1]+2, v[2]+4, LINE)
-  end
-  c.rect(298, 18, 44, 214, INK)
-  for y=19,230 do for x=299,340 do c.px(x, y, L.dith(x, y, Y, V, math.max(0, math.min(0.999, (y-130)/100)))) end end
-  c.rect(313, 19, 2, 212, INK); c.rect(325, 19, 2, 212, INK)
-  c.rect(330, 106, 8, 20, INK); c.rect(331, 107, 6, 18, LINE); c.hline(331, 107, 6, M)   -- the counterweight
-  c.vline(333, 19, 87, INK)
-  c.hline(288, SLAB, 64, INK); c.rect(289, SLAB+1, 62, 3, V); c.hline(289, SLAB+1, 62, M); c.hline(288, SLAB+4, 64, INK)
-  c.rect(289, SLAB+5, 62, 6, LINE); c.hline(288, SLAB+11, 64, INK)
+  local LOB = LIFT_Y + 58          -- lobby floor strip top (under the threshold)
+  c.rect(294, 19, 52, LOB-19, INK); c.rect(295, 20, 50, LOB-21, PHI)
+  for y=28, LOB-12, 12 do for x=((y//12)%2)*8+300, 340, 16 do
+    c.px(x, y, LINE); c.px(x-1, y, LINE); c.px(x+1, y, LINE); c.px(x, y-1, LINE); c.px(x, y+1, LINE)
+  end end
+  -- mid rail (lines up with the room's skirting) and a chunky skirting at the door level
+  c.hline(295, 89, 50, INK); c.rect(295, 90, 50, 4, V); c.hline(295, 90, 50, M); c.hline(295, 94, 50, INK)
+  c.hline(295, LOB-5, 50, INK); c.rect(295, LOB-4, 50, 3, V); c.hline(295, LOB-4, 50, M)
+  for _, v in ipairs({{290,44},{345,140},{290,196}}) do c.px(v[1], v[2], LINE); c.px(v[1]+1, v[2]+1, LINE); c.px(v[1], v[2]+3, LINE) end
+  -- lobby floor strip: big LINE / PANEL_HI tiles up to the plate's bottom edge
+  c.hline(289, LOB, 62, INK)
+  for y=LOB+1, H-2 do for x=289, 350 do c.px(x, y, ((x//8 + (y-LOB-1)//6) % 2 == 0) and LINE or PHI) end end
+  c.hline(288, H-1, 64, INK)
   c.commit()
 end
 
@@ -404,25 +414,30 @@ do
     for _, d in ipairs(A.cubes) do r = m(d); cubeDesk(c, r[1], r[2]) end
   end
 
-  -- lift car (front view): back wall with handrail + ceiling light, checker floor; doors + call lights
-  local cx, cy = 302, 250
-  c.rect(cx, cy, 36, 56, INK)
-  c.rect(cx+1, cy+1, 34, 30, PHI)
-  c.rect(cx+1, cy+1, 34, 3, LINE); c.rect(cx+10, cy+2, 16, 2, A_)
-  c.hline(cx+1, cy+20, 34, INK); c.hline(cx+1, cy+21, 34, M); c.hline(cx+1, cy+22, 34, INK)
-  for _, sx in ipairs({cx+9, cx+18, cx+27}) do c.vline(sx, cy+5, 14, LINE) end
-  c.rect(cx+28, cy+6, 5, 11, INK); for by=cy+7, cy+15, 3 do c.px(cx+30, by, A_) end
-  c.hline(cx+1, cy+31, 34, INK)
-  for y=cy+32, cy+54 do for x=cx+1, cx+34 do c.px(x, y, ((x//6 + (y-cy)//4) % 2 == 0) and LINE or PHI) end end
+  -- lift (HP6): a closed door pair in a MARBLE frame at floor level, the < > call plates beside the frame
+  local fx, fy = 301, LIFT_Y
+  c.rect(fx, fy, 38, 58, INK); c.rect(fx+1, fy+1, 36, 56, M); c.hline(fx+1, fy+1, 36, PHI)
+  c.vline(fx+36, fy+2, 54, LINE)
   for _, d in ipairs({EL.doorA, EL.doorB}) do
     local x, y, w, h = d[1], d[2], d[3], d[4]
     c.rect(x, y, w, h, INK)
-    c.rect(x+1, y+1, w-2, h-1, T)
-    c.vline(x+1, y+1, h-1, M)
-    c.vline(x + w//2, y+1, h-1, INK)
-    c.rect(x+2, y+8, 2, 12, Y); c.rect(x+w-4, y+8, 2, 12, Y)
-    c.rect(x, y-11, w, 9, INK)
-    c.rect(x + w//2 - 1, y-9, 3, 2, A_); c.rect(x + w//2 - 1, y-6, 3, 2, P)
+    c.rect(x+1, y+1, w-2, h-2, T)
+    c.vline(x+1, y+1, h-2, M)
+    c.rect(x+4, y+6, 2, 16, Y); c.rect(x+w-6, y+6, 2, 16, Y)
+    c.hline(x+1, y+h-6, w-2, INK); c.rect(x+1, y+h-5, w-2, 3, LINE)
+  end
+  c.rect(318, LIFT_Y+28, 4, 2, INK)   -- the leaves' meeting pulls
+  -- HP6 call buttons (< prev, > next): INK-outlined VIOLET wall plate, a raised MARBLE push button with a
+  -- LINE shadow and a chunky INK chevron. Idle look only; the UI lights them.
+  for _, b in ipairs({{EL.callPrev, -1}, {EL.callNext, 1}}) do
+    local x, y, w, h = b[1][1], b[1][2], b[1][3], b[1][4]
+    c.rect(x, y, w, h, INK); c.rect(x+1, y+1, w-2, h-2, V); c.px(x+1, y+1, M)
+    c.rect(x+2, y+2, w-4, h-4, INK); c.rect(x+3, y+3, w-6, h-6, M)
+    c.hline(x+3, y+h-4, w-6, LINE); c.vline(x+w-4, y+3, h-6, LINE)
+    for i=0,4 do
+      local dx = (b[2] < 0) and math.abs(i-2) or (2 - math.abs(i-2))
+      c.rect(x + 3 + dx, y+4+i, 2, 1, INK)
+    end
   end
   c.commit()
 end
@@ -448,8 +463,7 @@ do
     local w = #label*8 - 2 + 12
     local x = cx - w//2
     obj(c, function(t) t.poly({x, 6, x+w-1, 5, x+w, 19, x+1, 20}, A_) end, function(t)
-      t.hline(x+2, 7, w-4, M)
-      textBig(t, x+6, 9, label, INK, CO)
+      t.hline(x+2, 7, w-4, M)   -- HP6: no baked lettering; the UI writes the team name into teamX.sign
     end)
     L.twinkle(c, x - 5, 9, M, M, 2)
   end
@@ -517,9 +531,10 @@ do
     c.rect(x0 + d*10, 83, 2, 2, A_); c.rect(x0 + d*22, 86, 2, 2, A_)
   end
   -- lift: floor indicator + LIFT plate
-  c.rect(305, 236, 30, 11, INK); c.rect(306, 237, 28, 9, Y)
-  L.text(c, 317, 239, "07", A_)
-  c.stamp(309, 239, "|.g.|\n|ggg|", K)
+  local iy = LIFT_Y - 14   -- counter housing sits on the door frame head
+  -- HP6: blank digit face (INK in both modes) inside a LINE bevel; the UI writes the floor number here
+  c.rect(304, iy, 32, 12, INK); c.rect(305, iy+1, 30, 10, LINE); c.px(305, iy+1, M)
+  local f = EL.counter; c.rect(f[1], f[2], f[3], f[4], INK)
   obj(c, function(t) t.rect(303, 7, 34, 9, V) end, function(t) L.text(t, 312, 9, "LIFT", M) end)
   c.commit()
 end
@@ -546,19 +561,11 @@ do
   c.rect(x+9, y+27, 14, 8, INK); c.rect(x+10, y+28, 12, 6, A_)
   c.stamp(x+12, y+29, "|a.a.a.a|\n|aaaaaaa|\n|ppppppp|", { a=INK, p=P })
   mirror(c)
-  -- lift car front: header, jambs, threshold (hides the rider's shoes)
-  local cx, cy = 302, 250
-  c.rect(cx-2, cy-3, 40, 4, INK); c.rect(cx-1, cy-2, 38, 2, M)
-  for _, jx in ipairs({cx-2, cx+34}) do
-    c.rect(jx, cy, 4, 57, INK); c.rect(jx+1, cy, 2, 56, M); c.vline(jx+2, cy, 56, LINE)
-  end
-  c.rect(cx-2, cy+49, 40, 8, INK); c.rect(cx+2, cy+50, 32, 2, M); c.rect(cx+2, cy+52, 32, 3, LINE)
-  c.hline(cx+4, cy+53, 28, A_)
-  for _, d in ipairs({EL.doorA, EL.doorB}) do
-    local dx, dy, w, h = d[1], d[2], d[3], d[4]
-    c.vline(dx-1, dy-1, h+1, INK); c.vline(dx+w, dy-1, h+1, INK)
-    c.hline(dx-1, dy-1, w+2, INK); c.hline(dx, dy+h-1, w, M)
-  end
+  -- lift door frame front (HP6): jambs + threshold over the rider cell edges (hides the rider's shoes)
+  local fx, fy = 301, LIFT_Y
+  for _, jx in ipairs({fx, fx+35}) do c.rect(jx, fy+4, 3, 54, INK); c.vline(jx+1, fy+5, 52, M) end
+  c.rect(fx, fy+52, 38, 6, INK); c.rect(fx+1, fy+53, 36, 2, M); c.rect(fx+1, fy+55, 36, 2, LINE)
+  c.hline(fx+4, fy+55, 30, A_)
   c.commit()
 end
 
@@ -570,9 +577,6 @@ do
   L.twinkle(c, 250, 160, M, M, 1)
   L.twinkle(c, 30, 220, T, M, 1)
   mirror(c)
-  for _, g in ipairs({{302,90,10},{304,180,8}}) do
-    for i=0,g[3]-1 do c.px(g[1]+i, g[2]-i, M) end
-  end
   L.twinkle(c, 295, 120, T, M, 2)
   L.twinkle(c, 345, 66, P, M, 1)
   c.commit()
@@ -588,9 +592,10 @@ for _, side in ipairs({"A", "B"}) do
   local p = "team"..side.."."
   slice(p.."lead", m(A.lead)); slice(p.."buddyOffice", m(A.buddyOffice))
   for i, d in ipairs(A.desks) do slice(p.."desk"..(i-1), m(d)) end
-  slice(p.."lobby", m(A.lobby)); slice(p.."statsTv", m(A.statsTv))
+  slice(p.."lobby", m(A.lobby)); slice(p.."statsTv", m(A.statsTv)); slice(p.."sign", m(A.sign))
 end
 slice("elevator.doorA", EL.doorA); slice("elevator.doorB", EL.doorB); slice("elevator.car", EL.car)
+slice("elevator.counter", EL.counter); slice("elevator.callPrev", EL.callPrev); slice("elevator.callNext", EL.callNext)
 
 tmpSpr:close()
 spr:saveAs(root.."/art/office/floor.aseprite")

@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { NO_OVERLORD_TEXT, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
+import { NO_OVERLORD_TEXT, fetchHubCwd, hubSpinUpError, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const member = (id, kind, { status = "idle", attention = null, laneId = "sq1" } = {}) => ({
@@ -329,7 +329,7 @@ test("O3-fix: double click spawns once; a live Overlord is returned as is", asyn
 test("O3-fix: cwd comes only from the hub lane; never a feature-lane member", async () => {
   const feature = { ...withCwd(member("f", "worker", { laneId: "feat" }), "C:/feature-wt") };
   const deps = { spawn: async () => ({ id: "x" }), profile, profileName: "Lead - Claude" };
-  await assert.rejects(() => spinUpOverlord(view([member("buddy", "brainstorm"), feature]), deps), /start RiffBot first/);
+  await assert.rejects(() => spinUpOverlord(view([member("buddy", "brainstorm"), feature]), deps), /No working directory known/);
   let req;
   const hubWorker = withCwd(member("hw", "worker"), "C:/hub-wt");
   await spinUpOverlord(view([member("buddy", "brainstorm"), feature, hubWorker]), { ...deps, spawn: async (r) => ((req = r), { id: "x" }) });
@@ -354,4 +354,82 @@ test("O3-fix2: a rejected spawn leaves the closed Overlord alone (no retire)", a
   assert.equal(overlordStarting("sq1"), false);
   assert.equal(skyZonesFor(v).overlord.dormant, true);
   assert.equal(overlordProfileName(v), "Lead - Gemini");
+});
+
+test("hotfix2: Overlord clicks follow the zone's agentId (real-shaped zones): off = nothing opens, closed = read-only chat + Resume, live = chat", async () => {
+  const { skyCanOpen, skyFaceClick, skyEffectiveOpen, slamPrevOpenOnMount, slamView, slamStart } = await import("../src/skyZonesLogic.ts");
+  const click = (zones, tv) => skyEffectiveOpen(skyFaceClick(null, tv, skyCanOpen(zones)), skyCanOpen(zones));
+  // No Overlord agent running (and no history): static + Spin Up, so the Overlord TV / mini face open nothing; Riff still opens.
+  const off = skyZonesFor(view([member("buddy", "brainstorm")]));
+  assert.equal(off.overlord.agentId, null);
+  assert.equal(click(off, "overlord"), null);
+  assert.equal(click(off, "riffbot"), "riffbot");
+  // Closed Overlord (member null, agentId set): used to be unclickable because can.overlord read `member`. Now opens its history.
+  const closed = { ...member("old", "lead"), agent: { ...member("old", "lead").agent, status: "closed", labels: { lane: "sq1" } } };
+  const dormant = skyZonesFor(view([member("buddy", "brainstorm"), closed]));
+  assert.equal(dormant.overlord.member, null);
+  assert.equal(dormant.overlord.agentId, "old");
+  assert.equal(click(dormant, "overlord"), "overlord");
+  assert.equal(skyFaceClick(null, "overlord", { riffbot: true, overlord: !!dormant.overlord.member }), null); // the old `can.overlord = !!member` wiring: dead click
+  // A running Overlord opens as before.
+  const live = skyZonesFor(view([member("buddy", "brainstorm"), member("boss", "lead")]));
+  assert.equal(click(live, "overlord"), "overlord");
+  assert.match(src("SkyZones.tsx"), /const can: SkyCan = skyCanOpen\(zones\)/);
+  // Riff open triggers the slam, including a chat that mounts already open (Tower mini-face jump, SkyZones initialOpen).
+  assert.equal(slamPrevOpenOnMount(true, false), true); // plain mount: no slam
+  assert.equal(slamPrevOpenOnMount(true, true), false); // jump mount: flips false -> true, so the slam starts
+  const v = slamView(slamStart(true, false), false);
+  assert.equal(v.zoomStep, 1);
+  assert.equal(v.windowShown, false);
+  assert.equal(v.face, "smacked");
+});
+
+test("hub spin-up H2: with no hub member cwd the Overlord starts in the Squad/lane working dir (resolveCwd); a member cwd still wins", async () => {
+  let asked = null;
+  let req;
+  const id = await spinUpOverlord(view([]), {
+    spawn: async (r) => ((req = r), { id: "boss" }),
+    profile,
+    profileName: "Lead - Claude",
+    resolveCwd: async (hub) => ((asked = hub.lane.id), "C:/efi"),
+  });
+  assert.equal(id, "boss");
+  assert.equal(asked, "sq1");
+  assert.equal(req.cwd, "C:/efi");
+  // A hub Buddy with a cwd never reaches the resolver.
+  let calls = 0;
+  await spinUpOverlord(view([withCwd(member("buddy", "brainstorm"), "C:/hub")]), {
+    spawn: async (r) => ((req = r), { id: "boss2" }),
+    profile,
+    profileName: "Lead - Claude",
+    resolveCwd: async () => (calls++, "C:/efi"),
+  });
+  assert.equal(req.cwd, "C:/hub");
+  assert.equal(calls, 0);
+  // Resolver finds nothing (or throws): still a clear refusal, no spawn.
+  for (const resolveCwd of [async () => null, async () => Promise.reject(new Error("offline"))]) {
+    await assert.rejects(() => spinUpOverlord(view([]), { spawn: async () => ({ id: "x" }), profile, profileName: "Lead - Claude", resolveCwd }), /No working directory known/);
+  }
+});
+
+test("hub spin-up H2: fetchHubCwd reads cwd from brainstorm-summary for the hub lane", async () => {
+  const hub = { squad: { id: "efi" }, lane: { id: "efi" } };
+  let url = "";
+  const ok = (cwd) => async (u) => ((url = u), { ok: true, json: async () => ({ ok: true, cwd }) });
+  assert.equal(await fetchHubCwd(hub, ok("C:/efi")), "C:/efi");
+  assert.equal(url, "/__vibesquad/brainstorm-summary?lane=efi&teamId=efi");
+  assert.equal(await fetchHubCwd(hub, ok(null)), null);
+  assert.equal(await fetchHubCwd(hub, async () => ({ ok: false, json: async () => ({}) })), null);
+});
+
+test("hub spin-up H3: the failed Spin Up error is shown under the hub TVs only when the focus is the hub lane", () => {
+  const hub = { squad: { id: "sq1" }, lane: { id: "sq1" } };
+  assert.equal(hubSpinUpError({ laneId: "sq1", spinUpError: "Could not read the live agent list" }, hub), "Could not read the live agent list");
+  assert.equal(hubSpinUpError({ laneId: "other", spinUpError: "boom" }, hub), null);
+  assert.equal(hubSpinUpError({ laneId: "sq1", spinUpError: null }, hub), null);
+  assert.equal(hubSpinUpError(null, hub), null);
+  const app = src("App.tsx");
+  assert.ok(app.includes("hubSpinUpError(pinFocus, hubPinNow)"));
+  assert.ok(app.includes('data-testid="sky-spin-up-error"'));
+  assert.ok(app.includes("resolveCwd: (hub) => fetchHubCwd(hub)"));
 });

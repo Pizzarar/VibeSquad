@@ -97,8 +97,9 @@ export const EVERYONE_LAYER = [
   "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
   "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `vs hwo`→vs who, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
   "- R10 (Releases): Never run release, publish, tag or signing scripts yourself. When the owner asks for a release, send `vs log handoff \"release <project> <stable|beta> <commit|branch>\" -> Release Desk` plus a `send` (VS MCP / `vs send`) message to the Release Desk Buddy (`vs who brainstorm --lane release-desk`) with the change list and credits, then go back to your work. The desk versions, audits, signs, publishes and reports back.",
-  "- R11 (Bugs & fixes): Small root-cause fixes inside your own unit: just do them and report after. A bug you find, or a root-cause fix outside your own unit: don't ask, don't offer it as a question. Workers: put the item in your final message for the lead to send. Leads and Buddies: run `vs inbox add --lane <project bug lane> --from-brainstorm \"<item>\"` yourself, then keep working. A workaround ships only with its named follow-up already queued.",
+  "- R11 (Bugs & fixes): Fix small in-unit root causes, report after. Other bugs/fixes: queue, keep working (leads/Buddies: `vs inbox add --lane <bug lane> --from-brainstorm \"<item>\"`; workers: final msg). Workarounds need a queued follow-up.",
   "- R12 (Owner principles): When the owner states a cross-lane principle (UI, process), escalate it to the hub Overlord (`vs who lead --lane vibesquad`) and queue a @bug audit item; don't keep it lane-local. (Workers: final message.)",
+  "- R13 (Act on your lean): If you have a lean, act on it and report after: inbox triage, next steps, spikes. Ask only for scope changes, outward actions (push to others, release, external post), money, deletes or irreversible steps.",
   "- Attribution (Community Accolades): Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
 ].join("\n");
 
@@ -648,6 +649,15 @@ export function rolePack(role: string, cwd: string, vibeMode = false, isHub = fa
 
 const MAX_BRIEF_CHARS = 20_000;
 const MAX_SNAPSHOT_CHARS = 600;
+/** Spawn-prompt caps: the file stays the source of truth; the prompt gets the head plus a pointer. */
+export const MAX_INJECT_BRIEF_CHARS = 6_000;
+export const MAX_INJECT_OPEN_UNITS = 30;
+
+function clipForPrompt(text: string, max: number, pointer: string): string {
+  if (text.length <= max) return text;
+  const cut = text.lastIndexOf("\n", max);
+  return `${text.slice(0, cut > max / 2 ? cut : max)}\n[... ${text.length - max} more chars not shown; read ${pointer}]`;
+}
 
 export function briefPathFor(root: string, lane: string): string {
   const slug = String(lane ?? "").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-|-$/g, "");
@@ -671,7 +681,7 @@ export function laneBriefBlock(root: string, lane: string): string {
   return [
     `Lane brief for \`${lane}\`: read it before anything else; it is the Buddy handoff.`,
     briefBeginMarker(lane),
-    defangPromptFences(text.slice(0, MAX_BRIEF_CHARS)),
+    defangPromptFences(clipForPrompt(text, MAX_INJECT_BRIEF_CHARS, `docs/brainstorm/${lane}.md`)),
     `--- END docs/brainstorm/${lane}.md ---`,
   ].join("\n");
 }
@@ -704,8 +714,13 @@ export function laneArtifactBlock(root: string, lane: string): string {
     if (doc && typeof doc === "object" && Array.isArray(doc.units)) {
       const open = doc.units.filter((u: { status?: unknown }) => String(u?.status ?? "").trim().toLowerCase() !== "done");
       const doneCount = doc.units.length - open.length;
-      tasks = JSON.stringify({ ...doc, units: open }, null, 2);
-      if (doneCount > 0) doneNote = `\n${doneCount} done units (full list: docs/lanes/${safeLane}/TASKS.json)`;
+      const shown = open.slice(0, MAX_INJECT_OPEN_UNITS);
+      tasks = JSON.stringify({ ...doc, units: shown }, null, 2);
+      const moreOpen = open.length - shown.length;
+      if (doneCount > 0 || moreOpen > 0) {
+        const counts = [moreOpen > 0 ? `${moreOpen} more open units` : "", doneCount > 0 ? `${doneCount} done units` : ""].filter(Boolean);
+        doneNote = `\n${counts.join(", ")} (full list: docs/lanes/${safeLane}/TASKS.json)`;
+      }
     } else {
       tasks = `TASKS.json unreadable (see docs/lanes/${safeLane}/TASKS.json)`;
     }
@@ -716,10 +731,10 @@ export function laneArtifactBlock(root: string, lane: string): string {
     `Lane Artifact (docs/lanes/${safeLane}/ — durable source of truth across restarts & provider switches):`,
   ];
   if (spec) {
-    parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(spec.slice(0, MAX_BRIEF_CHARS))}`);
+    parts.push(`\n## SPEC.md (docs/lanes/${safeLane}/SPEC.md)\n${defangPromptFences(clipForPrompt(spec, MAX_INJECT_BRIEF_CHARS, `docs/lanes/${safeLane}/SPEC.md`))}`);
   }
   if (tasks) {
-    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(tasks.slice(0, MAX_BRIEF_CHARS))}${doneNote}`);
+    parts.push(`\n## TASKS.json (docs/lanes/${safeLane}/TASKS.json)\n${defangPromptFences(clipForPrompt(tasks, MAX_BRIEF_CHARS, `docs/lanes/${safeLane}/TASKS.json`))}${doneNote}`);
   }
   parts.push(`<!-- vibesquad:lane-artifact:end -->`);
   return parts.join("\n");
@@ -806,6 +821,22 @@ export function firstDispatchMetricText(
 
 export function injectedPrefix(role: string, cwd: string, vibeMode = false, isHub = false): string {
   return [EVERYONE_LAYER, rolePack(role, cwd, vibeMode, isHub)].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Layers the spawn prompt: prefix, then the profile notes, then the caller's own text, then git state.
+ * The caller's systemPrompt is usually the profile notes verbatim (toPaseoSpawnConfig sets
+ * systemPrompt = notes), so it gets the same prefix-line dedupe as the notes. Otherwise the stripped
+ * notes copy is not a substring of the raw caller copy and both ride along (the R1-R12 block and
+ * "Project rules first" twice, ~3.7 KB).
+ */
+export function composeSpawnPromptParts(prefix: string, profileNotes: string, rawSysPrompt: string, gitState: string | null): string[] {
+  const existing = dedupeNotesAgainst(rawSysPrompt.trim(), prefix);
+  const parts = [prefix];
+  if (profileNotes && !existing.includes(profileNotes)) parts.push(profileNotes);
+  if (existing) parts.push(existing);
+  if (gitState && !existing.includes("Starting git state (snapshot at spawn")) parts.push(gitState);
+  return parts;
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
@@ -1625,17 +1656,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");
         if (prefix && !rawSysPrompt.includes(EVERYONE_LAYER)) {
-          const existing = rawSysPrompt.trim();
-          const parts = [prefix];
-          if (profileNotes && !existing.includes(profileNotes)) {
-            parts.push(profileNotes);
-          }
-          if (existing) {
-            parts.push(existing);
-          }
-          if (gitState && !existing.includes("Starting git state (snapshot at spawn")) {
-            parts.push(gitState);
-          }
+          const parts = composeSpawnPromptParts(prefix, profileNotes, rawSysPrompt, gitState);
           next.systemPrompt = parts.join("\n\n");
           changed = true;
           const where = teamOf(envOrReqLabels, cwd);
