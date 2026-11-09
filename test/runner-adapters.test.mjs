@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
@@ -443,4 +443,41 @@ test('fix1: resumed session skips the context-delta estimate on its first turn (
   assert.equal(events.filter((e) => e.type === 'turn_done').length, 1);
   assert.equal(events.some((e) => e.type === 'usage' && e.estimated), false);
   assert.equal(events.some((e) => e.type === 'usage' && e.inputTokens), false);
+});
+
+// agy sends no usage_update and PromptResponse.usage is the turn's SUM; the exact per-call numbers are in its transcript.
+test('agy context meter = last PLANNER_RESPONSE in the session transcript (input + cache_read + output), multi-turn', async () => {
+  const home = tmp();
+  const dir = path.join(home, '.gemini', 'antigravity-cli', 'brain', 'S', '.system_generated', 'logs');
+  mkdirSync(dir, { recursive: true });
+  const planner = (step, inp, cache, out) => JSON.stringify({ step_index: step, source: 'MODEL', type: 'PLANNER_RESPONSE', input_tokens: inp, cache_read_tokens: cache, output_tokens: out, tool_calls: [{ name: 'run_command', args: { CommandLine: 'x'.repeat(100000) } }] });
+  const tr = path.join(dir, 'transcript.jsonl');
+  process.env.VS_AGY_HOME = home;
+  try {
+    // turn 1: 3 parallel-ish tool calls in 2 model calls; the summed response usage is 3x the real context
+    writeFileSync(tr, [planner(1, 5000, 95000, 100), JSON.stringify({ type: 'TOOL_RESULT' }), planner(3, 2000, 120000, 200), JSON.stringify({ type: 'USER_INPUT' })].join('\n') + '\n');
+    const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-argon-medium', [
+      (c, m) => { for (const t of ['a', 'b', 'c']) upd(c, { sessionUpdate: 'tool_call', toolCallId: t, title: 'x', kind: 'read' }); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 7000, cachedReadTokens: 215000, outputTokens: 300 } } }); },
+      (c, m) => { appendFileSync(tr, planner(9, 3000, 150000, 50) + '\n'); c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 3000, cachedReadTokens: 150000, outputTokens: 50 } } }); },
+    ]);
+    await tick(); await tick(); await tick();
+    runner.send(id, 'again');
+    await tick(); await tick(); await tick();
+    const us = runner.timeline(id).filter((e) => e.type === 'usage' && e.inputTokens);
+    assert.equal(us.length, 2);
+    assert.equal(us[0].contextTokens, 2000 + 120000 + 200, 'turn 1 = last call only, not the 222k sum');
+    assert.equal(us[0].inputTokens, 222000, 'spend totals stay the turn sum');
+    assert.equal(us[1].contextTokens, 3000 + 150000 + 50, 'turn 2 reads its own last call (no ctxStart reset to a lower number)');
+  } finally { delete process.env.VS_AGY_HOME; }
+});
+
+test('agy without a transcript falls back to the summed turn usage (documented upper bound)', async () => {
+  process.env.VS_AGY_HOME = tmp();
+  try {
+    const { runner, id } = usageHarness('antigravity-cli', 'gemini-4-argon-medium', [
+      (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 800, outputTokens: 100 } } }),
+    ]);
+    await tick(); await tick(); await tick();
+    assert.equal(runner.timeline(id).find((e) => e.type === 'usage' && e.inputTokens).contextTokens, 900);
+  } finally { delete process.env.VS_AGY_HOME; }
 });

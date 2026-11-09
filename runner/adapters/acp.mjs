@@ -1,13 +1,45 @@
 // Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Generic on purpose: every ACP agent differs only in
 // command + args (ACP_PROVIDERS) and in how its model ids are spelled (pickModel).
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import os from 'node:os';
+import { existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 import { estimateCostUsd } from './pricing.mjs';
 
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 && v !== null && v !== '' ? Number(v) : undefined);
+
+// PromptResponse.usage SUMS every model call of the turn's tool loop (real opencode turn: usage_update.used 268981 vs
+// input 806154 = 3 calls x ~268k), so it is not the context size. opencode sends usage_update.used, which we use. agy
+// never does, but writes exact per-call tokens on every PLANNER_RESPONSE line of its session transcript, so the agy meter
+// is the LAST such line's input + cache_read + output (claude.mjs's contextTokens = the last call's prompt + reply).
+export function agyTranscriptPath(sessionId, home = process.env.VS_AGY_HOME || os.homedir()) {
+  return path.join(home, '.gemini', 'antigravity-cli', 'brain', sessionId, '.system_generated', 'logs', 'transcript.jsonl');
+}
+// Reads only the tail of the file (a line can hold big tool args, so the window grows up to 4 MB). Returns undefined if
+// the file is missing/unreadable or has no PLANNER_RESPONSE yet.
+export function lastPlannerContext(file) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const size = fstatSync(fd).size;
+    for (let win = 64 * 1024; ; win *= 4) {
+      const n = Math.min(size, win);
+      const buf = Buffer.alloc(n);
+      readSync(fd, buf, 0, n, size - n);
+      const lines = buf.toString('utf8').split('\n');
+      if (n < size) lines.shift(); // first line is cut mid-way
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('"PLANNER_RESPONSE"')) continue;
+        let m; try { m = JSON.parse(lines[i]); } catch { continue; }
+        if (m.type !== 'PLANNER_RESPONSE' || !Number.isFinite(m.input_tokens)) continue;
+        return m.input_tokens + (num(m.cache_read_tokens) ?? 0) + (num(m.output_tokens) ?? 0);
+      }
+      if (n >= size || win >= 4 * 1024 * 1024) return undefined;
+    }
+  } catch { return undefined; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
+}
 
 // ACP PromptResponse.usage (camelCase per spec; snake_case tolerated). Per the real opencode/agy payloads inputTokens
 // EXCLUDES cache, so the returned inputTokens is the whole prompt size (fresh + cache read + cache write), like claude.mjs.
@@ -217,10 +249,13 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
             estimated = true;
           }
           ctxPrev = ctxNow;
+          // agy: exact last-call context from its transcript. Fallback (provider not agy, or no transcript file yet): the
+          // turn's summed input+output, an UPPER BOUND that overstates by the number of model calls in the loop.
+          const ctxAgy = ctxNow > 0 || (PROVIDER_ALIASES[provider] ?? provider) !== 'antigravity-cli' || !sessionId ? undefined : lastPlannerContext(agyTranscriptPath(sessionId));
           let turnCost = null;
           if (tok) {
             // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
-            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : tok.inputTokens + tok.outputTokens, inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
+            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : (ctxAgy ?? tok.inputTokens + tok.outputTokens), inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
             turnCost = estimateCostUsd(activeModel, tok);
           }
           const done = { stopReason: r?.stopReason };
