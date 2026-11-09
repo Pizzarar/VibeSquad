@@ -90,7 +90,8 @@ test("HP4 the floor never scrolls: fixed box, fit scale, one floor rendered", ()
   assert.doesNotMatch(comp, /scrollIntoView/);
   assert.equal(floorFitScale(1300, 800, 1), 2);
   assert.equal(floorFitScale(3000, 400, 1), 1);
-  assert.ok(Math.abs(floorFitScale(3000, 100, 1) - 100 / 360) < 1e-9); // SS5: no whole multiple fits the height -> fractional height fit, never clipped
+  assert.equal(floorFitScale(3000, 100, 1), 0.25); // 1/4 device px fits (100/360 = 0.277): a clean fraction, never an arbitrary 0.277 that drops uneven rows
+  assert.ok(Math.abs(floorFitScale(3000, 60, 1) - 60 / 360) < 1e-9); // under 1/4: fractional fallback, never 0 and never clipped
   assert.equal(floorFitScale(0, 800, 1), 0); // unmeasured only
 });
 
@@ -127,23 +128,22 @@ const castJson = JSON.parse(readFileSync(new URL("../public/office/cast.json", i
 test("FS-b json validates; bad json is rejected (skip-if-absent)", () => {
   const v = validateFloorCursor(cursorJson);
   assert.ok(v.ok);
-  assert.deepEqual(v.value, { cell: { w: 9, h: 8 }, frames: 2, fps: 3, anchor: { x: 4, y: 6 } });
+  assert.deepEqual(v.value, { cell: cursorJson.cell, frames: cursorJson.frames, fps: cursorJson.fps, anchor: cursorJson.anchor });
   assert.equal(validateFloorCursor(undefined).ok, false);
   assert.equal(validateFloorCursor({ ...cursorJson, frames: 0 }).ok, false);
-  assert.equal(validateFloorCursor({ ...cursorJson, cell: { w: 9 } }).ok, false);
+  assert.equal(validateFloorCursor({ ...cursorJson, cell: { w: 13 } }).ok, false);
 });
 
-test("FS-b placement: tip lands on seat.x, cell top rides bubble.offset.y (Art9: seat-4, seat-40)", () => {
+test("FS-b placement: tip lands on seat.x, cell top rides bubble.offset.y (Art9, read from the json)", () => {
   const cursor = validateFloorCursor(cursorJson).value;
-  const cast = { cell: 32, bubble: { offset: { x: -18, y: -40 } } };
-  assert.deepEqual(cursorOffset(cast, cursor), { x: -4, y: -40 });
-  // tip = cell origin + anchor = (seat.x, seat.y-34)
+  const cast = { cell: castJson.cell, bubble: castJson.bubble };
+  assert.deepEqual(cursorOffset(cast, cursor), { x: -cursor.anchor.x, y: castJson.bubble.offset.y });
+  // tip = cell origin + anchor = (seat.x, seat.y + bubble.offset.y + anchor.y)
   const o = cursorOffset(cast, cursor);
-  assert.deepEqual({ x: o.x + cursor.anchor.x, y: o.y + cursor.anchor.y }, { x: 0, y: -34 });
-  assert.deepEqual(cursorInButton(cast, cursor), { left: 12, top: -8 });
+  assert.deepEqual({ x: o.x + cursor.anchor.x, y: o.y + cursor.anchor.y }, { x: 0, y: castJson.bubble.offset.y + cursor.anchor.y });
+  assert.deepEqual(cursorInButton(cast, cursor), { left: o.x + castJson.cell / 2, top: o.y + castJson.cell });
   // follows the json values, not constants
   assert.deepEqual(cursorOffset({ bubble: { offset: { x: 0, y: -10 } } }, { ...cursor, anchor: { x: 2, y: 1 } }), { x: -2, y: -10 });
-  assert.equal(castJson.bubble.offset.y, -40);
 });
 
 test("FS-b wiring: skip-if-absent, focus-only, reduced motion static", () => {

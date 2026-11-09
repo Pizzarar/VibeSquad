@@ -70,3 +70,28 @@ test('Settings Reset clears the chat override, Ctrl+0 (resetUiScale) leaves it',
   const modal = read('src/TeamSettingsModal.tsx');
   assert.match(modal, /data-testid="ui-scale-reset"\s+onClick=\{\(\) => resetAllScales\(false\)\}/);
 });
+
+test('FF-ui floor snap: the (960x498) lands on whole device px or a clean 1/n, never a row-dropping fraction', () => {
+  const fit = (w, h, dpr, zoom) => floorFitScale(w, h, dpr, 960, 498, zoom);
+  const devPer = (s, dpr, zoom) => s * dpr * zoom;
+  // 1080 (dpr 1), stage ~ 1880 x 440 css at UI 100%: 0.88 device px per art px fits -> 1/2, not the fractional 0.883
+  assert.equal(devPer(fit(1880, 440, 1, 1), 1, 1), 0.5);
+  // 1080 UI 150%: stage 1250 x 295 css (device 1875 x 442) -> 1/2
+  assert.equal(devPer(fit(1250, 295, 1, 1.5), 1, 1.5), 0.5);
+  // 1080 with a stage tall enough for 1x (498+)
+  assert.equal(devPer(fit(1880, 520, 1, 1), 1, 1), 1);
+  // 4K @120%: device 3840x2160. UI 100%: stage 3100 x 1300 device -> css 2583 x 1083 -> 2x
+  assert.equal(devPer(fit(2583, 1083, 1.2, 1), 1.2, 1), 2);
+  // 4K @120% UI 150%: stage css 1722 x 722 (device 3100 x 1300) -> 2x device
+  assert.equal(devPer(fit(1722, 722, 1.2, 1.5), 1.2, 1.5), 2);
+  // 720: stage ~ 1180 x 330 css -> 1/2 device px per art px (330 < 498)
+  assert.equal(devPer(fit(1180, 330, 1, 1), 1, 1), 0.5);
+  // every result is exactly k or 1/n device px per art px, fits the box, never 0 for a measured box
+  for (const [dpr, zoom] of [[1, 1], [1, 1.5], [1.2, 1], [1.2, 1.5]]) {
+    for (let h = 150; h <= 1400; h += 37) {
+      const s = fit(1800, h, dpr, zoom), d = devPer(s, dpr, zoom);
+      assert.ok(s > 0 && 960 * s <= 1800 + 1e-6 && 498 * s <= h + 1e-6, `${h}@${dpr}x${zoom}: ${s}`);
+      if (h * dpr * zoom >= 498 / 4) assert.ok(Math.abs(d - Math.round(d)) < 1e-9 || [2, 3, 4].some((n) => Math.abs(d * n - 1) < 1e-9), `${h}@${dpr}x${zoom}: ${d} device px per art px`);
+    }
+  }
+});

@@ -805,25 +805,25 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
 }
 
 /**
- * Scale for a single floor in a fixed box: a whole DEVICE-pixel multiple fitting both width and height, so the pixel art stays crisp.
+ * Scale for a single floor in a fixed box, always a clean device-pixel ratio so the pixel art never drops rows.
  * `zoom` is the root UI zoom (src/uiScale.ts): the box is measured in zoomed CSS px, so a device px is 1 / (dpr x zoom) of a CSS px and the
  * snap must use that product (SS5: at 1080 + UI 150% the old dpr-only snap gave a 1.5x shimmer and a clipped floor).
- * It never returns 0 for a measured box (a narrow hub pane or a UI-scale zoom used to blank the tower): when no whole device-px multiple fits
- * (below one device pixel per native pixel, either way) it falls back to a fractional fit of the width and height, so the floor is never clipped.
+ * - >= 1 device px per native px fits both ways: the largest whole multiple, `k / (dpr x zoom)`.
+ * - Under 1: the largest clean fraction `1 / n` device px per native px (1/2, 1/3, 1/4) that fits, i.e. every n-th native row, evenly. Never an
+ *   arbitrary fraction like 0.683 (that drops uneven rows: the SS5 1080 hit once the floor art grew to 498 tall).
+ * - Smaller than 1/4 (a sliver of a pane): the old fractional fit, so a measured box never gets 0 and the floor is never clipped.
  * 0 only when there is no width yet.
  */
 export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLOOR_NATIVE_WIDTH, nativeH = FLOOR_NATIVE_HEIGHT, zoom = 1): number {
   if (!Number.isFinite(boxW) || boxW <= 0) return 0;
   const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
   const hasH = Number.isFinite(boxH) && boxH > 0;
-  const crisp = Math.floor((boxW * ratio) / nativeW) / ratio; // whole device-pixel multiple of the width
-  if (crisp >= 1 / ratio) {
-    if (!hasH) return crisp;
-    const byHeight = Math.floor((boxH * ratio) / nativeH) / ratio;
-    if (byHeight >= 1 / ratio) return Math.min(crisp, byHeight);
-    return Math.min(crisp, boxH / nativeH); // no whole multiple fits the height: fractional, never clipped
-  }
-  return hasH ? Math.min(boxW / nativeW, boxH / nativeH) : boxW / nativeW; // narrower than 1 device px per native px: fit fractionally rather than vanish
+  // Device px per native px that fit the box (the tighter of width and height).
+  const fit = Math.min((boxW * ratio) / nativeW, hasH ? (boxH * ratio) / nativeH : Infinity);
+  const whole = Math.floor(fit + 1e-9);
+  if (whole >= 1) return whole / ratio;
+  for (let n = 2; n <= 4; n++) if (fit + 1e-9 >= 1 / n) return 1 / n / ratio;
+  return fit / ratio; // narrower than 1/4 device px per native px: fit fractionally rather than vanish
 }
 
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────
