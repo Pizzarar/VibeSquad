@@ -999,6 +999,7 @@ export class RunnerBackend {
       hwm.set(id, e.seq);
     }
     this.emitTimeline({ id, event: e });
+    if (e.type === "compacted") logRunnerMetric(`compacted agent=${id} before=${e.before ?? "?"} after=${e.after ?? "?"}${e.trigger ? ` trigger=${e.trigger}` : ""}`); // once per event: the hwm gate above drops replays
     const t0 = this.live.turn.get(id);
     const from = t0 && viewStatus(t0);
     // Archive is terminal. The killed child's exit / error / idle land AFTER the archive event: they must not resurrect the roster
