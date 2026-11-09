@@ -1,0 +1,1 @@
+First, grade in one line whether the previous review's recommendations improved the KPIs (or note there is no prior review). Then give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.

@@ -491,18 +491,18 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
  * Resolve the real checkout: VIBESQUAD_ROOT override (same convention as brainstorm.mjs / lead-handoff.mjs), else
  * the repo the runtime was last synced from (build-stamp.json), else REPO_ROOT (the dev checkout).
  */
-function gitRepoRoot() {
-  if (process.env.VIBESQUAD_ROOT) return resolve(process.env.VIBESQUAD_ROOT);
+function gitRepoRoot({ runtimeRoot = REPO_ROOT, envRoot = process.env.VIBESQUAD_ROOT } = {}) {
+  if (envRoot) return resolve(envRoot);
   try {
-    const stampPath = join(REPO_ROOT, "build-stamp.json");
+    const stampPath = join(runtimeRoot, "build-stamp.json");
     if (existsSync(stampPath)) {
       const stamp = JSON.parse(readFileSync(stampPath, "utf8"));
       const repo = typeof stamp?.repo === "string" ? stamp.repo.trim() : "";
       const workTree = repo.replace(/[\\/]+\.git[\\/]*$/, "");
       if (workTree) return resolve(workTree);
     }
-  } catch { /* not a runtime or no stamp: fall through to REPO_ROOT */ }
-  return REPO_ROOT;
+  } catch { /* not a runtime or no stamp: fall through to runtimeRoot */ }
+  return resolve(runtimeRoot);
 }
 
 const defaultGit = (args) => execFileSync("git", args, { cwd: gitRepoRoot(), encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
@@ -1196,11 +1196,53 @@ const latestUsageReview = (home) => {
 const round2 = (n) => Math.round(Number(n) * 100) / 100;
 const clip = (s, n = 200) => { const t = String(s ?? ""); return t.length > n ? `${t.slice(0, n - 1)}…` : t; };
 
+export const USAGE_REVIEW_PROMPT_REL_PATH = join("docs", "lanes", "perfection", "USAGE_REVIEW_PROMPT.md");
+export const DEFAULT_USAGE_REVIEW_PROMPT =
+  "First, grade in one line whether the previous review's recommendations improved the KPIs (or note there is no prior review). Then give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.";
+
+let usageReviewPromptFallbackWarned = false;
+export const resetUsageReviewPromptWarnForTest = () => {
+  usageReviewPromptFallbackWarned = false;
+};
+
+/**
+ * Resolve docs/lanes/perfection/USAGE_REVIEW_PROMPT.md against the live VibeSquad repo checkout rather than REPO_ROOT.
+ * Why: server/sync-runtime.mjs (syncRuntimeDir, line 35) only copies ["dist", "public", "server", "cli", "runner"] into
+ * %LOCALAPPDATA%\VibeSquad\runtime — it never copies docs/ — and writes build-stamp.json with `repo: "<liveRepo>/.git"`.
+ * Resolving via gitRepoRoot() (VIBESQUAD_ROOT -> build-stamp.json repo -> REPO_ROOT) reads the live repo's file even when
+ * the server runs from the runtime copy, so Workflows (@perfection) edits take effect on the next review without a sync.
+ */
+export function resolveUsageReviewPromptPath({ runtimeRoot = REPO_ROOT, envRoot = process.env.VIBESQUAD_ROOT } = {}) {
+  return join(gitRepoRoot({ runtimeRoot, envRoot }), USAGE_REVIEW_PROMPT_REL_PATH);
+}
+
+/**
+ * Load the reviewer instruction text from docs/lanes/perfection/USAGE_REVIEW_PROMPT.md. Falls back to
+ * DEFAULT_USAGE_REVIEW_PROMPT when the file is missing, unreadable, or blank, logging a warning once per process.
+ */
+export function loadUsageReviewPrompt({ promptPath, runtimeRoot, envRoot, warn = console.warn } = {}) {
+  const file = promptPath ?? resolveUsageReviewPromptPath({ runtimeRoot, envRoot });
+  try {
+    const raw = readFileSync(file, "utf8").replace(/^\uFEFF/, "").trim();
+    if (raw) return raw;
+    if (!usageReviewPromptFallbackWarned) {
+      usageReviewPromptFallbackWarned = true;
+      warn(`usage-review: prompt file is empty at ${file}; using built-in fallback`);
+    }
+  } catch (err) {
+    if (!usageReviewPromptFallbackWarned) {
+      usageReviewPromptFallbackWarned = true;
+      warn(`usage-review: failed to read prompt file at ${file} (${err?.code ?? err?.message ?? err}); using built-in fallback`);
+    }
+  }
+  return DEFAULT_USAGE_REVIEW_PROMPT;
+}
+
 /** Compact prompt from the usage payload: totals, limits, loops, spawn storms, by-profile and per-lane review rounds, plus
  * usa-9 context — recent @usa/usage-lane notes, friction signals, mcp-alias counts, recent agent errors, the active
  * profile catalog and runner turn caps — so Opus and Gemini see *why* friction happened. `home` + `sinceMs` scope the
  * log-signal harvest (sinceMs = lastReview.at, so only entries since the prior review are shown). */
-function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview } = {}) {
+export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, promptPath, runtimeRoot, envRoot, warn } = {}) {
   const u = usage ?? {};
   const totals = u.totals ?? {};
   const out = [];
@@ -1275,7 +1317,7 @@ function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview } = {}) {
     }
   }
 
-  out.push("First, grade in one line whether the previous review's recommendations improved the KPIs (or note there is no prior review). Then give 3-5 concise, actionable bullets covering (1) Profile/Provider routing, (2) Loops/Tool friction, and (3) Handoffs/Review rounds. One line per bullet, no preamble.");
+  out.push(loadUsageReviewPrompt({ promptPath, runtimeRoot, envRoot, warn }));
   return out.join("\n");
 }
 
@@ -1354,14 +1396,20 @@ function overlapsSeen(text, seen) {
   return false;
 }
 
+/** True when an inbox card is an open perfection (Workflows) card (status "parked" or "accepted", or legacy unset status). */
+const isOpenPerfectionCard = (c) =>
+  Boolean(c) &&
+  String(c.laneId || "").toLowerCase() === "perfection" &&
+  (!c.status || c.status === "parked" || c.status === "accepted");
+
 /**
- * Best-effort: parse the review's actionable bullets and enqueue them into the bug-chaser inbox, deduped against
- * existing bug-chaser cards and across the opus/gemini sets. Returns the enqueued card ids (never throws).
+ * Best-effort: parse the review's actionable bullets and enqueue them into the perfection (Workflows) inbox, deduped
+ * against open perfection cards (status parked or accepted) and across the opus/gemini sets. Returns the enqueued card ids (never throws).
  */
 function routeReviewToInbox(opusResult, geminiResult, dir) {
   const sent = [];
   if (!dir || isForbiddenRealHome(dir)) return sent;
-  const existing = readInboxCards(dir).filter((c) => c && String(c.laneId || "").toLowerCase() === "bug-chaser");
+  const existing = readInboxCards(dir).filter(isOpenPerfectionCard);
   const seen = existing.map((c) => `${c.title || ""} ${c.text || ""}`).filter(Boolean);
   const process = (result, source) => {
     if (!result?.ok || typeof result.text !== "string") return;
@@ -1373,10 +1421,10 @@ function routeReviewToInbox(opusResult, geminiResult, dir) {
     }
     if (!ideas.length) return;
     try {
-      const res = addInboxCards({ ideas, laneId: "bug-chaser", teamId: "vibesquad", source, baseHome: dir });
+      const res = addInboxCards({ ideas, laneId: "perfection", teamId: "vibesquad", source, baseHome: dir });
       for (const c of res.added ?? []) sent.push(c.id);
     } catch (e) {
-      console.error(`usage-review: failed to route ${source} bullets to bug-chaser inbox: ${e?.message ?? e}`);
+      console.error(`usage-review: failed to route ${source} bullets to perfection inbox: ${e?.message ?? e}`);
     }
   };
   process(opusResult, "usage-review:opus");
@@ -1389,14 +1437,14 @@ function routeReviewToInbox(opusResult, geminiResult, dir) {
  * under a test runner; inject fakes in tests. One provider failing never loses the other. Appends one record to
  * usage-reviews.jsonl. A second call while one is running returns the in-flight promise (never a second spawn).
  */
-export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGemini, now = Date.now } = {}) {
+export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGemini, promptPath, now = Date.now } = {}) {
   if (usageReviewInFlight) return usageReviewInFlight;
   usageReviewInFlight = (async () => {
     try {
       const interval = loadRunnerSettings(home).usageReview.interval;
       const last = latestUsageReview(home);
       const sinceMs = last ? toMs(last.at) : null;
-      const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last });
+      const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last, promptPath });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
       const results = await Promise.all([
