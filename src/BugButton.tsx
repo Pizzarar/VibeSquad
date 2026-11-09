@@ -2,7 +2,9 @@
 // Shows the bug lane's open inbox count: red while items are newer than the last open, grey after, one short pulse on arrival.
 import "./BugButton.css";
 import { useEffect, useRef, useState } from "react";
-import { pinsForSquad, type Pin } from "./pins";
+import { bugRoachSheetSrc, pinsForSquad, snapChipSize, type Pin } from "./pins";
+import { useDpr, useImageOk, useTheme } from "./useBotFace";
+import { useUiScale } from "./uiScale";
 import { findBugLane, type TeamView } from "./teams";
 import { bugCounts, type BugCard } from "./hubBarLogic";
 
@@ -44,6 +46,10 @@ export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin)
   const all = pinsForSquad(view, { includeHidden: true });
   const pin = lane ? [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id) ?? null : null;
   const teamId = view.team.id;
+  const theme = useTheme();
+  const { device, css } = snapChipSize(useDpr(), useUiScale());
+  const sheet = bugRoachSheetSrc(theme, device);
+  const roachOk = useImageOk(sheet);
   const cards = useBugCards(teamId, pin?.lane.id ?? "");
   const [seen, setSeen] = useState(() => readSeen(teamId));
   const [pulse, setPulse] = useState(false);
@@ -86,8 +92,13 @@ export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin)
         void Promise.resolve(onOpen(pin)).catch((e) => alert(`Could not start Bug Runner: ${e}`));
       }}
     >
-      <span aria-hidden="true">🐞</span>
-      <span className="bug-btn-n">{counts.total}</span>
+      <span
+        className="bug-btn-roach"
+        data-testid={`bug-roach-${teamId}`}
+        aria-hidden="true"
+        style={{ backgroundImage: roachOk ? `url(${sheet})` : undefined, width: css, height: css }}
+      />
+      {counts.total > 0 && <span className="bug-btn-n">{counts.total}</span>}
     </button>
   );
 }
