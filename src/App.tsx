@@ -2019,9 +2019,8 @@ export function App() {
           {panesNode}
           {pinFocusView && (
             <HubPages
-              view={pinFocusView}
               agentOpen={hubAgentOpen}
-              sky={(open) => <SkyZones view={pinFocusView} initialOpen={open} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
+              sky={<SkyZones view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />

@@ -1,43 +1,5 @@
-// Hub pages (docs/PLAN_HUB_PAGES.md HP1-HP3): pure helpers for the Sky / Tower switcher and the shared skyline backdrop.
+// Hub view (docs/PLAN_HUB_PAGES.md HP1-HP5): pure helpers for the shared skyline backdrop.
 import { safeDpr } from "./skyZonesLogic.ts";
-import type { FaceBot } from "./squadFloorLogic.ts";
-
-export type HubPage = "sky" | "tower";
-export const HUB_PAGES: readonly HubPage[] = ["sky", "tower"];
-export const HUB_PAGE_KEY = "vs.hubPage";
-
-/** Anything but a known page reads as the Sky page (the default landing). */
-export function parseHubPage(v: unknown): HubPage {
-  return v === "tower" ? "tower" : "sky";
-}
-
-type Store = Pick<Storage, "getItem" | "setItem">;
-const store = (): Store | null => {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-};
-export function readHubPage(s: Store | null = store()): HubPage {
-  try {
-    return parseHubPage(s?.getItem(HUB_PAGE_KEY));
-  } catch {
-    return "sky";
-  }
-}
-export function writeHubPage(page: HubPage, s: Store | null = store()): void {
-  try {
-    s?.setItem(HUB_PAGE_KEY, page);
-  } catch {
-    /* private mode / quota: the choice just doesn't persist */
-  }
-}
-
-/** A mini face click: the Sky page, with that bot's chat open. */
-export function miniFaceJump(bot: FaceBot): { page: HubPage; open: FaceBot } {
-  return { page: "sky", open: bot };
-}
 
 export const HUB_BACKDROP_URL = (theme: "dark" | "light") => `/office/hub-backdrop-${theme}.png`;
 export const HUB_BACKDROP_JSON = "/office/hub-backdrop.json";

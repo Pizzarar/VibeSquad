@@ -4719,24 +4719,12 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #070a22, #18225e 62%, #3b3278); }
 :root[data-theme="light"] .hub-backdrop.is-fallback { background-image: linear-gradient(180deg, #7fc4f5, #bfe3fb 62%, #eef8ff); }
 .hub-backdrop.is-fallback.has-sky-band { background-size: auto 60%; background-position: left bottom; background-repeat: repeat-x; }
-.hub-tabs { flex: none; display: flex; gap: 4px; padding: 4px 10px; justify-content: flex-end; }
-.hub-tab { font-family: var(--arcade); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding: 3px 14px; border: 2px solid var(--line); background: var(--bg); color: var(--muted); cursor: pointer; }
-.hub-tab.is-on { color: var(--text); border-color: var(--cyan); }
-.hub-tab:focus-visible { outline: 2px solid var(--cyan); outline-offset: 1px; }
-.hub-sky-page, .hub-tower-page { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-/* HP2: the sky TVs are capped so the faces do not eat the screen; the skyline shows below them. The portrait stays integer-scaled inside. */
+.hub-sky-page { flex: none; display: flex; flex-direction: column; }
 .hub-sky-page .sky-zones { flex: none; height: clamp(260px, 36vh, 440px); }
-.hub-tower-sky { flex: none; display: flex; justify-content: space-between; align-items: flex-end; padding: 2px 18px 6px; }
-.hub-mini-face { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; cursor: pointer; color: var(--text); }
-.hub-mini-face:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
-.hub-mini-screen { position: relative; display: block; overflow: hidden; border: 2px solid var(--line); background: var(--sky-face-bg-custom, #2a1b6b); box-sizing: content-box; }
-:root[data-theme="light"] .hub-mini-screen { background: var(--sky-face-bg-custom, #95d3f2); }
-.hub-mini-riffbot .hub-mini-screen { border-color: var(--cyan); }
-.hub-mini-overlord .hub-mini-screen { border-color: var(--violet); }
-.hub-mini-name { font-family: var(--arcade); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; background: var(--bg); padding: 1px 6px; }
-/* The tower gets a fixed-height, non-scrolling box (HP4 shows one floor per screen); the gutters beside it are the backdrop, so the tower strip is transparent here. */
+/* HP5: the floor takes everything under the TVs + strip; its plate sits on the bottom edge (no road, no gap), skyline shows left and right. */
 .hub-tower-box { flex: 1; min-height: 0; overflow: hidden; display: flex; flex-direction: column; }
 .hub-pages .hub-tower-box .sq-floor { flex: 1; height: auto; min-height: 0; max-height: none; overflow: hidden; background: transparent; border-top: 0; } /* the page wrapper owns the box height; beats the .hub-body 38vh/40vh stand-ins */
+.hub-tower-box .sq-floor-stage { align-items: flex-end; }
 .hub-tower-box .sq-floor-tower { background: transparent; border-top: 0; }
 
 /* ── Sky zones (src/SkyZones.tsx, docs/PLAN_SKY_GODS_C2B.md G1): two sky-CRT chats above the tower ── */
@@ -4917,7 +4905,7 @@ button.project-file-name:hover { text-decoration: underline; }
   border-top: 2px solid var(--cyan);
 }
 .sq-floor-stage { flex: 1 1 0; min-height: 0; min-width: 0; overflow: hidden; display: flex; align-items: center; justify-content: center; }
-.sq-floor-tower { display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
+.sq-floor-tower { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; max-width: 100%; max-height: 100%; }
 .sq-floor-band-wrap { position: relative; flex: none; }
 /* CRT blink between floors: collapse to a line, then open again. Two ~100ms halves, CSS only; reduced motion swaps instantly (no class is ever set). */
 .sq-floor-band-wrap.is-blink-out { animation: sq-floor-blink-out 100ms steps(4, end) forwards; }
@@ -4925,8 +4913,8 @@ button.project-file-name:hover { text-decoration: underline; }
 @keyframes sq-floor-blink-out { 0% { transform: scaleY(1); filter: brightness(1); } 60% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } }
 @keyframes sq-floor-blink-in { 0% { transform: scaleY(0.01) scaleX(0.6); filter: brightness(3); } 40% { transform: scaleY(0.04); filter: brightness(2.2); } 100% { transform: scaleY(1); filter: brightness(1); } }
 @media (prefers-reduced-motion: reduce) { .sq-floor-band-wrap.is-blink-out, .sq-floor-band-wrap.is-blink-in { animation: none; } }
-/* The lift bar: < 07 > under the shaft, so paging reads as the elevator. */
-.sq-floor-lift { flex: none; display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 0 6px; }
+/* The lift pager: < 07 > rides the shaft, centred on the car (left/top set inline from floor.json) and sitting just above it. */
+.sq-floor-lift { position: absolute; z-index: 3; transform: translate(-50%, calc(-100% - 4px)); display: flex; align-items: center; justify-content: center; gap: 4px; white-space: nowrap; }
 .sq-floor-counter {
   min-width: 3ch;
   padding: 1px 8px;
