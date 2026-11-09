@@ -1,7 +1,8 @@
 // Agent Client Protocol adapter (JSON-RPC 2.0 over stdio). Generic on purpose: every ACP agent differs only in
 // command + args (ACP_PROVIDERS) and in how its model ids are spelled (pickModel).
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import os from 'node:os';
+import { existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
@@ -10,13 +11,34 @@ import { estimateCostUsd } from './pricing.mjs';
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) >= 0 && v !== null && v !== '' ? Number(v) : undefined);
 
 // PromptResponse.usage SUMS every model call of the turn's tool loop (real opencode turn: usage_update.used 268981 vs
-// input 806154 = 3 calls x ~268k), so it is not the context size. With no usage_update (agy), approximate the LAST call's
-// prompt (what claude.mjs reports) as the per-call average of prompt+reply tokens, never below the previous turn's context.
-// calls is the tool_call count + 1, which can overcount parallel tool calls: that errs low, not at the old 3-7x too high.
-export function lastCallContext(tok, calls, ctxStart) {
-  const n = Math.max(1, calls);
-  const perCall = Math.round(tok.inputTokens / n) + Math.round(tok.outputTokens / n); // prompt + reply, like claude's input+output
-  return Math.min(tok.inputTokens + tok.outputTokens, Math.max(perCall, ctxStart ?? 0));
+// input 806154 = 3 calls x ~268k), so it is not the context size. opencode sends usage_update.used, which we use. agy
+// never does, but writes exact per-call tokens on every PLANNER_RESPONSE line of its session transcript, so the agy meter
+// is the LAST such line's input + cache_read + output (claude.mjs's contextTokens = the last call's prompt + reply).
+export function agyTranscriptPath(sessionId, home = process.env.VS_AGY_HOME || os.homedir()) {
+  return path.join(home, '.gemini', 'antigravity-cli', 'brain', sessionId, '.system_generated', 'logs', 'transcript.jsonl');
+}
+// Reads only the tail of the file (a line can hold big tool args, so the window grows up to 4 MB). Returns undefined if
+// the file is missing/unreadable or has no PLANNER_RESPONSE yet.
+export function lastPlannerContext(file) {
+  let fd;
+  try {
+    fd = openSync(file, 'r');
+    const size = fstatSync(fd).size;
+    for (let win = 64 * 1024; ; win *= 4) {
+      const n = Math.min(size, win);
+      const buf = Buffer.alloc(n);
+      readSync(fd, buf, 0, n, size - n);
+      const lines = buf.toString('utf8').split('\n');
+      if (n < size) lines.shift(); // first line is cut mid-way
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('"PLANNER_RESPONSE"')) continue;
+        let m; try { m = JSON.parse(lines[i]); } catch { continue; }
+        if (m.type !== 'PLANNER_RESPONSE' || !Number.isFinite(m.input_tokens)) continue;
+        return m.input_tokens + (num(m.cache_read_tokens) ?? 0) + (num(m.output_tokens) ?? 0);
+      }
+      if (n >= size || win >= 4 * 1024 * 1024) return undefined;
+    }
+  } catch { return undefined; } finally { if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ } }
 }
 
 // ACP PromptResponse.usage (camelCase per spec; snake_case tolerated). Per the real opencode/agy payloads inputTokens
@@ -93,7 +115,6 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let replaying = false; // session/load replays the old transcript as session/update; our log already has it
       let activeModel = model;
       let ctxNow = 0; // latest usage_update.used (context size)
-      let turnToolCalls = 0; // tool_call updates this turn: model calls in the tool loop = this + 1
       let ctxPrev = resume ? null : 0; // context size at the end of the previous turn; null = unknown (resumed session restored an unseen history)
       let reportedCost; // agent-reported cumulative session cost (usage_update.cost), if any
       let costTotal = 0; // cumulative session cost, same convention as claude's total_cost_usd (the fold diffs it)
@@ -112,7 +133,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           switch (u.sessionUpdate) {
             case 'agent_message_chunk': if (u.content?.type === 'text') emit('output', { text: u.content.text }); break;
             case 'agent_thought_chunk': if (u.content?.type === 'text') emit('thought', { text: u.content.text }); break;
-            case 'tool_call': turnToolCalls++; emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
+            case 'tool_call': emit('tool', { phase: 'call', id: u.toolCallId, name: u.title, kind: u.kind }); break;
             case 'usage_update':
               if (Number.isFinite(u.used)) { ctxNow = u.used; emit('usage', { contextTokens: u.used, contextMax: u.size }); }
               // some agents report a cumulative session cost here; it beats our price-table estimate
@@ -217,7 +238,6 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         const prompt = [{ type: 'text', text }, ...(imageCapable ? images.map((i) => ({ type: 'image', data: i.data, mimeType: i.mimeType })) : [])];
         try {
           const ctxStart = ctxPrev;
-          turnToolCalls = 0;
           const r = await request('session/prompt', { sessionId, prompt });
           // Real per-turn tokens from PromptResponse.usage; else estimate from context-size growth (marked estimated).
           let tok = parseAcpUsage(r?.usage);
@@ -229,10 +249,13 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
             estimated = true;
           }
           ctxPrev = ctxNow;
+          // agy: exact last-call context from its transcript. Fallback (provider not agy, or no transcript file yet): the
+          // turn's summed input+output, an UPPER BOUND that overstates by the number of model calls in the loop.
+          const ctxAgy = ctxNow > 0 || (PROVIDER_ALIASES[provider] ?? provider) !== 'antigravity-cli' || !sessionId ? undefined : lastPlannerContext(agyTranscriptPath(sessionId));
           let turnCost = null;
           if (tok) {
             // contextTokens stays on the event (agy sends no usage_update) so the context meter keeps working
-            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : lastCallContext(tok, turnToolCalls + 1, ctxStart), inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
+            emit('usage', { contextTokens: ctxNow > 0 ? ctxNow : (ctxAgy ?? tok.inputTokens + tok.outputTokens), inputTokens: tok.inputTokens, outputTokens: tok.outputTokens, ...(tok.cachedReadTokens ? { cachedReadTokens: tok.cachedReadTokens } : {}), ...(tok.cachedWriteTokens ? { cachedWriteTokens: tok.cachedWriteTokens } : {}), ...(estimated ? { estimated: true } : {}) });
             turnCost = estimateCostUsd(activeModel, tok);
           }
           const done = { stopReason: r?.stopReason };
