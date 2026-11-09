@@ -81,6 +81,17 @@ export function auditCardPin(view: TeamView, card: { source?: string | null }): 
   return [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id) ?? null;
 }
 
+/** C2: the pin the Perfection angel opens: the first Squad's standing audit lane (hidden lanes included), the lane `perfection` ahead of any other audit lane; null when no Squad has one. */
+export function perfectionPin(views: TeamView[]): Pin | null {
+  const pins = views.flatMap((v) => {
+    const lane = findAuditLane(v.team);
+    if (!lane) return [];
+    const all = pinsForSquad(v, { includeHidden: true });
+    return [...all.pinned, ...all.done].filter((p) => p.lane.id === lane.id);
+  });
+  return pins.find((p) => p.lane.id === "perfection") ?? pins[0] ?? null;
+}
+
 /**
  * Build the pins for one squad. Pins are ordered by `order`, then by teams.json order. The "_other" bucket and removed lanes are never pins.
  * Hidden lanes (Bug Runner, Perfection) are left out of the lists; resolvers that must still find them (bug button, focus, open-from-finding) pass `includeHidden`.

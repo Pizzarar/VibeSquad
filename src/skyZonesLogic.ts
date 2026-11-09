@@ -1,11 +1,14 @@
 // Sky-gods hub (docs/PLAN_SKY_GODS_C2B.md G1): the pure zone→agent mapping. RiffBot is the hub Buddy (left),
 // the Overlord is the hub lead (right). No React here so it is unit-testable under node.
 import { dormantBuddyId, hubPinForSquad, type Pin } from "./pins.ts";
-import { poseFor, type FaceBot, type FaceMode, type FacesModel, type Pose } from "./squadFloorLogic.ts";
+import { isCssColor, poseFor, type FaceBot, type FaceMode, type FacesModel, type Pose } from "./squadFloorLogic.ts";
 import { ordOf, type Member, type TeamView } from "./teams.ts";
 
+/** The two sky-god TVs (RiffBot, Overlord); the Perfection angel (C2) has a face but no sky zone. */
+export type SkyBot = Exclude<FaceBot, "angel">;
+
 export type SkyZone = {
-  bot: FaceBot;
+  bot: SkyBot;
   /** The live agent behind the zone, or null (RiffBot not started / no Overlord on duty). */
   member: Member | null;
   agentId: string | null;
@@ -17,7 +20,7 @@ export type SkyZone = {
 
 export type SkyZones = { hub: Pin | null; riffbot: SkyZone; overlord: SkyZone };
 
-const zoneOf = (bot: FaceBot, member: Member | null, dormant = false): SkyZone => ({
+const zoneOf = (bot: SkyBot, member: Member | null, dormant = false): SkyZone => ({
   bot,
   member,
   agentId: member?.agent.id ?? null,
@@ -306,7 +309,7 @@ export const faceBg = (faces: FacesModel | null, bot: FaceBot, theme: SkyTheme):
 /** The two TVs never resize: a fixed 50/50 grid. (G6's 70/30 Overlord expand is gone.) */
 export const SKY_COLUMNS = "minmax(0, 1fr) minmax(0, 1fr)";
 /** Which bot's chat is open over the right TV; null = rest (portraits only). Set by clicks only, never by focus or talking. */
-export type SkyOpen = FaceBot | null;
+export type SkyOpen = SkyBot | null;
 /** Who can be opened: RiffBot needs a chat agent (live or dormant); the Overlord needs to be live (no static, no closed one). */
 export type SkyCan = { riffbot: boolean; overlord: boolean };
 /**
@@ -320,7 +323,7 @@ export const slamPrevOpenOnMount = (open: boolean, playOnMount: boolean): boolea
  * A click on a TV's face. At rest the bot opens (if it can). While anything is open the left TV shows the open bot's face
  * (Riff's own, or the Overlord that took it over), so clicking it again closes; the right TV is under the chat and cannot be clicked.
  */
-export function skyFaceClick(open: SkyOpen, tv: FaceBot, can: SkyCan): SkyOpen {
+export function skyFaceClick(open: SkyOpen, tv: SkyBot, can: SkyCan): SkyOpen {
   if (open !== null) return tv === "riffbot" ? null : open;
   return can[tv] ? tv : null;
 }
@@ -641,3 +644,29 @@ export const slamPuffPoints = (r: Rect): { x: number; y: number }[] => [
   { x: r.left, y: r.top + r.height },
   { x: r.left + r.width, y: r.top + r.height },
 ];
+
+// ── Sky clouds (C2, sky-clouds.json): the side fill of the Perfection angel strip ──
+export type SkyClouds = { w: number; h: number; top: { dark: string; light: string } };
+export const SKY_CLOUDS_JSON_URL = "/office/sky-clouds.json";
+export const SKY_CLOUDS_URL = (theme: SkyTheme) => `/office/sky-clouds-${theme}.png`;
+/** Validate sky-clouds.json: tile `w`x`h` and the per-theme `top` colour filled above the tile; anything else → absent (plain gradient). */
+export function validateSkyClouds(json: unknown): { ok: true; value: SkyClouds } | { ok: false; error: string } {
+  if (!json || typeof json !== "object") return { ok: false, error: "not an object" };
+  const { w, h, top } = json as Record<string, unknown>;
+  if (!posNum(w) || !posNum(h)) return { ok: false, error: "w/h must be > 0" };
+  const t = (top ?? {}) as Record<string, unknown>;
+  if (!isCssColor(t.dark) || !isCssColor(t.light)) return { ok: false, error: "top needs dark/light colours" };
+  return { ok: true, value: { w, h, top: { dark: t.dark, light: t.light } } };
+}
+/** The cloud strip: the top colour fills the area, the tile repeats along x on the bottom edge at `k` CSS px per art px (the face's scale). A null `url` (art absent) leaves just the colour. */
+export function cloudStripStyle(clouds: SkyClouds, theme: SkyTheme, k: number, url: string | null): Record<string, string> {
+  const style: Record<string, string> = { backgroundColor: clouds.top[theme] };
+  if (url && k > 0) {
+    style.backgroundImage = `url(${url})`;
+    style.backgroundSize = `${clouds.w * k}px ${clouds.h * k}px`;
+    style.backgroundRepeat = "repeat-x";
+    style.backgroundPosition = "left bottom";
+    style.imageRendering = "pixelated";
+  }
+  return style;
+}

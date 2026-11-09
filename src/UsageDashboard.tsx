@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { AngelBezel } from "./AngelBezel";
+import type { PinHandler } from "./PinGrid";
+import type { Pin } from "./pins";
 import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
@@ -248,7 +251,10 @@ export function useUsage(): { data: UsageData | null; error: string | null; refr
   return { data, error, refresh, applyUsageReview };
 }
 
-export function UsageDashboard() {
+/** C2: the Perfection angel on top opens `perfection` (the standing Workflows/audit lane); null → she shows but is not clickable. */
+export type UsagePerfection = { pin: Pin | null; onOpen?: PinHandler };
+
+export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } = {}) {
   const { data, error, refresh, applyUsageReview } = useUsage();
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "costUsd", dir: -1 });
   const [now, setNow] = useState(() => Date.now());
@@ -304,6 +310,7 @@ export function UsageDashboard() {
   if (!data) {
     return (
       <div className="squads-dashboard" data-testid="squads-dashboard">
+        <AngelBezel pin={perfection?.pin ?? null} onOpen={perfection?.onOpen} />
         <TriageCrt now={now} review={review} running={running} status={reviewStatus} error={reviewError} onInterval={changeInterval} onRun={runNow} />
         <div className="muted small">{error ? `Usage unavailable: ${error}` : "Loading usage…"}</div>
       </div>
@@ -317,6 +324,7 @@ export function UsageDashboard() {
 
   return (
     <div className="squads-dashboard" data-testid="squads-dashboard">
+      <AngelBezel pin={perfection?.pin ?? null} onOpen={perfection?.onOpen} />
       <TriageCrt now={now} review={review} running={running} status={reviewStatus} error={reviewError} onInterval={changeInterval} onRun={runNow} />
       <div className="usage-title">Usage</div>
       <div className="usage-limits" data-testid="usage-limits">
