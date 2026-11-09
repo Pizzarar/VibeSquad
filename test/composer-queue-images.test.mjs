@@ -22,8 +22,10 @@ test("image-queue: the queue guard no longer bypasses on images/files/context", 
 
 test("image-queue: queued items carry images and the idle flush sends them", () => {
   assert.match(composer, /export type QueuedTurnItem = \{[\s\S]*?images/);
-  // both flush paths (idle effect + "Send this now") must forward the images, not call sendMessage with undefined
-  assert.equal((drawer.match(/flushQueued\(agent\.id, combinedText, queuedBlobs\)/g) ?? []).length, 2);
+  // both flush paths (store idle flusher + "Send this now") must forward the images, not call sendMessage with undefined
+  const wire = readFileSync(new URL("../src/composerQueueWire.ts", import.meta.url), "utf8");
+  assert.match(drawer, /flushQueued\(agent\.id, combinedText, /);
+  assert.match(wire, /send: flushQueued/);
   assert.doesNotMatch(drawer, /sendMessage\(agent\.id, combinedText, undefined/);
-  assert.match(drawer, /flushQueued[\s\S]{0,200}blobsToPaseoImages\(images\)/);
+  assert.match(wire, /flushQueued[\s\S]{0,200}blobsToPaseoImages\(images\)/);
 });
