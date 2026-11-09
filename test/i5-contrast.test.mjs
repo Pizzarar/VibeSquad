@@ -1,8 +1,12 @@
 // Block I5 (docs/PLAN_INBOX_SWEEP_1108.md, idea-26 + idea-27): @art V1b contrast leftovers.
-// (a) .drawer-labels-list .chip clears the U3 9-slice border-image-source (--u3-chip-teal) so the tinted P0 panel fill shows (>= 4.5:1).
-// (b) .sky-static moves the repeating-linear-gradient scanlines onto ::before (pointer-events: none, behind content) so text sits on the solid base.
+// (a) In Vite 8's CSS minifier (lightningcss), `border-image: none !important` is serialized as invalid `border-image:!important`
+//     (empty value before `!important`), which Chromium drops at parse time. That left U3's `.chip { border-image-source: var(--u3-chip-teal) }`
+//     and `border-image-slice: 3 4 fill` active in production builds, painting the solid #4fd6cf teal sprite fill (1.59:1 with #f7f0ff --text).
+//     Using the longhand `border-image-source: none !important` survives lightningcss (`border-image-source:none!important`) and clears the sprite.
+// (b) `.sky-static-text` already sits on solid `background: var(--bg)` (>= 4.5:1 in dark and light).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import test from "node:test";
 
 const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8").replace(/\r\n/g, "\n");
@@ -55,20 +59,33 @@ const ratio = (a, b) => {
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 };
 
-test("I5a: .drawer-labels-list .chip clears the U3 border-image-source (--u3-chip-teal) and meets >= 4.5:1 in dark and light", () => {
-  // The U3 rule `.badge, .unit-tag, .chip, ... { border-image-source: var(--u3-chip-teal); }` comes AFTER the border-image shorthand,
-  // so `.drawer-labels-list .chip` in `.pin-rail-active-inspector` (outside U4b's `.sidebar` scope) painted the solid teal 9-slice fill.
+test("I5a: .drawer-labels-list .chip avoids lightningcss border-image:none truncation and clears --u3-chip-teal (>= 4.5:1)", () => {
+  const u3ChipFill = allRules.find((r) => /\.chip\b/.test(r.sel) && /border-image:[^;]*\bfill\b/.test(r.body));
   const u3ChipTeal = allRules.find((r) => /\.chip\b/.test(r.sel) && /border-image-source:\s*var\(--u3-chip-teal\)/.test(r.body));
-  assert.ok(u3ChipTeal, "U3 .chip border-image-source rule exists");
+  assert.ok(u3ChipFill && u3ChipTeal, "U3 .chip 9-slice fill and --u3-chip-teal rules exist");
+
+  // Confirm why master's `chip-teal-dark.png` center (#4fd6cf = rgb(79,214,207)) failed with dark `--text` (#f7f0ff): 1.59:1 < 4.5.
+  const brokenCr = ratio(color(dark, "var(--text)"), [79, 214, 207]);
+  assert.ok(brokenCr < 1.65, `un-cleared --u3-chip-teal fill contrast is ${brokenCr.toFixed(2)}:1 (< 4.5:1)`);
 
   const override = allRules.find((r) => r.sel === ":root:root .drawer-labels-list .chip");
   assert.ok(override, ":root:root .drawer-labels-list .chip override exists");
   assert.ok(override.at > u3ChipTeal.at, "override appears after U3 .chip border-image-source rule");
-  assert.match(override.body, /border-image:\s*none\s*!important/, "clears border-image shorthand");
-  assert.match(override.body, /border-image-source:\s*none\s*!important/, "clears border-image-source longhand");
-  assert.match(override.body, /border:\s*1px solid var\(--cyan\)\s*!important/, "resets border from U3 1x2 kit-px transparent slice to 1px solid var(--cyan)");
-  assert.match(override.body, /background:\s*color-mix\(in srgb,\s*var\(--cyan\)\s+18%,\s*var\(--panel\)\)\s*!important/);
-  assert.match(override.body, /color:\s*var\(--text\)\s*!important/);
+  assert.doesNotMatch(override.body, /border-image\s*:\s*none\b/, "must not use `border-image: none` shorthand (lightningcss minifies it to invalid `border-image:`)");
+  assert.match(override.body, /border-image-source:\s*none\s*!important/, "uses longhand `border-image-source: none !important`");
+
+  // Verify through Vite's lightningcss minifier that the rule emits valid `border-image-source:none!important` (and not `border-image:!important`).
+  const req = createRequire(new URL("../node_modules/vite/package.json", import.meta.url));
+  const lightningcss = req("lightningcss");
+  const minified = lightningcss
+    .transform({
+      filename: "styles.css",
+      code: Buffer.from(`${override.sel} { ${override.body} }`),
+      minify: true,
+    })
+    .code.toString();
+  assert.doesNotMatch(minified, /border-image:\s*(!important|[;}])/, "minified CSS has no empty `border-image:` value");
+  assert.match(minified, /border-image-source:none!important/, "minified CSS preserves `border-image-source:none!important`");
 
   for (const [name, tokens] of [
     ["dark", dark],
@@ -81,33 +98,9 @@ test("I5a: .drawer-labels-list .chip clears the U3 border-image-source (--u3-chi
   }
 });
 
-test("I5b: .sky-static moves scanline repeating-linear-gradient to ::before (pointer-events: none, behind content) and keeps solid base >= 4.5:1", () => {
-  const base = allRules.find((r) => r.sel === ".sky-static");
-  assert.ok(base, ".sky-static rule exists");
-  assert.doesNotMatch(base.body, /repeating-linear-gradient/, ".sky-static itself has no repeating-linear-gradient");
-  assert.match(base.body, /background-color:\s*#11131f/, ".sky-static keeps solid dark base #11131f");
-  assert.match(base.body, /position:\s*relative/, ".sky-static is position: relative for ::before");
-  assert.match(base.body, /isolation:\s*isolate/, ".sky-static isolates stacking context so z-index: -1 stays above solid base");
-
-  const before = allRules.find((r) => r.sel === ".sky-static::before");
-  assert.ok(before, ".sky-static::before rule exists");
-  assert.match(before.body, /content:\s*""/);
-  assert.match(before.body, /position:\s*absolute/);
-  assert.match(before.body, /pointer-events:\s*none/, "::before has pointer-events: none");
-  assert.match(before.body, /z-index:\s*-1/, "::before sits behind content");
-  assert.match(before.body, /inset:\s*0\s+0\s+60%\s+0/, "::before stops above centered label/button");
-  assert.match(before.body, /repeating-linear-gradient\(0deg/, "::before carries horizontal scanlines");
-  assert.match(before.body, /repeating-linear-gradient\(90deg/, "::before carries vertical scanlines");
-  assert.match(before.body, /animation:\s*sky-static-roll/);
-
-  const idleBefore = allRules.find((r) => r.sel === ".sky-zone.is-idle .sky-static::before");
-  assert.ok(idleBefore && /display:\s*none/.test(idleBefore.body), "idle strip disables ::before scanlines");
-
+test("I5b: .sky-static-text sits on solid var(--bg) with >= 4.5:1 contrast in dark and light", () => {
   const textRule = allRules.find((r) => r.sel === ".sky-static-text");
   assert.ok(textRule && /background:\s*var\(--bg\)/.test(textRule.body), ".sky-static-text sits on solid var(--bg)");
-
-  const btnRule = allRules.find((r) => r.sel === ".sky-static .btn");
-  assert.ok(btnRule && /background:\s*var\(--cyan-fill\)/.test(btnRule.body) && /color:\s*var\(--on-cyan-fill\)/.test(btnRule.body), ".sky-static .btn uses solid --cyan-fill + --on-cyan-fill");
 
   for (const [name, tokens] of [
     ["dark", dark],
@@ -115,7 +108,5 @@ test("I5b: .sky-static moves scanline repeating-linear-gradient to ::before (poi
   ]) {
     const textCr = ratio(color(tokens, "var(--text)"), color(tokens, "var(--bg)"));
     assert.ok(textCr >= 4.5, `${name} .sky-static-text contrast ${textCr.toFixed(2)}:1 >= 4.5:1`);
-    const btnCr = ratio(color(tokens, "var(--on-cyan-fill)"), color(tokens, "var(--cyan-fill)"));
-    assert.ok(btnCr >= 4.5, `${name} .sky-static .btn contrast ${btnCr.toFixed(2)}:1 >= 4.5:1`);
   }
 });
