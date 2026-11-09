@@ -74,7 +74,7 @@ test("1280x720 (sidebar 265): the column is narrower than the 960 art, so only t
 test("CSS + wiring: the band yields (shrinks to a slim strip), the box keeps --floor-need, HubPages sets it from floor.json", () => {
   assert.match(css, /\.hub-sky-page \{ flex: 0 1 clamp\(260px, 36vh, 440px\); min-height: var\(--sky-slim, 112px\);/);
   assert.match(css, /\.hub-tower-box \{ flex: 1 0 var\(--floor-need, 125px\); min-height: var\(--floor-need, 125px\);/);
-  assert.match(hub, /floorNeedCssPx\(native\.h, useDpr\(\), useUiScale\(\), width, native\.w\)/);
+  assert.match(hub, /floorNeedCssPx\(native\.h, useDpr\(\), (?:useUiScale\(\)|uiScale), width, native\.w\)/);
   assert.match(hub, /"--floor-need": `\$\{floorNeed\}px`/);
   assert.match(hub, /fetch\("\/office\/floor\.json"\)/);
   assert.doesNotMatch(css, /\.hub-sky-page[^{]*\{[^}]*transition/);
