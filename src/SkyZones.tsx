@@ -102,10 +102,11 @@ function ZoneFace({
   );
 }
 
-/** The shared bezel look (RiffBot / Overlord zones and the Perfection angel strip): the sky-crt.json border-image style once its art loads, and the sky PNG. Both null → the CSS bezel / gradient. */
-export function useSkyBezel() {
+/** The shared bezel look, `scale` overriding the border's art scale (the compact angel strip uses 1) (RiffBot / Overlord zones and the Perfection angel strip): the sky-crt.json border-image style once its art loads, and the sky PNG. Both null → the CSS bezel / gradient. */
+export function useSkyBezel(scale?: number) {
   const theme = useTheme();
-  const crt = useSkyCrtModel();
+  const model = useSkyCrtModel();
+  const crt = model && scale ? { ...model, scale } : model; // scale: the art px the bezel's border is drawn at (default sky-crt.json's)
   const dpr = useDpr();
   return skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr);
 }

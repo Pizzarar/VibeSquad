@@ -670,3 +670,13 @@ export function cloudStripStyle(clouds: SkyClouds, theme: SkyTheme, k: number, u
   }
   return style;
 }
+
+/** C2: device px per art px for the Perfection angel (the compact contract): 6 at 4K@120% (3200 device px wide), 4 at 1080, 2 at the 720 floor. Whole device px, so the art stays crisp at any zoom. */
+export function angelDeviceScale(cssW: number, cssH: number, dpr = 1): number {
+  const d = safeDpr(dpr);
+  if (!(cssW > 0) || cssH <= 760) return 2;
+  const dw = cssW * d;
+  return dw >= 2800 ? 6 : dw >= 1600 ? 4 : 2;
+}
+/** The same scale in CSS px per art px (device scale / dpr). */
+export const angelCssScale = (cssW: number, cssH: number, dpr = 1): number => angelDeviceScale(cssW, cssH, dpr) / safeDpr(dpr);

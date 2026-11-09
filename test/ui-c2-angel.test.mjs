@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { faceFrame, validateFaces } from "../src/squadFloorLogic.ts";
-import { cloudStripStyle, SKY_CLOUDS_URL, validateSkyClouds } from "../src/skyZonesLogic.ts";
+import { angelCssScale, angelDeviceScale, cloudStripStyle, SKY_CLOUDS_URL, validateSkyClouds } from "../src/skyZonesLogic.ts";
 import { perfectionPin } from "../src/pins.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
@@ -71,10 +71,22 @@ test("angel button: a real button with an aria-label, hover mode, reduced-motion
   assert.match(src("PinGrid.tsx"), /perfectionPin\(views\)/);
 });
 
-test("css: compact strip height from the angel scale, no massive scroll", () => {
+test("angel scale is in DEVICE px: 6 at 4K@1.2, 4 at 1080, 2 at 720; css = device / dpr", () => {
+  assert.equal(angelDeviceScale(2667, 1500, 1.2), 6);
+  assert.equal(angelCssScale(2667, 1500, 1.2), 5);
+  assert.equal(angelDeviceScale(1920, 1080, 1), 4);
+  assert.equal(angelCssScale(1920, 1080, 1), 4);
+  assert.equal(angelDeviceScale(1280, 720, 1), 2);
+  // compact strips: 49 art px (1 px headroom) + 2px borders
+  assert.ok(49 * 5 + 4 <= 260 && 49 * 4 + 4 <= 200);
   const css = src("styles.css");
-  assert.match(css, /\.angel-strip\b/);
-  assert.match(css, /--angel-k:\s*5/);
-  assert.match(css, /--angel-k:\s*7/);
-  assert.match(css, /image-rendering: pixelated/);
+  assert.ok(css.includes("height: calc(49px * var(--angel-k))"));
+  assert.doesNotMatch(css, /@media[^{]*\{ \.angel-strip \{ --angel-k/, "scale comes from device px, not css media queries");
+  assert.ok(src("AngelBezel.tsx").includes("useAngelScale(dpr)"));
+});
+
+test("css: the strip defines its own sky vars + light fallback bg (they are scoped to .sky-zones otherwise)", () => {
+  const css = src("styles.css");
+  assert.match(css, /\.angel-strip \{[^}]*--sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2;/);
+  assert.ok(css.includes(':root[data-theme="light"] .angel-strip { background-color: var(--sky-face-bg-light)'));
 });
