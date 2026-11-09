@@ -85,7 +85,7 @@ test("C2 (R2 M): a rail click on RiffBot / Overlord opens that bot's chat on the
   const pf = src("pinFocus.ts"), app = src("App.tsx"), hub = src("HubPages.tsx");
   assert.match(pf, /isHubPin\(pin\) && \(agentId === pin\.brainstorm\?\.agent\.id \|\| agentId === pin\.lead\?\.agent\.id\)/);
   assert.match(app, /const skyReq = useSkyRequest\(\)/);
-  assert.match(app, /<SkyZones key=\{skyReq\.n\} initialOpen=\{skyReq\.bot\}/);
+  assert.match(app, /<SkyZones view=\{pinFocusView\} key=\{skyReq\.n\} initialOpen=\{skyReq\.bot\}/);
   assert.doesNotMatch(hub, /hub-tab|useSkyRequest/, "HP5 HubPages stays the plain single view");
 });
 

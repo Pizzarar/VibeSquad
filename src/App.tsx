@@ -2026,7 +2026,7 @@ export function App() {
           {pinFocusView && (
             <HubPages
               agentOpen={hubAgentOpen}
-              sky={<><SkyZones key={skyReq.n} initialOpen={skyReq.bot} view={pinFocusView} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}</>}
+              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}</>}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />
