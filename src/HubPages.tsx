@@ -78,7 +78,7 @@ export function HubPages({
     const ro = new ResizeObserver((es) => es.forEach((e) => setWidth(e.contentRect.width)));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  }, [agentOpen]); // the root div only exists while the agent is not open
   if (agentOpen) return <>{strip}{tower}</>;
   return (
     <div ref={root} className="hub-pages" data-testid="hub-pages" style={{ "--floor-need": `${floorNeed}px` } as CSSProperties}>

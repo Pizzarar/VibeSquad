@@ -153,6 +153,7 @@ test("FS-b wiring: skip-if-absent, hover + keyboard focus, drawn above the front
   assert.match(comp, /pointedItem && cast && cursor && <SeatCursor /); // drawn in the bubbles layer, above the front overlay
   assert.match(comp, /onMouseEnter=\{\(\) => onPoint\(agent\.agentId\)\}/); // hover shows it
   assert.match(comp, /e\.currentTarget\.matches\(":focus-visible"\) && onPoint/); // keyboard focus shows it, pointer focus does not
+  assert.match(comp, /const pointed = hoveredId ?? focusedId;/); // hover and focus tracked apart
   assert.match(comp, /cursor\.reduced \? \{ animation: "none" \}/);
   assert.match(css, /\.sq-floor-front \{ position: absolute; z-index: 2;/);
   assert.match(css, /\.sq-floor-cursor \{ display: block; z-index: 3;[^}]*image-rendering: pixelated/);

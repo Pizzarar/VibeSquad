@@ -117,7 +117,7 @@ type CursorArt = { model: FloorCursor; url: string; reduced: boolean };
 type SeatProps = {
   item: BandItem;
   /** Hover / keyboard focus (:focus-visible) reports the seat so the band can draw the selector arrow above the front overlay. */
-  onPoint: (agentId: string | null) => void;
+  onPoint: (kind: "hover" | "focus", agentId: string | null) => void;
   cast: CastModel | null;
   sheet: string | null;
   frameIndex: number;
@@ -135,10 +135,10 @@ function Seat({ item: { agent, anchor, onOpen }, cast, sheet, frameIndex, onPoin
       title={`${agent.title} · ${status}`}
       style={{ left: anchor.x, top: anchor.y, ...(cast ? { width: cast.cell, height: cast.cell } : {}) }}
       onClick={onOpen}
-      onMouseEnter={() => onPoint(agent.agentId)}
-      onMouseLeave={() => onPoint(null)}
-      onFocus={(e) => e.currentTarget.matches(":focus-visible") && onPoint(agent.agentId)}
-      onBlur={() => onPoint(null)}
+      onMouseEnter={() => onPoint("hover", agent.agentId)}
+      onMouseLeave={() => onPoint("hover", null)}
+      onFocus={(e) => e.currentTarget.matches(":focus-visible") && onPoint("focus", agent.agentId)}
+      onBlur={() => onPoint("focus", null)}
     >
       {hasSprite ? (
         <span
@@ -225,7 +225,11 @@ function Band({
   cursor: CursorArt | null;
 }) {
   const sorted = sortByAnchorY(items);
-  const [pointed, setPointed] = useState<string | null>(null);
+  // Hover and keyboard focus are tracked apart: leaving with the mouse must not hide the arrow of a seat that still has :focus-visible.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
+  const pointed = hoveredId ?? focusedId;
+  const onPoint = (kind: "hover" | "focus", id: string | null) => (kind === "hover" ? setHoveredId(id) : setFocusedId(id));
   const pointedItem = cursor && cast ? sorted.find((it) => it.agent.agentId === pointed) : undefined;
   const layers = bandLayers(!!frontSrc);
   return (
@@ -238,7 +242,7 @@ function Band({
             return (
               <span key={layer} style={{ display: "contents" }}>
                 {sorted.map((it) => (
-                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} onPoint={setPointed} />
+                  <Seat key={it.agent.agentId} item={it} cast={cast} sheet={sheet} frameIndex={frameIndex} onPoint={onPoint} />
                 ))}
                 {extras}
               </span>
