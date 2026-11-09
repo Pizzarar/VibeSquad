@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import {
   createPlugin,
+  gitUnitBranchState,
   deriveTeamForSpawn,
   isHubCwd,
   laneBriefBlock,
@@ -152,6 +154,7 @@ function harness(
     cappedProviders?: any;
     usageProviders?: any[];
     leadWakeCooldownMs?: number;
+    unitBranchState?: (cwd: string | undefined) => Promise<{ unit: string; merged: boolean }>;
     /** Test hook for flushWake's snap(): null -> null snapshot, a string -> the agent with that status. */
     snapStatusOverride?: (id: string) => string | null | undefined;
   },
@@ -184,6 +187,7 @@ function harness(
     retryBaseMs: 10,
     firstPromptRedeliverMs: 60_000,
     leadWakeCooldownMs: opts.leadWakeCooldownMs ?? 40,
+    ...(opts.unitBranchState ? { unitBranchState: opts.unitBranchState } : {}),
     ...(opts.cappedProviders !== undefined ? { cappedProviders: opts.cappedProviders } : {}),
     ...(opts.usageProviders !== undefined ? { usageProviders: opts.usageProviders } : {}),
     setLabels: async (agentId: string, labels: Record<string, string>, name?: string) => {
@@ -252,6 +256,7 @@ function harness(
     stop,
     archivedIds,
     scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
+    sweepDoneWorkers: (stop as any).sweepDoneWorkers as (now?: number) => Promise<string[]>,
     async beforeCreate(req: any) {
       return (await before.get("agent.create")!({ request: req })) ?? req;
     },
@@ -1208,6 +1213,54 @@ test(
 );
 
 test(
+  "B1: the done sweep archives only long-done, merged, non-FAIL idle/closed workers; never leads, Buddies, running or in-grace workers",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, role: string, extra: any = {}, status = "idle") => ({
+      id, title: id, cwd: id === "w-unmerged" ? "/unmerged" : CWD, status, provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role, ...extra },
+    });
+    const agents = new Map<string, any>([
+      ["w-old", mk("w-old", "worker", {}, "closed")],
+      ["w-old-idle", mk("w-old-idle", "worker")],
+      ["w-running", mk("w-running", "worker", {}, "running")],
+      ["w-fresh", mk("w-fresh", "worker")],
+      ["w-fail", mk("w-fail", "worker")],
+      ["w-unmerged", mk("w-unmerged", "worker")],
+      ["lead-1", mk("lead-1", "lead", { lead: "vibesquad" })],
+      ["buddy-1", mk("buddy-1", "brainstorm")],
+    ]);
+    const h = harness(agents, {
+      briefRoot,
+      unitBranchState: async (cwd) => (cwd === "/unmerged" ? { unit: "unit-x", merged: false } : { unit: "unit-ok", merged: true }),
+    });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (id: string, text: string, ageMin: number) =>
+        JSON.stringify({ ts: new Date(now - ageMin * 60_000).toISOString(), agent: id, lane: "vibesquad", type: "done", text, refs: [] }) + "\n";
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      await h.onTurnEnded(agents.get("lead-1")); // hands the plugin its paseo handle; scanLogs below stays baseline-free (history)
+      writeFileSync(
+        file,
+        ["w-old", "w-old-idle", "w-running", "lead-1", "buddy-1", "w-unmerged"].map((id) => line(id, "PASS: shipped", 45)).join("") +
+          line("w-fresh", "PASS: shipped", 5) +
+          line("w-fail", "FAIL: tests red", 90),
+        "utf8",
+      );
+      const archived = await h.sweepDoneWorkers(now);
+      assert.deepEqual(archived.sort(), ["w-old", "w-old-idle"]);
+      assert.deepEqual(h.archivedIds.sort(), ["w-old", "w-old-idle"]);
+      const metrics = readFileSync(file, "utf8").split("\n").filter((l) => l.includes("worker-auto-archive"));
+      assert.equal(metrics.length, 2);
+      assert.ok(metrics.some((l) => l.includes("worker-auto-archive id=w-old unit=unit-ok")));
+      assert.deepEqual(await h.sweepDoneWorkers(now), [], "archived workers are not archived twice");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
   "R5: failover relabels env VS_PROFILE and config labels, not just request labels",
   withEnv(async ({ briefRoot }) => {
     const h = harness(new Map(), { briefRoot, cappedProviders: { claude: { reason: "cap" } } });
@@ -1286,6 +1339,153 @@ test(
       // The same archived agent WITHOUT the marker is still treated as retired (no live lead -> throws).
       delete w.labels["vs.auto-archived"];
       await assert.rejects(() => h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), /retired/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// B1 review R1 — default to keep
+// ---------------------------------------------------------------------------
+
+test(
+  "B1 R1: the sweep needs an explicit role=worker; missing, empty, overlord and reviewer roles are kept",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, labels: Record<string, string>) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", ...labels },
+    });
+    const agents = new Map<string, any>([
+      ["w-ok", mk("w-ok", { role: "worker" })],
+      ["no-role", mk("no-role", {})],
+      ["empty-role", mk("empty-role", { role: "" })],
+      ["overlord", mk("overlord", { role: "overlord" })],
+      ["reviewer", mk("reviewer", { role: "reviewer" })],
+      ["lead-1", mk("lead-1", { role: "lead", lead: "vibesquad" })],
+    ]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (id: string) => JSON.stringify({ ts: new Date(now - 60 * 60_000).toISOString(), agent: id, lane: "vibesquad", type: "done", text: "PASS", refs: [] }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(join(vsHome, "teams", "vibesquad", "log.jsonl"), [...agents.keys()].map(line).join(""), "utf8");
+      assert.deepEqual(await h.sweepDoneWorkers(now), ["w-ok"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "B1 R1: only the worker's own done counts; another author's ref is not its report, a digest FAIL verdict keeps it, git state is read once per cwd",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, cwd = CWD) => ({
+      id, title: id, cwd, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "worker" },
+    });
+    const agents = new Map<string, any>([
+      ["w-ref-only", mk("w-ref-only")],
+      ["w-digest-fail", mk("w-digest-fail")],
+      ["w-ok-1", mk("w-ok-1")],
+      ["w-ok-2", mk("w-ok-2")],
+      ["lead-1", { ...mk("lead-1"), labels: { team: "vibesquad", lane: "vibesquad", role: "lead", lead: "vibesquad" } }],
+    ]);
+    const calls: Array<string | undefined> = [];
+    const h = harness(agents, { briefRoot, unitBranchState: async (cwd) => (calls.push(cwd), { unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const ts = (min: number) => new Date(now - min * 60_000).toISOString();
+      const line = (agent: string, text: string, min: number, refs: string[] = []) =>
+        JSON.stringify({ ts: ts(min), agent, lane: "vibesquad", type: "done", text, refs }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        line("lead-1", "PASS: lane note", 60, ["w-ref-only"]) +
+          line("w-digest-fail", "PASS: shipped", 90) +
+          line("digest-9", "FAIL: regression", 60, ["w-digest-fail"]) +
+          line("w-ok-1", "PASS", 60) +
+          line("w-ok-2", "PASS", 60),
+        "utf8",
+      );
+      assert.deepEqual((await h.sweepDoneWorkers(now)).sort(), ["w-ok-1", "w-ok-2"]);
+      assert.equal(calls.length, 1, "same cwd: one git lookup per sweep");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test("B1 R1: gitUnitBranchState keeps (merged:false) on every unknown; merged:true only for a named branch contained in master", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-b1-git-"));
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, stdio: "pipe" });
+  try {
+    assert.deepEqual(await gitUnitBranchState(undefined), { unit: "", merged: false }, "no cwd");
+    assert.deepEqual(await gitUnitBranchState(join(root, "missing")), { unit: "", merged: false }, "cwd absent");
+    const plain = join(root, "plain");
+    mkdirSync(plain);
+    assert.equal((await gitUnitBranchState(plain)).merged, false, "not a repo");
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "master");
+    writeFileSync(join(repo, "a.txt"), "a");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "a");
+    assert.equal((await gitUnitBranchState(repo)).merged, false, "on master");
+    git(repo, "checkout", "-q", "-b", "unit-merged");
+    assert.deepEqual(await gitUnitBranchState(repo), { unit: "unit-merged", merged: true }, "named branch contained in master");
+    git(repo, "checkout", "-q", "-b", "unit-open");
+    writeFileSync(join(repo, "b.txt"), "b");
+    git(repo, "add", ".");
+    git(repo, "commit", "-q", "-m", "b");
+    assert.deepEqual(await gitUnitBranchState(repo), { unit: "unit-open", merged: false }, "unmerged branch");
+    git(repo, "checkout", "-q", "--detach");
+    assert.equal((await gitUnitBranchState(repo)).merged, false, "detached HEAD");
+    const nobase = join(root, "nobase");
+    mkdirSync(nobase);
+    git(nobase, "init", "-q", "-b", "trunk");
+    writeFileSync(join(nobase, "a.txt"), "a");
+    git(nobase, "add", ".");
+    git(nobase, "commit", "-q", "-m", "a");
+    git(nobase, "checkout", "-q", "-b", "unit-z");
+    assert.equal((await gitUnitBranchState(nobase)).merged, false, "no master/main base branch");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test(
+  "B1 R2: digest verdicts (agent=digest, refs=[worker]) govern grace and FAIL; the newest wins; a lead decision that refs the worker does not count",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const base = { cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true };
+    const mkW = (id: string) => ({ id, title: id, ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } });
+    const agents = new Map<string, any>([
+      ...["w-pass", "w-fail", "w-reset", "w-lead-ref", "w-unv-fail", "w-unv-pass"].map((id) => [id, mkW(id)] as [string, any]),
+      ["digest-1", { id: "digest-1", title: "digest-1", ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "digest", digestFor: "x" } }],
+      ["lead-1", { id: "lead-1", title: "lead-1", ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "lead", lead: "vibesquad" } }],
+    ]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      const now = Date.now();
+      const line = (agent: string, text: string, min: number, refs: string[]) =>
+        JSON.stringify({ ts: new Date(now - min * 60_000).toISOString(), agent, lane: "vibesquad", type: "done", text, refs }) + "\n";
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(
+        join(vsHome, "teams", "vibesquad", "log.jsonl"),
+        line("digest-1", "PASS: shipped", 45, ["w-pass"]) +
+          line("digest-1", "FAIL: tests red", 45, ["w-fail"]) +
+          line("digest-1", "PASS: first", 90, ["w-reset"]) +
+          line("digest-1", "PASS: fix round", 5, ["w-reset"]) + // newer digest inside the grace window resets it
+          line("lead-1", "PASS: decision", 60, ["w-lead-ref"]) + // lead decision refs the worker: not its report
+          line("digest-9", "UNVERIFIED (digest failed): FAIL", 60, ["w-unv-fail"]) +
+          line("digest-9", "UNVERIFIED (digest failed): PASS", 60, ["w-unv-pass"]),
+        "utf8",
+      );
+      assert.deepEqual((await h.sweepDoneWorkers(now)).sort(), ["w-pass", "w-unv-pass"]);
     } finally {
       h.stop?.();
     }

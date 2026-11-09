@@ -1,3 +1,4 @@
+import { clampCtxMenu, rootZoom } from "./pinMenuPlace";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "./agentTypes";
 import type { FileExplorerDirectoryPayload } from "./agentTypes";
@@ -628,7 +629,7 @@ export function FilesPanel({
           className="ctx-menu files-ctx-menu"
           data-testid="files-ctx-menu"
           role="menu"
-          style={{ left: Math.max(4, Math.min(menu.x, window.innerWidth - 170)), top: Math.max(4, Math.min(menu.y, window.innerHeight - 220)) }}
+          style={clampCtxMenu(menu.x, menu.y, { w: 170, h: 220 }, { w: window.innerWidth, h: window.innerHeight }, rootZoom())}
           onMouseDown={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
         >

@@ -931,6 +931,40 @@ export interface Deps {
   usageProviders?: any[] | (() => any[]);
   /** Capped-provider map/array (tests inject this to avoid touching ~/.vibesquad/capped-providers.json). */
   cappedProviders?: any;
+  /** Sweep cadence for archiving long-done workers (0 disables). Piggybacks on the log-watch interval. */
+  doneSweepIntervalMs?: number;
+  /** A worker is archived this long after its last `done` report (lead may still send a fix round meanwhile). */
+  doneArchiveGraceMs?: number;
+  /** The worker's unit branch (its cwd's HEAD) and whether it is merged into master. Unknown => merged:false (keep). */
+  unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
+}
+
+/**
+ * Default unitBranchState: HEAD branch of the worker's cwd. merged:true ONLY when that is a named non-master/main branch that
+ * is an ancestor of master/main. Anything unknown (no cwd, not a repo, detached HEAD, on master/main, no base branch,
+ * unmerged) is merged:false: default to keep.
+ */
+export function gitUnitBranchState(cwd: string | undefined): Promise<{ unit: string; merged: boolean }> {
+  const git = (args: string[]) =>
+    new Promise<{ ok: boolean; out: string }>((resolve) => {
+      if (!cwd || !fs.existsSync(cwd)) return resolve({ ok: false, out: "" });
+      try {
+        execFile("git", ["--no-optional-locks", ...args], { cwd, encoding: "utf8", timeout: 5000, windowsHide: true }, (err, stdout) =>
+          resolve({ ok: !err, out: String(stdout ?? "").trim() }),
+        );
+      } catch {
+        resolve({ ok: false, out: "" });
+      }
+    });
+  return (async () => {
+    const head = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
+    if (!head.ok || !head.out || ["HEAD", "master", "main"].includes(head.out)) return { unit: "", merged: false };
+    for (const base of ["master", "main"]) {
+      const r = await git(["merge-base", "--is-ancestor", head.out, base]);
+      if (r.ok) return { unit: head.out, merged: true };
+    }
+    return { unit: head.out, merged: false };
+  })();
 }
 
 export interface AgentSettingsPatch {
@@ -993,6 +1027,9 @@ const DEFAULT_DEPS: Deps = {
   leadWakeCooldownMs: 3000,
   brainstormArchiveGraceMs: 120_000,
   firstPromptRedeliverMs: 30_000,
+  doneSweepIntervalMs: 5 * 60_000,
+  doneArchiveGraceMs: 30 * 60_000,
+  unitBranchState: gitUnitBranchState,
 };
 
 // ---------------------------------------------------------------------------
@@ -2254,7 +2291,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return;
       }
       const labels = s.labels ?? {};
-      if (isDigestAgent(labels) || effectiveAgentRole({ labels }) !== "worker") {
+      if (isDigestAgent(labels) || String(labels.role ?? "").trim().toLowerCase() !== "worker") {
         doneReported.delete(agentId); // lead / Buddy / digest: never auto-closed
         return;
       }
@@ -2822,10 +2859,139 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    const FAIL_RE = /\bFAIL(ED)?\b/;
+    /** Only an explicit role=worker label is archivable: a missing/empty/unknown role normalizes to "worker" elsewhere. */
+    const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
+    /** The newest done entry attributed to a worker. */
+    type DoneIndex = Map<string, LogEntry>;
+    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …". */
+    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL)\b/;
+    /**
+     * One pass over a team log: per worker, the NEWEST `done` entry that belongs to it. Workers cannot `vs log`, so the report
+     * is normally the digest's `{agent: digest, refs: [worker]}`. An entry belongs to worker W when its author is W, or when it
+     * refs W and the author is a digest agent, or the author is not a lead/Buddy/Overlord and the text is a PASS/FAIL verdict.
+     * A lead's or Buddy's decision that merely refs W never counts. `authorKind` resolves an author id (memoized per sweep).
+     */
+    async function indexDoneEntries(team: string, authorKind: (id: string) => Promise<"digest" | "manager" | "other">): Promise<DoneIndex> {
+      const idx: DoneIndex = new Map();
+      let text = "";
+      try {
+        text = fs.readFileSync(logPath(team), "utf8");
+      } catch {
+        return idx;
+      }
+      const credit = (id: string, e: LogEntry) => {
+        const prev = idx.get(id);
+        if (!prev || Date.parse(e.ts) >= Date.parse(prev.ts) || !Number.isFinite(Date.parse(prev.ts))) idx.set(id, e);
+      };
+      for (const line of text.split(/\r?\n/)) {
+        if (!line.includes('"done"')) continue;
+        let e: LogEntry;
+        try {
+          e = JSON.parse(line) as LogEntry;
+        } catch {
+          continue; // skip malformed
+        }
+        if (e.type !== "done") continue;
+        if (e.agent) credit(e.agent, e);
+        const refs = (e.refs ?? []).filter((r) => r && r !== e.agent);
+        if (!refs.length) continue;
+        const kind = await authorKind(e.agent);
+        if (kind === "manager" || (kind === "other" && !VERDICT_RE.test(String(e.text ?? "")))) continue;
+        for (const ref of refs) credit(ref, e);
+      }
+      return idx;
+    }
+
+    /**
+     * B1 (lean boot): archive finished WORKERS that the immediate close missed or that waited out their grace. Same archive
+     * path as `vs archive` / closeFinishedWorker (deps.archiveAgent + the auto-archived marker, so a later send revives).
+     * Skips leads, Buddies, Overlord, digests (role must be worker), running/permission-blocked workers, a last report that says
+     * FAIL, and workers whose unit branch is not merged yet (fix rounds go to them). Returns the archived ids.
+     */
+    let sweeping = false;
+    async function sweepDoneWorkers(now = Date.now()): Promise<string[]> {
+      const paseo = paseoApi;
+      if (!paseo || sweeping) return [];
+      sweeping = true;
+      const archivedIds: string[] = [];
+      try {
+        const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+        const grace = deps.doneArchiveGraceMs ?? 30 * 60_000;
+        const logIndex = new Map<string, DoneIndex>(); // once per team per sweep
+        const kinds = new Map<string, Promise<"digest" | "manager" | "other">>(); // author id -> kind, once per sweep
+        const authorKind = (id: string) => {
+          let k = kinds.get(id);
+          if (!k) {
+            k = (async () => {
+              const fromList = (res.entries as any[]).find((x) => x.agent?.id === id)?.agent;
+              const labels = (fromList ?? (await snap(paseo, id)))?.labels ?? {};
+              if (isDigestAgent(labels)) return "digest" as const;
+              const role = String(labels.role ?? "").trim().toLowerCase();
+              return ["lead", "brainstorm", "overlord"].includes(role) ? ("manager" as const) : ("other" as const);
+            })().catch(() => "other" as const);
+            kinds.set(id, k);
+          }
+          return k;
+        };
+        const branchState = new Map<string, Promise<{ unit: string; merged: boolean }>>(); // once per cwd per sweep
+        for (const e of res.entries as any[]) {
+          const a = { ...e.agent, labels: e.agent?.labels ?? {} } as AgentSnap;
+          if (!a.id || a.archivedAt || a.internal || a.labels[AUTO_ARCHIVED_LABEL] === "1") continue;
+          if (isDigestAgent(a.labels) || !isExplicitWorker(a.labels)) continue;
+          if (!["idle", "closed"].includes(String(a.status ?? "").toLowerCase())) continue;
+          if (((a as any).pendingPermissions?.length ?? 0) > 0 || (a as any).requiresAttention) continue;
+          const where = teamOf(a.labels, a.cwd);
+          if (!where) continue;
+          let idx = logIndex.get(where.team);
+          if (!idx) logIndex.set(where.team, (idx = await indexDoneEntries(where.team, authorKind)));
+          const done = idx.get(a.id);
+          if (!done) continue;
+          const at = Date.parse(done.ts);
+          if (!Number.isFinite(at) || now - at < grace) continue;
+          if (FAIL_RE.test(done.text)) continue; // newest verdict is FAIL (incl. "UNVERIFIED (digest failed): FAIL"): the fix round goes here
+          const cwdKey = a.cwd ?? "";
+          let pending = branchState.get(cwdKey);
+          if (!pending) {
+            pending = Promise.resolve((deps.unitBranchState ?? gitUnitBranchState)(a.cwd)).catch(() => ({ unit: "", merged: false }));
+            branchState.set(cwdKey, pending);
+          }
+          const state = await pending;
+          if (!state.merged) continue;
+          // Re-read right before archiving: a fix round may have started since the list.
+          const fresh = await snap(paseo, a.id);
+          if (!fresh || fresh.archivedAt || !["idle", "closed"].includes(String(fresh.status ?? "").toLowerCase())) continue;
+          await deps.setLabels(a.id, { [AUTO_ARCHIVED_LABEL]: "1" }).catch((err: unknown) => log(`auto-archive marker failed for ${a.id}: ${err}`));
+          try {
+            await deps.archiveAgent(a.id);
+          } catch (err) {
+            log(`worker sweep archive failed for ${a.id}: ${err}`);
+            continue;
+          }
+          archivedIds.push(a.id);
+          appendLog(where.team, { agent: a.id, lane: where.lane, type: "metric", text: `worker-auto-archive id=${a.id} unit=${state.unit || a.labels.unit || "-"}`, refs: [a.id] });
+        }
+      } catch (err) {
+        log(`worker sweep failed: ${err}`);
+      } finally {
+        sweeping = false;
+      }
+      return archivedIds;
+    }
+
     scanLogs(true); // baseline offsets
     let interval: ReturnType<typeof setInterval> | null = null;
+    let lastSweepAt = Date.now();
     if (deps.startWatcher) {
-      interval = setInterval(() => scanLogs(false), deps.watchIntervalMs);
+      // Hook point: the existing log-watch tick, time-gated, so no new timer exists.
+      interval = setInterval(() => {
+        scanLogs(false);
+        const every = deps.doneSweepIntervalMs ?? 0;
+        if (every > 0 && Date.now() - lastSweepAt >= every) {
+          lastSweepAt = Date.now();
+          void sweepDoneWorkers().catch((err) => log(`worker sweep failed: ${err}`));
+        }
+      }, deps.watchIntervalMs);
       interval.unref?.();
     }
 
@@ -2838,6 +3004,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (const stop of stops) stop();
     };
     (dispose as any).scanLogs = scanLogs;
+    (dispose as any).sweepDoneWorkers = sweepDoneWorkers;
     (dispose as any).handoffCoordinator = handoffCoordinator;
     (dispose as any).confirmTakeover = handoffCoordinator.confirmTakeover;
     (dispose as any).sendAgentPrompt = (req: any, ctx?: any) =>

@@ -39,18 +39,18 @@ function renderModal(initialPair) {
 
 const basePair = (overrides = {}) => ({
   code: "123456",
-  pairUrl: "https://my-pc.nord:4180/pair?code=123456",
-  pairIpUrl: "https://100.83.196.251:4180/pair?code=123456",
-  lanIp: "192.168.1.135",
-  lanPairUrl: "https://192.168.1.135:4180/pair?code=123456",
+  pairUrl: "https://pc.example:4180/pair?code=123456",
+  pairIpUrl: "https://100.64.0.10:4180/pair?code=123456",
+  lanIp: "192.0.2.10",
+  lanPairUrl: "https://192.0.2.10:4180/pair?code=123456",
   lanQrSvg: "<svg id='lan-qr'></svg>",
-  lanAndroidApkUrl: "http://192.168.1.135:4180/VibeSquad.apk",
-  androidApkHttpUrl: "http://100.83.196.251:4180/VibeSquad.apk",
+  lanAndroidApkUrl: "http://192.0.2.10:4180/VibeSquad.apk",
+  androidApkHttpUrl: "http://100.64.0.10:4180/VibeSquad.apk",
   androidApkAvailable: true,
-  caHttpUrl: "http://100.83.196.251:4180/ca.crt",
+  caHttpUrl: "http://100.64.0.10:4180/ca.crt",
   caFingerprint: { full: "aa".repeat(32), short: "aaaa:aaaa" },
-  meshnetHost: "my-pc.nord",
-  meshnetIp: "100.83.196.251",
+  meshnetHost: "pc.example",
+  meshnetIp: "100.64.0.10",
   expiresAt: Date.now() + 300_000,
   qrSvg: "<svg id='host-qr'></svg>",
   qrSvgIp: "<svg id='ip-qr'></svg>",
@@ -61,7 +61,7 @@ describe("PairDeviceModal rendered APK download & gating", () => {
   test("renders Download VibeSquad.apk button with LAN URL when androidApkAvailable=true on LAN", () => {
     const html = renderModal(basePair());
     assert.match(html, /data-testid="download-android-apk"/);
-    assert.match(html, /href="http:\/\/192\.168\.1\.135:4180\/VibeSquad\.apk"/);
+    assert.match(html, /href="http:\/\/192\.0\.2\.10:4180\/VibeSquad\.apk"/);
     assert.match(html, /download="VibeSquad\.apk"/);
     assert.match(html, /⬇ Download VibeSquad\.apk \(Android\)/);
     assert.match(html, /Install the app, then scan with the in-app Scan \(not the phone camera\)\./);
@@ -71,7 +71,7 @@ describe("PairDeviceModal rendered APK download & gating", () => {
   test("renders Meshnet APK URL when lanIp is absent and androidApkAvailable=true", () => {
     const html = renderModal(basePair({ lanIp: null, lanPairUrl: null, lanAndroidApkUrl: null }));
     assert.match(html, /data-testid="download-android-apk"/);
-    assert.match(html, /href="http:\/\/100\.83\.196\.251:4180\/VibeSquad\.apk"/);
+    assert.match(html, /href="http:\/\/100\.64\.0\.10:4180\/VibeSquad\.apk"/);
   });
 
   test("hides the APK download card when androidApkAvailable=false", () => {
@@ -114,32 +114,32 @@ describe("resolvePairModalUrls — LAN & Meshnet APK URLs and availability", () 
     const lan = resolvePairModalUrls({ pair: sample, meta: null, networkMode: "lan", useIpMode: false });
     assert.equal(lan.isLan, true);
     assert.equal(lan.androidApkAvailable, true);
-    assert.equal(lan.apkUrl, "http://192.168.1.135:4180/VibeSquad.apk");
+    assert.equal(lan.apkUrl, "http://192.0.2.10:4180/VibeSquad.apk");
 
     const mesh = resolvePairModalUrls({ pair: sample, meta: null, networkMode: "meshnet", useIpMode: false });
     assert.equal(mesh.isLan, false);
     assert.equal(mesh.androidApkAvailable, true);
-    assert.equal(mesh.apkUrl, "http://100.83.196.251:4180/VibeSquad.apk");
+    assert.equal(mesh.apkUrl, "http://100.64.0.10:4180/VibeSquad.apk");
   });
 
   test("falls back to synthesized http://<ip>:<port>/VibeSquad.apk and meta fields when pair is loading", () => {
     const fromMetaLan = resolvePairModalUrls({
       pair: null,
-      meta: { lanIp: "192.168.1.50", meshnetIp: "100.64.1.2", port: 4180, androidApkAvailable: true },
+      meta: { lanIp: "192.0.2.20", meshnetIp: "100.64.0.20", port: 4180, androidApkAvailable: true },
       networkMode: "lan",
       useIpMode: false,
     });
     assert.equal(fromMetaLan.androidApkAvailable, true);
-    assert.equal(fromMetaLan.apkUrl, "http://192.168.1.50:4180/VibeSquad.apk");
+    assert.equal(fromMetaLan.apkUrl, "http://192.0.2.20:4180/VibeSquad.apk");
 
     const fromMetaMesh = resolvePairModalUrls({
       pair: null,
-      meta: { lanIp: null, meshnetIp: "100.64.1.2", port: 4180, androidApkAvailable: false },
+      meta: { lanIp: null, meshnetIp: "100.64.0.20", port: 4180, androidApkAvailable: false },
       networkMode: "meshnet",
       useIpMode: false,
     });
     assert.equal(fromMetaMesh.androidApkAvailable, false);
-    assert.equal(fromMetaMesh.apkUrl, "http://100.64.1.2:4180/VibeSquad.apk");
+    assert.equal(fromMetaMesh.apkUrl, "http://100.64.0.20:4180/VibeSquad.apk");
   });
 });
 
@@ -148,9 +148,9 @@ describe("resolvePairModalUrls — empty meshnetHost QR & URL fallback", () => {
     const pairEmptyHost = basePair({
       lanIp: null,
       meshnetHost: "",
-      meshnetIp: "100.83.196.251",
+      meshnetIp: "100.64.0.10",
       pairUrl: "https://:4180/pair?code=654321&fp=abcdef0123456789",
-      pairIpUrl: "https://100.83.196.251:4180/pair?code=654321&fp=abcdef0123456789",
+      pairIpUrl: "https://100.64.0.10:4180/pair?code=654321&fp=abcdef0123456789",
       qrSvg: "<svg id='broken-empty-host'/>",
       qrSvgIp: "<svg id='scannable-ip-qr'/>",
     });
@@ -162,14 +162,14 @@ describe("resolvePairModalUrls — empty meshnetHost QR & URL fallback", () => {
       useIpMode: false,
     });
 
-    assert.equal(res.host, "100.83.196.251");
+    assert.equal(res.host, "100.64.0.10");
     assert.equal(res.effectiveIpMode, true);
-    assert.equal(res.activePairUrl, "https://100.83.196.251:4180/pair?code=654321&fp=abcdef0123456789");
+    assert.equal(res.activePairUrl, "https://100.64.0.10:4180/pair?code=654321&fp=abcdef0123456789");
     assert.doesNotMatch(res.activePairUrl, /^https:\/\/:/);
     assert.equal(res.activeQrSvg, "<svg id='scannable-ip-qr'/>");
 
     const html = renderModal(pairEmptyHost);
-    assert.match(html, /href="https:\/\/100\.83\.196\.251:4180\/pair\?code=654321&amp;fp=abcdef0123456789"/);
+    assert.match(html, /href="https:\/\/100\.64\.0\.10:4180\/pair\?code=654321&amp;fp=abcdef0123456789"/);
     assert.doesNotMatch(html, /https:\/\/:4180/);
   });
 
@@ -178,7 +178,7 @@ describe("resolvePairModalUrls — empty meshnetHost QR & URL fallback", () => {
       pair: {
         code: "654321",
         meshnetHost: "",
-        meshnetIp: "100.83.196.251",
+        meshnetIp: "100.64.0.10",
         pairUrl: "https://:4180/pair?code=654321",
         qrSvg: "<svg id='fallback'/>",
       },
@@ -186,17 +186,17 @@ describe("resolvePairModalUrls — empty meshnetHost QR & URL fallback", () => {
       networkMode: "meshnet",
       useIpMode: false,
     });
-    assert.equal(res.activePairUrl, "https://100.83.196.251:4180/pair?code=654321");
+    assert.equal(res.activePairUrl, "https://100.64.0.10:4180/pair?code=654321");
   });
 
   test("preserves meshnetHost QR when meshnetHost is set and useIpMode=false, and switches on useIpMode=true", () => {
     const pairWithHost = basePair({
       code: "111222",
       lanIp: null,
-      meshnetHost: "pc.nord",
-      meshnetIp: "100.83.196.251",
-      pairUrl: "https://pc.nord:4180/pair?code=111222",
-      pairIpUrl: "https://100.83.196.251:4180/pair?code=111222",
+      meshnetHost: "pc.example",
+      meshnetIp: "100.64.0.10",
+      pairUrl: "https://pc.example:4180/pair?code=111222",
+      pairIpUrl: "https://100.64.0.10:4180/pair?code=111222",
       qrSvg: "<svg id='host-qr'/>",
       qrSvgIp: "<svg id='ip-qr'/>",
     });
@@ -207,9 +207,9 @@ describe("resolvePairModalUrls — empty meshnetHost QR & URL fallback", () => {
       networkMode: "meshnet",
       useIpMode: false,
     });
-    assert.equal(hostMode.host, "pc.nord");
+    assert.equal(hostMode.host, "pc.example");
     assert.equal(hostMode.effectiveIpMode, false);
-    assert.equal(hostMode.activePairUrl, "https://pc.nord:4180/pair?code=111222");
+    assert.equal(hostMode.activePairUrl, "https://pc.example:4180/pair?code=111222");
     assert.equal(hostMode.activeQrSvg, "<svg id='host-qr'/>");
 
     const ipMode = resolvePairModalUrls({
@@ -219,7 +219,7 @@ describe("resolvePairModalUrls — empty meshnetHost QR & URL fallback", () => {
       useIpMode: true,
     });
     assert.equal(ipMode.effectiveIpMode, true);
-    assert.equal(ipMode.activePairUrl, "https://100.83.196.251:4180/pair?code=111222");
+    assert.equal(ipMode.activePairUrl, "https://100.64.0.10:4180/pair?code=111222");
     assert.equal(ipMode.activeQrSvg, "<svg id='ip-qr'/>");
   });
 });

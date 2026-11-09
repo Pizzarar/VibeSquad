@@ -3759,6 +3759,7 @@ html, body, #root { overflow-x: hidden; }
 .cmd-list { overflow-y: auto; display: flex; flex-direction: column; }
 .cmd-item { text-align: left; background: transparent; border: 0; color: inherit; padding: 7px 14px; font: inherit; cursor: pointer; }
 .cmd-item.on, .cmd-item:hover { background: var(--cyan-dim, color-mix(in srgb, var(--cyan) 15%, transparent)); }
+.cmd-show-all { color: var(--muted, inherit); border-top: 1px solid var(--line, rgba(128, 128, 128, 0.25)); }
 .cmd-kind { display: inline-block; min-width: 46px; font-size: 10px; text-transform: uppercase; opacity: 0.6; }
 .cmd-empty { padding: 14px; }
 .ctx-menu {
@@ -4585,6 +4586,23 @@ button.project-file-name:hover { text-decoration: underline; }
   max-width: 100%;
   overflow: hidden;
 }
+.pin-rail-buddy-tools { position: relative; }
+.pin-rail-active-buddy:has(.drawer-sandbox-panel, .drawer-features-menu),
+.pin-rail-active-inspector:has(.drawer-sandbox-panel, .drawer-features-menu),
+.pin-rail-buddy-tools:has(.drawer-sandbox-panel, .drawer-features-menu) {
+  overflow: visible;
+}
+.pin-rail .drawer-sandbox,
+.pin-rail .pin-rail-buddy-tools > span:has(> .drawer-features-btn) {
+  position: static !important;
+}
+.pin-rail :is(.drawer-sandbox-panel, .drawer-features-menu) {
+  left: 0;
+  right: 0;
+  top: calc(100% + 2px);
+  width: auto;
+  max-width: 100%;
+}
 
 /* Issue 3.1: Right Dock tabs scroll/wrap cleanly, bodies wrap and stay bounded. */
 .right-dock-tabs { overflow-x: auto; scrollbar-width: none; min-width: 0; max-width: 100%; }
@@ -4670,6 +4688,7 @@ button.project-file-name:hover { text-decoration: underline; }
   overflow: hidden;
 }
 .hub-body .agent-panes { grid-column: 1; grid-row: 1; min-height: 0; overflow: hidden; height: auto; }
+.hub-body:not(.hub-agent-open) .agent-panes:has(.drawer-config-menu[open]) { overflow: visible; position: relative; z-index: 10; }
 /* Sky-gods hub: the two bots chat in the sky zones, so the panes keep only their header here; any other
    agent opened on the hub lane (.hub-agent-open) takes the normal focus view and the sky steps aside. */
 .hub-body:not(.hub-agent-open) .agent-panes .pin-focus-empty { display: none !important; }
@@ -5947,14 +5966,14 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root[data-theme="light"] .pin-tile-bar .pin-tile-name { flex: 0 1 auto; background: var(--panel-hi); color: var(--text); padding: 0 var(--sp-2); box-shadow: var(--bevel); }
 /* scanlines: text layers above, and a sized tile instead of repeating-* so no scanline box is a layer over text */
 .usage-crt > * { position: relative; z-index: 1; }
-.usage-crt::after { background-image: linear-gradient(to bottom, transparent 2px, color-mix(in srgb, var(--text) 7%, transparent) 2px); background-size: 100% 3px; background-repeat: repeat; }
+.usage-crt::after { background-image: linear-gradient(to bottom, transparent var(--u3-px), color-mix(in srgb, var(--text) 7%, transparent) var(--u3-px)); background-size: 100% calc(var(--u3-px) * 2); background-repeat: repeat; }
 .sky-static > * { position: relative; z-index: 1; }
 .sky-static > button.btn { background: var(--bg); padding: 4px 8px; }
 .sky-static {
   background-image:
-    linear-gradient(0deg, rgba(255, 255, 255, 0.06) 2px, rgba(0, 0, 0, 0.18) 2px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.05) 3px, rgba(0, 0, 0, 0.12) 3px);
-  background-size: 100% 4px, 7px 100%;
+    linear-gradient(0deg, rgba(255, 255, 255, 0.06) var(--u3-px), rgba(0, 0, 0, 0.18) var(--u3-px)),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.05) calc(var(--u3-px) * 2), rgba(0, 0, 0, 0.12) calc(var(--u3-px) * 2));
+  background-size: 100% calc(var(--u3-px) * 2), calc(var(--u3-px) * 4) 100%;
 }
 span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .card .talk-here { color: var(--text); }

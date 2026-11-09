@@ -3,7 +3,7 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
@@ -13,6 +13,7 @@ import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
 import { turnCapsFromEnv } from "../runner/runner.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
 import { resolveTeamsFilePath } from "./teams-file.mjs";
+import { resolveProjectPath } from "./brief-path.mjs";
 import { addInboxCards, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
@@ -360,6 +361,8 @@ function foldIdentity(st, m) {
   if (typeof title === "string" && title) st.title = title;
   if (typeof m.profile === "string" && m.profile) st.profile = m.profile;
   else if (typeof m.labels?.profile === "string" && m.labels.profile) st.profile = m.labels.profile;
+  const team = m.team ?? m.labels?.team;
+  if (typeof team === "string" && team) st.team = team;
 }
 
 function readTail(file, from, to) {
@@ -505,6 +508,7 @@ function gitRepoRoot({ runtimeRoot = REPO_ROOT, envRoot = process.env.VIBESQUAD_
   return resolve(runtimeRoot);
 }
 
+const gitIn = (root) => (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
 const defaultGit = (args) => execFileSync("git", args, { cwd: gitRepoRoot(), encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
 const REVIEW_RE = /review r(\d+)/i;
 const CODE_RE = /\(@([A-Za-z0-9_-]+)(?:\s[^)]*)?\)/g;
@@ -519,7 +523,7 @@ const codeOf = (subject) => {
   return last;
 };
 
-let mergedCache = null; // { git, head, units }: recomputed only when HEAD (or the injected git) changes
+const mergedCache = new WeakMap(); // git fn -> { head, units }: recomputed only when HEAD changes (one entry per repo's git fn)
 
 /**
  * Parse one `git log --first-parent --numstat --format=%H` into sha -> {locAdded, locDeleted, filesChanged}.
@@ -553,7 +557,8 @@ function parseNumstat(raw) {
 export function readMergedUnits(git = defaultGit) {
   let head = "";
   try { head = git(["rev-parse", "HEAD"]).trim(); } catch { return []; }
-  if (mergedCache && mergedCache.git === git && mergedCache.head === head) return mergedCache.units;
+  const cached = mergedCache.get(git);
+  if (cached && cached.head === head) return cached.units;
   let raw = "";
   try { raw = git(["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"]); } catch { return []; }
   const commits = new Map();
@@ -596,8 +601,97 @@ export function readMergedUnits(git = defaultGit) {
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
-  mergedCache = { git, head, units };
+  mergedCache.set(git, { head, units });
   return units;
+}
+
+// ---- usa-20: pool merged units across every Squad repo (teams.json team/lane paths), not just gitRepoRoot().
+const MAX_SQUAD_REPOS = 16;
+const HEAD_CHECK_TTL_MS = 15_000; // a poll within this window reuses the repo's units without spawning git at all
+const repoGitFns = new Map(); // normalised root -> stable git fn (the readMergedUnits cache key)
+const repoHeadCheck = new Map(); // normalised root -> { at, units }
+const normRepoKey = (p) => (process.platform === "win32" ? p.toLowerCase() : p);
+
+/** Nearest ancestor holding a .git entry (no spawn). A linked worktree's .git file folds back to its main checkout. */
+function repoToplevel(dir) {
+  let cur = resolve(dir);
+  for (let i = 0; i < 40; i++) {
+    const g = join(cur, ".git");
+    try {
+      const st = statSync(g);
+      if (st.isDirectory()) return cur;
+      if (st.isFile()) {
+        const m = /^gitdir:s*(.+)$/m.exec(readFileSync(g, "utf8"));
+        const wt = m ? /^(.*)[\/].git[\/]worktrees[\/][^\/]+$/.exec(resolve(cur, m[1].trim())) : null;
+        return wt ? wt[1] : cur;
+      }
+    } catch { /* no .git here */ }
+    const up = dirname(cur);
+    if (up === cur) return null;
+    cur = up;
+  }
+  return null;
+}
+
+/** Distinct git repos the Squads work in: [{ root, name, teams: [teamId], laneTeam: Map<laneId, teamId> }]. gitRepoRoot() is always first. */
+function readSquadRepos(home) {
+  const primary = gitRepoRoot();
+  const repos = new Map();
+  const add = (root, teamId, laneId) => {
+    if (!root) return;
+    const key = normRepoKey(root);
+    let r = repos.get(key);
+    if (!r) {
+      if (repos.size >= MAX_SQUAD_REPOS) return;
+      r = { root, name: basename(root), teams: [], laneTeam: new Map() };
+      repos.set(key, r);
+    }
+    if (teamId && !r.teams.includes(teamId)) r.teams.push(teamId);
+    if (laneId && teamId && !r.laneTeam.has(laneId)) r.laneTeam.set(laneId, teamId);
+  };
+  add(primary, null, null);
+  try {
+    const own = home ? join(home, "teams.json") : null;
+    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(primary);
+    const t = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+    for (const team of t.teams ?? []) {
+      const teamId = team?.id ? String(team.id) : null;
+      const resolveTop = (p) => {
+        try {
+          const full = resolveProjectPath(p, primary);
+          return full ? repoToplevel(realpathSync(full)) : null;
+        } catch { return null; }
+      };
+      for (const p of team?.paths ?? []) add(resolveTop(p), teamId, null);
+      for (const l of team?.lanes ?? []) {
+        const lp = [...(l?.paths ?? []), ...(l?.path ? [l.path] : [])];
+        for (const p of lp) add(resolveTop(p), teamId, l?.id ? String(l.id) : null);
+      }
+    }
+  } catch { /* no teams.json: primary repo only */ }
+  return [...repos.values()];
+}
+
+/** Merged units of every Squad repo, each tagged { repo, squad } and keyed repo+sha. Per-repo cache by HEAD, plus a
+ * short HEAD-check TTL so a poll storm spawns at most one `git rev-parse` per repo per 15s. */
+function readPooledMergedUnits(home, laneOf, now = Date.now) {
+  const out = [];
+  for (const r of readSquadRepos(home)) {
+    const key = normRepoKey(r.root);
+    const t = now();
+    let hc = repoHeadCheck.get(key);
+    if (!hc || t - hc.at >= HEAD_CHECK_TTL_MS) {
+      let git = repoGitFns.get(key);
+      if (!git) { git = gitIn(r.root); repoGitFns.set(key, git); }
+      hc = { at: t, units: readMergedUnits(git) };
+      repoHeadCheck.set(key, hc);
+    }
+    for (const u of hc.units) {
+      const lane = laneOf(u);
+      out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null });
+    }
+  }
+  return out;
 }
 
 /** lowercase lane code or id -> lane id, from <home>/teams.json lanes[]. */
@@ -632,6 +726,7 @@ function agentV2(st, agentId) {
     profile: st.profile || "unknown",
     role: st.role || "unknown",
     lane: st.lane,
+    team: st.team ?? null,
     cwd: st.cwd,
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
@@ -661,17 +756,20 @@ function agentV2(st, agentId) {
  */
 const unitNameOfCwd = (cwd) => (typeof cwd === "string" && cwd ? basename(cwd).toLowerCase() : "");
 
+/** A run carrying a team may only implement units of that Squad's repo (lane ids can repeat across Squads); untagged on either side matches. */
+const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === agent.team;
+
 /** Attribute a merged unit to the implementer worker: basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
 function attributeImplementer(unit, agents) {
   const mergedAtMs = tsMs(unit.mergedAt);
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
-    const matches = agents.filter((a) => a.role === "worker" && unitNameOfCwd(a.cwd) === want);
+    const matches = agents.filter((a) => a.role === "worker" && unitNameOfCwd(a.cwd) === want && sameSquad(unit, a));
     if (matches.length === 1) return matches[0];
     if (matches.length > 1) return null; // ambiguous cwd match
   }
   if (!unit.lane || mergedAtMs === null) return null;
-  const workers = agents.filter((a) => a.role === "worker" && a.lane === unit.lane && a.createdAt !== null && a.createdAt <= mergedAtMs);
+  const workers = agents.filter((a) => a.role === "worker" && a.lane === unit.lane && sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
   return workers.length === 1 ? workers[0] : null;
 }
 
@@ -1094,6 +1192,8 @@ function buildLedgerSnapshot(merged, rows) {
     sha: u.sha,
     ts: u.mergedAt ?? null,
     lane: u.lane ?? null,
+    ...(u.squad ? { squad: u.squad } : {}),
+    ...(u.repo ? { repo: u.repo } : {}),
     implementerProfile: u.implementerProfile ?? null,
     implementerProvider: u.implementerProvider ?? null,
     workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
@@ -1592,7 +1692,9 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
 
   // merged units; cost per merged unit = lane cost / lane merged units. Lane via the (@code) tag -> teams.json lane code/id.
   const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
-  const mergedRaw = readMergedUnits(git).map((u) => ({ ...u, lane: u.code ? (codes.get(u.code) ?? u.code) : null }));
+  const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
+  // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
+  const mergedRaw = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now);
   const mergedByLane = new Map();
   for (const u of mergedRaw) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
@@ -1607,7 +1709,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
     let fixAfterMerge = false;
     if (isFixUnit && u.lane && mergedAtMs !== null) {
-      fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
+      fixAfterMerge = mergedRaw.some((p) => p !== u && p.lane === u.lane && p.squad === u.squad && p.mergedAt !== null && tsMs(p.mergedAt) !== null && tsMs(p.mergedAt) < mergedAtMs && mergedAtMs - tsMs(p.mergedAt) <= FIX_AFTER_MERGE_WINDOW_MS);
     }
     return {
       ...u, mergedAtMs,
@@ -1739,7 +1841,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
       sha: r.sha, unit: r.unit ?? null, code: null, reviewRounds: r.reviewRounds ?? 0,
       mergedAt: r.ts ?? null, mergedAtMs: toMs(r.ts), firstBranchCtMs: null, subject: "",
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
-      lane: r.lane ?? null,
+      lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,

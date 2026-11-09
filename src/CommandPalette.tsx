@@ -1,3 +1,5 @@
+import { clampCtxMenu, rootZoom } from "./pinMenuPlace";
+import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
@@ -144,10 +146,9 @@ function ContextMenuHost() {
     };
   }, [s]);
   if (!s) return null;
-  const x = Math.min(s.x, window.innerWidth - 230);
-  const y = Math.min(s.y, window.innerHeight - 40 * s.items.length - 12);
+  const pos = clampCtxMenu(s.x, s.y, { w: 230, h: 40 * s.items.length + 12 }, { w: window.innerWidth, h: window.innerHeight }, rootZoom());
   return (
-    <div className="ctx-menu" data-testid="custom-context-menu" role="menu" style={{ left: Math.max(4, x), top: Math.max(4, y) }} onContextMenu={(e) => e.preventDefault()}>
+    <div className="ctx-menu" data-testid="custom-context-menu" role="menu" style={pos} onContextMenu={(e) => e.preventDefault()}>
       {s.items.map((it) => (
         <button
           key={it.label}
@@ -558,7 +559,16 @@ export function CommandPaletteHost(props: {
     ];
   }, [all, props.members, props.views, bindings]);
 
-  const shown = useMemo(() => filterPalette(items, q).slice(0, 60), [items, q]);
+  const [showAll, setShowAll] = useState(false);
+  useEffect(() => {
+    if (mode !== "palette") setShowAll(false);
+  }, [mode]);
+  const win = useMemo(() => paletteWindow(filterPalette(items, q), q, showAll), [items, q, showAll]);
+  const shown = win.rows;
+  const expand = () => {
+    setShowAll(true);
+    setSel(shown.length); // first row that was hidden
+  };
 
   /** The jumped-to drawer mounts after the palette closes; retry until its visible composer exists. Inactive panes stay mounted (display:none), so scope by agent and visibility. */
   const focusComposer = (agentId: string, tries = 20) => {
@@ -654,11 +664,14 @@ export function CommandPaletteHost(props: {
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setSel((s) => Math.min(shown.length - 1, s + 1));
+                  setSel((s) => Math.min(win.count - 1, s + 1));
                 } else if (e.key === "ArrowUp") {
                   e.preventDefault();
                   setSel((s) => Math.max(0, s - 1));
-                } else if (e.key === "Enter" && shown[sel]) run(shown[sel]);
+                } else if (e.key === "Enter") {
+                  if (shown[sel]) run(shown[sel]);
+                  else if (win.hidden > 0 && sel === shown.length) expand();
+                }
               }}
             />
             <div className="cmd-list">
@@ -674,6 +687,11 @@ export function CommandPaletteHost(props: {
                   )}
                 </button>
               ))}
+              {win.hidden > 0 && (
+                <button className={`cmd-item cmd-show-all ${sel === shown.length ? "on" : ""}`} data-testid="command-palette-show-all" onMouseEnter={() => setSel(shown.length)} onClick={expand}>
+                  <b>Show all ({shown.length + win.hidden})</b>
+                </button>
+              )}
             </div>
           </div>
         </div>

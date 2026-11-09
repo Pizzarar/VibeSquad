@@ -1302,6 +1302,10 @@ test('usa-10: floor splits spend into clean vs rework/loops/fix/restart buckets'
 
 test('usa-10: review records store kpis and the prompt grades prior recommendations against KPI deltas', async () => {
   const home = tmp();
+  // Point the prompt at a temp file seeded with the built-in text so this test is independent of the
+  // @perfection-owned live USAGE_REVIEW_PROMPT.md (edited on purpose, prompt v2).
+  const promptFile = path.join(home, 'review-prompt.md');
+  fs.writeFileSync(promptFile, DEFAULT_USAGE_REVIEW_PROMPT, 'utf8');
   const prompts = [];
   const runOpus = async ({ prompt }) => { prompts.push(prompt); return { ok: true, text: 'route via gemini', ms: 1 }; };
   const runGemini = async () => ({ ok: true, text: 'reduce review rounds', ms: 1 });
@@ -1310,7 +1314,7 @@ test('usa-10: review records store kpis and the prompt grades prior recommendati
     merged: { units: [{ reviewRounds: 2, fixAfterMerge: false, costUsd: 1, inputTokens: 0, outputTokens: 0 }] },
     floor: { cleanShare: 0.5 },
   };
-  await runUsageReview({ home, trigger: 'manual', usage: usage1, runOpus, runGemini });
+  await runUsageReview({ home, trigger: 'manual', usage: usage1, runOpus, runGemini, promptPath: promptFile });
   const rec1 = readUsageReviews(home)[0];
   assert.ok(rec1.kpis, 'kpis stored on the review record');
   assert.equal(rec1.kpis.unitsMerged, 1);
@@ -1321,7 +1325,7 @@ test('usa-10: review records store kpis and the prompt grades prior recommendati
     merged: { units: [{ reviewRounds: 0, fixAfterMerge: false, costUsd: 1, inputTokens: 0, outputTokens: 0 }] },
     floor: { cleanShare: 1 },
   };
-  await runUsageReview({ home, trigger: 'manual', usage: usage2, runOpus, runGemini });
+  await runUsageReview({ home, trigger: 'manual', usage: usage2, runOpus, runGemini, promptPath: promptFile });
   const prompt2 = prompts[1];
   assert.match(prompt2, /Previous review Opus said: route via gemini/, 'prior opus bullet included');
   assert.match(prompt2, /KPI delta since last review/, 'kpi delta section present');
@@ -1467,12 +1471,15 @@ test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogu
 
 // ---------------------------------------------------------------- usa-19: prompt loader, path resolution, open-card dedupe, multi-Squad pooling
 
-test('usa-19: USAGE_REVIEW_PROMPT.md matches DEFAULT_USAGE_REVIEW_PROMPT verbatim and assembles a byte-identical prompt on day 1', () => {
+test('usa-19: loader returns the live repo prompt verbatim (independent of its content) and buildUsageReviewPrompt appends it', () => {
   const home = tmp();
   const repoRoot = path.resolve(import.meta.dirname, '..');
   const repoPromptFile = path.join(repoRoot, USAGE_REVIEW_PROMPT_REL_PATH);
-  assert.equal(fs.readFileSync(repoPromptFile, 'utf8').trim(), DEFAULT_USAGE_REVIEW_PROMPT, 'repo prompt file is verbatim');
-  assert.equal(loadUsageReviewPrompt({ runtimeRoot: repoRoot, envRoot: '' }), DEFAULT_USAGE_REVIEW_PROMPT);
+  // @perfection owns USAGE_REVIEW_PROMPT.md and edits it on purpose (prompt v2), so never assert it equals the
+  // built-in DEFAULT_USAGE_REVIEW_PROMPT. Instead assert the loader returns the repo file's own trimmed content.
+  const repoPrompt = fs.readFileSync(repoPromptFile, 'utf8').trim();
+  assert.ok(repoPrompt.length > 0, 'repo prompt file is non-empty');
+  assert.equal(loadUsageReviewPrompt({ runtimeRoot: repoRoot, envRoot: '' }), repoPrompt, 'loader returns the repo file content verbatim');
 
   const sampleUsage = {
     totals: { turns: 12, costUsd: 1.5, inputTokens: 4000, outputTokens: 800 },
@@ -1485,9 +1492,19 @@ test('usa-19: USAGE_REVIEW_PROMPT.md matches DEFAULT_USAGE_REVIEW_PROMPT verbati
     floor: { cleanShare: 0.9, cleanCostPerUnit: 0.45, reworkCostUsd: 0.15, loopAndAbandonedCostUsd: 0, fixAfterMergeCostUsd: 0, restartOverheadCostUsd: 0 },
   };
   const fromRepoFile = buildUsageReviewPrompt(sampleUsage, { home, runtimeRoot: repoRoot, envRoot: '' });
+  assert.ok(fromRepoFile.endsWith(`\n${repoPrompt}`), 'repo instruction text appended at the end');
+
+  // Byte-identity check stays, but against a temp root seeded with DEFAULT_USAGE_REVIEW_PROMPT (VIBESQUAD_ROOT
+  // pointed at the temp dir), not the live repo file.
+  const seededRoot = tmp();
+  const seededPromptFile = path.join(seededRoot, USAGE_REVIEW_PROMPT_REL_PATH);
+  fs.mkdirSync(path.dirname(seededPromptFile), { recursive: true });
+  fs.writeFileSync(seededPromptFile, DEFAULT_USAGE_REVIEW_PROMPT, 'utf8');
+  assert.equal(loadUsageReviewPrompt({ runtimeRoot: seededRoot, envRoot: seededRoot }), DEFAULT_USAGE_REVIEW_PROMPT, 'seeded temp root returns the built-in text verbatim');
+  const fromSeeded = buildUsageReviewPrompt(sampleUsage, { home, runtimeRoot: seededRoot, envRoot: seededRoot });
   const fromFallback = buildUsageReviewPrompt(sampleUsage, { home, promptPath: path.join(home, 'missing.md'), warn: () => {} });
-  assert.equal(fromRepoFile, fromFallback, 'assembled prompt is byte-identical on day 1');
-  assert.ok(fromRepoFile.endsWith(`\n${DEFAULT_USAGE_REVIEW_PROMPT}`), 'instruction text appended at the end');
+  assert.equal(fromSeeded, fromFallback, 'seeded prompt assembles a byte-identical prompt');
+  assert.ok(fromSeeded.endsWith(`\n${DEFAULT_USAGE_REVIEW_PROMPT}`), 'built-in instruction text appended at the end');
 });
 
 test('usa-19: resolveUsageReviewPromptPath resolves live repo via build-stamp.json or VIBESQUAD_ROOT so edits take effect without sync-runtime', () => {
@@ -1659,4 +1676,93 @@ test('usa-19: getUsage and readUsageLogSignals pool agent runs, logs, handoffs, 
   const prompt = buildUsageReviewPrompt(u, { home });
   assert.match(prompt, /@usa: pool all squads/, 'vibesquad team log note included');
   assert.match(prompt, /other-squad turn cap hit/, 'other-squad team log friction included');
+});
+
+// ---------------------------------------------------------------- usa-20: merged units pooled across Squad repos
+test('usage: merged units pool across every Squad repo, tagged repo/squad, attributed within their own Squad', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const base = tmp();
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.invalid' };
+  const g = (cwd, ...args) => execFileSync('git', args, { cwd, env: gitEnv, stdio: 'pipe', encoding: 'utf8' });
+  const mkRepo = (name, unit, code) => {
+    const dir = path.join(base, name);
+    fs.mkdirSync(dir);
+    g(dir, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(dir, 'f.txt'), 'a\n');
+    g(dir, 'add', '.');
+    g(dir, 'commit', '-q', '-m', 'init');
+    if (unit) {
+      g(dir, 'checkout', '-q', '-b', unit);
+      fs.writeFileSync(path.join(dir, 'g.txt'), `${name}\n`);
+      g(dir, 'add', '.');
+      g(dir, 'commit', '-q', '-m', `feat: ${name} (@${code}) review r1`);
+      g(dir, 'checkout', '-q', 'main');
+      g(dir, 'merge', '-q', '--no-ff', '-m', `Merge branch '${unit}' (@${code})`, unit);
+    }
+    return dir;
+  };
+  mkRepo('main', null);
+  mkRepo('alpha', 'unit-shared', 'usa');
+  mkRepo('beta', 'unit-shared', 'usa');
+  mkRepo('plain-dir-not-git', null);
+  fs.rmSync(path.join(base, 'plain-dir-not-git', '.git'), { recursive: true, force: true });
+  const home = tmp();
+  fs.writeFileSync(path.join(home, 'teams.json'), JSON.stringify({ teams: [
+    { id: 'sq-a', paths: ['alpha'], lanes: [{ id: 'usage', code: 'usa' }] },
+    { id: 'sq-b', paths: [path.join(base, 'beta')], lanes: [{ id: 'usage', code: 'usa' }] },
+    { id: 'sq-c', paths: ['plain-dir-not-git', 'does-not-exist'], lanes: [] },
+  ] }));
+  const T0 = Date.now() - 3600_000;
+  for (const [id, team] of [['rn-a', 'sq-a'], ['rn-b', 'sq-b']]) {
+    writeAgent(home, id, [
+      { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/wt/unit-shared', meta: { lane: 'usage', role: 'worker', profile: `Impl ${team}`, labels: { team } } },
+      { ts: T0 + 1000, type: 'turn_done', costUsd: team === 'sq-a' ? 1 : 3 },
+    ]);
+  }
+  const prevRoot = process.env.VIBESQUAD_ROOT;
+  process.env.VIBESQUAD_ROOT = path.join(base, 'main');
+  try {
+    clearUsageCache();
+    let t = Date.now();
+    const u = getUsage({ home, now: () => t });
+    const units = u.merged.units.filter((x) => x.unit === 'unit-shared');
+    assert.equal(units.length, 2, 'same unit name in two repos stays two units');
+    const a = units.find((x) => x.repo === 'alpha');
+    const b = units.find((x) => x.repo === 'beta');
+    assert.equal(a.squad, 'sq-a');
+    assert.equal(b.squad, 'sq-b');
+    assert.notEqual(a.sha, b.sha);
+    assert.equal(a.lane, 'usage');
+    assert.equal(a.implementerAgentId, 'rn-a', 'attributed to its own Squad worker, not the other Squad\'s same-named unit');
+    assert.equal(b.implementerAgentId, 'rn-b');
+    assert.equal(a.costUsd, 1);
+    assert.equal(b.costUsd, 3);
+    assert.equal(a.reviewRounds, 1);
+    assert.equal(u.byProfile.find((p) => p.profile === 'Impl sq-a').mergedUnits, 1);
+    assert.equal(u.byProfile.find((p) => p.profile === 'Impl sq-b').mergedUnits, 1);
+    assert.ok(!u.merged.units.some((x) => x.repo === 'plain-dir-not-git'), 'non-git paths skipped silently');
+    // ledger: new records carry squad/repo; an old record without them still loads and folds.
+    const ledger = readUsageLedger(home);
+    assert.equal(ledger.find((r) => r.sha === a.sha).squad, 'sq-a');
+    assert.equal(ledger.find((r) => r.sha === b.sha).repo, 'beta');
+    fs.appendFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'), JSON.stringify({ kind: 'unit', unit: 'old-unit', sha: 'deadbeef', ts: new Date(T0).toISOString(), lane: 'usage', reviewRounds: 1 }) + '\n');
+    clearUsageCache();
+    const u2 = getUsage({ home, now: () => t });
+    const old = u2.merged.units.find((x) => x.sha === 'deadbeef');
+    assert.ok(old && old.fromLedger && old.squad === null, 'legacy ledger record without squad/repo still folds');
+    // cost bound: a new merge in alpha is not seen inside the HEAD-check TTL, but is after it.
+    g(path.join(base, 'alpha'), 'checkout', '-q', '-b', 'unit-late');
+    fs.writeFileSync(path.join(base, 'alpha', 'h.txt'), 'h\n');
+    g(path.join(base, 'alpha'), 'add', '.');
+    g(path.join(base, 'alpha'), 'commit', '-q', '-m', 'feat: late (@usa)');
+    g(path.join(base, 'alpha'), 'checkout', '-q', 'main');
+    g(path.join(base, 'alpha'), 'merge', '-q', '--no-ff', '-m', "Merge branch 'unit-late' (@usa)", 'unit-late');
+    clearUsageCache();
+    assert.equal(getUsage({ home, now: () => t + 1000 }).merged.units.filter((x) => x.repo === 'alpha').length, 1, 'within TTL: no git re-run');
+    t += 60_000;
+    clearUsageCache();
+    assert.equal(getUsage({ home, now: () => t }).merged.units.filter((x) => x.repo === 'alpha').length, 2, 'after TTL: new HEAD picked up');
+  } finally {
+    if (prevRoot === undefined) delete process.env.VIBESQUAD_ROOT; else process.env.VIBESQUAD_ROOT = prevRoot;
+  }
 });

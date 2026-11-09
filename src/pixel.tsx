@@ -3,7 +3,8 @@
 
 import type { CSSProperties } from "react";
 import type { AgentType } from "./teams";
-import { snapDeviceSize, useDpr, useUiScale } from "./uiScale";
+import { snapDeviceSize, useUiScale } from "./uiScale";
+import { useDpr } from "./useBotFace";
 import { CAST_CELL, CAST_SHOWN, CAST_URL, CAST_VARIANTS, castCell } from "./cast";
 
 function hash(s: string): number {
