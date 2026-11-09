@@ -5873,7 +5873,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* Config popover opens leftwards from the summary so it stays inside the pane at narrow widths. */
 .pin-focus-bar .drawer-config-popover { left: auto; right: 0; }
 /* Phone: tab titles get room before they ellipsize (the strip scrolls sideways). */
-.pane-tab { max-width: 220px; }
+.pane-tab { max-width: 260px; }
 /* Chat top bar at narrow widths: tighter gaps so the config summary is not cut by the pane edge. */
 .pin-focus-bar .drawer-head-compact { gap: var(--sp-1); }
 

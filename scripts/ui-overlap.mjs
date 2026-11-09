@@ -109,7 +109,7 @@ async function toSkyRiff(page, waitMs) {
 // Lift call button on the floor: floor n is reached with n presses of "next" (HP6: needs a squad with 3+ teams).
 async function toFloor(page, n) {
   await toHub(page);
-  for (let i = 0; i < n; i++) { await click(page, `${tid("sq-floor-next")}:visible`, 2500); await sleep(500); }
+  for (let i = 0; i < n; i++) { await vis(page, tid("sq-floor-next")).evaluate((el) => el.click(), null, { timeout: 6000 }); await sleep(1300); } // the lift ride animates; give it time to settle
 }
 
 const COMPOSER_ROOTS = ['footer.composer', tid("drawer-subagents-bar"), tid("drawer-config-menu-btn")];

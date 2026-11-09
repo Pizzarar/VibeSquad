@@ -49,3 +49,57 @@ The earlier 13 V1b contrast rows are fixed on master except the ones below that 
 | Meter readout | `lead-token-meter .meter-readout` | 1.66 | light |
 
 Lines through text (3): `button[data-testid="sky-start-overlord"]` and `.sky-static-text` (`sky-static-overlord` repeating-gradient scanline, unchanged since V1b, see above), plus one `focus-lead` decor-line. The Squads rail icon (`rail-squads-icon`) and the hub page switcher (`hub-tabs`) are clean at all sizes and themes.
+
+## V1b-2b (re-run on master 44d0f9c + HP5/HP6 hub view, 5-team demo; branch `unit-ui-overlap-v1b2`)
+
+Matrix: 3200x1800 css @ dpr 1.2 (= 3840x2160 @120%), 1920x1080, 1280x720, 390x844 mobile, dark + light. Failing @art: 37 contrast + 11 decor-line, plus 46 warn-only decor-suspect. Not fixed here (colour/skin). Rows below are the contrast/line hits not already described above (4k crops in `scratch/shots`; re-run `node scripts/ui-overlap.mjs --sizes 4k --no-fail`). Most are text on the selected/lead pink card fill (`.card.sel`, `.card-lead`, `.card-title`, `.muted.small` on `#e56ca1`-ish) at 1.2-2.6:1 and the teal `TALK HERE` badge at 1.23:1.
+
+| Selector | Kind | Detail | Sizes |
+|---|---|---|---|
+| `b[data-testid="talk-here-badge"]` ("TALK HERE ·") | contrast | contrast 1.23:1 (text rgb(79,214,207) on bg rgb(255,142,162)) | 4k |
+| `div.card-body > div.card-top-row > span.card-top-right > button.btn.confirm` ("Stop") | contrast | contrast 2.47:1 (text rgb(246,230,243) on bg rgb(242,99,161)) | 4k |
+| `div.card.card-lead > div.card-body > div.muted.small > span` ("25s") | contrast | contrast 1.53:1 (text rgb(183,161,213) on bg rgb(206,99,161)) | 4k |
+| `div.card.sel > div.card-body > div.muted.small > span` ("12m") | contrast | contrast 1.57:1 (text rgb(181,165,216) on bg rgb(155,114,232)) | 4k |
+| `div.cards > div.card.card-lead > div.card-body > div.card-title` ("★ VIBESQUAD ord1") | contrast | contrast 2.55:1 (text rgb(246,232,249) on bg rgb(229,108,161)) | 4k |
+| `div.cards > div.card.card-lead > div.card-body > div.muted.small` ("gemini-4-argon · vibesqu") | contrast | contrast 1.31:1 (text rgb(184,162,213) on bg rgb(229,108,161)) | 4k |
+| `div.cards > div.card.card-lead > span.avatar.type-lead > span.unit-tag` ("#71") | contrast | contrast 1.72:1 (text rgb(237,238,252) on bg rgb(76,202,198)) | 4k |
+| `div.cards > div.card.sel > div.card-body > div.card-title` ("neon-noir cast") | contrast | contrast 2.45:1 (text rgb(247,240,255) on bg rgb(241,114,168)) | 4k |
+| `div.cards > div.card.sel > div.card-body > div.muted.small` ("claude-opus-5-5 · vibesq") | contrast | contrast 1.21:1 (text rgb(181,165,216) on bg rgb(241,114,168)) | 4k |
+| `div.cards > div.card.sel > span.avatar.type-brainstorm > span.unit-tag` ("#12") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `div.row.error > span.row-title > span.diag-pills > span.pill.diag` ("RETRYABLE: EOF") | contrast | contrast 1.41:1 (text rgb(247,240,255) on bg rgb(255,196,108)) | 4k |
+| `div.section > div.tree-root > div.row.error > span.pill.error` ("Post "https://cloudcode-") | contrast | contrast 2.42:1 (text rgb(247,240,255) on bg rgb(255,104,168)) | 4k |
+| `div.section > div.tree-root > div.row.idle > span.pill.needs-you` ("pick option A or B") | contrast | contrast 2.42:1 (text rgb(247,240,255) on bg rgb(255,104,168)) | 4k |
+| `div.section > div.tree-root > div.row.idle > span.pill.permission` ("1 permission request(s)") | contrast | contrast 2.42:1 (text rgb(247,240,255) on bg rgb(255,104,168)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-error > b.alert-owner` ("WORKER") | contrast | contrast 2.42:1 (text rgb(247,240,255) on bg rgb(255,104,168)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-error > span.alert-type` ("✖ ERR") | contrast | contrast 2.42:1 (text rgb(247,240,255) on bg rgb(255,104,168)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-error > span.alert-who` ("Review - Gemini ·…") | contrast | contrast 1.20:1 (text rgb(181,165,216) on bg rgb(255,104,168)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-needs-you > span.alert-who` ("Review - Sonnet ·…") | contrast | contrast 1.57:1 (text rgb(181,165,216) on bg rgb(155,114,232)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-permission > b.alert-owner` ("WORKER") | contrast | contrast 1.41:1 (text rgb(247,240,255) on bg rgb(255,196,108)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-permission > span.alert-type` ("⚑ PERM") | contrast | contrast 1.41:1 (text rgb(247,240,255) on bg rgb(255,196,108)) | 4k |
+| `div.team-body > div.header-alerts > button.alert-pill.tone-permission > span.alert-who` ("Audit - token sco…") | contrast | contrast 1.43:1 (text rgb(181,165,216) on bg rgb(255,196,108)) | 4k |
+| `div.team-body > section.handoff-panel > div.handoff-row > span.badge` ("0 attached") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `div.team-body > section.handoff-panel > div.handoff-row > span.lane-tag` ("VibeSquad") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `div.team-body > section.handoff-panel > div.handoff-row.warn > span.warn-badge` ("⚠ CHAINED") | contrast | contrast 2.42:1 (text rgb(247,240,255) on bg rgb(255,104,168)) | 4k |
+| `div.tree-root > div.row.error > span.row-meta > span.prov-inline` ("◆gemini-4-argon") | contrast | contrast 1.03:1 (text rgb(0,240,255) on bg rgb(233,215,226)) | 4k |
+| `div.tree-root > div.row.idle > span.row-meta > span.prov-inline` ("◆gemini-4-argon") | contrast | contrast 1.01:1 (text rgb(0,240,255) on bg rgb(232,213,225)) | 4k |
+| `div.tree-root > div.row.running > span.row-actions > button.btn.confirm` ("Stop") | contrast | contrast 1.13:1 (text rgb(246,238,248) on bg rgb(235,224,232)) | 4k |
+| `div.tree-root > div.row.running > span.row-meta > span.prov-inline` ("✶claude-opus-5-5") | contrast | contrast 1.98:1 (text rgb(255,110,89) on bg rgb(233,213,226)) | 4k |
+| `div[data-testid="brainstorm-empty-card-riffbot"] > span.avatar.type-brainstorm > span.unit-tag` ("#22") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `div[data-testid="lead-token-meter"] > span.meter-readout` ("134k / 150k · 250k auto ") | contrast | contrast 1.66:1 (text rgb(87,208,208) on bg rgb(206,108,221)) | 4k |
+| `div[data-testid="pin-tile-art-direction"] > div.pin-tile-bar > span.pin-tile-name` ("Art Direction") | contrast | contrast 2.94:1 (text rgb(43,24,64) on bg rgb(154,79,136)) | 4k |
+| `section.team-feed > div.feed-list > div.feed-entry.blocker > span.lane-tag` ("vibesquad") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `section.team-feed > div.feed-list > div.feed-entry.decision > span.lane-tag` ("vibesquad") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `section.team-feed > div.feed-list > div.feed-entry.done > span.lane-tag` ("vibesquad") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `section.team-feed > div.feed-list > div.feed-entry.metric > span.lane-tag` ("vibesquad") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `section.team-feed > div.feed-list > div.feed-entry.needs-you > span.lane-tag` ("vibesquad") | contrast | contrast 1.59:1 (text rgb(247,240,255) on bg rgb(79,214,207)) | 4k |
+| `span[data-testid="runs-the-work-badge"]` ("RUNS THE WORK ·") | contrast | contrast 1.05:1 (text rgb(178,141,232) on bg rgb(229,135,155)) | 4k |
+| `div.usage-crt-bar > div.usage-inbox-tabs > button.usage-inbox-tab > span.usage-inbox-count` ("0") | decor-line | ::after of section[data-testid="usage-review"]: repeating-gradient scanline covers text 7x13 | 4k |
+| `div.usage-crt-bar > div.usage-inbox-tabs > button.usage-inbox-tab.is-active > span.usage-inbox-count` ("0") | decor-line | ::after of section[data-testid="usage-review"]: repeating-gradient scanline covers text 7x13 | 4k |
+| `div[data-testid="sky-static-overlord"] > span.sky-static-text` ("no Overlord on duty") | decor-line | bg-repeating-gradient of div[data-testid="sky-static-overlord"]: repeating-gradient scanline covers text 144x1 | 4k |
+| `div[data-testid="usage-bug-inbox"] > div.usage-empty.muted` ("no bug-chaser cards yet ") | decor-line | ::after of section[data-testid="usage-review"]: repeating-gradient scanline covers text 356x14 | 4k |
+| `section[data-testid="usage-review"] > div.usage-crt-bar > div.usage-inbox-tabs > button.usage-inbox-tab` ("[IN QUEUE] 0") | decor-line | ::after of section[data-testid="usage-review"]: repeating-gradient scanline covers text 76x13 | 4k |
+| `section[data-testid="usage-review"] > div.usage-crt-bar > div.usage-inbox-tabs > button.usage-inbox-tab.is-active` ("[ALL] 0") | decor-line | ::after of section[data-testid="usage-review"]: repeating-gradient scanline covers text 42x13 | 4k |
+| `section[data-testid="usage-review"] > div.usage-crt-bar > span.usage-crt-title` ("MAIL://BUG-AND-PERFECTIO") | decor-line | ::after of section[data-testid="usage-review"]: repeating-gradient scanline covers text 201x14 | 4k |
+| `thead > tr > th > button.usage-th` ("Lane") | decor-line | border-bottom of details[data-testid="usage-lane-collapse"]: horizontal 1.0px line at y=656 through text line  | 4k |
+| `thead > tr > th.num > button.usage-th` ("Tokens") | decor-line | border-bottom of details[data-testid="usage-lane-collapse"]: horizontal 1.0px line at y=656 through text line  | 4k |
+| `details[data-testid="drawer-config-menu"] > div.drawer-config-popover > label.drawer-config-row > span.muted.small` ("Thinking") | decor-line | border-bottom of div[data-testid="pin-focus-bar"]: horizontal 2.0px line at y=125 through text line box 115-12 | 720 |

@@ -37,6 +37,13 @@
   .app .pin-focus-bar .pin-focus-slot { flex: 1 1 360px; }
   .app .pin-focus-bar .drawer-head-compact { flex-wrap: wrap; height: auto; min-height: 44px; row-gap: 8px; }
   .handoff-row.unassigned-row > * { min-width: 0; overflow-wrap: anywhere; }
+  /* 170px sidebar with several teams: the @handle chip + ctx bar crushed names to ~37px ("Art Direction" -> "Ar…"). Drop the chip (the hub bar
+     shows it) and let the name wrap instead of ellipsizing. */
+  .sidebar .pin-row .pin-lane-handle { display: none; }
+  .sidebar .pin-row .pin-row-name { white-space: normal; overflow-wrap: anywhere; }
+  /* cwd + labels as wrapping flex items: wrapped inline <code> boxes span both lines and overlap each other. */
+  .handoff-row.unassigned-row > span.muted.small { display: flex; flex-wrap: wrap; gap: 2px 6px; }
+  .handoff-row.unassigned-row code { white-space: normal; overflow-wrap: anywhere; }
   .drawer-head { padding: 4px 8px; }
   .timeline { min-height: 180px; }
   .composer { position: sticky; bottom: 0; flex-shrink: 0; }

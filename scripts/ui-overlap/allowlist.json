@@ -96,6 +96,32 @@
       "reason": "Diagnostics log viewer is a log: it is capped at 40vh (ResponsiveSmallWindow.css .diag-log) and scrolls by nature; the modal opens on demand, not by default."
     },
     {
+      "kind": "edge-clip",
+      "selector": "sq-floor-(plate|front)",
+      "reason": "Squad Floor plate/front are bottom-aligned art cropped by the stage when the window is shorter than the 332px plate (HP5); the crop is the art, not content."
+    },
+    {
+      "kind": "compact-scroll",
+      "surface": "pin-grid-teams-toggle",
+      "reason": "Full Teams plumbing view, opened on demand via the squad-full-toggle; the compact grid is the default."
+    },
+    {
+      "kind": "compact-scroll",
+      "selector": "cmd-list",
+      "reason": "Command palette opens on demand (Ctrl+K) and its action list scrolls by nature; the filter box narrows it."
+    },
+    {
+      "kind": "overlap",
+      "selector": "tl-pinned-todo",
+      "reason": "The Plan / Tasks row is sticky-pinned over the scrolling timeline by design."
+    },
+    {
+      "kind": "overlap",
+      "selector": "brainstorm-empty-card.*cast-sprite",
+      "other": "unit-tag",
+      "reason": "The unit tag is a corner badge laid over the avatar frame by design (same on every avatar); @art owns the badge gutter."
+    },
+    {
       "kind": "overlap",
       "selector": "drawer-(thinking|mode)-select",
       "other": "dock-toggle|btn ghost",
