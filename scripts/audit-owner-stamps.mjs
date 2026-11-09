@@ -59,14 +59,14 @@ function parseArgs(argv) {
 
 export function audit({ dir, since, until }) {
   const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
-  const r = { transcripts: files.length, ownerInputs: 0, shortInputs: 0, shortToBrainstorm: 0, buckets: {}, topPhrases: {} };
+  const r = { transcripts: files.length, ownerInputs: 0, shortInputs: 0, shortToBrainstorm: 0, buckets: {}, topPhrases: {}, stampsByLane: {} };
   const counts = {};
   for (const f of files) {
-    let role = null;
+    let role = null, lane = null;
     for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
       if (!line) continue;
       let e; try { e = JSON.parse(line); } catch { continue; }
-      if (e.type === 'created') { role = e.meta?.role ?? null; continue; }
+      if (e.type === 'created') { role = e.meta?.role ?? null; lane = e.meta?.lane ?? null; continue; }
       if (e.type !== 'input' || !isOwnerInput(e.text)) continue;
       if ((since !== undefined && e.ts < since) || (until !== undefined && e.ts > until)) continue;
       r.ownerInputs++;
@@ -75,6 +75,7 @@ export function audit({ dir, since, until }) {
       if (role === 'brainstorm') r.shortToBrainstorm++;
       const b = classify(e.text);
       r.buckets[b] = (r.buckets[b] || 0) + 1;
+      if (b === 'rubber stamp') { const l = lane || '(none)'; r.stampsByLane[l] = (r.stampsByLane[l] || 0) + 1; }
       const k = normalize(e.text);
       ((counts[b] ||= {})[k] = (counts[b][k] || 0) + 1);
     }
@@ -149,7 +150,7 @@ export function handoffBucket(runs, { since, until } = {}) {
   for (const x of real) {
     const from = x.labels['vs.handoff-from'];
     const lane = `${x.team}/${x.lane}`;
-    const c = (r.churn[lane] ||= { runs: 0, handoffSuccessors: 0, freshSpawns: 0, thinRuns: 0 });
+    const c = (r.churn[lane] ||= { runs: 0, handoffSuccessors: 0, freshSpawns: 0, thinRuns: 0, under100k: 0 });
     c.runs++; from ? c.handoffSuccessors++ : c.freshSpawns++;
     if (x.outputs < 5) c.thinRuns++;
     if (!from) continue;
@@ -158,6 +159,7 @@ export function handoffBucket(runs, { since, until } = {}) {
     const p = byId.get(from);
     const k = !p || !p.maxCtx ? 'predecessorUnknown' : p.maxCtx < LEAD_HANDOFF_MIN_TOKENS ? 'under100k' : 'atOrOver100k';
     r.handoffs[k]++;
+    if (k === 'under100k') c.under100k++;
     (r.byTrigger[trig] ||= { under100k: 0, atOrOver100k: 0, predecessorUnknown: 0 })[k]++;
   }
   // Fixture runs per lane, so the hub's 31 are explained rather than hidden.
@@ -317,16 +319,138 @@ export function fixOfferBucket(dir, { since, until } = {}) {
   return r;
 }
 
-function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fixOffers } }) {
+// ================= O7 bucket 6: unrouted ops =================
+// Lead/handoff messages that mention a server restart, a runtime sync, or a Gotchas-style blocker
+// (OPS_MENTION) but were never routed to the Overlord (`vs send`) or @bug (`vs inbox add --lane
+// bug-chaser`) within the window. Report-only: no blocking, no penalties. Audit key `unrouted-ops:<date>`.
+export const OPS_MENTION_PATTERNS = [
+  /\bneeds? (a )?(server )?restart\b/i,
+  /\brestart (the )?(vs |vibesquad )?(server|runner)\b/i,
+  /\bruntime sync\b/i,
+  /\bsync (the )?runtime\b/i,
+  /\buntracked files?\b/i,
+  /\bnode_modules junction\b/i,
+];
+// Negated / already-routed / instructional phrasing is not an unrouted ops blocker.
+export const OPS_NEGATE = /\b(didn'?t|did not|don'?t|do not|no need to|without|waiting on (?:the )?(?:Hub|Overlord)\w*|checking how)\b/i;
+// `flaky` counts only as a Gotchas blocker, not a passing/solo-rerun dismissal or a speculative re-run.
+const FLAKY = /\bflaky\b/i;
+const FLAKY_DISMISS = /\b(known flaky|solo reruns?|on rerun|in a row|on its own|pass(?:ed|es|ing)|whether it'?s flaky|if it'?s flaky)\b|\b\d+\s*\/\s*\d+\b/i;
+export const isOpsMention = (text) => {
+  if (typeof text !== 'string') return false;
+  if (OPS_NEGATE.test(text)) return false;
+  if (OPS_MENTION_PATTERNS.some((p) => p.test(text))) return true;
+  return FLAKY.test(text) && !FLAKY_DISMISS.test(text);
+};
+// A route to @bug: `vs inbox add --lane bug-chaser` (any flag order, `node cli/vs.mjs`, `@bug`/`bug`).
+const INBOX_ADD_RE = /\bvs(?:\.mjs)?\s+inbox\s+add\b[^\n]*--lane[=\s]+['"]?@?bug(?:-chaser)?\b/i;
+// Routing tool events may sit just outside the mention window: allow a slack margin around [since, until].
+const ROUTE_SLACK_MS = 3600 * 1000;
+const BUG_LANES = new Set(['bug-chaser', 'bug-runner']);
+// A route to the Overlord: an MCP send tool whose recipient is an Overlord run, or a CLI `vs send <overlordId>`.
+function sendToOverlord(e, overlordIds) {
+  if (e.type !== 'tool') return false;
+  if (/send/i.test(String(e.name || ''))) {
+    const inp = e.input || {};
+    const to = inp.id ?? inp.agentId ?? inp.to;
+    if (typeof to === 'string' && overlordIds.has(to)) return true;
+  }
+  const cmd = e.input?.command || e.input?.text || '';
+  if (typeof cmd === 'string') {
+    const m = cmd.match(/(?:^|[\s;&|])(?:node\s+[^\s]*vs\.mjs|vs)\s+send\s+(\S+)/i);
+    if (m && overlordIds.has(m[1])) return true;
+  }
+  return false;
+}
+// The only input text we scan is the handoff packet's Judgment/Gotchas tail (Recent team log and the
+// brainstorm summary live outside it, and regular incoming messages are skipped entirely).
+function handoffOpsText(text) {
+  if (typeof text !== 'string') return null;
+  const begin = text.indexOf('--- BEGIN HANDOFF PACKET');
+  if (begin < 0) return null;
+  const end = text.indexOf('--- END HANDOFF PACKET', begin);
+  if (end < 0) return null;
+  const packet = text.slice(begin, end);
+  const j = packet.indexOf('## Judgment');
+  const g = packet.indexOf('### Gotchas');
+  const start = j >= 0 ? (g >= 0 ? Math.min(j, g) : j) : g;
+  if (start < 0) return null;
+  return packet.slice(start);
+}
+export function unroutedOpsBucket(dir, { since, until, now = Date.now() } = {}) {
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
+  // Pass 1: run metadata + Overlord (hub lead) run ids per team (role=lead on the hub lane, i.e. lane === team).
+  const meta = new Map();
+  for (const f of files) {
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === 'created') { meta.set(f.replace(/\.jsonl$/, ''), { role: e.meta?.role, lane: e.meta?.lane, team: e.meta?.team }); break; }
+    }
+  }
+  const overlordByTeam = new Map();
+  for (const [id, m] of meta) {
+    if (m.role === 'lead' && m.lane && m.lane === m.team) {
+      let s = overlordByTeam.get(m.team);
+      if (!s) overlordByTeam.set(m.team, (s = new Set()));
+      s.add(id);
+    }
+  }
+  // Pass 2: feature-lane leads' ops mentions, suppressed when the run routed to Overlord/@bug in the window.
+  const r = { total: 0, mentions: 0, routed: 0, byLane: {}, examples: [], auditKey: 'unrouted-ops:' + new Date(now).toISOString().slice(0, 10) };
+  const routeMin = since === undefined ? -Infinity : since - ROUTE_SLACK_MS;
+  const routeMax = until === undefined ? Infinity : until + ROUTE_SLACK_MS;
+  for (const f of files) {
+    const id = f.replace(/\.jsonl$/, '');
+    const m = meta.get(id);
+    if (!m || m.role !== 'lead') continue;
+    if (m.lane && m.lane === m.team) continue; // the Overlord is the sink, not a source.
+    if (BUG_LANES.has(m.lane)) continue; // the bug lane is @bug: its own mentions are already in @bug.
+    const overlordIds = overlordByTeam.get(m.team) || new Set();
+    const mentions = [];
+    let routed = false;
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === 'tool') {
+        if (e.ts >= routeMin && e.ts <= routeMax) {
+          if (INBOX_ADD_RE.test(JSON.stringify(e)) || sendToOverlord(e, overlordIds)) routed = true;
+        }
+        continue;
+      }
+      if (e.type !== 'input' && e.type !== 'output') continue;
+      if (since !== undefined && e.ts < since) continue;
+      if (until !== undefined && e.ts > until) continue;
+      if (e.type === 'output') {
+        if (typeof e.text === 'string' && isOpsMention(e.text)) mentions.push({ ts: e.ts, text: e.text });
+      } else {
+        const t = handoffOpsText(e.text);
+        if (t && isOpsMention(t)) mentions.push({ ts: e.ts, text: t });
+      }
+    }
+    if (!mentions.length) continue;
+    r.mentions += mentions.length;
+    if (routed) { r.routed += mentions.length; continue; }
+    const lane = m.lane || '(none)';
+    r.byLane[lane] = (r.byLane[lane] || 0) + mentions.length;
+    r.total += mentions.length;
+    for (const mn of mentions) r.examples.push({ run: id, lane, ts: mn.ts, tail: mn.text.trim().slice(-160) });
+  }
+  r.examples.sort((a, b) => (a.lane === b.lane ? a.ts - b.ts : a.lane < b.lane ? -1 : 1));
+  return r;
+}
+
+function printWaste({ buckets, ownerInputs, stampsByLane, waste: { relay, handoffs, fixers, fixOffers, unroutedOps } }) {
   console.log('\n== waste report ==');
   console.log(`(1) rubber stamps: ${buckets['rubber stamp'] || 0} of ${ownerInputs} owner inputs`);
+  console.log('    by lane:', JSON.stringify(stampsByLane));
   console.log(`(2) owner-as-relay: strict (owner:true, report-shaped, VS notices/forwards excluded) = ${relay.strict}`);
   console.log(`    unmarked report-shaped (upper bound, may be agent sends) = ${relay.unmarkedUpperBound}; system/forwarded excluded = ${relay.systemOrForwardedExcluded}`);
   const h = handoffs.handoffs;
   console.log(`(3) lead runs ${handoffs.leadRuns} (${handoffs.fixtureRuns} are handoff-test fixtures, excluded). Real handoffs ${h.total}: <100k ${h.under100k}, >=100k ${h.atOrOver100k}, predecessor unknown ${h.predecessorUnknown}`);
   console.log('    by trigger:', JSON.stringify(handoffs.byTrigger));
   console.log('    fixture runs by lane:', JSON.stringify(handoffs.fixtureByLane));
-  for (const [lane, c] of Object.entries(handoffs.churn)) console.log(`    churn ${lane}: runs ${c.runs} (handoff successors ${c.handoffSuccessors}, fresh ${c.freshSpawns}, thin <5 outputs ${c.thinRuns})`);
+  for (const [lane, c] of Object.entries(handoffs.churn)) console.log(`    churn ${lane}: runs ${c.runs} (handoff successors ${c.handoffSuccessors}, fresh ${c.freshSpawns}, thin <5 outputs ${c.thinRuns}, under100k ${c.under100k})`);
   console.log(`(4) fixers: ${fixers.unitsSeen} units seen; 2+ implementers ${fixers.multiWorker.length}; across lanes ${fixers.laneBounce.length}; fix unit <24h after merge ${fixers.fixAfterMerge.length}`);
   for (const c of FIXER_CLASSES) console.log(`    class ${c}: ${fixers.classes[c].length} units (${fixers.successorClasses[c]} extra implementers) ${JSON.stringify(fixers.classes[c].slice(0, 8))}`);
   console.log('    multi-worker:', JSON.stringify(fixers.multiWorker.slice(0, 15)));
@@ -336,6 +460,9 @@ function printWaste({ buckets, ownerInputs, waste: { relay, handoffs, fixers, fi
   console.log('    by lane:', JSON.stringify(fixOffers.byLane));
   console.log('    by role:', JSON.stringify(fixOffers.byRole));
   for (const x of fixOffers.examples.slice(0, 3)) console.log(`    e.g. ${x.run} ${x.lane}/${x.role}: ...${x.tail.slice(-120).replace(/\n/g, ' ')}`);
+  console.log(`(6) unrouted ops (audit-key: ${unroutedOps.auditKey}): ${unroutedOps.total} unrouted of ${unroutedOps.mentions} mentions (${unroutedOps.routed} routed)`);
+  console.log('    by lane:', JSON.stringify(unroutedOps.byLane));
+  for (const x of unroutedOps.examples.slice(0, 3)) console.log(`    e.g. ${x.run} ${x.lane}: ...${x.tail.slice(-100).replace(/\n/g, ' ')}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -343,7 +470,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const r = audit(args);
   if (args.waste) {
     const runs = loadRuns(args.dir);
-    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args) };
+    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs, args), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args), unroutedOps: unroutedOpsBucket(args.dir, args) };
   }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
