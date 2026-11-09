@@ -1,7 +1,7 @@
 // `vs inbox triage --archive|--park <cardId...>`: leads/Buddies of the card's Squad + owner; workers get a clear error.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,6 +20,17 @@ function setup(t) {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   writeFileSync(path.join(home, "inbox.json"), JSON.stringify({ cards: [card("a", "vibesquad"), card("b", "vibesquad"), card("c", "other")] }));
   const statuses = () => Object.fromEntries((([j]) => (Array.isArray(j) ? j : j.cards))([JSON.parse(readFileSync(path.join(home, "inbox.json"), "utf8"))]).map((c) => [c.id, c.status]));
+  const agent = (id, role, team = "vibesquad") => {
+    const dir = path.join(home, "runner", "agents");
+    mkdirSync(dir, { recursive: true });
+    const ts = Date.now();
+    const lines = [
+      { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd: home, meta: { title: id, labels: { role, team, lane: "bug-chaser" } } },
+      { seq: 1, ts, type: "status", status: "parked" },
+    ];
+    writeFileSync(path.join(dir, `${id}.jsonl`), lines.map((e) => JSON.stringify(e)).join(String.fromCharCode(10)) + String.fromCharCode(10));
+    return id;
+  };
   const run = (args, env = {}) => {
     const e = { ...process.env, VIBESQUAD_HOME: home, ...env };
     delete e.PASEO_AGENT_ID;
@@ -27,7 +38,7 @@ function setup(t) {
     Object.assign(e, env);
     return spawnSync(process.execPath, [CLI, "inbox", "triage", ...args], { encoding: "utf8", env: e });
   };
-  return { home, run, statuses };
+  return { home, run, statuses, agent };
 }
 
 test("CLI parses --archive <ids...> (owner, no agent id) and --park", (t) => {
@@ -42,11 +53,40 @@ test("CLI parses --archive <ids...> (owner, no agent id) and --park", (t) => {
   assert.equal(statuses().a, "parked");
 });
 
-test("a worker agent gets a clear error and nothing is archived", (t) => {
+test("a worker agent gets a clear error on EVERY mutating triage action (incl. --set-status bypass)", (t) => {
+  const { run, statuses, agent } = setup(t);
+  const env = { PASEO_AGENT_ID: agent("rn-worker1", "worker") };
+  for (const args of [
+    ["--archive", "a"],
+    ["--park", "a"],
+    ["--set-status", "a", "--status", "archived"],
+    ["--accept", "a"],
+    ["--reject", "a"],
+    ["--merge", "a", "b"],
+    ["--bounce", "a", "--lane", "other-lane"],
+  ]) {
+    const r = run(args, env);
+    assert.notEqual(r.status, 0, args.join(" "));
+    assert.match(r.stderr, /leads and Buddies of the card's Squad/, args.join(" "));
+  }
+  assert.deepEqual(statuses(), { a: "parked", b: "parked", c: "parked" });
+});
+
+test("a lead of the Squad can --set-status, and --merge archives its sources instead of deleting them", (t) => {
+  const { run, statuses, agent } = setup(t);
+  const env = { PASEO_AGENT_ID: agent("rn-lead1", "lead") };
+  assert.equal(run(["--set-status", "a", "--status", "accepted"], env).status, 0);
+  assert.equal(statuses().a, "accepted");
+  const m = run(["--merge", "a", "b"], env);
+  assert.equal(m.status, 0, m.stderr);
+  assert.deepEqual(statuses(), { a: "accepted", b: "archived", c: "parked" });
+});
+
+test("agent id with no runner record fails closed even if VS_ROLE=lead is in env", (t) => {
   const { run, statuses } = setup(t);
-  const r = run(["--archive", "a"], { PASEO_AGENT_ID: "rn-not-a-real-agent" });
+  const r = run(["--archive", "a"], { PASEO_AGENT_ID: "rn-ghost", VS_AGENT_ID: "rn-ghost", VS_ROLE: "lead", VS_TEAM: "vibesquad" });
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /leads and Buddies of the card's Squad/);
+  assert.match(r.stderr, /no runner record/);
   assert.equal(statuses().a, "parked");
 });
 
@@ -62,8 +102,8 @@ test("assertInboxTriageCaller: lead/Buddy of the Squad pass, worker and other Sq
 });
 
 test("--delete is owner-only: an agent is told to use --archive, the owner can delete", (t) => {
-  const { run, statuses } = setup(t);
-  const r = run(["--delete", "a"], { PASEO_AGENT_ID: "rn-not-a-real-agent" });
+  const { run, statuses, agent } = setup(t);
+  const r = run(["--delete", "a"], { PASEO_AGENT_ID: agent("rn-lead2", "lead") });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /deleting cards is owner-only; use --archive/);
   assert.equal(statuses().a, "parked");

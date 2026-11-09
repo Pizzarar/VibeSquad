@@ -601,9 +601,16 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       target.updatedAt = now;
 
       const sourceSet = new Set(sourceIds);
-      const remaining = cards.filter((c) => !sourceSet.has(c.id));
+      // Sources are archived, not deleted: a merge is recoverable.
+      for (const c of cards) {
+        if (sourceSet.has(c.id)) {
+          c.status = "archived";
+          c.updatedAt = now;
+        }
+      }
+      const remaining = cards;
       for (const c of remaining) {
-        if (c.relatedCardId && sourceSet.has(c.relatedCardId) && c.id !== target.id) {
+        if (!sourceSet.has(c.id) && c.relatedCardId && sourceSet.has(c.relatedCardId) && c.id !== target.id) {
           c.relatedCardId = target.id;
           c.relatedReason = `goes with card ${target.id} (${target.title})`;
         }

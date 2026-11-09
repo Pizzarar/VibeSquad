@@ -854,6 +854,16 @@ function commandInbox(flags) {
   }
 
   if (sub === "triage") {
+    // One gate for every mutating triage action. Empty agent id = the owner at a local shell: accepted trust
+    // model (an agent could edit inbox.json directly anyway). An agent id with no runner record fails closed.
+    const gate = (cardIds, { ownerOnly = false } = {}) => {
+      const me = resolveIdentity(flags, { recordWins: true });
+      if (me.agentId && !(isRunnerId(me.agentId) && readRunnerAgentSync(me.agentId))) {
+        throw new Error(`inbox triage denied: agent ${me.agentId} has no runner record, so its role/Squad cannot be verified`);
+      }
+      if (ownerOnly && me.agentId) throw new Error("deleting cards is owner-only; use --archive");
+      assertInboxTriageCaller({ agentId: me.agentId, role: me.role, teamId: me.team.id }, cardIds, baseHome);
+    };
     if (flags.merge) {
       const mergeStr = String(flags.merge).trim();
       let targetId = mergeStr;
@@ -863,6 +873,7 @@ function commandInbox(flags) {
         targetId = parts[0];
         sourceIds = [...parts.slice(1), ...sourceIds];
       }
+      gate([targetId, ...sourceIds]);
       const res = triageInboxCards({ action: "merge", targetId, sourceIds, baseHome });
       process.stdout.write(`merged [${res.mergedIds.join(", ")}] → ${res.card.id} (${res.card.title})\n`);
       return 0;
@@ -871,6 +882,7 @@ function commandInbox(flags) {
       const cardId = String(flags.bounce).trim();
       const laneId = String(flags.lane || flags._[0] || "").trim();
       if (!laneId) throw new Error("inbox triage --bounce <cardId> requires --lane <newLane>");
+      gate([cardId]);
       const res = triageInboxCards({
         action: "bounce",
         cardId,
@@ -888,6 +900,7 @@ function commandInbox(flags) {
       if (!INBOX_STATUSES.includes(status)) {
         throw new Error(`inbox triage status must be one of: ${INBOX_STATUSES.join(", ")}`);
       }
+      gate([cardId]);
       const res = triageInboxCards({ action: "update", cardId, patch: { status }, baseHome });
       process.stdout.write(`${res.card.id} → ${res.card.status}
 `);
@@ -896,8 +909,7 @@ function commandInbox(flags) {
     if (flags.archive || flags.park) {
       const verb = flags.archive ? "archive" : "park";
       const cardIds = [String(flags.archive || flags.park), ...flags._].map((s) => String(s).trim()).filter(Boolean);
-      const me = resolveIdentity(flags, { recordWins: true });
-      assertInboxTriageCaller({ agentId: me.agentId, role: me.role, teamId: me.team.id }, cardIds, baseHome);
+      gate(cardIds);
       for (const cardId of cardIds) {
         const res = verb === "archive"
           ? triageInboxCards({ action: "archive", cardId, baseHome })
@@ -908,9 +920,7 @@ function commandInbox(flags) {
       return 0;
     }
     if (flags.delete) {
-      if (resolveIdentity(flags, { recordWins: true }).agentId) {
-        throw new Error("deleting cards is owner-only; use --archive");
-      }
+      gate([], { ownerOnly: true });
       const res = triageInboxCards({ action: "delete", cardId: String(flags.delete).trim(), baseHome });
       process.stdout.write(`deleted ${res.card.id}
 `);
