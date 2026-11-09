@@ -65,3 +65,17 @@ test("many running workers overflow into +N more, still under budget", () => {
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("idle (finished/parked) workers are not in flight; running, queued and permission-pending ones are", () => {
+  const w = (id, over) => ({ id, title: id, createdAt: day(1), labels: labels("worker"), ...over });
+  const agents = [
+    w("idle1", { status: "idle" }),
+    w("idle2", { status: "idle", resumable: true }),
+    w("run", { status: "running" }),
+    w("starting", { status: "initializing" }),
+    w("queued", { status: "idle", queued: { ahead: 1 } }),
+    w("perm", { status: "idle", pendingPermissions: [{ id: "p" }], requiresAttention: true }),
+  ];
+  assert.deepEqual(bootRoster(agents, "own").workers.map((x) => x.id).sort(), ["perm", "queued", "run", "starting"]);
+  assert.match(whosHereBody(agents, "own"), /- Workers: 4$/m);
+});

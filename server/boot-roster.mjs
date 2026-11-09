@@ -15,6 +15,14 @@ const stamp = (a) => Date.parse(a?.createdAt ?? a?.updatedAt ?? "") || 0;
 const newestFirst = (a, b) => stamp(b) - stamp(a) || (Date.parse(b?.updatedAt ?? "") || 0) - (Date.parse(a?.updatedAt ?? "") || 0) || String(b?.id ?? "").localeCompare(String(a?.id ?? ""));
 const isClosed = (a) => String(a?.status ?? "").toLowerCase() === "closed";
 
+/** A worker is "in flight" only with a real turn: running or starting, queued for a slot, or waiting on a permission. Finished runner workers report idle (parked maps to idle), so non-closed is not enough. */
+export function hasActiveTurn(a) {
+  const s = String(a?.status ?? "").toLowerCase();
+  if (s === "running" || s === "initializing" || s === "queued") return true;
+  if (a?.queued || a?.requiresAttention === true) return true;
+  return Array.isArray(a?.pendingPermissions) && a.pendingPermissions.length > 0;
+}
+
 /**
  * The lead and the running workers of one lane. A running (non-closed) lead beats a closed one. A closed lead counts
  * only when it is the newest lead in the lane AND resumable (dd4bf51: a parked or lost lead still reads as the lane's lead).
@@ -30,7 +38,7 @@ export function bootRoster(agents, laneId) {
   const leads = inLane.filter((a) => normalizeRoleLabel(a) === "lead").filter((a) => !a.archivedAt && !a.archived && !a.internal).sort(newestFirst);
   const running = leads.filter((a) => isLiveAgent(a) && !isClosed(a));
   const lead = running[0] ?? (leads[0] && isLiveAgent(leads[0]) ? leads[0] : null);
-  const workers = ofRole("worker").filter((a) => isLiveAgent(a) && !isClosed(a)).sort(newestFirst);
+  const workers = ofRole("worker").filter((a) => isLiveAgent(a) && !isClosed(a) && hasActiveTurn(a)).sort(newestFirst);
   const buddies = ofRole("brainstorm").filter((a) => isLiveAgent(a) && !isClosed(a));
   return { lead, workers, buddies };
 }

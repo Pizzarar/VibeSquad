@@ -42,14 +42,14 @@ export function liveInFlightBlock({ agents, laneId, teamId, home, budget = BOOT_
   const logHead = log.length ? "- Latest lane log:" : "- Latest lane log: (no entries)";
   // Fill order: header + lead, running workers, then the newest lane log lines, then `+N more`.
   let room = budget - head.length - fixed.join("\n").length - 2 - logHead.length - 1 - 80;
-  const w = fitRows(workerRows.map((r) => `  - ${r}`), Math.max(0, room));
-  room -= w.used;
+  // Workers ride inline on one line ("- Workers: a [running]; b [queued]; +N more → vs who all"), cut to the budget.
+  const wLabel = workerRows.length ? "- Workers: " : "- Workers: none running";
+  const w = fitRows(workerRows.map((r) => `${r}; `), Math.max(0, room - wLabel.length));
+  room -= w.used + wLabel.length;
   const l = fitRows([...logRows].reverse(), Math.max(0, room));
   const out = [head, ...fixed];
   if (agents != null) {
-    out.push(`- Workers: ${workerRows.length ? `${workerRows.length} running` : "none running"}`);
-    out.push(...w.kept);
-    if (w.dropped) out.push(`  - +${w.dropped} more ${MORE_WORKERS_HINT}`);
+    out.push(workerRows.length ? `${wLabel}${w.kept.join("").replace(/; $/, "")}${w.dropped ? `; +${w.dropped} more ${MORE_WORKERS_HINT}` : ""}` : wLabel);
   }
   out.push(logHead, ...l.kept.reverse());
   return out.join("\n");
