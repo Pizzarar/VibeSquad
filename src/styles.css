@@ -3759,6 +3759,7 @@ html, body, #root { overflow-x: hidden; }
 .cmd-list { overflow-y: auto; display: flex; flex-direction: column; }
 .cmd-item { text-align: left; background: transparent; border: 0; color: inherit; padding: 7px 14px; font: inherit; cursor: pointer; }
 .cmd-item.on, .cmd-item:hover { background: var(--cyan-dim, color-mix(in srgb, var(--cyan) 15%, transparent)); }
+.cmd-show-all { color: var(--muted, inherit); border-top: 1px solid var(--line, rgba(128, 128, 128, 0.25)); }
 .cmd-kind { display: inline-block; min-width: 46px; font-size: 10px; text-transform: uppercase; opacity: 0.6; }
 .cmd-empty { padding: 14px; }
 .ctx-menu {
