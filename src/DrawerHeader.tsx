@@ -1486,6 +1486,7 @@ export function DrawerHeader({
             </span>
             {modeSelect}
             {thinkingSelect}
+            <WorkingChip members={working} subs={extraSubs} />
             {featureChips}
           </div>
           <div className="drawer-title" style={{ fontSize: 15 }}>

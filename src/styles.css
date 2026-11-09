@@ -4545,12 +4545,14 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 .drawer-working-chip:disabled { cursor: default; }
 .drawer-subagents-bar {
-  flex: none; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; padding: 3px 10px; border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--cyan) 5%, transparent); max-height: 52px; overflow-y: auto;
+  flex: 0 1 auto; min-width: 0; display: inline-flex; align-items: center; gap: var(--sp-1, 4px); flex-wrap: nowrap; padding: 0; border: 0;
+  background: transparent; max-height: none; overflow-x: auto; overflow-y: hidden; scrollbar-width: none;
 }
+.drawer-subagents-bar::-webkit-scrollbar { display: none; }
+.drawer-head-compact > .drawer-subagents-bar { flex: 0 1 auto; min-width: 0; }
 .drawer-subagent-chip {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 220px; padding: 1px 8px; font-size: 11px; color: var(--text);
-  background: transparent; border: 1px solid var(--line); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 160px; padding: 1px var(--sp-2, 8px); font-size: 11px; color: var(--text);
+  background: color-mix(in srgb, var(--cyan) 5%, transparent); border: 1px solid var(--line); cursor: pointer; white-space: nowrap;
 }
 .drawer-subagent-chip:hover, .drawer-subagent-chip:focus-visible { border-color: var(--cyan); outline: none; }
 
@@ -5879,10 +5881,10 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .exposed-network-banner button, .read-only-banner button, .config-warning-banner button, .update-available-banner button { line-height: 1; padding-block: 0; }
 /* Context bar: the readout and actions start below the painted cap, not across its edge (DrawerHeader.tsx no longer sets inline padding). */
 .brainstorm-ctx-bar { padding: calc(var(--u3-px) * 6 + var(--sp-1)) var(--sp-2) var(--sp-1); }
-/* Worker chips above the composer: the name ellipsizes inside the chip (the chip is a flex row, so bare text could only be cut), and the bar is tall enough for two chip rows before it scrolls. */
-.drawer-subagents-bar { max-height: calc(var(--u3-px) * 28 + var(--sp-2) * 2); }
+/* Worker chips in the top bar (C3): the name ellipsizes inside the chip so bare text cannot be cut. */
+.drawer-subagents-bar { max-height: none; }
 .drawer-subagent-chip { min-width: 0; }
-.drawer-subagent-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-subagent-chip-name { display: block; min-width: 0; max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Squads home huddle: portraits sit side by side (they were stacked with a -10px margin, so their click targets overlapped) and each pip sits under its own portrait instead of floating over the neighbour. */
 .squad-home-huddle { gap: var(--sp-2); padding-left: var(--sp-1); flex-wrap: wrap; align-items: flex-start; }
 .squad-home-portrait { display: inline-flex; flex-direction: column; align-items: center; gap: var(--sp-1); }

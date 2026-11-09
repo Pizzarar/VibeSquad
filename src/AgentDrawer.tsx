@@ -35,7 +35,7 @@ import { PermissionCard } from "./PermissionCard";
 import { Composer, formatBtwPrompt, shouldQueueOnSend, type QueuedTurnItem } from "./Composer";
 import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
-import { useWorkingMembers, WorkingBar } from "./WorkingBar";
+import { useWorkingMembers } from "./WorkingBar";
 import { RightDock } from "./RightDock";
 
 export { localImageSrc } from "./Timeline";
@@ -714,8 +714,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
           </button>
         </div>
       )}
-
-      <WorkingBar members={working} subs={extraSubs} />
 
       <Composer
         agent={agent}

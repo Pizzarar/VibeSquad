@@ -138,3 +138,17 @@ test("C2: sky chat panel drops the header row (left TV already names the bot); c
   assert.match(closeRule, /opacity:/);
 });
 
+test("C3: WorkingBar moves from above Composer into the hub/agent top bar as compact chips next to WorkingChip", () => {
+  const ad = src("AgentDrawer.tsx");
+  assert.doesNotMatch(ad, /<WorkingBar\b/);
+  const wb = src("WorkingBar.tsx");
+  assert.match(wb, /data-testid="drawer-working-chip"/);
+  assert.match(wb, /<WorkingBar members=\{members\} subs=\{subs\} \/>/);
+  assert.match(wb, /data-testid=\{`subagent-chip-\$\{m\.agent\.id\}`\}/);
+  assert.match(wb, /onClick=\{\(\) => openAgent\(m\.agent\.id\)\}/);
+  assert.doesNotMatch(wb, /Working under this agent:/);
+  const dh = src("DrawerHeader.tsx");
+  assert.match(dh, /<WorkingChip members=\{working\} subs=\{extraSubs\} \/>/);
+});
+
+

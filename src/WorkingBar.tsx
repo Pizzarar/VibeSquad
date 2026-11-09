@@ -27,31 +27,33 @@ export function useWorkingMembers(agentId: string, isBs: boolean, teamId: string
 
 const nameOf = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
 
-/** Compact header chip. */
+/** Compact header chip + compact working member chips in the top bar (C3). */
 export function WorkingChip({ members, subs }: { members: Member[]; subs: number }) {
   const n = members.length + subs;
   if (!n) return null;
   const first = members[0];
   return (
-    <button
-      type="button"
-      className="drawer-working-chip"
-      data-testid="drawer-working-chip"
-      title={members.length ? `Working: ${members.map(nameOf).join(", ")}${subs ? ` + ${subs} sub-agent call${subs === 1 ? "" : "s"}` : ""}` : `${subs} sub-agent call${subs === 1 ? "" : "s"} running`}
-      disabled={!first}
-      onClick={() => first && openAgent(first.agent.id)}
-    >
-      ⚡ {n} working
-    </button>
+    <>
+      <button
+        type="button"
+        className="drawer-working-chip"
+        data-testid="drawer-working-chip"
+        title={members.length ? `Working: ${members.map(nameOf).join(", ")}${subs ? ` + ${subs} sub-agent call${subs === 1 ? "" : "s"}` : ""}` : `${subs} sub-agent call${subs === 1 ? "" : "s"} running`}
+        disabled={!first}
+        onClick={() => first && openAgent(first.agent.id)}
+      >
+        ⚡ {n} working
+      </button>
+      <WorkingBar members={members} subs={subs} />
+    </>
   );
 }
 
-/** Slim strip above the composer with one clickable chip per running agent. */
+/** Compact top-bar chip group next to the "N working" pill (C3). */
 export function WorkingBar({ members, subs }: { members: Member[]; subs: number }) {
   if (!members.length && !subs) return null;
   return (
     <div className="drawer-subagents-bar" data-testid="drawer-subagents-bar">
-      <span className="muted small">⚡ Working under this agent:</span>
       {members.map((m) => (
         <button key={m.agent.id} type="button" className="drawer-subagent-chip" data-testid={`subagent-chip-${m.agent.id}`} title={`Open ${nameOf(m)}`} onClick={() => openAgent(m.agent.id)}>
           <StatusDot agent={m.agent} />
@@ -61,7 +63,7 @@ export function WorkingBar({ members, subs }: { members: Member[]; subs: number 
           </span>
         </button>
       ))}
-      {subs > 0 && <span className="muted small">{subs} sub-agent call{subs === 1 ? "" : "s"}</span>}
+      {!members.length && subs > 0 && <span className="muted small">+{subs}</span>}
     </div>
   );
 }
