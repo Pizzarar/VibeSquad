@@ -127,20 +127,25 @@ test("H1: runner agent labelled team=site files `--lane bug` into site's lane; -
   const cardsOf = () => JSON.parse(run({ VS_AGENT_ID: "", VS_TEAM: "efi" }, dir, "list", "--json", "--status", "all").stdout);
   const laneOf = (env, text, ...extra) => {
     assert.equal(run(env, dir, "add", text, "--lane", "bug", ...extra).status, 0);
-    return cardsOf().find((c) => c.text === text).laneId;
+    const c = cardsOf().find((x) => x.text === text);
+    return c.teamId === "site" ? c.laneId : `wrong team ${c.teamId}:${c.laneId}`;
   };
   assert.equal(laneOf({ VS_AGENT_ID: "rn-h1" }, "plain"), siteBug, "labels.team wins, not teams[0]");
   assert.equal(laneOf({ VS_AGENT_ID: "rn-h1", VS_TEAM: "efi" }, "env spoof"), siteBug, "VS_TEAM ignored");
   assert.equal(laneOf({ VS_AGENT_ID: "rn-h1" }, "flag spoof", "--team", "efi"), siteBug, "--team ignored");
+  // L1: the card's team is the lane's Squad, not --team.
+  assert.equal(run({ VS_AGENT_ID: "", VS_TEAM: "" }, dir, "add", "cross", "--lane", siteBug, "--team", "efi").status, 0);
+  assert.deepEqual((({ teamId, laneId }) => ({ teamId, laneId }))(cardsOf().find((c) => c.text === "cross")), { teamId: "site", laneId: siteBug });
   const siteCwd = path.join(dir, "site");
   mkdirSync(siteCwd, { recursive: true });
   const r = run({ VS_AGENT_ID: "" }, siteCwd, "add", "by cwd", "--lane", "bug");
   assert.equal(r.status, 0, r.stderr);
-  assert.equal(cardsOf().find((c) => c.text === "by cwd").laneId, siteBug, "cwd inside site resolves to site");
+  const byCwd = cardsOf().find((c) => c.text === "by cwd");
+  assert.deepEqual({ teamId: byCwd.teamId, laneId: byCwd.laneId }, { teamId: "site", laneId: siteBug }, "cwd inside site resolves to site");
 });
 
 test("M1: unscoped @bug keeps resolving to vibesquad's bug-chaser with efi first; the caller's own Squad wins when known", () => {
-  const teams = backfillBugLanes([squad("efi"), squad("vibesquad", [{ id: "bug-chaser", name: "Bug Chaser", state: "pinned", code: "Bug" }])]);
+  const teams = backfillBugLanes([squad("efi"), squad("vibesquad", [{ id: "bug-chaser", name: "Bug Chaser", state: "pinned", standing: true, code: "Bug" }])]);
   assert.equal(findLaneInRegistry("@bug", teams).lane.id, "bug-chaser");
   assert.equal(findLaneInRegistry("@bug", teams, "efi").lane.id, findBugLane(teams[0]).id);
   assert.equal(findLaneInRegistry("@bug", teams, "vibesquad").lane.id, "bug-chaser");

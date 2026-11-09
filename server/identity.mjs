@@ -249,7 +249,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
     }
   }
   // Lane-code handles: `@bug` / `bug` resolve to the lane whose stored or generated code matches.
-  // Several Squads can share a code (standing bug lanes): the caller's own team wins, then a non-standing lane (the one that held the code first), then array order.
+  // Several Squads can share a code (standing bug lanes): the caller's own team wins, then a non-hidden lane (the pre-backfill holder: bug-chaser is standing but visible, backfilled lanes are hidden), then array order.
   const hits = [];
   for (const team of teams) {
     const codes = laneCodesForTeam(team);
@@ -261,7 +261,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
   }
   if (hits.length) {
     const own = preferTeamId ? hits.find((h) => h.team.id === preferTeamId) : null;
-    return own ?? hits.find((h) => !h.lane.standing) ?? hits[0];
+    return own ?? hits.find((h) => !h.lane.hidden) ?? hits[0];
   }
   return null;
 }

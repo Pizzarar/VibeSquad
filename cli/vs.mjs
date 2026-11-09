@@ -805,14 +805,19 @@ function formatInboxCardLine(card) {
   return `[${card.id}] ${card.laneId} · ${card.scope} — ${card.title}${related}`;
 }
 
-/** `--lane bug` means the calling agent's own Squad bug lane (each Squad has its own); any other value is a lane id as typed. */
-function resolveInboxLaneFlag(flags) {
+/** `--lane bug` means the calling agent's own Squad bug lane (each Squad has its own); any other value is a lane id as typed. Returns { laneId, teamId }: a lane that resolves to a known Squad carries that Squad's id (never a conflicting --team). */
+function resolveInboxScope(flags) {
   const raw = flags.lane ? String(flags.lane).trim() : "";
-  if (raw.replace(/^@+/, "").toLowerCase() !== "bug") return raw;
+  const flagTeam = flags.team ? String(flags.team) : undefined;
+  if (!raw) return { laneId: undefined, teamId: flagTeam };
+  if (raw.replace(/^@+/, "").toLowerCase() !== "bug") {
+    const hit = findLane(raw, flagTeam || "");
+    return { laneId: raw, teamId: hit ? hit.team.id : flagTeam };
+  }
   const me = resolveIdentity({ ...flags, lane: undefined }, { recordWins: true });
   const lane = findBugLane(me.team);
   if (!lane) throw new Error(`Squad ${me.team?.id || "(unknown)"} has no bug lane; pass the lane id explicitly`);
-  return lane.id;
+  return { laneId: lane.id, teamId: me.team.id };
 }
 
 function commandInbox(flags) {
@@ -826,8 +831,7 @@ function commandInbox(flags) {
     }
     const res = addInboxCards({
       ideas,
-      laneId: flags.lane ? resolveInboxLaneFlag(flags) : undefined,
-      teamId: flags.team ? String(flags.team) : undefined,
+      ...resolveInboxScope(flags),
       source: flags.source ? String(flags.source) : flags.fromBrainstorm ? "brainstorm-dump" : "cli",
       splitDump: Boolean(flags.splitDump),
       baseHome,
@@ -845,8 +849,7 @@ function commandInbox(flags) {
       throw new Error(`inbox list --status must be one of: open, all, ${INBOX_STATUSES.join(", ")}`);
     }
     const cards = listInboxCards({
-      laneId: flags.lane ? resolveInboxLaneFlag(flags) : undefined,
-      teamId: flags.team ? String(flags.team) : undefined,
+      ...resolveInboxScope(flags),
       status: listStatus,
       baseHome,
     });
