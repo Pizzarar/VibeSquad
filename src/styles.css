@@ -269,7 +269,7 @@ code {
 }
 
 .brand {
-  padding: 4px 6px 12px;
+  padding: 4px 4px 12px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -278,8 +278,7 @@ code {
 
 .brand-text {
   min-width: 0;
-  flex: 1 1 auto;
-  margin-right: 6px;
+  flex: 0 1 auto;
   display: flex;
   flex-direction: column;
   font-family: var(--arcade);
