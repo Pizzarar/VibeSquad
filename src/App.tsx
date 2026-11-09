@@ -82,7 +82,7 @@ import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
-import { overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
+import { fetchHubCwd, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -1697,6 +1697,7 @@ export function App() {
     [],
   );
   const onSpinUpPin = useCallback(
+    // A failed start is already recorded on pinFocus.spinUpError (spinUpPin), which the hub page shows under the TVs.
     (pin: Pin, profile?: string) => void spinUpPin(pin, profile).catch(() => {}),
     [],
   );
@@ -1712,6 +1713,7 @@ export function App() {
       profile,
       profileName,
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
+      resolveCwd: (hub) => fetchHubCwd(hub),
     })
       .catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`))
       .finally(() => setOverlordBusy(false));
@@ -1726,6 +1728,7 @@ export function App() {
   const pinFocused = !!pinFocusView;
   const hubPinNow = pinFocusView ? hubPinForSquad(pinFocusView) : null;
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
+  const hubSpinUpErr = hubSpinUpError(pinFocus, hubPinNow);
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
   const hubAgentOpen = hubFocused && !!pinFocus?.agentId && !!pinFocusView && !skyZoneIds(skyZonesFor(pinFocusView)).includes(pinFocus.agentId);
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
@@ -2021,7 +2024,7 @@ export function App() {
             <HubPages
               view={pinFocusView}
               agentOpen={hubAgentOpen}
-              sky={(open) => <SkyZones view={pinFocusView} initialOpen={open} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />}
+              sky={(open) => (<><SkyZones view={pinFocusView} initialOpen={open} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}</>)}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />

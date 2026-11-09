@@ -37,6 +37,7 @@ import {
   appendVsLogEntry,
   createAgentClient,
   findExistingLaneBrainstorm,
+  laneWorkingDir,
   performBrainstormRestart,
   readBrainstormSummary,
   resetBrainstormRestartState,
@@ -770,8 +771,10 @@ async function handleBrainstormSummary(req, res, rootDir) {
     if (req.method === "GET") {
       const q = new URL(req.url, "http://x").searchParams;
       const lane = q.get("lane") || q.get("laneId") || "vibesquad";
-      const s = readBrainstormSummary(lane, rootDir, { teamId: q.get("teamId") || q.get("team") || "" });
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content) });
+      const teamId = q.get("teamId") || q.get("team") || "";
+      const s = readBrainstormSummary(lane, rootDir, { teamId });
+      // cwd: the folder a never-spawned lane (a Squad hub with no agents yet) starts in; null when the registry names none that exists.
+      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content), cwd: laneWorkingDir(teamId, s.laneId, rootDir) });
     }
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
