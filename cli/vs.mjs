@@ -27,6 +27,7 @@ import {
   listInboxCards,
   openTopicBrainstorm,
   parkTopicBrainstorm,
+  assertInboxTriageCaller,
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
@@ -231,6 +232,7 @@ function parseArgs(argv) {
     "scope",
     "delete",
     "archive",
+    "park",
     "accept",
     "reject",
     "setStatus",
@@ -486,7 +488,7 @@ Usage:
   vs handoff [--out <path>]
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>] [--from-brainstorm] [--source <tag>]
   vs inbox list [--lane <lane>]
-  vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane>
+  vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...> (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
   vs spec [show] [--lane <lane>] [--team <team>]
@@ -891,14 +893,27 @@ function commandInbox(flags) {
 `);
       return 0;
     }
-    if (flags.archive || flags.delete) {
-      const action = flags.archive ? "archive" : "delete";
-      const cardId = String(flags.archive || flags.delete).trim();
-      const res = triageInboxCards({ action, cardId, baseHome });
-      process.stdout.write(`${action}d ${res.card.id}\n`);
+    if (flags.archive || flags.park) {
+      const verb = flags.archive ? "archive" : "park";
+      const cardIds = [String(flags.archive || flags.park), ...flags._].map((s) => String(s).trim()).filter(Boolean);
+      const me = resolveIdentity(flags, { recordWins: true });
+      assertInboxTriageCaller({ agentId: me.agentId, role: me.role, teamId: me.team.id }, cardIds, baseHome);
+      for (const cardId of cardIds) {
+        const res = verb === "archive"
+          ? triageInboxCards({ action: "archive", cardId, baseHome })
+          : triageInboxCards({ action: "update", cardId, patch: { status: "parked" }, baseHome });
+        process.stdout.write(`${verb === "archive" ? "archived" : "parked"} ${res.card.id}
+`);
+      }
       return 0;
     }
-    throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, or --set-status <cardId> --status <status>");
+    if (flags.delete) {
+      const res = triageInboxCards({ action: "delete", cardId: String(flags.delete).trim(), baseHome });
+      process.stdout.write(`deleted ${res.card.id}
+`);
+      return 0;
+    }
+    throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
   if (sub === "open-topic") {

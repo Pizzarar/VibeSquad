@@ -536,6 +536,28 @@ function toBulletLines(text) {
     .filter(Boolean);
 }
 
+/**
+ * Who may archive/park inbox cards. The owner (no agent id: a human shell) always may; an agent may only if
+ * it is a lead or Buddy of the card's Squad (any lane: triage routes cards between lanes). Workers and
+ * other Squads get a clear error instead of the HTTP gate's bare 403. Returns normally when allowed.
+ */
+export function assertInboxTriageCaller(caller = {}, cardIds = [], baseHome) {
+  const agentId = String(caller.agentId || "").trim();
+  if (!agentId) return;
+  const role = String(caller.role || "worker");
+  if (role !== "lead" && role !== "brainstorm") {
+    throw new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`);
+  }
+  const cards = readInboxCards(baseHome);
+  for (const id of cardIds) {
+    const card = cards.find((c) => c.id === id);
+    if (!card) throw new Error(`Card not found: ${id}`);
+    if ((card.teamId || "") !== (caller.teamId || "")) {
+      throw new Error(`card ${id} belongs to Squad "${card.teamId}", not "${caller.teamId}": only that Squad's leads/Buddies (or the owner) may archive or park it`);
+    }
+  }
+}
+
 export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
