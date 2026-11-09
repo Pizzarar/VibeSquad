@@ -8,11 +8,29 @@ import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 import { parseClaudeRateLimit } from '../limits.mjs';
+import { readFileSync } from 'node:fs';
 
 export const DEFAULT_PERMISSION_MODE = 'auto';
 export const CLAUDE_PERMISSION_MODES = ['default', 'acceptEdits', 'plan', 'bypassPermissions', 'dontAsk', 'auto'];
 export const CLAUDE_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']; // claude --effort levels
 export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEFAULT_PERMISSION_MODE;
+
+// K4: runner agents load only the vibesquad MCP (--strict-mcp-config) and no user-level plugin/connector set
+// (--setting-sources project,local drops the user settings that enable data/engineering/productivity/cowork plugins).
+// VS hooks run on the runner lifecycle bus, not CLI settings, so nothing is lost. Never --bare (skips hooks) or
+// --disable-slash-commands (/compact must keep working).
+export const CLAUDE_SETTING_SOURCES = 'project,local';
+// Extras are opt-in: profiles that live-check UI, or any agent labelled vs.mcp=playwright (comma list).
+export const PLAYWRIGHT_PROFILES = ['Art Painter - Opus'];
+export const wantsPlaywright = (meta = {}) => PLAYWRIGHT_PROFILES.includes(meta.profile) || String(meta.labels?.['vs.mcp'] ?? '').split(',').map((s) => s.trim().toLowerCase()).includes('playwright');
+// Reuse the owner's own playwright server config (browser/headless flags) when present, else a headless default.
+export function playwrightSpec(home = os.homedir()) {
+  try {
+    const s = JSON.parse(readFileSync(path.join(home, '.claude.json'), 'utf8'))?.mcpServers?.playwright;
+    if (s?.command) return { command: s.command, args: s.args ?? [], env: s.env ?? {} };
+  } catch { /* fall through to the default */ }
+  return { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated'], env: {} };
+}
 
 // promptsDir: <runner home>/prompts (the Runner passes it); the tmpdir fallback only serves adapters built standalone.
 export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts') } = {}) {
@@ -28,13 +46,16 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (model) args.push('--model', model);
       args.push('--permission-mode', effectivePermissionMode(meta));
       if (CLAUDE_EFFORTS.includes(meta.thinkingOptionId)) args.push('--effort', meta.thinkingOptionId);
+      args.push('--setting-sources', CLAUDE_SETTING_SOURCES);
       if (mcp) {
         const spec = mcpServerSpec({ env, path: mcpPath });
         // Via a file too: server args/env grow without bound toward the same 32,767-char cap.
         const file = mcpFile(id);
         mkdirSync(path.dirname(file), { recursive: true });
-        writeFileSync(file, JSON.stringify({ mcpServers: { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } } }), 'utf8');
-        args.push('--mcp-config', file);
+        const servers = { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } };
+        if (wantsPlaywright(meta)) servers.playwright = playwrightSpec();
+        writeFileSync(file, JSON.stringify({ mcpServers: servers }), 'utf8');
+        args.push('--strict-mcp-config', '--mcp-config', file);
         args.push('--allowedTools', `mcp__${spec.name}`);
       }
       // The prompt goes via a file, never argv: a long role prompt blows the Windows 32,767-char command-line cap (spawn ENAMETOOLONG).

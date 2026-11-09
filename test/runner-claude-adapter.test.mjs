@@ -91,4 +91,28 @@ test('compact_boundary without metadata still emits compacted (undefined counts)
   assert.equal(events.filter((e) => e.type === 'compacted').length, 1);
   assert.equal(events.filter((e) => e.type === 'compacted')[0].before, undefined);
   assert.ok(!events.some((e) => e.type === 'usage'));
+
+// K4: lean tool load. Default = vibesquad MCP only + no user settings; extras are opt-in per profile / label.
+function startArgs(t, meta) {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'vs-claude-k4-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const spawnImpl = fakeSpawn();
+  const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: true, mcpPath: 'vs-mcp.mjs', promptsDir: path.join(root, 'prompts') });
+  adapter.start({ id: 'rn-k4', cwd: os.tmpdir(), meta, env: {}, emit() {}, onExit() {} });
+  const { args } = spawnImpl.calls[0];
+  return { args, servers: JSON.parse(readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers };
+}
+
+test('K4: default args are strict-MCP (vibesquad only), skip user settings, and never use --bare or --disable-slash-commands', (t) => {
+  const { args, servers } = startArgs(t, { profile: 'Implement - Sonnet' });
+  assert.ok(args.includes('--strict-mcp-config'));
+  assert.equal(args[args.indexOf('--setting-sources') + 1], 'project,local');
+  assert.deepEqual(Object.keys(servers), ['vibesquad']);
+  assert.ok(!args.includes('--bare') && !args.includes('--disable-slash-commands'));
+});
+
+test('K4: Playwright is opt-in by profile or vs.mcp label', (t) => {
+  assert.deepEqual(Object.keys(startArgs(t, { profile: 'Art Painter - Opus' }).servers), ['vibesquad', 'playwright']);
+  assert.deepEqual(Object.keys(startArgs(t, { profile: 'Implement - Sonnet', labels: { 'vs.mcp': 'Playwright' } }).servers), ['vibesquad', 'playwright']);
+  assert.deepEqual(Object.keys(startArgs(t, { labels: { 'vs.mcp': 'other' } }).servers), ['vibesquad']);
 });
