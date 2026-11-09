@@ -1,7 +1,7 @@
 // B2 (docs/PLAN_LEAN_BOOT_1109.md): one boot roster filter + 4k budget. 75 closed workers + 6 leads must list 1 lead, 0 closed workers.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { hubTeamsBlock } from "../server/brainstorm.mjs";
@@ -75,7 +75,25 @@ test("idle (finished/parked) workers are not in flight; running, queued and perm
     w("starting", { status: "initializing" }),
     w("queued", { status: "idle", queued: { ahead: 1 } }),
     w("perm", { status: "idle", pendingPermissions: [{ id: "p" }], requiresAttention: true }),
+    w("starting2", { status: "starting" }),
   ];
-  assert.deepEqual(bootRoster(agents, "own").workers.map((x) => x.id).sort(), ["perm", "queued", "run", "starting"]);
+  assert.deepEqual(bootRoster(agents, "own").workers.map((x) => x.id).sort(), ["queued", "run", "starting", "starting2"]);
   assert.match(whosHereBody(agents, "own"), /- Workers: 4$/m);
+});
+
+test("a long worker list leaves room for the lane log; header dropped never printed empty", () => {
+  const agents = Array.from({ length: 80 }, (_, i) => ({ id: `r${i}`, title: `Running worker ${i} with a longish title`, status: "running", createdAt: day(i % 20), labels: labels("worker") }));
+  const home = mkdtempSync(join(tmpdir(), "vs-b2-"));
+  try {
+    mkdirSync(join(home, "teams", "vibesquad"), { recursive: true });
+    const nl = String.fromCharCode(10);
+    const lines = [1, 2, 3].map((i) => JSON.stringify({ ts: `t${i}`, agent: "x", lane: "own", type: "decision", text: `entry ${i}` }));
+    writeFileSync(join(home, "teams", "vibesquad", "log.jsonl"), lines.join(nl) + nl);
+    const block = liveInFlightBlock({ agents, laneId: "own", teamId: "vibesquad", home });
+    assert.ok(block.length < BOOT_CONTEXT_BUDGET);
+    assert.ok(block.includes(["- Latest lane log:", "  - t1 x decision: entry 1"].join(nl)), block.slice(-400));
+    assert.ok(block.includes("entry 3"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

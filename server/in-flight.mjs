@@ -44,13 +44,16 @@ export function liveInFlightBlock({ agents, laneId, teamId, home, budget = BOOT_
   let room = budget - head.length - fixed.join("\n").length - 2 - logHead.length - 1 - 80;
   // Workers ride inline on one line ("- Workers: a [running]; b [queued]; +N more → vs who all"), cut to the budget.
   const wLabel = workerRows.length ? "- Workers: " : "- Workers: none running";
-  const w = fitRows(workerRows.map((r) => `${r}; `), Math.max(0, room - wLabel.length));
+  // Reserve room for the log first (up to half of what is left), so a long worker list never starves it.
+  const logNeed = logRows.reduce((n, r) => n + r.length + 1, 0);
+  const logReserve = Math.min(logNeed, Math.floor(room / 2));
+  const w = fitRows(workerRows.map((r) => `${r}; `), Math.max(0, room - logReserve - wLabel.length));
   room -= w.used + wLabel.length;
   const l = fitRows([...logRows].reverse(), Math.max(0, room));
   const out = [head, ...fixed];
   if (agents != null) {
     out.push(workerRows.length ? `${wLabel}${w.kept.join("").replace(/; $/, "")}${w.dropped ? `; +${w.dropped} more ${MORE_WORKERS_HINT}` : ""}` : wLabel);
   }
-  out.push(logHead, ...l.kept.reverse());
+  if (!log.length || l.kept.length) out.push(logHead, ...l.kept.reverse());
   return out.join("\n");
 }

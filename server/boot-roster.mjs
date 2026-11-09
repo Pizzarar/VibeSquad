@@ -17,10 +17,8 @@ const isClosed = (a) => String(a?.status ?? "").toLowerCase() === "closed";
 
 /** A worker is "in flight" only with a real turn: running or starting, queued for a slot, or waiting on a permission. Finished runner workers report idle (parked maps to idle), so non-closed is not enough. */
 export function hasActiveTurn(a) {
-  const s = String(a?.status ?? "").toLowerCase();
-  if (s === "running" || s === "initializing" || s === "queued") return true;
-  if (a?.queued || a?.requiresAttention === true) return true;
-  return Array.isArray(a?.pendingPermissions) && a.pendingPermissions.length > 0;
+  if (Boolean(a?.queued)) return true;
+  return ["running", "initializing", "starting", "queued"].includes(String(a?.status ?? "").toLowerCase());
 }
 
 /**

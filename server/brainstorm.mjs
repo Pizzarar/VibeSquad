@@ -767,10 +767,10 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     }
     timer.mark("inFlight");
     const isBootHub = Boolean(bootTeam && !topic && (bootLane ? isHubLane(bootTeam, bootLane) : isHubLane(bootTeam, { id: laneId })));
-    const hubTeams = isBootHub ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot }) : "";
+    const hubTeams = isBootHub ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot, budget: Math.floor(BOOT_CONTEXT_BUDGET / 2) }) : "";
     const initialPrompt = buildBrainstormInitialPrompt({
       hubTeams,
-      inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId }),
+      inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId, budget: BOOT_CONTEXT_BUDGET - hubTeams.length }),
       laneId,
       laneUpper,
       buddyName: newTitle,

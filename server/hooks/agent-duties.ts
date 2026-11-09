@@ -1733,7 +1733,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         st.mark("lane-artifacts");
         // B2: one `boot-size` metric per boot, measured on the final assembled prompt (prefix + notes + brief + artifacts).
-        if (next.systemPrompt || rawSysPrompt) {
+        // A VS Buddy restart already logged its own boot-size in brainstorm.mjs: log once per boot.
+        const bootLoggedByVs = role === "brainstorm" && (Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1");
+        if (!bootLoggedByVs && (next.systemPrompt || rawSysPrompt)) {
           const where = teamOf(envOrReqLabels, cwd);
           if (where) {
             try {
