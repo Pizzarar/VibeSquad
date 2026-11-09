@@ -391,3 +391,26 @@ test("seedAuditSchedules: a user-deleted seeded schedule stays deleted after res
   again.create({ prompt: "x", cadence: { type: "every", everyMs: 60_000 }, target: { type: "new-agent", config: { provider: "claude", cwd: "/x" } } });
   assert.equal(JSON.parse(fs.readFileSync(again.file, "utf8")).deletedSeeds.length, 1); // tombstone survives later saves
 });
+
+test("G0: a fresh audit seed is paused (no nextRunAt); an existing active seeded schedule is untouched; restarts flip neither", () => {
+  const { store, home, backend } = mk();
+  // A pre-G0 seeded schedule that is already active (VibeSquad's sch-6068645f1a10 shape).
+  const [oldId] = store.seedAuditSchedules([auditTeams[0]], rootDir);
+  store.resume(oldId);
+  const old = store.get(oldId);
+  assert.equal(old.status, "active");
+  const second = { id: "vs2", name: "VS Two", paths: ["VibeSquadX"], lanes: [{ id: "perfection-2", kind: "audit", hidden: true }] };
+  const [freshId] = store.seedAuditSchedules([auditTeams[0], second], rootDir);
+  const fresh = store.get(freshId);
+  assert.equal(fresh.status, "paused");
+  assert.equal(fresh.nextRunAt, null);
+  assert.deepEqual(store.get(oldId), old, "existing active schedule untouched, same id and seed");
+  for (const s of [store, createSchedulesStore({ home, backend })]) {
+    assert.deepEqual(s.seedAuditSchedules([auditTeams[0], second], rootDir), []);
+    assert.equal(s.get(oldId).status, "active");
+    assert.equal(s.get(freshId).status, "paused");
+  }
+  store.resume(freshId); // user un-pauses: a later start must not re-pause it
+  assert.equal(createSchedulesStore({ home, backend }).seedAuditSchedules([auditTeams[0], second], rootDir).length, 0);
+  assert.equal(createSchedulesStore({ home, backend }).get(freshId).status, "active");
+});
