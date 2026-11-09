@@ -31,6 +31,9 @@ import {
   swingTransform,
   slamStart,
   slamView,
+  SKY_CLOUDS_JSON_URL,
+  validateSkyClouds,
+  type SkyClouds,
   validateSkyCrt,
   validateSlamPuff,
   validateTakeover,
@@ -165,6 +168,9 @@ function useJsonModel<T>(url: string, validate: (json: unknown) => { ok: true; v
 
 /** sky-crt.json, loaded once; missing/invalid → null (the sky zones keep the CSS bezel). */
 export const useSkyCrtModel = (): SkyCrtModel | null => useJsonModel(SKY_CRT_JSON_URL, validateSkyCrt);
+
+/** sky-clouds.json (C2, @art), loaded once; missing/invalid → null (the angel strip keeps the plain bezel sky). */
+export const useSkyCloudsModel = (): SkyClouds | null => useJsonModel(SKY_CLOUDS_JSON_URL, validateSkyClouds);
 
 /** takeover.json (G7), loaded once; missing/invalid → null (the CSS dissolve plays instead). */
 export const useTakeoverModel = (): TakeoverModel | null => useJsonModel(TAKEOVER_JSON_URL, validateTakeover);

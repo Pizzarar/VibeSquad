@@ -5,12 +5,12 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
-import { NO_OVERLORD_TEXT, skyCanOpen, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, SLAM_PUFF_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, slamFaceForce, slamPuffBox, slamPuffPoints, slamPuffScale, slamRiffForce, slamTransform, takeoverLabelGeom, takeoverLanded, takeoverVisible, type SkyCan, type SkyOpen, type SkyZone, type SlamPuff, type SlamView, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
+import { NO_OVERLORD_TEXT, skyCanOpen, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, SLAM_PUFF_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, slamFaceForce, slamPuffBox, slamPuffPoints, slamPuffScale, slamRiffForce, slamTransform, takeoverLabelGeom, takeoverLanded, takeoverVisible, type SkyBot, type SkyCan, type SkyOpen, type SkyZone, type SlamPuff, type SlamView, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
 import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCrtModel, useSlamClock, useSlamPuffModel, useTakeoverClock, useTakeoverLabelModel, useTakeoverModel, useTheme } from "./useBotFace";
 
-const LABEL: Record<FaceBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
+const LABEL: Record<SkyBot, string> = { riffbot: "RiffBot", overlord: "Overlord" };
 
 /** G7 overlay state for Riff's TV: the sheet (only when takeover.json AND the theme PNG load) and its clock. Lives in Zone so the label scrawl (T1) shares the same clock as the face overlay. */
 function useTakeoverState(isRiff: boolean, takeover: TakeoverModel | null, expanded: boolean) {
@@ -67,6 +67,80 @@ function ZoneFace({
   const shownZone = landed && lander ? lander : zone;
   const holdScared = !landed && showSheet && !force && hasFaceMode(faces, "riffbot", "scared");
   const face = useBotFace(shown, shownZone.pose ? { pose: shownZone.pose } : null, faces, { theme, reduced, force: landed ? null : (force ?? (holdScared ? "scared" : null)) });
+  const bg = faceBg(faces, shown, theme);
+  const dpr = useDpr();
+  const tf = sheet?.frames[clock.frame];
+  return (
+    <FaceStage
+      testBot={zone.bot}
+      shown={shown}
+      faces={faces}
+      face={face}
+      bg={bg}
+      overlay={(box) => {
+        const tk = sheet ? faceContain(sheet.cell, box, dpr) : null;
+        return showSheet && !landed && sheet && tk && tf && tk.k > 0 ? (
+          <span
+            className="sky-takeover"
+            data-testid="sky-takeover"
+            data-frame={clock.frame}
+            style={{
+              width: sheet.cell.w,
+              height: sheet.cell.h,
+              left: tk.left,
+              top: tk.top,
+              transform: `scale(${tk.k})`,
+              backgroundImage: `url(${TAKEOVER_URL(theme)})`,
+              backgroundPosition: `-${tf.x}px -${tf.y}px`,
+            }}
+          />
+        ) : null;
+      }}
+    >
+      {fallback && <span key={fb.play} className={`sky-takeover-fallback${fb.play ? " is-play" : ""}`} data-testid="sky-takeover-fallback" />}
+    </FaceStage>
+  );
+}
+
+/** The shared bezel look, `scale` overriding the border's art scale (the compact angel strip uses 1) (RiffBot / Overlord zones and the Perfection angel strip): the sky-crt.json border-image style once its art loads, and the sky PNG. Both null → the CSS bezel / gradient. */
+export function useSkyBezel(scale?: number, ratio?: number) {
+  const theme = useTheme();
+  const model = useSkyCrtModel();
+  const crt = model && scale ? { ...model, scale } : model; // scale: the art px the bezel's border is drawn at (default sky-crt.json's)
+  const pageDpr = useDpr();
+  const dpr = ratio ?? pageDpr; // ratio: the effective device ratio (dpr x UI zoom) for a bezel under the root zoom
+  return skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr);
+}
+
+/**
+ * The CRT screen of a bezel: the bot's whole face as big as an integer device-pixel scale fits (contain, bottom-anchored, never cropped),
+ * on its gutter colour. `overlay(box)` draws extra art on the stage (the takeover sheet); children sit beside the face area (the fallback dissolve).
+ */
+export function FaceStage({
+  testBot,
+  shown,
+  faces,
+  face,
+  bg,
+  overlay,
+  onScale,
+  ratio,
+  children,
+}: {
+  /** Suffix of the test ids (`sky-face-<testBot>`). */
+  testBot: string;
+  /** The bot whose face is drawn (`data-face-bot`). */
+  shown: FaceBot;
+  faces: ReturnType<typeof useFacesModel>;
+  face: ReturnType<typeof useBotFace>;
+  bg: string | null;
+  overlay?: (box: { w: number; h: number }) => React.ReactNode;
+  /** Reports the integer scale the face is drawn at (CSS px per art px; 0 until measured). */
+  onScale?: (k: number) => void;
+  /** Device px per CSS px for the integer snap: defaults to the page dpr; a stage under the root UI zoom passes dpr x zoom. */
+  ratio?: number;
+  children?: React.ReactNode;
+}) {
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
   const cell = faces?.cell ?? { w: 48, h: 48 };
   const stage = useRef<HTMLSpanElement>(null); // the face box: the whole TV screen (G8: no chat under it)
@@ -80,41 +154,26 @@ function ZoneFace({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const bg = faceBg(faces, shown, theme);
-  const dpr = useDpr();
+  const pageDpr = useDpr();
+  const dpr = ratio ?? pageDpr;
   const { k, left, top } = faceContain(cell, box, dpr);
-  const tk = sheet ? faceContain(sheet.cell, box, dpr) : null;
-  const tf = sheet?.frames[clock.frame];
+  useEffect(() => onScale?.(k), [k, onScale]);
   return (
     <span className="sky-face-stage" aria-hidden="true" style={bg ? ({ ["--sky-face-bg-custom" as string]: bg } as React.CSSProperties) : undefined}>
-      <span ref={stage} className="sky-face-area" data-testid={`sky-face-area-${zone.bot}`}>
+      <span ref={stage} className="sky-face-area" data-testid={`sky-face-area-${testBot}`}>
       {k > 0 && (
         <span
           className={`sky-face${face.frame ? "" : " is-blank"}`}
-          data-testid={`sky-face-${zone.bot}`}
+          data-testid={`sky-face-${testBot}`}
           data-face-bot={shown}
           data-face-mode={face.mode}
+          data-face-k={k}
           style={{ width: cell.w, height: cell.h, left, top, transform: `scale(${k})`, ...face.style }}
         />
       )}
-      {showSheet && !landed && sheet && tk && tf && tk.k > 0 && (
-        <span
-          className="sky-takeover"
-          data-testid="sky-takeover"
-          data-frame={clock.frame}
-          style={{
-            width: sheet.cell.w,
-            height: sheet.cell.h,
-            left: tk.left,
-            top: tk.top,
-            transform: `scale(${tk.k})`,
-            backgroundImage: `url(${TAKEOVER_URL(theme)})`,
-            backgroundPosition: `-${tf.x}px -${tf.y}px`,
-          }}
-        />
-      )}
+      {overlay?.(box)}
       </span>
-      {fallback && <span key={fb.play} className={`sky-takeover-fallback${fb.play ? " is-play" : ""}`} data-testid="sky-takeover-fallback" />}
+      {children}
     </span>
   );
 }
@@ -358,7 +417,7 @@ export function SkyZones({
   // @art assets are optional: probe each, skip the absent ones (CSS gradient sky + CSS bezel stay).
   const crt = useSkyCrtModel();
   const dpr = useDpr();
-  const { skyUrl, frameStyle } = skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr);
+  const { skyUrl, frameStyle } = useSkyBezel();
   const takeover = useTakeoverModel();
   const labelModel = useTakeoverLabelModel();
   const reduced = usePrefersReducedMotion();
@@ -403,9 +462,9 @@ export function SkyZones({
       document.removeEventListener("keydown", key, true);
     };
   }, []);
-  const onFace = (tv: FaceBot) => setOpen((o) => skyFaceClick(skyEffectiveOpen(o, can), tv, can));
+  const onFace = (tv: SkyBot) => setOpen((o) => skyFaceClick(skyEffectiveOpen(o, can), tv, can));
   // While a chat is open the left TV is the open bot's face (clickable to close); the right TV is under the chat.
-  const clickable = (tv: FaceBot) => (open !== null ? tv === "riffbot" : can[tv]);
+  const clickable = (tv: SkyBot) => (open !== null ? tv === "riffbot" : can[tv]);
   const spinRiff = hub && onSpinUp ? () => onSpinUp(hub) : undefined;
   const spinOverlord = hub && onSpinUpOverlord ? () => onSpinUpOverlord(view) : undefined;
   // Built outside the JSX: a nested template literal in className defeats test/css-classes.test.mjs's token scan.

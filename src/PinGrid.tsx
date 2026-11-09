@@ -9,7 +9,7 @@ import { isRunnerId, runnerHandle } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { chipIconSrc, hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, pinsForSquad, quickBugsChipState, SEND_TO_MARKER, snapChipSize, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { chipIconSrc, hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, perfectionPin, pinsForSquad, quickBugsChipState, SEND_TO_MARKER, snapChipSize, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
 import { createQuickBugsPin, keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
 import { openPinMember, usePinFocus } from "./pinFocus";
 import { useIsShown } from "./panes";
@@ -953,7 +953,7 @@ export function SquadsHome({
           </div>
         )}
       </div>
-      <UsageDashboard />
+      <UsageDashboard perfection={{ pin: perfectionPin(views), onOpen: onOpenPin }} />
     </section>
   );
 }

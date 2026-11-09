@@ -4020,7 +4020,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-crt-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2, 8px) var(--sp-3, 12px); padding-bottom: var(--sp-2, 8px); border-bottom: 1px solid var(--cyan-t); }
 .usage-crt-title { color: var(--cyan-t); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .usage-crt-bar .usage-inbox-tabs { margin-left: auto; }
-.usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-2, 8px); max-height: 220px; overflow-y: auto; }
+.usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-2, 8px); max-height: 96px; overflow-y: auto; }
 .usage-inbox-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
 .usage-inbox-tab { background: none; border: 0; color: var(--muted); padding: 0 var(--sp-1, 4px); font: inherit; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
 .usage-inbox-tab:hover, .usage-inbox-tab:focus-visible { color: var(--cyan-t); }
@@ -6058,3 +6058,12 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   min-height: 0;
   pointer-events: none;
 }
+
+/* C2: the Perfection angel strip on top of the Usage panel: the sky-god bezel (.sky-zone, same FaceStage) at the face's integer DEVICE scale (--angel-k = css px per art px, set inline from skyZonesLogic angelCssScale: 6 device px at 4K@120%, 4 at 1080, 2 at 720), cloud fill (inline from sky-clouds.json) on either side. The bezel is 49 art px tall: 1 art px of headroom above the 48px face for the hover hop. */
+.angel-strip { --angel-k: 4; --sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2; display: flex; justify-content: center; align-items: flex-end; padding: 0; margin-bottom: 8px; background-color: var(--sky-face-bg-dark); overflow: hidden; image-rendering: pixelated; }
+:root[data-theme="light"] .angel-strip { background-color: var(--sky-face-bg-light); }
+.angel-bezel { box-sizing: content-box; flex: none; width: calc(160px * var(--angel-k)); max-width: calc(100% - 48px); height: calc(49px * var(--angel-k)); }
+.angel-bezel:not(.has-frame) { border-width: 2px; }
+.angel-bezel .sky-crt-name { pointer-events: none; }
+.angel-hit:disabled { cursor: default; }
+.angel-hit:not(:disabled):hover { cursor: pointer; }
