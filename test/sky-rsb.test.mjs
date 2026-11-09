@@ -7,6 +7,7 @@ import {
   SLAM_IDLE_VIEW,
   SLAM_REST,
   SLAM_SHAKE_DX,
+  SLAM_SQUASH,
   slamAdvance,
   slamFaceForce,
   slamKey,
@@ -40,21 +41,34 @@ test("open: 4 zoom steps over 250ms, window held back, Overlord smacked", () => 
   assert.deepEqual(seen, [1, 2, 3, 4]);
 });
 
-test("landing: window shown, 1 frame of squash, 150ms shake of 2-3px that ends still, puff plays once at 60ms/frame", () => {
+test("landing (hotfix2 hit): the dotted box stays on the Overlord while it is smacked, the squash/shake/puff read big, and the chat settles after the hit", () => {
   const land = SLAM.zoomMs;
   const v0 = at("open", land);
-  assert.equal(v0.windowShown, true);
-  assert.equal(v0.zoomStep, null);
+  assert.equal(v0.windowShown, false, "the chat waits for the hit");
+  assert.equal(v0.zoomStep, SLAM.zoomSteps, "the box sits on the Overlord TV through the impact");
+  assert.equal(v0.face, "smacked");
   assert.equal(v0.squash, true);
   assert.equal(at("open", land + SLAM.squashMs - 1).squash, true);
-  assert.equal(at("open", land + SLAM.squashMs).squash, false, "squash is one frame");
+  assert.equal(at("open", land + SLAM.squashMs).squash, false, "squash is one beat");
   const peak = Math.max(...SLAM_SHAKE_DX.map(Math.abs));
-  assert.ok(peak >= 2 && peak <= 3);
+  assert.ok(peak >= 8 && peak <= 12, "a visible shake (was 3px: read as no slam)");
+  assert.ok(SLAM_SQUASH.x >= 1.06 && SLAM_SQUASH.y <= 0.94);
   assert.equal(SLAM_SHAKE_DX.length * SLAM.shakeStepMs, SLAM.shakeMs);
   assert.equal(at("open", land).shakeDx, SLAM_SHAKE_DX[0]);
   assert.equal(at("open", land + SLAM.shakeMs - 1).shakeDx, SLAM_SHAKE_DX.at(-1));
-  assert.equal(at("open", land + SLAM.shakeMs).shakeDx, 0);
+  assert.equal(at("open", land + SLAM.shakeMs - 1).windowShown, false);
+  const settled = at("open", land + SLAM.shakeMs);
+  assert.equal(settled.shakeDx, 0);
+  assert.equal(settled.windowShown, true, "then the Riff chat settles");
+  assert.equal(settled.zoomStep, null);
   assert.deepEqual([0, 59, 60, 119, 120, 180, 239, 240].map((d) => at("open", land + d).puffFrame), [0, 0, 1, 1, 2, 3, 3, null]);
+});
+
+test("travel is a hard hit: whole steps, linear (no ease-out), landing exactly on the Overlord TV rect", () => {
+  const from = { left: 0, top: 0, width: 100, height: 40 };
+  const to = { left: 400, top: 0, width: 100, height: 40 };
+  const lefts = [1, 2, 3, 4].map((n) => slamRect(from, to, n, 4).left);
+  assert.deepEqual(lefts, [100, 200, 300, 400]);
 });
 
 test("no puff art: the slam still plays, just without the burst", () => {

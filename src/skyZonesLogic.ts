@@ -413,11 +413,11 @@ export type SlamDir = "rest" | "open" | "close";
 export type SlamState = { dir: SlamDir; t: number };
 export const SLAM_REST: SlamState = { dir: "rest", t: 0 };
 /** Timings (ms). The zoom is a few hard steps (Win95 zoom-rect), then the window lands: 1-frame squash, bezel shake, puff. */
-export const SLAM = { zoomMs: 250, zoomSteps: 4, squashMs: 60, shakeMs: 150, shakeStepMs: 30, dizzyMs: 1000 } as const;
+export const SLAM = { zoomMs: 250, zoomSteps: 4, squashMs: 90, shakeMs: 240, shakeStepMs: 30, dizzyMs: 1000 } as const;
 /** Bezel shake offsets (CSS px at 1080; 2-3px), one per shakeStepMs, ending still. */
-export const SLAM_SHAKE_DX: readonly number[] = [3, -3, 2, -2, 1];
+export const SLAM_SHAKE_DX: readonly number[] = [9, -9, 7, -7, 5, -5, 2, -2];
 /** Squash on the landing frame: wider and shorter, anchored on the bottom edge. */
-export const SLAM_SQUASH = { x: 1.03, y: 0.96 } as const;
+export const SLAM_SQUASH = { x: 1.08, y: 0.92 } as const;
 
 /** @art slam-puff.json (RS-a): a one-row sheet of `frames` cells, played once at `ms` per frame; `scale` is the 1080 integer scale. */
 export type SlamPuff = { frameW: number; frameH: number; frames: { x: number; y: number }[]; scale: number; ms: number };
@@ -479,9 +479,12 @@ export function slamView(s: SlamState, reduced: boolean, puff?: { frames: number
   }
   if (s.t < SLAM.zoomMs) return { ...SLAM_IDLE_VIEW, zoomStep: 1 + Math.min(SLAM.zoomSteps - 1, Math.floor(s.t / stepMs)), windowShown: false, face: "smacked" };
   const lt = s.t - SLAM.zoomMs; // ms since landing
+  const hit = lt < SLAM.shakeMs; // the impact: the dotted box stays on the Overlord TV and the real chat waits until the hit settles
   const pf = puff && puff.frames > 0 ? Math.floor(lt / puff.ms) : -1;
   return {
     ...SLAM_IDLE_VIEW,
+    zoomStep: hit ? SLAM.zoomSteps : null,
+    windowShown: !hit,
     squash: lt < SLAM.squashMs,
     shakeDx: lt < SLAM.shakeMs ? (SLAM_SHAKE_DX[Math.floor(lt / SLAM.shakeStepMs)] ?? 0) : 0,
     puffFrame: pf >= 0 && puff && pf < puff.frames ? pf : null,
