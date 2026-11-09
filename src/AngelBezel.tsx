@@ -7,13 +7,14 @@ import { showPinToast } from "./PinIdeas";
 import type { Pin } from "./pins";
 import { FaceStage, useSkyBezel } from "./SkyZones";
 import { angelCssScale, cloudStripStyle, faceBg, SKY_CLOUDS_URL } from "./skyZonesLogic";
+import { useUiScale } from "./uiScale";
 import { useBotFace, useDpr, useFacesModel, useImageOk, usePrefersReducedMotion, useSkyCloudsModel, useTheme } from "./useBotFace";
 
 const NAME = "Perfection";
 
-/** The strip's CSS px per art px: the device-px contract divided by the page's dpr, re-read on resize. */
-function useAngelScale(dpr: number): number {
-  const read = () => (typeof window === "undefined" ? 4 : angelCssScale(window.innerWidth, window.innerHeight, dpr));
+/** The strip's CSS px per art px: the device-px contract divided by dpr x UI zoom (html carries zoom), re-read on resize. */
+function useAngelScale(dpr: number, zoom: number): number {
+  const read = () => (typeof window === "undefined" ? 4 : angelCssScale(window.innerWidth, window.innerHeight, dpr, zoom));
   const [s, setS] = useState(read);
   useEffect(() => {
     const on = () => setS(read());
@@ -21,7 +22,7 @@ function useAngelScale(dpr: number): number {
     window.addEventListener("resize", on);
     return () => window.removeEventListener("resize", on);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dpr]);
+  }, [dpr, zoom]);
   return s;
 }
 
@@ -30,10 +31,12 @@ export function AngelBezel({ pin, onOpen }: { pin: Pin | null; onOpen?: PinHandl
   const reduced = usePrefersReducedMotion();
   const dpr = useDpr();
   const faces = useFacesModel();
-  const ak = useAngelScale(dpr);
+  const zoom = useUiScale();
+  const ratio = dpr * zoom; // 1 css px = dpr x zoom device px
+  const ak = useAngelScale(dpr, zoom);
   const clouds = useSkyCloudsModel();
   const cloudsOk = useImageOk(clouds ? SKY_CLOUDS_URL(theme) : null);
-  const { frameStyle } = useSkyBezel(1);
+  const { frameStyle } = useSkyBezel(1, ratio);
   const [hover, setHover] = useState(false);
   const [k, setK] = useState(0);
   // Reduced motion = the idle frame only (no hover frames either).
@@ -45,7 +48,7 @@ export function AngelBezel({ pin, onOpen }: { pin: Pin | null; onOpen?: PinHandl
   return (
     <div className="angel-strip" data-testid="angel-strip" data-has-clouds={clouds ? "true" : "false"} style={{ ...strip, ["--angel-k" as string]: ak } as React.CSSProperties}>
       <section className={`sky-zone angel-bezel${frameStyle ? " has-frame" : ""}`} style={frameStyle ?? undefined} data-testid="angel-bezel" aria-label={`${NAME} angel`}>
-        <FaceStage testBot="angel" shown="angel" faces={faces} face={face} bg={faceBg(faces, "angel", theme)} onScale={setK} />
+        <FaceStage testBot="angel" shown="angel" faces={faces} face={face} bg={faceBg(faces, "angel", theme)} onScale={setK} ratio={ratio} />
         <button
           type="button"
           className="sky-face-hit angel-hit"

@@ -678,5 +678,5 @@ export function angelDeviceScale(cssW: number, cssH: number, dpr = 1): number {
   const dw = cssW * d;
   return dw >= 2800 ? 6 : dw >= 1600 ? 4 : 2;
 }
-/** The same scale in CSS px per art px (device scale / dpr). */
-export const angelCssScale = (cssW: number, cssH: number, dpr = 1): number => angelDeviceScale(cssW, cssH, dpr) / safeDpr(dpr);
+/** The same scale in CSS px per art px: device scale / the effective device ratio (`ratio` = dpr x the root UI zoom, since 1 css px = dpr x zoom device px); `dpr` alone (zoom 1) picks the tier from the real viewport. */
+export const angelCssScale = (cssW: number, cssH: number, dpr = 1, zoom = 1): number => angelDeviceScale(cssW, cssH, dpr) / (safeDpr(dpr) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1));

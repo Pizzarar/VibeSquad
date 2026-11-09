@@ -103,11 +103,12 @@ function ZoneFace({
 }
 
 /** The shared bezel look, `scale` overriding the border's art scale (the compact angel strip uses 1) (RiffBot / Overlord zones and the Perfection angel strip): the sky-crt.json border-image style once its art loads, and the sky PNG. Both null → the CSS bezel / gradient. */
-export function useSkyBezel(scale?: number) {
+export function useSkyBezel(scale?: number, ratio?: number) {
   const theme = useTheme();
   const model = useSkyCrtModel();
   const crt = model && scale ? { ...model, scale } : model; // scale: the art px the bezel's border is drawn at (default sky-crt.json's)
-  const dpr = useDpr();
+  const pageDpr = useDpr();
+  const dpr = ratio ?? pageDpr; // ratio: the effective device ratio (dpr x UI zoom) for a bezel under the root zoom
   return skyAssets(theme, { sky: useImageOk(SKY_URL(theme)), frame: useImageOk(SKY_FRAME_URL(theme)) }, crt, dpr);
 }
 
@@ -123,6 +124,7 @@ export function FaceStage({
   bg,
   overlay,
   onScale,
+  ratio,
   children,
 }: {
   /** Suffix of the test ids (`sky-face-<testBot>`). */
@@ -135,6 +137,8 @@ export function FaceStage({
   overlay?: (box: { w: number; h: number }) => React.ReactNode;
   /** Reports the integer scale the face is drawn at (CSS px per art px; 0 until measured). */
   onScale?: (k: number) => void;
+  /** Device px per CSS px for the integer snap: defaults to the page dpr; a stage under the root UI zoom passes dpr x zoom. */
+  ratio?: number;
   children?: React.ReactNode;
 }) {
   // Cell size comes from faces.json (never hardcoded); until it loads, a blank stage.
@@ -150,7 +154,8 @@ export function FaceStage({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-  const dpr = useDpr();
+  const pageDpr = useDpr();
+  const dpr = ratio ?? pageDpr;
   const { k, left, top } = faceContain(cell, box, dpr);
   useEffect(() => onScale?.(k), [k, onScale]);
   return (

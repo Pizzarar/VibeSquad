@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import { faceFrame, validateFaces } from "../src/squadFloorLogic.ts";
-import { angelCssScale, angelDeviceScale, cloudStripStyle, SKY_CLOUDS_URL, validateSkyClouds } from "../src/skyZonesLogic.ts";
+import { crispScale, faceContain, angelCssScale, angelDeviceScale, cloudStripStyle, SKY_CLOUDS_URL, validateSkyClouds } from "../src/skyZonesLogic.ts";
 import { perfectionPin } from "../src/pins.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
@@ -82,7 +82,25 @@ test("angel scale is in DEVICE px: 6 at 4K@1.2, 4 at 1080, 2 at 720; css = devic
   const css = src("styles.css");
   assert.ok(css.includes("height: calc(49px * var(--angel-k))"));
   assert.doesNotMatch(css, /@media[^{]*\{ \.angel-strip \{ --angel-k/, "scale comes from device px, not css media queries");
-  assert.ok(src("AngelBezel.tsx").includes("useAngelScale(dpr)"));
+  assert.ok(src("AngelBezel.tsx").includes("useAngelScale(dpr, zoom)"));
+});
+
+test("angel scale snaps to whole DEVICE px under the root UI zoom (UI 100/125/150 x dpr 1/1.2)", () => {
+  for (const zoom of [1, 1.25, 1.5]) for (const dpr of [1, 1.2]) {
+    const eff = dpr * zoom; // html zoom: 1 css px = dpr x zoom device px
+    for (const [w, h] of [[2667, 1500], [1920, 1080], [1280, 720]]) {
+      const dev = angelDeviceScale(w, h, dpr);
+      assert.equal(Number.isInteger(dev), true);
+      const css = angelCssScale(w, h, dpr, zoom);
+      assert.ok(Math.abs(css * eff - dev) < 1e-9, `${w}x${h} dpr ${dpr} UI ${zoom}: ${css * eff} device px per art px`);
+    }
+    // the face inside a width-clamped stage and the scale-1 bezel border snap with the same effective ratio
+    const { k } = faceContain({ w: 80, h: 48 }, { w: 330, h: 49 * 4 }, eff);
+    assert.ok(Math.abs(Math.round(k * eff) - k * eff) < 1e-9, `face k ${k} at ratio ${eff}`);
+    assert.ok(Math.abs(crispScale(1, eff) * eff - 1) < 1e-9, "border is exactly 1 device px per art px");
+  }
+  const a = src("AngelBezel.tsx");
+  assert.ok(a.includes("useUiScale()") && a.includes("useSkyBezel(1, ratio)") && a.includes("ratio={ratio}"));
 });
 
 test("css: the strip defines its own sky vars + light fallback bg (they are scoped to .sky-zones otherwise)", () => {

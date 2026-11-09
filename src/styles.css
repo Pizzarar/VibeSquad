@@ -4020,7 +4020,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-crt-bar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-2, 8px) var(--sp-3, 12px); padding-bottom: var(--sp-2, 8px); border-bottom: 1px solid var(--cyan-t); }
 .usage-crt-title { color: var(--cyan-t); font-size: 12px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; }
 .usage-crt-bar .usage-inbox-tabs { margin-left: auto; }
-.usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-2, 8px); max-height: 220px; overflow-y: auto; }
+.usage-bug-inbox { display: flex; flex-direction: column; gap: var(--sp-2, 8px); max-height: 96px; overflow-y: auto; }
 .usage-inbox-tabs { display: flex; flex-wrap: wrap; gap: var(--sp-2, 8px); }
 .usage-inbox-tab { background: none; border: 0; color: var(--muted); padding: 0 var(--sp-1, 4px); font: inherit; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; }
 .usage-inbox-tab:hover, .usage-inbox-tab:focus-visible { color: var(--cyan-t); }
