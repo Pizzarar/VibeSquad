@@ -1574,6 +1574,11 @@ test(
       await wait(20);
       assert.ok(h.archivedIds.includes("dig-2") || createdDigests[1].archivedAt, "stale in-flight digest archived on worker turn_started");
       assert.equal(listCalls, listBeforeCancel, "tracked digest archived directly without calling paseo.agents.list");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
 
 // ---------------------------------------------------------------------------
 // B3 — one-time sweep: dry run lists, apply archives exactly that set (same predicate)
