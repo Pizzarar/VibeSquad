@@ -123,3 +123,18 @@ test("hotfix: the left TV still lands on the Overlord during the takeover", () =
   assert.equal(skyLeftBot(takeoverLanded(12, true, 12, false)), "overlord");
   assert.equal(skyLeftBot(takeoverLanded(0, true, 12, true)), "overlord");
 });
+
+test("C2: sky chat panel drops the header row (left TV already names the bot); close button floats in the corner and click-audit routing stays intact", () => {
+  const z = src("SkyZones.tsx");
+  assert.match(z, /const shown = isRiff \? skyLeftBot\(landed\) : zone\.bot;/);
+  assert.match(z, /\{!panel && \(\s*<span ref=\{chip\} className=\{`sky-crt-name/);
+  assert.match(z, /skyOutsideCloses\(!!t && !!root\.current\?\.contains\(t\), !!t\?\.closest\(SKY_POPOVER_SELECTOR\)\)/);
+  const css = src("styles.css");
+  assert.match(css, /\.sky-chat-panel \.sky-crt-body \{ top: 0; background: var\(--bg\); \}/);
+  assert.doesNotMatch(css, /\.sky-chat-panel \.sky-crt-body \{[^}]*top:\s*38px/);
+  const closeRule = css.match(/\.sky-chat-close \{[^}]+\}/)?.[0] ?? "";
+  assert.match(closeRule, /position: absolute/);
+  assert.match(closeRule, /z-index: 4/);
+  assert.match(closeRule, /opacity:/);
+});
+

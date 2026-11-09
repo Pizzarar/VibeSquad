@@ -4823,8 +4823,8 @@ button.project-file-name:hover { text-decoration: underline; }
 /* The face is the TV's button: click opens (rest) / closes (open). Transparent, under the name tag. */
 .sky-face-hit { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .sky-face-hit:focus-visible { outline: 3px solid var(--cyan); outline-offset: -6px; }
-.sky-chat-close { position: absolute; top: 6px; right: 8px; z-index: 4; min-width: 28px; height: 26px; padding: 0 8px; cursor: pointer; font-family: var(--arcade); font-size: 13px; color: var(--text); background: color-mix(in srgb, var(--bg) 80%, transparent); border: 1px solid var(--line); }
-.sky-chat-close:hover, .sky-chat-close:focus-visible { border-color: var(--cyan); color: var(--cyan-t); }
+.sky-chat-close { position: absolute; top: 4px; right: 6px; z-index: 4; min-width: 22px; height: 20px; padding: 0 5px; cursor: pointer; font-family: var(--arcade); font-size: 11px; line-height: 1; color: var(--text); background: color-mix(in srgb, var(--bg) 55%, transparent); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent); opacity: 0.72; }
+.sky-chat-close:hover, .sky-chat-close:focus-visible { opacity: 1; background: var(--panel); border-color: var(--cyan); color: var(--cyan-t); }
 /* The Overlord's chat drops over the right TV in a few hard steps. Riff's window is the RS-b slam instead (clock-driven in SkyZones: hinge swing, squash, shake, puff, star). Reduced motion = instant swap. */
 .sky-chat-panel:not([hidden]):not(.sky-zone-riffbot) { animation: sky-chat-slam 180ms steps(4, end) both; }
 /* RS-c: Riff's window is hinged on its left edge (the side nearest his TV) and swings into the Overlord: perspective + rotateY come per frame from --slam-swing on .sky-zones, the shake/squash from --slam-panel-tf. The chat panes' own counter-zoom (--chat-zoom) is on the children inside, so this transform composes with it. */
@@ -4872,8 +4872,9 @@ button.project-file-name:hover { text-decoration: underline; }
   display: flex;
   flex-direction: column;
 }
-/* Chat panel: the whole screen, under a strip for the name tag and the ✕. */
-.sky-chat-panel .sky-crt-body { top: 38px; background: var(--bg); border-top: 1px solid var(--line); }
+/* C2: the chat panel has no header row (the left TV already names the bot); the body fills the screen under the floating corner ✕. */
+.sky-chat-panel .sky-crt-body { top: 0; background: var(--bg); }
+.sky-chat-panel .sky-resume { padding-right: 36px; }
 .sky-chat-panel { background: var(--bg); }
 /* The chips' bevel is taller than the bar's 52px cap: let a wrapped second row show instead of clipping it. */
 .sky-chat-panel .drawer-subagents-bar { max-height: none; }
