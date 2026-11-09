@@ -15,10 +15,9 @@ import {
   FLOOR_CURSOR_JSON_URL,
   FLOOR_BLINK_MS,
   FLOOR_INDEX_KEY,
-  FLOOR_NATIVE_HEIGHT,
-  FLOOR_NATIVE_WIDTH,
   floorCounterText,
   floorFitScale,
+  floorNativeSize,
   floorOrPlaceholder,
   isTypingTarget,
   LOBBY_MAX_SHOWN,
@@ -407,7 +406,8 @@ export function SquadFloor({ view }: SquadFloorProps) {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const scale = floorFitScale(box.w, box.h, dpr);
+  const native = floorNativeSize(floor);
+  const scale = floorFitScale(box.w, box.h, dpr, native.w, native.h);
 
   // HP4 paging: one floor per screen, persisted; `blink` is the CRT collapse (out) / open (in) around the swap.
   const floorCount = tower.floors.length;
@@ -540,6 +540,10 @@ export function SquadFloor({ view }: SquadFloorProps) {
 
   const towerScale = (w: number, h: number): CSSProperties => ({ width: w * scale, height: h * scale });
 
+  // HP5: the < n > pager rides on the shaft, centred on the lift car and just above it (mid-shaft); position comes from floor.json, scaled.
+  const car = floor.elevator.car;
+  const liftStyle: CSSProperties = { left: (car.x + car.w / 2) * scale, top: car.y * scale };
+
   const floorBoxes: ReactNode = (
     <>
       <PlateBoxes rects={[floor.teamA.lead, floor.teamA.buddyOffice, ...floor.teamA.desks, ...(floor.teamA.lobby ? [floor.teamA.lobby] : [])]} />
@@ -561,9 +565,9 @@ export function SquadFloor({ view }: SquadFloorProps) {
               className={`sq-floor-band-wrap${blink ? ` is-blink-${blink}` : ""}`}
               data-testid="sq-floor-page"
               data-floor={f.index}
-              style={towerScale(FLOOR_NATIVE_WIDTH, FLOOR_NATIVE_HEIGHT)}
+              style={towerScale(native.w, native.h)}
             >
-              <div className="sq-floor-band" style={bandStyle(FLOOR_NATIVE_WIDTH, FLOOR_NATIVE_HEIGHT)}>
+              <div className="sq-floor-band" style={bandStyle(native.w, native.h)}>
                 <Band
                   cast={cast}
                   sheet={sheet}
@@ -576,7 +580,7 @@ export function SquadFloor({ view }: SquadFloorProps) {
                   ]}
                   plate={
                     floorImgOk ? (
-                      <img className="sq-floor-plate" src={FLOOR_URL(theme)} alt="" draggable={false} style={{ width: FLOOR_NATIVE_WIDTH, height: FLOOR_NATIVE_HEIGHT }} />
+                      <img className="sq-floor-plate" src={FLOOR_URL(theme)} alt="" draggable={false} style={{ width: native.w, height: native.h }} />
                     ) : (
                       floorBoxes
                     )
@@ -603,11 +607,8 @@ export function SquadFloor({ view }: SquadFloorProps) {
               )}
             </div>
           ))}
-        </div>
-        )}
-      </div>
-      {floorCount > 0 && (
-        <div className="sq-floor-lift" role="group" aria-label="Lift: change floor">
+        {floorCount > 0 && (
+        <div className="sq-floor-lift" role="group" aria-label="Lift: change floor" data-testid="sq-floor-lift" style={liftStyle}>
           <button
             type="button"
             className={`sq-floor-arrow${arrows.prev ? " has-needs" : ""}`}
@@ -635,6 +636,9 @@ export function SquadFloor({ view }: SquadFloorProps) {
           </button>
         </div>
       )}
+        </div>
+        )}
+      </div>
     </section>
 
   );

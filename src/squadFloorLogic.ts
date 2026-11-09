@@ -65,6 +65,8 @@ export type ScreensModel = {
 };
 
 export type FloorModel = {
+  /** Plate size from floor.json `w`/`h` (HP5: the ground strip is cropped, so the height is no longer 360); absent = the native 640x360. */
+  size?: { w: number; h: number };
   teamA: TeamSlices;
   teamB: TeamSlices;
   elevator: { doorA: Rect; doorB: Rect; car: Rect };
@@ -151,7 +153,8 @@ export function validateFloor(json: unknown): Validation<FloorModel> {
   if (!elevator) return fail("floor.json elevator is missing doorA, doorB or car");
   const penthouse = penthouseOf(json.penthouse);
   const screens = screensOf(json.screens);
-  return { ok: true, value: { teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(screens ? { screens } : {}), ...(json.front === true ? { front: true } : {}) } };
+  const size = isNum(json.w) && isNum(json.h) && json.w > 0 && json.h > 0 ? { w: json.w, h: json.h } : null;
+  return { ok: true, value: { ...(size ? { size } : {}), teamA, teamB, elevator, ...(penthouse ? { penthouse } : {}), ...(screens ? { screens } : {}), ...(json.front === true ? { front: true } : {}) } };
 }
 
 /** Validate cast.json. Unknown roles/poses/fields are kept; `fallback` may be `{}`; nothing about the sheet is hardcoded. */
@@ -244,6 +247,11 @@ export function validateCast(json: unknown): Validation<CastModel> {
 /** Native floor size per the contract (one plate, two teams). */
 export const FLOOR_NATIVE_WIDTH = 640;
 export const FLOOR_NATIVE_HEIGHT = 360;
+
+/** The plate's native size: floor.json `w`/`h` when given, else the 640x360 contract. */
+export function floorNativeSize(floor: Pick<FloorModel, "size">): { w: number; h: number } {
+  return floor.size ?? { w: FLOOR_NATIVE_WIDTH, h: FLOOR_NATIVE_HEIGHT };
+}
 
 /** Built-in placeholder floor.json shape (640x360 floor + 640x200 penthouse + lobby slices). */
 export function placeholderFloor(): FloorModel {
@@ -756,17 +764,17 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
  * has no whole CSS-px scale): below one device pixel per native pixel it falls back to a fractional fit of the width (and height).
  * A box shorter than one native floor still draws at the width fit, clipped, no scrollbar. 0 only when there is no width yet.
  */
-export function floorFitScale(boxW: number, boxH: number, dpr = 1): number {
+export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLOOR_NATIVE_WIDTH, nativeH = FLOOR_NATIVE_HEIGHT): number {
   if (!Number.isFinite(boxW) || boxW <= 0) return 0;
   const ratio = Number.isFinite(dpr) && dpr >= 1 ? dpr : 1;
   const hasH = Number.isFinite(boxH) && boxH > 0;
-  const crisp = Math.floor((boxW * ratio) / FLOOR_NATIVE_WIDTH) / ratio; // whole device-pixel multiple of the width
+  const crisp = Math.floor((boxW * ratio) / nativeW) / ratio; // whole device-pixel multiple of the width
   if (crisp >= 1 / ratio) {
     if (!hasH) return crisp;
-    const byHeight = Math.floor((boxH * ratio) / FLOOR_NATIVE_HEIGHT) / ratio;
+    const byHeight = Math.floor((boxH * ratio) / nativeH) / ratio;
     return byHeight >= 1 / ratio ? Math.min(crisp, byHeight) : Math.min(crisp, Math.max(byHeight, 1 / ratio));
   }
-  return boxW / FLOOR_NATIVE_WIDTH; // narrower than 1 device px per native px: fit the width fractionally rather than vanish
+  return boxW / nativeW; // narrower than 1 device px per native px: fit the width fractionally rather than vanish
 }
 
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────

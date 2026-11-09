@@ -1,4 +1,4 @@
--- H1d floor plate (docs/art/STYLE_BIBLE.md, owner ruling 3a): art/office/floor.aseprite, 640x360 INDEXED (P0),
+-- H1d floor plate (docs/art/STYLE_BIBLE.md, owner ruling 3a): art/office/floor.aseprite, 640x332 INDEXED (P0),
 -- hand-placed shapes only. Same hand as the H0 cast + the H1a gallery floor crop: chunky FRONT-VIEW furniture,
 -- every object its own 1px INK outline (obj() below outlines each piece on its own, so overlaps stay
 -- separated), flat fills, MARBLE shine pixels, Bayer dither only in the sunset through the windows.
@@ -6,7 +6,8 @@
 -- corner, a row of 5 cubicles along the back wall, a bench of two staggered rows (3 + 3) with the lead's desk
 -- at its head, the stats TV (wall CRT) by the lift, a break nook, the lobby mat. Every seat faces the back
 -- wall (sprites sit with their backs to the camera); monitors sit right of the head like the H0 sprites.
--- Back wall 0..95 (top rail 0..3, skirting 89..95), floor 96..331, slab + floor below from 332.
+-- Back wall 0..95 (top rail 0..3, skirting 89..95), floor 96..330, INK floor edge 331 = the plate's bottom edge
+-- (HP5: no slab / floor-below strip, the hub floor sits flush on the page bottom). Lift car mid-shaft (HP5).
 -- Layers (bottom->top): bg (sky through the windows), building, furniture, signs, light, front.
 -- "front" = the overlay that covers sprites (Buddy office glass front, lead desk modesty panel, lift car
 -- front + door jambs); also part of the plate, export_floor.lua writes it alone as floor-front-*.png.
@@ -18,13 +19,12 @@
 local root = app.params.root
 local L = dofile(root.."/art/cast/hypno/lib.lua")
 local pal = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" }
-local W, H = 640, 360
+local W, H = 640, 332
 local K = { k=15, v=8, p=9, c=10, a=11, s=14, m=4, t=7, g=12, y=13, l=3, h=2, n=1 }
 local INK, V, P, CO, A_, S_, M, T, G, Y = L.INK, L.VIOLET, L.PINK, L.CORAL, L.AMBER, L.SKIN, L.MARBLE, L.TEAL, L.MINT, L.SKY
 local PANEL, PHI, LINE = L.PANEL, L.PHI, L.LINE
 
-local FLOOR0, FLOOR1 = 96, 331
-local SLAB = 332
+local FLOOR0, FLOOR1 = 96, 330
 local WIN0, WIN1 = 24, 62       -- window glass rows (bullpen run); sill under it
 
 local spr = L.new(W, H, pal)
@@ -89,7 +89,9 @@ local A = {
 for i=0,4 do A.cubes[#A.cubes+1] = {CUBE0 + i*CUBEP + 5, 112, 32, 32} end
 A.desks = {}
 for _, k in ipairs({"bench1", "bench2", "cubes"}) do for _, d in ipairs(A[k]) do A.desks[#A.desks+1] = d end end
-local EL = { doorA = {290, 256, 11, 48}, car = {304, 270, 32, 32} }
+-- HP5: the car sits at the vertical middle of the shaft (glass 18..322); LIFT_Y = car frame top (was 250 at the floor)
+local LIFT_Y = 144
+local EL = { doorA = {290, LIFT_Y+6, 11, 48}, car = {304, LIFT_Y+20, 32, 32} }
 EL.doorB = mirR(EL.doorA)
 
 -- ======================= bg: sunset through the windows (the only dither on the plate) =======================
@@ -191,15 +193,10 @@ do
   c.rect(px0, 97, px1-px0+1, 2, M)
   c.rect(px0, 99, px1-px0+1, 10, S_)
   for x=px0+5, px1-3, 9 do c.px(x, 103 + (x//9) % 3, CO) end
-  -- slab cut-away + the floor below's ceiling (dollhouse tower read)
-  c.hline(0, SLAB, 288, INK); c.rect(0, SLAB+1, 288, 3, V); c.hline(0, SLAB+1, 288, M); c.hline(0, SLAB+4, 288, INK)
-  c.rect(0, SLAB+5, 288, 6, LINE); c.hline(0, SLAB+11, 288, INK)
-  c.rect(0, SLAB+12, 288, H-SLAB-12, PANEL)
-  for _, lx in ipairs({24, 104, 184, 248}) do
-    c.rect(lx, SLAB+14, 24, 6, INK); c.rect(lx+1, SLAB+15, 22, 4, M); c.hline(lx+1, SLAB+18, 22, LINE); c.px(lx+2, SLAB+15, M)
-  end
+  -- floor front edge: one INK row, the plate's bottom (HP5: no slab / floor-below strip)
+  c.hline(0, H-1, 288, INK)
   -- outer building wall
-  c.rect(0, 0, 4, H, INK); c.vline(1, 4, SLAB-4, M); c.vline(2, 4, SLAB-4, LINE)
+  c.rect(0, 0, 4, H, INK); c.vline(1, 4, H-6, M); c.vline(2, 4, H-6, LINE)
   mirror(c)
 
   -- lift core x 288..351: marble column, glass shaft, chunky outlines
@@ -210,13 +207,26 @@ do
   for _, v in ipairs({{293,44},{344,96},{294,166},{343,214}}) do
     c.px(v[1], v[2], LINE); c.px(v[1]+1, v[2]+1, LINE); c.px(v[1]+1, v[2]+2, LINE); c.px(v[1]+2, v[2]+4, LINE)
   end
-  c.rect(298, 18, 44, 214, INK)
-  for y=19,230 do for x=299,340 do c.px(x, y, L.dith(x, y, Y, V, math.max(0, math.min(0.999, (y-130)/100)))) end end
-  c.rect(313, 19, 2, 212, INK); c.rect(325, 19, 2, 212, INK)
-  c.rect(330, 106, 8, 20, INK); c.rect(331, 107, 6, 18, LINE); c.hline(331, 107, 6, M)   -- the counterweight
-  c.vline(333, 19, 87, INK)
-  c.hline(288, SLAB, 64, INK); c.rect(289, SLAB+1, 62, 3, V); c.hline(289, SLAB+1, 62, M); c.hline(288, SLAB+4, 64, INK)
-  c.rect(289, SLAB+5, 62, 6, LINE); c.hline(288, SLAB+11, 64, INK)
+  -- glass shaft 18..322 top to bottom; the car rides its middle (HP5), rails + cables run past it above and below
+  c.rect(298, 18, 44, 306, INK)
+  for y=19,322 do for x=299,340 do c.px(x, y, L.dith(x, y, Y, V, math.max(0, math.min(0.999, (y-60)/240)))) end end
+  c.rect(313, 19, 2, 304, INK); c.rect(325, 19, 2, 304, INK)
+  for ry=30, 314, 24 do c.px(313, ry, LINE); c.px(325, ry, LINE) end   -- rail bolts
+  -- hoist cables: sheave block at the top, two INK cables down to the car header
+  c.rect(315, 19, 10, 5, INK); c.rect(316, 20, 8, 3, LINE); c.hline(316, 20, 8, M)
+  -- the counterweight hangs low on its own cable (car high = weight low)
+  c.vline(333, 19, 236, INK)
+  c.rect(330, 254, 8, 20, INK); c.rect(331, 255, 6, 18, LINE); c.hline(331, 255, 6, M)
+  -- travelling cable looping under the car, and the pit buffer (spring) at the bottom of the run
+  for y=LIFT_Y+60, 290 do c.px(319 + ((y//6) % 2), y, INK) end
+  c.rect(315, 314, 10, 9, INK); for by=315, 321, 2 do c.hline(316, by, 8, A_) end
+  -- landing band: the marble floor slab the car is parked at (doors live on it), INK edges
+  c.rect(289, LIFT_Y-16, 62, 76, M)
+  c.hline(288, LIFT_Y-17, 64, INK); c.hline(288, LIFT_Y+60, 64, INK)
+  c.hline(289, LIFT_Y-16, 62, PHI); c.hline(289, LIFT_Y+59, 62, LINE)
+  c.vline(349, LIFT_Y-16, 76, LINE); c.vline(350, LIFT_Y-16, 76, LINE)
+  c.vline(318, 24, LIFT_Y-24, INK); c.vline(321, 24, LIFT_Y-24, INK)   -- cables reach the car header
+  c.hline(288, H-1, 64, INK)
   c.commit()
 end
 
@@ -405,7 +415,7 @@ do
   end
 
   -- lift car (front view): back wall with handrail + ceiling light, checker floor; doors + call lights
-  local cx, cy = 302, 250
+  local cx, cy = 302, LIFT_Y
   c.rect(cx, cy, 36, 56, INK)
   c.rect(cx+1, cy+1, 34, 30, PHI)
   c.rect(cx+1, cy+1, 34, 3, LINE); c.rect(cx+10, cy+2, 16, 2, A_)
@@ -517,9 +527,10 @@ do
     c.rect(x0 + d*10, 83, 2, 2, A_); c.rect(x0 + d*22, 86, 2, 2, A_)
   end
   -- lift: floor indicator + LIFT plate
-  c.rect(305, 236, 30, 11, INK); c.rect(306, 237, 28, 9, Y)
-  L.text(c, 317, 239, "07", A_)
-  c.stamp(309, 239, "|.g.|\n|ggg|", K)
+  local iy = LIFT_Y - 14
+  c.rect(305, iy, 30, 11, INK); c.rect(306, iy+1, 28, 9, Y)
+  L.text(c, 317, iy+3, "07", A_)
+  c.stamp(309, iy+3, "|.g.|\n|ggg|", K)
   obj(c, function(t) t.rect(303, 7, 34, 9, V) end, function(t) L.text(t, 312, 9, "LIFT", M) end)
   c.commit()
 end
@@ -547,7 +558,7 @@ do
   c.stamp(x+12, y+29, "|a.a.a.a|\n|aaaaaaa|\n|ppppppp|", { a=INK, p=P })
   mirror(c)
   -- lift car front: header, jambs, threshold (hides the rider's shoes)
-  local cx, cy = 302, 250
+  local cx, cy = 302, LIFT_Y
   c.rect(cx-2, cy-3, 40, 4, INK); c.rect(cx-1, cy-2, 38, 2, M)
   for _, jx in ipairs({cx-2, cx+34}) do
     c.rect(jx, cy, 4, 57, INK); c.rect(jx+1, cy, 2, 56, M); c.vline(jx+2, cy, 56, LINE)
@@ -570,7 +581,7 @@ do
   L.twinkle(c, 250, 160, M, M, 1)
   L.twinkle(c, 30, 220, T, M, 1)
   mirror(c)
-  for _, g in ipairs({{302,90,10},{304,180,8}}) do
+  for _, g in ipairs({{302,90,10},{302,290,8}}) do
     for i=0,g[3]-1 do c.px(g[1]+i, g[2]-i, M) end
   end
   L.twinkle(c, 295, 120, T, M, 2)
