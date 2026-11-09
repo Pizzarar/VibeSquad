@@ -283,7 +283,6 @@ export function buildAndroidApk({
 } = {}) {
   // --debug is an alias of --sideload: a compact (stripped arm64) release build signed with the Android debug keystore.
   sideload = sideload || debug;
-  debug = false;
   if (sideload && unsigned) throw new Error("--debug/--sideload and --unsigned cannot be combined");
   const require = createRequire(import.meta.url);
   const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
@@ -313,26 +312,24 @@ export function buildAndroidApk({
   ensureAndroidTrustKotlin(activityDir);
 
   // Step 4: build the release APK.
-  console.log(`[build:android] 3/6 Building ${debug ? "debug" : "release"} APK (tauri android build --apk${debug ? " --debug" : ""})...`);
-  const builtSo = join(rootDir, "src-tauri", "target", "aarch64-linux-android", debug ? "debug" : "release", "libvibesquad_desktop_lib.so");
+  console.log(`[build:android] 3/6 Building release APK (tauri android build --apk)...`);
+  const builtSo = join(rootDir, "src-tauri", "target", "aarch64-linux-android", "release", "libvibesquad_desktop_lib.so");
   try {
-    runNode([tauriCliJs, "android", "build", "--apk", "--target", "aarch64", "--ci", "--config", "src-tauri/tauri.android.conf.json", ...(debug ? ["--debug"] : [])]);
+    runNode([tauriCliJs, "android", "build", "--apk", "--target", "aarch64", "--ci", "--config", "src-tauri/tauri.android.conf.json"]);
   } catch (err) {
     if (process.platform !== "win32" || !existsSync(builtSo)) throw err;
-    console.log(`[build:android] Windows symlink fallback: copying libvibesquad_desktop_lib.so into jniLibs/arm64-v8a and running Gradle (${debug ? "debug" : "release"})...`);
+    console.log(`[build:android] Windows symlink fallback: copying libvibesquad_desktop_lib.so into jniLibs/arm64-v8a and running Gradle (release)...`);
     const jniDir = join(genAndroidDir, "app", "src", "main", "jniLibs", "arm64-v8a");
     mkdirSync(jniDir, { recursive: true });
     copyFileSync(builtSo, join(jniDir, "libvibesquad_desktop_lib.so"));
-    const task = debug ? "assembleArm64Debug -x rustBuildArm64Debug" : "assembleArm64Release -x rustBuildArm64Release";
+    const task = "assembleArm64Release -x rustBuildArm64Release";
     run("cmd.exe", ["/d", "/s", "/c", `.\\gradlew.bat ${task}`], { cwd: genAndroidDir });
   }
 
   // Step 5: locate the built APK (prefer universal, then aarch64).
   console.log("[build:android] 4/6 Locating built APK...");
   const apkOutDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk");
-  const apk = debug
-    ? findApk(join(apkOutDir, "universal", "debug")) || findApk(join(apkOutDir, "arm64", "debug")) || findApk(join(apkOutDir, "aarch64", "debug"))
-    : findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "arm64", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
+  const apk = findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "arm64", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
   if (!apk) throw new Error(`No built APK found under ${apkOutDir}`);
 
   // Step 6: sign (if unsigned) and stage into dist-desktop/VibeSquad.apk.
