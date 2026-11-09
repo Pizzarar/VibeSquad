@@ -318,12 +318,22 @@ function foldEvent(st, ev) {
       st.runningSince = undefined;
     }
   } else if (ev.type === "input") {
-    st.tail = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
+    if (st.msgVerdict === "PASS") st.priorPass = true;
+    else if (st.msgVerdict === "FAIL") st.priorPass = false;
+    st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
+    st.firstLineDone = false;
+    st.lastLine = "";
+    st.curLine = "";
+    st.msgVerdict = null;
+    st.pass = st.priorPass;
+    if (!st.roleOnly && typeof ev.text === "string" && /^\s*(?:ROLE:\s*reviewer\b|You are (?:acting as )?a READ-ONLY\b)/i.test(ev.text)) {
+      st.roleOnly = true;
+    }
   } else if (ev.type === "output") {
-    // PASS counts only at the start of a line of the agent's own message ("PASS", "Verdict: PASS", "**PASS**"), never mid-text.
     if (typeof ev.text === "string") {
-      st.tail = (st.tail + ev.text).slice(-400);
-      if (!st.pass && PASS_RE.test(st.tail)) st.pass = true;
+      foldOutputLines(st, ev.text);
+      st.msgVerdict = messageVerdict(st);
+      st.pass = st.msgVerdict === "FAIL" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
@@ -352,6 +362,8 @@ function foldEvent(st, ev) {
   }
 }
 
+const PROFILE_NAME_BY_ID = new Map(DEFAULT_PACK_PROFILES.map((p) => [p.id, p.name]));
+
 /** Role (brainstorm|lead|worker), handoff marker, title and profile ride on created.meta / meta.patch. */
 function foldIdentity(st, m) {
   if (!m) return;
@@ -359,10 +371,47 @@ function foldIdentity(st, m) {
   if (typeof m.labels?.["vs.handoff-from"] === "string") st.handoff = true;
   const title = m.title ?? m.labels?.job;
   if (typeof title === "string" && title) st.title = title;
-  if (typeof m.profile === "string" && m.profile) st.profile = m.profile;
-  else if (typeof m.labels?.profile === "string" && m.labels.profile) st.profile = m.labels.profile;
+  const rawProfile = typeof m.profile === "string" && m.profile ? m.profile : (typeof m.labels?.profile === "string" && m.labels.profile ? m.labels.profile : undefined);
+  if (rawProfile) st.profile = PROFILE_NAME_BY_ID.get(rawProfile) ?? rawProfile;
   const team = m.team ?? m.labels?.team;
   if (typeof team === "string" && team) st.team = team;
+}
+
+/** Incrementally track the first and last non-empty (non-warning) lines of the current assistant message. */
+function foldOutputLines(st, chunk) {
+  let i = 0;
+  while (true) {
+    const nl = chunk.indexOf("\n", i);
+    if (nl < 0) {
+      st.curLine = (st.curLine + chunk.slice(i)).slice(-1000);
+      if (!st.firstLineDone) st.firstLine = st.curLine.slice(0, 1000);
+      break;
+    }
+    const line = (st.curLine + chunk.slice(i, nl)).trim();
+    st.curLine = "";
+    if (line && !line.startsWith("⚠")) {
+      if (!st.firstLineDone) { st.firstLine = line.slice(0, 1000); st.firstLineDone = true; }
+      st.lastLine = line.slice(0, 1000);
+    }
+    i = nl + 1;
+  }
+}
+
+/** Verdict on a single line: any uppercase \bFAIL\b wins over PASS; uppercase PASS/FAIL only with word boundaries (ignores "passes"/"passed"). */
+function lineVerdict(line) {
+  if (!line || typeof line !== "string") return null;
+  if (/\bFAIL\b/.test(line)) return "FAIL";
+  if (VERDICT_LINE_PASS_RE.test(line) && /\bPASS\b/.test(line)) return "PASS";
+  return null;
+}
+
+function messageVerdict(st) {
+  const firstV = lineVerdict(st.firstLine);
+  const lastLine = st.curLine.trim() && !/^\s*⚠/.test(st.curLine) ? st.curLine.trim() : st.lastLine;
+  const lastV = lineVerdict(lastLine);
+  if (firstV === "FAIL" || lastV === "FAIL") return "FAIL";
+  if (firstV === "PASS" || lastV === "PASS") return "PASS";
+  return null;
 }
 
 function readTail(file, from, to) {
@@ -385,7 +434,7 @@ function readTail(file, from, to) {
 function refreshFile(file, stat) {
   let st = usageFiles.get(file);
   if (st && st.size === stat.size && st.mtimeMs === stat.mtimeMs) return st;
-  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, tail: "", pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
+  if (!st || stat.size < st.offset) st = { offset: 0, provider: "unknown", model: "unknown", lane: "", role: "", prevCost: 0, buckets: new Map(), turns: 0, firstLine: "", firstLineDone: false, lastLine: "", curLine: "", msgVerdict: null, priorPass: false, roleOnly: false, pass: false, handoff: false, title: "", profile: undefined, cwd: undefined, createdAt: undefined, firstTs: undefined, lastTs: undefined, workingMs: 0, runningSince: undefined, exited: false, exitError: false, exitTs: undefined, errors: 0, lastError: "", lastErrorTs: undefined };
   const buf = readTail(file, st.offset, stat.size);
   const lastNl = buf.lastIndexOf(10);
   if (lastNl >= 0) {
@@ -403,7 +452,8 @@ function refreshFile(file, stat) {
 
 /** A run (agent log) with more turns than this and no PASS in its output is flagged as a likely loop. */
 export const LOOP_TURN_THRESHOLD = 40;
-const PASS_RE = /(?:^|\n)[ \t>*_#-]*(?:verdict:?\s*)?[*_`]*PASS\b/i;
+// Verdict token on the first or last non-empty line: at line start or after ** / ` / "VERDICT:" / "Verdict:" / "R<n>" (uppercase PASS, word boundary).
+const VERDICT_LINE_PASS_RE = /(?:^[ \t>*_#`-]*|(?:^|[\s>*_#`(-])(?:\*{1,3}|`|(?:(?:verdict|r\d+)\b[ \t:*_`-]*))[ \t*_`]*)\bPASS\b/i;
 const COORDINATION_ROLES = new Set(["brainstorm", "lead"]);
 const ROLE_ORDER = ["brainstorm", "lead", "worker"];
 // v2 efficiency signals (usa-5): statuses that close a working interval, spawn-storm windows/thresholds, fix-after-merge.
@@ -510,7 +560,24 @@ function gitRepoRoot({ runtimeRoot = REPO_ROOT, envRoot = process.env.VIBESQUAD_
 
 const gitIn = (root) => (args) => execFileSync("git", args, { cwd: root, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
 const defaultGit = (args) => execFileSync("git", args, { cwd: gitRepoRoot(), encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
-const REVIEW_RE = /review r(\d+)/i;
+const REVIEW_RE = /\b(?:review(?:-[A-Za-z0-9_-]+)?\s+r(\d+)|r(\d+)\s+(?:[^;\n)]*?\s+)??(?:PASS|FAIL|fix(?:es|ed)?)\b|(?:PASS|FAIL|after)\s+r(\d+)|r\d+-r(\d+))\b/gi;
+const FIX_COUNT_RE = /\bfix\d+\b/gi;
+
+/** Review rounds from a commit subject: highest R<n> seen, else count of fixN tokens (keeping "review rN"). */
+function parseSubjectReviewRounds(subject) {
+  if (!subject || typeof subject !== "string") return { maxR: 0, fixCount: 0 };
+  let maxR = 0;
+  REVIEW_RE.lastIndex = 0;
+  let m;
+  while ((m = REVIEW_RE.exec(subject))) {
+    const n = Number(m[1] || m[2] || m[3] || m[4]);
+    if (n > maxR) maxR = n;
+  }
+  FIX_COUNT_RE.lastIndex = 0;
+  let fixCount = 0;
+  while (FIX_COUNT_RE.exec(subject)) fixCount += 1;
+  return { maxR, fixCount };
+}
 const CODE_RE = /\(@([A-Za-z0-9_-]+)(?:\s[^)]*)?\)/g;
 const MAX_COMMITS = 4000;
 const MAX_BRANCH_WALK = 500;
@@ -587,16 +654,20 @@ export function readMergedUnits(git = defaultGit) {
       side.push(k);
       stack.push(...k.parents);
     }
-    let rounds = 0;
+    const mergeParsed = parseSubjectReviewRounds(c.subject);
+    let maxR = mergeParsed.maxR;
+    let fixCount = mergeParsed.fixCount;
     let code = codeOf(c.subject);
     let firstCt = null;
     for (const k of side) {
-      const m = REVIEW_RE.exec(k.subject);
-      if (m) rounds = Math.max(rounds, Number(m[1]));
+      const sp = parseSubjectReviewRounds(k.subject);
+      if (sp.maxR > maxR) maxR = sp.maxR;
+      if (sp.fixCount > fixCount) fixCount = sp.fixCount;
       code ??= codeOf(k.subject);
       const cts = Number(k.ct);
       if (Number.isFinite(cts) && (firstCt === null || cts < firstCt)) firstCt = cts;
     }
+    const rounds = maxR > 0 ? maxR : fixCount;
     const branch = /Merge branch '([^']+)'/i.exec(c.subject)?.[1] ?? null;
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
@@ -621,8 +692,8 @@ function repoToplevel(dir) {
       const st = statSync(g);
       if (st.isDirectory()) return cur;
       if (st.isFile()) {
-        const m = /^gitdir:s*(.+)$/m.exec(readFileSync(g, "utf8"));
-        const wt = m ? /^(.*)[\/].git[\/]worktrees[\/][^\/]+$/.exec(resolve(cur, m[1].trim())) : null;
+        const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(g, "utf8"));
+        const wt = m ? /^(.*)[\\/]\.git[\\/]worktrees[\\/][^\\/]+$/.exec(resolve(cur, m[1].trim())) : null;
         return wt ? wt[1] : cur;
       }
     } catch { /* no .git here */ }
@@ -635,7 +706,7 @@ function repoToplevel(dir) {
 
 /** Distinct git repos the Squads work in: [{ root, name, teams: [teamId], laneTeam: Map<laneId, teamId> }]. gitRepoRoot() is always first. */
 function readSquadRepos(home) {
-  const primary = gitRepoRoot();
+  const primary = repoToplevel(gitRepoRoot()) ?? gitRepoRoot();
   const repos = new Map();
   const add = (root, teamId, laneId) => {
     if (!root) return;
@@ -727,6 +798,8 @@ function agentV2(st, agentId) {
     role: st.role || "unknown",
     lane: st.lane,
     team: st.team ?? null,
+    title: st.title ?? "",
+    roleOnly: !!st.roleOnly,
     cwd: st.cwd,
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
@@ -750,27 +823,63 @@ function agentV2(st, agentId) {
 }
 
 /**
- * The unit name a worker's cwd resolves to: basename() already strips both `\` and `/` (Windows worktree paths such as
- * <sanctuary>\worktrees\VibeSquad\<unit> use backslashes, some logs use forward slashes). Lower-cased so a worktree dir
- * that differs in case from the branch name still matches (git branch names are case-insensitive on Windows).
+ * Normalize a worker cwd (Windows backslashes -> forward slashes, case-insensitive drive, strip trailing slashes) and
+ * return its sanctuary worktree basename (lowercased) so cross-platform logs match the merged branch name.
  */
-const unitNameOfCwd = (cwd) => (typeof cwd === "string" && cwd ? basename(cwd).toLowerCase() : "");
+function normalizeWorktreeCwd(cwd) {
+  if (typeof cwd !== "string" || !cwd) return "";
+  return cwd
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^([A-Za-z]):/, (_, d) => `${d.toLowerCase()}:`)
+    .replace(/\/+$/, "");
+}
+const unitNameOfCwd = (cwd) => {
+  const norm = normalizeWorktreeCwd(cwd);
+  if (!norm) return "";
+  const idx = norm.lastIndexOf("/");
+  return (idx >= 0 ? norm.slice(idx + 1) : norm).toLowerCase();
+};
+
+const NON_IMPLEMENTER_PROFILE_RE = /^(?:Review|Pre-check|Check|Audit|Scout|Art Director|Planner|Spec)\b/i;
+const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
+
+/** True when a worker run is an implementer candidate rather than a digest/review/check/scout run in the same worktree. */
+function isImplementerWorker(a) {
+  if (a.role !== "worker") return false;
+  if (a.roleOnly) return false;
+  if (NON_IMPLEMENTER_PROFILE_RE.test(a.profile || "")) return false;
+  if (REVIEWER_TITLE_RE.test(a.title || "") && !/\breview\s+fix/i.test(a.title || "")) return false;
+  return true;
+}
 
 /** A run carrying a team may only implement units of that Squad's repo (lane ids can repeat across Squads); untagged on either side matches. */
 const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === agent.team;
 
-/** Attribute a merged unit to the implementer worker: basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
+/** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
 function attributeImplementer(unit, agents) {
   const mergedAtMs = tsMs(unit.mergedAt);
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
-    const matches = agents.filter((a) => a.role === "worker" && unitNameOfCwd(a.cwd) === want && sameSquad(unit, a));
-    if (matches.length === 1) return matches[0];
-    if (matches.length > 1) return null; // ambiguous cwd match
+    const cwdMatches = agents.filter((a) => a.role === "worker" && unitNameOfCwd(a.cwd) === want && sameSquad(unit, a));
+    if (cwdMatches.length === 1) return cwdMatches[0];
+    if (cwdMatches.length > 1) {
+      const impls = cwdMatches.filter(isImplementerWorker);
+      if (impls.length === 1) return impls[0];
+      if (impls.length > 1) {
+        const profiles = new Set(impls.map((a) => `${a.provider}|${a.profile}`));
+        if (profiles.size === 1) {
+          return impls.slice().sort((x, y) => (x.createdAt ?? Infinity) - (y.createdAt ?? Infinity))[0];
+        }
+      }
+      return null; // ambiguous cwd match across different implementer profiles
+    }
   }
   if (!unit.lane || mergedAtMs === null) return null;
-  const workers = agents.filter((a) => a.role === "worker" && a.lane === unit.lane && sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
-  return workers.length === 1 ? workers[0] : null;
+  const laneWorkers = agents.filter((a) => a.role === "worker" && a.lane === unit.lane && sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
+  if (laneWorkers.length === 1) return laneWorkers[0];
+  const laneImpls = laneWorkers.filter(isImplementerWorker);
+  return laneImpls.length === 1 ? laneImpls[0] : null;
 }
 
 /** handoff entries (type "handoff") from the vs-log dirs under home (logs and teams), deduped (same entry lands in both). */
