@@ -366,6 +366,9 @@ async function handoffLead(ctx, args = {}) {
     if (askedId && askedId !== target.id) throw new Error(`cannot hand off a lead: ${askedId} is not the live lead of lane "${targetLane.lane.id}" (${target.id})`);
     if (target.id === callerId || targetLane.lane.id === callerLane.lane.id) throw new Error("cannot hand off a lead: the Overlord hands off other lanes' leads; use a plain handoff_lead for itself");
     trigger = "overlord";
+    // O6 floor (mirrored by the server re-check): a healthy lead under 100k is steered first; --force needs a steer.
+    const floor = (await import("../lead-handoff.mjs")).overlordFloorVerdict(target, { force: args.force === true, steer: clean(args.steer) });
+    if (floor.refuse) throw new Error(`cannot hand off a lead: ${floor.message}`);
     const age = Date.now() - Date.parse(target.createdAt ?? "");
     if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
@@ -396,7 +399,7 @@ async function handoffLead(ctx, args = {}) {
     throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
   }
   const steer = clean(args.steer).slice(0, 2000);
-  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(trigger === "overlord" && steer ? { steer } : {}) };
+  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(trigger === "overlord" && steer ? { steer } : {}), ...(trigger === "overlord" && args.force === true ? { force: true } : {}) };
   let res;
   let via = "server";
   if (ctx.performHandoff) {
@@ -535,7 +538,7 @@ export const VS_TOOLS = {
   },
   handoff_lead: {
     description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
-    inputSchema: obj({ lane: S, steer: S }),
+    inputSchema: obj({ lane: S, steer: S, force: { type: "boolean" } }),
     run: handoffLead,
   },
   restart_buddy: {
