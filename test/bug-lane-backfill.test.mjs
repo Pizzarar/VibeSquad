@@ -1,14 +1,15 @@
 // Every Squad gets its hidden Bug Runner lane (G1) and agents can file into their own Squad's bug lane (G2).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { buildNewSquadTeamDef, withBugLane } from "../src/newSquadDef.ts";
 import { TEMPLATE_DEFAULTS, backfillBugLanes, diffAgainstTemplate, persistTemplateReconcile } from "../server/bug-lane-backfill.mjs";
-import { findBugLane } from "../server/identity.mjs";
+import { findBugLane, findLaneInRegistry } from "../server/identity.mjs";
+import { writeTeamsRegistry } from "../server/teams-file.mjs";
 
 const NL = String.fromCharCode(10);
 const CLI = fileURLToPath(new URL("../cli/vs.mjs", import.meta.url));
@@ -105,4 +106,57 @@ test("vs inbox add --lane bug files into the caller's Squad bug lane; the explic
   assert.equal(JSON.parse(run("list", "--json", "--lane", "bug-chaser").stdout).length, 0, "VibeSquad's lane not bumped");
   const noBug = spawnSync(process.execPath, [CLI, "inbox", "add", "x", "--lane", "bug"], { encoding: "utf8", env: { ...env, VS_TEAM: "nope-squad" } });
   assert.notEqual(noBug.status, 0, "unknown Squad does not silently file into a wrong lane");
+});
+
+test("H1: runner agent labelled team=site files `--lane bug` into site's lane; --team/VS_TEAM spoofing and efi-first order are ignored; cwd resolves the Squad", (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "vs-bug-h1-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "teams.json");
+  const teams = backfillBugLanes([{ ...squad("efi"), paths: ["efi"] }, { ...squad("site"), paths: ["site"] }]);
+  writeFileSync(file, JSON.stringify({ teams }));
+  const siteBug = findBugLane(teams[1]).id;
+  const efiBug = findBugLane(teams[0]).id;
+  assert.notEqual(siteBug, efiBug);
+  mkdirSync(path.join(dir, "runner", "agents"), { recursive: true });
+  writeFileSync(
+    path.join(dir, "runner", "agents", "rn-h1.jsonl"),
+    JSON.stringify({ type: "created", ts: new Date().toISOString(), cwd: dir, meta: { cwd: dir, labels: { team: "site", lane: "site", role: "lead" } } }) + NL,
+  );
+  const base = { ...process.env, VIBESQUAD_HOME: dir, VIBESQUAD_TEAMS_FILE: file, VS_TEAM: "", VS_LANE: "", PASEO_AGENT_ID: "" };
+  const run = (env, cwd, ...args) => spawnSync(process.execPath, [CLI, "inbox", ...args], { encoding: "utf8", env: { ...base, ...env }, cwd });
+  const cardsOf = () => JSON.parse(run({ VS_AGENT_ID: "", VS_TEAM: "efi" }, dir, "list", "--json", "--status", "all").stdout);
+  const laneOf = (env, text, ...extra) => {
+    assert.equal(run(env, dir, "add", text, "--lane", "bug", ...extra).status, 0);
+    return cardsOf().find((c) => c.text === text).laneId;
+  };
+  assert.equal(laneOf({ VS_AGENT_ID: "rn-h1" }, "plain"), siteBug, "labels.team wins, not teams[0]");
+  assert.equal(laneOf({ VS_AGENT_ID: "rn-h1", VS_TEAM: "efi" }, "env spoof"), siteBug, "VS_TEAM ignored");
+  assert.equal(laneOf({ VS_AGENT_ID: "rn-h1" }, "flag spoof", "--team", "efi"), siteBug, "--team ignored");
+  const siteCwd = path.join(dir, "site");
+  mkdirSync(siteCwd, { recursive: true });
+  const r = run({ VS_AGENT_ID: "" }, siteCwd, "add", "by cwd", "--lane", "bug");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(cardsOf().find((c) => c.text === "by cwd").laneId, siteBug, "cwd inside site resolves to site");
+});
+
+test("M1: unscoped @bug keeps resolving to vibesquad's bug-chaser with efi first; the caller's own Squad wins when known", () => {
+  const teams = backfillBugLanes([squad("efi"), squad("vibesquad", [{ id: "bug-chaser", name: "Bug Chaser", state: "pinned", code: "Bug" }])]);
+  assert.equal(findLaneInRegistry("@bug", teams).lane.id, "bug-chaser");
+  assert.equal(findLaneInRegistry("@bug", teams, "efi").lane.id, findBugLane(teams[0]).id);
+  assert.equal(findLaneInRegistry("@bug", teams, "vibesquad").lane.id, "bug-chaser");
+});
+
+test("M2: persist writes with the revision of its read, so a concurrent edit is a 409 retry, not an overwrite", (t) => {
+  const dir = mkdtempSync(path.join(tmpdir(), "vs-bug-m2-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, "teams.json");
+  writeFileSync(file, JSON.stringify({ teams: fixture() }));
+  const prev = { f: process.env.VIBESQUAD_TEAMS_FILE, h: process.env.VIBESQUAD_HOME };
+  process.env.VIBESQUAD_TEAMS_FILE = file;
+  process.env.VIBESQUAD_HOME = dir;
+  t.after(() => { for (const [k, v] of [["VIBESQUAD_TEAMS_FILE", prev.f], ["VIBESQUAD_HOME", prev.h]]) v === undefined ? delete process.env[k] : (process.env[k] = v); });
+  const stale = writeTeamsRegistry({ teams: fixture(), revision: "stale" }, dir);
+  assert.equal(stale.status, 409, "writer rejects a stale revision");
+  assert.equal(persistTemplateReconcile(dir).changed, true);
+  assert.equal(readFileSync(file, "utf8").includes("bug-runner-2"), true);
 });

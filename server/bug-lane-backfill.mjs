@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { cleanLaneCode, findAuditLane, findBugLane, isHubLane, laneCodesForTeam } from "./identity.mjs";
 import { takenLaneIds, uniqueLaneId } from "./pin-ideas.mjs";
-import { resolveTeamsFilePath, vibesquadHome, writeTeamsRegistry } from "./teams-file.mjs";
+import { resolveTeamsFilePath, teamsRevision, vibesquadHome, writeTeamsRegistry } from "./teams-file.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 
 // Template reconcile (G3): old Squads are diffed against what buildNewSquadTeamDef (src/newSquadDef.ts) makes today.
@@ -99,12 +99,24 @@ function logDriftMetric(team, text, home) {
 export function persistTemplateReconcile(rootDir) {
   const file = resolveTeamsFilePath(rootDir);
   if (path.basename(file) === "teams.example.json") return { changed: false, auto: [], logOnly: [] };
-  const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null });
-  const teams = r.ok && r.data && Array.isArray(r.data.teams) ? r.data.teams : null;
-  if (!teams) return { changed: false, auto: [], logOnly: [] };
-  const rec = reconcileTemplate(teams);
-  const changed = rec.teams !== teams;
-  if (changed) writeTeamsRegistry({ ...r.data, teams: rec.teams }, rootDir);
+  // Revision is taken with the read; writeTeamsRegistry re-checks it under its lock and answers 409 if teams.json moved meanwhile, so a concurrent edit is never overwritten (retry on the fresh file).
+  let r;
+  let teams;
+  let rec;
+  let changed = false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const revision = teamsRevision(file);
+    r = readJsonFileWithBom(file, { label: "teams.json", fallback: null });
+    teams = r.ok && r.data && Array.isArray(r.data.teams) ? r.data.teams : null;
+    if (!teams) return { changed: false, auto: [], logOnly: [] };
+    rec = reconcileTemplate(teams);
+    changed = rec.teams !== teams;
+    if (!changed) break;
+    const w = writeTeamsRegistry({ ...r.data, teams: rec.teams, revision }, rootDir);
+    if (w.status !== 409) break;
+    changed = false;
+    rec = { teams, auto: [], logOnly: [] };
+  }
   const home = vibesquadHome();
   const seenFile = path.join(home, SEEN_FILE);
   const seen = readJsonFileWithBom(seenFile, { fallback: {} }).value ?? {};

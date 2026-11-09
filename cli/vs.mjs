@@ -142,7 +142,7 @@ function resolveTeam(value) {
   return { id: safeSegment(raw.toLowerCase()), name: raw, lanes: [], paths: [], known: false };
 }
 
-function findLane(value) {
+function findLane(value, preferTeamId = "") {
   if (!value) return null;
   const stripped = String(value).trim().replace(/^@+/, "");
   const needle = stripped.toLowerCase();
@@ -154,7 +154,7 @@ function findLane(value) {
     }
   }
   // `@<code>` / `<code>` handles (e.g. @bug -> bug-chaser) and name matches.
-  return findLaneInRegistry(value, TEAM_DEFS);
+  return findLaneInRegistry(value, TEAM_DEFS, preferTeamId);
 }
 
 function matchTeamBySegments(targetPath) {
@@ -338,7 +338,7 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const laneFromLabels = labels.lane || labels.lead || "";
   const teamFromFlag = pick("team", "VS_TEAM");
   const laneRaw = laneFromFlag || (!teamFromFlag ? laneFromLabels : "");
-  const laneHit = findLane(laneRaw);
+  const laneHit = findLane(laneRaw, teamFromFlag || labels.team || "");
 
   // Team: explicit flag/env wins, then the lane's owning team, then the label,
   // then the folder. A --lane alone is enough to land in the right team.
@@ -809,7 +809,7 @@ function formatInboxCardLine(card) {
 function resolveInboxLaneFlag(flags) {
   const raw = flags.lane ? String(flags.lane).trim() : "";
   if (raw.replace(/^@+/, "").toLowerCase() !== "bug") return raw;
-  const me = resolveIdentity(flags);
+  const me = resolveIdentity({ ...flags, lane: undefined }, { recordWins: true });
   const lane = findBugLane(me.team);
   if (!lane) throw new Error(`Squad ${me.team?.id || "(unknown)"} has no bug lane; pass the lane id explicitly`);
   return lane.id;
