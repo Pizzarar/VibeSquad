@@ -126,7 +126,9 @@ export function pairRedeemUrl(host: string, code: string, deviceName = "VibeSqua
  * user back to the pair screen (`#unpaired`) when this device is no longer paired, instead of a dead 401 page.
  */
 export function serverUrl(host: string, appOrigin = ""): string {
-  return `https://${host}/${appOrigin ? `?${new URLSearchParams({ vs_app: appOrigin }).toString()}` : ""}`;
+  // Via /__vibesquad/enter: the app→PC navigation is cross-site, so the Strict vs_device cookie is withheld on it; the
+  // PC's same-site hop to "/" carries it (server/auth.mjs handleEnter).
+  return appOrigin ? `https://${host}/__vibesquad/enter?${new URLSearchParams({ vs_app: appOrigin }).toString()}` : `https://${host}/`;
 }
 
 /** What the server's redirect back to the app (`<app origin>/#paired|#unpaired|#failed`) says. */

@@ -676,3 +676,33 @@ test("Q2: vs who shows queued(N) for a queued agent instead of idle/initializing
     env.cleanup();
   }
 });
+
+test("I3: vs who prints lost (not closed) for a lost-but-resumable runner agent", () => {
+  const env = makeMockEnv();
+  try {
+    const agentsDir = join(env.vsHome, "runner", "agents");
+    mkdirSync(agentsDir, { recursive: true });
+    const now = Date.now();
+    const t0 = now - 60_000;
+    // A lead the runner lost (last event predates the runner's start) but which still has a saved session -> resumable.
+    writeFileSync(
+      join(agentsDir, "rn-lost-resumable-lead.jsonl"),
+      [
+        { seq: 0, ts: t0, type: "created", provider: "claude", model: "m", cwd: REPO_ROOT, meta: { title: "★ VIBESQUAD ord1", labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "1" } } },
+        { seq: 1, ts: t0, type: "status", status: "idle" },
+        { seq: 2, ts: t0, type: "session", sessionId: "sess-1" },
+      ].map((e) => JSON.stringify(e)).join("\n") + "\n",
+    );
+    writeFileSync(join(env.vsHome, "runner", "runner.json"), JSON.stringify({ port: 1, pid: process.pid, startedAt: now }));
+
+    const res = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"]);
+    assert.equal(res.status, 0, res.stdout + res.stderr);
+    assert.equal(res.stdout.trim(), "★ VIBESQUAD ord1 · rn-lost-resumable-lead · lost · 0k");
+
+    const json = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad", "--json"]);
+    assert.equal(json.status, 0, json.stdout + json.stderr);
+    assert.equal(JSON.parse(json.stdout).entries[0].status, "lost");
+  } finally {
+    env.cleanup();
+  }
+});

@@ -5899,10 +5899,10 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* plain confirm (Archive) and warn (Cancel & Resume) buttons */
 :root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
 :root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
-/* ⇄ Handoff (Aub's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
+/* ⇄ Handoff (owner's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
 :root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
-:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image: none !important; color: var(--text) !important; text-shadow: none; }
+:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
 
 /* usa-11: efficiency trend, clean-run floor, savings, workflow era */
 .usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
