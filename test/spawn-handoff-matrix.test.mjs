@@ -430,3 +430,29 @@ test("handoff_lead (retireImmediately, shared slots) after an unconfirmed auto-2
     assert.equal(oneLive(w, "lead", "after handoff_lead"), s1.successorId);
   } finally { w.cleanup(); }
 });
+
+test("R3 stakes param: sets labels.stakes, labels.stakes wins, unknown rejected, handoff strip keeps stakes, vs --stakes", async () => {
+  const w = setup();
+  try {
+    buddy(w);
+    lead(w);
+    const ctx = buddyCtx(w, { agentId: "rn-w", team: "mx", lane: "feat", role: "worker" });
+    const last = () => [...w.agents.values()].at(-1);
+    await callTool(ctx, "spawn_worker", { title: "A", profile: "Lead - Opus", prompt: "x", stakes: "mechanical" });
+    assert.equal(last().labels.stakes, "mechanical");
+    await callTool(ctx, "create_agent", { title: "B", profile: "Lead - Opus", prompt: "x", stakes: "mechanical", labels: { stakes: "tierA-security" } });
+    assert.equal(last().labels.stakes, "tierA-security");
+    await callTool(ctx, "spawn_worker", { title: "C", profile: "Lead - Opus", prompt: "x", stakes: "tierA-invariant", labels: { "vs.handoff-from": "rn-lead1", "handoff-successor": "rn-x" } });
+    assert.equal(last().labels.stakes, "tierA-invariant");
+    assert.equal(last().labels["vs.handoff-from"], undefined);
+    const before = w.creates;
+    await assert.rejects(callTool(ctx, "spawn_worker", { title: "D", profile: "Lead - Opus", prompt: "x", stakes: "bogus" }), /unknown stakes "bogus"/);
+    assert.equal(w.creates, before);
+    await callTool(ctx, "spawn_worker", { title: "E", profile: "Lead - Opus", prompt: "x" });
+    assert.equal(last().labels.stakes, undefined);
+    const out = [];
+    await commandAgentVerb("spawn", { _: [], title: "F", profile: "Lead - Opus", prompt: "x", stakes: "mechanical" }, () => ctx, (s) => out.push(s));
+    assert.equal(last().labels.stakes, "mechanical");
+    await assert.rejects(commandAgentVerb("spawn", { _: [], title: "G", profile: "Lead - Opus", prompt: "x", stakes: "nope" }, () => ctx, () => {}), /unknown stakes/);
+  } finally { w.cleanup(); }
+});

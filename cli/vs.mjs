@@ -503,7 +503,7 @@ Usage:
   vs task list [--lane <lane>] [--json]
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
-  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
+  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
   vs buddy restart --lane <code> [--reason "<why>"]   restart a lane's Buddy via the brainstorm-restart path (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
@@ -1840,6 +1840,7 @@ export async function runAgentVerb(verb, flags, ctx) {
       profile: flags.profile,
       prompt: flags.prompt ?? flags._.join(" "),
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
+      ...(flags.stakes !== undefined ? { stakes: String(flags.stakes) } : {}),
     };
   } else if (verb === "handoff_lead") {
     args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
@@ -1916,7 +1917,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     verb = "restart_buddy";
   }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
-    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]');
+    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
