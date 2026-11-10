@@ -71,8 +71,8 @@ function setup() {
     },
     /** `vs who <role>`: ok with exactly one entry, never conflict. */
     who(role, lane = "feat") {
-      const { winner, conflict } = resolveLeadWinner(world.live(role, lane));
-      return { ids: world.live(role, lane).map((a) => a.id), winner: winner?.id ?? null, conflict };
+      const { winner, conflict, pending } = resolveLeadWinner(world.live(role, lane));
+      return { ids: world.live(role, lane).map((a) => a.id), winner: winner?.id ?? null, conflict, pending };
     },
     cleanup() {
       if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
@@ -348,4 +348,37 @@ test("spoofed --role/--lane/--team/--agent/--ord cannot make a worker spawn a le
     for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     w.cleanup();
   }
+});
+
+// ---------------------------------------------------------------- vs who lead during a handoff
+
+test("who lead: pending handoff keeps the old lead as sole winner, the confirmed successor takes over, an unconfirmed one never conflicts, unlinked leads still CONFLICT", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    const first = await coordinator(w).triggerSelfHandoff(old, { trigger: "auto-250" });
+    // pending: both live, linked by vs.handoff-from
+    let r = w.who("lead");
+    assert.equal(r.ids.length, 2);
+    assert.equal(r.conflict, false, "a linked successor is not a duplicate");
+    assert.equal(r.winner, "rn-lead1");
+    assert.deepEqual(r.pending, [first.successorId]);
+    // never confirms: still exactly one winner, no conflict
+    r = w.who("lead");
+    assert.equal(r.winner, "rn-lead1");
+    // confirmed: old retires, the successor is the sole winner
+    await coordinator(w).confirmTakeover(first.successorId);
+    r = w.who("lead");
+    assert.deepEqual([r.winner, r.conflict, r.pending.length], [first.successorId, false, 0]);
+  } finally { w.cleanup(); }
+  const u = setup();
+  try {
+    lead(u);
+    u.seed({ id: "rn-lead9", title: "Lead 9", labels: { role: "lead", lead: "feat", ord: "2" } });
+    const r = u.who("lead");
+    assert.equal(r.conflict, true, "two live leads with no handoff link are a real CONFLICT");
+    // a link to an agent that is not a live lead does not excuse a duplicate either
+    u.agents.get("rn-lead9").labels["vs.handoff-from"] = "rn-gone";
+    assert.equal(u.who("lead").conflict, true);
+  } finally { u.cleanup(); }
 });

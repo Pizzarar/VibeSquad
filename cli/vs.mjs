@@ -1114,15 +1114,24 @@ async function commandWho(flags) {
     }
     const winners = [];
     const conflictRows = [];
+    const handoffPending = new Map(); // winner id -> successor short name
+    const shortTitle = (t) => String(t).split(" · ")[0].trim() || String(t);
     for (const group of groups.values()) {
-      const { winner, conflict } = resolveLeadWinner(group.map((m) => m.agent));
+      const { winner, conflict, pending } = resolveLeadWinner(group.map((m) => m.agent));
       if (conflict) conflictRows.push(...group);
-      else if (winner) winners.push(winner);
+      else if (winner) {
+        winners.push(winner);
+        if (pending.length) {
+          const succ = group.find((m) => m.agent.id === pending[pending.length - 1]);
+          handoffPending.set(winner.id, succ ? shortTitle(succ.title) : pending[0]);
+        }
+      }
     }
     const conflictIds = new Set(conflictRows.map((m) => m.agent.id));
-    const entries = conflictIds.size
+    const entries = (conflictIds.size
       ? matched.filter((m) => conflictIds.has(m.id))
-      : matched.filter((m) => winners.some((w) => w.id === m.id));
+      : matched.filter((m) => winners.some((w) => w.id === m.id))
+    ).map((m) => (handoffPending.has(m.id) ? { ...m, handoffPending: handoffPending.get(m.id), line: `${m.line} · handoff pending → ${handoffPending.get(m.id)}` } : m));
     const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
     const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
