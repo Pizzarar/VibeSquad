@@ -1731,8 +1731,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // failover. An explicit caller model/thinking wins; missing/unknown stakes = normal = profile unchanged.
         {
           // `config` is the caller's original request (`next` already carries the profile override), so this reads what the caller asked for.
-          const callerModel = String(config.model ?? "").trim();
-          const callerEffort = String(config.thinkingOptionId ?? "").trim();
+          // spawn_worker pre-fills model/thinking from the profile and names them in `vs.profile-derived`; those are not caller-explicit.
+          const derivedFields = String(reqLabels["vs.profile-derived"] ?? "").split(",").map((f) => f.trim());
+          const callerModel = derivedFields.includes("model") ? "" : String(config.model ?? "").trim();
+          const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
           const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
           const stakesOn = normalizeStakes(stakesRaw) !== "normal";
           // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so they are not explicit here
