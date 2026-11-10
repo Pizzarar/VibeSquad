@@ -584,6 +584,20 @@ export function createLeadHandoffCoordinator(deps = {}) {
     });
   };
 
+  // A repeat of a finished/in-flight handoff returns the earlier result. If that handoff left the old lead pending (auto-250) and this
+  // request wants it retired now (handoff_lead), confirm the takeover here instead of returning with two live leads.
+  async function settleDeduped(slotKey, prev, retireNow) {
+    let out = { ...(prev ?? {}), triggered: false, deduped: true, reason: "already-handed-off" };
+    if (retireNow && prev?.pendingConfirmation && prev.successorId) {
+      const c = await confirmTakeover(prev.successorId);
+      if (c.confirmed || c.alreadyConfirmed) {
+        out = { ...out, pendingConfirmation: false, retiredImmediately: true };
+        completedBySlot.set(slotKey, { ...prev, pendingConfirmation: false, retiredImmediately: true });
+      }
+    }
+    return out;
+  }
+
   async function spawnSuccessor({
     oldLead,
     trigger,
@@ -596,7 +610,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     // A stale predecessor can't be steered or asked to write Judgment: retire it now. Its packet is never synthesized over.
     const stalePred = isStalePredecessor(oldLead);
-    const retireNow = retireImmediately || stalePred;
+    let retireNow = retireImmediately || stalePred;
 
     const timer = createSpawnTimer("lead-handoff");
     if (typeof deps.connectMs === "number") timer.add("connect", deps.connectMs);
@@ -604,8 +618,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const rawOldOrd = parseLeadOrd(oldLead);
     // Idempotent over retries and server restarts: a live lead already stamped vs.handoff-from=<this lead> is the successor of an
     // earlier attempt (createAgent timed out but the agent exists, or the in-memory slots were lost). Adopt it, never mint a second.
-    const adoptable = trigger === "hard-300" ? null : allAgents.map((x) => x?.agent ?? x).find((a) => a?.id && a.id !== oldLead?.id && !a.archivedAt && !a.internal
+    const adoptable = allAgents.map((x) => x?.agent ?? x).find((a) => a?.id && a.id !== oldLead?.id && !a.archivedAt && !a.internal
       && a.labels?.["vs.handoff-from"] === oldLead?.id && effectiveAgentRole(a) === "lead" && !isRetiredAgent(a)) ?? null;
+    if (adoptable && trigger === "hard-300") retireNow = true; // forced: the pending successor takes over now, the old lead does not run on
     const maxOtherOrd = highestLaneLeadOrd(adoptable ? allAgents.filter((a) => (a?.agent ?? a) !== adoptable) : allAgents, laneId, oldLead?.id);
     const hasExplicitOldOrd = Boolean(String(oldLead?.labels?.ord ?? "").trim()) || /(?:\bord|★\s*[A-Za-z]{2,5})(\d+)\b/i.test(String(oldLead?.title ?? ""));
     const oldOrd = !hasExplicitOldOrd && maxOtherOrd > rawOldOrd ? maxOtherOrd : rawOldOrd;
@@ -615,12 +630,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${oldOrd}`;
     const canDedupeSlot = trigger !== "hard-300";
     if (canDedupeSlot && completedBySlot.has(slotKey)) {
-      const prev = completedBySlot.get(slotKey);
-      return { ...prev, triggered: false, deduped: true, reason: "already-handed-off" };
+      return settleDeduped(slotKey, completedBySlot.get(slotKey), retireImmediately);
     }
     if (canDedupeSlot && inFlightBySlot.has(slotKey)) {
-      const prev = await inFlightBySlot.get(slotKey);
-      return { ...prev, triggered: false, deduped: true, reason: "already-handed-off" };
+      return settleDeduped(slotKey, await inFlightBySlot.get(slotKey), retireImmediately);
     }
 
     const runSpawn = async () => {
@@ -844,9 +857,13 @@ export function createLeadHandoffCoordinator(deps = {}) {
       return { confirmed: false, alreadyConfirmed: true, successorId: id };
     }
 
+    const succAgent = await getAgent(id);
+    if (succAgent && (effectiveAgentRole(succAgent) !== "lead" || isRetiredAgent(succAgent))) {
+      return { confirmed: false, error: "successor is not a live lead", successorId: id };
+    }
     let rec = pendingTakeover.get(id) || null;
     if (!rec) {
-      const succ = await getAgent(id);
+      const succ = succAgent;
       const fromId = succ?.labels?.["vs.handoff-from"];
       if (fromId) {
         const old = await getAgent(fromId);
@@ -901,12 +918,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const slotPrefix = deps.sharedSlots ? `${rootDir}:` : "";
     const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${parseLeadOrd(lead)}`;
     if (selfHandedOff.has(lead.id) || completedBySlot.has(slotKey)) {
-      const prev = completedBySlot.get(slotKey);
-      return { ...(prev ?? {}), ok: true, stage: "self", triggered: false, deduped: true, reason: "already-handed-off" };
+      return { ok: true, stage: "self", ...(await settleDeduped(slotKey, completedBySlot.get(slotKey), Boolean(options.retireImmediately))) };
     }
     if (inFlightBySlot.has(slotKey)) {
-      const prev = await inFlightBySlot.get(slotKey);
-      return { ...(prev ?? {}), ok: true, stage: "self", triggered: false, deduped: true, reason: "already-handed-off" };
+      return { ok: true, stage: "self", ...(await settleDeduped(slotKey, await inFlightBySlot.get(slotKey), Boolean(options.retireImmediately))) };
     }
     selfHandedOff.add(lead.id);
     let res;

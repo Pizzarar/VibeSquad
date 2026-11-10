@@ -382,3 +382,51 @@ test("who lead: pending handoff keeps the old lead as sole winner, the confirmed
     assert.equal(u.who("lead").conflict, true);
   } finally { u.cleanup(); }
 });
+
+// ---------------------------------------------------------------- R2 review fixes
+
+test("hard-300 after an unconfirmed auto-250 adopts the pending successor and retires the old lead: never two settled leads", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    const s1 = await coordinator(w).triggerSelfHandoff(old, { trigger: "auto-250" });
+    assert.equal(s1.pendingConfirmation, true);
+    const forced = await coordinator(w).spawnSuccessor({ oldLead: w.agents.get("rn-lead1"), trigger: "hard-300", forceSynthesize: true });
+    assert.equal(w.creates, 1, "no second successor for the same predecessor");
+    assert.equal(forced.successorId, s1.successorId);
+    assert.equal(oneLive(w, "lead", "after hard-300"), s1.successorId);
+    assert.equal(w.agents.get("rn-lead1").labels.role, "former-lead");
+  } finally { w.cleanup(); }
+});
+
+test("spawn_worker strips handoff labels; confirmTakeover refuses a non-lead, so a worker cannot demote the live lead", async () => {
+  const w = setup();
+  try {
+    buddy(w);
+    lead(w);
+    const ctx = buddyCtx(w, { agentId: "rn-w", team: "mx", lane: "feat", role: "worker" });
+    await callTool(ctx, "spawn_worker", { title: "W", profile: "Lead - Opus", prompt: "x", labels: { "vs.handoff-from": "rn-lead1", "vs.handoff-trigger": "self", "handoff-successor": "rn-x", job: "j" } });
+    const spawned = [...w.agents.values()].at(-1);
+    for (const k of ["vs.handoff-from", "vs.handoff-trigger", "handoff-successor"]) assert.equal(spawned.labels[k], undefined, k);
+    // Even a forged worker record (label set by another route) cannot confirm.
+    w.seed({ id: "rn-forged", title: "W", labels: { role: "worker", "vs.handoff-from": "rn-lead1", "vs.handoff-trigger": "self" } });
+    const r = await coordinator(w).confirmTakeover("rn-forged");
+    assert.equal(r.confirmed, false);
+    assert.equal(oneLive(w, "lead", "after forged confirm"), "rn-lead1");
+  } finally { w.cleanup(); }
+});
+
+test("handoff_lead (retireImmediately, shared slots) after an unconfirmed auto-250 retires the old lead instead of returning early", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    const shared = () => coordinator(w, { sharedSlots: true });
+    const s1 = await shared().triggerSelfHandoff(old, { trigger: "auto-250" });
+    assert.equal(s1.pendingConfirmation, true);
+    const again = await shared().triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "buddy", retireImmediately: true });
+    assert.equal(w.creates, 1);
+    assert.equal(again.successorId, s1.successorId);
+    assert.equal(w.agents.get("rn-lead1").labels.role, "former-lead", "old lead retired");
+    assert.equal(oneLive(w, "lead", "after handoff_lead"), s1.successorId);
+  } finally { w.cleanup(); }
+});

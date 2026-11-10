@@ -387,3 +387,19 @@ test("(6) createPin: pinning a live same-name team twice returns it, never a -2 
   assert.deepEqual(teams[0].lanes.map((l) => l.id), ["vibesquad", "sound-design"]);
   assert.equal(briefs, 1, "the brief is written once");
 });
+
+test("(7) createQuickBugsPin twice returns the live Bugs lane, never bugs-2", async () => {
+  let teams = [{ id: "vibesquad", name: "VibeSquad", color: "#b07cf5", paths: [], lanes: [{ id: "vibesquad", name: "VibeSquad", state: "pinned" }] }];
+  const deps = {
+    getTeams: () => teams,
+    saveTeams: async (updater) => { teams = updater(teams); },
+    fetch: async () => new Response(JSON.stringify({ ok: true, content: "", revision: "r1" }), { status: 200 }),
+  };
+  const a = await pinActionsMod.createQuickBugsPin("vibesquad", deps);
+  const b = await pinActionsMod.createQuickBugsPin("vibesquad", deps);
+  assert.equal(a.lane.id, "bugs");
+  assert.equal(b.lane.id, "bugs");
+  assert.deepEqual(teams[0].lanes.map((l) => l.id), ["vibesquad", "bugs"]);
+  assert.equal(teams[0].quickLanes.bugs, "bugs");
+  assert.equal(teams[0].lanes[1].standing, true);
+});
