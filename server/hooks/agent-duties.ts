@@ -1734,14 +1734,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const callerEffort = String(config.thinkingOptionId ?? "").trim();
           const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
           const stakesOn = normalizeStakes(stakesRaw) !== "normal";
-          const explicitModel = stakesOn && Boolean(callerModel || callerEffort);
+          // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so they are not explicit here
+          // and the failover provider's rung applies.
+          const sameProvider = normalizeProviderFamily(String(next.provider ?? provider)) === normalizeProviderFamily(provider);
+          const explicitModel = stakesOn && sameProvider && Boolean(callerModel || callerEffort);
           const route = resolveStakesRoute(String(next.provider ?? provider), matchedProfile, stakesRaw, explicitModel);
           if (explicitModel) {
             // An explicit model/thinking beats the ladder AND an explicit profile's defaults; enforceProfileAfterSpawn must not revert it.
-            // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so leave the failover profile.
-            const sameProvider = normalizeProviderFamily(String(next.provider ?? provider)) === normalizeProviderFamily(provider);
-            if (sameProvider && callerModel) next.model = callerModel;
-            if (sameProvider && callerEffort) next.thinkingOptionId = callerEffort;
+            if (callerModel) next.model = callerModel;
+            if (callerEffort) next.thinkingOptionId = callerEffort;
             changed = true;
             const at = Date.now();
             ladderSpawns.set(`${title}::${cwd}`, at);

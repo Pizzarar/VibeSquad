@@ -196,9 +196,13 @@ test(
     const applied = [];
     const h = harness({ applyAgentSettings: async (id, patch) => applied.push({ id, patch }) });
     try {
-      const labels = LABELS({ stakes: "tierA-security" });
-      const out = await h.spawn({ provider: "claude", title: "Worker" }, { labels });
+      // Label-less before-hook spawn (stakes via env only, no profile), as with MCP create_agent: the profile arrives by label after creation.
+      const out = await h.spawn(
+        { provider: "claude", title: "Worker" },
+        { labels: { team: "vibesquad", lane: "vibesquad", role: "worker" }, env: { VS_STAKES: "tierA-security" } },
+      );
       assert.equal(out.config.model, "claude-fable-5-1");
+      const labels = LABELS({ stakes: "tierA-security" });
       const agent = {
         id: "w-1",
         title: "Worker",
@@ -212,6 +216,25 @@ test(
       };
       await h.onCreated({ agent }, { paseo: { getAgent: async () => agent } });
       assert.deepEqual(applied, [], "ladder model/effort must not be reverted to the profile's");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "hook: capped claude + explicit claude model + tierA -> failover provider's rung, reason=ladder",
+  withEnv(async ({ vsHome }) => {
+    const h = harness({ cappedProviders: { claude: { capped: true } } });
+    try {
+      const out = await h.spawn(
+        { provider: "claude", model: "claude-haiku-5-5", thinkingOptionId: "low" },
+        { labels: LABELS({ stakes: "tierA-invariant" }) },
+      );
+      assert.equal(out.config.provider, "antigravity-cli");
+      assert.equal(out.config.model, "gemini-4-argon");
+      assert.equal(out.config.thinkingOptionId, "high");
+      assert.match(routeMetrics(vsHome)[0], /model=gemini-4-argon effort=high reason=ladder/);
     } finally {
       h.stop?.();
     }
