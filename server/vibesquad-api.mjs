@@ -47,6 +47,8 @@ import {
 } from "./brainstorm.mjs";
 import {
   addInboxCards,
+  attachInboxMedia,
+  INBOX_MEDIA_MAX_BYTES,
   getInboxPath,
   listInboxCards,
   readInboxCards,
@@ -975,6 +977,41 @@ async function handleInboxSend(req, res, rootDir) {
   }
 }
 
+function readRawBody(req, limit) {
+  return new Promise((ok, fail) => {
+    const chunks = [];
+    let size = 0;
+    let done = false;
+    req.on("data", (c) => {
+      if (done) return;
+      size += c.length;
+      if (size > limit) {
+        done = true;
+        fail(Object.assign(new Error("attachment too large (8 MB max)"), { status: 413 }));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => !done && ok(Buffer.concat(chunks)));
+    req.on("error", fail);
+  });
+}
+
+async function handleInboxAttachment(req, res) {
+  if (req.method !== "POST") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  try {
+    const mime = String(req.headers["content-type"] || "");
+    const cardId = new URL(req.url, "http://x").searchParams.get("cardId") || "";
+    const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
+    return sendJson(res, 200, attachInboxMedia({ cardId, mime, bytes }));
+  } catch (e) {
+    return sendJson(res, e?.status === 413 ? 413 : 400, { ok: false, error: String(e?.message ?? e) });
+  }
+}
+
 function handlePushVapidPublicKey(req, res) {
   if (req.method !== "GET") {
     res.statusCode = 405;
@@ -1489,7 +1526,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
       return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
-    const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : MAX_BODY_BYTES;
+    const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : path === "/__vibesquad/inbox/attachment" ? INBOX_MEDIA_MAX_BYTES : MAX_BODY_BYTES;
     if (Number(req.headers["content-length"] ?? 0) > bodyLimit) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
     if (path === "/api/teams") return handleTeams(req, res, rootDir);
@@ -1555,6 +1592,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleInboxTriage(req, res, rootDir);
       case "/__vibesquad/inbox/send":
         return handleInboxSend(req, res, rootDir);
+      case "/__vibesquad/inbox/attachment": // owner-only (non-GET gate above): raw image body, ?cardId=
+        return handleInboxAttachment(req, res);
       case "/__vibesquad/push/vapid-public-key":
         return handlePushVapidPublicKey(req, res);
       case "/__vibesquad/push/subscribe":

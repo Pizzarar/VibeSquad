@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import os from "node:os";
 import { join, resolve } from "node:path";
@@ -585,6 +586,17 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       }
 
       target.text = bullets.map((b) => `- ${b}`).join("\n");
+      // Screenshots follow the merge: move each source's files into the target's media dir and re-link them.
+      for (const src of sources) {
+        for (const att of Array.isArray(src.attachments) ? src.attachments : []) {
+          const moved = moveInboxMedia(att, targetId, baseHome);
+          if (!moved) continue;
+          target.attachments = [...(Array.isArray(target.attachments) ? target.attachments : []), moved];
+          target.text = target.text.includes(att.path) ? target.text.split(att.path).join(moved.path) : `${target.text}\n- Screenshot: ${moved.path}`;
+        }
+        delete src.attachments;
+        removeInboxMedia(src.id, baseHome);
+      }
       target.mergedFromIds = [...mergedFrom];
       if (sourceIds.includes(target.relatedCardId)) {
         target.relatedCardId = null;
@@ -667,6 +679,7 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
         }
       }
       card.updatedAt = now;
+      if (card.status === "archived") removeInboxMedia(cardId, baseHome);
 
       result = { action: "update", card };
       return cards;
@@ -680,10 +693,12 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       if (action === "archive" || body.archive === true) {
         cards[idx].status = "archived";
         cards[idx].updatedAt = now;
+        removeInboxMedia(cardId, baseHome);
         result = { action, card: cards[idx] };
         return cards;
       }
       const [removed] = cards.splice(idx, 1);
+      removeInboxMedia(cardId, baseHome);
       result = { action: "delete", card: removed };
       return cards;
     }
@@ -787,4 +802,92 @@ export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
   } finally {
     delivering.delete(cardId);
   }
+}
+
+export const INBOX_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+export const INBOX_MEDIA_MAX_PER_CARD = 4;
+const MEDIA_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+/** The bytes must actually be the image type the client claims (no relying on the Content-Type header alone). */
+function sniffImage(b) {
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length > 12 && b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return "image/webp";
+  return "";
+}
+
+/** Move one saved attachment into another card's media dir (merge); returns the re-linked attachment or null. */
+function moveInboxMedia(att, toCardId, baseHome) {
+  const from = String(att?.path || "");
+  const root = getInboxMediaDir(baseHome);
+  if (!from.startsWith(root) || !existsSync(from)) return null;
+  const dir = join(root, toCardId);
+  mkdirSync(dir, { recursive: true });
+  const to = join(dir, `shot-m${randomBytes(4).toString("hex")}.${from.split(".").pop()}`);
+  renameSync(from, to);
+  return { ...att, path: to };
+}
+
+/** Remove a card's saved media (called when the card is archived or deleted). */
+export function removeInboxMedia(cardId, baseHome) {
+  if (!/^idea-\d+$/.test(String(cardId))) return;
+  rmSync(join(getInboxMediaDir(baseHome), String(cardId)), { recursive: true, force: true });
+}
+
+export function getInboxMediaDir(baseHome) {
+  const home = baseHome || process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
+  return join(home, "inbox-media");
+}
+
+/**
+ * E3: save one image for a parked card under inbox-media/<cardId>/ (server-generated filename), record it in the
+ * card's `attachments` and link the absolute path in the card text so workers/Buddies can read it.
+ * body: { cardId, mime, bytes: Buffer, baseHome }.
+ */
+export function attachInboxMedia(body = {}) {
+  const baseHome = body.baseHome;
+  const cardId = String(body.cardId || "");
+  if (!/^idea-\d+$/.test(cardId)) throw new Error("invalid cardId");
+  const mime = String(body.mime || "").split(";")[0].trim().toLowerCase();
+  const ext = MEDIA_TYPES[mime];
+  if (!ext) throw new Error("image types only (png, jpeg, webp)");
+  const bytes = body.bytes;
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new Error("empty attachment");
+  if (sniffImage(bytes) !== mime) throw new Error("file content is not the declared image type");
+  if (bytes.length > INBOX_MEDIA_MAX_BYTES) throw Object.assign(new Error("attachment too large (8 MB max)"), { status: 413 });
+  const card = readInboxCards(baseHome).find((c) => c.id === cardId);
+  if (!card) throw new Error(`Inbox card not found: ${cardId}`);
+  if (card.deliveredAt) throw new Error("card already delivered");
+  if ((card.attachments?.length ?? 0) >= INBOX_MEDIA_MAX_PER_CARD) throw new Error(`at most ${INBOX_MEDIA_MAX_PER_CARD} attachments per card`);
+  const dir = join(getInboxMediaDir(baseHome), cardId);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, `shot-${randomBytes(6).toString("hex")}.${ext}`);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, bytes);
+  renameSync(tmp, file);
+  const att = { path: file, mime, bytes: bytes.length };
+  let updated = card;
+  try {
+    // Re-check under the lock: the card may have been delivered, archived, deleted or filled while we wrote.
+    updateInboxCardsSync(baseHome, (current) => {
+      const t = current.find((c) => c.id === cardId);
+      if (!t) throw new Error(`Inbox card not found: ${cardId}`);
+      if (t.deliveredAt) throw new Error("card already delivered");
+      if (t.status === "archived") throw new Error("card is archived");
+      if ((t.attachments?.length ?? 0) >= INBOX_MEDIA_MAX_PER_CARD) throw new Error(`at most ${INBOX_MEDIA_MAX_PER_CARD} attachments per card`);
+      t.attachments = [...(Array.isArray(t.attachments) ? t.attachments : []), att];
+      t.text = `${t.text}
+
+Screenshot: ${file}`;
+      t.updatedAt = new Date().toISOString();
+      updated = t;
+      return current;
+    });
+  } catch (e) {
+    rmSync(file, { force: true });
+    try {
+      rmdirSync(dir); // only succeeds when empty
+    } catch {}
+    throw e;
+  }
+  return { ok: true, attachment: att, card: updated };
 }
