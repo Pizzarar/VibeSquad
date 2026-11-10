@@ -18,6 +18,7 @@ VibeSquad is a **local-first** tool. Its default attack surface is minimal:
 ## Known Scope Limits
 
 - **Multi-user PCs:** the local token stops other Windows users and other local apps from changing VibeSquad, but they can still **read** through the loopback API (teams, logs, settings, inbox). Anyone who can read your `~/.vibesquad` (an administrator, or malware running as you) has full access. Browsers send cookies to every port on `127.0.0.1`/`localhost`, so a hostile server another user runs on a loopback port could capture your `vs_local` cookie if you browse to it. Delete `~/.vibesquad/local-token` and restart the server to rotate it.
+- **Accepted limit (same OS user):** agents run as the same OS user as the owner. An agent that deliberately reads `~/.vibesquad/local-token` is therefore treated as the owner. This is accepted for 0.3. The real fix (a separate OS account or sandbox per agent) is post-0.3.
 - Rotating the token needs a server restart, and clients re-read the file on their next request.
 
 - The Paseo daemon runs on localhost with its own access controls (see Paseo documentation).
