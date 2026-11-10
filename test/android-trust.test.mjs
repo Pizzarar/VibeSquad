@@ -90,7 +90,7 @@ describe("native pin bridge (web side)", () => {
     assert.ok(src.includes("pairRedeemUrl(hostN, codeN, undefined, location.origin)"));
     assert.match(src, /sessionStorage\.setItem\(OPENED_KEY, "1"\);[\s\S]*?location\.href = pairRedeemUrl/);
     assert.match(src, /\/unpaired\/i\.test\([^)]*\)[\s\S]*?clearSession\(\)/);
-    assert.doesNotMatch(src, /#paired|flushCookies/);
+    assert.doesNotMatch(src, /#paired/);
   });
 
   test("native probe asks /api/auth/status with the WebView cookie, treats paired:false as unpaired, and flushes cookies on a timer", () => {
@@ -157,6 +157,25 @@ describe("Kotlin trust guards and build wiring", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /t\.pin\(hostN, fpN!\)/);
     assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN)"));
-    assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 2);
+    assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 3);
+  });
+
+  test("B8: pairWith flushes cookies (500ms cap) before redeeming; B9: forget clears the host vs_device cookie", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.match(src, /Promise\.race\(\[trust\(\)\?\.flush\(\)[\s\S]*?500\)\)\]\);\s*location\.href = pairRedeemUrl/);
+    assert.doesNotMatch(src, /flushCookies/);
+    assert.match(src, /clearSession\(\);\s*setError\(remoteError\("unknown", "Your PC no longer/);
+    assert.match(src, /trust\(\)\?\.forget\(h\)\.catch\(\(\) => \{\}\);\s*clearSession\(\);\s*setError/);
+    const kt = read("src-tauri/android/VsTrust.kt");
+    const forget = kt.slice(kt.indexOf("fun forget("), kt.indexOf("fun probe("));
+    assert.match(forget, /remove\("ca:\$key"\)/);
+    assert.match(forget, /setCookie\("\$base\/", "vs_device=; Max-Age=0/);
+  });
+
+  test("B3: a saved PC gets a Reconnect button that probes then opens the server and shows errors", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.match(src, /data-testid="reconnect-pc"/);
+    assert.match(src, /Reconnect to \{saved\.host\}/);
+    assert.match(src, /const reconnect = [\s\S]*?probe\(h\)\.then\(\s*\(\) => openServer\(h\),\s*\(e\) => \{\s*onReopenError\(e, h\)/);
   });
 });

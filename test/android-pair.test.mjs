@@ -7,6 +7,7 @@ import { describe, test } from "node:test";
 import {
   clearSession,
   isAndroidUserAgent,
+  mapRemoteError,
   needsPairing,
   normalizeHost,
   pairRedeemUrl,
@@ -356,5 +357,21 @@ describe("APK entry survives SameSite=Strict (vs_device is withheld on a cross-s
     assert.match(auth, /\$\{DEVICE_COOKIE\}=\$\{token\}; HttpOnly; Secure; SameSite=Strict/);
     const serve = read("server/serve.mjs");
     assert.ok(serve.indexOf('"/__vibesquad/enter"') < serve.indexOf("sendUnpaired(req, res)"), "enter must be served before the auth gate");
+  });
+});
+
+describe("mapRemoteError (B4, B7)", () => {
+  test("TLS pin failures say the certificate changed", () => {
+    for (const m of ["Trust anchor for certification path not found.", "javax.net.ssl.SSLHandshakeException: x", "net::ERR_CERT_AUTHORITY_INVALID", "CERT_AUTHORITY_INVALID"]) {
+      assert.equal(mapRemoteError(new Error(m)).message, "This PC's certificate changed. Scan a new QR on the PC to pair again.");
+    }
+  });
+  test("JVM connect / DNS / timeout messages are plain language", () => {
+    assert.equal(mapRemoteError(new Error("failed to connect to /192.0.2.1 (port 4180) after 5000ms")).kind, "unreachable");
+    assert.equal(mapRemoteError(new Error("Unable to resolve host \"pc.example\"")).kind, "unreachable");
+    assert.equal(mapRemoteError(new Error("java.net.SocketTimeoutException: Read timed out")).kind, "timeout");
+    assert.equal(mapRemoteError(new Error("SocketTimeout")).kind, "timeout");
+    assert.equal(mapRemoteError(new Error("connect timeout")).kind, "timeout");
+    assert.equal(mapRemoteError(new Error("boom")).kind, "unknown");
   });
 });

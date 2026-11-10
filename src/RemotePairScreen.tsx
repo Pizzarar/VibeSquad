@@ -123,6 +123,9 @@ export function RemotePairScreen() {
     } catch {
       /* no sessionStorage */
     }
+    // Best effort: persist cookies now, but never hold the navigation more than ~500ms.
+    // Shared client only: a second one would overwrite native.onmessage.
+    await Promise.race([trust()?.flush().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
     location.href = pairRedeemUrl(hostN, codeN, undefined, location.origin);
   }, []);
 
@@ -144,6 +147,28 @@ export function RemotePairScreen() {
     [],
   );
 
+  const onReopenError = (e: unknown, h: string) => {
+    // The PC answers but no longer knows this phone: drop the stale session instead of reopening into a 401 page.
+    if (/unpaired/i.test(String((e as Error)?.message))) {
+      void trust()?.forget(h).catch(() => {});
+      clearSession();
+      setError(remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."));
+    } else setError(mapRemoteError(e));
+  };
+
+  // Manual retry for the saved PC (offline at launch, Back from the PC's UI, a transient auth error).
+  const reconnect = (h: string) => {
+    setBusy(true);
+    setError(null);
+    probe(h).then(
+      () => openServer(h),
+      (e) => {
+        onReopenError(e, h);
+        setBusy(false);
+      },
+    );
+  };
+
   // Reopen the saved server. A dead one drops back to this form (with Forget) instead of a blank page.
   useEffect(() => {
     if (!saved || !reopening) return;
@@ -152,11 +177,7 @@ export function RemotePairScreen() {
       () => live && openServer(saved.host),
       (e) => {
         if (!live) return;
-        // The PC answers but no longer knows this phone: drop the stale session instead of reopening into a 401 page.
-        if (/unpaired/i.test(String((e as Error)?.message))) {
-          clearSession();
-          setError(remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."));
-        } else setError(mapRemoteError(e));
+        onReopenError(e, saved.host);
         setReopening(false);
       },
     );
@@ -299,6 +320,11 @@ export function RemotePairScreen() {
         <button type="submit" className="btn ok remote-pair-go" disabled={busy} data-testid="pair-go">
           {busy ? "Connecting…" : "Pair"}
         </button>
+        {saved && (
+          <button type="button" className="btn ok remote-pair-go" data-testid="reconnect-pc" disabled={busy} onClick={() => reconnect(saved.host)}>
+            Reconnect to {saved.host}
+          </button>
+        )}
         {saved && (
           <button
             type="button"
