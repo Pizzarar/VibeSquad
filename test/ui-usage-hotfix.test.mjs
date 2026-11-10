@@ -44,7 +44,7 @@ test("usage: the per-cwd unit name is memoised (attributeImplementer ran it unit
 test("art hooks: module-scope caches give a synchronous initial state, and the sheet loads in parallel with faces.json", () => {
   const b = src("useBotFace.ts");
   assert.match(b, /const loadedImages = new Set<string>\(\)/);
-  assert.match(b, /useState\(\(\) => !!url && loadedImages\.has\(url\)\)/);
+  assert.match(b, /return !!url && (loadedImages.has(url) || okUrl === url)/); // derived per url: a theme switch never reuses the previous theme's ok
   assert.match(b, /const jsonModels = new Map<string, unknown>\(\)/);
   assert.match(b, /useState<T \| null>\(\(\) => \(jsonModels\.get\(url\)/);
   assert.match(b, /useFacesModel = \(\): FacesModel \| null => useJsonModel\(/);

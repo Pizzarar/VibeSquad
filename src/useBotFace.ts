@@ -107,27 +107,21 @@ export function usePrefersReducedMotion(): boolean {
 /** True once an image at `url` loads (per theme); resets to false on error so the caller falls back. A null url is "absent". */
 const loadedImages = new Set<string>(); // module scope: a remount (or a second panel) starts from "loaded", not blank
 export function useImageOk(url: string | null): boolean {
-  const [ok, setOk] = useState(() => !!url && loadedImages.has(url));
+  // The state names the url that loaded, so the answer is derived per render: a theme switch (new url) is false until that url loads, never the previous theme's "ok".
+  const [okUrl, setOkUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!url) {
-      setOk(false);
-      return;
-    }
-    if (loadedImages.has(url)) {
-      setOk(true);
-      return;
-    }
+    if (!url || loadedImages.has(url)) return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const probe = (attempt: number) => {
       const img = new Image();
       img.onload = () => {
         loadedImages.add(url);
-        if (alive) setOk(true);
+        if (alive) setOkUrl(url);
       };
       img.onerror = () => {
         if (!alive) return;
-        setOk(false);
+        setOkUrl(null);
         const d = imageRetryDelay(attempt); // one failed probe (busy runtime) must not hide art that exists
         if (d != null) timer = setTimeout(() => alive && probe(attempt + 1), d);
       };
@@ -139,7 +133,7 @@ export function useImageOk(url: string | null): boolean {
       clearTimeout(timer);
     };
   }, [url]);
-  return ok;
+  return !!url && (loadedImages.has(url) || okUrl === url);
 }
 
 export const FACE_URL = (bot: FaceBot, theme: Theme) => `/office/face-${bot}-${theme}.png`;
