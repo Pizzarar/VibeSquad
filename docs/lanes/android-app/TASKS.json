@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-10T01:11:42.134Z",
+  "updatedAt": "2026-11-10T02:24:24.673Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -217,8 +217,8 @@
       "id": "unit-and-a1-retest",
       "goal": "0.3 A1 on-device retest by Aub (docs/lanes/android-app/RETEST_A1.md); confirm audit B5/B6/B10 on device",
       "files": [],
-      "doneCheck": "Aub PASS",
-      "status": "blocked"
+      "doneCheck": "Aub PASS full RETEST_A1.md (7fb55ab, APK aac22b2d)",
+      "status": "done"
     }
   ]
 }
