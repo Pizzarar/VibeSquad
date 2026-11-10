@@ -331,14 +331,16 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
     assert.equal(r300a.triggered, true);
     assert.equal(r300a.stage, "hard-300");
     assert.equal(r300a.trigger, "hard-300");
-    assert.equal(createdAgents.length, 2);
+    // The unconfirmed auto-250 successor is adopted (and the old lead retired now), never joined by a second one.
+    assert.equal(createdAgents.length, 1);
+    assert.equal(r300a.successorId, r250IdleA.successorId);
 
     // Repeated evaluation at 300k / 350k -> does NOT fire again
     const r300b = await coordinator.evaluateLead(lead, { usedTokens: 300_000 });
     const r350 = await coordinator.evaluateLead(lead, { usedTokens: 350_000 });
     assert.equal(r300b.triggered, false);
     assert.equal(r350.triggered, false);
-    assert.equal(createdAgents.length, 2);
+    assert.equal(createdAgents.length, 1);
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;

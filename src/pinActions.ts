@@ -507,6 +507,43 @@ export async function createPin(squadId: string, name: string, idea: string, dep
       (l.state === "done" || l.state === "removed") &&
       (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
   );
+  // A live team with this name/id is the pin: a double-click or a re-pin after the first save must not mint `<slug>-2`.
+  // Standing / quick-lane callers get the same lane, with their flags set on it if it lacks them.
+  const liveSame = (squad.lanes as PinLane[]).find(
+    (l) => l.state !== "done" && l.state !== "removed" && (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
+  );
+  if (liveSame) {
+    let outSquad = squad;
+    let outLane = liveSame;
+    if ((deps.standing && !liveSame.standing) || (deps.quickLane && squad.quickLanes?.[deps.quickLane] !== liveSame.id)) {
+      await (deps.saveTeams ?? saveTeams)((cur) =>
+        (cur.map((t) => {
+          if (t.id !== squadId) return t;
+          const next = {
+            ...t,
+            lanes: t.lanes.map((l) => (l.id === liveSame.id && deps.standing ? { ...l, standing: true } : l)),
+            ...(deps.quickLane ? { quickLanes: { ...t.quickLanes, [deps.quickLane]: liveSame.id } } : {}),
+          };
+          outSquad = next;
+          outLane = (next.lanes as PinLane[]).find((l) => l.id === liveSame.id) ?? liveSame;
+          return next;
+        })),
+      );
+    }
+    return {
+      squad: outSquad,
+      lane: outLane,
+      state: "pinned",
+      order: (outSquad.lanes as PinLane[]).findIndex((l) => l.id === liveSame.id),
+      brainstorm: null,
+      lead: null,
+      workers: [],
+      needsYou: 0,
+      running: 0,
+      contextUsed: 0,
+      topicBrainstorms: [],
+    };
+  }
   const doFetch = deps.fetch ?? fetch;
   if (reopenTarget) {
     const code = reopenTarget.code || laneCodesForTeam({ lanes: squad.lanes })[reopenTarget.id];

@@ -319,7 +319,11 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const envAgentId = recordWins
     ? (process.env.VS_AGENT_ID || process.env.PASEO_AGENT_ID)
     : (process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID);
-  const agentId = String((recordWins ? envAgentId : (flags.agent ?? envAgentId)) ?? "").trim();
+  // A caller that is a runner agent with a record is who its labels say: --agent/--role/--ord are claims, never overrides
+  // (a worker passing `--role lead` or `--agent <lead>` must not pass a lead gate). --lane/--team still aim the verb.
+  const envId = String(envAgentId ?? "").trim();
+  const callerRecord = envId && isRunnerId(envId) ? readRunnerAgentSync(envId) : null;
+  const agentId = String((recordWins || callerRecord ? envAgentId : (flags.agent ?? envAgentId)) ?? "").trim();
 
   // rn- ids belong to the runner: read its log (labels/role/lane).
   let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : null;
@@ -330,6 +334,8 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
 
   const pick = (flagName, envName) => {
     // recordWins (handoff_lead, spawn): a runner record's labels are the caller's identity; CLI flags never override it and VS_* env only fills in when there is no record.
+    const claim = flagName === "role" || flagName === "ord";
+    if (callerRecord && claim) return ""; // the record's labels supply role/ord
     const value = (recordWins ? undefined : flags[flagName]) ?? (recordWins && record ? undefined : process.env[envName]);
     return typeof value === "string" && value.trim() ? value.trim() : "";
   };
@@ -1076,15 +1082,24 @@ async function commandWho(flags) {
     }
     const winners = [];
     const conflictRows = [];
+    const handoffPending = new Map(); // winner id -> successor short name
+    const shortTitle = (t) => String(t).split(" · ")[0].trim() || String(t);
     for (const group of groups.values()) {
-      const { winner, conflict } = resolveLeadWinner(group.map((m) => m.agent));
+      const { winner, conflict, pending } = resolveLeadWinner(group.map((m) => m.agent));
       if (conflict) conflictRows.push(...group);
-      else if (winner) winners.push(winner);
+      else if (winner) {
+        winners.push(winner);
+        if (pending.length) {
+          const succ = group.find((m) => m.agent.id === pending[pending.length - 1]);
+          handoffPending.set(winner.id, succ ? shortTitle(succ.title) : pending[0]);
+        }
+      }
     }
     const conflictIds = new Set(conflictRows.map((m) => m.agent.id));
-    const entries = conflictIds.size
+    const entries = (conflictIds.size
       ? matched.filter((m) => conflictIds.has(m.id))
-      : matched.filter((m) => winners.some((w) => w.id === m.id));
+      : matched.filter((m) => winners.some((w) => w.id === m.id))
+    ).map((m) => (handoffPending.has(m.id) ? { ...m, handoffPending: handoffPending.get(m.id), line: `${m.line} · handoff pending → ${handoffPending.get(m.id)}` } : m));
     const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
     const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
