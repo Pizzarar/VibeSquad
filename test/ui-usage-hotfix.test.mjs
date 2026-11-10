@@ -32,3 +32,22 @@ test("image probe retries a failed load on a backoff instead of staying hidden",
   const fn = b.slice(b.indexOf("export function useImageOk"), b.indexOf("export const FACE_URL"));
   assert.match(fn, /imageRetryDelay/);
 });
+
+const server = () => readFileSync(new URL("../server/providers-catalog.mjs", import.meta.url), "utf8");
+
+test("usage: the per-cwd unit name is memoised (attributeImplementer ran it units x agents times and blocked the runtime ~6s per request)", () => {
+  const s = server();
+  assert.match(s, /const unitNameCache = new Map\(\)/);
+  assert.match(s, /unitNameCache\.get\(cwd\)/);
+});
+
+test("art hooks: module-scope caches give a synchronous initial state, and the sheet loads in parallel with faces.json", () => {
+  const b = src("useBotFace.ts");
+  assert.match(b, /const loadedImages = new Set<string>\(\)/);
+  assert.match(b, /useState\(\(\) => !!url && loadedImages\.has\(url\)\)/);
+  assert.match(b, /const jsonModels = new Map<string, unknown>\(\)/);
+  assert.match(b, /useState<T \| null>\(\(\) => \(jsonModels\.get\(url\)/);
+  assert.match(b, /useFacesModel = \(\): FacesModel \| null => useJsonModel\(/);
+  assert.match(b, /const sheetOk = useImageOk\(sheetUrl\)/);
+  assert.doesNotMatch(b, /useImageOk\(faces\?\.bots\[bot\]/);
+});
