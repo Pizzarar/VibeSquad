@@ -310,8 +310,8 @@ describe("wiring (source inspection)", () => {
     const src = read("server/build-android.mjs");
     assert.match(src, /"--apk", "--target", "aarch64"/);
     assert.doesNotMatch(src, /"--apk", "true"/);
-    assert.match(src, /findBuiltApk(rootDir)/);
-    assert.match(src, /findBuiltApk(rootDir)/);
+    assert.match(read("server/android-apk-paths.mjs"), /"arm64", "aarch64"/);
+    assert.match(src, /findBuiltApk\(rootDir\)/);
     assert.match(src, /jniLibs/);
     assert.match(src, /arm64-v8a/);
     assert.match(src, /assembleArm64Release/);
