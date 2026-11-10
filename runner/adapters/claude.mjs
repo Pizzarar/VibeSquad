@@ -127,6 +127,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       child.on('error', (err) => onExit({ code: null, error: String(err.message) }));
       child.on('exit', (code, signal) => onExit({ code, signal }));
       return {
+        pid: child.pid, // the runner probes this tree for background work before an after-turn park
         send(text, { images = [] } = {}) {
           // A send into an open, non-interrupted turn merges into it (the CLI emits ONE result for the merged turn), so
           // it must not open another slot. Only a fresh turn (none open) or one after an interrupt/cancel opens its own.
