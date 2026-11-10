@@ -43,15 +43,16 @@ describe("redeem -> same-site enter hop", () => {
     assert.match(page.body, /location\.replace\("\/"\)/);
   });
 
-  test("APK: 302 to enter?paired=1&vs_app, page returns to <app>/#paired", () => {
+  test("APK: 302 to enter?vs_app, page hops to same-site / (never back to the app origin)", () => {
     const res = redeem(`&vs_app=${encodeURIComponent(APP)}`);
     assert.equal(res.statusCode, 302);
-    assert.equal(res.headers.location, `/__vibesquad/enter?paired=1&vs_app=${encodeURIComponent(APP)}`);
+    assert.equal(res.headers.location, `/__vibesquad/enter?vs_app=${encodeURIComponent(APP)}`);
     const page = fakeRes();
     auth.handleEnter(fakeReq(res.headers.location), page);
     assert.equal(page.statusCode, 200);
     assert.equal(page.headers.location, undefined);
-    assert.match(page.body, /location\.replace\("http:\/\/tauri\.localhost\/#paired"\)/);
+    assert.match(page.body, /location\.replace\("\/\?vs_app=http%3A%2F%2Ftauri\.localhost"\)/);
+    assert.doesNotMatch(page.body, /#paired|href="http/);
   });
 
   test("a non-whitelisted vs_app never reaches the redirect or the page", () => {
@@ -119,5 +120,43 @@ describe("VsTrust.kt keeps the pairing cookie", () => {
     assert.match(kt, /cm\.flush\(\)/);
     assert.match(kt, /"flush" -> persistCookies\(\)/);
     assert.match(kt, /leaf\.verify\(ca\.publicKey\)/);
+  });
+});
+
+describe("A2e failure pages never send the WebView back to the app origin", () => {
+  const apkReq = (url, host = "pc.example:4180") => ({ ...fakeReq(url), headers: { host } });
+
+  test("bad/expired code page (APK): no tauri.localhost link, no auto-refresh, deep link + Back, no token", () => {
+    auth.resetPairRateLimitForTest();
+    const res = fakeRes();
+    auth.handlePairRedeem(apkReq(`/pair?code=000000&vs_app=${encodeURIComponent(APP)}`), res);
+    assert.equal(res.statusCode, 401);
+    assert.doesNotMatch(res.body, /tauri\.localhost|http-equiv="refresh"|#failed/);
+    assert.match(res.body, /href="vibesquad:\/\/pair\?host=pc\.example%3A4180"/);
+    assert.match(res.body, /history\.back\(\)/);
+  });
+
+  test("bad code page for a plain browser has no app recovery links", () => {
+    auth.resetPairRateLimitForTest();
+    const res = fakeRes();
+    auth.handlePairRedeem(apkReq("/pair?code=000000"), res);
+    assert.doesNotMatch(res.body, /vibesquad:\/\/|history\.back/);
+  });
+
+  test("unpaired page (APK): no tauri.localhost link, no auto-refresh, deep link + Back; API paths stay JSON", () => {
+    const res = fakeRes();
+    auth.sendUnpaired(apkReq(`/?vs_app=${encodeURIComponent(APP)}`), res);
+    assert.equal(res.statusCode, 401);
+    assert.doesNotMatch(res.body, /tauri\.localhost|http-equiv="refresh"|#unpaired/);
+    assert.match(res.body, /vibesquad:\/\/pair\?host=/);
+    const api = fakeRes();
+    auth.sendUnpaired(apkReq("/__vibesquad/x"), api);
+    assert.match(api.body, /unpaired device/);
+  });
+
+  test("auth status reports paired:false to an unpaired remote caller", () => {
+    const res = fakeRes();
+    api.handleAuthStatus({ ...fakeReq("/api/auth/status"), headers: { host: "pc.example:4180" } }, res);
+    assert.equal(JSON.parse(res.body).paired, false);
   });
 });

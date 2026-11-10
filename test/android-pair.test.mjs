@@ -7,6 +7,7 @@ import { describe, test } from "node:test";
 import {
   clearSession,
   isAndroidUserAgent,
+  mapRemoteError,
   needsPairing,
   normalizeHost,
   pairRedeemUrl,
@@ -313,20 +314,18 @@ describe("pairing is proven before it is saved (review fixes)", () => {
     assert.equal(serverUrl("pc.example:4180"), "https://pc.example:4180/");
   });
 
-  test("screen saves only a pending record, deep links never auto-pair, reachability is not trust", () => {
+  test("screen saves the host only on an explicit Pair press (the PC opens its own UI, no trip back), deep links never auto-pair, reachability is not trust", () => {
     const src = read("src/RemotePairScreen.tsx");
-    assert.doesNotMatch(src, /saveSession\(hostN\)/);
-    assert.match(src, /savePending\(hostN\)/);
+    assert.match(src, /saveSession\(hostN\);[\s\S]*?location\.href = pairRedeemUrl/);
     assert.doesNotMatch(src, /apply\([^)]*\)[^\n]*\bpairWith\b|autoPair/);
     assert.match(src, /data-testid="pair-confirm"/);
     assert.match(src, /data-testid="forget-pc"/);
   });
 
-  test("the server sends the APK back to its own origin: #paired / #unpaired / #failed", () => {
+  test("PC-served failure pages never link to the app origin; they carry a deep link + Back", () => {
     const src = read("server/auth.mjs");
-    assert.match(src, /\$\{app\}\/#unpaired/);
-    assert.match(src, /\$\{app\}\/#failed/);
-    assert.match(src, /app && paired \? `\$\{app\}\/#paired`/);
+    assert.doesNotMatch(src, /\$\{app\}\/#(paired|unpaired|failed)/);
+    assert.match(src, /vibesquad:\/\/pair\?host=/);
     assert.match(src, /TAURI_ORIGINS\.has\(o\)/);
   });
 });
@@ -358,5 +357,21 @@ describe("APK entry survives SameSite=Strict (vs_device is withheld on a cross-s
     assert.match(auth, /\$\{DEVICE_COOKIE\}=\$\{token\}; HttpOnly; Secure; SameSite=Strict/);
     const serve = read("server/serve.mjs");
     assert.ok(serve.indexOf('"/__vibesquad/enter"') < serve.indexOf("sendUnpaired(req, res)"), "enter must be served before the auth gate");
+  });
+});
+
+describe("mapRemoteError (B4, B7)", () => {
+  test("TLS pin failures say the certificate changed", () => {
+    for (const m of ["Trust anchor for certification path not found.", "javax.net.ssl.SSLHandshakeException: x", "net::ERR_CERT_AUTHORITY_INVALID", "CERT_AUTHORITY_INVALID"]) {
+      assert.equal(mapRemoteError(new Error(m)).message, "This PC's certificate changed. Scan a new QR on the PC to pair again.");
+    }
+  });
+  test("JVM connect / DNS / timeout messages are plain language", () => {
+    assert.equal(mapRemoteError(new Error("failed to connect to /192.0.2.1 (port 4180) after 5000ms")).kind, "unreachable");
+    assert.equal(mapRemoteError(new Error("Unable to resolve host \"pc.example\"")).kind, "unreachable");
+    assert.equal(mapRemoteError(new Error("java.net.SocketTimeoutException: Read timed out")).kind, "timeout");
+    assert.equal(mapRemoteError(new Error("SocketTimeout")).kind, "timeout");
+    assert.equal(mapRemoteError(new Error("connect timeout")).kind, "timeout");
+    assert.equal(mapRemoteError(new Error("boom")).kind, "unknown");
   });
 });
