@@ -262,7 +262,9 @@ async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job,
   const prompt = painterId
     ? `You are the Art Director in a Painter + Director duet. Your Painter is agent ${painterId}; it will send you gallery PNG paths via \`send\`. Reply with numbered fixes or PASS (max round 4).\n\nBrief:\n${brief}`
     : `You are the Art Painter in a Painter + Director duet. Your Director is agent ${self.id}; send it each gallery PNG path via \`send\` and fix only its numbered items until PASS or round 4.\n\nBrief:\n${brief}`;
-  const p = await spawnWorker(ctx, { ...args, _duetPartner: true, profile: partnerName, prompt, title: `${partnerName} · ${job}`, labels: { ...(args.labels ?? {}), job } });
+  // The partner is a different profile (often another provider): it never inherits the caller's provider/model/mode/thinking.
+  const { provider: _p, model: _m, modeId: _mi, mode: _mo, thinkingOptionId: _t, thinking: _th, ...partnerArgs } = args;
+  const p = await spawnWorker(ctx, { ...partnerArgs, _duetPartner: true, profile: partnerName, prompt, title: `${partnerName} · ${job}`, labels: { ...(args.labels ?? {}), job } });
   const msg = painterId
     ? `Your Art Director is agent ${p.id}. Send it each gallery PNG via \`send\`.`
     : `Your Art Painter is agent ${p.id}; it will send you gallery PNGs. Judge them and reply with numbered fixes or PASS.`;

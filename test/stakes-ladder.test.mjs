@@ -23,7 +23,7 @@ test("gemini rungs and opencode keeps the profile model", () => {
   assert.deepEqual([g.model, g.effort], ["gemini-4-argon", "high"]);
   assert.equal(resolveStakesRoute("antigravity-cli", { model: "x", thinkingOptionId: "medium" }, "mechanical", false).model, "gemini-3.8-flash");
   const o = resolveStakesRoute("opencode", { model: "deepseek/deepseek-v4-pro", thinkingOptionId: "default" }, "tierA-invariant", false);
-  assert.deepEqual([o.model, o.effort], ["deepseek/deepseek-v4-pro", "high"]);
+  assert.deepEqual([o.model, o.effort], [undefined, "high"]); // rung without a model leaves the spawn's model alone
 });
 
 test("missing / unknown stakes = normal = profile unchanged", () => {

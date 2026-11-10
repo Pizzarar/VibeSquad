@@ -323,3 +323,72 @@ test("create_agent with no profile: provider + model + thinkingOptionId=high (an
   assert.equal(seen[1].config.thinkingOptionId, "low");
   assert.equal(seen[0].labels["vs.profile-derived"], undefined);
 });
+
+test(
+  "e2e spawn_worker: model only -> caller model kept, ladder effort applies, reason=explicit+ladder (M1)",
+  withEnv(async ({ vsHome }) => {
+    const h = harness();
+    try {
+      const out = await viaSpawnWorker(h, { stakes: "tierA-security", provider: "claude", model: "claude-haiku-5-5" });
+      assert.equal(out.config.model, "claude-haiku-5-5");
+      assert.equal(out.config.thinkingOptionId, "high");
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-haiku-5-5 effort=high reason=explicit+ladder"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "e2e spawn_worker: thinking only -> caller effort kept, ladder model applies, reason=explicit+ladder (M1)",
+  withEnv(async ({ vsHome }) => {
+    const h = harness();
+    try {
+      const out = await viaSpawnWorker(h, { stakes: "tierA-invariant", thinkingOptionId: "low" });
+      assert.equal(out.config.model, "claude-opus-5-5");
+      assert.equal(out.config.thinkingOptionId, "low");
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-invariant model=claude-opus-5-5 effort=low reason=explicit+ladder"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "e2e spawn_worker: a caller-forged vs.profile-derived marker is stripped, so explicit model/thinking stay explicit (L2)",
+  withEnv(async ({ vsHome }) => {
+    const h = harness();
+    try {
+      const out = await viaSpawnWorker(h, {
+        stakes: "tierA-security",
+        provider: "claude",
+        model: "claude-haiku-5-5",
+        thinkingOptionId: "low",
+        labels: { "vs.profile-derived": "model,thinking" },
+      });
+      assert.equal(out.config.model, "claude-haiku-5-5");
+      assert.equal(out.config.thinkingOptionId, "low");
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-haiku-5-5 effort=low reason=explicit"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "hook: a claude model inherited by an antigravity spawn is not explicit; the gemini rung applies (M2 backstop)",
+  withEnv(async ({ vsHome }) => {
+    const h = harness();
+    try {
+      const out = await h.spawn(
+        { provider: "antigravity-cli", model: "claude-opus-5-5", thinkingOptionId: "low" },
+        { labels: LABELS({ profile: "Lead - Gemini", stakes: "tierA-security" }) },
+      );
+      assert.equal(out.config.provider, "antigravity-cli");
+      assert.equal(out.config.model, "gemini-4-argon");
+      assert.match(routeMetrics(vsHome)[0], /model=gemini-4-argon effort=low reason=explicit\+ladder/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);

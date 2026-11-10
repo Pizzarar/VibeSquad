@@ -1733,19 +1733,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // `config` is the caller's original request (`next` already carries the profile override), so this reads what the caller asked for.
           // spawn_worker pre-fills model/thinking from the profile and names them in `vs.profile-derived`; those are not caller-explicit.
           const derivedFields = String(reqLabels["vs.profile-derived"] ?? "").split(",").map((f) => f.trim());
-          const callerModel = derivedFields.includes("model") ? "" : String(config.model ?? "").trim();
-          const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
           const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
           const stakesOn = normalizeStakes(stakesRaw) !== "normal";
           // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so they are not explicit here
           // and the failover provider's rung applies.
-          const sameProvider = normalizeProviderFamily(String(next.provider ?? provider)) === normalizeProviderFamily(provider);
-          const explicitModel = stakesOn && sameProvider && Boolean(callerModel || callerEffort);
-          const route = resolveStakesRoute(String(next.provider ?? provider), matchedProfile, stakesRaw, explicitModel);
-          if (explicitModel) {
+          const finalFamily = normalizeProviderFamily(String(next.provider ?? provider));
+          const sameProvider = finalFamily === normalizeProviderFamily(provider);
+          const rawModel = derivedFields.includes("model") ? "" : String(config.model ?? "").trim();
+          const modelFamily = normalizeProviderFamily(rawModel);
+          // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
+          const callerModel = modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily ? "" : rawModel;
+          const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
+          const keepModel = stakesOn && sameProvider && Boolean(callerModel);
+          const keepEffort = stakesOn && sameProvider && Boolean(callerEffort);
+          const route = resolveStakesRoute(String(next.provider ?? provider), matchedProfile, stakesRaw, { model: keepModel, effort: keepEffort });
+          if (keepModel || keepEffort) {
             // An explicit model/thinking beats the ladder AND an explicit profile's defaults; enforceProfileAfterSpawn must not revert it.
-            if (callerModel) next.model = callerModel;
-            if (callerEffort) next.thinkingOptionId = callerEffort;
+            if (keepModel) next.model = callerModel;
+            if (keepEffort) next.thinkingOptionId = callerEffort;
             changed = true;
             const at = Date.now();
             ladderSpawns.set(`${title}::${cwd}`, at);
@@ -1763,7 +1768,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           logProfileMetric(
             reqLabels,
             cwd,
-            `route: stakes=${route.stakes} model=${next.model ?? config.model ?? "-"} effort=${next.thinkingOptionId ?? config.thinkingOptionId ?? "-"} reason=${reason}`,
+            `route: stakes=${route.stakes} model=${next.model ?? "-"} effort=${next.thinkingOptionId ?? "-"} reason=${reason}`,
           );
         }
 

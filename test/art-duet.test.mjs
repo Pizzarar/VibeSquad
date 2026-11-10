@@ -65,3 +65,14 @@ test('a failed partner spawn still returns the primary id with partnerError', as
   assert.equal(out.partner, undefined);
   assert.equal(out.partnerError, 'boom');
 });
+
+test('Art partner does not inherit the caller provider/model/thinking (M2)', async () => {
+  const ctx = ctxWith();
+  await callTool(ctx, 'spawn_worker', { title: 'neon', profile: 'Art Painter - Opus', prompt: 'draw it', provider: 'claude', model: 'claude-opus-5-5', thinkingOptionId: 'high', modeId: 'x' });
+  const [painter, director] = ctx.calls.filter((c) => c[0] === 'create').map((c) => c[2].config);
+  assert.equal(painter.model, 'claude-opus-5-5');
+  assert.equal(painter.thinkingOptionId, 'high');
+  assert.equal(director.model, 'm');
+  assert.equal(director.thinkingOptionId, undefined);
+  assert.equal(director.modeId, 'auto');
+});
