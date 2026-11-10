@@ -26,3 +26,7 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented hand-pixelled office art pipeline (indexed palettes, batch scripts) — Thanks to **Aseprite** by `Igara Studio`
 - Implemented Aseprite pixel pipeline — Thanks to **aseprite-mcp** by `diivi`
 - Implemented QR pairing scan — Thanks to **jsQR** by `cozmo`
+
+## Third-party runtime dependencies (v0.2.9)
+
+- Implemented E2E relay tunnel key agreement (X25519 fallback where WebCrypto lacks it) — Thanks to **@noble/curves 2.4.0** by `Paul Miller` (MIT)

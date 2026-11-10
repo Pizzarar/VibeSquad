@@ -1,6 +1,6 @@
 [package]
 name = "vibesquad-desktop"
-version = "0.2.7"
+version = "0.2.9"
 description = "VibeSquad Desktop App (Tauri 2)"
 authors = ["VibeSquad"]
 edition = "2021"
