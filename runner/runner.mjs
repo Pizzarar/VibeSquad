@@ -513,7 +513,8 @@ export class Runner {
     for (const other of this.store.ids()) {
       if (other === id) continue;
       let f = null;
-      try { f = this._fold(other); } catch { continue; }
+      // Warm after recoverQueued's boot pass: use the cached fold (no stat, no log read); only an agent never folded is read.
+      try { f = this._foldsWarm ? (this.folds.get(other) ?? this._fold(other)) : this._fold(other); } catch { continue; }
       if (!f?.created) continue;
       const ts = f.created.ts ?? 0;
       if (ts < mine || (ts === mine && other < id)) continue;
@@ -530,6 +531,9 @@ export class Runner {
   // non-queued status, which moves the log's cut past the input, so a second boot never replays it. Returns the ids re-enqueued.
   recoverQueued() {
     const plans = [];
+    this._foldsWarm = false;
+    for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
+    this._foldsWarm = true;
     for (const id of this.store.ids()) {
       let plan = null;
       try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
@@ -744,17 +748,30 @@ export class Runner {
   }
 
   // Same result as statusAll(), but yields to the event loop whenever a slice has run for sliceMs, so a cold roster
-  // scan (every log folded from byte 0) never blocks POST /agents, input, SSE or health behind it.
-  async statusAllAsync(sliceMs = 8) {
-    const out = [];
-    let t0 = Date.now();
-    for (const id of this.store.ids()) {
-      let s = null;
-      try { s = this.status(id); } catch { /* unreadable log: left out, like a failed per-id GET */ }
-      if (s) out.push(s);
-      if (Date.now() - t0 >= sliceMs) { await new Promise((r) => setImmediate(r)); t0 = Date.now(); }
-    }
-    return out;
+  // scan (every log folded from byte 0) never blocks POST /agents, input, SSE or health behind it. Concurrent callers
+  // share one in-flight scan. Returns { ids, agents }: ids is re-read after the scan and any agent created mid-scan is
+  // folded in, so the two can't diverge.
+  statusAllAsync(sliceMs = 8) {
+    if (this._scan) return this._scan;
+    this._scan = (async () => {
+      const agents = [];
+      const seen = new Set();
+      let t0 = Date.now();
+      const visit = (id) => {
+        seen.add(id);
+        let s = null;
+        try { s = this.status(id); } catch { /* unreadable log: left out, like a failed per-id GET */ }
+        if (s) agents.push(s);
+      };
+      for (const id of this.store.ids()) {
+        visit(id);
+        if (Date.now() - t0 >= sliceMs) { await new Promise((r) => setImmediate(r)); t0 = Date.now(); }
+      }
+      const ids = this.store.ids();
+      for (const id of ids) if (!seen.has(id)) visit(id); // created during the scan (cheap: new logs are tiny)
+      return { ids, agents };
+    })().finally(() => { this._scan = null; });
+    return this._scan;
   }
 
   // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.

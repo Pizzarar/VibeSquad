@@ -22,7 +22,7 @@ await new Promise((r2) => setTimeout(r2, 20)); maxStall = 0;
 for (const pass of ['cold', 'warm']) {
   maxStall = 0; last = Date.now();
   const t = process.hrtime.bigint();
-  const out = await ((r.statusAllAsync && !process.env.BENCH_SYNC) ? r.statusAllAsync() : r.statusAll());
+  const out = await ((r.statusAllAsync && !process.env.BENCH_SYNC) ? r.statusAllAsync() : r.statusAll()); if (out.agents) out.length = out.agents.length;
   await new Promise((r2) => setTimeout(r2, 20));
   console.log(`${pass} statusAll: total ${ms(t)}ms, agents ${out.length}, max loop stall ${maxStall}ms`);
 }
