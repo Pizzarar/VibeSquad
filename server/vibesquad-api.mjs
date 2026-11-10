@@ -9,6 +9,7 @@ import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { findBuiltApk } from "./android-apk-paths.mjs";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
@@ -1208,15 +1209,8 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
 export function resolveAndroidApkPath(rootDir = REPO_ROOT) {
   const primary = join(rootDir, "dist-desktop", "VibeSquad.apk");
   if (existsSync(primary)) return primary;
-  const parent = resolve(rootDir, "../..", "dist-desktop", "VibeSquad.apk");
-  if (existsSync(parent)) return parent;
-  const apkDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
-  if (existsSync(apkDir)) {
-    try {
-      const apk = readdirSync(apkDir).find((f) => f.endsWith(".apk"));
-      if (apk) return join(apkDir, apk);
-    } catch {}
-  }
+  const built = findBuiltApk(rootDir);
+  if (built) return built;
   return primary;
 }
 
@@ -1260,6 +1254,40 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
 /** The APK download path, case-insensitive (phones lowercase typed URLs: /vibesquad.apk). */
 export const isAndroidApkPath = (path) => /^\/(?:__vibesquad\/android\/)?vibesquad\.apk$/i.test(path);
 
+// sha256 of the served APK for x-vibesquad-apk-sha256. Never hashes on the request path: trust the build sidecar
+// when it is at least as new as the APK, else hash by stream in the background (header omitted until ready).
+// Cache is keyed by path+mtime+size so the header always matches the bytes served.
+const apkHashCache = new Map();
+const apkHashPending = new Set();
+function apkSha256(file, stat) {
+  const key = `${stat.mtimeMs}:${stat.size}`;
+  const hit = apkHashCache.get(file);
+  if (hit?.key === key) return hit.hash;
+  try {
+    const side = `${file}.sha256`;
+    if (existsSync(side) && statSync(side).mtimeMs >= stat.mtimeMs) {
+      const hash = readFileSync(side, "utf8").trim().toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(hash)) {
+        apkHashCache.set(file, { key, hash });
+        return hash;
+      }
+    }
+  } catch {}
+  const pend = `${file}|${key}`;
+  if (!apkHashPending.has(pend)) {
+    apkHashPending.add(pend);
+    const h = createHash("sha256");
+    createReadStream(file)
+      .on("data", (c) => h.update(c))
+      .on("end", () => {
+        apkHashCache.set(file, { key, hash: h.digest("hex") });
+        apkHashPending.delete(pend);
+      })
+      .on("error", () => apkHashPending.delete(pend));
+  }
+  return "";
+}
+
 export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -1275,6 +1303,8 @@ export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  const sha = apkSha256(file, stat);
+  if (sha) res.setHeader("x-vibesquad-apk-sha256", sha);
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
