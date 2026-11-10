@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import type { PinHandler } from "./PinGrid";
 import { showPinToast } from "./PinIdeas";
+import { openPinMember } from "./pinFocus";
 import type { Pin } from "./pins";
 import { FaceStage, useSkyBezel } from "./SkyZones";
 import { angelCssScale, cloudStripStyle, faceBg, SKY_CLOUDS_URL } from "./skyZonesLogic";
@@ -26,7 +27,65 @@ function useAngelScale(dpr: number, zoom: number): number {
   return s;
 }
 
+/** Boring Mode (docs/PLAN_BORING_MODE.md B3): `<html data-vibe="boring">` swaps the CRT strip for a compact header; anything else is Fun. */
+export const isBoringVibe = (attr: string | null | undefined): boolean => attr === "boring";
+
+export function useVibe(): "fun" | "boring" {
+  const read = () => (typeof document !== "undefined" && isBoringVibe(document.documentElement.getAttribute("data-vibe")) ? "boring" : "fun");
+  const [vibe, setVibe] = useState<"fun" | "boring">(read);
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const update = () => setVibe(read());
+    update();
+    const mo = new MutationObserver(update);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-vibe"] });
+    return () => mo.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return vibe;
+}
+
+export function BoringPerfectionBar({ pin, onOpen }: { pin: Pin | null; onOpen?: PinHandler }) {
+  const can = !!pin && !!onOpen;
+  const lead = pin?.lead ?? null;
+  return (
+    <div className="angel-boring-bar" data-testid="angel-boring-bar" role="group" aria-label="Workflows & Perfection">
+      <span className="angel-boring-title" data-testid="angel-boring-title">Workflows &amp; Perfection</span>
+      <code className="angel-boring-code">@per</code>
+      <button
+        type="button"
+        className="angel-boring-btn"
+        data-testid="angel-open-brainstorm"
+        disabled={!can}
+        title={can ? `Open the ${NAME} Brainstorm` : `${NAME} lane not set up`}
+        onClick={() => {
+          if (pin && onOpen) void Promise.resolve(onOpen(pin)).catch((err) => showPinToast(`Could not open ${pin.lane.name}: ${err}`));
+        }}
+      >
+        Open Brainstorm
+      </button>
+      <button
+        type="button"
+        className="angel-boring-btn"
+        data-testid="angel-open-lead"
+        disabled={!can || !lead}
+        title={lead ? `Open the ${NAME} Lead` : "Lead (none)"}
+        onClick={() => {
+          if (pin && lead) openPinMember(pin, lead.agent.id);
+        }}
+      >
+        Open Lead
+      </button>
+    </div>
+  );
+}
+
 export function AngelBezel({ pin, onOpen }: { pin: Pin | null; onOpen?: PinHandler }) {
+  const vibe = useVibe();
+  return vibe === "boring" ? <BoringPerfectionBar pin={pin} onOpen={onOpen} /> : <FunAngelBezel pin={pin} onOpen={onOpen} />;
+}
+
+function FunAngelBezel({ pin, onOpen }: { pin: Pin | null; onOpen?: PinHandler }) {
   const theme = useTheme();
   const reduced = usePrefersReducedMotion();
   const dpr = useDpr();
