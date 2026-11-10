@@ -105,3 +105,9 @@ export function decisionFromEntries(agentId: string, entries: { item?: { type?: 
 /** The text sent to the Overlord when the owner taps a button. Plain sentences: the Overlord reads them as the owner's reply. */
 export const approvalText = (d: Pick<Decision, "action">): string => `Approved: ${d.action}. Go ahead.`;
 export const alternativeText = (alt: string): string => `Not the recommended fix. Do this instead: ${alt}`;
+
+/** True while the agent still carries an un-cleared needs-you label, current or legacy key. */
+export function hasActiveNeedsYou(labels: Record<string, string> | undefined, legacyKey: string): boolean {
+  const live = (k: string) => !!labels?.[k] && labels[k] !== "cleared";
+  return live("needs-you") || live(legacyKey);
+}

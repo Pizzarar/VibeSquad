@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
-  alternativeText, approvalText, decisionCardId, decisionFromEntries, decisionFromText, parseDecision, parseRiffLane,
+  alternativeText, approvalText, decisionCardId, decisionFromEntries, decisionFromText, hasActiveNeedsYou, parseDecision, parseRiffLane,
 } from "../src/decisionLogic.ts";
 
 const FENCE = (body) => "Blocked.\n\n```vs:decision\n" + body + "\n```\n";
@@ -76,6 +76,22 @@ test("decisionFromEntries uses only the newest assistant message", () => {
 test("reply texts are plain sentences carrying the chosen action", () => {
   assert.match(approvalText({ action: "Rebase" }), /^Approved: Rebase/);
   assert.match(alternativeText("Hold"), /Hold$/);
+});
+
+test("needs-you is active on the current or legacy label, not once cleared", () => {
+  assert.equal(hasActiveNeedsYou({ "needs-you": "x" }, "legacy"), true);
+  assert.equal(hasActiveNeedsYou({ legacy: "x" }, "legacy"), true);
+  assert.equal(hasActiveNeedsYou({ "needs-you": "cleared", legacy: "cleared" }, "legacy"), false);
+  assert.equal(hasActiveNeedsYou(undefined, "legacy"), false);
+});
+
+test("double-tap: the second synchronous acquire is refused until released", async () => {
+  const { createSendLock, tryAcquire } = await import("../src/sendGuard.ts");
+  const lock = createSendLock();
+  assert.equal(tryAcquire(lock), true);
+  assert.equal(tryAcquire(lock), false);
+  lock.held = false;
+  assert.equal(tryAcquire(lock), true);
 });
 
 test("wiring: pinned in the Overlord chat, inline in Timeline, bug pill in the cockpit slot, duties teach the fence", () => {

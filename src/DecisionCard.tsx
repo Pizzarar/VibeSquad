@@ -1,8 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { alternativeText, approvalText, decisionFromEntries, type DecisionOffer } from "./decisionLogic";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { alternativeText, approvalText, decisionFromEntries, hasActiveNeedsYou, type DecisionOffer } from "./decisionLogic";
 import { dismissDecision, dismissedVersion, isDecisionDismissed, subscribeDismissed } from "./pinActions";
 import { clearNeedsYou, getPaseoState, sendMessage } from "./paseo";
 import { openBuddy } from "./phoneCockpitLogic";
+import { createSendLock, tryAcquire } from "./sendGuard";
+import { LEGACY_NEEDS_LABEL } from "./userName";
 
 // E2: one-tap Overlord escalation. "pin" sits above the Overlord chat on the phone; "inline" replaces the raw fence in the Timeline.
 // Both share one dismissal id, so acting on either hides both (and on every device, via the dismissed-cards store).
@@ -12,8 +14,7 @@ type Props = { agentId: string; offer: DecisionOffer; variant?: "pin" | "inline"
 async function sendAndClear(agentId: string, text: string): Promise<void> {
   await sendMessage(agentId, text);
   const agent = getPaseoState().agents.get(agentId);
-  const needs = (agent?.labels as Record<string, string> | undefined)?.["needs-you"];
-  if (agent && needs && needs !== "cleared") await clearNeedsYou(agent, { optimistic: true }).catch(() => undefined);
+  if (agent && hasActiveNeedsYou(agent.labels as Record<string, string> | undefined, LEGACY_NEEDS_LABEL)) await clearNeedsYou(agent, { optimistic: true }).catch(() => undefined);
 }
 
 export function DecisionCard({ agentId, offer, variant = "pin" }: Props) {
@@ -21,6 +22,7 @@ export function DecisionCard({ agentId, offer, variant = "pin" }: Props) {
   const [hidden, setHidden] = useState(() => isDecisionDismissed(offer.id));
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const lock = useRef(createSendLock()); // state is stale within one frame; a double-tap must not send twice
   const [err, setErr] = useState("");
   useEffect(() => {
     setHidden(isDecisionDismissed(offer.id));
@@ -30,6 +32,7 @@ export function DecisionCard({ agentId, offer, variant = "pin" }: Props) {
   if (hidden) return null;
 
   const act = async (text: string) => {
+    if (!tryAcquire(lock.current)) return;
     setBusy(true);
     setErr("");
     try {
@@ -39,6 +42,7 @@ export function DecisionCard({ agentId, offer, variant = "pin" }: Props) {
     } catch (e) {
       setErr(`Could not send: ${(e as Error)?.message ?? e}`);
     } finally {
+      lock.current.held = false;
       setBusy(false);
     }
   };
