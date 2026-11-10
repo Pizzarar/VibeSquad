@@ -743,6 +743,20 @@ export class Runner {
     return out;
   }
 
+  // Same result as statusAll(), but yields to the event loop whenever a slice has run for sliceMs, so a cold roster
+  // scan (every log folded from byte 0) never blocks POST /agents, input, SSE or health behind it.
+  async statusAllAsync(sliceMs = 8) {
+    const out = [];
+    let t0 = Date.now();
+    for (const id of this.store.ids()) {
+      let s = null;
+      try { s = this.status(id); } catch { /* unreadable log: left out, like a failed per-id GET */ }
+      if (s) out.push(s);
+      if (Date.now() - t0 >= sliceMs) { await new Promise((r) => setImmediate(r)); t0 = Date.now(); }
+    }
+    return out;
+  }
+
   // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.
   _fold(id) {
     let stamp = null;

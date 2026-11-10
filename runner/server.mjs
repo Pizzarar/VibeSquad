@@ -125,7 +125,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       if (parts[0] !== 'agents') return json(res, 404, { error: 'not found' });
       if (parts.length === 1) {
         if (req.method === 'POST') { const nid = runner.create(await readBody(req)); return json(res, 201, { id: nid, ...runner.queuePosition(nid) }); } // over a turn cap it queues and answers at once
-        if (req.method === 'GET') return json(res, 200, url.searchParams.get('full') === '1' ? { ids: runner.list(), agents: runner.statusAll() } : { ids: runner.list() });
+        if (req.method === 'GET') return json(res, 200, url.searchParams.get('full') === '1' ? { ids: runner.list(), agents: await runner.statusAllAsync() } : { ids: runner.list() }); // async: yields between slices so a full scan never stalls POST /agents
       }
       const id = parts[1];
       if (parts.length === 2 && req.method === 'GET') {
