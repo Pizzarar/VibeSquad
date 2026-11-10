@@ -21,7 +21,7 @@ export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), sta
   if (active?.runner === runner) return active.ready;
   active?.stop(); // sync: nothing may yield before the baseline and subscription below
   active = null;
-  runner.enableCatchUp();
+  const baseline = runner.enableCatchUp();
   let host = null;
   let stopped = false;
   const buffer = [];
@@ -41,6 +41,7 @@ export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), sta
   active = cur;
   cur.ready = (async () => {
     try {
+      await baseline; // the hwm / turn baseline must be complete before any event is replayed or dispatched
       host = await runner.attachHooks({ startWatcher, deps });
     } catch (err) {
       // Loud, stop buffering, and let a later start retry from scratch.

@@ -236,6 +236,40 @@ function foldRunnerLog(id) {
   return { feed, finish };
 }
 
+/** The created event is the log's first line: read just that (never the whole log) for a cheap id -> cwd. */
+function parseCreatedCwd(head) {
+  const nl = head.indexOf("\n");
+  if (nl < 0) return undefined; // longer than the window (or still being written): caller falls back
+  try { const e = JSON.parse(head.slice(0, nl)); return e?.type === "created" ? (typeof e.cwd === "string" ? e.cwd : null) : undefined; } catch { return undefined; }
+}
+const HEAD_BYTES = 16 * 1024;
+export function readRunnerCwdSync(id, { env = process.env, home } = {}) {
+  if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  const file = path.join(home ?? runnerHome(env), "agents", `${id}.jsonl`);
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const n = fs.readSync(fd, buf, 0, HEAD_BYTES, 0);
+    const cwd = parseCreatedCwd(buf.toString("utf8", 0, n));
+    if (cwd !== undefined) return cwd;
+  } catch { return null; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch {} }
+  return readRunnerAgentSync(id, { env, home })?.cwd ?? null; // unusual first line: the full fold
+}
+export async function readRunnerCwd(id, { env = process.env, home } = {}) {
+  if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  const file = path.join(home ?? runnerHome(env), "agents", `${id}.jsonl`);
+  let fh;
+  try {
+    fh = await fs.promises.open(file, "r");
+    const buf = Buffer.alloc(HEAD_BYTES);
+    const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
+    const cwd = parseCreatedCwd(buf.toString("utf8", 0, bytesRead));
+    if (cwd !== undefined) return cwd;
+  } catch { return null; } finally { await fh?.close().catch(() => {}); }
+  return (await readRunnerAgent(id, { env, home }))?.cwd ?? null;
+}
+
 /** Every runner agent on this machine (sync, log-derived). Empty when no runner dir exists. */
 export function listRunnerAgentsSync({ env = process.env } = {}) {
   const home = runnerHome(env);
@@ -392,10 +426,10 @@ export function logHooksUnavailable(err) {
  * Baseline for one agent log without parsing the whole file: read from the tail until a turn boundary (created / status idle / exit),
  * then fold the events after it. Returns { seq, t, archived }.
  */
-async function scanTail(file) {
+async function scanTail(file, limit = Infinity) {
   const fh = await fs.promises.open(file, "r");
   try {
-    const size = (await fh.stat()).size;
+    const size = Math.min((await fh.stat()).size, limit); // `limit`: the size when the baseline began, so later appends stay live events
     for (let want = 64 * 1024; ; want *= 4) {
       const len = Math.min(size, want);
       const buf = Buffer.alloc(len);
@@ -1021,15 +1055,24 @@ export class RunnerBackend {
     // The tail scan is async and batched (it ran sync over every log at boot and stalled the loop); `ready` settles when the
     // baseline is complete. Callers that need it (startRunnerLifecycle) await it before opening the event stream.
     const dir = path.join(this.rc.home, "agents");
+    // Sizes are taken in quick batches of concurrent stats at the very start (tens of ms in total, yielding between batches): the batched scan below reads each log
+    // only up to that size, so an event appended during the ~second-long scan stays a live/replayed event instead of becoming history.
+    // A log created after its stat has no hwm entry and replays from seq 0.
     this.live.baseline = (async () => {
-      let names;
-      try { names = await fs.promises.readdir(dir); } catch { return; } // no runner dir yet: every agent is new
-      const files = names.filter((f) => f.endsWith(".jsonl"));
+      const sizes = new Map();
+      try {
+        const names = (await fs.promises.readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+        for (let i = 0; i < names.length; i += 128) {
+          await Promise.all(names.slice(i, i + 128).map((f) => fs.promises.stat(path.join(dir, f)).then((st) => sizes.set(f, st.size), () => {})));
+          await new Promise((r) => setImmediate(r));
+        }
+      } catch { /* no runner dir yet: every agent is new */ }
+      const files = [...sizes.keys()];
       for (let i = 0; i < files.length; i += 16) {
         await Promise.all(files.slice(i, i + 16).map(async (f) => {
           const id = f.slice(0, -6);
           let r;
-          try { r = await scanTail(path.join(dir, f)); } catch { return; }
+          try { r = await scanTail(path.join(dir, f), sizes.get(f)); } catch { return; }
           hwm.set(id, r.seq);
           if (r.archived) archived.add(id);
           else if (r.t) turn.set(id, r.t);
@@ -1147,7 +1190,7 @@ export class RunnerBackend {
       this.live.known.set(id, fresh);
       return fresh;
     } catch { /* fall through */ }
-    let agent = readRunnerAgentSync(id, { home: this.rc.home });
+    let agent = await readRunnerAgent(id, { home: this.rc.home });
     if (!agent && e?.type === "created") agent = toAgent({ id, provider: e.provider, model: e.model, cwd: e.cwd, meta: e.meta, status: "starting", createdAt: e.ts, updatedAt: e.ts });
     if (agent) this.live.known.set(id, agent);
     return agent ?? { id, title: id, labels: { backend: "runner" }, status: "idle", backend: "runner" };

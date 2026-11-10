@@ -258,36 +258,45 @@ export function confineReq(cwd, roots, now = Date.now()) {
   // A 403 may just mean a new agent worktree: rescan once, but never more than every 5s (a probe loop must not hammer the disk).
   if (c.status !== 403 || now - lastRescanAt < RESCAN_COOLDOWN_MS) return c;
   lastRescanAt = now;
-  return confineCwd(cwd, roots(true));
+  const fresh = roots(true); // the getter may rescan asynchronously: then the answer is a promise
+  return typeof fresh?.then === "function" ? fresh.then((list) => confineCwd(cwd, list)) : confineCwd(cwd, fresh);
+}
+
+/** confineReq, then `next(confined)`: stays synchronous unless a 403 miss had to wait for a fresh rescan. */
+function confined(cwd, roots, next) {
+  const c = confineReq(cwd, roots);
+  return typeof c?.then === "function" ? c.then(next) : next(c);
 }
 
 /** GET ?cwd=&refresh=1 → { ok, files, truncated, source }. `roots` = allowed cwd roots (real paths). */
 export function handleFileList(req, res, roots, sendJson) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
-  const c = confineReq(params.get("cwd") ?? "", roots);
-  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-  try {
-    return sendJson(res, 200, { ok: true, ...listFiles(c.cwd, { refresh: params.get("refresh") === "1" }) });
-  } catch (e) {
-    return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
-  }
+  return confined(params.get("cwd") ?? "", roots, (c) => {
+    if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+    try {
+      return sendJson(res, 200, { ok: true, ...listFiles(c.cwd, { refresh: params.get("refresh") === "1" }) });
+    } catch (e) {
+      return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+    }
+  });
 }
 
 /** GET ?cwd=&q=&regex=1&case=1 → { ok, matches[{path,line,col,text}], truncated, engine }. */
 export function handleSearch(req, res, roots, sendJson) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
-  const c = confineReq(params.get("cwd") ?? "", roots);
-  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-  const opts = searchOptions(params);
-  if (!opts) return sendJson(res, 400, { ok: false, error: "q is required (max 500 chars)" });
-  const ac = new AbortController();
-  res.on("close", () => !res.writableFinished && ac.abort());
-  return runSearch(c.cwd, opts, { signal: ac.signal }).then((r) => {
-    if (ac.signal.aborted) return;
-    if (r.error) return sendJson(res, 400, { ok: false, error: r.error, engine: r.engine });
-    return sendJson(res, 200, { ok: true, ...r });
+  return confined(params.get("cwd") ?? "", roots, (c) => {
+    if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+    const opts = searchOptions(params);
+    if (!opts) return sendJson(res, 400, { ok: false, error: "q is required (max 500 chars)" });
+    const ac = new AbortController();
+    res.on("close", () => !res.writableFinished && ac.abort());
+    return runSearch(c.cwd, opts, { signal: ac.signal }).then((r) => {
+      if (ac.signal.aborted) return;
+      if (r.error) return sendJson(res, 400, { ok: false, error: r.error, engine: r.engine });
+      return sendJson(res, 200, { ok: true, ...r });
+    });
   });
 }
 
@@ -387,11 +396,12 @@ export function fsRead(cwd, rel, max = FS_READ_MAX) {
 export function handleFsList(req, res, roots, sendJson) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
-  const c = confineReq(params.get("cwd") ?? "", roots);
-  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-  const r = fsList(c.cwd, params.get("path") ?? "");
-  if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error });
-  return sendJson(res, 200, { ok: true, entries: r.entries });
+  return confined(params.get("cwd") ?? "", roots, (c) => {
+    if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+    const r = fsList(c.cwd, params.get("path") ?? "");
+    if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error });
+    return sendJson(res, 200, { ok: true, entries: r.entries });
+  });
 }
 
 /**
@@ -433,30 +443,31 @@ export function findInWorktrees(cwd, rel, candidates) {
 export function handleFsRead(req, res, roots, sendJson, worktreesFor, labelFor = (d) => basename(d)) {
   if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
-  const c = confineReq(params.get("cwd") ?? "", roots);
-  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-  const asked = Number(params.get("max"));
-  const max = Number.isFinite(asked) && asked > 0 ? Math.min(asked, FS_READ_MAX) : FS_READ_MAX;
-  let r = fsRead(c.cwd, params.get("path") ?? "", max);
-  if (r.error && r.status === 404 && worktreesFor) {
-    const alt = findInWorktrees(c.cwd, params.get("path") ?? "", worktreesFor(c.cwd));
-    if (alt.ambiguous) {
-      const rel = normalizeRel(params.get("path") ?? "").rel;
-      const matches = alt.ambiguous.map((d) => `${labelFor(d)}/${rel}`); // never raw host paths
-      return sendJson(res, 409, { ok: false, error: `ambiguous: ${matches.length} worktrees have this file (${matches.join(", ")})`, matches });
+  return confined(params.get("cwd") ?? "", roots, (c) => {
+    if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+    const asked = Number(params.get("max"));
+    const max = Number.isFinite(asked) && asked > 0 ? Math.min(asked, FS_READ_MAX) : FS_READ_MAX;
+    let r = fsRead(c.cwd, params.get("path") ?? "", max);
+    if (r.error && r.status === 404 && worktreesFor) {
+      const alt = findInWorktrees(c.cwd, params.get("path") ?? "", worktreesFor(c.cwd));
+      if (alt.ambiguous) {
+        const rel = normalizeRel(params.get("path") ?? "").rel;
+        const matches = alt.ambiguous.map((d) => `${labelFor(d)}/${rel}`); // never raw host paths
+        return sendJson(res, 409, { ok: false, error: `ambiguous: ${matches.length} worktrees have this file (${matches.join(", ")})`, matches });
+      }
+      if (alt.found) r = fsRead(alt.found.cwd, alt.found.rel, max);
     }
-    if (alt.found) r = fsRead(alt.found.cwd, alt.found.rel, max);
-  }
-  if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error, size: r.size });
-  res.statusCode = 200;
-  res.setHeader("content-type", r.mime);
-  res.setHeader("x-content-type-options", "nosniff");
-  // SVG/HTML served from our origin must not run script if opened directly.
-  res.setHeader("content-security-policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'");
-  res.setHeader("cache-control", "no-store");
-  res.setHeader("x-vs-modified", r.modifiedAt);
-  res.setHeader("x-vs-size", String(r.size));
-  res.end(r.bytes);
+    if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error, size: r.size });
+    res.statusCode = 200;
+    res.setHeader("content-type", r.mime);
+    res.setHeader("x-content-type-options", "nosniff");
+    // SVG/HTML served from our origin must not run script if opened directly.
+    res.setHeader("content-security-policy", "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'");
+    res.setHeader("cache-control", "no-store");
+    res.setHeader("x-vs-modified", r.modifiedAt);
+    res.setHeader("x-vs-size", String(r.size));
+    res.end(r.bytes);
+  });
 }
 
 // ---- Files dock writes + watch without the Paseo daemon (N2) ---------------------------------------
@@ -674,7 +685,7 @@ export async function handleFsMutation(op, req, res, roots, sendJson, readBody) 
   if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
   let body;
   try { body = await readBody(req); } catch (e) { return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }); }
-  const c = confineReq(String(body?.cwd ?? ""), roots);
+  const c = await confineReq(String(body?.cwd ?? ""), roots);
   if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
   const path = String(body?.path ?? "");
   const r =
@@ -691,15 +702,16 @@ export async function handleFsMutation(op, req, res, roots, sendJson, readBody) 
 export function handleFsWatch(req, res, roots, sendJson) {
   if (req.method !== "GET") return sendJson(res, 405, { ok: false, error: "method not allowed" });
   const params = new URL(req.url, "http://x").searchParams;
-  const c = confineReq(params.get("cwd") ?? "", roots);
-  if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-  const since = params.get("since") || undefined;
-  const ac = new AbortController();
-  res.on("close", () => !res.writableFinished && ac.abort());
-  return fsWatch(c.cwd, params.get("path") ?? "", since, { signal: ac.signal }).then((r) => {
-    if (ac.signal.aborted) return;
-    if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error });
-    return sendJson(res, 200, { ok: true, seq: r.seq, changed: r.changed });
+  return confined(params.get("cwd") ?? "", roots, (c) => {
+    if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
+    const since = params.get("since") || undefined;
+    const ac = new AbortController();
+    res.on("close", () => !res.writableFinished && ac.abort());
+    return fsWatch(c.cwd, params.get("path") ?? "", since, { signal: ac.signal }).then((r) => {
+      if (ac.signal.aborted) return;
+      if (r.error) return sendJson(res, r.status ?? 400, { ok: false, error: r.error });
+      return sendJson(res, 200, { ok: true, seq: r.seq, changed: r.changed });
+    });
   });
 }
 
@@ -718,7 +730,7 @@ export async function handleFsResolve(req, res, cwdFor, sendJson, roots) {
   try {
     const raw = await cwdFor(params.get("agentId") ?? "");
     if (!raw) return sendJson(res, 404, { ok: false, error: "unknown agent" });
-    const c = confineReq(raw, roots ?? []); // same realpath + roots check as list/read
+    const c = await confineReq(raw, roots ?? []); // same realpath + roots check as list/read
     if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
     return sendJson(res, 200, { ok: true, ...resolveBareName(listFiles(c.cwd).files, params.get("name") ?? "") });
   } catch (e) {

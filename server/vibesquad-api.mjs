@@ -2,7 +2,7 @@ import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, 
 import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
-import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerAgentSync } from "./backend/index.mjs";
+import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readRunnerCwdSync } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
@@ -573,39 +573,58 @@ async function resolveShellCwd(cwd, rootDir, opts) {
   return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
-// Runner roster for the sync root getters below. Parsing every agent log is hundreds of ms of CPU: it runs async in the background
-// (listRunnerAgents yields between batches), and callers read the last completed scan. One scan feeds navRoots and liveRunnerAgents.
-let runnerRoster = { at: 0, agents: [], loading: null };
-function refreshRunnerRoster() {
-  if (!runnerRoster.loading) {
-    runnerRoster.loading = listRunnerAgents()
-      .then((agents) => { runnerRoster = { at: Date.now(), agents: agents.filter((a) => !a.archivedAt), loading: null }; navRootsCache.clear(); })
-      .catch(() => { runnerRoster.loading = null; });
-  }
-  return runnerRoster.loading;
+// Runner roster for the sync root getters below. Parsing every agent log is hundreds of ms of CPU: it runs async in the
+// background (listRunnerAgents yields between batches), and callers read the last completed scan. One scan feeds navRoots and
+// liveRunnerAgents. A fresh request always starts its own scan (a scan already in flight listed the dir before the new agent
+// existed); the newest-started scan to finish wins, and a reset invalidates every scan still in flight.
+let runnerRoster = { at: 0, agents: [] };
+let rosterInflight = null;
+let rosterScanSeq = 0;
+let rosterApplied = 0;
+let rosterEpoch = 0;
+function refreshRunnerRoster(fresh = false) {
+  if (rosterInflight && !fresh) return rosterInflight;
+  const epoch = rosterEpoch;
+  const seq = ++rosterScanSeq;
+  const p = listRunnerAgents()
+    .then((agents) => {
+      if (epoch !== rosterEpoch || seq < rosterApplied) return;
+      rosterApplied = seq;
+      runnerRoster = { at: Date.now(), agents: agents.filter((a) => !a.archivedAt) };
+      navRootsCache.clear();
+    })
+    .catch(() => {})
+    .finally(() => { if (rosterInflight === p) rosterInflight = null; });
+  rosterInflight = p;
+  return p;
 }
 /** Live (non-archived) runner agents; kicks a background rescan when older than 30s (the stale list is served meanwhile). */
-function runnerRosterNow(now = Date.now(), fresh = false) {
-  if (fresh || now - runnerRoster.at >= 30_000) refreshRunnerRoster();
+function runnerRosterNow(now = Date.now()) {
+  if (now - runnerRoster.at >= 30_000) refreshRunnerRoster();
   return runnerRoster.agents;
 }
 export const _runnerRosterReady = () => refreshRunnerRoster();
-export const _navRootsForTest = (rootDir, opts) => navRoots(rootDir, opts);
-export const _liveRunnerAgentsForTest = (now) => liveRunnerAgents(now);
 
-// Quick open / find in files call per keystroke: reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
+// Quick open / find in files call per keystroke: reuse the roots for 30s. getter(true) (a 403 miss, file-search.mjs) awaits a
+// brand-new scan, so a worktree created a moment ago is allowed on the retry.
 const navRootsCache = new Map();
-const navRoots = (rootDir, opts) => (fresh) => {
-  const hit = navRootsCache.get(rootDir);
-  if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
+function buildNavRoots(rootDir, opts) {
   // Runner (rn-) agents are the default and often sit in worktrees outside the project roots.
   let runnerCwds = [];
-  try { runnerCwds = runnerRosterNow(Date.now(), fresh).map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
+  try { runnerCwds = [...new Set(runnerRosterNow().map((a) => a.cwd))].map(realOrNull).filter(Boolean); } catch {}
   // A home dir or drive root as a browse root would expose everything under it.
   const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])].filter((r) => !isUnsafeRoot(r));
   navRootsCache.set(rootDir, { at: Date.now(), roots });
   return roots;
+}
+const navRoots = (rootDir, opts) => (fresh) => {
+  if (fresh) return refreshRunnerRoster(true).then(() => buildNavRoots(rootDir, opts));
+  const hit = navRootsCache.get(rootDir);
+  if (hit && Date.now() - hit.at < 30_000) return hit.roots;
+  return buildNavRoots(rootDir, opts);
 };
+export const _navRootsForTest = (rootDir, opts) => navRoots(rootDir, opts);
+export const _liveRunnerAgentsForTest = (now) => liveRunnerAgents(now);
 
 /**
  * Other worktrees a relative file link may point into when the file is missing under `cwd`: the managed sanctuary
@@ -614,7 +633,7 @@ const navRoots = (rootDir, opts) => (fresh) => {
 function liveRunnerAgents(now = Date.now()) {
   return runnerRosterNow(now);
 }
-export const _resetLaneAgentsCache = () => { runnerRoster = { at: 0, agents: [], loading: null }; navRootsCache.clear(); };
+export const _resetLaneAgentsCache = () => { rosterEpoch++; rosterInflight = null; rosterApplied = 0; runnerRoster = { at: 0, agents: [] }; navRootsCache.clear(); };
 
 export function laneWorktreeCandidates(cwd, roots, { sanctuary = resolveManagedWorktreeRoot(), agents } = {}) {
   const out = [];
@@ -656,7 +675,7 @@ export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
   const id = String(agentId ?? "");
   if (!AGENT_ID_STRICT.test(id)) return rootDir;
   if (isRunnerId(id)) {
-    try { const rec = readRunnerAgentSync(id); if (rec?.cwd) return rec.cwd; } catch {} // on-disk record: no HTTP round trip
+    try { const cwd = await readRunnerCwd(id); if (cwd) return cwd; } catch {} // on-disk record: no HTTP round trip
     try {
       const cwd = (await (runner ?? sharedRunnerBackend()).fetchAgent(id)).agent?.cwd;
       if (cwd) return cwd;
@@ -1329,7 +1348,7 @@ export function lookupAgentCwd(agentId) {
   const id = String(agentId ?? "").trim();
   if (!AGENT_ID_RE.test(id) || !isRunnerId(id)) return null;
   try {
-    const cwd = readRunnerAgentSync(id)?.cwd;
+    const cwd = readRunnerCwdSync(id);
     return typeof cwd === "string" && cwd.trim() ? cwd.trim() : null;
   } catch {
     return null;
