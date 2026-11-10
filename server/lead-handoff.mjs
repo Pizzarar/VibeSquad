@@ -514,8 +514,15 @@ export function resolveLeadProfile(oldLead, profilesPath) {
 
 const sharedHttpInFlightBySlot = new Map();
 const sharedHttpCompletedBySlot = new Map();
+const sharedHttpEvictedSuccessors = new Set();
+
+/** True only for a definite "agent does not exist" error; any other fetch failure is transient and must not read as dead. */
+export function isAgentNotFoundError(err) {
+  return /not[ _-]?found|no such agent|unknown agent|\b404\b/i.test(String(err?.message ?? err));
+}
 
 export function resetLeadHandoffState() {
+  sharedHttpEvictedSuccessors.clear();
   sharedHttpInFlightBySlot.clear();
   sharedHttpCompletedBySlot.clear();
 }
@@ -531,7 +538,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
   const confirmedTakeovers = new Set();
   const deletedHeartbeats = [];
   const inFlightBySlot = deps.sharedSlots ? sharedHttpInFlightBySlot : new Map();
-  const evictedSuccessors = new Set(); // dead pending successors: a lagging roster must never offer them for adoption again
+  const evictedSuccessors = deps.sharedSlots ? sharedHttpEvictedSuccessors : new Set(); // dead pending successors: a lagging roster must never offer them for adoption again
   const completedBySlot = deps.sharedSlots ? sharedHttpCompletedBySlot : new Map();
 
   // The once-only sets are claimed before the awaited label write (so concurrent evaluations don't double-fire); a throw releases the claim.
@@ -841,7 +848,32 @@ export function createLeadHandoffCoordinator(deps = {}) {
       oldLabels,
     };
 
+    const buildResult = (retired) => ({
+      ok: true,
+      handoffId: `${teamId}:${laneId}:ord${oldOrd}->ord${nextOrd}`,
+      trigger,
+      oldLeadId: oldLead.id,
+      successorId: successor.id,
+      successor,
+      ord: oldOrd,
+      nextOrd,
+      title: successor.title,
+      oldTitle,
+      teamId,
+      laneId,
+      packetPath,
+      synthesizedPacket: synthesized,
+      prompt,
+      repointedWorkers,
+      retiredImmediately: retired,
+      pendingConfirmation: !retired,
+    });
+
     if (retireNow) {
+      // Record the created successor BEFORE the retire write: if it throws and the retry's roster lags, the retry finds this pending
+      // handoff (settleDeduped -> confirmTakeover) instead of minting a second successor.
+      pendingTakeover.set(successor.id, takeoverRecord);
+      completedBySlot.set(slotKey, buildResult(false));
       await setLabels(
         oldLead.id,
         {
@@ -860,26 +892,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     timer.mark("retire");
     timer.flush({ teamId, laneId, agent: successor.id });
-    const result = {
-      ok: true,
-      handoffId: `${teamId}:${laneId}:ord${oldOrd}->ord${nextOrd}`,
-      trigger,
-      oldLeadId: oldLead.id,
-      successorId: successor.id,
-      successor,
-      ord: oldOrd,
-      nextOrd,
-      title: successor.title,
-      oldTitle,
-      teamId,
-      laneId,
-      packetPath,
-      synthesizedPacket: synthesized,
-      prompt,
-      repointedWorkers,
-      retiredImmediately: retireNow,
-      pendingConfirmation: !retireNow,
-    };
+    const result = buildResult(retireNow);
     completedBySlot.set(slotKey, result);
     return result;
     };
@@ -1191,7 +1204,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
         if (connected && client && typeof backend.fetchAgent === "function") {
           // Only a definite not-found means "gone"; any other failure propagates so callers don't treat a blip as a dead agent.
           const r = await backend.fetchAgent(id).catch((err) => {
-            if (/not[ _-]?found|no such agent|unknown agent|\b404\b/i.test(String(err?.message ?? err))) return null;
+            if (isAgentNotFoundError(err)) return null;
             throw err;
           });
           return r?.agent ?? null;

@@ -8,6 +8,7 @@ import { join, resolve } from "node:path";
 import {
   SOFT_FLAG_NUDGE,
   createLeadHandoffCoordinator,
+  isAgentNotFoundError,
   leadUsedTokens,
   loadTeamsConfig,
   resolveTeamAndLane,
@@ -82,7 +83,7 @@ export function startTokenWatcher({
         }),
       compactStep: (agent, opts) => compact.run(agent, opts),
       listAgents: async () => [...live.values()],
-      getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch(() => null))?.agent ?? null,
+      getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch((err) => { if (isAgentNotFoundError(err)) return null; throw err; }))?.agent ?? null,
       deleteHeartbeat: (id) => runner.deleteHeartbeat(id),
     });
 

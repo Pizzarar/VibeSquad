@@ -595,3 +595,44 @@ test("L4r2: a transient getAgent error is not 'dead' (no eviction, no second suc
     assert.equal(oneLive(w, "lead", "after eviction"), r2.successorId);
   } finally { w.cleanup(); }
 });
+
+// ---------------------------------------------------------------- S1 lows round 3 (unit-s1-lows)
+
+test("L1r3: retire write fails after the successor was created and the retry roster lags -> the retry confirms the recorded successor, no second one", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let failRetire = true;
+    let lag = false;
+    const c = coordinator(w, {
+      listAgents: async () => (lag ? [] : (await w.fetchAgents()).entries.map((e) => e.agent)),
+      setLabels: async (id, labels, name) => { if (failRetire && id === "rn-lead1") throw new Error("retire boom"); return w.updateAgent(id, { name, labels }); },
+    });
+    await assert.rejects(c.triggerSelfHandoff(old, { trigger: "self", retireImmediately: true }), /retire boom/);
+    assert.equal(w.creates, 1);
+    failRetire = false;
+    lag = true; // listDaemonAgents failed / lags: the created successor is invisible to adoption
+    const r = await c.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "self", retireImmediately: true });
+    assert.equal(w.creates, 1, "the retry must not mint a second successor");
+    assert.equal(w.agents.get("rn-lead1").labels.role, "former-lead");
+    assert.equal(oneLive(w, "lead", "after retire retry"), r.successorId);
+  } finally { w.cleanup(); }
+});
+
+test("L2r3: evicted successors are shared across coordinators when sharedSlots (a second coordinator with a lagging roster cannot re-adopt the dead one)", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let stale = null;
+    const mk = () => coordinator(w, { sharedSlots: true, listAgents: async () => stale ?? (await w.fetchAgents()).entries.map((e) => e.agent) });
+    const c1 = mk();
+    const s1 = await c1.triggerSelfHandoff(old, { trigger: "auto-250" });
+    stale = (await w.fetchAgents()).entries.map((e) => e.agent);
+    w.agents.get(s1.successorId).archivedAt = new Date().toISOString();
+    w.modes = ["fail"];
+    await assert.rejects(c1.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "self", retireImmediately: true }), /spawn exploded/);
+    const r = await mk().triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "self", retireImmediately: true });
+    assert.notEqual(r.successorId, s1.successorId, "dead successor not re-adopted");
+    assert.equal(oneLive(w, "lead", "after second coordinator"), r.successorId);
+  } finally { w.cleanup(); }
+});
