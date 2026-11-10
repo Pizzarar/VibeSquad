@@ -181,6 +181,8 @@ test("a missing watch-sets module gives a clean 'watch sets unavailable' error, 
   const t = setup({ callerRole: "lead", callerId: "rn-lead" });
   try {
     delete t.ctx.watchSets;
+    // Simulate an absent module (W1 may already be merged): inject a loader that fails to resolve.
+    t.ctx.loadWatchSets = async () => { throw new Error("module not found"); };
     await assert.rejects(callTool(t.ctx, "watch", { action: "list" }), /watch sets unavailable/);
   } finally { t.cleanup(); }
 });
@@ -238,8 +240,11 @@ test("CLI usage errors are caught before any identity resolution", async () => {
 
 test("CLI: main() accepts --suite/--restart/--stall (no unknown-option error)", async () => {
   const { main } = await import("../cli/vs.mjs");
-  const prevEnv = { v: process.env.VS_AGENT_ID, p: process.env.PASEO_AGENT_ID };
-  delete process.env.VS_AGENT_ID; delete process.env.PASEO_AGENT_ID;
+  // Isolate the identity env so resolveIdentity deterministically reads a human (no agent id, no role), not the
+  // agent running the suite; a leftover VS_ROLE would make the caller read as a lead and flip the refusal message.
+  const IDENTITY_ENV = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_ROLE", "VS_TEAM", "VS_LANE", "VS_ORD"];
+  const prevEnv = {};
+  for (const k of IDENTITY_ENV) { prevEnv[k] = process.env[k]; delete process.env[k]; }
   const orig = process.stderr.write;
   const errs = [];
   process.stderr.write = (s) => { errs.push(String(s)); return true; };
@@ -254,8 +259,7 @@ test("CLI: main() accepts --suite/--restart/--stall (no unknown-option error)", 
     }
   } finally {
     process.stderr.write = orig;
-    if (prevEnv.v !== undefined) process.env.VS_AGENT_ID = prevEnv.v;
-    if (prevEnv.p !== undefined) process.env.PASEO_AGENT_ID = prevEnv.p;
+    for (const k of IDENTITY_ENV) { if (prevEnv[k] === undefined) delete process.env[k]; else process.env[k] = prevEnv[k]; }
   }
   const text = errs.join("");
   assert.ok(!/unknown option/.test(text), text);

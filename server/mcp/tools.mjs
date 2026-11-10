@@ -535,7 +535,8 @@ async function restartBuddy(ctx, args = {}) {
 async function getWatchSets(ctx) {
   if (ctx.watchSets) return ctx.watchSets;
   try {
-    return await import("../watch-sets.mjs");
+    const load = ctx.loadWatchSets ?? (() => import("../watch-sets.mjs"));
+    return await load();
   } catch {
     throw new Error("watch sets unavailable");
   }
