@@ -13,7 +13,7 @@ process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 
-const TEAMS = [{ id: "site", name: "example.dev", paths: ["example.dev"], lanes: [{ id: "site-polish", name: "Site Polish" }, { id: "other", name: "Other" }, { id: "site-hub", name: "Hub", hub: true }] },
+const TEAMS = [{ id: "site", name: "example.dev", paths: ["example.dev"], lanes: [{ id: "site-polish", name: "Site Polish" }, { id: "other", name: "Other" }, { id: "fresh", name: "Fresh" }, { id: "site-hub", name: "Hub", hub: true }] },
   { id: "oth", name: "oth.dev", paths: ["oth.dev"], lanes: [{ id: "oth-main", name: "Oth Main" }, { id: "oth-hub", name: "Oth Hub", hub: true }] }];
 
 function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
@@ -34,6 +34,7 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
   add("rn-buddy-b", "brainstorm", { lane: "other" });
   add("rn-buddy-topic", "brainstorm", { lane: "other", topic: "t" });
   add("rn-hub-lead", "lead", { lane: "site-hub", ord: "1" });
+  add("rn-lead-fresh", "lead", { lane: "fresh", ord: "1" }); // idea-95: a new lane with a lead and no Buddy yet
   add("rn-oth-hub-lead", "lead", { team: "oth", lane: "oth-hub", ord: "1" });
   add("rn-old-lead", "former-lead", { ord: "2" });
   add("rn-closed-lead", "lead", { lane: "site-polish", ord: "9" }, { status: "closed" });
@@ -239,7 +240,8 @@ test("pre-auth: a non-lead callerId is refused for a missing target, empty agent
   // And directly: a live lead naming start-brainstorm / a missing target / no agentId is refused too.
   const u = setup({ callerRole: "lead", callerId: "rn-lead" });
   try {
-    for (const extra of [{ agentId: "start-brainstorm" }, { agentId: "rn-nonexistent" }, { agentId: "" }, { agentId: "rn-lead" }]) {
+    // idea-95: start-brainstorm with a callerId is allowed now, but only for a lane the caller may restart (rn-lead: site-polish only).
+    for (const extra of [{ agentId: "start-brainstorm", laneId: "other" }, { agentId: "rn-nonexistent" }, { agentId: "" }, { agentId: "rn-lead" }]) {
       await assert.rejects(performBrainstormRestart({ callerId: "rn-lead", laneId: "site-polish", teamId: "site", agentClient: u.backend, baseHome: u.vsHome, profilesPath: u.profilesPath, ...extra }, u.dir), (e) => e.status === 403, JSON.stringify(extra));
     }
     assert.equal(u.calls.createAgent.length, 0);
@@ -284,4 +286,124 @@ test("CLI: main() parses --reason and --steer (no unknown-option error)", async 
   const text = errs.join("");
   assert.ok(!/unknown option/.test(text), text);
   assert.match(text, /not in the team registry/);
+});
+
+// idea-95: no agent verb could start a NEW lane's FIRST Buddy (`vs pin new` makes the lane, restart refused "has no live Buddy").
+// restart_buddy now starts one through the same start-brainstorm path the UI's first pin click uses.
+const startBody = (lane, callerId, extra = {}) => ({ agentId: "start-brainstorm", reason: "start-brainstorm", laneId: lane, teamId: "site", ...(callerId ? { callerId } : {}), ...extra });
+// Wire the tool to the real route function (in-process, fake backend), as the VS server would.
+const wireRoute = (t) => { t.ctx.restartBuddyRequest = (body) => { t.sent.push(body); return performBrainstormRestart({ ...body, agentClient: t.backend, baseHome: t.vsHome, profilesPath: t.profilesPath, backstopDelayMs: 0 }, t.dir); }; };
+const freshBuddies = (t) => [...t.agents.values()].filter((x) => x.labels?.role === "brainstorm" && x.labels?.lane === "fresh" && !x.archivedAt);
+
+test("first Buddy: a lane lead with no Buddy in its lane starts one (start-brainstorm path), role=brainstorm + its lane/team", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead-fresh", lane: "fresh" });
+  wireRoute(t);
+  try {
+    const r = await callTool(t.ctx, "restart_buddy", { reason: "new lane" });
+    assert.deepEqual(t.sent, [startBody("fresh", "rn-lead-fresh")]);
+    assert.equal(r.started, true);
+    assert.equal(r.oldBuddyId, "");
+    assert.equal(r.lane, "fresh");
+    assert.equal(r.team, "site");
+    assert.equal(r.trigger, "lane-lead");
+    assert.equal(t.calls.createAgent.length, 1);
+    const labels = t.calls.createAgent[0].labels;
+    assert.equal(labels.role, "brainstorm");
+    assert.equal(labels.lane, "fresh");
+    assert.equal(labels.team, "site");
+    assert.equal(r.id, freshBuddies(t)[0]?.id);
+    assert.equal(t.calls.archive.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("first Buddy: the Squad's Overlord and the owner may start one in any lane of the Squad", async () => {
+  for (const [callerId, lane, trigger] of [["rn-hub-lead", "site-hub", "overlord"], ["", "", "owner"]]) {
+    const t = setup({ callerRole: callerId ? "lead" : "", callerId, lane });
+    wireRoute(t);
+    try {
+      const r = await callTool(t.ctx, "restart_buddy", { lane: "fresh" });
+      assert.deepEqual(t.sent, [startBody("fresh", callerId)], trigger);
+      assert.equal(r.trigger, trigger);
+      assert.equal(r.started, true);
+      assert.equal(t.calls.createAgent.length, 1, trigger);
+      assert.equal(t.calls.createAgent[0].labels.role, "brainstorm");
+      assert.equal(t.calls.createAgent[0].labels.lane, "fresh");
+    } finally { t.cleanup(); }
+  }
+});
+
+test("first Buddy: an existing live Buddy is still restarted, never a second start", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    const r = await callTool(t.ctx, "restart_buddy", {});
+    assert.equal(r.started, undefined);
+    assert.equal(r.oldBuddyId, "rn-buddy");
+    assert.deepEqual(t.sent, [{ agentId: "rn-buddy", laneId: "site-polish", teamId: "site", reason: "buddy-restart-verb", callerId: "rn-lead" }]);
+  } finally { t.cleanup(); }
+});
+
+test("first Buddy: workers, Buddies, other lanes' leads and other Squads' Overlords are refused (tool and route)", async () => {
+  for (const [callerId, lane, team, re] of [
+    ["rn-worker", "site-polish", "site", /is not a live lead/],
+    ["rn-buddy", "site-polish", "site", /is not a live lead/],
+    ["rn-lead", "site-polish", "site", /only restart its own lane's Buddy/],
+    ["rn-oth-hub-lead", "oth-hub", "oth", /another Squad/],
+  ]) {
+    const t = setup({ callerRole: "lead", callerId, lane, team });
+    wireRoute(t);
+    try {
+      await assert.rejects(callTool(t.ctx, "restart_buddy", { lane: "fresh" }), re, callerId);
+      assert.equal(t.sent.length, 0, callerId);
+      await assert.rejects(performBrainstormRestart({ ...startBody("fresh", callerId), agentClient: t.backend, baseHome: t.vsHome, profilesPath: t.profilesPath }, t.dir), (e) => e.status === 403, callerId);
+      assert.equal(t.calls.createAgent.length, 0, callerId);
+    } finally { t.cleanup(); }
+  }
+});
+
+test("first Buddy: a route call can't aim a lead's start outside its grant (unknown/empty lane, forceNew)", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead-fresh", lane: "fresh" });
+  try {
+    for (const extra of [{ laneId: "no-such-lane" }, { laneId: "" }, { forceNew: true }]) {
+      await assert.rejects(performBrainstormRestart({ ...startBody("fresh", "rn-lead-fresh"), ...extra, agentClient: t.backend, baseHome: t.vsHome, profilesPath: t.profilesPath }, t.dir), (e) => e.status === 403, JSON.stringify(extra));
+    }
+    assert.equal(t.calls.createAgent.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("first Buddy: two concurrent restart_buddy calls start exactly one Buddy", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead-fresh", lane: "fresh" });
+  wireRoute(t);
+  try {
+    const [a, b] = await Promise.all([callTool(t.ctx, "restart_buddy", {}), callTool(t.ctx, "restart_buddy", {})]);
+    assert.equal(t.calls.createAgent.length, 1);
+    assert.ok(a.id);
+    assert.equal(a.id, b.id);
+    assert.equal(freshBuddies(t).length, 1);
+  } finally { t.cleanup(); }
+});
+
+test("first Buddy: --profile / --provider pick the Buddy's brainstorm profile", async () => {
+  for (const [args, want] of [[{ profile: "Brainstorm - Gemini" }, "Brainstorm - Gemini"], [{ provider: "gemini" }, "Brainstorm - Gemini"], [{ provider: "claude" }, "Brainstorm - Claude"]]) {
+    const t = setup({ callerRole: "lead", callerId: "rn-lead-fresh", lane: "fresh" });
+    wireRoute(t);
+    try {
+      await callTool(t.ctx, "restart_buddy", args);
+      assert.equal(t.sent[0].profileName, want, JSON.stringify(args));
+      assert.equal(t.calls.createAgent[0].labels.profile, want, JSON.stringify(args));
+    } finally { t.cleanup(); }
+  }
+  const t = setup({ callerRole: "lead", callerId: "rn-lead-fresh", lane: "fresh" });
+  try {
+    await assert.rejects(callTool(t.ctx, "restart_buddy", { provider: "nope" }), /provider/);
+    assert.equal(t.sent.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("vs buddy restart: CLI passes --profile / --provider through", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead-fresh", lane: "fresh" });
+  try {
+    await commandAgentVerb("buddy", { _: ["restart"], lane: "fresh", provider: "gemini" }, () => t.ctx, () => {});
+    assert.equal(t.sent[0].profileName, "Brainstorm - Gemini");
+    assert.equal(t.sent[0].agentId, "start-brainstorm");
+  } finally { t.cleanup(); }
 });

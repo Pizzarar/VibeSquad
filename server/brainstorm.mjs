@@ -440,7 +440,8 @@ const startInFlight = new Map();
 
 /**
  * O5: the route calls this BEFORE it spends an archive/spawn budget slot, so a denied callerId costs nothing. Throws a 403-tagged Error;
- * no callerId (owner) or a start-brainstorm request passes. performBrainstormRestartOnce re-checks the same rule against its own records.
+ * no callerId (owner) passes. A start-brainstorm with a callerId (restart_buddy on a lane with no Buddy, idea-95) is checked here against
+ * the exact team/lane the start will spawn into. performBrainstormRestartOnce re-checks a restart's rule against its own records.
  */
 export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
   if (body?.callerId == null || body.callerId === "") return; // owner path
@@ -469,7 +470,21 @@ export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
     if (!caller) throw forbid("caller not found");
     if (effectiveAgentRole(caller) !== "lead" || !isLiveAgent(caller)) throw forbid("only a live lead (or the owner) may restart a Buddy");
     const targetId = String(body.agentId || "").trim();
-    if (targetId === "start-brainstorm" || String(body.reason || "").trim() === "start-brainstorm") throw forbid("callerId is not allowed on start-brainstorm (owner only)");
+    if (targetId === "start-brainstorm" || String(body.reason || "").trim() === "start-brainstorm") {
+      // idea-95: a lane's first Buddy, same grants as a restart. Check the team/lane performBrainstormRestartOnce resolves (laneDisplayName),
+      // and only a canonical lane id of that team, so an alias, code or unknown lane can't spawn a Buddy outside the grant.
+      if (body.forceNew) throw forbid("forceNew is not allowed with a callerId");
+      const rawLane = String(body.laneId || body.lane || "").trim();
+      if (!rawLane) throw forbid("laneId is required");
+      const laneId = safeSegment(rawLane);
+      const resolved = laneDisplayName(rawLane, rootDir);
+      const teams = loadTeamsRegistry(rootDir);
+      const hit = resolved.teamId ? findLaneInRegistry(laneId, teams, resolved.teamId) : null;
+      const same = (x, y) => String(x ?? "").toLowerCase() === String(y ?? "").toLowerCase();
+      if (!hit || !same(hit.lane.id, laneId) || !same(hit.team.id, resolved.teamId) || !same(resolved.laneId, laneId)) throw forbid(`lane "${rawLane}" is not a lane id in the team registry`);
+      assertBuddyRestartAllowed(caller, { labels: { team: hit.team.id, lane: hit.lane.id } }, teams);
+      return;
+    }
     if (!targetId) throw forbid("agentId is required");
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(targetId)) throw forbid("bad agentId");
     const target = await load(targetId);

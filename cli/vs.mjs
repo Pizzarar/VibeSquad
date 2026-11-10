@@ -255,6 +255,7 @@ function parseArgs(argv) {
     "rule",
     "query",
     "profile",
+    "provider",
     "cwd",
     "prompt",
     "promptFile",
@@ -512,7 +513,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
   vs restart [--dry-run] [--timeout <sec>] [--no-force]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0, default 600s); result in ~/.vibesquad/restart-<ts>.json
-  vs buddy restart --lane <code> [--reason "<why>"]   restart a lane's Buddy via the brainstorm-restart path (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
+  vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
   vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
@@ -1855,7 +1856,7 @@ export async function runAgentVerb(verb, flags, ctx) {
   } else if (verb === "handoff_lead") {
     args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
   } else if (verb === "restart_buddy") {
-    args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}) };
+    args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}), ...(flags.profile ? { profile: String(flags.profile) } : {}), ...(flags.provider ? { provider: String(flags.provider) } : {}) };
   } else if (verb === "watch") {
     args = { action: flags.watchAction };
     if (flags.watchAction === "add") {
@@ -1934,7 +1935,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     verb = "handoff_lead";
   }
   if (verb === "buddy") {
-    if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"]');
+    if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]');
     verb = "restart_buddy";
   }
   if (verb === "watch") {

@@ -481,11 +481,13 @@ async function postLeadHandoffToServer(body, ctx) {
  * Restart a lane's Buddy through the existing /__vibesquad/brainstorm-restart path (archives the old Buddy, keeps its children, spawns a
  * fresh one from the brief). Allowed: the owner (a human `vs`, no agent id), that lane's live lead, and the Squad's hub lead (Overlord)
  * for any lane of its own Squad. The caller's role/lane/team are read from its runner record, never from env or args; the server
- * route re-checks callerId on its own (server/buddy-restart-auth.mjs).
+ * route re-checks callerId on its own (server/buddy-restart-auth.mjs). A lane with no Buddy yet (a new `vs pin new` lane) gets its
+ * first one through the same start-brainstorm path the UI's first pin click uses (idea-95), with the same grants.
  */
 async function restartBuddy(ctx, args = {}) {
   const callerId = clean(ctx.identity.agentId);
   const askedLane = clean(pick(args, "lane", "laneId"));
+  const profileName = buddyProfileArg(args);
   const teams = ctx.teams ?? loadTeamsRegistry();
   const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
   let teamId;
@@ -521,14 +523,36 @@ async function restartBuddy(ctx, args = {}) {
   const buddies = list.map((e) => e?.agent ?? e).filter((a) => a && whoCandidate(a, { teams, wantTeamId: teamId, wantLane: laneId })?.role === "brainstorm");
   // The lane's main Buddy (no topic label) restarts; a topic Buddy only when it is the sole one.
   const buddy = buddies.find((a) => !clean(a.labels?.topic)) ?? (buddies.length === 1 ? buddies[0] : null);
-  if (!buddy) throw new Error(`cannot restart a Buddy: lane "${laneId}" has ${buddies.length ? "only topic Buddies" : "no live Buddy"}`);
+  if (!buddy && buddies.length) throw new Error(`cannot restart a Buddy: lane "${laneId}" has only topic Buddies`);
+  const trigger = callerId ? (caller && findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams)?.lane.id === laneId ? "lane-lead" : "overlord") : "owner";
+  const send = async (body) => {
+    const out = ctx.restartBuddyRequest ? await ctx.restartBuddyRequest(body) : await postBuddyRestartToServer(body, ctx);
+    if (out?.ok === false || out?.error) throw new Error(`buddy restart failed: ${out.error ?? out.reason ?? "unknown"}`);
+    return out;
+  };
+  const extra = { ...(callerId ? { callerId } : {}), ...(profileName ? { profileName } : {}) };
+  if (!buddy) {
+    // idea-95: no Buddy yet. The route's start path dedupes concurrent starts per lane and reuses (or reopens) any Buddy that appeared
+    // meanwhile, so a race or a retry still leaves exactly one. The route re-checks the callerId grant for the target lane.
+    const out = await send({ agentId: "start-brainstorm", reason: "start-brainstorm", laneId, teamId, ...extra });
+    return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: "", started: true, ...(out.reused ? { reused: true } : {}), lane: laneId, team: teamId, title: out.title ?? "", trigger };
+  }
   if (callerId) assertBuddyRestartAllowed(caller, buddy, teams);
   // The route special-cases a few reason strings (start-brainstorm, auto*): the verb's free text is always prefixed.
   const why = clean(args.reason).slice(0, 200);
-  const body = { agentId: buddy.id, laneId, teamId, reason: why ? `buddy-restart-verb: ${why}` : "buddy-restart-verb", ...(callerId ? { callerId } : {}) };
-  const out = ctx.restartBuddyRequest ? await ctx.restartBuddyRequest(body) : await postBuddyRestartToServer(body, ctx);
-  if (out?.ok === false || out?.error) throw new Error(`buddy restart failed: ${out.error ?? out.reason ?? "unknown"}`);
-  return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: buddy.id, lane: laneId, team: teamId, title: out.title ?? "", ...(out.skipped ? { skipped: true, reason: out.reason } : {}), ...(callerId ? { trigger: caller && findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams)?.lane.id === laneId ? "lane-lead" : "overlord" } : { trigger: "owner" }) };
+  const out = await send({ agentId: buddy.id, laneId, teamId, reason: why ? `buddy-restart-verb: ${why}` : "buddy-restart-verb", ...extra });
+  return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: buddy.id, lane: laneId, team: teamId, title: out.title ?? "", ...(out.skipped ? { skipped: true, reason: out.reason } : {}), trigger };
+}
+
+/** idea-95: `--profile <Brainstorm profile>` wins; `--provider claude|gemini` picks the stock Brainstorm profile. The route only accepts brainstorm-role profiles. */
+function buddyProfileArg(args) {
+  const profile = clean(args.profile).slice(0, 120);
+  if (profile) return profile;
+  const provider = clean(args.provider).toLowerCase();
+  if (!provider) return "";
+  if (provider.startsWith("claude")) return "Brainstorm - Claude";
+  if (provider.startsWith("gemini") || provider.startsWith("antigravity")) return "Brainstorm - Gemini";
+  throw new Error(`cannot restart a Buddy: unknown provider "${provider}" (use claude or gemini, or --profile "<Brainstorm profile>")`);
 }
 
 /** The watch-set registry (server/watch-sets.mjs, W1). Injected via ctx.watchSets for tests; lazy-imported at runtime. */
@@ -681,8 +705,8 @@ export const VS_TOOLS = {
     run: handoffLead,
   },
   restart_buddy: {
-    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason. Returns {id, oldBuddyId, lane, team, title}.",
-    inputSchema: obj({ lane: S, reason: S }),
+    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief), or start the lane's first Buddy when it has none (a new pinned lane). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason; optional profile (a Brainstorm profile name) or provider (claude|gemini). Returns {id, oldBuddyId, lane, team, title, started?}.",
+    inputSchema: obj({ lane: S, reason: S, profile: S, provider: S }),
     run: restartBuddy,
   },
   watch: {
