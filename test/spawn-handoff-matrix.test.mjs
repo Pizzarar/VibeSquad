@@ -511,3 +511,87 @@ test("L2: a failing setLabels leaves the takeover pending and retryable (no conf
     assert.equal(oneLive(w, "lead", "after retry"), s1.successorId);
   } finally { w.cleanup(); }
 });
+
+// ---------------------------------------------------------------- S1 lows round 2 (unit-s1-lows)
+
+test("L1r2: a stale roster that still lists the dead successor as adoptable never retires the old lead onto it (0 leads)", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let stale = null;
+    const c = coordinator(w, { listAgents: async () => stale ?? (await w.fetchAgents()).entries.map((e) => e.agent) });
+    const s1 = await c.triggerSelfHandoff(old, { trigger: "auto-250" });
+    stale = (await w.fetchAgents()).entries.map((e) => e.agent); // roster lags: still shows the successor as a live adoptable lead
+    w.agents.get(s1.successorId).archivedAt = new Date().toISOString();
+    const again = await c.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "buddy", retireImmediately: true });
+    assert.equal(w.creates, 2, "a fresh successor, not the dead adoptable");
+    assert.notEqual(again.successorId, s1.successorId);
+    assert.equal(oneLive(w, "lead", "after stale-roster handoff"), again.successorId);
+  } finally { w.cleanup(); }
+});
+
+test("L2r2: a failing worker repoint does not abort the handoff after the successor exists", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    w.seed({ id: "rn-w1", title: "W", status: "running", labels: { role: "worker", "paseo.parent-agent-id": "rn-lead1" } });
+    const c = coordinator(w, { setLabels: async (id, labels, name) => { if (id === "rn-w1") throw new Error("worker boom"); return w.updateAgent(id, { name, labels }); } });
+    const r = await c.triggerSelfHandoff(old, { trigger: "self", retireImmediately: true });
+    assert.equal(r.ok, true);
+    assert.equal(oneLive(w, "lead", "after failed repoint"), r.successorId);
+    assert.equal(w.agents.get("rn-lead1").labels.role, "former-lead");
+  } finally { w.cleanup(); }
+});
+
+test("L2r2: evaluateLead releases its once-only claim when setLabels fails, so the next evaluation retries", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let fail = true;
+    const c = coordinator(w, { setLabels: async (id, labels, name) => { if (fail) throw new Error("label boom"); return w.updateAgent(id, { name, labels }); } });
+    await assert.rejects(c.evaluateLead(old, { usedTokens: 150_000 }), /label boom/);
+    fail = false;
+    const r = await c.evaluateLead(w.agents.get("rn-lead1"), { usedTokens: 150_000 });
+    assert.equal(r.stage, "flag-150");
+    assert.equal(r.triggered, true, "retried instead of being stuck as already-flagged");
+  } finally { w.cleanup(); }
+});
+
+test("L3r2: handoff_lead on a pending handoff surfaces a failed retire instead of reporting success", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let fail = false;
+    const c = coordinator(w, { setLabels: async (id, labels, name) => { if (fail) throw new Error("retire boom"); return w.updateAgent(id, { name, labels }); } });
+    const s1 = await c.triggerSelfHandoff(old, { trigger: "auto-250" });
+    fail = true;
+    const r = await c.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "buddy", retireImmediately: true });
+    assert.equal(r.ok, false);
+    assert.match(String(r.error), /retire boom/);
+    assert.equal(r.successorId, s1.successorId);
+    assert.equal(w.agents.get("rn-lead1").labels.role, "lead", "old lead still live; not silently half-done");
+  } finally { w.cleanup(); }
+});
+
+test("L4r2: a transient getAgent error is not 'dead' (no eviction, no second successor); a real death evicts and relabels the dead successor", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let flaky = false;
+    const c = coordinator(w, { getAgent: async (id) => { if (flaky) throw new Error("socket hang up"); return (await w.fetchAgent(id).catch(() => null))?.agent ?? null; } });
+    const s1 = await c.triggerSelfHandoff(old, { trigger: "auto-250" });
+    flaky = true;
+    const r = await c.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "self" });
+    assert.equal(w.creates, 1, "no eviction on a fetch error");
+    assert.equal(r.successorId, s1.successorId);
+    flaky = false;
+    // Real death: successor archived but still labeled as a lead -> evicted and relabeled so nothing adopts/counts it again.
+    w.agents.get(s1.successorId).archivedAt = new Date().toISOString();
+    const r2 = await c.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "self", retireImmediately: true });
+    assert.equal(w.creates, 2);
+    const dead = w.agents.get(s1.successorId);
+    assert.equal(dead.labels.role, "former-lead");
+    assert.notEqual(dead.labels["vs.handoff-from"], "rn-lead1");
+    assert.equal(oneLive(w, "lead", "after eviction"), r2.successorId);
+  } finally { w.cleanup(); }
+});
