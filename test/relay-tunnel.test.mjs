@@ -6,13 +6,27 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
-import { connectRelay, RelayAuthError } from "../src/remoteRelayTransport.ts";
+import {
+  connectRelay,
+  newKex,
+  RelayAuthError,
+  RelayRekeyError,
+  selfCertifyingHostId as tsSelfId,
+  takePairingFragment,
+  transcriptHash as tsTranscript,
+} from "../src/remoteRelayTransport.ts";
 import {
   acceptHandshake,
   backoffDelay,
+  createInProcessDispatcher,
   createRelayHost,
+  createSyntheticRequest,
   hostFingerprint,
   isRelayPathAllowed,
+  isRelayRequest,
+  normalizeRelayTarget,
+  selfCertifyingHostId,
+  transcriptHash,
   loadOrCreateHostKeypair,
   startClientHandshake,
 } from "../server/relay-tunnel.mjs";
@@ -390,5 +404,382 @@ describe("untrusted relay", () => {
       assert.ok(!Buffer.from(wire.split("\n").map((l) => (JSON.parse(l).b ? Buffer.from(JSON.parse(l).b, "base64").toString("latin1") : "")).join(""), "latin1").includes(needle), `leaked ${needle} (decoded)`);
     }
     host.stop();
+  });
+});
+
+// ---- Fable design review + Review-Gemini R1 ----------------------------------------------------------------------------
+
+const cids = (relay) => [...relay.clients.keys()];
+const hostFire = (relay, obj) => relay.host.fire("message", { data: JSON.stringify(obj) });
+
+describe("H1 in-process dispatch", () => {
+  test("synthetic request is a relay principal, never loopback, with no credential headers", () => {
+    const req = createSyntheticRequest({ method: "GET", path: "/api/x", headers: { accept: "*/*" }, deviceId: "dev-9" });
+    assert.equal(isRelayRequest(req), true);
+    assert.equal(req.relayDevice.id, "dev-9");
+    assert.throws(() => (req.relayDevice.id = "dev-1"), TypeError, "frozen");
+    for (const loop of ["127.0.0.1", "::1", "::ffff:127.0.0.1", "localhost"]) assert.notEqual(req.socket.remoteAddress, loop);
+    assert.notEqual(req.socket.localAddress, "127.0.0.1");
+    assert.equal(req.headers.cookie, undefined);
+    assert.equal(isRelayRequest({ socket: { remoteAddress: "127.0.0.1" } }), false);
+  });
+
+  test("end to end: listener sees relayDevice + canonical url; set-cookie never reaches the client", async () => {
+    const seen = [];
+    const listener = (req, res) => {
+      seen.push({ rd: req.relayDevice, url: req.url, addr: req.socket.remoteAddress });
+      res.setHeader("Set-Cookie", "vs_session=abc");
+      res.writeHead(200, { "content-type": "text/plain", "Set-Cookie": ["a=b"], "x-keep": "1" });
+      res.end("hi");
+    };
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { handleHttp: createInProcessDispatcher(listener) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const res = await c.fetch("/api/a%20b?q=1");
+    assert.equal(await res.text(), "hi");
+    assert.equal(res.headers.get("set-cookie"), null);
+    assert.equal(res.headers.get("x-keep"), "1");
+    assert.deepEqual(seen[0].rd, { id: "dev-1" });
+    assert.equal(seen[0].url, "/api/a%20b?q=1");
+    assert.equal(seen[0].addr, "relay");
+    host.stop();
+  });
+
+  test("dispatcher maps a throwing listener to 500 and a hung one to 504", async () => {
+    const boom = createInProcessDispatcher(() => Promise.reject(new Error("x")));
+    assert.equal((await boom({ method: "GET", path: "/api/x", headers: {}, body: Buffer.alloc(0), deviceId: "d" })).status, 500);
+    const hang = createInProcessDispatcher(() => {}, { timeoutMs: 20 });
+    assert.equal((await hang({ method: "GET", path: "/api/x", headers: {}, body: Buffer.alloc(0), deviceId: "d" })).status, 504);
+  });
+});
+
+describe("path normalization (R1 #2)", () => {
+  test("validator and consumer see the same canonical string", async () => {
+    assert.equal(normalizeRelayTarget("GET", "/api/a%20b?x=%2F").path, "/api/a%20b?x=%2F");
+    assert.equal(normalizeRelayTarget("GET", "/api/%41%62").path, "/api/Ab");
+    assert.equal(normalizeRelayTarget("GET", "/%5f%5fvibesquad/teams").path, "/__vibesquad/teams");
+    for (const bad of ["/api/a%2fb", "/api/%2e", "/api/%2E%2e/x", "/api/a//b", "/%5f%5fvibesquad/first%2drun/x", "/api/%C3%28"])
+      assert.equal(normalizeRelayTarget("GET", bad), null, bad);
+    const relay = makeRelay();
+    const { host, calls } = makeHost(relay);
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    await c.fetch("/%5f%5fvibesquad/teams?z=1");
+    assert.equal(calls.http[0].path, "/__vibesquad/teams?z=1");
+    host.stop();
+  });
+});
+
+describe("H2 / R1 #1 host-wide redeem limit", () => {
+  test("failures accumulate across sessions and reconnects; 10th burns codes and locks until a fresh mint", async () => {
+    const relay = makeRelay();
+    let burned = 0;
+    const alerts = [];
+    const { host, calls, timers } = makeHost(relay, { burnCodes: () => burned++, onNeedsYou: (e) => alerts.push(e) });
+    host.start();
+    await tick();
+    for (let i = 0; i < 2; i++) {
+      const c = await connect(relay);
+      for (let k = 0; k < 4; k++) await assert.rejects(c.redeem("000000"));
+    }
+    assert.equal(host.status().redeemFails, 8);
+    relay.dropHost();
+    timers.at(-1).fn();
+    await tick();
+    const c3 = await connect(relay);
+    await assert.rejects(c3.redeem("1"));
+    assert.equal(burned, 0);
+    await assert.rejects(c3.redeem("2")); // 10th failure
+    assert.equal(burned, 1);
+    assert.equal(alerts.length, 1);
+    assert.match(alerts[0].type, /relay-redeem-flood/);
+    assert.equal(host.status().redeemLocked, true);
+    const before = calls.redeem.length;
+    const c4 = await connect(relay);
+    await assert.rejects(c4.redeem("123456"), /locked/); // correct code, but locked: callback never runs
+    assert.equal(calls.redeem.length, before);
+    host.noteFreshMint();
+    assert.equal((await c4.redeem("123456")).deviceId, "dev-1");
+    host.stop();
+  });
+
+  test("a successful redeem resets the failure count", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay);
+    host.start();
+    await tick();
+    const c = await connect(relay);
+    await assert.rejects(c.redeem("x"));
+    assert.equal(host.status().redeemFails, 1);
+    await c.redeem("123456");
+    assert.equal(host.status().redeemFails, 0);
+    host.stop();
+  });
+});
+
+describe("M2 revocation re-check on every dispatch", () => {
+  test("an out-of-process revoke (store flips, no revoke() call) kills the session on the next request", async () => {
+    const revoked = new Set();
+    const relay = makeRelay();
+    const { host, events } = makeHost(relay, { isRevoked: async (id) => revoked.has(id) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    assert.equal((await c.fetch("/api/ok")).status, 200);
+    revoked.add("dev-1");
+    await assert.rejects(c.fetch("/api/ok"));
+    assert.equal(host.status().sessions, 0);
+    assert.ok(events.some((e) => e.type === "revoked-on-dispatch"));
+    host.stop();
+  });
+});
+
+describe("M4 transcript binding", () => {
+  test("version byte and suite are hashed; TS and node agree; fixed vector", async () => {
+    const S = Buffer.alloc(32, 1);
+    const ec = Buffer.alloc(32, 2);
+    const eh = Buffer.alloc(32, 3);
+    const v1 = transcriptHash("h", S, ec, eh, 1);
+    assert.notEqual(v1.toString("hex"), transcriptHash("h", S, ec, eh, 2).toString("hex"));
+    assert.equal(Buffer.from(await tsTranscript("h", S, ec, eh, 1)).toString("hex"), v1.toString("hex"));
+    assert.equal(v1.toString("hex"), "974f295e706e84deaaf748b7ed639f7a521b50842aca35726340efdbc21582e9");
+  });
+
+  test("self-certifying hostId helper agrees across implementations; client can require it", async () => {
+    const id = selfCertifyingHostId(hostKey.publicRaw);
+    assert.equal(await tsSelfId(hostKey.publicRaw), id);
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { hostId: id });
+    host.start();
+    await tick();
+    const ok = await connectRelay({ endpoint: "wss://r", hostId: id, hostPubKey: hostKey.pubB64, WebSocketImpl: relay.Sock, requireSelfCertifiedHostId: true });
+    ok.close();
+    await assert.rejects(
+      connectRelay({ endpoint: "wss://r", hostId: "squatted", hostPubKey: hostKey.pubB64, WebSocketImpl: relay.Sock, requireSelfCertifiedHostId: true }),
+      RelayAuthError,
+    );
+    host.stop();
+  });
+});
+
+describe("M5 rekey", () => {
+  test("record budget: host sends rekey and closes; client sees RelayRekeyError", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { maxSessionRecords: 8 });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    let reason;
+    c.onclose = (r) => (reason = r);
+    for (let i = 0; i < 10 && !reason; i++) await c.fetch("/api/x").catch(() => {});
+    assert.ok(reason instanceof RelayRekeyError, String(reason?.message));
+    assert.equal(host.status().sessions, 0);
+    host.stop();
+  });
+
+  test("age budget (24h): next traffic triggers rekey; a fresh connect works again", async () => {
+    let t = 1_000_000;
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { now: () => t });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    let reason;
+    c.onclose = (r) => (reason = r);
+    t += 25 * 3600 * 1000;
+    await c.fetch("/api/x").catch(() => {});
+    assert.ok(reason instanceof RelayRekeyError, String(reason?.message));
+    const c2 = await connect(relay);
+    assert.deepEqual(await c2.authenticate("tok-SECRET-1"), { deviceId: "dev-1" });
+    host.stop();
+  });
+});
+
+describe("M3 eviction + R1 #8 limits", () => {
+  test("when full, the oldest UNAUTHENTICATED session is evicted; authenticated ones are never evicted", async () => {
+    const relay = makeRelay();
+    const { host, events } = makeHost(relay, { maxSessions: 2 });
+    host.start();
+    await tick();
+    const owner = await paired(relay); // authenticated
+    const idle = await connect(relay); // unauthenticated
+    let idleClosed = false;
+    idle.onclose = () => (idleClosed = true);
+    const fresh = await connect(relay); // full: evicts idle
+    await until(() => idleClosed);
+    assert.ok(events.some((e) => e.type === "evicted-unauthenticated"));
+    assert.deepEqual(await fresh.authenticate("tok-SECRET-1"), { deviceId: "dev-1" });
+    assert.equal(host.status().sessions, 2);
+    // both slots are authenticated now: a newcomer is refused, nobody is evicted
+    hostFire(relay, { t: "open", cid: "zz" });
+    assert.equal(host.status().sessions, 2);
+    assert.equal((await owner.fetch("/api/ok")).status, 200);
+    host.stop();
+  });
+
+  test("authTimeoutMs closes a session that never authenticates", async () => {
+    const relay = makeRelay();
+    const { host, timers } = makeHost(relay, { authTimeoutMs: 1234 });
+    host.start();
+    await tick();
+    const c = await connect(relay);
+    let closed = false;
+    c.onclose = () => (closed = true);
+    const t = timers.find((x) => x.ms === 1234);
+    assert.ok(t);
+    t.fn();
+    await until(() => closed);
+    assert.equal(host.status().sessions, 0);
+    host.stop();
+  });
+
+  test("429 over maxHttpPerSession completes cleanly (no hang, no leak)", async () => {
+    const relay = makeRelay();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const { host } = makeHost(relay, { maxHttpPerSession: 1, handleHttp: async () => (await gate, { status: 200, body: "ok" }) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const first = c.fetch("/api/slow");
+    await tick();
+    const second = await c.fetch("/api/second");
+    assert.equal(second.status, 429);
+    release();
+    assert.equal(await (await first).text(), "ok");
+    host.stop();
+  });
+
+  test("a throwing handler yields a finished 502", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay, {
+      handleHttp: async () => {
+        throw new Error("boom");
+      },
+    });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    assert.equal((await c.fetch("/api/x")).status, 502);
+    host.stop();
+  });
+});
+
+describe("size caps + leaks (R1 #3-#7)", () => {
+  test("host drops an oversize relay frame before parsing it", async () => {
+    const relay = makeRelay();
+    const { host, events } = makeHost(relay);
+    host.start();
+    await tick();
+    relay.host.fire("message", { data: "x".repeat(2_000_000) });
+    assert.ok(events.some((e) => e.type === "oversize-frame"));
+    host.stop();
+  });
+
+  test("client caps response bytes and kills the session on an oversize frame", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { handleHttp: async () => ({ status: 200, body: Buffer.alloc(300_000, 1) }) });
+    host.start();
+    await tick();
+    const c = await connectRelay({ endpoint: "wss://r", hostId: HOST_ID, hostPubKey: hostKey.pubB64, WebSocketImpl: relay.Sock, maxResponseBytes: 100_000 });
+    await c.redeem("123456");
+    await assert.rejects(c.fetch("/api/big"), /too large/);
+    const c2 = await connect(relay);
+    let reason;
+    c2.onclose = (r) => (reason = r);
+    relay.clients.get(cids(relay).at(-1)).fire("message", { data: "x".repeat(2_000_000) });
+    assert.match(String(reason?.message), /oversize/);
+    host.stop();
+  });
+
+  test("connect timeout closes the socket instead of leaking it", async () => {
+    let closes = 0;
+    class Never {
+      readyState = 0;
+      addEventListener() {}
+      send() {}
+      close() {
+        closes++;
+      }
+    }
+    await assert.rejects(connectRelay({ endpoint: "wss://r", hostId: HOST_ID, hostPubKey: hostKey.pubB64, WebSocketImpl: Never, timeoutMs: 20 }), /timed out/);
+    assert.ok(closes >= 1);
+  });
+
+  test("a throwing WebSocket constructor emits connect-error and schedules a retry", () => {
+    class Boom {
+      constructor() {
+        throw new Error("no net");
+      }
+    }
+    const { host, events, timers } = makeHost(makeRelay(), { WebSocketImpl: Boom });
+    host.start();
+    assert.ok(events.some((e) => e.type === "connect-error"));
+    assert.equal(timers.at(-1).ms, 1000);
+    host.stop();
+  });
+});
+
+describe("noble X25519 fallback", () => {
+  test("noble and WebCrypto agree on DH, and a noble-only client talks to the node host", async () => {
+    const a = await newKex(true);
+    const b = await newKex(false);
+    assert.equal(a.impl, "noble");
+    assert.equal(b.impl, "webcrypto");
+    assert.deepEqual(Buffer.from(await a.dh(b.pub)), Buffer.from(await b.dh(a.pub)));
+    const relay = makeRelay();
+    const { host } = makeHost(relay);
+    host.start();
+    await tick();
+    const c = await connectRelay({ endpoint: "wss://r", hostId: HOST_ID, hostPubKey: hostKey.pubB64, WebSocketImpl: relay.Sock, forceNoble: true });
+    assert.equal(c.kex, "noble");
+    await c.redeem("123456");
+    assert.equal((await c.fetch("/api/hello")).status, 200);
+    host.stop();
+  });
+
+  test("a runtime without WebCrypto X25519 falls back automatically", async () => {
+    const subtle = globalThis.crypto.subtle;
+    const orig = subtle.generateKey.bind(subtle);
+    subtle.generateKey = async (alg, ...rest) => {
+      if (alg?.name === "X25519") throw new Error("NotSupportedError");
+      return orig(alg, ...rest);
+    };
+    try {
+      assert.equal((await newKex()).impl, "noble");
+    } finally {
+      delete subtle.generateKey;
+    }
+    assert.equal((await newKex()).impl, "webcrypto");
+  });
+});
+
+describe("H3 pairing fragment", () => {
+  const link = () => `#hostId=h1&pub=${encodeURIComponent(hostKey.pubB64)}&relay=${encodeURIComponent("wss://relay.example")}&code=123456`;
+  const win = (hash) => {
+    const w = { location: { hash, pathname: "/pair", search: "?a=1" }, history: { calls: [], replaceState: (...a) => w.history.calls.push(a) } };
+    return w;
+  };
+
+  test("reads hostId/pub/relay/code into memory and strips the fragment immediately", () => {
+    const w = win(link());
+    const f = takePairingFragment(w);
+    assert.deepEqual(f, { hostId: "h1", pub: hostKey.pubB64, relay: "wss://relay.example", code: "123456" });
+    assert.deepEqual(w.history.calls, [[null, "", "/pair?a=1"]]);
+  });
+
+  test("strips even a malformed pairing link but returns null; ignores unrelated fragments; rejects ws:// relays", () => {
+    const bad = win("#hostId=h1&pub=AAAA&relay=wss%3A%2F%2Fr");
+    assert.equal(takePairingFragment(bad), null);
+    assert.equal(bad.history.calls.length, 1);
+    const other = win("#section-2");
+    assert.equal(takePairingFragment(other), null);
+    assert.equal(other.history.calls.length, 0);
+    const plain = win(link().replace("wss%3A", "ws%3A"));
+    assert.equal(takePairingFragment(plain), null);
+    assert.equal(takePairingFragment({}), null);
   });
 });

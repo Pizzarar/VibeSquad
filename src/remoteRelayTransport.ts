@@ -1,29 +1,36 @@
 // E5 client side of the VibeSquad outbound E2EE relay. Protocol + threat model: server/relay-tunnel.mjs header and
 // docs/lanes/android-app/E5_THREAT_MODEL.md. UNWIRED: nothing imports this yet.
-// Uses WebCrypto only (no deps). X25519 in WebCrypto needs Chrome/WebView >= 133, Safari >= 17, Firefox >= 130; when it
-// is missing, connectRelay() rejects with RelayUnsupportedError instead of falling back to hand-rolled curve math.
-// Kept dependency-free and type-erasable so node can import it directly in tests.
+// Crypto: WebCrypto (AES-256-GCM, HKDF, SHA-256) plus X25519 from WebCrypto when the runtime has it (Chrome/WebView >= 133,
+// Safari >= 17, Firefox >= 130), else audited @noble/curves. Channel keys and counters live only in memory: any socket
+// drop means a fresh handshake, never a resume.
+// Kept type-erasable so node can import it directly in tests.
+import { x25519 } from "@noble/curves/ed25519.js";
 
 const PROTOCOL = "vibesquad-relay-v1";
+const SUITE = "Noise_NK_25519_AESGCM_SHA256";
 const HS_VERSION = 1;
 const DIR_C2H = 1;
 const DIR_H2C = 2;
 const TAG_LEN = 16;
+export const MAX_RECORD_BYTES = 1024 * 1024;
+const MAX_WIRE_CHARS = Math.ceil(((MAX_RECORD_BYTES + 8 + TAG_LEN) * 4) / 3) + 512; // raw relay frame, before JSON/base64
+const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
-export class RelayUnsupportedError extends Error {
-  constructor(msg = "This browser/WebView lacks WebCrypto X25519; use Meshnet or update the system WebView.") {
-    super(msg);
-    this.name = "RelayUnsupportedError";
+export class RelayAuthError extends Error {}
+/** The host asked for a fresh handshake (24 h / 2^20 records). Reconnect and re-authenticate. */
+export class RelayRekeyError extends Error {
+  constructor() {
+    super("relay session expired; reconnect");
+    this.name = "RelayRekeyError";
   }
 }
-export class RelayAuthError extends Error {}
 
 type Bytes = Uint8Array<ArrayBuffer>;
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const subtle = (): SubtleCrypto => {
   const s = globalThis.crypto?.subtle;
-  if (!s) throw new RelayUnsupportedError("WebCrypto is unavailable (insecure context?)");
+  if (!s) throw new Error("WebCrypto is unavailable (insecure context?)");
   return s;
 };
 
@@ -48,29 +55,45 @@ const concat = (...parts: Uint8Array[]): Bytes => {
   return out;
 };
 
-/** Probes X25519 + AES-GCM + HKDF support. */
-export async function supportsRelayCrypto(): Promise<boolean> {
-  try {
-    await subtle().generateKey({ name: "X25519" }, true, ["deriveBits"]);
-    return true;
-  } catch {
-    return false;
+// ---- X25519: WebCrypto when present, @noble/curves otherwise --------------------------------------------------------------
+
+export interface Kex {
+  impl: "webcrypto" | "noble";
+  pub: Bytes;
+  dh(peer: Uint8Array): Promise<Bytes>;
+}
+
+/** Fresh ephemeral X25519 key. `forceNoble` is for tests and for runtimes known to mis-implement WebCrypto X25519. */
+export async function newKex(forceNoble = false): Promise<Kex> {
+  if (!forceNoble) {
+    try {
+      const eph = (await subtle().generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;
+      const pub = new Uint8Array(await subtle().exportKey("raw", eph.publicKey));
+      return {
+        impl: "webcrypto",
+        pub,
+        async dh(peer) {
+          const k = await subtle().importKey("raw", peer as Bytes, { name: "X25519" }, false, []);
+          return new Uint8Array(await subtle().deriveBits({ name: "X25519", public: k }, eph.privateKey, 256));
+        },
+      };
+    } catch {
+      // no WebCrypto X25519 here: fall through to the pure-JS implementation
+    }
   }
+  const sk = x25519.utils.randomSecretKey();
+  const pub = x25519.getPublicKey(sk) as Bytes;
+  return { impl: "noble", pub, dh: async (peer) => x25519.getSharedSecret(sk, peer) as Bytes };
 }
 
 // ---- pure crypto pieces (swap these, not the mux) ----------------------------------------------------------------------
 
-export async function transcriptHash(hostId: string, hostPub: Uint8Array, ec: Uint8Array, eh: Uint8Array): Promise<Bytes> {
+export async function transcriptHash(hostId: string, hostPub: Uint8Array, ec: Uint8Array, eh: Uint8Array, version = HS_VERSION): Promise<Bytes> {
   const id = enc.encode(hostId);
   const len = new Uint8Array([id.length >> 8, id.length & 255]);
-  return new Uint8Array(await subtle().digest("SHA-256", concat(enc.encode(PROTOCOL), len, id, hostPub, ec, eh)));
-}
-
-async function dh(priv: CryptoKey, pubRaw: Uint8Array): Promise<Bytes> {
-  const pub = await subtle().importKey("raw", pubRaw as Bytes, { name: "X25519" }, false, []);
-  const bits = new Uint8Array(await subtle().deriveBits({ name: "X25519", public: pub }, priv, 256));
-  if (bits.every((b) => b === 0)) throw new RelayAuthError("degenerate DH output");
-  return bits;
+  return new Uint8Array(
+    await subtle().digest("SHA-256", concat(enc.encode(PROTOCOL), enc.encode(SUITE), new Uint8Array([version]), len, id, hostPub, ec, eh)),
+  );
 }
 
 export async function deriveKeys(dhEs: Uint8Array, dhEe: Uint8Array, h: Uint8Array): Promise<{ c2h: Bytes; h2c: Bytes }> {
@@ -80,6 +103,8 @@ export async function deriveKeys(dhEs: Uint8Array, dhEe: Uint8Array, h: Uint8Arr
   );
   return { c2h: okm.slice(0, 32), h2c: okm.slice(32, 64) };
 }
+
+const allZero = (b: Uint8Array) => b.every((x) => x === 0);
 
 export interface Channel {
   seal(plain: Uint8Array): Promise<Bytes>;
@@ -101,6 +126,7 @@ export async function createChannel(sendRaw: Uint8Array, recvRaw: Uint8Array, se
   };
   return {
     async seal(plain) {
+      if (plain.length > MAX_RECORD_BYTES) throw new Error("record too large");
       const ctr = sendCtr;
       if (ctr >= 2n ** 53n) throw new Error("relay channel exhausted");
       sendCtr += 1n; // advance before awaiting so concurrent seals never reuse a nonce
@@ -112,6 +138,7 @@ export async function createChannel(sendRaw: Uint8Array, recvRaw: Uint8Array, se
     },
     async open(frame) {
       if (frame.length < 8 + TAG_LEN) throw new RelayAuthError("short record");
+      if (frame.length > MAX_RECORD_BYTES + 8 + TAG_LEN) throw new RelayAuthError("record too large");
       const ctr = new DataView(frame.buffer, frame.byteOffset, frame.byteLength).getBigUint64(0);
       if (ctr !== recvCtr) throw new RelayAuthError("replayed or out-of-order record");
       const { iv, aad } = meta(recvDir, ctr);
@@ -127,16 +154,20 @@ export async function createChannel(sendRaw: Uint8Array, recvRaw: Uint8Array, se
   };
 }
 
-export async function startHandshake(hostPub: Uint8Array, hostId: string) {
-  const eph = (await subtle().generateKey({ name: "X25519" }, false, ["deriveBits"])) as CryptoKeyPair;
-  const ec = new Uint8Array(await subtle().exportKey("raw", eph.publicKey));
+export async function startHandshake(hostPub: Uint8Array, hostId: string, kex?: Kex) {
+  const k = kex ?? (await newKex());
+  const ec = k.pub;
   return {
+    kex: k,
     msg1: concat(new Uint8Array([HS_VERSION]), ec),
     async finish(msg2: Uint8Array): Promise<Channel> {
       if (msg2.length < 32 + 8 + TAG_LEN) throw new RelayAuthError("bad handshake reply");
       const eh = msg2.slice(0, 32);
       const h = await transcriptHash(hostId, hostPub, ec, eh);
-      const keys = await deriveKeys(await dh(eph.privateKey, hostPub), await dh(eph.privateKey, eh), h);
+      const es = await k.dh(hostPub);
+      const ee = await k.dh(eh);
+      if (allZero(es) || allZero(ee)) throw new RelayAuthError("degenerate DH output");
+      const keys = await deriveKeys(es, ee, h);
       const channel = await createChannel(keys.c2h, keys.h2c, DIR_C2H, DIR_H2C);
       const ok = dec.decode(await channel.open(msg2.slice(32)));
       if (ok !== "vs-ok") throw new RelayAuthError("host key confirmation failed");
@@ -144,6 +175,48 @@ export async function startHandshake(hostPub: Uint8Array, hostId: string) {
     },
   };
 }
+
+/** base64url(SHA-256(host public key)): the self-certifying hostId (design review M1). */
+export async function selfCertifyingHostId(pub: Uint8Array): Promise<string> {
+  const d = new Uint8Array(await subtle().digest("SHA-256", pub as Bytes));
+  return toB64(d).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+// ---- pairing link fragment (design review H3) ----------------------------------------------------------------------------
+// The browser client is served from a static origin that is a TRUSTED party (it sees the code, the pin and all plaintext).
+// First thing on load: read the #fragment into memory and strip it from the URL/history so it is never re-shared,
+// bookmarked or leaked via Referer. Import this module before anything else in the entry point.
+
+export interface PairingFragment {
+  hostId: string;
+  pub: string;
+  relay: string;
+  code: string | null;
+}
+interface WindowLike {
+  location?: { hash: string; pathname: string; search: string };
+  history?: { replaceState(state: unknown, title: string, url?: string): void };
+}
+
+export function takePairingFragment(w: WindowLike = globalThis as WindowLike): PairingFragment | null {
+  const loc = w.location;
+  if (!loc?.hash || loc.hash.length < 2) return null;
+  const p = new URLSearchParams(loc.hash.slice(1));
+  if (!p.has("pub") && !p.has("hostId")) return null; // not ours: leave other fragments alone
+  w.history?.replaceState(null, "", loc.pathname + loc.search);
+  const hostId = p.get("hostId") ?? "";
+  const pub = p.get("pub") ?? "";
+  const relay = p.get("relay") ?? "";
+  let pubOk = false;
+  try {
+    pubOk = fromB64(pub.replace(/-/g, "+").replace(/_/g, "/")).length === 32;
+  } catch {}
+  if (!hostId || !pubOk || !/^wss:\/\//i.test(relay)) return null;
+  return { hostId, pub: pub.replace(/-/g, "+").replace(/_/g, "/"), relay, code: p.get("code") };
+}
+
+/** Captured at module load, before any other app code can read location.hash. null outside a browser or without a pairing link. */
+export const pairingFragment: PairingFragment | null = takePairingFragment();
 
 // ---- transport -----------------------------------------------------------------------------------------------------------
 
@@ -163,6 +236,11 @@ export interface RelayOptions {
   hostPubKey: string;
   WebSocketImpl?: SockCtor;
   timeoutMs?: number;
+  /** Skip WebCrypto X25519 even when present. */
+  forceNoble?: boolean;
+  maxResponseBytes?: number;
+  /** Require hostId === base64url(SHA-256(hostPubKey)). */
+  requireSelfCertifiedHostId?: boolean;
 }
 
 export interface RelayWebSocket {
@@ -175,19 +253,20 @@ export interface RelayWebSocket {
 }
 
 export interface RelayClient {
+  kex: "webcrypto" | "noble";
   redeem(code: string, label?: string): Promise<{ deviceId: string; token: string }>;
   authenticate(token: string): Promise<{ deviceId: string }>;
   fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
   openWebSocket(path: string): Promise<RelayWebSocket>;
   close(): void;
-  onclose: (() => void) | null;
+  onclose: ((reason?: unknown) => void) | null;
 }
 
 type Frame = Record<string, unknown> & { t: string; id?: string };
 
 export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
-  if (!(await supportsRelayCrypto())) throw new RelayUnsupportedError();
   const timeoutMs = opts.timeoutMs ?? 15_000;
+  const maxResponseBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const Ctor = opts.WebSocketImpl ?? (globalThis.WebSocket as unknown as SockCtor);
   const u = new URL(opts.endpoint);
   if (!u.pathname.endsWith("/ws")) u.pathname = `${u.pathname.replace(/\/$/, "")}/ws`;
@@ -195,6 +274,10 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
   u.searchParams.set("role", "client");
   const hostPub = fromB64(opts.hostPubKey);
   if (hostPub.length !== 32) throw new RelayAuthError("bad pinned host key");
+  if (opts.requireSelfCertifiedHostId && (await selfCertifyingHostId(hostPub)) !== opts.hostId) {
+    throw new RelayAuthError("hostId does not match the pinned host key");
+  }
+  const kex = await newKex(opts.forceNoble);
 
   const sock = new Ctor(u.toString());
   let channel: Channel | null = null;
@@ -207,34 +290,43 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
     ready = res;
     fail = rej;
   });
+  handshake.catch(() => {}); // rejection is surfaced to connectRelay's await below
   const pending = new Map<string, { resolve: (f: Frame) => void; reject: (e: unknown) => void }>();
   const streams = new Map<string, (f: Frame) => void>(); // http body + ws events by request id
-  const client: RelayClient = { onclose: null } as RelayClient;
+  const client = { onclose: null, kex: kex.impl } as unknown as RelayClient;
 
   const shutdown = (err?: unknown) => {
     if (closed) return;
     closed = true;
-    fail(err ?? new Error("relay closed"));
-    for (const p of pending.values()) p.reject(err ?? new Error("relay closed"));
+    const reason = err ?? new Error("relay closed");
+    fail(reason);
+    for (const p of pending.values()) p.reject(reason);
     pending.clear();
-    for (const s of streams.values()) s({ t: "ws-close", code: 1006 });
+    for (const s of [...streams.values()]) s({ t: "ws-close", code: 1006 });
     streams.clear();
     try {
       sock.close();
     } catch {}
-    client.onclose?.();
+    client.onclose?.(reason);
   };
   const sendRaw = (b: Uint8Array) => sock.send(JSON.stringify({ t: "msg", b: toB64(b) }));
   const sendFrame = async (f: Frame) => {
     if (!channel || closed) throw new Error("relay not connected");
     sendRaw(await channel.seal(enc.encode(JSON.stringify(f))));
   };
+  // Sends a request frame; on failure drops the id from pending/streams so nothing leaks.
+  const sendTracked = (f: Frame, id: string, reject: (e: unknown) => void) =>
+    sendFrame(f).catch((e) => {
+      pending.delete(id);
+      streams.delete(id);
+      reject(e);
+    });
   let nextId = 0;
   const rpc = (f: Omit<Frame, "id">, expect: string): Promise<Frame> => {
     const id = String(++nextId);
     return new Promise<Frame>((resolve, reject) => {
       pending.set(id, { resolve, reject });
-      sendFrame({ ...f, id } as Frame).catch(reject);
+      void sendTracked({ ...f, id } as Frame, id, reject);
     }).then((r) => {
       if (r.t !== expect) throw new Error(`unexpected ${r.t}`);
       return r;
@@ -247,12 +339,9 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
       return ready();
     }
     const f = JSON.parse(dec.decode(await channel.open(bytes))) as Frame;
+    if (f.t === "rekey") return shutdown(new RelayRekeyError());
     const id = f.id ?? "";
-    if (f.t === "redeem-res" || f.t === "auth-res" || f.t === "ws-open-res") {
-      const p = pending.get(id);
-      pending.delete(id);
-      p?.resolve(f);
-    } else if (f.t === "http-res") {
+    if (f.t === "redeem-res" || f.t === "auth-res" || f.t === "ws-open-res" || f.t === "http-res") {
       const p = pending.get(id);
       pending.delete(id);
       p?.resolve(f);
@@ -260,42 +349,52 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
   }
 
   sock.addEventListener("message", (ev) => {
+    const raw = ev.data;
+    if (typeof raw !== "string" || raw.length > MAX_WIRE_CHARS) return shutdown(new Error("oversize or non-text relay frame")); // before JSON/base64
     let b: Uint8Array | null = null;
     try {
-      const m = JSON.parse(String(ev.data)) as { t?: string; b?: string };
-      if (m.t === "close") return shutdown(new Error("relay closed the session (host offline?)"));
+      const m = JSON.parse(raw) as { t?: string; b?: string };
+      if (m.t === "close") {
+        chain = chain.then(() => shutdown(new Error("relay closed the session (host offline?)"))); // after in-flight records, so a final rekey frame is still read
+        return;
+      }
       if (m.t === "msg" && typeof m.b === "string") b = fromB64(m.b);
     } catch {}
     if (!b) return;
     const bytes = b;
     chain = chain.then(() => onRecord(bytes)).catch((e) => shutdown(e)); // any failure kills the session
   });
-  sock.addEventListener("close", () => shutdown());
+  sock.addEventListener("close", () => void (chain = chain.then(() => shutdown()))); // after in-flight records
   sock.addEventListener("error", () => shutdown(new Error("relay socket error")));
 
-  await new Promise<void>((res, rej) => {
-    const t = setTimeout(() => rej(new Error("relay connect timed out")), timeoutMs);
-    sock.addEventListener("open", () => {
-      clearTimeout(t);
-      res();
-    });
-    sock.addEventListener("error", () => {
-      clearTimeout(t);
-      rej(new Error("relay unreachable"));
-    });
-  });
-  hs = await startHandshake(hostPub, opts.hostId);
-  sendRaw(hs.msg1);
-  const hsTimer = setTimeout(() => shutdown(new RelayAuthError("host did not answer the handshake")), timeoutMs);
   try {
-    await handshake;
-  } finally {
-    clearTimeout(hsTimer);
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error("relay connect timed out")), timeoutMs);
+      sock.addEventListener("open", () => {
+        clearTimeout(t);
+        res();
+      });
+      sock.addEventListener("error", () => {
+        clearTimeout(t);
+        rej(new Error("relay unreachable"));
+      });
+    });
+    hs = await startHandshake(hostPub, opts.hostId, kex);
+    sendRaw(hs.msg1);
+    const hsTimer = setTimeout(() => shutdown(new RelayAuthError("host did not answer the handshake")), timeoutMs);
+    try {
+      await handshake;
+    } finally {
+      clearTimeout(hsTimer);
+    }
+  } catch (e) {
+    shutdown(e); // closes the socket on connect timeout / handshake failure
+    throw e;
   }
 
   client.redeem = async (code, label = "") => {
     const r = await rpc({ t: "redeem", code, label }, "redeem-res");
-    if (!r.ok) throw new RelayAuthError("code rejected");
+    if (!r.ok) throw new RelayAuthError(r.locked ? "pairing locked; mint a new code" : "code rejected");
     return { deviceId: String(r.deviceId), token: String(r.token) };
   };
   client.authenticate = async (token) => {
@@ -311,6 +410,7 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
     const body = init.body == null ? null : new Uint8Array(await new Response(init.body).arrayBuffer());
     const id = String(++nextId);
     const chunks: Bytes[] = [];
+    let total = 0;
     let done!: () => void;
     let abort!: (e: unknown) => void;
     const finished = new Promise<void>((r, j) => ((done = r), (abort = j)));
@@ -318,19 +418,30 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
     streams.set(id, (f) => {
       if (f.t === "ws-close") abort(new Error("relay closed mid-response"));
       else if (f.t === "http-body") {
-        if (f.b) chunks.push(fromB64(String(f.b)));
+        if (f.b) {
+          const c = fromB64(String(f.b));
+          total += c.length;
+          if (total > maxResponseBytes) {
+            streams.delete(id);
+            return abort(new Error("relay response too large"));
+          }
+          chunks.push(c);
+        }
         if (f.fin) done();
       }
     });
     const head = await new Promise<Frame>((resolve, reject) => {
       pending.set(id, { resolve, reject });
-      sendFrame({ t: "http", id, method, path: url.pathname + url.search, headers, ...(body ? { b: toB64(body) } : {}) }).catch(reject);
+      void sendTracked({ t: "http", id, method, path: url.pathname + url.search, headers, ...(body ? { b: toB64(body) } : {}) }, id, reject);
     });
     const status = Number(head.status);
     if (head.fin) done();
-    await finished;
-    streams.delete(id);
-    const noBody = status === 204 || status === 304 || method === "HEAD";
+    try {
+      await finished;
+    } finally {
+      streams.delete(id);
+    }
+    const noBody = status === 204 || status === 304 || method === "HEAD" || head.fin === true;
     return new Response(noBody ? null : concat(...chunks), { status, headers: (head.headers ?? {}) as Record<string, string> });
   };
   client.openWebSocket = async (path) => {
@@ -362,7 +473,7 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
     });
     const r = await new Promise<Frame>((resolve, reject) => {
       pending.set(id, { resolve, reject });
-      sendFrame({ t: "ws-open", id, path }).catch(reject);
+      void sendTracked({ t: "ws-open", id, path }, id, reject);
     });
     if (!r.ok) {
       streams.delete(id);

@@ -9,7 +9,7 @@
 // Handshake (client knows host static pubkey S out of band; relay never does anything but forward):
 //   msg1 = 0x01 || e_c(32)                       client ephemeral
 //   msg2 = e_h(32) || record(h2c, ctr 0, "vs-ok") host ephemeral + key confirmation (proves it holds S's private key)
-//   h    = SHA256("vibesquad-relay-v1" || len(hostId) || hostId || S || e_c || e_h)
+//   h    = SHA256("vibesquad-relay-v1" || "Noise_NK_25519_AESGCM_SHA256" || version || len(hostId) || hostId || S || e_c || e_h)
 //   keys = HKDF-SHA256(ikm = DH(e_c,S) || DH(e_c,e_h), salt = h, info = "vs-relay-v1 keys", 64) -> c2h[0..32), h2c[32..64)
 // Records: ctr(8, BE) || AES-256-GCM(key_dir, nonce = 0x00000000||ctr, aad = dir||ctr, plaintext) ; receiver requires
 // ctr === expected, so replay, reorder and drop-then-continue all fail closed.
@@ -27,9 +27,11 @@ import {
 } from "node:crypto";
 import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
+import { Readable, Writable } from "node:stream";
 import { dirname, join } from "node:path";
 
 export const PROTOCOL = "vibesquad-relay-v1";
+const SUITE = "Noise_NK_25519_AESGCM_SHA256"; // hashed into the transcript with the version byte (design review M4)
 export const HS_VERSION = 0x01;
 const DIR_C2H = 1;
 const DIR_H2C = 2;
@@ -141,11 +143,20 @@ export function createChannel(sendKey, recvKey, sendDir, recvDir) {
   };
 }
 
-export function transcriptHash(hostId, hostPub, ec, eh) {
+export function transcriptHash(hostId, hostPub, ec, eh, version = HS_VERSION) {
   const id = Buffer.from(String(hostId), "utf8");
   const len = Buffer.alloc(2);
   len.writeUInt16BE(id.length);
-  return createHash("sha256").update(PROTOCOL).update(len).update(id).update(hostPub).update(ec).update(eh).digest();
+  return createHash("sha256")
+    .update(PROTOCOL)
+    .update(SUITE)
+    .update(Buffer.from([version]))
+    .update(len)
+    .update(id)
+    .update(hostPub)
+    .update(ec)
+    .update(eh)
+    .digest();
 }
 
 function dhChecked(privateKey, publicKey) {
@@ -201,7 +212,7 @@ export function backoffDelay(attempt, { base = 1000, max = 60_000, jitter = 0.3,
   return Math.max(0, Math.round(raw * (1 + (rand() * 2 - 1) * jitter)));
 }
 
-// ---- S4/R2 allowlist ------------------------------------------------------------------------------------------------
+// ---- S4/R2 allowlist + path normalization ---------------------------------------------------------------------------
 // No shared constant exists: server/vibesquad-api.mjs isGatedRead() is a loopback read-only gate, not a remote
 // allowlist, and importing it would drag the whole API module in. This is the relay's own pure, default-deny filter.
 
@@ -211,34 +222,49 @@ export const RELAY_DENIED_PREFIXES = [
   "/__vibesquad/local-image", // arbitrary local file contents
   "/__vibesquad/pair/redeem", // codes are redeemed inside the encrypted channel only
   "/__vibesquad/enter", // cookie-hop for the direct (non-relay) transport
+  "/__vibesquad/local-login", // loopback bootstrap (+ /nonce): defense in depth, relayed callers are never local
 ];
 const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 
-/** True only for a well-formed same-origin path under an allowed root and not under a denied prefix. */
-export function isRelayPathAllowed(method, target) {
-  if (!METHODS.has(String(method).toUpperCase())) return false;
-  if (typeof target !== "string" || target.length > 4096 || !target.startsWith("/") || target.startsWith("//")) return false;
-  if (/[\u0000-\u001f\u007f\\#]/.test(target)) return false;
-  const pathname = target.split("?")[0];
-  const segs = pathname.split("/").slice(1);
+/**
+ * Canonicalizes a request target ONCE and judges that canonical form. Returns { pathname, query, path } or null.
+ * Each segment is decoded, rejected if it is a dot segment / contains a slash, backslash or control char / is
+ * double-encoded, then re-encoded with encodeURIComponent. `path` is what must be forwarded: the validator and the
+ * consumer (handleHttp / openWs / the in-process dispatcher) therefore see the same string, never the raw input.
+ */
+export function normalizeRelayTarget(method, target) {
+  if (!METHODS.has(String(method).toUpperCase())) return null;
+  if (typeof target !== "string" || target.length > 4096 || !target.startsWith("/") || target.startsWith("//")) return null;
+  if (/[\u0000-\u001f\u007f\\#]/.test(target)) return null;
+  const qi = target.indexOf("?");
+  const rawPath = qi < 0 ? target : target.slice(0, qi);
+  const query = qi < 0 ? "" : target.slice(qi);
+  const segs = rawPath.split("/").slice(1);
   const decoded = [];
-  for (const s of segs) {
+  const encoded = [];
+  for (let i = 0; i < segs.length; i++) {
+    const s = segs[i];
     let d;
     try {
       d = decodeURIComponent(s);
     } catch {
-      return false;
+      return null;
     }
-    if (d === "." || d === ".." || /[/\\\u0000]/.test(d)) return false;
-    if (d !== s && /%[0-9a-f]{2}/i.test(d)) return false; // double-encoding
+    if (d === "." || d === ".." || /[/\\\u0000-\u001f\u007f]/.test(d)) return null;
+    if (d === "" && i < segs.length - 1) return null; // //
+    if (d !== s && /%[0-9a-f]{2}/i.test(d)) return null; // double-encoding
     decoded.push(d);
+    encoded.push(encodeURIComponent(d));
   }
   const norm = `/${decoded.join("/")}`.toLowerCase();
-  // norm is the DECODED, lowercased path, so /%5f%5fvibesquad/first-run can't dodge the deny list. Plain startsWith
-  // also catches siblings like /first-run-status.
-  if (RELAY_DENIED_PREFIXES.some((p) => norm.startsWith(p))) return false;
-  return norm === "/ws" || RELAY_ALLOWED_ROOTS.some((r) => norm.startsWith(r));
+  if (RELAY_DENIED_PREFIXES.some((p) => norm.startsWith(p))) return null; // also catches siblings like /first-run-status
+  if (!(norm === "/ws" || RELAY_ALLOWED_ROOTS.some((r) => norm.startsWith(r)))) return null;
+  const pathname = `/${encoded.join("/")}`;
+  return { pathname, query, path: pathname + query };
 }
+
+/** True only for a well-formed same-origin path under an allowed root and not under a denied prefix. */
+export const isRelayPathAllowed = (method, target) => normalizeRelayTarget(method, target) !== null;
 
 const FORWARD_HEADERS = new Set(["content-type", "accept", "if-none-match", "if-modified-since", "range"]);
 const pickHeaders = (h) => {
@@ -248,16 +274,116 @@ const pickHeaders = (h) => {
   }
   return out;
 };
+const STRIPPED_RESPONSE_HEADERS = new Set(["set-cookie", "set-cookie2"]);
+const cleanResponseHeaders = (h) => {
+  const out = {};
+  for (const [k, v] of Object.entries(h && typeof h === "object" ? h : {})) {
+    const key = k.toLowerCase();
+    if (STRIPPED_RESPONSE_HEADERS.has(key) || v == null) continue;
+    out[key] = Array.isArray(v) ? v.join(", ") : String(v);
+  }
+  return out;
+};
+
+// ---- in-process dispatch (design review H1) ---------------------------------------------------------------------------
+// NEVER proxy relayed traffic through a real loopback fetch: auth.mjs isLocalBrowserSafe() would treat the relayed
+// device as the PC itself. The wiring layer calls the server's request listener in-process with a synthetic request
+// that carries req.relayDevice and a NON-loopback socket address; auth must treat any request with relayDevice as
+// remote (isRelayRequest below) and authenticate() must honor relayDevice instead of cookies/tokens.
+
+export const isRelayRequest = (req) => Boolean(req?.relayDevice?.id);
+
+/** An IncomingMessage-shaped Readable. headers hold only the filtered client headers; no cookie/authorization/host. */
+export function createSyntheticRequest({ method, path, headers = {}, body = Buffer.alloc(0), deviceId }) {
+  const req = Readable.from(body.length ? [body] : []);
+  const socket = { remoteAddress: "relay", localAddress: "relay", remotePort: 0, encrypted: true, destroyed: false, destroy() {}, on() {} };
+  Object.assign(req, {
+    method,
+    url: path,
+    headers: { ...headers },
+    httpVersion: "1.1",
+    socket,
+    connection: socket,
+    relayDevice: Object.freeze({ id: String(deviceId) }),
+  });
+  return req;
+}
+
+/** A ServerResponse-shaped Writable that records status/headers/body. set-cookie never survives. */
+export function createSyntheticResponse() {
+  const chunks = [];
+  const headers = new Map();
+  let total = 0;
+  const res = new Writable({
+    write(chunk, _enc, cb) {
+      total += chunk.length;
+      if (total > res.maxBodyBytes) return cb(new Error("response too large"));
+      chunks.push(Buffer.from(chunk));
+      cb();
+    },
+  });
+  Object.assign(res, {
+    statusCode: 200,
+    maxBodyBytes: 32 * 1024 * 1024,
+    setHeader(k, v) {
+      headers.set(String(k).toLowerCase(), v);
+      return res;
+    },
+    getHeader: (k) => headers.get(String(k).toLowerCase()),
+    getHeaders: () => Object.fromEntries(headers),
+    hasHeader: (k) => headers.has(String(k).toLowerCase()),
+    removeHeader: (k) => void headers.delete(String(k).toLowerCase()),
+    flushHeaders() {},
+    writeHead(status, a, b) {
+      res.statusCode = status;
+      for (const [k, v] of Object.entries(typeof a === "object" && a ? a : (b ?? {}))) headers.set(k.toLowerCase(), v);
+      return res;
+    },
+    get headersSent() {
+      return res.writableLength > 0 || res.writableEnded;
+    },
+    result: () => ({ status: res.statusCode, headers: cleanResponseHeaders(Object.fromEntries(headers)), body: Buffer.concat(chunks) }),
+  });
+  return res;
+}
+
+/** Adapts a node (req, res) request listener into the tunnel's handleHttp, fully in-process. */
+export function createInProcessDispatcher(requestListener, { timeoutMs = 60_000, maxBodyBytes } = {}) {
+  return ({ method, path, headers, body, deviceId }) =>
+    new Promise((resolve) => {
+      const req = createSyntheticRequest({ method, path, headers, body, deviceId });
+      const res = createSyntheticResponse();
+      if (maxBodyBytes) res.maxBodyBytes = maxBodyBytes;
+      let done = false;
+      let timer = null;
+      const finish = (status) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(status ? { status, headers: {}, body: Buffer.alloc(0) } : res.result());
+      };
+      timer = setTimeout(() => finish(504), timeoutMs);
+      res.on("finish", () => finish());
+      res.on("error", () => finish(502));
+      Promise.resolve(requestListener(req, res)).catch(() => finish(500));
+    });
+}
 
 // ---- the tunnel -------------------------------------------------------------------------------------------------------
+
+const MAX_WIRE_CHARS = Math.ceil(((MAX_RECORD_BYTES + 8 + TAG_LEN) * 4) / 3) + 512; // raw relay frame, before JSON/base64
+const rawSize = (raw) => (typeof raw === "string" ? raw.length : (raw?.byteLength ?? raw?.length ?? Infinity));
 
 /**
  * createRelayHost({ endpoint, hostId, hostKey, redeem, authenticate, handleHttp, openWs, ... })
  *   redeem({ code, label }) -> { deviceId, token } | null        (wiring calls auth.mjs; this module never writes devices.json)
  *   authenticate(token)     -> { deviceId } | null
- *   handleHttp({ method, path, headers, body: Buffer, deviceId }) -> { status, headers?, body? }   (loopback handler)
+ *   isRevoked(deviceId)     -> boolean | Promise<boolean>        (re-checked on EVERY post-auth dispatch; CLI revokes run out of process)
+ *   handleHttp({ method, path, headers, body: Buffer, deviceId }) -> { status, headers?, body? }   path is canonical; see createInProcessDispatcher
  *   openWs({ path, deviceId, send(data, binary), close(code?) }) -> { message(data, binary), close() } | null
- * Injected for tests: WebSocketImpl, setTimeoutFn/clearTimeoutFn, rand, onEvent.
+ *   burnCodes()             -> void   (H2: invalidate every outstanding pairing code)
+ *   onNeedsYou(event)       -> void   (H2/R1#1: security event for the owner)
+ * Injected for tests: WebSocketImpl, setTimeoutFn/clearTimeoutFn, rand, now, onEvent.
  */
 export function createRelayHost(opts) {
   const {
@@ -268,23 +394,35 @@ export function createRelayHost(opts) {
     authenticate,
     handleHttp,
     openWs,
+    isRevoked = () => false,
+    burnCodes = () => {},
+    onNeedsYou = () => {},
     WebSocketImpl = globalThis.WebSocket,
     setTimeoutFn = setTimeout,
     clearTimeoutFn = clearTimeout,
     rand = Math.random,
+    now = Date.now,
     onEvent = () => {},
     backoff = {},
     maxSessions = 32,
     authTimeoutMs = 30_000,
-    maxRedeemAttempts = 5,
+    maxRedeemAttempts = 5, // per session
+    redeemFailLimit = 10, // host-wide, across sessions and reconnects (H2)
+    authFailLimit = 100, // host-wide per authFailWindowMs
+    authFailWindowMs = 60_000,
     maxHttpPerSession = 16,
     maxWsPerSession = 8,
+    maxSessionMs = 24 * 60 * 60 * 1000, // rekey (M5)
+    maxSessionRecords = 2 ** 20,
   } = opts;
   let sock = null;
   let attempt = 0;
   let timer = null;
   let stopped = true;
-  const sessions = new Map(); // cid -> session
+  let redeemFails = 0;
+  let redeemLocked = false; // set when the global limit burns the codes; cleared by noteFreshMint()
+  let authFails = [];
+  const sessions = new Map(); // cid -> session, insertion order = age
 
   const url = () => {
     const u = new URL(endpoint);
@@ -314,13 +452,42 @@ export function createRelayHost(opts) {
     if (notifyRelay) relaySend({ t: "close", cid });
   }
 
+  function sealSend(s, obj) {
+    relaySend({ t: "msg", cid: s.cid, b: s.channel.seal(Buffer.from(JSON.stringify(obj))).toString("base64") });
+    s.records++;
+  }
   function send(s, obj) {
     if (s.dead || !s.channel) return;
     try {
-      relaySend({ t: "msg", cid: s.cid, b: s.channel.seal(Buffer.from(JSON.stringify(obj))).toString("base64") });
+      if (s.records >= maxSessionRecords || now() - s.createdAt > maxSessionMs) {
+        onEvent({ type: "rekey", cid: s.cid, deviceId: s.deviceId });
+        sealSend(s, { t: "rekey" }); // one last record tells the client to re-handshake + re-authenticate
+        return closeSession(s.cid);
+      }
+      sealSend(s, obj);
     } catch {
       closeSession(s.cid);
     }
+  }
+
+  const needsYou = (event) => {
+    try {
+      onNeedsYou(event);
+    } catch {}
+  };
+  function noteRedeemFailure() {
+    if (++redeemFails < redeemFailLimit) return;
+    redeemFails = 0;
+    redeemLocked = true;
+    try {
+      burnCodes();
+    } catch {}
+    needsYou({ type: "relay-redeem-flood", message: `Relay: ${redeemFailLimit} failed pairing attempts. All pending codes were burned; mint a new code.` });
+  }
+  function authThrottled() {
+    const t = now();
+    authFails = authFails.filter((x) => t - x < authFailWindowMs);
+    return authFails.length >= authFailLimit;
   }
 
   async function dispatch(s, m) {
@@ -328,9 +495,14 @@ export function createRelayHost(opts) {
     if (m.t === "redeem") {
       if (s.deviceId) return send(s, { t: "redeem-res", id, ok: false });
       if (++s.redeems > maxRedeemAttempts) return closeSession(s.cid);
+      if (redeemLocked) return send(s, { t: "redeem-res", id, ok: false, locked: true }); // never reaches redeem()
       const r = await redeem({ code: String(m.code ?? ""), label: typeof m.label === "string" ? m.label.slice(0, 80) : "" });
       if (s.dead) return;
-      if (!r?.token || !r.deviceId) return send(s, { t: "redeem-res", id, ok: false });
+      if (!r?.token || !r.deviceId) {
+        noteRedeemFailure();
+        return send(s, { t: "redeem-res", id, ok: false });
+      }
+      redeemFails = 0;
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
       return send(s, { t: "redeem-res", id, ok: true, deviceId: s.deviceId, token: r.token });
@@ -338,45 +510,56 @@ export function createRelayHost(opts) {
     if (m.t === "auth") {
       if (s.deviceId) return send(s, { t: "auth-res", id, ok: false });
       if (++s.redeems > maxRedeemAttempts) return closeSession(s.cid);
+      if (authThrottled()) return send(s, { t: "auth-res", id, ok: false });
       const r = await authenticate(String(m.token ?? ""));
       if (s.dead) return;
-      if (!r?.deviceId) return send(s, { t: "auth-res", id, ok: false });
+      if (!r?.deviceId) {
+        authFails.push(now());
+        return send(s, { t: "auth-res", id, ok: false });
+      }
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
       return send(s, { t: "auth-res", id, ok: true, deviceId: s.deviceId });
     }
     if (!s.deviceId) return closeSession(s.cid); // anything else before redeem/auth is a protocol violation
+    if (await isRevoked(s.deviceId)) {
+      onEvent({ type: "revoked-on-dispatch", deviceId: s.deviceId });
+      return closeSession(s.cid);
+    }
+    if (s.dead) return;
     if (m.t === "http") {
-      if (s.http >= maxHttpPerSession) return send(s, { t: "http-res", id, status: 429, headers: {} });
+      if (s.http >= maxHttpPerSession) return send(s, { t: "http-res", id, status: 429, headers: {}, fin: true });
       const method = String(m.method ?? "GET").toUpperCase();
-      if (!isRelayPathAllowed(method, m.path)) {
+      const target = normalizeRelayTarget(method, m.path);
+      if (!target) {
         onEvent({ type: "denied", deviceId: s.deviceId, method, path: String(m.path).slice(0, 200) });
         return send(s, { t: "http-res", id, status: 403, headers: {}, fin: true });
       }
       s.http++;
+      let headSent = false;
       try {
         const body = m.b ? Buffer.from(String(m.b), "base64") : Buffer.alloc(0);
-        const r = await handleHttp({ method, path: m.path, headers: pickHeaders(m.headers), body, deviceId: s.deviceId });
+        const r = await handleHttp({ method, path: target.path, headers: pickHeaders(m.headers), body, deviceId: s.deviceId });
         if (s.dead) return;
         const buf = r?.body == null ? Buffer.alloc(0) : Buffer.from(r.body);
-        send(s, { t: "http-res", id, status: r?.status ?? 500, headers: r?.headers ?? {} });
+        send(s, { t: "http-res", id, status: r?.status ?? 500, headers: cleanResponseHeaders(r?.headers) });
+        headSent = true;
         for (let o = 0; o < buf.length; o += BODY_CHUNK) {
           send(s, { t: "http-body", id, b: buf.subarray(o, o + BODY_CHUNK).toString("base64") });
         }
         send(s, { t: "http-body", id, b: "", fin: true });
       } catch {
-        send(s, { t: "http-res", id, status: 502, headers: {}, fin: true });
+        send(s, headSent ? { t: "http-body", id, b: "", fin: true } : { t: "http-res", id, status: 502, headers: {}, fin: true });
       } finally {
         s.http--;
       }
       return;
     }
     if (m.t === "ws-open") {
-      if (s.ws.size >= maxWsPerSession || s.ws.has(id) || !id || !isRelayPathAllowed("GET", m.path)) {
-        return send(s, { t: "ws-open-res", id, ok: false });
-      }
+      const target = normalizeRelayTarget("GET", m.path);
+      if (s.ws.size >= maxWsPerSession || s.ws.has(id) || !id || !target) return send(s, { t: "ws-open-res", id, ok: false });
       const handle = await openWs({
-        path: m.path,
+        path: target.path,
         deviceId: s.deviceId,
         send: (data, binary) =>
           send(s, { t: "ws-data", id, bin: Boolean(binary), data: binary ? Buffer.from(data).toString("base64") : String(data) }),
@@ -401,6 +584,7 @@ export function createRelayHost(opts) {
   }
 
   function onRelayMessage(raw) {
+    if (rawSize(raw) > MAX_WIRE_CHARS) return onEvent({ type: "oversize-frame" }); // before JSON.parse / base64
     let f;
     try {
       f = JSON.parse(typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8"));
@@ -412,8 +596,14 @@ export function createRelayHost(opts) {
     if (f.t === "close") return closeSession(cid, false);
     if (f.t === "open") {
       if (sessions.has(cid)) return;
-      if (sessions.size >= maxSessions) return relaySend({ t: "close", cid });
-      const s = { cid, channel: null, deviceId: null, redeems: 0, http: 0, ws: new Map(), dead: false, authTimer: null };
+      if (sessions.size >= maxSessions) {
+        // M3: a flood of half-open sessions must not lock the owner out. Evict the oldest unauthenticated one.
+        const victim = [...sessions.values()].find((x) => !x.deviceId);
+        if (!victim) return relaySend({ t: "close", cid });
+        onEvent({ type: "evicted-unauthenticated", cid: victim.cid });
+        closeSession(victim.cid);
+      }
+      const s = { cid, channel: null, deviceId: null, redeems: 0, http: 0, ws: new Map(), dead: false, authTimer: null, createdAt: now(), records: 0 };
       s.authTimer = setTimeoutFn(() => closeSession(cid), authTimeoutMs);
       sessions.set(cid, s);
       return;
@@ -421,15 +611,15 @@ export function createRelayHost(opts) {
     if (f.t !== "msg") return;
     const s = sessions.get(cid);
     if (!s || typeof f.b !== "string") return;
-    let bytes;
     try {
-      bytes = Buffer.from(f.b, "base64");
+      const bytes = Buffer.from(f.b, "base64");
       if (!s.channel) {
         const { reply, channel } = acceptHandshake(bytes, { hostKey, hostId });
         s.channel = channel;
         return relaySend({ t: "msg", cid, b: reply.toString("base64") });
       }
       const m = JSON.parse(s.channel.open(bytes).toString("utf8"));
+      s.records++;
       if (!m || typeof m !== "object") throw new Error("bad frame");
       dispatch(s, m).catch(() => closeSession(cid));
     } catch (e) {
@@ -438,12 +628,24 @@ export function createRelayHost(opts) {
     }
   }
 
+  // down() is the single teardown path for a relay socket (close and error both land here; the guard makes it idempotent).
+  function down(ws) {
+    if (sock !== ws) return;
+    sock = null;
+    try {
+      ws.close();
+    } catch {}
+    for (const cid of [...sessions.keys()]) closeSession(cid, false);
+    onEvent({ type: "disconnected" });
+    schedule();
+  }
   function connect() {
     if (stopped) return;
     let ws;
     try {
       ws = new WebSocketImpl(url());
-    } catch {
+    } catch (e) {
+      onEvent({ type: "connect-error", reason: String(e?.message ?? e) });
       return schedule();
     }
     sock = ws;
@@ -455,20 +657,8 @@ export function createRelayHost(opts) {
     ws.addEventListener("message", (ev) => {
       if (sock === ws) onRelayMessage(ev.data);
     });
-    const down = () => {
-      if (sock !== ws) return;
-      sock = null;
-      for (const cid of [...sessions.keys()]) closeSession(cid, false);
-      onEvent({ type: "disconnected" });
-      schedule();
-    };
-    ws.addEventListener("close", down);
-    ws.addEventListener("error", () => {
-      try {
-        ws.close();
-      } catch {}
-      down();
-    });
+    ws.addEventListener("close", () => down(ws));
+    ws.addEventListener("error", () => down(ws));
   }
   function schedule() {
     if (stopped || timer) return;
@@ -513,6 +703,14 @@ export function createRelayHost(opts) {
       for (const cid of [...sessions.keys()]) closeSession(cid);
       return n;
     },
-    status: () => ({ connected: sock?.readyState === 1, sessions: sessions.size, attempt }),
+    /** Call after a fresh pairing code is minted: lifts the redeem lock set by the global failure limit. */
+    noteFreshMint() {
+      redeemLocked = false;
+      redeemFails = 0;
+    },
+    status: () => ({ connected: sock?.readyState === 1, sessions: sessions.size, attempt, redeemFails, redeemLocked }),
   };
 }
+
+/** Self-certifying host id (design review M1): base64url(SHA-256(host public key)). Clients may require hostId === this. */
+export const selfCertifyingHostId = (pub) => createHash("sha256").update(typeof pub === "string" ? Buffer.from(pub, "base64") : pub).digest("base64url");

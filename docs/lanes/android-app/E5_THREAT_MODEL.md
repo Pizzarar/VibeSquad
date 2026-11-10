@@ -1,6 +1,6 @@
 # E5 Outbound E2EE Relay · Threat Model (branch `unit-and-end-e5`)
 
-Status: DRAFT for the 0.3 `X1` security walk and the Fable design pass. Tier A. Core is new files only and **unwired**.
+Status: rev 2, after the Fable 5.1 design pass (`~/.vibesquad/teams/vibesquad/E5_DESIGN_REVIEW.md`, PASS-with-changes) and Review-Gemini R1 (`E5_REVIEW_R1.md`, FAIL 0C/2H/4M/2L). Tier A. Core is new files only and **unwired**.
 Files: `server/relay-tunnel.mjs` (host), `src/remoteRelayTransport.ts` (client), `test/relay-tunnel.test.mjs`.
 Plan: `docs/PLAN_ANDROID_END_STATE.md` Phase 1 item 1.
 
@@ -16,52 +16,92 @@ Plan: `docs/PLAN_ANDROID_END_STATE.md` Phase 1 item 1.
 ## 2. Actors and trust boundaries
 - **Relay operator / relay compromise: UNTRUSTED.** Can read, drop, delay, reorder, replay, inject frames, and refuse service. Never learns keys or plaintext. Sees metadata: `hostId`, timing, sizes, connection counts, client IPs.
 - **Network attacker** (work/proxy/ISP, TLS-terminating corporate proxy): same powers as the relay on the wire. Corporate TLS interception breaks only the outer WSS; the E2EE inner channel is unaffected.
+- **Static client origin: TRUSTED** (design review H3). For browser clients (Project PC) the page that serves the `/pair` JS runs inside the trust boundary: it sees the code, the pin and all plaintext. Therefore:
+  1. it MUST be a VS-controlled origin **separate from the relay operator** (a relay that also serves the page is not zero-knowledge);
+  2. the bundle MUST be loaded with Subresource Integrity (pipeline below);
+  3. the client strips the pairing `#fragment` immediately on load (`takePairingFragment` / `pairingFragment` in `remoteRelayTransport.ts`: read `hostId/pub/relay/code` into memory, then `history.replaceState` to drop the fragment before any other code runs; tested). The fragment never reaches a server in any case, and stripping stops it living on in history, bookmarks, Referer or screenshots.
+  4. **Android APK**: the page is bundled inside the APK, so there is no remote page origin to trust; H3 applies only to browser / static-host clients.
+  - **SRI pipeline** (wiring/build phase, not in this unit's files): after `vite build --mode remote`, a build step computes `sha384` of every emitted JS/CSS asset and writes `integrity="sha384-…" crossorigin="anonymous"` into the emitted `index.html` (a small Vite plugin using `generateBundle`/`transformIndexHtml`); the same hashes are published in the release notes so a user can compare. The entry module must import `remoteRelayTransport.ts` first so the fragment is stripped before any other module runs. Hosting: VS-controlled static host (e.g. GitHub Pages under the project domain), CSP `default-src 'self'; connect-src wss:`; no third-party scripts.
 - **Client device** (phone, Project PC browser): trusted once paired; holds the token and the pinned host pubkey.
-- **Host process**: trusted. Boundary = the injected `handleHttp`/`openWs` loopback handler plus the allowlist; relay clients get no more than an authenticated remote caller gets.
+- **Host process**: trusted. Boundary = the in-process dispatcher plus the allowlist; a relayed principal gets no more than a *remote* authenticated owner gets, never local-PC powers (H1).
 - **Local users on the Home PC**: out of scope here (covered by the `~/.vibesquad` lockdown, S2).
 
-Trust anchor: the host public key `pub` delivered **out of band** in the pairing link/QR (`#hostId=..&pub=..&relay=..&code=..`; fragment never reaches a server). The relay URL is NOT a trust anchor.
+Trust anchor: the host public key `pub` delivered **out of band** in the pairing link/QR (`#hostId=..&pub=..&relay=..&code=..`). The relay URL is NOT a trust anchor.
 
 ## 3. Threat table
 | # | Threat | Mitigation | Residual |
 |---|---|---|---|
-| T1 | **MITM / malicious relay impersonates host** | Client pins `pub`. Handshake derives keys from `DH(e_c, S)`; host proves possession of `s` via key-confirmation record. Wrong key -> confirmation decrypt fails, client aborts before sending any code/token. Transcript hash binds `hostId`, `S`, both ephemerals. | If the pairing link itself is intercepted (shown over an insecure channel) the attacker gets the pin. Link is single-use-code gated; show only on trusted screens |
+| T1 | **MITM / malicious relay impersonates host** | Client pins `pub`. Handshake derives keys from `DH(e_c, S)`; host proves possession of `s` via key-confirmation record. Wrong key -> confirmation fails, client aborts before sending any code/token. Transcript binds protocol, suite, version, `hostId`, `S`, both ephemerals | If the pairing link is intercepted the attacker gets the pin; show it only on trusted screens |
 | T2 | **Relay reads traffic** | AEAD records; relay only forwards opaque base64 (tested with a recording fake relay) | Metadata visible |
 | T3 | **Tamper / bit-flip** | AES-256-GCM tag, AAD = direction + counter; any failure closes the session | None |
-| T4 | **Replay / reorder / drop-and-continue** | Strict counter: receiver accepts only `ctr == expected`; per-direction keys stop reflection; fresh ephemerals per session stop cross-session replay | Relay can truncate or kill a session (DoS) but not forge |
-| T5 | **Relay compromise** | Equivalent to T1-T4; relay holds no secrets. Relay cannot mint codes or tokens | Availability |
-| T6 | **Stolen / lost phone** | Per-device token, revocable. `revoke(deviceId)` immediately closes that device's relay sessions; revocation of the token itself is `auth.mjs` (unwired). Cascade revoke is E4b | Window until owner revokes; token lives in phone storage |
-| T7 | **Token theft in transit** | Redeem/auth happen only inside the E2EE channel; token never in a URL/header to the relay | Token at rest on client |
-| T8 | **Brute-force the 6-digit code** | Host caps redeem/auth attempts per session (5, then close) and unauth sessions time out (30s); global per-IP/code lockout stays in `auth.mjs` (S2). Code is one-time and TTL'd by auth.mjs | Relay hides client IPs from host, so **per-IP lockout is blind**; auth.mjs must lock out per code/hostId globally (open item) |
-| T9 | **DoS (flood sessions, huge frames)** | `maxSessions` 32, 1 MiB record cap, 16 concurrent HTTP and 8 WS per session, unauth timeout, backoff+jitter on the outbound dial | Relay-level volumetric DoS is the relay's problem |
-| T10 | **SSRF / path abuse via the mux** | Default-deny allowlist (`isRelayPathAllowed`): only `/__vibesquad/*`, `/api/*`, `/ws`; denies `first-run`, `local-image`, `pair/redeem`, `enter`; rejects `..`, encoded slashes/dots, double-encoding, `//`, backslash, control chars, absolute URLs. Only 5 request headers are forwarded (no cookie/authorization/host/x-forwarded-*) | Allowed API surface is as powerful as an owner session: it IS owner access. Per-route owner gating remains the server's |
-| T11 | **Host key theft** | File 0600 in `~/.vibesquad` (0700 dir). Attacker with it can impersonate the host to pinned clients (but cannot read past traffic: ephemeral DH gives forward secrecy for recorded sessions) | Rotation = delete file + re-pair everything (no rotation UX yet) |
-| T12 | **Downgrade** | One suite; version byte must be `0x01` else reject; no negotiation | Future versions need a new byte + new transcript label |
-| T13 | **Revoked device keeps an open session** | `revoke()` closes it; unwired `auth.mjs` must call it on DELETE/cascade | Depends on wiring (see §7) |
-| T14 | **Client key compromise (ephemeral)** | Fresh `e_c` per session; compromise of a token does not reveal past sessions | Client is anonymous at the handshake level (NK, not XX/IK); identity = token inside the channel |
+| T4 | **Replay / reorder / drop-and-continue** | Strict counter; per-direction keys stop reflection; fresh ephemerals per session stop cross-session replay | Relay can truncate or kill a session (DoS) but not forge |
+| T5 | **Relay compromise** | Equivalent to T1-T4; relay holds no secrets | Availability |
+| T6 | **Stolen / lost phone** | Per-device token, revocable. Revocation is re-checked on **every** post-auth dispatch via injected `isRevoked` (CLI `vs devices revoke` runs out of process and never calls `revoke()`), plus `revoke(deviceId)` for immediate close. Cascade revoke is E4b | Window until owner revokes; token lives in phone storage |
+| T7 | **Token theft in transit** | Redeem/auth only inside the E2EE channel | Token at rest on client |
+| T8 | **Brute-force the 6-digit code** | Host-**wide** failed-redeem counter (not per session or per socket; survives reconnects, tested). At 10 failures: `burnCodes()`, `onNeedsYou` security event, redeem locked until `noteFreshMint()`. Chance an attacker succeeds in one code lifetime ≤ ~1e-5. Per-session cap (5) and 30 s unauth timeout stay as extra friction. Token auth failures are throttled host-wide (100/min) | The relay hides client IPs, so no per-IP lockout is possible host-side; the relay should cap connections per IP per `hostId`. Attacker can force the lock (DoS of pairing, never of already-paired devices) |
+| T9 | **DoS (flood sessions, huge frames)** | `maxSessions` 32 **with eviction of the oldest unauthenticated session** so a half-open flood cannot lock the owner out; raw relay frame cap before JSON/base64 on both sides (~1.4 MiB), 1 MiB record cap, client response cap (64 MiB default), 16 HTTP + 8 WS per session (429 completes cleanly), backoff + jitter on the dial | Volumetric DoS is the relay's problem |
+| T10 | **SSRF / path abuse via the mux** | Default-deny allowlist. The target is **canonicalized once** (`normalizeRelayTarget`): segments decoded, dot segments / encoded slashes / double-encoding / control chars rejected, re-encoded; the deny/allow decision is made on the decoded-lowercase form and the **canonical string is what handlers receive**, so validator and consumer cannot disagree. Denies `first-run`, `local-image`, `pair/redeem`, `enter`, `local-login`. Only 5 request headers are forwarded; `set-cookie` is stripped from every response | Allowed API surface is as powerful as an owner session: it IS owner access |
+| T11 | **Host key theft** | File 0600 in a 0700 dir (see wiring list for the S2 lockdown entry). Attacker with it can impersonate the host to pinned clients but cannot read recorded sessions (ephemeral `ee` gives forward secrecy) | Rotation = delete file + re-pair everything (no CLI yet) |
+| T12 | **Downgrade** | One suite; version byte must be `0x01` and is hashed into the transcript, as is the suite label, so any future negotiation is bound | New versions need a new byte + label |
+| T13 | **Revoked device keeps a session** | See T6: per-dispatch `isRevoked` + `revoke()` + 24 h session cap | Idle sockets without traffic live until the next frame or rekey |
+| T14 | **Long-lived session key exposure** | Rekey: host closes a session after 24 h or 2^20 records (either direction) with a final encrypted `rekey` frame; the client re-handshakes and re-authenticates, which also re-checks revocation | None |
+| T15 | **Relayed device treated as the PC itself (H1)** | Relayed traffic is **never proxied through a real loopback fetch**. It is dispatched in-process (`createInProcessDispatcher`) with a synthetic request carrying a frozen `req.relayDevice = {id}` and a non-loopback sentinel socket (`remoteAddress: "relay"`); `isRelayRequest(req)` lets `auth.mjs` classify it as remote | Depends on the wiring honouring `relayDevice` (below) |
+| T16 | **hostId squatting at the relay (M1)** | Optional self-certifying id `hostId = base64url(SHA-256(pub))` (`selfCertifyingHostId`, client option `requireSelfCertifiedHostId`) so a squatter cannot present a valid pinned identity; clients never trust the relay's claim anyway because of the pin | Squatting still denies service and leaks client IPs/timing unless the **relay** authenticates `role=host` registration (proof of possession of `s`, e.g. relay ephemeral X25519 challenge + HMAC); one live host per `hostId`. Relay-side work, out of scope here |
+| T17 | **Malicious/compromised static page (H3)** | See §2: separate VS-controlled origin, SRI, fragment stripped on load, APK bundles its own page | Whoever controls the origin controls the client; SRI only protects against tampering in transit/CDN |
 
 ## 4. Crypto choices and why
-- **Pattern: Noise_NK-style** (client anonymous, host static key pinned). Fits "phone knows host pub from QR; host does not know the phone until it redeems". Hand-rolled using only `node:crypto` / WebCrypto, **not a Noise library**, so no new dependency. Deviations from textbook Noise are documented below; the Fable pass should decide whether to move to a vetted Noise implementation.
-- **KEX: X25519** with two DHs: `es = DH(e_c, S)` (authenticates host) and `ee = DH(e_c, e_h)` (forward secrecy). All-zero DH output rejected.
-- **KDF: HKDF-SHA-256**, ikm = `es || ee`, salt = transcript hash `h`, info `"vs-relay-v1 keys"`, 64 bytes -> separate `c2h` and `h2c` keys.
-- **AEAD: AES-256-GCM** (not ChaCha20-Poly1305 as the plan sketched). Reason: the client must run in a browser/Android WebView and **WebCrypto has no ChaCha20-Poly1305**; AES-GCM exists in both runtimes with no extra dependency. Nonces are never random: 96-bit = 32 zero bits || 64-bit counter, unique per key because keys are per-session and per-direction. Counter cap 2^53.
-- **Key confirmation**: host's first record (`"vs-ok"`, ctr 0) is verified by the client before it sends anything.
-- **Transcript binding**: `h = SHA256("vibesquad-relay-v1" || len(hostId) || hostId || S || e_c || e_h)`.
-- **Known limitation**: WebCrypto X25519 needs Chrome/WebView >= 133, Safari >= 17, Firefox >= 130. The client probes support and throws `RelayUnsupportedError` with a clear message rather than shipping a hand-written curve. A pure-JS fallback (audited lib such as `@noble/curves`) is a possible later addition; it would be a justified new dependency, not added now.
-- No padding: record sizes leak to the relay (accepted, listed under metadata).
-- All crypto sits behind small pure functions (`acceptHandshake`, `startClientHandshake`, `createChannel`, `deriveKeys`, `transcriptHash`) so the suite can be swapped without touching the mux.
+- **Pattern: Noise_NK-style** (client anonymous, host static key pinned). The design review judged this sound: it is Noise_NK with the MixHash/MixKey chain flattened into one HKDF, equivalent for a 2-message pattern. Hand-rolled on `node:crypto` / WebCrypto because no maintained Noise library runs identically in Node and an Android WebView (libp2p-noise is XX-only and heavy; others need sodium builds). The node reference client (`startClientHandshake`) cross-checks the browser client in tests; fixed transcript test vector included.
+- **KEX: X25519** with two DHs: `es = DH(e_c, S)` (authenticates host) and `ee = DH(e_c, e_h)` (forward secrecy). All-zero DH output rejected on both sides.
+- **Transcript**: `h = SHA256("vibesquad-relay-v1" || "Noise_NK_25519_AESGCM_SHA256" || version || len(hostId) || hostId || S || e_c || e_h)`.
+- **KDF: HKDF-SHA-256**, ikm = `es || ee`, salt = `h`, info `"vs-relay-v1 keys"`, 64 bytes -> separate `c2h` and `h2c` keys.
+- **AEAD: AES-256-GCM** (not ChaCha20-Poly1305 as the plan sketched): WebCrypto has no ChaCha, AES-GCM exists in both runtimes. Nonce = 32 zero bits || 64-bit counter, unique per key (keys are per session and per direction); counter cap 2^53, far under the deterministic-IV limit. The design review confirmed this choice.
+- **Key confirmation**: the host's first record (`"vs-ok"`, ctr 0) is verified by the client before it sends anything.
+- **X25519 on the client**: WebCrypto X25519 when the runtime has it (Chrome/WebView ≥ 133, Safari ≥ 17, Firefox ≥ 130), else **`@noble/curves` x25519** (audited, pure JS; new dependency approved by Hub5, `package.json` `@noble/curves 2.4.0`). `RelayUnsupportedError` no longer exists: "unsupported" would have meant "no access" for the Project PC. noble is used for X25519 only; AES-GCM/HKDF/SHA-256 stay on WebCrypto. Tests cover noble↔WebCrypto DH agreement, a noble-only client against the node host, and automatic fallback.
+- **Rekey / no persisted keys (L4)**: channel keys and counters exist only in memory and are never written to disk or storage; any socket drop means a fresh handshake, never a resume. Sessions are capped at 24 h / 2^20 records.
+- No padding: record sizes leak to the relay (accepted metadata).
+- All crypto sits behind small pure functions (`acceptHandshake`, `startClientHandshake`/`startHandshake`, `createChannel`, `deriveKeys`, `transcriptHash`, `newKex`) so the suite is cheap to swap without touching the mux. Version byte `0x02` is reserved for an optional encrypted client static key in msg1 (IK), deliberately not built now: a client static stored next to the bearer token adds nothing against phone theft.
 
 ## 5. Key storage
-- Host: `~/.vibesquad/host-keypair.json`, `{v:1, alg:"x25519", pub, priv}` (base64url raw), created atomically (0600 temp file, hard-link into place, EEXIST -> read winner), directory 0700. On Windows the user-profile ACL is the boundary (no POSIX mode). Not logged, never sent anywhere.
-- Host never writes `devices.json`; redeem/authenticate are injected callbacks.
-- Client: pins `pub` per host in its own session store (E4a `hosts[]`, unwired); the token is stored like today's Meshnet session token.
+- Host: `~/.vibesquad/host-keypair.json`, `{v:1, alg:"x25519", pub, priv}` (base64url raw), created atomically (0600 temp file, hard-link into place, EEXIST -> read winner), directory 0700. On Windows the user-profile ACL is the boundary unless the wiring adds it to the S2 lockdown list (below). Never logged, never sent.
+- Host never writes `devices.json`; `redeem`/`authenticate`/`isRevoked` are injected callbacks.
+- Client: pins `pub` per host in its own session store (E4a `hosts[]`, unwired); the token is stored like today's Meshnet session token. No channel keys are persisted.
 
 ## 6. Allowlist (S4/R2)
-No shared constant existed (`isGatedRead` in `vibesquad-api.mjs` is a read-only loopback gate). The relay owns a pure default-deny function `isRelayPathAllowed(method, target)` plus exported `RELAY_DENIED_PREFIXES`. The wiring unit should decide whether to also reject anything `isGatedRead` flags for non-owner relay principals.
+No shared constant existed (`isGatedRead` in `vibesquad-api.mjs` is a read-only loopback gate). The relay owns `normalizeRelayTarget` / `isRelayPathAllowed` plus exported `RELAY_DENIED_PREFIXES`. The wiring unit should also reject anything `isGatedRead` flags for non-owner relay principals.
 
-## 7. Still unwired / open
-- `serve.mjs`: construct `createRelayHost` from `relay.endpoint`, supply `handleHttp` (loopback fetch that attaches the device credential server-side) and `openWs`.
-- `auth.mjs`: `redeem` (code -> token), `authenticate` (token -> deviceId), call `relay.revoke(deviceId)` on revoke and cascade revoke, global per-code lockout (T8), `pending-approval` two-step confirm (E4b).
-- No relay server exists in this unit; the framing in the header of `relay-tunnel.mjs` is the contract. The relay must authenticate host registration (`role=host`) itself, or anyone can squat a `hostId` and receive ciphertext (still can't decrypt; DoS only).
-- No UI, no `PairDeviceModal` link generation, no APK integration.
-- Open design questions for review: (a) hand-rolled NK vs a vetted Noise lib; (b) AES-GCM vs ChaCha with a JS fallback; (c) whether to send a client static key to give the host a stronger device identity at handshake time (IK); (d) per-request token re-validation vs relying on `revoke()` closing sessions.
+## 7. Wiring design (rewritten for H1) and what the wiring phase must do
+
+### Design: in-process dispatch, not loopback fetch
+`auth.mjs` `isLocalBrowserSafe` treats a loopback request with Node's UA, no Origin and no Sec-Fetch-Site as the PC itself. A relay that forwards decrypted requests with a real `fetch("http://127.0.0.1:…")` would therefore make every relayed device look like the local owner (including `/__vibesquad/pair/start`). So:
+
+```
+createRelayHost({
+  endpoint, hostId, hostKey,
+  redeem:       ({code,label}) => auth.redeemPairCode(...)  -> {deviceId, token} | null   // writes devices.json in auth.mjs
+  authenticate: (token)        => auth.deviceForToken(token) -> {deviceId} | null
+  isRevoked:    (deviceId)     => !auth.deviceActive(deviceId)                              // re-reads devices.json, covers CLI revoke
+  handleHttp:   createInProcessDispatcher(serverRequestListener),                           // synthetic req.relayDevice, no socket
+  openWs:       (info) => <in-process ws handler using createSyntheticRequest(...)>,
+  burnCodes:    () => auth.burnAllPairCodes(),
+  onNeedsYou:   (e) => log needs-you security event,
+})
+```
+and `auth.mjs` mints call `host.noteFreshMint()` after a new code exists.
+
+### Wiring phase must do (needs `auth.mjs` / `serve.mjs`, not touched by this unit)
+1. **`auth.mjs`**: `authenticate(req)` must honour `req.relayDevice` (device id established inside the channel; ignore cookies/Authorization on relay requests); `isLocal()` / `isLocalBrowserSafe()` must return **false** whenever `isRelayRequest(req)`; a relay request is never "local owner".
+2. **`auth.mjs`**: expose `redeemPairCode`, `deviceForToken`, `deviceActive` (fresh read or mtime-checked reload of `devices.json`), `burnAllPairCodes`; call `relayHost.revoke(id)` from `revokeDevice` and cascade revoke; global per-code lockout belongs here too.
+3. **L1**: add `host-keypair.json` to `HOME_SECRET_FILES` (`auth.mjs:150`) so the Windows icacls lockdown covers it; add a `vs host-key rotate` CLI that deletes the file and marks all devices for re-pair.
+4. **L2**: add `/__vibesquad/local-login` and `/__vibesquad/local-login/nonce` as explicit server-side denies for relay principals (already in `RELAY_DENIED_PREFIXES`; this is defense in depth in `auth.mjs`).
+5. **`serve.mjs`**: construct the tunnel from `settings.json relay.endpoint`; supply the in-process dispatcher and an in-process WS bridge; surface `status()` in the Host pill.
+6. **H3**: SRI build step + VS-controlled static origin + CSP; entry module imports `remoteRelayTransport.ts` first.
+7. **M1**: decide self-certifying `hostId` format with E4a; relay must authenticate `role=host` registration (proof of possession) and cap client connections per IP per `hostId`.
+8. **Pairing link / `PairDeviceModal.tsx`**: generate `#hostId=&pub=&relay=&code=` links; call `noteFreshMint()` after each mint.
+9. Request bodies must fit in one 1 MiB record; larger uploads need chunking (not built).
+10. No relay server exists in this unit; the framing in the `relay-tunnel.mjs` header is the contract.
+
+### E4b two-step confirm wording (L3)
+The "approve on the minting phone or another owner device" step protects against **link or code leakage** (someone else redeems a code you minted). It does **not** protect against a stolen *unlocked* phone, which can approve itself. Stolen-phone defense is revocation (from another owner device, or `vs devices revoke` on the host) plus cascade revoke of every device it minted.
+
+## 8. Resolved review questions
+(a) hand-rolled NK: kept (design review). (b) AES-GCM + WebCrypto, `@noble/curves` for X25519 only. (c) No IK now; reserve version `0x02`. (d) Both: validate at session start **and** `isRevoked` on every dispatch.
