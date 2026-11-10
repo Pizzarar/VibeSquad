@@ -102,10 +102,11 @@ function stealStaleLock(file, seen, { pid, alive, onSteal, guardStaleMs }) {
   const guard = `${file}.steal`;
   if (!tryCreateLock(guard, pid)) {
     let guardAge;
-    try { guardAge = Date.now() - statSync(guard).mtimeMs; } catch { return true; } // released meanwhile: retry
+    try { guardAge = Date.now() - statSync(guard).mtimeMs; } catch { guardAge = Infinity; } // released meanwhile
     if (guardAge < guardStaleMs) return false;
-    rmSync(guard, { force: true }); // orphaned by a holder that died mid-steal
-    return true;
+    rmSync(guard, { force: true }); // orphaned by a holder that died mid-steal (no-op if it was released)
+    // Take the guard in this same call, so clearing an orphan does not use up one of the caller's attempts.
+    if (!tryCreateLock(guard, pid)) return false; // another stealer got it first
   }
   try {
     const now = readLock(file);

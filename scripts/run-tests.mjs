@@ -68,7 +68,12 @@ function finish(exitCode, signal) {
   try { summary = JSON.parse(readFileSync(summaryFile, "utf8")); } catch {} // killed before the summary: counts stay null
   rmSync(summaryFile, { force: true });
   const failingFiles = (summary.failingFiles ?? []).map((f) => path.relative(root, f).split(path.sep).join("/"));
-  finishSlot(paths, slot, { ...summary, failingFiles, exitCode: exitCode ?? null, signal: signal ?? null });
+  // A non-zero exit with no counted failure (missing file, bad flag, killed mid-run) is still a FAIL: readers treat
+  // fail > 0 as the failure signal, so a null or 0 here would read as a pass.
+  const failedRun = exitCode !== 0 || !!signal;
+  const incomplete = failedRun && !(summary.fail > 0);
+  const fail = incomplete ? Math.max(Number(summary.fail) || 0, 1) : summary.fail;
+  finishSlot(paths, slot, { ...summary, fail, failingFiles, exitCode: exitCode ?? null, signal: signal ?? null, ...(incomplete ? { incomplete: true } : {}) });
 }
 child.on("exit", (code, sig) => { finish(code, sig); process.exit(code ?? (sig ? 1 : 0)); });
 for (const s of ["SIGINT", "SIGTERM"]) process.on(s, () => { child.kill(s); });

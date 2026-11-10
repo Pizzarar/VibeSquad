@@ -152,6 +152,21 @@ test("steal guard: a fresh guard blocks the steal; an orphaned one is cleared", 
   assert.equal(existsSync(`${file}.steal`), false);
 });
 
+test("steal guard: clearing an orphaned guard and stealing happen in one attempt, even when attempts are tight", (t) => {
+  // Before: the orphan removal returned early and used up an attempt, so orphan + any transient miss exhausted all 3.
+  const file = path.join(tmp(t), "x.lock");
+  writeFileSync(file, JSON.stringify({ pid: DEAD_PID, startedAt: 1 }));
+  writeFileSync(`${file}.steal`, JSON.stringify({ pid: DEAD_PID, startedAt: 1 }));
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(`${file}.steal`, old, old);
+  let judged = 0;
+  assert.equal(acquireStartLock(file, { alive: (p) => (judged++, p === process.pid) }), true);
+  assert.equal(readLock(file).pid, process.pid);
+  assert.equal(existsSync(`${file}.steal`), false);
+  // One liveness judgment of the holder (no onSteal, so no reason check). The early-return version needed a second round.
+  assert.equal(judged, 1, `orphan cleared and holder stolen in the first attempt (judged=${judged})`);
+});
+
 test("concurrent --queue waiters are served one at a time and leave no lock or queue file", { timeout: 60000 }, async (t) => {
   const dir = tmp(t);
   const paths = suitePaths(dir);
@@ -302,6 +317,18 @@ test("run-tests.mjs: a normal run keeps the spec output, writes the last record,
   assert.deepEqual([last.tests, last.pass, last.fail], [2, 1, 1]);
   assert.deepEqual(last.failingFiles, [path.relative(root, fail).split(path.sep).join("/")]);
   assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith("vibesquad-")), ["vibesquad-npm-test-last.json"], "no lock, queue or summary left");
+});
+
+test("run-tests.mjs: a non-zero exit with no counted failure records fail >= 1, never a silent pass", { timeout: 60000 }, (t) => {
+  const dir = tmp(t);
+  const missing = path.join(dir, "missing.test.mjs");
+  const r = spawnSync(process.execPath, [RUN_TESTS, missing], { cwd: root, env: cleanEnv({ VIBESQUAD_TEST_LOCK_DIR: dir }), encoding: "utf8" });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  const last = JSON.parse(readFileSync(path.join(dir, "vibesquad-npm-test-last.json"), "utf8"));
+  assert.ok(last.fail >= 1, JSON.stringify(last));
+  assert.equal(last.exitCode, 1);
+  assert.equal(last.incomplete, true);
+  assert.equal(existsSync(path.join(dir, "vibesquad-npm-test.lock")), false);
 });
 
 test("run-tests.mjs: without --queue a held slot still exits 1; with --queue it waits and then runs", { timeout: 60000 }, async (t) => {
