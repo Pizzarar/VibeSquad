@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, test } from "node:test";
 import { handleEnter } from "../server/auth.mjs";
 import { ensureAndroidTrustKotlin } from "../server/build-android.mjs";
-import { diagLines, installDiagOverlay } from "../src/diagOverlay.ts";
+import { diagError, diagLines, installDiagOverlay } from "../src/diagOverlay.ts";
 import { isAndroidApkPath } from "../server/vibesquad-api.mjs";
 
 function enter(url, method = "GET") {
@@ -63,6 +63,12 @@ describe("diagnostics overlay", () => {
       document: { body: null },
     };
   };
+
+  test("diagError mounts no box before an Android install (desktop render errors)", () => {
+    let created = 0;
+    diagError("render", "x", { body: {}, createElement: () => (created++, {}) });
+    assert.equal(created, 0);
+  });
 
   test("installs only on Android and redacts pairing codes from the boot breadcrumb", () => {
     assert.equal(installDiagOverlay(win("Mozilla Windows")), false);

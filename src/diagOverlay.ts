@@ -5,6 +5,8 @@
 export type DiagWindow = Pick<Window, "addEventListener" | "document" | "location"> & { navigator?: { userAgent?: string } };
 
 const MAX_LINES = 12;
+// Set by installDiagOverlay on Android only: the box never mounts anywhere else (a desktop render error shows the root error boundary alone).
+let active = false;
 const lines: string[] = [];
 let box: HTMLElement | null = null;
 
@@ -35,12 +37,13 @@ export function diagStep(step: string): void {
 export function diagError(kind: string, detail: string, doc?: Document): void {
   lines.push(`${stamp()} ${kind}: ${detail}`);
   if (lines.length > MAX_LINES * 2) lines.splice(0, lines.length - MAX_LINES * 2);
-  if (doc) render(doc);
+  if (doc && active) render(doc);
 }
 
 /** Installs the listeners once; returns false (and does nothing) off Android. */
 export function installDiagOverlay(win: DiagWindow = window): boolean {
   if (!/Android/i.test(win.navigator?.userAgent ?? "")) return false;
+  active = true;
   diagStep(`boot ${win.location.href.replace(/([?&](?:code|fp|token)=)[^&#]*/gi, "$1…")}`);
   win.addEventListener("error", (e) => {
     const ev = e as ErrorEvent;
