@@ -86,10 +86,10 @@ describe("phone bug capture", () => {
     const dir = join(home, "inbox-media", id);
     const files = readdirSync(dir);
     assert.equal(files.length, 1);
-    assert.match(files[0], /^shot-1-[0-9a-f]{8}\.png$/);
+    assert.match(files[0], /^shot-[0-9a-f]{12}\.png$/);
     const card = inbox.readInboxCards(home).find((c) => c.id === id);
     assert.equal(card.attachments[0].path, join(dir, files[0]));
-    assert.match(card.text, /Screenshot: .*shot-1-/);
+    assert.match(card.text, /Screenshot: .*shot-/);
     assert.equal(card.source, "phone-apk");
     assert.ok((await upload(id, JPG, "image/jpeg")).status === 200);
     assert.ok((await upload(id, WEBP, "image/webp")).status === 200);
@@ -173,5 +173,50 @@ describe("phone bug capture", () => {
     assert.equal(sent[0].agentId, "bud");
     assert.match(sent[0].text, /Screenshot: /);
     assert.equal((await upload(id, PNG)).status, 400);
+  });
+
+  test("bodyLimit: >1 MB and <8 MB uploads pass the real route; >8 MB is 413", async () => {
+    const id = await park();
+    const mid = Buffer.concat([PNG, Buffer.alloc(2 * 1024 * 1024, 3)]);
+    assert.equal((await upload(id, mid)).status, 200);
+    const big = Buffer.concat([PNG, Buffer.alloc(inbox.INBOX_MEDIA_MAX_BYTES + 1024)]);
+    const r = await upload(id, big).catch(() => ({ status: 413 }));
+    assert.equal(r.status, 413);
+    // every other route keeps the 1 MB limit
+    const other = await call(port, "/__vibesquad/inbox", { method: "POST", headers: owner("application/json"), body: JSON.stringify({ text: "x".repeat(1100 * 1024), laneId: "bug-chaser" }) }).catch(() => ({ status: 413 }));
+    assert.equal(other.status, 413);
+  });
+
+  test("merge carries screenshots to the target and drops the source dirs; archive via update cleans media", async () => {
+    const a = await park();
+    const b = await park();
+    await upload(a, PNG);
+    await upload(b, JPG, "image/jpeg");
+    const srcPath = inbox.readInboxCards(home).find((c) => c.id === b).attachments[0].path;
+    inbox.triageInboxCards({ action: "merge", targetId: a, sourceIds: [b], baseHome: home }, repoRoot);
+    const target = inbox.readInboxCards(home).find((c) => c.id === a);
+    assert.equal(target.attachments.length, 2);
+    assert.ok(target.attachments.every((x) => x.path.startsWith(join(home, "inbox-media", a))));
+    assert.equal(target.text.includes(srcPath), false);
+    assert.ok(target.text.includes(target.attachments[1].path));
+    assert.equal(existsSync(join(home, "inbox-media", b)), false);
+    inbox.triageInboxCards({ action: "update", cardId: a, patch: { status: "archived" }, baseHome: home }, repoRoot);
+    assert.equal(existsSync(join(home, "inbox-media", a)), false);
+  });
+
+  test("attach re-checks under the lock: a failed attach leaves no orphan file", async () => {
+    const id = await park();
+    for (let i = 0; i < inbox.INBOX_MEDIA_MAX_PER_CARD; i++) inbox.attachInboxMedia({ cardId: id, mime: "image/png", bytes: PNG, baseHome: home });
+    const before = readdirSync(join(home, "inbox-media", id)).sort();
+    assert.throws(() => inbox.attachInboxMedia({ cardId: id, mime: "image/png", bytes: PNG, baseHome: home }), /at most/);
+    assert.deepEqual(readdirSync(join(home, "inbox-media", id)).sort(), before);
+    // stale precheck: card flips to delivered between the read and the lock
+    const id2 = await park();
+    const orig = inbox.readInboxCards(home);
+    const c = orig.find((x) => x.id === id2);
+    c.status = "archived";
+    inbox.writeInboxCards(orig, home);
+    assert.throws(() => inbox.attachInboxMedia({ cardId: id2, mime: "image/png", bytes: PNG, baseHome: home }), /archived/);
+    assert.equal(existsSync(join(home, "inbox-media", id2)), false);
   });
 });
