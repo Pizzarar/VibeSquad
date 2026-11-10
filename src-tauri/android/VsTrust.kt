@@ -123,6 +123,11 @@ object VsTrust {
     fun forget(c: Context, authority: String) {
         val key = key(authority) ?: return
         prefs(c).edit().remove("ca:$key").apply()
+        // Also drop this PC's device cookie so a forgotten PC isn't silently still signed in (the PC keeps the device row until revoked there).
+        val cm = CookieManager.getInstance()
+        val base = "https://${urlAuthority(key)}"
+        cm.setCookie("$base/", "vs_device=; Max-Age=0; Path=/; Secure")
+        cm.flush()
     }
 
     /**
