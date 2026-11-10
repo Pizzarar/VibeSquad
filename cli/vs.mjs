@@ -1219,7 +1219,7 @@ async function commandWhoami(flags) {
       const lead = winner;
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
-      const status = String(lead.status ?? "unknown").trim();
+      const status = lead.lost ? "lost" : String(lead.status ?? "unknown").trim();
       const line = formatWhoLine({ id: lead.id, title, status, tokensLabel });
       currentLead = {
         id: lead.id,
