@@ -1272,6 +1272,8 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
       const d = await r.json().catch(() => ({{}}));
       if (d.reachable) {{
         consecutiveFailures = 0;
+        // The page's WS/fetches died with the old server: reload once the server is back instead of Re-pair.
+        if (banner && banner.style.display !== 'none') window.location.reload();
         if (banner) banner.style.display = 'none';
       }} else {{
         consecutiveFailures++;

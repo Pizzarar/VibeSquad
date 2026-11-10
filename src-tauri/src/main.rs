@@ -2036,16 +2036,13 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         return;
     }
     if check_local_server_healthy(&state.client(), &host).await.is_ok() {
+        // Healthy, whoever owns the process (e.g. restarted externally): drop a dead child + stale pid
+        // so they never block a later respawn, and never start a second server.
+        reap_dead_managed_server(state);
         return;
     }
     // Already spawned by us and still alive: just wait for it below.
-    let spawned_alive = {
-        let mut guard = state.managed_server.lock().unwrap();
-        match guard.as_mut() {
-            Some(child) => matches!(child.try_wait(), Ok(None)),
-            None => false,
-        }
-    };
+    let spawned_alive = reap_dead_managed_server(state);
     if !spawned_alive {
         // Anything left in server.pid belongs to a previous run that is no longer serving: forget it.
         let _ = fs::remove_file(server_pid_path());
@@ -2067,6 +2064,25 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+    // Our child is alive but never became healthy (wedged, or lost the port to an external server that
+    // has since gone): kill it so the next ping respawns instead of waiting on it forever.
+    if spawned_alive {
+        stop_managed_server(state);
+    }
+}
+
+/// Forgets a managed child that already exited (and its server.pid). Returns true when a live child remains.
+fn reap_dead_managed_server(state: &Arc<SharedAppState>) -> bool {
+    let mut guard = state.managed_server.lock().unwrap();
+    let alive = match guard.as_mut() {
+        Some(child) => matches!(child.try_wait(), Ok(None)),
+        None => return false,
+    };
+    if !alive {
+        *guard = None;
+        let _ = fs::remove_file(server_pid_path());
+    }
+    alive
 }
 
 /// Kills the server we spawned (never one we merely reused) so quitting leaves no orphan node.exe.
@@ -3063,6 +3079,24 @@ mod tests {
             cfg.device_token = "t".into();
         }
         state
+    }
+
+    #[tokio::test]
+    async fn external_restart_reaps_stale_child_and_never_double_spawns() {
+        use axum::routing::get;
+        let ext = spawn_upstream(Router::new().route("/", get(|| async { "<html><div id=\"root\"></div></html>" })).route("/api/auth/status", get(|| async { Json(json!({ "distReady": true })) }))).await;
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "local".into();
+            cfg.server_host = ext.clone();
+        }
+        // A child we spawned earlier that has since exited (the server was restarted outside the app).
+        let mut dead = std::process::Command::new(std::env::current_exe().unwrap()).arg("--list").stdout(std::process::Stdio::null()).spawn().unwrap();
+        let _ = dead.wait();
+        *state.managed_server.lock().unwrap() = Some(dead);
+        ensure_local_server_running(&state).await;
+        assert!(state.managed_server.lock().unwrap().is_none(), "stale child must be cleared when the port is healthy");
     }
 
     #[tokio::test]
