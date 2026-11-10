@@ -221,6 +221,16 @@ export function takePairingFragment(w: WindowLike = globalThis as WindowLike): P
   return { hostId, pub: pub.replace(/-/g, "+").replace(/_/g, "/"), relay, code: p.get("code") };
 }
 
+/**
+ * Pairing-link consumer check (X1 M-2): the link's hostId must be the self-certifying id of its pub, so an attacker's
+ * link can only name a NEW host (with no stored pin/token), never repoint a known hostId at the attacker's key.
+ * Wiring contract (threat model §7): never overwrite a stored pin from a link; never send a stored token to a host whose pin differs.
+ */
+export async function acceptPairingFragment(f: PairingFragment): Promise<PairingFragment> {
+  if ((await selfCertifyingHostId(fromB64(f.pub))) !== f.hostId) throw new RelayAuthError("pairing link hostId does not match its key");
+  return f;
+}
+
 /** Captured at module load, before any other app code can read location.hash. null outside a browser or without a pairing link. */
 export const pairingFragment: PairingFragment | null = takePairingFragment();
 
@@ -245,7 +255,7 @@ export interface RelayOptions {
   /** Skip WebCrypto X25519 even when present. */
   forceNoble?: boolean;
   maxResponseBytes?: number;
-  /** Require hostId === base64url(SHA-256(hostPubKey)). */
+  /** hostId must equal base64url(SHA-256(hostPubKey)). DEFAULT ON (X1 M-2); pass false only in tests. */
   requireSelfCertifiedHostId?: boolean;
 }
 
@@ -275,12 +285,13 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
   const maxResponseBytes = opts.maxResponseBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
   const Ctor = opts.WebSocketImpl ?? (globalThis.WebSocket as unknown as SockCtor);
   const u = new URL(opts.endpoint);
+  if (u.protocol !== "wss:") throw new RelayAuthError("relay endpoint must be wss://"); // X1 L-4: never leak hostId/timing in clear
   if (!u.pathname.endsWith("/ws")) u.pathname = `${u.pathname.replace(/\/$/, "")}/ws`;
   u.searchParams.set("hostId", opts.hostId);
   u.searchParams.set("role", "client");
   const hostPub = fromB64(opts.hostPubKey);
   if (hostPub.length !== 32) throw new RelayAuthError("bad pinned host key");
-  if (opts.requireSelfCertifiedHostId && (await selfCertifyingHostId(hostPub)) !== opts.hostId) {
+  if (opts.requireSelfCertifiedHostId !== false && (await selfCertifyingHostId(hostPub)) !== opts.hostId) {
     throw new RelayAuthError("hostId does not match the pinned host key");
   }
   const kex = await newKex(opts.forceNoble);
@@ -316,9 +327,16 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
     client.onclose?.(reason);
   };
   const sendRaw = (b: Uint8Array) => sock.send(JSON.stringify({ t: "msg", b: toB64(b) }));
-  const sendFrame = async (f: Frame) => {
-    if (!channel || closed) throw new Error("relay not connected");
-    sendRaw(await channel.seal(enc.encode(JSON.stringify(f))));
+  // seal + send in ONE queued step: WebCrypto encrypt completion order is unspecified, so without this a slow ctr 0 and a
+  // fast ctr 1 reach the wire reversed and the host (rightly) kills the session (X1 M-1). Wire order == counter order.
+  let sendChain: Promise<void> = Promise.resolve();
+  const sendFrame = (f: Frame): Promise<void> => {
+    const step = sendChain.then(async () => {
+      if (!channel || closed) throw new Error("relay not connected");
+      sendRaw(await channel.seal(enc.encode(JSON.stringify(f))));
+    });
+    sendChain = step.catch(() => {});
+    return step;
   };
   // Sends a request frame; on failure drops the id from pending/streams so nothing leaks.
   const sendTracked = (f: Frame, id: string, reject: (e: unknown) => void) =>

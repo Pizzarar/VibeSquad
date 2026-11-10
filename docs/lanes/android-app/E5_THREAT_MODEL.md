@@ -1,6 +1,6 @@
 # E5 Outbound E2EE Relay · Threat Model (branch `unit-and-end-e5`)
 
-Status: rev 2, after the Fable 5.1 design pass (`~/.vibesquad/teams/vibesquad/E5_DESIGN_REVIEW.md`, PASS-with-changes) and Review-Gemini R1 (`E5_REVIEW_R1.md`, FAIL 0C/2H/4M/2L). Tier A. Core is new files only and **unwired**.
+Status: rev 3 (X1 walk fix round, see §9), after the Fable 5.1 design pass (`~/.vibesquad/teams/vibesquad/E5_DESIGN_REVIEW.md`, PASS-with-changes) and Review-Gemini R1 (`E5_REVIEW_R1.md`, FAIL 0C/2H/4M/2L). Tier A. Core is new files only and **unwired**.
 Files: `server/relay-tunnel.mjs` (host), `src/remoteRelayTransport.ts` (client), `test/relay-tunnel.test.mjs`.
 Plan: `docs/PLAN_ANDROID_END_STATE.md` Phase 1 item 1.
 
@@ -38,7 +38,7 @@ Trust anchor: the host public key `pub` delivered **out of band** in the pairing
 | T5 | **Relay compromise** | Equivalent to T1-T4; relay holds no secrets | Availability |
 | T6 | **Stolen / lost phone** | Per-device token, revocable. Revocation is re-checked on **every** post-auth dispatch via injected `isRevoked` (CLI `vs devices revoke` runs out of process and never calls `revoke()`), plus `revoke(deviceId)` for immediate close. Cascade revoke is E4b | Window until owner revokes; token lives in phone storage |
 | T7 | **Token theft in transit** | Redeem/auth only inside the E2EE channel | Token at rest on client |
-| T8 | **Brute-force the 6-digit code** | Host-**wide** failed-redeem counter (not per session or per socket; survives reconnects, tested). At 10 failures: `burnCodes()`, `onNeedsYou` security event, redeem locked until `noteFreshMint()`. Chance an attacker succeeds in one code lifetime ≤ ~1e-5. Per-session cap (5) and 30 s unauth timeout stay as extra friction. Token auth failures are throttled host-wide (100/min) | The relay hides client IPs, so no per-IP lockout is possible host-side; the relay should cap connections per IP per `hostId`. Attacker can force the lock (DoS of pairing, never of already-paired devices) |
+| T8 | **Brute-force the 6-digit code** | Host-**wide** failed-redeem counter (not per session or per socket; survives reconnects, tested). A guess is counted **when issued**, synchronously before the await on `redeem()` (X1 H-1), so closing the session mid-flight or bursting 32x5 frames cannot skip it; at most `redeemFailLimit` guesses ever reach the callback; a success only clears the guesses that are not still in flight. Over-long codes (>16) and tokens (>128) are rejected without reaching `auth.mjs` and still count. At 10 failures: `burnCodes()`, `onNeedsYou` security event, redeem locked until `noteFreshMint()`. Chance an attacker succeeds in one code lifetime ≤ ~1e-5. Per-session cap (5) and 30 s unauth timeout stay as extra friction. Token auth failures are throttled host-wide (100/min) | The relay hides client IPs, so no per-IP lockout is possible host-side; the relay should cap connections per IP per `hostId`. Attacker can force the lock (DoS of pairing, never of already-paired devices) |
 | T9 | **DoS (flood sessions, huge frames)** | `maxSessions` 32 **with eviction of the oldest unauthenticated session** so a half-open flood cannot lock the owner out; raw relay frame cap before JSON/base64 on both sides (~1.4 MiB), 1 MiB record cap, client response cap (64 MiB default), 16 HTTP + 8 WS per session (429 completes cleanly), backoff + jitter on the dial | Volumetric DoS is the relay's problem |
 | T10 | **SSRF / path abuse via the mux** | Default-deny allowlist. The target is **canonicalized once** (`normalizeRelayTarget`): segments decoded, dot segments / encoded slashes / double-encoding / control chars rejected, re-encoded; the deny/allow decision is made on the decoded-lowercase form and the **canonical string is what handlers receive**, so validator and consumer cannot disagree. Denies `first-run`, `local-image`, `pair/redeem`, `enter`, `local-login`. Only 5 request headers are forwarded; `set-cookie` is stripped from every response | Allowed API surface is as powerful as an owner session: it IS owner access |
 | T11 | **Host key theft** | File 0600 in a 0700 dir (see wiring list for the S2 lockdown entry). Attacker with it can impersonate the host to pinned clients but cannot read recorded sessions (ephemeral `ee` gives forward secrecy) | Rotation = delete file + re-pair everything (no CLI yet) |
@@ -46,7 +46,7 @@ Trust anchor: the host public key `pub` delivered **out of band** in the pairing
 | T13 | **Revoked device keeps a session** | See T6: per-dispatch `isRevoked` + `revoke()` + 24 h session cap | Idle sockets without traffic live until the next frame or rekey |
 | T14 | **Long-lived session key exposure** | Rekey: host closes a session after 24 h or 2^20 records (either direction) with a final encrypted `rekey` frame; the client re-handshakes and re-authenticates, which also re-checks revocation | None |
 | T15 | **Relayed device treated as the PC itself (H1)** | Relayed traffic is **never proxied through a real loopback fetch**. It is dispatched in-process (`createInProcessDispatcher`) with a synthetic request carrying a frozen `req.relayDevice = {id}` and a non-loopback sentinel socket (`remoteAddress: "relay"`); `isRelayRequest(req)` lets `auth.mjs` classify it as remote | Depends on the wiring honouring `relayDevice` (below) |
-| T16 | **hostId squatting at the relay (M1)** | Optional self-certifying id `hostId = base64url(SHA-256(pub))` (`selfCertifyingHostId`, client option `requireSelfCertifiedHostId`) so a squatter cannot present a valid pinned identity; clients never trust the relay's claim anyway because of the pin | Squatting still denies service and leaks client IPs/timing unless the **relay** authenticates `role=host` registration (proof of possession of `s`, e.g. relay ephemeral X25519 challenge + HMAC); one live host per `hostId`. Relay-side work, out of scope here |
+| T16 | **hostId squatting at the relay (M1) / pairing link repoints a known host (X1 M-2)** | Self-certifying id, **default ON** `hostId = base64url(SHA-256(pub))` (`selfCertifyingHostId`, `connectRelay` rejects a `hostId` that is not base64url(SHA-256(pub)) unless `requireSelfCertifiedHostId: false`; `acceptPairingFragment` applies the same rule to links) so a squatter or a crafted link cannot present a valid pinned identity; clients never trust the relay's claim anyway because of the pin | Squatting still denies service and leaks client IPs/timing unless the **relay** authenticates `role=host` registration (proof of possession of `s`, e.g. relay ephemeral X25519 challenge + HMAC); one live host per `hostId`. Relay-side work, out of scope here |
 | T17 | **Malicious/compromised static page (H3)** | See §2: separate VS-controlled origin, SRI, fragment stripped on load, APK bundles its own page | Whoever controls the origin controls the client; SRI only protects against tampering in transit/CDN |
 
 ## 4. Crypto choices and why
@@ -100,8 +100,27 @@ and `auth.mjs` mints call `host.noteFreshMint()` after a new code exists.
 9. Request bodies must fit in one 1 MiB record; larger uploads need chunking (not built).
 10. No relay server exists in this unit; the framing in the `relay-tunnel.mjs` header is the contract.
 
+### Pin-store rule (X1 M-2; wiring contract for the E4a `hosts[]` store)
+1. A stored pin (`hostId` -> `pub`) is **never overwritten by a pairing link**. A link whose `hostId` is already stored with a different `pub` is an error shown to the user, not a silent re-pair. (With self-certifying ids a crafted link can only name a *new* host.)
+2. A stored token is **never sent to a host whose pin differs** from the one it was issued for: `authenticate` happens only after the handshake succeeded against the stored pin for that exact `hostId`.
+3. Run `acceptPairingFragment` on every link before using it.
+
 ### E4b two-step confirm wording (L3)
 The "approve on the minting phone or another owner device" step protects against **link or code leakage** (someone else redeems a code you minted). It does **not** protect against a stolen *unlocked* phone, which can approve itself. Stolen-phone defense is revocation (from another owner device, or `vs devices revoke` on the host) plus cascade revoke of every device it minted.
 
 ## 8. Resolved review questions
 (a) hand-rolled NK: kept (design review). (b) AES-GCM + WebCrypto, `@noble/curves` for X25519 only. (c) No IK now; reserve version `0x02`. (d) Both: validate at session start **and** `isRevoked` on every dispatch.
+
+## 9. X1 walk fix round (Fable high, `594d29e`: FAIL 1H/3M/6L)
+| Finding | Fix | Where |
+|---|---|---|
+| H-1 guess counted after the await | counted synchronously when issued (redeem and auth), independent of `s.dead`; lock/burn at the limit; callbacks never exceed the limit | `server/relay-tunnel.mjs` `dispatch` |
+| M-1 client ctr/wire order race | seal + send in one queued step | `src/remoteRelayTransport.ts` `sendFrame` |
+| M-2 pin override via link | self-certifying hostId default ON; `acceptPairingFragment`; pin-store rule above | `remoteRelayTransport.ts`, §7 |
+| M-3 ws slots / ordering | slot reserved synchronously (pending placeholder), per-session ordered dispatch queue; http/ws-open work started, not awaited | `relay-tunnel.mjs` `dispatch`, `runHttp`, `runWsOpen` |
+| L-1 host seal cap | `seal` refuses >1 MiB; oversize `ws-data` closes only that stream (1009), oversize head becomes 502 | `relay-tunnel.mjs` |
+| L-2 `headersSent` | real getter via `defineProperty` | `createSyntheticResponse` |
+| L-3 code/token length | reject codes >16 and tokens >128 before callbacks | `dispatch` |
+| L-4 `ws://` | `connectRelay` requires `wss:` | `remoteRelayTransport.ts` |
+| L-5 keypair rename | no rename fallback: exclusive create, EEXIST reads the winner; directory chmod 0700 best effort | `loadOrCreateHostKeypair` |
+| L-6 host header | synthetic requests carry `host: relay.invalid` | `createSyntheticRequest` |

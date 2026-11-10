@@ -25,7 +25,7 @@ import {
   hkdfSync,
   randomBytes,
 } from "node:crypto";
-import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { Readable, Writable } from "node:stream";
 import { dirname, join } from "node:path";
@@ -68,6 +68,9 @@ export function loadOrCreateHostKeypair(file = defaultKeypairPath()) {
   const jwk = generateKeyPairSync("x25519").privateKey.export({ format: "jwk" });
   const body = JSON.stringify({ v: 1, alg: "x25519", pub: jwk.x, priv: jwk.d });
   mkdirSync(dirname(file), { recursive: true, mode: 0o700 });
+  try {
+    chmodSync(dirname(file), 0o700); // mkdir's mode does not tighten an existing directory
+  } catch {}
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600);
   try {
@@ -82,7 +85,17 @@ export function loadOrCreateHostKeypair(file = defaultKeypairPath()) {
     linkSync(tmp, file);
   } catch (e) {
     if (e?.code === "EEXIST") return read();
-    renameSync(tmp, file); // filesystem without hard links: best effort
+    // no hard links (EPERM on some filesystems): create exclusively; never replace a key another process just made
+    try {
+      const fd2 = openSync(file, "wx", 0o600);
+      try {
+        writeSync(fd2, body);
+      } finally {
+        closeSync(fd2);
+      }
+    } catch (e2) {
+      if (e2?.code !== "EEXIST") throw e2;
+    }
     return read();
   } finally {
     try {
@@ -118,6 +131,7 @@ export function createChannel(sendKey, recvKey, sendDir, recvDir) {
   let recvCtr = 0n;
   return {
     seal(plain) {
+      if (plain.length > MAX_RECORD_BYTES) throw new RangeError("record too large");
       const ctr = sendCtr;
       if (ctr >= MAX_CTR) throw new Error("relay channel exhausted");
       const c = createCipheriv("aes-256-gcm", sendKey, nonceFor(ctr), { authTagLength: TAG_LEN });
@@ -300,7 +314,7 @@ export function createSyntheticRequest({ method, path, headers = {}, body = Buff
   Object.assign(req, {
     method,
     url: path,
-    headers: { ...headers },
+    headers: { ...headers, host: "relay.invalid" }, // obviously synthetic; routers that build URLs from it keep working
     httpVersion: "1.1",
     socket,
     connection: socket,
@@ -317,6 +331,7 @@ export function createSyntheticResponse() {
   const res = new Writable({
     write(chunk, _enc, cb) {
       total += chunk.length;
+      res.bytesWritten = total;
       if (total > res.maxBodyBytes) return cb(new Error("response too large"));
       chunks.push(Buffer.from(chunk));
       cb();
@@ -325,6 +340,7 @@ export function createSyntheticResponse() {
   Object.assign(res, {
     statusCode: 200,
     maxBodyBytes: 32 * 1024 * 1024,
+    bytesWritten: 0,
     setHeader(k, v) {
       headers.set(String(k).toLowerCase(), v);
       return res;
@@ -339,11 +355,9 @@ export function createSyntheticResponse() {
       for (const [k, v] of Object.entries(typeof a === "object" && a ? a : (b ?? {}))) headers.set(k.toLowerCase(), v);
       return res;
     },
-    get headersSent() {
-      return res.writableLength > 0 || res.writableEnded;
-    },
     result: () => ({ status: res.statusCode, headers: cleanResponseHeaders(Object.fromEntries(headers)), body: Buffer.concat(chunks) }),
   });
+  Object.defineProperty(res, "headersSent", { get: () => res.writableLength > 0 || res.writableEnded || res.writableFinished || res.bytesWritten > 0, enumerable: true });
   return res;
 }
 
@@ -420,6 +434,7 @@ export function createRelayHost(opts) {
   let timer = null;
   let stopped = true;
   let redeemFails = 0;
+  let redeemInflight = 0;
   let redeemLocked = false; // set when the global limit burns the codes; cleared by noteFreshMint()
   let authFails = [];
   const sessions = new Map(); // cid -> session, insertion order = age
@@ -453,7 +468,9 @@ export function createRelayHost(opts) {
   }
 
   function sealSend(s, obj) {
-    relaySend({ t: "msg", cid: s.cid, b: s.channel.seal(Buffer.from(JSON.stringify(obj))).toString("base64") });
+    const plain = Buffer.from(JSON.stringify(obj));
+    if (plain.length > MAX_RECORD_BYTES) throw new RangeError("record too large");
+    relaySend({ t: "msg", cid: s.cid, b: s.channel.seal(plain).toString("base64") });
     s.records++;
   }
   function send(s, obj) {
@@ -465,7 +482,20 @@ export function createRelayHost(opts) {
         return closeSession(s.cid);
       }
       sealSend(s, obj);
-    } catch {
+    } catch (e) {
+      // X1 L-1: an oversize record must not take the whole session down. Fail just that stream.
+      if (e instanceof RangeError && obj.t === "ws-data") {
+        onEvent({ type: "oversize-record", cid: s.cid, id: obj.id });
+        const h = s.ws.get(obj.id);
+        if (s.ws.delete(obj.id)) {
+          try {
+            h?.close();
+          } catch {}
+          return send(s, { t: "ws-close", id: obj.id, code: 1009 });
+        }
+        return;
+      }
+      if (e instanceof RangeError && obj.t === "http-res") return send(s, { t: "http-res", id: obj.id, status: 502, headers: {}, fin: true });
       closeSession(s.cid);
     }
   }
@@ -475,9 +505,10 @@ export function createRelayHost(opts) {
       onNeedsYou(event);
     } catch {}
   };
-  function noteRedeemFailure() {
-    if (++redeemFails < redeemFailLimit) return;
-    redeemFails = 0;
+  // H2 / X1 H-1: a guess is counted when it is ISSUED (synchronously, before the await on redeem()), never when the
+  // callback returns, so closing the session mid-flight or bursting frames before any callback resolves cannot skip it.
+  function lockRedeem() {
+    if (redeemLocked) return;
     redeemLocked = true;
     try {
       burnCodes();
@@ -489,20 +520,79 @@ export function createRelayHost(opts) {
     authFails = authFails.filter((x) => t - x < authFailWindowMs);
     return authFails.length >= authFailLimit;
   }
+  const validCode = (c) => typeof c === "string" && c.length > 0 && c.length <= 16;
+  const validToken = (t) => typeof t === "string" && t.length > 0 && t.length <= 128;
 
+  async function runHttp(s, id, m, target) {
+    s.http++;
+    let headSent = false;
+    try {
+      const body = m.b ? Buffer.from(String(m.b), "base64") : Buffer.alloc(0);
+      const r = await handleHttp({ method: String(m.method ?? "GET").toUpperCase(), path: target.path, headers: pickHeaders(m.headers), body, deviceId: s.deviceId });
+      if (s.dead) return;
+      const buf = r?.body == null ? Buffer.alloc(0) : Buffer.from(r.body);
+      send(s, { t: "http-res", id, status: r?.status ?? 500, headers: cleanResponseHeaders(r?.headers) });
+      headSent = true;
+      for (let o = 0; o < buf.length; o += BODY_CHUNK) {
+        send(s, { t: "http-body", id, b: buf.subarray(o, o + BODY_CHUNK).toString("base64") });
+      }
+      send(s, { t: "http-body", id, b: "", fin: true });
+    } catch {
+      send(s, headSent ? { t: "http-body", id, b: "", fin: true } : { t: "http-res", id, status: 502, headers: {}, fin: true });
+    } finally {
+      s.http--;
+    }
+  }
+
+  async function runWsOpen(s, id, target, pending) {
+    let handle = null;
+    try {
+      handle = await openWs({
+        path: target.path,
+        deviceId: s.deviceId,
+        send: (data, binary) => send(s, { t: "ws-data", id, bin: Boolean(binary), data: binary ? Buffer.from(data).toString("base64") : String(data) }),
+        close: (code) => {
+          if (s.ws.delete(id)) send(s, { t: "ws-close", id, code: code ?? 1000 });
+        },
+      });
+    } catch {}
+    const stillMine = s.ws.get(id) === pending;
+    if (s.dead || !stillMine || !handle) {
+      if (stillMine) s.ws.delete(id);
+      try {
+        handle?.close();
+      } catch {}
+      if (!s.dead) send(s, { t: "ws-open-res", id, ok: false });
+      return;
+    }
+    s.ws.set(id, handle);
+    send(s, { t: "ws-open-res", id, ok: true });
+  }
+
+  // Frames of one session are dispatched strictly in order (see s.queue). Long-running work (handleHttp / openWs) is
+  // started, not awaited, so one slow request never blocks the session; slots are reserved synchronously (X1 M-3).
   async function dispatch(s, m) {
     const id = typeof m.id === "string" ? m.id.slice(0, 64) : "";
     if (m.t === "redeem") {
       if (s.deviceId) return send(s, { t: "redeem-res", id, ok: false });
       if (++s.redeems > maxRedeemAttempts) return closeSession(s.cid);
       if (redeemLocked) return send(s, { t: "redeem-res", id, ok: false, locked: true }); // never reaches redeem()
-      const r = await redeem({ code: String(m.code ?? ""), label: typeof m.label === "string" ? m.label.slice(0, 80) : "" });
-      if (s.dead) return;
-      if (!r?.token || !r.deviceId) {
-        noteRedeemFailure();
-        return send(s, { t: "redeem-res", id, ok: false });
+      if (redeemFails >= redeemFailLimit) {
+        lockRedeem();
+        return send(s, { t: "redeem-res", id, ok: false, locked: true });
       }
-      redeemFails = 0;
+      redeemFails++; // counted now, synchronously
+      redeemInflight++;
+      let r = null;
+      try {
+        if (validCode(m.code)) r = await redeem({ code: m.code, label: typeof m.label === "string" ? m.label.slice(0, 80) : "" });
+      } catch {}
+      redeemInflight--;
+      const ok = Boolean(r?.token && r.deviceId);
+      if (ok) redeemFails = redeemInflight; // this guess was right: only other guesses still in flight stay counted
+      else if (redeemFails >= redeemFailLimit) lockRedeem();
+      if (s.dead) return;
+      if (!ok) return send(s, { t: "redeem-res", id, ok: false });
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
       return send(s, { t: "redeem-res", id, ok: true, deviceId: s.deviceId, token: r.token });
@@ -511,12 +601,18 @@ export function createRelayHost(opts) {
       if (s.deviceId) return send(s, { t: "auth-res", id, ok: false });
       if (++s.redeems > maxRedeemAttempts) return closeSession(s.cid);
       if (authThrottled()) return send(s, { t: "auth-res", id, ok: false });
-      const r = await authenticate(String(m.token ?? ""));
-      if (s.dead) return;
-      if (!r?.deviceId) {
-        authFails.push(now());
-        return send(s, { t: "auth-res", id, ok: false });
+      const stamp = now();
+      authFails.push(stamp); // counted before the await
+      let r = null;
+      try {
+        if (validToken(m.token)) r = await authenticate(m.token);
+      } catch {}
+      if (r?.deviceId) {
+        const i = authFails.indexOf(stamp);
+        if (i >= 0) authFails.splice(i, 1);
       }
+      if (s.dead) return;
+      if (!r?.deviceId) return send(s, { t: "auth-res", id, ok: false });
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
       return send(s, { t: "auth-res", id, ok: true, deviceId: s.deviceId });
@@ -535,42 +631,16 @@ export function createRelayHost(opts) {
         onEvent({ type: "denied", deviceId: s.deviceId, method, path: String(m.path).slice(0, 200) });
         return send(s, { t: "http-res", id, status: 403, headers: {}, fin: true });
       }
-      s.http++;
-      let headSent = false;
-      try {
-        const body = m.b ? Buffer.from(String(m.b), "base64") : Buffer.alloc(0);
-        const r = await handleHttp({ method, path: target.path, headers: pickHeaders(m.headers), body, deviceId: s.deviceId });
-        if (s.dead) return;
-        const buf = r?.body == null ? Buffer.alloc(0) : Buffer.from(r.body);
-        send(s, { t: "http-res", id, status: r?.status ?? 500, headers: cleanResponseHeaders(r?.headers) });
-        headSent = true;
-        for (let o = 0; o < buf.length; o += BODY_CHUNK) {
-          send(s, { t: "http-body", id, b: buf.subarray(o, o + BODY_CHUNK).toString("base64") });
-        }
-        send(s, { t: "http-body", id, b: "", fin: true });
-      } catch {
-        send(s, headSent ? { t: "http-body", id, b: "", fin: true } : { t: "http-res", id, status: 502, headers: {}, fin: true });
-      } finally {
-        s.http--;
-      }
+      void runHttp(s, id, m, target);
       return;
     }
     if (m.t === "ws-open") {
       const target = normalizeRelayTarget("GET", m.path);
-      if (s.ws.size >= maxWsPerSession || s.ws.has(id) || !id || !target) return send(s, { t: "ws-open-res", id, ok: false });
-      const handle = await openWs({
-        path: target.path,
-        deviceId: s.deviceId,
-        send: (data, binary) =>
-          send(s, { t: "ws-data", id, bin: Boolean(binary), data: binary ? Buffer.from(data).toString("base64") : String(data) }),
-        close: (code) => {
-          if (s.ws.delete(id)) send(s, { t: "ws-close", id, code: code ?? 1000 });
-        },
-      });
-      if (s.dead) return void handle?.close();
-      if (!handle) return send(s, { t: "ws-open-res", id, ok: false });
-      s.ws.set(id, handle);
-      return send(s, { t: "ws-open-res", id, ok: true });
+      if (s.ws.size >= maxWsPerSession || !id || s.ws.has(id) || !target) return send(s, { t: "ws-open-res", id, ok: false });
+      const pending = { message() {}, close() {}, pending: true };
+      s.ws.set(id, pending); // reserved synchronously: caps and duplicate ids are enforced before any await
+      void runWsOpen(s, id, target, pending);
+      return;
     }
     if (m.t === "ws-data") {
       const h = s.ws.get(id);
@@ -603,7 +673,7 @@ export function createRelayHost(opts) {
         onEvent({ type: "evicted-unauthenticated", cid: victim.cid });
         closeSession(victim.cid);
       }
-      const s = { cid, channel: null, deviceId: null, redeems: 0, http: 0, ws: new Map(), dead: false, authTimer: null, createdAt: now(), records: 0 };
+      const s = { cid, channel: null, deviceId: null, redeems: 0, http: 0, ws: new Map(), dead: false, authTimer: null, createdAt: now(), records: 0, queue: Promise.resolve() };
       s.authTimer = setTimeoutFn(() => closeSession(cid), authTimeoutMs);
       sessions.set(cid, s);
       return;
@@ -621,7 +691,7 @@ export function createRelayHost(opts) {
       const m = JSON.parse(s.channel.open(bytes).toString("utf8"));
       s.records++;
       if (!m || typeof m !== "object") throw new Error("bad frame");
-      dispatch(s, m).catch(() => closeSession(cid));
+      s.queue = s.queue.then(() => dispatch(s, m)).catch(() => closeSession(cid)); // strictly ordered per session
     } catch (e) {
       onEvent({ type: "session-error", cid, deviceId: s.deviceId, reason: String(e?.message ?? e) });
       closeSession(cid);

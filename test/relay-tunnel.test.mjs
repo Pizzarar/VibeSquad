@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import {
-  connectRelay,
+  connectRelay as connectRelayStrict,
   newKex,
   RelayAuthError,
   RelayRekeyError,
@@ -31,12 +31,14 @@ import {
   startClientHandshake,
 } from "../server/relay-tunnel.mjs";
 
+// Tests use free-form host ids; production default is self-certified (X1 M-2). Strict behaviour has its own tests.
+const connectRelay = (o) => connectRelayStrict({ requireSelfCertifiedHostId: false, ...o });
 const tmp = mkdtempSync(join(tmpdir(), "vs-relay-"));
 after(() => rmSync(tmp, { recursive: true, force: true }));
 const HOST_ID = "host-test-1";
 const hostKey = loadOrCreateHostKeypair(join(tmp, "k", "host-keypair.json"));
 const tick = () => new Promise((r) => setImmediate(r));
-const until = async (fn, n = 200) => {
+const until = async (fn, n = 200000) => {
   for (let i = 0; i < n; i++) {
     if (fn()) return;
     await tick();
@@ -794,5 +796,281 @@ describe("H3 pairing fragment", () => {
     const plain = win(link().replace("wss%3A", "ws%3A"));
     assert.equal(takePairingFragment(plain), null);
     assert.equal(takePairingFragment({}), null);
+  });
+});
+
+// ---- X1 walk fix round (H-1, M-1..M-3, L-1..L-6) -----------------------------------------------------------------------
+
+/** Talks the wire protocol by hand (node reference client) so tests can send exact frame sequences. */
+async function rawSession(relay, cid) {
+  const inbox = [];
+  relay.clients.set(cid, { fire: (t, ev) => t === "message" && inbox.push(JSON.parse(ev.data)) });
+  hostFire(relay, { t: "open", cid });
+  const hs = startClientHandshake(hostKey.publicRaw, HOST_ID);
+  hostFire(relay, { t: "msg", cid, b: hs.msg1.toString("base64") });
+  await until(() => inbox.length);
+  const ch = hs.finish(Buffer.from(inbox.shift().b, "base64"));
+  return {
+    send: (o) => hostFire(relay, { t: "msg", cid, b: ch.seal(Buffer.from(JSON.stringify(o))).toString("base64") }),
+    recv: async () => {
+      await until(() => inbox.length);
+      const f = inbox.shift();
+      return f.t === "close" ? f : JSON.parse(ch.open(Buffer.from(f.b, "base64")));
+    },
+    inbox,
+  };
+}
+
+describe("X1 H-1 guesses are counted when issued", () => {
+  const asyncRedeem = (log, gate) => async ({ code }) => {
+    log.push(code);
+    await (gate ?? new Promise((r) => setImmediate(r)));
+    return null;
+  };
+
+  test("redeem-then-close per session cannot skip the counter: 50 sessions burn at the limit", async () => {
+    const relay = makeRelay();
+    const log = [];
+    let burned = 0;
+    const { host } = makeHost(relay, { redeem: asyncRedeem(log), burnCodes: () => burned++ });
+    host.start();
+    await tick();
+    for (let i = 0; i < 50; i++) {
+      const c = await connect(relay);
+      const before = log.length;
+      void c.redeem("000000").catch(() => {});
+      await until(() => log.length > before || host.status().redeemLocked);
+      c.close(); // closes while redeem() is still in flight
+    }
+    await until(() => host.status().redeemLocked);
+    assert.equal(burned, 1);
+    assert.ok(log.length <= 10, `redeem() reached ${log.length} times`);
+    host.stop();
+  });
+
+  test("32 sessions x 5 guesses in a burst: at most the limit reaches redeem(), then burn + lock", async () => {
+    const relay = makeRelay();
+    const log = [];
+    let burned = 0;
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const { host } = makeHost(relay, { redeem: asyncRedeem(log, gate), burnCodes: () => burned++ });
+    host.start();
+    await tick();
+    const clients = [];
+    for (let i = 0; i < 32; i++) clients.push(await connect(relay));
+    const attempts = clients.map((c) => c.redeem("000000").catch(() => {}));
+    for (const c of clients) for (let k = 0; k < 4; k++) void c.redeem("1").catch(() => {});
+    await until(() => log.length >= 10);
+    await tick();
+    await tick();
+    release();
+    await Promise.all(attempts);
+    await until(() => host.status().redeemLocked);
+    assert.equal(log.length, 10);
+    assert.equal(burned, 1);
+    host.stop();
+  });
+
+  test("a successful redeem does not erase guesses that are still in flight", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay);
+    host.start();
+    await tick();
+    const c = await connect(relay);
+    await c.redeem("123456");
+    assert.equal(host.status().redeemFails, 0);
+    host.stop();
+  });
+
+  test("auth failures are counted before the await too", async () => {
+    const relay = makeRelay();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const seen = [];
+    const { host } = makeHost(relay, { authFailLimit: 3, authenticate: async (t) => (seen.push(t), await gate, null) });
+    host.start();
+    await tick();
+    const cs = [];
+    for (let i = 0; i < 6; i++) cs.push(await connect(relay));
+    const results = cs.map((c) => c.authenticate("t").catch(() => {}));
+    await until(() => seen.length >= 3);
+    await tick();
+    await tick();
+    release();
+    await Promise.all(results);
+    assert.equal(seen.length, 3, "only authFailLimit lookups were issued");
+    host.stop();
+  });
+});
+
+describe("X1 M-1 client send order", () => {
+  test("a slow encrypt on ctr 0 cannot let ctr 1 overtake it", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay);
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const subtle = globalThis.crypto.subtle;
+    const orig = subtle.encrypt.bind(subtle);
+    let first = true;
+    subtle.encrypt = async (...a) => {
+      if (first) {
+        first = false;
+        await new Promise((r) => setTimeout(r, 15));
+      }
+      return orig(...a);
+    };
+    try {
+      const [a, b] = await Promise.all([c.fetch("/api/one"), c.fetch("/api/two")]);
+      assert.equal(a.status, 200);
+      assert.equal(b.status, 200);
+      assert.equal(host.status().sessions, 1, "host did not kill the session on out-of-order ctr");
+    } finally {
+      delete subtle.encrypt;
+    }
+    host.stop();
+  });
+});
+
+describe("X1 M-2 pin rules", () => {
+  test("self-certified hostId is the default; links must carry the id of their key", async () => {
+    const { acceptPairingFragment } = await import("../src/remoteRelayTransport.ts");
+    const relay = makeRelay();
+    await assert.rejects(
+      connectRelayStrict({ endpoint: "wss://r", hostId: "squatted", hostPubKey: hostKey.pubB64, WebSocketImpl: relay.Sock }),
+      RelayAuthError,
+    );
+    const frag = { hostId: selfCertifyingHostId(hostKey.publicRaw), pub: hostKey.pubB64, relay: "wss://r", code: null };
+    assert.equal(await acceptPairingFragment(frag), frag);
+    await assert.rejects(acceptPairingFragment({ ...frag, hostId: "victim-host-id" }), RelayAuthError);
+  });
+});
+
+describe("X1 M-3 ws-open slots and ordering", () => {
+  test("caps and duplicate ids are enforced before the await; handles are not leaked", async () => {
+    const relay = makeRelay();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const opened = [];
+    const { host } = makeHost(relay, {
+      maxWsPerSession: 2,
+      openWs: async ({ path }) => {
+        await gate;
+        const h = { got: [], closed: false, message(d) { h.got.push(d); }, close() { h.closed = true; } };
+        opened.push(h);
+        return h;
+      },
+    });
+    host.start();
+    await tick();
+    const r = await rawSession(relay, "raw1");
+    r.send({ t: "redeem", id: "r", code: "123456" });
+    assert.equal((await r.recv()).ok, true);
+    r.send({ t: "ws-open", id: "a", path: "/ws" });
+    r.send({ t: "ws-open", id: "a", path: "/ws" }); // duplicate id
+    r.send({ t: "ws-open", id: "b", path: "/ws" });
+    r.send({ t: "ws-open", id: "c", path: "/ws" }); // over the cap of 2
+    const early = [await r.recv(), await r.recv()];
+    assert.deepEqual(early.map((f) => [f.id, f.ok]), [["a", false], ["c", false]]);
+    release();
+    const late = [await r.recv(), await r.recv()];
+    assert.deepEqual(late.map((f) => f.ok), [true, true]);
+    assert.equal(opened.length, 2, "openWs ran once per accepted id");
+    host.stop();
+  });
+
+  test("frames reach the ws handler in order even when isRevoked does async work", async () => {
+    const relay = makeRelay();
+    let n = 0;
+    const got = [];
+    const { host } = makeHost(relay, {
+      isRevoked: async () => {
+        await new Promise((r) => setTimeout(r, n++ % 2 === 0 ? 8 : 0)); // alternate slow/fast lookups
+        return false;
+      },
+      openWs: async () => ({ message: (d) => got.push(d), close() {} }),
+    });
+    host.start();
+    await tick();
+    const r = await rawSession(relay, "raw2");
+    r.send({ t: "redeem", id: "r", code: "123456" });
+    await r.recv();
+    r.send({ t: "ws-open", id: "w", path: "/ws" });
+    assert.equal((await r.recv()).ok, true);
+    for (const d of ["1", "2", "3", "4", "5"]) r.send({ t: "ws-data", id: "w", data: d });
+    await until(() => got.length === 5);
+    assert.deepEqual(got, ["1", "2", "3", "4", "5"]);
+    host.stop();
+  });
+});
+
+describe("X1 lows", () => {
+  test("L-1: host seal refuses >1 MiB; an oversize ws message closes only that stream (1009)", async () => {
+    const hs = startClientHandshake(hostKey.publicRaw, HOST_ID);
+    const { channel } = acceptHandshake(hs.msg1, { hostKey, hostId: HOST_ID });
+    assert.throws(() => channel.seal(Buffer.alloc(1024 * 1024 + 1)), RangeError);
+    const relay = makeRelay();
+    let wsSend;
+    const { host } = makeHost(relay, { openWs: async ({ send }) => ((wsSend = send), { message() {}, close() {} }) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const ws = await c.openWebSocket("/ws");
+    let code;
+    ws.onclose = (e) => (code = e.code);
+    wsSend("x".repeat(2 * 1024 * 1024), false);
+    await until(() => code !== undefined);
+    assert.equal(code, 1009);
+    assert.equal((await c.fetch("/api/still-alive")).status, 200);
+    assert.equal(host.status().sessions, 1);
+    host.stop();
+  });
+
+  test("L-2: synthetic res.headersSent flips once bytes are written", () => {
+    const listenerSeen = [];
+    const done = createInProcessDispatcher((req, res) => {
+      listenerSeen.push(res.headersSent);
+      res.write("a");
+      listenerSeen.push(res.headersSent);
+      res.end();
+    });
+    return done({ method: "GET", path: "/api/x", headers: {}, body: Buffer.alloc(0), deviceId: "d" }).then(() => {
+      assert.deepEqual(listenerSeen, [false, true]);
+    });
+  });
+
+  test("L-3: over-long code/token are rejected without reaching the callbacks", async () => {
+    const relay = makeRelay();
+    const seen = [];
+    const { host } = makeHost(relay, {
+      redeem: async (a) => (seen.push(["redeem", a.code]), null),
+      authenticate: async (t) => (seen.push(["auth", t]), null),
+    });
+    host.start();
+    await tick();
+    const c = await connect(relay);
+    await assert.rejects(c.redeem("1".repeat(17)));
+    await assert.rejects(c.authenticate("t".repeat(129)));
+    assert.deepEqual(seen, []);
+    assert.equal(host.status().redeemFails, 1, "the bad code still counted as a guess");
+    host.stop();
+  });
+
+  test("L-4: connectRelay refuses ws:// endpoints", async () => {
+    await assert.rejects(connectRelay({ endpoint: "ws://relay.example", hostId: HOST_ID, hostPubKey: hostKey.pubB64, WebSocketImpl: makeRelay().Sock }), /wss/);
+  });
+
+  test("L-5: keypair loading never replaces an existing key", () => {
+    const f = join(tmp, "race", "host-keypair.json");
+    const a = loadOrCreateHostKeypair(f);
+    const b = loadOrCreateHostKeypair(f);
+    assert.equal(a.pubB64, b.pubB64);
+  });
+
+  test("L-6: synthetic requests carry a fixed sentinel host header", () => {
+    const req = createSyntheticRequest({ method: "GET", path: "/api/x", deviceId: "d" });
+    assert.equal(req.headers.host, "relay.invalid");
+    assert.equal(req.headers.cookie, undefined);
   });
 });
