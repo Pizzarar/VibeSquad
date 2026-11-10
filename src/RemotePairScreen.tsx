@@ -81,6 +81,7 @@ function takeServerReturn(): { error: RemoteError | null; open: string | null } 
     clearSession();
     return { error: remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."), open: null };
   }
+  clearSession();
   return { error: remoteError("unknown", "That code was invalid, already used or expired. Generate a new one on your PC."), open: null };
 }
 
@@ -140,8 +141,10 @@ export function RemotePairScreen() {
       setBusy(false);
       return;
     }
-    // Only a pending record: the session is saved when the server sends the browser back with #paired.
+    // The PC opens its own UI right after redeeming (no trip back here), so remember the host now; a rejected code or
+    // cookie comes back as #failed / #unpaired, which clears it.
     savePending(hostN);
+    saveSession(hostN);
     location.href = pairRedeemUrl(hostN, codeN, undefined, location.origin);
   }, []);
 

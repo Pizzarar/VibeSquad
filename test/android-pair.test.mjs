@@ -313,10 +313,10 @@ describe("pairing is proven before it is saved (review fixes)", () => {
     assert.equal(serverUrl("pc.example:4180"), "https://pc.example:4180/");
   });
 
-  test("screen saves only a pending record, deep links never auto-pair, reachability is not trust", () => {
+  test("screen saves the host only on an explicit Pair press (the PC opens its own UI, no trip back), deep links never auto-pair, reachability is not trust", () => {
     const src = read("src/RemotePairScreen.tsx");
-    assert.doesNotMatch(src, /saveSession\(hostN\)/);
-    assert.match(src, /savePending\(hostN\)/);
+    assert.match(src, /savePending\(hostN\);\s*saveSession\(hostN\);\s*location\.href = pairRedeemUrl/);
+    assert.match(src, /clearSession\(\);\s*return \{ error: remoteError\("unknown", "That code was invalid/);
     assert.doesNotMatch(src, /apply\([^)]*\)[^\n]*\bpairWith\b|autoPair/);
     assert.match(src, /data-testid="pair-confirm"/);
     assert.match(src, /data-testid="forget-pc"/);
@@ -326,7 +326,7 @@ describe("pairing is proven before it is saved (review fixes)", () => {
     const src = read("server/auth.mjs");
     assert.match(src, /\$\{app\}\/#unpaired/);
     assert.match(src, /\$\{app\}\/#failed/);
-    assert.match(src, /app && paired \? `\$\{app\}\/#paired`/);
+    assert.doesNotMatch(src, /\$\{app\}\/#paired/, "success never navigates the WebView back to the app origin");
     assert.match(src, /TAURI_ORIGINS\.has\(o\)/);
   });
 });

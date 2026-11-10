@@ -210,7 +210,7 @@ describe("wiring (source inspection)", () => {
     assert.match(src, /handleAndroidApk/);
     assert.match(src, /import \{[^}]*handleAndroidApk[^}]*\} from "\.\/vibesquad-api\.mjs"/s);
     assert.match(src, /"\.apk": "application\/vnd\.android\.package-archive"/);
-    assert.match(src, /path === "\/VibeSquad\.apk" \|\| path === "\/__vibesquad\/android\/VibeSquad\.apk"/);
+    assert.match(src, /isAndroidApkPath\(path\)/);
   });
 
   test("server/auth.mjs exposes lanAndroidApkUrl / androidApkHttpUrl / androidApkAvailable", () => {
@@ -478,5 +478,25 @@ describe("ensureAndroidCameraPermission", () => {
     assert.equal(ensureAndroidCameraPermission(manifest), false);
     assert.equal(readFileSync(manifest, "utf8"), once);
     assert.equal(ensureAndroidCameraPermission(join(root, "missing.xml")), false);
+  });
+});
+
+describe("APK route is case-insensitive", () => {
+  test("/vibesquad.apk and /__vibesquad/android/vibesquad.apk serve the APK via mux, dev middleware and serve.mjs", async () => {
+    const { isAndroidApkPath } = await import("../server/vibesquad-api.mjs");
+    for (const p of ["/VibeSquad.apk", "/vibesquad.apk", "/VIBESQUAD.APK", "/__vibesquad/android/VibeSquad.apk", "/__vibesquad/android/vibesquad.apk"]) assert.ok(isAndroidApkPath(p), p);
+    for (const p of ["/vibesquad.apk/x", "/x/vibesquad.apk", "/vibesquad.apks", "/__vibesquad/android/../vibesquad.apk"]) assert.ok(!isAndroidApkPath(p), p);
+    const root = tmpRoot();
+    writeApk(root);
+    const mw = createVibesquadMiddleware(root);
+    await withServer((req, res) => mw(req, res, () => { res.statusCode = 404; res.end(); }), async (base) => {
+      for (const p of ["/vibesquad.apk", "/__vibesquad/android/vibesquad.apk"]) {
+        const r = await fetch(base + p);
+        assert.equal(r.status, 200, p);
+        assert.deepEqual(Buffer.from(await r.arrayBuffer()), APK_BYTES);
+      }
+    });
+    const serve = read("server/serve.mjs");
+    assert.equal((serve.match(/isAndroidApkPath\(path\)/g) ?? []).length, 2, "both mesh handlers use the case-insensitive check");
   });
 });

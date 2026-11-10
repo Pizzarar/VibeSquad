@@ -43,7 +43,7 @@ describe("redeem -> same-site enter hop", () => {
     assert.match(page.body, /location\.replace\("\/"\)/);
   });
 
-  test("APK: 302 to enter?paired=1&vs_app, page returns to <app>/#paired", () => {
+  test("APK: 302 to enter?paired=1&vs_app, page hops to same-site / (never back to the app origin)", () => {
     const res = redeem(`&vs_app=${encodeURIComponent(APP)}`);
     assert.equal(res.statusCode, 302);
     assert.equal(res.headers.location, `/__vibesquad/enter?paired=1&vs_app=${encodeURIComponent(APP)}`);
@@ -51,7 +51,8 @@ describe("redeem -> same-site enter hop", () => {
     auth.handleEnter(fakeReq(res.headers.location), page);
     assert.equal(page.statusCode, 200);
     assert.equal(page.headers.location, undefined);
-    assert.match(page.body, /location\.replace\("http:\/\/tauri\.localhost\/#paired"\)/);
+    assert.match(page.body, /location\.replace\("\/\?vs_app=http%3A%2F%2Ftauri\.localhost"\)/);
+    assert.doesNotMatch(page.body, /#paired|href="http/);
   });
 
   test("a non-whitelisted vs_app never reaches the redirect or the page", () => {

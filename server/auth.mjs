@@ -710,9 +710,9 @@ export function handleEnter(req, res) {
     return res.end();
   }
   const app = appOrigin(req);
-  const paired = new URL(req.url ?? "/", "http://x").searchParams.get("paired") === "1";
-  // paired=1 (APK only: needs a whitelisted app origin) returns to the app's #paired screen; otherwise a fixed same-site "/".
-  const href = app && paired ? `${app}/#paired` : app ? `/?${new URLSearchParams({ vs_app: app }).toString()}` : "/";
+  // Always a fixed same-site "/" (also after pairing). Returning to the app origin from here was the post-pair dead end:
+  // the WebView never completed the https-PC -> http://tauri.localhost navigation, leaving this page stuck on "Continue".
+  const href = app ? `/?${new URLSearchParams({ vs_app: app }).toString()}` : "/";
   res.statusCode = 200;
   res.setHeader("content-type", "text/html; charset=utf-8");
   setNoFraming(res);
@@ -826,7 +826,7 @@ export function handlePairRedeem(req, res) {
   res.setHeader("set-cookie", `${DEVICE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`);
   // Not a direct redirect: the scan is a cross-site navigation, and a redirect chain started cross-site keeps Strict cookies
   // from being sent. Land on the same-site /__vibesquad/enter page (a 200, which ends the chain); its client-side hop to "/"
-  // (browser) or `${app}/#paired` (APK, which saves its session only on that return trip) is same-site and carries vs_device.
+  // is same-site and carries vs_device. The APK saves its session before leaving (RemotePairScreen), not on a return trip.
   const app = appOrigin(req);
   res.setHeader("location", app ? `/__vibesquad/enter?${new URLSearchParams({ paired: "1", vs_app: app }).toString()}` : "/__vibesquad/enter");
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
