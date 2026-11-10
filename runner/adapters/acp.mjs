@@ -277,6 +277,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         }
       }
       return {
+        pid: child.pid, // the runner probes this tree for background work before an after-turn park
         send(text, { images = [] } = {}) {
           if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
           queue.push({ text, images });

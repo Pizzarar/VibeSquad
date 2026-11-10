@@ -5,6 +5,7 @@ import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
 import { LimitStore, createAgyUsagePoller } from './limits.mjs';
+import { createBackgroundProbe } from './background.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -72,6 +73,19 @@ export function parkGraceFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_GRACE_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_GRACE_MS;
 }
+// The after-turn park is held while the agent has background work (a shell its CLI left running: a test suite, a build;
+// see background.mjs), re-checked every poll, and forced (logged as park-forced, with what was killed) past the max hold
+// so a held agent cannot keep its live slot forever. A max hold of 0 turns the hold off (park kills the tree at once).
+export const DEFAULT_PARK_HOLD_MAX_MS = 60 * 60 * 1000;
+export function parkHoldMaxFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_PARK_HOLD_MAX_MS);
+  return env.VS_RUNNER_PARK_HOLD_MAX_MS !== undefined && env.VS_RUNNER_PARK_HOLD_MAX_MS !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_HOLD_MAX_MS;
+}
+export const DEFAULT_PARK_HOLD_POLL_MS = 15_000;
+export function parkHoldPollFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_PARK_HOLD_POLL_MS);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_PARK_HOLD_POLL_MS;
+}
 // An archived agent that is mid-turn gets a cancel; if it has not stopped by then it is killed (session kept).
 export const DEFAULT_ARCHIVE_KILL_MS = 10_000;
 export function archiveKillFromEnv(env = process.env) {
@@ -96,7 +110,7 @@ export function providerFamily(provider) {
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
-  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv() }) {
+  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe() }) {
     this.store = new LogStore(dir);
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
@@ -105,6 +119,9 @@ export class Runner {
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
     this.parkGraceMs = parkGraceMs;
+    this.parkHoldMaxMs = parkHoldMaxMs;
+    this.parkHoldPollMs = parkHoldPollMs;
+    this.bgProbe = bgProbe; // (pid) -> Promise<[{ pid, name, cmd }]>: background shells under an agent's CLI
     this.archiveKillMs = archiveKillMs;
     this.queueMaxAgeMs = queueMaxAgeMs; // recoverQueued ignores inputs queued longer ago than this (0 = no bound)
     this.quietMs = quietMs;
@@ -145,7 +162,7 @@ export class Runner {
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
     // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
     // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
-    const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null };
+    const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null, progress: 0, idleProgress: 0, turnGen: 0, work: null, heldSince: null };
     this.live.set(id, entry);
     const emit = (type, data) => {
       // A late event from a child that was just parked/killed (killTree is async on Windows) must not touch a dead
@@ -153,6 +170,7 @@ export class Runner {
       if (entry.parked || entry.status === 'exited' || this.live.get(id) !== entry) return;
       if (!NON_PROGRESS_EVENTS.has(type)) { // only turn-progress events count: stderr/raw/limit are noise
         entry.lastEvent = Date.now();
+        entry.progress++;
         if (entry.quiet) entry.quiet = false; // a real event ends a quiet turn's quiet period: it counts again
       }
       let turnEnded = false;
@@ -164,10 +182,12 @@ export class Runner {
           // slot after the previous idle cleared it. Over-cap is allowed (like OWNER_OVER_CAP / a quiet turn): the
           // agent was already admitted, so it is never re-queued or cancelled for a turn it is already running.
           if (entry.inflight === 0) entry.inflight = 1;
+          this._turnStarted(entry);
         }
         if (data.status === 'idle') {
           entry.inflight = 0;
           entry.turns++;
+          entry.idleProgress = entry.progress;
           turnEnded = true;
           this._releaseOverCap(entry, 1); // an owner turn that was running over the cap just ended
         }
@@ -229,11 +249,35 @@ export class Runner {
 
   _parkable(e) { return e.status === 'idle' && e.handle && e.sessionId && e.inflight === 0 && this.adapters[e.provider]?.canPark; }
 
+  // A turn opened: what the last probe saw (and any hold) no longer applies; the turn's own idle re-checks.
+  _turnStarted(e) { e.turnGen++; e.work = null; e.heldSince = null; }
+
+  // Background work is only possible after a turn ran in this process, and only checkable with a pid and the hold on.
+  _mayHoldWork(e) { return this.parkHoldMaxMs > 0 && !!this.bgProbe && Number.isInteger(e.handle?.pid) && e.turnGen > 0; }
+
+  // Parkable without killing background work: nothing to check, or the last probe since the turn ended saw none.
+  _parkableNow(e) { return this._parkable(e) && (!this._mayHoldWork(e) || e.work?.length === 0); }
+
+  // Probes the agent's tree once (deduped per entry). Resolves to the work list, or null when a turn started meanwhile
+  // (the snapshot predates it). A failing probe resolves to [] (the old park) and logs park-probe-error.
+  _probeWork(id, e) {
+    if (e.probing) return e.probing;
+    const gen = e.turnGen;
+    const settle = (work) => { e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
+    e.probing = Promise.resolve().then(() => this.bgProbe(e.handle.pid)).then(
+      (work) => settle(Array.isArray(work) ? work : []),
+      (err) => { try { this.store.append(id, 'park-probe-error', { message: String(err?.message ?? err) }); } catch { /* log gone */ } return settle([]); },
+    );
+    return e.probing;
+  }
+
   // Room for one more live process (the safety ceiling): parks the oldest idle agent if needed. False when nothing can be parked.
   _makeRoom(except, { dryRun = false } = {}) {
     const others = [...this.live.entries()].filter(([k]) => k !== except);
     if (others.length < this.maxLive) return true;
-    const idle = others.filter(([, e]) => this._parkable(e)).sort((a, b) => a[1].lastActive - b[1].lastActive);
+    // Never for room: an idle agent with background work (held). One not yet probed is probed now; the result re-pumps.
+    for (const [k, e] of others) if (this._parkable(e) && !this._parkableNow(e) && e.work === null) this._probeWork(k, e).then(() => this._pump());
+    const idle = others.filter(([, e]) => this._parkableNow(e)).sort((a, b) => a[1].lastActive - b[1].lastActive);
     if (dryRun) return idle.length > others.length - this.maxLive; // enough parkable agents to get below the ceiling
     for (let n = others.length - this.maxLive + 1; n > 0; n--) {
       if (!idle.length) return false;
@@ -363,13 +407,56 @@ export class Runner {
   _scheduleParkAfterTurn(id, entry) {
     clearTimeout(entry.parkTimer);
     if (entry.inflight > 0 || entry.turns < 1) return;
+    this._armPark(id, entry, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
+  }
+
+  _armPark(id, entry, ms) {
+    clearTimeout(entry.parkTimer);
     entry.parkTimer = setTimeout(() => {
       entry.parkTimer = null;
-      if (this.live.get(id) !== entry || entry.perms.size > 0 || !this._parkable(entry)) return;
-      this.park(id);
-      this._pump();
-    }, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
+      if (this._shutDown || this.live.get(id) !== entry || entry.perms.size > 0 || !this._parkable(entry)) return;
+      this._parkWhenClear(id, entry);
+    }, ms);
     entry.parkTimer.unref?.();
+  }
+
+  // park() kills the whole tree, so a background shell the CLI left running (run_in_background: a full test suite, a
+  // build) would die with no exit notice to the agent. Hold the park while one lives, re-check every parkHoldPollMs, and
+  // park once it is gone (after one more grace, so the CLI can report the finished task first). Past parkHoldMaxMs the
+  // park is forced and logged with what it kills (park-forced), so a held agent cannot keep its live slot forever.
+  // Explicit stops (archive, shutdown, kill) still kill at once.
+  _parkWhenClear(id, entry) {
+    if (!this._mayHoldWork(entry)) { this.park(id); this._pump(); return; }
+    this._probeWork(id, entry).then((work) => {
+      if (work === null || this._shutDown || this.live.get(id) !== entry || entry.perms.size > 0 || !this._parkable(entry)) return; // a turn started or the agent went: its own idle re-arms
+      if (entry.progress !== entry.idleProgress) { // events since the idle with no new turn (the CLI reporting a finished task on its own)
+        entry.idleProgress = entry.progress;
+        entry.work = null;
+        this._scheduleParkAfterTurn(id, entry);
+        return;
+      }
+      if (!work.length) {
+        if (entry.heldSince === null) { this.park(id); this._pump(); return; }
+        entry.heldSince = null;
+        entry.work = null;
+        this._scheduleParkAfterTurn(id, entry);
+        return;
+      }
+      const now = Date.now();
+      if (entry.heldSince === null) {
+        entry.heldSince = now;
+        this.store.append(id, 'park-held', { work, maxHoldMs: this.parkHoldMaxMs });
+      }
+      const heldMs = now - entry.heldSince;
+      if (heldMs >= this.parkHoldMaxMs) {
+        this.store.append(id, 'park-forced', { heldMs, work });
+        this.park(id);
+        this._pump();
+        return;
+      }
+      entry.work = null; // the next check takes a fresh snapshot
+      this._armPark(id, entry, Math.min(this.parkHoldPollMs, this.parkHoldMaxMs - heldMs));
+    }).catch((err) => { try { this.store.append(id, 'error', { message: `park: ${err.message}` }); } catch { /* log gone */ } }); // never an unhandled rejection in the runner
   }
 
   // Stops an idle agent's process tree but keeps its transcript; the next send() resumes it with --resume.
@@ -583,6 +670,7 @@ export class Runner {
       entry.inflight = 1;
       entry.lastEvent = Date.now();
       entry.quiet = false;
+      this._turnStarted(entry);
     }
     try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) { if (fresh) entry.inflight = 0; throw err; }
   }
@@ -593,7 +681,7 @@ export class Runner {
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
   send(id, text, opts = {}) {
     let live = this.live.get(id);
-    if (live?.configStale && live.inflight === 0 && this._parkable(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process
+    if (live?.configStale && live.inflight === 0 && this._parkableNow(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process (one with background work keeps serving: never killed for a config change)
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
     // Coalesce into a job still waiting in this process's queue first (a queued create or send): one entry, one turn.
     const queued = this.queue.find((j) => j.id === id && (j.kind === 'send' || j.kind === 'create'));
@@ -695,7 +783,8 @@ export class Runner {
     if (e?.handle) {
       e.configStale = true;
       busy = e.inflight > 0 || e.status === 'running';
-      if (!busy && this._parkable(e)) { this.park(id); this._pump(); } // idle process (park grace window): drop it so the next send resumes with the new args
+      if (!busy && this._parkableNow(e)) { this.park(id); this._pump(); } // idle process (park grace window): drop it so the next send resumes with the new args
+      else if (!busy && this._parkable(e)) this._scheduleParkAfterTurn(id, e); // may have background work: the held park runs now (configStale: no grace)
     }
     return { appliesFrom: 'next-turn', busy };
   }
