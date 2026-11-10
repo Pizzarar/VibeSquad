@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { FLOOR_DESIGN_WIDTH, FLOOR_NEED_PAD_DEVICE_PX, floorFitScale, floorKitScale, floorNeedCssPx, riderSpot, deskRowMate, spreadNeighbours, floorNativeSize, validateFloor, buildTower } from "../src/squadFloorLogic.ts";
+import { FLOOR_DESIGN_WIDTH, FLOOR_NEED_PAD_DEVICE_PX, FLOOR_FIT_SLACK_DEVICE_PX, floorFitScale, floorKitScale, floorNeedCssPx, riderSpot, deskRowMate, spreadNeighbours, floorNativeSize, validateFloor, buildTower } from "../src/squadFloorLogic.ts";
 
 const rd = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 const floorJson = JSON.parse(rd("../public/office/floor.json"));
@@ -39,6 +39,7 @@ test("floor kit scale and need come from floor.json (960x444 -> x2 of the 480 de
   assert.equal(floorKitScale(native), 2);
   assert.equal(JSON.parse(rd("../public/office/cast.json")).cell, 32 * floorKitScale(native)); // cast cell = 32 x kit
   const pad = FLOOR_NEED_PAD_DEVICE_PX;
+  assert.ok(pad >= FLOOR_FIT_SLACK_DEVICE_PX, "the need pad covers the fit's measuring slack");
   assert.equal(pad, 1);
   assert.equal(floorNeedCssPx(native.h, 1, 1), native.h + pad);
   assert.equal(floorNeedCssPx(native.h, 1, 1.5), Math.ceil((native.h + pad) / 1.5));

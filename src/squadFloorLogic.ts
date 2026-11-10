@@ -810,6 +810,9 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+/** Device px of measuring slack floorFitScale tolerates on each axis (CSS zoom makes ResizeObserver sizes a hair short). floorNeedCssPx pads the box by the same amount so the slack can never cut the plate. */
+export const FLOOR_FIT_SLACK_DEVICE_PX = 1;
+
 /**
  * Scale for a single floor in a fixed box: a whole device-pixel multiple, never below 1 device px per native px.
  * `zoom` is the root UI zoom (src/uiScale.ts): the box is measured in zoomed CSS px, so a device px is 1 / (dpr x zoom) of a CSS px and the
@@ -825,7 +828,7 @@ export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLO
   const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
   const hasH = Number.isFinite(boxH) && boxH > 0;
   const room = (w: number, h: number) => Math.min((w * ratio) / nativeW, hasH ? (h * ratio) / nativeH : Infinity);
-  const whole = Math.floor(room(boxW + 1 / ratio, boxH + 1 / ratio) + 1e-9);
+  const whole = Math.floor(room(boxW + FLOOR_FIT_SLACK_DEVICE_PX / ratio, boxH + FLOOR_FIT_SLACK_DEVICE_PX / ratio) + 1e-9);
   if (whole >= 1) return whole / ratio;
   return room(boxW, boxH) / ratio; // last resort: fractional fit rather than clip or vanish
 }
@@ -839,7 +842,7 @@ export function floorKitScale(size: { w: number }): number {
 }
 
 /** Device px of headroom the floor box keeps over the plate (see floorNeedCssPx). */
-export const FLOOR_NEED_PAD_DEVICE_PX = 1;
+export const FLOOR_NEED_PAD_DEVICE_PX = FLOOR_FIT_SLACK_DEVICE_PX;
 
 /**
  * CSS px (in the root-zoomed space) the floor needs to be drawn at 1 device px per native px: (native height + FLOOR_NEED_PAD_DEVICE_PX) / (dpr x zoom), rounded up.

@@ -6,7 +6,7 @@
 -- are drawn natively at 960. Slices = design rects x2 (team B stays a pixel mirror of team A).
 -- vs FF (960x498 from a 640x332 grid at 1.5): the back wall is 64 rows (was 96), the dead checker rows are gone,
 -- desks/people are x2 of the 32 grid (was x1.5), rows restack to 4 cubicles + bench 4 + bench 3 per team.
--- Surreal touch (Aub 11-09, flavour a; max 2 per floor): team A's wall clock melts down the wall, and one
+-- Surreal touch (flavour a, 11-09; max 2 per floor): team A's wall clock melts down the wall, and one
 -- floating eyeball drifts over the lift lobby (= the scene's one googly prop, ruling 2a; the posters are plain).
 -- Same hand as H0/H1: chunky FRONT-VIEW furniture, every object its own 1px INK outline (obj() outlines each
 -- piece on its own), flat fills, MARBLE shine pixels, Bayer dither only in the sunset through the windows.
@@ -546,7 +546,7 @@ do
     obj(c, function(t) t.ellipse(x, 30, 6.1, 6.6, M, {0,0,1,0,0,0,0,0,0,0,0,0,0}, {0,1,0,0,0,0,0,0,0,-1,0,0,0}) end,
       function(t) t.line(x, 30, x, 26, INK); t.line(x, 30, x+3, 32, INK); t.px(x, 25, LINE); t.px(x-4, 30, LINE); t.px(x+4, 30, LINE); t.px(x, 35, LINE); t.px(x-3, 26, M) end)
   end
-  -- team A: SURREAL (Aub 11-09, flavour a): the same clock, melting. Its lower rim sags into a long drip that
+  -- team A: SURREAL (flavour a, 11-09): the same clock, melting. Its lower rim sags into a long drip that
   -- runs down the wall to the skirting, the 6 slides down the drip, the minute hand droops; one drop below.
   do local x = 145
     obj(c, function(t)
@@ -569,7 +569,7 @@ do
   c.rect(EL.counter[1]-2, iy, 32, 12, INK); c.rect(EL.counter[1]-1, iy+1, 30, 10, LINE); c.px(EL.counter[1]-1, iy+1, M)
   local f = EL.counter; c.rect(f[1], f[2], f[3], f[4], INK)
   obj(c, function(t) t.rect(MID//2 - 17, 7, 34, 9, V) end, function(t) text(t, MID//2 - 8, 9, "LIFT", M) end)
-  -- SURREAL (Aub 11-09, flavour a): one floating eyeball drifting over the lift lobby, the scene's one googly
+  -- SURREAL (flavour a, 11-09): one floating eyeball drifting over the lift lobby, the scene's one googly
   -- prop (ruling 2a). Calm: a MARBLE ball with a TEAL iris looking off to the side, two PINK veins, an INK
   -- pupil + shine, three LINE drift dots trailing below it. Off every UI slot (counter, doors, call plates).
   do local ex, ey = MID//2 - 2, 108
