@@ -276,3 +276,29 @@ test('R2 send to a superseded agent names the successor; send to a stale one doe
   assert.throws(() => r3.send(st.q, 'late'), /not running/); // stale input is not revived by a send either
   r3.shutdown();
 });
+
+test('boot recovery parses each log once (fold warm, no second read) and still recovers the queued ones', async () => {
+  const dir = tmp();
+  const s1 = fakeSpawn();
+  const r1 = boot(dir, s1);
+  const a = r1.create({ provider: 'claude', cwd: process.cwd(), prompt: 'first' });
+  const b = r1.create({ provider: 'claude', cwd: process.cwd(), prompt: 'second' });
+  const c = r1.create({ provider: 'claude', cwd: process.cwd(), prompt: 'third' });
+  await tick();
+  r1.shutdown();
+
+  const r2 = boot(dir, fakeSpawn());
+  const reads = new Map();
+  const count = (id, n) => reads.set(id, (reads.get(id) ?? 0) + n);
+  const { read, readFrom } = r2.store;
+  r2.store.read = (id, ...rest) => { count(id, 1); return read.call(r2.store, id, ...rest); };
+  r2.store.readFrom = (id, ...rest) => { count(id, 1); return readFrom.call(r2.store, id, ...rest); };
+  const back = r2.recoverQueued();
+  assert.deepEqual(back.sort(), [b, c].sort());
+  const nonQueued = reads.get(a); // (queued logs also get read by the jobs they start, so only non-queued ones are counted)
+  assert.equal(nonQueued, 1, 'a non-queued log is parsed exactly once at boot');
+  assert.ok(r2.folds.has(a), 'folds stay warm');
+  await tick();
+  r2.shutdown();
+  await tick();
+});
