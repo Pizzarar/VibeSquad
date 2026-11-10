@@ -263,6 +263,7 @@ function parseArgs(argv) {
     "since",
     "source",
     "revision",
+    "stall",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -281,6 +282,8 @@ function parseArgs(argv) {
     "stdin",
     "apply",
     "sweep",
+    "suite",
+    "restart",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -518,6 +521,8 @@ Usage:
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
+  vs watch add <agent...> [--suite] [--restart] [--stall <min>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
+  vs watch list | vs watch cancel <id>   list or cancel your watch sets (Overlord may name another owner in its Squad)
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
@@ -1850,6 +1855,16 @@ export async function runAgentVerb(verb, flags, ctx) {
     args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
   } else if (verb === "restart_buddy") {
     args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}) };
+  } else if (verb === "watch") {
+    args = { action: flags.watchAction };
+    if (flags.watchAction === "add") {
+      args.agents = flags._.map((s) => String(s).trim()).filter(Boolean);
+      if (flags.suite) args.suite = true;
+      if (flags.restart) args.restart = true;
+      if (flags.stall !== undefined) args.stallMin = flags.stall;
+    } else if (flags.watchAction === "cancel") {
+      args.id = String(flags._[0] ?? "").trim();
+    }
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else if (verb === "ls") {
@@ -1920,6 +1935,14 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"]');
     verb = "restart_buddy";
   }
+  if (verb === "watch") {
+    const sub = String(flags._.shift() ?? "").toLowerCase();
+    if (sub === "ls") sub = "list";
+    if (sub !== "add" && sub !== "list" && sub !== "cancel") {
+      throw new Error("usage: vs watch add <agent...> [--suite] [--restart] [--stall <min>] | vs watch list | vs watch cancel <id>");
+    }
+    flags.watchAction = sub;
+  }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
   }
@@ -1931,6 +1954,17 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   if (verb === "logs" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
     throw new Error("usage: vs logs <agent> [--limit <N>]");
   }
+  if (verb === "watch") {
+    if (flags.watchAction === "add") {
+      if (!flags._.length && !flags.suite && !flags.restart) throw new Error("vs watch add needs at least one agent, --suite or --restart");
+      if (flags.stall !== undefined) {
+        const stall = Number(flags.stall);
+        if (!Number.isFinite(stall) || stall <= 0) throw new Error("--stall must be a positive number of minutes");
+      }
+    } else if (flags.watchAction === "cancel" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
+      throw new Error("usage: vs watch cancel <id>");
+    }
+  }
   // handoff_lead / spawn: --lane (for handoff_lead) names only the TARGET lane (runAgentVerb reads it); the caller's
   // identity comes from VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
   if (verb === "spawn" && (flags.agent || flags.role || flags.team || flags.lane || flags.ord)) {
@@ -1938,7 +1972,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
   const identity =
-    verb === "handoff_lead" || verb === "spawn" || verb === "restart_buddy"
+    verb === "handoff_lead" || verb === "spawn" || verb === "restart_buddy" || verb === "watch"
       ? resolveIdentity(callerFlags, { recordWins: true })
       : resolveIdentity(flags);
   const lane = verb === "ls" && identity.lane === UNASSIGNED_LANE && !flags.lane && !process.env.VS_LANE ? "" : identity.lane;
@@ -2510,6 +2544,7 @@ export const KNOWN_VERBS = [
   "lesson",
   "lessons",
   "wait",
+  "watch",
   "spawn",
   "send",
   "status",
@@ -2620,6 +2655,7 @@ export function main(argv) {
       command === "status" ||
       command === "lead" ||
       command === "buddy" ||
+      command === "watch" ||
       command === "ls" ||
       command === "logs" ||
       command === "inspect" ||
