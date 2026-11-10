@@ -124,3 +124,12 @@ The "approve on the minting phone or another owner device" step protects against
 | L-4 `ws://` | `connectRelay` requires `wss:` | `remoteRelayTransport.ts` |
 | L-5 keypair rename | no rename fallback: exclusive create, EEXIST reads the winner; directory chmod 0700 best effort | `loadOrCreateHostKeypair` |
 | L-6 host header | synthetic requests carry `host: relay.invalid` | `createSyntheticRequest` |
+
+## 10. X1 R2 walk fix round (`2aeec63`: new 1M/2L)
+| Finding | Fix | Where |
+|---|---|---|
+| M: per-session dispatch queue retained decrypted frames with no depth cap while a callback was slow (PoC E: 150 x 1 MiB frames, +143 MiB heap behind one pending `redeem()`) | **Pre-decrypt frame budget.** `onRelayMessage` counts frames queued per session and checks the budget synchronously *before* base64-decoding or decrypting: exactly 1 in-flight frame before auth, `maxPendingFrames` (default 16) after auth. Overflow emits `backpressure-overflow` and closes the session. The count is released when each frame's dispatch finishes. Memory held behind a slow callback is therefore bounded to ~1 record pre-auth and ~16 post-auth per session | `server/relay-tunnel.mjs` `onRelayMessage`, `s.pending` |
+| L: `openWs` errors swallowed | emits `ws-open-error` (reason capped at 200 chars) and answers `ws-open-res ok:false` for that stream only | `runWsOpen` |
+| L: body streamed after an oversize head became a 502 | stream id recorded in `skipBody`; `runHttp` stops after the finished 502 | `send`, `runHttp` |
+
+Residual: a legitimate client that fires more than 16 concurrent post-auth frames while the host is slow (e.g. a very slow `isRevoked`) is disconnected and must reconnect; the client already re-handshakes on any drop.
