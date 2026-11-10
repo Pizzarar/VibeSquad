@@ -157,12 +157,15 @@ describe("Kotlin trust guards and build wiring", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /t\.pin\(hostN, fpN!\)/);
     assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN)"));
-    assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 2);
+    assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 3);
   });
 
   test("B8: pairWith flushes cookies (500ms cap) before redeeming; B9: forget clears the host vs_device cookie", () => {
     const src = read("src/RemotePairScreen.tsx");
-    assert.match(src, /flushCookies\(globalThis, 500\);\s*location\.href = pairRedeemUrl/);
+    assert.match(src, /Promise\.race\(\[trust\(\)\?\.flush\(\)[\s\S]*?500\)\)\]\);\s*location\.href = pairRedeemUrl/);
+    assert.doesNotMatch(src, /flushCookies/);
+    assert.match(src, /clearSession\(\);\s*setError\(remoteError\("unknown", "Your PC no longer/);
+    assert.match(src, /trust\(\)\?\.forget\(h\)\.catch\(\(\) => \{\}\);\s*clearSession\(\);\s*setError/);
     const kt = read("src-tauri/android/VsTrust.kt");
     const forget = kt.slice(kt.indexOf("fun forget("), kt.indexOf("fun probe("));
     assert.match(forget, /remove\("ca:\$key"\)/);
@@ -173,6 +176,6 @@ describe("Kotlin trust guards and build wiring", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /data-testid="reconnect-pc"/);
     assert.match(src, /Reconnect to \{saved\.host\}/);
-    assert.match(src, /const reconnect = [\s\S]*?probe\(h\)\.then\(\s*\(\) => openServer\(h\),\s*\(e\) => \{\s*onReopenError\(e\)/);
+    assert.match(src, /const reconnect = [\s\S]*?probe\(h\)\.then\(\s*\(\) => openServer\(h\),\s*\(e\) => \{\s*onReopenError\(e, h\)/);
   });
 });

@@ -16,7 +16,7 @@ import {
   serverUrl,
   type RemoteError,
 } from "./remoteSession";
-import { createTrustClient, flushCookies, nativeTrust, type TrustClient } from "./vsTrust";
+import { createTrustClient, nativeTrust, type TrustClient } from "./vsTrust";
 
 const PROBE_MS = 5000;
 
@@ -124,7 +124,8 @@ export function RemotePairScreen() {
       /* no sessionStorage */
     }
     // Best effort: persist cookies now, but never hold the navigation more than ~500ms.
-    await flushCookies(globalThis, 500);
+    // Shared client only: a second one would overwrite native.onmessage.
+    await Promise.race([trust()?.flush().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
     location.href = pairRedeemUrl(hostN, codeN, undefined, location.origin);
   }, []);
 
@@ -146,9 +147,10 @@ export function RemotePairScreen() {
     [],
   );
 
-  const onReopenError = (e: unknown) => {
+  const onReopenError = (e: unknown, h: string) => {
     // The PC answers but no longer knows this phone: drop the stale session instead of reopening into a 401 page.
     if (/unpaired/i.test(String((e as Error)?.message))) {
+      void trust()?.forget(h).catch(() => {});
       clearSession();
       setError(remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."));
     } else setError(mapRemoteError(e));
@@ -161,7 +163,7 @@ export function RemotePairScreen() {
     probe(h).then(
       () => openServer(h),
       (e) => {
-        onReopenError(e);
+        onReopenError(e, h);
         setBusy(false);
       },
     );
@@ -175,7 +177,7 @@ export function RemotePairScreen() {
       () => live && openServer(saved.host),
       (e) => {
         if (!live) return;
-        onReopenError(e);
+        onReopenError(e, saved.host);
         setReopening(false);
       },
     );
