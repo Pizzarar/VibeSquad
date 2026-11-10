@@ -466,6 +466,9 @@ export class Runner {
   // or, when a session was recorded, resumed) and the inputs logged since the last real status, or null if it is not that case.
   _unstartedPlan(id) {
     if (!this.store.exists(id) || this.live.has(id) || this.queue.some((j) => j.id === id)) return null; // a queued job already owns these inputs
+    // Warm folds (recoverQueued's boot pass): a log whose last status is not `queued` can't be unstarted; skip the second full parse.
+    // _fold is stat-validated, so a log that grew since the pass is refolded incrementally, never served stale.
+    if (this._foldsWarm) { const f = this._fold(id); if (f && f.status !== 'queued') return null; }
     const events = this.store.read(id);
     const c = events[0];
     if (c?.type !== 'created' || !this.adapters[c.provider]) return null;

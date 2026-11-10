@@ -436,6 +436,7 @@ export {
   canonicalCardId,
   sendToCardId,
   sendToFrom,
+  sendToLegacyId,
   spinOffCardId,
   nameFromIdea,
   newPinBrief,

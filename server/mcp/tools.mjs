@@ -5,6 +5,7 @@ import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
+import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -136,9 +137,17 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const provider = given.provider || spawn.provider;
   const model = given.model || (given.provider && given.provider !== spawn.provider ? "" : spawn.model);
   const modeId = given.modeId || spawn.modeId;
+  const givenThinking = clean(pick(args, "thinkingOptionId", "thinking"));
+  const thinkingOptionId = givenThinking || (given.provider && given.provider !== spawn.provider ? "" : clean(spawn.thinkingOptionId));
   const { team, lane } = ctx.identity;
   const title = clean(args.title) || `Worker ${new Date().toISOString().slice(11, 19)}`;
   const labels = { ...(args.labels ?? {}) };
+  // Convenience for labels.stakes (the ladder reads the label); an explicit labels.stakes wins.
+  const stakesArg = clean(args.stakes);
+  if (stakesArg) {
+    if (!STAKES_VALUES.includes(stakesArg)) throw new Error(`unknown stakes "${stakesArg}". Known: ${STAKES_VALUES.join(", ")}`);
+    if (!clean(labels.stakes)) labels.stakes = stakesArg;
+  }
   const requestedRole = clean(labels.role).toLowerCase();
   const requestedTeam = clean(labels.team);
   const requestedLane = clean(labels.lane);
@@ -206,12 +215,17 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   if (isRunnerCaller(ctx)) labels["vs.parent"] = ctx.identity.agentId;
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
+  // Which of model/thinking came from the profile rather than the caller: the before.agent.create hook must not read those as an explicit override of the stakes ladder.
+  delete labels["vs.profile-derived"];
+  const derived = [!given.model && model ? "model" : "", !givenThinking && thinkingOptionId ? "thinking" : ""].filter(Boolean);
+  if (derived.length) labels["vs.profile-derived"] = derived.join(",");
   const env = { VS_ROLE: role, ...(labels.profile ? { VS_PROFILE: labels.profile } : {}), ...(labels.lane ? { VS_LANE: labels.lane } : {}), ...(labels.team ? { VS_TEAM: labels.team } : {}) };
   const created = await ctx.withBackend({ lane: labels.lane, requireRunner: true }, (b) =>
     b.createAgent({
       config: {
         provider, model, cwd: clean(args.cwd) || ctx.cwd, title,
         ...(modeId ? { modeId } : {}),
+        ...(thinkingOptionId ? { thinkingOptionId } : {}),
         ...(spawn.systemPrompt ? { systemPrompt: spawn.systemPrompt } : {}),
       },
       initialPrompt: prompt,
@@ -248,7 +262,9 @@ async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job,
   const prompt = painterId
     ? `You are the Art Director in a Painter + Director duet. Your Painter is agent ${painterId}; it will send you gallery PNG paths via \`send\`. Reply with numbered fixes or PASS (max round 4).\n\nBrief:\n${brief}`
     : `You are the Art Painter in a Painter + Director duet. Your Director is agent ${self.id}; send it each gallery PNG path via \`send\` and fix only its numbered items until PASS or round 4.\n\nBrief:\n${brief}`;
-  const p = await spawnWorker(ctx, { ...args, _duetPartner: true, profile: partnerName, prompt, title: `${partnerName} · ${job}`, labels: { ...(args.labels ?? {}), job } });
+  // The partner is a different profile (often another provider): it never inherits the caller's provider/model/mode/thinking.
+  const { provider: _p, model: _m, modeId: _mi, mode: _mo, thinkingOptionId: _t, thinking: _th, ...partnerArgs } = args;
+  const p = await spawnWorker(ctx, { ...partnerArgs, _duetPartner: true, profile: partnerName, prompt, title: `${partnerName} · ${job}`, labels: { ...(args.labels ?? {}), job } });
   const msg = painterId
     ? `Your Art Director is agent ${p.id}. Send it each gallery PNG via \`send\`.`
     : `Your Art Painter is agent ${p.id}; it will send you gallery PNGs. Judge them and reply with numbered fixes or PASS.`;
@@ -536,12 +552,13 @@ async function postBuddyRestartToServer(body, ctx) {
 
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
 const S = { type: "string" };
+const STAKES_PARAM = { type: "string", enum: STAKES_VALUES, description: "Routes the spawn's model + effort by stakes; sets labels.stakes (an explicit labels.stakes wins)." };
 
 /** Canonical VS tools. */
 export const VS_TOOLS = {
   spawn_worker: {
-    description: "Start a worker agent in your lane from a VS profile. Returns {id, title}.",
-    inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, labels: { type: "object" } }, ["title", "profile", "prompt"]),
+    description: "Start a worker agent in your lane from a VS profile. Optional stakes (tierA-security | tierA-invariant | normal | mechanical) routes the model + effort by stakes (same as labels.stakes; labels.stakes wins if both). Returns {id, title}.",
+    inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, provider: S, model: S, thinkingOptionId: S, thinking: S, labels: { type: "object" }, stakes: STAKES_PARAM }, ["title", "profile", "prompt"]),
     run: spawnWorker,
   },
   send: { description: "Send a follow-up message to an agent.", inputSchema: obj({ id: S, text: S }, ["id", "text"]), run: sendTool },
@@ -589,7 +606,7 @@ const aliasResult = (name, r) => {
 // Paseo-shaped inputs per alias (agentId, prompt/initialPrompt, mode/modeId); the canonical schemas stay VS-shaped.
 const AGENT_ID = { agentId: S, id: S };
 const ALIAS_SCHEMAS = {
-  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S }),
+  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S, thinkingOptionId: S, thinking: S, stakes: STAKES_PARAM }),
   send_agent_prompt: obj({ ...AGENT_ID, prompt: S, text: S }),
   get_agent_status: obj(AGENT_ID),
   list_agents: obj({}),

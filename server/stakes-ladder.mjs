@@ -66,23 +66,21 @@ export function loadStakesLadder(file = stakesLadderPath()) {
  * @param provider  provider the spawn ends up on (after failover)
  * @param profile   matched profile ({model, thinkingOptionId}) or null
  * @param stakes    raw stakes label; missing/unknown = normal
- * @param explicit  true when the caller passed an explicit model/thinkingOptionId that must be kept
- * @returns {{stakes, model, effort, reason: "ladder"|"explicit"|"default", apply: boolean}}
- *   model/effort are the values to run with (undefined = leave the spawn alone); apply = ladder rewrites the spawn.
+ * @param explicit  caller-passed fields that must be kept: true (both) or {model, effort} booleans; merged per field
+ * @returns {{stakes, model, effort, reason: "ladder"|"explicit"|"explicit+ladder"|"default", apply: boolean}}
+ *   apply = the ladder rewrites the spawn. On apply, model/effort are the rung's values for the fields the caller did not
+ *   pass (undefined = leave that field alone, e.g. a rung without a model); otherwise they are the profile's.
  */
 export function resolveStakesRoute(provider, profile, stakes, explicit, opts = {}) {
   const s = normalizeStakes(stakes);
   const base = { stakes: s, model: profile?.model || undefined, effort: profile?.thinkingOptionId || undefined };
-  if (explicit) return { ...base, reason: "explicit", apply: false };
-  if (s === "normal") return { ...base, reason: "default", apply: false };
+  const keep = explicit === true ? { model: true, effort: true } : { model: Boolean(explicit?.model), effort: Boolean(explicit?.effort) };
+  if (keep.model && keep.effort) return { ...base, reason: "explicit", apply: false };
+  if (s === "normal") return { ...base, reason: keep.model || keep.effort ? "explicit" : "default", apply: false };
   const ladder = opts.ladder ?? loadStakesLadder();
   const rung = ladder[normalizeProviderFamily(provider)]?.[s];
-  if (!rung || (!rung.model && !rung.effort)) return { ...base, reason: "default", apply: false };
-  return {
-    stakes: s,
-    model: rung.model || base.model,
-    effort: rung.effort || base.effort,
-    reason: "ladder",
-    apply: true,
-  };
+  const model = keep.model ? undefined : rung?.model || undefined;
+  const effort = keep.effort ? undefined : rung?.effort || undefined;
+  if (!model && !effort) return { ...base, reason: keep.model || keep.effort ? "explicit" : "default", apply: false };
+  return { stakes: s, model, effort, reason: keep.model || keep.effort ? "explicit+ladder" : "ladder", apply: true };
 }

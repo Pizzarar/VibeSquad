@@ -2,7 +2,7 @@
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readDiscovery } from "../server/backend/runner-client.mjs";
@@ -71,5 +71,10 @@ test("stale runner.lock (dead pid) is taken over; stale starting.lock expires", 
   const start = path.join(home, "starting.lock");
   assert.equal(acquireStartLock(start), true);
   assert.equal(acquireStartLock(start), false, "fresh lock held by a live pid blocks");
-  assert.equal(acquireStartLock(start, { staleMs: -1 }), true, "stale lock is taken over");
+  // Expire by backdating the file's mtime. (staleMs:-1 raced the fs clock: age = Date.now() - mtimeMs can be < -1 when mtime
+  // is ahead of the JS clock by a tick, so the lock looked fresh and the takeover flaked under load.)
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(start, old, old);
+  assert.equal(acquireStartLock(start), true, "stale lock is taken over");
+  assert.equal(acquireStartLock(start), false, "the new lock is fresh again");
 });

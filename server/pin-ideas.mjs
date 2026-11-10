@@ -217,13 +217,19 @@ export const sendToCardId = (agentId, offer) => cardId("send-to", agentId, Strin
  * The offer in the newest Brainstorm message, else null. `legacyIds` are the pre-D1 `${agentId}:${messageId}` ids that a
  * tab still running the old bundle writes when its card is fired, so such a dismissal keeps hiding this card.
  */
+/** The pre-D1 `${agentId}:${messageId}` card id of one assistant-message entry (bar and inline cards share it). */
+export const sendToLegacyId = (agentId, entry) => {
+  const it = entry.item;
+  return `${agentId}:${it.id ?? it.messageId ?? entry.seqStart ?? entry.timestamp ?? it.text?.length}`;
+};
+
 export function sendToFrom(agentId, entries) {
   for (let i = entries.length - 1; i >= 0; i--) {
     const it = entries[i].item;
     if (it?.type !== "assistant_message" || typeof it.text !== "string") continue;
     const offer = parseSendTo(it.text);
     if (!offer) return null;
-    return { ...offer, id: sendToCardId(agentId, offer), legacyIds: [`${agentId}:${it.id ?? it.messageId ?? entries[i].seqStart ?? entries[i].timestamp ?? it.text.length}`] };
+    return { ...offer, id: sendToCardId(agentId, offer), legacyIds: [sendToLegacyId(agentId, entries[i])] };
   }
   return null;
 }
