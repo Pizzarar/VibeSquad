@@ -629,7 +629,12 @@ async function watchTool(ctx, args = {}) {
   if (action === "cancel") {
     const id = clean(pick(args, "id"));
     if (!id) throw new Error("id is required to cancel a watch");
-    return ws.cancelWatch(id, callerId);
+    // X1 F6: same rule as `add`'s owner: only the set's owner, or the same-Squad Overlord for a set of its own Squad, may
+    // cancel. Ids are listable (`watch list` with any owner), so the id alone must never be the capability.
+    const allow = (set) => set.owner === callerId || (isOverlord && String(set.team ?? "") === team);
+    const out = await ws.cancelWatch(id, callerId, { allow });
+    if (out?.refused) throw new Error(out.error);
+    return out;
   }
   if (action === "list") {
     const opts = {};
