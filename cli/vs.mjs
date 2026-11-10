@@ -144,7 +144,8 @@ function findLane(value, preferTeamId = "") {
   if (!value) return null;
   const stripped = String(value).trim().replace(/^@+/, "");
   const needle = stripped.toLowerCase();
-  for (const team of TEAM_DEFS) {
+  const liveTeams = loadTeamsFile().teams; // live read: TEAM_DEFS is a module-load snapshot, stale after a lane add/rename
+  for (const team of liveTeams) {
     for (const lane of team.lanes ?? []) {
       if (String(lane.id).toLowerCase() === needle || (lane.aliases ?? []).some((a) => String(a).toLowerCase() === needle)) {
         return { team, lane };
@@ -152,7 +153,7 @@ function findLane(value, preferTeamId = "") {
     }
   }
   // `@<code>` / `<code>` handles (e.g. @bug -> bug-chaser) and name matches.
-  return findLaneInRegistry(value, TEAM_DEFS, preferTeamId);
+  return findLaneInRegistry(value, liveTeams, preferTeamId);
 }
 
 function matchTeamBySegments(targetPath) {
