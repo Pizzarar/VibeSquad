@@ -433,3 +433,16 @@ test("hub spin-up H3: the failed Spin Up error is shown under the hub TVs only w
   assert.ok(app.includes('data-testid="sky-spin-up-error"'));
   assert.ok(app.includes("resolveCwd: (hub) => fetchHubCwd(hub)"));
 });
+
+test("hub spin-up follow-ups: RiffBot Spin Up shows a disabled pending state from the shared pinActions in-flight; Overlord errors render inline, not alert()", () => {
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("useSyncExternalStore(subscribePinStarts, () => (hub ? isPinStarting(hub) : false))"));
+  assert.ok(sky.includes('data-testid="sky-start-riffbot" disabled={busy}'));
+  assert.ok(sky.includes('{busy ? "Spinning up…" : "Spin Up RiffBot"}'));
+  assert.equal((sky.match(/busy=\{riffStarting\}/g) ?? []).length, 2, "TV and panel zones both get the RiffBot pending flag");
+  const app = src("App.tsx");
+  assert.ok(!app.includes("alert(`Could not start the Overlord"));
+  assert.ok(app.includes("setOverlordErr(e?.message ?? String(e))"));
+  assert.ok(app.includes('data-testid="sky-overlord-error"'));
+  assert.ok(app.includes("setOverlordErr(null);"), "a new attempt clears the previous error");
+});

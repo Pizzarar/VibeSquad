@@ -1730,8 +1730,10 @@ export function App() {
   );
   // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
   const [overlordBusy, setOverlordBusy] = useState(false);
+  const [overlordErr, setOverlordErr] = useState<string | null>(null); // shown inline under the TVs (was alert())
   const onSpinUpOverlord = useCallback((view: TeamView) => {
     setOverlordBusy(true);
+    setOverlordErr(null);
     const profileName = overlordProfileName(view);
     const profile = findProfile(profileName, getProfiles());
     void spinUpOverlord(view, {
@@ -1742,7 +1744,7 @@ export function App() {
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
       resolveCwd: (hub) => fetchHubCwd(hub),
     })
-      .catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`))
+      .catch((e) => setOverlordErr(e?.message ?? String(e)))
       .finally(() => setOverlordBusy(false));
   }, []);
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
@@ -2069,7 +2071,7 @@ export function App() {
           {pinFocusView && (
             <HubPages
               agentOpen={hubAgentOpen}
-              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}</>}
+              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}{overlordErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-overlord-error">Could not start the Overlord: {overlordErr}</div>}</>}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />
