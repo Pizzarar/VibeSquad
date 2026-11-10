@@ -875,7 +875,15 @@ export function handleEnter(req, res) {
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   const safe = href.replace(/&/g, "&amp;");
   if (req.method === "HEAD") return res.end();
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}"></head><body><a href="${safe}">Continue</a><script>location.replace(${JSON.stringify(href).replace(/</g, "\\u003c")})</script></body></html>`);
+  // Styled on purpose: the old bare page was a white screen with one "Continue" link whenever the automatic hop did not fire.
+  // If this page is still showing after 2.5s the script prints what it can see, so a screenshot of it is a trace.
+  const target = JSON.stringify(href).replace(/</g, "\u003c");
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}">
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#070710;color:#eef2ff;font-family:"JetBrains Mono",Consolas,monospace}
+.c{max-width:480px;margin:16px;padding:22px;background:#111326;border:1px solid #ff2a85}p{margin:0 0 10px;color:#828ba8}a{color:#ff2a85}#d{white-space:pre-wrap;font-size:12px;color:#828ba8}</style></head>
+<body><div class="c"><p>Opening VibeSquad…</p><p><a id="go" href="${safe}">Continue</a></p><div id="d"></div></div>
+<script>try{location.replace(${target})}catch(e){document.getElementById("d").textContent="redirect threw: "+e}
+setTimeout(function(){document.getElementById("d").textContent="Redirect did not leave this page (hop to "+${target}+") | cookies enabled: "+navigator.cookieEnabled+" | UA: "+navigator.userAgent+" | ref: "+document.referrer}, 2500)</script></body></html>`);
 }
 
 export function handleCaCrt(req, res) {
