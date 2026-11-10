@@ -71,7 +71,6 @@ export function PhoneBugSheet({ teamId, bugLaneId, ctx, onClose, onSent }: { tea
         role="dialog"
         aria-label="Report a bug"
         onClick={(e) => e.stopPropagation()}
-        style={{ position: "fixed", left: 0, right: 0, bottom: 0, background: "var(--panel)", borderTop: "1px solid var(--line)", padding: 12, display: "grid", gap: 8 }}
       >
         <textarea ref={area} value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder="What went wrong?" aria-label="Bug description" style={{ width: "100%", fontSize: 16 }} />
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>

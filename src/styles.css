@@ -6204,3 +6204,13 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .dc-err { color: var(--bad, #e5534b); font-size: 12px; }
 /* On the phone the pinned card is the control; older inline copies shrink to their summary. */
 .phone-cockpit .decision-card.inline .dc-actions { display: none; }
+
+/* ---- E3 phone bug sheet (bottom sheet over a dimmed scrim) ---- */
+.phone-bug-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.45); }
+.phone-bug-sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 90%; overflow-y: auto; display: grid; gap: 8px; padding: 12px; background: var(--panel); border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; }
+.phone-bug-sheet .btn { min-height: 44px; }
+
+/* ---- E2 decision card buttons ---- */
+.dc-riff { border-color: var(--violet); font-weight: 600; }
+.dc-more { min-height: 44px; align-self: flex-start; }
+.dc-alt { width: 100%; }
