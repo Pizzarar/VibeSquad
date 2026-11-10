@@ -838,8 +838,12 @@ export function floorKitScale(size: { w: number }): number {
   return size.w > 0 ? size.w / FLOOR_DESIGN_WIDTH : 1;
 }
 
+/** Device px of headroom the floor box keeps over the plate (see floorNeedCssPx). */
+export const FLOOR_NEED_PAD_DEVICE_PX = 1;
+
 /**
- * CSS px (in the root-zoomed space) the floor needs to be drawn at 1 device px per native px: native height / (dpr x zoom), rounded up.
+ * CSS px (in the root-zoomed space) the floor needs to be drawn at 1 device px per native px: (native height + FLOOR_NEED_PAD_DEVICE_PX) / (dpr x zoom), rounded up.
+ * The pad keeps the box a whole device px taller than the plate, so floorFitScale's 1 device px measuring slack can never land the plate a fraction of a px past the box (a clipped bottom outline row).
  * The hub keeps the floor box at least this tall; the sky TVs band yields the rest. When the column is narrower than the native floor
  * (`colW` CSS px, 0 = unknown) 1x cannot fit sideways anyway (last-resort fractional fit in floorFitScale), so the need shrinks with the
  * width the floor will really be drawn at, and the TVs keep the height the floor cannot use.
@@ -847,7 +851,7 @@ export function floorKitScale(size: { w: number }): number {
 export function floorNeedCssPx(nativeH: number, dpr = 1, zoom = 1, colW = 0, nativeW = FLOOR_NATIVE_WIDTH): number {
   const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
   const sideways = colW > 0 && nativeW > 0 ? Math.min(1, (colW * ratio) / nativeW) : 1;
-  return Math.ceil((nativeH * sideways) / ratio);
+  return Math.ceil((nativeH * sideways + FLOOR_NEED_PAD_DEVICE_PX) / ratio);
 }
 
 /** A rider's spot over the lift: the first rider stands on the car's centre line (car.x + car.w/2); more alternate either side by 6 contract px x the kit scale. `rise` is the ride travel (12 contract px x kit). */

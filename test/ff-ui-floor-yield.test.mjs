@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { FLOOR_DESIGN_WIDTH, floorFitScale, floorKitScale, floorNeedCssPx, riderSpot, deskRowMate, spreadNeighbours, floorNativeSize, validateFloor } from "../src/squadFloorLogic.ts";
+import { FLOOR_DESIGN_WIDTH, FLOOR_NEED_PAD_DEVICE_PX, floorFitScale, floorKitScale, floorNeedCssPx, riderSpot, deskRowMate, spreadNeighbours, floorNativeSize, validateFloor, buildTower } from "../src/squadFloorLogic.ts";
 
 const rd = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
 const floorJson = JSON.parse(rd("../public/office/floor.json"));
@@ -38,9 +38,13 @@ test("floor kit scale and need come from floor.json (960x444 -> x2 of the 480 de
   assert.equal(floorKitScale(native), floorJson.w / FLOOR_DESIGN_WIDTH);
   assert.equal(floorKitScale(native), 2);
   assert.equal(JSON.parse(rd("../public/office/cast.json")).cell, 32 * floorKitScale(native)); // cast cell = 32 x kit
-  assert.equal(floorNeedCssPx(native.h, 1, 1), native.h);
-  assert.equal(floorNeedCssPx(native.h, 1, 1.5), Math.ceil(native.h / 1.5));
-  assert.equal(floorNeedCssPx(native.h, 1.2, 1.5), Math.ceil(native.h / 1.8));
+  const pad = FLOOR_NEED_PAD_DEVICE_PX;
+  assert.equal(pad, 1);
+  assert.equal(floorNeedCssPx(native.h, 1, 1), native.h + pad);
+  assert.equal(floorNeedCssPx(native.h, 1, 1.5), Math.ceil((native.h + pad) / 1.5));
+  assert.equal(floorNeedCssPx(native.h, 1.2, 1.5), Math.ceil((native.h + pad) / 1.8));
+  // the box is always more than the plate in device px, even where native.h divides the ratio exactly (1080 UI 150: 444 / 1.5)
+  for (const [d, z] of [[1, 1], [1, 1.5], [1.2, 1], [1.2, 1.5], [2, 1.25]]) assert.ok(floorNeedCssPx(native.h, d, z) * d * z > native.h, `${d}x${z}`);
   // a column narrower than the native floor cannot hold 1x sideways: the need follows the width it will be drawn at
   assert.ok(floorNeedCssPx(native.h, 1, 1, 715, native.w) < native.h);
 });
@@ -117,4 +121,24 @@ test("FT: 11 desks per team in rows 4/3/4 by y; spreadNeighbours follows the flo
   items[4].k = "b";
   // slot 1 shares slot 0's row, so the lone "b" is pulled up beside the first "a"
   assert.deepEqual(spreadNeighbours(items, key, mate).map((x) => x.id), [0, 4, 1, 2, 3]);
+});
+
+test("FT: a populated team seats every desk by desk id; each desk id maps to its own floor.json rect (rows 4/3/4 by y)", () => {
+  const mk = (id, kind, status = "running") => ({ kind, agentType: "claude", agent: { id, title: id, status, labels: {} }, attention: null });
+  const workers = Array.from({ length: 13 }, (_, i) => mk(`w${i}`, "worker"));
+  const t = { laneId: "l", name: "L", lead: mk("lead", "lead"), buddy: mk("bs", "brainstorm"), workers };
+  const tower = buildTower({ hubBuddy: null, hubLead: null, teams: [t] }, floor);
+  const team = tower.floors[0].teamA;
+  assert.equal(team.desks.length, 11, "all 11 desks seated");
+  assert.deepEqual(team.desks.map((d) => d.desk).sort((a, b) => a - b), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  const rects = team.desks.map((d) => floor.teamA.desks[d.desk]);
+  assert.equal(new Set(rects.map((r) => `${r.x},${r.y}`)).size, 11, "no two agents share a desk rect");
+  assert.deepEqual([0, 3, 4, 6, 7, 10].map((i) => floor.teamA.desks[i].y), [232, 232, 308, 308, 156, 156]);
+  assert.equal(team.tv.length, 2, "the two extra workers overflow to the wall TV, not onto desks");
+});
+
+test("FT: the ?crowd demo fills a whole floor team (12+ workers on UI Bois, Buddy included) so art review sees seated desks", () => {
+  const demo = rd("../src/demo.tsx");
+  assert.match(demo, /\{ lane: "ui-bois", lead: "demo-lead-ui-bois", workers: 12, buddy: true \}/);
+  assert.match(demo, /has\("crowd"\)\) CAST\.push\(\.\.\.demoCrowd\(\)\)/);
 });

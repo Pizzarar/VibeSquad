@@ -115,6 +115,29 @@ if (typeof location !== "undefined" && new URLSearchParams(location.search).has(
   );
 }
 
+// ?crowd=1: a populated floor for art review (every desk of the UI Bois team seated + one overflow blip, plus partly filled neighbours),
+// so desk placement, lead/Buddy seats and the lift can be checked on a real crowd. Off by default.
+export const DEMO_CROWD_LANES: { lane: string; lead: string; workers: number; buddy?: boolean }[] = [
+  { lane: "ui-bois", lead: "demo-lead-ui-bois", workers: 12, buddy: true },
+  { lane: "art-direction", lead: "demo-lead-art-dir", workers: 6, buddy: true },
+  { lane: "runner-pilot", lead: "demo-lead-runner", workers: 3 },
+  { lane: "wiki", lead: "demo-lead-wiki", workers: 4, buddy: true },
+];
+const CROWD_KINDS: [Spec["who"], string][] = [["claude", "Implement"], ["gemini", "Review"], ["codex", "Mechanical"], ["sonnet", "Audit"], ["deepseek", "Implement"], ["opencode", "Review"]];
+export function demoCrowd(): Spec[] {
+  const out: Spec[] = [];
+  for (const c of DEMO_CROWD_LANES) {
+    if (c.buddy) out.push({ id: `demo-crowd-${c.lane}-bs`, who: "claude", title: `BRAINSTORM · ${c.lane}`, status: "running", labels: vs({ role: "brainstorm", lane: c.lane }), ago: 2 });
+    for (let i = 0; i < c.workers; i++) {
+      const [who, kind] = CROWD_KINDS[i % CROWD_KINDS.length];
+      const needs: Record<string, string> = i % 5 === 3 ? { "needs-you": "pick", "needs-you-reason": "pick option A or B" } : {};
+      out.push({ id: `demo-crowd-${c.lane}-${i}`, who, title: `${kind} - ${c.lane} task ${i + 1}`, status: "running", labels: vs({ role: "worker", lane: c.lane, "paseo.parent-agent-id": c.lead, ...needs }), used: 20_000 + i * 3_000, ago: 40 - i });
+    }
+  }
+  return out;
+}
+if (typeof location !== "undefined" && new URLSearchParams(location.search).has("crowd")) CAST.push(...demoCrowd());
+
 const ARCHIVED: Spec[] = [
   { id: "demo-arc-1", who: "claude", title: "Implement - step 1 scaffold", status: "closed", labels: vs({ role: "worker" }), used: 90_000, ago: 3000, extra: { archivedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() } },
   { id: "demo-arc-2", who: "gemini", title: "Audit - DSF", status: "closed", labels: vs({ role: "worker" }), used: 120_000, ago: 4000, extra: { archivedAt: new Date(Date.now() - 5 * 3_600_000).toISOString() } },
