@@ -456,3 +456,58 @@ test("R3 stakes param: sets labels.stakes, labels.stakes wins, unknown rejected,
     await assert.rejects(commandAgentVerb("spawn", { _: [], title: "G", profile: "Lead - Opus", prompt: "x", stakes: "nope" }, () => ctx, () => {}), /unknown stakes/);
   } finally { w.cleanup(); }
 });
+
+// ---------------------------------------------------------------- S1 lows (unit-s1-lows)
+
+test("L1: a pending successor that died before confirm is evicted; the next handoff mints a fresh one (not a dead deduped id)", async () => {
+  for (const via of ["self", "spawn"]) {
+    const w = setup();
+    try {
+      const old = lead(w);
+      const c = coordinator(w);
+      const s1 = await c.triggerSelfHandoff(old, { trigger: "auto-250" });
+      assert.equal(s1.pendingConfirmation, true);
+      w.agents.get(s1.successorId).archivedAt = new Date().toISOString(); // dies before confirming
+      const again = via === "self"
+        ? await c.triggerSelfHandoff(w.agents.get("rn-lead1"), { trigger: "buddy", retireImmediately: true })
+        : await c.spawnSuccessor({ oldLead: w.agents.get("rn-lead1"), trigger: "buddy", retireImmediately: true });
+      assert.equal(w.creates, 2, `${via}: a fresh successor was minted`);
+      assert.notEqual(again.successorId, s1.successorId, `${via}: not the dead one`);
+      assert.equal(w.agents.get("rn-lead1").labels.role, "former-lead", `${via}: old lead retired`);
+      assert.equal(oneLive(w, "lead", `${via}: after dead-successor handoff`), again.successorId);
+    } finally { w.cleanup(); }
+  }
+});
+
+test("L2: confirmTakeover refuses an unverifiable (unfetchable) successor and leaves the old lead live", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    const c = coordinator(w);
+    const s1 = await c.triggerSelfHandoff(old, { trigger: "auto-250" });
+    w.agents.delete(s1.successorId); // pending record exists, successor can no longer be verified
+    const r = await c.confirmTakeover(s1.successorId);
+    assert.equal(r.confirmed, false);
+    assert.equal(w.agents.get("rn-lead1").labels.role, "lead", "old lead not retired on an unverified successor");
+    assert.equal(oneLive(w, "lead", "after unverifiable confirm"), "rn-lead1");
+  } finally { w.cleanup(); }
+});
+
+test("L2: a failing setLabels leaves the takeover pending and retryable (no confirmed/pending drift)", async () => {
+  const w = setup();
+  try {
+    const old = lead(w);
+    let fail = true;
+    const c = coordinator(w, { setLabels: async (id, labels, name) => { if (fail) throw new Error("update boom"); return w.updateAgent(id, { name, labels }); } });
+    const s1 = await c.triggerSelfHandoff(old, { trigger: "auto-250" });
+    const bad = await c.confirmTakeover(s1.successorId);
+    assert.equal(bad.confirmed, false);
+    assert.equal(c.hasPendingTakeover(s1.successorId), true, "still pending");
+    assert.equal(w.agents.get("rn-lead1").labels.role, "lead");
+    fail = false;
+    const ok = await c.confirmTakeover(s1.successorId);
+    assert.equal(ok.confirmed, true, "retry succeeds (not reported alreadyConfirmed)");
+    assert.equal(c.hasPendingTakeover(s1.successorId), false);
+    assert.equal(oneLive(w, "lead", "after retry"), s1.successorId);
+  } finally { w.cleanup(); }
+});

@@ -586,7 +586,18 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
   // A repeat of a finished/in-flight handoff returns the earlier result. If that handoff left the old lead pending (auto-250) and this
   // request wants it retired now (handoff_lead), confirm the takeover here instead of returning with two live leads.
-  async function settleDeduped(slotKey, prev, retireNow) {
+  // Returns null when the earlier handoff's pending successor is dead (closed non-resumable / archived / retired / not a lead): the slot
+  // is evicted so the caller falls through to a fresh spawn (or adopt) instead of leaving the lane on the old lead with a dead successor.
+  async function settleDeduped(slotKey, prev, retireNow, oldLeadId) {
+    if (prev?.pendingConfirmation && prev.successorId && !confirmedTakeovers.has(prev.successorId)) {
+      const succ = await getAgent(prev.successorId);
+      if (!succ || succ.archivedAt || effectiveAgentRole(succ) !== "lead" || isRetiredAgent(succ)) {
+        completedBySlot.delete(slotKey);
+        pendingTakeover.delete(prev.successorId);
+        selfHandedOff.delete(oldLeadId ?? prev.oldLeadId);
+        return null;
+      }
+    }
     let out = { ...(prev ?? {}), triggered: false, deduped: true, reason: "already-handed-off" };
     if (retireNow && prev?.pendingConfirmation && prev.successorId) {
       const c = await confirmTakeover(prev.successorId);
@@ -630,10 +641,12 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${oldOrd}`;
     const canDedupeSlot = trigger !== "hard-300";
     if (canDedupeSlot && completedBySlot.has(slotKey)) {
-      return settleDeduped(slotKey, completedBySlot.get(slotKey), retireImmediately);
+      const d = await settleDeduped(slotKey, completedBySlot.get(slotKey), retireImmediately, oldLead?.id);
+      if (d) return d;
     }
     if (canDedupeSlot && inFlightBySlot.has(slotKey)) {
-      return settleDeduped(slotKey, await inFlightBySlot.get(slotKey), retireImmediately);
+      const d = await settleDeduped(slotKey, await inFlightBySlot.get(slotKey), retireImmediately, oldLead?.id);
+      if (d) return d;
     }
 
     const runSpawn = async () => {
@@ -810,6 +823,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         },
         oldTitle,
       );
+      pendingTakeover.delete(successor.id);
       confirmedTakeovers.add(successor.id);
     } else {
       pendingTakeover.set(successor.id, takeoverRecord);
@@ -858,7 +872,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
 
     const succAgent = await getAgent(id);
-    if (succAgent && (effectiveAgentRole(succAgent) !== "lead" || isRetiredAgent(succAgent))) {
+    if (!succAgent || succAgent.archivedAt || effectiveAgentRole(succAgent) !== "lead" || isRetiredAgent(succAgent)) {
       return { confirmed: false, error: "successor is not a live lead", successorId: id };
     }
     let rec = pendingTakeover.get(id) || null;
@@ -888,9 +902,6 @@ export function createLeadHandoffCoordinator(deps = {}) {
       return { confirmed: false, error: "no pending takeover for agent", successorId: id };
     }
 
-    pendingTakeover.delete(id);
-    confirmedTakeovers.add(id);
-
     const currentOld = await getAgent(rec.oldLeadId);
     const mergedOldLabels = {
       ...rec.oldLabels,
@@ -900,7 +911,14 @@ export function createLeadHandoffCoordinator(deps = {}) {
       "handoff-successor": id,
     };
 
-    await setLabels(rec.oldLeadId, mergedOldLabels, rec.oldTitle);
+    try {
+      await setLabels(rec.oldLeadId, mergedOldLabels, rec.oldTitle);
+    } catch (err) {
+      // Nothing was mutated: the takeover stays pending and a retry can confirm it.
+      return { confirmed: false, error: `could not retire the old lead: ${err?.message ?? err}`, successorId: id };
+    }
+    pendingTakeover.delete(id);
+    confirmedTakeovers.add(id);
 
     return {
       confirmed: true,
@@ -918,10 +936,12 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const slotPrefix = deps.sharedSlots ? `${rootDir}:` : "";
     const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${parseLeadOrd(lead)}`;
     if (selfHandedOff.has(lead.id) || completedBySlot.has(slotKey)) {
-      return { ok: true, stage: "self", ...(await settleDeduped(slotKey, completedBySlot.get(slotKey), Boolean(options.retireImmediately))) };
+      const d = await settleDeduped(slotKey, completedBySlot.get(slotKey), Boolean(options.retireImmediately), lead.id);
+      if (d) return { ok: true, stage: "self", ...d };
     }
     if (inFlightBySlot.has(slotKey)) {
-      return { ok: true, stage: "self", ...(await settleDeduped(slotKey, await inFlightBySlot.get(slotKey), Boolean(options.retireImmediately))) };
+      const d = await settleDeduped(slotKey, await inFlightBySlot.get(slotKey), Boolean(options.retireImmediately), lead.id);
+      if (d) return { ok: true, stage: "self", ...d };
     }
     selfHandedOff.add(lead.id);
     let res;
@@ -1143,7 +1163,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       },
       async setLabels(agentId, labels, name) {
         if (connected && client && typeof backend.updateAgent === "function") {
-          await backend.updateAgent(agentId, { ...(name ? { name } : {}), labels }).catch(() => {});
+          await backend.updateAgent(agentId, { ...(name ? { name } : {}), labels });
         }
       },
       async sendMessage(agentId, text) {
