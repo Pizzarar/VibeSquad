@@ -15,6 +15,7 @@ import {
   clampFloorIndex,
   cursorOffset,
   FLOOR_CURSOR_JSON_URL,
+  fetchFloorJson,
   FLOOR_BLINK_MS,
   FLOOR_INDEX_KEY,
   floorCounterText,
@@ -429,6 +430,25 @@ function PlateBoxes({ rects, className }: { rects: Rect[]; className?: string })
   );
 }
 
+type ImageState = "loading" | "ok" | "error";
+
+/** Like useImageOk, but tells "still loading" from "failed" (the error fallback must not flash while the art loads). */
+function useImageState(url: string): ImageState {
+  const [state, setState] = useState<{ url: string; s: ImageState }>({ url, s: "loading" });
+  useEffect(() => {
+    let alive = true;
+    setState({ url, s: "loading" });
+    const img = new Image();
+    img.onload = () => alive && setState({ url, s: "ok" });
+    img.onerror = () => alive && setState({ url, s: "error" });
+    img.src = url;
+    return () => {
+      alive = false;
+    };
+  }, [url]);
+  return state.url === url ? state.s : "loading";
+}
+
 function readStoredFloor(): string | null {
   try {
     return typeof localStorage === "undefined" ? null : localStorage.getItem(FLOOR_INDEX_KEY);
@@ -458,21 +478,21 @@ export function SquadFloor({ view }: SquadFloorProps) {
   // The tower follows the loaded floor: desk count and statsTv (overflow → blips) come from floor.json.
   const tower = useMemo(() => towerForView(view, floor), [view, floor]);
 
-  const floorImgOk = useImageOk(FLOOR_URL(theme));
+  // The plate is "loading" until it settles: only a failed load shows the placeholder boxes (a loading one shows nothing, no flash of bare boxes).
+  const floorArt = useImageState(FLOOR_URL(theme));
   const castImgOk = useImageOk(CAST_URL(theme));
-  // Front overlays are opt-in per floor.json (`"front": true`); absent → skip.
-  const floorFrontOk = useImageOk(floor.front ? FLOOR_FRONT_URL(theme) : null);
+  // Front overlays are opt-in per floor.json (`"front": true`); absent → skip. The image starts loading with the JSON, not after it.
+  const floorFrontImgOk = useImageOk(FLOOR_FRONT_URL(theme));
+  const floorFrontOk = floorFrontImgOk && !!floor.front;
   const sheet = cast && castImgOk ? CAST_URL(theme) : null;
-  const cursorImgOk = useImageOk(cursorModel ? CURSOR_URL(theme) : null);
+  const cursorImgOk = useImageOk(CURSOR_URL(theme));
   const cursor: CursorArt | null = cast && cursorModel && cursorImgOk ? { model: cursorModel, url: CURSOR_URL(theme), reduced } : null;
 
   // Load the art JSON; missing/invalid → F1 placeholder layout (and no sprites when cast.json is absent).
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetch("/office/floor.json")
-        .then((r) => (r.ok ? r.json() : undefined))
-        .catch(() => undefined),
+      fetchFloorJson(),
       fetch(FLOOR_CURSOR_JSON_URL)
         .then((r) => (r.ok ? r.json() : undefined))
         .catch(() => undefined),
@@ -686,11 +706,11 @@ export function SquadFloor({ view }: SquadFloorProps) {
                     ...(f.teamB ? teamItems(f.teamB, floor.teamB, (agentId) => openAgent(f.teamB!.laneId, agentId)) : []),
                   ]}
                   plate={
-                    floorImgOk ? (
+                    floorArt === "ok" ? (
                       <img className="sq-floor-plate" src={FLOOR_URL(theme)} alt="" draggable={false} style={{ width: native.w, height: native.h }} />
-                    ) : (
+                    ) : floorArt === "error" ? (
                       floorBoxes
-                    )
+                    ) : null
                   }
                   wall={
                     <>

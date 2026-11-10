@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { HUB_BACKDROP_JSON, HUB_BACKDROP_URL, backdropStyle, isShortCssHeight, validateHubBackdrop, type HubBackdrop } from "./hubPagesLogic";
 import { SKY_URL } from "./skyZonesLogic";
-import { floorNativeSize, floorNeedCssPx, floorOrPlaceholder } from "./squadFloorLogic";
+import { fetchFloorJson, floorNativeSize, floorNeedCssPx, floorOrPlaceholder } from "./squadFloorLogic";
 import { useUiScale } from "./uiScale";
 import { useDpr, useImageOk, useTheme } from "./useBotFace";
 
@@ -30,10 +30,7 @@ function useFloorNative(): { w: number; h: number } {
   const [size, setSize] = useState(() => floorNativeSize(floorOrPlaceholder(undefined)));
   useEffect(() => {
     let alive = true;
-    fetch("/office/floor.json")
-      .then((r) => (r.ok ? r.json() : undefined))
-      .catch(() => undefined)
-      .then((json) => alive && setSize(floorNativeSize(floorOrPlaceholder(json))));
+    fetchFloorJson().then((json) => alive && setSize(floorNativeSize(floorOrPlaceholder(json))));
     return () => {
       alive = false;
     };

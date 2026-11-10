@@ -863,6 +863,21 @@ export function riderSpot(car: Rect, index: number, kit: number): { left: number
   return { left: car.x + car.w / 2 + side * Math.ceil(index / 2) * 6 * kit, top: car.y + car.h - 2 * kit, rise: 12 * kit };
 }
 
+/** floor.json, fetched once per page load and shared (HubPages sizing + SquadFloor); a failed fetch is not cached so a remount retries. */
+let floorJsonPromise: Promise<unknown> | null = null;
+export function fetchFloorJson(): Promise<unknown> {
+  if (!floorJsonPromise) {
+    const p: Promise<unknown> = fetch("/office/floor.json")
+      .then((r) => (r.ok ? r.json() : undefined))
+      .catch(() => undefined);
+    floorJsonPromise = p;
+    void p.then((json) => {
+      if (json === undefined && floorJsonPromise === p) floorJsonPromise = null;
+    });
+  }
+  return floorJsonPromise;
+}
+
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────
 
 export const FLOOR_CURSOR_JSON_URL = "/office/floor-cursor.json";

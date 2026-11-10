@@ -96,3 +96,44 @@ test("C2b G2: tower has no top band / CRT screens; faces live in the shared useB
   assert.ok(hook.includes("faces.json"));
   assert.ok(hook.includes("reduced"));
 });
+
+test("floor placeholders: no boxes while the art loads, boxes only on error; front/cursor start with the JSON; floor.json fetched once", () => {
+  assert.match(floor, /const floorArt = useImageState\(FLOOR_URL\(theme\)\);/);
+  assert.match(floor, /floorArt === "ok" \? \([\s\S]*?\) : floorArt === "error" \? \(\s*floorBoxes\s*\) : null/);
+  assert.ok(!/floorImgOk/.test(floor), "no loading-time fallback boxes");
+  assert.match(floor, /img\.onerror = \(\) => alive && setState\(\{ url, s: "error" \}\)/);
+  // theme URLs probed unconditionally: no JSON -> image waterfall
+  assert.match(floor, /useImageOk\(FLOOR_FRONT_URL\(theme\)\)/);
+  assert.match(floor, /const floorFrontOk = floorFrontImgOk && !!floor\.front;/);
+  assert.match(floor, /useImageOk\(CURSOR_URL\(theme\)\)/);
+  // one shared floor.json promise
+  const logic = src("squadFloorLogic.ts");
+  assert.equal((logic.match(/fetch\("\/office\/floor\.json"\)/g) || []).length, 1);
+  assert.ok(!/fetch\("\/office\/floor\.json"\)/.test(floor) && !/fetch\("\/office\/floor\.json"\)/.test(src("HubPages.tsx")));
+  assert.match(floor, /fetchFloorJson\(\),/);
+  assert.match(src("HubPages.tsx"), /fetchFloorJson\(\)\.then/);
+});
+
+test("fetchFloorJson dedupes concurrent calls and retries after a failure", async () => {
+  const { fetchFloorJson } = await import("../src/squadFloorLogic.ts");
+  const orig = globalThis.fetch;
+  let calls = 0;
+  let ok = false;
+  globalThis.fetch = async () => {
+    calls++;
+    return ok ? { ok: true, json: async () => ({ a: 1 }) } : { ok: false };
+  };
+  try {
+    const [a, b] = await Promise.all([fetchFloorJson(), fetchFloorJson()]);
+    assert.equal(calls, 1);
+    assert.equal(a, undefined);
+    assert.equal(b, undefined);
+    await Promise.resolve();
+    ok = true;
+    assert.deepEqual(await fetchFloorJson(), { a: 1 });
+    await fetchFloorJson();
+    assert.equal(calls, 2, "success cached");
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
