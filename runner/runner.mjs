@@ -258,13 +258,13 @@ export class Runner {
   // Parkable without killing background work: nothing to check, or the last probe since the turn ended saw none.
   _parkableNow(e) { return this._parkable(e) && (!this._mayHoldWork(e) || e.work?.length === 0); }
 
-  // Probes the agent's tree once (deduped per entry). Resolves to the work list, or null when a turn started meanwhile
+  // Probes the agent's tree once (deduped per entry), with a process snapshot started after its turn ended. Resolves to the work list, or null when a turn started meanwhile
   // (the snapshot predates it). A failing probe resolves to [] (the old park) and logs park-probe-error.
   _probeWork(id, e) {
     if (e.probing) return e.probing;
     const gen = e.turnGen;
     const settle = (work) => { e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
-    e.probing = Promise.resolve().then(() => this.bgProbe(e.handle.pid)).then(
+    e.probing = Promise.resolve().then(() => this.bgProbe(e.handle.pid, e.lastActive)).then( // lastActive = the turn end: no snapshot from before it
       (work) => settle(Array.isArray(work) ? work : []),
       (err) => { try { this.store.append(id, 'park-probe-error', { message: String(err?.message ?? err) }); } catch { /* log gone */ } return settle([]); },
     );

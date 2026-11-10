@@ -8,9 +8,20 @@ import { spawn } from 'node:child_process';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'ksh', 'tcsh', 'csh', 'nu', 'cmd', 'powershell', 'pwsh']);
 const imageOf = (name) => String(name ?? '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-// An MCP server the CLI launched at boot, maybe via a shell (`cmd /c npx some-mcp`). Claude Code tool shells always source
-// a shell-snapshots file, so a tool command that merely mentions mcp is still work.
-const isSidecar = (p) => /mcp/i.test(p.cmd ?? '') && !/shell-snapshots/i.test(p.cmd ?? '');
+// A tool shell's launcher (Claude Code: shell-snapshots / CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT; agy/gemini PowerShell:
+// `-Command "try { $OutputEncoding ...`) is always work, whatever its command mentions.
+const TOOL_SHELL = /shell-snapshots|CLAUDE_CODE_SHELL_LAUNCHER|\$OutputEncoding/i;
+// An MCP server a CLI (or a wrapper it runs, e.g. `opencode serve`) launched, maybe via a shell (`cmd /c npx some-mcp`):
+// real launcher shapes only, never a bare "mcp" substring (`npm run test:mcp`, `node scripts/check-mcp.mjs` are work).
+const END = String.raw`(?=$|[\s"'@])`;
+const MCP_LAUNCHERS = [
+  /@playwright[\\/]mcp\b/i,
+  /@modelcontextprotocol[\\/]/i,
+  /[\\/]server[\\/]mcp[\\/]server\.m?js\b/i, // the vs MCP server
+  new RegExp(String.raw`(?:^|[\s"'\\/@])mcp-server(?:-[\w-]+)?(?:\.(?:exe|cmd))?` + END, 'i'), // mcp-server-fetch
+  new RegExp(String.raw`(?:^|[\s"'\\/@])[\w-]+-mcp(?:\.(?:exe|cmd))?` + END, 'i'), // blender-mcp, foo-mcp.exe (a package/binary, not a script file)
+];
+const isSidecar = (p) => { const cmd = String(p.cmd ?? ''); return !TOOL_SHELL.test(cmd) && MCP_LAUNCHERS.some((re) => re.test(cmd)); };
 
 // Pure: shells under rootPid that are not inside an MCP sidecar's subtree, topmost first (a shell's own subtree is its
 // work, not more entries). procs: [{ pid, ppid, name, cmd, createdMs? }]. A child created before its parent is a stale
@@ -25,18 +36,18 @@ export function backgroundWork(procs, rootPid) {
   }
   const out = [];
   const seen = new Set([rootPid]);
-  const walk = (pid, depth) => {
+  const walk = (pid) => {
     const parent = byPid.get(pid);
     for (const c of kids.get(pid) ?? []) {
       if (seen.has(c.pid)) continue;
       seen.add(c.pid);
       if (parent?.createdMs && c.createdMs && c.createdMs + 50 < parent.createdMs) continue;
-      if (depth === 0 && isSidecar(c)) continue;
+      if (isSidecar(c)) continue; // at any depth: wrapper CLIs start their MCP servers one level down
       if (SHELLS.has(imageOf(c.name))) { out.push({ pid: c.pid, name: imageOf(c.name), cmd: String(c.cmd ?? '').slice(-240) }); continue; }
-      walk(c.pid, depth + 1);
+      walk(c.pid);
     }
   };
-  walk(rootPid, 0);
+  walk(rootPid);
   return out;
 }
 
@@ -79,20 +90,22 @@ function parsePs(text) {
   return out;
 }
 
-// probe(rootPid) -> Promise<[{ pid, name, cmd }]>. Probes that land together share one snapshot (many agents park at once
-// when a burst of turns ends), and a snapshot is reused for ttlMs.
+// probe(rootPid, minAt) -> Promise<[{ pid, name, cmd }]>. Probes that land together share one snapshot (many agents park
+// at once when a burst of turns ends), and a snapshot is reused for ttlMs. minAt (the agent's turn end): a snapshot that
+// STARTED before it, cached or still in flight, may miss a shell started late in that turn, so it is never used.
 export function createBackgroundProbe({ snapshot = snapshotProcesses, ttlMs = 1000 } = {}) {
-  let inflight = null;
-  let cached = null;
-  const table = () => {
-    if (cached && Date.now() - cached.at < ttlMs) return Promise.resolve(cached.procs);
-    if (!inflight) {
-      inflight = Promise.resolve().then(() => snapshot()).then(
-        (procs) => { cached = { at: Date.now(), procs }; inflight = null; return procs; },
-        (err) => { inflight = null; throw err; },
-      );
-    }
-    return inflight;
+  let inflight = null; // { startedAt, promise }
+  let cached = null; // { startedAt, procs }
+  const table = (minAt = 0) => {
+    if (cached && cached.startedAt >= minAt && Date.now() - cached.startedAt < ttlMs) return Promise.resolve(cached.procs);
+    if (inflight && inflight.startedAt >= minAt) return inflight.promise;
+    const startedAt = Date.now();
+    const promise = Promise.resolve().then(() => snapshot()).then(
+      (procs) => { if (!cached || startedAt >= cached.startedAt) cached = { startedAt, procs }; if (inflight?.promise === promise) inflight = null; return procs; },
+      (err) => { if (inflight?.promise === promise) inflight = null; throw err; },
+    );
+    inflight = { startedAt, promise };
+    return promise;
   };
-  return async (rootPid) => backgroundWork(await table(), rootPid);
+  return async (rootPid, minAt) => backgroundWork(await table(Number.isFinite(minAt) ? minAt : 0), rootPid);
 }

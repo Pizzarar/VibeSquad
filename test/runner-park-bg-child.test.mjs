@@ -270,6 +270,69 @@ test('createBackgroundProbe: concurrent probes share one snapshot', async () => 
   assert.equal(b.length, 0);
 });
 
+// Review-Gemini High: a tool command mentioning mcp is still work; sidecars under a wrapper CLI are not.
+test('backgroundWork: tool shells that mention mcp count; sidecars at any depth do not', () => {
+  const root = { pid: 1, ppid: 0, name: 'agy.exe', cmd: 'agy acp', createdMs: 1000 };
+  const agyTool = { pid: 2, ppid: 1, name: 'powershell.exe', cmd: 'powershell -Command "try { $OutputEncoding = [System.Text.UTF8Encoding]::new($false); npm run test:mcp } catch {}"', createdMs: 1001 };
+  const claudePs = { pid: 3, ppid: 1, name: 'pwsh.exe', cmd: 'pwsh -NoProfile -Command "$script = $env:CLAUDE_CODE_SHELL_LAUNCHER_SCRIPT; node --test test/mcp-tools.test.mjs"', createdMs: 1002 };
+  const plainTool = { pid: 4, ppid: 1, name: 'bash', cmd: 'bash -c "node scripts/check-mcp.mjs && node test/runner-mcp.test.mjs"', createdMs: 1003 };
+  assert.deepEqual(backgroundWork([root, agyTool, claudePs, plainTool], 1).map((w) => w.pid), [2, 3, 4]);
+
+  const wrapper = [
+    { pid: 10, ppid: 0, name: 'opencode.exe', cmd: 'opencode acp', createdMs: 1000 },
+    { pid: 11, ppid: 10, name: 'opencode.exe', cmd: 'opencode.exe serve', createdMs: 1001 },
+    { pid: 12, ppid: 11, name: 'cmd.exe', cmd: 'cmd /c npx -y @playwright/mcp@latest --headless', createdMs: 1002 },
+    { pid: 13, ppid: 11, name: 'cmd.exe', cmd: 'cmd /c uvx blender-mcp', createdMs: 1003 },
+    { pid: 14, ppid: 11, name: 'sh', cmd: '/bin/sh -c "node C:/vs/runtime/server/mcp/server.mjs"', createdMs: 1004 },
+    { pid: 15, ppid: 11, name: 'cmd.exe', cmd: 'cmd /c npx -y @modelcontextprotocol/server-filesystem C:/x', createdMs: 1005 },
+    { pid: 16, ppid: 11, name: 'bash', cmd: 'bash -c "npx mcp-server-fetch"', createdMs: 1006 },
+    { pid: 17, ppid: 11, name: 'cmd.exe', cmd: 'cmd /c node C:\\Users\\x\\AppData\\Local\\VibeSquad\\runtime\\server\\mcp\\server.mjs', createdMs: 1007 },
+    { pid: 18, ppid: 11, name: 'cmd.exe', cmd: 'cmd /c "C:\\uv\\Scripts\\blender-mcp.exe"', createdMs: 1008 },
+    { pid: 19, ppid: 11, name: 'cmd.exe', cmd: 'cmd /c node C:\\npm\\node_modules\\@playwright\\mcp\\cli.js', createdMs: 1009 },
+  ];
+  assert.deepEqual(backgroundWork(wrapper, 10), [], 'MCP launchers under a wrapper CLI (depth >= 1) are sidecars');
+});
+
+// Review-Gemini Med: a snapshot that started before the agent's turn ended may miss a shell started late in that turn.
+test('createBackgroundProbe: a probe with minAt never uses a snapshot started before it', async () => {
+  let n = 0;
+  const snaps = [];
+  const probe = createBackgroundProbe({
+    snapshot: async () => { n++; const k = n; await tick(30); snaps.push(k); return k === 1 ? [] : [{ pid: 2, ppid: 1, name: 'bash', cmd: 'npm test' }]; },
+    ttlMs: 60_000,
+  });
+  const first = probe(1); // in flight, started before the turn ended
+  await tick(10);
+  const turnEnded = Date.now();
+  await tick(2);
+  const late = await probe(1, turnEnded); // must not join the in-flight one
+  assert.equal(late.length, 1, 'took a fresh snapshot');
+  assert.equal((await first).length, 0);
+  assert.equal(n, 2);
+  assert.equal((await probe(1, turnEnded)).length, 1, 'a snapshot started after minAt is reused');
+  assert.equal(n, 2);
+  await tick(2);
+  await probe(1, Date.now());
+  assert.equal(n, 3, 'cached snapshot older than minAt: a new one');
+});
+
+test('runner passes the turn-end time as minAt to the probe', async () => {
+  const calls = [];
+  let em;
+  const adapter = { canPark: true, start({ emit }) { em = emit; return { pid: 77, send() { emit('status', { status: 'running' }); }, cancel() {}, kill() {} }; } };
+  const runner = new Runner({ dir: tmp(), adapters: { fake: adapter }, parkGraceMs: 0, parkHoldPollMs: 20, bgProbe: async (pid, minAt) => { calls.push({ pid, minAt }); return []; } });
+  const id = runner.create({ provider: 'fake', cwd: os.tmpdir(), prompt: 'x' });
+  em('session', { sessionId: 's' });
+  await tick(5);
+  const beforeIdle = Date.now();
+  em('turn_done', {}); em('status', { status: 'idle' });
+  await until(() => runner.status(id).status === 'parked');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].pid, 77);
+  assert.ok(Number.isFinite(calls[0].minAt) && calls[0].minAt >= beforeIdle, `minAt ${calls[0].minAt} >= ${beforeIdle}`);
+  runner.shutdown();
+});
+
 // ---- one real process tree (cheap: node + one shell for ~1.5s) ----
 
 test('real process: a live shell under the agent holds the park; it parks after the shell exits', async () => {
