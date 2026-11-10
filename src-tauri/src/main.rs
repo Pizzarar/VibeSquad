@@ -1137,6 +1137,7 @@ async fn handle_desktop_ping(
     Json(json!({
         "ok": true,
         "reachable": false,
+        "restarting": restart_marker_fresh(&state.pid_path),
         "lanHost": lan_target,
         "meshnetHost": mesh_target,
         "probes": {
@@ -2116,6 +2117,18 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
+}
+
+/// A planned restart is signalled by touching `server.restarting` next to server.pid (written by whoever
+/// restarts the server); it counts for 2 minutes so a forgotten marker can't mask a real outage.
+fn restart_marker_fresh(pid_path: &std::path::Path) -> bool {
+    let marker = pid_path.with_file_name("server.restarting");
+    fs::metadata(marker)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .map(|age| age < Duration::from_secs(120))
+        .unwrap_or(false)
 }
 
 /// Forgets a managed child that already exited (and its server.pid). Returns true when a live child remains.
@@ -3168,6 +3181,26 @@ mod tests {
         assert!(state.managed_server.lock().unwrap().is_none(), "no spawn while the port accepts connections");
         assert_eq!(fs::read_to_string(&pid).unwrap(), "12345", "server.pid untouched");
         let _ = fs::remove_dir_all(pid.parent().unwrap());
+    }
+
+    #[test]
+    fn restart_marker_drives_the_ping_restarting_flag() {
+        let dir = std::env::temp_dir().join(format!("vs-test-marker-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let pid = dir.join("server.pid");
+        assert!(!restart_marker_fresh(&pid));
+        fs::write(dir.join("server.restarting"), "1").unwrap();
+        assert!(restart_marker_fresh(&pid));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn banner_needs_three_misses_and_says_restarting_when_signalled() {
+        let html = ui_pages::desktop_bridge_script("", "");
+        assert!(html.contains("consecutiveFailures >= 3"), "banner after 3 consecutive misses");
+        assert!(!html.contains("consecutiveFailures >= 2"), "old 2-miss threshold gone");
+        assert!(html.contains("d.restarting"), "ping restarting flag read");
+        assert!(html.contains("Server restarting"), "restart label present");
     }
 
     #[test]

@@ -1275,7 +1275,7 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
     if (banner) return banner;
     banner = document.createElement('div');
     banner.style.cssText = 'position:fixed;bottom:12px;right:12px;z-index:99999;background:#121120;border:1px solid #ff2a85;color:#eef2ff;padding:8px 12px;font-family:monospace;font-size:12px;display:none;align-items:center;gap:10px;box-shadow:0 8px 24px rgba(0,0,0,0.6)';
-    banner.innerHTML = '<span style="color:#ff2a85">● Server unreachable (retrying every 3s…)</span>' +
+    banner.innerHTML = '<span id="vs-dt-msg" style="color:#ff2a85">● Server unreachable (retrying every 3s…)</span>' +
       '<button id="vs-dt-retry" style="background:#00f0ff;color:#05060d;border:none;padding:3px 8px;font-family:inherit;font-weight:700;cursor:pointer">Retry</button>' +
       '<a href="/__desktop/setup" style="color:#00f0ff;text-decoration:none;border:1px solid #282644;padding:3px 8px">Change Server / Re-pair</a>';
     document.body.appendChild(banner);
@@ -1299,11 +1299,15 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
       }} else {{
         consecutiveFailures++;
         greenSince = 0;
-        if (consecutiveFailures >= 2) ensureBanner().style.display = 'flex';
+        if (consecutiveFailures >= 3) {{
+          const b = ensureBanner();
+          b.querySelector('#vs-dt-msg').textContent = d.restarting ? '● Server restarting…' : '● Server unreachable (retrying every 3s…)';
+          b.style.display = 'flex';
+        }}
       }}
     }} catch (_) {{
       consecutiveFailures++;
-      if (consecutiveFailures >= 2) ensureBanner().style.display = 'flex';
+      if (consecutiveFailures >= 3) ensureBanner().style.display = 'flex';
     }}
   }}, 4000);
 }})();
