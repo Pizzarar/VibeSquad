@@ -44,7 +44,7 @@ import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, deriveRole } from "../profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
-import { resolveStakesRoute } from "../stakes-ladder.mjs";
+import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -1305,9 +1305,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const laddered = Boolean((agent.id && ladderSpawns.has(agent.id)) || ladderSpawns.has(lk));
         if (agent.id) ladderSpawns.delete(agent.id);
         ladderSpawns.delete(lk);
-        const runnerLaddered = labels["vs.spawn-configured"] === "1" && ["tierA-security", "tierA-invariant", "mechanical"].includes(String(labels.stakes ?? "").trim());
         // The stakes ladder picked this model/effort on purpose (explicit-override pattern, brainstorm.mjs hasCallerOverride).
-        if (laddered || runnerLaddered) diffs = diffs.filter((d) => d.field !== "model" && d.field !== "thinking");
+        if (laddered) diffs = diffs.filter((d) => d.field !== "model" && d.field !== "thinking");
       }
       if (!diffs.length) return;
       const name = agent.title || agent.id;
@@ -1730,10 +1729,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // Routing by stakes (PLAN_ROUTING_BY_STAKES R1/R2): applied for the provider the spawn ended up on after
         // failover. An explicit caller model/thinking wins; missing/unknown stakes = normal = profile unchanged.
         {
-          const callerSetModel = Boolean(String(config.model ?? "").trim() || String(config.thinkingOptionId ?? "").trim());
-          const explicitModel = callerSetModel && (!matchedProfile || keepCaller || !profileMatch?.explicit);
+          // `config` is the caller's original request (`next` already carries the profile override), so this reads what the caller asked for.
+          const callerModel = String(config.model ?? "").trim();
+          const callerEffort = String(config.thinkingOptionId ?? "").trim();
           const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
+          const stakesOn = normalizeStakes(stakesRaw) !== "normal";
+          const explicitModel = stakesOn && Boolean(callerModel || callerEffort);
           const route = resolveStakesRoute(String(next.provider ?? provider), matchedProfile, stakesRaw, explicitModel);
+          if (explicitModel) {
+            // An explicit model/thinking beats the ladder AND an explicit profile's defaults; enforceProfileAfterSpawn must not revert it.
+            // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so leave the failover profile.
+            const sameProvider = normalizeProviderFamily(String(next.provider ?? provider)) === normalizeProviderFamily(provider);
+            if (sameProvider && callerModel) next.model = callerModel;
+            if (sameProvider && callerEffort) next.thinkingOptionId = callerEffort;
+            changed = true;
+            const at = Date.now();
+            ladderSpawns.set(`${title}::${cwd}`, at);
+            if (reqAgentId) ladderSpawns.set(reqAgentId, at);
+          }
           if (route.apply) {
             if (route.model && route.model !== next.model) next.model = route.model;
             if (route.effort && route.effort !== next.thinkingOptionId) next.thinkingOptionId = route.effort;

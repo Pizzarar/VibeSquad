@@ -59,7 +59,7 @@ function harness(overrides = {}) {
     const req = { config: { cwd: CWD, ...config }, ...extra };
     return (await before.get("agent.create")({ request: req })) ?? req;
   };
-  return { stop, spawn };
+  return { stop, spawn, onCreated: on.get("agent.created") };
 }
 
 const LABELS = (extra = {}) => ({ profile: "Implement - Sonnet", team: "vibesquad", lane: "vibesquad", role: "worker", ...extra });
@@ -166,6 +166,52 @@ test(
       const m = routeMetrics(vsHome);
       assert.equal(m.length, 2);
       assert.ok(m.every((t) => t === "route: stakes=normal model=claude-sonnet-5-5 effort=medium reason=default"));
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "hook: profile label + explicit model + stakes (no profile-override) keeps the explicit model over profile and ladder",
+  withEnv(async ({ vsHome }) => {
+    const h = harness();
+    try {
+      const out = await h.spawn(
+        { provider: "claude", model: "claude-haiku-5-5", thinkingOptionId: "low" },
+        { labels: LABELS({ stakes: "tierA-security" }) },
+      );
+      assert.equal(out.config.model, "claude-haiku-5-5");
+      assert.equal(out.config.thinkingOptionId, "low");
+      assert.match(routeMetrics(vsHome)[0], /stakes=tierA-security model=claude-haiku-5-5 effort=low reason=explicit/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "agent.created after a laddered spawn: enforceProfileAfterSpawn keeps the ladder's model/effort",
+  withEnv(async () => {
+    const applied = [];
+    const h = harness({ applyAgentSettings: async (id, patch) => applied.push({ id, patch }) });
+    try {
+      const labels = LABELS({ stakes: "tierA-security" });
+      const out = await h.spawn({ provider: "claude", title: "Worker" }, { labels });
+      assert.equal(out.config.model, "claude-fable-5-1");
+      const agent = {
+        id: "w-1",
+        title: "Worker",
+        cwd: CWD,
+        status: "idle",
+        provider: "claude",
+        model: "claude-fable-5-1",
+        modeId: "auto",
+        thinkingOptionId: "high",
+        labels,
+      };
+      await h.onCreated({ agent }, { paseo: { getAgent: async () => agent } });
+      assert.deepEqual(applied, [], "ladder model/effort must not be reverted to the profile's");
     } finally {
       h.stop?.();
     }
