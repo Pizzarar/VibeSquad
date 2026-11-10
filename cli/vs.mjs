@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 if (process.platform === "win32") {
   process.stdout.setDefaultEncoding?.("utf8");
@@ -38,6 +38,7 @@ import {
   findBugLane,
   findLaneInRegistry,
   findTeamInRegistry,
+  isHubLane,
   isDigestAgent,
   freezeLaneCodes,
   isRetiredRole,
@@ -274,6 +275,7 @@ function parseArgs(argv) {
     "json",
     "notes",
     "dryRun",
+    "noForce",
     "force",
     "print",
     "stdin",
@@ -505,6 +507,7 @@ Usage:
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
+  vs restart [--dry-run] [--timeout <sec>] [--no-force]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0, default 600s); result in ~/.vibesquad/restart-<ts>.json
   vs buddy restart --lane <code> [--reason "<why>"]   restart a lane's Buddy via the brainstorm-restart path (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -1357,6 +1360,7 @@ export function installVsShim({ binDirs, targetScript, baseHome, force = false }
     "server/stale-runtime.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
+    "scripts/restart-runtime.mjs", // `vs restart` launches it from beside cli/
     ...vsImportClosure(repoRoot),
   ];
 
@@ -2174,6 +2178,77 @@ function commandMcp(flags) {
   return 0;
 }
 
+/** Who may restart the runtime: the owner's own shell (no runner agent id) or the Squad's hub lead (Overlord). Any other runner agent is refused. */
+export function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync) {
+  const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
+  if (!id || !isRunnerId(id)) return;
+  // Fail closed: identity comes only from the runner's own record of this agent id. A runner id with no record gets nothing from
+  // VS_ROLE/VS_LANE/VS_TEAM env (spoofable), so it is refused.
+  const rec = identity ? null : readRecord(id);
+  if (!identity && !rec) throw new Error(`vs restart: ${id} has no runner record, so its role cannot be verified; refusing.`);
+  const labels = rec?.labels ?? {};
+  const who = identity ?? { role: String(labels.role ?? "").trim().toLowerCase(), team: { id: labels.team ?? "" }, lane: labels.lane || labels.lead || "" };
+  const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
+  const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
+  if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane)) {
+    throw new Error(`vs restart: ${id} is a ${who.role || "worker"}; restarting the runtime cuts every agent's turn, so only the owner or the Overlord (hub lead) may. Ask your lead.`);
+  }
+}
+
+/** One launch arg may not carry a quote or control character: it is joined into a single Win32_Process.Create CommandLine. */
+function assertSafeLaunchArg(a) {
+  if (/["\p{Cc}]/u.test(String(a))) throw new Error(`vs restart: refusing a launch argument with a quote or control character: ${JSON.stringify(String(a))}`);
+}
+
+/**
+ * vs restart: start scripts/restart-runtime.mjs detached and return at once. Every agent runs on the runner, so the script
+ * must not be in the runner's process tree (the shutdown kills agent trees). On Windows it is created through WMI
+ * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
+ * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
+ */
+export function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync } = {}) {
+  if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
+  if (!flags.dryRun) assertRestartCaller(identity, teams, env, readRecord);
+  const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
+  if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
+  const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  const logFile = path.join(vsHome, "logs", `restart-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+  const args = [script, "--log", logFile];
+  if (env.VIBESQUAD_HOME) args.push("--vs-home", vsHome, "--home", path.join(vsHome, "runner"), "--out-dir", vsHome);
+  if (env.VIBESQUAD_DESKTOP_CONFIG_DIR?.trim()) args.push("--config-dir", env.VIBESQUAD_DESKTOP_CONFIG_DIR.trim());
+  if (env.VIBESQUAD_PORT && /^\d+$/.test(env.VIBESQUAD_PORT)) args.push("--port", env.VIBESQUAD_PORT);
+  if (flags.dryRun) args.push("--dry-run");
+  if (flags.noForce) args.push("--no-force");
+  if (flags.timeout) args.push("--wait-timeout", String(flags.timeout));
+  for (const a of [process.execPath, ...args]) assertSafeLaunchArg(a);
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  if (flags.dryRun) {
+    const r = spawnSync(process.execPath, args, { encoding: "utf8", windowsHide: true });
+    process.stdout.write(r.stdout || "");
+    if (r.stderr) process.stderr.write(r.stderr);
+    return r.status ?? 1;
+  }
+  let pid = null;
+  if (spawnFn) pid = spawnFn(process.execPath, args);
+  else if (process.platform === "win32") {
+    const q = (x) => `'${String(x).replace(/'/g, "''")}'`;
+    const cmdline = [process.execPath, ...args].map((a) => `"${a}"`).join(" ");
+    const ps = `$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=${q(cmdline)}; ProcessStartupInformation=$si}; if ($r.ReturnValue -ne 0) { exit 1 }; $r.ProcessId`;
+    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", windowsHide: true });
+    if (r.status !== 0) throw new Error(`could not launch the restart script detached: ${(r.stderr || r.stdout || "").trim()}`);
+    pid = Number(String(r.stdout).trim());
+  } else {
+    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
+    child.unref();
+    pid = child.pid;
+  }
+  process.stdout.write(`restart launched (pid ${pid}); it waits for the runner to go idle, then restarts runner + server.
+log: ${logFile}
+result: ${vsHome}/restart-<ts>.json (also check: vs restart --dry-run)
+`);
+  return 0;
+}
+
 function commandCap(flags) {
   const sub = String(flags._[0] ?? "list").toLowerCase();
 
@@ -2328,6 +2403,7 @@ export const KNOWN_VERBS = [
   "status",
   "lead",
   "buddy",
+  "restart",
   "ls",
   "logs",
   "inspect",
@@ -2422,6 +2498,7 @@ export function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
+    if (command === "restart") return commandRestart(flags);
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
