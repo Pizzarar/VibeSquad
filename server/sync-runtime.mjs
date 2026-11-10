@@ -43,6 +43,12 @@ export function syncRuntimeDir(repoRoot = rootDir) {
     }
   }
 
+  // `vs restart` launches this self-contained script; the runtime copy of cli/ needs it beside it.
+  try {
+    mkdirSync(join(runtimeDir, "scripts"), { recursive: true });
+    copyFileSync(join(repoRoot, "scripts", "restart-runtime.mjs"), join(runtimeDir, "scripts", "restart-runtime.mjs"));
+  } catch {}
+
   // The live server serves runtime/dist-desktop/VibeSquad.apk. Ship the staged build only as a verified pair
   // (sidecar present and equal to the apk's hash), via temp file + rename, apk first and sidecar last.
   try {
