@@ -50,6 +50,7 @@ import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContex
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
+import { PhoneBugPill } from "./PhoneBugSheet";
 import { FocusRail, railAlerts } from "./FocusRail";
 import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
@@ -1838,6 +1839,7 @@ export function App() {
         onSpinUp={onSpinUpPin}
         onSpinUpOverlord={onSpinUpOverlord}
         overlordBusy={overlordBusy}
+        bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
       />
     );
   }

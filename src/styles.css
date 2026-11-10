@@ -6193,3 +6193,14 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 }
 .phone-tab.on { color: var(--text); border-top-color: var(--hot-pink); background: var(--panel-hi); }
 .phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--hot-pink); color: var(--well); font-size: 12px; font-weight: 800; text-align: center; }
+
+/* ---- E2 decision card (Overlord escalation) ---- */
+.decision-card { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--violet); border-radius: 10px; background: var(--violet-dim); color: var(--text); }
+.decision-card.pin { flex: 0 0 auto; max-height: 45%; overflow-y: auto; margin: 6px 8px; }
+.dc-summary { margin: 0; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; }
+.dc-actions, .dc-alts { display: flex; flex-direction: column; gap: 6px; }
+.dc-actions .btn { min-height: 44px; text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.dc-primary { font-weight: 700; }
+.dc-err { color: var(--bad, #e5534b); font-size: 12px; }
+/* On the phone the pinned card is the control; older inline copies shrink to their summary. */
+.phone-cockpit .decision-card.inline .dc-actions { display: none; }

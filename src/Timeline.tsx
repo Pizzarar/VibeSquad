@@ -31,6 +31,8 @@ import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
 import { refreshDismissedCards } from "./pinActions";
 import { SpinOffCard, SendToCard, findPinForAgent, showPinToast, useSendTo } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
+import { DecisionCard } from "./DecisionCard";
+import { decisionCardId, parseDecision } from "./decisionLogic";
 import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, sendToLegacyId, spinOffCardId } from "./pins";
 
 export class TimelineErrorBoundary extends Component<
@@ -461,6 +463,10 @@ export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId }
               </div>
             );
           }
+        }
+        if (lang === "vs:decision" && agentId) {
+          const d = parseDecision(tok.code);
+          if (d) return <DecisionCard key={i} agentId={agentId} offer={{ ...d, id: decisionCardId(agentId, d) }} variant="inline" />;
         }
         if (lang.startsWith("vs:send-to") || /^\s*vs:send-to\s+[A-Za-z0-9_-]+/m.test(tok.code)) {
           const parsedSendTo = parseSendTo(lang.startsWith("vs:send-to") ? `${tok.lang}\n${tok.code}` : tok.code);

@@ -303,7 +303,7 @@ function dismissedSet(key = LOOKS_DONE_KEY): Set<string> {
 
 // Dismissed cards also live on the server (settings.json `dismissedCards`, newest 500) so every device hides a card
 // once any device acted on it. localStorage stays as the offline cache; the two are merged on read.
-const DISMISS_KEYS = [LOOKS_DONE_KEY, "vibesquad.sendToDismissed", "vibesquad.spinOffDismissed"];
+const DISMISS_KEYS = [LOOKS_DONE_KEY, "vibesquad.sendToDismissed", "vibesquad.spinOffDismissed", "vibesquad.decisionDismissed"];
 const SETTINGS_URL = "/__vibesquad/settings";
 let serverDismissed = new Set<string>();
 let dismissedLoad: Promise<void> | null = null;
@@ -710,6 +710,10 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
 export const isSendToDismissed = (messageId: string, legacyIds?: string[]): boolean => isDismissed(SEND_TO_KEY, messageId, legacyIds);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
+
+const DECISION_KEY = "vibesquad.decisionDismissed";
+export const isDecisionDismissed = (cardId: string): boolean => isDismissed(DECISION_KEY, cardId);
+export const dismissDecision = (cardId: string): void => dismiss(DECISION_KEY, cardId);
 
 const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
 export const isSpinOffDismissed = (messageId: string): boolean => isDismissed(SPIN_OFF_KEY, messageId);

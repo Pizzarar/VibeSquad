@@ -3,6 +3,7 @@ import { expandFolderMentions } from "./projectContext";
 import { appendContext, useCtxSources } from "./contextSources";
 import type { PaseoAgent } from "./agentTypes";
 import type { ActiveTurnBehavior } from "./agentTypes";
+import { DecisionPin } from "./DecisionCard";
 import { removeLocalAgent, sendMessage, updateAgent, upsertLocalAgent } from "./paseo";
 import { runnerSpawn } from "./runnerBridge";
 import { vsListDirectory } from "./vsFiles";
@@ -137,9 +138,9 @@ export async function triggerBrainstormRestart(opts: {
 }
 
 /** `chatOnly` (sky-gods zones): messages + composer only. The right dock (Changes/Files/Terminal) is never rendered, never read from or written to the shared `vs.right-dock.open` key, and `vs:open-right-dock` is ignored. */
-type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean };
+type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean; pinDecisions?: boolean };
 
-export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false }: DrawerProps) {
+export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false, pinDecisions = false }: DrawerProps) {
   useTeams();
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const prov = providerSpec(agent.provider);
@@ -600,6 +601,7 @@ ${draft}`);
         />
       ))}
 
+      {pinDecisions && <DecisionPin agentId={agent.id} entries={entries} />}
       <div className="drawer-shell">
         <TimelineErrorBoundary fallbackLabel="timeline">
           <Timeline

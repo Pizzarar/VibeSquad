@@ -121,7 +121,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   if (shown === "overlord") {
     const m = zones.overlord.member;
     body = m ? (
-      <AgentDrawer key={m.agent.id} agent={m.agent} chatOnly onClose={() => {}} onSuccessor={() => onSuccessor(m.agent.id)} />
+      <AgentDrawer key={m.agent.id} agent={m.agent} chatOnly pinDecisions onClose={() => {}} onSuccessor={() => onSuccessor(m.agent.id)} />
     ) : (
       <Empty what="No Overlord is on duty for this Squad." action="Start Overlord" busy={overlordBusy} onAction={view ? () => onSpinUpOverlord(view) : undefined} />
     );
