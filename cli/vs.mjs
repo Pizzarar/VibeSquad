@@ -2179,10 +2179,15 @@ function commandMcp(flags) {
 }
 
 /** Who may restart the runtime: the owner's own shell (no runner agent id) or the Squad's hub lead (Overlord). Any other runner agent is refused. */
-export function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env) {
+export function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync) {
   const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
   if (!id || !isRunnerId(id)) return;
-  const who = identity ?? resolveIdentity({}, { recordWins: true });
+  // Fail closed: identity comes only from the runner's own record of this agent id. A runner id with no record gets nothing from
+  // VS_ROLE/VS_LANE/VS_TEAM env (spoofable), so it is refused.
+  const rec = identity ? null : readRecord(id);
+  if (!identity && !rec) throw new Error(`vs restart: ${id} has no runner record, so its role cannot be verified; refusing.`);
+  const labels = rec?.labels ?? {};
+  const who = identity ?? { role: String(labels.role ?? "").trim().toLowerCase(), team: { id: labels.team ?? "" }, lane: labels.lane || labels.lead || "" };
   const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
   const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
   if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane)) {
@@ -2201,9 +2206,9 @@ function assertSafeLaunchArg(a) {
  * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
  * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
  */
-export function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env } = {}) {
+export function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
-  if (!flags.dryRun) assertRestartCaller(identity, teams, env);
+  if (!flags.dryRun) assertRestartCaller(identity, teams, env, readRecord);
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");

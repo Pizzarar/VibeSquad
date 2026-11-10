@@ -160,6 +160,8 @@ export async function detect(opts, d = defaultDeps, env = process.env) {
   return finishDetect({ opts, d, env, home, port, configDir, runner, spid });
 }
 
+const isRunnerCmd = (cmd) => /runner[\\/]server\.mjs/.test(cmd ?? '');
+
 /** The runner as discovery files + a live probe describe it right now (re-run before acting on it). */
 export async function detectRunner(home, d = defaultDeps) {
   const disc = readJson(path.join(home, 'runner.json'));
@@ -168,7 +170,10 @@ export async function detectRunner(home, d = defaultDeps) {
   const runner = { home, port: disc?.port ?? null, pid: disc?.pid ?? null, token, alive: false, health: null, parent: null, cmd: null };
   if (runner.pid) {
     const pi = d.procInfo(runner.pid);
-    runner.alive = !!pi;
+    // A pid from runner.json may have been recycled by an unrelated process: alive only if its command line is the runner.
+    runner.isRunner = isRunnerCmd(pi?.cmd);
+    runner.alive = !!pi && runner.isRunner;
+    runner.staleDiscovery = !!pi && !runner.isRunner;
     runner.parent = pi?.ppid ?? null;
     runner.cmd = pi?.cmd ?? null;
   }
@@ -326,7 +331,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     const pre = d.listenerPid(det.port);
     if (pre) {
       const pi = d.procInfo(pre);
-      if (!pi || !/serve.mjs/.test(pi.cmd ?? '')) { fail('server stop', `pid ${pre} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
+      if (!pi || !/serve\.mjs/.test(pi.cmd ?? '')) { fail('server stop', `pid ${pre} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
     }
 
     // Snapshot right before the stop: which agents were already lost (historic; the roster holds hundreds) and which were mid-turn.
@@ -361,7 +366,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     };
     const stopRunner = async () => {
       const r0 = det.runner;
-      if (!r0.alive) { step('runner not running'); return true; }
+      if (!r0.alive) { step('runner not running', r0.staleDiscovery ? { note: `runner.json names pid ${r0.pid}, which is not a runner (recycled); left alone` } : {}); return true; }
       let accepted = false;
       try {
         const r = await runnerCall(det, d, 'POST', '/shutdown');
@@ -372,6 +377,8 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       else if (!opts.force) { fail('runner stop', 'no graceful stop available and --no-force'); return false; }
       else {
         // An old runner cannot be told to stop; a hard kill writes no exit events, so its agents stay resumable (lost).
+        const again = d.procInfo(r0.pid); // re-verify immediately before the kill: the pid may have been recycled
+        if (!again || !isRunnerCmd(again.cmd)) { fail('runner stop', `pid ${r0.pid} is no longer the runner; refusing to kill it`); return false; }
         d.killHard(r0.pid);
         result.forced.push({ label: 'runner', pid: r0.pid, reason: 'no /shutdown endpoint on this runner build' });
         await d.sleep(500);

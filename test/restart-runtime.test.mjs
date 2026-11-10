@@ -100,13 +100,13 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false } = {}) {
+async function world({ running = [0], supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
   const outDir = path.join(tmp, "vs");
   mkdirSync(home, { recursive: true });
-  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0 };
+  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0 };
   const agents = { current: [
     { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" },
   ] };
@@ -138,7 +138,7 @@ async function world({ running = [0], supportsShutdown = true, serverBootsRunner
     writeFileSync(path.join(home, "token"), token);
     writeFileSync(path.join(home, "runner.json"), JSON.stringify({ port, pid, startedAt: Date.now() }));
     w.alive.add(pid);
-    runnerState = st; runnerSrv = st.srv;
+    runnerState = st; runnerSrv = st.srv; w.allSrvs.push(st.srv);
     return st;
   };
   let serverSrv = null;
@@ -168,7 +168,12 @@ async function world({ running = [0], supportsShutdown = true, serverBootsRunner
     pidAlive: (pid) => w.alive.has(pid),
     procInfo: (pid) => {
       if (!w.alive.has(pid)) return null;
-      if (pid !== serverPid) return { pid, ppid: 1, cmd: "node runner/server.mjs" };
+      if (pid !== serverPid) {
+        w.runnerInfoCalls += 1;
+        // runnerRecycled "detect": the pid in runner.json already belongs to something else; "late": it is recycled after detection
+        const recycled = runnerRecycled === "detect" || (runnerRecycled === "late" && w.runnerInfoCalls > 2);
+        return { pid, ppid: 1, cmd: recycled ? "notepad.exe" : "node runner/server.mjs" };
+      }
       w.serverInfoCalls += 1;
       const spoof = spoofAfterVerify && w.serverInfoCalls > 3; // the pid was reused between the check and the kill
       return { pid, ppid: 1, cmd: spoof || !serveCmd ? "something-else.exe" : "\"C:\\rt\\node.exe\" server/serve.mjs" };
@@ -197,7 +202,7 @@ async function world({ running = [0], supportsShutdown = true, serverBootsRunner
   const env = { ...process.env, VIBESQUAD_HOME: outDir, VIBESQUAD_DESKTOP_CONFIG_DIR: configDir };
   w.opts = (extra = {}) => ({ ...parseArgs(["--stop-timeout", "2", "--wait-timeout", "5"]), home, port: serverPort, configDir, outDir, runtimeDir: tmp, node: process.execPath, ...extra });
   w.run = (extra, logs = []) => restartRuntime(w.opts(extra), deps, env, (l) => logs.push(l));
-  w.cleanup = async () => { for (const s of [runnerSrv, serverSrv]) if (s?.listening) await close(s); rmSync(tmp, { recursive: true, force: true }); };
+  w.cleanup = async () => { for (const s of [...w.allSrvs, serverSrv]) if (s?.listening) await close(s); rmSync(tmp, { recursive: true, force: true }); };
   w.runner = () => runnerState;
   return w;
 }
@@ -402,6 +407,33 @@ test("vs restart: --timeout must be a positive integer; unsafe launch args rejec
   assert.throws(() => assertRestartCaller(as("lead", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/, "a non-hub lead");
   assert.throws(() => assertRestartCaller(as("brainstorm", "vibesquad"), teams, agentEnv), /only the owner/);
   assert.doesNotThrow(() => assertRestartCaller(as("lead", "vibesquad"), teams, agentEnv), "hub lead = Overlord");
+  // fail closed: an rn- id with no runner record is refused even if VS_ROLE/VS_LANE/VS_TEAM claim to be the Overlord
+  const spoof = { VS_AGENT_ID: "rn-deadbeef0000", VS_ROLE: "lead", VS_LANE: "vibesquad", VS_TEAM: "vibesquad" };
+  assert.throws(() => assertRestartCaller(null, teams, spoof, () => null), /no runner record/);
+  assert.throws(() => run({}, { env: spoof, readRecord: () => null }), /no runner record/);
+  const rec = (labels) => () => ({ labels });
+  assert.doesNotThrow(() => assertRestartCaller(null, teams, spoof, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" })), "the record, not env, decides");
+  assert.throws(() => assertRestartCaller(null, teams, spoof, rec({ role: "worker", team: "vibesquad", lane: "bug-chaser" })), /only the owner/, "env claiming lead is ignored when the record says worker");
   assert.throws(() => run({}, { identity: as("worker", "bug-chaser"), env: agentEnv }), /only the owner/);
   assert.equal(run({}, { identity: as("lead", "vibesquad"), env: agentEnv }).code, 0);
+});
+
+test("recycled runner pid: never killed (cmdline must be the runner) at detect time or right before the kill", async () => {
+  // runner.json names a pid that is now an unrelated process, and /shutdown would 404 -> the force path
+  const w = await world({ supportsShutdown: false, runnerRecycled: "detect" });
+  try {
+    const r = await w.run({ runnerBootMs: 300 });
+    assert.equal(w.hardKills.includes(w.runner().pid), false, "the recycled pid was not killed");
+    assert.equal(w.shutdownAuth.length, 0, "no shutdown sent to a non-runner");
+    assert.ok(r.steps.some((s) => s.step === "runner not running" && /recycled/.test(s.note ?? "")));
+    assert.equal(r.forced.some((f) => f.label === "runner"), false);
+  } finally { await w.cleanup(); }
+  // recycled between detection and the kill
+  const w2 = await world({ supportsShutdown: false, runnerRecycled: "late" });
+  try {
+    const r = await w2.run({});
+    assert.equal(r.ok, false);
+    assert.deepEqual(w2.hardKills, [], "nothing killed");
+    assert.ok(r.errors.some((e) => /no longer the runner/.test(e)));
+  } finally { await w2.cleanup(); }
 });
