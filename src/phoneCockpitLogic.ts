@@ -1,3 +1,5 @@
+import { gridPinsForSquad, type Pin } from "./pins.ts";
+import type { TeamView } from "./teams.ts";
 // E1 (docs/PLAN_ANDROID_END_STATE.md Phase 2): pure rules for the strict phone cockpit. No React, no DOM: test/phone-cockpit.test.mjs imports this directly.
 
 /** Phone viewport cutoff; matches the existing `@media (max-width: 600px)` mobile rules in styles.css. */
@@ -54,4 +56,18 @@ export function subscribeBuddyRequest(l: () => void): () => void {
 /** Test seam. */
 export function resetBuddyRequest(): void {
   buddyRequest = null;
+}
+
+export type PhoneLaneState = "live" | "idle" | "none";
+export type PhoneLaneRow = { pin: Pin; laneId: string; name: string; state: PhoneLaneState };
+
+/** The ⋯ drawer's lane list: every pinned lane of the Squad (no-agent lanes from `vs pin new` included), same data as the desktop sidebar. */
+export function phoneLaneRows(view: TeamView | undefined): PhoneLaneRow[] {
+  if (!view) return [];
+  return gridPinsForSquad(view).pinned.map((pin) => ({
+    pin,
+    laneId: pin.lane.id,
+    name: pin.lane.name,
+    state: !pin.brainstorm ? "none" : pin.brainstorm.agent.status === "running" ? "live" : "idle",
+  }));
 }

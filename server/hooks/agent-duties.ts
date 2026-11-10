@@ -46,6 +46,8 @@ import { DEFAULT_PACK_PROFILES, deriveRole } from "../profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
+import { createWatchEngine } from "../watch-sets.mjs";
+import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -93,7 +95,7 @@ export const EVERYONE_LAYER = [
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
-  "- R6 (Waiting): Wait on agents with `vs wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.",
+  "- R6 (Waiting): Leads/Buddies wait on several items with `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping); workers wait with `vs wait <id> --timeout <s>`. No sleep/poll loops or heartbeats.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
   "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
   "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `vs hwo`→vs who, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
@@ -145,6 +147,7 @@ export const HUB_LEAD_RULES = [
   "  1. Steer: idle/stalled lead → `vs send <lead> \"<steer>\"`, then `vs wait <lead> --timeout 90`.",
   "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
   "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Floor: a healthy lead under 100k tokens is refused (steer first, ladder 1-2); an errored, wedged or permission-stuck lead is not. `--force` needs a non-empty `--steer` and is logged as a decision. Never raw-archive a lead.",
+  "- Multi-item waits (several leads, a suite run, a restart): run `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping). Use no `vs wait` loops and no heartbeats for multi-item waits; the ladder's `vs wait <lead> --timeout 90` stays for a single steer.",
   "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
   "- Inbox cards with no lane arrive as a `Route this:` message: bounce the card with the existing `vs inbox triage --bounce <cardId> --lane <lane>`, send it on to that lane's Buddy (`vs who brainstorm --lane <lane>`, then `vs send`), and `vs log decision` where it went. Never open a new agent for a card.",
   "- Escalations to the owner (phone cockpit): when you need a decision, end your message with a fenced block ```vs:decision with lines `summary: <1-2 lines: what stopped>`, `do: <your recommended action>`, one `alt: <other option>` per alternative, and optionally `vs:riff @<lane>` to send the owner to that lane's Buddy. It renders as one-tap buttons; keep each line short and put nothing else in the fence.",
@@ -169,7 +172,8 @@ export const LEAD_FALLBACK_PACK = [
   "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the new lane's short code) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff). To restart an EXISTING lane's Buddy instead (fresh context, same lane), run `vs buddy restart --lane <code> [--reason \"<why>\"]`; never archive it by hand.",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
   "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
-  "- Only one full `npm test` runs at a time machine-wide (the wrapper refuses a second): workers run only the tests for their own files; the lead hands out the full-suite slot.",
+  "- Full-suite slot: run `npm test -- --queue` in the FOREGROUND. It waits FIFO for the machine-wide slot; you no longer ask the Overlord to hand slots out. Workers run only their own test files, never the full suite.",
+  "- Waiting on several items (workers, reviewers, your suite run, a restart): run `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn. You get one ping. Use no `vs wait` loops and no heartbeats for multi-item waits. A single short wait may still use `vs wait <id> --timeout <s>`.",
   "- Hand server restarts, post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites e.g. public-release.test.mjs, worktree node_modules junction gaps, flaky shared tests) to the Overlord (`vs who lead --lane vibesquad`, then `vs send`) or @bug (`vs inbox add --lane bug-chaser \"<item>\"`). Never leave them only in handoff Gotchas or owner replies.",
   "- New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
@@ -959,6 +963,10 @@ export interface Deps {
   doneArchiveGraceMs?: number;
   /** The worker's unit branch (its cwd's HEAD) and whether it is merged into master. Unknown => merged:false (keep). */
   unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
+  /** Watch sets (server/watch-sets.mjs): engine options, or false for off. Default: on in the watcher host that has runner events. */
+  watchSets?: false | Omit<WatchEngineOptions, "getAgent" | "deliver" | "log">;
+  /** RunnerBackend.subscribeEvents (passed by the runner hook host): lifecycle events that feed the watch sets. */
+  subscribeRunnerEvents?(listener: (ev: any) => void): () => void;
 }
 
 /**
@@ -2506,8 +2514,144 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     function noteEntry(team: string, entry: LogEntry) {
       if (entry.type === "done") noteWorkerDone(entry);
+      const taken = watch?.onLogEntry(team, entry) ?? [];
+      if (taken.length) watchTaken.set(entry, taken);
       if (!WAKE_TYPES.has(entry.type)) return;
       queueWake(team, entry);
+    }
+
+    // ---- Hook 3b: watch sets (server/watch-sets.mjs) ------------------------
+    // A watch set's items are held back from the per-event wakes above (dispatchWakes asks watchHolds), and the set's own ping
+    // rides the same delivery path: it is queued in pendingWake for the owner (or, if the owner is retired, the lane's live lead)
+    // and sent by flushWake, which persists attemptedAt before the send so a ping is never sent twice.
+
+    const watchTaken = new WeakMap<LogEntry, string[]>(); // log entry -> open watch sets that took it over
+    const watchKeyOf = new WeakMap<LogEntry, string>(); // queued wake entry -> the watch ping it carries
+    const watchSending = new Set<string>(); // ping keys inside an in-flight flushWake send
+    const watchOpts =
+      deps.watchSets === false ? null : (deps.watchSets ?? (deps.startWatcher && deps.subscribeRunnerEvents ? {} : null));
+    const watch: WatchEngine | null = watchOpts
+      ? createWatchEngine({
+          ...watchOpts,
+          getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
+          deliver: (d: WatchDelivery) => deliverWatchPing(d),
+          spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
+          log,
+        })
+      : null;
+    if (watch) {
+      try {
+        watch.start();
+      } catch (err) {
+        log(`watch sets start failed: ${err}`);
+      }
+      if (deps.subscribeRunnerEvents) {
+        try {
+          stops.push(deps.subscribeRunnerEvents((ev: any) => watch.onRunnerEvent(ev)));
+        } catch (err) {
+          log(`watch sets runner subscription failed: ${err}`);
+        }
+      }
+    }
+
+    /** Where a set's ping goes: its owner while live, else the current live lead of the set's lane (the successor). */
+    async function resolveWatchTarget(paseo: Paseo, set: WatchSet): Promise<AgentSnap | null> {
+      const owner = await snap(paseo, set.owner);
+      if (owner && isLiveAgent(owner)) return owner;
+      const lane = set.lane || owner?.labels?.lane || "";
+      const team = set.team || owner?.labels?.team || "";
+      if (!team) return null;
+      return findLead(paseo, teamIdOf(team, currentTeams()), lane);
+    }
+
+    /** True when `entry` was taken over by a watch set whose ping goes to `leadId`: the set's one ping replaces this wake. */
+    async function watchHolds(paseo: Paseo, entry: LogEntry, leadId: string): Promise<boolean> {
+      const setIds = watchTaken.get(entry);
+      if (!watch || !setIds?.length) return false;
+      for (const set of await watch.holdingSets(entry, setIds)) {
+        if ((await resolveWatchTarget(paseo, set))?.id === leadId) return true;
+      }
+      return false;
+    }
+
+    /** The lead whose pendingWake holds this ping, "" when it is in the debounce queue or mid-send, null when it is nowhere. */
+    function watchQueuedAt(key: string): string | null {
+      for (const [leadId, q] of pendingWake) if (q.some((e) => watchKeyOf.get(e) === key)) return leadId;
+      if (watchSending.has(key) || wakeQueue.some((w) => watchKeyOf.get(w.entry) === key)) return "";
+      return null;
+    }
+
+    /** The engine's deliver hook. Re-offered every retryMs until attempted: a queued ping gets a flush nudge, a dropped one is re-queued. */
+    async function deliverWatchPing(d: WatchDelivery) {
+      const paseo = paseoApi;
+      if (!paseo) return;
+      const queuedAt = watchQueuedAt(d.key);
+      if (queuedAt !== null) {
+        if (queuedAt) void flushWake(paseo, queuedAt);
+        return;
+      }
+      const target = await resolveWatchTarget(paseo, d.set);
+      if (!target) return log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; ping held`);
+      if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
+      const text = target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
+      const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text, refs: [d.setId] };
+      watchKeyOf.set(entry, d.key);
+      pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
+      void flushWake(paseo, target.id);
+    }
+
+    /** W4: a too-long watch ping is merged by one Pre-check - Flash worker; the merged digest is then delivered through the wake path. */
+    async function spawnWatchDigest(paseo: Paseo, d: WatchDelivery): Promise<boolean> {
+      if (!paseo) return false;
+      try {
+        const target = await resolveWatchTarget(paseo, d.set);
+        if (!target) {
+          log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; cannot spawn merge`);
+          return false;
+        }
+        const where = teamOf(target.labels, target.cwd);
+        const team = d.team || where?.team || target.labels?.team || "";
+        const lane = d.lane || where?.lane || target.labels?.lane || "";
+        const digestProfile = resolveStoredProfile(DIGEST_PROFILE, DIGEST_PROVIDER, DIGEST_PROFILE, "worker");
+        const provider = digestProfile ? `${digestProfile.provider}/${digestProfile.model}` : DIGEST_PROVIDER;
+        const modeId = digestProfile?.modeId || DIGEST_MODE_ID;
+        const thinkingOptionId = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
+        const featureValues = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
+        const prompt = [
+          `You are a digest agent. Merge the watch-set report below into at most 15 lines, keeping every agent id, PASS/FAIL verdict, commit hash and pass/fail count. Drop nothing that matters.`,
+          `Output ONLY the merged digest text. Do not run any commands, do not send messages, and do not modify files.`,
+          ``,
+          `--- watch ${d.setId} report ---`,
+          d.text,
+        ].join("\n");
+        const handle = await paseo.agents.create({
+          config: { provider, modeId, thinkingOptionId, featureValues },
+          cwd: target.cwd,
+          title: `${DIGEST_PROFILE} digest`,
+          prompt,
+          labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: d.setId },
+          env: { VS_PROFILE: DIGEST_PROFILE },
+          autoArchive: true,
+        });
+        const createdId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+        if (!createdId) {
+          log(`watch ${d.setId}: merge spawn returned no agent id`);
+          return false;
+        }
+        // Await the worker's turn so a failure is detected and `autoArchive` runs; then read the merged digest it produced.
+        const res = await (handle?.waitForFinish ? handle.waitForFinish(10 * 60_000) : Promise.resolve(null));
+        const ok = !res?.status || ["idle", "completed", "finished"].includes(res.status);
+        const merged = ok ? await lastAssistantText(paseo, createdId) : "";
+        if (!merged) {
+          log(`watch ${d.setId}: merge worker produced no digest`);
+          return false;
+        }
+        await deliverWatchPing({ ...d, text: merged });
+        return true;
+      } catch (err) {
+        log(`watch ${d.setId} merge spawn failed: ${err}`);
+        return false;
+      }
     }
 
     /**
@@ -2864,7 +3008,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         try {
           const lead = await findLead(paseo, team, lane);
           if (!lead) continue;
-          const fresh = entries.filter((e) => e.agent !== lead.id);
+          const fresh: LogEntry[] = [];
+          for (const e of entries) if (e.agent !== lead.id && !(await watchHolds(paseo, e, lead.id))) fresh.push(e);
           if (!fresh.length) continue;
           const queue = pendingWake.get(lead.id) ?? [];
           queue.push(...fresh);
@@ -2917,6 +3062,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         // Archived or non-resumable closed lead: discard its held wakeups (the lead is gone). A closed-but-resumable
         // lead is a lost lead with a saved session: keep its wakeups and resume it via the send below.
+        // A watch ping dropped here is not lost: it was never attempted, so the watch engine re-offers it to the new target.
         if (liveLead.archivedAt || (liveLead.status === "closed" && liveLead.resumable !== true)) {
           pendingWake.delete(leadId);
           lastWakeAt.delete(leadId);
@@ -2925,17 +3071,23 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         // No longer a lead (e.g. retired): don't send to it; re-route its held wakeups
         // through the normal queueWake/dispatchWakes path to the current lead.
+        // Watch pings: a live non-lead owner (a Buddy) keeps its own; a retired one's are dropped and re-offered by the engine.
         if (effectiveAgentRole(liveLead) !== "lead") {
           const entries = pendingWake.get(leadId) ?? [];
-          if (entries.length) {
+          const keep = isLiveAgent(liveLead) ? entries.filter((e) => watchKeyOf.has(e)) : [];
+          const reroute = entries.filter((e) => !watchKeyOf.has(e));
+          if (entries.length && !keep.length) {
             pendingWake.delete(leadId);
             lastWakeAt.delete(leadId);
+          }
+          if (keep.length) pendingWake.set(leadId, keep);
+          if (reroute.length) {
             const where = teamOf(liveLead.labels, liveLead.cwd);
             if (where) {
-              for (const entry of entries) queueWake(where.team, entry);
+              for (const entry of reroute) queueWake(where.team, entry);
             }
           }
-          return;
+          if (!keep.length) return;
         }
 
         // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal
@@ -2959,13 +3111,26 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!queue?.length) return;
         pendingWake.delete(leadId);
         tookQueue = true;
-        const last = queue[queue.length - 1]!;
-        const more = queue.length > 1 ? ` (+${queue.length - 1} more)` : "";
-        const text = `New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`;
+        // Watch pings go out whole; the plain log events keep the one-line "(+N more)" summary.
+        const watchKeys = queue.map((e) => watchKeyOf.get(e)).filter((k): k is string => Boolean(k));
+        const plain = queue.filter((e) => !watchKeyOf.has(e));
+        const parts = queue.filter((e) => watchKeyOf.has(e)).map((e) => e.text);
+        if (plain.length) {
+          const last = plain[plain.length - 1]!;
+          const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
+          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`);
+        }
+        const text = parts.join("\n\n");
+        for (const k of watchKeys) watchSending.add(k);
         try {
+          if (watchKeys.length) watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
           await paseo.agents.ref(leadId).send(text);
+          if (watchKeys.length) watch?.markDelivered(watchKeys, leadId);
         } catch (e) {
           log(`wakeup send failed: ${e}`);
+          if (watchKeys.length) watch?.markFailed(watchKeys, String(e));
+        } finally {
+          for (const k of watchKeys) watchSending.delete(k);
         }
         lastWakeAt.set(leadId, Date.now());
       } finally {
@@ -3218,6 +3383,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // Hook point: the existing log-watch tick, time-gated, so no new timer exists.
       interval = setInterval(() => {
         scanLogs(false);
+        if (watch) void watch.tick().catch((err) => log(`watch tick failed: ${err}`));
         const every = deps.doneSweepIntervalMs ?? 0;
         if (every > 0 && Date.now() - lastSweepAt >= every) {
           lastSweepAt = Date.now();
@@ -3236,6 +3402,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (const stop of stops) stop();
     };
     (dispose as any).scanLogs = scanLogs;
+    (dispose as any).watchSets = watch;
     (dispose as any).sweepDoneWorkers = sweepDoneWorkers;
     (dispose as any).sweepDoneWorkersReport = sweepDoneWorkersReport;
     (dispose as any).handoffCoordinator = handoffCoordinator;

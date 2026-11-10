@@ -255,6 +255,7 @@ function parseArgs(argv) {
     "rule",
     "query",
     "profile",
+    "provider",
     "cwd",
     "prompt",
     "promptFile",
@@ -263,6 +264,8 @@ function parseArgs(argv) {
     "since",
     "source",
     "revision",
+    "stall",
+    "owner",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -281,6 +284,8 @@ function parseArgs(argv) {
     "stdin",
     "apply",
     "sweep",
+    "suite",
+    "restart",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -508,7 +513,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
   vs restart [--dry-run] [--timeout <sec>] [--no-force]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0, default 600s); result in ~/.vibesquad/restart-<ts>.json
-  vs buddy restart --lane <code> [--reason "<why>"]   restart a lane's Buddy via the brainstorm-restart path (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
+  vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
   vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
@@ -518,6 +523,8 @@ Usage:
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
+  vs watch add <agent...> [--suite] [--restart] [--stall <min>] [--owner <agent>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
+  vs watch list | vs watch cancel <id>   list or cancel your watch sets (only the same-Squad Overlord may name another owner via --owner)
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
@@ -1212,7 +1219,7 @@ async function commandWhoami(flags) {
       const lead = winner;
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
-      const status = String(lead.status ?? "unknown").trim();
+      const status = lead.lost ? "lost" : String(lead.status ?? "unknown").trim();
       const line = formatWhoLine({ id: lead.id, title, status, tokensLabel });
       currentLead = {
         id: lead.id,
@@ -1849,7 +1856,18 @@ export async function runAgentVerb(verb, flags, ctx) {
   } else if (verb === "handoff_lead") {
     args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
   } else if (verb === "restart_buddy") {
-    args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}) };
+    args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}), ...(flags.profile ? { profile: String(flags.profile) } : {}), ...(flags.provider ? { provider: String(flags.provider) } : {}) };
+  } else if (verb === "watch") {
+    args = { action: flags.watchAction };
+    if (flags.watchAction === "add") {
+      args.agents = [...new Set(flags._.map((s) => String(s).trim()).filter(Boolean))];
+      if (flags.suite) args.suite = true;
+      if (flags.restart) args.restart = true;
+      if (flags.stall !== undefined) args.stallMin = flags.stall;
+      if (flags.owner !== undefined) args.owner = String(flags.owner);
+    } else if (flags.watchAction === "cancel") {
+      args.id = String(flags._[0] ?? "").trim();
+    }
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else if (verb === "ls") {
@@ -1917,8 +1935,16 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     verb = "handoff_lead";
   }
   if (verb === "buddy") {
-    if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"]');
+    if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]');
     verb = "restart_buddy";
+  }
+  if (verb === "watch") {
+    let sub = String(flags._.shift() ?? "").toLowerCase();
+    if (sub === "ls") sub = "list";
+    if (sub !== "add" && sub !== "list" && sub !== "cancel") {
+      throw new Error("usage: vs watch add <agent...> [--suite] [--restart] [--stall <min>] | vs watch list | vs watch cancel <id>");
+    }
+    flags.watchAction = sub;
   }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
@@ -1931,6 +1957,21 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   if (verb === "logs" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
     throw new Error("usage: vs logs <agent> [--limit <N>]");
   }
+  if (verb === "watch") {
+    if (flags.watchAction === "add") {
+      if (!flags._.length && !flags.suite && !flags.restart) throw new Error("vs watch add needs at least one agent, --suite or --restart");
+      for (const a of flags._) {
+        const ref = String(a).trim();
+        if (ref && !isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
+      }
+      if (flags.stall !== undefined) {
+        const stall = Number(flags.stall);
+        if (!Number.isFinite(stall) || stall <= 0) throw new Error("--stall must be a positive number of minutes");
+      }
+    } else if (flags.watchAction === "cancel" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
+      throw new Error("usage: vs watch cancel <id>");
+    }
+  }
   // handoff_lead / spawn: --lane (for handoff_lead) names only the TARGET lane (runAgentVerb reads it); the caller's
   // identity comes from VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
   if (verb === "spawn" && (flags.agent || flags.role || flags.team || flags.lane || flags.ord)) {
@@ -1938,7 +1979,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
   const identity =
-    verb === "handoff_lead" || verb === "spawn" || verb === "restart_buddy"
+    verb === "handoff_lead" || verb === "spawn" || verb === "restart_buddy" || verb === "watch"
       ? resolveIdentity(callerFlags, { recordWins: true })
       : resolveIdentity(flags);
   const lane = verb === "ls" && identity.lane === UNASSIGNED_LANE && !flags.lane && !process.env.VS_LANE ? "" : identity.lane;
@@ -2516,6 +2557,7 @@ export const KNOWN_VERBS = [
   "lesson",
   "lessons",
   "wait",
+  "watch",
   "spawn",
   "send",
   "status",
@@ -2626,6 +2668,7 @@ export function main(argv) {
       command === "status" ||
       command === "lead" ||
       command === "buddy" ||
+      command === "watch" ||
       command === "ls" ||
       command === "logs" ||
       command === "inspect" ||

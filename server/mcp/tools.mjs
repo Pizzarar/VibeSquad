@@ -481,11 +481,13 @@ async function postLeadHandoffToServer(body, ctx) {
  * Restart a lane's Buddy through the existing /__vibesquad/brainstorm-restart path (archives the old Buddy, keeps its children, spawns a
  * fresh one from the brief). Allowed: the owner (a human `vs`, no agent id), that lane's live lead, and the Squad's hub lead (Overlord)
  * for any lane of its own Squad. The caller's role/lane/team are read from its runner record, never from env or args; the server
- * route re-checks callerId on its own (server/buddy-restart-auth.mjs).
+ * route re-checks callerId on its own (server/buddy-restart-auth.mjs). A lane with no Buddy yet (a new `vs pin new` lane) gets its
+ * first one through the same start-brainstorm path the UI's first pin click uses (idea-95), with the same grants.
  */
 async function restartBuddy(ctx, args = {}) {
   const callerId = clean(ctx.identity.agentId);
   const askedLane = clean(pick(args, "lane", "laneId"));
+  const profileName = buddyProfileArg(args);
   const teams = ctx.teams ?? loadTeamsRegistry();
   const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
   let teamId;
@@ -521,14 +523,138 @@ async function restartBuddy(ctx, args = {}) {
   const buddies = list.map((e) => e?.agent ?? e).filter((a) => a && whoCandidate(a, { teams, wantTeamId: teamId, wantLane: laneId })?.role === "brainstorm");
   // The lane's main Buddy (no topic label) restarts; a topic Buddy only when it is the sole one.
   const buddy = buddies.find((a) => !clean(a.labels?.topic)) ?? (buddies.length === 1 ? buddies[0] : null);
-  if (!buddy) throw new Error(`cannot restart a Buddy: lane "${laneId}" has ${buddies.length ? "only topic Buddies" : "no live Buddy"}`);
+  if (!buddy && buddies.length) throw new Error(`cannot restart a Buddy: lane "${laneId}" has only topic Buddies`);
+  const trigger = callerId ? (caller && findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams)?.lane.id === laneId ? "lane-lead" : "overlord") : "owner";
+  const send = async (body) => {
+    const out = ctx.restartBuddyRequest ? await ctx.restartBuddyRequest(body) : await postBuddyRestartToServer(body, ctx);
+    if (out?.ok === false || out?.error) throw new Error(`buddy restart failed: ${out.error ?? out.reason ?? "unknown"}`);
+    return out;
+  };
+  const extra = { ...(callerId ? { callerId } : {}), ...(profileName ? { profileName } : {}) };
+  if (!buddy) {
+    // idea-95: no Buddy yet. The route's start path dedupes concurrent starts per lane and reuses (or reopens) any Buddy that appeared
+    // meanwhile, so a race or a retry still leaves exactly one. The route re-checks the callerId grant for the target lane.
+    const out = await send({ agentId: "start-brainstorm", reason: "start-brainstorm", laneId, teamId, ...extra });
+    return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: "", started: true, ...(out.reused ? { reused: true } : {}), lane: laneId, team: teamId, title: out.title ?? "", trigger };
+  }
   if (callerId) assertBuddyRestartAllowed(caller, buddy, teams);
   // The route special-cases a few reason strings (start-brainstorm, auto*): the verb's free text is always prefixed.
   const why = clean(args.reason).slice(0, 200);
-  const body = { agentId: buddy.id, laneId, teamId, reason: why ? `buddy-restart-verb: ${why}` : "buddy-restart-verb", ...(callerId ? { callerId } : {}) };
-  const out = ctx.restartBuddyRequest ? await ctx.restartBuddyRequest(body) : await postBuddyRestartToServer(body, ctx);
-  if (out?.ok === false || out?.error) throw new Error(`buddy restart failed: ${out.error ?? out.reason ?? "unknown"}`);
-  return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: buddy.id, lane: laneId, team: teamId, title: out.title ?? "", ...(out.skipped ? { skipped: true, reason: out.reason } : {}), ...(callerId ? { trigger: caller && findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams)?.lane.id === laneId ? "lane-lead" : "overlord" } : { trigger: "owner" }) };
+  const out = await send({ agentId: buddy.id, laneId, teamId, reason: why ? `buddy-restart-verb: ${why}` : "buddy-restart-verb", ...extra });
+  return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: buddy.id, lane: laneId, team: teamId, title: out.title ?? "", ...(out.skipped ? { skipped: true, reason: out.reason } : {}), trigger };
+}
+
+/** idea-95: `--profile <Brainstorm profile>` wins; `--provider claude|gemini` picks the stock Brainstorm profile. The route only accepts brainstorm-role profiles. */
+function buddyProfileArg(args) {
+  const profile = clean(args.profile).slice(0, 120);
+  if (profile) return profile;
+  const provider = clean(args.provider).toLowerCase();
+  if (!provider) return "";
+  if (provider.startsWith("claude")) return "Brainstorm - Claude";
+  if (provider.startsWith("gemini") || provider.startsWith("antigravity")) return "Brainstorm - Gemini";
+  throw new Error(`cannot restart a Buddy: unknown provider "${provider}" (use claude or gemini, or --profile "<Brainstorm profile>")`);
+}
+
+/** The watch-set registry (server/watch-sets.mjs, W1). Injected via ctx.watchSets for tests; lazy-imported at runtime. */
+async function getWatchSets(ctx) {
+  if (ctx.watchSets) return ctx.watchSets;
+  try {
+    const load = ctx.loadWatchSets ?? (() => import("../watch-sets.mjs"));
+    return await load();
+  } catch {
+    throw new Error("watch sets unavailable");
+  }
+}
+
+/**
+ * Register / list / cancel a watch set (W2). `vs watch add <agent...> [--suite] [--restart] [--stall <min>]` lets a lead
+ * register the agents + its suite run + a restart it is waiting on, then end its turn; a server-side watcher pings once when
+ * the set completes or stalls. Auth mirrors handoff_lead / restart_buddy: the owner defaults to the resolved caller identity,
+ * workers are refused, and only the same-Squad Overlord (role=lead on the hub lane) may name a different owner (and only an
+ * agent of its own Squad). Identity is read from the runner record, never from env/args.
+ */
+async function watchTool(ctx, args = {}) {
+  const action = clean(args.action);
+  if (!["add", "list", "cancel"].includes(action)) throw new Error("watch action must be one of: add, list, cancel");
+  const callerId = clean(ctx.identity.agentId);
+  const callerRole = clean(ctx.identity.role).toLowerCase();
+  const teams = ctx.teams ?? loadTeamsRegistry();
+  // agentOf keeps a `{ agent: null }` wrapper when the backend has no record; normalize to null so a missing agent is detectable.
+  const fetchAgent = async (id) => {
+    const a = agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
+    return a && a.id ? a : null;
+  };
+
+  // Resolve the caller's identity from its runner record (never env/args), exactly like handoff_lead / restart_buddy.
+  let caller = null;
+  if (callerId) caller = await fetchAgent(callerId);
+  const recRole = caller ? effectiveAgentRole(caller) : "";
+  // Workers and digest agents get no watch verb (a digest worker is not a lead/Buddy and must never register watches).
+  if (recRole === "worker" || recRole === "digest" || (!caller && (!callerRole || callerRole === "worker"))) {
+    throw new Error("workers may not use the watch verb");
+  }
+  // Only a live lead or Buddy may watch; retired/former-lead/closed/unknown callers are refused outright.
+  if (!caller || !isLiveAgent(caller) || (recRole !== "lead" && recRole !== "brainstorm")) {
+    throw new Error("only a live lead or Buddy may use the watch verb");
+  }
+  // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
+  const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+  const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
+  if (!callerTeam || !callerLane || callerLane.team.id !== callerTeam.id) {
+    throw new Error(`only a live lead or Buddy may use the watch verb: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
+  }
+  const team = callerTeam.id;
+  let lane = callerLane.lane.id;
+  const isOverlord = recRole === "lead" && isHubLane(callerTeam, callerLane.lane);
+
+  // owner defaults to the caller; only the same-Squad Overlord may name a different one (and only a live lead/Buddy of its own Squad).
+  let owner = callerId;
+  const requestedOwner = clean(pick(args, "owner"));
+  if (requestedOwner && requestedOwner !== callerId) {
+    if (!isOverlord) throw new Error("only the same-Squad Overlord may set a different owner");
+    const ownerRec = await fetchAgent(requestedOwner);
+    if (!ownerRec) throw new Error(`cannot watch for an unknown agent "${requestedOwner}"`);
+    if (!isLiveAgent(ownerRec) || !["lead", "brainstorm"].includes(effectiveAgentRole(ownerRec))) {
+      throw new Error(`cannot watch for a retired, closed, worker or digest agent "${requestedOwner}"`);
+    }
+    const ownerTeam = findTeamInRegistry(clean(ownerRec.labels?.team), teams);
+    if (!ownerTeam || ownerTeam.id !== team) throw new Error("only the same-Squad Overlord may set a different owner in its own Squad");
+    owner = requestedOwner;
+    const ownerLane = findLaneInRegistry(clean(ownerRec.labels?.lane || ownerRec.labels?.lead), teams, ownerTeam.id);
+    if (ownerLane) lane = ownerLane.lane.id;
+  }
+
+  const ws = await getWatchSets(ctx);
+
+  if (action === "cancel") {
+    const id = clean(pick(args, "id"));
+    if (!id) throw new Error("id is required to cancel a watch");
+    return ws.cancelWatch(id, callerId);
+  }
+  if (action === "list") {
+    const opts = {};
+    if (owner) opts.owner = owner;
+    if (team) opts.team = team;
+    return ws.listWatches(opts);
+  }
+  // add
+  const items = [];
+  const seen = new Set();
+  const rawAgents = Array.isArray(args.agents) ? args.agents : args.agents !== undefined ? [args.agents] : [];
+  for (const a of rawAgents) {
+    const ref = clean(a);
+    if (!ref) continue;
+    if (!isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    items.push({ kind: "agent", ref });
+  }
+  if (args.suite) items.push({ kind: "suite", ref: "" });
+  if (args.restart) items.push({ kind: "restart", ref: "" });
+  if (!items.length) throw new Error("a watch set needs at least one item (agents, --suite or --restart)");
+  const stallMin = args.stallMin === undefined ? 15 : Number(args.stallMin);
+  if (!Number.isFinite(stallMin) || stallMin <= 0) throw new Error("stallMin must be a positive number of minutes");
+  return ws.addWatch({ owner, team, lane, items, stallMin });
 }
 
 async function postBuddyRestartToServer(body, ctx) {
@@ -579,9 +705,14 @@ export const VS_TOOLS = {
     run: handoffLead,
   },
   restart_buddy: {
-    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason. Returns {id, oldBuddyId, lane, team, title}.",
-    inputSchema: obj({ lane: S, reason: S }),
+    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief), or start the lane's first Buddy when it has none (a new pinned lane). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason; optional profile (a Brainstorm profile name) or provider (claude|gemini). Returns {id, oldBuddyId, lane, team, title, started?}.",
+    inputSchema: obj({ lane: S, reason: S, profile: S, provider: S }),
     run: restartBuddy,
+  },
+  watch: {
+    description: "Register, list or cancel a watch set: a lead registers the agents + its suite run + a restart it is waiting on and ends its turn; a server-side watcher pings once when the whole set completes or stalls (stallMin, default 15). Default owner is the caller; workers are refused; only the same-Squad Overlord may set a different owner (within its own Squad). Returns {id} for add, the watch list for list, and a cancel confirmation for cancel.",
+    inputSchema: obj({ action: { type: "string", enum: ["add", "list", "cancel"] }, agents: { type: "array", items: S }, suite: { type: "boolean" }, restart: { type: "boolean" }, stallMin: { type: "number" }, id: S, owner: S }, ["action"]),
+    run: watchTool,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },
   cancel: { description: "Interrupt an agent's current turn.", inputSchema: obj({ id: S }, ["id"]), run: cancelTool },

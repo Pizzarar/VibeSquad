@@ -6096,12 +6096,15 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   background: var(--bg);
   color: var(--text);
   position: relative;
+  --phone-safe-top: env(safe-area-inset-top, 0px);
 }
+/* Android WebViews often report a 0 inset; floor it so the bar never hides under the notification bar. */
+.phone-cockpit[data-android="true"] { --phone-safe-top: max(env(safe-area-inset-top, 0px), 28px); }
 .phone-bar {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 10px;
+  padding: calc(8px + var(--phone-safe-top, 0px)) 10px 8px;
   background: var(--panel);
   border-bottom: 1px solid var(--line);
   box-shadow: 0 1px 0 var(--violet-dim), 0 6px 14px -8px var(--hot-pink-dim);
@@ -6139,7 +6142,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .phone-bug-slot { display: inline-flex; align-items: center; }
 .phone-squad-menu, .phone-drawer {
   position: absolute;
-  top: 58px;
+  top: calc(58px + var(--phone-safe-top, 0px));
   right: 8px;
   z-index: 20;
   min-width: 220px;
@@ -6168,6 +6171,12 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   text-align: left;
 }
 .phone-squad-opt.on { border-color: var(--violet); background: var(--violet-dim); }
+.phone-lanes { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.phone-lanes-head { font-size: 0.75rem; letter-spacing: 0.08em; color: var(--muted, #8a8a9a); }
+.phone-lane-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; }
+.phone-lane-row.live { border-color: var(--violet); }
+.phone-lane-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.phone-lane-state { font-size: 0.8rem; opacity: 0.7; white-space: nowrap; }
 .phone-health-line { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .phone-restart .btn, .phone-pair-slot .btn { min-height: 44px; width: 100%; }
 .phone-pair-slot:empty { display: none; }
@@ -6219,7 +6228,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 
 /* ---- E3 phone bug sheet (bottom sheet over a dimmed scrim) ---- */
 .phone-bug-scrim { position: fixed; inset: 0; z-index: 60; background: rgba(0, 0, 0, 0.45); }
-.phone-bug-sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 90%; overflow-y: auto; display: grid; gap: 8px; padding: 12px; background: var(--panel); border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; }
+.phone-bug-sheet { position: fixed; left: 0; right: 0; bottom: 0; max-height: 90%; overflow-y: auto; display: grid; gap: 8px; padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px)); background: var(--panel); border-top: 1px solid var(--line); border-radius: 12px 12px 0 0; }
 .phone-bug-sheet .btn { min-height: 44px; }
 
 /* ---- E2 decision card buttons ---- */
