@@ -672,21 +672,33 @@ function appOrigin(req) {
   return TAURI_ORIGINS.has(o) ? o : null;
 }
 
-function sendHtml(res, code, title, message, back = null) {
+function sendHtml(res, code, title, message, back = null, extra = "") {
   res.statusCode = code;
   res.setHeader("content-type", "text/html; charset=utf-8");
   setNoFraming(res);
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
-  res.end(htmlPage(title, message, back));
+  res.end(htmlPage(title, message, back, extra));
+}
+
+/**
+ * Recovery actions for the APK on PC-served failure pages. The WebView never completes a navigation from this https origin
+ * back to http://tauri.localhost, so these pages carry no link to it: a vibesquad://pair deep link (host only, no token)
+ * reopens the app's pair screen, and Back (history) returns to the app screen that offers Forget. Browsers get nothing.
+ */
+function apkRecoveryHtml(req) {
+  if (!appOrigin(req)) return "";
+  const host = String(req.headers?.host ?? "");
+  const link = /^[a-z0-9.:\[\]-]{1,255}$/i.test(host) ? `vibesquad://pair?host=${encodeURIComponent(host)}` : "vibesquad://pair";
+  return `<p><a href="${link}" style="color:#ff2a85">Pair again</a></p><p><a href="#" onclick="history.back();return false" style="color:#ff2a85">Back to the app (use Forget this PC there)</a></p>`;
 }
 
 /** `back` = { href, label, auto }: a link to the APK's pair screen (auto also redirects there at once). */
-export function htmlPage(title, message, back = null) {
+export function htmlPage(title, message, back = null, extra = "") {
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title>${back?.auto ? `<meta http-equiv="refresh" content="0;url=${back.href}">` : ""}
 <style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#070710;color:#eef2ff;font-family:"JetBrains Mono",Consolas,monospace}
 .card{max-width:480px;margin:16px;padding:22px;background:#111326;border:1px solid #ff2a85;box-shadow:0 0 24px #ff2a8530}
 h1{margin:0 0 10px;font-size:18px;color:#ff2a85;letter-spacing:1px;text-transform:uppercase}p{margin:0;line-height:1.5;color:#828ba8}</style></head>
-<body><div class="card"><h1>${title}</h1><p>${message}</p>${back ? `<p><a href="${back.href}" style="color:#ff2a85">${back.label}</a></p>` : ""}</div></body></html>`;
+<body><div class="card"><h1>${title}</h1><p>${message}</p>${back ? `<p><a href="${back.href}" style="color:#ff2a85">${back.label}</a></p>` : ""}${extra}</div></body></html>`;
 }
 
 export const UNPAIRED_MESSAGE = "Unpaired device — open VibeSquad on your PC, click Pair a device, install the CA certificate if needed, and scan the QR code.";
@@ -695,8 +707,7 @@ export const UNPAIRED_MESSAGE = "Unpaired device — open VibeSquad on your PC, 
 export function sendUnpaired(req, res) {
   const path = (req.url ?? "").split("?")[0];
   if (path.startsWith("/__vibesquad/") || String(req.headers.accept ?? "").includes("application/json")) return sendJson(res, 401, { error: "unpaired device" });
-  const app = appOrigin(req);
-  sendHtml(res, 401, "Unpaired device", UNPAIRED_MESSAGE, app && { href: `${app}/#unpaired`, label: "Back to the app to pair again", auto: true });
+  sendHtml(res, 401, "Unpaired device", UNPAIRED_MESSAGE, null, apkRecoveryHtml(req));
 }
 
 /**
@@ -813,8 +824,7 @@ export function handlePairRedeem(req, res) {
   codes.delete(rawCode);
   if (!exp || exp <= Date.now()) {
     recordPairFailure(ip);
-    const app = appOrigin(req);
-    return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.", app && { href: `${app}/#failed`, label: "Back to the app", auto: true });
+    return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.", null, apkRecoveryHtml(req));
   }
   pairFailuresByIp.delete(ip);
   const token = randomBytes(32).toString("base64url");
@@ -828,7 +838,7 @@ export function handlePairRedeem(req, res) {
   // from being sent. Land on the same-site /__vibesquad/enter page (a 200, which ends the chain); its client-side hop to "/"
   // is same-site and carries vs_device. The APK saves its session before leaving (RemotePairScreen), not on a return trip.
   const app = appOrigin(req);
-  res.setHeader("location", app ? `/__vibesquad/enter?${new URLSearchParams({ paired: "1", vs_app: app }).toString()}` : "/__vibesquad/enter");
+  res.setHeader("location", app ? `/__vibesquad/enter?${new URLSearchParams({ vs_app: app }).toString()}` : "/__vibesquad/enter");
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   res.end();
 }

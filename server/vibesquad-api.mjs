@@ -388,8 +388,8 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
     return res.end();
   }
   const full = getAuthStatus(rootDir);
-  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
+  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, distReady: full.distReady, caFingerprint: full.caFingerprint });
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
