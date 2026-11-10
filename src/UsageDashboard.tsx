@@ -4,6 +4,7 @@ import { AngelBezel } from "./AngelBezel";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
 import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
+import { fetchJsonTimeout } from "./fetchTimeout";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -11,6 +12,7 @@ import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 const POLL_MS = 60_000;
 const MIN_GAP_MS = 10_000;
 const REVIEW_POLL_MS = 5_000;
+const USAGE_TIMEOUT_MS = 45_000; // a busy runtime can answer slowly; past this the panel shows an error and the next poll retries
 const HIGH_REVIEW_ROUNDS = 2;
 const HIGH_FIX_RATE = 0.25;
 
@@ -220,9 +222,7 @@ export function useUsage(): { data: UsageData | null; error: string | null; refr
       inflight = true;
       last = t;
       try {
-        const res = await fetch("/__vibesquad/providers/usage");
-        if (!res.ok) throw new Error(`usage ${res.status}`);
-        const j = await res.json();
+        const j = (await fetchJsonTimeout("/__vibesquad/providers/usage", USAGE_TIMEOUT_MS)) as UsageData;
         if (alive) { setData(j); setError(null); }
       } catch (e) {
         if (alive) setError(String((e as Error)?.message ?? e));

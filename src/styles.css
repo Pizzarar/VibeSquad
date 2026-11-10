@@ -4064,8 +4064,17 @@ html, body, #root { overflow-x: hidden; }
 .squad-home-portrait:not(:first-child) { margin-left: -10px; }
 .squad-home-portrait:hover, .squad-home-portrait:focus-visible { z-index: 2; transform: translateY(-2px); }
 .squad-home-portrait-pip { position: absolute; right: -2px; bottom: -2px; display: flex; align-items: center; gap: 2px; }
-.squad-home-lead-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.squad-home-lead-line, .squad-home-summary-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 520px) { .squads-home-grid, .pin-grid { grid-template-columns: 1fr; } }
+/* Squads home below ~1000 css px of layout height (SQUADS_COMPACT_BELOW_H: window height / app zoom): one strip row of summary tiles with the pager in the title row, so the Usage limit cards stay above the 1080 fold. */
+.squads-home-pager-wrap.compact { gap: var(--sp-2); }
+.squads-home-head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); min-width: 0; }
+.squads-home-head .squads-home-pager { flex-wrap: nowrap; gap: var(--sp-2); }
+.squads-home-head .squads-pager-btn { padding-block: 0; }
+.squads-home-pager-wrap.compact .squads-home-grid { --squads-card-min: 11rem; gap: var(--sp-2); }
+.squad-home-tile.compact { gap: var(--sp-1); padding-inline: var(--sp-3); padding-bottom: var(--sp-2); }
+.squads-home-pager-wrap.compact .squad-home-tile.pin-plus { min-height: 0; flex-direction: row; gap: var(--sp-2); }
+.squads-home-pager-wrap.compact .pin-plus-icon { display: none; }
 
 /* Chat inline code: plain code is muted, only file links stay cyan + clickable */
 .tl-icode { color: var(--muted); cursor: text; }
@@ -4844,6 +4853,9 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-zone.is-slam-fx { transform: var(--slam-tv-tf, none); transform-origin: 50% 100%; }
 .sky-zone.sky-chat-panel.is-slam-fx { transform: var(--slam-swing, translateX(0)) var(--slam-panel-tf, translateX(0)); transform-origin: 0 100%; backface-visibility: hidden; will-change: transform; }
 .sky-zone.sky-chat-panel.is-slam-closing { pointer-events: none; }
+/* RS-d: at the hit the window BODY (its fill + the chat inside) goes see-through so the Overlord's smacked face shows through, then fades back in; the bezel frame stays solid. --slam-body-a is set only while below 1. */
+.sky-zone.sky-chat-panel.is-slam-fx { background: color-mix(in srgb, var(--bg) calc(var(--slam-body-a, 1) * 100%), transparent); }
+.sky-zone.sky-chat-panel.is-slam-fx .sky-crt-body { opacity: var(--slam-body-a, 1); background: color-mix(in srgb, var(--bg) calc(var(--slam-body-a, 1) * 100%), transparent); }
 .sky-slam-fx { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; }
 .sky-slam-puff { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
 /* The smear rides inside the swinging window on its outer (right) edge, so it rotates with it; the cells are art px, the wrapper is scaled by k. */

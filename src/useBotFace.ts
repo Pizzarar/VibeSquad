@@ -1,6 +1,7 @@
 // Shared bot-face plumbing (docs/PLAN_SKY_GODS_C2B.md G2): theme, reduced-motion, image probing, faces.json
 // loading and the talk/needs/blink/idle mode logic. The tower no longer draws faces; the sky zones do.
 import { useEffect, useRef, useState, type RefObject } from "react";
+import { imageRetryDelay } from "./fetchTimeout";
 import {
   BLINK_MS,
   faceFrame,
@@ -104,60 +105,72 @@ export function usePrefersReducedMotion(): boolean {
 }
 
 /** True once an image at `url` loads (per theme); resets to false on error so the caller falls back. A null url is "absent". */
+const loadedImages = new Set<string>(); // module scope: a remount (or a second panel) starts from "loaded", not blank
 export function useImageOk(url: string | null): boolean {
-  const [ok, setOk] = useState(false);
+  // The state names the url that loaded, so the answer is derived per render: a theme switch (new url) is false until that url loads, never the previous theme's "ok".
+  const [okUrl, setOkUrl] = useState<string | null>(null);
   useEffect(() => {
-    if (!url) {
-      setOk(false);
-      return;
-    }
+    if (!url || loadedImages.has(url)) return;
     let alive = true;
-    const img = new Image();
-    img.onload = () => alive && setOk(true);
-    img.onerror = () => alive && setOk(false);
-    img.src = url;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const probe = (attempt: number) => {
+      const img = new Image();
+      img.onload = () => {
+        loadedImages.add(url);
+        if (alive) setOkUrl(url);
+      };
+      img.onerror = () => {
+        if (!alive) return;
+        setOkUrl(null);
+        const d = imageRetryDelay(attempt); // one failed probe (busy runtime) must not hide art that exists
+        if (d != null) timer = setTimeout(() => alive && probe(attempt + 1), d);
+      };
+      img.src = url;
+    };
+    probe(0);
     return () => {
       alive = false;
+      clearTimeout(timer);
     };
   }, [url]);
-  return ok;
+  return !!url && (loadedImages.has(url) || okUrl === url);
 }
 
 export const FACE_URL = (bot: FaceBot, theme: Theme) => `/office/face-${bot}-${theme}.png`;
 
-/** faces.json, loaded once; missing/invalid → null (callers fall back to a plain bezel). */
-export function useFacesModel(): FacesModel | null {
-  const [faces, setFaces] = useState<FacesModel | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    fetch("/office/faces.json")
+/** Parsed models by url, module scope: the first hook to ask fetches, every later mount/consumer reads it synchronously. Failures are not cached (a remount retries). */
+const jsonModels = new Map<string, unknown>();
+const jsonInflight = new Map<string, Promise<unknown>>();
+function loadJsonModel<T>(url: string, validate: (json: unknown) => { ok: true; value: T } | { ok: false }): Promise<T | null> {
+  let p = jsonInflight.get(url) as Promise<T | null> | undefined;
+  if (!p) {
+    p = fetch(url)
       .then((r) => (r.ok ? r.json() : undefined))
       .catch(() => undefined)
       .then((json) => {
-        if (cancelled) return;
-        const f = validateFaces(json);
-        setFaces(f.ok ? f.value : null);
+        const m = validate(json);
+        if (m.ok) jsonModels.set(url, m.value);
+        jsonInflight.delete(url);
+        return m.ok ? m.value : null;
       });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  return faces;
+    jsonInflight.set(url, p);
+  }
+  return p;
 }
 
-/** An optional @art json, fetched once; missing/invalid → null so the caller keeps its CSS fallback. */
+/** An optional @art json, fetched once per page; missing/invalid → null so the caller keeps its CSS fallback. */
 function useJsonModel<T>(url: string, validate: (json: unknown) => { ok: true; value: T } | { ok: false }): T | null {
-  const [model, setModel] = useState<T | null>(null);
+  const [model, setModel] = useState<T | null>(() => (jsonModels.get(url) as T | undefined) ?? null);
   useEffect(() => {
     let cancelled = false;
-    fetch(url)
-      .then((r) => (r.ok ? r.json() : undefined))
-      .catch(() => undefined)
-      .then((json) => {
-        if (cancelled) return;
-        const m = validate(json);
-        setModel(m.ok ? m.value : null);
-      });
+    const hit = jsonModels.get(url) as T | undefined;
+    if (hit) {
+      setModel(hit);
+      return;
+    }
+    void loadJsonModel(url, validate).then((m) => {
+      if (!cancelled) setModel(m);
+    });
     return () => {
       cancelled = true;
     };
@@ -165,6 +178,9 @@ function useJsonModel<T>(url: string, validate: (json: unknown) => { ok: true; v
   }, [url]);
   return model;
 }
+
+/** faces.json, loaded once; missing/invalid → null (callers fall back to a plain bezel). */
+export const useFacesModel = (): FacesModel | null => useJsonModel("/office/faces.json", validateFaces);
 
 /** sky-crt.json, loaded once; missing/invalid → null (the sky zones keep the CSS bezel). */
 export const useSkyCrtModel = (): SkyCrtModel | null => useJsonModel(SKY_CRT_JSON_URL, validateSkyCrt);
@@ -285,7 +301,7 @@ export function useBotFace(
 ): BotFace {
   const { theme, reduced, force } = opts;
   const sheetUrl = FACE_URL(bot, theme);
-  const sheetOk = useImageOk(faces?.bots[bot] ? sheetUrl : null);
+  const sheetOk = useImageOk(sheetUrl); // parallel with faces.json (the frame still waits for both below)
 
   const [tick, setTick] = useState(0);
   useEffect(() => {

@@ -441,6 +441,7 @@ export function SkyZones({
   const tvTf = slamTransform(slam.shakeDx, slam.squash, dpr);
   if (tvTf) slamStyle["--slam-tv-tf"] = tvTf;
   if (tvTf) slamStyle["--slam-panel-tf"] = tvTf;
+  if (slam.body !== null && slam.body < 1) slamStyle["--slam-body-a"] = String(slam.body); // RS-d: the window body is see-through at the hit and fades back in; the frame stays solid
   // Esc, or a click anywhere outside the sky, closes whatever is open. Clicks inside are the faces' / chat's / ✕'s own handlers.
   useEffect(() => {
     const down = (e: PointerEvent) => {
