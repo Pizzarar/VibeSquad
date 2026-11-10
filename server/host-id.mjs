@@ -31,7 +31,7 @@ export const mintHostId = () => randomBytes(16).toString("base64url");
  * Reads the host id, creating it on first use. Creation is atomic: an exclusive create (`wx`) means two servers
  * starting at once both end up with whichever id landed first; a malformed file is replaced via tmp + rename.
  */
-export function ensureHostId(file = hostIdPath()) {
+export function ensureHostId(file = hostIdPath(), { readRetries = 5 } = {}) {
   const existing = readHostId(file);
   if (existing) return existing;
   mkdirSync(join(file, ".."), { recursive: true });
@@ -42,8 +42,13 @@ export function ensureHostId(file = hostIdPath()) {
   } catch (e) {
     if (e?.code !== "EEXIST") throw e;
   }
-  const raced = readHostId(file);
-  if (raced) return raced;
+  // Another process just created it and may still be writing: give it ~100 ms before calling it malformed
+  // (server/local-token.mjs does the same), so both servers report the id that is actually on disk.
+  for (let i = 0; i < readRetries; i++) {
+    const raced = readHostId(file);
+    if (raced) return raced;
+    if (typeof SharedArrayBuffer !== "undefined") Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
   // Exists but malformed (truncated write, hand edit): replace it atomically.
   const tmp = `${file}.${process.pid}.tmp`;
   writeFileSync(tmp, id + "\n", { encoding: "utf8", mode: 0o644 });

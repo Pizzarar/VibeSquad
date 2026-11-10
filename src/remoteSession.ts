@@ -11,6 +11,8 @@
  */
 export type StoredRemoteHost = {
   hostId: string;
+  /** The PC's VS CA SHA-256 (lowercase hex) this device pinned at pairing, or "" (plain browser: the OS trust store holds it). */
+  caFp?: string;
   label: string;
   meshnetHost?: string;
   relay?: { endpoint: string; pubKey: string };
@@ -194,8 +196,18 @@ function validHost(h: unknown): StoredRemoteHost | null {
       : null;
   if (!meshnetHost && !relay) return null; // no way to reach it
   const hostId = normalizeHostId(x.hostId);
+  const caFp = normalizeFp(typeof x.caFp === "string" ? x.caFp : "") ?? "";
   const label = typeof x.label === "string" && x.label.trim() ? x.label.trim().slice(0, 60) : meshnetHost || relay!.endpoint;
-  return { hostId, label, ...(meshnetHost ? { meshnetHost } : {}), ...(relay ? { relay } : {}), savedAt: x.savedAt };
+  return { hostId, ...(caFp ? { caFp } : {}), label, ...(meshnetHost ? { meshnetHost } : {}), ...(relay ? { relay } : {}), savedAt: x.savedAt };
+}
+
+/**
+ * Two saved entries are the same PC only when the host id AND the pinned CA fingerprint match. The id alone is public
+ * (any unpaired caller can read it from /api/auth/status) and a cloned ~/.vibesquad gives two PCs one id, so it must
+ * never evict another saved host by itself.
+ */
+export function samePc(a: { hostId: string; caFp?: string }, b: { hostId: string; caFp?: string }): boolean {
+  return Boolean(a.hostId) && a.hostId === b.hostId && Boolean(a.caFp) && a.caFp === b.caFp;
 }
 
 /**
@@ -249,18 +261,29 @@ function writeSession(local: GetSet, s: StoredRemoteSession): void {
 }
 
 /**
- * Remembers `host` as the active pairing. Pass `hostId` when /api/auth/status already reported it. An entry for the
- * same host id (or, lacking one, the same address) is updated in place, so re-pairing never duplicates a host.
+ * Remembers `host` as the active pairing. Pass `hostId` when /api/auth/status already reported it and `caFp` (the
+ * pinned CA fingerprint) when the device pinned one. An entry for the same address, or for the same PC (host id AND
+ * CA fingerprint), is updated in place, so re-pairing never duplicates a host; the id alone never folds anything.
  */
-export function saveSession(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date(), hostId: unknown = ""): void {
+export function saveSession(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date(), hostId: unknown = "", caFp: unknown = ""): void {
   if (!local) throw new Error("remote: this browser has no localStorage");
   const h = normalizeHost(host);
   if (!h) throw new Error("remote: not a valid server address");
   const id = normalizeHostId(hostId);
+  const fp = normalizeFp(typeof caFp === "string" ? caFp : "") ?? "";
   const prev = readSession(local);
-  const hosts = prev?.hosts.filter((x) => !(id && x.hostId === id) && x.meshnetHost !== h) ?? [];
-  const same = prev?.hosts.find((x) => (id && x.hostId === id) || x.meshnetHost === h);
-  const entry: StoredRemoteHost = { ...same, hostId: id || same?.hostId || "", label: same?.label && same.label !== same.meshnetHost ? same.label : h, meshnetHost: h, savedAt: now.toISOString() };
+  const me = { hostId: id, caFp: fp };
+  const same = prev?.hosts.find((x) => x.meshnetHost === h) ?? prev?.hosts.find((x) => samePc(x, me));
+  const hosts = prev?.hosts.filter((x) => x !== same && x.meshnetHost !== h && !samePc(x, me)) ?? [];
+  const entry: StoredRemoteHost = {
+    ...same,
+    hostId: id || same?.hostId || "",
+    label: same?.label && same.label !== same.meshnetHost ? same.label : h,
+    meshnetHost: h,
+    savedAt: now.toISOString(),
+  };
+  if (fp) entry.caFp = fp;
+  else if (id && same?.hostId && same.hostId !== id) delete entry.caFp; // a new PC behind the same address: the old pin is not its pin
   writeSession(local, { v: 3, activeHostId: entry.hostId, hosts: [entry, ...hosts] });
 }
 
@@ -268,6 +291,7 @@ export function saveSession(host: string, local: GetSet | null = browserStorage(
  * Fills in the host id once the PC reported it (/api/auth/status `hostId`) for the host at `host`. Returns true when
  * the stored session changed. A different id for an already-known host means the PC's ~/.vibesquad was reset: the
  * entry follows the PC (the CA pin and device cookie are checked separately, so nothing is trusted on the id alone).
+ * Another entry is folded into this one only when it is the same PC: same id AND same pinned CA fingerprint.
  */
 export function setSessionHostId(host: string, hostId: unknown, local: GetSet | null = browserStorage("localStorage")): boolean {
   const id = normalizeHostId(hostId);
@@ -277,8 +301,8 @@ export function setSessionHostId(host: string, hostId: unknown, local: GetSet | 
   const i = s.hosts.findIndex((x) => x.meshnetHost === h);
   if (i < 0 || s.hosts[i].hostId === id) return false;
   const wasActive = activeHost(s) === s.hosts[i];
-  const merged = { ...s.hosts[i], hostId: id };
-  const hosts = s.hosts.filter((x, j) => j === i || x.hostId !== id); // another entry with this id is the same PC: fold it
+  const merged: StoredRemoteHost = { ...s.hosts[i], hostId: id };
+  const hosts = s.hosts.filter((x, j) => j === i || !samePc(x, merged));
   hosts[hosts.indexOf(s.hosts[i])] = merged;
   writeSession(local, { v: 3, activeHostId: wasActive ? id : s.activeHostId, hosts });
   return true;

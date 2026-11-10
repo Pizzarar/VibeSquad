@@ -112,9 +112,10 @@ export function RemotePairScreen() {
     }
     setBusy(true);
     setError(null);
+    let pinnedFp = fpN ?? "";
     try {
       // Native: fetching + pinning the CA is also the reachability check. Only the CA matching the fingerprint is trusted, for this host only.
-      if (t) await t.pin(hostN, fpN!);
+      if (t) pinnedFp = (await t.pin(hostN, fpN!)) || pinnedFp;
       else await probe(hostN);
     } catch (e) {
       setError(/fingerprint/i.test(String((e as Error)?.message)) ? remoteError("unknown", (e as Error).message) : mapRemoteError(e));
@@ -125,7 +126,7 @@ export function RemotePairScreen() {
     // a stale session that the next launch drops: the reopen probe checks the PC still recognizes this phone.
     // The host id (E4a) is best effort here: the status route answers unpaired callers, but a plain browser without
     // CORS gets "" and fills it in on a later reconnect.
-    saveSession(hostN, undefined, undefined, await fetchHostId(hostN));
+    saveSession(hostN, undefined, undefined, await fetchHostId(hostN), pinnedFp);
     // Android Back from the PC's UI should land on this form (with Forget), not bounce straight back to the PC.
     try {
       sessionStorage.setItem(OPENED_KEY, "1");

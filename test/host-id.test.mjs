@@ -150,3 +150,26 @@ describe("hostId on the /__vibesquad/teams envelope", () => {
     assert.doesNotMatch(src, /hostId/);
   });
 });
+
+describe("X1 R1 L1: a concurrent first start waits for the other writer before replacing the file", () => {
+  test("an empty file (other process opened it, not yet written) is re-read ~5 x 20 ms before being called malformed", () => {
+    const dir = mkdtempSync(join(tmpdir(), "vs-host-id-wait-"));
+    try {
+      const file = join(dir, "host-id");
+      writeFileSync(file, ""); // what `wx` leaves between open and write in the other process
+      const t0 = Date.now();
+      const id = hostId.ensureHostId(file);
+      const waited = Date.now() - t0;
+      assert.match(id, ID_RE);
+      assert.ok(waited >= 80, `waited ${waited} ms for the other writer (5 reads, 20 ms apart)`);
+      assert.equal(readFileSync(file, "utf8"), id + "\n");
+      writeFileSync(file, "");
+      const t1 = Date.now();
+      hostId.ensureHostId(file, { readRetries: 0 });
+      assert.ok(Date.now() - t1 < 60, "no wait when retries are off");
+      assert.match(readFileSync(new URL("../server/host-id.mjs", import.meta.url), "utf8"), /for \(let i = 0; i < readRetries; i\+\+\)/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

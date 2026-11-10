@@ -156,7 +156,7 @@ describe("Kotlin trust guards and build wiring", () => {
   test("the pair screen pins through the bridge before redeeming and forgets on Forget", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /t\.pin\(hostN, fpN!\)/);
-    assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN, undefined, undefined, await fetchHostId(hostN))"));
+    assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN, undefined, undefined, await fetchHostId(hostN), pinnedFp)"));
     assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 3);
   });
 

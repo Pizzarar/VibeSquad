@@ -3,7 +3,7 @@
 // trusting its in-memory device list: a token revoked on disk is refused on its very next request.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -240,5 +240,117 @@ describe("vs pair (headless)", () => {
     assert.match(text, /Host id:\s+h{22}/);
     assert.match(text, /QR\n$/);
     assert.ok(!text.includes("<svg"));
+  });
+});
+
+describe("X1 R1 H1: an external revoke cuts a device's live SSE stream, not only its next request", () => {
+  test("a real /__vibesquad/runner/events stream over the TLS listener closes within ~2 s of `vs devices revoke` in another process", async () => {
+    process.env.VIBESQUAD_MESHNET_IP = "100.64.0.7";
+    const { createMeshnetMux } = await import("../server/serve.mjs");
+    const { request: httpsRequest } = await import("node:https");
+    const token = pairDevice("Streaming phone", "100.64.0.50");
+    const dev = auth.listDevices().find((d) => d.name === "Streaming phone");
+    const { mux } = createMeshnetMux({ port: 4180, meshnetHost: "", meshnetIp: "100.64.0.7", tls: auth.getTls() });
+    await new Promise((ok) => mux.listen(0, "127.0.0.1", ok));
+    try {
+      const port = mux.address().port;
+      const opened = await new Promise((ok, fail) => {
+        const req = httpsRequest(
+          { host: "127.0.0.1", port, path: "/__vibesquad/runner/events", method: "GET", rejectUnauthorized: false, headers: { host: "100.64.0.7:4180", cookie: `vs_device=${token}`, accept: "text/event-stream" } },
+          (res) => ok({ req, res }),
+        );
+        req.on("error", fail);
+        req.end();
+      });
+      assert.equal(opened.res.statusCode, 200, "the paired device's stream opens");
+      assert.match(String(opened.res.headers["content-type"]), /text\/event-stream/);
+      await new Promise((ok) => opened.res.once("data", ok)); // ": ok" preamble: the stream is live
+      assert.equal(auth.hasDeviceSockets(dev.id), true, "authenticate() registered the stream's socket");
+      const closed = new Promise((ok) => {
+        opened.res.once("close", () => ok("close"));
+        opened.res.once("end", () => ok("end"));
+      });
+      ageDevicesFile();
+      const r = vs(["devices", "revoke", dev.id]);
+      assert.equal(r.status, 0, r.err);
+      // No further request from the phone: the server's 1 s devices.json watch must notice and destroy the socket.
+      const how = await Promise.race([closed, new Promise((_, fail) => setTimeout(() => fail(new Error("stream still open 4 s after revoke")), 4000))]);
+      assert.ok(how === "close" || how === "end");
+      assert.equal(auth.hasDeviceSockets(dev.id), false);
+      assert.equal(authAs(token), null);
+    } finally {
+      await new Promise((ok) => mux.close(ok));
+      delete process.env.VIBESQUAD_MESHNET_IP;
+    }
+  });
+});
+
+describe("X1 R1 M1: devices.json has one locked writer (server/file-lock.mjs withFileLockSync)", () => {
+  test("a held <devices.json>.lock makes `vs devices revoke` wait and fail without writing; a dead holder is reaped", () => {
+    const token = pairDevice("Locked out", "100.64.0.60");
+    const victim = auth.listDevices().find((d) => d.name === "Locked out");
+    const lock = `${devicesFile}.lock`;
+    const before = readFileSync(devicesFile, "utf8");
+    // Held by a live process (this test runner's parent) and fresh: the CLI must not steal it.
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
+    try {
+      const r = vs(["devices", "revoke", victim.id]);
+      assert.equal(r.status, 1);
+      assert.match(r.err, /Timed out .* waiting for lock/);
+      assert.equal(readFileSync(devicesFile, "utf8"), before, "nothing written while the lock is held");
+      assert.ok(authAs(token), "still paired");
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    // Held by a dead pid: reaped, and the revoke goes through.
+    writeFileSync(lock, JSON.stringify({ pid: 999_999_999, startedAt: Date.now() - 60_000 }));
+    const r2 = vs(["devices", "revoke", victim.id]);
+    assert.equal(r2.status, 0, r2.err);
+    assert.equal(authAs(token), null);
+    assert.ok(!existsSync(lock), "the CLI released the lock it took over");
+  });
+
+  test("the server's own writes take the same lock (a pairing is refused, not lost, while another writer holds it)", () => {
+    const lock = `${devicesFile}.lock`;
+    const before = readFileSync(devicesFile, "utf8");
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
+    try {
+      auth.resetPairRateLimitForTest();
+      const code = auth.createPairCode();
+      const res = fakeRes();
+      auth.handlePairRedeem({ url: `/pair?code=${code}&name=Blocked`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: "100.64.0.61" }, on() {} }, res);
+      assert.equal(res.statusCode, 503, res.body);
+      assert.equal(res.headers["set-cookie"], undefined, "no device cookie without a recorded device");
+      assert.equal(readFileSync(devicesFile, "utf8"), before);
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    assert.match(readFileSync(new URL("../server/auth.mjs", import.meta.url), "utf8"), /withFileLockSync\(devicesFile\(\)/);
+  });
+});
+
+describe("X1 R1 M2: an unreadable devices.json fails closed and is never written over", () => {
+  test("malformed file: auth refused, list throws, GET 503, pair redeem 503 with the file untouched; recovers once readable", () => {
+    const token = pairDevice("Survivor", "100.64.0.70");
+    assert.ok(authAs(token));
+    const good = readFileSync(devicesFile, "utf8");
+    ageDevicesFile();
+    writeFileSync(devicesFile, "{ not json");
+    assert.equal(authAs(token), null, "fail closed: a paired token is refused while the file is unreadable");
+    assert.throws(() => auth.listDevices(), /unreadable/);
+    const list = fakeRes();
+    auth.handleDevices({ url: "/__vibesquad/devices", method: "GET", headers: { host: "100.64.0.7:4180", cookie: `vs_device=${token}` }, socket: {}, on() {} }, list);
+    assert.equal(list.statusCode, 503);
+    auth.resetPairRateLimitForTest();
+    const code = auth.createPairCode();
+    const res = fakeRes();
+    auth.handlePairRedeem({ url: `/pair?code=${code}&name=Intruder`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: "100.64.0.71" }, on() {} }, res);
+    assert.equal(res.statusCode, 503, res.body);
+    assert.equal(readFileSync(devicesFile, "utf8"), "{ not json", "a pairing never overwrites an unreadable list");
+    assert.equal(vs(["devices", "revoke", "--all"]).status, 1, "the CLI refuses too");
+    assert.equal(readFileSync(devicesFile, "utf8"), "{ not json");
+    writeFileSync(devicesFile, good);
+    assert.ok(authAs(token), "the previous list is back once the file reads again");
+    assert.equal(auth.listDevices().length, JSON.parse(good).devices.length, "nothing was cached as empty in between");
   });
 });
