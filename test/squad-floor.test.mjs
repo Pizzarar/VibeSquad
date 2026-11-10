@@ -244,7 +244,8 @@ test("P3b draw order: plate < y-sorted sprites < front < bubbles; no front layer
   assert.deepEqual(bandLayers(true), ["plate", "sprites", "front", "bubbles"]);
   assert.deepEqual(bandLayers(false), ["plate", "sprites", "bubbles"]);
   const src = readFileSync(new URL("../src/SquadFloor.tsx", import.meta.url), "utf8");
-  assert.match(src, /floor\.front \? FLOOR_FRONT_URL/);
+  assert.match(src, /floorFrontImgOk && !!floor\.front;/); // the image is probed early, but the layer needs floor.json's front flag
+  assert.match(src, /frontSrc=\{floorFrontOk \? FLOOR_FRONT_URL\(theme\) : null\}/);
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\.sq-floor-front\s*\{[^}]*pointer-events:\s*none/);
 });

@@ -83,7 +83,7 @@ test("CSS + wiring: the band yields (shrinks to a slim strip), the box keeps --f
   assert.match(css, /\.hub-tower-box \{ flex: 1 0 var\(--floor-need, 125px\); min-height: var\(--floor-need, 125px\);/);
   assert.match(hub, /floorNeedCssPx\(native\.h, useDpr\(\), (?:useUiScale\(\)|uiScale), width, native\.w\)/);
   assert.match(hub, /"--floor-need": `\$\{floorNeed\}px`/);
-  assert.match(hub, /fetch\("\/office\/floor\.json"\)/);
+  assert.match(hub, /fetchFloorJson\(\)\.then/); // the shared floor.json fetch (squadFloorLogic.ts)
   assert.doesNotMatch(css, /\.hub-sky-page[^{]*\{[^}]*transition/);
 });
 
