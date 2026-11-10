@@ -1,7 +1,7 @@
 // S1/S2 of docs/PLAN_INBOX_SEND_1109.md: Send delivers a card to its lane's live Buddy (lead as fallback),
 // an unassigned card goes to the Squad's Overlord, and nothing ever spawns an agent.
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -10,6 +10,29 @@ import { loadTeamsForInbox, readInboxCards, sendInboxCard, triageInboxCards, wri
 import { resolveLeadWinner, whoCandidate } from "../server/identity.mjs";
 
 const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+
+// Own team/lane registry: the resolver (whoCandidate, hub lane) needs it and a fresh/hermetic home has none.
+const teamsDir = mkdtempSync(path.join(tmpdir(), "vs-inbox-send-teams-"));
+const teamsFile = path.join(teamsDir, "teams.json");
+writeFileSync(
+  teamsFile,
+  JSON.stringify({
+    teams: [
+      {
+        id: "vibesquad",
+        name: "VibeSquad",
+        lanes: [
+          { id: "vibesquad", name: "VibeSquad", hub: true },
+          { id: "bug-chaser", name: "Bug Chaser" },
+          { id: "empty-lane", name: "Empty Lane" },
+          { id: "ui-bois", name: "UI Bois" },
+        ],
+      },
+    ],
+  }),
+);
+process.env.VIBESQUAD_TEAMS_FILE = teamsFile;
+test.after(() => rmSync(teamsDir, { recursive: true, force: true }));
 
 const agent = (id, role, lane, extra = {}) => ({
   id,
