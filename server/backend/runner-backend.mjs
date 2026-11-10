@@ -145,6 +145,35 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   } catch {
     return null;
   }
+  const f = foldRunnerLog(id);
+  for (const line of text.split("\n")) f.feed(line);
+  return f.finish(home ?? runnerHome(env), env, liveness);
+}
+
+const yieldLoop = () => new Promise((r) => setImmediate(r));
+const FOLD_YIELD_LINES = 2000; // a multi-MB log must not hold the loop for its whole parse
+
+/** Same snapshot as readRunnerAgentSync, but file read is async and the parse yields to the event loop. */
+export async function readRunnerAgent(id, { env = process.env, home, liveness } = {}) {
+  if (!isRunnerId(id) || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) return null;
+  const h = home ?? runnerHome(env);
+  let text;
+  try {
+    text = await fs.promises.readFile(path.join(h, "agents", `${id}.jsonl`), "utf8");
+  } catch {
+    return null;
+  }
+  const f = foldRunnerLog(id);
+  const lines = text.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    f.feed(lines[i]);
+    if (i % FOLD_YIELD_LINES === FOLD_YIELD_LINES - 1) await yieldLoop();
+  }
+  return f.finish(h, env, liveness);
+}
+
+/** Incremental fold of one agent log: feed() each line, then finish() for the toAgent() snapshot (null without a created event). */
+function foldRunnerLog(id) {
   let created = null;
   let status = "unknown";
   let exited = false;
@@ -159,10 +188,10 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
   const meta = {};
   let offered = null;
   let sessionId = null;
-  for (const line of text.split("\n")) {
-    if (!line) continue;
+  const feed = (line) => {
+    if (!line) return;
     let e;
-    try { e = JSON.parse(line); } catch { continue; }
+    try { e = JSON.parse(line); } catch { return; }
     last = e;
     if (e.type !== "meta" && e.type !== "archive") lastLive = e;
     if (e.type === "input" || e.type === "created") lastPrompt = e;
@@ -179,29 +208,32 @@ export function readRunnerAgentSync(id, { env = process.env, home, liveness } = 
     else if (e.type === "unarchive") archivedAt = null;
     else if (e.type === "usage") usage = e;
     else if (e.type === "permission") { if (e.phase === "request") perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
-  }
-  if (!created) return null;
-  // The log's last status is not liveness (runner/runner.mjs summary: "log says running but no child in this process").
-  // A non-parked agent whose last event predates the running runner's start, or whose runner is dead, has no child: lost.
-  if (!exited && status !== "parked") {
-    const rl = liveness === undefined ? runnerLiveness(home ?? runnerHome(env)) : liveness;
-    if (rl && (!rl.alive || (lastLive?.ts ?? 0) < rl.startedAt)) status = "lost";
-  }
-  // A lost (restarted) agent is resumable in place only when it has a saved session and never exited/archived:
-  // the same predicate the runner's resume endpoint (409) applies (_lostSpec/_parkedSpec). Every adapter canPark today.
-  const resumable =
-    status === "lost" &&
-    !archivedAt &&
-    typeof sessionId === "string" &&
-    sessionId !== "" &&
-    !sessionId.startsWith("-");
-  return toAgent({
-    id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
-    status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
-    lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
-    usage, pendingPermissions: [...perms.values()], resumable,
-    ...(status === "queued" && !exited && queued ? { queued } : {}),
-  });
+  };
+  const finish = (home, env, liveness) => {
+    if (!created) return null;
+    // The log's last status is not liveness (runner/runner.mjs summary: "log says running but no child in this process").
+    // A non-parked agent whose last event predates the running runner's start, or whose runner is dead, has no child: lost.
+    if (!exited && status !== "parked") {
+      const rl = liveness === undefined ? runnerLiveness(home ?? runnerHome(env)) : liveness;
+      if (rl && (!rl.alive || (lastLive?.ts ?? 0) < rl.startedAt)) status = "lost";
+    }
+    // A lost (restarted) agent is resumable in place only when it has a saved session and never exited/archived:
+    // the same predicate the runner's resume endpoint (409) applies (_lostSpec/_parkedSpec). Every adapter canPark today.
+    const resumable =
+      status === "lost" &&
+      !archivedAt &&
+      typeof sessionId === "string" &&
+      sessionId !== "" &&
+      !sessionId.startsWith("-");
+    return toAgent({
+      id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
+      status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
+      lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
+      usage, pendingPermissions: [...perms.values()], resumable,
+      ...(status === "queued" && !exited && queued ? { queued } : {}),
+    });
+  };
+  return { feed, finish };
 }
 
 /** Every runner agent on this machine (sync, log-derived). Empty when no runner dir exists. */
@@ -215,6 +247,26 @@ export function listRunnerAgentsSync({ env = process.env } = {}) {
   }
   const liveness = runnerLiveness(home); // once for the whole list, not per agent
   return names.filter((f) => f.endsWith(".jsonl")).map((f) => readRunnerAgentSync(f.slice(0, -6), { env, home, liveness })).filter(Boolean);
+}
+
+/** listRunnerAgentsSync without blocking the event loop: async reads, small batches, a yield between them. */
+export async function listRunnerAgents({ env = process.env, batch = 8 } = {}) {
+  const home = runnerHome(env);
+  let names;
+  try {
+    names = await fs.promises.readdir(path.join(home, "agents"));
+  } catch {
+    return [];
+  }
+  const liveness = runnerLiveness(home);
+  const ids = names.filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -6));
+  const out = [];
+  for (let i = 0; i < ids.length; i += batch) {
+    const got = await Promise.all(ids.slice(i, i + batch).map((id) => readRunnerAgent(id, { env, home, liveness })));
+    for (const a of got) if (a) out.push(a);
+    await yieldLoop();
+  }
+  return out;
 }
 
 /** Runner JSONL events -> timeline entries ({ item, timestamp, seqStart, seqEnd }) as the timeline UI expects. */
@@ -340,14 +392,14 @@ export function logHooksUnavailable(err) {
  * Baseline for one agent log without parsing the whole file: read from the tail until a turn boundary (created / status idle / exit),
  * then fold the events after it. Returns { seq, t, archived }.
  */
-function scanTail(file) {
-  const fd = fs.openSync(file, "r");
+async function scanTail(file) {
+  const fh = await fs.promises.open(file, "r");
   try {
-    const size = fs.fstatSync(fd).size;
+    const size = (await fh.stat()).size;
     for (let want = 64 * 1024; ; want *= 4) {
       const len = Math.min(size, want);
       const buf = Buffer.alloc(len);
-      fs.readSync(fd, buf, 0, len, size - len);
+      await fh.read(buf, 0, len, size - len);
       let lines = buf.toString("utf8").split("\n");
       if (len < size) lines = lines.slice(1); // first line is cut
       const evs = [];
@@ -372,7 +424,7 @@ function scanTail(file) {
       return { seq, t, archived };
     }
   } finally {
-    fs.closeSync(fd);
+    await fh.close();
   }
 }
 
@@ -962,22 +1014,32 @@ export class RunnerBackend {
     const hwm = new Map();
     const turn = new Map();
     const archived = new Set();
-    const dir = path.join(this.rc.home, "agents");
-    try {
-      for (const f of fs.readdirSync(dir)) {
-        if (!f.endsWith(".jsonl")) continue;
-        const id = f.slice(0, -6);
-        let r;
-        try { r = scanTail(path.join(dir, f)); } catch { continue; }
-        hwm.set(id, r.seq);
-        if (r.archived) archived.add(id);
-        else if (r.t) turn.set(id, r.t);
-      }
-    } catch { /* no runner dir yet: every agent is new */ }
     this.live.hwm = hwm;
     this.live.turn = turn;
     this.live.archived = archived;
     this.live.known = new Map();
+    // The tail scan is async and batched (it ran sync over every log at boot and stalled the loop); `ready` settles when the
+    // baseline is complete. Callers that need it (startRunnerLifecycle) await it before opening the event stream.
+    const dir = path.join(this.rc.home, "agents");
+    this.live.baseline = (async () => {
+      let names;
+      try { names = await fs.promises.readdir(dir); } catch { return; } // no runner dir yet: every agent is new
+      const files = names.filter((f) => f.endsWith(".jsonl"));
+      for (let i = 0; i < files.length; i += 16) {
+        await Promise.all(files.slice(i, i + 16).map(async (f) => {
+          const id = f.slice(0, -6);
+          let r;
+          try { r = await scanTail(path.join(dir, f)); } catch { return; }
+          hwm.set(id, r.seq);
+          if (r.archived) archived.add(id);
+          else if (r.t) turn.set(id, r.t);
+        }));
+        await new Promise((r) => setImmediate(r));
+      }
+    })();
+    // Everything that reads hwm/turn/archived (seed, replay, live events) runs on the chain: hold it until the baseline is complete.
+    this.live.chain = this.live.chain.then(() => this.live.baseline).catch(() => {});
+    return this.live.baseline;
   }
 
   /** Replay events newer than the high-water mark, agents in creation order (new agents replay from seq 0). */

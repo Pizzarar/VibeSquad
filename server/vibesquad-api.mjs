@@ -2,7 +2,7 @@ import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, 
 import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
-import { sharedRunnerBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync } from "./backend/index.mjs";
+import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerAgentSync } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
@@ -573,6 +573,26 @@ async function resolveShellCwd(cwd, rootDir, opts) {
   return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
+// Runner roster for the sync root getters below. Parsing every agent log is hundreds of ms of CPU: it runs async in the background
+// (listRunnerAgents yields between batches), and callers read the last completed scan. One scan feeds navRoots and liveRunnerAgents.
+let runnerRoster = { at: 0, agents: [], loading: null };
+function refreshRunnerRoster() {
+  if (!runnerRoster.loading) {
+    runnerRoster.loading = listRunnerAgents()
+      .then((agents) => { runnerRoster = { at: Date.now(), agents: agents.filter((a) => !a.archivedAt), loading: null }; navRootsCache.clear(); })
+      .catch(() => { runnerRoster.loading = null; });
+  }
+  return runnerRoster.loading;
+}
+/** Live (non-archived) runner agents; kicks a background rescan when older than 30s (the stale list is served meanwhile). */
+function runnerRosterNow(now = Date.now(), fresh = false) {
+  if (fresh || now - runnerRoster.at >= 30_000) refreshRunnerRoster();
+  return runnerRoster.agents;
+}
+export const _runnerRosterReady = () => refreshRunnerRoster();
+export const _navRootsForTest = (rootDir, opts) => navRoots(rootDir, opts);
+export const _liveRunnerAgentsForTest = (now) => liveRunnerAgents(now);
+
 // Quick open / find in files call per keystroke: reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
 const navRootsCache = new Map();
 const navRoots = (rootDir, opts) => (fresh) => {
@@ -580,7 +600,7 @@ const navRoots = (rootDir, opts) => (fresh) => {
   if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
   // Runner (rn-) agents are the default and often sit in worktrees outside the project roots.
   let runnerCwds = [];
-  try { runnerCwds = listRunnerAgentsSync().filter((a) => !a.archivedAt).map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
+  try { runnerCwds = runnerRosterNow(Date.now(), fresh).map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
   // A home dir or drive root as a browse root would expose everything under it.
   const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])].filter((r) => !isUnsafeRoot(r));
   navRootsCache.set(rootDir, { at: Date.now(), roots });
@@ -591,17 +611,10 @@ const navRoots = (rootDir, opts) => (fresh) => {
  * Other worktrees a relative file link may point into when the file is missing under `cwd`: the managed sanctuary
  * dirs for the same repo, plus cwds of live agents in the same team + lane. Lane cwds must already be allowed roots.
  */
-let laneAgentsCache = { at: 0, agents: [] };
 function liveRunnerAgents(now = Date.now()) {
-  // listRunnerAgentsSync parses every jsonl: share one scan across 404s for 30s, like navRoots.
-  if (now - laneAgentsCache.at >= 30_000) {
-    let agents = [];
-    try { agents = listRunnerAgentsSync().filter((a) => !a.archivedAt); } catch {}
-    laneAgentsCache = { at: now, agents };
-  }
-  return laneAgentsCache.agents;
+  return runnerRosterNow(now);
 }
-export const _resetLaneAgentsCache = () => { laneAgentsCache = { at: 0, agents: [] }; };
+export const _resetLaneAgentsCache = () => { runnerRoster = { at: 0, agents: [], loading: null }; navRootsCache.clear(); };
 
 export function laneWorktreeCandidates(cwd, roots, { sanctuary = resolveManagedWorktreeRoot(), agents } = {}) {
   const out = [];
@@ -1437,6 +1450,7 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 // caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   const readOnlyCache = createReadOnlyCache(opts.readOnlyCacheMs);
+  refreshRunnerRoster(); // background scan so the first file request already knows the runner worktrees
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
     const cachedRead = (run) => readOnlyCache(path, isOwner(req), run);

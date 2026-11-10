@@ -10,4 +10,4 @@ export function getBackend(client) {
   return client;
 }
 
-export { RunnerBackend, isRunnerId, readRunnerAgentSync, listRunnerAgentsSync } from "./runner-backend.mjs";
+export { RunnerBackend, isRunnerId, readRunnerAgentSync, listRunnerAgentsSync, listRunnerAgents } from "./runner-backend.mjs";
