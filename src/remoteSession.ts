@@ -3,8 +3,25 @@
 // `https://<host>:<port>/pair?code=…` and sets the vs_device cookie, exactly as for the paired-PC browser; the
 // app then opens the server's own UI. No imports: the screen is src/RemotePairScreen.tsx and node tests use fakes.
 
-/** The stored pairing: which server this device paired with. The device cookie itself lives in the WebView. */
-export type StoredRemoteSession = { v: 2; host: string; savedAt: string };
+/**
+ * One paired PC (PLAN_ANDROID_END_STATE.md E4a). `hostId` is the PC's ~/.vibesquad/host-id as /api/auth/status
+ * reports it, or "" until the phone has heard it (a v:2 session knew no host id). `meshnetHost` is the
+ * `host:port` this device pairs over LAN/Meshnet; `relay` is the E5 outbound relay (unused until E5 lands).
+ * The device cookie itself lives in the WebView, and the CA pin lives in the native trust store keyed by meshnetHost.
+ */
+export type StoredRemoteHost = {
+  hostId: string;
+  label: string;
+  meshnetHost?: string;
+  relay?: { endpoint: string; pubKey: string };
+  savedAt: string;
+};
+
+/** The stored pairings: every PC this device paired with, and which one it opens. One host today; the switcher UI waits for a second. */
+export type StoredRemoteSession = { v: 3; activeHostId: string; hosts: StoredRemoteHost[] };
+
+/** What a v:2 session (one LAN/Meshnet host, no host id) looked like; still read, never written. */
+type StoredRemoteSessionV2 = { v: 2; host: string; savedAt: string };
 
 /**
  * What a QR, deep link or typed input resolves to. `code` is empty for a host-only input, `host` for a code-only one.
@@ -159,24 +176,142 @@ export function clearPending(local: GetSet | null = browserStorage("localStorage
   safe(() => local?.removeItem(REMOTE_PENDING_KEY), undefined);
 }
 
-/** The stored pairing, or null when missing or malformed (an old relay-offer session is not trusted). */
+const HOST_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
+
+/** A host id as the server reports it, or "" (unknown / malformed). Never trusted for anything but keying saved hosts. */
+export function normalizeHostId(input: unknown): string {
+  const t = typeof input === "string" ? input.trim() : "";
+  return HOST_ID_RE.test(t) ? t : "";
+}
+
+function validHost(h: unknown): StoredRemoteHost | null {
+  const x = h as Partial<StoredRemoteHost> | null;
+  if (!x || typeof x !== "object" || typeof x.savedAt !== "string") return null;
+  const meshnetHost = typeof x.meshnetHost === "string" ? normalizeHost(x.meshnetHost) : null;
+  const relay =
+    x.relay && typeof x.relay === "object" && typeof x.relay.endpoint === "string" && typeof x.relay.pubKey === "string" && x.relay.endpoint && x.relay.pubKey
+      ? { endpoint: x.relay.endpoint, pubKey: x.relay.pubKey }
+      : null;
+  if (!meshnetHost && !relay) return null; // no way to reach it
+  const hostId = normalizeHostId(x.hostId);
+  const label = typeof x.label === "string" && x.label.trim() ? x.label.trim().slice(0, 60) : meshnetHost || relay!.endpoint;
+  return { hostId, label, ...(meshnetHost ? { meshnetHost } : {}), ...(relay ? { relay } : {}), savedAt: x.savedAt };
+}
+
+/**
+ * Validates a parsed session value, upgrading a v:2 one losslessly (host -> meshnetHost + label, hostId "" until the
+ * PC reports it; the CA pin is keyed by the same host string, so it stays valid). Null for junk or an old relay offer.
+ */
+export function migrateSession(s: unknown): StoredRemoteSession | null {
+  const v = s as { v?: unknown } | null;
+  if (!v || typeof v !== "object") return null;
+  if (v.v === 2) {
+    const old = v as Partial<StoredRemoteSessionV2>;
+    if (typeof old.host !== "string" || typeof old.savedAt !== "string") return null;
+    const h = normalizeHost(old.host);
+    return h ? { v: 3, activeHostId: "", hosts: [{ hostId: "", label: h, meshnetHost: h, savedAt: old.savedAt }] } : null;
+  }
+  if (v.v !== 3) return null;
+  const raw = v as Partial<StoredRemoteSession>;
+  const hosts = (Array.isArray(raw.hosts) ? raw.hosts : []).map(validHost).filter((h): h is StoredRemoteHost => Boolean(h));
+  if (!hosts.length) return null;
+  const want = normalizeHostId(raw.activeHostId);
+  const active = (want && hosts.find((h) => h.hostId === want)) || hosts[0];
+  return { v: 3, activeHostId: active.hostId, hosts };
+}
+
+/** The host this device opens: the one `activeHostId` names, else the first (only) one. */
+export function activeHost(s: StoredRemoteSession | null): StoredRemoteHost | null {
+  if (!s?.hosts.length) return null;
+  return (s.activeHostId && s.hosts.find((h) => h.hostId === s.activeHostId)) || s.hosts[0];
+}
+
+/** The LAN/Meshnet `host:port` of the active host, or "" (relay-only hosts wait for E5). */
+export function activeMeshnetHost(s: StoredRemoteSession | null): string {
+  return activeHost(s)?.meshnetHost ?? "";
+}
+
+/** UI rule (E4): no host-switcher chrome while there is at most one saved host. */
+export function showHostSwitcher(s: StoredRemoteSession | null): boolean {
+  return (s?.hosts.length ?? 0) > 1;
+}
+
+/** The stored pairings, or null when missing or malformed (an old relay-offer session is not trusted). v:2 is upgraded on read. */
 export function readSession(storage: Get | null = browserStorage("localStorage")): StoredRemoteSession | null {
   if (!storage) return null;
   const raw = safe(() => storage.getItem(REMOTE_SESSION_KEY), null);
   if (!raw) return null;
-  const s = safe(() => JSON.parse(raw), null);
-  if (!s || s.v !== 2 || typeof s.host !== "string" || typeof s.savedAt !== "string" || !normalizeHost(s.host)) return null;
-  return { v: 2, host: s.host, savedAt: s.savedAt };
+  return migrateSession(safe(() => JSON.parse(raw), null));
 }
 
-export function saveSession(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date()): void {
+function writeSession(local: GetSet, s: StoredRemoteSession): void {
+  local.setItem(REMOTE_SESSION_KEY, JSON.stringify(s satisfies StoredRemoteSession));
+}
+
+/**
+ * Remembers `host` as the active pairing. Pass `hostId` when /api/auth/status already reported it. An entry for the
+ * same host id (or, lacking one, the same address) is updated in place, so re-pairing never duplicates a host.
+ */
+export function saveSession(host: string, local: GetSet | null = browserStorage("localStorage"), now = new Date(), hostId: unknown = ""): void {
   if (!local) throw new Error("remote: this browser has no localStorage");
   const h = normalizeHost(host);
   if (!h) throw new Error("remote: not a valid server address");
-  local.setItem(REMOTE_SESSION_KEY, JSON.stringify({ v: 2, host: h, savedAt: now.toISOString() } satisfies StoredRemoteSession));
+  const id = normalizeHostId(hostId);
+  const prev = readSession(local);
+  const hosts = prev?.hosts.filter((x) => !(id && x.hostId === id) && x.meshnetHost !== h) ?? [];
+  const same = prev?.hosts.find((x) => (id && x.hostId === id) || x.meshnetHost === h);
+  const entry: StoredRemoteHost = { ...same, hostId: id || same?.hostId || "", label: same?.label && same.label !== same.meshnetHost ? same.label : h, meshnetHost: h, savedAt: now.toISOString() };
+  writeSession(local, { v: 3, activeHostId: entry.hostId, hosts: [entry, ...hosts] });
 }
 
-/** Forget this device's pairing (the server still lists the device until it is revoked on the PC). */
+/**
+ * Fills in the host id once the PC reported it (/api/auth/status `hostId`) for the host at `host`. Returns true when
+ * the stored session changed. A different id for an already-known host means the PC's ~/.vibesquad was reset: the
+ * entry follows the PC (the CA pin and device cookie are checked separately, so nothing is trusted on the id alone).
+ */
+export function setSessionHostId(host: string, hostId: unknown, local: GetSet | null = browserStorage("localStorage")): boolean {
+  const id = normalizeHostId(hostId);
+  const h = normalizeHost(host);
+  const s = local ? readSession(local) : null;
+  if (!local || !s || !id || !h) return false;
+  const i = s.hosts.findIndex((x) => x.meshnetHost === h);
+  if (i < 0 || s.hosts[i].hostId === id) return false;
+  const wasActive = activeHost(s) === s.hosts[i];
+  const merged = { ...s.hosts[i], hostId: id };
+  const hosts = s.hosts.filter((x, j) => j === i || x.hostId !== id); // another entry with this id is the same PC: fold it
+  hosts[hosts.indexOf(s.hosts[i])] = merged;
+  writeSession(local, { v: 3, activeHostId: wasActive ? id : s.activeHostId, hosts });
+  return true;
+}
+
+/**
+ * Best-effort: asks `host` for its id (GET /api/auth/status answers unpaired callers with `hostId`). Resolves "" on any
+ * failure (offline, CORS in a plain browser, old server) and never throws; the id is only a key, never a credential.
+ */
+export async function fetchHostId(host: string, fetchImpl: typeof fetch | null = typeof fetch === "function" ? fetch : null, timeoutMs = 2000): Promise<string> {
+  const h = normalizeHost(host);
+  if (!h || !fetchImpl) return "";
+  try {
+    const res = await fetchImpl(`https://${h}/api/auth/status`, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return "";
+    return normalizeHostId((await res.json())?.hostId);
+  } catch {
+    return "";
+  }
+}
+
+/** Forget one PC (the server still lists the device until it is revoked there). The next saved host becomes active. */
+export function forgetHost(host: string, local: GetSet | null = browserStorage("localStorage")): void {
+  const h = normalizeHost(host);
+  const s = local ? readSession(local) : null;
+  if (!local || !s) return;
+  const hosts = s.hosts.filter((x) => x.meshnetHost !== h);
+  if (!hosts.length) return clearSession(local);
+  const active = hosts.find((x) => x.hostId === s.activeHostId) ?? hosts[0];
+  writeSession(local, { v: 3, activeHostId: active.hostId, hosts });
+}
+
+/** Forget every pairing on this device (the server still lists the device until it is revoked on the PC). */
 export function clearSession(local: GetSet | null = browserStorage("localStorage")): void {
   safe(() => local?.removeItem(REMOTE_SESSION_KEY), undefined);
 }

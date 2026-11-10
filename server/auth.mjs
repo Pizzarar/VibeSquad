@@ -1,8 +1,9 @@
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual, X509Certificate } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
+import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
 import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
@@ -107,6 +108,7 @@ export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
   const distReady = hasDistIndex(rootDir);
   return {
     ok: true,
+    hostId: getHostId(),
     port,
     meshnetIp,
     meshnetHost,
@@ -348,24 +350,77 @@ export function caFingerprint() {
 
 let devices; // [{ id, name, createdAt, lastSeenAt, tokenHash }]
 let lastPersist = 0;
+// devices.json is also written by other processes (`vs devices revoke` over SSH, E4a), so the in-memory list is only
+// trusted while the file's path + mtime + size still match what was loaded or saved last. A changed stamp reloads
+// before any read, so a revoked token is refused on its next request without a server restart.
+let devicesStamp = null;
+let loadedIds = new Set(); // ids on disk at the last load/save: tells a removal by another process from our own addition
+
+function devicesFileStamp() {
+  const file = devicesFile();
+  const st = statSync(file, { throwIfNoEntry: false });
+  return st ? `${file}|${st.mtimeMs}|${st.size}` : `${file}|missing`;
+}
+
+function readDevicesFromDisk() {
+  const { value } = readJsonFileWithBom(devicesFile(), { fallback: { devices: [] }, label: "devices.json" });
+  return Array.isArray(value?.devices) ? value.devices : [];
+}
+
+function dropDeviceSockets(id) {
+  for (const s of wsByDevice.get(id) ?? []) s.destroy();
+  wsByDevice.delete(id);
+}
 
 function loadDevices() {
-  if (devices) return devices;
-  const { value } = readJsonFileWithBom(devicesFile(), { fallback: { devices: [] }, label: "devices.json" });
-  devices = Array.isArray(value?.devices) ? value.devices : [];
+  const stamp = devicesFileStamp();
+  if (devices && stamp === devicesStamp) return devices;
+  const fresh = readDevicesFromDisk();
+  if (devices) {
+    // Another process rewrote the file: anything it dropped is revoked here too, live sockets included.
+    const keep = new Set(fresh.map((d) => d.id));
+    for (const d of devices) if (!keep.has(d.id)) dropDeviceSockets(d.id);
+  }
+  devices = fresh;
+  devicesStamp = stamp;
+  loadedIds = new Set(fresh.map((d) => d.id));
   return devices;
 }
 
 function saveDevices() {
+  let list = devices ?? loadDevices();
+  if (devices && devicesFileStamp() !== devicesStamp) {
+    // The file changed under us since the last load (a `vs devices revoke` between our read and this write):
+    // the other process's removals win, our additions and lastSeenAt updates stay.
+    const onDisk = new Set(readDevicesFromDisk().map((d) => d.id));
+    list = list.filter((d) => !loadedIds.has(d.id) || onDisk.has(d.id));
+    for (const d of devices) if (!list.includes(d)) dropDeviceSockets(d.id);
+    devices = list;
+  }
   mkdirSync(vibesquadHome(), { recursive: true });
   const tmp = devicesFile() + ".tmp";
-  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), { encoding: "utf8", mode: 0o600 });
+  writeFileSync(tmp, JSON.stringify({ devices: list }, null, 2), { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, devicesFile());
   clearConfigWarning(devicesFile());
+  devicesStamp = devicesFileStamp();
+  loadedIds = new Set(list.map((d) => d.id));
   lastPersist = Date.now();
 }
 
+/** Drops the in-memory device list so the next read comes from disk (tests that swap VIBESQUAD_HOME). */
+export function resetDevicesForTest() {
+  devices = undefined;
+  devicesStamp = null;
+  loadedIds = new Set();
+  lastPersist = 0;
+}
+
 const publicDevice = (d, currentId) => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, current: d.id === currentId });
+
+/** The paired devices without their token hashes (what `vs devices list` and GET /__vibesquad/devices show). */
+export function listDevices() {
+  return loadDevices().map((d) => publicDevice(d, null));
+}
 
 export function parseCookies(header) {
   const out = {};
@@ -563,9 +618,19 @@ export function revokeDevice(id) {
   if (i < 0) return false;
   list.splice(i, 1);
   saveDevices();
-  for (const s of wsByDevice.get(id) ?? []) s.destroy();
-  wsByDevice.delete(id);
+  dropDeviceSockets(id);
   return true;
+}
+
+/** Revokes every paired device (`vs devices revoke --all`, lost-phone fallback). Returns how many were dropped. */
+export function revokeAllDevices() {
+  const list = loadDevices();
+  const ids = list.map((d) => d.id);
+  if (!ids.length) return 0;
+  list.length = 0;
+  saveDevices();
+  for (const id of ids) dropDeviceSockets(id);
+  return ids.length;
 }
 
 // ---- One-time pairing codes ----

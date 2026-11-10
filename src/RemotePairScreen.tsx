@@ -3,7 +3,9 @@
 // https://<host>/pair?code=… so the server sets the vs_device cookie and serves its own UI.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  clearSession,
+  activeMeshnetHost,
+  fetchHostId,
+  forgetHost,
   mapRemoteError,
   normalizeCode,
   normalizeFp,
@@ -14,6 +16,7 @@ import {
   remoteError,
   saveSession,
   serverUrl,
+  setSessionHostId,
   type RemoteError,
 } from "./remoteSession";
 import { createTrustClient, nativeTrust, type TrustClient } from "./vsTrust";
@@ -69,7 +72,11 @@ function openServer(host: string): void {
 }
 
 export function RemotePairScreen() {
-  const saved = readSession();
+  // v:3 session (E4a): one active host out of hosts[]; the screen only ever shows the active one, and no switcher
+  // chrome exists while hosts.length <= 1 (the switcher rule in remoteSession.ts says no). A second host arrives with E5.
+  const session = readSession();
+  const savedHost = activeMeshnetHost(session);
+  const saved = savedHost ? { host: savedHost } : null;
   const [host, setHost] = useState(saved?.host ?? "");
   const [code, setCode] = useState("");
   const [fp, setFp] = useState("");
@@ -116,7 +123,9 @@ export function RemotePairScreen() {
     }
     // The PC opens its own UI right after redeeming (no trip back here), so remember the host now. A rejected code leaves
     // a stale session that the next launch drops: the reopen probe checks the PC still recognizes this phone.
-    saveSession(hostN);
+    // The host id (E4a) is best effort here: the status route answers unpaired callers, but a plain browser without
+    // CORS gets "" and fills it in on a later reconnect.
+    saveSession(hostN, undefined, undefined, await fetchHostId(hostN));
     // Android Back from the PC's UI should land on this form (with Forget), not bounce straight back to the PC.
     try {
       sessionStorage.setItem(OPENED_KEY, "1");
@@ -151,7 +160,7 @@ export function RemotePairScreen() {
     // The PC answers but no longer knows this phone: drop the stale session instead of reopening into a 401 page.
     if (/unpaired/i.test(String((e as Error)?.message))) {
       void trust()?.forget(h).catch(() => {});
-      clearSession();
+      forgetHost(h);
       setError(remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."));
     } else setError(mapRemoteError(e));
   };
@@ -174,7 +183,12 @@ export function RemotePairScreen() {
     if (!saved || !reopening) return;
     let live = true;
     probe(saved.host).then(
-      () => live && openServer(saved.host),
+      async () => {
+        if (!live) return;
+        // Fill in the PC's host id when the v:2 upgrade left it empty (never holds the open longer than the fetch timeout).
+        if (session && !session.activeHostId) setSessionHostId(saved.host, await fetchHostId(saved.host));
+        if (live) openServer(saved.host);
+      },
       (e) => {
         if (!live) return;
         onReopenError(e, saved.host);
@@ -213,7 +227,7 @@ export function RemotePairScreen() {
             data-testid="forget-pc"
             onClick={() => {
               void trust()?.forget(saved.host).catch(() => {});
-              clearSession();
+              forgetHost(saved.host);
               setReopening(false);
             }}
           >
@@ -331,7 +345,7 @@ export function RemotePairScreen() {
             className="btn ghost remote-pair-forget"
             onClick={() => {
               void trust()?.forget(saved.host).catch(() => {});
-              clearSession();
+              forgetHost(saved.host);
               location.reload();
             }}
           >
