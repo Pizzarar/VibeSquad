@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import os from "node:os";
 import { join, resolve } from "node:path";
@@ -680,10 +681,12 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       if (action === "archive" || body.archive === true) {
         cards[idx].status = "archived";
         cards[idx].updatedAt = now;
+        removeInboxMedia(cardId, baseHome);
         result = { action, card: cards[idx] };
         return cards;
       }
       const [removed] = cards.splice(idx, 1);
+      removeInboxMedia(cardId, baseHome);
       result = { action: "delete", card: removed };
       return cards;
     }
@@ -787,4 +790,67 @@ export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
   } finally {
     delivering.delete(cardId);
   }
+}
+
+export const INBOX_MEDIA_MAX_BYTES = 8 * 1024 * 1024;
+export const INBOX_MEDIA_MAX_PER_CARD = 4;
+const MEDIA_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp" };
+/** The bytes must actually be the image type the client claims (no relying on the Content-Type header alone). */
+function sniffImage(b) {
+  if (b.length > 8 && b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length > 12 && b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return "image/webp";
+  return "";
+}
+
+/** Remove a card's saved media (called when the card is archived or deleted). */
+export function removeInboxMedia(cardId, baseHome) {
+  if (!/^idea-\d+$/.test(String(cardId))) return;
+  rmSync(join(getInboxMediaDir(baseHome), String(cardId)), { recursive: true, force: true });
+}
+
+export function getInboxMediaDir(baseHome) {
+  const home = baseHome || process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
+  return join(home, "inbox-media");
+}
+
+/**
+ * E3: save one image for a parked card under inbox-media/<cardId>/ (server-generated filename), record it in the
+ * card's `attachments` and link the absolute path in the card text so workers/Buddies can read it.
+ * body: { cardId, mime, bytes: Buffer, baseHome }.
+ */
+export function attachInboxMedia(body = {}) {
+  const baseHome = body.baseHome;
+  const cardId = String(body.cardId || "");
+  if (!/^idea-\d+$/.test(cardId)) throw new Error("invalid cardId");
+  const mime = String(body.mime || "").split(";")[0].trim().toLowerCase();
+  const ext = MEDIA_TYPES[mime];
+  if (!ext) throw new Error("image types only (png, jpeg, webp)");
+  const bytes = body.bytes;
+  if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new Error("empty attachment");
+  if (sniffImage(bytes) !== mime) throw new Error("file content is not the declared image type");
+  if (bytes.length > INBOX_MEDIA_MAX_BYTES) throw Object.assign(new Error("attachment too large (8 MB max)"), { status: 413 });
+  const card = readInboxCards(baseHome).find((c) => c.id === cardId);
+  if (!card) throw new Error(`Inbox card not found: ${cardId}`);
+  if (card.deliveredAt) throw new Error("card already delivered");
+  if ((card.attachments?.length ?? 0) >= INBOX_MEDIA_MAX_PER_CARD) throw new Error(`at most ${INBOX_MEDIA_MAX_PER_CARD} attachments per card`);
+  const dir = join(getInboxMediaDir(baseHome), cardId);
+  mkdirSync(dir, { recursive: true });
+  const n = (Array.isArray(card.attachments) ? card.attachments.length : 0) + 1;
+  const file = join(dir, `shot-${n}-${randomBytes(4).toString("hex")}.${ext}`);
+  const tmp = `${file}.tmp`;
+  writeFileSync(tmp, bytes);
+  renameSync(tmp, file);
+  const att = { path: file, mime, bytes: bytes.length };
+  let updated = card;
+  updateInboxCardsSync(baseHome, (current) => {
+    const t = current.find((c) => c.id === cardId);
+    if (!t) throw new Error(`Inbox card not found: ${cardId}`);
+    t.attachments = [...(Array.isArray(t.attachments) ? t.attachments : []), att];
+    t.text = `${t.text}\n\nScreenshot: ${file}`;
+    t.updatedAt = new Date().toISOString();
+    updated = t;
+    return current;
+  });
+  return { ok: true, attachment: att, card: updated };
 }
