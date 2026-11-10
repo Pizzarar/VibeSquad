@@ -7,8 +7,9 @@
 | Frozen commit | `e8380d3` (master, 2026-11-10; master tip 3f66803 = TASKS.json only, deliberately left out) |
 | Release commits | `4f23507` (`release: vibesquad 0.2.9 (stable) version bump, frozen from e8380d3`) + `8085dd5` (`release: credit @noble/curves as a third-party dependency line`) on `release/vibesquad-0.2.9`; built/tested commit = `8085dd591d2fecd25821b973d4826f20788ad4d2` |
 | Requester | Release Desk lead Rele5 (rn-cd9dc6ddfea4) |
-| Approval | _pending_ (desk stopped before publish: no tag, no gh release, no tag push) |
-| Release URL | _pending_ |
+| Approval | Aub GO (via Hub6), publish ordered by Rele5 on 2026-11-10 after the Tier A B4 review |
+| Tier A review | Review-Gemini rn-a33adefaa531 PASS 0H/0M/4L (relay unwired; build-stamp path + updater key pw tracked) |
+| Release URL | https://github.com/Pizzarar/VibeSquad/releases/tag/v0.2.9 (tag `v0.2.9` on `8085dd5`) |
 | Range | `7a638bf..e8380d3` (v0.2.8 frozen commit to this freeze): 500 commits, 183 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only (no `android-aarch64` entry: c1f884a rule, no APK built). Android: no D6 keystore, so no APK was built or attached.
@@ -26,7 +27,8 @@ The 0.2.8 EPERM lock race is fixed in this release: `848f3d9` is an ancestor of 
 | --- | --- |
 | VibeSquad-setup.exe | `2dd0b15f636504e3db9e2d2011e0337b076b102af0495e83f2af107526220cbd` |
 | VibeSquad-setup.exe.sig | `68ad2ad45efee33ed4fcbf7c83d65ad31ed9265b61610dd8140978c3aee0a522` |
-| latest.json (sign stage; the publish stage rewrites it with notes + pub_date, so its hash changes at publish) | `13801587111ccd6502b4646018faa620542e3116d796efbb0db3a8f23fde4023` |
+| latest.json (sign stage, before notes) | `13801587111ccd6502b4646018faa620542e3116d796efbb0db3a8f23fde4023` |
+| latest.json (published: same signature, Windows-only, release notes + pub_date added per the 0.2.8 convention) | `d814cf4c0a0383151924543413a52cd34d74617f7870e69add34df8f17b9a1b1` |
 | THIRD-PARTY-LICENSES.txt | `c1557df798c8c64e96b83cc804ba32cd0ef75212d9e26b9ea205d69cade4f41e` |
 | NO-AUTHENTICODE (marker, not published) | `8c1c3f6a4e24034b9b1a25b512bf8f0cac8bcfe5c26fd5ad5c6e08ba5b02bb40` |
 
