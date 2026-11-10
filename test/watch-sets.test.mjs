@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, watchesPath, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -541,6 +541,97 @@ test("startup backfill: a report filed while the server was down still completes
     await engine.tick();
     assert.equal(delivered.length, 1);
     assert.match(delivered[0].text, /while down/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// W4: digest merge (docs/PLAN_COMPLETION_DIGEST_RELAY.md block W4)
+// ---------------------------------------------------------------------------
+
+const longReport = (ref) => `${ref} PASS: shipped with ${"detail ".repeat(45)} commit deadbeefcafe1`.trim(); // ~ 330 chars each
+
+test("a short ping is sent raw and never spawns a merge worker", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const spawns = [];
+    const { engine, delivered, clock } = engineFor(sb, {
+      spawnDigest: (d) => {
+        spawns.push(d);
+        return true;
+      },
+    });
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-1", T0 + 1000, "PASS: w1 shipped"));
+    clock.t = T0 + 2000;
+    await engine.tick();
+    assert.equal(delivered.length, 1, "the raw text is delivered");
+    assert.equal(spawns.length, 0, "no Flash spawn for a short set");
+    assert.match(delivered[0].text, /complete: all 1 item done/);
+    assert.ok(delivered[0].text.length <= DIGEST_MERGE_MAX);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a long completion ping spawns exactly one merge worker (attempted before the spawn) and is not sent raw", async () => {
+  const sb = sandbox();
+  try {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const { id } = addWatch({ owner: "lead-1", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const spawns = [];
+    const { engine, delivered, clock } = engineFor(sb, {
+      spawnDigest: (d) => {
+        spawns.push(d);
+        // One-ping guarantee: attemptedAt is persisted BEFORE the spawn runs.
+        assert.ok(engine.get(id).pings[0].attemptedAt, "attemptedAt persisted before the spawn");
+        return true;
+      },
+    });
+    for (const ref of refs) {
+      engine.onRunnerEvent(agentEv(ref, "idle"));
+      engine.onLogEntry("vibesquad", doneEntry(ref, T0 + 1000, longReport(ref)));
+    }
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const ping = engine.get(id).pings[0];
+    assert.ok(ping.text.length > DIGEST_MERGE_MAX, `the set's text is over ${DIGEST_MERGE_MAX} chars (got ${ping.text.length})`);
+    assert.equal(spawns.length, 1, "exactly one merge worker for a long set");
+    assert.equal(delivered.length, 0, "the raw text is not also sent");
+    assert.ok(ping.attemptedAt, "attemptedAt persisted");
+    // Later ticks never re-spawn.
+    clock.t += 5 * MIN;
+    await engine.tick();
+    assert.equal(spawns.length, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failed merge spawn falls back to the raw text, truncated with a size note", async () => {
+  const sb = sandbox();
+  try {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const { id } = addWatch({ owner: "lead-1", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb, { spawnDigest: () => false });
+    for (const ref of refs) {
+      engine.onRunnerEvent(agentEv(ref, "idle"));
+      engine.onLogEntry("vibesquad", doneEntry(ref, T0 + 1000, longReport(ref)));
+    }
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const ping = engine.get(id).pings[0];
+    assert.ok(ping.text.length > DIGEST_MERGE_MAX);
+    assert.equal(delivered.length, 1, "fallback delivered exactly once");
+    assert.ok(ping.attemptedAt, "attemptedAt persisted (never re-offered)");
+    assert.equal(delivered[0].text.startsWith(ping.text.slice(0, DIGEST_MERGE_MAX)), true, "fallback is the raw text's prefix");
+    assert.match(delivered[0].text, /\(\+\d+ chars, see vs log\)$/, "fallback names the dropped char count");
+    // Never sent twice: another tick does not re-offer (attempted) or re-spawn.
+    clock.t += 5 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
   } finally {
     sb.cleanup();
   }

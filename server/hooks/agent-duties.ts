@@ -2533,6 +2533,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           ...watchOpts,
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
           deliver: (d: WatchDelivery) => deliverWatchPing(d),
+          spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
           log,
         })
       : null;
@@ -2595,6 +2596,50 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       watchKeyOf.set(entry, d.key);
       pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
       void flushWake(paseo, target.id);
+    }
+
+    /** W4: a too-long watch ping is merged by one Pre-check - Flash worker, which sends the merged digest to the owner (or its successor). */
+    async function spawnWatchDigest(paseo: Paseo, d: WatchDelivery): Promise<boolean> {
+      if (!paseo) return false;
+      try {
+        const target = await resolveWatchTarget(paseo, d.set);
+        if (!target) {
+          log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; cannot spawn merge`);
+          return false;
+        }
+        const digestProfile = resolveStoredProfile(DIGEST_PROFILE, DIGEST_PROVIDER, DIGEST_PROFILE, "worker");
+        const provider = digestProfile ? `${digestProfile.provider}/${digestProfile.model}` : DIGEST_PROVIDER;
+        const modeId = digestProfile?.modeId || DIGEST_MODE_ID;
+        const thinkingOptionId = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
+        const featureValues = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
+        const recipient = target.id;
+        const prompt = [
+          `You are a digest agent. Merge the watch-set report below into at most 15 lines, keeping every agent id, PASS/FAIL verdict, commit hash and pass/fail count. Drop nothing that matters.`,
+          `Then send the merged digest to agent ${recipient}${recipient !== d.owner ? ` (watch owner ${d.owner} is retired; you are its successor)` : ""} with exactly one command:`,
+          `vs send ${recipient} "<merged digest, at most 15 lines>"`,
+          ``,
+          `--- watch ${d.setId} report ---`,
+          d.text,
+        ].join("\n");
+        const handle = await paseo.agents.create({
+          config: { provider, modeId, thinkingOptionId, featureValues },
+          cwd: target.cwd,
+          title: `${DIGEST_PROFILE} digest`,
+          prompt,
+          labels: { team: d.team, lane: d.lane, role: "worker", profile: DIGEST_PROFILE, digestFor: recipient },
+          env: { VS_PROFILE: DIGEST_PROFILE },
+          autoArchive: true,
+        });
+        const createdId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+        if (!createdId) {
+          log(`watch ${d.setId}: merge spawn returned no agent id`);
+          return false;
+        }
+        return true;
+      } catch (err) {
+        log(`watch ${d.setId} merge spawn failed: ${err}`);
+        return false;
+      }
     }
 
     /**

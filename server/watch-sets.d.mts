@@ -57,6 +57,7 @@ export const DEFAULT_STALL_MIN: number;
 export const SUITE_RESULT_FILE: string;
 export const SUITE_LOCK_FILE: string;
 export const PRUNE_AFTER_MS: number;
+export const DIGEST_MERGE_MAX: number;
 export function watchesPath(opts?: { home?: string }): string;
 
 export function addWatch(
@@ -76,6 +77,8 @@ export interface WatchEngineOptions {
   alive?: (pid: number) => boolean;
   getAgent?: (id: string) => Promise<any>;
   deliver?: (d: WatchDelivery) => Promise<void> | void;
+  /** W4: spawn the merge worker for a too-long ping; truthy = spawned (the worker sends the merged digest). */
+  spawnDigest?: (d: WatchDelivery) => Promise<boolean> | boolean;
   log?: (msg: string) => void;
   retryMs?: number;
 }
