@@ -10,7 +10,7 @@ export function isPhoneShell(isAndroidUa: boolean, viewportWidth: number): boole
 
 export type PhoneSurface = "overlord" | "riffbot" | "buddy";
 
-/** Overlord is the landing tab only while something needs Aub; otherwise RiffBot (pitch ideas, spin up lanes). */
+/** Overlord is the landing tab only while something needs the owner; otherwise RiffBot (pitch ideas, spin up lanes). */
 export function defaultSurface(needsYou: number): PhoneSurface {
   return needsYou > 0 ? "overlord" : "riffbot";
 }
