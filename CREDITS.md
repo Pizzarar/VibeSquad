@@ -29,4 +29,4 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 
 ## Third-party runtime dependencies (v0.2.9)
 
-- Implemented E2E relay tunnel key agreement (X25519 fallback where WebCrypto lacks it) — Thanks to **@noble/curves 2.4.0** by `Paul Miller` (MIT)
+- **@noble/curves 2.4.0** by `Paul Miller` (MIT) — runtime dependency: X25519 key agreement for the E2E relay tunnel (pure-JS fallback where WebCrypto lacks it)
