@@ -36,3 +36,14 @@ test("P4b pager uses no fixed px width and the section header is rendered", () =
   assert.match(tsx, /className="squads-section-title"/);
   assert.match(rule(".squads-section-title"), /font-size: 12px/);
 });
+
+test("squads home collapses to one strip row of summary tiles when the layout height is short (limit cards stay above the 1080 fold)", () => {
+  const tsx = read("PinGrid.tsx");
+  assert.match(tsx, /SQUADS_COMPACT_BELOW_H = 1000/);
+  assert.match(tsx, /useLayoutHeight\(\) < SQUADS_COMPACT_BELOW_H/);
+  assert.match(tsx, /const rows = compact \? 1 : SQUAD_ROWS/);
+  assert.match(tsx, /data-testid=\{`squad-home-summary-\$\{v\.team\.id\}`\}/);
+  assert.match(css, /\.squads-home-pager-wrap\.compact \.squads-home-grid \{ --squads-card-min: 11rem/);
+  assert.match(css, /\.squad-home-tile\.compact \{[^}]*padding-bottom/);
+  assert.doesNotMatch(css.slice(css.indexOf(".squad-home-tile.compact {"), css.indexOf("}", css.indexOf(".squad-home-tile.compact {"))), /padding-top|padding:/);
+});
