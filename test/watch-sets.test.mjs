@@ -336,17 +336,17 @@ test("suite item: PASS record = done, FAIL record = done-with-FAIL (pinged), dea
     const a = addWatch({ owner: "lead-1", items: [{ kind: "suite", ref: "rn-runner" }, { kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
     const { engine, delivered, clock } = engineFor(sb);
     engine.onRunnerEvent(agentEv("w-1", "running"));
-    writeFileSync(lockFile, JSON.stringify({ pid: 111, agentId: "rn-runner", startedAt: T0 + 1000 }));
+    writeFileSync(lockFile, JSON.stringify({ pid: 111, agentId: "rn-runner", startedAt: T0 + 1000, full: true, files: [] }));
     clock.t = T0 + 20 * MIN; // a live holder never stalls, however long it runs
     engine.onRunnerEvent({ kind: "timeline", agentId: "w-1" });
     await engine.tick();
     assert.equal(engine.get(a.id).items[0].phase, "running");
     assert.equal(delivered.length, 0);
     // Another agent's result is not ours.
-    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-other", pid: 222, startedAt: iso(T0), finishedAt: iso(clock.t), tests: 10, pass: 10, fail: 0, failingFiles: [] }));
+    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-other", pid: 222, startedAt: iso(T0 + 1), full: true, files: [], finishedAt: iso(clock.t), tests: 10, pass: 10, fail: 0, failingFiles: [] }));
     await engine.tick();
     assert.equal(delivered.length, 0);
-    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-runner", pid: 111, startedAt: iso(T0 + 1000), finishedAt: iso(clock.t + 1), tests: 1200, pass: 1198, fail: 2, failingFiles: ["test/a.test.mjs"] }));
+    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-runner", pid: 111, startedAt: iso(T0 + 1000), full: true, files: [], finishedAt: iso(clock.t + 1), tests: 1200, pass: 1198, fail: 2, failingFiles: ["test/a.test.mjs"] }));
     rmSync(lockFile);
     clock.t += 1000;
     await engine.tick();
@@ -357,7 +357,7 @@ test("suite item: PASS record = done, FAIL record = done-with-FAIL (pinged), dea
 
     // Dead holder, no result (a park / kill of the suite runner) -> stall.
     const b = addWatch({ owner: "lead-2", items: [{ kind: "suite" }] }, { home: sb.home, now: clock.t });
-    writeFileSync(lockFile, JSON.stringify({ pid: 999, agentId: "rn-x", startedAt: clock.t + 10 }));
+    writeFileSync(lockFile, JSON.stringify({ pid: 999, agentId: "rn-x", startedAt: clock.t + 10, full: true, files: [] }));
     clock.t += 1000;
     await engine.tick();
     const bp = delivered.filter((d) => d.setId === b.id);
@@ -367,17 +367,107 @@ test("suite item: PASS record = done, FAIL record = done-with-FAIL (pinged), dea
     // W3's died record for the stolen holder -> stall; then a PASS rerun -> done -> completion.
     const c = addWatch({ owner: "lead-3", items: [{ kind: "suite", ref: "rn-y" }] }, { home: sb.home, now: clock.t });
     rmSync(lockFile);
-    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-y", pid: 333, startedAt: iso(clock.t), finishedAt: iso(clock.t + 5), died: true }));
+    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-y", pid: 333, startedAt: iso(clock.t), full: true, files: [], finishedAt: iso(clock.t + 5), died: true }));
     clock.t += 1000;
     await engine.tick();
     assert.match(delivered.filter((d) => d.setId === c.id)[0].text, /stalled \(died\)/);
-    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-y", pid: 334, startedAt: iso(clock.t), finishedAt: iso(clock.t + 5), tests: 5, pass: 5, fail: 0, failingFiles: [] }));
+    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-y", pid: 334, startedAt: iso(clock.t), full: true, files: [], finishedAt: iso(clock.t + 5), tests: 5, pass: 5, fail: 0, failingFiles: [] }));
     clock.t += 1000;
     await engine.tick();
     const cp = delivered.filter((d) => d.setId === c.id);
     assert.equal(cp.length, 2);
     assert.match(cp[1].text, /complete: all 1 item done/);
     assert.match(cp[1].text, /PASS 5\/5 pass, 0 fail/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("suite item: only a full run started after registration counts; a queued 17-test run that overwrites the full run's record never reads green", async () => {
+  const sb = sandbox();
+  try {
+    const resultFile = join(sb.tmp, SUITE_RESULT_FILE);
+    const lockFile = join(sb.tmp, SUITE_LOCK_FILE);
+    const partial = (at, extra = {}) => ({ agentId: "rn-w", pid: 555, startedAt: at, finishedAt: at + 30_000, full: false, files: ["test/watch-sets.test.mjs"], tests: 17, pass: 17, fail: 0, failingFiles: [], ...extra });
+    const full = (at, extra = {}) => ({ agentId: "rn-full", pid: 444, startedAt: at, finishedAt: at + 10 * MIN, full: true, files: [], tests: 1300, pass: 1300, fail: 0, failingFiles: [], ...extra });
+
+    // (a) Partial PASS records (one with full:false, one old record with no `full` field) never satisfy the item.
+    const a = addWatch({ owner: "lead-a", items: [{ kind: "suite" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    writeFileSync(resultFile, JSON.stringify(partial(T0 + 1000)));
+    clock.t = T0 + 2 * MIN;
+    await engine.tick();
+    const { full: _f, files: _x, ...legacy } = partial(T0 + 2000);
+    writeFileSync(resultFile, JSON.stringify(legacy));
+    await engine.tick();
+    assert.equal(delivered.length, 0, "no ping from a partial run");
+    assert.equal(engine.get(a.id).items[0].state, "waiting");
+    // A partial run holding the lock is not "our suite running" either.
+    writeFileSync(lockFile, JSON.stringify({ pid: 111, agentId: "rn-w", startedAt: T0 + 3000, full: false, files: ["x"] }));
+    await engine.tick();
+    assert.equal(engine.get(a.id).items[0].phase, "queued");
+    rmSync(lockFile);
+
+    // (b) A full run that started BEFORE registration does not count, even if it passes after it.
+    writeFileSync(resultFile, JSON.stringify(full(T0 - MIN)));
+    await engine.tick();
+    assert.equal(delivered.length, 0, "a full run older than the watch is not ours");
+
+    // (c) The full run FAILs, then a queued 17-test run PASSes and overwrites the record: the FAIL stands, no green.
+    const b = addWatch({ owner: "lead-b", items: [{ kind: "suite" }, { kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    writeFileSync(resultFile, JSON.stringify(full(clock.t + 1000, { pass: 1298, fail: 2, failingFiles: ["test/x.test.mjs"] })));
+    clock.t += 11 * MIN;
+    engine.onRunnerEvent({ kind: "timeline", agentId: "w-1" });
+    await engine.tick();
+    let bp = delivered.filter((d) => d.setId === b.id);
+    assert.equal(bp.length, 1);
+    assert.match(bp[0].text, /suite FAIL/);
+    writeFileSync(resultFile, JSON.stringify(partial(clock.t)));
+    clock.t += MIN;
+    engine.onRunnerEvent({ kind: "timeline", agentId: "w-1" });
+    await engine.tick();
+    assert.equal(engine.get(b.id).items[0].state, "fail", "the partial run did not replace the full run's verdict");
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-1", clock.t + 1, "PASS: w1"));
+    clock.t += 1000;
+    await engine.tick();
+    bp = delivered.filter((d) => d.setId === b.id);
+    assert.equal(bp.length, 2);
+    assert.match(bp[1].text, /finished: 1 done, 1 FAIL/);
+    assert.match(bp[1].text, /suite: FAIL — FAIL 1298\/1300/);
+    assert.doesNotMatch(bp[1].text, /17\/17|complete: all/);
+
+    // (d) The full run is still going (or not yet seen) when the 17-test run's PASS lands: waiting, not green; the full PASS then completes it.
+    const c = addWatch({ owner: "lead-c", items: [{ kind: "suite" }] }, { home: sb.home, now: clock.t });
+    const fullStart = clock.t + 1000;
+    writeFileSync(lockFile, JSON.stringify({ pid: 111, agentId: "rn-full", startedAt: fullStart, full: true, files: [] }));
+    writeFileSync(resultFile, JSON.stringify(partial(clock.t + 2000)));
+    clock.t += 5 * MIN;
+    await engine.tick();
+    assert.equal(delivered.filter((d) => d.setId === c.id).length, 0);
+    assert.equal(engine.get(c.id).items[0].phase, "running");
+    rmSync(lockFile);
+    writeFileSync(resultFile, JSON.stringify(full(fullStart)));
+    clock.t += MIN;
+    await engine.tick();
+    const cp = delivered.filter((d) => d.setId === c.id);
+    assert.equal(cp.length, 1);
+    assert.match(cp[0].text, /complete: all 1 item done/);
+    assert.match(cp[0].text, /PASS 1300\/1300/);
+
+    // (e) A died record for a full run is a stall; a died partial run is ignored.
+    const d = addWatch({ owner: "lead-d", items: [{ kind: "suite" }] }, { home: sb.home, now: clock.t });
+    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-w", pid: 556, startedAt: clock.t + 10, full: false, files: ["x"], died: true }));
+    clock.t += MIN;
+    await engine.tick();
+    assert.equal(delivered.filter((x) => x.setId === d.id).length, 0, "a died partial run is not our suite");
+    writeFileSync(resultFile, JSON.stringify({ agentId: "rn-full", pid: 445, startedAt: clock.t, full: true, files: [], died: true }));
+    clock.t += MIN;
+    await engine.tick();
+    const dp = delivered.filter((x) => x.setId === d.id);
+    assert.equal(dp.length, 1);
+    assert.match(dp[0].text, /suite stalled \(died\)/);
   } finally {
     sb.cleanup();
   }

@@ -1,8 +1,9 @@
 // The machine-wide `npm test` slot (scripts/run-tests.mjs): one lock, an opt-in FIFO queue and a last-run record.
 // The watcher (server/watch-sets.mjs) reads these file names and fields, so keep them stable.
-//   <dir>/vibesquad-npm-test.lock       {pid, agentId, startedAt}  O_EXCL, held for the run (runner/lock.mjs)
-//   <dir>/vibesquad-npm-test-last.json  {agentId, pid, startedAt, finishedAt, tests, pass, fail, failingFiles} on exit,
-//                                       or {agentId, pid, startedAt, died:true} written by whoever steals a dead holder's lock
+//   <dir>/vibesquad-npm-test.lock       {pid, agentId, startedAt, full, files}  O_EXCL, held for the run (runner/lock.mjs)
+//   <dir>/vibesquad-npm-test-last.json  {agentId, pid, startedAt, finishedAt, full, files, tests, pass, fail, failingFiles} on exit,
+//                                       or {agentId, pid, startedAt, full, files, died:true} written by whoever steals a dead holder's lock
+// full: true only for a whole-suite run (no file args); files: the file args. A watch set's suite item accepts only full runs.
 //   <dir>/vibesquad-npm-test.queue      append-only JSON lines: join / beat / done, see readQueue
 // <dir> is os.tmpdir(), or VIBESQUAD_TEST_LOCK_DIR (tests point it at a temp dir so they never touch the real slot).
 import { randomBytes } from "node:crypto";
@@ -63,22 +64,23 @@ const sameRun = (a, b) => a?.pid === b?.pid && a?.startedAt === b?.startedAt;
 export function recordDied(paths, old, reason = "dead") {
   if (!Number.isInteger(old?.pid)) return;
   if (sameRun(readLast(paths), old)) return;
-  const rec = { agentId: old.agentId ?? null, pid: old.pid, startedAt: old.startedAt ?? null, died: true };
+  const rec = { agentId: old.agentId ?? null, pid: old.pid, startedAt: old.startedAt ?? null, full: old.full === true, files: Array.isArray(old.files) ? old.files : [], died: true };
   if (reason !== "dead") rec.reason = reason; // "stale": alive but past SUITE_STALE_MS
   writeJsonAtomic(paths.last, rec);
 }
 
-/** One try for the slot. Returns the slot {pid, agentId, startedAt} or null while another live run holds it. */
-export function tryAcquireSlot(paths, { pid = process.pid, agentId = callerAgentId(), alive = pidAlive, staleMs = SUITE_STALE_MS } = {}) {
+/** One try for the slot. Returns the slot {pid, agentId, startedAt, full, files} or null while another live run holds it. */
+export function tryAcquireSlot(paths, { pid = process.pid, agentId = callerAgentId(), alive = pidAlive, staleMs = SUITE_STALE_MS, full = false, files = [] } = {}) {
   const startedAt = Date.now();
+  const run = { full: full === true, files: [...files] };
   const ok = acquireStartLock(paths.lock, {
     staleMs,
     alive,
     pid,
-    body: { agentId, startedAt },
+    body: { agentId, startedAt, ...run },
     onSteal: (old, reason) => recordDied(paths, old, reason),
   });
-  return ok ? { pid, agentId, startedAt } : null;
+  return ok ? { pid, agentId, startedAt, ...run } : null;
 }
 
 /**
@@ -94,6 +96,8 @@ export function finishSlot(paths, slot, { tests = null, pass = null, fail = null
       pid: slot.pid,
       startedAt: slot.startedAt,
       finishedAt: Date.now(),
+      full: slot.full === true,
+      files: Array.isArray(slot.files) ? slot.files : [],
       tests,
       pass,
       fail,
@@ -161,6 +165,8 @@ export async function waitForSlot(
     pollMs = QUEUE_POLL_MS,
     beatMs = QUEUE_BEAT_MS,
     beatStaleMs = QUEUE_BEAT_STALE_MS,
+    full = false,
+    files = [],
     onWait,
     onJoin,
   } = {},
@@ -198,7 +204,7 @@ export async function waitForSlot(
         continue;
       }
       if (idx === 0) {
-        const slot = tryAcquireSlot(paths, { pid, agentId, alive, staleMs });
+        const slot = tryAcquireSlot(paths, { pid, agentId, alive, staleMs, full, files });
         if (slot) {
           leave();
           if (live.length === 1) rmSync(paths.queue, { force: true }); // nobody behind us: compact (a racing joiner re-joins)

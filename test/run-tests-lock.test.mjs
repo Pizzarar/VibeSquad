@@ -86,21 +86,23 @@ test("callerAgentId reads VS_AGENT_ID, then PASEO_AGENT_ID, else null", () => {
   assert.equal(callerAgentId({ VS_AGENT_ID: "  " }), null);
 });
 
-test("lock body is {pid, agentId, startedAt}; a live holder refuses a second acquirer; finish records and releases", (t) => {
+test("lock body is {pid, agentId, startedAt, full, files}; a live holder refuses a second acquirer; finish records and releases", (t) => {
   const paths = suitePaths(tmp(t));
-  const slot = tryAcquireSlot(paths, { agentId: "agent-a" });
+  const slot = tryAcquireSlot(paths, { agentId: "agent-a", full: true, files: [] });
   assert.ok(slot);
   const body = readLock(paths.lock);
   assert.equal(body.pid, process.pid);
   assert.equal(body.agentId, "agent-a");
   assert.equal(body.startedAt, slot.startedAt);
+  assert.equal(body.full, true);
+  assert.deepEqual(body.files, []);
   assert.equal(tryAcquireSlot(paths, { agentId: "agent-b" }), null, "fresh live lock blocks");
   finishSlot(paths, slot, { tests: 4, pass: 3, fail: 1, failingFiles: ["test/x.test.mjs"] });
   assert.equal(existsSync(paths.lock), false);
   const last = readLast(paths);
   assert.deepEqual(
     { ...last, finishedAt: typeof last.finishedAt },
-    { agentId: "agent-a", pid: process.pid, startedAt: slot.startedAt, finishedAt: "number", tests: 4, pass: 3, fail: 1, failingFiles: ["test/x.test.mjs"] },
+    { agentId: "agent-a", pid: process.pid, startedAt: slot.startedAt, finishedAt: "number", full: true, files: [], tests: 4, pass: 3, fail: 1, failingFiles: ["test/x.test.mjs"] },
   );
   assert.deepEqual(readdirSync(paths.dir).sort(), ["vibesquad-npm-test-last.json"], "no tmp or guard files left behind");
 });
@@ -210,7 +212,7 @@ test("a crashed holder is stolen and gets a died record", { timeout: 30000 }, as
   await k.exited;
   const slot = tryAcquireSlot(paths, { agentId: "agent-next" });
   assert.ok(slot, "dead holder's lock taken over");
-  assert.deepEqual(readLast(paths), { agentId: "agent-crash", pid: k.pid, startedAt, died: true });
+  assert.deepEqual(readLast(paths), { agentId: "agent-crash", pid: k.pid, startedAt, full: false, files: [], died: true });
   assert.equal(readLock(paths.lock).agentId, "agent-next");
   finishSlot(paths, slot, { tests: 1, pass: 1, fail: 0 });
   assert.equal(readLast(paths).agentId, "agent-next");
@@ -230,12 +232,12 @@ test("a holder that wrote its own result before dying gets no died record", (t) 
 
 test("a live holder past the 2h stale age is taken over with a died record (reason stale)", (t) => {
   const paths = suitePaths(tmp(t));
-  writeFileSync(paths.lock, JSON.stringify({ pid: DEAD_PID, agentId: "agent-stuck", startedAt: 7 }));
+  writeFileSync(paths.lock, JSON.stringify({ pid: DEAD_PID, agentId: "agent-stuck", startedAt: 7, full: true, files: [] }));
   const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
   utimesSync(paths.lock, old, old);
   const slot = tryAcquireSlot(paths, { alive: () => true });
   assert.ok(slot);
-  assert.deepEqual(readLast(paths), { agentId: "agent-stuck", pid: DEAD_PID, startedAt: 7, died: true, reason: "stale" });
+  assert.deepEqual(readLast(paths), { agentId: "agent-stuck", pid: DEAD_PID, startedAt: 7, full: true, files: [], died: true, reason: "stale" }, "a died full run stays marked full");
   finishSlot(paths, slot);
 });
 
@@ -316,6 +318,8 @@ test("run-tests.mjs: a normal run keeps the spec output, writes the last record,
   assert.ok(last.startedAt <= last.finishedAt);
   assert.deepEqual([last.tests, last.pass, last.fail], [2, 1, 1]);
   assert.deepEqual(last.failingFiles, [path.relative(root, fail).split(path.sep).join("/")]);
+  assert.equal(last.full, false, "file args = a partial run");
+  assert.deepEqual(last.files, [pass, fail]);
   assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith("vibesquad-")), ["vibesquad-npm-test-last.json"], "no lock, queue or summary left");
 });
 
@@ -352,7 +356,7 @@ test("run-tests.mjs: without --queue a held slot still exits 1; with --queue it 
   assert.equal(await code, 0, out);
   assert.match(out, /ℹ pass 1/);
   const last = readLast(paths);
-  assert.deepEqual([last.agentId, last.tests, last.pass, last.fail, last.failingFiles], [null, 1, 1, 0, []]);
+  assert.deepEqual([last.agentId, last.tests, last.pass, last.fail, last.failingFiles, last.full, last.files], [null, 1, 1, 0, [], false, [pass]], "--queue is not a file arg");
   assert.equal(existsSync(paths.lock), false);
   assert.equal(existsSync(paths.queue), false);
 });

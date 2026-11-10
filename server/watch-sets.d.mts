@@ -12,6 +12,8 @@ export interface WatchItem {
   report?: string;
   doneAt?: string;
   stallFiredAt?: string;
+  /** suite: the full run whose record set the verdict */
+  run?: { pid: number | null; startedAt: number | string };
 }
 
 export interface WatchPing {

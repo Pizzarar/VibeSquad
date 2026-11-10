@@ -1,5 +1,5 @@
 // `npm test` entry: only one suite may run at a time machine-wide (parallel suites each spawn runners/MCP servers and flood the box).
-// Holds <tmpdir>/vibesquad-npm-test.lock {pid, agentId, startedAt} for the run; a dead owner or a lock older than 2h is stale
+// Holds <tmpdir>/vibesquad-npm-test.lock {pid, agentId, startedAt, full, files} for the run; a dead owner or a lock older than 2h is stale
 // and taken over (the dead run gets a {died:true} record). On exit it writes <tmpdir>/vibesquad-npm-test-last.json with the
 // counts and failing files. Files and fields: scripts/suite-lock.mjs.
 //   npm test                     refuse (exit 1) if another suite holds the slot
@@ -16,6 +16,8 @@ const paths = suitePaths();
 const args = process.argv.slice(2);
 const queue = args.includes("--queue");
 const files = args.filter((a) => a !== "--queue");
+// Recorded in the lock and the last-run record: only a full run (no file args) can satisfy a watch set's suite item.
+const run = { full: files.length === 0, files };
 const who = (h) => `pid ${h?.pid}${h?.agentId ? `, agent ${h.agentId}` : ""}`;
 
 let slot = null;
@@ -26,6 +28,7 @@ if (queue) {
   process.on("SIGTERM", quit);
   process.on("exit", () => { if (!slot) leave(); });
   slot = await waitForSlot(paths, {
+    ...run,
     onJoin: (t) => { leave = t.leave; },
     onWait: ({ position, waiting, holder }) =>
       console.error(`npm test queued: #${position} of ${waiting} waiting for the suite slot${holder ? ` (held by ${who(holder)})` : ""}.`),
@@ -33,7 +36,7 @@ if (queue) {
   process.off("SIGINT", quit);
   process.off("SIGTERM", quit);
 } else {
-  slot = tryAcquireSlot(paths);
+  slot = tryAcquireSlot(paths, run);
   if (!slot) {
     let holder = null;
     try { holder = JSON.parse(readFileSync(paths.lock, "utf8")); } catch {}

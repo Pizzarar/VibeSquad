@@ -191,19 +191,23 @@ export function classifyItem(item, set, ctx) {
   }
 
   if (item.kind === "suite") {
+    // Only a FULL run (no file args; W3's `full: true`, a missing field is not full) that started after registration counts.
+    // A partial run (e.g. a queued 17-test run that overwrote the last-run record) is ignored: never done, never green.
     const anyRun = ANY_SUITE.has(item.ref.toLowerCase());
-    const matches = (x) => Boolean(x) && (anyRun || String(x.agentId ?? "") === item.ref);
+    const ours = (x) => Boolean(x) && (anyRun || String(x.agentId ?? "") === item.ref) && x.full === true && timeOf(x.startedAt) >= created;
     const rec = ctx.suite?.result;
-    const recAt = timeOf(rec?.finishedAt ?? rec?.startedAt);
-    if (matches(rec) && recAt >= created) {
-      if (rec.died) return { phase: "died", state: "stalled", reason: "died", report: `suite holder pid ${rec.pid ?? "?"} died with no result` };
+    if (ours(rec)) {
+      const run = { pid: rec.pid ?? null, startedAt: rec.startedAt };
+      if (rec.died) return { phase: "died", state: "stalled", reason: "died", run, report: `suite holder pid ${rec.pid ?? "?"} died with no result` };
       const fail = Number(rec.fail) || 0;
       const files = Array.isArray(rec.failingFiles) && rec.failingFiles.length ? `; failing: ${rec.failingFiles.join(", ")}` : "";
       const summary = `${rec.pass ?? "?"}/${rec.tests ?? "?"} pass, ${fail} fail${files}`;
-      return fail > 0 ? { phase: "finished", state: "fail", report: `FAIL ${summary}` } : { phase: "finished", state: "done", report: `PASS ${summary}` };
+      return fail > 0 ? { phase: "finished", state: "fail", run, report: `FAIL ${summary}` } : { phase: "finished", state: "done", run, report: `PASS ${summary}` };
     }
+    // A full run's verdict already seen stays put when a later partial run overwrites the record (only a new full run replaces it).
+    if (item.run) return { phase: item.phase, state: item.state, ...(item.reason ? { reason: item.reason } : {}), report: item.report };
     const lock = ctx.suite?.lock;
-    if (matches(lock)) {
+    if (ours(lock)) {
       if (!ctx.alive(Number(lock.pid))) return { phase: "running", state: "stalled", reason: "holder-dead", report: `suite holder pid ${lock.pid} is gone and wrote no result` };
       const lockAt = timeOf(lock.startedAt);
       return { phase: "running", phaseSince: Number.isFinite(lockAt) ? iso(lockAt) : undefined, state: "waiting" };
@@ -287,6 +291,7 @@ export function stepSet(set, ctx) {
       if (c.state === "done" || c.state === "fail") item.doneAt = at;
     }
     if (c.report !== undefined && c.report !== item.report) item.report = c.report;
+    if (c.run && JSON.stringify(c.run) !== JSON.stringify(item.run)) item.run = c.run;
   }
   set.pings ??= [];
   const lastPing = timeOf(set.lastPingAt);
