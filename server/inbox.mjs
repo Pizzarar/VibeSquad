@@ -5,7 +5,7 @@ import os from "node:os";
 import { join, resolve } from "node:path";
 import { createAgentClient } from "./brainstorm.mjs";
 import { getBackend } from "./backend/index.mjs";
-import { resolveLeadWinner, whoCandidate } from "./identity.mjs";
+import { findLaneInRegistry, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { isHubLane } from "./lane-pure.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
@@ -457,6 +457,18 @@ export function listInboxCards(filter = {}, rootDir = REPO_ROOT) {
   });
 }
 
+/**
+ * A card parked on a lane nobody has (a typo'd `--lane`, a bad bounce) is invisible: no column, no Buddy, and Send fails
+ * later. Refuse it at the door so the sender sees the error. Legacy INBOX_LANES and `_unassigned` stay valid; with no
+ * registry loaded there is nothing to check against.
+ */
+function assertKnownLane(laneId, teams) {
+  const raw = String(laneId ?? "").trim().replace(/^@+/, "");
+  if (!raw || raw === "_unassigned" || INBOX_LANES.includes(raw) || !teams.length) return;
+  if (findLaneInRegistry(raw, teams)) return;
+  throw new Error(`unknown lane "${raw}": not in the teams registry (cards on an unknown lane never reach a Buddy)`);
+}
+
 export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
@@ -474,6 +486,7 @@ export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
   const defaultLane = typeof body.defaultLaneId === "string" && body.defaultLaneId.trim() ? body.defaultLaneId.trim() : "";
   const explicitTeam = typeof body.teamId === "string" && body.teamId.trim() ? body.teamId.trim() : "";
   const source = typeof body.source === "string" && body.source.trim() ? body.source.trim() : "ui";
+  if (explicitLane) assertKnownLane(explicitLane, teams);
 
   let added = [];
   const cards = updateInboxCardsSync(baseHome, (working) => {
@@ -628,6 +641,7 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       const cardId = String(body.cardId || "").trim();
       const laneId = String(body.laneId || body.lane || "").trim();
       if (!cardId || !laneId) throw new Error("bounce requires cardId and laneId");
+      assertKnownLane(laneId, teams);
       const card = cards.find((c) => c.id === cardId);
       if (!card) throw new Error(`Card not found: ${cardId}`);
 
