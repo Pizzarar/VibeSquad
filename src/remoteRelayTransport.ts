@@ -164,8 +164,14 @@ export async function startHandshake(hostPub: Uint8Array, hostId: string, kex?: 
       if (msg2.length < 32 + 8 + TAG_LEN) throw new RelayAuthError("bad handshake reply");
       const eh = msg2.slice(0, 32);
       const h = await transcriptHash(hostId, hostPub, ec, eh);
-      const es = await k.dh(hostPub);
-      const ee = await k.dh(eh);
+      let es: Bytes;
+      let ee: Bytes;
+      try {
+        es = await k.dh(hostPub);
+        ee = await k.dh(eh);
+      } catch {
+        throw new RelayAuthError("invalid peer key"); // noble throws on low-order/invalid points, WebCrypto may too: one typed error
+      }
       if (allZero(es) || allZero(ee)) throw new RelayAuthError("degenerate DH output");
       const keys = await deriveKeys(es, ee, h);
       const channel = await createChannel(keys.c2h, keys.h2c, DIR_C2H, DIR_H2C);

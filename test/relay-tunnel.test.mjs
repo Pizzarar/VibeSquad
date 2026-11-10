@@ -757,6 +757,19 @@ describe("noble X25519 fallback", () => {
   });
 });
 
+describe("low-order peer key", () => {
+  test("both X25519 backends reject a low-order host ephemeral with RelayAuthError", async () => {
+    const { startHandshake } = await import("../src/remoteRelayTransport.ts");
+    const junk = Buffer.alloc(32 + 8 + 16 + 5, 9);
+    for (const forceNoble of [true, false]) {
+      for (const point of [Buffer.alloc(32, 0), Buffer.concat([Buffer.from([1]), Buffer.alloc(31, 0)])]) {
+        const hs = await startHandshake(hostKey.publicRaw, HOST_ID, await newKex(forceNoble));
+        await assert.rejects(hs.finish(Buffer.concat([point, junk.subarray(32)])), RelayAuthError, `${forceNoble ? "noble" : "webcrypto"} ${point.toString("hex").slice(0, 4)}`);
+      }
+    }
+  });
+});
+
 describe("H3 pairing fragment", () => {
   const link = () => `#hostId=h1&pub=${encodeURIComponent(hostKey.pubB64)}&relay=${encodeURIComponent("wss://relay.example")}&code=123456`;
   const win = (hash) => {
