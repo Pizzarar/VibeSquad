@@ -1208,8 +1208,6 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
 export function resolveAndroidApkPath(rootDir = REPO_ROOT) {
   const primary = join(rootDir, "dist-desktop", "VibeSquad.apk");
   if (existsSync(primary)) return primary;
-  const parent = resolve(rootDir, "../..", "dist-desktop", "VibeSquad.apk");
-  if (existsSync(parent)) return parent;
   const apkDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
   if (existsSync(apkDir)) {
     try {
@@ -1260,6 +1258,21 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
 /** The APK download path, case-insensitive (phones lowercase typed URLs: /vibesquad.apk). */
 export const isAndroidApkPath = (path) => /^\/(?:__vibesquad\/android\/)?vibesquad\.apk$/i.test(path);
 
+// sha256 of the served APK, cached by path+mtime+size so each request stays cheap.
+const apkHashCache = new Map();
+function apkSha256(file, stat) {
+  const key = `${stat.mtimeMs}:${stat.size}`;
+  const hit = apkHashCache.get(file);
+  if (hit?.key === key) return hit.hash;
+  try {
+    const hash = createHash("sha256").update(readFileSync(file)).digest("hex");
+    apkHashCache.set(file, { key, hash });
+    return hash;
+  } catch {
+    return "";
+  }
+}
+
 export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -1275,6 +1288,8 @@ export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  const sha = apkSha256(file, stat);
+  if (sha) res.setHeader("x-vibesquad-apk-sha256", sha);
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }

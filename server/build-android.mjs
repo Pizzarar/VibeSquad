@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
@@ -267,6 +268,13 @@ function latestBuildTools(androidHome) {
   }
 }
 
+/** Writes `<apk>.sha256` (hex digest) so the served APK can be proven equal to the built one. */
+export function writeApkSidecar(apkPath) {
+  const hash = createHash("sha256").update(readFileSync(apkPath)).digest("hex");
+  writeFileSync(`${apkPath}.sha256`, `${hash}\n`, "utf8");
+  return hash;
+}
+
 /**
  * Builds the Android APK: remote frontend → `tauri android init` (if needed) → deep-link intent-filter
  * → `tauri android build --apk` → sign (if unsigned) → copy to `dist-desktop/VibeSquad.apk`.
@@ -336,6 +344,7 @@ export function buildAndroidApk({
   const distDesktopDir = join(rootDir, "dist-desktop");
   mkdirSync(distDesktopDir, { recursive: true });
   const destApk = join(distDesktopDir, "VibeSquad.apk");
+  rmSync(`${destApk}.sha256`, { force: true }); // never leave a stale hash beside a missing/failed APK
   const latest = latestBuildTools(androidEnv.ANDROID_HOME);
   if (!latest) throw new Error(`Android build-tools not found under ${join(androidEnv.ANDROID_HOME, "build-tools")}`);
   const javaExe = androidEnv.JAVA_HOME
@@ -363,6 +372,7 @@ export function buildAndroidApk({
     copyFileSync(apk, destApk);
     ({ certSha256 } = verifyApkCert({ javaExe, apksignerJar, apk: destApk, cwd: rootDir, env: androidEnv, exec, pinFirst }));
   }
+  writeApkSidecar(destApk);
   console.log(`[build:android] 6/6 Staged ${destApk}`);
   return { apkPath: destApk, certSha256 };
 }

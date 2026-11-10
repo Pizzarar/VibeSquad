@@ -42,6 +42,18 @@ export function syncRuntimeDir(repoRoot = rootDir) {
     }
   }
 
+  // The live server serves runtime/dist-desktop/VibeSquad.apk; ship the staged build (+ hash sidecar) when present.
+  for (const name of ["VibeSquad.apk", "VibeSquad.apk.sha256"]) {
+    const src = join(repoRoot, "dist-desktop", name);
+    if (!existsSync(src)) continue;
+    try {
+      mkdirSync(join(runtimeDir, "dist-desktop"), { recursive: true });
+      cpSync(src, join(runtimeDir, "dist-desktop", name), { force: true });
+    } catch {
+      // ignore locked files
+    }
+  }
+
   let stamp = null;
   try {
     const gitOut = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8", windowsHide: true }).trim();

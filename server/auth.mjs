@@ -5,6 +5,7 @@ import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
+import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
 export const DEVICE_COOKIE = "vs_device";
@@ -96,9 +97,9 @@ export function hasDistIndex(rootDir = DEFAULT_ROOT_DIR) {
   return false;
 }
 
-/** True when `npm run build:android` has produced the signed APK in `dist-desktop/`. */
-function isAndroidApkBuilt(rootDir = resolve(import.meta.dirname, "..")) {
-  return existsSync(join(rootDir, "dist-desktop", "VibeSquad.apk"));
+/** True when the APK route would serve a file (same lookup as /VibeSquad.apk; called at request time, so the circular import is safe). */
+export function isAndroidApkBuilt(rootDir = resolve(import.meta.dirname, "..")) {
+  return existsSync(resolveAndroidApkPath(rootDir));
 }
 
 export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
