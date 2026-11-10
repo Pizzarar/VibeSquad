@@ -5,7 +5,7 @@ import test from "node:test";
 const src = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
 
 test("compact header requires a focused agent so Spin Up never portals drawer-head-compact", () => {
-  assert.match(src, /const compact = !!pinFocus\?\.agentId && shownHere/);
+  assert.match(src, /const compact = !!pinFocus && shownHere && inLane/);
 });
 
 test("switching provider on a Lead leaves its labels.profile intact before onSuccessor()", () => {

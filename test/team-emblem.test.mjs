@@ -8,11 +8,13 @@ import { transformSync } from "rolldown/utils";
 
 // pixel.tsx is TypeScript + JSX: transpile it once to a temp .mjs and import that.
 const srcDir = resolve(import.meta.dirname, "..", "src");
-const code = transformSync("pixel.tsx", readFileSync(join(srcDir, "pixel.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace('"./cast"', '"./cast.mjs"');
+const code = transformSync("pixel.tsx", readFileSync(join(srcDir, "pixel.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace('"./cast"', '"./cast.mjs"').replace('"./uiScale"', '"./uiScale.mjs"').replace('"./useBotFace"', '"./useBotFace.mjs"');
 const dir = mkdtempSync(join(tmpdir(), "vs-team-emblem-"));
 writeFileSync(join(dir, "pixel.mjs"), code);
 writeFileSync(join(dir, "cast.mjs"), transformSync("cast.ts", readFileSync(join(srcDir, "cast.ts"), "utf8"), { lang: "ts" }).code);
-const { initials, inkFor } = await import(pathToFileURL(join(dir, "pixel.mjs")).href);
+// pixel.tsx also imports the React-hook modules uiScale and useBotFace; the pure helpers under test never call them, so stub them.
+writeFileSync(join(dir, "uiScale.mjs"), "export const snapDeviceSize = (css) => ({ device: css, css });\nexport const useUiScale = () => 1;\n");
+writeFileSync(join(dir, "useBotFace.mjs"), "export const useDpr = () => 1;\n");const { initials, inkFor } = await import(pathToFileURL(join(dir, "pixel.mjs")).href);
 
 test("initials: one letter from the first part", () => {
   assert.equal(initials("Escape From Idle"), "E");
