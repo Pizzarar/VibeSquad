@@ -21,6 +21,33 @@ function toSvg(matrix, margin = 2) {
   );
 }
 
+/**
+ * Returns the QR as terminal text (two modules per row with half blocks; `vs pair` over SSH). Dark modules print as
+ * block characters on the default background, so it scans best on a dark terminal; a light one still scans.
+ */
+export async function qrTerminal(text) {
+  const lib = await loadLib();
+  if (lib?.toString) {
+    try {
+      return await lib.toString(text, { type: "terminal", small: true, errorCorrectionLevel: "M" });
+    } catch {}
+  }
+  const m = encodeQr(text);
+  const n = m.length;
+  const at = (y, x) => (y >= 0 && y < n && x >= 0 && x < n ? Boolean(m[y][x]) : false);
+  const lines = [];
+  for (let y = -2; y < n + 2; y += 2) {
+    let line = "";
+    for (let x = -2; x < n + 2; x++) {
+      const top = at(y, x);
+      const bottom = at(y + 1, x);
+      line += top && bottom ? "█" : top ? "▀" : bottom ? "▄" : " ";
+    }
+    lines.push(line);
+  }
+  return lines.join("\n") + "\n";
+}
+
 /** Returns an SVG string (white background, black modules) encoding `text`. */
 export async function qrSvg(text) {
   const lib = await loadLib();

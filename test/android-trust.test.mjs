@@ -89,7 +89,7 @@ describe("native pin bridge (web side)", () => {
     const src = readFileSync(new URL("../src/RemotePairScreen.tsx", import.meta.url), "utf8");
     assert.ok(src.includes("pairRedeemUrl(hostN, codeN, undefined, location.origin)"));
     assert.match(src, /sessionStorage\.setItem\(OPENED_KEY, "1"\);[\s\S]*?location\.href = pairRedeemUrl/);
-    assert.match(src, /\/unpaired\/i\.test\([^)]*\)[\s\S]*?clearSession\(\)/);
+    assert.match(src, /\/unpaired\/i\.test\([^)]*\)[\s\S]*?forgetHost\(h\)/);
     assert.doesNotMatch(src, /#paired/);
   });
 
@@ -156,7 +156,7 @@ describe("Kotlin trust guards and build wiring", () => {
   test("the pair screen pins through the bridge before redeeming and forgets on Forget", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /t\.pin\(hostN, fpN!\)/);
-    assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN)"));
+    assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN, undefined, undefined, await fetchHostId(hostN), pinnedFp)"));
     assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 3);
   });
 
@@ -164,8 +164,8 @@ describe("Kotlin trust guards and build wiring", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /Promise\.race\(\[trust\(\)\?\.flush\(\)[\s\S]*?500\)\)\]\);\s*location\.href = pairRedeemUrl/);
     assert.doesNotMatch(src, /flushCookies/);
-    assert.match(src, /clearSession\(\);\s*setError\(remoteError\("unknown", "Your PC no longer/);
-    assert.match(src, /trust\(\)\?\.forget\(h\)\.catch\(\(\) => \{\}\);\s*clearSession\(\);\s*setError/);
+    assert.match(src, /forgetHost\(h\);\s*setError\(remoteError\("unknown", "Your PC no longer/);
+    assert.match(src, /trust\(\)\?\.forget\(h\)\.catch\(\(\) => \{\}\);\s*forgetHost\(h\);\s*setError/);
     const kt = read("src-tauri/android/VsTrust.kt");
     const forget = kt.slice(kt.indexOf("fun forget("), kt.indexOf("fun probe("));
     assert.match(forget, /remove\("ca:\$key"\)/);

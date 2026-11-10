@@ -33,6 +33,7 @@ import {
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
+import { getHostId } from "./host-id.mjs";
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
@@ -383,7 +384,7 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
     return res.end();
   }
   const full = getAuthStatus(rootDir);
-  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, distReady: full.distReady, caFingerprint: full.caFingerprint });
+  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint });
   return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
 }
 
@@ -396,7 +397,8 @@ function handleTeams(req, res, rootDir) {
     const file = resolveTeamsFilePath(rootDir);
     const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null, recordWarning: true });
     if (r.ok && r.data) {
-      return sendJson(res, 200, { ...r.data, revision: teamsRevision(file) });
+      // hostId rides on the envelope only (never inside the lane/agent records; Overlord decision, E4a).
+      return sendJson(res, 200, { ...r.data, revision: teamsRevision(file), hostId: getHostId() });
     }
     return sendJson(res, 500, { error: r.error || "Failed to read teams.json" });
   }

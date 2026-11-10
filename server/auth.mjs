@@ -1,8 +1,10 @@
 import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual, X509Certificate } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
+import { withFileLockSync } from "./file-lock.mjs";
+import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
 import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
@@ -107,6 +109,7 @@ export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
   const distReady = hasDistIndex(rootDir);
   return {
     ok: true,
+    hostId: getHostId(),
     port,
     meshnetIp,
     meshnetHost,
@@ -346,26 +349,158 @@ export function caFingerprint() {
 
 // ---- Devices ----
 
-let devices; // [{ id, name, createdAt, lastSeenAt, tokenHash }]
+let devices; // [{ id, name, createdAt, lastSeenAt, tokenHash }]: in-memory mirror of devices.json
 let lastPersist = 0;
+// devices.json is also written by other processes (`vs devices revoke` over SSH, E4a). Two rules keep that safe:
+//  1. One locked writer: every change goes through mutateDevices(), which re-reads the file under <devices.json>.lock
+//     (server/file-lock.mjs, the same primitive the CLI uses through this module), edits, and writes atomically. A
+//     revoke and a pairing can't undo each other.
+//  2. The mirror is trusted only while the file's path + mtime + size match what was last read or written; a changed
+//     stamp reloads before any read, and the sockets of devices that vanished are destroyed. A file that exists but
+//     can't be read or parsed is never treated as "no devices": reads fail closed and nothing is written over it.
+let devicesStamp = null;
+let devicesReadError = null; // Error from the last failed read, or null
 
+function devicesFileStamp() {
+  const file = devicesFile();
+  const st = statSync(file, { throwIfNoEntry: false });
+  return st ? `${file}|${st.mtimeMs}|${st.size}` : `${file}|missing`;
+}
+
+/** The list on disk; throws when the file exists but is unreadable or malformed (a missing file is an empty list). */
+function readDevicesFromDisk() {
+  const r = readJsonFileWithBom(devicesFile(), { fallback: { devices: [] }, label: "devices.json" });
+  if (!r.ok && r.exists) throw new Error(`devices.json unreadable: ${r.error}`);
+  return Array.isArray(r.value?.devices) ? r.value.devices : [];
+}
+
+// ---- Live sockets per device: every authenticated request registers its socket (keep-alive, SSE streams), so a
+// revoke, from the UI or from another process, destroys the streams instead of waiting for the phone's TCP to drop.
+const wsByDevice = new Map(); // deviceId -> Set<socket>
+const DEVICE_WATCH_MS = 1000;
+let deviceWatch = null;
+
+function dropDeviceSockets(id) {
+  for (const s of wsByDevice.get(id) ?? []) s.destroy();
+  wsByDevice.delete(id);
+}
+
+/** While any device socket is open, re-check devices.json every second so an external revoke cuts streams without a request. */
+function ensureDeviceWatch() {
+  if (deviceWatch) return;
+  deviceWatch = setInterval(() => {
+    if (!wsByDevice.size) {
+      clearInterval(deviceWatch);
+      deviceWatch = null;
+      return;
+    }
+    loadDevices(); // reloads on an external change and drops the sockets of devices that are gone
+  }, DEVICE_WATCH_MS);
+  deviceWatch.unref?.();
+}
+
+export function trackSocket(deviceId, socket) {
+  if (typeof socket?.once !== "function" || typeof socket?.destroy !== "function") return;
+  let set = wsByDevice.get(deviceId);
+  if (!set) wsByDevice.set(deviceId, (set = new Set()));
+  if (set.has(socket)) return; // keep-alive: many requests, one close listener
+  set.add(socket);
+  socket.once("close", () => {
+    set.delete(socket);
+    if (!set.size) wsByDevice.delete(deviceId);
+  });
+  ensureDeviceWatch();
+}
+
+/** True while a device still has a registered socket (tests). */
+export function hasDeviceSockets(id) {
+  return (wsByDevice.get(id)?.size ?? 0) > 0;
+}
+
+function adoptDevices(fresh, stamp) {
+  if (devices) {
+    // The file changed under us (another process): anything it dropped is revoked here too, live sockets included.
+    const keep = new Set(fresh.map((d) => d.id));
+    for (const d of devices) if (!keep.has(d.id)) dropDeviceSockets(d.id);
+  }
+  devices = fresh;
+  devicesStamp = stamp;
+  devicesReadError = null;
+}
+
+/** The current list, re-read when another process changed the file. Null when the file can't be read (callers fail closed). */
 function loadDevices() {
-  if (devices) return devices;
-  const { value } = readJsonFileWithBom(devicesFile(), { fallback: { devices: [] }, label: "devices.json" });
-  devices = Array.isArray(value?.devices) ? value.devices : [];
+  const stamp = devicesFileStamp();
+  if (devices && stamp === devicesStamp) return devices;
+  let fresh;
+  try {
+    fresh = readDevicesFromDisk();
+  } catch (e) {
+    devicesReadError = e;
+    return null; // stamp not advanced: the next call tries the disk again
+  }
+  adoptDevices(fresh, stamp);
   return devices;
 }
 
-function saveDevices() {
+function writeDevicesFile(list) {
   mkdirSync(vibesquadHome(), { recursive: true });
-  const tmp = devicesFile() + ".tmp";
-  writeFileSync(tmp, JSON.stringify({ devices: loadDevices() }, null, 2), { encoding: "utf8", mode: 0o600 });
-  renameSync(tmp, devicesFile());
+  const tmp = `${devicesFile()}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ devices: list }, null, 2), { encoding: "utf8", mode: 0o600 });
+  try {
+    renameSync(tmp, devicesFile());
+  } catch (e) {
+    rmSync(tmp, { force: true });
+    throw e;
+  }
   clearConfigWarning(devicesFile());
-  lastPersist = Date.now();
+}
+
+/**
+ * The only writer of devices.json. Under <devices.json>.lock the list is re-read from disk, `mutate(list)` edits it in
+ * place (its return value is passed back), and the result is written atomically. Throws, writing nothing, when the
+ * file exists but can't be read, or when the lock can't be taken (5 s).
+ */
+function mutateDevices(mutate) {
+  return withFileLockSync(devicesFile(), () => {
+    const list = readDevicesFromDisk();
+    const out = mutate(list);
+    writeDevicesFile(list);
+    adoptDevices(list, devicesFileStamp());
+    lastPersist = Date.now();
+    return out;
+  });
+}
+
+/** Writes the in-memory lastSeenAt times onto the file (every 60 s; never resurrects a device another process removed). */
+function persistLastSeen() {
+  const mem = devices;
+  if (!mem) return;
+  mutateDevices((list) => {
+    for (const d of list) {
+      const m = mem.find((x) => x.id === d.id);
+      if (m?.lastSeenAt && String(m.lastSeenAt) > String(d.lastSeenAt ?? "")) d.lastSeenAt = m.lastSeenAt;
+    }
+  });
+}
+
+/** Drops the in-memory device list so the next read comes from disk (tests that swap VIBESQUAD_HOME). */
+export function resetDevicesForTest() {
+  devices = undefined;
+  devicesStamp = null;
+  devicesReadError = null;
+  lastPersist = 0;
+  for (const id of [...wsByDevice.keys()]) dropDeviceSockets(id);
 }
 
 const publicDevice = (d, currentId) => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, current: d.id === currentId });
+
+/** The paired devices without their token hashes (what `vs devices list` and GET /__vibesquad/devices show). Throws when devices.json is unreadable. */
+export function listDevices() {
+  const list = loadDevices();
+  if (!list) throw devicesReadError ?? new Error("devices.json unreadable");
+  return list.map((d) => publicDevice(d, null));
+}
 
 export function parseCookies(header) {
   const out = {};
@@ -381,14 +516,24 @@ export function authenticate(req) {
   const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
   if (!token) return null;
   const hash = Buffer.from(sha256Hex(token), "hex");
-  const dev = loadDevices().find((d) => {
+  const list = loadDevices();
+  if (!list) return null; // devices.json unreadable: fail closed rather than trust a stale or empty list
+  const dev = list.find((d) => {
     const want = Buffer.from(String(d.tokenHash ?? ""), "hex");
     return want.length === hash.length && timingSafeEqual(want, hash);
   });
   if (!dev) return null;
   const now = Date.now();
   dev.lastSeenAt = new Date(now).toISOString();
-  if (now - lastPersist > 60_000) saveDevices();
+  if (now - lastPersist > 60_000) {
+    try {
+      persistLastSeen();
+    } catch {
+      lastPersist = now; // locked or unreadable: try again in a minute, never block a request on it
+    }
+  }
+  // Register this connection so a revoke (UI, or `vs devices revoke` in another process) cuts its streams too.
+  trackSocket(dev.id, req.socket);
   return dev;
 }
 
@@ -545,27 +690,26 @@ function deviceNameFromUa(ua = "") {
 
 // ---- Live /ws sockets per device, so revocation cuts them immediately ----
 
-const wsByDevice = new Map(); // deviceId -> Set<socket>
-
-export function trackSocket(deviceId, socket) {
-  let set = wsByDevice.get(deviceId);
-  if (!set) wsByDevice.set(deviceId, (set = new Set()));
-  set.add(socket);
-  socket.once("close", () => {
-    set.delete(socket);
-    if (!set.size) wsByDevice.delete(deviceId);
+export function revokeDevice(id) {
+  const hit = mutateDevices((list) => {
+    const i = list.findIndex((d) => d.id === id);
+    if (i < 0) return false;
+    list.splice(i, 1);
+    return true;
   });
+  if (hit) dropDeviceSockets(id);
+  return hit;
 }
 
-export function revokeDevice(id) {
-  const list = loadDevices();
-  const i = list.findIndex((d) => d.id === id);
-  if (i < 0) return false;
-  list.splice(i, 1);
-  saveDevices();
-  for (const s of wsByDevice.get(id) ?? []) s.destroy();
-  wsByDevice.delete(id);
-  return true;
+/** Revokes every paired device (`vs devices revoke --all`, lost-phone fallback). Returns how many were dropped. */
+export function revokeAllDevices() {
+  const ids = mutateDevices((list) => {
+    const was = list.map((d) => d.id);
+    list.length = 0;
+    return was;
+  });
+  for (const id of ids) dropDeviceSockets(id);
+  return ids.length;
 }
 
 // ---- One-time pairing codes ----
@@ -831,8 +975,12 @@ export function handlePairRedeem(req, res) {
   const token = randomBytes(32).toString("base64url");
   const now = new Date().toISOString();
   const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
-  loadDevices().push({ id: randomUUID(), name, createdAt: now, lastSeenAt: now, tokenHash: sha256Hex(token) });
-  saveDevices();
+  try {
+    mutateDevices((list) => list.push({ id: randomUUID(), name, createdAt: now, lastSeenAt: now, tokenHash: sha256Hex(token) }));
+  } catch (e) {
+    // devices.json locked or unreadable: the code is spent, nothing was written, and no cookie goes out.
+    return sendHtml(res, 503, "Pairing failed", "The PC could not record this device (its device list is locked or unreadable). Generate a new code and try again.");
+  }
   res.statusCode = 302;
   res.setHeader("set-cookie", `${DEVICE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`);
   // Not a direct redirect: the scan is a cross-site navigation, and a redirect chain started cross-site keeps Strict cookies
@@ -851,8 +999,10 @@ export function handleDevices(req, res) {
   }
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   const current = authenticate(req)?.id;
+  const list = loadDevices();
+  if (!list) return sendJson(res, 503, { error: "devices.json is unreadable on the PC" });
   sendJson(res, 200, {
-    devices: loadDevices().map((d) => publicDevice(d, current)),
+    devices: list.map((d) => publicDevice(d, current)),
     caFingerprint: caFingerprint(),
     meshnetHost,
     meshnetIp,
@@ -879,7 +1029,7 @@ export async function handleRevoke(req, res, readBody) {
     if (typeof id !== "string") return sendJson(res, 400, { error: "id required" });
     if (!revokeDevice(id)) return sendJson(res, 404, { error: "no such device" });
     const current = authenticate(req)?.id;
-    sendJson(res, 200, { ok: true, devices: loadDevices().map((d) => publicDevice(d, current)) });
+    sendJson(res, 200, { ok: true, devices: (loadDevices() ?? []).map((d) => publicDevice(d, current)) });
   } catch (e) {
     sendJson(res, 400, { error: String(e) });
   }

@@ -52,6 +52,8 @@ export type AgentUsage = {
 
 export type PaseoAgent = {
   id: string;
+  /** The VibeSquad host (~/.vibesquad/host-id) this record came from; set client-side from the response envelope (E4a). */
+  hostId?: string;
   provider: string;
   cwd: string;
   workspaceId?: string;
@@ -94,6 +96,8 @@ export type PaseoAgent = {
 /** A registered workspace row (only the demo roster still produces these). */
 export type PaseoWorkspace = {
   id: string;
+  /** See PaseoAgent.hostId. */
+  hostId?: string;
   projectId: string;
   projectDisplayName: string;
   projectRootPath: string;

@@ -518,6 +518,8 @@ Usage:
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
+  vs pair [--json]   mint a pairing code on the running local server (headless/SSH): prints the link, 6-digit code, CA fingerprint and an ASCII QR
+  vs devices list [--json] | vs devices revoke <id|--all>   paired devices in ~/.vibesquad/devices.json; revoke drops the token (lost phone)
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
@@ -1993,6 +1995,116 @@ async function commandOpen(flags) {
 }
 
 // ---------------------------------------------------------------------------
+// vs pair / vs devices — headless pairing + lost-phone revocation (PLAN_ANDROID_END_STATE.md E4a)
+// Both need the local filesystem: `vs pair` sends ~/.vibesquad/local-token to the running server's loopback
+// listener (the same POST /__vibesquad/pair/start the desktop dialog uses; codes live in that process), and
+// `vs devices` edits ~/.vibesquad/devices.json through auth.mjs's own revoke path (the server re-reads it).
+// ---------------------------------------------------------------------------
+
+/** The text `vs pair` prints: link, code, CA fingerprint, QR. Pure, for tests. */
+export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
+  const lines = [];
+  const code = String(p.code ?? "");
+  lines.push(`Pairing code:   ${code.slice(0, 3)} ${code.slice(3)}   (expires ${p.expiresAt ? new Date(p.expiresAt).toLocaleTimeString() : "in 5 min"})`);
+  lines.push(`Pairing link:   ${p.pairUrl}`);
+  if (p.lanPairUrl && p.lanPairUrl !== p.pairUrl) lines.push(`LAN link:       ${p.lanPairUrl}`);
+  if (p.pairIpUrl && p.pairIpUrl !== p.pairUrl && p.pairIpUrl !== p.lanPairUrl) lines.push(`IP link:        ${p.pairIpUrl}`);
+  lines.push(`CA fingerprint: ${p.caFingerprint?.full || p.caFingerprint?.short || "(no CA yet)"}`);
+  if (p.hostId) lines.push(`Host id:        ${p.hostId}`);
+  if (p.caHttpUrl) lines.push(`CA download:    ${p.caHttpUrl}`);
+  if (p.androidApkAvailable && p.androidApkHttpUrl) lines.push(`Android APK:    ${p.androidApkHttpUrl}`);
+  lines.push("");
+  lines.push("Scan with the VibeSquad app (or open the link and type the code), then install the CA if asked.");
+  lines.push(`Paired devices: vs devices list   ·   lost phone: vs devices revoke <id|--all>   (port ${port})`);
+  return lines.join("\n") + "\n" + (qr ? "\n" + qr : "");
+}
+
+/** Mints a code on the running local server. Throws when the server is down or has no LAN/Meshnet address. */
+export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
+  const token = readLocalToken(file);
+  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
+  let res;
+  try {
+    res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/pair/start`, {
+      method: "POST",
+      headers: { [LOCAL_TOKEN_HEADER]: token },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw new Error(`no VibeSquad server on 127.0.0.1:${port} (${e?.cause?.code ?? e?.name ?? e}); start it first (or set VIBESQUAD_PORT)`);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`pairing refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
+  if (typeof body?.code !== "string" || typeof body?.pairUrl !== "string") throw new Error("unexpected pair/start response");
+  return body;
+}
+
+async function commandPair(flags) {
+  if (flags._.length) throw new Error("usage: vs pair [--json]");
+  const port = Number(process.env.VIBESQUAD_PORT || 4180);
+  const p = await requestPairStart({ port });
+  // Never echo the SVGs; the terminal gets its own rendering of the same link.
+  const { qrSvg: _svg, qrSvgIp: _svgIp, lanQrSvg: _svgLan, ...plain } = p;
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(plain, null, 2) + "\n");
+    return 0;
+  }
+  const { qrTerminal } = await import("../server/qr.mjs");
+  const qr = await qrTerminal(p.pairUrl).catch(() => "");
+  process.stdout.write(formatPairOutput(plain, qr, { port }));
+  return 0;
+}
+
+const DEVICES_USAGE = "usage: vs devices list [--json] | vs devices revoke <id|--all>";
+
+/** `vs devices …` argv with `--all` folded into a positional, so the shared parser (which rejects unknown flags) stays untouched. */
+export function foldDevicesArgv(argv) {
+  return argv[0] === "devices" ? argv.map((a) => (a === "--all" ? "all" : a)) : argv;
+}
+
+function formatDeviceLine(d) {
+  const seen = d.lastSeenAt ? d.lastSeenAt.replace("T", " ").slice(0, 16) : "never";
+  return `${d.id}  ${String(d.name ?? "").padEnd(24).slice(0, 24)}  paired ${String(d.createdAt ?? "").slice(0, 10)}  seen ${seen}`;
+}
+
+async function commandDevices(flags) {
+  const sub = String(flags._.shift() ?? "");
+  const auth = await import("../server/auth.mjs");
+  if (sub === "list" || sub === "ls" || sub === "") {
+    if (flags._.length) throw new Error(DEVICES_USAGE);
+    const devices = auth.listDevices();
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ devices }, null, 2) + "\n");
+      return 0;
+    }
+    if (!devices.length) {
+      process.stdout.write("No paired devices. Pair one with: vs pair\n");
+      return 0;
+    }
+    process.stdout.write(devices.map(formatDeviceLine).join("\n") + "\n");
+    return 0;
+  }
+  if (sub === "revoke") {
+    const target = String(flags._.shift() ?? "");
+    if (!target || flags._.length) throw new Error(DEVICES_USAGE);
+    if (target === "all") {
+      const n = auth.revokeAllDevices();
+      process.stdout.write(n ? `Revoked ${n} device${n === 1 ? "" : "s"}; their next request is refused.\n` : "No paired devices to revoke.\n");
+      return 0;
+    }
+    const known = auth.listDevices();
+    // A unique id prefix is enough (ids are UUIDs; typing one over SSH is the common case).
+    const matches = known.filter((d) => d.id === target || (target.length >= 8 && d.id.startsWith(target)));
+    if (!matches.length) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    if (matches.length > 1) throw new Error(`"${target}" matches ${matches.length} devices; give more of the id`);
+    if (!auth.revokeDevice(matches[0].id)) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    process.stdout.write(`Revoked ${matches[0].id} (${matches[0].name}); its next request is refused.\n`);
+    return 0;
+  }
+  throw new Error(DEVICES_USAGE);
+}
+
+// ---------------------------------------------------------------------------
 // vs spec / vs task / vs cap — durable lane artifacts (docs/lanes/<lane>/)
 // ---------------------------------------------------------------------------
 
@@ -2397,7 +2509,7 @@ export function suggestVerb(raw, verbs = KNOWN_VERBS) {
 export function main(argv) {
   let flags;
   try {
-    flags = parseArgs(argv);
+    flags = parseArgs(foldDevicesArgv(argv));
   } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
     return 1;
@@ -2441,6 +2553,8 @@ export function main(argv) {
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
+    if (command === "pair") return commandPair(flags);
+    if (command === "devices") return commandDevices(flags);
     const hint = suggestVerb(command);
     const didYouMean = hint ? `, did you mean "${hint}"?` : ".";
     process.stderr.write(`Error: unknown verb "${command}"${didYouMean} Try "vs --help".\n`);

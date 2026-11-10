@@ -5,15 +5,24 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import {
+  activeHost,
+  activeMeshnetHost,
   clearSession,
+  fetchHostId,
+  forgetHost,
   isAndroidUserAgent,
   mapRemoteError,
+  migrateSession,
   needsPairing,
   normalizeHost,
+  normalizeHostId,
   pairRedeemUrl,
   parsePairInput,
   readSession,
+  samePc,
   saveSession,
+  setSessionHostId,
+  showHostSwitcher,
   toAndroidDeepLink,
 } from "../src/remoteSession.ts";
 
@@ -81,24 +90,140 @@ describe("toAndroidDeepLink / pairRedeemUrl", () => {
   });
 });
 
-describe("stored pairing session", () => {
+const HOST_ID = "Qm9yZWFsaXNIb3N0SWQxMg"; // 22 url-safe chars, what ~/.vibesquad/host-id looks like
+const HOST_ID_2 = "c2Vjb25kLWhvc3QtaWQtMDE";
+
+describe("stored pairing session (v:3, E4a)", () => {
   test("save / read / clear and needsPairing", () => {
     const s = fakeStore();
     assert.equal(readSession(s), null);
     assert.equal(needsPairing(true, s), true);
     assert.equal(needsPairing(false, s), false);
     saveSession("pc.example", s, new Date("2026-11-07T00:00:00Z"));
-    assert.deepEqual(readSession(s), { v: 2, host: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" });
+    assert.deepEqual(readSession(s), {
+      v: 3,
+      activeHostId: "",
+      hosts: [{ hostId: "", label: "pc.example:4180", meshnetHost: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" }],
+    });
+    assert.equal(JSON.parse(s.getItem("vs.remote.session")).v, 3, "written as v:3");
+    assert.equal(activeMeshnetHost(readSession(s)), "pc.example:4180");
     assert.equal(needsPairing(true, s), false);
     clearSession(s);
     assert.equal(needsPairing(true, s), true);
+  });
+
+  test("a v:2 session upgrades losslessly on read (same host string, so the CA pin and serverUrl still apply)", () => {
+    const s = fakeStore({ "vs.remote.session": JSON.stringify({ v: 2, host: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" }) });
+    const up = readSession(s);
+    assert.deepEqual(up, {
+      v: 3,
+      activeHostId: "",
+      hosts: [{ hostId: "", label: "pc.example:4180", meshnetHost: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" }],
+    });
+    assert.equal(activeMeshnetHost(up), "pc.example:4180");
+    assert.equal(needsPairing(true, s), false);
+    assert.equal(showHostSwitcher(up), false);
+    // Not persisted by a read alone; the next saveSession/setSessionHostId writes v:3.
+    assert.equal(JSON.parse(s.getItem("vs.remote.session")).v, 2);
+    assert.equal(setSessionHostId("pc.example:4180", HOST_ID, s), true);
+    assert.equal(JSON.parse(s.getItem("vs.remote.session")).v, 3);
+    assert.deepEqual(readSession(s), {
+      v: 3,
+      activeHostId: HOST_ID,
+      hosts: [{ hostId: HOST_ID, label: "pc.example:4180", meshnetHost: "pc.example:4180", savedAt: "2026-11-07T00:00:00.000Z" }],
+    });
+    assert.equal(setSessionHostId("pc.example:4180", HOST_ID, s), false, "no-op when already known");
+    assert.equal(setSessionHostId("pc.example:4180", "junk id", s), false, "a malformed id is ignored");
+    assert.equal(setSessionHostId("other.example:4180", HOST_ID, s), false, "unknown host is ignored");
+  });
+
+  test("saveSession with a known hostId + CA pin keys the entry by them; re-pairing never duplicates a host", () => {
+    const FP = "c".repeat(64);
+    const s = fakeStore();
+    saveSession("pc.example", s, new Date("2026-11-07T00:00:00Z"), HOST_ID, FP);
+    saveSession("pc.example:4180", s, new Date("2026-11-08T00:00:00Z"), HOST_ID, FP);
+    let r = readSession(s);
+    assert.equal(r.hosts.length, 1);
+    assert.equal(r.activeHostId, HOST_ID);
+    assert.equal(r.hosts[0].savedAt, "2026-11-08T00:00:00.000Z");
+    // The same PC (same id AND same pin) reached by a new address (Meshnet name changed): the entry follows it.
+    saveSession("100.64.0.7", s, new Date("2026-11-09T00:00:00Z"), HOST_ID, FP);
+    r = readSession(s);
+    assert.equal(r.hosts.length, 1);
+    assert.equal(r.hosts[0].meshnetHost, "100.64.0.7:4180");
+    // The same address, a reset PC (new host id): still one entry, now under the new id.
+    saveSession("100.64.0.7", s, new Date("2026-11-10T00:00:00Z"), HOST_ID_2);
+    r = readSession(s);
+    assert.equal(r.hosts.length, 1);
+    assert.equal(r.hosts[0].hostId, HOST_ID_2);
+    assert.equal(r.activeHostId, HOST_ID_2);
+    assert.equal(showHostSwitcher(r), false, "no switcher UI with one host");
+  });
+
+  test("a second host (E5 later) becomes active; the switcher rule flips only then; forgetHost keeps the rest", () => {
+    const s = fakeStore();
+    saveSession("pc.example", s, new Date("2026-11-07T00:00:00Z"), HOST_ID);
+    saveSession("work.example", s, new Date("2026-11-08T00:00:00Z"), HOST_ID_2);
+    const r = readSession(s);
+    assert.equal(r.hosts.length, 2);
+    assert.equal(r.activeHostId, HOST_ID_2);
+    assert.equal(activeHost(r).meshnetHost, "work.example:4180");
+    assert.equal(showHostSwitcher(r), true);
+    forgetHost("work.example:4180", s);
+    const after = readSession(s);
+    assert.deepEqual(after.hosts.map((h) => h.hostId), [HOST_ID]);
+    assert.equal(after.activeHostId, HOST_ID);
+    assert.equal(showHostSwitcher(after), false);
+    forgetHost("pc.example:4180", s);
+    assert.equal(readSession(s), null, "forgetting the last host clears the session");
+  });
+
+  test("migrateSession validates v:3 shapes and keeps relay-only hosts for E5", () => {
+    assert.equal(migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [] }), null, "no hosts");
+    assert.equal(migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "x", savedAt: "t" }] }), null, "unreachable host (no meshnetHost, no relay)");
+    const relayOnly = migrateSession({ v: 3, activeHostId: "nope", hosts: [{ hostId: HOST_ID, label: "Home", relay: { endpoint: "wss://r.example/ws", pubKey: "k" }, savedAt: "t" }] });
+    assert.deepEqual(relayOnly, { v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "Home", relay: { endpoint: "wss://r.example/ws", pubKey: "k" }, savedAt: "t" }] });
+    assert.equal(activeMeshnetHost(relayOnly), "", "no LAN/Meshnet address for a relay-only host");
+    const bad = migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: "bad id", label: "", meshnetHost: "pc.example", savedAt: "t" }, "junk"] });
+    assert.deepEqual(bad, { v: 3, activeHostId: "", hosts: [{ hostId: "", label: "pc.example:4180", meshnetHost: "pc.example:4180", savedAt: "t" }] });
+    assert.equal(normalizeHostId(HOST_ID), HOST_ID);
+    assert.equal(normalizeHostId(" " + HOST_ID + "\n"), HOST_ID);
+    assert.equal(normalizeHostId("short"), "");
+    assert.equal(normalizeHostId("has/slash".padEnd(22, "a")), "");
+  });
+
+  test("fetchHostId asks /api/auth/status, trusts only a well-formed id, and never throws", async () => {
+    const calls = [];
+    const ok = async (url, init) => {
+      calls.push([url, init?.cache]);
+      return { ok: true, json: async () => ({ ok: true, paired: false, hostId: HOST_ID }) };
+    };
+    assert.equal(await fetchHostId("pc.example", ok), HOST_ID);
+    assert.deepEqual(calls, [["https://pc.example:4180/api/auth/status", "no-store"]]);
+    assert.equal(await fetchHostId("pc.example", async () => ({ ok: true, json: async () => ({ hostId: "x" }) })), "");
+    assert.equal(await fetchHostId("pc.example", async () => ({ ok: false, json: async () => ({ hostId: HOST_ID }) })), "");
+    assert.equal(await fetchHostId("pc.example", async () => { throw new Error("TypeError: Failed to fetch"); }), "");
+    assert.equal(await fetchHostId("pc.example", null), "");
+    assert.equal(await fetchHostId("localhost", ok), "", "never asks a local address");
   });
 
   test("an old relay-offer session or junk is not trusted", () => {
     const old = { v: 1, offer: { v: 2, serverId: "srv", daemonPublicKeyB64: "k", relay: { endpoint: "r" } }, savedAt: "x" };
     assert.equal(readSession(fakeStore({ "vs.remote.session": JSON.stringify(old) })), null);
     assert.equal(readSession(fakeStore({ "vs.remote.session": "{" })), null);
+    assert.equal(readSession(fakeStore({ "vs.remote.session": JSON.stringify({ v: 2, host: "localhost", savedAt: "x" }) })), null);
     assert.throws(() => saveSession("localhost", fakeStore()));
+  });
+
+  test("RemotePairScreen reads the active host, fills the host id, and has no switcher chrome", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.match(src, /activeMeshnetHost\(session\)/);
+    assert.match(src, /saveSession\(hostN, undefined, undefined, await fetchHostId\(hostN\), pinnedFp\)/);
+    assert.match(src, /setSessionHostId\(saved\.host, await fetchHostId\(saved\.host\)\)/);
+    assert.match(src, /forgetHost\(saved\.host\)/);
+    assert.doesNotMatch(src, /showHostSwitcher|host-switcher/, "no switcher UI while hosts.length <= 1 (none exists yet at all)");
+    const types = read("src/agentTypes.ts");
+    assert.match(types, /hostId\?: string/);
   });
 });
 
@@ -316,7 +441,7 @@ describe("pairing is proven before it is saved (review fixes)", () => {
 
   test("screen saves the host only on an explicit Pair press (the PC opens its own UI, no trip back), deep links never auto-pair, reachability is not trust", () => {
     const src = read("src/RemotePairScreen.tsx");
-    assert.match(src, /saveSession\(hostN\);[\s\S]*?location\.href = pairRedeemUrl/);
+    assert.match(src, /saveSession\(hostN, undefined, undefined, await fetchHostId\(hostN\), pinnedFp\);[\s\S]*?location\.href = pairRedeemUrl/);
     assert.doesNotMatch(src, /apply\([^)]*\)[^\n]*\bpairWith\b|autoPair/);
     assert.match(src, /data-testid="pair-confirm"/);
     assert.match(src, /data-testid="forget-pc"/);
@@ -373,5 +498,59 @@ describe("mapRemoteError (B4, B7)", () => {
     assert.equal(mapRemoteError(new Error("SocketTimeout")).kind, "timeout");
     assert.equal(mapRemoteError(new Error("connect timeout")).kind, "timeout");
     assert.equal(mapRemoteError(new Error("boom")).kind, "unknown");
+  });
+});
+
+describe("X1 R1 L2: saved hosts fold on hostId + pinned CA fingerprint, never on the public id alone", () => {
+  const FP_A = "a".repeat(64);
+  const FP_B = "b".repeat(64);
+
+  test("same hostId, different CA pin: two PCs stay saved (a cloned ~/.vibesquad or a spoofed id evicts nothing)", () => {
+    const s = fakeStore();
+    saveSession("home.example", s, new Date("2026-11-07T00:00:00Z"), HOST_ID, FP_A);
+    saveSession("clone.example", s, new Date("2026-11-08T00:00:00Z"), HOST_ID, FP_B);
+    const r = readSession(s);
+    assert.deepEqual(r.hosts.map((h) => [h.meshnetHost, h.hostId, h.caFp]), [
+      ["clone.example:4180", HOST_ID, FP_B],
+      ["home.example:4180", HOST_ID, FP_A],
+    ]);
+    assert.equal(samePc(r.hosts[0], r.hosts[1]), false);
+    assert.equal(samePc({ hostId: HOST_ID }, { hostId: HOST_ID }), false, "no pin on either side: not provably the same PC");
+    assert.equal(samePc({ hostId: HOST_ID, caFp: FP_A }, { hostId: HOST_ID, caFp: FP_A }), true);
+  });
+
+  test("same hostId and same CA pin reached by a new address: one entry, following the PC", () => {
+    const s = fakeStore();
+    saveSession("home.example", s, new Date("2026-11-07T00:00:00Z"), HOST_ID, FP_A);
+    saveSession("100.64.0.7", s, new Date("2026-11-08T00:00:00Z"), HOST_ID, FP_A);
+    const r = readSession(s);
+    assert.equal(r.hosts.length, 1);
+    assert.equal(r.hosts[0].meshnetHost, "100.64.0.7:4180");
+    assert.equal(r.hosts[0].caFp, FP_A);
+  });
+
+  test("setSessionHostId folds another entry only when its CA pin matches too", () => {
+    const s = fakeStore();
+    saveSession("home.example", s, new Date("2026-11-07T00:00:00Z"), HOST_ID, FP_A);
+    saveSession("other.example", s, new Date("2026-11-08T00:00:00Z"), "", FP_B); // id unknown yet, different pin
+    assert.equal(setSessionHostId("other.example:4180", HOST_ID, s), true);
+    let r = readSession(s);
+    assert.equal(r.hosts.length, 2, "a different pin is a different PC even with the same reported id");
+    const s2 = fakeStore();
+    saveSession("home.example", s2, new Date("2026-11-07T00:00:00Z"), HOST_ID, FP_A);
+    saveSession("alias.example", s2, new Date("2026-11-08T00:00:00Z"), "", FP_A); // same pin, id arrives later
+    assert.equal(setSessionHostId("alias.example:4180", HOST_ID, s2), true);
+    r = readSession(s2);
+    assert.deepEqual(r.hosts.map((h) => h.meshnetHost), ["alias.example:4180"], "same PC (id + pin): folded");
+    assert.equal(r.activeHostId, HOST_ID);
+  });
+
+  test("a v:2 upgrade has no pin; a bad caFp is dropped on read; the pair screen passes the pinned fingerprint", () => {
+    const s = fakeStore({ "vs.remote.session": JSON.stringify({ v: 2, host: "pc.example:4180", savedAt: "t" }) });
+    assert.equal(readSession(s).hosts[0].caFp, undefined);
+    const bad = migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, caFp: "zz", label: "x", meshnetHost: "pc.example", savedAt: "t" }] });
+    assert.equal(bad.hosts[0].caFp, undefined);
+    const src = read("src/RemotePairScreen.tsx");
+    assert.match(src, /pinnedFp = \(await t\.pin\(hostN, fpN!\)\) \|\| pinnedFp/);
   });
 });
