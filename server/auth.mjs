@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual, X509Certificate } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, randomUUID, timingSafeEqual, X509Certificate } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
@@ -149,8 +149,9 @@ function lockDown(dir) {
   execFileSync("icacls", [dir, "/inheritance:r", "/grant:r", `${user}:(OI)(CI)F`], { stdio: "pipe", windowsHide: true });
 }
 
-// Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints, daemon password).
-export const HOME_SECRET_FILES = ["local-token", "vapid.json", "push-subs.json", "devices.json", "daemon-password"];
+// Secrets that live directly in ~/.vibesquad (VAPID private key, device token hashes, push endpoints, daemon password,
+// the E5 relay host keypair).
+export const HOME_SECRET_FILES = ["local-token", "vapid.json", "push-subs.json", "devices.json", "daemon-password", "host-keypair.json"];
 
 /**
  * Restricts ~/.vibesquad to the current user: icacls on Windows, 0700 dir + 0600 secret files elsewhere.
@@ -349,8 +350,11 @@ export function caFingerprint() {
 
 // ---- Devices ----
 
-let devices; // [{ id, name, createdAt, lastSeenAt, tokenHash }]: in-memory mirror of devices.json
+let devices; // [{ id, name, createdAt, lastSeenAt, tokenHash, mintedByDeviceId }]: in-memory mirror of devices.json
 let lastPersist = 0;
+// X1 E4a R2 L1: request-path callers (last-seen persist, pair redeem/approve, UI revoke) wait at most this long for
+// <devices.json>.lock, so a stalled CLI holder can't freeze the event loop for the CLI's own 5 s budget.
+const REQUEST_LOCK_MS = 200;
 // devices.json is also written by other processes (`vs devices revoke` over SSH, E4a). Two rules keep that safe:
 //  1. One locked writer: every change goes through mutateDevices(), which re-reads the file under <devices.json>.lock
 //     (server/file-lock.mjs, the same primitive the CLI uses through this module), edits, and writes atomically. A
@@ -437,17 +441,21 @@ function loadDevices() {
     fresh = readDevicesFromDisk();
   } catch (e) {
     devicesReadError = e;
+    // X1 E4a R2 L2: fail closed for live streams too. New requests are already refused; an open SSE/keep-alive socket of
+    // a device that the unreadable rewrite may have revoked must not keep flowing. Clients reconnect once it's readable.
+    for (const id of [...wsByDevice.keys()]) dropDeviceSockets(id);
     return null; // stamp not advanced: the next call tries the disk again
   }
   adoptDevices(fresh, stamp);
   return devices;
 }
 
-function writeDevicesFile(list) {
+function writeDevicesFile(list, lock = null) {
   mkdirSync(vibesquadHome(), { recursive: true });
   const tmp = `${devicesFile()}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify({ devices: list }, null, 2), { encoding: "utf8", mode: 0o600 });
   try {
+    lock?.assertOwned(); // X1 E4a R2 L4: a holder reaped as stale must not rename over a newer writer's file
     renameSync(tmp, devicesFile());
   } catch (e) {
     rmSync(tmp, { force: true });
@@ -459,29 +467,33 @@ function writeDevicesFile(list) {
 /**
  * The only writer of devices.json. Under <devices.json>.lock the list is re-read from disk, `mutate(list)` edits it in
  * place (its return value is passed back), and the result is written atomically. Throws, writing nothing, when the
- * file exists but can't be read, or when the lock can't be taken (5 s).
+ * file exists but can't be read, or when the lock can't be taken (5 s for the CLI; request paths pass REQUEST_LOCK_MS).
  */
-function mutateDevices(mutate) {
-  return withFileLockSync(devicesFile(), () => {
+function mutateDevices(mutate, { timeoutMs } = {}) {
+  const lockOpts = timeoutMs === undefined ? {} : { timeoutMs };
+  return withFileLockSync(devicesFile(), (lock) => {
     const list = readDevicesFromDisk();
     const out = mutate(list);
-    writeDevicesFile(list);
+    writeDevicesFile(list, lock);
     adoptDevices(list, devicesFileStamp());
     lastPersist = Date.now();
     return out;
-  });
+  }, lockOpts);
 }
 
 /** Writes the in-memory lastSeenAt times onto the file (every 60 s; never resurrects a device another process removed). */
 function persistLastSeen() {
   const mem = devices;
   if (!mem) return;
-  mutateDevices((list) => {
-    for (const d of list) {
-      const m = mem.find((x) => x.id === d.id);
-      if (m?.lastSeenAt && String(m.lastSeenAt) > String(d.lastSeenAt ?? "")) d.lastSeenAt = m.lastSeenAt;
-    }
-  });
+  mutateDevices(
+    (list) => {
+      for (const d of list) {
+        const m = mem.find((x) => x.id === d.id);
+        if (m?.lastSeenAt && String(m.lastSeenAt) > String(d.lastSeenAt ?? "")) d.lastSeenAt = m.lastSeenAt;
+      }
+    },
+    { timeoutMs: REQUEST_LOCK_MS },
+  );
 }
 
 /** Drops the in-memory device list so the next read comes from disk (tests that swap VIBESQUAD_HOME). */
@@ -491,9 +503,33 @@ export function resetDevicesForTest() {
   devicesReadError = null;
   lastPersist = 0;
   for (const id of [...wsByDevice.keys()]) dropDeviceSockets(id);
+  pendingDevices.clear();
 }
 
-const publicDevice = (d, currentId) => ({ id: d.id, name: d.name, createdAt: d.createdAt, lastSeenAt: d.lastSeenAt, current: d.id === currentId });
+const publicDevice = (d, currentId) => ({
+  id: d.id,
+  name: d.name,
+  createdAt: d.createdAt,
+  lastSeenAt: d.lastSeenAt,
+  mintedByDeviceId: typeof d.mintedByDeviceId === "string" ? d.mintedByDeviceId : null,
+  current: d.id === currentId,
+});
+
+/** Ids of `id` plus every device it minted, recursively (E4b cascade). Pure; cycles and self-references terminate. */
+export function cascadeIds(list, id) {
+  const out = new Set([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const d of list) {
+      if (!out.has(d.id) && typeof d.mintedByDeviceId === "string" && out.has(d.mintedByDeviceId)) {
+        out.add(d.id);
+        grew = true;
+      }
+    }
+  }
+  return [...out];
+}
 
 /** The paired devices without their token hashes (what `vs devices list` and GET /__vibesquad/devices show). Throws when devices.json is unreadable. */
 export function listDevices() {
@@ -688,17 +724,28 @@ function deviceNameFromUa(ua = "") {
   return `${os} · ${browser}`;
 }
 
-// ---- Live /ws sockets per device, so revocation cuts them immediately ----
+// ---- Revocation (cuts live sockets immediately; E4b cascades over mintedByDeviceId) ----
 
-export function revokeDevice(id) {
-  const hit = mutateDevices((list) => {
-    const i = list.findIndex((d) => d.id === id);
-    if (i < 0) return false;
-    list.splice(i, 1);
-    return true;
-  });
-  if (hit) dropDeviceSockets(id);
-  return hit;
+/**
+ * Revokes `id` and, recursively, every device it minted (E4b MUST 3), in one locked read-modify-write so a concurrent
+ * CLI write can't interleave halfway through the cascade. Returns the removed ids (empty when `id` is unknown).
+ * The CLI keeps the lock's 5 s default; HTTP handlers pass { timeoutMs: REQUEST_LOCK_MS }.
+ */
+export function revokeDevice(id, { timeoutMs } = {}) {
+  const removed = mutateDevices(
+    (list) => {
+      if (!list.some((d) => d.id === id)) return [];
+      const gone = new Set(cascadeIds(list, id));
+      for (let i = list.length - 1; i >= 0; i--) if (gone.has(list[i].id)) list.splice(i, 1);
+      return [...gone];
+    },
+    { timeoutMs },
+  );
+  for (const rid of removed) {
+    dropDeviceSockets(rid);
+    discardPendingMintedBy(rid); // tickets the revoked device minted die with it
+  }
+  return removed;
 }
 
 /** Revokes every paired device (`vs devices revoke --all`, lost-phone fallback). Returns how many were dropped. */
@@ -709,13 +756,60 @@ export function revokeAllDevices() {
     return was;
   });
   for (const id of ids) dropDeviceSockets(id);
+  pendingDevices.clear();
   return ids.length;
 }
 
 // ---- One-time pairing codes ----
 
-const codes = new Map(); // code -> expiresAt
+const codes = new Map(); // code -> { expiresAt, mintedBy } (mintedBy: paired device id that minted it, null = PC / CLI)
 const PAIR_WINDOW_MS = 60_000;
+
+// ---- E4b two-step confirm: devices redeemed from a phone-minted code wait here, never in devices.json ----
+// A pending ticket holds the new device's token hash in memory only. authenticate() reads devices.json, so the token
+// authenticates nothing (HTTP, SSE, relay, CLI list) until the minting device approves it, which appends the device
+// with mintedByDeviceId under the lock. Deny, the TTL, a server restart, or revoking the minter all discard it.
+export const PENDING_TTL_MS = 60_000;
+const pendingDevices = new Map(); // pendingId -> { id, tokenHash, name, ip, mintedBy, createdAt, expiresAt }
+
+function sweepPending(now = Date.now()) {
+  for (const [pid, p] of pendingDevices) if (p.expiresAt <= now) pendingDevices.delete(pid);
+}
+
+function discardPendingMintedBy(deviceId) {
+  for (const [pid, p] of pendingDevices) if (p.mintedBy === deviceId) pendingDevices.delete(pid);
+}
+
+/** The pending ticket behind a vs_device cookie value, or null (constant-time hash compare, like authenticate). */
+function pendingForToken(token) {
+  if (!token) return null;
+  sweepPending();
+  const hash = Buffer.from(sha256Hex(token), "hex");
+  for (const p of pendingDevices.values()) {
+    const want = Buffer.from(p.tokenHash, "hex");
+    if (want.length === hash.length && timingSafeEqual(want, hash)) return p;
+  }
+  return null;
+}
+
+const publicPending = (p, now = Date.now()) => ({ pendingId: p.id, name: p.name, ip: p.ip, createdAt: p.createdAt, expiresInMs: Math.max(0, p.expiresAt - now) });
+
+/** Pending tickets minted by `deviceId` (what the minting phone's sheet shows). */
+export function listPendingMintedBy(deviceId) {
+  sweepPending();
+  return [...pendingDevices.values()].filter((p) => p.mintedBy === deviceId).map((p) => publicPending(p));
+}
+
+/** Tests: how many tickets are waiting. */
+export function pendingCountForTest() {
+  sweepPending();
+  return pendingDevices.size;
+}
+
+/** Tests: age every waiting ticket past its TTL. */
+export function expirePendingForTest() {
+  for (const p of pendingDevices.values()) p.expiresAt = 0;
+}
 const PAIR_MAX_ATTEMPTS = 5;
 // Bad codes lock out only the IP that sent them (other IPs' live codes stay valid): 1 min, doubling up to 1 h.
 const PAIR_MAX_FAILURES = 5;
@@ -751,11 +845,12 @@ function recordPairFailure(ip, now = Date.now()) {
   pairFailuresByIp.set(ip, f);
 }
 
-export function createPairCode(ttlMs = CODE_TTL_MS) {
+/** A fresh one-shot code. `mintedBy` = the paired device that asked for it (E4b: its redeem lands in pending-approval). */
+export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null) {
   sweepCodes();
   let code = String(randomInt(100_000, 1_000_000));
   while (codes.has(code)) code = String(randomInt(100_000, 1_000_000));
-  codes.set(code, Date.now() + ttlMs);
+  codes.set(code, { expiresAt: Date.now() + ttlMs, mintedBy: typeof mintedBy === "string" ? mintedBy : null });
   return code;
 }
 
@@ -792,7 +887,7 @@ export function discardPlainHttpPairCode(rawCode, ip) {
 
 function sweepCodes() {
   const now = Date.now();
-  for (const [c, exp] of codes) if (exp <= now) codes.delete(c);
+  for (const [c, v] of codes) if (v.expiresAt <= now) codes.delete(c);
 }
 
 // ---- HTTP handlers ----
@@ -903,8 +998,12 @@ export async function handlePairStart(req, res) {
     res.statusCode = 405;
     return res.end();
   }
-  if (!isLocalBrowserSafe(req) && !authenticate(req)) {
-    return sendJson(res, 403, { error: "pairing can only be started from the PC" });
+  // Hub5 MUST / X1 M3: the handler gates itself, not only the router. A loopback caller needs the local token (header or
+  // vs_local cookie); a token-less loopback process, browser or not, can't mint. A paired device may mint (E4b), but its
+  // code lands in pending-approval (mintedBy) instead of granting access on redeem.
+  const minter = authenticate(req);
+  if (!isLocalOwner(req) && !minter) {
+    return sendJson(res, 403, { error: "pairing can only be started from the PC (local token) or an already paired device" });
   }
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   if (!meshnetIp && !lanIp) {
@@ -912,8 +1011,8 @@ export async function handlePairStart(req, res) {
   }
   const effectiveMeshnetIp = meshnetIp || DEFAULT_MESHNET_IP;
   getTls();
-  const code = createPairCode();
-  const expiresAt = codes.get(code);
+  const code = createPairCode(CODE_TTL_MS, minter?.id ?? null);
+  const expiresAt = codes.get(code).expiresAt;
   // `fp` (CA SHA-256, hex) lets the Android app pin this PC's VS CA at pairing (see src-tauri/android/VsTrust.kt).
   const fpQuery = pairFpQuery();
   const pairHost = meshnetHost || effectiveMeshnetIp || lanIp;
@@ -939,6 +1038,9 @@ export async function handlePairStart(req, res) {
     meshnetHost,
     meshnetIp: effectiveMeshnetIp,
     expiresAt,
+    // E4b: a device-minted code needs the minting device's Approve tap after redeem (the sheet polls /pair/pending).
+    requiresApproval: Boolean(minter),
+    mintedByDeviceId: minter?.id ?? null,
     qrSvg: await qrSvg(pairUrl),
     qrSvgIp: await qrSvg(pairIpUrl),
   });
@@ -963,33 +1065,175 @@ export function handlePairRedeem(req, res) {
   if (!rawCode) {
     return sendHtml(res, 400, "No pairing code", "Scan the QR code on your PC (it opens an https:// link with the code).");
   }
-  const code = /^\d{3}[-\s]?\d{3}$/.test(rawCode) ? rawCode.replace(/[-\s]/g, "") : rawCode;
-  const exp = codes.get(code) ?? codes.get(rawCode);
-  codes.delete(code); // one-shot, even when expired
-  codes.delete(rawCode);
-  if (!exp || exp <= Date.now()) {
-    recordPairFailure(ip);
+  const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
+  const r = redeemPairCode({ rawCode, ip, name });
+  if (r.state === "invalid") {
     return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.", null, apkRecoveryHtml(req));
   }
-  pairFailuresByIp.delete(ip);
-  const token = randomBytes(32).toString("base64url");
-  const now = new Date().toISOString();
-  const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
-  try {
-    mutateDevices((list) => list.push({ id: randomUUID(), name, createdAt: now, lastSeenAt: now, tokenHash: sha256Hex(token) }));
-  } catch (e) {
+  if (r.state === "busy") {
     // devices.json locked or unreadable: the code is spent, nothing was written, and no cookie goes out.
     return sendHtml(res, 503, "Pairing failed", "The PC could not record this device (its device list is locked or unreadable). Generate a new code and try again.");
   }
-  res.statusCode = 302;
+  const app = appOrigin(req);
+  const enterHref = app ? `/__vibesquad/enter?${new URLSearchParams({ vs_app: app }).toString()}` : "/__vibesquad/enter";
+  const token = r.token;
   res.setHeader("set-cookie", `${DEVICE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`);
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  if (r.state === "pending") {
+    // E4b two-step confirm: the cookie's token is not in devices.json yet, so it opens nothing. This page polls the public
+    // /pair/status (same-site fetch, so the Strict cookie is sent) and hops to /enter only once the minting device approved.
+    return sendHtml(res, 200, "Waiting for approval", `Approve this device on the phone that showed the code (<b>${escapeHtml(r.mintedByName)}</b>) within ${Math.round(PENDING_TTL_MS / 1000)} s.`, null, waitingScript(enterHref) + apkRecoveryHtml(req));
+  }
+  res.statusCode = 302;
   // Not a direct redirect: the scan is a cross-site navigation, and a redirect chain started cross-site keeps Strict cookies
   // from being sent. Land on the same-site /__vibesquad/enter page (a 200, which ends the chain); its client-side hop to "/"
   // is same-site and carries vs_device. The APK saves its session before leaving (RemotePairScreen), not on a return trip.
-  const app = appOrigin(req);
-  res.setHeader("location", app ? `/__vibesquad/enter?${new URLSearchParams({ vs_app: app }).toString()}` : "/__vibesquad/enter");
-  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  res.setHeader("location", enterHref);
   res.end();
+}
+
+const escapeHtml = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+
+/** Inline poller for the waiting page: every 2 s ask /pair/status; "approved" hops to `href`, anything else stops. */
+function waitingScript(href) {
+  const target = JSON.stringify(href).replace(/</g, "\\u003c");
+  return `<p id="vs-wait-state">Waiting…</p><script>(function(){var el=document.getElementById("vs-wait-state");var t=setInterval(function(){fetch("/pair/status",{credentials:"same-origin",cache:"no-store"}).then(function(r){return r.json()}).then(function(j){if(j.state==="approved"){clearInterval(t);el.textContent="Approved. Opening…";location.replace(${target});}else if(j.state!=="pending"){clearInterval(t);el.textContent=j.state==="denied"?"Denied on the phone. Ask for a new code.":"The approval window closed. Ask for a new code.";}}).catch(function(){});},2000);})()</script>`;
+}
+
+/**
+ * Spends `rawCode` and either records the device (PC/CLI-minted: state "paired", devices.json written) or parks it as a
+ * pending ticket (device-minted: state "pending", nothing written until the minter approves). Shared by the HTTP /pair
+ * route and, later, the E5 relay redeem. `token` is the value the new device must present as vs_device.
+ * States: paired | pending | invalid (bad/used/expired code; a failure is recorded for `ip`) | busy (lock/unreadable).
+ */
+export function redeemPairCode({ rawCode, ip = "unknown", name = "Device" }) {
+  const code = /^\d{3}[-\s]?\d{3}$/.test(rawCode) ? rawCode.replace(/[-\s]/g, "") : rawCode;
+  const entry = codes.get(code) ?? codes.get(rawCode);
+  codes.delete(code); // one-shot, even when expired
+  codes.delete(rawCode);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    recordPairFailure(ip);
+    return { state: "invalid" };
+  }
+  pairFailuresByIp.delete(ip);
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = sha256Hex(token);
+  const nowMs = Date.now();
+  const now = new Date(nowMs).toISOString();
+  const id = randomUUID();
+  if (entry.mintedBy) {
+    // The minter must still be paired right now; a revoked minter's codes are dead (fail closed on an unreadable list).
+    const list = loadDevices();
+    const minter = list?.find((d) => d.id === entry.mintedBy);
+    if (!minter) return { state: "invalid" };
+    sweepPending(nowMs);
+    pendingDevices.set(id, { id, tokenHash, name, ip, mintedBy: minter.id, createdAt: now, expiresAt: nowMs + PENDING_TTL_MS });
+    return { state: "pending", token, pendingId: id, mintedByDeviceId: minter.id, mintedByName: minter.name };
+  }
+  try {
+    mutateDevices((list) => list.push({ id, name, createdAt: now, lastSeenAt: now, tokenHash, mintedByDeviceId: null }), { timeoutMs: REQUEST_LOCK_MS });
+  } catch {
+    return { state: "busy" };
+  }
+  return { state: "paired", token, deviceId: id };
+}
+
+/**
+ * GET /pair/status: public (both listeners), cookie-scoped. Tells the waiting page whether its vs_device token is still
+ * pending, now approved (in devices.json), or gone (denied / expired / minter revoked). Reveals nothing else.
+ */
+const denied = new Set(); // token hashes the minter denied, so the waiting page can say so (bounded; cleared past 64)
+export function handlePairStatus(req, res) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+  if (!token) return sendJson(res, 200, { state: "gone" });
+  if (pendingForToken(token)) return sendJson(res, 200, { state: "pending" });
+  if (authenticate(req)) return sendJson(res, 200, { state: "approved" });
+  return sendJson(res, 200, { state: denied.has(sha256Hex(token)) ? "denied" : "gone" });
+}
+
+/** GET /__vibesquad/pair/pending: tickets waiting on *this* paired device's Approve (the minter only). */
+export function handlePairPending(req, res) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const dev = authenticate(req);
+  if (!dev) return sendJson(res, 403, { error: "only a paired device sees the approvals it minted" });
+  sendJson(res, 200, { pending: listPendingMintedBy(dev.id), ttlMs: PENDING_TTL_MS });
+}
+
+/**
+ * POST /__vibesquad/pair/approve { pendingId, approve: true|false } (E4b MUST 2). Only the device that minted the code
+ * may decide. Approve appends the device with mintedByDeviceId under the lock (re-checking the minter is still on disk);
+ * deny discards the ticket. A ticket past its TTL is gone either way.
+ */
+export async function handlePairApprove(req, res, readBody) {
+  if (req.method !== "POST") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  const dev = authenticate(req);
+  if (!dev) return sendJson(res, 403, { error: "only the paired device that minted the code can approve it" });
+  let body;
+  try {
+    body = await readBody(req);
+  } catch {
+    return sendJson(res, 400, { error: "bad request body" });
+  }
+  const pendingId = typeof body?.pendingId === "string" ? body.pendingId : "";
+  sweepPending();
+  const p = pendingDevices.get(pendingId);
+  if (!p) return sendJson(res, 404, { error: "no such pending device (expired or already decided)" });
+  if (p.mintedBy !== dev.id) return sendJson(res, 403, { error: "only the device that minted this code can decide it" });
+  pendingDevices.delete(pendingId);
+  if (body?.approve !== true) {
+    if (denied.size > 64) denied.clear();
+    denied.add(p.tokenHash);
+    return sendJson(res, 200, { ok: true, approved: false, pending: listPendingMintedBy(dev.id) });
+  }
+  try {
+    mutateDevices(
+      (list) => {
+        if (!list.some((d) => d.id === dev.id)) throw new Error("minter is no longer paired");
+        list.push({ id: p.id, name: p.name, createdAt: p.createdAt, lastSeenAt: p.createdAt, tokenHash: p.tokenHash, mintedByDeviceId: dev.id });
+      },
+      { timeoutMs: REQUEST_LOCK_MS },
+    );
+  } catch (e) {
+    if (/no longer paired/.test(String(e?.message))) return sendJson(res, 403, { error: "this device is no longer paired" });
+    return sendJson(res, 503, { error: "device list busy or unreadable; retry", retryable: true });
+  }
+  sendJson(res, 200, { ok: true, approved: true, device: publicDevice({ ...p, mintedByDeviceId: dev.id }, dev.id), pending: listPendingMintedBy(dev.id) });
+}
+
+// ---- Loopback server proof (X1 E4a L3): the server proves it holds the local token before a CLI sends it ----
+
+export const LOCAL_PROOF_PREFIX = "vs-local-proof";
+const NONCE_RE = /^[0-9a-f]{32}$/;
+
+/** HMAC-SHA256(localToken, prefix \0 nonce \0 port). Pure, shared with the CLI-side verifier in local-token.mjs. */
+export function localProof(token, nonce, port) {
+  return createHmac("sha256", token).update(`${LOCAL_PROOF_PREFIX}\0${nonce}\0${port}`).digest("hex");
+}
+
+/**
+ * GET /__vibesquad/local-proof?c=<32 hex>: public on loopback. Binding the accepted socket's local port stops a rogue
+ * listener on one port from relaying the challenge to a real server on another. HMAC is a PRF, so the oracle leaks nothing.
+ */
+export function handleLocalProof(req, res) {
+  if (req.method !== "GET") {
+    res.statusCode = 405;
+    return res.end();
+  }
+  if (!isLocalBrowserSafe(req)) return sendJson(res, 403, { error: "loopback only" });
+  const c = String(new URL(req.url ?? "/", "http://x").searchParams.get("c") ?? "");
+  if (!NONCE_RE.test(c)) return sendJson(res, 400, { error: "c must be 32 hex chars" });
+  const port = Number(req.socket?.localPort ?? 0);
+  sendJson(res, 200, { proof: localProof(getLocalToken(), c, port), port });
 }
 
 export function handleDevices(req, res) {
@@ -997,10 +1241,13 @@ export function handleDevices(req, res) {
     res.statusCode = 405;
     return res.end();
   }
-  const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
-  const current = authenticate(req)?.id;
+  // X1 E4a M3: the inventory (ids, names, last-seen, LAN/Meshnet IPs) needs the local token or a paired cookie, here and
+  // in the router (isGatedRead), so a token-less local process can't read it.
   const list = loadDevices();
-  if (!list) return sendJson(res, 503, { error: "devices.json is unreadable on the PC" });
+  if (!list) return sendJson(res, 503, { error: "devices.json is unreadable on the PC" }); // fail closed first (X1 M2); says nothing else
+  const current = authenticate(req)?.id;
+  if (!current && !isLocalOwner(req)) return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
+  const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   sendJson(res, 200, {
     devices: list.map((d) => publicDevice(d, current)),
     caFingerprint: caFingerprint(),
@@ -1024,13 +1271,21 @@ export async function handleRevoke(req, res, readBody) {
     res.statusCode = 405;
     return res.end();
   }
+  let id;
   try {
-    const { id } = await readBody(req);
-    if (typeof id !== "string") return sendJson(res, 400, { error: "id required" });
-    if (!revokeDevice(id)) return sendJson(res, 404, { error: "no such device" });
-    const current = authenticate(req)?.id;
-    sendJson(res, 200, { ok: true, devices: (loadDevices() ?? []).map((d) => publicDevice(d, current)) });
-  } catch (e) {
-    sendJson(res, 400, { error: String(e) });
+    ({ id } = await readBody(req));
+  } catch {
+    return sendJson(res, 400, { error: "bad request body" });
   }
+  if (typeof id !== "string") return sendJson(res, 400, { error: "id required" });
+  let removed;
+  try {
+    removed = revokeDevice(id, { timeoutMs: REQUEST_LOCK_MS });
+  } catch {
+    // X1 E4a R2 L3: a lock timeout or unreadable file is a retryable 503, never the lock path or holder pid.
+    return sendJson(res, 503, { error: "device list busy or unreadable; retry", retryable: true });
+  }
+  if (!removed.length) return sendJson(res, 404, { error: "no such device" });
+  const current = authenticate(req)?.id;
+  sendJson(res, 200, { ok: true, removed, devices: (loadDevices() ?? []).map((d) => publicDevice(d, current)) });
 }

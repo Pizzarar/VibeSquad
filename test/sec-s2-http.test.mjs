@@ -158,6 +158,7 @@ describe("S2 fix 6: ~/.vibesquad is locked down at startup regardless of LAN", (
       ["/h/.vibesquad/vapid.json", 0o600],
       ["/h/.vibesquad/devices.json", 0o600],
       ["/h/.vibesquad/daemon-password", 0o600],
+      ["/h/.vibesquad/host-keypair.json", 0o600], // E4b MUST 6: the E5 relay host key
     ]);
   });
 

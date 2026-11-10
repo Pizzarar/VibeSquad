@@ -110,3 +110,29 @@ test("real cross-process race: no lost updates", async (t) => {
   assert.equal(JSON.parse(readFileSync(f, "utf8")).n, procs * per);
   assert.equal(existsSync(`${f}.lock`), false);
 });
+
+// X1 E4a R2 L4 (E4b): a holder that was reaped as stale must not commit when it resumes.
+test("lock.assertOwned(): fn sees its own lock; a stolen lock throws and updateJsonFileSync writes nothing", (t) => {
+  const f = path.join(tmp(t), "a.json");
+  writeFileSync(f, JSON.stringify({ n: 1 }));
+  withFileLockSync(f, (lock) => {
+    assert.equal(lock.stillOwned(), true);
+    assert.doesNotThrow(() => lock.assertOwned());
+    // another writer reaped our lock and took its own
+    writeFileSync(`${f}.lock`, JSON.stringify({ pid: 2147483000, startedAt: Date.now() }));
+    assert.equal(lock.stillOwned(), false);
+    assert.throws(() => lock.assertOwned(), /lock lost/);
+  });
+  assert.ok(existsSync(`${f}.lock`), "we never release a lock that is not ours");
+  rmSync(`${f}.lock`, { force: true });
+  assert.throws(
+    () =>
+      updateJsonFileSync(f, (d) => {
+        writeFileSync(`${f}.lock`, JSON.stringify({ pid: 2147483000, startedAt: Date.now() }));
+        d.n = 2;
+      }),
+    /lock lost/,
+  );
+  assert.deepEqual(JSON.parse(readFileSync(f, "utf8")), { n: 1 }, "the stale holder's mutate never reached the file");
+  rmSync(`${f}.lock`, { force: true });
+});
