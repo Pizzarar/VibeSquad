@@ -46,6 +46,8 @@ import { DEFAULT_PACK_PROFILES, deriveRole } from "../profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
+import { createWatchEngine } from "../watch-sets.mjs";
+import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_USER_TYPE,
@@ -959,6 +961,10 @@ export interface Deps {
   doneArchiveGraceMs?: number;
   /** The worker's unit branch (its cwd's HEAD) and whether it is merged into master. Unknown => merged:false (keep). */
   unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
+  /** Watch sets (server/watch-sets.mjs): engine options, or false for off. Default: on in the watcher host that has runner events. */
+  watchSets?: false | Omit<WatchEngineOptions, "getAgent" | "deliver" | "log">;
+  /** RunnerBackend.subscribeEvents (passed by the runner hook host): lifecycle events that feed the watch sets. */
+  subscribeRunnerEvents?(listener: (ev: any) => void): () => void;
 }
 
 /**
@@ -2506,8 +2512,89 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     function noteEntry(team: string, entry: LogEntry) {
       if (entry.type === "done") noteWorkerDone(entry);
+      const taken = watch?.onLogEntry(team, entry) ?? [];
+      if (taken.length) watchTaken.set(entry, taken);
       if (!WAKE_TYPES.has(entry.type)) return;
       queueWake(team, entry);
+    }
+
+    // ---- Hook 3b: watch sets (server/watch-sets.mjs) ------------------------
+    // A watch set's items are held back from the per-event wakes above (dispatchWakes asks watchHolds), and the set's own ping
+    // rides the same delivery path: it is queued in pendingWake for the owner (or, if the owner is retired, the lane's live lead)
+    // and sent by flushWake, which persists attemptedAt before the send so a ping is never sent twice.
+
+    const watchTaken = new WeakMap<LogEntry, string[]>(); // log entry -> open watch sets that took it over
+    const watchKeyOf = new WeakMap<LogEntry, string>(); // queued wake entry -> the watch ping it carries
+    const watchSending = new Set<string>(); // ping keys inside an in-flight flushWake send
+    const watchOpts =
+      deps.watchSets === false ? null : (deps.watchSets ?? (deps.startWatcher && deps.subscribeRunnerEvents ? {} : null));
+    const watch: WatchEngine | null = watchOpts
+      ? createWatchEngine({
+          ...watchOpts,
+          getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
+          deliver: (d: WatchDelivery) => deliverWatchPing(d),
+          log,
+        })
+      : null;
+    if (watch) {
+      try {
+        watch.start();
+      } catch (err) {
+        log(`watch sets start failed: ${err}`);
+      }
+      if (deps.subscribeRunnerEvents) {
+        try {
+          stops.push(deps.subscribeRunnerEvents((ev: any) => watch.onRunnerEvent(ev)));
+        } catch (err) {
+          log(`watch sets runner subscription failed: ${err}`);
+        }
+      }
+    }
+
+    /** Where a set's ping goes: its owner while live, else the current live lead of the set's lane (the successor). */
+    async function resolveWatchTarget(paseo: Paseo, set: WatchSet): Promise<AgentSnap | null> {
+      const owner = await snap(paseo, set.owner);
+      if (owner && isLiveAgent(owner)) return owner;
+      const lane = set.lane || owner?.labels?.lane || "";
+      const team = set.team || owner?.labels?.team || "";
+      if (!team) return null;
+      return findLead(paseo, teamIdOf(team, currentTeams()), lane);
+    }
+
+    /** True when `entry` was taken over by a watch set whose ping goes to `leadId`: the set's one ping replaces this wake. */
+    async function watchHolds(paseo: Paseo, entry: LogEntry, leadId: string): Promise<boolean> {
+      const setIds = watchTaken.get(entry);
+      if (!watch || !setIds?.length) return false;
+      for (const set of await watch.holdingSets(entry, setIds)) {
+        if ((await resolveWatchTarget(paseo, set))?.id === leadId) return true;
+      }
+      return false;
+    }
+
+    /** The lead whose pendingWake holds this ping, "" when it is in the debounce queue or mid-send, null when it is nowhere. */
+    function watchQueuedAt(key: string): string | null {
+      for (const [leadId, q] of pendingWake) if (q.some((e) => watchKeyOf.get(e) === key)) return leadId;
+      if (watchSending.has(key) || wakeQueue.some((w) => watchKeyOf.get(w.entry) === key)) return "";
+      return null;
+    }
+
+    /** The engine's deliver hook. Re-offered every retryMs until attempted: a queued ping gets a flush nudge, a dropped one is re-queued. */
+    async function deliverWatchPing(d: WatchDelivery) {
+      const paseo = paseoApi;
+      if (!paseo) return;
+      const queuedAt = watchQueuedAt(d.key);
+      if (queuedAt !== null) {
+        if (queuedAt) void flushWake(paseo, queuedAt);
+        return;
+      }
+      const target = await resolveWatchTarget(paseo, d.set);
+      if (!target) return log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; ping held`);
+      if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
+      const text = target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
+      const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text, refs: [d.setId] };
+      watchKeyOf.set(entry, d.key);
+      pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
+      void flushWake(paseo, target.id);
     }
 
     /**
@@ -2864,7 +2951,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         try {
           const lead = await findLead(paseo, team, lane);
           if (!lead) continue;
-          const fresh = entries.filter((e) => e.agent !== lead.id);
+          const fresh: LogEntry[] = [];
+          for (const e of entries) if (e.agent !== lead.id && !(await watchHolds(paseo, e, lead.id))) fresh.push(e);
           if (!fresh.length) continue;
           const queue = pendingWake.get(lead.id) ?? [];
           queue.push(...fresh);
@@ -2917,6 +3005,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         // Archived or non-resumable closed lead: discard its held wakeups (the lead is gone). A closed-but-resumable
         // lead is a lost lead with a saved session: keep its wakeups and resume it via the send below.
+        // A watch ping dropped here is not lost: it was never attempted, so the watch engine re-offers it to the new target.
         if (liveLead.archivedAt || (liveLead.status === "closed" && liveLead.resumable !== true)) {
           pendingWake.delete(leadId);
           lastWakeAt.delete(leadId);
@@ -2925,17 +3014,23 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
         // No longer a lead (e.g. retired): don't send to it; re-route its held wakeups
         // through the normal queueWake/dispatchWakes path to the current lead.
+        // Watch pings: a live non-lead owner (a Buddy) keeps its own; a retired one's are dropped and re-offered by the engine.
         if (effectiveAgentRole(liveLead) !== "lead") {
           const entries = pendingWake.get(leadId) ?? [];
-          if (entries.length) {
+          const keep = isLiveAgent(liveLead) ? entries.filter((e) => watchKeyOf.has(e)) : [];
+          const reroute = entries.filter((e) => !watchKeyOf.has(e));
+          if (entries.length && !keep.length) {
             pendingWake.delete(leadId);
             lastWakeAt.delete(leadId);
+          }
+          if (keep.length) pendingWake.set(leadId, keep);
+          if (reroute.length) {
             const where = teamOf(liveLead.labels, liveLead.cwd);
             if (where) {
-              for (const entry of entries) queueWake(where.team, entry);
+              for (const entry of reroute) queueWake(where.team, entry);
             }
           }
-          return;
+          if (!keep.length) return;
         }
 
         // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal
@@ -2959,13 +3054,26 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!queue?.length) return;
         pendingWake.delete(leadId);
         tookQueue = true;
-        const last = queue[queue.length - 1]!;
-        const more = queue.length > 1 ? ` (+${queue.length - 1} more)` : "";
-        const text = `New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`;
+        // Watch pings go out whole; the plain log events keep the one-line "(+N more)" summary.
+        const watchKeys = queue.map((e) => watchKeyOf.get(e)).filter((k): k is string => Boolean(k));
+        const plain = queue.filter((e) => !watchKeyOf.has(e));
+        const parts = queue.filter((e) => watchKeyOf.has(e)).map((e) => e.text);
+        if (plain.length) {
+          const last = plain[plain.length - 1]!;
+          const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
+          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`);
+        }
+        const text = parts.join("\n\n");
+        for (const k of watchKeys) watchSending.add(k);
         try {
+          if (watchKeys.length) watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
           await paseo.agents.ref(leadId).send(text);
+          if (watchKeys.length) watch?.markDelivered(watchKeys, leadId);
         } catch (e) {
           log(`wakeup send failed: ${e}`);
+          if (watchKeys.length) watch?.markFailed(watchKeys, String(e));
+        } finally {
+          for (const k of watchKeys) watchSending.delete(k);
         }
         lastWakeAt.set(leadId, Date.now());
       } finally {
@@ -3218,6 +3326,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // Hook point: the existing log-watch tick, time-gated, so no new timer exists.
       interval = setInterval(() => {
         scanLogs(false);
+        if (watch) void watch.tick().catch((err) => log(`watch tick failed: ${err}`));
         const every = deps.doneSweepIntervalMs ?? 0;
         if (every > 0 && Date.now() - lastSweepAt >= every) {
           lastSweepAt = Date.now();
@@ -3236,6 +3345,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (const stop of stops) stop();
     };
     (dispose as any).scanLogs = scanLogs;
+    (dispose as any).watchSets = watch;
     (dispose as any).sweepDoneWorkers = sweepDoneWorkers;
     (dispose as any).sweepDoneWorkersReport = sweepDoneWorkersReport;
     (dispose as any).handoffCoordinator = handoffCoordinator;

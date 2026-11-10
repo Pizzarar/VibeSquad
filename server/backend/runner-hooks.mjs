@@ -104,6 +104,8 @@ export async function createRunnerHookHost(backend, { startWatcher = false, deps
       await backend.archiveAgent(id);
     },
     deleteHeartbeat: (id) => backend.deleteHeartbeat(id),
+    // Watch sets (server/watch-sets.mjs) run only in the watcher host (one per machine) and read the runner's lifecycle stream.
+    ...(startWatcher ? { subscribeRunnerEvents: (fn) => backend.subscribeEvents(fn) } : {}),
     startWatcher,
     ...deps,
   })(server);
