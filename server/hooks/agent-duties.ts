@@ -2598,7 +2598,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       void flushWake(paseo, target.id);
     }
 
-    /** W4: a too-long watch ping is merged by one Pre-check - Flash worker, which sends the merged digest to the owner (or its successor). */
+    /** W4: a too-long watch ping is merged by one Pre-check - Flash worker; the merged digest is then delivered through the wake path. */
     async function spawnWatchDigest(paseo: Paseo, d: WatchDelivery): Promise<boolean> {
       if (!paseo) return false;
       try {
@@ -2607,16 +2607,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; cannot spawn merge`);
           return false;
         }
+        const where = teamOf(target.labels, target.cwd);
+        const team = d.team || where?.team || target.labels?.team || "";
+        const lane = d.lane || where?.lane || target.labels?.lane || "";
         const digestProfile = resolveStoredProfile(DIGEST_PROFILE, DIGEST_PROVIDER, DIGEST_PROFILE, "worker");
         const provider = digestProfile ? `${digestProfile.provider}/${digestProfile.model}` : DIGEST_PROVIDER;
         const modeId = digestProfile?.modeId || DIGEST_MODE_ID;
         const thinkingOptionId = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
         const featureValues = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
-        const recipient = target.id;
         const prompt = [
           `You are a digest agent. Merge the watch-set report below into at most 15 lines, keeping every agent id, PASS/FAIL verdict, commit hash and pass/fail count. Drop nothing that matters.`,
-          `Then send the merged digest to agent ${recipient}${recipient !== d.owner ? ` (watch owner ${d.owner} is retired; you are its successor)` : ""} with exactly one command:`,
-          `vs send ${recipient} "<merged digest, at most 15 lines>"`,
+          `Output ONLY the merged digest text. Do not run any commands, do not send messages, and do not modify files.`,
           ``,
           `--- watch ${d.setId} report ---`,
           d.text,
@@ -2626,7 +2627,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           cwd: target.cwd,
           title: `${DIGEST_PROFILE} digest`,
           prompt,
-          labels: { team: d.team, lane: d.lane, role: "worker", profile: DIGEST_PROFILE, digestFor: recipient },
+          labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: d.setId },
           env: { VS_PROFILE: DIGEST_PROFILE },
           autoArchive: true,
         });
@@ -2635,6 +2636,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           log(`watch ${d.setId}: merge spawn returned no agent id`);
           return false;
         }
+        // Await the worker's turn so a failure is detected and `autoArchive` runs; then read the merged digest it produced.
+        const res = await (handle?.waitForFinish ? handle.waitForFinish(10 * 60_000) : Promise.resolve(null));
+        const ok = !res?.status || ["idle", "completed", "finished"].includes(res.status);
+        const merged = ok ? await lastAssistantText(paseo, createdId) : "";
+        if (!merged) {
+          log(`watch ${d.setId}: merge worker produced no digest`);
+          return false;
+        }
+        await deliverWatchPing({ ...d, text: merged });
         return true;
       } catch (err) {
         log(`watch ${d.setId} merge spawn failed: ${err}`);

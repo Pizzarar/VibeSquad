@@ -39,6 +39,8 @@ export interface WatchSet {
   lastPingAt?: string;
   cancelledAt?: string;
   cancelledBy?: string;
+  /** W4: timestamp of the set's one Flash merge spawn (at most one per set). */
+  digestSpawnedAt?: string;
 }
 
 export interface WatchDelivery {
