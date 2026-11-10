@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-10T02:24:24.673Z",
+  "updatedAt": "2026-11-10T14:53:49.444Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -231,7 +231,7 @@
         "test/phone-cockpit.test.mjs"
       ],
       "doneCheck": "node --test test/phone-cockpit.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "unit-and-end-e3",
@@ -244,7 +244,7 @@
         "test/phone-bug-capture.test.mjs"
       ],
       "doneCheck": "node --test test/phone-bug-capture.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "unit-and-end-e4a",
@@ -258,7 +258,7 @@
         "test/android-pair.test.mjs"
       ],
       "doneCheck": "node --test test/android-pair.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "unit-and-end-e2",
@@ -272,7 +272,7 @@
         "test/decision-card.test.mjs"
       ],
       "doneCheck": "node --test test/decision-card.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "unit-and-end-e4b",
@@ -287,7 +287,7 @@
     },
     {
       "id": "unit-and-end-e5",
-      "goal": "E5 (Tier A — coordinate with 0.3 X1): Outbound E2EE Relay for Project PC & Phone (host outbound WSS tunnel with auto-reconnect, X25519 E2EE pinned to host key, devices.json per-device token redeem/revoke, static HTTPS client / APK fallback)",
+      "goal": "E5 (Tier A — coordinate with 0.3 X1): Outbound E2EE Relay for Project PC & Phone (host outbound WSS tunnel with auto-reconnect, X25519 E2EE pinned to host key, devices.json per-device token redeem/revoke, static HTTPS client / APK fallback) [core landed e8380d3; wiring phase per E5_THREAT_MODEL §7 still todo]",
       "files": [
         "server/relay-tunnel.mjs",
         "src/remoteRelayTransport.ts",
@@ -297,7 +297,7 @@
         "test/relay-tunnel.test.mjs"
       ],
       "doneCheck": "node --test test/relay-tunnel.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done"
     },
     {
       "id": "unit-and-end-apk",
@@ -307,6 +307,29 @@
         "dist-desktop/VibeSquad.apk.sha256"
       ],
       "doneCheck": "node --test test/android-apk-route.test.mjs",
+      "status": "todo"
+    },
+    {
+      "id": "unit-and-end-e4a-lows",
+      "goal": "E4a X1 R2 lows (X1_E4A_WALK_R2.md): request-path lock timeout 200ms (auth.mjs:465), unreadable devices.json closes tracked streams, UI revoke lock timeout -> generic 503 (auth.mjs:1034), file-lock ownership check before rename (file-lock.mjs:65)",
+      "files": [
+        "server/auth.mjs",
+        "server/file-lock.mjs",
+        "test/cli-devices.test.mjs"
+      ],
+      "doneCheck": "node --test test/cli-devices.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
+      "status": "todo"
+    },
+    {
+      "id": "unit-and-end-e5-wire",
+      "goal": "E5 wiring (Tier A): auth.mjs honours relayDevice + isLocalBrowserSafe false for it, host-keypair.json in HOME_SECRET_FILES, vs host-key rotate, serve.mjs openWs bridge, pin-store rule (never overwrite pin from link), isRevoked stays cheap mtime check",
+      "files": [
+        "server/auth.mjs",
+        "server/serve.mjs",
+        "server/relay-tunnel.mjs",
+        "cli/vs.mjs"
+      ],
+      "doneCheck": "node --test test/relay-tunnel.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
       "status": "todo"
     }
   ]
