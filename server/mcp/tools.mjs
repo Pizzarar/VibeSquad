@@ -554,7 +554,7 @@ async function watchTool(ctx, args = {}) {
   const callerId = clean(ctx.identity.agentId);
   const callerRole = clean(ctx.identity.role).toLowerCase();
   const teams = ctx.teams ?? loadTeamsRegistry();
-  // agentOf keeps a `{ agent: null }` wrapper when the backend has no record; normalize to null so a missing owner is detectable.
+  // agentOf keeps a `{ agent: null }` wrapper when the backend has no record; normalize to null so a missing agent is detectable.
   const fetchAgent = async (id) => {
     const a = agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
     return a && a.id ? a : null;
@@ -564,30 +564,34 @@ async function watchTool(ctx, args = {}) {
   let caller = null;
   if (callerId) caller = await fetchAgent(callerId);
   const recRole = caller ? effectiveAgentRole(caller) : "";
-  if (recRole === "worker" || (!caller && callerRole === "worker")) {
+  // Workers and digest agents get no watch verb (a digest worker is not a lead/Buddy and must never register watches).
+  if (recRole === "worker" || recRole === "digest" || (!caller && (!callerRole || callerRole === "worker"))) {
     throw new Error("workers may not use the watch verb");
   }
-
-  let owner = callerId;
-  let team = clean(ctx.identity.team);
-  let lane = clean(ctx.identity.lane);
-  let isOverlord = false;
-  if (caller) {
-    const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
-    const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
-    if (callerTeam && callerLane && callerLane.team.id === callerTeam.id) {
-      team = callerTeam.id;
-      lane = callerLane.lane.id;
-      isOverlord = recRole === "lead" && isHubLane(callerTeam, callerLane.lane);
-    }
+  // Only a live lead or Buddy may watch; retired/former-lead/closed/unknown callers are refused outright.
+  if (!caller || !isLiveAgent(caller) || (recRole !== "lead" && recRole !== "brainstorm")) {
+    throw new Error("only a live lead or Buddy may use the watch verb");
   }
+  // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
+  const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+  const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
+  if (!callerTeam || !callerLane || callerLane.team.id !== callerTeam.id) {
+    throw new Error(`only a live lead or Buddy may use the watch verb: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
+  }
+  const team = callerTeam.id;
+  let lane = callerLane.lane.id;
+  const isOverlord = recRole === "lead" && isHubLane(callerTeam, callerLane.lane);
 
-  // owner defaults to the caller; only the same-Squad Overlord may name a different one (and only within its own Squad).
+  // owner defaults to the caller; only the same-Squad Overlord may name a different one (and only a live lead/Buddy of its own Squad).
+  let owner = callerId;
   const requestedOwner = clean(pick(args, "owner"));
   if (requestedOwner && requestedOwner !== callerId) {
     if (!isOverlord) throw new Error("only the same-Squad Overlord may set a different owner");
     const ownerRec = await fetchAgent(requestedOwner);
     if (!ownerRec) throw new Error(`cannot watch for an unknown agent "${requestedOwner}"`);
+    if (!isLiveAgent(ownerRec) || !["lead", "brainstorm"].includes(effectiveAgentRole(ownerRec))) {
+      throw new Error(`cannot watch for a retired, closed, worker or digest agent "${requestedOwner}"`);
+    }
     const ownerTeam = findTeamInRegistry(clean(ownerRec.labels?.team), teams);
     if (!ownerTeam || ownerTeam.id !== team) throw new Error("only the same-Squad Overlord may set a different owner in its own Squad");
     owner = requestedOwner;
@@ -610,10 +614,15 @@ async function watchTool(ctx, args = {}) {
   }
   // add
   const items = [];
+  const seen = new Set();
   const rawAgents = Array.isArray(args.agents) ? args.agents : args.agents !== undefined ? [args.agents] : [];
   for (const a of rawAgents) {
     const ref = clean(a);
-    if (ref) items.push({ kind: "agent", ref });
+    if (!ref) continue;
+    if (!isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    items.push({ kind: "agent", ref });
   }
   if (args.suite) items.push({ kind: "suite", ref: "" });
   if (args.restart) items.push({ kind: "restart", ref: "" });

@@ -34,6 +34,7 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
   add("rn-oth-hub-lead", "lead", { team: "oth", lane: "oth-hub", ord: "1" });
   add("rn-old-lead", "former-lead", { ord: "2" });
   add("rn-closed-lead", "lead", { lane: "site-polish", ord: "9" }, { status: "closed" });
+  add("rn-digest", "digest");
   const backend = {
     async fetchAgents() { return { entries: [...agents.values()].map((agent) => ({ agent })), pageInfo: { hasMore: false } }; },
     async fetchAgent(id) { return { agent: agents.get(id) ?? null }; },
@@ -123,14 +124,44 @@ test("another Squad's Overlord cannot name an owner outside its Squad; an unknow
   } finally { t.cleanup(); }
 });
 
-test("a non-hub lead, retired lead and closed lead cannot name a different owner", async () => {
-  for (const [id, lane] of [["rn-lead-b", "other"], ["rn-old-lead", "site-polish"], ["rn-closed-lead", "site-polish"]]) {
+test("a non-hub lead cannot name a different owner", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead-b", lane: "other" });
+  try {
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a"], owner: "rn-lead" }), /only the same-Squad Overlord may set a different owner/);
+    assert.equal(t.watchCalls.add.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("a former-lead, closed lead and digest agent are refused even for themselves", async () => {
+  for (const [id, lane, re] of [["rn-old-lead", "site-polish", /only a live lead or Buddy may use the watch verb/], ["rn-closed-lead", "site-polish", /only a live lead or Buddy may use the watch verb/], ["rn-digest", "site-polish", /workers may not use the watch verb/]]) {
     const t = setup({ callerRole: "lead", callerId: id, lane });
     try {
-      await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a"], owner: "rn-lead" }), /only the same-Squad Overlord may set a different owner/, id);
+      await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a"] }), re, id);
       assert.equal(t.watchCalls.add.length, 0);
     } finally { t.cleanup(); }
   }
+});
+
+test("a spoofed callerId/agentId in MCP args is ignored (the ctx identity decides)", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" }); // a plain, non-hub lead
+  try {
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a"], callerId: "rn-hub-lead", agentId: "rn-hub-lead", owner: "rn-lead-b" }), /only the same-Squad Overlord may set a different owner/);
+    assert.equal(t.watchCalls.add.length, 0);
+  } finally { t.cleanup(); }
+});
+
+test("CLI: --owner is forwarded (Overlord allowed, non-Overlord refused)", async () => {
+  const ov = setup({ callerRole: "lead", callerId: "rn-hub-lead", lane: "site-hub" });
+  try {
+    await runAgentVerb("watch", { _: ["rn-a"], watchAction: "add", owner: "rn-lead" }, ov.ctx);
+    assert.equal(ov.watchCalls.add[0].owner, "rn-lead");
+    assert.equal(ov.watchCalls.add[0].lane, "site-polish");
+  } finally { ov.cleanup(); }
+  const plain = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    await assert.rejects(runAgentVerb("watch", { _: ["rn-a"], watchAction: "add", owner: "rn-lead-b" }, plain.ctx), /only the same-Squad Overlord may set a different owner/);
+    assert.equal(plain.watchCalls.add.length, 0);
+  } finally { plain.cleanup(); }
 });
 
 test("cancel passes the id and the caller id; list passes owner + team", async () => {
@@ -161,6 +192,35 @@ test("CLI arg parsing: runAgentVerb maps --suite/--restart/--stall and positiona
     assert.deepEqual(r, { id: "w-1" });
     assert.deepEqual(t.watchCalls.add[0].items, [{ kind: "agent", ref: "rn-a" }, { kind: "agent", ref: "rn-b" }, { kind: "suite", ref: "" }, { kind: "restart", ref: "" }]);
     assert.equal(t.watchCalls.add[0].stallMin, 30);
+  } finally { t.cleanup(); }
+});
+
+test("vs watch ls maps to list (no const-reassignment TypeError)", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    await commandAgentVerb("watch", { _: ["ls"] }, () => t.ctx, () => {});
+    assert.equal(t.watchCalls.list.length, 1);
+    assert.deepEqual(t.watchCalls.list[0], { owner: "rn-lead", team: "site" });
+  } finally { t.cleanup(); }
+});
+
+test("non-rn agent ids are rejected (CLI + MCP)", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["foo"] }), /runner ids/);
+    await assert.rejects(callTool(t.ctx, "watch", { action: "add", agents: ["rn-a", "bar"] }), /runner ids.*got "bar"/);
+    assert.equal(t.watchCalls.add.length, 0);
+  } finally { t.cleanup(); }
+  await assert.rejects(commandAgentVerb("watch", { _: ["add", "foo"] }, () => t.ctx, () => {}), /runner ids/);
+});
+
+test("duplicate agent ids are deduplicated (CLI + MCP)", async () => {
+  const t = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    await callTool(t.ctx, "watch", { action: "add", agents: ["rn-a", "rn-a", "rn-b"] });
+    assert.deepEqual(t.watchCalls.add[0].items, [{ kind: "agent", ref: "rn-a" }, { kind: "agent", ref: "rn-b" }]);
+    await runAgentVerb("watch", { _: ["rn-a", "rn-a"], watchAction: "add" }, t.ctx);
+    assert.deepEqual(t.watchCalls.add[1].items, [{ kind: "agent", ref: "rn-a" }]);
   } finally { t.cleanup(); }
 });
 

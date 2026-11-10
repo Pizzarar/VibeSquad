@@ -264,6 +264,7 @@ function parseArgs(argv) {
     "source",
     "revision",
     "stall",
+    "owner",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -521,8 +522,8 @@ Usage:
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
-  vs watch add <agent...> [--suite] [--restart] [--stall <min>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
-  vs watch list | vs watch cancel <id>   list or cancel your watch sets (Overlord may name another owner in its Squad)
+  vs watch add <agent...> [--suite] [--restart] [--stall <min>] [--owner <agent>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
+  vs watch list | vs watch cancel <id>   list or cancel your watch sets (only the same-Squad Overlord may name another owner via --owner)
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
@@ -1858,10 +1859,11 @@ export async function runAgentVerb(verb, flags, ctx) {
   } else if (verb === "watch") {
     args = { action: flags.watchAction };
     if (flags.watchAction === "add") {
-      args.agents = flags._.map((s) => String(s).trim()).filter(Boolean);
+      args.agents = [...new Set(flags._.map((s) => String(s).trim()).filter(Boolean))];
       if (flags.suite) args.suite = true;
       if (flags.restart) args.restart = true;
       if (flags.stall !== undefined) args.stallMin = flags.stall;
+      if (flags.owner !== undefined) args.owner = String(flags.owner);
     } else if (flags.watchAction === "cancel") {
       args.id = String(flags._[0] ?? "").trim();
     }
@@ -1936,7 +1938,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     verb = "restart_buddy";
   }
   if (verb === "watch") {
-    const sub = String(flags._.shift() ?? "").toLowerCase();
+    let sub = String(flags._.shift() ?? "").toLowerCase();
     if (sub === "ls") sub = "list";
     if (sub !== "add" && sub !== "list" && sub !== "cancel") {
       throw new Error("usage: vs watch add <agent...> [--suite] [--restart] [--stall <min>] | vs watch list | vs watch cancel <id>");
@@ -1957,6 +1959,10 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   if (verb === "watch") {
     if (flags.watchAction === "add") {
       if (!flags._.length && !flags.suite && !flags.restart) throw new Error("vs watch add needs at least one agent, --suite or --restart");
+      for (const a of flags._) {
+        const ref = String(a).trim();
+        if (ref && !isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
+      }
       if (flags.stall !== undefined) {
         const stall = Number(flags.stall);
         if (!Number.isFinite(stall) || stall <= 0) throw new Error("--stall must be a positive number of minutes");
