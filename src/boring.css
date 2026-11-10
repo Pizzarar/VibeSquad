@@ -117,6 +117,11 @@ html[data-vibe="boring"] .angel-boring-bar {
   color: var(--text);
   font-size: 12px;
 }
+html[data-vibe="boring"] .angel-boring-title { font-weight: 600; color: var(--text); }
+html[data-vibe="boring"] .angel-boring-code { font-family: var(--mono); font-size: 11px; color: var(--text-dim); padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-hover); }
+html[data-vibe="boring"] .angel-boring-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); color: var(--text); font-size: 12px; cursor: pointer; }
+html[data-vibe="boring"] .angel-boring-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .angel-boring-btn:disabled { opacity: 0.5; cursor: default; }
 
 /* B2: outer Overlord / Bugs / RiffBot bar and lane quick buttons. */
 html[data-vibe="boring"] .boring-ade-bar {
