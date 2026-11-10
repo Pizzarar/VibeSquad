@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-09T15:14:40.950Z",
+  "updatedAt": "2026-11-10T01:11:42.134Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -174,6 +174,51 @@
       "files": [],
       "doneCheck": "",
       "status": "done"
+    },
+    {
+      "id": "unit-and-mesh-a2e",
+      "goal": "0.3 A1: post-pair blank white Continue screen (enter hop same-site /), case-insensitive APK route",
+      "files": [
+        "server/auth.mjs",
+        "server/serve.mjs",
+        "server/vibesquad-api.mjs",
+        "src/RemotePairScreen.tsx",
+        "src-tauri/android/VsTrust.kt"
+      ],
+      "doneCheck": "merged 705b5f6",
+      "status": "done"
+    },
+    {
+      "id": "unit-and-a1b-apk-sync",
+      "goal": "0.3 A1 B2/B11: APK sha256 sidecar, sync-runtime copies apk, x-vibesquad-apk-sha256 header",
+      "files": [
+        "server/build-android.mjs",
+        "server/sync-runtime.mjs",
+        "server/vibesquad-api.mjs",
+        "server/android-apk-paths.mjs",
+        "server/auth.mjs"
+      ],
+      "doneCheck": "merged 0fe90ce",
+      "status": "done"
+    },
+    {
+      "id": "unit-and-a1c-app-recover",
+      "goal": "0.3 A1 B3/B4/B7/B8/B9: Reconnect button, plain cert/offline errors, cookie flush, forget clears pin+cookie",
+      "files": [
+        "src/RemotePairScreen.tsx",
+        "src/remoteSession.ts",
+        "src/vsTrust.ts",
+        "src-tauri/android/VsTrust.kt"
+      ],
+      "doneCheck": "merged 7fb55ab",
+      "status": "done"
+    },
+    {
+      "id": "unit-and-a1-retest",
+      "goal": "0.3 A1 on-device retest by Aub (docs/lanes/android-app/RETEST_A1.md); confirm audit B5/B6/B10 on device",
+      "files": [],
+      "doneCheck": "Aub PASS",
+      "status": "blocked"
     }
   ]
 }

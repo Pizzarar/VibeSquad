@@ -3,7 +3,8 @@
 // rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
-import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
+import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
+import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -369,6 +370,10 @@ async function handoffLead(ctx, args = {}) {
     if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
     }
+    // O6 floor (mirrored by the server re-check): a healthy lead under 100k is steered first; --force needs a steer.
+    // The lane listing omits lastPromptAt/lastProgressAt, so read the lead itself before judging "wedged".
+    const floor = (await import("../lead-handoff.mjs")).overlordFloorVerdict((await fetchAgent(target.id)) ?? target, { force: args.force === true, steer: clean(args.steer) });
+    if (floor.refuse) throw new Error(`cannot hand off a lead: ${floor.message}`);
   } else if (callerRole === LEAD_ROLE) {
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
     // The lane is canonicalised through the registry like the Buddy branch; an empty or unknown lane is refused.
@@ -395,7 +400,7 @@ async function handoffLead(ctx, args = {}) {
     throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
   }
   const steer = clean(args.steer).slice(0, 2000);
-  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(trigger === "overlord" && steer ? { steer } : {}) };
+  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(trigger === "overlord" && steer ? { steer } : {}), ...(trigger === "overlord" && args.force === true ? { force: true } : {}) };
   let res;
   let via = "server";
   if (ctx.performHandoff) {
@@ -437,6 +442,79 @@ async function postLeadHandoffToServer(body, ctx) {
   return json;
 }
 
+/**
+ * Restart a lane's Buddy through the existing /__vibesquad/brainstorm-restart path (archives the old Buddy, keeps its children, spawns a
+ * fresh one from the brief). Allowed: the owner (a human `vs`, no agent id), that lane's live lead, and the Squad's hub lead (Overlord)
+ * for any lane of its own Squad. The caller's role/lane/team are read from its runner record, never from env or args; the server
+ * route re-checks callerId on its own (server/buddy-restart-auth.mjs).
+ */
+async function restartBuddy(ctx, args = {}) {
+  const callerId = clean(ctx.identity.agentId);
+  const askedLane = clean(pick(args, "lane", "laneId"));
+  const teams = ctx.teams ?? loadTeamsRegistry();
+  const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
+  let teamId;
+  let laneId;
+  let caller = null;
+  if (callerId) {
+    caller = await fetchAgent(callerId);
+    if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || !isLiveAgent(caller)) {
+      throw new Error(`cannot restart a Buddy: ${callerId} is not a live lead (only the owner, the lane's lead or the Squad's Overlord may)`);
+    }
+    // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
+    const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+    const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
+    if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) throw new Error(`cannot restart a Buddy: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
+    const target = askedLane ? findLaneInRegistry(askedLane, teams, callerTeam.id) : callerLane;
+    if (!target) throw new Error(`cannot restart a Buddy: lane "${askedLane}" is not in the team registry`);
+    if (target.team.id !== callerTeam.id) throw new Error(`cannot restart a Buddy: lane "${target.lane.id}" is in another Squad than the caller's "${callerTeam.id}"`);
+    if (target.lane.id !== callerLane.lane.id && !isHubLane(callerTeam, callerLane.lane)) {
+      throw new Error("cannot restart a Buddy: a lead may only restart its own lane's Buddy unless it is the Squad's hub lead (Overlord)");
+    }
+    teamId = callerTeam.id;
+    laneId = target.lane.id;
+  } else {
+    if (!askedLane) throw new Error("cannot restart a Buddy: --lane is required");
+    const target = findLaneInRegistry(askedLane, teams);
+    if (!target) throw new Error(`cannot restart a Buddy: lane "${askedLane}" is not in the team registry`);
+    teamId = target.team.id;
+    laneId = target.lane.id;
+  }
+  const res = await ctx.withBackend({ lane: laneId, requireRunner: true }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {}));
+  const list = Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : null;
+  if (!list) throw new Error("cannot restart a Buddy: agent list unreadable");
+  const buddies = list.map((e) => e?.agent ?? e).filter((a) => a && whoCandidate(a, { teams, wantTeamId: teamId, wantLane: laneId })?.role === "brainstorm");
+  // The lane's main Buddy (no topic label) restarts; a topic Buddy only when it is the sole one.
+  const buddy = buddies.find((a) => !clean(a.labels?.topic)) ?? (buddies.length === 1 ? buddies[0] : null);
+  if (!buddy) throw new Error(`cannot restart a Buddy: lane "${laneId}" has ${buddies.length ? "only topic Buddies" : "no live Buddy"}`);
+  if (callerId) assertBuddyRestartAllowed(caller, buddy, teams);
+  // The route special-cases a few reason strings (start-brainstorm, auto*): the verb's free text is always prefixed.
+  const why = clean(args.reason).slice(0, 200);
+  const body = { agentId: buddy.id, laneId, teamId, reason: why ? `buddy-restart-verb: ${why}` : "buddy-restart-verb", ...(callerId ? { callerId } : {}) };
+  const out = ctx.restartBuddyRequest ? await ctx.restartBuddyRequest(body) : await postBuddyRestartToServer(body, ctx);
+  if (out?.ok === false || out?.error) throw new Error(`buddy restart failed: ${out.error ?? out.reason ?? "unknown"}`);
+  return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: buddy.id, lane: laneId, team: teamId, title: out.title ?? "", ...(out.skipped ? { skipped: true, reason: out.reason } : {}), ...(callerId ? { trigger: caller && findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams)?.lane.id === laneId ? "lane-lead" : "overlord" } : { trigger: "owner" }) };
+}
+
+async function postBuddyRestartToServer(body, ctx) {
+  const { localTokenHeaders } = await import("../local-token.mjs");
+  const port = Number(process.env.VIBESQUAD_PORT || 4180);
+  let r;
+  try {
+    r = await (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}/__vibesquad/brainstorm-restart`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...localTokenHeaders() },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(200_000),
+    });
+  } catch (e) {
+    throw new Error(`VS server unreachable: ${e?.message ?? e} (a Buddy restart runs through the server so its archive/spawn budgets apply)`);
+  }
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok && !json?.error) json.error = `server answered ${r.status}`;
+  return json;
+}
+
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
 const S = { type: "string" };
 
@@ -461,8 +539,13 @@ export const VS_TOOLS = {
   },
   handoff_lead: {
     description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
-    inputSchema: obj({ lane: S, steer: S }),
+    inputSchema: obj({ lane: S, steer: S, force: { type: "boolean" } }),
     run: handoffLead,
+  },
+  restart_buddy: {
+    description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason. Returns {id, oldBuddyId, lane, team, title}.",
+    inputSchema: obj({ lane: S, reason: S }),
+    run: restartBuddy,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },
   cancel: { description: "Interrupt an agent's current turn.", inputSchema: obj({ id: S }, ["id"]), run: cancelTool },

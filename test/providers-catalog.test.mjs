@@ -7,7 +7,7 @@ import path from 'node:path';
 import {
   buildCatalog, buildUsageReviewPrompt, clearProbeCache, clearUsageCache, DEFAULT_USAGE_REVIEW_PROMPT, getModels, getProviders, getUsage, handleProvidersApi, intervalMs,
   loadRunnerSettings, loadUsageReviewPrompt, LOOP_TURN_THRESHOLD, normalizeRunnerSettings, oneShotReviewRun, parseReviewBullets, probeProviders, probeStats,
-  readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, resetUsageReviewPromptWarnForTest, resolveUsageReviewPromptPath,
+  readBootSizes, foldBootSizes, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, resetUsageReviewPromptWarnForTest, resolveUsageReviewPromptPath,
   runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
@@ -1978,4 +1978,38 @@ test('usa-21 (idea-39): sanctuary worktree attribution normalizes paths, disambi
     if (prevRoot === undefined) delete process.env.VIBESQUAD_ROOT;
     else process.env.VIBESQUAD_ROOT = prevRoot;
   }
+});
+
+test('usa-22: bootSize rollup folds boot-size metrics by role/provider/lane (avg + p90), tolerates legacy lines, shows in getUsage + md export', async () => {
+  const home = tmp();
+  const t0 = Date.UTC(2026, 10, 9, 12);
+  const line = (role, prov, lane, total, sys, plugin, artifact, brief, first) =>
+    `boot-size role=${role} provider=${prov} lane=${lane} chars=${total - first} total=${total} sys=${sys} plugin=${plugin} artifact=${artifact} brief=${brief} first=${first} estTok=${Math.ceil(total / 4)}`;
+  for (let i = 1; i <= 10; i++) writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0 + i * 1000, 'plugin', 'usage', 'metric', line('worker', 'claude', 'usage', i * 100, 10, 20, 30, 0, 5)));
+  writeLog(home, 'logs/vibesquad--other.jsonl', L_ENTRY(t0 + 20000, 'plugin', 'other', 'metric', 'boot-size role=lead chars=4000')); // legacy: total only
+  writeLog(home, 'teams/vibesquad/log.jsonl', L_ENTRY(t0 + 1000, 'plugin', 'usage', 'metric', line('worker', 'claude', 'usage', 100, 10, 20, 30, 0, 5))); // dup -> deduped
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(t0 + 30000, 'plugin', 'usage', 'metric', 'prompt-injection role=lead provider=claude chars=999')); // not a boot-size line
+
+  const rows = readBootSizes(home);
+  const w = rows.find((r) => r.role === 'worker');
+  assert.equal(w.count, 10, 'dup deduped');
+  assert.equal(w.provider, 'claude');
+  assert.equal(w.lane, 'usage');
+  assert.equal(w.avgChars, 550);
+  assert.equal(w.p90Chars, 900);
+  assert.equal(w.p90EstTok, 225);
+  assert.deepEqual(w.avgParts, { sys: 10, plugin: 20, artifact: 30, brief: 0, first: 5 });
+  const l = rows.find((r) => r.role === 'lead');
+  assert.deepEqual([l.provider, l.lane, l.count, l.avgChars, l.avgEstTok], ['unknown', 'other', 1, 4000, 1000], 'legacy line counts as total-only');
+  assert.equal(rows.length, 2);
+  assert.deepEqual(foldBootSizes([{ lane: '', text: 'boot-size role=x chars=notanumber' }]), [], 'garbage skipped');
+  assert.deepEqual(readBootSizes(home, { since: '2026-11-10' }), [], 'day filter');
+
+  clearUsageCache();
+  const usage = getUsage({ home, git: noGit });
+  assert.equal(usage.bootSize.length, 2, 'exposed in getUsage');
+  let md;
+  await handleProvidersApi({ method: 'GET', url: '/__vibesquad/providers/usage-export?format=md' }, {}, { home, ...probeOpts, readBody: async () => ({}), sendJson: (_r, _c, data) => { md = data.markdown; } });
+  assert.match(md, /## Boot size/);
+  assert.match(md, /\| worker \| claude \| usage \| 10 \| 550 \| 900 \|/);
 });

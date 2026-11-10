@@ -196,7 +196,8 @@ export function isAndroidUserAgent(
 export type RemoteErrorKind = "bad-input" | "unreachable" | "timeout" | "unknown";
 export type RemoteError = { kind: RemoteErrorKind; message: string };
 
-const MESSAGES: Record<RemoteErrorKind, string> = {
+const MESSAGES: Record<RemoteErrorKind | "certChanged", string> = {
+  certChanged: "This PC's certificate changed. Scan a new QR on the PC to pair again.",
   "bad-input": "Enter the server address and the 6-digit code from Pair a device on your PC, or scan its QR code.",
   unreachable:
     "Couldn't reach your PC. Check this phone is on the same Wi-Fi (Home LAN) or on NordVPN Meshnet, that VibeSquad is running there, and that the CA fingerprint matches the one on your PC.",
@@ -212,7 +213,9 @@ export function remoteError(kind: RemoteErrorKind, message = MESSAGES[kind]): Re
 export function mapRemoteError(err: unknown): RemoteError {
   const e = err as { name?: string; message?: string } | null;
   const msg = String((e && typeof e === "object" ? e.message : err) ?? "");
-  if (e?.name === "TimeoutError" || e?.name === "AbortError" || /timed? ?out/i.test(msg)) return remoteError("timeout");
-  if (/failed to fetch|network|load failed|ECONN|ENOTFOUND|certificate|ssl|tls/i.test(msg)) return remoteError("unreachable");
+  // The PC's CA was regenerated (its address changed), so the pinned CA no longer validates the PC's certificate.
+  if (/trust anchor|certification path|SSLHandshake|CERT_/i.test(msg)) return remoteError("unknown", MESSAGES.certChanged);
+  if (e?.name === "TimeoutError" || e?.name === "AbortError" || /timed? ?out|SocketTimeout/i.test(msg)) return remoteError("timeout");
+  if (/failed to fetch|network|load failed|ECONN|ENOTFOUND|failed to connect to|unable to resolve host|certificate|ssl|tls/i.test(msg)) return remoteError("unreachable");
   return remoteError("unknown", msg ? `${MESSAGES.unknown} (${msg})` : MESSAGES.unknown);
 }

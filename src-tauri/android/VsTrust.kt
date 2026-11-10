@@ -42,6 +42,8 @@ object VsTrust {
     // The app's own origin only: a page served by the paired PC (https://<host>) can never reach the bridge.
     private val APP_ORIGINS = setOf("http://tauri.localhost", "https://tauri.localhost")
     private const val MAX_CA_BYTES = 64 * 1024
+    private const val MAX_STATUS_BYTES = 64 * 1024
+    private const val FLUSH_EVERY_MS = 3000L
 
     /** `host:port` (host without IPv6 brackets, lowercase) or null. */
     fun key(authority: String): String? {
@@ -121,21 +123,36 @@ object VsTrust {
     fun forget(c: Context, authority: String) {
         val key = key(authority) ?: return
         prefs(c).edit().remove("ca:$key").apply()
+        // Also drop this PC's device cookie so a forgotten PC isn't silently still signed in (the PC keeps the device row until revoked there).
+        val cm = CookieManager.getInstance()
+        val base = "https://${urlAuthority(key)}"
+        cm.setCookie("$base/", "vs_device=; Max-Age=0; Path=/; Secure")
+        cm.flush()
     }
 
-    /** TLS reachability to a pinned host, validated against its pinned CA (default hostname verification). */
+    /**
+     * TLS reachability to a pinned host, validated against its pinned CA (default hostname verification), and whether the PC
+     * still recognizes this phone: /api/auth/status is asked with the WebView's vs_device cookie and answers `paired`.
+     * Throws "unpaired" on `paired:false`; a PC that doesn't report `paired` (older build) counts as reachable only.
+     */
     fun probe(c: Context, authority: String) {
         val key = key(authority) ?: throw IllegalArgumentException("not a valid server address")
         val ca = loadCa(c, key) ?: throw SecurityException("this PC is not pinned: pair again")
         val ks = KeyStore.getInstance(KeyStore.getDefaultType()).apply { load(null, null); setCertificateEntry("vs-ca", ca) }
         val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm()).apply { init(ks) }
         val ctx = SSLContext.getInstance("TLS").apply { init(null, tmf.trustManagers, null) }
-        val conn = URL("https://${urlAuthority(key)}/api/health").openConnection() as HttpsURLConnection
+        val base = "https://${urlAuthority(key)}"
+        val conn = URL("$base/api/auth/status").openConnection() as HttpsURLConnection
         conn.sslSocketFactory = ctx.socketFactory
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
+        conn.instanceFollowRedirects = false
+        CookieManager.getInstance().getCookie("$base/")?.let { conn.setRequestProperty("Cookie", it) }
         try {
-            conn.responseCode // handshake + any HTTP answer = reachable and trusted
+            if (conn.responseCode != 200) return // handshake + any HTTP answer = reachable and trusted
+            val text = conn.inputStream.use { String(it.readBytes().take(MAX_STATUS_BYTES).toByteArray(), Charsets.UTF_8) }
+            val paired = runCatching { JSONObject(text).opt("paired") }.getOrNull()
+            if (paired == false) throw SecurityException("unpaired: this PC no longer recognizes this phone")
         } finally {
             conn.disconnect()
         }
@@ -205,6 +222,19 @@ object VsTrust {
         val app = webView.context.applicationContext
         // vs_device (HttpOnly, Secure, Strict) is set on the /pair response; make sure the WebView keeps it across restarts.
         persistCookies()
+        // The PC sets vs_device while a page of its own is loading (no bridge there, and the generated WebViewClient can't be
+        // hooked), so write cookies to disk on a short timer for as long as the WebView lives.
+        val tick = object : Runnable {
+            override fun run() {
+                if (!webView.isAttachedToWindow) return
+                CookieManager.getInstance().flush()
+                webView.postDelayed(this, FLUSH_EVERY_MS)
+            }
+        }
+        webView.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: android.view.View) { v.removeCallbacks(tick); v.postDelayed(tick, FLUSH_EVERY_MS) }
+            override fun onViewDetachedFromWindow(v: android.view.View) { v.removeCallbacks(tick) }
+        })
         WebViewCompat.addWebMessageListener(webView, BRIDGE, APP_ORIGINS) { _, message: WebMessageCompat, _, isMainFrame, reply ->
             val data = message.data
             if (isMainFrame && data != null) handle(app, data, reply)

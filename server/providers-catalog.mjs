@@ -1738,6 +1738,59 @@ function maybeScheduleUsageReview(usage, home, opts = {}) {
   } catch { /* best-effort */ }
 }
 
+/** usa-22: fold `boot-size` metrics (vs logs, deduped like readUsageLogSignals) into avg/p90 chars + estTok per role/provider/lane.
+ * Entries without a breakdown (pre usa-22: `role chars`) count as total-only under provider "unknown". Never throws. */
+const BOOT_PARTS = ["sys", "plugin", "artifact", "brief", "first"];
+export function foldBootSizes(entries) {
+  const groups = new Map();
+  for (const e of entries) {
+    const kv = Object.fromEntries([...String(e.text ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
+    const total = Number(kv.total ?? kv.chars);
+    if (!Number.isFinite(total)) continue;
+    const key = `${kv.role || "unknown"}|${kv.provider || "unknown"}|${kv.lane || e.lane || "-"}`;
+    const g = getOrSet(groups, key, () => ({ role: kv.role || "unknown", provider: kv.provider || "unknown", lane: kv.lane || e.lane || "-", totals: [], toks: [], parts: Object.fromEntries(BOOT_PARTS.map((p) => [p, 0])) }));
+    g.totals.push(total);
+    g.toks.push(Number.isFinite(Number(kv.estTok)) ? Number(kv.estTok) : Math.ceil(total / 4));
+    for (const p of BOOT_PARTS) if (Number.isFinite(Number(kv[p]))) g.parts[p] += Number(kv[p]);
+  }
+  const avg = (a) => Math.round(a.reduce((s, x) => s + x, 0) / a.length);
+  const p90 = (a) => { const v = [...a].sort((x, y) => x - y); return v[Math.min(v.length - 1, Math.ceil(v.length * 0.9) - 1)]; };
+  return [...groups.values()].map((g) => ({
+    role: g.role, provider: g.provider, lane: g.lane, count: g.totals.length,
+    avgChars: avg(g.totals), p90Chars: p90(g.totals), avgEstTok: avg(g.toks), p90EstTok: p90(g.toks),
+    avgParts: Object.fromEntries(BOOT_PARTS.map((p) => [p, Math.round(g.parts[p] / g.totals.length)])),
+  })).sort((a, b) => b.avgChars - a.avgChars || a.role.localeCompare(b.role) || a.provider.localeCompare(b.provider) || a.lane.localeCompare(b.lane));
+}
+
+export function readBootSizes(home, { since, until } = {}) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  const files = [];
+  try { const logs = join(dir, "logs"); if (existsSync(logs)) for (const n of readdirSync(logs)) if (n.endsWith(".jsonl")) files.push(join(logs, n)); } catch { /* none */ }
+  try { const teams = join(dir, "teams"); if (existsSync(teams)) for (const t of readdirSync(teams)) { const p = join(teams, t, "log.jsonl"); if (existsSync(p)) files.push(p); } } catch { /* none */ }
+  const seen = new Set();
+  const hits = [];
+  for (const file of files) {
+    let text = "";
+    try { text = readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      if (!line.includes("boot-size")) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (e.type !== "metric" || typeof e.text !== "string" || !e.text.startsWith("boot-size ")) continue;
+      const t = tsMs(e.ts);
+      if (t === null) continue;
+      const day = new Date(t).toISOString().slice(0, 10);
+      if ((since && day < since) || (until && day > until)) continue;
+      const key = `${e.lane ?? ""}|${t}|${e.text.slice(0, 60)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push({ lane: typeof e.lane === "string" ? e.lane : "", text: e.text });
+    }
+  }
+  return foldBootSizes(hits);
+}
+
 export function getUsage({ home, since, until, git, laneCodes, usageReview, now = Date.now } = {}) {
   const homeDir = home || vibesquadHome();
   const dir = join(homeDir, "runner", "agents");
@@ -1998,6 +2051,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms: computeSpawnStorms(agents),
+    bootSize: readBootSizes(home, { since, until }),
     recentErrors,
     byWorkflow,
     savings,
@@ -2063,6 +2117,14 @@ function usageToMarkdown(u) {
     lines.push("| lane | merged | cost/unit | fix rate |");
     lines.push("|---|---|---|---|");
     for (const l of pl) lines.push(`| ${l.lane} | ${l.mergedUnits} | $${l.costPerMergedUnit} | ${l.fixAfterMergeRate} |`);
+  }
+  const bs = u.bootSize ?? [];
+  if (bs.length) {
+    lines.push("");
+    lines.push("## Boot size (chars / est tokens per spawn)");
+    lines.push("| role | provider | lane | n | avg chars | p90 chars | avg tok | p90 tok | avg sys/plugin/artifact/brief/first |");
+    lines.push("|---|---|---|---|---|---|---|---|---|");
+    for (const b of bs) lines.push(`| ${b.role} | ${b.provider} | ${b.lane} | ${b.count} | ${b.avgChars} | ${b.p90Chars} | ${b.avgEstTok} | ${b.p90EstTok} | ${BOOT_PARTS.map((p) => b.avgParts[p]).join("/")} |`);
   }
   return lines.join("\n") + "\n";
 }

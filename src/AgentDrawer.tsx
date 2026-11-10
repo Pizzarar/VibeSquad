@@ -23,12 +23,11 @@ import {
   isTopicBrainstorm,
   kindOf,
   teamForAgent,
-  topicOfBrainstorm,
   usedTokens,
   useTeams,
 } from "./teams";
 import { titleFor } from "./teams";
-import { handoffTopicBrainstormClient, parkIdeasInInbox, parkTopicBrainstormClient } from "./IdeaInbox";
+import { parkIdeasInInbox } from "./IdeaInbox";
 import { providerSpec } from "./pixel";
 import { openAgentInTab, paneOfAgent } from "./panes";
 import { setLastBrainstormProfile } from "./pinActions";
@@ -161,8 +160,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [inboxDumpText, setInboxDumpText] = useState("");
   const [inboxParking, setInboxParking] = useState(false);
   const [inboxToast, setInboxToast] = useState("");
-  const [topicHandingOff, setTopicHandingOff] = useState(false);
-  const [topicParking, setTopicParking] = useState(false);
   const feedbackKey = `vs.restart-feedback.${agent.id}`;
   const [feedbackDismissed, setFeedbackDismissed] = useState(() => localStorage.getItem(feedbackKey) === "1");
   const [lastSteered, setLastSteered] = useState<string | null>(null);
@@ -178,8 +175,6 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   const isBs = isBrainstormAgent(agent);
   const isTopicBs = isTopicBrainstorm(agent);
-  const topicName = isTopicBs ? topicOfBrainstorm(agent) : "";
-  const topicCardId = labels["vs.inbox-card-id"] || "";
   const { team, laneId: resolvedLaneId } = teamForAgent(agent);
   const { warnTokens, restartTokens } = getBrainstormThresholds(team);
   const bsUsedTokens = isBs ? brainstormUsedTokens(agent) : 0;
@@ -515,45 +510,6 @@ ${draft}`);
     [clearDraft, inboxParking, laneId, teamId],
   );
 
-  const handleTopicHandoff = useCallback(async () => {
-    if (topicHandingOff) return;
-    setTopicHandingOff(true);
-    try {
-      const planNote = lastAssistantMsg ? lastAssistantMsg.slice(0, 240) : `Topic ${topicName} plan handed off to lead`;
-      await handoffTopicBrainstormClient({
-        cardId: topicCardId || undefined,
-        agentId: agent.id,
-        planNote,
-        summaryUpdate: summaryOpen && summaryText.trim() ? summaryText : undefined,
-        usedTokens: bsUsedTokens,
-      });
-    } catch (err) {
-      alert(`Topic handoff failed: ${err}`);
-    } finally {
-      setTopicHandingOff(false);
-    }
-  }, [agent.id, bsUsedTokens, lastAssistantMsg, summaryOpen, summaryText, topicCardId, topicHandingOff, topicName]);
-
-  const handleTopicPark = useCallback(async () => {
-    if (topicParking) return;
-    setTopicParking(true);
-    try {
-      const summaryNote =
-        (lastAssistantMsg && lastAssistantMsg.slice(0, 240)) ||
-        (draft.trim() && draft.trim().slice(0, 240)) ||
-        `Parked topic summary: ${topicName}`;
-      await parkTopicBrainstormClient({
-        cardId: topicCardId || undefined,
-        agentId: agent.id,
-        summaryNote,
-      });
-    } catch (err) {
-      alert(`Park topic failed: ${err}`);
-    } finally {
-      setTopicParking(false);
-    }
-  }, [agent.id, draft, lastAssistantMsg, topicCardId, topicName, topicParking]);
-
   return (
     <aside
       className="drawer"
@@ -597,8 +553,6 @@ ${draft}`);
         onStageSwitch={setStagedSwitch}
         isBs={isBs}
         isTopicBs={isTopicBs}
-        topicName={topicName}
-        topicCardId={topicCardId}
         bsUsedTokens={bsUsedTokens}
         warnTokens={warnTokens}
         restartTokens={restartTokens}
@@ -626,10 +580,6 @@ ${draft}`);
         inboxParking={inboxParking}
         inboxToast={inboxToast}
         parkToInbox={parkToInbox}
-        topicHandingOff={topicHandingOff}
-        handleTopicHandoff={handleTopicHandoff}
-        topicParking={topicParking}
-        handleTopicPark={handleTopicPark}
         restartedFrom={restartedFrom}
         feedbackDismissed={feedbackDismissed}
         onFeedback={onFeedback}

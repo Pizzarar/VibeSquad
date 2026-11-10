@@ -22,11 +22,8 @@ if (process.platform === "win32") {
 }
 import {
   addInboxCards,
-  handoffTopicBrainstorm,
   INBOX_STATUSES,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   assertInboxTriageCaller,
   triageInboxCards,
 } from "../server/inbox.mjs";
@@ -218,6 +215,8 @@ function teamByPath(cwd) {
 function parseArgs(argv) {
   const flags = { _: [], ref: [] };
   const valued = new Set([
+    "reason",
+    "steer",
     "agent",
     "team",
     "lane",
@@ -500,6 +499,7 @@ Usage:
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
+  vs buddy restart --lane <code> [--reason "<why>"]   restart a lane's Buddy via the brainstorm-restart path (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
   vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
@@ -945,36 +945,7 @@ function commandInbox(flags) {
     throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
-  if (sub === "open-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    if (!cardId) throw new Error("inbox open-topic requires <cardId>");
-    return openTopicBrainstorm({ cardId, baseHome }).then((res) => {
-      process.stdout.write(`opened ${res.title} (${res.agentId}) for card #${res.card.id}\n`);
-      return 0;
-    });
-  }
-
-  if (sub === "handoff-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    const agentId = String(flags.agent || process.env.PASEO_AGENT_ID || "").trim();
-    const planNote = flags.note ? String(flags.note) : flags._.slice(1).join(" ").trim();
-    return handoffTopicBrainstorm({ cardId, agentId, planNote, baseHome }).then((res) => {
-      process.stdout.write(`handed off card #${res.card.id} (${res.card.title}); closed ${res.archivedAgentId || "topic chat"}\n`);
-      return 0;
-    });
-  }
-
-  if (sub === "park-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    const agentId = String(flags.agent || process.env.PASEO_AGENT_ID || "").trim();
-    const summaryNote = flags.note ? String(flags.note) : flags._.slice(1).join(" ").trim();
-    return parkTopicBrainstorm({ cardId, agentId, summaryNote, baseHome }).then((res) => {
-      process.stdout.write(`parked topic back to card #${res.card.id} (${res.card.title})\n`);
-      return 0;
-    });
-  }
-
-  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage | open-topic | handoff-topic | park-topic`);
+  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage`);
 }
 
 const WHO_TARGETS = new Set(["lead", "brainstorm", "buddy", "workers", "worker", "all"]);
@@ -1854,7 +1825,9 @@ export async function runAgentVerb(verb, flags, ctx) {
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
     };
   } else if (verb === "handoff_lead") {
-    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}) };
+    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
+  } else if (verb === "restart_buddy") {
+    args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}) };
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else if (verb === "ls") {
@@ -1921,6 +1894,10 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>] [--steer \"<note>\"]");
     verb = "handoff_lead";
   }
+  if (verb === "buddy") {
+    if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"]');
+    verb = "restart_buddy";
+  }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]');
   }
@@ -1939,7 +1916,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
   const identity =
-    verb === "handoff_lead" || verb === "spawn"
+    verb === "handoff_lead" || verb === "spawn" || verb === "restart_buddy"
       ? resolveIdentity(callerFlags, { recordWins: true })
       : resolveIdentity(flags);
   const lane = verb === "ls" && identity.lane === UNASSIGNED_LANE && !flags.lane && !process.env.VS_LANE ? "" : identity.lane;
@@ -2334,6 +2311,7 @@ export const KNOWN_VERBS = [
   "send",
   "status",
   "lead",
+  "buddy",
   "ls",
   "logs",
   "inspect",
@@ -2436,6 +2414,7 @@ export function main(argv) {
       command === "send" ||
       command === "status" ||
       command === "lead" ||
+      command === "buddy" ||
       command === "ls" ||
       command === "logs" ||
       command === "inspect" ||

@@ -5,4 +5,5 @@ export function laneWorkingDir(teamId: string, laneId: string, rootDir?: string)
 export function findNewestPlanFile(cwd?: string, rootDir?: string): string;
 export function appendVsLogEntry(opts: { teamId?: string; laneId?: string; agent?: string; type?: string; text: string; refs?: string[] }): { entry: any; path: string; teamLogPath: string };
 export function buildBrainstormInitialPrompt(opts: { laneId: string; laneUpper: string; summaryContent: string; latestPlan: string; pendingPrompt?: string }): string;
+export function authorizeBuddyRestartRequest(body: any, rootDir?: string): Promise<void>;
 export function performBrainstormRestart(body: any, rootDir?: string): Promise<any>;

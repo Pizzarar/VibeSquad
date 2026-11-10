@@ -32,7 +32,9 @@ local HD = dofile(root.."/art/office/ff/heads.lua")(L, root, SC)
 local NV = 4
 local pal = { dark = Palette{ fromFile = root.."/art/palette/pc98-dark.gpl" },
               light = Palette{ fromFile = root.."/art/palette/pc98-light.gpl" } }
-local CELL = 48
+local CELL = 64
+local S2 = CELL / 32   -- FT: 32-grid -> 64 cell (x2); FF was 1.5 at cell 48
+local Q = CELL / 48    -- FF 48-px placements -> this cell
 local C32 = 32   -- the S1v2 grid the ASCII parts and back heads are authored in
 local ROLES = { "lead", "buddy", "implement", "review" }
 for _, r in ipairs(X.roles) do if r ~= "riffbot" and r ~= "overlord" then ROLES[#ROLES+1] = r end end
@@ -61,7 +63,7 @@ local tmp = Sprite(CELL, CELL, ColorMode.INDEXED); tmp:setPalette(pal.dark); tmp
 local tmp32 = Sprite(C32, C32, ColorMode.INDEXED); tmp32:setPalette(pal.dark); tmp32.transparentColor = 0
 local function canvasRaw() return L.canvas(tmp, tmp.layers[1], tmp.frames[1]) end
 -- 32-grid geometry re-rasterised into the 48 grid
-local function canvasS() return SC.wrap(canvasRaw(), 1.5) end
+local function canvasS() return SC.wrap(canvasRaw(), S2) end
 local function canvas32() return L.canvas(tmp32, tmp32.layers[1], tmp32.frames[1]) end
 local function blank() local i = Image(CELL, CELL, ColorMode.INDEXED); i:clear(0); return i end
 local function over(dst, src, dx, dy)
@@ -74,14 +76,15 @@ end
 -- up15: a finished 32px ASCII part -> the 48 grid. Every 2nd source column/row is doubled; on the doubled
 -- copy an INK pixel takes its far neighbour instead (fill or transparent), so outlines and INK detail
 -- lines stay exactly 1px and fills grow by 1.5.
-local function up15(src)
+local function up15(src, r)
+  r = r or S2
   local w, h = src.width, src.height
-  local W2, H2 = (w*3 + 1)//2, (h*3 + 1)//2
+  local W2, H2 = math.floor(w*r + 0.5), math.floor(h*r + 0.5)
   local function pass(get, n, n2)
     local t = {}
     for X=0,n2-1 do
-      local sx = (X*2)//3
-      local dup = X % 3 == 1
+      local sx = math.floor(X / r)
+      local dup = X > 0 and math.floor((X - 1) / r) == sx
       t[X] = function(o) local v = get(sx, o)
         if dup and v == L.INK then local nx = get(sx+1, o); if nx ~= L.INK then v = nx end end
         return v end
@@ -222,7 +225,7 @@ local function work(role, f)
     end)
   end
   local hi, y0, y1 = backHead(role)
-  putHead(out, hi, y0, y1, 32)
+  putHead(out, hi, y0, y1, math.floor(32*Q + 0.5))
   blob(out, function(C)
     C.hline(11, 20, 10, chair); C.rect(10, 21, 12, 6, chair)
     C.hline(11, 22, 10, L.INK)
@@ -239,7 +242,7 @@ local function part15(out, x, y, map, dx)
   local x1, y1 = 0, 0
   for yy=0,C32-1 do for xx=0,C32-1 do if C.img:getPixel(xx, yy) ~= 0 then x1 = math.max(x1, xx); y1 = math.max(y1, yy) end end end
   local cut = Image(x1+1, y1+1, ColorMode.INDEXED); cut:clear(0); over(cut, C.img)
-  over(out, up15(cut), math.floor(x*1.5 + 0.5) + (dx or 0), math.floor(y*1.5 + 0.5))
+  over(out, up15(cut), math.floor(x*S2 + 0.5) + (dx or 0), math.floor(y*S2 + 0.5))
 end
 local function needs(role, wave)
   local lk = LOOK[role]
@@ -261,7 +264,7 @@ local function needs(role, wave)
   local bx, map = torsoMap(role)
   part15(out, bx, 17, map)
   local hi, y0, y1 = frontHead(role, "yo")
-  putHead(out, hi, y0, y1, 27)
+  putHead(out, hi, y0, y1, 36)
   for i, p in ipairs(FB.fx[role]) do if i > 1 then part15(out, p[1], p[2] - 3, p[3], wave * 2) end end
   return out
 end
@@ -279,7 +282,7 @@ local function stand(role, ride)
   local lk = LOOK[role]
   local trouser = lk[3]
   local out = blank()
-  shadow(out, 24, 44.5, 15, 3.5)
+  shadow(out, 32, 59.5, 20, 4.5)
   blob(out, function(C) C.rect(11, 24, 4, 3, trouser); C.rect(17, 24, 4, 3, trouser) end)
   do local C = canvasS()
     C.rect(10, 28, 5, 2, L.INK); C.rect(17, 28, 5, 2, L.INK); C.px(11, 28, L.MARBLE); C.px(18, 28, L.MARBLE)
@@ -287,34 +290,39 @@ local function stand(role, ride)
   local bx, map = torsoMap(role)
   part15(out, bx, 17, map)
   local hi, y0, y1 = frontHead(role, "rest")
-  putHead(out, hi, y0, y1, 27)
-  if ride then part15(out, 26, 1, NOTE, 2) end
+  putHead(out, hi, y0, y1, 36)
+  if ride then part15(out, 25, 1, NOTE, 0) end
   return out
 end
 
--- "!" callout, drawn at 48-grid size (19x19)
+-- "!" callout, drawn at 64-grid size (25x24; FF 19x19 at 48)
 local BUBBLE = [[
-|.kkkkkkkkkkkkkkkk..|
-|kppppppppppppppppk.|
-|kppppppppppppppppkk|
-|kppppppmmmkppppppkk|
-|kppppppmmmkppppppkk|
-|kppppppmmmkppppppkk|
-|kppppppmmmkppppppkk|
-|kppppppmmmkppppppkk|
-|kppppppmmmkppppppkk|
-|kpppppppkkkppppppkk|
-|kppppppppppppppppkk|
-|kppppppmmmkppppppkk|
-|kppppppmmmkppppppkk|
-|kpppppppkkkppppppkk|
-|kppppppppppppppppkk|
-|.kkkpkkkkkkkkkkkkk.|
-|...kppk............|
-|...kpk.............|
-|...kk..............|
+|.kkkkkkkkkkkkkkkkkkkkkk..|
+|kppppppppppppppppppppppk.|
+|kppppppppppppppppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kppppppppppkkkkppppppppkk|
+|kppppppppppppppppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kpppppppppmmmmkppppppppkk|
+|kppppppppppkkkkppppppppkk|
+|kppppppppppppppppppppppkk|
+|kppppppppppppppppppppppkk|
+|.kkkkppkkkkkkkkkkkkkkkk..|
+|....kppk.................|
+|....kpk..................|
+|....kk...................|
 ]]
-local BW, BH = 19, 19
+local BW, BH = 25, 24
 
 local SW, SH = CELL*6*NV, CELL*(#ROLES + 1)
 local sheet = Image(SW, SH, ColorMode.INDEXED); sheet:clear(0)
@@ -360,8 +368,8 @@ for _, role in ipairs(ROLES) do
   parts[#parts+1] = '    "'..role..'":{"variants":['..table.concat(vs, ",")..'\n     ],\n     '..poses(cells[role][1])..'}'
 end
 -- bubble offset = bubble top-left relative to the sprite anchor (cell bottom-centre)
-local json = '{\n  "version":2,\n  "cell":48,\n  "anchor":"bottom-centre",\n  "roles":{\n'..table.concat(parts, ",\n")..
-  '\n  },\n  "bubble":{"x":'..BX..',"y":'..BY..',"w":'..BW..',"h":'..BH..',"offset":{"x":-27,"y":-60}},\n'..
+local json = '{\n  "version":2,\n  "cell":'..CELL..',\n  "anchor":"bottom-centre",\n  "roles":{\n'..table.concat(parts, ",\n")..
+  '\n  },\n  "bubble":{"x":'..BX..',"y":'..BY..',"w":'..BW..',"h":'..BH..',"offset":{"x":-36,"y":-80}},\n'..
   '  "fallback":{}\n}\n'
 local f = io.open(root.."/public/office/cast.json", "wb"); f:write(json); f:close()
 print("wrote cast.json ("..#ROLES.." roles)")

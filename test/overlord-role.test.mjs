@@ -46,3 +46,10 @@ test("HUB_BUDDY_RULES lets RiffBot wake or spawn the Overlord", () => {
   assert.match(HUB_BUDDY_RULES, /message or spawn the Overlord/);
   assert.match(HUB_BUDDY_RULES, /never spawn a feature-lane Lead/);
 });
+
+test("Hypnospace surrealism line is in the Buddy, Lead and art review packs", async () => {
+  const { BRAINSTORM_PACK, LEAD_FALLBACK_PACK } = await import("../server/hooks/agent-duties.ts");
+  const { ART_PAINTER_NOTE_BODY, ART_DIRECTOR_NOTE_BODY } = await import("../server/profiles.mjs");
+  const re = /light surrealism in the Hypnospace vibe.*chrome readability is still the gate/;
+  for (const p of [BRAINSTORM_PACK, LEAD_FALLBACK_PACK, ART_PAINTER_NOTE_BODY, ART_DIRECTOR_NOTE_BODY]) assert.match(p, re);
+});

@@ -2298,7 +2298,13 @@ code {
   border-color: var(--cyan);
   color: var(--cyan-t);
 }
-.inbox-open-topic-btn {
+.inbox-send-btn {
+  font-weight: 700;
+  border-color: var(--cyan);
+  color: var(--cyan-t);
+}
+.inbox-delivered-tag {
+  cursor: pointer;
   border-color: var(--cyan);
   color: var(--cyan-t);
 }

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createPlugin } from "../server/hooks/agent-duties.ts";
+import { bootSizeMetric, createPlugin } from "../server/hooks/agent-duties.ts";
 
 const PROFILES = [
   { name: "Lead - Claude", role: "lead", provider: "claude", model: "claude-opus-5-5", modeId: "auto", thinkingOptionId: "medium" },
@@ -260,3 +260,12 @@ test(
     }
   }),
 );
+
+test("usa-22: bootSizeMetric keeps the legacy shape and adds the per-part breakdown", () => {
+  assert.equal(bootSizeMetric("lead", 100), "boot-size role=lead chars=100");
+  const line = bootSizeMetric("worker", 1000, { provider: "claude", lane: "usage", sys: 100, plugin: 600, artifact: 300, brief: 0, first: 21 });
+  assert.equal(
+    line,
+    "boot-size role=worker provider=claude lane=usage chars=1000 total=1021 sys=100 plugin=600 artifact=300 brief=0 first=21 estTok=256",
+  );
+});

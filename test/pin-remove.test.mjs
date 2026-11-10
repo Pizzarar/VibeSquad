@@ -62,7 +62,7 @@ test("PinMenu stops propagation on onKeyDown and onContextMenu, and is mounted i
 
   const pinRailSrc = fs.readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
   const headStart = pinRailSrc.indexOf('<div className="pin-rail-active-head">');
-  const headEnd = pinRailSrc.indexOf("{active && focus.agentId && <SendToBar", headStart);
+  const headEnd = pinRailSrc.indexOf("{active && drawerOpen && <SendToBar", headStart);
   assert.ok(headStart >= 0 && headEnd > headStart, ".pin-rail-active-head exists in PinRail.tsx");
   const headBlock = pinRailSrc.slice(headStart, headEnd);
   assert.match(headBlock, /!isHubPin\(active\)[\s\S]*?<PinMenu/, ".pin-rail-active-head mounts <PinMenu> for non-hub active pins");

@@ -496,3 +496,127 @@ test("a double Overlord handoff returns the fresh successor instead of handing o
     assert.equal(t.calls.createAgent.length, 1);
   } finally { t.cleanup(); }
 });
+
+// O6: a healthy lead under 100k is steered, not handed off. Unknown tokens fail open.
+const setTokens = (t, id, n, over = {}) => Object.assign(t.agents.get(id), { usedTokens: n }, over);
+const readLog = (t) => { try { return readFileSync(join(t.vsHome, "teams", "site", "log.jsonl"), "utf8"); } catch { return ""; } };
+
+test("O6: Overlord refused on a healthy lead under 100k; allowed at 100k+, and when errored, wedged or permission-stuck", async () => {
+  const t = overlord();
+  try {
+    setTokens(t, "rn-lead-b", 99_999);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other", steer: "x" }), /steer first \(ladder 1-2\)/);
+    assert.equal(t.calls.createAgent.length, 0);
+    setTokens(t, "rn-lead-b", 99_999, { status: "error" });
+    assert.equal((await callTool(t.ctx, "handoff_lead", { lane: "other" })).trigger, "overlord");
+  } finally { t.cleanup(); }
+  for (const [name, over] of [["wedged", { status: "initializing", lastPromptAt: "2026-11-01T00:00:00.000Z" }], ["permission", { pendingPermissions: [{ id: "p1" }] }]]) {
+    const w = overlord();
+    try {
+      setTokens(w, "rn-lead-b", 5_000, over);
+      assert.equal((await callTool(w.ctx, "handoff_lead", { lane: "other" })).trigger, "overlord", name);
+    } finally { w.cleanup(); }
+  }
+  const ok = overlord();
+  try {
+    setTokens(ok, "rn-lead-b", 100_000);
+    assert.equal((await callTool(ok.ctx, "handoff_lead", { lane: "other" })).trigger, "overlord");
+  } finally { ok.cleanup(); }
+});
+
+test("O6: --force needs a steer; with one it skips the floor and writes a decision log naming Overlord, lane, target, tokens, steer", async () => {
+  const t = overlord();
+  try {
+    setTokens(t, "rn-lead-b", 42_000);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other", force: true }), /steer first \(ladder 1-2\)/);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other", force: true, steer: "   " }), /steer first/);
+    assert.equal(readLog(t), "");
+    const r = await callTool(t.ctx, "handoff_lead", { lane: "other", force: true, steer: "stop looping" });
+    assert.equal(r.trigger, "overlord");
+    const line = readLog(t).split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === "decision");
+    assert.ok(line, "decision entry");
+    assert.match(line.text, /rn-hub-lead/);
+    assert.match(line.text, /lane other/);
+    assert.match(line.text, /rn-lead-b/);
+    assert.match(line.text, /42000 tokens/);
+    assert.match(line.text, /stop looping/);
+  } finally { t.cleanup(); }
+});
+
+test("O6: unknown token count fails open; self and Buddy triggers ignore the floor", async () => {
+  const t = overlord();
+  try {
+    assert.equal((await callTool(t.ctx, "handoff_lead", { lane: "other" })).trigger, "overlord");
+  } finally { t.cleanup(); }
+  const b = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    setTokens(b, "rn-lead", 1_000);
+    assert.equal((await callTool(b.ctx, "handoff_lead", {})).trigger, "buddy");
+  } finally { b.cleanup(); }
+  const s = setup({ callerRole: "lead", callerId: "rn-lead" });
+  try {
+    setTokens(s, "rn-lead", 1_000);
+    assert.equal((await callTool(s.ctx, "handoff_lead", {})).trigger, "self");
+  } finally { s.cleanup(); }
+});
+
+test("O6: the server re-check enforces the floor on a direct HTTP call", async () => {
+  const t = overlord();
+  try {
+    setTokens(t, "rn-lead-b", 10_000);
+    const run = (extra) => performLeadHandoffHttp({ agentId: "rn-lead-b", retireImmediately: true, trigger: "overlord", callerId: "rn-hub-lead", ...t.deps, ...extra }, t.dir);
+    await assert.rejects(run({}), /steer first \(ladder 1-2\)/);
+    await assert.rejects(run({ force: true }), /steer first/);
+    await assert.rejects(run({ steer: "go" }), /steer first/);
+    assert.equal(t.calls.createAgent.length, 0);
+    const ok = await run({ force: true, steer: "go" });
+    assert.equal(ok.ok !== false, true);
+    assert.match(readLog(t), /"type":"decision"/);
+  } finally { t.cleanup(); }
+});
+
+test("O6 review: wedged lead under 100k is allowed when the list strips lastPromptAt and only fetchAgent has it", async () => {
+  const t = overlord();
+  try {
+    const full = setTokens(t, "rn-lead-b", 5_000, { status: "initializing", lastPromptAt: "2026-11-01T00:00:00.000Z" });
+    const origList = t.ctx.withBackend;
+    t.ctx.withBackend = async (o, fn) => origList(o, (b) => fn({ ...b, async fetchAgents(...a) { const r = await b.fetchAgents(...a); return { ...r, entries: r.entries.map(({ agent }) => ({ agent: { ...agent, lastPromptAt: undefined, lastProgressAt: undefined } })) }; } }));
+    assert.equal((await callTool(t.ctx, "handoff_lead", { lane: "other" })).trigger, "overlord");
+    // server path: resolved by lane from a stripped list, enriched via backend.fetchAgent
+    const s = overlord();
+    try {
+      setTokens(s, "rn-lead-b", 5_000, { status: "initializing", lastPromptAt: "2026-11-01T00:00:00.000Z" });
+      const stripped = { ...s.deps.agentClient, async fetchAgents() { return { entries: [...s.agents.values()].map((a) => ({ agent: { ...a, lastPromptAt: undefined, lastProgressAt: undefined } })), pageInfo: { hasMore: false } }; } };
+      const r = await performLeadHandoffHttp({ lane: "other", team: "site", retireImmediately: true, trigger: "overlord", callerId: "rn-hub-lead", ...s.deps, agentClient: stripped, agents: undefined }, s.dir);
+      assert.equal(r.ok !== false, true);
+    } finally { s.cleanup(); }
+    assert.ok(full);
+  } finally { t.cleanup(); }
+});
+
+test("O6 review: a repeat Overlord handoff within the dedupe window returns the fresh successor even when it is under 100k", async () => {
+  const t = overlord();
+  try {
+    const first = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    setTokens(t, first.id, 10_000, { status: "idle" });
+    const again = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    assert.equal(again.id, first.id);
+    assert.equal(again.deduped, true);
+  } finally { t.cleanup(); }
+});
+
+test("O6 review: the forced-handoff decision log is written once, and not when the spawn fails or the call is a repeat", async () => {
+  const t = overlord();
+  try {
+    setTokens(t, "rn-lead-b", 42_000);
+    t.behavior.createAgent = "throw";
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other", force: true, steer: "go" }));
+    assert.equal(readLog(t).includes('"type":"decision"'), false);
+    t.behavior.createAgent = null;
+    await callTool(t.ctx, "handoff_lead", { lane: "other", force: true, steer: "go" });
+    const count = () => readLog(t).split("\n").filter((l) => l.includes('"type":"decision"')).length;
+    assert.equal(count(), 1);
+    await performLeadHandoffHttp({ agentId: "rn-lead-b", retireImmediately: true, trigger: "overlord", callerId: "rn-hub-lead", force: true, steer: "go", ...t.deps }, t.dir).catch(() => {});
+    assert.equal(count(), 1);
+  } finally { t.cleanup(); }
+});

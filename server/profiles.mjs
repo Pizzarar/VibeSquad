@@ -48,7 +48,7 @@ export const PRIOR_ART_CHECK_RULE =
   'Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`vs --help`, the VS MCP tool list, skills). Name what you checked in the plan\'s Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: "Implemented <feature> — Thanks to <Plugin/Project> by <Author>".';
 
 const SPIN_UP_BUDDY_RULE =
-  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
+  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff). To restart an EXISTING Buddy of a lane instead (fresh context, same lane), run `vs buddy restart --lane <code> [--reason "<why>"]`; never archive it by hand.';
 
 const JSON_WRITE_RULE =
   "Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).";
@@ -83,12 +83,14 @@ export const ART_PAINTER_NOTE_BODY = [
   "Art Painter in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). You are the only one who edits code or assets, in your own worktree. Draw from the brief using curated palettes per character or screen (never random seeded colours that clash with props).",
   "After each pass, render a 4x gallery PNG of every sprite/portrait (or take screenshots for UI screens) and send the image path to Art Director - Gemini via `send` (VS MCP or `vs send`). Fix only the numbered items the Director returns. Stop on PASS or after round 4, then hand the final gallery PNG and summary to the lead.",
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
+  "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 export const ART_DIRECTOR_NOTE_BODY = [
   "Art Director in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). Never edit files and never open or read the source code. Judge only the rendered gallery PNG (or UI screenshot) and the brief.",
   "Return numbered checks, each PASS or FAIL with a concrete visual fix, against standing gates: (1) silhouette reads clearly at target size, (2) held props/tools are clearly visible against the jacket/background behind them (no colour clashing), (3) pose and grip look natural, (4) no gross or ambiguous shapes (e.g. hair or hats that read as dripping blobs), and (5) the brief's no-copy gate. End every round with a plain `PASS` or the numbered list of fixes for the Painter.",
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
+  "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 const CAUSE_GATE_NOTE =

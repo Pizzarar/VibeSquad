@@ -119,6 +119,7 @@ export const BRAINSTORM_PACK = [
   "- At >=80k tokens, update the brief now. At the hard limit VS retires you; the next click on the pin starts a fresh Brainstorm from the brief.",
   "- If the user raises something that belongs to another Team, send it directly: `vs inbox add --lane <lane> --from-brainstorm \"<idea>\"` or `send` to that lane's Buddy, then tell the owner in one line. Only when the target lane is unclear, fall back to a fenced block: line 1 `vs:send-to <lane-id>`, then the idea text (VS shows a one-click Send button). Once the owner has picked an option or approved the direction, act: hand off, send to another lane, park in the Inbox, then report what you did in one line. Ask only for real choices between options, or before merges the owner hasn't seen, deletes, releases, force-pushes or settings changes. Unrelated loose ideas: `vs inbox add \"<idea>\"` (or the UI's `Park in Inbox`) and reply \"parked N ideas → Inbox\".",
   "- \"I just thought of X\" / \"spin up a Brainstorm for X\" is a new-pin request: run `vs pin new \"<short name>\" --brief \"<X in 1-3 lines>\"` (same Squad by default). It refuses when X overlaps an existing Team and names it: offer that Team instead. For work in flight that isn't a Team yet, check `vs who brainstorm` / `vs log --since-me` first. Don't spawn the Brainstorm; the first click on the new pin starts it.",
+  "- New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 /** Appended to the Buddy pack only for the Squad's hub Buddy (RiffBot; isHubLane contract). Team Buddies never get it. */
@@ -142,7 +143,9 @@ export const HUB_LEAD_RULES = [
   "- Lead escalation ladder for a feature lane's stalled lead (go in order, never skip ahead):",
   "  1. Steer: idle/stalled lead → `vs send <lead> \"<steer>\"`, then `vs wait <lead> --timeout 90`.",
   "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
-  "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Never raw-archive a lead.",
+  "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Floor: a healthy lead under 100k tokens is refused (steer first, ladder 1-2); an errored, wedged or permission-stuck lead is not. `--force` needs a non-empty `--steer` and is logged as a decision. Never raw-archive a lead.",
+  "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
+  "- Inbox cards with no lane arrive as a `Route this:` message: bounce the card with the existing `vs inbox triage --bounce <cardId> --lane <lane>`, send it on to that lane's Buddy (`vs who brainstorm --lane <lane>`, then `vs send`), and `vs log decision` where it went. Never open a new agent for a card.",
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
 ].join("\n");
 
@@ -160,11 +163,12 @@ export const LEAD_FALLBACK_PACK = [
   "- When a plan block passes (PASS) or the whole plan is complete, add that line under `## In flight` in `docs/brainstorm/<lane>.md` so the Brainstorm can spot \"looks done\". Touch nothing else in the brief.",
   "- Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. Run `vs handoff` and fill the Judgment section.",
   "- Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`vs --help`, the VS MCP tool list, skills). Name what you checked in the plan's Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project creator in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
-  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the new lane's short code) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).",
+  "- \"Spin up a buddy (for X)\" / \"spin up another buddy\" / \"get me a buddy for X\": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the new lane's short code) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff). To restart an EXISTING lane's Buddy instead (fresh context, same lane), run `vs buddy restart --lane <code> [--reason \"<why>\"]`; never archive it by hand.",
   "- Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).",
   "- Plans carry a parallel table (block | touches | clashes with); run non-clashing blocks at the same time by default; say why in one line when you don't.",
   "- Only one full `npm test` runs at a time machine-wide (the wrapper refuses a second): workers run only the tests for their own files; the lead hands out the full-suite slot.",
-  "- Restart the VibeSquad server only when a merged change needs it, and log it (`vs log metric \"server restart: <why>\"`).",
+  "- Hand server restarts, post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites e.g. public-release.test.mjs, worktree node_modules junction gaps, flaky shared tests) to the Overlord (`vs who lead --lane vibesquad`, then `vs send`) or @bug (`vs inbox add --lane bug-chaser \"<item>\"`). Never leave them only in handoff Gotchas or owner replies.",
+  "- New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 export const ROLE_PACKS = {
@@ -840,8 +844,18 @@ export function composeSpawnPromptParts(prefix: string, profileNotes: string, ra
 }
 
 /** The once-per-boot size metric line (docs/PLAN_LEAN_BOOT_1109.md B2). */
-export function bootSizeMetric(role: string, chars: number): string {
-  return `boot-size role=${role} chars=${chars}`;
+export function bootSizeMetric(
+  role: string,
+  chars: number,
+  parts?: { provider?: string; lane?: string; sys: number; plugin: number; artifact: number; brief: number; first: number },
+): string {
+  if (!parts) return `boot-size role=${role} chars=${chars}`;
+  // usa-22: per-part breakdown. total = final system prompt + first prompt; agent id is not yet known at before.agent.create.
+  const total = chars + parts.first;
+  return (
+    `boot-size role=${role} provider=${parts.provider || "unknown"} lane=${parts.lane || "-"} chars=${chars} total=${total}` +
+    ` sys=${parts.sys} plugin=${parts.plugin} artifact=${parts.artifact} brief=${parts.brief} first=${parts.first} estTok=${Math.ceil(total / 4)}`
+  );
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
@@ -1734,7 +1748,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
         const gitState = await inspectGitSpawnState(cwd);
         st.mark("git-spawn-state");
+        let bootPluginChars = 0;
+        let bootBriefChars = 0;
+        let bootArtifactChars = 0;
         if (prefix && !rawSysPrompt.includes(EVERYONE_LAYER)) {
+          bootPluginChars = prefix.length;
           const parts = composeSpawnPromptParts(prefix, profileNotes, rawSysPrompt, gitState);
           next.systemPrompt = parts.join("\n\n");
           changed = true;
@@ -1770,6 +1788,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (block) {
               next.systemPrompt = [currentSys.trim(), block].filter(Boolean).join("\n\n");
               changed = true;
+              bootBriefChars = block.length;
               const where = teamOf(reqLabels, cwd);
               if (where) {
                 try {
@@ -1801,6 +1820,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (artBlock) {
               next.systemPrompt = [currentSys.trim(), artBlock].filter(Boolean).join("\n\n");
               changed = true;
+              bootArtifactChars = artBlock.length;
             }
           }
         }
@@ -1813,7 +1833,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const where = teamOf(envOrReqLabels, cwd);
           if (where) {
             try {
-              appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: bootSizeMetric(role, String(next.systemPrompt ?? rawSysPrompt ?? "").length) });
+              appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: bootSizeMetric(role, String(next.systemPrompt ?? rawSysPrompt ?? "").length, {
+                provider: finalProvider,
+                lane: where.lane || explicitLane,
+                sys: rawSysPrompt.length,
+                plugin: bootPluginChars,
+                artifact: bootArtifactChars,
+                brief: bootBriefChars,
+                first: String((request as any).prompt ?? (request as any).initialPrompt ?? "").length,
+              }) });
             } catch (err) {
               log(`boot-size metric write failed: ${err}`);
             }

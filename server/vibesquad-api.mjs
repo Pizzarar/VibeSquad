@@ -9,6 +9,7 @@ import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { findBuiltApk } from "./android-apk-paths.mjs";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
@@ -35,6 +36,7 @@ import {
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   laneWorkingDir,
@@ -45,14 +47,10 @@ import {
 } from "./brainstorm.mjs";
 import {
   addInboxCards,
-  buildTopicBrainstormPrompt,
-  buildTopicTitle,
   getInboxPath,
-  handoffTopicBrainstorm,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   readInboxCards,
+  sendInboxCard,
   sortIdeaCard,
   triageInboxCards,
   writeInboxCards,
@@ -127,6 +125,7 @@ import {
 
 export {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   performBrainstormRestart,
@@ -134,14 +133,10 @@ export {
   resetBrainstormRestartState,
   writeBrainstormSummary,
   addInboxCards,
-  buildTopicBrainstormPrompt,
-  buildTopicTitle,
   getInboxPath,
-  handoffTopicBrainstorm,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   readInboxCards,
+  sendInboxCard,
   sortIdeaCard,
   triageInboxCards,
   writeInboxCards,
@@ -233,7 +228,7 @@ export function sanitizeBody(body) {
 /** readBody + sanitizeBody: what every write handler that hands its body to a helper must use. */
 const readCleanBody = async (req) => sanitizeBody(await readBody(req));
 
-// Agent archives reachable over HTTP (brainstorm-restart, inbox park/handoff-topic) share one budget, so a
+// Agent archives reachable over HTTP (brainstorm-restart) share one budget, so a
 // loop over agent ids can't retire every Buddy at once.
 export const ARCHIVE_BUDGET_PER_MIN = 10;
 export const archiveBudget = createWindowLimiter({ max: ARCHIVE_BUDGET_PER_MIN });
@@ -386,8 +381,8 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
     return res.end();
   }
   const full = getAuthStatus(rootDir);
-  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
+  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, distReady: full.distReady, caFingerprint: full.caFingerprint });
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
@@ -859,6 +854,8 @@ async function handleBrainstormRestart(req, res, rootDir) {
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
+    // O5: a denied callerId must not spend a budget slot (a worker could otherwise exhaust it and block real restarts).
+    await authorizeBuddyRestartRequest(body, rootDir);
     if (body.reason === "start-brainstorm" || body.agentId === "start-brainstorm") {
       if (overSpawnBudget(res)) return;
     } else {
@@ -870,7 +867,7 @@ async function handleBrainstormRestart(req, res, rootDir) {
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -932,44 +929,14 @@ async function handleInboxTriage(req, res, rootDir) {
   }
 }
 
-async function handleInboxOpenTopic(req, res, rootDir) {
+async function handleInboxSend(req, res, rootDir) {
   if (req.method !== "POST") {
     res.statusCode = 405;
     return res.end();
   }
   try {
     const body = await readCleanBody(req);
-    const result = await openTopicBrainstorm(body, rootDir);
-    return sendJson(res, 200, result);
-  } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
-  }
-}
-
-async function handleInboxHandoffTopic(req, res, rootDir) {
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    return res.end();
-  }
-  try {
-    const body = await readCleanBody(req);
-    if (overArchiveBudget(res)) return;
-    const result = await handoffTopicBrainstorm(body, rootDir);
-    return sendJson(res, 200, result);
-  } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
-  }
-}
-
-async function handleInboxParkTopic(req, res, rootDir) {
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    return res.end();
-  }
-  try {
-    const body = await readCleanBody(req);
-    if (overArchiveBudget(res)) return;
-    const result = await parkTopicBrainstorm(body, rootDir);
+    const result = await sendInboxCard(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
@@ -1204,15 +1171,8 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
 export function resolveAndroidApkPath(rootDir = REPO_ROOT) {
   const primary = join(rootDir, "dist-desktop", "VibeSquad.apk");
   if (existsSync(primary)) return primary;
-  const parent = resolve(rootDir, "../..", "dist-desktop", "VibeSquad.apk");
-  if (existsSync(parent)) return parent;
-  const apkDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
-  if (existsSync(apkDir)) {
-    try {
-      const apk = readdirSync(apkDir).find((f) => f.endsWith(".apk"));
-      if (apk) return join(apkDir, apk);
-    } catch {}
-  }
+  const built = findBuiltApk(rootDir);
+  if (built) return built;
   return primary;
 }
 
@@ -1253,6 +1213,43 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
+/** The APK download path, case-insensitive (phones lowercase typed URLs: /vibesquad.apk). */
+export const isAndroidApkPath = (path) => /^\/(?:__vibesquad\/android\/)?vibesquad\.apk$/i.test(path);
+
+// sha256 of the served APK for x-vibesquad-apk-sha256. Never hashes on the request path: trust the build sidecar
+// when it is at least as new as the APK, else hash by stream in the background (header omitted until ready).
+// Cache is keyed by path+mtime+size so the header always matches the bytes served.
+const apkHashCache = new Map();
+const apkHashPending = new Set();
+function apkSha256(file, stat) {
+  const key = `${stat.mtimeMs}:${stat.size}`;
+  const hit = apkHashCache.get(file);
+  if (hit?.key === key) return hit.hash;
+  try {
+    const side = `${file}.sha256`;
+    if (existsSync(side) && statSync(side).mtimeMs >= stat.mtimeMs) {
+      const hash = readFileSync(side, "utf8").trim().toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(hash)) {
+        apkHashCache.set(file, { key, hash });
+        return hash;
+      }
+    }
+  } catch {}
+  const pend = `${file}|${key}`;
+  if (!apkHashPending.has(pend)) {
+    apkHashPending.add(pend);
+    const h = createHash("sha256");
+    createReadStream(file)
+      .on("data", (c) => h.update(c))
+      .on("end", () => {
+        apkHashCache.set(file, { key, hash: h.digest("hex") });
+        apkHashPending.delete(pend);
+      })
+      .on("error", () => apkHashPending.delete(pend));
+  }
+  return "";
+}
+
 export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -1268,6 +1265,8 @@ export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  const sha = apkSha256(file, stat);
+  if (sha) res.setHeader("x-vibesquad-apk-sha256", sha);
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
@@ -1466,7 +1465,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") {
       return handleDesktopInstaller(req, res, rootDir);
     }
-    if (path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") {
+    if (isAndroidApkPath(path)) {
       return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json") {
@@ -1521,12 +1520,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleInbox(req, res, rootDir);
       case "/__vibesquad/inbox/triage":
         return handleInboxTriage(req, res, rootDir);
-      case "/__vibesquad/inbox/open-topic":
-        return handleInboxOpenTopic(req, res, rootDir);
-      case "/__vibesquad/inbox/handoff-topic":
-        return handleInboxHandoffTopic(req, res, rootDir);
-      case "/__vibesquad/inbox/park-topic":
-        return handleInboxParkTopic(req, res, rootDir);
+      case "/__vibesquad/inbox/send":
+        return handleInboxSend(req, res, rootDir);
       case "/__vibesquad/push/vapid-public-key":
         return handlePushVapidPublicKey(req, res);
       case "/__vibesquad/push/subscribe":

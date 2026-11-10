@@ -15,7 +15,7 @@ import {
 } from "./antigravity";
 import { useDraft } from "./drafts";
 import { AgentTitleEdit } from "./QuickWinsUi";
-import { isImeComposing, shouldComposerSubmit, TOPIC_SOFT_CAP, TopicCapBanner } from "./IdeaInbox";
+import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBadge, useUserName } from "./userName";
@@ -499,8 +499,6 @@ export type DrawerHeaderProps = {
   onStageSwitch?: (target: ProviderSwitchTarget | null) => void;
   isBs: boolean;
   isTopicBs: boolean;
-  topicName: string;
-  topicCardId: string;
   bsUsedTokens: number;
   warnTokens: number;
   restartTokens: number;
@@ -528,10 +526,6 @@ export type DrawerHeaderProps = {
   inboxParking: boolean;
   inboxToast: string;
   parkToInbox: (text: string, fromComposer: boolean) => void;
-  topicHandingOff: boolean;
-  handleTopicHandoff: () => Promise<void>;
-  topicParking: boolean;
-  handleTopicPark: () => Promise<void>;
   restartedFrom: string;
   feedbackDismissed: boolean;
   onFeedback: (verdict: "good" | "lost") => Promise<void>;
@@ -651,8 +645,6 @@ export function DrawerHeader({
   onStageSwitch,
   isBs,
   isTopicBs,
-  topicName,
-  topicCardId,
   bsUsedTokens,
   warnTokens,
   restartTokens,
@@ -680,10 +672,6 @@ export function DrawerHeader({
   inboxParking,
   inboxToast,
   parkToInbox,
-  topicHandingOff,
-  handleTopicHandoff,
-  topicParking,
-  handleTopicPark,
   restartedFrom,
   feedbackDismissed,
   onFeedback,
@@ -1239,35 +1227,6 @@ export function DrawerHeader({
 
       {isBs && (
         <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ margin: "4px 8px 0" }}>
-          {isTopicBs && (
-            <div className="brainstorm-topic-row">
-              <span className="brainstorm-topic-badge" data-testid="brainstorm-topic-badge">
-                📌 Topic: {topicName}
-                {topicCardId ? ` (Card #${topicCardId})` : ""}
-              </span>
-              <div className="brainstorm-topic-actions">
-                <button
-                  className="btn small ok btn-topic-handoff"
-                  data-testid="btn-topic-handoff"
-                  disabled={topicHandingOff}
-                  onClick={() => void handleTopicHandoff()}
-                  title="Mark card handed-off, log handoff metric, and archive/close this topic brainstorm"
-                >
-                  {topicHandingOff ? "Handing off…" : "✓ Hand off plan & close topic"}
-                </button>
-                <button
-                  className="btn ghost small btn-topic-park"
-                  data-testid="btn-topic-park"
-                  disabled={topicParking}
-                  onClick={() => void handleTopicPark()}
-                  title="Save current summary onto the Inbox card and archive this topic chat"
-                >
-                  {topicParking ? "Parking…" : "📥 Park to card"}
-                </button>
-              </div>
-            </div>
-          )}
-          <TopicCapBanner minCount={isTopicBs ? TOPIC_SOFT_CAP : TOPIC_SOFT_CAP + 1} />
           <div className="brainstorm-ctx-main" style={{ flexWrap: "wrap", gap: 6 }}>
             <span className="brainstorm-ctx-readout">
               {usedK}k / {restartK}k tok
