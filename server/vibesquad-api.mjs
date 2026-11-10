@@ -388,8 +388,8 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
     return res.end();
   }
   const full = getAuthStatus(rootDir);
-  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
+  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, distReady: full.distReady, caFingerprint: full.caFingerprint });
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
@@ -1257,6 +1257,9 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
+/** The APK download path, case-insensitive (phones lowercase typed URLs: /vibesquad.apk). */
+export const isAndroidApkPath = (path) => /^\/(?:__vibesquad\/android\/)?vibesquad\.apk$/i.test(path);
+
 export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -1470,7 +1473,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") {
       return handleDesktopInstaller(req, res, rootDir);
     }
-    if (path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") {
+    if (isAndroidApkPath(path)) {
       return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json") {
