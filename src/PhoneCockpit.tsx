@@ -159,7 +159,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   );
 
   return (
-    <div className="phone-cockpit" data-testid="phone-cockpit" data-surface={shown}>
+    <div className="phone-cockpit" data-testid="phone-cockpit" data-surface={shown} data-android={isAndroidUserAgent() ? "true" : undefined}>
       <header className="phone-bar">
         <button
           type="button"
