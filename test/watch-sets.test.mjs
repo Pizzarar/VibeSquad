@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, watchesPath, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -547,6 +547,134 @@ test("startup backfill: a report filed while the server was down still completes
 });
 
 // ---------------------------------------------------------------------------
+// W4: digest merge (docs/PLAN_COMPLETION_DIGEST_RELAY.md block W4)
+// ---------------------------------------------------------------------------
+
+const longReport = (ref) => `${ref} PASS: shipped with ${"detail ".repeat(45)} commit deadbeefcafe1`.trim(); // ~ 330 chars each
+
+test("a short ping is sent raw and never spawns a merge worker", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const spawns = [];
+    const { engine, delivered, clock } = engineFor(sb, {
+      spawnDigest: (d) => {
+        spawns.push(d);
+        return true;
+      },
+    });
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-1", T0 + 1000, "PASS: w1 shipped"));
+    clock.t = T0 + 2000;
+    await engine.tick();
+    assert.equal(delivered.length, 1, "the raw text is delivered");
+    assert.equal(spawns.length, 0, "no Flash spawn for a short set");
+    assert.match(delivered[0].text, /complete: all 1 item done/);
+    assert.ok(delivered[0].text.length <= DIGEST_MERGE_MAX);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a long completion ping spawns exactly one merge worker (attempted before the spawn) and is not sent raw", async () => {
+  const sb = sandbox();
+  try {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const { id } = addWatch({ owner: "lead-1", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const spawns = [];
+    const { engine, delivered, clock } = engineFor(sb, {
+      spawnDigest: (d) => {
+        spawns.push(d);
+        // One-ping guarantee: attemptedAt is persisted BEFORE the spawn runs.
+        assert.ok(engine.get(id).pings[0].attemptedAt, "attemptedAt persisted before the spawn");
+        return true;
+      },
+    });
+    for (const ref of refs) {
+      engine.onRunnerEvent(agentEv(ref, "idle"));
+      engine.onLogEntry("vibesquad", doneEntry(ref, T0 + 1000, longReport(ref)));
+    }
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const ping = engine.get(id).pings[0];
+    assert.ok(ping.text.length > DIGEST_MERGE_MAX, `the set's text is over ${DIGEST_MERGE_MAX} chars (got ${ping.text.length})`);
+    assert.equal(spawns.length, 1, "exactly one merge worker for a long set");
+    assert.equal(delivered.length, 0, "the raw text is not also sent");
+    assert.ok(ping.attemptedAt, "attemptedAt persisted");
+    // Later ticks never re-spawn.
+    clock.t += 5 * MIN;
+    await engine.tick();
+    assert.equal(spawns.length, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a failed merge spawn falls back to the raw text, truncated with a size note", async () => {
+  const sb = sandbox();
+  try {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const { id } = addWatch({ owner: "lead-1", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb, { spawnDigest: () => false });
+    for (const ref of refs) {
+      engine.onRunnerEvent(agentEv(ref, "idle"));
+      engine.onLogEntry("vibesquad", doneEntry(ref, T0 + 1000, longReport(ref)));
+    }
+    clock.t = T0 + 2000;
+    await engine.tick();
+    const ping = engine.get(id).pings[0];
+    assert.ok(ping.text.length > DIGEST_MERGE_MAX);
+    assert.equal(delivered.length, 1, "fallback delivered exactly once");
+    assert.ok(ping.attemptedAt, "attemptedAt persisted (never re-offered)");
+    assert.equal(delivered[0].text.startsWith(ping.text.slice(0, DIGEST_MERGE_MAX)), true, "fallback is the raw text's prefix");
+    assert.match(delivered[0].text, /\(\+\d+ chars, see vs log\)$/, "fallback names the dropped char count");
+    // Never sent twice: another tick does not re-offer (attempted) or re-spawn.
+    clock.t += 5 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("a set spawns at most one Flash worker across multiple over-long pings (stall, then done)", async () => {
+  const sb = sandbox();
+  try {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6", "w-7", "w-8"];
+    const { id } = addWatch({ owner: "lead-1", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: T0 });
+    const spawns = [];
+    const { engine, delivered, clock } = engineFor(sb, {
+      spawnDigest: (d) => {
+        spawns.push(d);
+        return true;
+      },
+    });
+    // w-1..w-6 finish with long reports so any ping's text exceeds the threshold.
+    for (const ref of refs.slice(0, 6)) {
+      engine.onRunnerEvent(agentEv(ref, "idle"));
+      engine.onLogEntry("vibesquad", doneEntry(ref, T0 + 1000, longReport(ref)));
+    }
+    // w-7 stalls -> a >1500 stall ping (the set's first over-long ping).
+    engine.onRunnerEvent(agentEv("w-7", "error"));
+    clock.t = T0 + 2000;
+    await engine.tick();
+    assert.equal(spawns.length, 1, "the stall ping spawned the set's one Flash worker");
+    assert.equal(delivered.length, 0, "the stall ping was merged, not sent raw");
+    assert.ok(engine.get(id).pings[0].text.length > DIGEST_MERGE_MAX, "stall ping over threshold");
+    // w-8 finishes -> a >1500 completion ping; the set already used its one Flash worker.
+    engine.onRunnerEvent(agentEv("w-8", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-8", clock.t + 1, longReport("w-8")));
+    clock.t += 1000;
+    await engine.tick();
+    assert.equal(spawns.length, 1, "no second Flash worker for the completion ping");
+    assert.equal(delivered.length, 1, "the completion ping fell back to the truncated raw text");
+    assert.match(delivered[0].text, /\(\+\d+ chars, see vs log\)$/, "fallback names the dropped char count");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Plugin integration: the wake path (agent-duties.ts Hook 3 / 3b)
 // ---------------------------------------------------------------------------
 
@@ -566,7 +694,7 @@ const TEAMS_DOC = {
 const CWD = "/projects/VibeSquad";
 const mk = (id, role, lane = "vibesquad", extra = {}) => ({ id, title: id, cwd: CWD, status: "idle", provider: "claude", labels: { team: "vibesquad", lane, role, ...extra } });
 
-async function pluginHarness(sb, agents) {
+async function pluginHarness(sb, agents, extra = {}) {
   const { createPlugin } = await import("../server/hooks/agent-duties.ts");
   const sent = [];
   const server = { before: () => () => {}, on: () => () => {} };
@@ -588,9 +716,10 @@ async function pluginHarness(sb, agents) {
         send: async (text) => void sent.push({ to: id, text }),
         archive: async () => {},
         detach: async () => {},
-        timeline: { refetch: async () => ({ entries: [] }) },
+        timeline: { refetch: async () => ({ entries: extra.timelineFor?.(id) ?? [] }) },
       }),
       list: async () => ({ entries: [...agents.values()].map((agent) => ({ agent })) }),
+      create: extra.create,
     },
   };
   stop.setPaseo(paseo);
@@ -757,6 +886,70 @@ test(
       assert.equal(c.sent.length, 0, "attempted: never again");
     } finally {
       c.stop();
+    }
+  }),
+);
+
+test(
+  "plugin: an over-long watch ping is merged by the Flash worker and the merged digest is delivered to the owner",
+  withPluginEnv(async (sb) => {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ...refs.map((r) => [r, mk(r, "worker")])]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: now - 1000 });
+    const spawns = [];
+    const h = await pluginHarness(sb, agents, {
+      create: async (payload) => {
+        spawns.push(payload);
+        return { id: "flash-1", waitForFinish: async () => ({ status: "idle" }) };
+      },
+      timelineFor: (aid) => (aid === "flash-1" ? [{ item: { type: "assistant_message", text: "MERGED: 6 done, all PASS" } }] : []),
+    });
+    try {
+      writeLog(sb, refs.map((ref, i) => ({ ts: iso(now + i), agent: ref, lane: "vibesquad", type: "done", text: longReport(ref), refs: [] })));
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      assert.equal(spawns.length, 1, "one Flash worker spawned");
+      assert.equal(toLead.length, 1, JSON.stringify(h.sent));
+      assert.match(toLead[0].text, /MERGED: 6 done, all PASS/);
+      assert.doesNotMatch(toLead[0].text, /\(\+\d+ chars, see vs log\)$/, "no truncated fallback when the merge succeeds");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin: a failed Flash merge falls back to the truncated raw text, delivered once",
+  withPluginEnv(async (sb) => {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ...refs.map((r) => [r, mk(r, "worker")])]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: now - 1000 });
+    const spawns = [];
+    const h = await pluginHarness(sb, agents, {
+      create: async () => {
+        spawns.push(1);
+        return { id: "flash-1", waitForFinish: async () => ({ status: "error" }) };
+      },
+      timelineFor: () => [],
+    });
+    try {
+      writeLog(sb, refs.map((ref, i) => ({ ts: iso(now + i), agent: ref, lane: "vibesquad", type: "done", text: longReport(ref), refs: [] })));
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      assert.equal(spawns.length, 1, "one Flash worker was attempted");
+      assert.equal(toLead.length, 1, JSON.stringify(h.sent));
+      assert.match(toLead[0].text, /\(\+\d+ chars, see vs log\)$/, "truncated raw fallback delivered");
+      assert.doesNotMatch(toLead[0].text, /MERGED/, "no merged digest on failure");
+    } finally {
+      h.stop();
     }
   }),
 );

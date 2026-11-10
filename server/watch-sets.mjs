@@ -27,6 +27,8 @@ export const SUITE_RESULT_FILE = "vibesquad-npm-test-last.json";
 export const SUITE_LOCK_FILE = "vibesquad-npm-test.lock";
 /** Fired / cancelled sets whose pings are all attempted are dropped from the file after this long. */
 export const PRUNE_AFTER_MS = 7 * 24 * 60 * 60_000;
+/** A fired ping whose text is over this many chars is merged by a Pre-check - Flash worker instead of sent raw (block W4). */
+export const DIGEST_MERGE_MAX = 1500;
 const REPORT_CAP = 400; // per item in a ping; W4 merges long texts
 const REPORTS_PER_AGENT = 20;
 const SNAP_REFRESH_MS = 60_000; // re-read a watched agent this often, so a missed runner event cannot hang the set
@@ -319,6 +321,7 @@ export function stepSet(set, ctx) {
 
 /**
  * opts: home, tmpdir (suite files), now(), alive(pid), getAgent(id) -> snapshot | null, deliver(ping) (the plugin's wake path),
+ * spawnDigest(ping) (W4: spawn the merge worker for a too-long ping; truthy = spawned, the worker sends the merged digest),
  * log(msg), retryMs (re-offer of an undelivered ping). All injectable for tests.
  * deliver receives { key, setId, pingKey, text, owner, team, lane, set }; it must not throw synchronously.
  */
@@ -329,6 +332,7 @@ export function createWatchEngine({
   alive = pidAlive,
   getAgent,
   deliver,
+  spawnDigest,
   log = () => {},
   retryMs = 10_000,
 } = {}) {
@@ -605,10 +609,11 @@ export function createWatchEngine({
           reload();
         }
       }
-      await offerPending();
     } finally {
+      // Release the evaluation lock before offering: a slow deliver (or a W4 Flash merge) must not block other sets' ticks.
       ticking = false;
     }
+    await offerPending();
   }
 
   async function offerPending() {
@@ -621,10 +626,34 @@ export function createWatchEngine({
         const key = pingKeyOf(set, ping);
         if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue;
         lastOffer.set(key, t);
-        try {
-          await deliver({ key, setId: set.id, pingKey: ping.key, text: ping.text, owner: set.owner, team: set.team, lane: set.lane, set: structuredClone(set) });
-        } catch (e) {
-          log(`watch ${set.id} delivery failed: ${e?.message ?? e}`);
+        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, owner: set.owner, team: set.team, lane: set.lane, set: structuredClone(set) };
+        if (spawnDigest && ping.text.length > DIGEST_MERGE_MAX) {
+          // W4: a too-long ping is merged by one Pre-check - Flash worker, which sends the digest to the owner. The one-ping
+          // guarantee holds: attemptedAt is persisted BEFORE the spawn, so the ping is never offered (spawned) twice. At most
+          // one Flash worker per set: any later over-long ping on the same set falls straight to the truncated raw fallback.
+          if (!set.digestSpawnedAt) {
+            markDigestSpawned(set.id);
+            markAttempted([key], d.owner);
+            let merged = false;
+            try {
+              merged = Boolean(await spawnDigest(d));
+            } catch (e) {
+              log(`watch ${set.id} digest merge spawn failed: ${e?.message ?? e}`);
+            }
+            if (merged) continue; // the Flash worker delivered the merged digest to the owner
+          }
+          // Fallback: a failed spawn (or a later over-long ping) gets the raw text truncated, so the owner always gets something.
+          try {
+            await deliver({ ...d, text: ping.text.slice(0, DIGEST_MERGE_MAX) + `(+${ping.text.length - DIGEST_MERGE_MAX} chars, see vs log)` });
+          } catch (e) {
+            log(`watch ${set.id} fallback delivery failed: ${e?.message ?? e}`);
+          }
+        } else {
+          try {
+            await deliver(d);
+          } catch (e) {
+            log(`watch ${set.id} delivery failed: ${e?.message ?? e}`);
+          }
         }
       }
     }
@@ -639,6 +668,20 @@ export function createWatchEngine({
       });
     } catch (e) {
       log(`watch ping mark failed: ${e?.message ?? e}`);
+    }
+    cacheStamp = "";
+    reload();
+  }
+
+  /** W4: mark a set as having had its one Flash merge spawned, so later over-long pings on it fall back instead of spawning again. */
+  function markDigestSpawned(setId) {
+    try {
+      mutateDoc(file, (doc) => {
+        const s = doc.sets.find((x) => x.id === setId);
+        if (s && !s.digestSpawnedAt) s.digestSpawnedAt = iso(now());
+      });
+    } catch (e) {
+      log(`watch digest-spawn mark failed: ${e?.message ?? e}`);
     }
     cacheStamp = "";
     reload();

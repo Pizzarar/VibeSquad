@@ -2533,6 +2533,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           ...watchOpts,
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
           deliver: (d: WatchDelivery) => deliverWatchPing(d),
+          spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
           log,
         })
       : null;
@@ -2595,6 +2596,60 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       watchKeyOf.set(entry, d.key);
       pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
       void flushWake(paseo, target.id);
+    }
+
+    /** W4: a too-long watch ping is merged by one Pre-check - Flash worker; the merged digest is then delivered through the wake path. */
+    async function spawnWatchDigest(paseo: Paseo, d: WatchDelivery): Promise<boolean> {
+      if (!paseo) return false;
+      try {
+        const target = await resolveWatchTarget(paseo, d.set);
+        if (!target) {
+          log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; cannot spawn merge`);
+          return false;
+        }
+        const where = teamOf(target.labels, target.cwd);
+        const team = d.team || where?.team || target.labels?.team || "";
+        const lane = d.lane || where?.lane || target.labels?.lane || "";
+        const digestProfile = resolveStoredProfile(DIGEST_PROFILE, DIGEST_PROVIDER, DIGEST_PROFILE, "worker");
+        const provider = digestProfile ? `${digestProfile.provider}/${digestProfile.model}` : DIGEST_PROVIDER;
+        const modeId = digestProfile?.modeId || DIGEST_MODE_ID;
+        const thinkingOptionId = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
+        const featureValues = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
+        const prompt = [
+          `You are a digest agent. Merge the watch-set report below into at most 15 lines, keeping every agent id, PASS/FAIL verdict, commit hash and pass/fail count. Drop nothing that matters.`,
+          `Output ONLY the merged digest text. Do not run any commands, do not send messages, and do not modify files.`,
+          ``,
+          `--- watch ${d.setId} report ---`,
+          d.text,
+        ].join("\n");
+        const handle = await paseo.agents.create({
+          config: { provider, modeId, thinkingOptionId, featureValues },
+          cwd: target.cwd,
+          title: `${DIGEST_PROFILE} digest`,
+          prompt,
+          labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: d.setId },
+          env: { VS_PROFILE: DIGEST_PROFILE },
+          autoArchive: true,
+        });
+        const createdId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+        if (!createdId) {
+          log(`watch ${d.setId}: merge spawn returned no agent id`);
+          return false;
+        }
+        // Await the worker's turn so a failure is detected and `autoArchive` runs; then read the merged digest it produced.
+        const res = await (handle?.waitForFinish ? handle.waitForFinish(10 * 60_000) : Promise.resolve(null));
+        const ok = !res?.status || ["idle", "completed", "finished"].includes(res.status);
+        const merged = ok ? await lastAssistantText(paseo, createdId) : "";
+        if (!merged) {
+          log(`watch ${d.setId}: merge worker produced no digest`);
+          return false;
+        }
+        await deliverWatchPing({ ...d, text: merged });
+        return true;
+      } catch (err) {
+        log(`watch ${d.setId} merge spawn failed: ${err}`);
+        return false;
+      }
     }
 
     /**
