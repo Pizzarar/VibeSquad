@@ -510,6 +510,12 @@ pub struct SharedAppState {
     pub updater: Mutex<updater::UpdaterState>,
     /// The `node.exe server/serve.mjs` child we spawned (None when we reused an already-running server).
     pub managed_server: Mutex<Option<std::process::Child>>,
+    /// When `managed_server` was spawned (the boot window is measured from here, not per call).
+    pub managed_spawned_at: Mutex<Option<std::time::Instant>>,
+    /// Serialises ensure_local_server_running so GET / and ping can't race each other's spawn/kill.
+    pub ensure_lock: tokio::sync::Mutex<()>,
+    /// Where the managed server's pid is recorded (tests inject a temp path).
+    pub pid_path: PathBuf,
     pub last_notified_agent_id: RwLock<Option<String>>,
     /// Per-launch secret: the webview gets it as the vs_desktop cookie via /__desktop/boot, and every request
     /// to this proxy must carry it, so other local processes can't borrow the proxy's server credentials.
@@ -2026,7 +2032,41 @@ fn spawn_server_process(
     }
 }
 
+/// A server we spawned gets this long (measured from spawn) to bind and finish booting before it may be killed.
+const SERVER_BOOT_WINDOW: Duration = Duration::from_secs(60);
+
+#[derive(Debug, PartialEq, Eq)]
+enum EnsureAction {
+    /// Our own child is alive and still inside its boot window: keep waiting, never kill it.
+    Wait,
+    /// Our own child is alive but never became healthy within the boot window: kill, respawn next time.
+    Kill,
+    /// Nothing of ours is alive and the port refuses connections: spawn.
+    Spawn,
+    /// Something is listening on the port (slow, not dead): never spawn, never touch server.pid.
+    Skip,
+}
+
+fn decide_ensure(child_alive: bool, child_age: Duration, port_accepts: bool) -> EnsureAction {
+    if child_alive {
+        if child_age >= SERVER_BOOT_WINDOW { EnsureAction::Kill } else { EnsureAction::Wait }
+    } else if port_accepts {
+        EnsureAction::Skip
+    } else {
+        EnsureAction::Spawn
+    }
+}
+
+async fn port_accepts_connections(host: &str) -> bool {
+    let norm = normalize_host(host);
+    matches!(
+        tokio::time::timeout(Duration::from_millis(500), tokio::net::TcpStream::connect(norm.as_str())).await,
+        Ok(Ok(_))
+    )
+}
+
 /// Starts the bundled VibeSquad server when the configured local host is not healthy. Reuses a healthy one.
+/// Single-flight: concurrent callers (GET /, ping) queue instead of racing each other's spawn/kill.
 async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
     let (mode, host) = {
         let cfg = state.config.read().unwrap();
@@ -2035,27 +2075,39 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
     if mode != "local" || !is_local_host(&host) {
         return;
     }
+    let _flight = state.ensure_lock.lock().await;
     if check_local_server_healthy(&state.client(), &host).await.is_ok() {
         // Healthy, whoever owns the process (e.g. restarted externally): drop a dead child + stale pid
         // so they never block a later respawn, and never start a second server.
         reap_dead_managed_server(state);
         return;
     }
-    // Already spawned by us and still alive: just wait for it below.
-    let spawned_alive = reap_dead_managed_server(state);
-    if !spawned_alive {
-        // Anything left in server.pid belongs to a previous run that is no longer serving: forget it.
-        let _ = fs::remove_file(server_pid_path());
-        let Some((node, runtime_dir)) = find_bundled_runtime() else {
+    let child_alive = reap_dead_managed_server(state);
+    let child_age = state.managed_spawned_at.lock().unwrap().map(|t| t.elapsed()).unwrap_or_default();
+    let port_open = !child_alive && port_accepts_connections(&host).await;
+    match decide_ensure(child_alive, child_age, port_open) {
+        EnsureAction::Skip => return,
+        EnsureAction::Kill => {
+            stop_managed_server(state);
             return;
-        };
-        match spawn_server_process(&node, &runtime_dir, Some(port_of_host(&host)), false) {
-            Ok(child) => {
-                let _ = fs::create_dir_all(config_dir());
-                let _ = fs::write(server_pid_path(), child.id().to_string());
-                *state.managed_server.lock().unwrap() = Some(child);
+        }
+        EnsureAction::Wait => {}
+        EnsureAction::Spawn => {
+            let _ = fs::remove_file(&state.pid_path);
+            let Some((node, runtime_dir)) = find_bundled_runtime() else {
+                return;
+            };
+            match spawn_server_process(&node, &runtime_dir, Some(port_of_host(&host)), false) {
+                Ok(child) => {
+                    if let Some(dir) = state.pid_path.parent() {
+                        let _ = fs::create_dir_all(dir);
+                    }
+                    let _ = fs::write(&state.pid_path, child.id().to_string());
+                    *state.managed_spawned_at.lock().unwrap() = Some(std::time::Instant::now());
+                    *state.managed_server.lock().unwrap() = Some(child);
+                }
+                Err(_) => return,
             }
-            Err(_) => return,
         }
     }
     for _ in 0..25 {
@@ -2063,11 +2115,6 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-    // Our child is alive but never became healthy (wedged, or lost the port to an external server that
-    // has since gone): kill it so the next ping respawns instead of waiting on it forever.
-    if spawned_alive {
-        stop_managed_server(state);
     }
 }
 
@@ -2080,7 +2127,7 @@ fn reap_dead_managed_server(state: &Arc<SharedAppState>) -> bool {
     };
     if !alive {
         *guard = None;
-        let _ = fs::remove_file(server_pid_path());
+        let _ = fs::remove_file(&state.pid_path);
     }
     alive
 }
@@ -2091,7 +2138,7 @@ fn stop_managed_server(state: &Arc<SharedAppState>) {
     if let Some(mut child) = child {
         let _ = child.kill();
         let _ = child.wait();
-        let _ = fs::remove_file(server_pid_path());
+        let _ = fs::remove_file(&state.pid_path);
     }
 }
 
@@ -2175,12 +2222,10 @@ async fn proxy_http_handler(
             .await
             .is_err()
         {
+            // Down or slow: the reconnecting card polls and reloads when it is back (the pair page has no poller).
             return html_no_store_response(
                 StatusCode::OK,
-                ui_pages::render_pair_page(
-                    &cfg,
-                    Some("Localhost (127.0.0.1:4180) does not have a healthy VibeSquad server (dist/index.html missing). Select a remote server below."),
-                ),
+                ui_pages::render_reconnecting_page(&cfg, "Local VibeSquad server is not responding yet."),
             );
         }
     }
@@ -2373,7 +2418,7 @@ async fn proxy_http_handler(
                         if host_is_local {
                             return html_no_store_response(
                                 StatusCode::OK,
-                                ui_pages::render_pair_page(&cfg, Some(&err_msg)),
+                                ui_pages::render_reconnecting_page(&cfg, &err_msg),
                             );
                         } else {
                             return html_no_store_response(
@@ -2664,6 +2709,9 @@ fn main() {
         tracker: Mutex::new(AgentAlertTracker::default()),
         updater: Mutex::new(updater::UpdaterState::default()),
         managed_server: Mutex::new(None),
+        managed_spawned_at: Mutex::new(None),
+        ensure_lock: tokio::sync::Mutex::new(()),
+        pid_path: server_pid_path(),
         last_notified_agent_id: RwLock::new(None),
         desktop_key: random_hex_key(),
         require_desktop_key: AtomicBool::new(true),
@@ -2995,6 +3043,9 @@ mod tests {
             tracker: Mutex::new(AgentAlertTracker::default()),
             updater: Mutex::new(updater::UpdaterState::default()),
             managed_server: Mutex::new(None),
+        managed_spawned_at: Mutex::new(None),
+        ensure_lock: tokio::sync::Mutex::new(()),
+        pid_path: std::env::temp_dir().join(format!("vs-test-{}-{:?}", std::process::id(), std::thread::current().id())).join("server.pid"),
             last_notified_agent_id: RwLock::new(None),
             desktop_key: "k".repeat(64),
             require_desktop_key: AtomicBool::new(false),
@@ -3081,6 +3132,53 @@ mod tests {
         state
     }
 
+    #[test]
+    fn ensure_never_kills_a_booting_child_and_never_spawns_onto_a_listening_port() {
+        let young = Duration::from_secs(6);
+        // Booting child (e.g. distReady:false during a vite build): wait, don't kill, even past the old 5s.
+        assert_eq!(decide_ensure(true, young, false), EnsureAction::Wait);
+        assert_eq!(decide_ensure(true, SERVER_BOOT_WINDOW - Duration::from_secs(1), true), EnsureAction::Wait);
+        assert_eq!(decide_ensure(true, SERVER_BOOT_WINDOW, false), EnsureAction::Kill);
+        // Something listening but slow (loop stall): never spawn.
+        assert_eq!(decide_ensure(false, Duration::ZERO, true), EnsureAction::Skip);
+        assert_eq!(decide_ensure(false, Duration::ZERO, false), EnsureAction::Spawn);
+    }
+
+    #[tokio::test]
+    async fn listening_but_unhealthy_port_is_not_touched_and_root_nav_gets_reconnecting_page() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let host = listener.local_addr().unwrap().to_string();
+        let accepter = tokio::net::TcpListener::from_std({ listener.set_nonblocking(true).unwrap(); listener }).unwrap();
+        tokio::spawn(async move { loop { let _ = accepter.accept().await; } });
+        assert!(port_accepts_connections(&host).await);
+        let state = make_test_state();
+        {
+            let mut cfg = state.config.write().unwrap();
+            cfg.server_mode = "local".into();
+            cfg.server_host = host.clone();
+        }
+        let pid = state.pid_path.clone();
+        fs::create_dir_all(pid.parent().unwrap()).unwrap();
+        fs::write(&pid, "12345").unwrap();
+        let req = Request::builder().method("GET").uri("/").header("accept", "text/html").header("sec-fetch-dest", "document").body(Body::empty()).unwrap();
+        let resp = proxy_http_handler(State(state.clone()), req).await;
+        let body = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert_eq!(text.as_ref(), ui_pages::render_reconnecting_page(&state.config.read().unwrap(), "Local VibeSquad server is not responding yet."), "must serve the polling reconnecting page");
+        assert!(state.managed_server.lock().unwrap().is_none(), "no spawn while the port accepts connections");
+        assert_eq!(fs::read_to_string(&pid).unwrap(), "12345", "server.pid untouched");
+        let _ = fs::remove_dir_all(pid.parent().unwrap());
+    }
+
+    #[test]
+    fn banner_does_not_reload_on_a_short_blip() {
+        let html = ui_pages::desktop_bridge_script("", "");
+        assert!(html.contains("greenSince"), "recovery is deferred through greenSince");
+        assert!(html.contains("hasUnsentInput()"), "reload is gated on unsent input");
+        assert!(html.contains(">= 10000"), "reload only after 10s green with no WS open");
+        assert!(!html.contains("if (banner && banner.style.display !== 'none') window.location.reload();"), "no immediate reload on recovery");
+    }
+
     #[tokio::test]
     async fn external_restart_reaps_stale_child_and_never_double_spawns() {
         use axum::routing::get;
@@ -3097,6 +3195,7 @@ mod tests {
         *state.managed_server.lock().unwrap() = Some(dead);
         ensure_local_server_running(&state).await;
         assert!(state.managed_server.lock().unwrap().is_none(), "stale child must be cleared when the port is healthy");
+        let _ = fs::remove_dir_all(state.pid_path.parent().unwrap());
     }
 
     #[tokio::test]
@@ -3485,6 +3584,9 @@ mod tests {
                 tracker: Mutex::new(AgentAlertTracker::default()),
                 updater: Mutex::new(updater::UpdaterState::default()),
                 managed_server: Mutex::new(None),
+        managed_spawned_at: Mutex::new(None),
+        ensure_lock: tokio::sync::Mutex::new(()),
+        pid_path: std::env::temp_dir().join("vs-test-pid-other").join("server.pid"),
                 last_notified_agent_id: RwLock::new(None),
                 desktop_key: random_hex_key(),
                 require_desktop_key: AtomicBool::new(true),

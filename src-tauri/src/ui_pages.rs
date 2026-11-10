@@ -1255,6 +1255,22 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
   // Lightweight connection monitor banner when server becomes unreachable
   let banner = null;
   let consecutiveFailures = 0;
+  let greenSince = 0;
+  let lastWsOpen = 0;
+  const NativeWS = window.WebSocket;
+  if (NativeWS) {{
+    window.WebSocket = new Proxy(NativeWS, {{
+      construct(target, args) {{
+        const ws = new target(...args);
+        ws.addEventListener('open', () => {{ lastWsOpen = Date.now(); }});
+        return ws;
+      }}
+    }});
+  }}
+  function hasUnsentInput() {{
+    return Array.from(document.querySelectorAll('textarea, input[type=text], input:not([type]), [contenteditable=true]'))
+      .some((el) => String(el.value !== undefined ? el.value : el.textContent || '').trim().length > 0);
+  }}
   function ensureBanner() {{
     if (banner) return banner;
     banner = document.createElement('div');
@@ -1272,11 +1288,17 @@ pub fn desktop_bridge_script(last_hash: &str, last_route: &str) -> String {
       const d = await r.json().catch(() => ({{}}));
       if (d.reachable) {{
         consecutiveFailures = 0;
-        // The page's WS/fetches died with the old server: reload once the server is back instead of Re-pair.
-        if (banner && banner.style.display !== 'none') window.location.reload();
+        // Hide the banner and let the app's own WS reconnect. Reload only if no socket opens within 10s of
+        // ping going green, and never while a text field holds unsent input.
+        if (banner && banner.style.display !== 'none') greenSince = Date.now();
         if (banner) banner.style.display = 'none';
+        if (greenSince) {{
+          if (lastWsOpen > greenSince) greenSince = 0;
+          else if (Date.now() - greenSince >= 10000 && !hasUnsentInput()) window.location.reload();
+        }}
       }} else {{
         consecutiveFailures++;
+        greenSince = 0;
         if (consecutiveFailures >= 2) ensureBanner().style.display = 'flex';
       }}
     }} catch (_) {{
