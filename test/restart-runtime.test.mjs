@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
+import { Runner } from "../runner/runner.mjs";
 import { parseArgs, restartRuntime } from "../scripts/restart-runtime.mjs";
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
@@ -47,14 +48,65 @@ test("runner POST /shutdown: no token 401, wrong token 401, right token 202 + st
   try { assert.equal((await call(p3, "POST", "/shutdown", { authorization: "Bearer secret" })).status, 403); } finally { await close(noHook); }
 });
 
+// Real Runner + real runner HTTP server (only the provider child is fake). Fail-first: with a plain runner.shutdown() every agent
+// reads "exited" and cannot be resumed; the /shutdown path must leave a cut agent "lost" and an idle one "parked", both resumable.
+test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle reads parked, both resume; the exit handler's second shutdown is a no-op", async () => {
+  const starts = [];
+  const adapter = {
+    canPark: true,
+    start({ id, emit, resume }) {
+      const rec = { id, resume, emit, killed: 0 };
+      starts.push(rec);
+      setImmediate(() => emit("session", { sessionId: `sess-${id}` }));
+      return { send() { emit("status", { status: "running" }); }, cancel() {}, kill() { rec.killed += 1; } };
+    },
+  };
+  const runner = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: adapter } });
+  let shutdownDone;
+  const stopped = new Promise((r) => { shutdownDone = r; });
+  const srv = createRunnerServer(runner, { token: "t0k", hash: "h", onShutdown: () => { runner.shutdown({ keepResumable: true }); shutdownDone(); } });
+  const port = await listen(srv);
+  const auth = { authorization: "Bearer t0k" };
+  const status = async (id) => JSON.parse((await call(port, "GET", `/agents/${id}`, auth)).body).status;
+  try {
+    const cut = runner.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta: {} }); // mid-turn
+    const idle = runner.create({ provider: "claude", cwd: process.cwd(), meta: {} });
+    await new Promise((r) => setTimeout(r, 30));
+    starts.find((x) => x.id === idle).emit("status", { status: "idle" });
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(await status(cut), "running");
+    assert.equal(await status(idle), "idle");
+    assert.equal((await call(port, "POST", "/shutdown")).status, 401);
+    assert.equal((await call(port, "POST", "/shutdown", auth)).status, 202);
+    await stopped;
+    runner.shutdown(); // process.on('exit') runs this afterwards: must not write exit events now
+    assert.equal(await status(cut), "lost", "cut agent is resumable, not exited");
+    assert.equal(await status(idle), "parked");
+    for (const id of [cut, idle]) assert.ok(runner.timeline(id).every((e) => e.type !== "exit"), `${id} has no exit event`);
+    assert.ok(starts.every((x) => x.killed === 1), "every child stopped exactly once");
+    const resumeFrom = starts.length;
+    for (const id of [cut, idle]) assert.equal((await call(port, "POST", `/agents/${id}/resume`, auth)).status, 202, `resume ${id}`);
+    await new Promise((r) => setTimeout(r, 30));
+    assert.deepEqual(starts.slice(resumeFrom).map((x) => x.resume).sort(), [`sess-${cut}`, `sess-${idle}`].sort(), "resumed from their saved sessions");
+    assert.equal(await status(cut), "starting");
+  } finally { await close(srv); }
+  // Contrast (the old behaviour this replaces): a plain shutdown() exits every agent for good.
+  const r2 = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: adapter } });
+  const id2 = r2.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta: {} });
+  await new Promise((r) => setTimeout(r, 30));
+  r2.shutdown();
+  assert.equal(r2.status(id2).status, "exited");
+  assert.equal(r2.resume(id2), false);
+});
+
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], supportsShutdown = true, serverBootsRunner = true, serveCmd = true } = {}) {
+async function world({ running = [0], supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
   const outDir = path.join(tmp, "vs");
   mkdirSync(home, { recursive: true });
-  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [] };
+  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0 };
   const agents = { current: [
     { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" },
   ] };
@@ -104,14 +156,28 @@ async function world({ running = [0], supportsShutdown = true, serverBootsRunner
   agents.current[1].status = "running";
 
   const deps = {
-    sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 5))),
+    serverStopMode: treeKill ? "tree-kill" : "graceful",
+    sleep: async (ms) => {
+      if (swapRunnerOnFirstSleep && !w.swapped) { // the runner restarted on its own while we waited: new pid, port and token
+        w.swapped = true;
+        const old = runnerState; w.alive.delete(old.pid); await close(old.srv);
+        await startRunner("swapped-hash");
+      }
+      await new Promise((r) => setTimeout(r, Math.min(ms, 5)));
+    },
     pidAlive: (pid) => w.alive.has(pid),
-    procInfo: (pid) => (w.alive.has(pid) ? { pid, ppid: 1, cmd: pid === serverPid ? (serveCmd ? `"C:\\rt\\node.exe" server/serve.mjs` : "something-else.exe") : "node runner/server.mjs" } : null),
+    procInfo: (pid) => {
+      if (!w.alive.has(pid)) return null;
+      if (pid !== serverPid) return { pid, ppid: 1, cmd: "node runner/server.mjs" };
+      w.serverInfoCalls += 1;
+      const spoof = spoofAfterVerify && w.serverInfoCalls > 3; // the pid was reused between the check and the kill
+      return { pid, ppid: 1, cmd: spoof || !serveCmd ? "something-else.exe" : "\"C:\\rt\\node.exe\" server/serve.mjs" };
+    },
     listenerPid: () => (serverSrv?.listening ? serverPid : null),
-    termGracefully: (pid) => { w.calls.push(`term ${pid}`); if (pid === serverPid) { w.alive.delete(pid); close(serverSrv); } },
+    termGracefully: (pid) => { w.calls.push(`term ${pid}`); if (pid === serverPid) { w.alive.delete(pid); close(serverSrv); if (strayAfterServerStop) startRunner("stray-hash"); } },
     killHard: (pid) => {
       w.hardKills.push(pid); w.alive.delete(pid);
-      if (pid === serverPid) close(serverSrv);
+      if (pid === serverPid) { close(serverSrv); if (strayAfterServerStop) startRunner("stray-hash"); }
       if (runnerState?.pid === pid) { runnerState.dead = true; close(runnerSrv); }
     },
     spawnDetached: (cmd, args) => {
@@ -143,7 +209,7 @@ test("full restart: marker held while working, graceful stops, server boots the 
     const r = await w.run({}, logs);
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     const names = r.steps.map((s) => s.step);
-    const order = ["marker touched", "waiting for runner idle", "runner idle", "snapshot before stop", "server stopped gracefully", "runner stopped gracefully", "server started", "server healthy", "verified", "resumed lost agents", "marker cleared"];
+    const order = ["marker touched", "waiting for runner idle", "runner idle", "snapshot before stop", "runner stopped gracefully", "server stopped gracefully", "server started", "server healthy", "verified", "resumed lost agents", "marker cleared"];
     let last = -1;
     for (const n of order) { const i = names.indexOf(n); assert.ok(i > last, `${n} after ${order[order.indexOf(n) - 1]} (got ${names.join(" | ")})`); last = i; }
     assert.ok(logs.every((l) => /^\[\d{4}-\d\d-\d\dT[\d:.]+Z\]|^result:/.test(l)), "every step line is timestamped");
@@ -218,7 +284,7 @@ test("refuses to stop a process on the server port that is not serve.mjs", async
     assert.equal(r.ok, false);
     assert.ok(r.errors.some((e) => /not serve\.mjs/.test(e)));
     assert.deepEqual(w.hardKills, []);
-    assert.deepEqual(w.shutdownAuth, [], "runner untouched");
+    assert.deepEqual(w.shutdownAuth, [], "preflight refuses before the runner is stopped");
   } finally { await w.cleanup(); }
 });
 
@@ -246,15 +312,96 @@ test("parseArgs: defaults and overrides; unknown flag throws", () => {
   assert.throws(() => parseArgs(["--bogus"]));
 });
 
-test("vs restart launches the script detached with its flags (and never runs it inline)", async () => {
-  const { commandRestart } = await import("../cli/vs.mjs");
-  const seen = [];
-  const out = [];
-  const orig = process.stdout.write.bind(process.stdout);
-  process.stdout.write = (c) => { out.push(String(c)); return true; };
-  try { assert.equal(commandRestart({ timeout: "90", noForce: true }, { spawnFn: (exe, args) => { seen.push(args); return 4321; } }), 0); } finally { process.stdout.write = orig; }
-  assert.equal(seen.length, 1);
-  assert.ok(seen[0][0].split(path.sep).join("/").endsWith("scripts/restart-runtime.mjs"));
-  assert.deepEqual(seen[0].slice(3), ["--no-force", "--wait-timeout", "90"]);
-  assert.match(out.join(""), /restart launched \(pid 4321\)/);
+
+test("Windows-style server stop: one tree kill (no graceful attempt, no 30s burn), --no-force does not make it fail; pid identity re-verified before the kill", async () => {
+  const w = await world({ treeKill: true });
+  try {
+    const r = await w.run({ force: false, stopTimeoutSec: 2 });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.serverStop, "tree-kill");
+    assert.equal(w.calls.some((c) => c.startsWith("term")), false, "no plain taskkill attempt");
+    assert.equal(w.hardKills.length, 1);
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.indexOf("runner stopped gracefully") < names.indexOf("server tree-killed"), "runner first");
+  } finally { await w.cleanup(); }
+  const w2 = await world({ treeKill: true, spoofAfterVerify: true });
+  try {
+    const r = await w2.run({});
+    assert.equal(r.ok, false);
+    assert.deepEqual(w2.hardKills, [], "a pid that stopped being serve.mjs is never killed");
+    assert.ok(r.errors.some((e) => /changed identity/.test(e)));
+  } finally { await w2.cleanup(); }
+});
+
+test("a runner the old server respawned in the gap is swept before our start", async () => {
+  const w = await world({ treeKill: true, strayAfterServerStop: true });
+  try {
+    const r = await w.run({ runnerBootMs: 300 });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "stray runner found after server stop"));
+    assert.equal(w.shutdownAuth.length, 2, "original + stray both shut down");
+  } finally { await w.cleanup(); }
+});
+
+test("runner pid/port/token re-detected right before /shutdown (it restarted during the wait)", async () => {
+  const w = await world({ running: [3], swapRunnerOnFirstSleep: true });
+  try {
+    const first = w.runner().token;
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(w.shutdownAuth.length, 1);
+    assert.notEqual(w.shutdownAuth[0], `Bearer ${first}`, "the old token was not reused");
+    assert.equal(r.steps.filter((s) => s.step === "runner stopped gracefully").length, 1);
+  } finally { await w.cleanup(); }
+});
+
+test("detection runs under the lock: a refused second run never reads or touches anything", async () => {
+  const w = await world();
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    writeFileSync(path.join(w.outDir, "restart-runtime.lock"), JSON.stringify({ pid: w.runner().pid, at: Date.now() }));
+    const before = w.serverInfoCalls;
+    const r = await w.run({});
+    assert.equal(r.alreadyRunning, true);
+    assert.equal(w.serverInfoCalls, before, "no detection happened before the lock was won");
+    assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false);
+  } finally { await w.cleanup(); }
+});
+
+test("vs restart: --timeout must be a positive integer; unsafe launch args rejected; caller gate; env passed as flags", async () => {
+  const { commandRestart, assertRestartCaller } = await import("../cli/vs.mjs");
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
+  const run = (flags, opts = {}) => {
+    const seen = [];
+    const out = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (c) => { out.push(String(c)); return true; };
+    try { return { code: commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, env: {}, teams, ...opts }), seen, out: out.join("") }; } finally { process.stdout.write = orig; }
+  };
+  const ok = run({ timeout: "90", noForce: true });
+  assert.equal(ok.code, 0);
+  assert.ok(ok.seen[0][0].split(path.sep).join("/").endsWith("scripts/restart-runtime.mjs"));
+  assert.deepEqual(ok.seen[0].slice(3), ["--no-force", "--wait-timeout", "90"]);
+  assert.match(ok.out, /restart launched \(pid 4321\)/);
+  for (const bad of ["0", "-5", "1.5", "abc", "10 --no-wait", "1e3", ""]) assert.throws(() => run({ timeout: bad }), /positive integer/, bad);
+  // WMI CommandLine: a quote or control char in any path (e.g. VIBESQUAD_HOME) is refused, never escaped into the string
+  assert.throws(() => run({}, { env: { VIBESQUAD_HOME: 'C:\\x" --evil "' } }), /quote or control/);
+  assert.throws(() => run({}, { env: { VIBESQUAD_HOME: "C:\\x\ny" } }), /quote or control/);
+  // WMI drops our env, so the values travel as flags
+  const home = path.join(os.tmpdir(), "vs-home-x");
+  const env = run({}, { env: { VIBESQUAD_HOME: home, VIBESQUAD_DESKTOP_CONFIG_DIR: path.join(os.tmpdir(), "cfg-x"), VIBESQUAD_PORT: "4999" } });
+  const a = env.seen[0];
+  for (const f of ["--vs-home", "--home", "--out-dir", "--config-dir", "--port"]) assert.ok(a.includes(f), f);
+  assert.equal(a[a.indexOf("--port") + 1], "4999");
+  assert.equal(a[a.indexOf("--home") + 1], path.join(home, "runner"));
+  // caller gate: runner agent ids only; the owner's shell has none
+  const as = (role, lane) => ({ role, lane, team: { id: "vibesquad" } });
+  const agentEnv = { VS_AGENT_ID: "rn-abcdef123456" };
+  assert.doesNotThrow(() => assertRestartCaller(null, teams, {}), "owner shell");
+  assert.throws(() => assertRestartCaller(as("worker", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/);
+  assert.throws(() => assertRestartCaller(as("lead", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/, "a non-hub lead");
+  assert.throws(() => assertRestartCaller(as("brainstorm", "vibesquad"), teams, agentEnv), /only the owner/);
+  assert.doesNotThrow(() => assertRestartCaller(as("lead", "vibesquad"), teams, agentEnv), "hub lead = Overlord");
+  assert.throws(() => run({}, { identity: as("worker", "bug-chaser"), env: agentEnv }), /only the owner/);
+  assert.equal(run({}, { identity: as("lead", "vibesquad"), env: agentEnv }).code, 0);
 });

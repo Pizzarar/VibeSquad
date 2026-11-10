@@ -6,14 +6,15 @@
 //
 //   node scripts/restart-runtime.mjs [--dry-run] [--wait-timeout <sec=600>] [--stop-timeout <sec=30>] [--no-wait]
 //        [--no-force] [--no-resume] [--resume-all-lost] [--port <4180>] [--home <runner home>] [--runtime-dir <dir>] [--node <exe>]
-//        [--config-dir <desktop config dir>] [--out-dir <result dir>] [--log <file>]
+//        [--config-dir <desktop config dir>] [--out-dir <result dir>] [--log <file>] [--vs-home <dir>]
 //
 // Steps (each logged with a timestamp, all recorded in ~/.vibesquad/restart-<ts>.json):
-//   lock -> marker (server.restarting, refreshed) -> wait runner running:0 -> stop server -> stop runner -> start server
+//   lock -> detect -> marker (server.restarting, refreshed) -> wait runner running:0 -> stop runner -> stop server -> start server
 //   (it boots the runner; fallback: start the runner directly) -> verify -> resume lost agents -> clear marker -> result file.
-// Stop order is server first (deliberate): the server supervises the runner and would respawn it within 5s of a runner
-// stop, racing our own start. Graceful first: runner POST /shutdown (token-authed), server SIGTERM / plain `taskkill`;
-// `taskkill /F` only after --stop-timeout (or when the runner predates /shutdown), never with --no-force.
+// Stop order: runner (POST /shutdown, token-authed, keeps agents resumable), then the server (Windows: taskkill /T /F, since
+// serve.mjs has no state to flush and a plain taskkill never stops headless node.exe; POSIX: SIGTERM then SIGKILL after
+// --stop-timeout), then a sweep for a runner the server's supervisor respawned in the gap. Runner force-kill only after
+// --stop-timeout or when the runner predates /shutdown; never with --no-force.
 // Reuses: runner /health `running`, runner.json + token discovery, the desktop `server.restarting` marker
 // (src-tauri restart_marker_fresh: valid 120s, so refreshed every 30s) and server.pid, the desktop's server launch
 // (spawn_server_process: node server/serve.mjs, cwd = runtime dir, VIBESQUAD_RUNTIME_DIR/BUNDLED_NODE/PORT/START_RUNNER).
@@ -47,6 +48,7 @@ export function parseArgs(argv) {
     else if (a === '--config-dir') o.configDir = val(i++);
     else if (a === '--out-dir') o.outDir = val(i++);
     else if (a === '--log') o.log = val(i++);
+    else if (a === '--vs-home') o.vsHome = val(i++);
     else throw new Error(`unknown flag ${a}`);
   }
   for (const k of ['waitTimeoutSec', 'stopTimeoutSec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
@@ -141,7 +143,7 @@ export function httpCall(url, { method = 'GET', headers = {}, timeoutMs = 5000 }
   });
 }
 
-const defaultDeps = { sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall };
+const defaultDeps = { sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
 
 // ---- detection -----------------------------------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
@@ -153,6 +155,13 @@ export async function detect(opts, d = defaultDeps, env = process.env) {
   const home = opts.home ?? path.join(vsHome(env), 'runner');
   const port = opts.port ?? (Number(env.VIBESQUAD_PORT) || 4180);
   const configDir = opts.configDir ?? desktopConfigDir(env);
+  const runner = await detectRunner(home, d);
+  const spid = d.listenerPid(port);
+  return finishDetect({ opts, d, env, home, port, configDir, runner, spid });
+}
+
+/** The runner as discovery files + a live probe describe it right now (re-run before acting on it). */
+export async function detectRunner(home, d = defaultDeps) {
   const disc = readJson(path.join(home, 'runner.json'));
   let token = null;
   try { token = readFileSync(path.join(home, 'token'), 'utf8').trim(); } catch { /* no runner token */ }
@@ -169,7 +178,10 @@ export async function detect(opts, d = defaultDeps, env = process.env) {
       if (h.status === 200) runner.health = h.body;
     } catch { /* unhealthy */ }
   }
-  const spid = d.listenerPid(port);
+  return runner;
+}
+
+async function finishDetect({ opts, d, env, home, port, configDir, runner, spid }) {
   const si = spid ? d.procInfo(spid) : null;
   const server = { port, pid: spid, cmd: si?.cmd ?? null, parent: si?.ppid ?? null, isServe: /serve\.mjs/.test(si?.cmd ?? ''), health: null };
   if (spid) {
@@ -220,8 +232,9 @@ const brief = (a) => ({ id: a.id, title: a.title ?? a.name ?? null, status: a.st
 // ---- the run -------------------------------------------------------------------------------------------------------
 export async function restartRuntime(opts, deps = {}, env = process.env, log = (line) => console.log(line)) {
   const d = { ...defaultDeps, ...deps };
-  const det = await detect(opts, d, env);
-  const result = { startedAt: new Date(d.now()).toISOString(), dryRun: !!opts.dryRun, steps: [], cutAgents: [], resumedAgents: [], errors: [], oldHash: det.runner.health?.hash ?? null, newHash: null, forced: [], ok: false };
+  const outDir = opts.outDir ?? vsHome(env);
+  const configDir = opts.configDir ?? desktopConfigDir(env);
+  const result = { startedAt: new Date(d.now()).toISOString(), dryRun: !!opts.dryRun, steps: [], cutAgents: [], resumedAgents: [], errors: [], oldHash: null, newHash: null, forced: [], ok: false };
   const step = (name, detail = {}) => {
     const rec = { step: name, at: new Date(d.now()).toISOString(), ...detail };
     result.steps.push(rec);
@@ -229,6 +242,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
   };
 
   if (opts.dryRun) {
+    const det = await detect(opts, d, env);
     let agents = [];
     if (det.runner.health) { try { agents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1')).body); } catch { /* listed below as unknown */ } }
     result.plan = {
@@ -242,8 +256,8 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       steps: [
         `touch ${path.join(det.configDir, 'server.restarting')} (refreshed every 30s)`,
         opts.wait ? `wait for runner /health running:0 (timeout ${opts.waitTimeoutSec}s, then proceed and record cut agents)` : 'skip waiting (--no-wait)',
-        det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid} gracefully (${IS_WIN ? 'taskkill' : 'SIGTERM'}), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
-        det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled)'}` : 'runner not running: nothing to stop',
+        det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : 'runner not running: nothing to stop',
+        det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
         `start server: ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}, from ${det.serverLaunch.source}, log ${det.serverLaunch.logFile}); it boots the runner`,
         `fallback if the runner is not up after 45s: ${det.runnerLaunch.node} ${det.runnerLaunch.args.join(' ')}`,
         'verify: runner /health hash, GET /agents?full=1, server /api/health',
@@ -257,8 +271,8 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
   }
 
   // Idempotence: one restart at a time. A second run while the first is alive exits; a dead holder's lock is taken over.
-  mkdirSync(det.outDir, { recursive: true });
-  const lockFile = path.join(det.outDir, 'restart-runtime.lock');
+  mkdirSync(outDir, { recursive: true });
+  const lockFile = path.join(outDir, 'restart-runtime.lock');
   const takeLock = () => {
     try { writeFileSync(lockFile, JSON.stringify({ pid: process.pid, at: d.now() }), { flag: 'wx' }); return true; } catch { return false; }
   };
@@ -273,14 +287,18 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     rmSync(lockFile, { force: true });
     if (!takeLock()) { result.errors.push('could not take restart lock'); return result; }
   }
-  const markerFile = path.join(det.configDir, 'server.restarting');
+  const markerFile = path.join(configDir, 'server.restarting');
   const touchMarker = () => {
-    try { mkdirSync(det.configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
+    try { mkdirSync(configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
   };
   let markerTimer = null;
   const fail = (what, e) => { result.errors.push(`${what}: ${e?.message ?? e}`); step('error', { what, error: String(e?.message ?? e) }); };
 
+  let det;
   try {
+    // Detection happens under the lock: a concurrent run can no longer change what we read.
+    det = await detect(opts, d, env);
+    result.oldHash = det.runner.health?.hash ?? null;
     // 1. marker
     touchMarker();
     markerTimer = setInterval(touchMarker, 30000);
@@ -302,6 +320,15 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       } else step('runner idle');
     } else step('wait skipped', { reason: det.runner.health ? 'no-wait' : 'runner not healthy' });
 
+    // Re-detect right before acting: the wait can take minutes, and the runner may have restarted (new pid/port/token) meanwhile.
+    det.runner = await detectRunner(det.home, d);
+    // Preflight: refuse before anything is stopped if the server port belongs to something that is not serve.mjs.
+    const pre = d.listenerPid(det.port);
+    if (pre) {
+      const pi = d.procInfo(pre);
+      if (!pi || !/serve.mjs/.test(pi.cmd ?? '')) { fail('server stop', `pid ${pre} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
+    }
+
     // Snapshot right before the stop: which agents were already lost (historic; the roster holds hundreds) and which were mid-turn.
     let lostBefore = null;
     if (det.runner.health) {
@@ -313,7 +340,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       } catch (e) { fail('snapshot', e); }
     }
 
-    // 3. stop the server first (it would respawn a stopped runner)
+    // 3. stop the runner (keep-resumable: no exit events, so step 7 can resume the agents it cut)
     const stopProc = async (label, pid, graceful) => {
       await graceful();
       const end = d.now() + opts.stopTimeoutSec * 1000;
@@ -326,34 +353,60 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       step(`${label} force-killed`, { pid, alive: d.pidAlive(pid) });
       return !d.pidAlive(pid);
     };
-    const cur = det.server.pid ? d.listenerPid(det.port) : null;
-    if (!cur) step('server not running', { port: det.port });
-    else if (!det.server.isServe) { fail('server stop', `pid ${cur} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
-    else if (!(await stopProc('server', cur, () => d.termGracefully(cur)))) throw new Error('server did not stop');
-
-    // 4. stop the runner
-    if (!det.runner.alive) step('runner not running');
-    else {
+    const clearRunnerFiles = (pid) => {
+      for (const f of ['runner.json', 'runner.lock']) {
+        const info = readJson(path.join(det.home, f));
+        if (info && info.pid === pid) rmSync(path.join(det.home, f), { force: true }); // only that dead runner's files
+      }
+    };
+    const stopRunner = async () => {
+      const r0 = det.runner;
+      if (!r0.alive) { step('runner not running'); return true; }
       let accepted = false;
       try {
         const r = await runnerCall(det, d, 'POST', '/shutdown');
         accepted = r.status === 202;
         if (!accepted) step('runner /shutdown unavailable', { status: r.status, note: r.status === 404 ? 'runner predates /shutdown' : undefined });
       } catch (e) { step('runner /shutdown failed', { error: e.message }); }
-      if (accepted) {
-        if (!(await stopProc('runner', det.runner.pid, async () => {}))) throw new Error('runner did not stop');
-      } else if (!opts.force) { fail('runner stop', 'no graceful stop available and --no-force'); throw new Error('runner did not stop'); }
+      if (accepted) { if (!(await stopProc('runner', r0.pid, async () => {}))) return false; }
+      else if (!opts.force) { fail('runner stop', 'no graceful stop available and --no-force'); return false; }
       else {
-        // An old runner cannot be told to stop; its agents are already idle (running:0) or recorded as cut.
-        d.killHard(det.runner.pid);
-        result.forced.push({ label: 'runner', pid: det.runner.pid, reason: 'no /shutdown endpoint on this runner build' });
+        // An old runner cannot be told to stop; a hard kill writes no exit events, so its agents stay resumable (lost).
+        d.killHard(r0.pid);
+        result.forced.push({ label: 'runner', pid: r0.pid, reason: 'no /shutdown endpoint on this runner build' });
         await d.sleep(500);
-        step('runner force-killed', { pid: det.runner.pid, alive: d.pidAlive(det.runner.pid) });
+        step('runner force-killed', { pid: r0.pid, alive: d.pidAlive(r0.pid) });
       }
-      for (const f of ['runner.json', 'runner.lock']) {
-        const info = readJson(path.join(det.home, f));
-        if (info && info.pid === det.runner.pid) rmSync(path.join(det.home, f), { force: true }); // only our dead runner's files
-      }
+      clearRunnerFiles(r0.pid);
+      return true;
+    };
+    if (!(await stopRunner())) throw new Error('runner did not stop');
+
+    // 4. stop the server. serve.mjs has no state to flush: its only exit hooks (onServerExit: terminals.mjs, workspace-scripts.mjs)
+    // kill child processes, and a tree kill (/T /F) does exactly that; everything else it persists is written as it changes.
+    // So no graceful step on Windows (a plain taskkill never works on headless node.exe); POSIX still gets SIGTERM first.
+    // The runner went first, so the supervisor inside this server may have respawned one: swept below.
+    const cur = d.listenerPid(det.port);
+    if (!cur) step('server not running', { port: det.port });
+    else {
+      const info = d.procInfo(cur);
+      if (!info || !/serve\.mjs/.test(info.cmd ?? '')) { fail('server stop', `pid ${cur} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
+      if (d.serverStopMode === 'tree-kill') {
+        const again = d.procInfo(cur); // re-verify immediately before the kill: the pid may have been reused
+        if (!again || !/serve\.mjs/.test(again.cmd ?? '')) { fail('server stop', `pid ${cur} changed identity before the kill`); throw new Error('abort'); }
+        d.killHard(cur);
+        await d.sleep(500);
+        result.serverStop = 'tree-kill';
+        step('server tree-killed', { pid: cur, alive: d.pidAlive(cur) });
+      } else if (!(await stopProc('server', cur, () => d.termGracefully(cur)))) throw new Error('server did not stop');
+      if (d.pidAlive(cur)) { fail('server stop', `pid ${cur} still alive`); throw new Error('server did not stop'); }
+    }
+    // Sweep: a runner the old server respawned in the gap holds no work, but it must not outlive the restart (or block ours).
+    const stray = await detectRunner(det.home, d);
+    if (stray.alive && stray.pid !== det.runner.pid) {
+      det.runner = stray;
+      step('stray runner found after server stop', { pid: stray.pid });
+      if (!(await stopRunner())) throw new Error('stray runner did not stop');
     }
 
     // 5. start the server (same launch as the desktop app); it boots the runner
@@ -418,7 +471,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     rmSync(markerFile, { force: true });
     step('marker cleared');
     result.finishedAt = new Date(d.now()).toISOString();
-    const file = path.join(det.outDir, `restart-${result.startedAt.replace(/[:.]/g, '-')}.json`);
+    const file = path.join(outDir, `restart-${result.startedAt.replace(/[:.]/g, '-')}.json`);
     try { writeFileSync(file, JSON.stringify(result, null, 2)); result.resultFile = file; log(`result: ${file}`); } catch (e) { log(`could not write result: ${e.message}`); }
     const holder = readJson(lockFile);
     if (holder?.pid === process.pid) rmSync(lockFile, { force: true });
@@ -429,6 +482,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`restart-runtime: ${e.message}`); process.exit(2); }
+  if (opts.vsHome) process.env.VIBESQUAD_HOME = opts.vsHome; // `vs restart` runs us via WMI, which drops its env
   const log = (line) => { console.log(line); if (opts.log) { try { appendFileSync(opts.log, line + '\n'); } catch { /* console only */ } } };
   const r = await restartRuntime(opts, {}, process.env, log);
   if (r.dryRun) console.log(JSON.stringify(r.plan, null, 2));

@@ -222,7 +222,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true });
-  const server = createServer(runner, { token, onShutdown: () => stop() });
+  const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }) });
   try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     const port = server.address().port;
@@ -230,10 +230,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.log(JSON.stringify({ listening: port, dir, home }));
   });
   let stopping = false;
-  const stop = () => {
+  const stop = (opts) => {
     if (stopping) return;
     stopping = true;
-    runner.shutdown();
+    runner.shutdown(opts?.keepResumable ? { keepResumable: true } : undefined); // later runner.shutdown() calls (the 'exit' handler) are no-ops
     try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ }
     try { releaseLock(lockFile); } catch { /* ignore */ }
     server.close();
@@ -245,9 +245,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     try { runner.shutdown(); } catch { /* ignore */ }
     try { releaseLock(lockFile); } catch { /* ignore */ }
   });
-  process.on('SIGINT', stop);
-  process.on('SIGTERM', stop);
-  process.on('SIGBREAK', stop);
-  process.on('SIGHUP', stop);
+  process.on('SIGINT', () => stop());
+  process.on('SIGTERM', () => stop());
+  process.on('SIGBREAK', () => stop());
+  process.on('SIGHUP', () => stop());
   process.on('uncaughtException', (err) => { console.error(err); process.exitCode = 1; stop(); });
 }
