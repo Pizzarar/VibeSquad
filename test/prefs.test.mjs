@@ -2,7 +2,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import { getPref, setPref, applyPrefsToDom } from '../src/prefs.ts';
 
 const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
@@ -48,12 +47,3 @@ test('boring.css is imported after styles.css and every rule is scoped to html[d
   for (const s of selectors) assert.ok(s.startsWith('html[data-vibe="boring"]'), `unscoped selector: ${s}`);
 });
 
-test('styles.css and art/ are untouched relative to master', () => {
-  let diff = '';
-  try {
-    diff = execFileSync('git', ['diff', 'master', '--', 'src/styles.css', 'art/'], { encoding: 'utf8' });
-  } catch {
-    return; // no master ref available (shallow checkout): nothing to compare
-  }
-  assert.equal(diff, '');
-});

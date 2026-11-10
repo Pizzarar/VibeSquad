@@ -104,3 +104,19 @@ test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onS
   assert.ok(s.includes("phoneLaneRows(view)") && s.includes("phone-lane-"));
   assert.ok(/state === "none"\) onSpinUp\(r\.pin\);\s*openBuddy\(r\.laneId\)/.test(s));
 });
+
+test("E1b: top safe-area inset applied once on the cockpit (App's .app padding is not mounted in the phone shell)", () => {
+  const tsx = src("PhoneCockpit.tsx");
+  assert.ok(tsx.includes('data-android={isAndroidUserAgent() ? "true" : undefined}'));
+  const css = src("styles.css");
+  assert.ok(css.includes("--phone-safe-top: env(safe-area-inset-top, 0px);"));
+  assert.ok(css.includes('.phone-cockpit[data-android="true"] { --phone-safe-top: max(env(safe-area-inset-top, 0px), 28px); }'));
+  assert.ok(css.includes("padding: calc(8px + var(--phone-safe-top, 0px)) 10px 8px;"));
+  const menu = css.slice(css.indexOf(".phone-squad-menu, .phone-drawer {"));
+  assert.ok(menu.slice(0, 120).includes("top: calc(58px + var(--phone-safe-top, 0px));"));
+  const sheet = css.slice(css.indexOf(".phone-bug-sheet {"), css.indexOf(".phone-bug-sheet .btn"));
+  assert.ok(sheet.includes("calc(12px + env(safe-area-inset-bottom, 0px))"));
+  // phone shell returns before the .app wrapper, so .app's own inset cannot double up
+  const app = src("App.tsx");
+  assert.ok(app.indexOf("if (phoneShell) {") < app.indexOf('className={`app '));
+});
