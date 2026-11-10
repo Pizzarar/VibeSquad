@@ -531,6 +531,107 @@ async function restartBuddy(ctx, args = {}) {
   return { id: out.newAgentId ?? out.id ?? "", oldBuddyId: buddy.id, lane: laneId, team: teamId, title: out.title ?? "", ...(out.skipped ? { skipped: true, reason: out.reason } : {}), ...(callerId ? { trigger: caller && findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams)?.lane.id === laneId ? "lane-lead" : "overlord" } : { trigger: "owner" }) };
 }
 
+/** The watch-set registry (server/watch-sets.mjs, W1). Injected via ctx.watchSets for tests; lazy-imported at runtime. */
+async function getWatchSets(ctx) {
+  if (ctx.watchSets) return ctx.watchSets;
+  try {
+    return await import("../watch-sets.mjs");
+  } catch {
+    throw new Error("watch sets unavailable");
+  }
+}
+
+/**
+ * Register / list / cancel a watch set (W2). `vs watch add <agent...> [--suite] [--restart] [--stall <min>]` lets a lead
+ * register the agents + its suite run + a restart it is waiting on, then end its turn; a server-side watcher pings once when
+ * the set completes or stalls. Auth mirrors handoff_lead / restart_buddy: the owner defaults to the resolved caller identity,
+ * workers are refused, and only the same-Squad Overlord (role=lead on the hub lane) may name a different owner (and only an
+ * agent of its own Squad). Identity is read from the runner record, never from env/args.
+ */
+async function watchTool(ctx, args = {}) {
+  const action = clean(args.action);
+  if (!["add", "list", "cancel"].includes(action)) throw new Error("watch action must be one of: add, list, cancel");
+  const callerId = clean(ctx.identity.agentId);
+  const callerRole = clean(ctx.identity.role).toLowerCase();
+  const teams = ctx.teams ?? loadTeamsRegistry();
+  // agentOf keeps a `{ agent: null }` wrapper when the backend has no record; normalize to null so a missing agent is detectable.
+  const fetchAgent = async (id) => {
+    const a = agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
+    return a && a.id ? a : null;
+  };
+
+  // Resolve the caller's identity from its runner record (never env/args), exactly like handoff_lead / restart_buddy.
+  let caller = null;
+  if (callerId) caller = await fetchAgent(callerId);
+  const recRole = caller ? effectiveAgentRole(caller) : "";
+  // Workers and digest agents get no watch verb (a digest worker is not a lead/Buddy and must never register watches).
+  if (recRole === "worker" || recRole === "digest" || (!caller && (!callerRole || callerRole === "worker"))) {
+    throw new Error("workers may not use the watch verb");
+  }
+  // Only a live lead or Buddy may watch; retired/former-lead/closed/unknown callers are refused outright.
+  if (!caller || !isLiveAgent(caller) || (recRole !== "lead" && recRole !== "brainstorm")) {
+    throw new Error("only a live lead or Buddy may use the watch verb");
+  }
+  // Lane and Squad come from the caller's own record, never from env (VS_LANE/VS_TEAM are spoofable).
+  const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+  const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
+  if (!callerTeam || !callerLane || callerLane.team.id !== callerTeam.id) {
+    throw new Error(`only a live lead or Buddy may use the watch verb: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
+  }
+  const team = callerTeam.id;
+  let lane = callerLane.lane.id;
+  const isOverlord = recRole === "lead" && isHubLane(callerTeam, callerLane.lane);
+
+  // owner defaults to the caller; only the same-Squad Overlord may name a different one (and only a live lead/Buddy of its own Squad).
+  let owner = callerId;
+  const requestedOwner = clean(pick(args, "owner"));
+  if (requestedOwner && requestedOwner !== callerId) {
+    if (!isOverlord) throw new Error("only the same-Squad Overlord may set a different owner");
+    const ownerRec = await fetchAgent(requestedOwner);
+    if (!ownerRec) throw new Error(`cannot watch for an unknown agent "${requestedOwner}"`);
+    if (!isLiveAgent(ownerRec) || !["lead", "brainstorm"].includes(effectiveAgentRole(ownerRec))) {
+      throw new Error(`cannot watch for a retired, closed, worker or digest agent "${requestedOwner}"`);
+    }
+    const ownerTeam = findTeamInRegistry(clean(ownerRec.labels?.team), teams);
+    if (!ownerTeam || ownerTeam.id !== team) throw new Error("only the same-Squad Overlord may set a different owner in its own Squad");
+    owner = requestedOwner;
+    const ownerLane = findLaneInRegistry(clean(ownerRec.labels?.lane || ownerRec.labels?.lead), teams, ownerTeam.id);
+    if (ownerLane) lane = ownerLane.lane.id;
+  }
+
+  const ws = await getWatchSets(ctx);
+
+  if (action === "cancel") {
+    const id = clean(pick(args, "id"));
+    if (!id) throw new Error("id is required to cancel a watch");
+    return ws.cancelWatch(id, callerId);
+  }
+  if (action === "list") {
+    const opts = {};
+    if (owner) opts.owner = owner;
+    if (team) opts.team = team;
+    return ws.listWatches(opts);
+  }
+  // add
+  const items = [];
+  const seen = new Set();
+  const rawAgents = Array.isArray(args.agents) ? args.agents : args.agents !== undefined ? [args.agents] : [];
+  for (const a of rawAgents) {
+    const ref = clean(a);
+    if (!ref) continue;
+    if (!isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
+    if (seen.has(ref)) continue;
+    seen.add(ref);
+    items.push({ kind: "agent", ref });
+  }
+  if (args.suite) items.push({ kind: "suite", ref: "" });
+  if (args.restart) items.push({ kind: "restart", ref: "" });
+  if (!items.length) throw new Error("a watch set needs at least one item (agents, --suite or --restart)");
+  const stallMin = args.stallMin === undefined ? 15 : Number(args.stallMin);
+  if (!Number.isFinite(stallMin) || stallMin <= 0) throw new Error("stallMin must be a positive number of minutes");
+  return ws.addWatch({ owner, team, lane, items, stallMin });
+}
+
 async function postBuddyRestartToServer(body, ctx) {
   const { localTokenHeaders } = await import("../local-token.mjs");
   const port = Number(process.env.VIBESQUAD_PORT || 4180);
@@ -582,6 +683,11 @@ export const VS_TOOLS = {
     description: "Restart a lane's Buddy (archives the old Buddy, keeps its children, spawns a fresh one from the brief). A lead restarts its own lane's Buddy; the Squad's Overlord (hub lead) any lane in its Squad. Optional reason. Returns {id, oldBuddyId, lane, team, title}.",
     inputSchema: obj({ lane: S, reason: S }),
     run: restartBuddy,
+  },
+  watch: {
+    description: "Register, list or cancel a watch set: a lead registers the agents + its suite run + a restart it is waiting on and ends its turn; a server-side watcher pings once when the whole set completes or stalls (stallMin, default 15). Default owner is the caller; workers are refused; only the same-Squad Overlord may set a different owner (within its own Squad). Returns {id} for add, the watch list for list, and a cancel confirmation for cancel.",
+    inputSchema: obj({ action: { type: "string", enum: ["add", "list", "cancel"] }, agents: { type: "array", items: S }, suite: { type: "boolean" }, restart: { type: "boolean" }, stallMin: { type: "number" }, id: S, owner: S }, ["action"]),
+    run: watchTool,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },
   cancel: { description: "Interrupt an agent's current turn.", inputSchema: obj({ id: S }, ["id"]), run: cancelTool },
