@@ -4844,6 +4844,9 @@ button.project-file-name:hover { text-decoration: underline; }
 .sky-zone.is-slam-fx { transform: var(--slam-tv-tf, none); transform-origin: 50% 100%; }
 .sky-zone.sky-chat-panel.is-slam-fx { transform: var(--slam-swing, translateX(0)) var(--slam-panel-tf, translateX(0)); transform-origin: 0 100%; backface-visibility: hidden; will-change: transform; }
 .sky-zone.sky-chat-panel.is-slam-closing { pointer-events: none; }
+/* RS-d: at the hit the window BODY (its fill + the chat inside) goes see-through so the Overlord's smacked face shows through, then fades back in; the bezel frame stays solid. --slam-body-a is set only while below 1. */
+.sky-zone.sky-chat-panel.is-slam-fx { background: color-mix(in srgb, var(--bg) calc(var(--slam-body-a, 1) * 100%), transparent); }
+.sky-zone.sky-chat-panel.is-slam-fx .sky-crt-body { opacity: var(--slam-body-a, 1); background: color-mix(in srgb, var(--bg) calc(var(--slam-body-a, 1) * 100%), transparent); }
 .sky-slam-fx { position: absolute; inset: 0; z-index: 6; pointer-events: none; overflow: hidden; }
 .sky-slam-puff { position: absolute; transform-origin: top left; display: block; background-repeat: no-repeat; image-rendering: pixelated; }
 /* The smear rides inside the swinging window on its outer (right) edge, so it rotates with it; the cells are art px, the wrapper is scaled by k. */

@@ -8,7 +8,7 @@ import {
   SLAM_REST,
   SLAM_SHAKE_DX,
   SLAM_SQUASH,
-  SWING_REBOUND_DEG,
+  slamBodyAlpha,
   SLAM_HIT_MS,
   swingEdgeX,
   swingPerspectivePx,
@@ -77,7 +77,7 @@ test("smear: only the fast late slice of the swing", () => {
   assert.equal(at("open", SLAM.swingMs).smear, false);
 });
 
-test("the hit (hotfix2): squash one beat, visible shake, puff + SMACK star, Overlord smacked, the window recoils off his TV and settles flat", () => {
+test("the hit (hotfix2): squash one beat, visible shake, puff + SMACK star, Overlord smacked, the window lands flat (no recoil)", () => {
   const hit = SLAM.swingMs;
   const v0 = at("open", hit);
   assert.equal(v0.face, "smacked");
@@ -92,9 +92,13 @@ test("the hit (hotfix2): squash one beat, visible shake, puff + SMACK star, Over
   assert.equal(SLAM_SHAKE_DX.length * SLAM.shakeStepMs, SLAM.shakeMs);
   assert.equal(v0.shakeDx, SLAM_SHAKE_DX[0]);
   assert.equal(at("open", hit + SLAM.shakeMs - 1).shakeDx, SLAM_SHAKE_DX.at(-1));
-  let rebound = 0;
-  for (let d = 0; d < SLAM_HIT_MS; d += 5) rebound = Math.max(rebound, swingAngleOpen(hit + d));
-  assert.equal(rebound, SWING_REBOUND_DEG, "the window recoils away from the TV (positive: outer edge swung away)");
+  let prevA = 0;
+  for (let d = 0; d < SLAM_HIT_MS; d += 5) {
+    const a = swingAngleOpen(hit + d);
+    assert.equal(a, 0, `no recoil: flat ${d}ms after the hit`);
+    assert.ok(a >= prevA, "angle never goes back after landing");
+    prevA = a;
+  }
   assert.equal(swingAngleOpen(hit), 0, "flat at the instant of the hit");
   assert.equal(swingAngleOpen(hit + SLAM_HIT_MS), 0, "flat when settled");
   const settled = at("open", hit + SLAM_HIT_MS);
@@ -297,24 +301,27 @@ test("swing: the projected outer edge never leaves the window's own box (inside 
   assert.equal(swingPerspectivePx(-59, 2000), 2 * swingPerspectivePx(-59, 1000));
 });
 
-test("the Overlord's face stays uncovered while the window recoils (hit..hold), then it settles back flat", () => {
-  for (const w of WIDTHS) {
-    const h = Math.round(w * 0.55);
-    const face = faceContain({ w: 80, h: 48 }, { w, h }, 1.2);
-    for (let lt = 20; lt <= SLAM.shakeMs; lt += 5) {
-      const edge = swingEdgeX(swingAngleOpen(SLAM.swingMs + lt), w);
-      assert.ok(edge <= face.left, `w=${w} lt=${lt}: window edge ${edge.toFixed(0)} covers the face (left ${face.left})`);
-    }
+test("RS-d: the window body is see-through from the hit through the shake (the face reads through it), then fades back in; solid before and after", () => {
+  assert.equal(slamBodyAlpha(0), 1);
+  assert.equal(slamBodyAlpha(SLAM.swingMs - 1), 1, "solid through the swing");
+  for (let lt = 0; lt < SLAM.shakeMs; lt += 5) assert.equal(slamBodyAlpha(SLAM.swingMs + lt), 0, `see-through at +${lt}ms`);
+  let prev = 0;
+  const seen = new Set();
+  for (let lt = SLAM.shakeMs; lt < SLAM_HIT_MS; lt += 5) {
+    const a = slamBodyAlpha(SLAM.swingMs + lt);
+    assert.ok(a >= prev && a < 1, `fade-in is monotonic and not yet solid at +${lt}ms`);
+    prev = a;
+    seen.add(a);
   }
-  assert.equal(swingAngleOpen(SLAM.swingMs + SLAM.shakeMs - 1), SWING_REBOUND_DEG);
-  assert.equal(at("open", SLAM.swingMs + 100).face, "smacked");
-});
-
-test("slamPuffBox: the puff is kept whole inside the FX box (right-edge puffs were clipped in half)", () => {
-  const bounds = { width: 1000, height: 600 };
-  const edge = slamPuffBox({ x: 1000, y: 0 }, { w: 32, h: 32 }, 3, 1, bounds);
-  assert.deepEqual([edge.left, edge.top], [1000 - 96, 0]);
-  const mid = slamPuffBox({ x: 500, y: 300 }, { w: 32, h: 32 }, 3, 1, bounds);
-  assert.deepEqual([mid.left, mid.top], [452, 252]);
-  assert.equal(slamPuffBox({ x: 1000, y: 0 }, { w: 32, h: 32 }, 3, 1).left, 952, "no bounds = unclamped");
+  assert.ok(seen.size >= 3, "a few hard steps, not a pop");
+  assert.equal(slamBodyAlpha(SLAM.swingMs + SLAM_HIT_MS), 1, "solid once settled");
+  const v = at("open", SLAM.swingMs + 100);
+  assert.equal(v.body, 0);
+  assert.equal(v.face, "smacked", "the Overlord is hit while the body is see-through");
+  assert.equal(v.swing, 0, "window flat while see-through");
+  assert.equal(at("open", 100).body, 1);
+  assert.equal(at("open", SLAM.swingMs + SLAM_HIT_MS).body, null);
+  assert.deepEqual(slamView({ dir: "open", t: 400 }, true, fx), SLAM_IDLE_VIEW, "reduced motion: no see-through, just open");
+  const k1 = slamKey({ ...at("open", SLAM.swingMs + 100), body: 0 }), k2 = slamKey({ ...at("open", SLAM.swingMs + 100), body: 1 });
+  assert.notEqual(k1, k2, "body is part of the key (it renders as a CSS var)");
 });
