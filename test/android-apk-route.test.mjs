@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -310,7 +310,8 @@ describe("wiring (source inspection)", () => {
     const src = read("server/build-android.mjs");
     assert.match(src, /"--apk", "--target", "aarch64"/);
     assert.doesNotMatch(src, /"--apk", "true"/);
-    assert.match(src, /"arm64", "release"/);
+    assert.match(read("server/android-apk-paths.mjs"), /"arm64", "aarch64"/);
+    assert.match(src, /findBuiltApk(rootDir)/);
     assert.match(src, /jniLibs/);
     assert.match(src, /arm64-v8a/);
     assert.match(src, /assembleArm64Release/);
@@ -507,9 +508,9 @@ describe("APK route is case-insensitive", () => {
 describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
   const APK_SHA = createHash("sha256").update(APK_BYTES).digest("hex");
 
-  test("handleAndroidApk sends x-vibesquad-apk-sha256 equal to the served bytes (GET and HEAD)", async () => {
+  test("handleAndroidApk sends x-vibesquad-apk-sha256 from a fresh sidecar (GET and HEAD)", async () => {
     const root = tmpRoot();
-    writeApk(root);
+    writeApkSidecar(writeApk(root));
     await withServer((req, res) => handleAndroidApk(req, res, root), async (base) => {
       for (const method of ["GET", "HEAD"]) {
         const r = await fetch(`${base}/VibeSquad.apk`, { method });
@@ -518,15 +519,42 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
     });
   });
 
-  test("header follows a replaced APK (cache keyed by mtime+size)", async () => {
+  test("no sidecar: header omitted on the request path, then served from a background stream hash", async () => {
+    const root = tmpRoot();
+    writeApk(root);
+    await withServer((req, res) => handleAndroidApk(req, res, root), async (base) => {
+      const first = await fetch(`${base}/VibeSquad.apk`, { method: "HEAD" });
+      assert.equal(first.headers.get("x-vibesquad-apk-sha256"), null);
+      let got = null;
+      for (let i = 0; i < 50 && !got; i++) {
+        await new Promise((ok) => setTimeout(ok, 20));
+        got = (await fetch(`${base}/VibeSquad.apk`, { method: "HEAD" })).headers.get("x-vibesquad-apk-sha256");
+      }
+      assert.equal(got, APK_SHA);
+    });
+  });
+
+  test("a sidecar older than the APK is ignored (header never lies about the served bytes)", async () => {
     const root = tmpRoot();
     const file = writeApk(root);
+    writeFileSync(`${file}.sha256`, `${"0".repeat(64)}
+`);
+    const past = new Date(Date.now() - 60_000);
+    utimesSync(`${file}.sha256`, past, past);
     await withServer((req, res) => handleAndroidApk(req, res, root), async (base) => {
-      await (await fetch(`${base}/VibeSquad.apk`)).arrayBuffer();
-      writeFileSync(file, "different-apk-bytes-longer");
-      const r = await fetch(`${base}/VibeSquad.apk`);
-      assert.equal(r.headers.get("x-vibesquad-apk-sha256"), createHash("sha256").update("different-apk-bytes-longer").digest("hex"));
+      const r = await fetch(`${base}/VibeSquad.apk`, { method: "HEAD" });
+      assert.notEqual(r.headers.get("x-vibesquad-apk-sha256"), "0".repeat(64));
     });
+  });
+
+  test("resolveAndroidApkPath dev fallback finds arm64 and aarch64 release outputs", () => {
+    for (const abi of ["arm64", "aarch64"]) {
+      const root = tmpRoot();
+      const dir = join(root, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", abi, "release");
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "x.apk"), "a");
+      assert.equal(resolveAndroidApkPath(root), join(dir, "x.apk"));
+    }
   });
 
   test("writeApkSidecar writes <apk>.sha256 matching the file", () => {
@@ -582,6 +610,50 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
     } finally {
       if (prev === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prev;
     }
+  });
+
+  test("syncRuntimeDir does not copy without a sidecar or with a mismatched one, and keeps the live pair", () => {
+    const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
+    const prev = process.env.LOCALAPPDATA;
+    process.env.LOCALAPPDATA = lad;
+    const live = join(lad, "VibeSquad", "runtime", "dist-desktop");
+    mkdirSync(live, { recursive: true });
+    writeFileSync(join(live, "VibeSquad.apk"), "live-old");
+    try {
+      const repo = tmpRoot();
+      const file = writeApk(repo);
+      syncRuntimeDir(repo); // no sidecar
+      assert.equal(readFileSync(join(live, "VibeSquad.apk"), "utf8"), "live-old");
+      writeFileSync(`${file}.sha256`, `${"0".repeat(64)}
+`); // mismatched
+      syncRuntimeDir(repo);
+      assert.equal(readFileSync(join(live, "VibeSquad.apk"), "utf8"), "live-old");
+      assert.equal(existsSync(join(live, "VibeSquad.apk.sha256")), false);
+      writeApkSidecar(file); // now valid
+      syncRuntimeDir(repo);
+      assert.deepEqual(readFileSync(join(live, "VibeSquad.apk")), APK_BYTES);
+      assert.deepEqual(readdirSync(live).sort(), ["VibeSquad.apk", "VibeSquad.apk.sha256"]);
+    } finally {
+      if (prev === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prev;
+    }
+  });
+
+  test("buildAndroidApk: a failed cert verify leaves no staged apk or sidecar", () => {
+    const root = mkdtempSync(join(tmpdir(), "vs-apk-"));
+    const sdk = join(root, "sdk");
+    mkdirSync(join(sdk, "build-tools", "1.0.0"), { recursive: true });
+    const apkDir = join(root, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
+    mkdirSync(apkDir, { recursive: true });
+    writeFileSync(join(apkDir, "app-signed.apk"), "apk-bytes");
+    const log = console.log;
+    console.log = () => {};
+    try {
+      assert.throws(() => buildAndroidApk({ rootDir: root, env: { ...process.env, ANDROID_HOME: sdk }, exec: () => { throw new Error("verify failed"); } }), /verify failed/);
+    } finally {
+      console.log = log;
+    }
+    assert.equal(existsSync(join(root, "dist-desktop", "VibeSquad.apk")), false);
+    assert.equal(existsSync(join(root, "dist-desktop", "VibeSquad.apk.sha256")), false);
   });
 
   test("isAndroidApkBuilt agrees with the route lookup; no ../.. fallback", () => {

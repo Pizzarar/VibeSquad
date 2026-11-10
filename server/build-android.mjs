@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync,
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { findBuiltApk } from "./android-apk-paths.mjs";
 import { resolveSecret } from "./secrets.mjs";
 
 const KS_SECRET = { envVar: "VS_KS_PASS", target: "vibesquad/android-keystore", required: true };
@@ -249,14 +250,6 @@ export function signSideloadApk({ javaExe, apksignerJar, inputApk, outApk, cwd, 
   return { certSha256 };
 }
 
-function findApk(dir) {
-  if (!existsSync(dir)) return null;
-  const files = readdirSync(dir).filter((f) => f.endsWith(".apk"));
-  if (!files.length) return null;
-  files.sort((a, b) => statSync(join(dir, b)).mtimeMs - statSync(join(dir, a)).mtimeMs);
-  return join(dir, files[0]);
-}
-
 function latestBuildTools(androidHome) {
   const buildToolsDir = join(androidHome, "build-tools");
   if (!existsSync(buildToolsDir)) return "";
@@ -337,7 +330,7 @@ export function buildAndroidApk({
   // Step 5: locate the built APK (prefer universal, then aarch64).
   console.log("[build:android] 4/6 Locating built APK...");
   const apkOutDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk");
-  const apk = findApk(join(apkOutDir, "universal", "release")) || findApk(join(apkOutDir, "arm64", "release")) || findApk(join(apkOutDir, "aarch64", "release"));
+  const apk = findBuiltApk(rootDir);
   if (!apk) throw new Error(`No built APK found under ${apkOutDir}`);
 
   // Step 6: sign (if unsigned) and stage into dist-desktop/VibeSquad.apk.
@@ -352,25 +345,32 @@ export function buildAndroidApk({
     : "java";
   const apksignerJar = join(androidEnv.ANDROID_HOME, "build-tools", latest, "lib", "apksigner.jar");
   let certSha256;
-  if (sideload || unsigned) {
-    // Sideload test builds: compact release signed with the Android debug keystore (--sideload/--debug) or raw unsigned (--unsigned). No release pin/keystore; never publishable.
-    console.log(`[build:android] 5/6 ${sideload ? "Sideload build (Android debug keystore)" : "Unsigned build"}: skipping release signing and cert pin.`);
-    // A stale release marker must never let release.mjs publish this test APK.
-    rmSync(join(distDesktopDir, "android-build.json"), { force: true });
-    if (sideload) {
-      ({ certSha256 } = signSideloadApk({ javaExe, apksignerJar, inputApk: apk, outApk: destApk, cwd: rootDir, exec, keystorePath: debugKeystorePath }));
+  try {
+    if (sideload || unsigned) {
+      // Sideload test builds: compact release signed with the Android debug keystore (--sideload/--debug) or raw unsigned (--unsigned). No release pin/keystore; never publishable.
+      console.log(`[build:android] 5/6 ${sideload ? "Sideload build (Android debug keystore)" : "Unsigned build"}: skipping release signing and cert pin.`);
+      // A stale release marker must never let release.mjs publish this test APK.
+      rmSync(join(distDesktopDir, "android-build.json"), { force: true });
+      if (sideload) {
+        ({ certSha256 } = signSideloadApk({ javaExe, apksignerJar, inputApk: apk, outApk: destApk, cwd: rootDir, exec, keystorePath: debugKeystorePath }));
+      } else {
+        copyFileSync(apk, destApk);
+      }
+    } else if (apk.endsWith("-unsigned.apk")) {
+      console.log("[build:android] 5/6 Signing APK...");
+      const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv });
+      ({ certSha256 } = signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec, pinFirst }));
     } else {
+      // Already signed (e.g. by Gradle): still must verify and match the pin before it ships.
+      console.log("[build:android] 5/6 Verifying pre-signed APK...");
       copyFileSync(apk, destApk);
+      ({ certSha256 } = verifyApkCert({ javaExe, apksignerJar, apk: destApk, cwd: rootDir, env: androidEnv, exec, pinFirst }));
     }
-  } else if (apk.endsWith("-unsigned.apk")) {
-    console.log("[build:android] 5/6 Signing APK...");
-    const { keystorePath, secretEnv, alias } = ensureAndroidKeystore({ env: androidEnv });
-    ({ certSha256 } = signAndVerifyApk({ javaExe, apksignerJar, keystorePath, alias, secretEnv, inputApk: apk, outApk: destApk, cwd: rootDir, exec, pinFirst }));
-  } else {
-    // Already signed (e.g. by Gradle): still must verify and match the pin before it ships.
-    console.log("[build:android] 5/6 Verifying pre-signed APK...");
-    copyFileSync(apk, destApk);
-    ({ certSha256 } = verifyApkCert({ javaExe, apksignerJar, apk: destApk, cwd: rootDir, env: androidEnv, exec, pinFirst }));
+  } catch (err) {
+    // A failed sign/verify must not leave an unverified APK staged where sync-runtime or the route could pick it up.
+    rmSync(destApk, { force: true });
+    rmSync(`${destApk}.sha256`, { force: true });
+    throw err;
   }
   writeApkSidecar(destApk);
   console.log(`[build:android] 6/6 Staged ${destApk}`);

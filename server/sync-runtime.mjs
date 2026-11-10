@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -42,17 +43,31 @@ export function syncRuntimeDir(repoRoot = rootDir) {
     }
   }
 
-  // The live server serves runtime/dist-desktop/VibeSquad.apk; ship the staged build (+ hash sidecar) when present.
-  for (const name of ["VibeSquad.apk", "VibeSquad.apk.sha256"]) {
-    const src = join(repoRoot, "dist-desktop", name);
-    if (!existsSync(src)) continue;
-    try {
-      mkdirSync(join(runtimeDir, "dist-desktop"), { recursive: true });
-      cpSync(src, join(runtimeDir, "dist-desktop", name), { force: true });
-    } catch {
-      // ignore locked files
+  // The live server serves runtime/dist-desktop/VibeSquad.apk. Ship the staged build only as a verified pair
+  // (sidecar present and equal to the apk's hash), via temp file + rename, apk first and sidecar last.
+  try {
+    const dist = join(repoRoot, "dist-desktop");
+    const apk = join(dist, "VibeSquad.apk");
+    const side = `${apk}.sha256`;
+    if (existsSync(apk) && existsSync(side)) {
+      const want = readFileSync(side, "utf8").trim().toLowerCase();
+      const got = createHash("sha256").update(readFileSync(apk)).digest("hex");
+      if (want === got) {
+        const destDir = join(runtimeDir, "dist-desktop");
+        mkdirSync(destDir, { recursive: true });
+        for (const [src, name] of [[apk, "VibeSquad.apk"], [side, "VibeSquad.apk.sha256"]]) {
+          const tmp = join(destDir, `${name}.tmp-${process.pid}`);
+          try {
+            copyFileSync(src, tmp);
+            renameSync(tmp, join(destDir, name));
+          } catch {
+            rmSync(tmp, { force: true }); // locked live file: leave the old pair
+            break;
+          }
+        }
+      }
     }
-  }
+  } catch {}
 
   let stamp = null;
   try {
