@@ -118,5 +118,5 @@ test("E1b: top safe-area inset applied once on the cockpit (App's .app padding i
   assert.ok(sheet.includes("calc(12px + env(safe-area-inset-bottom, 0px))"));
   // phone shell returns before the .app wrapper, so .app's own inset cannot double up
   const app = src("App.tsx");
-  assert.ok(app.indexOf("if (phoneShell) {") < app.indexOf('className="app'));
+  assert.ok(app.indexOf("if (phoneShell) {") < app.indexOf('className={`app '));
 });
