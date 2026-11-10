@@ -325,3 +325,17 @@ test("RS-d: the window body is see-through from the hit through the shake (the f
   const k1 = slamKey({ ...at("open", SLAM.swingMs + 100), body: 0 }), k2 = slamKey({ ...at("open", SLAM.swingMs + 100), body: 1 });
   assert.notEqual(k1, k2, "body is part of the key (it renders as a CSS var)");
 });
+
+// RS-d replaces the old "face stays uncovered while the window recoils" check: the window now stays flat ON the TV, so the face is only readable because the body is see-through.
+test("RS-d: while the Overlord's smacked face is on show the flat window covers it, and its body is fully see-through; the body is solid again only after the hit phase", () => {
+  for (const w of WIDTHS) {
+    for (let lt = 0; lt < SLAM.shakeMs; lt += 5) {
+      const t = SLAM.swingMs + lt;
+      assert.equal(swingEdgeX(swingAngleOpen(t), w), w, `w=${w} lt=${lt}: window flat over the TV (no recoil uncovering the face)`);
+      assert.equal(slamBodyAlpha(t), 0, `lt=${lt}: body see-through so the face reads through`);
+      assert.equal(at("open", t).face, "smacked");
+    }
+  }
+  for (let lt = SLAM.shakeMs; lt < SLAM_HIT_MS; lt += 5) assert.ok(slamBodyAlpha(SLAM.swingMs + lt) < 1, "still fading in until the hit phase ends");
+  assert.equal(slamBodyAlpha(SLAM.swingMs + SLAM_HIT_MS), 1);
+});
