@@ -865,6 +865,12 @@ export function riderSpot(car: Rect, index: number, kit: number): { left: number
 
 /** floor.json, fetched once per page load and shared (HubPages sizing + SquadFloor); a failed fetch is not cached so a remount retries. */
 let floorJsonPromise: Promise<unknown> | null = null;
+let floorJsonSettled = false;
+let floorJsonValue: unknown = undefined;
+/** The last settled floor.json (a failure settles as undefined = placeholder floor): lets a remount size its first paint synchronously. */
+export function peekFloorJson(): { settled: boolean; json: unknown } {
+  return { settled: floorJsonSettled, json: floorJsonValue };
+}
 export function fetchFloorJson(): Promise<unknown> {
   if (!floorJsonPromise) {
     const p: Promise<unknown> = fetch("/office/floor.json")
@@ -872,6 +878,8 @@ export function fetchFloorJson(): Promise<unknown> {
       .catch(() => undefined);
     floorJsonPromise = p;
     void p.then((json) => {
+      floorJsonSettled = true;
+      floorJsonValue = json;
       if (json === undefined && floorJsonPromise === p) floorJsonPromise = null;
     });
   }

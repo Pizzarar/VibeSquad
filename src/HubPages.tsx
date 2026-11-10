@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { HUB_BACKDROP_JSON, HUB_BACKDROP_URL, backdropStyle, isShortCssHeight, validateHubBackdrop, type HubBackdrop } from "./hubPagesLogic";
 import { SKY_URL } from "./skyZonesLogic";
-import { fetchFloorJson, floorNativeSize, floorNeedCssPx, floorOrPlaceholder } from "./squadFloorLogic";
+import { fetchFloorJson, peekFloorJson, floorNativeSize, floorNeedCssPx, floorOrPlaceholder } from "./squadFloorLogic";
 import { useUiScale } from "./uiScale";
 import { useDpr, useImageOk, useTheme } from "./useBotFace";
 
@@ -27,7 +27,7 @@ function useHubBackdrop(): HubBackdrop | null {
 
 /** The floor plate's native size from floor.json (the placeholder 640x360 until it loads): the floor box must hold this many device px, so the TVs band yields. */
 function useFloorNative(): { w: number; h: number } {
-  const [size, setSize] = useState(() => floorNativeSize(floorOrPlaceholder(undefined)));
+  const [size, setSize] = useState(() => floorNativeSize(floorOrPlaceholder(peekFloorJson().json)));
   useEffect(() => {
     let alive = true;
     fetchFloorJson().then((json) => alive && setSize(floorNativeSize(floorOrPlaceholder(json))));

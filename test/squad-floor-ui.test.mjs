@@ -137,3 +137,26 @@ test("fetchFloorJson dedupes concurrent calls and retries after a failure", asyn
     globalThis.fetch = orig;
   }
 });
+
+test("floor first paint: no cast fallback while loading (error only), stage hidden until floor.json known, cached remount sizes synchronously", async () => {
+  assert.match(floor, /const castArt = useImageState\(CAST_URL\(theme\)\);/);
+  assert.match(floor, /const charsReady = jsonDone && castArt !== "loading";/);
+  assert.match(floor, /items=\{!charsReady \? \[\] : \[/); // seats (and their .sq-floor-sprite-fallback) only once settled
+  assert.match(floor, /!charsReady \? null : riders/);
+  assert.match(floor, /useState<FloorModel>\(\(\) => floorOrPlaceholder\(peekFloorJson\(\)\.json\)\)/);
+  assert.match(floor, /useState\(\(\) => peekFloorJson\(\)\.settled\)/);
+  assert.match(floor, /className="sq-floor-stage" ref=\{stageRef\} style=\{floorKnown \? undefined : \{ visibility: "hidden" \}\}/);
+  assert.match(src("HubPages.tsx"), /floorOrPlaceholder\(peekFloorJson\(\)\.json\)/);
+  assert.match(floor, /scale > 0 &&/); // SS5 integer device-px scale untouched
+  const { fetchFloorJson, peekFloorJson, floorNativeSize, floorOrPlaceholder } = await import("../src/squadFloorLogic.ts");
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ plate: { w: 960, h: 444 } }) });
+  try {
+    await fetchFloorJson();
+    const peek = peekFloorJson();
+    assert.equal(peek.settled, true);
+    assert.deepEqual(floorNativeSize(floorOrPlaceholder(peek.json)), floorNativeSize(floorOrPlaceholder(await fetchFloorJson())), "remount native size == settled size from first render");
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
