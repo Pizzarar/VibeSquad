@@ -10,6 +10,7 @@ import {
   hostHealthLine,
   isPhoneShell,
   openBuddy,
+  phoneLaneRows,
   resetBuddyRequest,
   subscribeBuddyRequest,
 } from "../src/phoneCockpitLogic.ts";
@@ -78,4 +79,28 @@ test("cockpit: three surfaces, no escape hatch, slots and restart wiring", () =>
 test("css defines the cockpit shell", () => {
   const css = src("styles.css");
   for (const cls of [".phone-cockpit", ".phone-tabs", ".phone-drawer", ".phone-back-pill"]) assert.ok(css.includes(cls), cls);
+});
+
+test("drawer lane list: a no-agent pinned lane from `vs pin new` appears (state none); removed/done and live Buddies handled", () => {
+  const mk = (lane, brainstorm = null) => ({ lane, members: [], brainstorm, lead: null, topicBrainstorms: [], duplicateBrainstorms: [] });
+  const buddy = (status) => ({ agent: { id: "a1", status }, kind: "brainstorm" });
+  const lanes = [
+    { id: "boring-mode", name: "Boring Mode", state: "pinned", code: "Bor" },
+    { id: "live-one", name: "Live One", state: "pinned" },
+    { id: "idle-one", name: "Idle One", state: "pinned" },
+    { id: "gone", name: "Gone", state: "removed" },
+  ];
+  const view = {
+    team: { id: "s", name: "S", color: "#fff", paths: [], lanes },
+    lanes: [mk(lanes[0]), mk(lanes[1], buddy("running")), mk(lanes[2], buddy("idle")), mk(lanes[3])],
+  };
+  const rows = phoneLaneRows(view);
+  assert.deepEqual(rows.map((r) => [r.laneId, r.state]), [["boring-mode", "none"], ["live-one", "live"], ["idle-one", "idle"]]);
+  assert.deepEqual(phoneLaneRows(undefined), []);
+});
+
+test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onSpinUp", () => {
+  const s = src("PhoneCockpit.tsx");
+  assert.ok(s.includes("phoneLaneRows(view)") && s.includes("phone-lane-"));
+  assert.ok(/state === "none"\) onSpinUp\(r\.pin\);\s*openBuddy\(r\.laneId\)/.test(s));
 });
