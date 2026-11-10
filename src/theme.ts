@@ -25,3 +25,22 @@ export function themeFromPrefsBlob(blob: string | null, systemPrefersDark: boole
   }
   return resolveTheme(pref, systemPrefersDark);
 }
+
+/** Layout vibe: "fun" is the Hypnospace default, "boring" is the corporate ADE skin (src/boring.css). */
+export type VibePref = "fun" | "boring";
+
+export const VIBE_PREFS: readonly VibePref[] = ["fun", "boring"];
+
+/** Anything but an explicit "boring" is the fun default. */
+export function parseVibePref(raw: unknown): VibePref {
+  return raw === "boring" ? "boring" : "fun";
+}
+
+/** Same pick from the raw vs.prefs.v1 JSON blob; mirrored by the pre-paint script in index.html. */
+export function vibeFromPrefsBlob(blob: string | null): VibePref {
+  try {
+    return parseVibePref(blob ? (JSON.parse(blob) as Record<string, unknown>)["app.vibe"] : undefined);
+  } catch {
+    return "fun";
+  }
+}
