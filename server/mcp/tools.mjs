@@ -5,6 +5,7 @@ import { isRunnerId } from "../backend/runner-backend.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
+import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
@@ -139,6 +140,12 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const { team, lane } = ctx.identity;
   const title = clean(args.title) || `Worker ${new Date().toISOString().slice(11, 19)}`;
   const labels = { ...(args.labels ?? {}) };
+  // Convenience for labels.stakes (the ladder reads the label); an explicit labels.stakes wins.
+  const stakesArg = clean(args.stakes);
+  if (stakesArg) {
+    if (!STAKES_VALUES.includes(stakesArg)) throw new Error(`unknown stakes "${stakesArg}". Known: ${STAKES_VALUES.join(", ")}`);
+    if (!clean(labels.stakes)) labels.stakes = stakesArg;
+  }
   const requestedRole = clean(labels.role).toLowerCase();
   const requestedTeam = clean(labels.team);
   const requestedLane = clean(labels.lane);
@@ -536,12 +543,13 @@ async function postBuddyRestartToServer(body, ctx) {
 
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
 const S = { type: "string" };
+const STAKES_PARAM = { type: "string", enum: STAKES_VALUES, description: "Routes the spawn's model + effort by stakes; sets labels.stakes (an explicit labels.stakes wins)." };
 
 /** Canonical VS tools. */
 export const VS_TOOLS = {
   spawn_worker: {
-    description: "Start a worker agent in your lane from a VS profile. Returns {id, title}.",
-    inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, labels: { type: "object" } }, ["title", "profile", "prompt"]),
+    description: "Start a worker agent in your lane from a VS profile. Optional stakes (tierA-security | tierA-invariant | normal | mechanical) routes the model + effort by stakes (same as labels.stakes; labels.stakes wins if both). Returns {id, title}.",
+    inputSchema: obj({ title: S, profile: S, prompt: S, cwd: S, labels: { type: "object" }, stakes: STAKES_PARAM }, ["title", "profile", "prompt"]),
     run: spawnWorker,
   },
   send: { description: "Send a follow-up message to an agent.", inputSchema: obj({ id: S, text: S }, ["id", "text"]), run: sendTool },
@@ -589,7 +597,7 @@ const aliasResult = (name, r) => {
 // Paseo-shaped inputs per alias (agentId, prompt/initialPrompt, mode/modeId); the canonical schemas stay VS-shaped.
 const AGENT_ID = { agentId: S, id: S };
 const ALIAS_SCHEMAS = {
-  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S }),
+  create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S, stakes: STAKES_PARAM }),
   send_agent_prompt: obj({ ...AGENT_ID, prompt: S, text: S }),
   get_agent_status: obj(AGENT_ID),
   list_agents: obj({}),
