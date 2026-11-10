@@ -223,3 +223,23 @@ test("buddy: the default performBrainstormRestart wiring restarts once (reason a
   assert.equal(creates.length, 1, "no restart loop");
   w.stop();
 });
+
+test("token-watch coordinator: a transient fetchAgent error is not 'dead' (confirmTakeover throws); only not-found reads as missing", async () => {
+  const runner = makeRunner();
+  const rootDir = makeRoot();
+  runner.agents.set("rn-succ", { id: "rn-succ", title: "S", status: "idle", labels: { role: "lead", "vs.handoff-from": "rn-old" } });
+  const realFetch = runner.fetchAgent.bind(runner);
+  let mode = "transient";
+  runner.fetchAgent = async (id) => {
+    if (mode === "transient") throw new Error("socket hang up");
+    if (mode === "missing") throw new Error("agent rn-succ not found");
+    return realFetch(id);
+  };
+  const w = startTokenWatcher({ runner, rootDir });
+  try {
+    await assert.rejects(w.coordinator.confirmTakeover("rn-succ"), /socket hang up/);
+    mode = "missing";
+    const r = await w.coordinator.confirmTakeover("rn-succ");
+    assert.equal(r.confirmed, false);
+  } finally { w.stop(); }
+});

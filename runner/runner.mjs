@@ -813,8 +813,13 @@ export class Runner {
 
   list() { return this.store.ids(); } // names only; use status(id) for details
 
-  // Marks every live agent as exited by the runner, then kills its process tree.
-  shutdown() {
+  // Marks every live agent as exited by the runner, then kills its process tree. Idempotent.
+  // keepResumable (the restart script's POST /shutdown): NO exit event, so the next runner can resume every agent. An idle agent
+  // with a session is parked (logged); a mid-turn/starting one is stopped with entry.parked=true and its log left as-is, so it
+  // reads "lost" afterwards and POST /agents/:id/resume brings it back from its last session id.
+  shutdown({ keepResumable = false } = {}) {
+    if (this._shutDown) return;
+    this._shutDown = true;
     this._pollAgy?.shutdown();
     clearInterval(this._quietSweep);
     const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
@@ -822,6 +827,18 @@ export class Runner {
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }
     for (const id of [...this.live.keys()]) {
       if (waiting.has(id)) { const e = this.live.get(id); if (e) e.parked = true; this.kill(id); continue; } // parked flag: onExit logs nothing
+      if (keepResumable) {
+        const e = this.live.get(id);
+        if (e) e.parked = true; // onExit/emit log nothing, even for a child still starting
+        if (e?.handle) {
+          if (e.status === 'idle' && e.sessionId && this.adapters[e.provider]?.canPark) {
+            this.store.append(id, 'parked', { sessionId: e.sessionId, systemPrompt: e.systemPrompt ?? null });
+            this.store.append(id, 'status', { status: 'parked' });
+          }
+          try { e.handle.kill(); } catch { /* best effort */ }
+        }
+        continue;
+      }
       try { this.store.append(id, 'exit', { code: null, reason: 'runner-shutdown' }); } catch { /* best effort */ }
       this.kill(id);
     }
