@@ -96,3 +96,67 @@ test("C2b G2: tower has no top band / CRT screens; faces live in the shared useB
   assert.ok(hook.includes("faces.json"));
   assert.ok(hook.includes("reduced"));
 });
+
+test("floor placeholders: no boxes while the art loads, boxes only on error; front/cursor start with the JSON; floor.json fetched once", () => {
+  assert.match(floor, /const floorArt = useImageState\(FLOOR_URL\(theme\)\);/);
+  assert.match(floor, /floorArt === "ok" \? \([\s\S]*?\) : floorArt === "error" \? \(\s*floorBoxes\s*\) : null/);
+  assert.ok(!/floorImgOk/.test(floor), "no loading-time fallback boxes");
+  assert.match(floor, /img\.onerror = \(\) => alive && setState\(\{ url, s: "error" \}\)/);
+  // theme URLs probed unconditionally: no JSON -> image waterfall
+  assert.match(floor, /useImageOk\(FLOOR_FRONT_URL\(theme\)\)/);
+  assert.match(floor, /const floorFrontOk = floorFrontImgOk && !!floor\.front;/);
+  assert.match(floor, /useImageOk\(CURSOR_URL\(theme\)\)/);
+  // one shared floor.json promise
+  const logic = src("squadFloorLogic.ts");
+  assert.equal((logic.match(/fetch\("\/office\/floor\.json"\)/g) || []).length, 1);
+  assert.ok(!/fetch\("\/office\/floor\.json"\)/.test(floor) && !/fetch\("\/office\/floor\.json"\)/.test(src("HubPages.tsx")));
+  assert.match(floor, /fetchFloorJson\(\),/);
+  assert.match(src("HubPages.tsx"), /fetchFloorJson\(\)\.then/);
+});
+
+test("fetchFloorJson dedupes concurrent calls and retries after a failure", async () => {
+  const { fetchFloorJson } = await import("../src/squadFloorLogic.ts");
+  const orig = globalThis.fetch;
+  let calls = 0;
+  let ok = false;
+  globalThis.fetch = async () => {
+    calls++;
+    return ok ? { ok: true, json: async () => ({ a: 1 }) } : { ok: false };
+  };
+  try {
+    const [a, b] = await Promise.all([fetchFloorJson(), fetchFloorJson()]);
+    assert.equal(calls, 1);
+    assert.equal(a, undefined);
+    assert.equal(b, undefined);
+    await Promise.resolve();
+    ok = true;
+    assert.deepEqual(await fetchFloorJson(), { a: 1 });
+    await fetchFloorJson();
+    assert.equal(calls, 2, "success cached");
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
+
+test("floor first paint: no cast fallback while loading (error only), stage hidden until floor.json known, cached remount sizes synchronously", async () => {
+  assert.match(floor, /const castArt = useImageState\(CAST_URL\(theme\)\);/);
+  assert.match(floor, /const charsReady = jsonDone && castArt !== "loading";/);
+  assert.match(floor, /items=\{!charsReady \? \[\] : \[/); // seats (and their .sq-floor-sprite-fallback) only once settled
+  assert.match(floor, /!charsReady \? null : riders/);
+  assert.match(floor, /useState<FloorModel>\(\(\) => floorOrPlaceholder\(peekFloorJson\(\)\.json\)\)/);
+  assert.match(floor, /useState\(\(\) => peekFloorJson\(\)\.settled\)/);
+  assert.match(floor, /className="sq-floor-stage" ref=\{stageRef\} style=\{floorKnown \? undefined : \{ visibility: "hidden" \}\}/);
+  assert.match(src("HubPages.tsx"), /floorOrPlaceholder\(peekFloorJson\(\)\.json\)/);
+  assert.match(floor, /scale > 0 &&/); // SS5 integer device-px scale untouched
+  const { fetchFloorJson, peekFloorJson, floorNativeSize, floorOrPlaceholder } = await import("../src/squadFloorLogic.ts");
+  const orig = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ plate: { w: 960, h: 444 } }) });
+  try {
+    await fetchFloorJson();
+    const peek = peekFloorJson();
+    assert.equal(peek.settled, true);
+    assert.deepEqual(floorNativeSize(floorOrPlaceholder(peek.json)), floorNativeSize(floorOrPlaceholder(await fetchFloorJson())), "remount native size == settled size from first render");
+  } finally {
+    globalThis.fetch = orig;
+  }
+});
