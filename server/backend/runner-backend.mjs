@@ -755,7 +755,7 @@ export class RunnerBackend {
             if (/is retired and no live/.test(String(err?.message ?? err))) throw err; // the sender must see "no live lead", not a delivery to the retired one
           })
         : undefined;
-      if (res?.redirected) return;
+      if (res?.redirected) return { redirectedTo: res.targetAgentId ?? res.agentId }; // the sender must learn the message went to the successor
     }
     const body = { text };
     if (opts.images?.length) body.images = opts.images;

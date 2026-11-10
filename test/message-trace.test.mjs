@@ -68,6 +68,19 @@ test("hop2/3 vs send + MCP send: delivered returns sent:true; backend failure (d
   await assert.rejects(callTool(good, "send", { id: "rn-bud", text: "  " }), /text is required/);
 });
 
+test("hop2/3 send to a retired Buddy: the redirect target surfaces as redirectedTo to the sender (vs send + MCP)", async () => {
+  const redirecting = ctxWith({ sendAgentPrompt: async () => ({ redirectedTo: "rn-new" }) });
+  assert.deepEqual(await runAgentVerb("send", { _: ["rn-old", "hello"] }, redirecting), { id: "rn-old", sent: true, redirectedTo: "rn-new" });
+  assert.deepEqual(await callTool(redirecting, "send", { id: "rn-old", text: "hi" }), { id: "rn-old", sent: true, redirectedTo: "rn-new" });
+});
+
+test("runner backend sendAgentPrompt returns {redirectedTo} when the retired-lead hook redirects", async () => {
+  const { RunnerBackend } = await import("../server/backend/runner-backend.mjs");
+  const fake = { hookHost: async () => ({ before: async () => ({ redirected: true, agentId: "rn-new", targetAgentId: "rn-new" }) }) };
+  const res = await RunnerBackend.prototype.sendAgentPrompt.call(fake, "rn-old", "hi", { senderId: "rn-sender" });
+  assert.deepEqual(res, { redirectedTo: "rn-new" });
+});
+
 // Hop 4: Send card (UI decision card) -> lane Buddy
 test("hop4 Send card: delivered stamps the card; a refused send leaves it undelivered and throws the reason", async (t) => {
   const baseHome = home(t);
