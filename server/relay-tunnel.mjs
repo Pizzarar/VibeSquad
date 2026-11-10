@@ -426,6 +426,7 @@ export function createRelayHost(opts) {
     authFailWindowMs = 60_000,
     maxHttpPerSession = 16,
     maxWsPerSession = 8,
+    maxPendingFrames = 16, // post-auth frames queued behind a slow dispatch; pre-auth is always 1
     maxSessionMs = 24 * 60 * 60 * 1000, // rekey (M5)
     maxSessionRecords = 2 ** 20,
   } = opts;
@@ -495,7 +496,10 @@ export function createRelayHost(opts) {
         }
         return;
       }
-      if (e instanceof RangeError && obj.t === "http-res") return send(s, { t: "http-res", id: obj.id, status: 502, headers: {}, fin: true });
+      if (e instanceof RangeError && obj.t === "http-res") {
+        s.skipBody.add(obj.id); // the 502 already finished this stream: runHttp must not stream the body after it
+        return send(s, { t: "http-res", id: obj.id, status: 502, headers: {}, fin: true });
+      }
       closeSession(s.cid);
     }
   }
@@ -533,6 +537,7 @@ export function createRelayHost(opts) {
       const buf = r?.body == null ? Buffer.alloc(0) : Buffer.from(r.body);
       send(s, { t: "http-res", id, status: r?.status ?? 500, headers: cleanResponseHeaders(r?.headers) });
       headSent = true;
+      if (s.skipBody.delete(id)) return; // head was oversize and already answered with a finished 502
       for (let o = 0; o < buf.length; o += BODY_CHUNK) {
         send(s, { t: "http-body", id, b: buf.subarray(o, o + BODY_CHUNK).toString("base64") });
       }
@@ -555,7 +560,10 @@ export function createRelayHost(opts) {
           if (s.ws.delete(id)) send(s, { t: "ws-close", id, code: code ?? 1000 });
         },
       });
-    } catch {}
+    } catch (e) {
+      onEvent({ type: "ws-open-error", cid: s.cid, deviceId: s.deviceId, reason: String(e?.message ?? e).slice(0, 200) });
+      handle = null; // falls through to ok:false + stream cleanup below
+    }
     const stillMine = s.ws.get(id) === pending;
     if (s.dead || !stillMine || !handle) {
       if (stillMine) s.ws.delete(id);
@@ -673,7 +681,7 @@ export function createRelayHost(opts) {
         onEvent({ type: "evicted-unauthenticated", cid: victim.cid });
         closeSession(victim.cid);
       }
-      const s = { cid, channel: null, deviceId: null, redeems: 0, http: 0, ws: new Map(), dead: false, authTimer: null, createdAt: now(), records: 0, queue: Promise.resolve() };
+      const s = { cid, channel: null, deviceId: null, redeems: 0, http: 0, ws: new Map(), dead: false, authTimer: null, createdAt: now(), records: 0, queue: Promise.resolve(), pending: 0, skipBody: new Set() };
       s.authTimer = setTimeoutFn(() => closeSession(cid), authTimeoutMs);
       sessions.set(cid, s);
       return;
@@ -682,6 +690,12 @@ export function createRelayHost(opts) {
     const s = sessions.get(cid);
     if (!s || typeof f.b !== "string") return;
     try {
+      // Backpressure BEFORE decrypting: a frame that is decrypted, parsed and queued behind a slow callback costs memory
+      // (up to ~1 MiB each). Pre-auth a session may have exactly one frame in flight; post-auth a small budget.
+      if (s.channel && s.pending >= (s.deviceId ? maxPendingFrames : 1)) {
+        onEvent({ type: "backpressure-overflow", cid, deviceId: s.deviceId });
+        return closeSession(cid);
+      }
       const bytes = Buffer.from(f.b, "base64");
       if (!s.channel) {
         const { reply, channel } = acceptHandshake(bytes, { hostKey, hostId });
@@ -691,7 +705,11 @@ export function createRelayHost(opts) {
       const m = JSON.parse(s.channel.open(bytes).toString("utf8"));
       s.records++;
       if (!m || typeof m !== "object") throw new Error("bad frame");
-      s.queue = s.queue.then(() => dispatch(s, m)).catch(() => closeSession(cid)); // strictly ordered per session
+      s.pending++;
+      s.queue = s.queue
+        .then(() => dispatch(s, m))
+        .catch(() => closeSession(cid))
+        .finally(() => s.pending--); // strictly ordered per session
     } catch (e) {
       onEvent({ type: "session-error", cid, deviceId: s.deviceId, reason: String(e?.message ?? e) });
       closeSession(cid);

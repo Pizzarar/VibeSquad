@@ -1074,3 +1074,96 @@ describe("X1 lows", () => {
     assert.equal(req.headers.cookie, undefined);
   });
 });
+
+// ---- X1 R2 walk fix round (queue backpressure, openWs errors, oversize head) ---------------------------------------------
+
+describe("X1 R2 backpressure before decrypt", () => {
+  test("PoC E: frames behind a slow redeem are not queued; the session is closed after one in-flight frame pre-auth", async () => {
+    const relay = makeRelay();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const seen = [];
+    const { host, events } = makeHost(relay, { redeem: async ({ code }) => (seen.push(code), await gate, null) });
+    host.start();
+    await tick();
+    const r = await rawSession(relay, "e1");
+    r.send({ t: "redeem", id: "1", code: "000001" });
+    await until(() => seen.length === 1);
+    for (let i = 0; i < 150; i++) r.send({ t: "redeem", id: String(i + 2), code: "x".repeat(900_000) }); // would be ~130 MiB if queued
+    await until(() => host.status().sessions === 0);
+    assert.ok(events.some((e) => e.type === "backpressure-overflow"));
+    assert.equal(seen.length, 1);
+    release();
+    await tick();
+    assert.equal(host.status().sessions, 0);
+    host.stop();
+  });
+
+  test("post-auth budget: more queued frames than maxPendingFrames closes the session", async () => {
+    const relay = makeRelay();
+    let release;
+    const gate = new Promise((r) => (release = r));
+    const { host, events } = makeHost(relay, { maxPendingFrames: 3, isRevoked: async () => (await gate, false) });
+    host.start();
+    await tick();
+    const r = await rawSession(relay, "e2");
+    r.send({ t: "redeem", id: "r", code: "123456" });
+    assert.equal((await r.recv()).ok, true);
+    for (let i = 0; i < 6; i++) r.send({ t: "http", id: `h${i}`, method: "GET", path: "/api/x" });
+    await until(() => host.status().sessions === 0);
+    assert.ok(events.some((e) => e.type === "backpressure-overflow"));
+    release();
+    host.stop();
+  });
+
+  test("a normal burst within the budget still completes", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay);
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const res = await Promise.all(Array.from({ length: 10 }, (_, i) => c.fetch(`/api/b${i}`)));
+    assert.deepEqual(res.map((x) => x.status), Array(10).fill(200));
+    host.stop();
+  });
+});
+
+describe("X1 R2 lows", () => {
+  test("openWs errors emit an event and answer ok:false for that stream only", async () => {
+    const relay = makeRelay();
+    const { host, events } = makeHost(relay, {
+      openWs: async () => {
+        throw new Error("upstream exploded");
+      },
+    });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    await assert.rejects(c.openWebSocket("/ws"), /ws denied/);
+    const ev = events.find((e) => e.type === "ws-open-error");
+    assert.ok(ev);
+    assert.match(ev.reason, /upstream exploded/);
+    assert.equal((await c.fetch("/api/alive")).status, 200);
+    host.stop();
+  });
+
+  test("an oversize response head becomes one finished 502; no body chunks follow", async () => {
+    const relay = makeRelay();
+    const { host } = makeHost(relay, {
+      handleHttp: async () => ({ status: 200, headers: { "x-big": "y".repeat(2 * 1024 * 1024) }, body: Buffer.alloc(400_000, 1) }),
+    });
+    host.start();
+    await tick();
+    const r = await rawSession(relay, "e3");
+    r.send({ t: "redeem", id: "r", code: "123456" });
+    await r.recv();
+    r.send({ t: "http", id: "h", method: "GET", path: "/api/big-head" });
+    const head = await r.recv();
+    assert.equal(head.status, 502);
+    assert.equal(head.fin, true);
+    for (let i = 0; i < 50; i++) await tick();
+    await new Promise((res) => setTimeout(res, 20));
+    assert.equal(r.inbox.length, 0, "no http-body frames after the 502");
+    host.stop();
+  });
+});
