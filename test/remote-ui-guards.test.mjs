@@ -43,7 +43,8 @@ describe("R2-4 remote UI & module-load guards", () => {
     assert.match(inbox, /action: "bounce", cardId, teamId: team\.id, laneId: newLane/);
     assert.match(inbox, /action: "merge",\s*targetId,\s*sourceIds,\s*teamId: team\.id,\s*laneId:/);
     assert.match(inbox, /action: "archive",\s*cardId,\s*teamId: team\.id,\s*laneId:/);
-    assert.match(inbox, /!isRemote\(\) && \(\s*<button[^>]*inbox-open-topic-btn/);
+    assert.match(inbox, /\/__vibesquad\/inbox\/send/);
+    assert.doesNotMatch(inbox, /open-topic|handoff-topic|park-topic/);
 
     const newSquad = read("src/NewSquadModal.tsx");
     assert.match(newSquad, /data-testid="new-squad-remote-note"/);

@@ -611,20 +611,26 @@ const seat = (m: Member, seatKind: SeatKind, desk?: number): SeatedAgent => ({
   ...(desk !== undefined ? { desk } : {}),
 });
 
-/** Desks per row on the floor plate (desks 0-2 top, 3-5 bottom); side-by-side means the same row. */
+/** Desks per row on the built-in placeholder (desks 0-2 top, 3-5 bottom); side-by-side means the same row. A real floor.json gives rows by desk y (see deskRowMate). */
 export const DESKS_PER_ROW = 3;
+
+/** True when desk `slot` sits in the same row as the desk before it (same y in floor.json), so the plate may stack rows of any length (4/3/4 bench and cubicles). */
+export function deskRowMate(desks: readonly Pick<Rect, "y">[]): (slot: number) => boolean {
+  return (slot) => slot > 0 && slot < desks.length && desks[slot].y === desks[slot - 1].y;
+}
 
 /**
  * Reorder desk assignment (never the agents' looks) so identical sprites don't sit side by side: fill slots in
  * order, taking the earliest remaining item whose key differs from the left neighbour in the same row; when every
  * remaining item matches, take the earliest anyway. Stable: with no clash the order is unchanged.
  */
-export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => string, rowSize = DESKS_PER_ROW): T[] {
+export function spreadNeighbours<T>(items: readonly T[], keyOf: (item: T) => string, rowSize: number | ((slot: number) => boolean) = DESKS_PER_ROW): T[] {
+  const mate = typeof rowSize === "function" ? rowSize : (slot: number) => slot % rowSize !== 0;
   const left = [...items];
   const out: T[] = [];
   while (left.length > 0) {
     const slot = out.length;
-    const leftKey = slot % rowSize === 0 ? null : keyOf(out[slot - 1]);
+    const leftKey = mate(slot) ? keyOf(out[slot - 1]) : null;
     const at = left.findIndex((it) => leftKey === null || keyOf(it) !== leftKey);
     out.push(left.splice(at < 0 ? 0 : at, 1)[0]);
   }
@@ -640,7 +646,7 @@ function placeTeam(t: TowerTeam, slices?: TeamSlices): TeamFloorPlacement {
     .filter((w): w is Member => isLiveMember(w) && !isRetiredLead(w) && isSeatedWorkerPose(poseFor(w)))
     .sort(spawnOrder);
   const deskCount = slices ? slices.desks.length : DESK_COUNT;
-  const desks = spreadNeighbours(workers.slice(0, deskCount).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`).map((a, i) => ({ ...a, desk: i }));
+  const desks = spreadNeighbours(workers.slice(0, deskCount).map((w) => seat(w, "desk")), (a) => `${a.role}:${a.variant}`, slices ? deskRowMate(slices.desks) : DESKS_PER_ROW).map((a, i) => ({ ...a, desk: i }));
   const overflow = workers.slice(deskCount);
   // F4b: with a statsTv every overflow worker is a blip on the wall TV; without one, the old lobby + "+N".
   if (slices?.statsTv) {
@@ -804,6 +810,9 @@ export function isTypingTarget(t: { tagName?: string; isContentEditable?: boolea
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+/** Device px of measuring slack floorFitScale tolerates on each axis (CSS zoom makes ResizeObserver sizes a hair short). floorNeedCssPx pads the box by the same amount so the slack can never cut the plate. */
+export const FLOOR_FIT_SLACK_DEVICE_PX = 1;
+
 /**
  * Scale for a single floor in a fixed box: a whole device-pixel multiple, never below 1 device px per native px.
  * `zoom` is the root UI zoom (src/uiScale.ts): the box is measured in zoomed CSS px, so a device px is 1 / (dpr x zoom) of a CSS px and the
@@ -819,18 +828,25 @@ export function floorFitScale(boxW: number, boxH: number, dpr = 1, nativeW = FLO
   const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
   const hasH = Number.isFinite(boxH) && boxH > 0;
   const room = (w: number, h: number) => Math.min((w * ratio) / nativeW, hasH ? (h * ratio) / nativeH : Infinity);
-  const whole = Math.floor(room(boxW + 1 / ratio, boxH + 1 / ratio) + 1e-9);
+  const whole = Math.floor(room(boxW + FLOOR_FIT_SLACK_DEVICE_PX / ratio, boxH + FLOOR_FIT_SLACK_DEVICE_PX / ratio) + 1e-9);
   if (whole >= 1) return whole / ratio;
   return room(boxW, boxH) / ratio; // last resort: fractional fit rather than clip or vanish
 }
 
-/** The floor plate's art scale against the 640-wide contract (floor.json w / 640): 1.5 for the x1.5 kit. Per-px CSS/TS numbers derive from this. */
+/** The floor plate is drawn on a 480-wide design grid and exported at a whole multiple (FT: 960 = x2, matching the cast's 64 = 2 x 32). */
+export const FLOOR_DESIGN_WIDTH = 480;
+
+/** The floor plate's art scale against the 480-wide design grid (floor.json w / 480): 2 for the 960 plate. Per-px CSS/TS numbers (rider spacing and rise, lift panel) derive from this. */
 export function floorKitScale(size: { w: number }): number {
-  return size.w > 0 ? size.w / FLOOR_NATIVE_WIDTH : 1;
+  return size.w > 0 ? size.w / FLOOR_DESIGN_WIDTH : 1;
 }
 
+/** Device px of headroom the floor box keeps over the plate (see floorNeedCssPx). */
+export const FLOOR_NEED_PAD_DEVICE_PX = FLOOR_FIT_SLACK_DEVICE_PX;
+
 /**
- * CSS px (in the root-zoomed space) the floor needs to be drawn at 1 device px per native px: native height / (dpr x zoom), rounded up.
+ * CSS px (in the root-zoomed space) the floor needs to be drawn at 1 device px per native px: (native height + FLOOR_NEED_PAD_DEVICE_PX) / (dpr x zoom), rounded up.
+ * The pad keeps the box a whole device px taller than the plate, so floorFitScale's 1 device px measuring slack can never land the plate a fraction of a px past the box (a clipped bottom outline row).
  * The hub keeps the floor box at least this tall; the sky TVs band yields the rest. When the column is narrower than the native floor
  * (`colW` CSS px, 0 = unknown) 1x cannot fit sideways anyway (last-resort fractional fit in floorFitScale), so the need shrinks with the
  * width the floor will really be drawn at, and the TVs keep the height the floor cannot use.
@@ -838,13 +854,36 @@ export function floorKitScale(size: { w: number }): number {
 export function floorNeedCssPx(nativeH: number, dpr = 1, zoom = 1, colW = 0, nativeW = FLOOR_NATIVE_WIDTH): number {
   const ratio = (Number.isFinite(dpr) && dpr >= 1 ? dpr : 1) * (Number.isFinite(zoom) && zoom > 0 ? zoom : 1);
   const sideways = colW > 0 && nativeW > 0 ? Math.min(1, (colW * ratio) / nativeW) : 1;
-  return Math.ceil((nativeH * sideways) / ratio);
+  return Math.ceil((nativeH * sideways + FLOOR_NEED_PAD_DEVICE_PX) / ratio);
 }
 
 /** A rider's spot over the lift: the first rider stands on the car's centre line (car.x + car.w/2); more alternate either side by 6 contract px x the kit scale. `rise` is the ride travel (12 contract px x kit). */
 export function riderSpot(car: Rect, index: number, kit: number): { left: number; top: number; rise: number } {
   const side = index === 0 ? 0 : index % 2 === 1 ? 1 : -1;
   return { left: car.x + car.w / 2 + side * Math.ceil(index / 2) * 6 * kit, top: car.y + car.h - 2 * kit, rise: 12 * kit };
+}
+
+/** floor.json, fetched once per page load and shared (HubPages sizing + SquadFloor); a failed fetch is not cached so a remount retries. */
+let floorJsonPromise: Promise<unknown> | null = null;
+let floorJsonSettled = false;
+let floorJsonValue: unknown = undefined;
+/** The last settled floor.json (a failure settles as undefined = placeholder floor): lets a remount size its first paint synchronously. */
+export function peekFloorJson(): { settled: boolean; json: unknown } {
+  return { settled: floorJsonSettled, json: floorJsonValue };
+}
+export function fetchFloorJson(): Promise<unknown> {
+  if (!floorJsonPromise) {
+    const p: Promise<unknown> = fetch("/office/floor.json")
+      .then((r) => (r.ok ? r.json() : undefined))
+      .catch(() => undefined);
+    floorJsonPromise = p;
+    void p.then((json) => {
+      floorJsonSettled = true;
+      floorJsonValue = json;
+      if (json === undefined && floorJsonPromise === p) floorJsonPromise = null;
+    });
+  }
+  return floorJsonPromise;
 }
 
 // ── FS-b: keyboard-focus selector arrow (floor-cursor.json, Art9) ─────────────

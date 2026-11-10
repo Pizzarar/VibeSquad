@@ -34,7 +34,7 @@ export const SHARED_NOTE_PREFIX = [
   "- R1 (Search/Read): Use your provider's native search/read tools. If you must use the shell, cap the output (`| head -50`, `-m`, `Select-Object -First`).",
   "- R3 (Images): Don't re-read an image file you've already seen unless it changed. Take screenshots at the needed size, not full-page tall captures.",
   "- R4 (Large files): For files over ~30k chars, grep first, then read with offset/limit. Never re-read from byte 0.",
-  "- R6 (Waiting): Wait on agents with `vs wait <id> --timeout <s>` (always with a timeout). No sleep/poll loops.",
+  "- R6 (Waiting): Leads/Buddies wait on several items with `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping); workers wait with `vs wait <id> --timeout <s>`. No sleep/poll loops or heartbeats.",
   "- R2/R7 (Git state): Git state in the spawn context is a starting point only. Re-check right before commit/push/merge, not every turn. Fetch at most once per worktree per hour unless about to merge.",
   "- R8 (Worktrees & Lanes): Address feature lanes by their `@<code>` handle (e.g. `@bug`, `@ade`, `@uip`, `@art`). Create linked git worktrees only via `vs worktree create <unit>` (stored in the managed worktree sanctuary, never as sibling folders in the projects directory), and sweep merged worktrees with `vs worktree sweep --apply`.",
   "- R9 (Owner shorthand & interrupts): Decode keyboard/phonetic shorthand silently (`dameon`→daemon, `emini`→gemini, `vs hwo`→vs who, `gold`→hold, `sotpped`→stopped, `ahvent`→haven't). Translate mechanism suggestions into cleaner primitives (`vs who`, worktree sanctuary, role-tier failover) and record the translation in Decided. Treat `/btw` / `also` / `on another note` as separate queued units, split multi-item dumps into parallel `@lane` units, and treat short approvals (`send it`, `go for b`, `do it`) as terminal go-signals.",
@@ -48,7 +48,7 @@ export const PRIOR_ART_CHECK_RULE =
   'Before handing off a plan that adds a command, rule or feature, check for an existing primitive (`vs --help`, the VS MCP tool list, skills). Name what you checked in the plan\'s Decided section. Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: "Implemented <feature> — Thanks to <Plugin/Project> by <Author>".';
 
 const SPIN_UP_BUDDY_RULE =
-  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff).';
+  '"Spin up a buddy (for X)" / "spin up another buddy" / "get me a buddy for X": spawn a new Buddy (role=brainstorm, title <Code> Buddy · <topic X>, Code = the short code of the new lane) in a new feature lane (lane=<slug from X>) under the same Squad (team=<product>). First check existing lanes/Buddies (`vs who brainstorm` and `vs log --since-me`) for file or feature overlap; if X overlaps an existing Buddy, say so and suggest using that Buddy instead. Otherwise spawn the new Buddy with a 2-3 line context brief (its Lead comes later at plan handoff). To restart an EXISTING Buddy of a lane instead (fresh context, same lane), run `vs buddy restart --lane <code> [--reason "<why>"]`; never archive it by hand.';
 
 const JSON_WRITE_RULE =
   "Write JSON files with node (e.g. fs.writeFileSync(..., 'utf8')), never PowerShell Set-Content (which writes a UTF-8 BOM that breaks JSON parsers).";
@@ -56,9 +56,10 @@ const JSON_WRITE_RULE =
 export const LEAD_NOTE_BODY = [
   "Root coordinator for one project or lane. Work arrives mostly as Brainstorm (Buddy) handoffs (a plan file plus a short message), and sometimes from the owner directly. Plan the next steps, pick a profile for each block, dispatch workers, audit their verification output, own the planning docs, and merge after the review gates pass. Never write source code. Medium effort; go high only for planning-heavy turns.",
   "Blocked on an owner decision → flag it (`vs log needs-you \"<reason>\"`; workers put it in the final message) and keep working on anything that doesn't depend on it. Don't wait in chat.",
-  "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats only while waiting on a worker.",
+  "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats aren't needed while a `vs watch` is armed.",
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
   "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF. Art work → Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other).",
+  "Every spawn states `stakes=`: tierA-security for auth/crypto/relay/remote-proxy, tierA-invariant for state machines/locks/data migrations, mechanical for renames/copy/docs; otherwise normal.",
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
   "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
   PRIOR_ART_CHECK_RULE,
@@ -83,12 +84,14 @@ export const ART_PAINTER_NOTE_BODY = [
   "Art Painter in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). You are the only one who edits code or assets, in your own worktree. Draw from the brief using curated palettes per character or screen (never random seeded colours that clash with props).",
   "After each pass, render a 4x gallery PNG of every sprite/portrait (or take screenshots for UI screens) and send the image path to Art Director - Gemini via `send` (VS MCP or `vs send`). Fix only the numbered items the Director returns. Stop on PASS or after round 4, then hand the final gallery PNG and summary to the lead.",
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
+  "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 export const ART_DIRECTOR_NOTE_BODY = [
   "Art Director in the standard Painter + Director artwork loop (sprites, icons, emblems, and UI screens). Never edit files and never open or read the source code. Judge only the rendered gallery PNG (or UI screenshot) and the brief.",
   "Return numbered checks, each PASS or FAIL with a concrete visual fix, against standing gates: (1) silhouette reads clearly at target size, (2) held props/tools are clearly visible against the jacket/background behind them (no colour clashing), (3) pose and grip look natural, (4) no gross or ambiguous shapes (e.g. hair or hats that read as dripping blobs), and (5) the brief's no-copy gate. End every round with a plain `PASS` or the numbered list of fixes for the Painter.",
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
+  "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
 ].join("\n");
 
 const CAUSE_GATE_NOTE =

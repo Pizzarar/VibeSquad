@@ -158,7 +158,7 @@ export const STANDING_RULES = [
   "Find the lead with `vs who lead` (labels role/lane/ord), never agent-list JSON scraping or title-prefix regex.",
   "Run unit work in `%LOCALAPPDATA%\\VibeSquad\\worktrees\\<repo>\\<unit>`; never `git worktree add ../<repo>-<unit>` into `projects/`.",
   "Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File` (UTF-8 BOM breaks parsers).",
-  "Never end a turn just to wait on a background task: poll with a timeout or `vs wait <id> --timeout <s>`.",
+  "Never end a turn on a background task with nothing armed: leads/Buddies arm `vs watch add ...`; workers use `vs wait <id> --timeout <s>`.",
   "Route by Role + Tier with automatic provider failover (Claude -> Gemini -> DeepSeek); never pin every profile to one provider.",
   "Detach live children before archiving a Paseo-backed agent (Paseo cascades archives to its children; the runner has no such cascade, so this applies only to Paseo-backed lanes).",
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",

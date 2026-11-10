@@ -148,7 +148,7 @@ test("FS-b placement: tip lands on seat.x, cell sits 1.5 cell-heights above the 
 });
 
 test("FS-b wiring: skip-if-absent, hover + keyboard focus, drawn above the front overlay, reduced motion static", () => {
-  assert.match(comp, /useImageOk\(cursorModel \? CURSOR_URL\(theme\) : null\)/);
+  assert.match(comp, /useImageOk\(CURSOR_URL\(theme\)\)/);
   assert.match(comp, /cast && cursorModel && cursorImgOk \? \{/);
   assert.match(comp, /pointedItem && cast && cursor && <SeatCursor /); // drawn in the bubbles layer, above the front overlay
   assert.match(comp, /onMouseEnter=\{\(\) => onPoint\("hover", agent\.agentId\)\}/); // hover shows it

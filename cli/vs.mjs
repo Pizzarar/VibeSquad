@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 
 if (process.platform === "win32") {
   process.stdout.setDefaultEncoding?.("utf8");
@@ -22,11 +22,8 @@ if (process.platform === "win32") {
 }
 import {
   addInboxCards,
-  handoffTopicBrainstorm,
   INBOX_STATUSES,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   assertInboxTriageCaller,
   triageInboxCards,
 } from "../server/inbox.mjs";
@@ -41,6 +38,7 @@ import {
   findBugLane,
   findLaneInRegistry,
   findTeamInRegistry,
+  isHubLane,
   isDigestAgent,
   freezeLaneCodes,
   isRetiredRole,
@@ -218,6 +216,8 @@ function teamByPath(cwd) {
 function parseArgs(argv) {
   const flags = { _: [], ref: [] };
   const valued = new Set([
+    "reason",
+    "steer",
     "agent",
     "team",
     "lane",
@@ -255,6 +255,7 @@ function parseArgs(argv) {
     "rule",
     "query",
     "profile",
+    "provider",
     "cwd",
     "prompt",
     "promptFile",
@@ -263,6 +264,8 @@ function parseArgs(argv) {
     "since",
     "source",
     "revision",
+    "stall",
+    "owner",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -275,11 +278,14 @@ function parseArgs(argv) {
     "json",
     "notes",
     "dryRun",
+    "noForce",
     "force",
     "print",
     "stdin",
     "apply",
     "sweep",
+    "suite",
+    "restart",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -320,7 +326,11 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const envAgentId = recordWins
     ? (process.env.VS_AGENT_ID || process.env.PASEO_AGENT_ID)
     : (process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID);
-  const agentId = String((recordWins ? envAgentId : (flags.agent ?? envAgentId)) ?? "").trim();
+  // A caller that is a runner agent with a record is who its labels say: --agent/--role/--ord are claims, never overrides
+  // (a worker passing `--role lead` or `--agent <lead>` must not pass a lead gate). --lane/--team still aim the verb.
+  const envId = String(envAgentId ?? "").trim();
+  const callerRecord = envId && isRunnerId(envId) ? readRunnerAgentSync(envId) : null;
+  const agentId = String((recordWins || callerRecord ? envAgentId : (flags.agent ?? envAgentId)) ?? "").trim();
 
   // rn- ids belong to the runner: read its log (labels/role/lane).
   let record = isRunnerId(agentId) ? readRunnerAgentSync(agentId) : null;
@@ -331,6 +341,8 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
 
   const pick = (flagName, envName) => {
     // recordWins (handoff_lead, spawn): a runner record's labels are the caller's identity; CLI flags never override it and VS_* env only fills in when there is no record.
+    const claim = flagName === "role" || flagName === "ord";
+    if (callerRecord && claim) return ""; // the record's labels supply role/ord
     const value = (recordWins ? undefined : flags[flagName]) ?? (recordWins && record ? undefined : process.env[envName]);
     return typeof value === "string" && value.trim() ? value.trim() : "";
   };
@@ -498,8 +510,10 @@ Usage:
   vs task list [--lane <lane>] [--json]
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
-  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
+  vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
+  vs restart [--dry-run] [--timeout <sec>] [--no-force]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0, default 600s); result in ~/.vibesquad/restart-<ts>.json
+  vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
   vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
@@ -509,9 +523,13 @@ Usage:
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
+  vs watch add <agent...> [--suite] [--restart] [--stall <min>] [--owner <agent>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
+  vs watch list | vs watch cancel <id>   list or cancel your watch sets (only the same-Squad Overlord may name another owner via --owner)
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
+  vs pair [--json]   mint a pairing code on the running local server (headless/SSH): prints the link, 6-digit code, CA fingerprint and an ASCII QR
+  vs devices list [--json] | vs devices revoke <id|--all>   paired devices in ~/.vibesquad/devices.json; revoke drops the token (lost phone)
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
@@ -945,36 +963,7 @@ function commandInbox(flags) {
     throw new Error("inbox triage needs --merge <targetId> <sourceId...>, --bounce <cardId> --lane <newLane>, --accept|--reject <cardId>, --archive|--park <cardId...>, or --set-status <cardId> --status <status>");
   }
 
-  if (sub === "open-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    if (!cardId) throw new Error("inbox open-topic requires <cardId>");
-    return openTopicBrainstorm({ cardId, baseHome }).then((res) => {
-      process.stdout.write(`opened ${res.title} (${res.agentId}) for card #${res.card.id}\n`);
-      return 0;
-    });
-  }
-
-  if (sub === "handoff-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    const agentId = String(flags.agent || process.env.PASEO_AGENT_ID || "").trim();
-    const planNote = flags.note ? String(flags.note) : flags._.slice(1).join(" ").trim();
-    return handoffTopicBrainstorm({ cardId, agentId, planNote, baseHome }).then((res) => {
-      process.stdout.write(`handed off card #${res.card.id} (${res.card.title}); closed ${res.archivedAgentId || "topic chat"}\n`);
-      return 0;
-    });
-  }
-
-  if (sub === "park-topic") {
-    const cardId = String(flags.card || flags._[0] || "").trim();
-    const agentId = String(flags.agent || process.env.PASEO_AGENT_ID || "").trim();
-    const summaryNote = flags.note ? String(flags.note) : flags._.slice(1).join(" ").trim();
-    return parkTopicBrainstorm({ cardId, agentId, summaryNote, baseHome }).then((res) => {
-      process.stdout.write(`parked topic back to card #${res.card.id} (${res.card.title})\n`);
-      return 0;
-    });
-  }
-
-  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage | open-topic | handoff-topic | park-topic`);
+  throw new Error(`unknown inbox subcommand "${sub}". Use: vs inbox add | list | triage`);
 }
 
 const WHO_TARGETS = new Set(["lead", "brainstorm", "buddy", "workers", "worker", "all"]);
@@ -1105,15 +1094,24 @@ async function commandWho(flags) {
     }
     const winners = [];
     const conflictRows = [];
+    const handoffPending = new Map(); // winner id -> successor short name
+    const shortTitle = (t) => String(t).split(" · ")[0].trim() || String(t);
     for (const group of groups.values()) {
-      const { winner, conflict } = resolveLeadWinner(group.map((m) => m.agent));
+      const { winner, conflict, pending } = resolveLeadWinner(group.map((m) => m.agent));
       if (conflict) conflictRows.push(...group);
-      else if (winner) winners.push(winner);
+      else if (winner) {
+        winners.push(winner);
+        if (pending.length) {
+          const succ = group.find((m) => m.agent.id === pending[pending.length - 1]);
+          handoffPending.set(winner.id, succ ? shortTitle(succ.title) : pending[0]);
+        }
+      }
     }
     const conflictIds = new Set(conflictRows.map((m) => m.agent.id));
-    const entries = conflictIds.size
+    const entries = (conflictIds.size
       ? matched.filter((m) => conflictIds.has(m.id))
-      : matched.filter((m) => winners.some((w) => w.id === m.id));
+      : matched.filter((m) => winners.some((w) => w.id === m.id))
+    ).map((m) => (handoffPending.has(m.id) ? { ...m, handoffPending: handoffPending.get(m.id), line: `${m.line} · handoff pending → ${handoffPending.get(m.id)}` } : m));
     const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
     const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
@@ -1221,7 +1219,7 @@ async function commandWhoami(flags) {
       const lead = winner;
       const { tokens, tokensLabel } = extractAgentTokens(lead);
       const title = String(lead.title ?? lead.name ?? lead.id).trim();
-      const status = String(lead.status ?? "unknown").trim();
+      const status = lead.lost ? "lost" : String(lead.status ?? "unknown").trim();
       const line = formatWhoLine({ id: lead.id, title, status, tokensLabel });
       currentLead = {
         id: lead.id,
@@ -1371,6 +1369,7 @@ export function installVsShim({ binDirs, targetScript, baseHome, force = false }
     "server/stale-runtime.mjs",
     "server/pin-ideas.mjs",
     "docs/profiles/DEFAULT_PACK.md",
+    "scripts/restart-runtime.mjs", // `vs restart` launches it from beside cli/
     ...vsImportClosure(repoRoot),
   ];
 
@@ -1852,9 +1851,23 @@ export async function runAgentVerb(verb, flags, ctx) {
       profile: flags.profile,
       prompt: flags.prompt ?? flags._.join(" "),
       ...(flags.cwd ? { cwd: path.resolve(String(flags.cwd)) } : {}),
+      ...(flags.stakes !== undefined ? { stakes: String(flags.stakes) } : {}),
     };
   } else if (verb === "handoff_lead") {
-    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}) };
+    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
+  } else if (verb === "restart_buddy") {
+    args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}), ...(flags.profile ? { profile: String(flags.profile) } : {}), ...(flags.provider ? { provider: String(flags.provider) } : {}) };
+  } else if (verb === "watch") {
+    args = { action: flags.watchAction };
+    if (flags.watchAction === "add") {
+      args.agents = [...new Set(flags._.map((s) => String(s).trim()).filter(Boolean))];
+      if (flags.suite) args.suite = true;
+      if (flags.restart) args.restart = true;
+      if (flags.stall !== undefined) args.stallMin = flags.stall;
+      if (flags.owner !== undefined) args.owner = String(flags.owner);
+    } else if (flags.watchAction === "cancel") {
+      args.id = String(flags._[0] ?? "").trim();
+    }
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else if (verb === "ls") {
@@ -1921,8 +1934,20 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
     if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>] [--steer \"<note>\"]");
     verb = "handoff_lead";
   }
+  if (verb === "buddy") {
+    if (flags._.shift() !== "restart" || !flags.lane || flags._.length) throw new Error('usage: vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]');
+    verb = "restart_buddy";
+  }
+  if (verb === "watch") {
+    let sub = String(flags._.shift() ?? "").toLowerCase();
+    if (sub === "ls") sub = "list";
+    if (sub !== "add" && sub !== "list" && sub !== "cancel") {
+      throw new Error("usage: vs watch add <agent...> [--suite] [--restart] [--stall <min>] | vs watch list | vs watch cancel <id>");
+    }
+    flags.watchAction = sub;
+  }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
-    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>]');
+    throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
@@ -1932,6 +1957,21 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   if (verb === "logs" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
     throw new Error("usage: vs logs <agent> [--limit <N>]");
   }
+  if (verb === "watch") {
+    if (flags.watchAction === "add") {
+      if (!flags._.length && !flags.suite && !flags.restart) throw new Error("vs watch add needs at least one agent, --suite or --restart");
+      for (const a of flags._) {
+        const ref = String(a).trim();
+        if (ref && !isRunnerId(ref)) throw new Error(`watch agents must be runner ids (rn-...), got "${ref}"`);
+      }
+      if (flags.stall !== undefined) {
+        const stall = Number(flags.stall);
+        if (!Number.isFinite(stall) || stall <= 0) throw new Error("--stall must be a positive number of minutes");
+      }
+    } else if (flags.watchAction === "cancel" && (!String(flags._[0] ?? "").trim() || flags._.length > 1)) {
+      throw new Error("usage: vs watch cancel <id>");
+    }
+  }
   // handoff_lead / spawn: --lane (for handoff_lead) names only the TARGET lane (runAgentVerb reads it); the caller's
   // identity comes from VS_AGENT_ID -> its record labels / VS_* env, never from --agent/--role/--team/--lane/--ord.
   if (verb === "spawn" && (flags.agent || flags.role || flags.team || flags.lane || flags.ord)) {
@@ -1939,7 +1979,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   const { agent: _a, role: _r, team: _t, lane: _l, ord: _o, ...callerFlags } = flags;
   const identity =
-    verb === "handoff_lead" || verb === "spawn"
+    verb === "handoff_lead" || verb === "spawn" || verb === "restart_buddy" || verb === "watch"
       ? resolveIdentity(callerFlags, { recordWins: true })
       : resolveIdentity(flags);
   const lane = verb === "ls" && identity.lane === UNASSIGNED_LANE && !flags.lane && !process.env.VS_LANE ? "" : identity.lane;
@@ -1998,6 +2038,116 @@ async function commandOpen(flags) {
   if (r.error || r.status !== 0) throw new Error(`could not open a browser (${r.error?.message ?? `exit ${r.status}`}); run vs open --print and paste the URL`);
   process.stdout.write("Opened VibeSquad with owner access.\n");
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// vs pair / vs devices — headless pairing + lost-phone revocation (PLAN_ANDROID_END_STATE.md E4a)
+// Both need the local filesystem: `vs pair` sends ~/.vibesquad/local-token to the running server's loopback
+// listener (the same POST /__vibesquad/pair/start the desktop dialog uses; codes live in that process), and
+// `vs devices` edits ~/.vibesquad/devices.json through auth.mjs's own revoke path (the server re-reads it).
+// ---------------------------------------------------------------------------
+
+/** The text `vs pair` prints: link, code, CA fingerprint, QR. Pure, for tests. */
+export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
+  const lines = [];
+  const code = String(p.code ?? "");
+  lines.push(`Pairing code:   ${code.slice(0, 3)} ${code.slice(3)}   (expires ${p.expiresAt ? new Date(p.expiresAt).toLocaleTimeString() : "in 5 min"})`);
+  lines.push(`Pairing link:   ${p.pairUrl}`);
+  if (p.lanPairUrl && p.lanPairUrl !== p.pairUrl) lines.push(`LAN link:       ${p.lanPairUrl}`);
+  if (p.pairIpUrl && p.pairIpUrl !== p.pairUrl && p.pairIpUrl !== p.lanPairUrl) lines.push(`IP link:        ${p.pairIpUrl}`);
+  lines.push(`CA fingerprint: ${p.caFingerprint?.full || p.caFingerprint?.short || "(no CA yet)"}`);
+  if (p.hostId) lines.push(`Host id:        ${p.hostId}`);
+  if (p.caHttpUrl) lines.push(`CA download:    ${p.caHttpUrl}`);
+  if (p.androidApkAvailable && p.androidApkHttpUrl) lines.push(`Android APK:    ${p.androidApkHttpUrl}`);
+  lines.push("");
+  lines.push("Scan with the VibeSquad app (or open the link and type the code), then install the CA if asked.");
+  lines.push(`Paired devices: vs devices list   ·   lost phone: vs devices revoke <id|--all>   (port ${port})`);
+  return lines.join("\n") + "\n" + (qr ? "\n" + qr : "");
+}
+
+/** Mints a code on the running local server. Throws when the server is down or has no LAN/Meshnet address. */
+export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
+  const token = readLocalToken(file);
+  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
+  let res;
+  try {
+    res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/pair/start`, {
+      method: "POST",
+      headers: { [LOCAL_TOKEN_HEADER]: token },
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (e) {
+    throw new Error(`no VibeSquad server on 127.0.0.1:${port} (${e?.cause?.code ?? e?.name ?? e}); start it first (or set VIBESQUAD_PORT)`);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(`pairing refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
+  if (typeof body?.code !== "string" || typeof body?.pairUrl !== "string") throw new Error("unexpected pair/start response");
+  return body;
+}
+
+async function commandPair(flags) {
+  if (flags._.length) throw new Error("usage: vs pair [--json]");
+  const port = Number(process.env.VIBESQUAD_PORT || 4180);
+  const p = await requestPairStart({ port });
+  // Never echo the SVGs; the terminal gets its own rendering of the same link.
+  const { qrSvg: _svg, qrSvgIp: _svgIp, lanQrSvg: _svgLan, ...plain } = p;
+  if (flags.json) {
+    process.stdout.write(JSON.stringify(plain, null, 2) + "\n");
+    return 0;
+  }
+  const { qrTerminal } = await import("../server/qr.mjs");
+  const qr = await qrTerminal(p.pairUrl).catch(() => "");
+  process.stdout.write(formatPairOutput(plain, qr, { port }));
+  return 0;
+}
+
+const DEVICES_USAGE = "usage: vs devices list [--json] | vs devices revoke <id|--all>";
+
+/** `vs devices …` argv with `--all` folded into a positional, so the shared parser (which rejects unknown flags) stays untouched. */
+export function foldDevicesArgv(argv) {
+  return argv[0] === "devices" ? argv.map((a) => (a === "--all" ? "all" : a)) : argv;
+}
+
+function formatDeviceLine(d) {
+  const seen = d.lastSeenAt ? d.lastSeenAt.replace("T", " ").slice(0, 16) : "never";
+  return `${d.id}  ${String(d.name ?? "").padEnd(24).slice(0, 24)}  paired ${String(d.createdAt ?? "").slice(0, 10)}  seen ${seen}`;
+}
+
+async function commandDevices(flags) {
+  const sub = String(flags._.shift() ?? "");
+  const auth = await import("../server/auth.mjs");
+  if (sub === "list" || sub === "ls" || sub === "") {
+    if (flags._.length) throw new Error(DEVICES_USAGE);
+    const devices = auth.listDevices();
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ devices }, null, 2) + "\n");
+      return 0;
+    }
+    if (!devices.length) {
+      process.stdout.write("No paired devices. Pair one with: vs pair\n");
+      return 0;
+    }
+    process.stdout.write(devices.map(formatDeviceLine).join("\n") + "\n");
+    return 0;
+  }
+  if (sub === "revoke") {
+    const target = String(flags._.shift() ?? "");
+    if (!target || flags._.length) throw new Error(DEVICES_USAGE);
+    if (target === "all") {
+      const n = auth.revokeAllDevices();
+      process.stdout.write(n ? `Revoked ${n} device${n === 1 ? "" : "s"}; their next request is refused.\n` : "No paired devices to revoke.\n");
+      return 0;
+    }
+    const known = auth.listDevices();
+    // A unique id prefix is enough (ids are UUIDs; typing one over SSH is the common case).
+    const matches = known.filter((d) => d.id === target || (target.length >= 8 && d.id.startsWith(target)));
+    if (!matches.length) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    if (matches.length > 1) throw new Error(`"${target}" matches ${matches.length} devices; give more of the id`);
+    if (!auth.revokeDevice(matches[0].id)) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    process.stdout.write(`Revoked ${matches[0].id} (${matches[0].name}); its next request is refused.\n`);
+    return 0;
+  }
+  throw new Error(DEVICES_USAGE);
 }
 
 // ---------------------------------------------------------------------------
@@ -2181,6 +2331,77 @@ function commandMcp(flags) {
   return 0;
 }
 
+/** Who may restart the runtime: the owner's own shell (no runner agent id) or the Squad's hub lead (Overlord). Any other runner agent is refused. */
+export function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync) {
+  const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
+  if (!id || !isRunnerId(id)) return;
+  // Fail closed: identity comes only from the runner's own record of this agent id. A runner id with no record gets nothing from
+  // VS_ROLE/VS_LANE/VS_TEAM env (spoofable), so it is refused.
+  const rec = identity ? null : readRecord(id);
+  if (!identity && !rec) throw new Error(`vs restart: ${id} has no runner record, so its role cannot be verified; refusing.`);
+  const labels = rec?.labels ?? {};
+  const who = identity ?? { role: String(labels.role ?? "").trim().toLowerCase(), team: { id: labels.team ?? "" }, lane: labels.lane || labels.lead || "" };
+  const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
+  const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
+  if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane)) {
+    throw new Error(`vs restart: ${id} is a ${who.role || "worker"}; restarting the runtime cuts every agent's turn, so only the owner or the Overlord (hub lead) may. Ask your lead.`);
+  }
+}
+
+/** One launch arg may not carry a quote or control character: it is joined into a single Win32_Process.Create CommandLine. */
+function assertSafeLaunchArg(a) {
+  if (/["\p{Cc}]/u.test(String(a))) throw new Error(`vs restart: refusing a launch argument with a quote or control character: ${JSON.stringify(String(a))}`);
+}
+
+/**
+ * vs restart: start scripts/restart-runtime.mjs detached and return at once. Every agent runs on the runner, so the script
+ * must not be in the runner's process tree (the shutdown kills agent trees). On Windows it is created through WMI
+ * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
+ * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
+ */
+export function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync } = {}) {
+  if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
+  if (!flags.dryRun) assertRestartCaller(identity, teams, env, readRecord);
+  const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
+  if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
+  const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  const logFile = path.join(vsHome, "logs", `restart-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
+  const args = [script, "--log", logFile];
+  if (env.VIBESQUAD_HOME) args.push("--vs-home", vsHome, "--home", path.join(vsHome, "runner"), "--out-dir", vsHome);
+  if (env.VIBESQUAD_DESKTOP_CONFIG_DIR?.trim()) args.push("--config-dir", env.VIBESQUAD_DESKTOP_CONFIG_DIR.trim());
+  if (env.VIBESQUAD_PORT && /^\d+$/.test(env.VIBESQUAD_PORT)) args.push("--port", env.VIBESQUAD_PORT);
+  if (flags.dryRun) args.push("--dry-run");
+  if (flags.noForce) args.push("--no-force");
+  if (flags.timeout) args.push("--wait-timeout", String(flags.timeout));
+  for (const a of [process.execPath, ...args]) assertSafeLaunchArg(a);
+  fs.mkdirSync(path.dirname(logFile), { recursive: true });
+  if (flags.dryRun) {
+    const r = spawnSync(process.execPath, args, { encoding: "utf8", windowsHide: true });
+    process.stdout.write(r.stdout || "");
+    if (r.stderr) process.stderr.write(r.stderr);
+    return r.status ?? 1;
+  }
+  let pid = null;
+  if (spawnFn) pid = spawnFn(process.execPath, args);
+  else if (process.platform === "win32") {
+    const q = (x) => `'${String(x).replace(/'/g, "''")}'`;
+    const cmdline = [process.execPath, ...args].map((a) => `"${a}"`).join(" ");
+    const ps = `$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=${q(cmdline)}; ProcessStartupInformation=$si}; if ($r.ReturnValue -ne 0) { exit 1 }; $r.ProcessId`;
+    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", windowsHide: true });
+    if (r.status !== 0) throw new Error(`could not launch the restart script detached: ${(r.stderr || r.stdout || "").trim()}`);
+    pid = Number(String(r.stdout).trim());
+  } else {
+    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
+    child.unref();
+    pid = child.pid;
+  }
+  process.stdout.write(`restart launched (pid ${pid}); it waits for the runner to go idle, then restarts runner + server.
+log: ${logFile}
+result: ${vsHome}/restart-<ts>.json (also check: vs restart --dry-run)
+`);
+  return 0;
+}
+
 function commandCap(flags) {
   const sub = String(flags._[0] ?? "list").toLowerCase();
 
@@ -2330,10 +2551,13 @@ export const KNOWN_VERBS = [
   "lesson",
   "lessons",
   "wait",
+  "watch",
   "spawn",
   "send",
   "status",
   "lead",
+  "buddy",
+  "restart",
   "ls",
   "logs",
   "inspect",
@@ -2404,7 +2628,7 @@ export function suggestVerb(raw, verbs = KNOWN_VERBS) {
 export function main(argv) {
   let flags;
   try {
-    flags = parseArgs(argv);
+    flags = parseArgs(foldDevicesArgv(argv));
   } catch (err) {
     process.stderr.write(`Error: ${err.message}\n`);
     return 1;
@@ -2428,6 +2652,7 @@ export function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
+    if (command === "restart") return commandRestart(flags);
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
@@ -2436,6 +2661,8 @@ export function main(argv) {
       command === "send" ||
       command === "status" ||
       command === "lead" ||
+      command === "buddy" ||
+      command === "watch" ||
       command === "ls" ||
       command === "logs" ||
       command === "inspect" ||
@@ -2447,6 +2674,8 @@ export function main(argv) {
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     if (command === "open") return commandOpen(flags);
+    if (command === "pair") return commandPair(flags);
+    if (command === "devices") return commandDevices(flags);
     const hint = suggestVerb(command);
     const didYouMean = hint ? `, did you mean "${hint}"?` : ".";
     process.stderr.write(`Error: unknown verb "${command}"${didYouMean} Try "vs --help".\n`);

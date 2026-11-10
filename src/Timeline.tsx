@@ -31,7 +31,9 @@ import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
 import { refreshDismissedCards } from "./pinActions";
 import { SpinOffCard, SendToCard, findPinForAgent, showPinToast, useSendTo } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
-import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, spinOffCardId } from "./pins";
+import { DecisionCard } from "./DecisionCard";
+import { decisionCardId, parseDecision } from "./decisionLogic";
+import { hasLooksDone, isHubPin, parseSendTo, parseSpinOff, sendToCardId, sendToLegacyId, spinOffCardId } from "./pins";
 
 export class TimelineErrorBoundary extends Component<
   { children: ReactNode; fallbackLabel?: string },
@@ -400,7 +402,7 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
-export function MarkdownRenderer({ text, agentId, doc = false }: { text: string; agentId?: string; doc?: boolean }) {
+export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId }: { text: string; agentId?: string; doc?: boolean; messageLegacyId?: string }) {
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const liveLooksDoneId = useLooksDoneId(agentId ?? null);
   const newestOffer = useSendTo(agentId ?? null); // only for its pre-D1 ids
@@ -462,6 +464,10 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
             );
           }
         }
+        if (lang === "vs:decision" && agentId) {
+          const d = parseDecision(tok.code);
+          if (d) return <DecisionCard key={i} agentId={agentId} offer={{ ...d, id: decisionCardId(agentId, d) }} variant="inline" />;
+        }
         if (lang.startsWith("vs:send-to") || /^\s*vs:send-to\s+[A-Za-z0-9_-]+/m.test(tok.code)) {
           const parsedSendTo = parseSendTo(lang.startsWith("vs:send-to") ? `${tok.lang}\n${tok.code}` : tok.code);
           const pin = findPinForAgent(agentId);
@@ -471,7 +477,7 @@ export function MarkdownRenderer({ text, agentId, doc = false }: { text: string;
                 <CodeBlock lang={tok.lang || "vs:send-to"} code={tok.code} />
                 <SendToCard pin={pin} offer={(() => {
                     const id = sendToCardId(agentId ?? "inline", parsedSendTo);
-                    return { ...parsedSendTo, id, legacyIds: [`${agentId ?? "inline"}:inline:${i}`, ...(newestOffer?.id === id ? (newestOffer.legacyIds ?? []) : [])] };
+                    return { ...parsedSendTo, id, legacyIds: [`${agentId ?? "inline"}:inline:${i}`, ...(messageLegacyId ? [messageLegacyId] : []), ...(newestOffer?.id === id ? (newestOffer.legacyIds ?? []) : [])] };
                   })()} variant="bar" />
               </div>
             );
@@ -785,7 +791,7 @@ export function TimelineItem({
     case "assistant_message":
       return (
         <div className={`tl tl-assistant${selected ? " tl-selected" : ""}`} data-selected={selected ? "true" : undefined} onClick={(ev) => onMessageClick(ev, onSelect)} onContextMenu={(ev) => openContextMenu(ev, messageCtxItems(it.text ?? "", agentId, onParkText, selectionWithin(ev.currentTarget)))}>
-          {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} /> : it.text}
+          {typeof it.text === "string" ? <MarkdownRenderer text={it.text} agentId={agentId} messageLegacyId={sendToLegacyId(agentId, e)} /> : it.text}
           <Stamp iso={e.timestamp} />
           {selected && <div className="tl-actions">
             <CopyMsgButton text={it.text ?? ""} />

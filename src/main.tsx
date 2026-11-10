@@ -1,5 +1,7 @@
+import { diagStep } from "./diagOverlay"; // first import: installs the Android error overlay before any other module can throw
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { RootErrorBoundary } from "./RootErrorBoundary";
 import { start } from "./paseo";
 import { startComposerQueueFlusher } from "./composerQueueWire";
 import "./perfBoot";
@@ -8,6 +10,7 @@ import { isRemote } from "./remoteSession";
 import { RemotePairScreen } from "./RemotePairScreen";
 import { FiveLeads, SpriteSheet } from "./demo";
 import "./styles.css";
+import "./boring.css";
 
 // ?cast=1 shows the whole cast for art review; it needs no daemon.
 // ?five-leads=1 shows the five project leads at sidebar size (no labels on the top row).
@@ -22,4 +25,5 @@ if (!cast && !five && !remote) {
   startComposerQueueFlusher();
   loadUserName();
 }
-createRoot(document.getElementById("root")!).render(remote ? <RemotePairScreen /> : five ? <FiveLeads /> : cast ? <SpriteSheet /> : <App />);
+diagStep(remote ? "render RemotePairScreen" : "render App");
+createRoot(document.getElementById("root")!).render(<RootErrorBoundary>{remote ? <RemotePairScreen /> : five ? <FiveLeads /> : cast ? <SpriteSheet /> : <App />}</RootErrorBoundary>);

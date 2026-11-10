@@ -1,5 +1,5 @@
 -- FF floor heads: every floor variant's FRONT head (rest + "yo!") is its own 64px bust head re-drawn at
--- s = 0.7 into the 48px floor grid (scale.lua), so the floor person wears the bust's face: the same eyes,
+-- s = 0.7 into the 48px floor grid (FT: s = 0.933 into the 64px grid) (scale.lua), so the floor person wears the bust's face: the same eyes,
 -- shades, googly glasses, grin, teeth, hair and hat. Only the head layers are taken (head, hair, face,
 -- mouth, props above the collar); the bust body/arms/twinkles/"YO!" balloon are dropped.
 --   v0 (H0 busts, bust.lua / bust_extra.lua) has one face: "yo" = that face as drawn; "rest" = the same
@@ -13,8 +13,8 @@ local H1B = dofile(hyp.."h1b.lua")(L)
 local B0 = dofile(hyp.."bust.lua")
 local BX = dofile(hyp.."bust_extra.lua")
 local K, V, P, CO, A, S, M = 15, 8, 9, 10, 11, 14, 4
-local N = 48          -- working canvas (head lands top-left; the cast builder crops by bbox)
-local HS = 0.7        -- bust -> floor head scale
+local N = 64          -- working canvas (head lands top-left; the cast builder crops by bbox)
+local HS = 0.7 * 4 / 3   -- bust -> floor head scale (FT: cell 64, was 0.7 at cell 48)
 local COLLAR = 44     -- bust rows >= this are body (props are clipped there)
 local H = {}
 -- v0 prop layers that belong to the head (phone at the ear, headphones, TV antennae, eye stalk); the other
@@ -110,11 +110,11 @@ function H.front(role, v, mood)
   return SC.flatten(list, N, N)
 end
 
--- v1-v3 back of the head: the H1b 32px floor "back" head redrawn at 1.5x
+-- v1-v3 back of the head: the H1b 32px floor "back" head redrawn at 2x (FT; 1.5x at cell 48)
 function H.back1(role, v)
   local d = H1B[role][v]
   local made = {}
-  local function NC() local c = SC.wrap(SC.canvas(N, N), 1.5); made[#made + 1] = c; return c end
+  local function NC() local c = SC.wrap(SC.canvas(N, N), 2); made[#made + 1] = c; return c end
   local list = d.floor(NC, "back")
   return SC.flatten(list, N, N)
 end

@@ -437,11 +437,10 @@ export type SlamDir = "rest" | "open" | "close";
 /** The slam clock: `t` ms since the open/close began. `rest` = nothing animating (t 0). */
 export type SlamState = { dir: SlamDir; t: number };
 export const SLAM_REST: SlamState = { dir: "rest", t: 0 };
-/** Timings (ms). The window swings in on its hinge (ease-in, ~300ms), hits (1-frame squash, bezel shake, puff, SMACK star), recoils off the Overlord's TV (back to nearly edge-on, held through the shake so his hurt face is on show) and then swings back flat (settleMs). Close swings it shut gently. */
-export const SLAM = { swingMs: 300, closeMs: 300, squashMs: 90, shakeMs: 240, shakeStepMs: 30, recoilMs: 20, settleMs: 200, dizzyMs: 1000 } as const;
-/** The swing: rotateY(deg) about the hinge edge. Opens from SWING_FROM_DEG (nearly edge-on, outer edge toward the viewer) to flat; the hit recoils to SWING_REBOUND_DEG (the outer edge swung AWAY, so the window leaves his TV face uncovered), holds, then eases flat. */
+/** Timings (ms). The window swings in on its hinge (ease-in, ~300ms), lands flat (1-frame squash, bezel shake, puff, SMACK star) with the window body see-through through the shake so his hurt face shows, then the body and chat fade back in (settleMs). Close swings it shut gently. */
+export const SLAM = { swingMs: 300, closeMs: 300, squashMs: 90, shakeMs: 240, shakeStepMs: 30, settleMs: 200, dizzyMs: 1000 } as const;
+/** The swing: rotateY(deg) about the hinge edge. Opens from SWING_FROM_DEG (nearly edge-on, outer edge toward the viewer) to flat and stays flat: no recoil. */
 export const SWING_FROM_DEG = -80;
-export const SWING_REBOUND_DEG = 88;
 /** The smear is drawn for this slice of the open swing (progress 0..1): the fast part, just before the hit. */
 export const SWING_SMEAR: readonly [number, number] = [0.45, 1];
 /** Bezel shake offsets (CSS px at 1080; 2-3px), one per shakeStepMs, ending still. */
@@ -524,6 +523,8 @@ export function slamAdvance(s: SlamState, dtMs: number, fxMs = 0): SlamState {
 export type SlamView = {
   /** Swing rotateY in deg about the hinge (0 = flat), or null when the window is not swinging (nothing applied). Per-frame: NOT part of slamKey. */
   swing: number | null;
+  /** Window body opacity 0..1 (see-through at the hit, then fades in), or null when not animating. Stepped (5 values), so it is part of slamKey and rendered as a CSS var. */
+  body: number | null;
   /** True while the swing/bounce is running (the panel carries the transform): the coarse, keyed form of `swing`. */
   swinging: boolean;
   /** Closing: the panel stays up until it has swung shut. */
@@ -542,17 +543,20 @@ export type SlamView = {
   /** Face the Overlord's TV is forced to: smacked from the hit, dizzy after the close; null = normal. */
   face: "smacked" | "dizzy" | null;
 };
-export const SLAM_IDLE_VIEW: SlamView = { swing: null, swinging: false, closing: false, smear: false, shove: false, squash: false, shakeDx: 0, puffFrame: null, smackFrame: null, face: null };
+export const SLAM_IDLE_VIEW: SlamView = { swing: null, body: null, swinging: false, closing: false, smear: false, shove: false, squash: false, shakeDx: 0, puffFrame: null, smackFrame: null, face: null };
 
-/** Length of the whole hit phase after the contact: recoil + hold (the shake) + settle back flat. */
+/** Length of the whole hit phase after the contact: the see-through hold (the shake) + the fade-in. */
 export const SLAM_HIT_MS = SLAM.shakeMs + SLAM.settleMs;
-/** The hinge angle at `t` ms into an open: the swing in, then the hit's recoil (fast out, held while the Overlord shows his hurt face), then the settle flat. */
-export function swingAngleOpen(t: number): number {
-  if (t < SLAM.swingMs) return SWING_FROM_DEG * (1 - swingEaseIn(t / SLAM.swingMs));
+/** The hinge angle at `t` ms into an open: the swing in, then flat for good (the hit does not recoil). */
+export const swingAngleOpen = (t: number): number => (t < SLAM.swingMs ? SWING_FROM_DEG * (1 - swingEaseIn(t / SLAM.swingMs)) : 0);
+/** Body fade-in steps (the chat content and the window body come back in a few hard steps, like the Overlord's drop). */
+export const SLAM_FADE_STEPS = 4;
+/** Opacity of the window BODY (background + chat content) at `t` ms into an open: solid through the swing, see-through from the hit through the shake (the Overlord's face reads through it), then stepped back to solid. The frame and title bar are never faded. */
+export function slamBodyAlpha(t: number): number {
   const lt = t - SLAM.swingMs;
-  if (lt < SLAM.recoilMs) return SWING_REBOUND_DEG * (1 - (1 - lt / SLAM.recoilMs) ** 2);
-  if (lt < SLAM.shakeMs) return SWING_REBOUND_DEG;
-  return lt >= SLAM_HIT_MS ? 0 : SWING_REBOUND_DEG * (1 - swingEaseInOut((lt - SLAM.shakeMs) / SLAM.settleMs));
+  if (lt < 0 || lt >= SLAM_HIT_MS) return 1;
+  if (lt < SLAM.shakeMs) return 0;
+  return Math.floor(((lt - SLAM.shakeMs) / SLAM.settleMs) * SLAM_FADE_STEPS) / SLAM_FADE_STEPS;
 }
 /** Close: a gentle swing shut (ease-in-out), flat → edge-on. */
 export const swingAngleClose = (t: number): number => SWING_FROM_DEG * swingEaseInOut(t / SLAM.closeMs) + 0;
@@ -566,7 +570,7 @@ export function slamView(s: SlamState, reduced: boolean, fx?: SlamFxTiming | nul
   }
   if (s.t < SLAM.swingMs) {
     const p = s.t / SLAM.swingMs;
-    return { ...SLAM_IDLE_VIEW, swing: swingAngleOpen(s.t), swinging: true, smear: p >= SWING_SMEAR[0] && p < SWING_SMEAR[1], shove: true, face: null };
+    return { ...SLAM_IDLE_VIEW, swing: swingAngleOpen(s.t), body: 1, swinging: true, smear: p >= SWING_SMEAR[0] && p < SWING_SMEAR[1], shove: true, face: null };
   }
   const lt = s.t - SLAM.swingMs; // ms since the hit
   const pf = fx && fx.frames > 0 ? Math.floor(lt / fx.ms) : -1;
@@ -575,6 +579,7 @@ export function slamView(s: SlamState, reduced: boolean, fx?: SlamFxTiming | nul
   return {
     ...SLAM_IDLE_VIEW,
     swing: bouncing ? swingAngleOpen(s.t) : null,
+    body: bouncing ? slamBodyAlpha(s.t) : null,
     swinging: bouncing,
     shove: bouncing,
     squash: lt < SLAM.squashMs,
@@ -585,7 +590,7 @@ export function slamView(s: SlamState, reduced: boolean, fx?: SlamFxTiming | nul
   };
 }
 /** Stable string of a view; the clock re-renders only when it changes (the per-frame `swing` angle is written straight to the DOM instead). */
-export const slamKey = (v: SlamView): string => `${v.swinging ? 1 : 0}:${v.closing ? 1 : 0}:${v.smear ? 1 : 0}:${v.shove ? 1 : 0}:${v.squash ? 1 : 0}:${v.shakeDx}:${v.puffFrame ?? "-"}:${v.smackFrame ?? "-"}:${v.face ?? "-"}`;
+export const slamKey = (v: SlamView): string => `${v.body ?? "-"}:${v.swinging ? 1 : 0}:${v.closing ? 1 : 0}:${v.smear ? 1 : 0}:${v.shove ? 1 : 0}:${v.squash ? 1 : 0}:${v.shakeDx}:${v.puffFrame ?? "-"}:${v.smackFrame ?? "-"}:${v.face ?? "-"}`;
 
 /** The mode to force on the Overlord's face: the slam's, skipped when faces.json lacks that key. */
 export const slamFaceForce = (v: SlamView, faces: FacesModel | null): Extract<FaceMode, "smacked" | "dizzy"> | null => (v.face && hasFaceMode(faces, "overlord", v.face) ? v.face : null);

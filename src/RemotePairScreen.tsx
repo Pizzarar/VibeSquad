@@ -3,24 +3,24 @@
 // https://<host>/pair?code=… so the server sets the vs_device cookie and serves its own UI.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  clearPending,
-  clearSession,
+  activeMeshnetHost,
+  fetchHostId,
+  forgetHost,
   mapRemoteError,
   normalizeCode,
   normalizeFp,
   normalizeHost,
   pairRedeemUrl,
   parsePairInput,
-  parsePairReturn,
-  readPending,
   readSession,
   remoteError,
-  savePending,
   saveSession,
   serverUrl,
+  setSessionHostId,
   type RemoteError,
 } from "./remoteSession";
-import { createTrustClient, flushCookies, nativeTrust, type TrustClient } from "./vsTrust";
+import { diagStep } from "./diagOverlay";
+import { createTrustClient, nativeTrust, type TrustClient } from "./vsTrust";
 
 const PROBE_MS = 5000;
 
@@ -63,27 +63,6 @@ async function onDeepLink(handler: (urls: string[]) => void): Promise<() => void
   }
 }
 
-/** The server redirects back here as `#paired` (code redeemed), `#unpaired` (cookie rejected) or `#failed` (bad code). */
-function takeServerReturn(): { error: RemoteError | null; open: string | null } {
-  const ret = parsePairReturn(location.hash);
-  if (!ret) return { error: null, open: null };
-  history.replaceState(null, "", location.pathname + location.search);
-  const pending = readPending();
-  clearPending();
-  if (ret === "paired") {
-    if (pending) {
-      saveSession(pending);
-      return { error: null, open: pending };
-    }
-    return { error: remoteError("unknown", "Pairing finished too late to be saved. Pair again."), open: null };
-  }
-  if (ret === "unpaired") {
-    clearSession();
-    return { error: remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."), open: null };
-  }
-  return { error: remoteError("unknown", "That code was invalid, already used or expired. Generate a new one on your PC."), open: null };
-}
-
 function openServer(host: string): void {
   try {
     sessionStorage.setItem(OPENED_KEY, "1");
@@ -94,13 +73,16 @@ function openServer(host: string): void {
 }
 
 export function RemotePairScreen() {
-  const [ret] = useState(takeServerReturn);
-  const saved = readSession();
+  // v:3 session (E4a): one active host out of hosts[]; the screen only ever shows the active one, and no switcher
+  // chrome exists while hosts.length <= 1 (the switcher rule in remoteSession.ts says no). A second host arrives with E5.
+  const session = readSession();
+  const savedHost = activeMeshnetHost(session);
+  const saved = savedHost ? { host: savedHost } : null;
   const [host, setHost] = useState(saved?.host ?? "");
   const [code, setCode] = useState("");
   const [fp, setFp] = useState("");
   const [link, setLink] = useState("");
-  const [error, setError] = useState<RemoteError | null>(ret.error);
+  const [error, setError] = useState<RemoteError | null>(null);
   const [fromLink, setFromLink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
@@ -113,7 +95,7 @@ export function RemotePairScreen() {
     } catch {
       /* no sessionStorage */
     }
-    return Boolean(saved) && !cameBack && !ret.error && !ret.open;
+    return Boolean(saved) && !cameBack;
   });
 
   const pairWith = useCallback(async (h: string, c: string, f: string) => {
@@ -131,17 +113,32 @@ export function RemotePairScreen() {
     }
     setBusy(true);
     setError(null);
+    let pinnedFp = fpN ?? "";
     try {
       // Native: fetching + pinning the CA is also the reachability check. Only the CA matching the fingerprint is trusted, for this host only.
-      if (t) await t.pin(hostN, fpN!);
+      if (t) pinnedFp = (await t.pin(hostN, fpN!)) || pinnedFp;
       else await probe(hostN);
     } catch (e) {
       setError(/fingerprint/i.test(String((e as Error)?.message)) ? remoteError("unknown", (e as Error).message) : mapRemoteError(e));
       setBusy(false);
       return;
     }
-    // Only a pending record: the session is saved when the server sends the browser back with #paired.
-    savePending(hostN);
+    // The PC opens its own UI right after redeeming (no trip back here), so remember the host now. A rejected code leaves
+    // a stale session that the next launch drops: the reopen probe checks the PC still recognizes this phone.
+    // The host id (E4a) is best effort here: the status route answers unpaired callers, but a plain browser without
+    // CORS gets "" and fills it in on a later reconnect.
+    diagStep(`pinned ${hostN}; saving session`);
+    saveSession(hostN, undefined, undefined, await fetchHostId(hostN), pinnedFp);
+    // Android Back from the PC's UI should land on this form (with Forget), not bounce straight back to the PC.
+    try {
+      sessionStorage.setItem(OPENED_KEY, "1");
+    } catch {
+      /* no sessionStorage */
+    }
+    diagStep("leaving for /pair (redeem)");
+    // Best effort: persist cookies now, but never hold the navigation more than ~500ms.
+    // Shared client only: a second one would overwrite native.onmessage.
+    await Promise.race([trust()?.flush().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);
     location.href = pairRedeemUrl(hostN, codeN, undefined, location.origin);
   }, []);
 
@@ -163,25 +160,42 @@ export function RemotePairScreen() {
     [],
   );
 
-  // Just paired: open the server's UI now that the session is saved.
-  useEffect(() => {
-    if (ret.open) {
-      // Persist vs_device (set on the /pair redirect) before leaving for the PC.
-      const host = ret.open;
-      void flushCookies().then(() => openServer(host));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const onReopenError = (e: unknown, h: string) => {
+    // The PC answers but no longer knows this phone: drop the stale session instead of reopening into a 401 page.
+    if (/unpaired/i.test(String((e as Error)?.message))) {
+      void trust()?.forget(h).catch(() => {});
+      forgetHost(h);
+      setError(remoteError("unknown", "Your PC no longer recognizes this phone. Pair again with a new code."));
+    } else setError(mapRemoteError(e));
+  };
+
+  // Manual retry for the saved PC (offline at launch, Back from the PC's UI, a transient auth error).
+  const reconnect = (h: string) => {
+    setBusy(true);
+    setError(null);
+    probe(h).then(
+      () => openServer(h),
+      (e) => {
+        onReopenError(e, h);
+        setBusy(false);
+      },
+    );
+  };
 
   // Reopen the saved server. A dead one drops back to this form (with Forget) instead of a blank page.
   useEffect(() => {
     if (!saved || !reopening) return;
     let live = true;
     probe(saved.host).then(
-      () => live && openServer(saved.host),
+      async () => {
+        if (!live) return;
+        // Fill in the PC's host id when the v:2 upgrade left it empty (never holds the open longer than the fetch timeout).
+        if (session && !session.activeHostId) setSessionHostId(saved.host, await fetchHostId(saved.host));
+        if (live) openServer(saved.host);
+      },
       (e) => {
         if (!live) return;
-        setError(mapRemoteError(e));
+        onReopenError(e, saved.host);
         setReopening(false);
       },
     );
@@ -217,7 +231,7 @@ export function RemotePairScreen() {
             data-testid="forget-pc"
             onClick={() => {
               void trust()?.forget(saved.host).catch(() => {});
-              clearSession();
+              forgetHost(saved.host);
               setReopening(false);
             }}
           >
@@ -325,12 +339,17 @@ export function RemotePairScreen() {
           {busy ? "Connecting…" : "Pair"}
         </button>
         {saved && (
+          <button type="button" className="btn ok remote-pair-go" data-testid="reconnect-pc" disabled={busy} onClick={() => reconnect(saved.host)}>
+            Reconnect to {saved.host}
+          </button>
+        )}
+        {saved && (
           <button
             type="button"
             className="btn ghost remote-pair-forget"
             onClick={() => {
               void trust()?.forget(saved.host).catch(() => {});
-              clearSession();
+              forgetHost(saved.host);
               location.reload();
             }}
           >

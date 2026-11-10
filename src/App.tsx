@@ -49,6 +49,8 @@ import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
+import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
+import { PhoneBugPill } from "./PhoneBugSheet";
 import { FocusRail, railAlerts } from "./FocusRail";
 import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
@@ -1438,6 +1440,7 @@ export function App() {
   const sheet = useSheet();
   const split = useSplit();
   const mobileTeamView = useMobileTeamView();
+  const phoneShell = usePhoneShell();
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
   const chatScale = useChatScale();
@@ -1838,6 +1841,23 @@ export function App() {
       header={pinFocusView && pinFocus ? <PinFocusHeader view={pinFocusView} focus={pinFocus} spinUpError={pinFocus.spinUpError} onStart={onSpinUpPin} onSelectSquad={onTeam} belowBar={drawerOpen ? undefined : <HubBar view={pinFocusView} onOpen={onQuickStart} />} /> : undefined}
     />
   ) : null;
+
+  // E1: on a phone nothing else mounts. No desktop panels, no sidebar, no escape hatch (E3 passes bugSlot, E4b pairSlot).
+  if (phoneShell) {
+    return (
+      <PhoneCockpit
+        views={sidebarViews}
+        view={view}
+        onSquad={onTeam}
+        runnerConn={runnerConn}
+        onSuccessor={paneSuccessor}
+        onSpinUp={onSpinUpPin}
+        onSpinUpOverlord={onSpinUpOverlord}
+        overlordBusy={overlordBusy}
+        bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
+      />
+    );
+  }
 
   return (
     <div

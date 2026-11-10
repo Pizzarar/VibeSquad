@@ -2,13 +2,14 @@ import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, 
 import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
-import { sharedRunnerBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync } from "./backend/index.mjs";
+import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readRunnerCwdSync } from "./backend/index.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
 import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
+import { findBuiltApk } from "./android-apk-paths.mjs";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
@@ -32,9 +33,11 @@ import {
   saveUserSettings,
   stripBom,
 } from "./user-settings.mjs";
+import { getHostId } from "./host-id.mjs";
 import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
 import {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   laneWorkingDir,
@@ -45,14 +48,12 @@ import {
 } from "./brainstorm.mjs";
 import {
   addInboxCards,
-  buildTopicBrainstormPrompt,
-  buildTopicTitle,
+  attachInboxMedia,
+  INBOX_MEDIA_MAX_BYTES,
   getInboxPath,
-  handoffTopicBrainstorm,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   readInboxCards,
+  sendInboxCard,
   sortIdeaCard,
   triageInboxCards,
   writeInboxCards,
@@ -127,6 +128,7 @@ import {
 
 export {
   appendVsLogEntry,
+  authorizeBuddyRestartRequest,
   createAgentClient,
   findExistingLaneBrainstorm,
   performBrainstormRestart,
@@ -134,14 +136,10 @@ export {
   resetBrainstormRestartState,
   writeBrainstormSummary,
   addInboxCards,
-  buildTopicBrainstormPrompt,
-  buildTopicTitle,
   getInboxPath,
-  handoffTopicBrainstorm,
   listInboxCards,
-  openTopicBrainstorm,
-  parkTopicBrainstorm,
   readInboxCards,
+  sendInboxCard,
   sortIdeaCard,
   triageInboxCards,
   writeInboxCards,
@@ -233,7 +231,7 @@ export function sanitizeBody(body) {
 /** readBody + sanitizeBody: what every write handler that hands its body to a helper must use. */
 const readCleanBody = async (req) => sanitizeBody(await readBody(req));
 
-// Agent archives reachable over HTTP (brainstorm-restart, inbox park/handoff-topic) share one budget, so a
+// Agent archives reachable over HTTP (brainstorm-restart) share one budget, so a
 // loop over agent ids can't retire every Buddy at once.
 export const ARCHIVE_BUDGET_PER_MIN = 10;
 export const archiveBudget = createWindowLimiter({ max: ARCHIVE_BUDGET_PER_MIN });
@@ -386,8 +384,8 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
     return res.end();
   }
   const full = getAuthStatus(rootDir);
-  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, { ...full, localAccess: localAccess(req) });
+  if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint });
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
@@ -399,7 +397,8 @@ function handleTeams(req, res, rootDir) {
     const file = resolveTeamsFilePath(rootDir);
     const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null, recordWarning: true });
     if (r.ok && r.data) {
-      return sendJson(res, 200, { ...r.data, revision: teamsRevision(file) });
+      // hostId rides on the envelope only (never inside the lane/agent records; Overlord decision, E4a).
+      return sendJson(res, 200, { ...r.data, revision: teamsRevision(file), hostId: getHostId() });
     }
     return sendJson(res, 500, { error: r.error || "Failed to read teams.json" });
   }
@@ -578,35 +577,67 @@ async function resolveShellCwd(cwd, rootDir, opts) {
   return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
-// Quick open / find in files call per keystroke: reuse the roots for 30s; file-search.mjs rescans (fresh) once before it answers 403.
+// Runner roster for the sync root getters below. Parsing every agent log is hundreds of ms of CPU: it runs async in the
+// background (listRunnerAgents yields between batches), and callers read the last completed scan. One scan feeds navRoots and
+// liveRunnerAgents. A fresh request always starts its own scan (a scan already in flight listed the dir before the new agent
+// existed); the newest-started scan to finish wins, and a reset invalidates every scan still in flight.
+let runnerRoster = { at: 0, agents: [] };
+let rosterInflight = null;
+let rosterScanSeq = 0;
+let rosterApplied = 0;
+let rosterEpoch = 0;
+function refreshRunnerRoster(fresh = false) {
+  if (rosterInflight && !fresh) return rosterInflight;
+  const epoch = rosterEpoch;
+  const seq = ++rosterScanSeq;
+  const p = listRunnerAgents()
+    .then((agents) => {
+      if (epoch !== rosterEpoch || seq < rosterApplied) return;
+      rosterApplied = seq;
+      runnerRoster = { at: Date.now(), agents: agents.filter((a) => !a.archivedAt) };
+      navRootsCache.clear();
+    })
+    .catch(() => {})
+    .finally(() => { if (rosterInflight === p) rosterInflight = null; });
+  rosterInflight = p;
+  return p;
+}
+/** Live (non-archived) runner agents; kicks a background rescan when older than 30s (the stale list is served meanwhile). */
+function runnerRosterNow(now = Date.now()) {
+  if (now - runnerRoster.at >= 30_000) refreshRunnerRoster();
+  return runnerRoster.agents;
+}
+export const _runnerRosterReady = () => refreshRunnerRoster();
+
+// Quick open / find in files call per keystroke: reuse the roots for 30s. getter(true) (a 403 miss, file-search.mjs) awaits a
+// brand-new scan, so a worktree created a moment ago is allowed on the retry.
 const navRootsCache = new Map();
-const navRoots = (rootDir, opts) => (fresh) => {
-  const hit = navRootsCache.get(rootDir);
-  if (!fresh && hit && Date.now() - hit.at < 30_000) return hit.roots;
+function buildNavRoots(rootDir, opts) {
   // Runner (rn-) agents are the default and often sit in worktrees outside the project roots.
   let runnerCwds = [];
-  try { runnerCwds = listRunnerAgentsSync().filter((a) => !a.archivedAt).map((a) => realOrNull(a.cwd)).filter(Boolean); } catch {}
+  try { runnerCwds = [...new Set(runnerRosterNow().map((a) => a.cwd))].map(realOrNull).filter(Boolean); } catch {}
   // A home dir or drive root as a browse root would expose everything under it.
   const roots = [...new Set([...allowedAttachRoots(rootDir, opts), ...runnerCwds])].filter((r) => !isUnsafeRoot(r));
   navRootsCache.set(rootDir, { at: Date.now(), roots });
   return roots;
+}
+const navRoots = (rootDir, opts) => (fresh) => {
+  if (fresh) return refreshRunnerRoster(true).then(() => buildNavRoots(rootDir, opts));
+  const hit = navRootsCache.get(rootDir);
+  if (hit && Date.now() - hit.at < 30_000) return hit.roots;
+  return buildNavRoots(rootDir, opts);
 };
+export const _navRootsForTest = (rootDir, opts) => navRoots(rootDir, opts);
+export const _liveRunnerAgentsForTest = (now) => liveRunnerAgents(now);
 
 /**
  * Other worktrees a relative file link may point into when the file is missing under `cwd`: the managed sanctuary
  * dirs for the same repo, plus cwds of live agents in the same team + lane. Lane cwds must already be allowed roots.
  */
-let laneAgentsCache = { at: 0, agents: [] };
 function liveRunnerAgents(now = Date.now()) {
-  // listRunnerAgentsSync parses every jsonl: share one scan across 404s for 30s, like navRoots.
-  if (now - laneAgentsCache.at >= 30_000) {
-    let agents = [];
-    try { agents = listRunnerAgentsSync().filter((a) => !a.archivedAt); } catch {}
-    laneAgentsCache = { at: now, agents };
-  }
-  return laneAgentsCache.agents;
+  return runnerRosterNow(now);
 }
-export const _resetLaneAgentsCache = () => { laneAgentsCache = { at: 0, agents: [] }; };
+export const _resetLaneAgentsCache = () => { rosterEpoch++; rosterInflight = null; rosterApplied = 0; runnerRoster = { at: 0, agents: [] }; navRootsCache.clear(); };
 
 export function laneWorktreeCandidates(cwd, roots, { sanctuary = resolveManagedWorktreeRoot(), agents } = {}) {
   const out = [];
@@ -648,7 +679,7 @@ export async function agentCwdFor(agentId, rootDir, { runner } = {}) {
   const id = String(agentId ?? "");
   if (!AGENT_ID_STRICT.test(id)) return rootDir;
   if (isRunnerId(id)) {
-    try { const rec = readRunnerAgentSync(id); if (rec?.cwd) return rec.cwd; } catch {} // on-disk record: no HTTP round trip
+    try { const cwd = await readRunnerCwd(id); if (cwd) return cwd; } catch {} // on-disk record: no HTTP round trip
     try {
       const cwd = (await (runner ?? sharedRunnerBackend()).fetchAgent(id)).agent?.cwd;
       if (cwd) return cwd;
@@ -859,6 +890,8 @@ async function handleBrainstormRestart(req, res, rootDir) {
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
+    // O5: a denied callerId must not spend a budget slot (a worker could otherwise exhaust it and block real restarts).
+    await authorizeBuddyRestartRequest(body, rootDir);
     if (body.reason === "start-brainstorm" || body.agentId === "start-brainstorm") {
       if (overSpawnBudget(res)) return;
     } else {
@@ -870,7 +903,7 @@ async function handleBrainstormRestart(req, res, rootDir) {
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -932,47 +965,52 @@ async function handleInboxTriage(req, res, rootDir) {
   }
 }
 
-async function handleInboxOpenTopic(req, res, rootDir) {
+async function handleInboxSend(req, res, rootDir) {
   if (req.method !== "POST") {
     res.statusCode = 405;
     return res.end();
   }
   try {
     const body = await readCleanBody(req);
-    const result = await openTopicBrainstorm(body, rootDir);
+    const result = await sendInboxCard(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
-async function handleInboxHandoffTopic(req, res, rootDir) {
-  if (req.method !== "POST") {
-    res.statusCode = 405;
-    return res.end();
-  }
-  try {
-    const body = await readCleanBody(req);
-    if (overArchiveBudget(res)) return;
-    const result = await handoffTopicBrainstorm(body, rootDir);
-    return sendJson(res, 200, result);
-  } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
-  }
+function readRawBody(req, limit) {
+  return new Promise((ok, fail) => {
+    const chunks = [];
+    let size = 0;
+    let done = false;
+    req.on("data", (c) => {
+      if (done) return;
+      size += c.length;
+      if (size > limit) {
+        done = true;
+        fail(Object.assign(new Error("attachment too large (8 MB max)"), { status: 413 }));
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on("end", () => !done && ok(Buffer.concat(chunks)));
+    req.on("error", fail);
+  });
 }
 
-async function handleInboxParkTopic(req, res, rootDir) {
+async function handleInboxAttachment(req, res) {
   if (req.method !== "POST") {
     res.statusCode = 405;
     return res.end();
   }
   try {
-    const body = await readCleanBody(req);
-    if (overArchiveBudget(res)) return;
-    const result = await parkTopicBrainstorm(body, rootDir);
-    return sendJson(res, 200, result);
+    const mime = String(req.headers["content-type"] || "");
+    const cardId = new URL(req.url, "http://x").searchParams.get("cardId") || "";
+    const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
+    return sendJson(res, 200, attachInboxMedia({ cardId, mime, bytes }));
   } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 413 ? 413 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -1204,15 +1242,8 @@ function resolveDesktopInstallerPath(rootDir = REPO_ROOT) {
 export function resolveAndroidApkPath(rootDir = REPO_ROOT) {
   const primary = join(rootDir, "dist-desktop", "VibeSquad.apk");
   if (existsSync(primary)) return primary;
-  const parent = resolve(rootDir, "../..", "dist-desktop", "VibeSquad.apk");
-  if (existsSync(parent)) return parent;
-  const apkDir = join(rootDir, "src-tauri", "gen", "android", "app", "build", "outputs", "apk", "universal", "release");
-  if (existsSync(apkDir)) {
-    try {
-      const apk = readdirSync(apkDir).find((f) => f.endsWith(".apk"));
-      if (apk) return join(apkDir, apk);
-    } catch {}
-  }
+  const built = findBuiltApk(rootDir);
+  if (built) return built;
   return primary;
 }
 
@@ -1253,6 +1284,43 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
 
+/** The APK download path, case-insensitive (phones lowercase typed URLs: /vibesquad.apk). */
+export const isAndroidApkPath = (path) => /^\/(?:__vibesquad\/android\/)?vibesquad\.apk$/i.test(path);
+
+// sha256 of the served APK for x-vibesquad-apk-sha256. Never hashes on the request path: trust the build sidecar
+// when it is at least as new as the APK, else hash by stream in the background (header omitted until ready).
+// Cache is keyed by path+mtime+size so the header always matches the bytes served.
+const apkHashCache = new Map();
+const apkHashPending = new Set();
+function apkSha256(file, stat) {
+  const key = `${stat.mtimeMs}:${stat.size}`;
+  const hit = apkHashCache.get(file);
+  if (hit?.key === key) return hit.hash;
+  try {
+    const side = `${file}.sha256`;
+    if (existsSync(side) && statSync(side).mtimeMs >= stat.mtimeMs) {
+      const hash = readFileSync(side, "utf8").trim().toLowerCase();
+      if (/^[0-9a-f]{64}$/.test(hash)) {
+        apkHashCache.set(file, { key, hash });
+        return hash;
+      }
+    }
+  } catch {}
+  const pend = `${file}|${key}`;
+  if (!apkHashPending.has(pend)) {
+    apkHashPending.add(pend);
+    const h = createHash("sha256");
+    createReadStream(file)
+      .on("data", (c) => h.update(c))
+      .on("end", () => {
+        apkHashCache.set(file, { key, hash: h.digest("hex") });
+        apkHashPending.delete(pend);
+      })
+      .on("error", () => apkHashPending.delete(pend));
+  }
+  return "";
+}
+
 export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -1268,6 +1336,8 @@ export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  const sha = apkSha256(file, stat);
+  if (sha) res.setHeader("x-vibesquad-apk-sha256", sha);
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
@@ -1317,7 +1387,7 @@ export function lookupAgentCwd(agentId) {
   const id = String(agentId ?? "").trim();
   if (!AGENT_ID_RE.test(id) || !isRunnerId(id)) return null;
   try {
-    const cwd = readRunnerAgentSync(id)?.cwd;
+    const cwd = readRunnerCwdSync(id);
     return typeof cwd === "string" && cwd.trim() ? cwd.trim() : null;
   } catch {
     return null;
@@ -1438,6 +1508,7 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 // caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   const readOnlyCache = createReadOnlyCache(opts.readOnlyCacheMs);
+  refreshRunnerRoster(); // background scan so the first file request already knows the runner worktrees
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
     const cachedRead = (run) => readOnlyCache(path, isOwner(req), run);
@@ -1457,7 +1528,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
       return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
     }
-    const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : MAX_BODY_BYTES;
+    const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : path === "/__vibesquad/inbox/attachment" ? INBOX_MEDIA_MAX_BYTES : MAX_BODY_BYTES;
     if (Number(req.headers["content-length"] ?? 0) > bodyLimit) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
     if (path === "/api/teams") return handleTeams(req, res, rootDir);
@@ -1466,7 +1537,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") {
       return handleDesktopInstaller(req, res, rootDir);
     }
-    if (path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") {
+    if (isAndroidApkPath(path)) {
       return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json") {
@@ -1521,12 +1592,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleInbox(req, res, rootDir);
       case "/__vibesquad/inbox/triage":
         return handleInboxTriage(req, res, rootDir);
-      case "/__vibesquad/inbox/open-topic":
-        return handleInboxOpenTopic(req, res, rootDir);
-      case "/__vibesquad/inbox/handoff-topic":
-        return handleInboxHandoffTopic(req, res, rootDir);
-      case "/__vibesquad/inbox/park-topic":
-        return handleInboxParkTopic(req, res, rootDir);
+      case "/__vibesquad/inbox/send":
+        return handleInboxSend(req, res, rootDir);
+      case "/__vibesquad/inbox/attachment": // owner-only (non-GET gate above): raw image body, ?cardId=
+        return handleInboxAttachment(req, res);
       case "/__vibesquad/push/vapid-public-key":
         return handlePushVapidPublicKey(req, res);
       case "/__vibesquad/push/subscribe":

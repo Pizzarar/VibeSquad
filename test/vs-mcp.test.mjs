@@ -406,8 +406,10 @@ test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --ro
     // Direct resolveIdentity check: recordWins ignores flags+env; default mode still honours flags for other verbs.
     const locked = resolveIdentity({ role: 'lead', lane: 'other', team: 'oth', agent: 'rn-lead-other' }, { recordWins: true });
     assert.deepEqual([locked.agentId, locked.team.id, locked.lane, locked.role], ['rn-work1', 'efi', 'own', 'worker']);
-    const open = resolveIdentity({ role: 'lead', lane: 'other', team: 'oth', agent: 'rn-lead-other' });
-    assert.deepEqual([open.agentId, open.team.id, open.lane, open.role], ['rn-lead-other', 'oth', 'other', 'lead']);
+    // Default mode (log/spec/task/pin...): a runner caller's --agent/--role/--ord are claims and never override its record; --lane/--team still aim.
+    const open = resolveIdentity({ role: 'lead', lane: 'other', team: 'oth', agent: 'rn-lead-other', ord: '9' });
+    assert.deepEqual([open.agentId, open.team.id, open.lane, open.role], ['rn-work1', 'oth', 'other', 'worker']);
+    assert.notEqual(open.ord, '9');
   } finally {
     for (const k of Object.keys(vars)) {
       if (saved[k] === undefined) delete process.env[k];

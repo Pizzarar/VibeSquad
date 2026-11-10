@@ -1,0 +1,150 @@
+/* Boring Mode (@bor B1): corporate ADE skin. Standalone: every rule is scoped under html[data-vibe="boring"],
+   so data-vibe="fun" (the default) applies nothing. Never edit styles.css for this; it lives here. */
+
+html[data-vibe="boring"],
+html[data-vibe="boring"][data-theme="dark"] {
+  --bg: #0f1115; --bg-elev: #161920; --bg-card: #161920; --bg-hover: #1e222b;
+  --border: #262b36; --border-strong: #353c4b;
+  --text: #e6e8ee; --text-dim: #9aa2b2; --accent: #4c8dff; --radius: 4px;
+  /* remap the Hypnospace tokens so every existing rule inherits the corporate palette */
+  --navy: #0f1115; --well: #0b0d11; --panel: #161920; --panel-hi: #1e222b; --panel-alt: #1e222b;
+  --line: #262b36; --slate: #262b36; --marble: #e6e8ee; --muted: #9aa2b2;
+  --cyan: #4c8dff; --cyan-t: #4c8dff; --cyan-fill: #4c8dff; --violet: #4c8dff; --hot-pink: #4c8dff;
+  --on-cyan-fill: #ffffff; --on-pastel: #ffffff;
+  --panel-grad: #161920; --titlebar: #161920; --tb-1: #161920; --tb-2: #161920; --tb-3: #161920;
+  --bevel: none; --bevel-in: none; --hard: none; --bayer: none;
+}
+
+html[data-vibe="boring"][data-theme="light"] {
+  --bg: #f8f9fb; --bg-elev: #ffffff; --bg-card: #ffffff; --bg-hover: #eef1f6;
+  --border: #d8dee9; --border-strong: #b8c2d4;
+  --text: #181b20; --text-dim: #5a6372; --accent: #2563eb; --radius: 4px;
+  --navy: #f8f9fb; --well: #eef1f6; --panel: #ffffff; --panel-hi: #eef1f6; --panel-alt: #eef1f6;
+  --line: #d8dee9; --slate: #d8dee9; --marble: #181b20; --muted: #5a6372;
+  --cyan: #2563eb; --cyan-t: #2563eb; --cyan-fill: #2563eb; --violet: #2563eb; --hot-pink: #2563eb;
+  --on-cyan-fill: #ffffff; --on-pastel: #ffffff;
+  --panel-grad: #ffffff; --titlebar: #ffffff; --tb-1: #ffffff; --tb-2: #ffffff; --tb-3: #ffffff;
+  --bevel: none; --bevel-in: none; --hard: none; --bayer: none;
+}
+
+html[data-vibe="boring"] {
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  --pixel: var(--sans);
+  font-family: var(--sans);
+}
+html[data-vibe="boring"] body { background: var(--bg); color: var(--text); font-family: var(--sans); }
+
+/* Flat surfaces: 1px borders, no bevels, glows, filters or image frames. */
+html[data-vibe="boring"] .card,
+html[data-vibe="boring"] .menu,
+html[data-vibe="boring"] .toolbar,
+html[data-vibe="boring"] .btn,
+html[data-vibe="boring"] .badge,
+html[data-vibe="boring"] .pill,
+html[data-vibe="boring"] .chip,
+html[data-vibe="boring"] .pin-tile,
+html[data-vibe="boring"] .pin-grid,
+html[data-vibe="boring"] .pin-rail,
+html[data-vibe="boring"] .chat-box,
+html[data-vibe="boring"] .chat-drawer,
+html[data-vibe="boring"] .drawer,
+html[data-vibe="boring"] .team-emblem {
+  border-image: none !important;
+  box-shadow: none !important;
+  text-shadow: none !important;
+  filter: none !important;
+  backdrop-filter: none !important;
+  border-style: solid;
+  border-width: 1px;
+  border-color: var(--border);
+  border-radius: var(--radius);
+  background-image: none;
+}
+html[data-vibe="boring"] .card,
+html[data-vibe="boring"] .menu,
+html[data-vibe="boring"] .pin-tile,
+html[data-vibe="boring"] .chat-box,
+html[data-vibe="boring"] .chat-drawer,
+html[data-vibe="boring"] .drawer { background-color: var(--bg-card); }
+html[data-vibe="boring"] .toolbar,
+html[data-vibe="boring"] .pin-rail { background-color: var(--bg-elev); }
+html[data-vibe="boring"] .btn { background-color: var(--bg-elev); color: var(--text); font-family: var(--sans); }
+html[data-vibe="boring"] .btn:hover:not(:disabled) { background-color: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .btn.confirm.armed { animation: none; }
+html[data-vibe="boring"] .badge,
+html[data-vibe="boring"] .pill,
+html[data-vibe="boring"] .chip { background-color: var(--bg-hover); color: var(--text-dim); border-radius: 999px; font-family: var(--sans); }
+html[data-vibe="boring"] .pin-tile:hover { background-color: var(--bg-hover); border-color: var(--border-strong); }
+
+/* No CRT, scanlines, clouds or spray-paint decoration. */
+html[data-vibe="boring"] .crt-scanlines,
+html[data-vibe="boring"] .sky-crt-frame,
+html[data-vibe="boring"] .sky-clouds,
+html[data-vibe="boring"] .spray-wash,
+html[data-vibe="boring"] .crt-scanlines::before,
+html[data-vibe="boring"] .crt-scanlines::after,
+html[data-vibe="boring"] .sky-crt-frame::before,
+html[data-vibe="boring"] .sky-crt-frame::after,
+html[data-vibe="boring"] .spray-wash::before,
+html[data-vibe="boring"] .spray-wash::after {
+  display: none !important;
+  background-image: none !important;
+}
+html[data-vibe="boring"] body::before,
+html[data-vibe="boring"] body::after,
+html[data-vibe="boring"] #root::before,
+html[data-vibe="boring"] #root::after { background-image: none !important; box-shadow: none !important; }
+
+/* Pixel sprites hidden; monograms, text badges and status dots stay. */
+html[data-vibe="boring"] .avatar img,
+html[data-vibe="boring"] .avatar canvas,
+html[data-vibe="boring"] .team-emblem img,
+html[data-vibe="boring"] .pixel-icon img,
+html[data-vibe="boring"] .quick-bugs-chip img { display: none !important; }
+html[data-vibe="boring"] .status-dot { display: inline-block; }
+
+/* B3: compact Perfection header (replaces the AngelBezel CRT/cloud strip). */
+html[data-vibe="boring"] .angel-boring-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font-size: 12px;
+}
+html[data-vibe="boring"] .angel-boring-title { font-weight: 600; color: var(--text); }
+html[data-vibe="boring"] .angel-boring-code { font-family: var(--mono); font-size: 11px; color: var(--text-dim); padding: 1px 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-hover); }
+html[data-vibe="boring"] .angel-boring-btn { padding: 4px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); color: var(--text); font-size: 12px; cursor: pointer; }
+html[data-vibe="boring"] .angel-boring-btn:hover:not(:disabled) { background: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .angel-boring-btn:disabled { opacity: 0.5; cursor: default; }
+
+/* B2: outer Overlord / Bugs / RiffBot bar and lane quick buttons. */
+html[data-vibe="boring"] .boring-ade-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+html[data-vibe="boring"] .boring-ade-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+html[data-vibe="boring"] .boring-ade-pill:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .boring-ade-pill .badge { padding: 0 6px; }
+html[data-vibe="boring"] .boring-ade-lane { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+html[data-vibe="boring"] .boring-ade-actions { display: inline-flex; gap: 4px; margin-left: auto; }

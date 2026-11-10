@@ -41,15 +41,12 @@ function useBugCards(teamId: string, laneId: string) {
   return state && state.key === `${teamId}/${laneId}` ? state.cards : null;
 }
 
-export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin) => void | Promise<unknown> }) {
+/** Shared unread-count/pulse state for any bug pill (sidebar BugButton, PhoneBugPill). */
+export function useBugPill(view: TeamView) {
   const lane = findBugLane(view.team);
   const all = pinsForSquad(view, { includeHidden: true });
   const pin = lane ? [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id) ?? null : null;
   const teamId = view.team.id;
-  const theme = useTheme();
-  const { device, css } = snapChipSize(useDpr(), useUiScale());
-  const sheet = bugRoachSheetSrc(theme, device);
-  const roachOk = useImageOk(sheet);
   const cards = useBugCards(teamId, pin?.lane.id ?? "");
   const [seen, setSeen] = useState(() => readSeen(teamId));
   const [pulse, setPulse] = useState(false);
@@ -69,7 +66,6 @@ export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin)
     const t = setTimeout(() => setPulse(false), 1200);
     return () => clearTimeout(t);
   }, [cards, counts.max, counts.unseen]);
-  if (!pin) return null;
   const markSeen = () => {
     if (!cards) return;
     const next = Math.max(seen, counts.max);
@@ -80,6 +76,16 @@ export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin)
     }
     setSeen(next);
   };
+  return { pin, teamId, counts, pulse, markSeen };
+}
+
+export function BugButton({ view, onOpen }: { view: TeamView; onOpen: (pin: Pin) => void | Promise<unknown> }) {
+  const { pin, teamId, counts, pulse, markSeen } = useBugPill(view);
+  const theme = useTheme();
+  const { device, css } = snapChipSize(useDpr(), useUiScale());
+  const sheet = bugRoachSheetSrc(theme, device);
+  const roachOk = useImageOk(sheet);
+  if (!pin) return null;
   return (
     <button
       type="button"

@@ -85,10 +85,20 @@ describe("native pin bridge (web side)", () => {
     await flushCookies({ VsTrust: { postMessage() {}, onmessage: null } }, 10); // silent native: times out, still resolves
   });
 
-  test("the pair screen flushes before opening the PC and the APK /pair request carries vs_app", () => {
+  test("the APK /pair request carries vs_app; Back after pairing shows the form; the reopen probe drops an unpaired session", () => {
     const src = readFileSync(new URL("../src/RemotePairScreen.tsx", import.meta.url), "utf8");
-    assert.ok(src.includes("flushCookies().then(() => openServer(host))"));
     assert.ok(src.includes("pairRedeemUrl(hostN, codeN, undefined, location.origin)"));
+    assert.match(src, /sessionStorage\.setItem\(OPENED_KEY, "1"\);[\s\S]*?location\.href = pairRedeemUrl/);
+    assert.match(src, /\/unpaired\/i\.test\([^)]*\)[\s\S]*?forgetHost\(h\)/);
+    assert.doesNotMatch(src, /#paired/);
+  });
+
+  test("native probe asks /api/auth/status with the WebView cookie, treats paired:false as unpaired, and flushes cookies on a timer", () => {
+    const kt = readFileSync(new URL("../src-tauri/android/VsTrust.kt", import.meta.url), "utf8");
+    assert.match(kt, /\/api\/auth\/status/);
+    assert.match(kt, /CookieManager\.getInstance\(\)\.getCookie\(/);
+    assert.match(kt, /paired == false\) throw SecurityException\("unpaired/);
+    assert.match(kt, /CookieManager\.getInstance\(\)\.flush\(\)[\s\S]*postDelayed\(this, FLUSH_EVERY_MS\)/);
   });
 
   test("a native refusal (fingerprint mismatch) rejects with its message; silence times out", async () => {
@@ -146,7 +156,26 @@ describe("Kotlin trust guards and build wiring", () => {
   test("the pair screen pins through the bridge before redeeming and forgets on Forget", () => {
     const src = read("src/RemotePairScreen.tsx");
     assert.match(src, /t\.pin\(hostN, fpN!\)/);
-    assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("savePending(hostN)"));
-    assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 2);
+    assert.ok(src.indexOf("t.pin(hostN") < src.indexOf("saveSession(hostN, undefined, undefined, await fetchHostId(hostN), pinnedFp)"));
+    assert.equal((src.match(/trust\(\)\?\.forget\(/g) ?? []).length, 3);
+  });
+
+  test("B8: pairWith flushes cookies (500ms cap) before redeeming; B9: forget clears the host vs_device cookie", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.match(src, /Promise\.race\(\[trust\(\)\?\.flush\(\)[\s\S]*?500\)\)\]\);\s*location\.href = pairRedeemUrl/);
+    assert.doesNotMatch(src, /flushCookies/);
+    assert.match(src, /forgetHost\(h\);\s*setError\(remoteError\("unknown", "Your PC no longer/);
+    assert.match(src, /trust\(\)\?\.forget\(h\)\.catch\(\(\) => \{\}\);\s*forgetHost\(h\);\s*setError/);
+    const kt = read("src-tauri/android/VsTrust.kt");
+    const forget = kt.slice(kt.indexOf("fun forget("), kt.indexOf("fun probe("));
+    assert.match(forget, /remove\("ca:\$key"\)/);
+    assert.match(forget, /setCookie\("\$base\/", "vs_device=; Max-Age=0/);
+  });
+
+  test("B3: a saved PC gets a Reconnect button that probes then opens the server and shows errors", () => {
+    const src = read("src/RemotePairScreen.tsx");
+    assert.match(src, /data-testid="reconnect-pc"/);
+    assert.match(src, /Reconnect to \{saved\.host\}/);
+    assert.match(src, /const reconnect = [\s\S]*?probe\(h\)\.then\(\s*\(\) => openServer\(h\),\s*\(e\) => \{\s*onReopenError\(e, h\)/);
   });
 });

@@ -624,7 +624,7 @@ test('baseline sees an archive that is followed by exit / error / idle', async (
   writeFileSync(path.join(dir, 'rn-a2.jsonl'), line(0, 'created', { provider: 'claude', meta: {} }) + line(1, 'status', { status: 'running' }) + line(2, 'archive', {}) + line(3, 'error', { message: 'x' }) + line(4, 'status', { status: 'idle' }));
   writeFileSync(path.join(dir, 'rn-live.jsonl'), line(0, 'created', { provider: 'claude', meta: {} }) + line(1, 'status', { status: 'idle' }));
   const backend = new RunnerBackend({ client: new RunnerClient({ home }), rootDir: ROOT, hooks: false });
-  backend.enableCatchUp();
+  await backend.enableCatchUp();
   assert.ok(backend.live.archived.has('rn-a1') && backend.live.archived.has('rn-a2'));
   assert.ok(!backend.live.archived.has('rn-live'));
   assert.equal(backend.live.hwm.get('rn-a2'), 4);

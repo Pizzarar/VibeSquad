@@ -303,7 +303,7 @@ function dismissedSet(key = LOOKS_DONE_KEY): Set<string> {
 
 // Dismissed cards also live on the server (settings.json `dismissedCards`, newest 500) so every device hides a card
 // once any device acted on it. localStorage stays as the offline cache; the two are merged on read.
-const DISMISS_KEYS = [LOOKS_DONE_KEY, "vibesquad.sendToDismissed", "vibesquad.spinOffDismissed"];
+const DISMISS_KEYS = [LOOKS_DONE_KEY, "vibesquad.sendToDismissed", "vibesquad.spinOffDismissed", "vibesquad.decisionDismissed"];
 const SETTINGS_URL = "/__vibesquad/settings";
 let serverDismissed = new Set<string>();
 let dismissedLoad: Promise<void> | null = null;
@@ -507,6 +507,43 @@ export async function createPin(squadId: string, name: string, idea: string, dep
       (l.state === "done" || l.state === "removed") &&
       (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
   );
+  // A live team with this name/id is the pin: a double-click or a re-pin after the first save must not mint `<slug>-2`.
+  // Standing / quick-lane callers get the same lane, with their flags set on it if it lacks them.
+  const liveSame = (squad.lanes as PinLane[]).find(
+    (l) => l.state !== "done" && l.state !== "removed" && (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
+  );
+  if (liveSame) {
+    let outSquad = squad;
+    let outLane = liveSame;
+    if ((deps.standing && !liveSame.standing) || (deps.quickLane && squad.quickLanes?.[deps.quickLane] !== liveSame.id)) {
+      await (deps.saveTeams ?? saveTeams)((cur) =>
+        (cur.map((t) => {
+          if (t.id !== squadId) return t;
+          const next = {
+            ...t,
+            lanes: t.lanes.map((l) => (l.id === liveSame.id && deps.standing ? { ...l, standing: true } : l)),
+            ...(deps.quickLane ? { quickLanes: { ...t.quickLanes, [deps.quickLane]: liveSame.id } } : {}),
+          };
+          outSquad = next;
+          outLane = (next.lanes as PinLane[]).find((l) => l.id === liveSame.id) ?? liveSame;
+          return next;
+        })),
+      );
+    }
+    return {
+      squad: outSquad,
+      lane: outLane,
+      state: "pinned",
+      order: (outSquad.lanes as PinLane[]).findIndex((l) => l.id === liveSame.id),
+      brainstorm: null,
+      lead: null,
+      workers: [],
+      needsYou: 0,
+      running: 0,
+      contextUsed: 0,
+      topicBrainstorms: [],
+    };
+  }
   const doFetch = deps.fetch ?? fetch;
   if (reopenTarget) {
     const code = reopenTarget.code || laneCodesForTeam({ lanes: squad.lanes })[reopenTarget.id];
@@ -673,6 +710,10 @@ export async function sendIdeaToTeam(laneId: string, text: string, from?: string
 const SEND_TO_KEY = "vibesquad.sendToDismissed";
 export const isSendToDismissed = (messageId: string, legacyIds?: string[]): boolean => isDismissed(SEND_TO_KEY, messageId, legacyIds);
 export const dismissSendTo = (messageId: string): void => dismiss(SEND_TO_KEY, messageId);
+
+const DECISION_KEY = "vibesquad.decisionDismissed";
+export const isDecisionDismissed = (cardId: string): boolean => isDismissed(DECISION_KEY, cardId);
+export const dismissDecision = (cardId: string): void => dismiss(DECISION_KEY, cardId);
 
 const SPIN_OFF_KEY = "vibesquad.spinOffDismissed";
 export const isSpinOffDismissed = (messageId: string): boolean => isDismissed(SPIN_OFF_KEY, messageId);

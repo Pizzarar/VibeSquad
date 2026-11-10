@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -41,6 +42,38 @@ export function syncRuntimeDir(repoRoot = rootDir) {
       // ignore locked files
     }
   }
+
+  // `vs restart` launches this self-contained script; the runtime copy of cli/ needs it beside it.
+  try {
+    mkdirSync(join(runtimeDir, "scripts"), { recursive: true });
+    copyFileSync(join(repoRoot, "scripts", "restart-runtime.mjs"), join(runtimeDir, "scripts", "restart-runtime.mjs"));
+  } catch {}
+
+  // The live server serves runtime/dist-desktop/VibeSquad.apk. Ship the staged build only as a verified pair
+  // (sidecar present and equal to the apk's hash), via temp file + rename, apk first and sidecar last.
+  try {
+    const dist = join(repoRoot, "dist-desktop");
+    const apk = join(dist, "VibeSquad.apk");
+    const side = `${apk}.sha256`;
+    if (existsSync(apk) && existsSync(side)) {
+      const want = readFileSync(side, "utf8").trim().toLowerCase();
+      const got = createHash("sha256").update(readFileSync(apk)).digest("hex");
+      if (want === got) {
+        const destDir = join(runtimeDir, "dist-desktop");
+        mkdirSync(destDir, { recursive: true });
+        for (const [src, name] of [[apk, "VibeSquad.apk"], [side, "VibeSquad.apk.sha256"]]) {
+          const tmp = join(destDir, `${name}.tmp-${process.pid}`);
+          try {
+            copyFileSync(src, tmp);
+            renameSync(tmp, join(destDir, name));
+          } catch {
+            rmSync(tmp, { force: true }); // locked live file: leave the old pair
+            break;
+          }
+        }
+      }
+    }
+  } catch {}
 
   let stamp = null;
   try {

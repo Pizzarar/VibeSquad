@@ -106,6 +106,9 @@ export function laneLeadMismatch(agentOrLabels, teams) {
 /**
  * Strictly label/status-based retired check (never inspects title/name).
  */
+/** Below this many context tokens a healthy lead is steered, not handed off (Overlord ladder step 3 floor; also the owner-stamp audit's bucket). */
+export const LEAD_HANDOFF_MIN_TOKENS = 100000;
+
 export function isRetiredAgent(agentOrLabels) {
   if (!agentOrLabels || typeof agentOrLabels !== "object") return false;
   const labels = extractLabels(agentOrLabels);
@@ -714,14 +717,24 @@ export function whoCandidate(a, { teams, wantTeamId, wantLane, squadWide = false
  * Pick the single live winner from same-(team,lane,role) candidates, mirroring the runner's `_successorOf` preference:
  * a non-closed agent beats a closed-but-resumable one (its successor is live, so a lost predecessor must not surface as a
  * duplicate live lead); among equals the newest wins (createdAt, then updatedAt, then id). `conflict` is true only when 2+
- * non-closed agents remain (the genuine duplicate-live-lead case). Returns { winner, conflict }.
+ * non-closed agents remain (the genuine duplicate-live-lead case). Returns { winner, conflict, pending } (pending: successors of an unconfirmed handoff, ignored for the winner).
  */
 export function resolveLeadWinner(candidates) {
   const live = (candidates ?? []).filter((a) => a && isLiveAgent(a));
-  if (!live.length) return { winner: null, conflict: false };
+  if (!live.length) return { winner: null, conflict: false, pending: [] };
   const nonClosed = live.filter((a) => String(a.status ?? "").toLowerCase() !== "closed");
-  const conflict = nonClosed.length >= 2;
-  const pool = nonClosed.length ? nonClosed : live;
+  // A successor stamped vs.handoff-from=<a live non-closed candidate> is a handoff in flight, not a duplicate: the predecessor stays the
+  // winner until the successor confirms (the predecessor is then relabelled former-lead and leaves the set). Unlinked pairs still conflict.
+  const liveIds = new Set(nonClosed.map((a) => a.id));
+  const isPending = (a) => {
+    const from = String(a?.labels?.["vs.handoff-from"] ?? "").trim();
+    return Boolean(from) && from !== a.id && liveIds.has(from);
+  };
+  const settled = nonClosed.filter((a) => !isPending(a));
+  const pending = settled.length ? nonClosed.filter(isPending).map((a) => a.id) : [];
+  const decided = settled.length ? settled : nonClosed;
+  const conflict = decided.length >= 2;
+  const pool = decided.length ? decided : live;
   const newest = (a, b) => {
     const at = Date.parse(a?.createdAt ?? a?.updatedAt ?? "") || 0;
     const bt = Date.parse(b?.createdAt ?? b?.updatedAt ?? "") || 0;
@@ -731,5 +744,5 @@ export function resolveLeadWinner(candidates) {
     if (au !== bu) return bu - au;
     return String(b?.id ?? "").localeCompare(String(a?.id ?? ""));
   };
-  return { winner: [...pool].sort(newest)[0], conflict };
+  return { winner: [...pool].sort(newest)[0], conflict, pending };
 }

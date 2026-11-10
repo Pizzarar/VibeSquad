@@ -56,6 +56,7 @@ function makeEnv() {
         env: { ...process.env, VIBESQUAD_HOME: vsHome, PASEO_HOME: paseoHome, PASEO_AGENT_ID: "", VS_TEAM: "", VS_LANE: "", ...extraEnv },
       });
     },
+    dir,
     cleanup: () => rmSync(dir, { recursive: true, force: true }),
   };
 }
@@ -132,6 +133,31 @@ test("whoami for an agent with a team label but no lane label prints lane: unass
     assert.match(res.stdout, /^lane: unassigned · squad: _unassigned/);
     const labelled = env.run(["whoami", "--agent", "rn-worker-main"]);
     assert.match(labelled.stdout, /^lane: main-game · squad: efi/);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("whoami current-lead line shows lost, not closed, for a lost lead (same status as vs who)", () => {
+  const env = makeEnv();
+  try {
+    // A lead whose log says running with a saved session, under a runner whose pid is dead: runner-backend folds it to lost.
+    const vsHome = join(env.dir, ".vibesquad");
+    writeFileSync(join(vsHome, "runner", "runner.json"), JSON.stringify({ pid: 2 ** 22 + 12345, startedAt: 1 }), "utf8");
+    const ts = Date.now();
+    const evs = [
+      { seq: 0, ts, type: "created", provider: "claude", model: "m", cwd: join(env.dir, "elsewhere"), meta: { title: "LEAD lost", labels: { team: "efi", lane: "ui-lab", role: "lead", ord: "1" } } },
+      { seq: 1, ts, type: "session", sessionId: "sess-1" },
+      { seq: 2, ts, type: "status", status: "running" },
+    ];
+    writeFileSync(join(vsHome, "runner", "agents", "rn-lead-ui.jsonl"), evs.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf8");
+    const who = env.run(["who", "lead", "--lane", "ui-lab", "--team", "efi"]);
+    assert.match(who.stdout, /rn-lead-ui.*lost/);
+    const res = env.run(["whoami", "--agent", "rn-buddy-ui", "--json"]);
+    const j = JSON.parse(res.stdout);
+    assert.equal(j.currentLead.status, "lost");
+    assert.match(j.currentLead.line, /lost/);
+    assert.doesNotMatch(j.currentLead.line, /closed/);
   } finally {
     env.cleanup();
   }

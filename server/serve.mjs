@@ -11,6 +11,7 @@ import { extname, join, normalize, resolve, sep } from "node:path";
 import {
   createVibesquadMiddleware,
   handleAndroidApk,
+  isAndroidApkPath,
   handleAuthStatus,
   handleDesktopInstaller,
   handleDesktopUpdateJson,
@@ -191,12 +192,34 @@ function findDistFile(urlPath) {
   return null;
 }
 
-function sendFile(res, file) {
+// Static art (/office, /ui) revalidates every load: no max-age, so merged art shows up without a hard refresh.
+const REVALIDATE_DIRS = [`${sep}office${sep}`, `${sep}ui${sep}`];
+
+export function sendFile(res, file, req) {
   res.statusCode = 200;
   res.setHeader("content-type", MIME[extname(file).toLowerCase()] ?? "application/octet-stream");
   if (extname(file).toLowerCase() === ".html") setNoFraming(res);
   if (file.includes(`${sep}assets${sep}`)) {
     res.setHeader("cache-control", "public, max-age=31536000, immutable");
+  } else if (req && REVALIDATE_DIRS.some((d) => file.includes(d))) {
+    let st;
+    try {
+      st = statSync(file);
+    } catch {
+      res.statusCode = 404;
+      return res.end("not found");
+    }
+    const etag = `"${st.size.toString(16)}-${Math.floor(st.mtimeMs).toString(16)}"`;
+    res.setHeader("cache-control", "no-cache");
+    res.setHeader("etag", etag);
+    res.setHeader("last-modified", st.mtime.toUTCString());
+    const inm = req.headers["if-none-match"];
+    const ims = Date.parse(req.headers["if-modified-since"] ?? "");
+    const fresh = inm ? inm.split(",").some((t) => t.trim().replace(/^W\//, "") === etag || t.trim() === "*") : ims >= Math.floor(st.mtimeMs / 1000) * 1000;
+    if (fresh) {
+      res.statusCode = 304;
+      return res.end();
+    }
   } else {
     res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   }
@@ -304,7 +327,7 @@ function handle(req, res) {
     }
     const path = (req.url ?? "/").split("?")[0];
     const file = findDistFile(path === "/" ? "/index.html" : path);
-    if (file) return sendFile(res, file);
+    if (file) return sendFile(res, file, req);
     // Missing asset (has an extension and is not /index.html) is a real 404; anything else is an SPA route.
     if (extname(path) && path !== "/index.html") {
       res.statusCode = 404;
@@ -343,7 +366,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopInstaller(req, res, rootDir);
     }
-    if ((path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") && (req.method === "GET" || req.method === "HEAD")) {
+    if (isAndroidApkPath(path) && (req.method === "GET" || req.method === "HEAD")) {
       return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
@@ -385,7 +408,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopInstaller(req, res, rootDir);
     }
-    if ((path === "/VibeSquad.apk" || path === "/__vibesquad/android/VibeSquad.apk") && (req.method === "GET" || req.method === "HEAD")) {
+    if (isAndroidApkPath(path) && (req.method === "GET" || req.method === "HEAD")) {
       return handleAndroidApk(req, res, rootDir);
     }
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
