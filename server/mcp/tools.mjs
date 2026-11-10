@@ -103,7 +103,20 @@ const pick = (args, ...names) => {
   return undefined;
 };
 
+// One in-flight lead spawn per (team, lane) in this process: a retried or double-fired call must not pass the live-lead check
+// while the first create is still in flight (that mints two leads, a `vs who lead` CONFLICT).
+const leadSpawnLeases = new Set();
+
 async function spawnWorker(ctx, args = {}) {
+  const lease = { key: "" };
+  try {
+    return await spawnWorkerOnce(ctx, args, lease);
+  } finally {
+    if (lease.key) leadSpawnLeases.delete(lease.key);
+  }
+}
+
+async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   const prompt = need(args, "prompt", "initialPrompt");
   const profileName = clean(pick(args, "profile", "profileId") ?? args.labels?.profile);
   const given = { provider: clean(args.provider), model: clean(args.model), modeId: clean(pick(args, "modeId", "mode")) };
@@ -166,6 +179,10 @@ async function spawnWorker(ctx, args = {}) {
     }
     if (requestedTeam && findTeamInRegistry(requestedTeam, teams)?.id !== canonTeam) throw new Error(`cannot spawn a lead: target team "${requestedTeam}" is not the caller's team "${canonTeam}"`);
     if (!clean(profile?.name).startsWith(LEAD_PROFILE_PREFIX)) throw new Error(`cannot spawn a lead: profile "${clean(profile?.name) || profileName || "none"}" is not a "${LEAD_PROFILE_PREFIX}" profile`);
+    const leaseKey = `${canonTeam}:${canonLane}`;
+    if (leadSpawnLeases.has(leaseKey)) throw new Error(`cannot spawn a lead: a lead spawn for lane "${canonLane}" is already in flight`);
+    leadSpawnLeases.add(leaseKey);
+    lease.key = leaseKey;
     let live;
     try {
       live = await ctx.findLiveLeads({ team: canonTeam, lane: canonLane });

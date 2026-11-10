@@ -602,10 +602,14 @@ export function createLeadHandoffCoordinator(deps = {}) {
     if (typeof deps.connectMs === "number") timer.add("connect", deps.connectMs);
     const allAgents = await listAgents();
     const rawOldOrd = parseLeadOrd(oldLead);
-    const maxOtherOrd = highestLaneLeadOrd(allAgents, laneId, oldLead?.id);
+    // Idempotent over retries and server restarts: a live lead already stamped vs.handoff-from=<this lead> is the successor of an
+    // earlier attempt (createAgent timed out but the agent exists, or the in-memory slots were lost). Adopt it, never mint a second.
+    const adoptable = trigger === "hard-300" ? null : allAgents.map((x) => x?.agent ?? x).find((a) => a?.id && a.id !== oldLead?.id && !a.archivedAt && !a.internal
+      && a.labels?.["vs.handoff-from"] === oldLead?.id && effectiveAgentRole(a) === "lead" && !isRetiredAgent(a)) ?? null;
+    const maxOtherOrd = highestLaneLeadOrd(adoptable ? allAgents.filter((a) => (a?.agent ?? a) !== adoptable) : allAgents, laneId, oldLead?.id);
     const hasExplicitOldOrd = Boolean(String(oldLead?.labels?.ord ?? "").trim()) || /(?:\bord|★\s*[A-Za-z]{2,5})(\d+)\b/i.test(String(oldLead?.title ?? ""));
     const oldOrd = !hasExplicitOldOrd && maxOtherOrd > rawOldOrd ? maxOtherOrd : rawOldOrd;
-    const nextOrd = Math.max(oldOrd, maxOtherOrd) + 1;
+    const nextOrd = adoptable && parseLeadOrd(adoptable) > oldOrd ? parseLeadOrd(adoptable) : Math.max(oldOrd, maxOtherOrd) + 1;
 
     const slotPrefix = deps.sharedSlots ? `${rootDir}:` : "";
     const slotKey = `${slotPrefix}${teamId}:${laneId}:ord${oldOrd}`;
@@ -698,8 +702,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
     };
 
     timer.mark("prep");
-    let created = null;
-    if (typeof deps.createAgent === "function") {
+    let created = adoptable;
+    if (!adoptable && typeof deps.createAgent === "function") {
       created = await deps.createAgent({
         config: {
           provider: spawnCfg.provider,

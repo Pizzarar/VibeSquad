@@ -366,3 +366,24 @@ test("(6) vs pin merge adds fromLane.id + code to intoLane.aliases and sets from
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("(6) createPin: pinning a live same-name team twice returns it, never a -2 lane", async () => {
+  let teams = [{ id: "vibesquad", name: "VibeSquad", color: "#b07cf5", paths: [], lanes: [{ id: "vibesquad", name: "VibeSquad", state: "pinned" }] }];
+  let briefs = 0;
+  const deps = {
+    getTeams: () => teams,
+    saveTeams: async (updater) => { teams = updater(teams); },
+    fetch: async (url, init) => {
+      if (init?.method === "POST") briefs++;
+      return new Response(JSON.stringify({ ok: true, content: "", revision: "r1" }), { status: 200 });
+    },
+  };
+  const a = await pinActionsMod.createPin("vibesquad", "Sound Design", "idea one", deps);
+  const b = await pinActionsMod.createPin("vibesquad", "Sound Design", "idea one", deps); // second click, fresh snapshot
+  const c = await pinActionsMod.createPin("vibesquad", "sound design", "idea one", deps);
+  assert.equal(a.lane.id, "sound-design");
+  assert.equal(b.lane.id, "sound-design");
+  assert.equal(c.lane.id, "sound-design");
+  assert.deepEqual(teams[0].lanes.map((l) => l.id), ["vibesquad", "sound-design"]);
+  assert.equal(briefs, 1, "the brief is written once");
+});

@@ -507,6 +507,26 @@ export async function createPin(squadId: string, name: string, idea: string, dep
       (l.state === "done" || l.state === "removed") &&
       (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
   );
+  // A live team with this name/id is the pin: a double-click or a re-pin after the first save must not mint `<slug>-2`.
+  // Standing / quick-lane callers still fall through (they set flags on the lane).
+  const liveSame = deps.standing || deps.quickLane ? undefined : (squad.lanes as PinLane[]).find(
+    (l) => l.state !== "done" && l.state !== "removed" && (l.id.toLowerCase() === slug || (l.name ?? "").toLowerCase() === clean.toLowerCase()),
+  );
+  if (liveSame) {
+    return {
+      squad,
+      lane: liveSame,
+      state: "pinned",
+      order: (squad.lanes as PinLane[]).indexOf(liveSame),
+      brainstorm: null,
+      lead: null,
+      workers: [],
+      needsYou: 0,
+      running: 0,
+      contextUsed: 0,
+      topicBrainstorms: [],
+    };
+  }
   const doFetch = deps.fetch ?? fetch;
   if (reopenTarget) {
     const code = reopenTarget.code || laneCodesForTeam({ lanes: squad.lanes })[reopenTarget.id];
