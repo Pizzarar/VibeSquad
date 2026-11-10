@@ -8,6 +8,8 @@ import {
   getBuddyRequest,
   hostHealthLine,
   isPhoneShell,
+  openBuddy,
+  phoneLaneRows,
   subscribeBuddyRequest,
   type PhoneSurface,
 } from "./phoneCockpitLogic";
@@ -110,6 +112,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   const zones = skyZonesFor(view);
   const health = hostHealthLine(runnerConn);
   const buddy = buddyOf(view, buddyLane);
+  const laneRows = phoneLaneRows(view);
 
   const pick = (s: PhoneSurface) => {
     setSurface(s);
@@ -200,6 +203,27 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
         <aside className="phone-drawer" data-testid="phone-drawer" aria-label="Host">
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
+          </div>
+          <div className="phone-lanes" data-testid="phone-lanes">
+            <div className="phone-lanes-head">TEAMS</div>
+            {laneRows.length === 0 && <p className="muted small">No teams pinned yet.</p>}
+            {laneRows.map((r) => (
+              <button
+                key={r.laneId}
+                type="button"
+                className={`phone-lane-row ${r.state}`}
+                data-testid={`phone-lane-${r.laneId}`}
+                data-state={r.state}
+                onClick={() => {
+                  if (r.state === "none") onSpinUp(r.pin);
+                  openBuddy(r.laneId);
+                  setMenu(false);
+                }}
+              >
+                <span className="phone-lane-name">{r.name}</span>
+                <span className="phone-lane-state">{r.state === "live" ? "live" : r.state === "idle" ? "idle" : "tap to start"}</span>
+              </button>
+            ))}
           </div>
           <RestartHost />
           <div className="phone-pair-slot" data-testid="phone-pair-slot">{pairSlot}</div>

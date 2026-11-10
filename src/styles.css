@@ -6168,6 +6168,12 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   text-align: left;
 }
 .phone-squad-opt.on { border-color: var(--violet); background: var(--violet-dim); }
+.phone-lanes { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.phone-lanes-head { font-size: 0.75rem; letter-spacing: 0.08em; color: var(--muted, #8a8a9a); }
+.phone-lane-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: transparent; color: var(--text); font: inherit; text-align: left; }
+.phone-lane-row.live { border-color: var(--violet); }
+.phone-lane-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.phone-lane-state { font-size: 0.8rem; opacity: 0.7; white-space: nowrap; }
 .phone-health-line { display: flex; align-items: center; gap: 8px; font-weight: 700; }
 .phone-restart .btn, .phone-pair-slot .btn { min-height: 44px; width: 100%; }
 .phone-pair-slot:empty { display: none; }
