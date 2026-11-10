@@ -34,6 +34,10 @@ export interface InboxCard {
   topicAgentId?: string | null;  // for P3 topic brainstorms
   topicTitle?: string | null;
   topicOpenedAt?: string | null;
+  deliveredTo?: string | null;      // agent id the Send landed on (lane Buddy, lane lead, or the Overlord)
+  deliveredLane?: string | null;
+  deliveredToTitle?: string | null;
+  deliveredAt?: string | null;
   handedOffAt?: string | null;
   summaryNote?: string | null;
   source?: string;        // "ui" | "brainstorm-dump" | "cli"
