@@ -108,3 +108,56 @@ test("hop6 lane Buddy: archived Buddy is skipped for the lead; a lane with nobod
   assert.equal(c.sent[0].id, "lead");
   await assert.rejects(sendInboxCard({ cardId: "b", baseHome, agentClient: c }, repoRoot), /No live Buddy or lead/);
 });
+
+// Review R1 fixes
+const mkCard = (id, laneId, extra = {}) => {
+  const now = new Date().toISOString();
+  return { id, title: id, text: "t", teamId: "vibesquad", laneId, scope: "other", status: "parked", createdAt: now, updatedAt: now, ...extra };
+};
+
+test("R1-H standing bug/audit fallback lanes stay valid even when the registry has no such lane", (t) => {
+  const baseHome = home(t);
+  for (const lane of ["bug-runner", "perfection"]) {
+    const r = addInboxCards({ ideas: [`idea for ${lane}`], laneId: lane, baseHome }, repoRoot);
+    assert.equal(r.added[0].laneId, lane);
+  }
+  assert.throws(() => addInboxCards({ ideas: ["x"], laneId: "nope-lane", baseHome }, repoRoot), /unknown lane/);
+});
+
+test("R1-M1 add/bounce store the canonical lane id; a same-lane alias bounce keeps the delivery stamp", (t) => {
+  const baseHome = home(t);
+  const added = addInboxCards({ ideas: ["alias add"], laneId: "@bug", teamId: "vibesquad", baseHome }, repoRoot);
+  assert.equal(added.added[0].laneId, "bug-chaser");
+  writeInboxCards([mkCard("d1", "bug-chaser", { deliveredAt: "2026-11-10T00:00:00Z", deliveredTo: "bud", deliveredLane: "bug-chaser" })], baseHome);
+  triageInboxCards({ action: "bounce", cardId: "d1", laneId: "bug", baseHome }, repoRoot);
+  const c = readInboxCards(baseHome)[0];
+  assert.equal(c.laneId, "bug-chaser");
+  assert.equal(c.deliveredTo, "bud", "same lane via alias must not re-open delivery (double-send)");
+  assert.equal(c.teamId, "vibesquad");
+});
+
+test("R1-M2 triage update validates and canonicalizes patch.laneId", (t) => {
+  const baseHome = home(t);
+  writeInboxCards([mkCard("u1", "empty-lane", { deliveredAt: "2026-11-10T00:00:00Z", deliveredTo: "bud" })], baseHome);
+  assert.throws(() => triageInboxCards({ action: "update", cardId: "u1", patch: { laneId: "bug-chasr" }, baseHome }, repoRoot), /unknown lane/);
+  assert.equal(readInboxCards(baseHome)[0].laneId, "empty-lane");
+  triageInboxCards({ action: "update", cardId: "u1", patch: { laneId: "bug" }, baseHome }, repoRoot);
+  const c = readInboxCards(baseHome)[0];
+  assert.equal(c.laneId, "bug-chaser");
+  assert.equal(c.deliveredAt, undefined, "a real lane move re-opens delivery");
+});
+
+test("R1-L vs inbox --lane resolves against the live teams.json, not the module-load snapshot", async (t) => {
+  const baseHome = home(t);
+  const { main } = await import("../cli/vs.mjs");
+  writeFileSync(teamsFile, JSON.stringify({ teams: [
+    { id: "vibesquad", name: "VibeSquad", lanes: [{ id: "vibesquad", hub: true }, { id: "bug-chaser", aliases: ["bug"] }] },
+    { id: "late", name: "Late", lanes: [{ id: "late-lane", name: "Late Lane" }] },
+  ] }));
+  const prev = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = baseHome;
+  t.after(() => { if (prev === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prev; });
+  const code = await main(["inbox", "add", "late idea", "--lane", "late-lane", "--team", "vibesquad"]);
+  assert.equal(code, 0);
+  assert.equal(readInboxCards(baseHome)[0].teamId, "late");
+});
