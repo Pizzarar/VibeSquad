@@ -18,5 +18,6 @@ export function spinOffFrom(agentId: string, entries: { item: any; seqStart?: nu
 export function cardId(kind: string, agentId: string, key: string, text: string): string;
 export function canonicalCardId(id: string): string;
 export function sendToFrom(agentId: string, entries: { item: any; seqStart?: number; timestamp?: string }[]): { laneId: string; text: string; id: string; legacyIds: string[] } | null;
+export function sendToLegacyId(agentId: string, entry: { item: any; seqStart?: number; timestamp?: string }): string;
 export function sendToCardId(agentId: string, offer: { laneId: string; text: string }): string;
 export function spinOffCardId(agentId: string, teams: { name: string; brief: string }[]): string;

@@ -212,3 +212,17 @@ test("D1 regress2 [H]: a dismissal made elsewhere after this tab loaded shows up
 test("D1 regress2 [L]: send-to lane id is case-insensitive like spin-off", () => {
   assert.equal(ideas.sendToCardId("a", { laneId: "Usage", text: "x" }), ideas.sendToCardId("a", { laneId: "usage", text: "x" }));
 });
+
+test("D1 L: an older (non-newest) inline card also honours its pre-D1 `${agentId}:${seqStart}` dismissal", async () => {
+  newClient();
+  settings.saveUserSettings({ dismissedCards: ["rn-y:50"] }, home);
+  await settle();
+  const older = msg(50, fence("an older idea"));
+  const newer = msg(51, fence("a newer idea"));
+  assert.equal(typeof ideas.sendToLegacyId, "function", "shared legacy-id helper");
+  assert.equal(ideas.sendToLegacyId("rn-y", older), "rn-y:50");
+  assert.equal(ideas.sendToFrom("rn-y", [older, newer]).legacyIds[0], ideas.sendToLegacyId("rn-y", newer), "bar uses the same helper");
+  const offer = ideas.parseSendTo(older.item.text);
+  assert.equal(actions.isSendToDismissed(ideas.sendToCardId("rn-y", offer), [ideas.sendToLegacyId("rn-y", older)]), true);
+  assert.match(read("src/Timeline.tsx"), /messageLegacyId/, "Timeline threads the message's legacy id to inline cards");
+});
