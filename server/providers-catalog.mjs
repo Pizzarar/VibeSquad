@@ -834,11 +834,16 @@ function normalizeWorktreeCwd(cwd) {
     .replace(/^([A-Za-z]):/, (_, d) => `${d.toLowerCase()}:`)
     .replace(/\/+$/, "");
 }
+// attributeImplementer() asks this once per (merged unit x agent run): memoise per distinct cwd so getUsage() stays linear (it blocked the runtime ~6s per request).
+const unitNameCache = new Map();
 const unitNameOfCwd = (cwd) => {
+  const hit = typeof cwd === "string" ? unitNameCache.get(cwd) : undefined;
+  if (hit !== undefined) return hit;
   const norm = normalizeWorktreeCwd(cwd);
-  if (!norm) return "";
   const idx = norm.lastIndexOf("/");
-  return (idx >= 0 ? norm.slice(idx + 1) : norm).toLowerCase();
+  const name = norm ? (idx >= 0 ? norm.slice(idx + 1) : norm).toLowerCase() : "";
+  if (typeof cwd === "string") unitNameCache.set(cwd, name);
+  return name;
 };
 
 const NON_IMPLEMENTER_PROFILE_RE = /^(?:Review|Pre-check|Check|Audit|Scout|Art Director|Planner|Spec)\b/i;
