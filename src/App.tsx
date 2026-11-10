@@ -369,6 +369,7 @@ const Sidebar = memo(function Sidebar(props: {
           className="btn ghost small sidebar-collapse-btn"
           onClick={props.onToggleSidebarCollapse}
           title={props.sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar to 56px rail"}
+          aria-expanded={!props.sidebarCollapsed}
           data-testid="sidebar-collapse-toggle"
         >
           {props.sidebarCollapsed ? "»" : "«"}

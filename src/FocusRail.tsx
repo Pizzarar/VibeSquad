@@ -308,6 +308,7 @@ export const FocusRail = memo(function FocusRail(props: {
             className="btn ghost small sidebar-collapse-btn"
             onClick={props.onToggleSidebarCollapse}
             title={props.sidebarCollapsed ? "Expand sidebar rail" : "Collapse sidebar rail to 56px"}
+            aria-expanded={!props.sidebarCollapsed}
             data-testid="sidebar-collapse-toggle"
           >
             {props.sidebarCollapsed ? "»" : "«"}
