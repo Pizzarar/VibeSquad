@@ -8,8 +8,8 @@ import { PassThrough } from "node:stream";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Runner, agentEnv, agentMay, protectedMetaIn, spawnMetaForAgent } from "../runner/runner.mjs";
-import { createServer as createRunnerServer, hubLaneReader, writeDiscovery } from "../runner/server.mjs";
+import { Runner, agentEnv, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent } from "../runner/runner.mjs";
+import { createServer as createRunnerServer, hubLaneReader, teamLogWriter, writeDiscovery } from "../runner/server.mjs";
 import { createClaudeAdapter } from "../runner/adapters/claude.mjs";
 import { createAcpAdapter } from "../runner/adapters/acp.mjs";
 import { LogStore, redactSecrets } from "../runner/log.mjs";
@@ -48,7 +48,7 @@ function fakeAdapter() {
 }
 
 /** A runner + server with a Squad: Overlord (hub lane = team id), lane Buddy, lane lead, two lane workers, a second Squad's worker. */
-async function squad({ parkGraceMs = 60_000 } = {}) {
+async function squad({ parkGraceMs = 60_000, teamLog } = {}) {
   const dir = path.join(tmp(), "agents");
   const fake = fakeAdapter();
   const runner = new Runner({ dir, adapters: { claude: fake.adapter }, parkGraceMs, bgProbe: null });
@@ -63,7 +63,7 @@ async function squad({ parkGraceMs = 60_000 } = {}) {
   ids.worker2 = mk({ team: "sq", lane: "art", role: "worker", labels: { "vs.parent": ids.other } }); // spawned by another lead
   ids.uiWorker = mk({ team: "sq", lane: "ui", role: "worker", labels: { "vs.parent": ids.other } });
   ids.foreign = mk({ team: "other-squad", lane: "other-squad", role: "lead", labels: {} });
-  const srv = createRunnerServer(runner, { token: ADMIN, hash: "h", onShutdown: () => { srv.shutdowns = (srv.shutdowns ?? 0) + 1; } });
+  const srv = createRunnerServer(runner, { token: ADMIN, hash: "h", onShutdown: () => { srv.shutdowns = (srv.shutdowns ?? 0) + 1; }, ...(teamLog ? { teamLog } : {}) });
   const port = await listen(srv);
   const hdr = (who) => (who === "admin" ? { authorization: `Bearer ${ADMIN}` } : who === "none" ? {} : { "x-vs-agent-id": who.id, "x-vs-agent-token": who.token ?? runner.tokensById.get(who.id) });
   const call = async (who, method, route, body) => {
@@ -515,6 +515,94 @@ test("X1a: agentMay / spawnMetaForAgent are pure rule tables", () => {
   const w = spawnMetaForAgent(worker, { lane: "ui" });
   assert.equal(w.lane, "art");
   assert.equal(spawnMetaForAgent(overlord, { lane: "ui" }).lane, "ui");
+});
+
+test("xsquad: agentMay input across Squads only for an Overlord to a live lead of the other Squad; everything else stays same-Squad", () => {
+  const overlord = { id: "rn-ov", role: "lead", lane: "sq", team: "sq", overlord: true };
+  const lead = { id: "rn-lead", role: "lead", lane: "art", team: "sq", overlord: false };
+  const buddy = { id: "rn-b", role: "brainstorm", lane: "art", team: "sq", overlord: false };
+  const t = (id, meta, extra = {}) => ({ id, meta, status: "idle", ...extra });
+  const otherOverlord = t("rn-o2", { team: "efi", lane: "efi", role: "lead", labels: {} });
+  const otherLead = t("rn-o3", { labels: { team: "efi", lane: "ui", role: "lead" } }); // labels-only shape
+  assert.equal(agentMay(overlord, "input", otherOverlord), true, "Overlord -> other Squad's Overlord");
+  assert.equal(agentMay(overlord, "input", otherLead), true, "Overlord -> other Squad's lane lead");
+  assert.equal(agentMay(overlord, "input", t("rn-o4", { team: "efi", lane: "ui", role: "worker", labels: {} })), false, "other Squad's worker");
+  assert.equal(agentMay(overlord, "input", t("rn-o5", { team: "efi", lane: "ui", role: "brainstorm", labels: {} })), false, "other Squad's Buddy");
+  assert.equal(agentMay(overlord, "input", t("rn-o6", { team: "efi", lane: "ui", role: "buddy", labels: {} })), false, "Buddy alias");
+  assert.equal(agentMay(overlord, "input", t("rn-o7", { team: "efi", lane: "ui", role: "former-lead", labels: {} })), false, "retired lead");
+  assert.equal(agentMay(overlord, "input", t("rn-o8", { team: "efi", lane: "ui", role: "lead", labels: { role: "former-lead" } })), false, "retired by label");
+  assert.equal(agentMay(overlord, "input", t("rn-o9", { team: "efi", lane: "ui", role: "lead", labels: {} }, { archivedAt: 1 })), false, "archived lead");
+  assert.equal(agentMay(overlord, "input", t("rn-oa", { team: "efi", lane: "ui", role: "lead", labels: {} }, { status: "exited" })), false, "exited lead");
+  assert.equal(agentMay(overlord, "input", t("rn-ob", { team: "efi", lane: "ui", role: "lead", labels: { orphan: "true" } })), false, "orphan lead");
+  assert.equal(agentMay(overlord, "input", t("rn-oc", { lane: "ui", role: "lead", labels: {} })), false, "a lead with no team");
+  assert.equal(agentMay(lead, "input", otherOverlord), false, "a plain lead never crosses Squads");
+  assert.equal(agentMay(lead, "input", otherLead), false);
+  assert.equal(agentMay(buddy, "input", otherOverlord), false, "a Buddy never crosses Squads");
+  assert.equal(agentMay({ ...overlord, overlord: "true" }, "input", otherOverlord), false, "overlord must be exactly true");
+  assert.equal(agentMay({ ...overlord, team: null }, "input", otherOverlord), false, "an Overlord without a team");
+  for (const action of ["cancel", "archive", "unarchive", "resume", "meta", "config"]) {
+    assert.equal(agentMay(overlord, action, otherOverlord), false, `cross-Squad ${action} stays denied`);
+    assert.equal(agentMay(overlord, action, otherLead), false, `cross-Squad ${action} on a lane lead stays denied`);
+  }
+  assert.equal(crossSquadInput(overlord, t("rn-l", { team: "sq", lane: "art", role: "lead", labels: {} })), false, "same Squad is not the cross-Squad grant");
+  assert.equal(agentMay(overlord, "input", t("rn-l", { team: "sq", lane: "art", role: "worker", labels: {} })), true, "same-Squad input unchanged");
+});
+
+test("xsquad: runner HTTP: Overlord input to another Squad's Overlord/lead is 202 and audited in the sender's team log; workers/Buddies/retired, plain leads and cancel/archive/meta/config are 403 and not logged", async () => {
+  const logged = [];
+  const s = await squad({ teamLog: (e) => logged.push(e) });
+  try {
+    const { ids, runner } = s;
+    const mk = (meta) => runner.create({ provider: "claude", cwd: process.cwd(), meta });
+    const fLead = mk({ team: "other-squad", lane: "ui", role: "lead", labels: {} });
+    const fWorker = mk({ team: "other-squad", lane: "ui", role: "worker", labels: {} });
+    const fBuddy = mk({ team: "other-squad", lane: "ui", role: "brainstorm", labels: {} });
+    const fFormer = mk({ team: "other-squad", lane: "ui2", role: "former-lead", labels: {} });
+    const fArchived = mk({ team: "other-squad", lane: "ui3", role: "lead", labels: {} });
+    runner.archive(fArchived);
+    const input = (from, to, body = { text: "pause your bg suite" }) => s.call(s.as(from), "POST", `/agents/${to}/input`, body);
+    const r = await input(ids.overlord, ids.foreign);
+    assert.equal(r.status, 202, r.text);
+    assert.equal(r.body.senderId, ids.overlord);
+    assert.equal(runner.timeline(ids.foreign).find((e) => e.type === "input")?.senderId, ids.overlord);
+    assert.equal((await input(ids.overlord, fLead)).status, 202, "other Squad's lane lead");
+    assert.equal((await input(ids.foreign, ids.overlord)).status, 202, "symmetric: the other Overlord answers back");
+    assert.deepEqual(logged.map((e) => [e.team, e.type, e.agent]), [["sq", "decision", ids.overlord], ["sq", "decision", ids.overlord], ["other-squad", "decision", ids.foreign]]);
+    assert.equal(logged[0].text, `xsquad input ${ids.overlord} (sq) -> ${ids.foreign} (other-squad)`);
+    assert.equal(logged[0].lane, "sq");
+    assert.deepEqual(logged[0].refs, [ids.overlord, ids.foreign]);
+    for (const to of [fWorker, fBuddy, fFormer, fArchived]) assert.equal((await input(ids.overlord, to)).status, 403, `Overlord -> ${to}`);
+    assert.equal((await input(ids.lead, ids.foreign)).status, 403, "a plain lead -> other Squad's Overlord");
+    assert.equal((await input(ids.lead, fLead)).status, 403, "a plain lead -> other Squad's lead");
+    assert.equal((await input(ids.buddy, ids.foreign)).status, 403, "a Buddy -> other Squad's Overlord");
+    assert.equal((await input(ids.worker, ids.foreign)).status, 403, "a worker -> other Squad's Overlord");
+    for (const action of ["cancel", "archive", "unarchive", "resume", "meta", "config"]) {
+      assert.equal((await s.call(s.as(ids.overlord), "POST", `/agents/${ids.foreign}/${action}`, {})).status, 403, `cross-Squad ${action}`);
+    }
+    assert.equal((await input(ids.overlord, ids.lead)).status, 202, "same-Squad input");
+    assert.equal(logged.length, 3, "denied and same-Squad sends are not cross-Squad audit entries");
+    // An interrupt across Squads is downgraded to a steer: input does not carry cancel rights there.
+    runner.send(fLead, "HOLD: long turn");
+    await tick(30);
+    assert.equal((await input(ids.overlord, fLead, { text: "stop", activeTurnBehavior: "interrupt" })).status, 202);
+    assert.equal(s.fake.starts.find((x) => x.id === fLead).cancels, 0, "the other Squad's lead turn was not cancelled");
+  } finally { await s.stop(); }
+});
+
+test("xsquad: teamLogWriter appends one entry to the lane log and the team log under the VS home", () => {
+  const home = tmp("vs-xsquad-log-");
+  teamLogWriter(home)({ team: "vibesquad", lane: "vibesquad", agent: "rn-a", type: "decision", text: "xsquad input rn-a (vibesquad) -> rn-b (efi)", refs: ["rn-a", "rn-b"] });
+  const read = (...p) => readFileSync(path.join(home, ...p), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const lane = read("logs", "vibesquad--vibesquad.jsonl");
+  assert.equal(lane.length, 1);
+  assert.deepEqual(read("teams", "vibesquad", "log.jsonl"), lane);
+  assert.equal(lane[0].type, "decision");
+  assert.equal(lane[0].agent, "rn-a");
+  assert.equal(lane[0].lane, "vibesquad");
+  assert.deepEqual(lane[0].refs, ["rn-a", "rn-b"]);
+  assert.ok(lane[0].ts);
+  teamLogWriter(home)({ team: "../evil", lane: null, agent: "rn-a", text: "x" });
+  assert.ok(readdirSync(path.join(home, "teams")).every((d) => !d.includes("..")), "team segment is sanitised");
 });
 
 test("X1a: hubLaneReader mirrors isHubLane: a lane flagged hub wins, else the lane whose id is the team id; no file → the default rule; the file is re-read when it changes", () => {

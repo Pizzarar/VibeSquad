@@ -1068,9 +1068,16 @@ async function commandWho(flags) {
 
   const identity = resolveIdentity(flags);
   const wantTeamId = identity.team.id.toLowerCase();
-  const wantLane = identity.lane.toLowerCase();
   // `who all` without --lane lists the whole squad, grouped by lane.
   const explicitLane = flags.lane ?? process.env.VS_LANE;
+  // `who lead --team <other Squad>` with no --lane is that Squad's Overlord (its hub lane), the seat another Squad's
+  // Overlord messages (cross-Squad input, runner crossSquadInput): the caller's own lane (label / VS_LANE) is not a lane
+  // of that Squad. A lane of the named Squad, or a Squad without a hub lane, is unchanged (no guess).
+  const teamLanes = identity.team.lanes ?? [];
+  const hubLane = target === "lead" && flags.team && !flags.lane && !teamLanes.some((l) => String(l.id).toLowerCase() === identity.lane.toLowerCase())
+    ? teamLanes.find((l) => isHubLane(identity.team, l))
+    : null;
+  const wantLane = (hubLane ? String(hubLane.id) : identity.lane).toLowerCase();
   const squadWide = target === "all" && !(typeof explicitLane === "string" && explicitLane.trim());
 
   const { agents } = collectAgents();

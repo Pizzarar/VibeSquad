@@ -86,7 +86,7 @@ export function protectedMetaIn(patch = {}) {
 /**
  * Whether a verified agent caller may run `action` on `target` (a status record with meta, or null). Pure: the runner
  * resolves caller and target, this is the rule table of PLAN_X1_IDENTITY "Runner scope for agent callers".
- *   input: any agent of the caller's Squad.
+ *   input: any agent of the caller's Squad; the Overlord also reaches another Squad's live leads (crossSquadInput).
  *   cancel: self; own children; lane workers for a lead; any Squad agent for the Overlord; never a lead/Buddy from a worker.
  *   archive/unarchive/resume/meta: own children; lane workers for a lead; Squad workers for the Overlord. config: also self.
  */
@@ -100,7 +100,7 @@ export function agentMay(caller, action, target) {
   const squadWorker = sameSquad && t.role === 'worker';
   const isLead = caller.role === 'lead';
   switch (action) {
-    case 'input': return sameSquad;
+    case 'input': return sameSquad || crossSquadInput(caller, target);
     case 'cancel':
       if (self || child) return true;
       if (caller.overlord && sameSquad) return true;
@@ -116,6 +116,21 @@ export function agentMay(caller, action, target) {
       return false;
     default: return false;
   }
+}
+
+/**
+ * The one cross-Squad grant: a Squad's Overlord may send input to a live lead of another Squad (that Squad's Overlord or
+ * a lane lead), so Overlords coordinate without the owner relaying. Never a worker or Buddy, never an exited, archived,
+ * retired or orphan lead, and never anything but input (cancel/archive/config/meta stay same-Squad). The runner logs
+ * every use in the sender's team log. Pure, like agentMay.
+ */
+export function crossSquadInput(caller, target) {
+  if (caller?.overlord !== true || !caller.team || !target?.meta) return false;
+  const t = identityOf(target.meta);
+  if (!t.team || t.team === caller.team || t.role !== 'lead') return false;
+  if (target.status === 'exited' || target.exit || target.archivedAt || isRetiredMeta(target.meta)) return false;
+  const orphan = String(t.labels.orphan ?? '').trim().toLowerCase();
+  return orphan !== '1' && orphan !== 'true';
 }
 
 /**

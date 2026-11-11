@@ -29,6 +29,7 @@ function makeEnv() {
           ],
         },
         { id: "site", name: "Example Site", paths: ["example-site"], lanes: [{ id: "site-polish", name: "Site Polish" }] },
+        { id: "hubsq", name: "Hub Squad", paths: ["hub-squad"], lanes: [{ id: "ops", name: "Ops", hub: true }, { id: "feat", name: "Feat" }] },
       ],
     }) + "\n",
     "utf8",
@@ -48,6 +49,8 @@ function makeEnv() {
   agent("rn-worker-main", "WORKER main", { team: "efi", lane: "main-game", role: "worker" });
   agent("rn-lead-site", "LEAD site", { team: "site", lane: "site-polish", role: "lead", ord: "1" });
   agent("rn-no-lane", "NO LANE", { team: "efi", role: "worker" });
+  agent("rn-hub-ov", "HUB overlord", { team: "hubsq", lane: "ops", role: "lead", ord: "1" });
+  agent("rn-hub-feat", "HUB feat lead", { team: "hubsq", lane: "feat", role: "lead", ord: "1" });
   return {
     run(args, extraEnv = {}) {
       return spawnSync(process.execPath, [CLI_PATH, ...args], {
@@ -118,6 +121,26 @@ test("who lead for a caller without a lane label in a multi-lane squad does not 
   try {
     const res = env.run(["who", "lead", "--team", "efi"]);
     assert.equal(res.status, 1);
+    assert.equal(res.stdout.trim(), "NONE");
+  } finally {
+    env.cleanup();
+  }
+});
+
+test("who lead --team <other Squad> with no --lane resolves that Squad's Overlord (hub lane), even with the caller's own VS_LANE set", () => {
+  const env = makeEnv();
+  try {
+    let res = env.run(["who", "lead", "--team", "hubsq"], { PASEO_AGENT_ID: "rn-lead-main" });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), "HUB overlord · rn-hub-ov · idle · 5k");
+    res = env.run(["who", "lead", "--team", "hubsq"], { PASEO_AGENT_ID: "rn-lead-main", VS_LANE: "main-game" });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), "HUB overlord · rn-hub-ov · idle · 5k", "the caller's own lane is not a lane of the other Squad");
+    res = env.run(["who", "lead", "--team", "hubsq", "--lane", "feat"], { PASEO_AGENT_ID: "rn-lead-main" });
+    assert.equal(res.status, 0, res.stderr);
+    assert.equal(res.stdout.trim(), "HUB feat lead · rn-hub-feat · idle · 5k", "an explicit --lane still wins");
+    res = env.run(["who", "lead", "--team", "efi"], { PASEO_AGENT_ID: "rn-hub-ov" });
+    assert.equal(res.status, 1, "a Squad without a hub lane still never guesses");
     assert.equal(res.stdout.trim(), "NONE");
   } finally {
     env.cleanup();
