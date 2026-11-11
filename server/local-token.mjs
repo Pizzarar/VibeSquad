@@ -1,7 +1,7 @@
 // Per-install loopback secret (~/.vibesquad/local-token). The server creates it; local clients (vs CLI,
 // Paseo plugins, the desktop proxy) read it and send it as `x-vibesquad-token`. Node built-ins only, so a
 // client can import this file or copy readLocalToken() as-is.
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -44,6 +44,29 @@ export async function requestLocalLoginUrl({ port = Number(process.env.VIBESQUAD
   const { path } = await res.json();
   if (typeof path !== "string" || !path.startsWith("/__vibesquad/local-login?t=")) throw new Error("unexpected nonce response");
   return `http://localhost:${port}${path}`;
+}
+
+/**
+ * X1 E4a L3: before a CLI sends the master token to 127.0.0.1:port, make whatever listens there prove it already holds
+ * the token. Sends a fresh 128-bit nonce to GET /__vibesquad/local-proof?c=, expects HMAC-SHA256(token, "vs-local-proof"
+ * \0 nonce \0 port) back; the port in the MAC is the server's accepted-socket port, so a rogue listener on this port can't
+ * relay the challenge to a real server elsewhere. Resolves true on a valid proof; throws with a plain reason otherwise.
+ */
+export async function proveLocalServer({ port = Number(process.env.VIBESQUAD_PORT || 4180), token, fetchImpl = fetch, timeoutMs = 5000 } = {}) {
+  if (!token) throw new Error("no local token to verify against");
+  const nonce = randomBytes(16).toString("hex");
+  let res;
+  try {
+    res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/local-proof?c=${nonce}`, { method: "GET", signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    throw new Error(`no VibeSquad server on 127.0.0.1:${port} (${e?.cause?.code ?? e?.name ?? e}); start it first (or set VIBESQUAD_PORT)`);
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || typeof body?.proof !== "string") throw new Error(`the listener on 127.0.0.1:${port} did not prove it is this install's VibeSquad server (${res.status}); the local token was not sent`);
+  const want = createHmac("sha256", token).update(`vs-local-proof\0${nonce}\0${port}`).digest();
+  const got = Buffer.from(/^[0-9a-f]{64}$/.test(body.proof) ? body.proof : "00", "hex");
+  if (got.length !== want.length || !timingSafeEqual(got, want)) throw new Error(`the listener on 127.0.0.1:${port} failed the local-token proof; the local token was not sent`);
+  return true;
 }
 
 /** Reads the token, creating it (32 random bytes, hex, mode 0o600) when missing or malformed. */

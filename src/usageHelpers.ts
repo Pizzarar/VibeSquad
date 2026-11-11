@@ -11,7 +11,21 @@ export type LimitRow = {
   at?: string;
   burnPctPerHour: number;
   etaToCap: string | null;
+  poolAgents?: { count: number; agentIds: string[]; text: string };
 };
+
+const PROVIDER_LABEL: Record<string, string> = {
+  claude: "Claude",
+  "antigravity-cli": "Gemini",
+  "antigravity-cli/claude-gpt": "Gemini plan · 3rd-party models (Claude/GPT)",
+};
+export const providerLabel = (p: string): string => PROVIDER_LABEL[p] ?? p;
+
+/** Hover text for a limit card's name; only the Antigravity 3rd-party pool needs one. */
+export function limitTooltip(l: Pick<LimitRow, "provider" | "poolAgents">): string | undefined {
+  if (l.provider !== "antigravity-cli/claude-gpt") return undefined;
+  return `Google Antigravity's built-in 3rd-party model pool (Claude/GPT through your Gemini plan), separate from the Anthropic Claude subscription. Used here by: ${l.poolAgents?.text ?? "0 VibeSquad agents (used outside VibeSquad)"}.`;
+}
 export type Stats = { turns: number; costUsd: number; inputTokens: number; outputTokens: number; avgTokensPerTurn: number };
 export type LaneRow = Stats & {
   lane: string;
@@ -65,6 +79,8 @@ export type ProfileRow = {
   idleMs: number;
   passCount: number;
   passRate: number;
+  successRate?: number | null;
+  successBasis?: string;
   loopCount: number;
   mergedUnits: number;
   reviewRounds: number;
@@ -209,6 +225,8 @@ export type ProfileView = {
   turns: number;
   avgTurnsPerRun: number;
   passRate: number;
+  successRate: number | null;
+  successBasis: string;
   mergedUnits: number;
   avgReviewRounds: number;
   costPerMergedUnit: number | null;
@@ -226,6 +244,27 @@ export function humanizeProfile(profile: string): string {
   return RAW_PROFILE_ID.test(profile || "") ? ORPHAN_PROFILE_LABEL : profile;
 }
 
+/** Combine two folded rows' success scores: weight by merged units (implementer basis) or runs (otherwise); null only if both are. */
+function mergeSuccess(a: ProfileView, b: ProfileView): { successRate: number | null; successBasis: string } {
+  if (a.successRate === null || b.successRate === null) {
+    const keep = a.successRate !== null ? a : b;
+    return { successRate: keep.successRate, successBasis: keep.successRate === null ? a.successBasis : keep.successBasis };
+  }
+  const byUnits = a.successBasis === "implementer-first-try-pass";
+  const wa = byUnits ? a.mergedUnits : a.runs;
+  const wb = byUnits ? b.mergedUnits : b.runs;
+  return { successRate: wa + wb > 0 ? (a.successRate * wa + b.successRate * wb) / (wa + wb) : a.successRate, successBasis: a.successBasis };
+}
+
+const SUCCESS_BASIS_LABEL: Record<string, string> = {
+  "implementer-first-try-pass": "Implementer: merged units that passed review on the first try",
+  "reviewer-pass-lines": "Reviewer: runs that ended with a PASS verdict",
+  "no-signal": "No reliable log signal for this role (plan done / handoff accepted are not recorded)",
+};
+/** Success cell text: percent, or `—` when the role has no signal. */
+export const successText = (p: Pick<ProfileView, "successRate">): string => pctText(p.successRate);
+export const successTooltip = (p: Pick<ProfileView, "successBasis">): string => SUCCESS_BASIS_LABEL[p.successBasis] ?? p.successBasis;
+
 export function buildProfiles(d: UsageData): ProfileView[] {
   const out = new Map<string, ProfileView>();
   const msByKey = new Map<string, { work: number; idle: number }>();
@@ -240,6 +279,9 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       turns: p.turns ?? 0,
       avgTurnsPerRun: p.avgTurnsPerRun ?? 0,
       passRate: p.passRate ?? 0,
+      // role-specific success; rows from an older server (no successRate) fall back to passRate
+      successRate: p.successBasis === undefined ? (p.passRate ?? 0) : (p.successRate ?? null),
+      successBasis: p.successBasis ?? "reviewer-pass-lines",
       mergedUnits: p.mergedUnits ?? 0,
       avgReviewRounds: p.avgReviewRounds ?? 0,
       costPerMergedUnit: p.costPerMergedUnit ?? null,
@@ -267,6 +309,7 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       turns: prev.turns + view.turns,
       avgTurnsPerRun: runs > 0 ? (prev.turns + view.turns) / runs : 0,
       passRate: wRun(prev.passRate, view.passRate),
+      ...mergeSuccess(prev, view),
       mergedUnits: units,
       avgReviewRounds: wUnit(prev.avgReviewRounds, view.avgReviewRounds),
       costPerMergedUnit: cost,

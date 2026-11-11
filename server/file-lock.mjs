@@ -38,9 +38,13 @@ function reapStale(lockFile, seen) {
 }
 
 /**
- * Run fn() while holding <targetPath>.lock. Waits (sync) up to timeoutMs without the holder changing, taking over locks whose owner pid is dead
+ * Run fn(lock) while holding <targetPath>.lock. Waits (sync) up to timeoutMs without the holder changing, taking over locks whose owner pid is dead
  * or that are older than staleMs. Always releases (only a lock this process owns). Returns fn()'s value.
  * Not re-entrant: a nested call on the same path in one process waits out the timeout and throws.
+ *
+ * `lock.assertOwned()` (X1 E4a R2 L4): a holder that stalls past staleMs gets reaped and another writer takes over; when
+ * the stalled one resumes it must not commit its stale view. Callers invoke it right before their rename/atomic write;
+ * it re-reads the lock file and throws when it no longer holds this process's { pid, startedAt }.
  */
 export function withFileLockSync(targetPath, fn, { timeoutMs = FILE_LOCK_TIMEOUT_MS, staleMs = FILE_LOCK_STALE_MS, alive = pidAlive } = {}) {
   const lockFile = `${targetPath}.lock`;
@@ -72,8 +76,21 @@ export function withFileLockSync(targetPath, fn, { timeoutMs = FILE_LOCK_TIMEOUT
     if (stale) reapStale(lockFile, info);
     else sleepSync(POLL_MS);
   }
+  const mine = readLock(lockFile); // { pid, startedAt } we just wrote; pid-only if the read-back raced
+  const stillOwned = () => {
+    const now = readLock(lockFile);
+    if (!now || now.pid !== process.pid) return false;
+    return mine?.startedAt === undefined || now.startedAt === mine.startedAt;
+  };
+  const lock = {
+    file: lockFile,
+    stillOwned,
+    assertOwned() {
+      if (!stillOwned()) throw new Error(`lock lost: ${lockFile} is no longer held by this process (reaped as stale?); nothing written`);
+    },
+  };
   try {
-    return fn();
+    return fn(lock);
   } finally {
     releaseLock(lockFile);
   }
@@ -86,7 +103,7 @@ export function withFileLockSync(targetPath, fn, { timeoutMs = FILE_LOCK_TIMEOUT
 export function updateJsonFileSync(targetPath, mutate, { fallback = {}, ...lockOpts } = {}) {
   return withFileLockSync(
     targetPath,
-    () => {
+    (lock) => {
       let raw = null;
       try {
         raw = readFileSync(targetPath, "utf8");
@@ -97,6 +114,7 @@ export function updateJsonFileSync(targetPath, mutate, { fallback = {}, ...lockO
       const data = raw === null ? structuredClone(fallback) : JSON.parse(raw.replace(/^﻿/, ""));
       const out = mutate(data);
       const next = out === undefined ? data : out;
+      lock.assertOwned(); // a reaped (stale) holder must not commit over a newer writer's file
       writeFileAtomic(targetPath, JSON.stringify(next, null, 2) + "\n");
       return next;
     },
