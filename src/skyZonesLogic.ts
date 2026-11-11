@@ -164,6 +164,11 @@ export async function fetchHubCwd(hub: Pin, doFetch: typeof fetch = fetch): Prom
 }
 
 /** H3: the failed Spin Up error to show on the hub page, only while the focus is the hub lane's. */
+/** The failed Overlord spawn's message, only while its own Squad's hub is shown and no live Overlord has appeared since. */
+export function hubOverlordError(err: { squadId: string; message: string } | null, squadId: string | null | undefined, overlordAgentId: string | null | undefined): string | null {
+  return err && squadId && err.squadId === squadId && !overlordAgentId ? err.message : null;
+}
+
 export function hubSpinUpError(focus: { laneId: string; spinUpError?: string | null } | null | undefined, hub: Pin | null | undefined): string | null {
   return focus && hub && focus.laneId === hub.lane.id ? focus.spinUpError || null : null;
 }

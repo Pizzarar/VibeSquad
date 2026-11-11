@@ -216,3 +216,24 @@ test("PinFocusHeader renders profile picker chips and inline spinUpError alert i
   assert.match(pr, /data-testid=\{`pin-spin-up-profile-chip-\$\{name\}`\}/, "renders each profile chip with testid");
   assert.match(pr, /onStart\(pin,\s*selectedProfile\)/, "Spin Up button passes selectedProfile to onStart");
 });
+
+test("sky Spin Up pending: openPin shares one in-flight spawn, isPinStarting is true until it rejects, subscribers are pinged", async () => {
+  const pin = makePin("lane-pending");
+  let release;
+  let fetches = 0;
+  const fetch = () => (fetches++, new Promise((res) => (release = () => res({ ok: false, status: 500, json: async () => ({ error: "boom" }) }))));
+  let pings = 0;
+  const off = pinActionsMod.subscribePinStarts(() => pings++);
+  assert.equal(pinActionsMod.isPinStarting(pin), false);
+  const a = pinActionsMod.openPin(pin, { fetch, agents: [] });
+  const b = pinActionsMod.openPin(pin, { fetch, agents: [] });
+  assert.equal(a, b, "double-click shares the promise");
+  assert.equal(pinActionsMod.isPinStarting(pin), true);
+  await new Promise((r) => setTimeout(r, 0));
+  release();
+  await assert.rejects(a, /boom/);
+  assert.equal(pinActionsMod.isPinStarting(pin), false, "cleared after rejection");
+  assert.equal(fetches, 1);
+  assert.ok(pings >= 2);
+  off();
+});
