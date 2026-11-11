@@ -5,7 +5,7 @@ html[data-vibe="boring"],
 html[data-vibe="boring"][data-theme="dark"] {
   --bg: #0b0d12; --bg-elev: #11151e; --bg-card: #181e2b; --bg-hover: #222a3a;
   --border: #2e384d; --border-strong: #455370;
-  --text: #eef1f7; --text-dim: #9ba6b8; --accent: #3b82f6; --radius: 4px;
+  --text: #eef1f7; --text-dim: #9ba6b8; --accent: #2563eb; --radius: 4px;
   /* remap the Hypnospace tokens so every existing rule inherits the corporate palette */
   --navy: #0f1115; --well: #0b0d11; --panel: #161920; --panel-hi: #1e222b; --panel-alt: #1e222b;
   --line: #262b36; --slate: #262b36; --marble: #e6e8ee; --muted: #9aa2b2;
@@ -18,7 +18,7 @@ html[data-vibe="boring"][data-theme="dark"] {
 html[data-vibe="boring"][data-theme="light"] {
   --bg: #f1f5f9; --bg-elev: #f8fafc; --bg-card: #ffffff; --bg-hover: #e2e8f0;
   --border: #cbd5e1; --border-strong: #94a3b8;
-  --text: #0f172a; --text-dim: #475569; --accent: #2563eb; --radius: 4px;
+  --text: #0f172a; --text-dim: #475569; --accent: #0f62fe; --radius: 4px;
   --navy: #f8f9fb; --well: #eef1f6; --panel: #ffffff; --panel-hi: #eef1f6; --panel-alt: #eef1f6;
   --line: #d8dee9; --slate: #d8dee9; --marble: #181b20; --muted: #5a6372;
   --cyan: #2563eb; --cyan-t: #2563eb; --cyan-fill: #2563eb; --violet: #2563eb; --hot-pink: #2563eb;
@@ -319,3 +319,44 @@ html[data-vibe="boring"] .composer-thumb .thumb-name { font-size: 11px; color: v
 html[data-vibe="boring"] .composer-thumb .thumb-x,
 html[data-vibe="boring"] .composer-thumb .composer-thumb-remove { width: 22px; height: 22px; font-size: 16px; line-height: 1; color: #ffffff; background: var(--border-strong); border-radius: 50%; }
 html[data-vibe="boring"] .tl-note[data-testid="tl-empty-indicator"] { margin: auto; max-width: 420px; padding: 24px; text-align: center; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; }
+
+/* B2r2: plain header (no art residue), solid Send, 4K base font, roomy dropdowns. */
+html[data-vibe="boring"] .drawer-head .role-tag,
+html[data-vibe="boring"] .drawer-head .provider-tag,
+html[data-vibe="boring"] .drawer-head .drawer-badge,
+html[data-vibe="boring"] .drawer-head .brainstorm-tag,
+html[data-vibe="boring"] .drawer-head .tag,
+html[data-vibe="boring"] .drawer-head [class*="tag"],
+html[data-vibe="boring"] .brainstorm-ctx-bar,
+html[data-vibe="boring"] .brainstorm-ctx-track { background-image: none !important; box-shadow: none !important; text-shadow: none !important; font-family: var(--sans); letter-spacing: normal; }
+html[data-vibe="boring"] .brainstorm-ctx-track { background: var(--bg-hover); border: 1px solid var(--border); border-radius: 4px; }
+html[data-vibe="boring"] .brainstorm-ctx-fill { background: var(--accent) !important; background-image: none !important; box-shadow: none !important; }
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .brainstorm-ctx-bar .btn,
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .drawer-head [data-testid*="handoff"],
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .drawer-head [data-testid*="summary"],
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .drawer-head [data-testid*="inbox"] { display: none !important; }
+
+html[data-vibe="boring"] .composer .send,
+html[data-vibe="boring"] .composer button[type="submit"],
+html[data-vibe="boring"] .composer-send { background: var(--accent) !important; background-color: var(--accent) !important; background-image: none !important; color: #ffffff !important; opacity: 1 !important; border: 1px solid var(--accent) !important; font-weight: 600; }
+html[data-vibe="boring"] .composer .send:disabled,
+html[data-vibe="boring"] .composer button[type="submit"]:disabled,
+html[data-vibe="boring"] .composer-send:disabled { background: #475569 !important; background-color: #475569 !important; border-color: #475569 !important; color: #ffffff !important; opacity: 0.85 !important; }
+
+html[data-vibe="boring"] .boring-app,
+html[data-vibe="boring"] .boring-chat-column .timeline,
+html[data-vibe="boring"] .tl-body,
+html[data-vibe="boring"] .tl-user,
+html[data-vibe="boring"] .tl-assistant,
+html[data-vibe="boring"] .drawer-head { font-size: clamp(14px, 0.45vw + 12px, 18px); line-height: 1.55; }
+
+html[data-vibe="boring"] .drawer-head select,
+html[data-vibe="boring"] .drawer-head .chip,
+html[data-vibe="boring"] .drawer-head button,
+html[data-vibe="boring"] .drawer-provider-select,
+html[data-vibe="boring"] .drawer-mode-select,
+html[data-vibe="boring"] .drawer-thinking-select,
+html[data-vibe="boring"] .drawer-model-input { min-height: 36px; padding: 6px 12px; font-size: clamp(13px, 0.35vw + 11px, 15px); border-radius: 6px; background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); }
+html[data-vibe="boring"] .drawer-head .drawer-controls,
+html[data-vibe="boring"] .drawer-head .drawer-row,
+html[data-vibe="boring"] .drawer-head .drawer-actions { gap: 8px; align-items: center; flex-wrap: wrap; }
