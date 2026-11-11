@@ -2,7 +2,7 @@
 Before proposing a workflow, check here; if covered, say "already covered by X". Update when a workflow ships.
 `docs/PLAN_*.md` is gitignored: those cites resolve in the main checkout. `cli/vs.mjs:NNN` = usage line in the `vs --help` text.
 
-| name | trigger (what Aub says) | where it lives | lane |
+| name | trigger (what the owner says) | where it lives | lane |
 |---|---|---|---|
 | Spin up a Buddy / hub Buddy | "spin up a buddy for X", "new pin" | `cli/vs.mjs:508` (`vs pin new`); docs/PLAN_HUB_BUDDY.md:15 | @hub |
 | Buddy restart | "restart the buddy", "fresh buddy" | `cli/vs.mjs:518` (`vs buddy restart`); `server/mcp/tools.mjs:712` (`restart_buddy`) | @bug |
