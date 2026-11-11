@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { getPref, setPref, applyPrefsToDom } from '../src/prefs.ts';
+import { getPref, setPref, applyPrefsToDom, PREF_DEFS } from '../src/prefs.ts';
 
 const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 
@@ -31,6 +31,18 @@ test('applyPrefsToDom sets documentElement.dataset.vibe', () => {
   } finally {
     setPref('app.vibe', 'fun');
     delete globalThis.document;
+  }
+});
+
+test('app.vibe pref UI copy says Vibespace and no pref copy says Hypnospace', () => {
+  const vibe = PREF_DEFS.find((d) => d.key === 'app.vibe');
+  assert.ok(vibe, 'app.vibe pref def exists');
+  assert.equal(vibe.hint, 'Vibespace (fun) or corporate ADE (boring).');
+  assert.equal(vibe.options.find((o) => o.value === 'fun').label, 'Fun (Vibespace)');
+  for (const d of PREF_DEFS) {
+    assert.ok(!/hypnospace/i.test(d.label ?? ''), `label says Hypnospace: ${d.key}`);
+    assert.ok(!/hypnospace/i.test(d.hint ?? ''), `hint says Hypnospace: ${d.key}`);
+    for (const o of d.options ?? []) assert.ok(!/hypnospace/i.test(o.label ?? ''), `option label says Hypnospace: ${d.key} -> ${o.value}`);
   }
 });
 
