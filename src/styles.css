@@ -3938,7 +3938,8 @@ html, body, #root { overflow-x: hidden; }
 .usage-limit.usage-warn { --usage-c: var(--amber); }
 .usage-limit.usage-hot { --usage-c: var(--hot-pink); border-color: var(--hot-pink); }
 .usage-limit-head { display: flex; align-items: center; gap: var(--sp-2, 8px); min-width: 0; }
-.usage-limit-name { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-limit-name { font-weight: 700; min-width: 0; flex: 1 1 auto; overflow-wrap: anywhere; line-height: 1.2; }
+.usage-limit-pool { line-height: 1.2; }
 .usage-limit-win { color: var(--cyan-t); font-family: var(--arcade); font-size: 10px; text-transform: uppercase; }
 .usage-estimate { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px dashed var(--amber); border-radius: 999px; color: var(--amber-t); text-transform: uppercase; }
 .usage-limit-pct { font-size: 28px; font-weight: 700; line-height: 1; color: var(--mint-t); white-space: nowrap; }
