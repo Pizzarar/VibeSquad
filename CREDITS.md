@@ -36,4 +36,3 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented Boring Mode B2r layout/readability refine (idea-125) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
 - Implemented Boring Mode B2r live 4K refine round 1 (idea-125) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
 - Implemented outbound E2EE relay hardening — Thanks to **@noble/curves** by `Paul Miller (paulmillr)`
-- Implemented hub skyline backdrop wiring — Thanks to **@art A1 (08bfe64)**
