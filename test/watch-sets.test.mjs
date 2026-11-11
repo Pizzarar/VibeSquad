@@ -309,7 +309,7 @@ test("blocker entry and permission wait stall the item; a blocker after the stal
     const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: T0 });
     const { engine, delivered } = engineFor(sb);
     engine.onRunnerEvent(agentEv("w-1", "running"));
-    engine.onRunnerEvent(agentEv("w-2", "running", { requiresAttention: true }));
+    engine.onRunnerEvent(agentEv("w-2", "running", { requiresAttention: true, pendingPermissions: [{ id: "p1", toolName: "Bash" }] }));
     const blk = { ts: iso(T0 + 1000), agent: "w-1", lane: "vibesquad", type: "blocker", text: "need creds", refs: [] };
     assert.deepEqual(engine.onLogEntry("vibesquad", blk), [id]);
     await engine.tick();
@@ -318,6 +318,24 @@ test("blocker entry and permission wait stall the item; a blocker after the stal
     assert.match(delivered[0].text, /need creds/);
     assert.match(delivered[0].text, /w-2 stalled \(blocked \(permission\)\)/);
     assert.deepEqual(engine.onLogEntry("vibesquad", { ...blk, ts: iso(T0 + 2000), text: "still blocked" }), [], "already pinged: normal wake");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("idea-110: requiresAttention without a pending permission is not 'blocked (permission)'; a resolved permission clears it", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered } = engineFor(sb);
+    // w-1: attention flag set for a non-permission reason (empty pending list).
+    engine.onRunnerEvent(agentEv("w-1", "running", { requiresAttention: true, pendingPermissions: [] }));
+    // w-2: permission requested, then answered (the agent event after it carries an empty list).
+    engine.onRunnerEvent(agentEv("w-2", "running", { requiresAttention: true, pendingPermissions: [{ id: "p1" }] }));
+    engine.onRunnerEvent({ kind: "permission", agentId: "w-2", request: { id: "p1", toolName: "Bash" } });
+    engine.onRunnerEvent(agentEv("w-2", "running", { requiresAttention: false, pendingPermissions: [] }));
+    await engine.tick();
+    assert.equal(delivered.length, 0, "neither agent is blocked on a permission");
   } finally {
     sb.cleanup();
   }
