@@ -45,6 +45,25 @@
       "reason": "Config popover floats over the chat timeline by design."
     },
     {
+      "kind": "overlap",
+      "selector": "drawer-config-popover",
+      "other": "timeline",
+      "surface": "menu-drawer-config",
+      "reason": "Config popover rows (labels) float over the chat timeline by design; the popover is the top layer."
+    },
+    {
+      "kind": "overlap",
+      "selector": "angel-hit",
+      "other": "angel-name",
+      "reason": "Angel bezel face-hit is a transparent full-TV click layer over the name chip by design (same as sky-face-hit, AngelBezel.tsx:113); the chip stays readable under it."
+    },
+    {
+      "kind": "overlap",
+      "selector": "tl-pinned-todo",
+      "other": "tl-stamp",
+      "reason": "The pinned plan header is sticky (.tl-head, opaque) and the scrolled timeline passes under it; the stamp underneath is covered content, not an overlap in the layout."
+    },
+    {
       "kind": "decor-line",
       "selector": "drawer-config-popover",
       "other": "timeline",
