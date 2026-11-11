@@ -11,7 +11,9 @@ import test from "node:test";
 import {
   cleanupProjectsFolder,
   createManagedWorktree,
+  linkNodeModules,
   listRepoWorktrees,
+  unlinkNodeModulesLink,
   resolveManagedWorktreePath,
   resolveManagedWorktreeRoot,
   sweepMergedWorktrees,
@@ -220,4 +222,60 @@ test("matchPathInRegistry resolves a managed sanctuary path to its team", () => 
   assert.ok(m, "expected a match for the sanctuary path");
   assert.equal(m.team.id, "efi");
   assert.equal(m.lane.id, "main-game");
+});
+
+// ── idea-79: node_modules junction ──────────────────────────────────────────────
+
+test("createManagedWorktree junctions node_modules, keeps it untracked, and sweep removes only the link", async () => {
+  const { lstatSync, readFileSync, readdirSync } = await import("node:fs");
+  const root = mkdtempSync(join(tmpdir(), "vs-nm-"));
+  const env = { VIBESQUAD_WORKTREES_DIR: resolve(root, "sanctuary") };
+  try {
+    const repo = join(root, "repo");
+    initRepo(repo);
+    mkdirSync(join(repo, "node_modules", "pkg"), { recursive: true });
+    writeFileSync(join(repo, "node_modules", "pkg", "index.js"), "x");
+    // The real repo ignores `node_modules/` (directory-only pattern); mirror that.
+    writeFileSync(join(repo, ".gitignore"), "node_modules/\n");
+    runGit(["add", ".gitignore"], repo);
+    runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "ignore"], repo);
+
+    const wt = createManagedWorktree(repo, "unit-nm", { env });
+    assert.equal(wt.nodeModules, "linked");
+    assert.ok(lstatSync(join(wt.path, "node_modules")).isSymbolicLink());
+    assert.equal(readFileSync(join(wt.path, "node_modules", "pkg", "index.js"), "utf8"), "x");
+    // Untracked: a fresh worktree stays clean.
+    assert.equal(runGit(["status", "--porcelain"], wt.path), "");
+    // Idempotent: second call leaves it alone.
+    assert.equal(linkNodeModules(repo, wt.path), "exists");
+    const excludeText = readFileSync(join(repo, ".git", "info", "exclude"), "utf8");
+    assert.equal(excludeText.split(/\r?\n/).filter((l) => l === "/node_modules").length, 1);
+
+    const res = sweepMergedWorktrees(repo, { apply: true });
+    assert.equal(res.results[0].action, "removed");
+    assert.equal(existsSync(wt.path), false);
+    // The target's contents survive.
+    assert.equal(readFileSync(join(repo, "node_modules", "pkg", "index.js"), "utf8"), "x");
+    assert.deepEqual(readdirSync(join(repo, "node_modules")), ["pkg"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("linkNodeModules skips when the main checkout has no node_modules, and never replaces a real folder", () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-nm2-"));
+  try {
+    const repo = join(root, "repo");
+    initRepo(repo);
+    const dest = join(root, "dest");
+    mkdirSync(dest);
+    assert.equal(linkNodeModules(repo, dest), "no-source");
+    mkdirSync(join(repo, "node_modules"));
+    mkdirSync(join(dest, "node_modules"));
+    assert.equal(linkNodeModules(repo, dest), "exists");
+    assert.equal(unlinkNodeModulesLink(dest), false);
+    assert.ok(existsSync(join(dest, "node_modules")));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
