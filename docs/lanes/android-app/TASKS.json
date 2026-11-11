@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-10T21:40:09.897Z",
+  "updatedAt": "2026-11-11T05:38:25.434Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -343,6 +343,35 @@
       ],
       "doneCheck": "node --test test/relay-tunnel.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
       "status": "todo"
+    },
+    {
+      "id": "unit-and-p0-white",
+      "goal": "P0 white screen after pair: diagnostics only (enter-hop on-page trace, Android error overlay + root error boundary, WebView debug on sideload builds, RETEST_P0.md). Root fix waits for owner retest trace (back-burnered 2026-11-10).",
+      "files": [
+        "server/auth.mjs",
+        "server/build-android.mjs",
+        "src-tauri/android/VsTrust.kt",
+        "src/diagOverlay.ts",
+        "src/RootErrorBoundary.tsx",
+        "src/main.tsx",
+        "test/android-p0-diag.test.mjs",
+        "docs/lanes/android-app/RETEST_P0.md"
+      ],
+      "doneCheck": "node --test test/android-p0-diag.test.mjs && npm run typecheck",
+      "status": "done",
+      "commit": "d01e9b5"
+    },
+    {
+      "id": "unit-and-pair-scroll",
+      "goal": "Pair a Device modal scrolls at UI scale (vh / --vs-ui-scale max-height, sticky head/foot) + idea-127 phone QR and CA next to APK download",
+      "files": [
+        "src/PairDeviceModal.tsx",
+        "src/styles.css",
+        "test/pair-modal-scroll.test.mjs"
+      ],
+      "doneCheck": "node --test test/pair-modal-scroll.test.mjs test/pair-modal-apk.test.mjs && npm run typecheck",
+      "status": "done",
+      "commit": "fc51517"
     }
   ]
 }
