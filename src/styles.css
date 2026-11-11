@@ -6022,8 +6022,8 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 
 /* Slim composer (PLAN_CHAT_ROOM C4): ◂ tab on the composer edge opens the rarer controls; Stop is a small icon. */
 .composer-stop-btn { min-width: 0; padding-left: var(--sp-2, 8px); padding-right: var(--sp-2, 8px); }
-.composer-more-tab { flex: none; align-self: stretch; min-width: var(--sp-4, 16px); padding: 0 var(--sp-1, 4px); background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--text); border: 1px solid var(--line); opacity: 0.6; cursor: pointer; font: inherit; line-height: 1; }
-.composer-more-tab:hover, .composer-more-tab:focus-visible, .composer-more-tab[aria-expanded="true"] { opacity: 1; background: var(--panel); color: var(--cyan-t); }
+.composer-more-tab { flex: none; align-self: stretch; min-width: var(--sp-4, 16px); padding: 0 var(--sp-1, 4px); background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--muted); border: 1px solid var(--line); opacity: 1; cursor: pointer; font: inherit; line-height: 1; }
+.composer-more-tab:hover, .composer-more-tab:focus-visible, .composer-more-tab[aria-expanded="true"] { background: var(--panel); color: var(--cyan-t); }
 .composer-more-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1, 4px) 0; }
 .composer-more-item { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .composer-more-item:hover:not(:disabled), .composer-more-item:focus-visible { background: var(--navy); color: var(--cyan-t); outline: none; }
