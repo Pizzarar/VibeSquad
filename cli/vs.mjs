@@ -4,12 +4,15 @@
 // Writes tiny typed state once (~/.vibesquad/teams/<team>/log.jsonl) and reads
 // only the slice a caller needs. Node built-ins only; no install step.
 //
-//   vs log <type> "<text>" [--ref <ref>...] [--digest]
+//   vs log <type> "<text>" [--ref <ref>...]
 //   vs log --since-me [--limit <N>] [--peek]
 //   vs handoff [--out <path>]
 //
 // Caller identity comes from VS_AGENT_ID (PASEO_AGENT_ID is still read: the runner exports both, old prompts use it) or --agent.
 // Labels are read from the runner's own agent log; teams.json path rules decide the team/lane for everything else.
+// X1b (docs/PLAN_X1_IDENTITY.md): with VS_AGENT_TOKEN set, every write goes to the VS server with x-vs-agent-id +
+// x-vs-agent-token (never the owner's local token) and the server resolves the caller from runner memory; owner verbs
+// (`vs restart`, the owner turn of `vs send`) need owner proof (no agent id + a readable ~/.vibesquad/local-token).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -25,11 +28,12 @@ import {
   INBOX_STATUSES,
   listInboxCards,
   assertInboxTriageCaller,
+  triageCardIds as triageIds,
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
-import { callTool, createContext } from "../server/mcp/tools.mjs";
+import { agentCallerOf, callTool, createContext, hasOwnerProof, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
 import {
@@ -51,7 +55,7 @@ import {
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
-import { fetchWithLocalToken, localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
+import { fetchWithLocalToken, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
   readLaneSpec,
   writeLaneSpec,
@@ -328,7 +332,7 @@ const UNASSIGNED_LANE = "unassigned";
 export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const envAgentId = recordWins
     ? (process.env.VS_AGENT_ID || process.env.PASEO_AGENT_ID)
-    : (process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID);
+    : (String(process.env.PASEO_AGENT_ID ?? "").trim() || process.env.VS_AGENT_ID); // R1 M1: an empty PASEO_AGENT_ID never masks VS_AGENT_ID
   // A caller that is a runner agent with a record is who its labels say: --agent/--role/--ord are claims, never overrides
   // (a worker passing `--role lead` or `--agent <lead>` must not pass a lead gate). --lane/--team still aim the verb.
   const envId = String(envAgentId ?? "").trim();
@@ -389,19 +393,20 @@ export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const ord = pick("ord", "VS_ORD") || ordStringOf(labels);
 
   const profile = labels.profile || "";
-  const digest =
-    Boolean(flags.digest || flags.digestHook) ||
-    process.env.VS_DIGEST === "1" ||
-    isDigestAgent(labels);
+  // X1b: digest identity is the agent record's (Pre-check - Flash + digestFor), never --digest / VS_DIGEST.
+  const digest = isDigestAgent(labels);
 
   return {
     agentId,
+    // X1b: the per-agent token is the identity; the server/runner verify (id, token) and ignore the env's role/lane/team claim.
+    token: String(process.env.VS_AGENT_TOKEN ?? "").trim(),
     agent: agentId || loadUserSettings(BASE_DIR).userName,
     title,
     cwd,
     labels,
     profile,
     digest,
+    digestFor: labels.digestFor ? String(labels.digestFor) : null,
     role,
     ord,
     team,
@@ -500,7 +505,7 @@ Usage:
   vs whoami [--agent <id>] [--lane <lane>] [--json]
   vs who [lead|brainstorm|buddy|workers|all] [--team <team>] [--lane <lane>] [--json]
   vs profiles [--role <role>] [--name <name>] [--notes] [--json]
-  vs log <type> "<text>" [--ref <ref>...] [--digest]
+  vs log <type> "<text>" [--ref <ref>...]
   vs log --since-me [--limit <N>] [--peek]
   vs handoff [--out <path>]
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
@@ -537,13 +542,14 @@ Usage:
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
-Identity: PASEO_AGENT_ID + --team/--lane/--role/--ord (or VS_TEAM/VS_LANE/VS_ROLE/VS_ORD).
+Identity: VS_AGENT_ID + VS_AGENT_TOKEN (the runner verifies the pair; --team/--lane aim a verb, --role/--ord are claims).
 Storage:  VIBESQUAD_HOME (default ~/.vibesquad)
 
-Only role=lead, role=brainstorm, Owner (type "you"), and the Pre-check - Flash
-digest may write to the team log. Workers are logged by the digest.`;
+Team log: the Owner writes "you"; leads and Buddies write every other type; a worker writes
+metric, or done/blocker as a self-report (refs = itself); the Pre-check - Flash digest (per its
+record, never --digest) writes done/metric for the worker it digests.`;
 
-function commandLog(flags) {
+async function commandLog(flags) {
   const identity = resolveIdentity(flags);
 
   if (flags.sinceMe) return readSinceMe(flags, identity);
@@ -567,29 +573,44 @@ function commandLog(flags) {
     throw new Error(`log text must be 1..${MAX_TEXT} chars (got ${text.length})`);
   }
 
-  const mayWrite =
-    identity.role === "lead" ||
-    identity.role === "brainstorm" ||
-    type === "you" ||
-    type === LEGACY_USER_TYPE ||
-    identity.digest;
-  if (!mayWrite) {
-    throw new Error(
-      "role=worker cannot write directly to the team log; worker results are logged by Pre-check - Flash digest.",
-    );
-  }
-
-  const entry = {
-    ts: new Date().toISOString(),
-    agent: identity.agentId || loadUserSettings(BASE_DIR).userName,
-    lane: identity.lane,
-    type,
-    text,
-    refs: flags.ref,
-  };
-  const line = appendLog(identity, entry);
-  process.stdout.write(line);
+  const digestFlag = Boolean(flags.digest || flags.digestHook) || process.env.VS_DIGEST === "1";
+  const who = clientLogFields(identity, { type, refs: flags.ref, digestFlag });
+  // X1b: the entry goes to the VS server as this caller (agent headers, or the owner's local token); the server
+  // re-attributes it from the verified caller. Direct disk append only for a caller without agent proof when the
+  // server is down or there is no local token to present (createContext().writeLog).
+  const ctx = createContext({ env: process.env, identity: callerIdentity(identity) });
+  const entry = await ctx.writeLog({ type: who.type, text, refs: who.refs, agent: who.agent });
+  process.stdout.write(JSON.stringify(entry) + "\n");
   return 0;
+}
+
+/** The tools.mjs identity for a resolved CLI identity: the agent id + token (X1b), team/lane/role as the claim to verify. */
+function callerIdentity(identity) {
+  return { agentId: identity.agentId, token: identity.token, team: identity.team.id, lane: identity.lane, role: identity.role };
+}
+
+/**
+ * X1b client-side mirror of the server's log attribution (server/vibesquad-api.mjs agentLogFields), so an agent gets a
+ * clear error instead of a bare 403 and the disk fallback writes what the server would: `you` is the owner's; a lead/Buddy
+ * keeps today's types; a plain worker logs `metric`, or `done`/`blocker` with refs forced to itself; a digest worker
+ * (per its record, never --digest / VS_DIGEST) logs `done`/`metric` with refs forced to the worker it digests.
+ */
+export function clientLogFields(identity, { type, refs, digestFlag = false } = {}) {
+  const list = Array.isArray(refs) ? refs.map(String) : refs !== undefined && refs !== null ? [String(refs)] : [];
+  const id = String(identity.agentId ?? "").trim();
+  if (!id) return { agent: identity.agent, type, refs: list };
+  if (type === "you" || type === LEGACY_USER_TYPE) throw new Error(`log type "${type}" is the owner's; an agent cannot write it`);
+  if (digestFlag && !identity.digest) {
+    throw new Error(`--digest / VS_DIGEST is ignored: digest identity comes from your agent record (Pre-check - Flash with digestFor), and ${id} is a ${identity.role || "worker"}`);
+  }
+  if (identity.role === "lead" || identity.role === "brainstorm") return { agent: id, type, refs: list };
+  if (identity.digest) {
+    if (type !== "done" && type !== "metric") throw new Error(`a digest worker may only log done or metric, not ${type}`);
+    return { agent: id, type, refs: identity.digestFor ? [identity.digestFor] : list };
+  }
+  if (type === "done" || type === "blocker") return { agent: id, type, refs: [id] };
+  if (type === "metric") return { agent: id, type, refs: list.filter((r) => !isRunnerId(r) || r === id) };
+  throw new Error(`role=worker cannot write ${type} to the team log (only done, blocker or metric, as a self-report); put it in your final message for your lead.`);
 }
 
 function readSinceMe(flags, identity) {
@@ -844,7 +865,7 @@ function resolveInboxScope(flags) {
   return { laneId: lane.id, teamId: me.team.id };
 }
 
-function commandInbox(flags) {
+async function commandInbox(flags) {
   const sub = String(flags._.shift() ?? "list").toLowerCase();
   const baseHome = path.resolve(process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
 
@@ -892,15 +913,43 @@ function commandInbox(flags) {
   }
 
   if (sub === "triage") {
-    // One gate for every mutating triage action. Empty agent id = the owner at a local shell: accepted trust
-    // model (an agent could edit inbox.json directly anyway). An agent id with no runner record fails closed.
-    const gate = (cardIds, { ownerOnly = false } = {}) => {
-      const me = resolveIdentity(flags, { recordWins: true });
-      if (me.agentId && !(isRunnerId(me.agentId) && readRunnerAgentSync(me.agentId))) {
-        throw new Error(`inbox triage denied: agent ${me.agentId} has no runner record, so its role/Squad cannot be verified`);
+    // X1b + idea-137: the role check runs first, before any card id or action validation. A verified agent (id + token)
+    // triages through POST /__vibesquad/inbox/triage, where the server re-checks role, Squad and cards; the owner's shell
+    // goes through the server too when it holds the local token, and writes directly only when the server is down (or
+    // there is no token to present). An agent id without a token (rollout fallback) keeps the record-based local gate.
+    const me = resolveIdentity(flags, { recordWins: true });
+    const ctx = createContext({ env: process.env, identity: callerIdentity(me) });
+    const caller = agentCallerOf(ctx);
+    let role = me.role;
+    let teamId = me.team.id;
+    if (caller) {
+      if (caller.verify) {
+        await verifyCaller(ctx); // 403 on a wrong/missing token
+        role = ctx.identity.role;
+        teamId = ctx.identity.team;
+      } else if (!(isRunnerId(caller.id) && readRunnerAgentSync(caller.id))) {
+        throw new Error(`inbox triage denied: agent ${caller.id} has no runner record, so its role/Squad cannot be verified`);
       }
-      if (ownerOnly && me.agentId) throw new Error("deleting cards is owner-only; use --archive");
-      assertInboxTriageCaller({ agentId: me.agentId, role: me.role, teamId: me.team.id }, cardIds, baseHome);
+      if (flags.delete) throw new Error("deleting cards is owner-only; use --archive");
+      if (role !== "lead" && role !== "brainstorm") {
+        throw new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${caller.id} is a ${role}. Put it in your final message for your lead to run.`);
+      }
+    } else if (!(await hasOwnerProof(ctx))) {
+      // R1 H1: an empty agent id is the owner only with the local token in hand; a scrubbed shell is nobody.
+      throw new Error("vs inbox triage: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or a lead/Buddy of the card's Squad may triage.");
+    }
+    const viaServer = async (body) => {
+      if (caller?.verify) return postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
+      if (caller) {
+        assertInboxTriageCaller({ agentId: caller.id, role, teamId }, triageIds(body), baseHome);
+        return triageInboxCards({ ...body, baseHome });
+      }
+      try {
+        return await postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
+      } catch (e) {
+        if (e?.unreachable) return triageInboxCards({ ...body, baseHome });
+        throw e;
+      }
     };
     if (flags.merge) {
       const mergeStr = String(flags.merge).trim();
@@ -911,8 +960,7 @@ function commandInbox(flags) {
         targetId = parts[0];
         sourceIds = [...parts.slice(1), ...sourceIds];
       }
-      gate([targetId, ...sourceIds]);
-      const res = triageInboxCards({ action: "merge", targetId, sourceIds, baseHome });
+      const res = await viaServer({ action: "merge", targetId, sourceIds });
       process.stdout.write(`merged [${res.mergedIds.join(", ")}] → ${res.card.id} (${res.card.title})\n`);
       return 0;
     }
@@ -920,14 +968,12 @@ function commandInbox(flags) {
       const cardId = String(flags.bounce).trim();
       const laneId = String(flags.lane || flags._[0] || "").trim();
       if (!laneId) throw new Error("inbox triage --bounce <cardId> requires --lane <newLane>");
-      gate([cardId]);
-      const res = triageInboxCards({
+      const res = await viaServer({
         action: "bounce",
         cardId,
         laneId,
         teamId: flags.team ? String(flags.team) : undefined,
         scope: flags.scope ? String(flags.scope) : undefined,
-        baseHome,
       });
       process.stdout.write(`bounced ${res.card.id} → ${res.card.laneId} (${res.card.teamId})\n`);
       return 0;
@@ -938,8 +984,7 @@ function commandInbox(flags) {
       if (!INBOX_STATUSES.includes(status)) {
         throw new Error(`inbox triage status must be one of: ${INBOX_STATUSES.join(", ")}`);
       }
-      gate([cardId]);
-      const res = triageInboxCards({ action: "update", cardId, patch: { status }, baseHome });
+      const res = await viaServer({ action: "update", cardId, patch: { status } });
       process.stdout.write(`${res.card.id} → ${res.card.status}
 `);
       return 0;
@@ -947,19 +992,17 @@ function commandInbox(flags) {
     if (flags.archive || flags.park) {
       const verb = flags.archive ? "archive" : "park";
       const cardIds = [String(flags.archive || flags.park), ...flags._].map((s) => String(s).trim()).filter(Boolean);
-      gate(cardIds);
       for (const cardId of cardIds) {
         const res = verb === "archive"
-          ? triageInboxCards({ action: "archive", cardId, baseHome })
-          : triageInboxCards({ action: "update", cardId, patch: { status: "parked" }, baseHome });
+          ? await viaServer({ action: "archive", cardId })
+          : await viaServer({ action: "update", cardId, patch: { status: "parked" } });
         process.stdout.write(`${verb === "archive" ? "archived" : "parked"} ${res.card.id}
 `);
       }
       return 0;
     }
     if (flags.delete) {
-      gate([], { ownerOnly: true });
-      const res = triageInboxCards({ action: "delete", cardId: String(flags.delete).trim(), baseHome });
+      const res = await viaServer({ action: "delete", cardId: String(flags.delete).trim() });
       process.stdout.write(`deleted ${res.card.id}
 `);
       return 0;
@@ -1929,6 +1972,7 @@ export async function requestWorkerSweep({ apply = false, port = Number(process.
 export async function commandAgentVerb(verb, flags, makeContext = createContext, out = (s) => process.stdout.write(s), readStdin) {
   if (verb === "archive" && flags.sweep) {
     if (flags._.length) throw new Error("usage: vs archive --sweep [--apply]");
+    assertOwnerShell("vs archive --sweep"); // X1b: the sweep route is owner-only and rides the local token
     const report = await requestWorkerSweep({ apply: Boolean(flags.apply) });
     out(JSON.stringify(report, null, 2) + "\n");
     if (report?.busy) process.stderr.write("Warning: the 5-min sweep is running right now; nothing was evaluated. Retry in a moment.\n");
@@ -1990,7 +2034,7 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
       : resolveIdentity(flags);
   const lane = verb === "ls" && identity.lane === UNASSIGNED_LANE && !flags.lane && !process.env.VS_LANE ? "" : identity.lane;
   const ctx = makeContext({
-    identity: { agentId: identity.agentId, team: identity.team.id, lane, role: identity.role },
+    identity: { agentId: identity.agentId, token: identity.token, team: identity.team.id, lane, role: identity.role },
   });
   const result = await runAgentVerb(verb, flags, ctx);
   out(JSON.stringify(result, null, 2) + "\n");
@@ -2380,20 +2424,79 @@ function commandMcp(flags) {
 }
 
 /** Who may restart the runtime: the owner's own shell (no runner agent id) or the Squad's hub lead (Overlord). Any other runner agent is refused. */
-export function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync) {
+/**
+ * Owner proof for an owner verb run from a shell (X1b): no agent id, and the per-install local token is readable from
+ * the env's home (VIBESQUAD_HOME, else USERPROFILE/HOME + .vibesquad). The env is the only source: an empty env has none.
+ */
+export function ownerProofFromEnv(env = process.env) {
+  if (String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim()) return false;
+  if (String(env.VS_AGENT_TOKEN ?? "").trim()) return false; // R1 M1: a leftover token with the id cleared is still an agent shell
+  const base = String(env.VIBESQUAD_HOME || "").trim() || (env.USERPROFILE || env.HOME ? path.join(String(env.USERPROFILE || env.HOME), ".vibesquad") : "");
+  if (!base) return false;
+  return Boolean(readLocalToken(localTokenPath(base)));
+}
+
+/** Default verifier for `assertRestartCaller`: GET /verify-agent on the runner as (id, token) (RunnerBackend.verifyAgent). */
+async function verifyAgentForRestart({ id, token }, env = process.env) {
+  const { RunnerClient } = await import("../server/backend/runner-client.mjs");
+  return new RunnerClient({ env, caller: { id, token } }).verifyAgent({ id, token });
+}
+
+/**
+ * Who may run `vs restart`: the owner's shell (owner proof: no agent id + the local token), or the Overlord (role lead on
+ * the Squad's hub lane). An agent is who its token says (X1b: /verify-agent); under the rollout fallback (an id without a
+ * token, flag off) its runner record on disk decides, as before; a runner id with no record or a wrong token is refused.
+ * `identity` is a DI shortcut for tests; `opts.hasOwnerProof(env)` / `opts.verify({ id, token })` inject the proofs.
+ */
+export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync, { hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env) } = {}) {
   const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
-  if (!id || !isRunnerId(id)) return;
-  // Fail closed: identity comes only from the runner's own record of this agent id. A runner id with no record gets nothing from
-  // VS_ROLE/VS_LANE/VS_TEAM env (spoofable), so it is refused.
-  const rec = identity ? null : readRecord(id);
-  if (!identity && !rec) throw new Error(`vs restart: ${id} has no runner record, so its role cannot be verified; refusing.`);
-  const labels = rec?.labels ?? {};
-  const who = identity ?? { role: String(labels.role ?? "").trim().toLowerCase(), team: { id: labels.team ?? "" }, lane: labels.lane || labels.lead || "" };
+  if (!id || !isRunnerId(id)) {
+    if (!hasOwnerProof(env)) throw new Error("vs restart: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Overlord may restart the runtime.");
+    return;
+  }
+  const token = String(env.VS_AGENT_TOKEN ?? "").trim();
+  const tokenRequired = String(env.VS_AGENT_TOKEN_REQUIRED ?? "").trim() === "1";
+  let who = identity;
+  if (!who && (token || tokenRequired)) {
+    if (!token) throw new Error(`vs restart: 403: ${id} has no VS_AGENT_TOKEN, so it cannot be verified; refusing.`);
+    let rec;
+    try {
+      rec = await verify({ id, token });
+    } catch (e) {
+      if (e?.status === 403) throw new Error(`vs restart: 403: ${id}'s token does not match the runner's (or the agent is gone/retired); refusing.`);
+      throw new Error(`vs restart: could not verify ${id} with the runner: ${e?.message ?? e}`);
+    }
+    rec = rec?.agent ?? rec;
+    if (!rec || String(rec.id ?? "") !== id) throw new Error(`vs restart: 403: the runner does not know ${id}; refusing.`);
+    who = { role: String(rec.role ?? "").trim().toLowerCase(), team: { id: rec.team ?? "" }, lane: rec.lane ?? "" };
+  } else if (!who) {
+    // Rollout fallback (X1a-X1b): identity comes only from the runner's own record of this agent id on disk. A runner id with
+    // no record gets nothing from VS_ROLE/VS_LANE/VS_TEAM env (spoofable), so it is refused.
+    const rec = readRecord(id);
+    if (!rec) throw new Error(`vs restart: ${id} has no runner record, so its role cannot be verified; refusing.`);
+    const labels = rec?.labels ?? {};
+    who = { role: String(labels.role ?? "").trim().toLowerCase(), team: { id: labels.team ?? "" }, lane: labels.lane || labels.lead || "" };
+  }
   const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
   const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
   if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane)) {
     throw new Error(`vs restart: ${id} is a ${who.role || "worker"}; restarting the runtime cuts every agent's turn, so only the owner or the Overlord (hub lead) may. Ask your lead.`);
   }
+}
+
+/** X1b: an owner verb (pair, devices, open, archive --sweep, restart) never runs from an agent shell: an agent must not present the owner's local token. */
+export function assertOwnerShell(what, env = process.env) {
+  const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
+  if (id) throw new Error(`${what} is an owner verb; it never runs from an agent shell (VS_AGENT_ID=${id}). Ask the owner.`);
+  if (String(env.VS_AGENT_TOKEN ?? "").trim()) throw new Error(`${what} is an owner verb; it never runs from an agent shell (VS_AGENT_TOKEN is set). Ask the owner.`);
+}
+
+/** X1b: the agent identity keys a relaunched runtime must never inherit (mirrors scripts/restart-runtime.mjs AGENT_ENV_KEYS; not imported: the shim ships cli/ + server/ only). */
+export const AGENT_ENV_KEYS = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_LANE", "VS_TEAM", "VS_ORD", "VS_PROFILE"];
+export function stripAgentEnv(env = process.env) {
+  const out = { ...env };
+  for (const k of AGENT_ENV_KEYS) delete out[k];
+  return out;
 }
 
 /** One launch arg may not carry a quote or control character: it is joined into a single Win32_Process.Create CommandLine. */
@@ -2407,9 +2510,9 @@ function assertSafeLaunchArg(a) {
  * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
  * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
  */
-export function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync } = {}) {
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync, hasOwnerProof, verify } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
-  if (!flags.dryRun) assertRestartCaller(identity, teams, env, readRecord);
+  if (!flags.dryRun) await assertRestartCaller(identity, teams, env, readRecord, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
@@ -2440,7 +2543,9 @@ export function commandRestart(flags, { spawnFn = null, identity = null, teams =
     if (r.status !== 0) throw new Error(`could not launch the restart script detached: ${(r.stderr || r.stdout || "").trim()}`);
     pid = Number(String(r.stdout).trim());
   } else {
-    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore" });
+    // X1b: the relaunched server/runner must never inherit this shell's agent identity (VS_AGENT_ID / PASEO_AGENT_ID /
+    // VS_AGENT_TOKEN), or the new server would call the runner as that agent. (WMI above never inherits our env.)
+    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(env) });
     child.unref();
     pid = child.pid;
   }
@@ -2722,6 +2827,8 @@ export function main(argv) {
     }
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
+    // X1b: owner verbs present the local token to the server; they never run from an agent shell.
+    if (command === "open" || command === "pair" || command === "devices" || command === "host-key") assertOwnerShell(`vs ${command}`); // host-key: R2 L1
     if (command === "open") return commandOpen(flags);
     if (command === "pair") return commandPair(flags);
     if (command === "devices") return commandDevices(flags);

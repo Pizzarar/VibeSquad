@@ -34,7 +34,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -56,6 +56,7 @@ import {
   sendInboxCard,
   sortIdeaCard,
   assertInboxTriageCaller,
+  assertInboxTriageRole,
   triageCardIds,
   triageInboxCards,
   writeInboxCards,
@@ -1065,9 +1066,11 @@ async function handleInboxTriage(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readCleanBody(req);
-    // X1c: an agent triages only as a lead/Buddy of the cards' Squad; delete is the owner's.
+    // X1c: an agent triages only as a lead/Buddy of the cards' Squad; delete is the owner's. idea-137: the role check
+    // comes first, before the body is parsed and before any action/card validation can answer a worker with a 400/404.
     const caller = agentCaller(req);
+    if (caller) assertInboxTriageRole(caller);
+    const body = await readCleanBody(req);
     if (caller) {
       if (String(body.action || "").trim() === "delete") throw forbidden("inbox delete is owner-only; archive it instead");
       assertInboxTriageCaller(caller, triageCardIds(body));
@@ -1638,6 +1641,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/__vibesquad/local-proof") return handleLocalProof(req, res); // X1 L3: server proves the token before `vs pair` sends it
     const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
     if (isApi && !isTrusted(req)) {
+      if (originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4: a cookie write that failed the same-origin proof
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 401, { error: "unpaired device" });
     }
@@ -1656,6 +1660,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const write = req.method !== "GET" && req.method !== "HEAD";
     if (caller.kind === "denied") return sendJson(res, caller.status, { error: caller.error });
     if (isApi && !owner && (write || isGatedRead(path, req.url))) {
+      if (caller.kind !== "agent" && originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4 (never for an agent caller)
       if (caller.kind !== "agent") return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
       if (!write || !agentWriteAllowed(path)) return sendJson(res, 403, { error: `agent ${caller.id} may not ${req.method} ${path} (owner-only route)` });
     }
