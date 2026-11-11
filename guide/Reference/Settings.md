@@ -4,7 +4,7 @@ What each area of VibeSquad's Settings window does, when to touch it, and the sa
 
 Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** and **Layout vibe** (Normal or Psycho, see [Normal and Psycho](../Concepts/Modes.md)) are on **App**, and **UPDATE CHANNEL** is on **About**. The screenshot below is the **App** tab, which opens first.
 
-![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
+![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Layout vibe, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
 ## Your name
 
