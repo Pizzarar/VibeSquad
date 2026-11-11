@@ -53,6 +53,13 @@ const RAIL_SURFACES = [
   { id: "rail-sidebar-toggled-hub", setup: async (p) => { await surfById("hub")(p); await railClick(p, "sidebar-collapse-toggle"); } },
 ];
 
+// Boring Mode (data-vibe=boring) replaces the whole desktop shell, so the fun-mode routes above do not exist there: use its own entry points.
+const boringClick = async (p, id) => { await p.locator(tidq(id)).first().click({ timeout: 4000 }); await sleep(600); };
+const BORING_SURFACES = [
+  { id: "boring-home", setup: async () => {} },
+  ...[["boring-overview", "boring-project-overview-btn"], ["boring-overlord", "boring-core-overlord"], ["boring-riffbot", "boring-core-riffbot"], ["boring-bugs", "boring-core-bugs"], ["boring-lead", "boring-conv-lead-vibesquad"], ["boring-brainstorm", "boring-conv-brainstorm-vibesquad"], ["boring-usage", "boring-usage-btn"], ["boring-settings", "boring-settings-btn"]].map(([id, t]) => ({ id, setup: (p) => boringClick(p, t) })),
+];
+
 // Surfaces whose setup deliberately leaves a non-modal layer open: that layer (only) may cover the page controls behind it.
 const OPEN_LAYER = { "menu-pin-tile": ".pin-menu-list", "sky-riff-open": ".sky-chat-panel", "sky-riff-landed": ".sky-chat-panel" }; // C5: at <=820px height the open sky chat overlays the dimmed floor by design
 
@@ -230,7 +237,7 @@ async function closeLayers(page) {
   await sleep(120);
 }
 
-const ALL_SURFACES = () => [...O.SURFACES, ...RAIL_SURFACES, ...PHONE_SURFACES];
+const ALL_SURFACES = () => [...O.SURFACES, ...RAIL_SURFACES, ...PHONE_SURFACES, ...BORING_SURFACES];
 
 export async function run() {
   const sizeIds = arg("sizes", "1080,4k,mobile,1280").split(",");
@@ -277,7 +284,8 @@ export async function run() {
         const st = stats[combo];
         const ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: size.dpr, colorScheme: theme, ...(size.mobile ? { hasTouch: true } : {}) });
         await E.installRoutes(ctx);
-        if (vibe !== "fun") await ctx.addInitScript(`document.documentElement.setAttribute("data-vibe", ${JSON.stringify(vibe)})`);
+        // The app derives <html data-vibe> from the app.vibe pref (src/prefs.ts), so seed that, not the attribute.
+        if (vibe !== "fun") await ctx.addInitScript(`try { localStorage.setItem("vs.prefs.v1", JSON.stringify({ "app.vibe": ${JSON.stringify(vibe)} })); } catch {}`);
         await ctx.addInitScript(`try { localStorage.setItem("vs.vibePicked", "1"); } catch {}`);
         const page = await ctx.newPage();
         // Rail/menu state persists in storage between surfaces (a probe click can collapse a rail): every setup starts from a clean app.
@@ -286,7 +294,7 @@ export async function run() {
           await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("vs.vibePicked", "1"); }); // vibePicked: never hit the first-launch Normal/Psycho picker
           if (!size.mobile) { await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 }); await page.waitForTimeout(1500); }
         };
-        for (const surf of size.mobile ? PHONE_SURFACES : [...O.SURFACES, ...RAIL_SURFACES]) {
+        for (const surf of size.mobile ? PHONE_SURFACES : vibe === "boring" ? BORING_SURFACES : [...O.SURFACES, ...RAIL_SURFACES]) {
           if (only.length && !only.includes(surf.id)) continue;
           st.surfaces++;
           // Below ~1300px the rails start collapsed and hide the controls some setups click (pin-team rows, footer buttons): when a
