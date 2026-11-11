@@ -211,9 +211,9 @@ test("vs restart from an agent shell: the gate verifies the token with the runne
   assert.match(scrubbed.stderr, /no owner proof/, "a scrubbed shell with no local token is not the owner");
 });
 
-test("owner verbs (pair, devices, open, archive --sweep) never run from an agent shell and make no server call", async () => {
+test("owner verbs (pair, devices, open, host-key, archive --sweep) never run from an agent shell and make no server call", async () => {
   const before = hits.length;
-  for (const args of [["pair"], ["devices"], ["devices", "revoke", "x"], ["open"], ["archive", "--sweep"]]) {
+  for (const args of [["pair"], ["devices"], ["devices", "revoke", "x"], ["open"], ["host-key"], ["host-key", "show"], ["host-key", "rotate"], ["archive", "--sweep"]]) {
     const r = await vs(args, { who: ids.overlord });
     assert.notEqual(r.status, 0, args.join(" "));
     assert.match(r.stderr, /owner verb/, args.join(" "));

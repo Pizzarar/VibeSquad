@@ -330,7 +330,7 @@ describe("E4b MUST 3: mintedByDeviceId cascade revoke", () => {
 
     const kid = await mintAndApprove(rootToken, "Child 3");
     ageDevicesFile();
-    const r = spawnSync(process.execPath, [VS, "devices", "revoke", root.id], { encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: "", VS_AGENT_ID: "" }, windowsHide: true, timeout: 60_000 });
+    const r = spawnSync(process.execPath, [VS, "devices", "revoke", root.id], { encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: "", VS_AGENT_ID: "", VS_AGENT_TOKEN: "", VS_AGENT_TOKEN_REQUIRED: "" }, windowsHide: true, timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stdout, /Also revoked 1 device it paired: Child 3/);
     assert.equal(authAs(kid), null, "the server noticed the out-of-process cascade");
@@ -723,7 +723,7 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
     const { token } = redeem(start.code, "Orphan ticket");
     assert.equal(auth.pendingCountForTest(), 1);
     ageDevicesFile();
-    const r = spawnSync(process.execPath, [VS, "devices", "revoke", phone.id], { encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: "", VS_AGENT_ID: "" }, windowsHide: true, timeout: 60_000 });
+    const r = spawnSync(process.execPath, [VS, "devices", "revoke", phone.id], { encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: "", VS_AGENT_ID: "", VS_AGENT_TOKEN: "", VS_AGENT_TOKEN_REQUIRED: "" }, windowsHide: true, timeout: 60_000 });
     assert.equal(r.status, 0, r.stderr);
     assert.equal(authAs(phoneToken), null, "the server reloaded the file");
     assert.equal(auth.pendingCountForTest(), 0, "the minter's ticket went with it");

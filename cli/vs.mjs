@@ -2828,7 +2828,7 @@ export function main(argv) {
     if (command === "mcp") return commandMcp(flags);
     if (command === "install-shim") return commandInstallShim(flags);
     // X1b: owner verbs present the local token to the server; they never run from an agent shell.
-    if (command === "open" || command === "pair" || command === "devices") assertOwnerShell(`vs ${command}`);
+    if (command === "open" || command === "pair" || command === "devices" || command === "host-key") assertOwnerShell(`vs ${command}`); // host-key: R2 L1
     if (command === "open") return commandOpen(flags);
     if (command === "pair") return commandPair(flags);
     if (command === "devices") return commandDevices(flags);
