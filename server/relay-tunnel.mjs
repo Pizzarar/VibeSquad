@@ -522,6 +522,8 @@ const rawSize = (raw) => (typeof raw === "string" ? raw.length : (raw?.byteLengt
  *   openWs({ path, deviceId, send(data, binary), close(code?) }) -> { message(data, binary), close() } | null
  *   burnCodes()             -> void   (H2: invalidate every outstanding pairing code)
  *   onNeedsYou(event)       -> void   (H2/R1#1: security event for the owner)
+ *   onAuthenticated(deviceId, cid) -> void   (X1 wire M1: a session became that device; the wiring registers it with auth.mjs trackSocket)
+ *   onSessionClosed(cid, deviceId) -> void   (X1 wire M1: that session is gone, whatever closed it)
  * Injected for tests: WebSocketImpl, setTimeoutFn/clearTimeoutFn, rand, now, onEvent.
  */
 export function createRelayHost(opts) {
@@ -536,6 +538,8 @@ export function createRelayHost(opts) {
     isRevoked = () => false,
     burnCodes = () => {},
     onNeedsYou = () => {},
+    onAuthenticated = () => {},
+    onSessionClosed = () => {},
     WebSocketImpl = globalThis.WebSocket,
     setTimeoutFn = setTimeout,
     clearTimeoutFn = clearTimeout,
@@ -591,6 +595,11 @@ export function createRelayHost(opts) {
     s.ws.clear();
     s.dead = true;
     if (notifyRelay) relaySend({ t: "close", cid });
+    if (s.deviceId) {
+      try {
+        onSessionClosed(cid, s.deviceId);
+      } catch {}
+    }
   }
 
   function sealSend(s, obj) {
@@ -734,6 +743,9 @@ export function createRelayHost(opts) {
       }
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
+      try {
+        onAuthenticated(s.deviceId, s.cid);
+      } catch {}
       return send(s, { t: "redeem-res", id, ok: true, deviceId: s.deviceId, token: r.token });
     }
     if (m.t === "auth") {
@@ -760,6 +772,9 @@ export function createRelayHost(opts) {
       if (!r?.deviceId) return send(s, { t: "auth-res", id, ok: false });
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
+      try {
+        onAuthenticated(s.deviceId, s.cid);
+      } catch {}
       return send(s, { t: "auth-res", id, ok: true, deviceId: s.deviceId });
     }
     if (!s.deviceId) return closeSession(s.cid); // anything else before redeem/auth is a protocol violation

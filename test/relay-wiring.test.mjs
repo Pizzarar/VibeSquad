@@ -301,3 +301,130 @@ describe("E5 wiring: opt-in and the T8 lock", () => {
     w.stop();
   });
 });
+
+// ---- X1 wire walk fix round (X1_E5_WIRE_WALK.md M1 / L1) ----
+describe("X1 wire M1: out-of-process revoke and the unreadable-file fail-close reach relay sessions with no request in flight", () => {
+  /** The real middleware plus one long-lived SSE route (what the runner / terminal streams are), authenticated the same way. */
+  const streamListener = guardHandler((req, res) => {
+    if (!String(req.url).startsWith("/api/stream")) return listener(req, res);
+    if (!auth.authenticate(req)) {
+      res.writeHead(401);
+      return res.end();
+    }
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    let n = 0;
+    const t = setInterval(() => res.write(`data: ${++n}\n\n`), 20);
+    res.on("close", () => clearInterval(t));
+  });
+  const startStreamWiring = (relay) =>
+    wiring.createRelayWiring({ endpoint: "wss://relay.example/ws", requestListener: streamListener, keypairFile: keyFile, keyPollMs: 0, log: quiet, onNeedsYou: () => {}, hostOptions: { WebSocketImpl: relay.Sock, rand: () => 0.5 } }).start();
+  /** Real-time wait (the devices.json watch is a real 1 s interval). Resolves with the elapsed ms. */
+  const waitFor = async (fn, ms = 4000) => {
+    const t0 = Date.now();
+    while (!fn()) {
+      if (Date.now() - t0 > ms) throw new Error("timed out waiting");
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    return Date.now() - t0;
+  };
+  const openStream = async (c) => {
+    const ws = await c.openWebSocket("/api/stream");
+    const st = { events: 0, closed: null };
+    ws.onmessage = () => st.events++;
+    ws.onclose = (ev) => (st.closed = ev.code);
+    await waitFor(() => st.events >= 2);
+    return st;
+  };
+
+  test("an authenticated relay session is registered like a LAN socket; it is released when the session ends normally", async () => {
+    const relay = makeRelay();
+    const w = startStreamWiring(relay);
+    await tick();
+    const c = await connect(relay, w);
+    const { deviceId } = await c.redeem(auth.createPairCode(), "Phone");
+    assert.equal(auth.hasDeviceSockets(deviceId), true, "tracked on authentication, before any request");
+    c.close();
+    await waitFor(() => !auth.hasDeviceSockets(deviceId));
+    assert.equal(w.status().sessions, 0);
+    auth.revokeDevice(deviceId);
+    w.stop();
+  });
+
+  test("attacker: stolen phone, `vs devices revoke` in another process; its open stream and idle session are cut by the watch within ~1.5 s, no request needed", async () => {
+    const relay = makeRelay();
+    const w = startStreamWiring(relay);
+    await tick();
+    const a = await connect(relay, w);
+    const ra = await a.redeem(auth.createPairCode(), "Stolen phone");
+    const idle = await connect(relay, w);
+    await idle.authenticate(ra.token);
+    let idleClosed = null;
+    idle.onclose = (e) => (idleClosed = e);
+    const st = await openStream(a);
+    assert.equal(w.status().sessions, 2);
+    // Out of process: rewrite devices.json without the device, no request from anyone afterwards.
+    const list = JSON.parse(readFileSync(devicesFile, "utf8"));
+    list.devices = list.devices.filter((d) => d.id !== ra.deviceId);
+    writeFileSync(devicesFile, JSON.stringify(list, null, 2));
+    const ms = await waitFor(() => st.closed !== null && idleClosed !== null);
+    assert.ok(ms < 2500, `cut within ${ms} ms`);
+    const after = st.events;
+    await new Promise((r) => setTimeout(r, 150));
+    assert.equal(st.events, after, "no event flows after the cut");
+    assert.equal(w.status().sessions, 0);
+    assert.equal(auth.hasDeviceSockets(ra.deviceId), false);
+    const again = await connect(relay, w);
+    await assert.rejects(again.authenticate(ra.token), /token rejected/);
+    again.close();
+    w.stop();
+  });
+
+  test("an unreadable devices.json fails closed for an open relay stream with no request in flight (E4a R2 L2 parity)", async () => {
+    const relay = makeRelay();
+    const w = startStreamWiring(relay);
+    await tick();
+    const c = await connect(relay, w);
+    const { deviceId } = await c.redeem(auth.createPairCode(), "Phone");
+    const st = await openStream(c);
+    const good = readFileSync(devicesFile, "utf8");
+    writeFileSync(devicesFile, "{ not json");
+    const ms = await waitFor(() => st.closed !== null);
+    assert.ok(ms < 2500, `cut within ${ms} ms`);
+    assert.equal(w.status().sessions, 0);
+    writeFileSync(devicesFile, good);
+    assert.ok(auth.listDevices().some((d) => d.id === deviceId), "the device is back once the file is readable; it just re-authenticates");
+    auth.revokeDevice(deviceId);
+    w.stop();
+  });
+});
+
+describe("X1 wire L1: the relay endpoint is never shown or logged with userinfo, query or fragment", () => {
+  test("status() and the wiring's endpoint carry origin + path only; the host still dials the configured URL", async () => {
+    assert.equal(wiring.publicRelayEndpoint("wss://user:s3cret@relay.example:8443/ws?token=RELAYSECRET#frag"), "wss://relay.example:8443/ws");
+    assert.equal(wiring.publicRelayEndpoint("wss://relay.example"), "wss://relay.example/");
+    const relay = makeRelay();
+    const dialed = [];
+    class Spy extends relay.Sock {
+      constructor(url) {
+        super(url);
+        dialed.push(url);
+      }
+    }
+    const w = wiring.createRelayWiring({ endpoint: "wss://user:s3cret@relay.example/ws?token=RELAYSECRET#frag", requestListener: listener, keypairFile: keyFile, keyPollMs: 0, log: quiet, onNeedsYou: () => {}, hostOptions: { WebSocketImpl: Spy, rand: () => 0.5 } }).start();
+    api.setRelayStatus(() => w.status());
+    await tick();
+    assert.equal(w.endpoint, "wss://relay.example/ws");
+    assert.equal(w.status().endpoint, "wss://relay.example/ws");
+    assert.ok(!/s3cret|RELAYSECRET|frag/.test(JSON.stringify(w.status())), "nothing secret in status()");
+    assert.match(dialed[0], /^wss:\/\/user:s3cret@relay\.example\/ws\?token=RELAYSECRET&hostId=/, "the dial URL keeps what the relay may need");
+    const c = await connectRelay({ endpoint: "wss://relay.example/ws", hostId: w.hostId, hostPubKey: w.pub, WebSocketImpl: relay.Sock });
+    const { deviceId } = await c.redeem(auth.createPairCode(), "Phone");
+    const body = await (await c.fetch("/api/auth/status")).text();
+    assert.ok(!/s3cret|RELAYSECRET/.test(body), "nothing secret on /api/auth/status");
+    assert.equal(JSON.parse(body).relay.endpoint, "wss://relay.example/ws");
+    c.close();
+    auth.revokeDevice(deviceId);
+    api.setRelayStatus(null);
+    w.stop();
+  });
+});

@@ -12,6 +12,7 @@ import {
   PAIR_AUDIT_LANE,
   PAIR_AUDIT_TEAM,
   redeemPairCode,
+  trackSocket,
 } from "./auth.mjs";
 import {
   createInProcessDispatcher,
@@ -24,6 +25,7 @@ import {
   selfCertifyingHostId,
 } from "./relay-tunnel.mjs";
 import { loadUserSettings, normalizeRelaySettings } from "./user-settings.mjs";
+import { EventEmitter } from "node:events";
 
 const KEY_POLL_MS = 10_000;
 // Logged tunnel events. `reconnect-scheduled` only on the first failed dial (one line when the relay goes away, not one per
@@ -60,8 +62,10 @@ export function createRelayWiring({
 } = {}) {
   const cfg = normalizeRelaySettings({ endpoint });
   if (!cfg) throw new Error("relay endpoint must be a wss:// URL");
+  const publicEndpoint = publicRelayEndpoint(cfg.endpoint); // X1 wire L1: never userinfo / query / fragment in status or logs
   if (typeof requestListener !== "function") throw new Error("relay wiring needs the server request listener");
 
+  const shims = new Map(); // cid -> socket shim registered with auth.mjs trackSocket (X1 wire M1)
   const handleHttp = createInProcessDispatcher(requestListener);
   const openWs = createInProcessStreamBridge(requestListener);
   const callbacks = {
@@ -78,6 +82,28 @@ export function createRelayWiring({
     handleHttp,
     openWs,
     burnCodes: () => burnAllPairCodes(),
+    // X1 wire M1: an authenticated relay session is registered with auth.mjs exactly like a LAN socket, through a
+    // socket-shaped shim, so the existing 1 s devices.json watch (out-of-process `vs devices revoke`, external edits)
+    // and the unreadable-file fail-close reach relay streams too, with no request in flight and no new mechanism.
+    // destroy() = what auth.mjs does to a revoked device's sockets; "close" = the session ended for any reason.
+    onAuthenticated: (deviceId, cid) => {
+      const shim = new EventEmitter();
+      shim.destroyed = false;
+      shim.destroy = () => {
+        if (shim.destroyed) return;
+        shim.destroyed = true;
+        host.revoke(deviceId);
+      };
+      shims.set(cid, shim);
+      trackSocket(deviceId, shim);
+    },
+    onSessionClosed: (cid) => {
+      const shim = shims.get(cid);
+      if (!shim) return;
+      shims.delete(cid);
+      shim.destroyed = true;
+      shim.emit("close");
+    },
     onNeedsYou: (e) => {
       try {
         log.warn?.(`[vibesquad] relay: ${e?.message ?? e?.type}`);
@@ -140,7 +166,8 @@ export function createRelayWiring({
   }
 
   const api = {
-    endpoint: cfg.endpoint,
+    /** Display form: origin + path only. The dial URL (with any userinfo/query a hosted relay may need) stays private. */
+    endpoint: publicEndpoint,
     get hostId() {
       return selfCertifyingHostId(key.publicRaw);
     },
@@ -173,12 +200,18 @@ export function createRelayWiring({
       host.stop();
     },
     /** For the Host pill / vs CLI: public identity and tunnel health, never key material. */
-    status: () => ({ endpoint: cfg.endpoint, hostId: api.hostId, pub: api.pub, fingerprint: api.fingerprint, running, ...host.status() }),
+    status: () => ({ endpoint: publicEndpoint, hostId: api.hostId, pub: api.pub, fingerprint: api.fingerprint, running, ...host.status() }),
     revoke: (id) => host.revoke(id),
     /** Tests / `vs host-key rotate` without waiting for the poll: re-reads the key file now. True when the key changed. */
     checkKeyFile,
   };
   return api;
+}
+
+/** The endpoint as it may be shown or logged: scheme, host, port and path; userinfo, query and fragment removed (X1 wire L1). */
+export function publicRelayEndpoint(endpoint) {
+  const u = new URL(endpoint);
+  return `${u.origin}${u.pathname}`;
 }
 
 /** serve.mjs: the running wiring when settings.json has relay.endpoint, else null (the relay stays off by default). */
