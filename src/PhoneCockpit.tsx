@@ -2,7 +2,6 @@ import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react
 import { AgentDrawer, triggerBrainstormRestart } from "./AgentDrawer";
 import type { RunnerConn } from "./daemonOverlay";
 import { oppositeProviderTarget } from "./DrawerHeader";
-import { updateAgent } from "./paseo";
 import { getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
 import { providerSpec } from "./pixel";
 import { setPref, usePref } from "./prefs";
@@ -159,10 +158,6 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
       }
       return;
     }
-    const nextLeadProfile = switchTarget.profile ?? (switchTarget.provider === "antigravity-cli" ? "Lead - Gemini" : "Lead - Claude");
-    void updateAgent(activeMember.agent.id, {
-      labels: { ...(activeMember.agent.labels as Record<string, string>), ...(nextLeadProfile ? { profile: nextLeadProfile } : {}) },
-    }).catch(() => {});
     onSuccessor(activeMember.agent.id);
   };
 
