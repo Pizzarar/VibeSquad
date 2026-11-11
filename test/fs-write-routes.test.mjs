@@ -116,8 +116,10 @@ test("owner gate: watch is a gated read; mutation routes are non-GET so the serv
   const { isGatedRead } = await import("../server/vibesquad-api.mjs");
   assert.equal(isGatedRead("/__vibesquad/fs/watch", "/__vibesquad/fs/watch?cwd=x"), true);
   const api = readFileSync(new URL("../server/vibesquad-api.mjs", import.meta.url), "utf8");
-  // every non-GET from a non-owner is 403 before the switch: the fs mutation cases sit behind that gate
-  assert.match(api, /isApi && !isOwner\(req\) && \(\(req\.method !== "GET" && req\.method !== "HEAD"\)/);
+  // every non-GET (`write`) from a non-owner is 403 before the switch (X1c: only an allow-listed verified agent passes it, and
+  // the fs routes are not on that list): the fs mutation cases sit behind that gate
+  assert.match(api, /isApi && !owner && \(write \|\| isGatedRead\(path, req\.url\)\)/);
+  assert.doesNotMatch(api, /AGENT_WRITE_ALLOWLIST = Object\.freeze\(\[[^\]]*\/__vibesquad\/fs\//);
   for (const op of ["write", "create", "rename", "delete", "duplicate"]) assert.match(api, new RegExp(`case "/__vibesquad/fs/${op}":`));
 });
 

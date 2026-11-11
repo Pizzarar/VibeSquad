@@ -611,6 +611,87 @@ export function hasLocalTokenHeader(req) {
   return typeof header === "string" && sameSecret(header.trim(), getLocalToken());
 }
 
+// ---- Caller kinds (X1c, docs/PLAN_X1_IDENTITY.md) ----
+// Every /__vibesquad request has exactly one caller:
+//   owner   = a paired device (vs_device cookie) or the loopback local token (x-vibesquad-token header / vs_local cookie),
+//   agent   = x-vs-agent-id + x-vs-agent-token, verified against runner memory with GET /verify-agent (never the env, never a
+//             claimed id). The record carries role/lane/team/profile/digest/digestFor/status/overlord; the token stays on the
+//             caller as a non-enumerable field (so the VS server can forward the call as that agent) and is never serialised.
+//   unknown = neither (read-only). An empty id is never the owner.
+// A request that names an agent is never the owner, whatever else it carries: a wrong/missing token is a refusal
+// ({ kind: "denied", status: 403 }); a runner that cannot answer is a refusal too (503), never a fallback to owner.
+export const AGENT_ID_HEADER = "x-vs-agent-id";
+export const AGENT_TOKEN_HEADER = "x-vs-agent-token";
+const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const CALLER_PROMISE = Symbol("vibesquad.caller.promise");
+const CALLER_VALUE = Symbol("vibesquad.caller");
+
+const headerValue = (req, name) => {
+  const v = req.headers?.[name];
+  return String(Array.isArray(v) ? v[0] : v ?? "").trim();
+};
+
+/** True when the request names an agent (a non-empty x-vs-agent-id). Such a request is never the owner. */
+export const hasAgentHeaders = (req) => headerValue(req, AGENT_ID_HEADER) !== "";
+
+/** Owner proof: a paired device cookie, or the loopback local token (header or vs_local cookie). Never for an agent request. */
+export function ownerProof(req) {
+  if (hasAgentHeaders(req)) return false;
+  return Boolean(authenticate(req)) || isLocalOwner(req);
+}
+
+async function defaultVerifyAgent(caller) {
+  const { sharedRunnerBackend } = await import("./backend/index.mjs"); // lazy: auth.mjs stays light for the pair/TLS callers
+  return sharedRunnerBackend().verifyAgent(caller);
+}
+
+const denied = (status, error) => ({ kind: "denied", status, error });
+
+async function resolveCaller(req, verifyAgent) {
+  const id = headerValue(req, AGENT_ID_HEADER);
+  if (!id) return ownerProof(req) ? { kind: "owner" } : { kind: "unknown" };
+  const token = headerValue(req, AGENT_TOKEN_HEADER);
+  const bad = "agent token invalid (x-vs-agent-id does not match x-vs-agent-token, or the agent is gone/retired)";
+  if (!AGENT_ID_RE.test(id) || !token) return denied(403, bad);
+  let who = null;
+  try {
+    who = await verifyAgent({ id, token });
+  } catch (e) {
+    if (e?.status === 403) return denied(403, bad);
+    return denied(503, `could not verify the agent caller: ${e?.message ?? e}`);
+  }
+  if (!who || typeof who !== "object" || who.id !== id) return denied(403, bad);
+  const caller = { kind: "agent", ...who, id };
+  Object.defineProperty(caller, "token", { value: token, enumerable: false });
+  return caller;
+}
+
+/**
+ * The caller of `req`, resolved once per request (later calls return the same record). `verifyAgent({ id, token })` is the
+ * runner lookup (RunnerBackend.verifyAgent: GET /verify-agent as that agent; throws a 403 RunnerHttpError on mismatch).
+ */
+export function callerFromRequest(req, { verifyAgent = defaultVerifyAgent } = {}) {
+  if (req[CALLER_PROMISE]) return req[CALLER_PROMISE];
+  const p = resolveCaller(req, verifyAgent).then((c) => {
+    req[CALLER_VALUE] = c;
+    return c;
+  });
+  req[CALLER_PROMISE] = p;
+  return p;
+}
+
+/** The already-resolved caller of `req` (set by callerFromRequest / the middleware), or null before resolution. */
+export const callerOf = (req) => req?.[CALLER_VALUE] ?? null;
+
+/** Synchronous resolution for a request without agent headers (owner | unknown); cached like callerFromRequest. */
+export function resolveNonAgentCaller(req) {
+  if (req[CALLER_VALUE]) return req[CALLER_VALUE];
+  const c = ownerProof(req) ? { kind: "owner" } : { kind: "unknown" };
+  req[CALLER_VALUE] = c;
+  req[CALLER_PROMISE] = Promise.resolve(c);
+  return c;
+}
+
 // Single-use login nonces: the URL a launcher puts on a command line never carries the master token.
 const LOGIN_NONCE_TTL_MS = 60_000;
 const loginNonces = new Map(); // nonce -> expiresAt

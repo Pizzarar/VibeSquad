@@ -1,5 +1,7 @@
-// /__vibesquad/runner/* : the UI's window onto the agent runner (the browser reaches agents only through these routes). Writes are owner-gated by the caller (vibesquad-api.mjs).
+// /__vibesquad/runner/* : the UI's window onto the agent runner (the browser reaches agents only through these routes).
+// Writes are gated by the caller (vibesquad-api.mjs: owner, or an allow-listed verified agent forwarded to the runner's scope rules).
 import { sharedRunnerBackend } from "./backend/index.mjs";
+import { callerOf } from "./auth.mjs";
 
 const PREFIX = "/__vibesquad/runner/";
 const ID_RE = /^rn-[A-Za-z0-9_-]{1,64}$/;
@@ -37,7 +39,14 @@ export async function runnerStatus() {
   return { enabled: true };
 }
 
-export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), status = runnerStatus }) {
+/**
+ * `caller` (X1c): the middleware's resolved caller. The middleware admits only the owner and allow-listed agent routes here.
+ * An agent caller is forwarded to the runner as that agent ({ id, token }), so the runner's scope rules decide (team, parent,
+ * role, protected meta); `owner: true` on input is only ever set for the owner. The body can never name the caller.
+ */
+export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), status = runnerStatus, caller = callerOf(req) }) {
+  const agent = caller?.kind === "agent" ? { id: caller.id, token: caller.token } : null;
+  const as = agent ? { caller: agent } : {};
   try {
     const parts = (req.url ?? "").split("?")[0].slice(PREFIX.length).split("/").filter(Boolean);
     const url = new URL(req.url, "http://x");
@@ -62,8 +71,8 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
       return sendJson(res, 200, await host.sweepDoneWorkersReport({ apply: body?.apply === true }));
     }
     if (parts[0] === "spawn" && req.method === "POST") {
-      const body = await readBody(req);
-      return sendJson(res, 201, { agent: await backend.createAgent(body) });
+      const { caller: _claimed, ...body } = (await readBody(req)) ?? {};
+      return sendJson(res, 201, { agent: await backend.createAgent({ ...body, ...as }) });
     }
     if (parts[0] === "agents" && ID_RE.test(parts[1] ?? "")) {
       const id = parts[1];
@@ -81,18 +90,24 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
           await backend.sendAgentPrompt(id, String(body?.text ?? ""), {
             images: Array.isArray(body?.images) ? body.images : undefined,
             activeTurnBehavior: body?.activeTurnBehavior === "interrupt" ? "interrupt" : undefined,
-            owner: true, // this route is owner-gated (vibesquad-api.mjs forbids non-owner POSTs), so the UI composer is a human send
+            // Only the owner's composer is a human send; an agent's send is forwarded as that agent (the runner sets
+            // senderId from the verified caller, ignores a body `owner`, and downgrades an interrupt it may not cancel).
+            owner: !agent,
+            ...as,
           });
         }
-        else if (action === "cancel") await backend.cancelAgent(id);
-        else if (action === "archive") await backend.archiveAgent(id);
-        else if (action === "unarchive") await backend.unarchiveAgent(id);
+        else if (action === "cancel") await backend.cancelAgent(id, as);
+        else if (action === "archive") await backend.archiveAgent(id, as);
+        else if (action === "unarchive") await backend.unarchiveAgent(id, as);
         else if (action === "resume") {
           // Reopens a lost/parked agent in place (same id and history); status stays "closed" when it is not resumable.
-          return sendJson(res, 200, { ok: true, agent: await backend.refreshAgent(id) });
+          return sendJson(res, 200, { ok: true, agent: await backend.refreshAgent(id, as) });
         }
-        else if (action === "meta") await backend.updateAgent(id, body);
-        else if (action === "config") return sendJson(res, 200, { ok: true, ...(await backend.setAgentConfig(id, body ?? {})) }); // model / mode / thinking: applies from the next turn
+        else if (action === "meta") await backend.updateAgent(id, body, as);
+        else if (action === "config") {
+          if (agent) return sendJson(res, 403, { error: "config is owner-only" }); // not on AGENT_WRITE_ALLOWLIST; belt and braces
+          return sendJson(res, 200, { ok: true, ...(await backend.setAgentConfig(id, body ?? {})) }); // model / mode / thinking: applies from the next turn
+        }
         else return sendJson(res, 404, { error: "not found" });
         return sendJson(res, 200, { ok: true });
       }
