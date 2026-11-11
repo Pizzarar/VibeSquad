@@ -353,7 +353,11 @@ export function runAudit(opts, deps = {}) {
       } catch (e) { skip = true; notes.push(`git rev-parse HEAD failed: ${String(e.message).split("\n")[0]}`); }
     }
     if (fs.existsSync(stampPath) && opts.commit && !commitError) {
-      const stamp = String(JSON.parse(fs.readFileSync(stampPath, "utf8")).commit || "").toLowerCase();
+      const stampJson = JSON.parse(fs.readFileSync(stampPath, "utf8"));
+      const stamp = String(stampJson.commit || "").toLowerCase();
+      const localPath = Object.values(stampJson).find((v) => typeof v === "string" && (/^[A-Za-z]:[\\/]/.test(v) || /^(\/|\\\\)[^/\\\s]/.test(v)));
+      if (localPath !== undefined) fail ||= "packaged build-stamp.json embeds an absolute local path";
+      else notes.push("build-stamp has no local path");
       if (/^[0-9a-f]{7,40}$/.test(stamp) && commit.startsWith(stamp)) notes.push(`build-stamp ${stamp.slice(0, 10)} == commit`);
       else fail ||= `build-stamp commit ${stamp.slice(0, 10) || "(empty)"} != ${commit.slice(0, 10)} (needs >= 7 hex chars)`;
     } else if (!commitError) { skip = true; notes.push("build-stamp or --commit missing"); }

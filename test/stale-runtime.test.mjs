@@ -3,7 +3,7 @@ import test from "node:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computeStale, getStale, resetStaleCache, staleWarning } from "../server/stale-runtime.mjs";
+import { computeStale, getStale, packagedStamp, readBuildStamp, resetStaleCache, staleWarning } from "../server/stale-runtime.mjs";
 
 const runtimeWith = (stamp) => {
   const dir = mkdtempSync(join(tmpdir(), "vs-stale-"));
@@ -27,6 +27,15 @@ test("missing stamp, missing repo, or git failure is not stale", () => {
   const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo: "/r" });
   assert.equal(computeStale({ rootDir, git: gitFor("b", 3), exists: () => false }), null);
   assert.equal(computeStale({ rootDir, git: () => { throw new Error("no git"); }, exists: () => true }), null);
+});
+
+test("packaged stamp has no repo path; a repo-less stamp reads fine and is never stale", () => {
+  const stamp = packagedStamp({ commit: "aaaaaaa1111", builtAt: "t", repo: "C:/Users/x/.git" });
+  assert.deepEqual(Object.keys(stamp).sort(), ["builtAt", "commit"]);
+  const rootDir = runtimeWith(stamp);
+  assert.equal(readBuildStamp(rootDir).commit, "aaaaaaa1111");
+  assert.equal(readBuildStamp(rootDir).repo, undefined);
+  assert.equal(computeStale({ rootDir, git: () => { throw new Error("must not run git"); }, exists: () => true }), null);
 });
 
 test("getStale caches for a minute and staleWarning reads the published file", () => {
