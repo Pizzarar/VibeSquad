@@ -1,5 +1,7 @@
 # VibeSquad
 
+> **New here? Take the [interactive tour: how VibeSquad works](https://pizzarar.github.io/VibeSquad/how-it-works.html).**
+
 Multi-agent coordination system for [Claude Code](https://claude.com/claude-code) and Gemini, running on VibeSquad's own agent runner. Use it as a Windows desktop app, in the browser, or from your phone (Android app or PWA).
 
 VibeSquad organizes Claude Code agents into **Squads** (product-level teams) and **Feature Lanes** (parallel workstreams), each with a **Buddy** (brainstorm partner), a **Lead** (implementation coordinator), and **Workers** (task agents). A lightweight `vs` CLI records decisions, reads team logs, and generates handoff packets — with no prompt or transcript content ever written to disk.

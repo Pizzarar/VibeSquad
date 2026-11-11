@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en" class="dark scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VibeSquad — How It Actually Works</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Fonts: Inter, Space Grotesk, JetBrains Mono, Press Start 2P (for CRT Pixel Mode) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Press+Start 2P&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+  <!-- Font Awesome -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            display: ['Space Grotesk', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+            pixel: ['"Press Start 2P"', 'monospace'],
+          },
+          colors: {
+            vs: {
+              bg: '#090D16',
+              card: '#111827',
+              border: '#1E293B',
+              cyan: '#06B6D4',
+              purple: '#8B5CF6',
+              emerald: '#10B981',
+              amber: '#F59E0B',
+              rose: '#F43F5E'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      background-color: #090D16;
+      color: #F8FAFC;
+      overflow-x: hidden;
+    }
+
+    /* Subtle grid background */
+    .bg-grid {
+      background-size: 36px 36px;
+      background-image: 
+        linear-gradient(to right, rgba(30, 41, 59, 0.35) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(30, 41, 59, 0.35) 1px, transparent 1px);
+    }
+
+    /* CRT / Pixel-Art Mode overrides (nod to VibeSquad's Normal vs Psycho UI) */
+    body.crt-mode {
+      font-family: 'JetBrains Mono', monospace;
+      background-color: #050a0e;
+    }
+    body.crt-mode::after {
+      content: " ";
+      display: block;
+      position: fixed;
+      top: 0; left: 0; bottom: 0; right: 0;
+      background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.28) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.03), rgba(0, 255, 0, 0.01), rgba(0, 0, 255, 0.03));
+      z-index: 9999;
+      background-size: 100% 4px, 6px 100%;
+      pointer-events: none;
+    }
+    body.crt-mode .pixel-heading {
+      font-family: 'Press Start 2P', monospace;
+      letter-spacing: -0.03em;
+      line-height: 1.45;
+      text-shadow: 0 0 10px rgba(6, 182, 212, 0.6);
+    }
+    body.crt-mode .crt-card {
+      border-width: 2px;
+      border-color: #06B6D4 !important;
+      box-shadow: 4px 4px 0px #06B6D4;
+      border-radius: 0px !important;
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #090D16; }
+    ::-webkit-scrollbar-thumb { background: #1E293B; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+
+    /* Pulse glow animation for active pipeline node */
+    @keyframes pulseGlow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.4), 0 0 20px rgba(6, 182, 212, 0.35); }
+      50% { box-shadow: 0 0 0 6px rgba(6, 182, 212, 0), 0 0 28px rgba(6, 182, 212, 0.6); }
+    }
+    .active-step-node {
+      animation: pulseGlow 2.2s infinite;
+    }
+  </style>
+</head>
+<body class="bg-grid antialiased selection:bg-cyan-500 selection:text-slate-950">
+
+  <!-- Top Sticky Navigation Bar -->
+  <header class="sticky top-0 z-50 backdrop-blur-xl bg-slate-950/90 border-b border-slate-800/80">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+      <!-- Brand + Version Badge -->
+      <div class="flex items-center gap-3 shrink-0">
+        <div class="w-9 h-9 rounded-lg bg-gradient-to-br from-cyan-500 via-blue-600 to-purple-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <i class="fa-solid fa-terminal text-white text-sm"></i>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="font-display font-bold text-lg tracking-tight text-white">VibeSquad</span>
+            <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">v0.2.7</span>
+          </div>
+          <p class="text-[11px] font-mono text-slate-400 hidden sm:block">Interactive Architecture &amp; Workflow Guide</p>
+        </div>
+      </div>
+
+      <!-- Quick Jump Links for Live Presenting -->
+      <nav class="hidden lg:flex items-center gap-1 text-xs font-medium">
+        <a href="#pipeline" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/70 transition">1. Flow</a>
+        <a href="#handoffs" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/70 transition">2. Handoffs</a>
+        <a href="#team" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/70 transition">3. Roles</a>
+        <a href="#looks-pairing" class="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800/70 transition">4. The app</a>
+      </nav>
+
+      <!-- Action Buttons: Speaker Cue Toggle + CRT Mode + Repo/Wiki Links -->
+      <div class="flex items-center gap-2 shrink-0">
+        <button id="toggleCuesBtn" onclick="toggleSpeakerCues()" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25 transition flex items-center gap-1.5" title="Show or hide presenter 'Say This Out Loud' cues">
+          <i class="fa-solid fa-microphone-slash"></i>
+          <span class="hidden sm:inline">Talk Cues: OFF</span>
+        </button>
+
+        <button id="toggleCrtBtn" onclick="toggleCrtMode()" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-purple-500/15 text-purple-300 border border-purple-500/30 hover:bg-purple-500/25 transition flex items-center gap-1.5" title="Toggle VibeSquad's Normal (Corpo) vs Psycho (Pixel/CRT) look">
+          <i class="fa-solid fa-tv"></i>
+          <span id="crtBtnLabel" class="hidden sm:inline">Psycho / CRT</span>
+        </button>
+
+        <a href="https://github.com/Pizzarar/VibeSquad" target="_blank" rel="noopener noreferrer" class="px-3 py-1.5 rounded-lg text-xs font-mono bg-slate-800 text-slate-200 border border-slate-700 hover:bg-slate-700 transition flex items-center gap-1.5">
+          <i class="fa-brands fa-github text-cyan-400"></i>
+          <span class="hidden md:inline">GitHub</span>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-20">
+
+    <!-- Hero -->
+    <section id="pitch" class="space-y-5">
+      <div class="text-xs font-mono uppercase tracking-widest text-cyan-400">How it works</div>
+      <h1 class="pixel-heading font-display text-4xl sm:text-5xl font-bold tracking-tight text-white leading-[1.1]">
+        Not one giant chat. <span class="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-400">A small AI dev shop on your PC.</span>
+      </h1>
+      <p class="text-lg text-slate-300 leading-relaxed max-w-3xl">
+        VibeSquad runs the coding-agent CLIs you already have signed in (<span class="text-cyan-300">Claude Code, Gemini / Antigravity, OpenCode and Codex</span>) as separate agents with separate jobs. You talk to a <strong class="text-white">Buddy</strong> who plans, a <strong class="text-white">Lead</strong> hands out the work, and short-lived <strong class="text-white">Workers</strong> each do one task. A hub Lead called the <strong class="text-purple-300">Overlord</strong> looks after the whole Squad.
+      </p>
+      <div class="speaker-cue rounded-xl bg-emerald-950/25 border border-emerald-500/40 p-4 text-sm text-emerald-100" style="display:none;">
+        <strong class="text-emerald-300">Talk track:</strong> "Instead of one chat that grows until it forgets things, each job gets its own agent, and agents pass files to each other, not chat history."
+      </div>
+      <p class="text-xs text-slate-400 max-w-3xl">Two kinds of rules appear below. A <span class="text-amber-300 font-semibold">prompt rule</span> is something agents are told to do. A <span class="text-emerald-300 font-semibold">server check</span> is code that refuses the action. They are tagged so you can tell them apart.</p>
+    </section>
+
+    <!-- Pipeline -->
+    <section id="pipeline" class="space-y-6">
+      <div>
+        <div class="text-xs font-mono uppercase tracking-widest text-cyan-400">01 / One piece of work, start to finish</div>
+        <h2 class="font-display text-3xl font-bold text-white">From idea to merged code</h2>
+        <p class="text-slate-400 text-sm mt-1">Click a step, or use the <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-xs">←</kbd> <kbd class="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-xs">→</kbd> keys.</p>
+      </div>
+      <div id="pipelineNodes" class="flex flex-wrap gap-2"></div>
+      <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5 space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <h3 id="stepTitle" class="font-display text-xl font-bold text-white"></h3>
+          <span id="stepKind" class="text-[11px] font-mono px-2 py-0.5 rounded-full border"></span>
+        </div>
+        <p id="stepBody" class="text-slate-300 text-sm"></p>
+        <p id="stepCite" class="text-xs font-mono text-slate-500"></p>
+      </div>
+    </section>
+
+    <!-- Handoffs -->
+    <section id="handoffs" class="space-y-6">
+      <div>
+        <div class="text-xs font-mono uppercase tracking-widest text-cyan-400">02 / How work changes hands</div>
+        <h2 class="font-display text-3xl font-bold text-white">Agents hand over files and labels, not chat history</h2>
+        <p class="text-slate-400 text-sm mt-1 max-w-3xl">A plan file, a Team brief or a handoff packet travels. The next agent starts with a fresh context and reads it. Pick a handoff to see what is a prompt rule and what the server really checks.</p>
+      </div>
+      <div class="speaker-cue rounded-xl bg-emerald-950/25 border border-emerald-500/40 p-4 text-sm text-emerald-100" style="display:none;">
+        <strong class="text-emerald-300">Talk track:</strong> "A successor Lead never sees the old transcript. It reads the packet the old Lead wrote."
+      </div>
+      <div id="handoffButtons" class="flex flex-wrap gap-2"></div>
+      <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5 grid md:grid-cols-3 gap-4 text-sm">
+        <div><div class="text-xs font-mono uppercase text-cyan-400 mb-1">Trigger</div><p id="hoTrigger" class="text-slate-200"></p></div>
+        <div><div class="text-xs font-mono uppercase text-amber-300 mb-1">Prompt rule (agents are told)</div><p id="hoPrompt" class="text-slate-200"></p></div>
+        <div><div class="text-xs font-mono uppercase text-emerald-400 mb-1">Server check (code refuses)</div><p id="hoServer" class="text-slate-200"></p></div>
+      </div>
+      <p id="hoCite" class="text-xs font-mono text-slate-500"></p>
+    </section>
+
+    <!-- Roles -->
+    <section id="team" class="space-y-6">
+      <div>
+        <div class="text-xs font-mono uppercase tracking-widest text-cyan-400">03 / Who does what</div>
+        <h2 class="font-display text-3xl font-bold text-white">Roles</h2>
+        <p class="text-slate-400 text-sm mt-1 max-w-3xl">What each role is told to do is a prompt rule (<code class="text-cyan-300">server/profiles.mjs</code>). Only the items in the green box are enforced by code.</p>
+      </div>
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4 text-sm">
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Owner (you)</h3><p class="text-slate-300 mt-1">Sets direction and talks to the Buddy. Release publishing is yours: agents are told to hand a release request to the Release Desk and never publish themselves.</p></div>
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Buddy</h3><p class="text-slate-300 mt-1">The chat you talk to. Plans the work in a plan file and hands build work to a Lead rather than writing the code.</p></div>
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Lead</h3><p class="text-slate-300 mt-1">Splits the plan into blocks, dispatches Workers, reads their reports and merges after review.</p></div>
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Worker</h3><p class="text-slate-300 mt-1">Does one block in its own git worktree and reports PASS/FAIL in its final message. In the team log, Leads and Buddies write the entries; a Worker may write only metric and its own done/blocker entries (<code class="text-cyan-300">cli/vs.mjs:545-549</code>).</p></div>
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Reviewer</h3><p class="text-slate-300 mt-1">A separate agent checks a Worker's diff. The Lead's prompt pairs Claude work with a Gemini reviewer and Gemini work with a Sonnet reviewer (<code class="text-cyan-300">server/profiles.mjs:64</code>); nothing in code forces it.</p></div>
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Overlord</h3><p class="text-slate-300 mt-1">The hub Lead of a Squad. It is the only role allowed to start a Lead on another lane of its own Squad.</p></div>
+      </div>
+      <div class="rounded-xl bg-emerald-950/20 border border-emerald-500/30 p-5 text-sm text-slate-200 space-y-2">
+        <h3 class="font-display text-lg font-bold text-emerald-300">What the server does check today</h3>
+        <ul class="list-disc pl-5 space-y-1">
+          <li>Starting a Lead: only a Buddy (for its own lane) or the Squad's hub Lead may, the lane must exist in the team registry, the profile must be a Lead profile, and a lane with a live Lead is refused (<code class="text-cyan-300">server/mcp/tools.mjs:342-395</code>). Role, ordinal and handoff labels supplied by the caller are stripped.</li>
+          <li>The Overlord handing off a healthy Lead under the token floor is refused unless forced with a written steer note (<code class="text-cyan-300">server/lead-handoff.mjs:223-237</code>).</li>
+        </ul>
+        <p class="text-xs text-slate-400">What it does not check: that a Worker may not start other Workers, who may publish a release, or which reviewer is used. Those are prompt rules. Agent identity comes from the runner's per-agent token, but the older tokenless fallback is still on unless <code class="text-cyan-300">VS_AGENT_TOKEN_REQUIRED=1</code> is set (<code class="text-cyan-300">server/backend/runner-client.mjs:38</code>), so don't read it as a security boundary yet.</p>
+      </div>
+    </section>
+
+    <!-- Looks + pairing -->
+    <section id="looks-pairing" class="space-y-6">
+      <div>
+        <div class="text-xs font-mono uppercase tracking-widest text-cyan-400">04 / The app</div>
+        <h2 class="font-display text-3xl font-bold text-white">Two looks, and a phone you can pair</h2>
+        <p class="text-slate-400 text-sm mt-1">Chosen on first launch, switchable any time in Settings.</p>
+      </div>
+      <div class="grid md:grid-cols-2 gap-4">
+        <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
+          <h3 class="font-display text-lg font-bold text-white mb-2">Normal vs Psycho</h3>
+          <p class="text-sm text-slate-300"><strong class="text-cyan-300">Normal</strong> is a plain layout: a sidebar of projects, a centered chat and project cards. <strong class="text-purple-300">Psycho</strong> is the pixel-art Vibespace office. The Phone Cockpit labels Normal as <em>Corpo</em> (<code class="text-cyan-300">src/PhoneCockpit.tsx:273</code>), and Settings search also finds it under "corpo" (<code class="text-cyan-300">src/prefs.ts:113</code>). The CRT button in this page's header is only a taste of Psycho.</p>
+        </div>
+        <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
+          <h3 class="font-display text-lg font-bold text-white mb-2">Pairing a phone</h3>
+          <ul class="text-sm text-slate-300 space-y-1.5 list-disc pl-5">
+            <li>On the PC, open <strong>Pair a Device</strong>: scan the QR, or type the 6-digit one-time code (valid for about a minute, <code class="text-cyan-300">server/auth.mjs:1007</code>).</li>
+            <li>The window shows the CA SHA-256 fingerprint to compare with the phone. Other devices stay off by default (loopback only) until you turn on remote access.</li>
+            <li>Every paired device has a <strong>Revoke</strong> button that signs it out at once.</li>
+            <li>The <code class="text-cyan-300">vs</code> CLI and MCP tools check an HMAC proof from the local server before sending the local token.</li>
+            <li>An end-to-end encrypted relay exists but is <strong>off by default</strong>: it only starts if you hand-edit a <code class="text-cyan-300">wss://</code> endpoint into your settings file. No hosted relay ships. When one is running, Pair a Device also offers a relay link.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="border-t border-slate-800/80 bg-slate-950/90 py-8 mt-16">
+    <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-mono text-slate-400">
+      <div>VibeSquad v0.2.7 · Interactive Architecture &amp; Workflow Guide</div>
+      <div class="flex items-center gap-4">
+        <a href="https://github.com/Pizzarar/VibeSquad" target="_blank" rel="noopener noreferrer" class="text-slate-200 hover:underline">GitHub →</a>
+        <a href="https://github.com/Pizzarar/VibeSquad/wiki" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:underline">User Guide &amp; Wiki →</a>
+        <a href="https://github.com/Pizzarar/VibeSquad/releases/latest" target="_blank" rel="noopener noreferrer" class="text-emerald-400 hover:underline">Latest Release →</a>
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    const PIPELINE = [
+      { t: '1. Talk to the Buddy', kind: 'prompt', body: "You describe the idea to the lane's Buddy. It reads the lane brief and checks what already exists before proposing anything new.", cite: 'server/hooks/agent-duties.ts:127; R14 in server/profiles.mjs:45' },
+      { t: '2. The plan', kind: 'prompt', body: 'The Buddy writes a plan as a table of blocks: what each block touches and which blocks clash. Workarounds must name the follow-up that replaces them.', cite: 'Prompt rule; the docs/PLAN_*.md files are examples' },
+      { t: '3. Start a Lead', kind: 'server', body: "The Buddy starts the lane's Lead. The server refuses unless the caller is that lane's Buddy or the Squad's hub Lead, the profile is a Lead profile, and the lane has no live Lead.", cite: 'server/mcp/tools.mjs:342-395' },
+      { t: '4. Workers in worktrees', kind: 'prompt', body: 'The Lead dispatches non-clashing blocks to Workers. Each works in its own git worktree made with vs worktree create, so parallel Workers do not overwrite each other.', cite: 'R8 in server/profiles.mjs; vs worktree create: cli/vs.mjs:2625' },
+      { t: '5. Review', kind: 'prompt', body: "A different agent reviews the diff. The Lead's prompt sends Claude work to a Gemini reviewer and Gemini work to a Sonnet reviewer. Findings are fixed and re-reviewed.", cite: 'server/profiles.mjs:64 (not enforced in code)' },
+      { t: '6. Merge', kind: 'prompt', body: 'The Lead audits what the Workers report and merges the reviewed work.', cite: 'Lead role text: server/profiles.mjs:58' },
+      { t: '7. Release', kind: 'prompt', body: 'Agents are told never to run release, publish, tag or signing scripts. They send a release request to the Release Desk lane, and you give the final go.', cite: 'R10, server/profiles.mjs:41 (a prompt rule, not a server check)' }
+    ];
+    const HANDOFFS = [
+      { pair: 'Owner → Buddy', trigger: 'You start a Team on a lane.', prompt: 'A fresh Buddy reads the lane brief (docs/brainstorm/<lane>.md) first.', server: 'No role check applies to this step.', cite: 'server/hooks/agent-duties.ts:127' },
+      { pair: 'Buddy → Lead', trigger: 'The plan is ready.', prompt: 'The plan file and a short message are handed over.', server: 'Lead start is checked: caller role, lane in registry, Lead profile, one live Lead per lane. Caller-supplied role, ordinal and handoff labels are stripped.', cite: 'server/mcp/tools.mjs:342-395' },
+      { pair: 'Lead → Worker', trigger: 'A block is dispatched.', prompt: 'The Worker gets a profile, a stakes label and its own worktree, and reports PASS/FAIL with refs in its final message.', server: "Nothing stops a Worker from spawning; that is a prompt rule only. The server records the spawning agent as the new agent's parent.", cite: 'server/mcp/tools.mjs (vs.parent label)' },
+      { pair: 'Worker → Lead', trigger: 'The Worker finishes or is blocked.', prompt: 'Report in the final message instead of writing to the team log.', server: "The team log accepts a Worker's own metric and done/blocker entries.", cite: 'cli/vs.mjs:545-549, server/vibesquad-api.mjs:967' },
+      { pair: 'Lead → Successor Lead', trigger: "The Lead's context grows (flag at 150k tokens, automatic handoff at 250k, hard cap 300k) or the Overlord steps in.", prompt: 'The old Lead writes a handoff packet with its own Judgment section.', server: "Idle Claude Leads are compacted in place first. If no packet exists the server writes one. The successor reuses the old Lead's profile label, and the usual capped-provider failover can swap it. Messages sent to the former Lead are redirected to the live successor. The Overlord is refused when handing off a healthy Lead under the token floor.", cite: 'server/lead-handoff.mjs:38-40,223-237,480-490,1022; server/hooks/agent-duties.ts:1551; server/backend/runner-backend.mjs:806' }
+    ];
+
+    let pStep = 0;
+    function renderPipeline() {
+      const box = document.getElementById('pipelineNodes');
+      box.innerHTML = '';
+      PIPELINE.forEach((s, i) => {
+        const b = document.createElement('button');
+        b.textContent = s.t;
+        b.className = 'px-3 py-1.5 rounded-lg text-xs font-mono border transition ' + (i === pStep
+          ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/40' : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800');
+        b.onclick = () => { pStep = i; renderPipeline(); };
+        box.appendChild(b);
+      });
+      const s = PIPELINE[pStep];
+      document.getElementById('stepTitle').textContent = s.t;
+      document.getElementById('stepBody').textContent = s.body;
+      document.getElementById('stepCite').textContent = s.cite;
+      const el = document.getElementById('stepKind');
+      el.textContent = s.kind === 'server' ? 'Server check' : 'Prompt rule';
+      el.className = 'text-[11px] font-mono px-2 py-0.5 rounded-full border ' + (s.kind === 'server'
+        ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-amber-500/15 text-amber-300 border-amber-500/30');
+    }
+    let hStep = 0;
+    function renderHandoffs() {
+      const box = document.getElementById('handoffButtons');
+      box.innerHTML = '';
+      HANDOFFS.forEach((h, i) => {
+        const b = document.createElement('button');
+        b.textContent = h.pair;
+        b.className = 'px-3 py-1.5 rounded-lg text-xs font-mono border transition ' + (i === hStep
+          ? 'bg-cyan-500/20 text-cyan-200 border-cyan-500/40' : 'bg-slate-900 text-slate-300 border-slate-700 hover:bg-slate-800');
+        b.onclick = () => { hStep = i; renderHandoffs(); };
+        box.appendChild(b);
+      });
+      const h = HANDOFFS[hStep];
+      document.getElementById('hoTrigger').textContent = h.trigger;
+      document.getElementById('hoPrompt').textContent = h.prompt;
+      document.getElementById('hoServer').textContent = h.server;
+      document.getElementById('hoCite').textContent = h.cite;
+    }
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight') pStep = Math.min(PIPELINE.length - 1, pStep + 1);
+      else if (e.key === 'ArrowLeft') pStep = Math.max(0, pStep - 1);
+      else return;
+      renderPipeline();
+    });
+    renderPipeline();
+    renderHandoffs();
+
+    let cuesVisible = false;
+    function toggleSpeakerCues() {
+      cuesVisible = !cuesVisible;
+      document.querySelectorAll('.speaker-cue').forEach(el => { el.style.display = cuesVisible ? '' : 'none'; });
+      document.getElementById('toggleCuesBtn').innerHTML = cuesVisible
+        ? '<i class="fa-solid fa-microphone-lines"></i><span class="hidden sm:inline">Talk Cues: ON</span>'
+        : '<i class="fa-solid fa-microphone-slash"></i><span class="hidden sm:inline">Talk Cues: OFF</span>';
+    }
+    function toggleCrtMode() {
+      document.body.classList.toggle('crt-mode');
+      document.getElementById('crtBtnLabel').textContent = document.body.classList.contains('crt-mode') ? 'Normal UI' : 'Psycho / CRT';
+    }
+  </script>
+</body>
+</html>
