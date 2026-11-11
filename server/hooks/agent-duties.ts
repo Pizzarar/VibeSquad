@@ -80,6 +80,8 @@ export const DIGEST_THINKING_OPTION_ID = "low";
 export const DIGEST_TURN_LABEL = "digestTurn";
 /** A digest's waiter archives it after 10 min; one still open past this has no waiter left (server restarted) and is swept (idea-62). */
 export const DIGEST_STALE_MS = 15 * 60_000;
+/** An orphaned digest older than this is only archived: its worker's verdict may sit past the 200-line log window, and a late UNVERIFIED would wake the lead for old work. */
+export const DIGEST_ORPHAN_VERDICT_MAX_MS = 2 * 60 * 60_000;
 /** Label before(agent.create) stamps with the stakes route, so agent.created can log it with the new agent's id (idea-87). */
 export const ROUTE_LABEL = "vs.route";
 const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
@@ -3453,6 +3455,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           archived.push(d.id);
           const workerId = String(d.labels.digestFor);
           if (inflightDigestIds.get(workerId) === d.id) inflightDigestIds.delete(workerId);
+          if (now - born > DIGEST_ORPHAN_VERDICT_MAX_MS) continue;
           // Watch-set merges name a set id, not an agent: snap() is null and nothing is written.
           const worker = await snap(paseo, workerId);
           if (!worker || worker.archivedAt || isWorkerBusy(worker)) continue;

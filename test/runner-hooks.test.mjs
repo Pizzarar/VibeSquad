@@ -862,6 +862,13 @@ test('idea-62: the stale-digest sweep archives an orphaned digest (no waiter lef
     assert.ok((await b.backend.getAgent(d1.id)).archivedAt, 'orphaned digest archived');
     const done = await until(() => teamLog().find((e) => e.type === 'done' && (e.refs ?? []).includes(w.id) && /^UNVERIFIED \(digest orphaned\)/.test(e.text)), 4000, 'UNVERIFIED verdict');
     assert.match(done.text, /echo:PASS: swept/);
+    // A days-old orphan (the live backlog on first deploy) is archived without a late verdict.
+    const w2 = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'old thing' }, { initialPrompt: 'PASS: old' }));
+    holdDigests(b, w2.id);
+    const d2 = await until(async () => (await digestsOf(b, w2.id))[0], 8000, 'second digest');
+    assert.deepEqual(await host2.dispose.sweepStaleDigests(Date.now() + 3 * 24 * 60 * 60_000), [d2.id]);
+    await settle(200);
+    assert.ok(!teamLog().some((e) => e.type === 'done' && (e.refs ?? []).includes(w2.id) && /digest orphaned/.test(e.text)), 'no late verdict for a days-old orphan');
   } finally {
     host2?.dispose?.();
     await b.close();
