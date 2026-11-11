@@ -37,7 +37,7 @@ Good to know:
 |---|---|
 | [ROLO.md](ROLO.md) | The method on one page: Riff, Organize, Loop, Own |
 | `Guide/` | The walkthrough, one step per sitting. Start at [Maps/Start.md](Maps/Start.md) |
-| `Concepts/` | Short notes on the words used, such as [Buddy](Concepts/Buddy.md) |
+| `Concepts/` | Short notes on the words used, such as [Buddy](Concepts/Buddy.md) and [Normal and Psycho](Concepts/Modes.md) |
 | `Maps/` | Notes that link the steps in order |
 | `Notebook/` | Aub's raw notes. Private; only the [README](Notebook/README.md) is shared |
 | [START_HERE.md](START_HERE.md) | The instructions the setup agent follows |

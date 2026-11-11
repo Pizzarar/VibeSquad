@@ -8,13 +8,19 @@ import {
   buildCatalog, buildUsageReviewPrompt, clearProbeCache, clearUsageCache, DEFAULT_USAGE_REVIEW_PROMPT, getModels, getProviders, getUsage, handleProvidersApi, intervalMs,
   loadRunnerSettings, loadUsageReviewPrompt, LOOP_TURN_THRESHOLD, normalizeRunnerSettings, oneShotReviewRun, parseReviewBullets, probeProviders, probeStats,
   readBootSizes, foldBootSizes, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, resetUsageReviewPromptWarnForTest, resolveUsageReviewPromptPath,
-  runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats,
+  runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats, withPoolAgents,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
-import { realVibesquadHome } from '../server/test-guard.mjs';
 import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-'));
+// Declares a temp dir as "the real ~/.vibesquad" (VS_TEST_REAL_HOME) so forbidden-home guards are exercised without touching the developer's actual home.
+function withFakeRealHome(fn) {
+  const fakeReal = tmp();
+  const prev = process.env.VS_TEST_REAL_HOME;
+  process.env.VS_TEST_REAL_HOME = fakeReal;
+  try { return fn(fakeReal); } finally { prev === undefined ? delete process.env.VS_TEST_REAL_HOME : (process.env.VS_TEST_REAL_HOME = prev); }
+}
 const okExec = (file, args, o, cb) => cb(null, `${path.basename(file)} 1.2.3\n`);
 const resolveImpl = (cmd) => {
   if (cmd === 'opencode') throw new Error('nope');
@@ -470,6 +476,40 @@ test('usage v2: byProfile compares Implement - Sonnet vs a Gemini implementer vi
   assert.equal(su.implementerAgentId, 'rn-sonnet');
   assert.equal(su.implementerProfile, 'Implement - Sonnet');
   assert.equal(su.unitCycleMs, 50000, 'worker createdAt -> mergedAt');
+  // usa-12: implementer success = first-try review PASS (reviewRounds <= 1); passRate stays for back-compat
+  assert.equal(sonnet.successRate, 0, 'sonnet needed 2 review rounds');
+  assert.equal(sonnet.successBasis, 'implementer-first-try-pass');
+  assert.equal(gemini.successRate, 1, 'gemini passed on round 1');
+  assert.equal(gemini.successBasis, 'implementer-first-try-pass');
+  assert.equal(typeof sonnet.passRate, 'number');
+  const workerRole = u.byRole.find((r) => r.role === 'worker');
+  assert.equal(workerRole.successRate, 0.5);
+  assert.equal(workerRole.successBasis, 'implementer-first-try-pass');
+});
+
+test('usa-12: lead and Buddy report null / no-signal; reviewer uses PASS lines; implementer with no merged unit is no-signal', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, role, profile, lines) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role, profile } },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 10, outputTokens: 5 },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.1 },
+    ...lines,
+  ]);
+  mk('rn-lead', 'lead', 'Lead - Claude', []);
+  mk('rn-buddy', 'brainstorm', 'Buddy', []);
+  mk('rn-impl', 'worker', 'Implement - Sonnet', []);
+  mk('rn-rev', 'worker', 'Review - Gemini', [{ ts: T0 + 2000, type: 'output', text: 'PASS 0/0/0\n' }]);
+  const u = getUsage({ home, git: noGit });
+  for (const profile of ['Lead - Claude', 'Buddy']) {
+    const p = byProfileOf(u, profile);
+    assert.equal(p.successRate, null, profile);
+    assert.equal(p.successBasis, 'no-signal', profile);
+  }
+  assert.deepEqual([byProfileOf(u, 'Implement - Sonnet').successRate, byProfileOf(u, 'Implement - Sonnet').successBasis], [null, 'no-signal']);
+  assert.equal(byProfileOf(u, 'Review - Gemini').successBasis, 'reviewer-pass-lines');
+  assert.equal(u.byRole.find((r) => r.role === 'lead').successBasis, 'no-signal');
 });
 
 test('usage v2: byProfile falls back to the single worker in the lane when cwd does not match', () => {
@@ -1137,7 +1177,10 @@ test('usa-10: usage-ledger write/read/fold, idempotent sync, no double count, fo
   assert.equal(u.totals.turns, 3, 'folded day turns added (1 raw + 2 ledger)');
   assert.ok(u.byDay.some((r) => r.day === '2026-11-01'), 'folded day appears in byDay');
 
-  assert.equal(syncUsageLedger(realVibesquadHome(), [{ kind: 'day', day: '2099-01-01', turns: 1 }]), 0, 'forbidden real home: no write');
+  withFakeRealHome((fakeReal) => {
+    assert.equal(syncUsageLedger(fakeReal, [{ kind: 'day', day: '2099-01-01', turns: 1 }]), 0, 'forbidden real home: no write');
+    assert.deepEqual(fs.readdirSync(fakeReal), [], 'forbidden real home: nothing created');
+  });
 });
 
 test('usa-10: syncUsageLedger only writes completed days (day < today UTC)', () => {
@@ -1445,9 +1488,17 @@ test('usa-15 / usa-19: a model that fails to return ok contributes no inbox card
 test('usa-15: forbidden real home -> no inbox write, empty sentCardIds', async () => {
   const runOpus = async () => ({ ok: true, text: 'No prior review.\n- Route to Gemini.', ms: 1 });
   const runGemini = async () => ({ ok: true, text: 'No prior review.\n- Reduce rounds.', ms: 1 });
-  const rec = await runUsageReview({ home: realVibesquadHome(), trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
-  assert.deepEqual(rec.sentCardIds, [], 'forbidden real home: nothing enqueued');
-  assert.equal(rec.opus.ok, true);
+  const fakeReal = tmp();
+  const prev = process.env.VS_TEST_REAL_HOME;
+  process.env.VS_TEST_REAL_HOME = fakeReal;
+  try {
+    const rec = await runUsageReview({ home: fakeReal, trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
+    assert.deepEqual(rec.sentCardIds, [], 'forbidden real home: nothing enqueued');
+    assert.equal(rec.opus.ok, true);
+    assert.deepEqual(fs.readdirSync(fakeReal), [], 'forbidden real home: no file or dir created (no review record, no inbox)');
+  } finally {
+    prev === undefined ? delete process.env.VS_TEST_REAL_HOME : (process.env.VS_TEST_REAL_HOME = prev);
+  }
 });
 
 test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogus statuses', () => {
@@ -2012,4 +2063,31 @@ test('usa-22: bootSize rollup folds boot-size metrics by role/provider/lane (avg
   await handleProvidersApi({ method: 'GET', url: '/__vibesquad/providers/usage-export?format=md' }, {}, { home, ...probeOpts, readBody: async () => ({}), sendJson: (_r, _c, data) => { md = data.markdown; } });
   assert.match(md, /## Boot size/);
   assert.match(md, /\| worker \| claude \| usage \| 10 \| 550 \| 900 \|/);
+});
+
+test('usa-14: withPoolAgents attributes antigravity-cli claude-*/gpt-* agents to the 3rd-party pool row only', () => {
+  const rows = [
+    { provider: 'antigravity-cli', window: '5h', usedPct: 4 },
+    { provider: 'antigravity-cli/claude-gpt', window: 'weekly', usedPct: 19 },
+  ];
+  const none = withPoolAgents(rows, [{ agentId: 'a', provider: 'antigravity-cli', model: 'gemini-4-argon' }, { agentId: 'b', provider: 'claude', model: 'claude-sonnet-5-5' }]);
+  assert.equal(none[0].poolAgents, undefined, 'Gemini pool row untouched');
+  assert.deepEqual(none[1].poolAgents, { count: 0, agentIds: [], text: '0 VibeSquad agents (used outside VibeSquad)' });
+  const some = withPoolAgents(rows, [{ agentId: 'a', provider: 'antigravity-cli', model: 'claude-sonnet-5-5' }, { agentId: 'c', provider: 'antigravity-cli', model: 'gpt-5' }, { agentId: 'd', provider: 'antigravity-cli', model: 'gemini-4' }]);
+  assert.deepEqual(some[1].poolAgents, { count: 2, agentIds: ['a', 'c'], text: '2 VibeSquad agents' });
+});
+
+test('usa-12 fix1: review prompt emits successRate + basis per profile row, "-" for no-signal, not passRate', () => {
+  const usage = {
+    totals: { turns: 1 },
+    byProfile: [
+      { provider: 'claude', profile: 'Implement - Sonnet', role: 'worker', runs: 3, turns: 12, costUsd: 1.5, passRate: 0, successRate: 0.667, successBasis: 'implementer-first-try-pass', costPerMergedUnit: 0.5, avgReviewRounds: 1.3, fixAfterMergeRate: 0 },
+      { provider: 'claude', profile: 'Lead - Claude', role: 'lead', runs: 1, turns: 5, costUsd: 1, passRate: 0, successRate: null, successBasis: 'no-signal', costPerMergedUnit: null, avgReviewRounds: 0, fixAfterMergeRate: 0 },
+    ],
+  };
+  const prompt = buildUsageReviewPrompt(usage, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
+  assert.match(prompt, /successRate \(basis\)/);
+  assert.match(prompt, /Implement - Sonnet \| worker \| 3 \| 12 \| 1\.5 \| 0\.667 \(implementer-first-try-pass\) \|/);
+  assert.match(prompt, /Lead - Claude \| lead \| 1 \| 5 \| 1 \| - \(no-signal\) \|/);
+  assert.doesNotMatch(prompt, /\| passRate \|/);
 });

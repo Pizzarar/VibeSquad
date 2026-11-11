@@ -4,6 +4,6 @@ Standing lane: Aub's bug dump, coordination fixes, and the 0.3 critical path (PL
 
 ## Lane habits
 - **Archive on merge (Hub6, 11-11):** when a branch that fixes an inbox card merges, run `vs inbox triage --archive <idea-ids>` in the same turn as the merge/push. Before a plan block closes, check its cards are archived.
-- Commit trailer `Live-Needs: <server-restart|runner-restart|build|frontend-reload|none>` (valid tokens: `LIVE_NEEDS`, server/sync-runtime.mjs:176; UI changes are `build, frontend-reload`) goes in the same final -m paragraph as Co-Authored-By; ping Hub6 on push with the value.
+- Commit trailer `Live-Needs: <server-restart|runner-restart|build|frontend-reload|none>` (valid tokens: `LIVE_NEEDS`, server/sync-runtime.mjs:176; UI changes are `build, frontend-reload`) goes in the same final -m paragraph as Co-Authored-By; ping Hub6 on push with the value. Fetch and fast-forward master BEFORE the feature merge, so the merge carrying the trailer is the pushed tip. Sync reads the tip: a later "merge origin/master" commit without a trailer reads as none (946d362, Hub7 11-11).
 - Full suite: `npm test -- --queue` in the foreground, once per merge batch. Workers run only their own tests.
 - Don't restart the server or runner yourself (Hub6 owns build, sync and restart).

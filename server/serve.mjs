@@ -27,6 +27,7 @@ import {
   handleCaCrt,
   handleEnter,
   handlePairRedeem,
+  handlePairStatus,
   isAllowedHostHeader,
   lockDownVibesquadHome,
   netConfig,
@@ -423,6 +424,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if (path === "/pair" && req.method === "GET") {
       return handlePairRedeem(req, res);
     }
+    if (path === "/pair/status" && req.method === "GET") return handlePairStatus(req, res); // E4b waiting page poll (cookie-scoped)
     if (path === "/__vibesquad/enter") return handleEnter(req, res);
     const dev = authenticate(req);
     if (!dev) return sendUnpaired(req, res);

@@ -1,7 +1,7 @@
 You are reviewing how VibeSquad's agent workflows performed, using pooled data from every Squad. Your output goes to the Workflows lane's inbox. One card is filed per bullet.
 
 Known-bad metrics: do not base a verdict on any of these until they are fixed.
-- `passRate` counts only lines that start with "PASS", so non-reviewer roles always score 0.
+- `passRate` counts only lines that start with "PASS", so non-reviewer roles always score 0. Use `successRate (basis)` instead; lead and Buddy `successRate` is null ("no-signal"), so do not grade those roles on it.
 - `avgReviewRounds` and `firstTryPassRate` read 0 rounds and 1.000 for every workflow, and the real round counts are higher.
 - `mergedUnits` and `costPerMergedUnit` read 0 or null per profile, because merges are not attributed to profiles.
 - `costPerUnit` 0 with costCoverage 0 means not reported, not free.
