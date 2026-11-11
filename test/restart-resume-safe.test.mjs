@@ -16,8 +16,11 @@ import { Runner } from "../runner/runner.mjs";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { superviseRunner } from "../server/runner-supervisor.mjs";
 import { parseArgs, restartRuntime } from "../scripts/restart-runtime.mjs";
-import { RunnerBackend } from "../server/backend/runner-backend.mjs";
+import { RunnerBackend, readRunnerAgentSync } from "../server/backend/runner-backend.mjs";
 import { RunnerClient } from "../server/backend/runner-client.mjs";
+import { createClaudeAdapter } from "../runner/adapters/claude.mjs";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 
 const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -43,8 +46,7 @@ function fakeAdapter({ readyFor = () => undefined } = {}) {
 }
 
 /** A runner with one agent that was cut mid-turn by a keep-resumable shutdown: reads `lost` in a second runner on the same dir. */
-async function lostAgent(adapterOpts, runnerOpts = {}) {
-  const dir = tmp();
+async function lostAgent(adapterOpts, runnerOpts = {}, dir = tmp()) {
   const a1 = fakeAdapter();
   const r1 = new Runner({ dir, adapters: { claude: a1.adapter } });
   const id = r1.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta: {} });
@@ -219,4 +221,154 @@ test("88: no seen file, or an outage longer than the cap, keeps the old rule (ev
     const saved = JSON.parse(readFileSync(path.join(home, "server-seen.json"), "utf8"));
     assert.equal(saved.ts, t0 + 70_000, "seeded with the newest history event, so the next restart gap is covered");
   }
+});
+
+// ---- Tier A review R1 (review-restart-resume.md) ----------------------------------------------------------------------
+
+test("R1 H1: an idle agent counts as held from the moment its turn ends until its first background probe comes back clean", async () => {
+  let answer = null; // the probe stays pending until the test says what it sees
+  const waiters = [];
+  const bgProbe = () => new Promise((r) => { const go = () => r(answer); if (answer !== null) go(); else waiters.push(go); });
+  const settle = (work) => { answer = work; for (const go of waiters.splice(0)) go(); };
+  const { adapter, starts } = fakeAdapter();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, parkGraceMs: 80, parkHoldPollMs: 20, parkHoldMaxMs: 60_000, bgProbe });
+  const srv = createRunnerServer(runner, { token: "t0k", hash: "h" });
+  const port = await listen(srv);
+  const health = () => fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: "Bearer t0k" } }).then((r) => r.json());
+  try {
+    const id = runner.create({ provider: "claude", cwd: process.cwd(), prompt: "start the suite in the background, then end the turn", meta: {} });
+    await tick(20);
+    starts[0].emit("status", { status: "idle" }); // the turn ends; its suite keeps running under the CLI
+    assert.deepEqual(runner.heldIds(), [id], "inside the park grace, before any probe: a restart must not see running:0 held:0");
+    const h = await health();
+    assert.deepEqual([h.running, h.held, h.heldAgents], [0, 1, [id]]);
+    await tick(120); // grace over, probe pending
+    assert.deepEqual(runner.heldIds(), [id], "while the probe runs");
+    settle([{ pid: 9000, name: "bash", cmd: "npm test" }]);
+    await until(() => runner.timeline(id).some((e) => e.type === "park-held"), 1000);
+    assert.deepEqual(runner.heldIds(), [id], "held park");
+    answer = []; // the suite exits: the next probe is clean and the agent parks
+    await until(() => runner.status(id).status === "parked", 2000);
+    assert.deepEqual(runner.heldIds(), []);
+    const fresh = await lostAgent();
+    fresh.runner.resume(fresh.id);
+    await until(() => fresh.runner.status(fresh.id).status === "idle", 1000);
+    assert.deepEqual(fresh.runner.heldIds(), [], "a prompt-less resume ran no turn: nothing to hold");
+    fresh.runner.shutdown();
+  } finally { await close(srv); runner.shutdown(); }
+});
+
+/** A cut agent in <home>/agents plus a RunnerBackend whose catch-up baseline was taken before the resume. */
+async function cutAgentWithBackend(runnerOpts = {}) {
+  const home = tmp("vs-rrs-h2-");
+  const dir = path.join(home, "agents");
+  mkdirSync(dir, { recursive: true });
+  const lost = await lostAgent({}, runnerOpts, dir);
+  const backend = backendFor(home);
+  await backend.enableCatchUp();
+  const ended = [];
+  backend.listeners.add((e) => { if (e.kind === "turn_ended") ended.push(e.outcome?.kind); });
+  const feed = async () => { for (const event of lost.runner.timeline(lost.id).filter((e) => e.seq > (backend.live.hwm.get(lost.id) ?? -1))) await backend.handleLogEvent({ id: lost.id, event }); };
+  return { ...lost, home, backend, ended, feed };
+}
+
+test("R1 H2: a prompt-less resume (settle to idle, then park) never reads as a completed turn on the server; a real turn after it ends once", async () => {
+  const c = await cutAgentWithBackend({ parkGraceMs: 30 });
+  assert.equal(c.backend.live.turn.get(c.id).status, "running", "the baseline knows the turn the restart cut");
+  c.runner.resume(c.id);
+  await until(() => c.runner.status(c.id).status === "parked", 1000);
+  await c.feed();
+  assert.deepEqual(c.ended, [], "no turn_ended for a turn that never ran (it would spawn a digest / confirm a takeover)");
+  const resumeStatuses = c.runner.timeline(c.id).filter((e) => e.type === "status" && e.resume === true).map((e) => e.status);
+  assert.deepEqual(resumeStatuses, ["starting", "idle"], "the lifecycle statuses are tagged");
+  c.runner.send(c.id, "next");
+  await until(() => c.starts.length === 2 && c.runner.status(c.id).status === "running", 1000);
+  c.starts[1].emit("status", { status: "idle" });
+  await c.feed();
+  assert.deepEqual(c.ended, ["completed"], "the real turn ends exactly once");
+  c.runner.shutdown();
+});
+
+test("R1 M1: unwedge without retry leaves a terminal lost status: vs who (readRunnerAgentSync) and the server turn state read closed/lost, not initializing", async () => {
+  const c = await cutAgentWithBackend();
+  const never = fakeAdapter({ readyFor: () => new Promise(() => {}) });
+  c.runner.adapters.claude = never.adapter; // the resumed child never finishes its handshake
+  writeFileSync(path.join(c.home, "runner.json"), JSON.stringify({ port: 1, pid: process.pid, startedAt: Date.now() - 1000 })); // a live runner wrote these events
+  c.runner.resume(c.id);
+  await tick(30);
+  assert.equal(c.runner.unwedge(c.id, { reason: "still starting" }).action, "failed");
+  const last = c.runner.timeline(c.id).filter((e) => e.type === "status").at(-1);
+  assert.equal(last.status, "lost", "a terminal status event, not just an error");
+  const who = readRunnerAgentSync(c.id, { home: c.home });
+  assert.deepEqual([who.status, who.lost, who.resumable], ["closed", true, true]);
+  await c.feed();
+  assert.equal(c.backend.live.turn.get(c.id).status, "closed", "server turn state is not left initializing");
+  assert.deepEqual(c.ended, [], "giving up is not a completed turn either");
+  assert.equal(c.runner.resume(c.id), true, "a send/resume can still bring it back");
+  c.runner.shutdown();
+});
+
+test("R1 M2: a send queued behind the turn cap during a resume handshake keeps `queued` as the last status; no park, the prompt survives a restart", async () => {
+  let release;
+  const caps = { claude: 1, gemini: 1, antigravity: 1, other: 1 };
+  const { id, runner } = await lostAgent({ readyFor: (rec) => (rec.resume ? new Promise((r) => { release = r; }) : undefined) }, { parkGraceMs: 20, turnCaps: caps });
+  runner.create({ provider: "claude", cwd: process.cwd(), prompt: "hold the only claude turn slot", meta: {} });
+  runner.resume(id);
+  await tick(20);
+  runner.send(id, "queued behind the cap");
+  assert.equal(runner.timeline(id).filter((e) => e.type === "status").at(-1).status, "queued");
+  release();
+  await tick(80);
+  assert.equal(runner.timeline(id).filter((e) => e.type === "status").at(-1).status, "queued", "not overwritten with idle");
+  assert.ok(runner.live.has(id), "not parked while its send waits");
+  assert.ok(runner.queue.some((j) => j.id === id), "still queued in memory");
+  const r2 = new Runner({ dir: runner.store.dir, adapters: { claude: fakeAdapter().adapter }, turnCaps: caps }); // a runner restart now re-enqueues it
+  assert.deepEqual(r2.recoverQueued(), [id]);
+  runner.shutdown(); r2.shutdown();
+});
+
+/** Fake claude child for the real claude adapter. */
+function fakeClaudeSpawn({ exitAfterMs = null } = {}) {
+  const impl = () => {
+    const child = new EventEmitter();
+    child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough();
+    child.pid = 7000;
+    child.kill = () => child.emit("exit", null, "SIGTERM");
+    if (exitAfterMs !== null) setTimeout(() => child.emit("exit", 1, null), exitAfterMs);
+    return child;
+  };
+  return impl;
+}
+
+test("R1 M3a: the claude adapter has a ready promise: it resolves after the settle window, and rejects when the CLI exits first", async () => {
+  const promptsDir = tmp("vs-rrs-cl-");
+  const ok = createClaudeAdapter({ spawnImpl: fakeClaudeSpawn(), command: process.execPath, mcp: false, promptsDir, readySettleMs: 40 })
+    .start({ id: "rn-a", cwd: promptsDir, emit() {}, onExit() {}, resume: "sess-a" });
+  assert.ok(ok.ready && typeof ok.ready.then === "function", "a prompt-less resume has something to wait on");
+  let state = "pending";
+  ok.ready.then(() => { state = "ready"; }, () => { state = "rejected"; });
+  await tick(15);
+  assert.equal(state, "pending", "not ready the instant it is spawned");
+  await tick(60);
+  assert.equal(state, "ready");
+  const bad = createClaudeAdapter({ spawnImpl: fakeClaudeSpawn({ exitAfterMs: 5 }), command: process.execPath, mcp: false, promptsDir, readySettleMs: 200 })
+    .start({ id: "rn-b", cwd: promptsDir, emit() {}, onExit() {}, resume: "sess-b" });
+  await assert.rejects(bad.ready, /exited before it was ready/);
+});
+
+test("R1 M3b: a turn-edge event is persisted before its lifecycle reaches the hooks, so a kill right after a digest cannot replay it", async () => {
+  const now = Date.now();
+  const { home, t0 } = gapHome({ seen: "fresh", now });
+  const b = backendFor(home);
+  await b.enableCatchUp({ now });
+  let savedAtEmit = null;
+  b.listeners.add((e) => { if (e.kind === "turn_ended") savedAtEmit = JSON.parse(readFileSync(path.join(home, "server-seen.json"), "utf8")).ts; });
+  await b.handleLogEvent({ id: "rn-worker", event: { seq: 3, ts: t0 + 60_000, type: "turn_done" } });
+  await b.handleLogEvent({ id: "rn-worker", event: { seq: 4, ts: t0 + 60_001, type: "status", status: "idle" } });
+  assert.equal(savedAtEmit, t0 + 60_001, "server-seen.json already names the idle when turn_ended is dispatched (no 1s window)");
+  // A hard kill right after the dispatch: the next boot treats that idle as history, so no second turn_ended / digest.
+  const b2 = backendFor(home);
+  await b2.enableCatchUp({ now: Date.now() });
+  assert.equal(b2.live.hwm.get("rn-worker"), 4, "history includes the dispatched idle");
+  assert.equal(b2.live.turn.get("rn-worker").status, "idle", "no open turn left to end again");
 });

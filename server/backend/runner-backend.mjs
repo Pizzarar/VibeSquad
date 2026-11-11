@@ -378,6 +378,14 @@ export function reduceTurn(t, e) {
   if (e.type === "input") { t.awaiting = true; return null; }
   if (e.type === "error") { if (inTurn) { t.errored = true; t.error = e.message; } return null; }
   if (e.type === "cancel") { if (inTurn) t.cancelled = true; return null; }
+  if (e.type === "status" && e.status && e.resume === true) {
+    // A prompt-less resume (Runner._settleResume / unwedge): the process came back (or gave up), no turn ran. Never a
+    // turn_started/turn_ended. A turn the restart cut is abandoned here, not reported completed (no digest, no takeover).
+    t.status = STATUS[e.status] ?? e.status;
+    t.queued = undefined;
+    if (e.status !== "starting") { t.awaiting = false; t.errored = false; t.error = undefined; t.cancelled = false; }
+    return null;
+  }
   if (e.type === "status" && e.status) {
     const wasRunning = t.status === "running";
     t.status = STATUS[e.status] ?? e.status;
@@ -431,6 +439,7 @@ export function logHooksUnavailable(err) {
 const SEEN_FILE = "server-seen.json";
 const SEEN_FLUSH_MS = 1000; // a hard kill loses at most this much: those events replay once more at the next boot
 const SEEN_ALIVE_MS = 60 * 1000;
+const TURN_EDGE_EVENTS = new Set(["status", "exit", "archive"]); // persisted synchronously (noteSeen)
 export const CATCHUP_MAX_GAP_MS = 30 * 60 * 1000; // a longer outage is not a restart gap: its events stay history
 function readSeen(home) {
   try {
@@ -1118,10 +1127,21 @@ export class RunnerBackend {
     return this.live.baseline;
   }
 
-  /** Records the newest handled event's ts for the next boot's baseline (enableCatchUp); written at most every SEEN_FLUSH_MS. */
-  noteSeen(ts) {
+  /**
+   * Records the newest handled event's ts for the next boot's baseline (enableCatchUp); written at most every SEEN_FLUSH_MS.
+   * sync: a turn-edge event (status / exit / archive: the only ones that open or close a turn) is written at once, BEFORE
+   * its lifecycle events reach the hooks, so a hard kill right after a digest/wake was dispatched can never replay that
+   * turn_ended into a second digest. The cost is at-most-once: a kill between this write and the dispatch drops it.
+   */
+  noteSeen(ts, { sync = false } = {}) {
     if (!Number.isFinite(ts) || ts <= (this.live.seenTs ?? 0)) return;
     this.live.seenTs = ts;
+    if (sync) {
+      clearTimeout(this.live.seenTimer);
+      this.live.seenTimer = null;
+      this.flushSeen();
+      return;
+    }
     if (this.live.seenTimer) return;
     this.live.seenTimer = setTimeout(() => { this.live.seenTimer = null; this.flushSeen(); }, SEEN_FLUSH_MS);
     this.live.seenTimer.unref?.();
@@ -1162,7 +1182,7 @@ export class RunnerBackend {
     if (hwm) {
       if (e.seq <= (hwm.get(id) ?? -1)) return; // already handled (replayed at connect, or history before startup)
       hwm.set(id, e.seq);
-      this.noteSeen(e.ts);
+      this.noteSeen(e.ts, { sync: TURN_EDGE_EVENTS.has(e.type) });
     }
     this.emitTimeline({ id, event: e });
     if (e.type === "compacted") logRunnerMetric(`compacted agent=${id} before=${e.before ?? "?"} after=${e.after ?? "?"}${e.trigger ? ` trigger=${e.trigger}` : ""}`); // once per event: the hwm gate above drops replays

@@ -646,27 +646,32 @@ export class Runner {
     if (this.live.has(id)) return true;
     const spec = this._parkedSpec(id) ?? this._lostSpec(id);
     if (!spec) return false;
-    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { const e = this._resume(id, spec); if (e) this._settleResume(id, e); } });
+    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { const e = this._resume(id, spec, { promptless: true }); if (e) this._settleResume(id, e); } });
     return true;
   }
 
   // A resume sends nothing, so no adapter ever reports a turn: the agent would read `starting` forever and, never idle, would
-  // never park (idea-109). Once the adapter is ready (ACP: its session handshake resolved; claude: spawned) it is idle, as
-  // after a turn, and the normal after-turn park takes over. A send that arrived meanwhile owns the status instead.
+  // never park (idea-109). Once the adapter is ready (ACP: its session handshake resolved; claude: survived its settle window)
+  // it is idle, as after a turn, and the normal after-turn park takes over. Its `starting` and `idle` carry `resume: true`:
+  // process lifecycle, not a turn, so the server never reads them as a completed turn (no digest, no takeover confirm).
+  // A send that arrived meanwhile owns the status instead: delivered (a turn is open) or queued behind a turn cap (its
+  // `queued` must stay the log's last status, or a runner restart would drop the prompt and the park would kill the agent).
   _settleResume(id, entry) {
     Promise.resolve(entry.handle?.ready).then(() => {
       if (this.live.get(id) !== entry || entry.parked || entry.status !== 'starting' || entry.inflight > 0) return; // shutdown clears live
+      if (this.queue.some((j) => j.id === id)) return; // a queued send: its job delivers into this live process when it runs
       entry.status = 'idle';
       entry.lastActive = Date.now();
-      this.store.append(id, 'status', { status: 'idle' });
+      this.store.append(id, 'status', { status: 'idle', resume: true });
       this._scheduleParkAfterTurn(id, entry);
       this._pump();
     }, () => {}); // a failed handshake ends the process: its onExit logs that
   }
 
-  // A resume stuck in `starting` (its handshake never finished): stops that child without writing to the log, so the agent
-  // reads `lost` (still resumable). retry: resume it again at once. Otherwise log why, which leaves it visibly lost instead of
-  // silently "initializing" with a live slot. Anything not stuck (a turn open, already idle, not live) is left alone.
+  // A resume stuck in `starting` (its handshake never finished): stops that child. retry: resume it again at once (the log
+  // is left as is). Otherwise log why plus a terminal `lost` status, so every reader (vs who, the server's roster/turn state)
+  // shows it closed+lost (still resumable by a send) instead of "initializing" with a live slot. Anything not stuck (a turn
+  // open, already idle, not live) is left alone.
   unwedge(id, { retry = false, reason = '' } = {}) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
     const e = this.live.get(id);
@@ -678,24 +683,32 @@ export class Runner {
     this.live.delete(id);
     try { e.handle?.kill(); } catch { /* already gone */ }
     if (retry && this.resume(id)) { this._pump(); return { action: 'retried' }; }
-    this.store.append(id, 'error', { message: `resume did not finish starting${reason ? `: ${reason}` : ''}` });
+    const message = `resume did not finish starting${reason ? `: ${reason}` : ''}`;
+    this.store.append(id, 'error', { message });
+    this.store.append(id, 'status', { status: 'lost', resume: true, reason: message });
     this._pump();
     return { action: 'failed', status: this.status(id)?.status ?? null };
   }
 
-  // Idle agents kept alive only because their tree still runs background work (a held park): a restart would kill that work.
+  // Idle agents a restart would cut background work under: held parks, AND every parkable idle agent whose after-turn probe
+  // has not yet come back clean. Right after a turn ends the park grace + the first probe take seconds with heldSince still
+  // null, and a suite started with run_in_background is already running then. Only a probe that saw nothing clears it.
   heldIds() {
     const ids = [];
-    for (const [id, e] of this.live) if (e.heldSince !== null && e.heldSince !== undefined) ids.push(id);
+    for (const [id, e] of this.live) {
+      if (e.heldSince !== null && e.heldSince !== undefined) ids.push(id);
+      else if (this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0) ids.push(id);
+    }
     return ids;
   }
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
-  _resume(id, fallbackSpec = null) {
+  // promptless: a bare resume (no send behind it), whose `starting` is tagged `resume: true` (see _settleResume).
+  _resume(id, fallbackSpec = null, { promptless = false } = {}) {
     const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
     if (!this._makeRoom(id)) throw new Error('no live process slot free');
-    this.store.append(id, 'status', { status: 'starting' });
+    this.store.append(id, 'status', { status: 'starting', ...(promptless ? { resume: true } : {}) });
     return this._start(id, spec);
   }
 
