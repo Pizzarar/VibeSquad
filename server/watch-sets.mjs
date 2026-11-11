@@ -395,7 +395,9 @@ export function createWatchEngine({
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
     o.archived = Boolean(a.archivedAt || a.archived);
-    o.attention = Boolean(a.requiresAttention || (a.pendingPermissions?.length ?? 0) > 0);
+    // Only a real pending permission reads "blocked (permission)" (idea-110). `requiresAttention` is a generic
+    // finished/unread flag and must not count on its own.
+    o.attention = (a.pendingPermissions?.length ?? 0) > 0;
     if (a.labels) o.labels = a.labels;
     if (activity || o.lastEventAt === undefined) o.lastEventAt = t;
   }
