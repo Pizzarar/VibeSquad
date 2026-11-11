@@ -1,5 +1,6 @@
 // Minimal stdio MCP server (newline-delimited JSON-RPC 2.0, zero deps) exposing the VS agent tools.
-//   node server/mcp/server.mjs      identity from env: VS_AGENT_ID (or PASEO_AGENT_ID), VS_TEAM, VS_LANE, VS_ROLE
+//   node server/mcp/server.mjs      identity from env: VS_AGENT_ID (or PASEO_AGENT_ID) + VS_AGENT_TOKEN (X1b: the token is
+//   the identity; tools.mjs verifyCaller resolves role/lane/team from the runner, VS_TEAM/VS_LANE/VS_ROLE are only a claim)
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";

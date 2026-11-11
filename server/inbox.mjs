@@ -561,15 +561,22 @@ export function triageCardIds(body = {}) {
  * other Squads get a clear 403-tagged error instead of the HTTP gate's bare 403. Returns normally when allowed.
  * `caller` is the verified caller (X1c: `{ id, role, team }` from /verify-agent) or the CLI's `{ agentId, role, teamId }`.
  */
+/** idea-137: the role half of assertInboxTriageCaller, with no card or action in hand: a worker (or any non lead/Buddy agent) is 403 before anything else is looked at. The owner (no agent id) passes. */
+export function assertInboxTriageRole(caller = {}) {
+  const agentId = String(caller.id || caller.agentId || "").trim();
+  if (!agentId) return;
+  const role = String(caller.role || "worker");
+  if (role !== "lead" && role !== "brainstorm") {
+    throw Object.assign(new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`), { status: 403 });
+  }
+}
+
 export function assertInboxTriageCaller(caller = {}, cardIds = [], baseHome) {
   const agentId = String(caller.id || caller.agentId || "").trim();
   if (!agentId) return;
+  assertInboxTriageRole(caller); // role first (idea-137), then the cards
   const forbid = (why) => Object.assign(new Error(why), { status: 403 });
-  const role = String(caller.role || "worker");
   const teamId = String(caller.team ?? caller.teamId ?? "");
-  if (role !== "lead" && role !== "brainstorm") {
-    throw forbid(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`);
-  }
   const cards = readInboxCards(baseHome);
   for (const id of cardIds) {
     const card = cards.find((c) => c.id === id);
