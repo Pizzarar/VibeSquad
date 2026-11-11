@@ -55,7 +55,8 @@ function fakeClient({ redeem, authenticate, status } = {}) {
     },
     async fetch(path) {
       calls.fetch.push(String(path));
-      const body = status ? status() : { ok: true, paired: true, hostId: E4A_ID, relay: { hostId: ID_A, pub: PUB_A } };
+      // What the PC claims about itself over the channel: E4a id, CA fingerprint (R1 M2: the fold needs both) and its pin.
+      const body = status ? status() : { ok: true, paired: true, hostId: E4A_ID, caFingerprint: { full: "ab".repeat(32), short: "ab:ab" }, relay: { hostId: ID_A, pub: PUB_A } };
       return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
     },
     async openWebSocket() {
@@ -232,7 +233,7 @@ describe("connectWithRelayLink: pinned connect, persist after success, one hosts
     const store2 = fakeStore();
     saveSession("100.64.0.7:4180", store2, new Date(), E4A_ID, "ab".repeat(32));
     saveRelayPin(ID_B, { endpoint: RELAY_2, pubKey: PUB_B }, store2);
-    assert.equal(foldRelayHost(ID_B, E4A_ID, store2), true, "the old relay pin folds in");
+    assert.equal(foldRelayHost(ID_B, E4A_ID, store2, "ab".repeat(32)), true, "the old relay pin folds in");
     const r2 = await connectWithRelayLink(parseRelayPairingLink(mkLink()), { store: store2, connect: fakeClient().connect });
     assert.equal(r2.hostId, E4A_ID, "the id the PC reported is passed on, but");
     const s2 = readSession(store2);
@@ -270,7 +271,8 @@ describe("connectWithRelayLink: pinned connect, persist after success, one hosts
     const r = await connectWithRelayLink(parseRelayPairingLink(mkLink()), { store, connect: c.connect });
     assert.equal(r.pending, true);
     assert.deepEqual(c.calls.fetch, []);
-    assert.equal(relayPinFor(ID_A, store).token, "ticket-1");
+    assert.equal(relayPinFor(ID_A, store).pendingToken, "ticket-1", "parked beside the (absent) working token, never as the token (R1 L3)");
+    assert.equal(relayPinFor(ID_A, store).token, undefined);
     assert.equal(readSession(store).hosts[0].hostId, ID_A, "still keyed by the relay id until approved");
     // Reconnecting before approval: authenticate throws RelayPendingError, which the connect path reports as pending.
     const later = fakeClient({ authenticate: async () => { throw new transport.RelayPendingError("pending"); } });
@@ -306,7 +308,7 @@ describe("connectWithRelayLink: pinned connect, persist after success, one hosts
       rand: () => 0.5,
       redeem: async ({ code, label }) => (code === "123456" ? { deviceId: "dev-e2e", token: `tok-e2e-${label}` } : null),
       authenticate: async (t) => (t.startsWith("tok-e2e-") ? { deviceId: "dev-e2e" } : null),
-      handleHttp: async (req) => (http.push(req), { status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ ok: true, paired: true, hostId: E4A_ID, relay: { hostId: ID_A, pub: PUB_A } })) }),
+      handleHttp: async (req) => (http.push(req), { status: 200, headers: { "content-type": "application/json" }, body: Buffer.from(JSON.stringify({ ok: true, paired: true, hostId: E4A_ID, caFingerprint: { full: "ab".repeat(32) }, relay: { hostId: ID_A, pub: PUB_A } })) }),
       openWs: async () => null,
     });
     host.start();

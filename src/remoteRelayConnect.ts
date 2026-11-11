@@ -9,9 +9,12 @@
 //     keeps the stored endpoint and still connects with the link's code through it.
 //  4. Nothing is persisted until the pinned handshake AND the redeem / authenticate succeeded through the endpoint the
 //     session actually used, so a dead or hostile relay leaves the store untouched.
-//  5. Fold (E5 §11 residual a): the PC's E4a host id is read over the authenticated channel (/api/auth/status, which
-//     also echoes the relay id + key, cross-checked against the pin) and foldRelayHost merges the relay pin into the
-//     LAN entry of the same PC. Never from the link.
+//  5. Fold (E5 §11 residual a): the PC's E4a host id AND CA fingerprint are read over the authenticated channel
+//     (/api/auth/status, which also echoes the relay id + key, cross-checked against the pin) and foldRelayHost merges
+//     the relay pin into the LAN entry of the SAME PC (id + fingerprint, E4a's samePc rule). Never from the link, and
+//     never on the public id alone (R1 M2 / X1 R1 M1).
+//  6. E4b pending (X1 R1 L1): a device-minted ticket is kept beside a working token, never over it; it replaces the
+//     token only once it authenticates.
 import {
   acceptPairingFragment,
   connectRelay,
@@ -24,6 +27,7 @@ import {
 } from "./remoteRelayTransport.ts";
 import {
   foldRelayHost,
+  normalizeFp,
   normalizeHostId,
   publicRelayEndpoint,
   relayHostFor,
@@ -125,35 +129,76 @@ export async function connectWithRelayLink(f: PairingFragment, opts: ConnectWith
     const code = f.code && CODE_RE.test(f.code) ? f.code : "";
     let deviceId = "";
     let pending = false;
-    let token = d.pin.token ?? "";
+    let token = d.pin.token ?? ""; // the working token stays unless something better authenticated
+    let pendingToken = d.pin.pendingToken ?? "";
+    const auth = async (t: string): Promise<"ok" | "pending"> => {
+      try {
+        deviceId = (await client.authenticate(t)).deviceId;
+        return "ok";
+      } catch (e) {
+        if (e instanceof RelayPendingError) return "pending";
+        throw e;
+      }
+    };
     if (code) {
       const r = await client.redeem(code, opts.deviceName ?? "VibeSquad Android");
       deviceId = r.deviceId;
-      token = r.token;
-      pending = r.pending === true;
-    } else if (token) {
-      // No code in the link: reconnect with the token this device already holds for that pin (rule 2: same key, same id).
-      try {
-        deviceId = (await client.authenticate(token)).deviceId;
-      } catch (e) {
-        if (!(e instanceof RelayPendingError)) throw e;
+      if (r.pending === true) {
+        // X1 R1 L1: a device-minted code never downgrades a phone that already holds a working token; the ticket waits beside it.
         pending = true;
+        pendingToken = r.token;
+      } else {
+        token = r.token;
+        pendingToken = "";
+      }
+    } else if (token || pendingToken) {
+      // No code in the link: reconnect with what this device already holds for that pin (rule 2: same key, same id).
+      // The working token first; a pending ticket only if there is no working token or it was revoked meanwhile.
+      let state: "ok" | "pending" | "revoked" = "revoked";
+      if (token) {
+        try {
+          state = await auth(token);
+        } catch (e) {
+          if (!(e instanceof RelayAuthError) || !pendingToken) throw e;
+          state = "revoked";
+        }
+      }
+      if (state === "pending") pending = true; // a stored token that is itself still a ticket (legacy store)
+      if (state === "revoked" && pendingToken) {
+        const r = await auth(pendingToken);
+        if (r === "ok") {
+          token = pendingToken; // approved since: the ticket becomes the token
+          pendingToken = "";
+        } else {
+          pending = true;
+          if (state === "revoked") token = "";
+        }
       }
     } else {
       throw new RelayAuthError("this link has no pairing code and this device is not paired with that PC yet");
     }
     // The handshake proved the key, the PC accepted this device: now the pin (and the endpoint it was proven through) persist.
     if (!store) throw new Error("remote: this browser has no localStorage");
-    saveRelayPin(f.hostId, { endpoint: d.pin.endpoint, pubKey: d.pin.pubKey }, store, opts.now ?? new Date(), d.known ? "" : d.label, { repoint: d.repointed, token });
+    saveRelayPin(f.hostId, { endpoint: d.pin.endpoint, pubKey: d.pin.pubKey }, store, opts.now ?? new Date(), d.known ? "" : d.label, {
+      repoint: d.repointed,
+      token: token || null,
+      pendingToken: pendingToken || null,
+    });
     let hostId = "";
     if (!pending) {
       try {
-        const st = (await (await client.fetch("/api/auth/status")).json()) as { hostId?: unknown; relay?: { hostId?: unknown; pub?: unknown } | null } | null;
+        const st = (await (await client.fetch("/api/auth/status")).json()) as {
+          hostId?: unknown;
+          caFingerprint?: { full?: unknown } | null;
+          relay?: { hostId?: unknown; pub?: unknown } | null;
+        } | null;
         const e4a = normalizeHostId(st?.hostId);
+        const caFp = normalizeFp(typeof st?.caFingerprint?.full === "string" ? st.caFingerprint.full : "") ?? "";
         const self = st?.relay;
-        // Only the PC behind this pinned, authenticated channel can say which E4a id it has; it must also claim this very pin.
+        // Only the PC behind this pinned, authenticated channel can say which E4a identity it has; it must also claim this
+        // very pin. The fold itself needs id AND CA fingerprint to match a LAN entry (samePc), never the public id alone.
         if (e4a && self && self.hostId === f.hostId && typeof self.pub === "string" && sameRelayKey(self.pub, d.pin.pubKey)) {
-          foldRelayHost(f.hostId, e4a, store);
+          foldRelayHost(f.hostId, e4a, store, caFp);
           hostId = e4a;
         }
       } catch {

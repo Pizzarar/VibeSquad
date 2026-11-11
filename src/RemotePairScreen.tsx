@@ -8,6 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { pairingFragment, type PairingFragment } from "./remoteRelayTransport"; // first: strips a #fragment from the URL before anything else runs
 import { connectWithRelayLink, parseRelayPairingLink, relayConnectErrorMessage } from "./remoteRelayConnect";
 import {
+  activeHost,
   activeMeshnetHost,
   fetchHostId,
   forgetHost,
@@ -83,6 +84,8 @@ export function RemotePairScreen() {
   const session = readSession();
   const savedHost = activeMeshnetHost(session);
   const saved = savedHost ? { host: savedHost } : null;
+  // A relay-only pairing (no address) still needs a way out (R1 L2): Forget by its relay id.
+  const relayOnly = !saved ? activeHost(session) : null;
   const [host, setHost] = useState(saved?.host ?? "");
   const [code, setCode] = useState("");
   const [fp, setFp] = useState("");
@@ -160,7 +163,9 @@ export function RemotePairScreen() {
     try {
       const r = await connectWithRelayLink(f, {
         confirmRepoint: ({ label, from, to }) =>
-          window.confirm(`This link moves ${label} to a different relay:\n${to}\n\nIt is currently reached through:\n${from}\n\nSwitch to the new relay? Cancel keeps the current one.`),
+          window.confirm(
+            `This link moves ${label} to a different relay:\n${to}\n\nIt is currently reached through:\n${from}\n\nSwitch to the new relay? Only answer OK if you set up ${safeRelayHost(to)} yourself. Cancel keeps the current one.`,
+          ),
       });
       r.client.close(); // nothing drives the session yet (E5 §7 item 6); the pin and token are stored for it
       setRelayDone(
@@ -414,6 +419,19 @@ export function RemotePairScreen() {
             }}
           >
             Forget {saved.host}
+          </button>
+        )}
+        {relayOnly && (
+          <button
+            type="button"
+            className="btn ghost remote-pair-forget"
+            data-testid="forget-relay-pc"
+            onClick={() => {
+              forgetHost(relayOnly.relay?.hostId || relayOnly.hostId);
+              location.reload();
+            }}
+          >
+            Forget {relayOnly.label} (relay)
           </button>
         )}
       </form>

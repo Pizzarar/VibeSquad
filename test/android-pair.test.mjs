@@ -9,6 +9,7 @@ import {
   activeMeshnetHost,
   clearSession,
   fetchHostId,
+  foldRelayHost,
   forgetHost,
   isAndroidUserAgent,
   mapRemoteError,
@@ -595,12 +596,13 @@ describe("E5 pin store: a pairing link never replaces a stored host key (threat 
   test("a LAN-paired host gets its relay pin added in place (CA pin and address kept); junk links are refused", () => {
     const store = fakeStore();
     saveSession("100.64.0.7:4180", store, new Date(), HOST_ID, "ab".repeat(32));
-    saveRelayPin(HOST_ID, { endpoint: "wss://relay.example", pubKey: KEY_B }, store);
+    saveRelayPin(RELAY_ID, { endpoint: "wss://relay.example", pubKey: KEY_B }, store);
+    foldRelayHost(RELAY_ID, HOST_ID, store, "ab".repeat(32));
     const h = readSession(store).hosts;
     assert.equal(h.length, 1);
     assert.equal(h[0].meshnetHost, "100.64.0.7:4180");
     assert.equal(h[0].caFp, "ab".repeat(32));
-    assert.deepEqual(h[0].relay, { hostId: HOST_ID, endpoint: "wss://relay.example", pubKey: KEY_B });
+    assert.deepEqual(h[0].relay, { hostId: RELAY_ID, endpoint: "wss://relay.example", pubKey: KEY_B });
     assert.throws(() => saveRelayPin(HOST_ID, { endpoint: "ws://relay.example", pubKey: KEY_B }, store), /wss:/);
     assert.throws(() => saveRelayPin(HOST_ID, { endpoint: "wss://relay.example", pubKey: "c2hvcnQ=" }, store), /host key/);
     assert.throws(() => saveRelayPin("bad id", { endpoint: "wss://relay.example", pubKey: KEY_B }, store), /host id/);

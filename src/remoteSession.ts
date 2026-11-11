@@ -9,7 +9,15 @@
  * two are folded (foldRelayHost). `pubKey` is write-once per relay id. `token` is the per-device bearer token the PC
  * minted inside the E2EE channel (stored like the Meshnet cookie is, on this device only; revoked on the PC).
  */
-export type StoredRelayPin = { hostId: string; endpoint: string; pubKey: string; token?: string };
+export type StoredRelayPin = {
+  hostId: string;
+  endpoint: string;
+  pubKey: string;
+  /** The working per-device token, sent only after a handshake pinned to `pubKey`. */
+  token?: string;
+  /** E4b: a device-minted ticket waiting for approval. Never replaces `token` until it authenticates (X1 R1 L1). */
+  pendingToken?: string;
+};
 
 /**
  * One paired PC (PLAN_ANDROID_END_STATE.md E4a). `hostId` is the PC's ~/.vibesquad/host-id as /api/auth/status
@@ -204,7 +212,13 @@ function validHost(h: unknown): StoredRemoteHost | null {
   const relayId = normalizeHostId(r?.hostId) || hostId; // entries written before the fold keyed the pin by the entry id
   const relay: StoredRelayPin | null =
     r && typeof r === "object" && typeof r.endpoint === "string" && typeof r.pubKey === "string" && /^wss:\/\//i.test(r.endpoint) && r.pubKey && relayId
-      ? { hostId: relayId, endpoint: r.endpoint, pubKey: r.pubKey, ...(typeof r.token === "string" && r.token ? { token: r.token } : {}) }
+      ? {
+          hostId: relayId,
+          endpoint: r.endpoint,
+          pubKey: r.pubKey,
+          ...(typeof r.token === "string" && r.token ? { token: r.token } : {}),
+          ...(typeof r.pendingToken === "string" && r.pendingToken ? { pendingToken: r.pendingToken } : {}),
+        }
       : null;
   if (!meshnetHost && !relay) return null; // no way to reach it
   const caFp = normalizeFp(typeof x.caFp === "string" ? x.caFp : "") ?? "";
@@ -295,6 +309,9 @@ export function saveSession(host: string, local: GetSet | null = browserStorage(
   };
   if (fp) entry.caFp = fp;
   else if (id && same?.hostId && same.hostId !== id) delete entry.caFp; // a new PC behind the same address: the old pin is not its pin
+  // R1 M1: a different PC behind the same address (other host id, or other CA fingerprint) must not inherit the old
+  // PC's relay pin and token either; the relay pin is bound to the PC that proved it, never to the address.
+  if (same && ((id && same.hostId && same.hostId !== id) || (fp && same.caFp && same.caFp !== fp))) delete entry.relay;
   writeSession(local, { v: 3, activeHostId: entry.hostId, hosts: [entry, ...hosts] });
 }
 
@@ -313,6 +330,7 @@ export function setSessionHostId(host: string, hostId: unknown, local: GetSet | 
   if (i < 0 || s.hosts[i].hostId === id) return false;
   const wasActive = activeHost(s) === s.hosts[i];
   const merged: StoredRemoteHost = { ...s.hosts[i], hostId: id };
+  if (s.hosts[i].hostId) delete merged.relay; // R1 M1: a new PC behind the address keeps nothing of the old PC's relay pin
   const hosts = s.hosts.filter((x, j) => j === i || !samePc(x, merged));
   hosts[hosts.indexOf(s.hosts[i])] = merged;
   writeSession(local, { v: 3, activeHostId: wasActive ? id : s.activeHostId, hosts });
@@ -335,12 +353,16 @@ export async function fetchHostId(host: string, fetchImpl: typeof fetch | null =
   }
 }
 
-/** Forget one PC (the server still lists the device until it is revoked there). The next saved host becomes active. */
-export function forgetHost(host: string, local: GetSet | null = browserStorage("localStorage")): void {
-  const h = normalizeHost(host);
+/**
+ * Forget one PC by its LAN/Meshnet address, its host id or its relay id (a relay-only pairing has no address; R1 L2).
+ * The server still lists the device until it is revoked there. The next saved host becomes active.
+ */
+export function forgetHost(hostOrId: string, local: GetSet | null = browserStorage("localStorage")): void {
+  const h = normalizeHost(hostOrId);
+  const id = normalizeHostId(hostOrId);
   const s = local ? readSession(local) : null;
   if (!local || !s) return;
-  const hosts = s.hosts.filter((x) => x.meshnetHost !== h);
+  const hosts = s.hosts.filter((x) => !((h && x.meshnetHost === h) || (id && (x.hostId === id || x.relay?.hostId === id))));
   if (!hosts.length) return clearSession(local);
   const active = hosts.find((x) => x.hostId === s.activeHostId) ?? hosts[0];
   writeSession(local, { v: 3, activeHostId: active.hostId, hosts });
@@ -379,13 +401,13 @@ export function publicRelayEndpoint(endpoint: unknown): string {
 }
 
 /**
- * The hosts[] entry that owns relay id `relayId`: by its pin first, else the entry keyed by that id (an unfolded
- * relay-only entry, or a LAN entry whose pin arrives under its own id). Safe: a link's id is self-certifying
- * (acceptPairingFragment), so no link can name an E4a id it does not hold the key for.
+ * The hosts[] entry that owns relay id `relayId`: by its pin first, else an UNFOLDED relay-only entry keyed by that
+ * id (no address). A LAN entry is never matched by its E4a id here (X1 R1 P4): a LAN host could report any 22-64
+ * char string as its id, including another PC's public relay id, and must not receive that PC's pin or token.
  */
 function relayEntryIndex(hosts: StoredRemoteHost[], relayId: string): number {
   const byPin = hosts.findIndex((h) => h.relay?.hostId === relayId);
-  return byPin >= 0 ? byPin : hosts.findIndex((h) => h.hostId === relayId);
+  return byPin >= 0 ? byPin : hosts.findIndex((h) => h.hostId === relayId && !h.meshnetHost);
 }
 
 /** The stored relay pin for relay id `hostId`, or null. The connect path reads this and never the link's key. */
@@ -411,6 +433,8 @@ export type SaveRelayPinOptions = {
   repoint?: boolean;
   /** A string replaces the stored device token for this relay, null removes it, undefined keeps it. */
   token?: string | null;
+  /** Same for the E4b pending ticket, which lives beside `token` and never replaces it (X1 R1 L1). */
+  pendingToken?: string | null;
 };
 
 /**
@@ -438,49 +462,60 @@ export function saveRelayPin(
   const hosts = prev?.hosts.slice() ?? [];
   const i = relayEntryIndex(hosts, id);
   const token = typeof opts.token === "string" && opts.token ? { token: opts.token } : {};
+  const pendingToken = typeof opts.pendingToken === "string" && opts.pendingToken ? { pendingToken: opts.pendingToken } : {};
   if (i >= 0) {
     const cur = hosts[i].relay;
     if (cur && !sameRelayKey(cur.pubKey, pubKey)) throw new RelayPinMismatchError(id);
-    const pin: StoredRelayPin = cur ? { ...cur, hostId: id, endpoint: opts.repoint ? endpoint : cur.endpoint, ...token } : { hostId: id, endpoint, pubKey, ...token };
+    const pin: StoredRelayPin = cur ? { ...cur, hostId: id, endpoint: opts.repoint ? endpoint : cur.endpoint, ...token, ...pendingToken } : { hostId: id, endpoint, pubKey, ...token, ...pendingToken };
     if (opts.token === null) delete pin.token;
+    if (opts.pendingToken === null) delete pin.pendingToken;
     hosts[i] = { ...hosts[i], relay: pin, savedAt: now.toISOString() };
     writeSession(local, { v: 3, activeHostId: prev?.activeHostId || hosts[i].hostId, hosts });
     return pin;
   }
-  const pin: StoredRelayPin = { hostId: id, endpoint, pubKey, ...token };
+  const pin: StoredRelayPin = { hostId: id, endpoint, pubKey, ...token, ...pendingToken };
   const entry: StoredRemoteHost = { hostId: id, label: (label || "").trim().slice(0, 60) || safe(() => new URL(endpoint).host, endpoint), relay: pin, savedAt: now.toISOString() };
   writeSession(local, { v: 3, activeHostId: id, hosts: [entry, ...hosts] });
   return pin;
 }
 
 /**
- * Folds the E4a host id and the E5 relay id of ONE PC into one hosts[] entry (E5_THREAT_MODEL.md §11 residual (a)).
- * Call it only with an `e4aHostId` the PC reported over the pinned AND authenticated relay channel for `relayId`
- * (/api/auth/status through the relay): never from a link, which is unauthenticated. Rules:
- *  - a LAN entry with that E4a id and no relay pin (or the same key) takes the relay pin; the relay-only entry goes;
- *  - a LAN entry whose relay pin has a DIFFERENT key keeps it (the PC rotated its key, or this is not that PC): no
- *    fold, both entries stay, false is returned, so nothing the channel said ever moves an existing pin;
- *  - a relay-only entry still keyed by its relay id learns the E4a id (the entry follows the PC, the pin stays).
+ * Folds the E4a identity and the E5 relay id of ONE PC into one hosts[] entry (E5_THREAT_MODEL.md §11 residual (a)).
+ * Call it only with what the PC reported over the pinned AND authenticated relay channel for `relayId`
+ * (/api/auth/status through the relay: `hostId` and `caFingerprint`): never from a link, which is unauthenticated.
+ * The identity rule is E4a's `samePc` (R1 M2 / X1 R1 M1): host id AND CA fingerprint, both known and equal. The id
+ * alone is public (any unpaired caller reads it) and a cloned ~/.vibesquad gives two PCs one id, so a host that
+ * merely claims an id never merges into a LAN entry. Rules:
+ *  - a LAN entry that is the same PC (id + CA fingerprint) with no relay pin, or the same key, takes the pin; the
+ *    relay-only entry goes;
+ *  - a LAN entry whose relay pin has a DIFFERENT key keeps it (rotated key, or not that PC): no fold, both stay;
+ *  - a relay-only entry (no address) learns the E4a id and CA fingerprint, so a LATER LAN pairing of the same PC
+ *    (saveSession, which also uses samePc) folds into it: the order of pairing does not matter;
+ *  - an entry that already has an address never changes identity here: the LAN side proved that identity over TLS.
  * Returns true when the store changed.
  */
-export function foldRelayHost(relayId: unknown, e4aHostId: unknown, local: GetSet | null = browserStorage("localStorage")): boolean {
+export function foldRelayHost(relayId: unknown, e4aHostId: unknown, local: GetSet | null = browserStorage("localStorage"), caFp: unknown = ""): boolean {
   const rid = normalizeHostId(relayId);
   const hid = normalizeHostId(e4aHostId);
+  const fp = normalizeFp(typeof caFp === "string" ? caFp : "") ?? "";
   const s = local ? readSession(local) : null;
   if (!local || !s || !rid || !hid) return false;
   const ri = relayEntryIndex(s.hosts, rid);
-  if (ri < 0) return false;
+  if (ri < 0 || !s.hosts[ri].relay) return false;
   const relayEntry = s.hosts[ri];
   const pin: StoredRelayPin = { ...relayEntry.relay!, hostId: rid };
-  const li = s.hosts.findIndex((h, j) => j !== ri && h.hostId === hid);
+  const me = { hostId: hid, caFp: fp };
+  const li = s.hosts.findIndex((h, j) => j !== ri && samePc(h, me));
   if (li < 0) {
-    if (relayEntry.hostId === hid && relayEntry.relay?.hostId === rid) return false;
+    if (relayEntry.meshnetHost) return false; // a LAN-proven entry keeps its identity
+    if (relayEntry.hostId === hid && relayEntry.relay?.hostId === rid && (!fp || relayEntry.caFp === fp)) return false;
     const hosts = s.hosts.slice();
-    hosts[ri] = { ...relayEntry, hostId: hid, relay: pin };
+    hosts[ri] = { ...relayEntry, hostId: hid, ...(fp ? { caFp: fp } : {}), relay: pin };
     writeSession(local, { v: 3, activeHostId: s.activeHostId === relayEntry.hostId ? hid : s.activeHostId, hosts });
     return true;
   }
   const lan = s.hosts[li];
+  if (relayEntry.meshnetHost) return false; // two LAN-proven entries never merge over the relay
   if (lan.relay && !sameRelayKey(lan.relay.pubKey, pin.pubKey)) return false;
   const relayHostLabel = safe(() => new URL(pin.endpoint).host, "");
   const merged: StoredRemoteHost = {
