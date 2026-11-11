@@ -23,16 +23,18 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Catch up on Squad state | "catch me up" | `cli/vs.mjs:503` (`vs log --since-me`) | @bug |
 | Handoff packet | "write a handoff" | `cli/vs.mjs:504` (`vs handoff`) | @bug |
 | Lane spec / tasks | "update the spec", "show tasks" | `cli/vs.mjs:510,511,512` (`vs spec`, `vs task list`) | @bug |
-| Merge pins / lanes | "fold perfection-2 into perfection" | `cli/vs.mjs:509` (`vs pin merge`) | @sta |
-| Standing lanes (Bugs, Workflows) | "bugs chip", "workflows chip" | docs/PLAN_STANDING_TEAMS.md:5; docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md:13 | @sta |
+| Merge pins / lanes | "fold perfection-2 into perfection" | `cli/vs.mjs:509` (`vs pin merge`) | @hub |
+| Bugs chip (standing Bug lane) | "bugs chip" | docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md:5-11 (Workflows chip dropped 11-09) | @ui |
 | Overlord spin-up | "spin up overlord" | docs/PLAN_OVERLORD_ROLE.md:26; docs/PLAN_HUB_SPINUP_1108.md:1 | @hub |
 | Wait on agents (end turn, one ping) | "wait for them" | `cli/vs.mjs:527,528` (`vs wait`, `vs watch add`); MCP `wait` `server/mcp/tools.mjs:697`, `watch` `:717`; STANDING_RULES `server/lessons.mjs:161` | @bug |
-| Message / inspect / stop an agent | "tell the lead X", "stop it" | `cli/vs.mjs:519` (`vs send`); MCP `send` `server/mcp/tools.mjs:696`, `status` `:701`, `list` `:722`, `cancel` `:723` | @bug |
+| Message / inspect / stop an agent | "tell the lead X", "stop it" | `cli/vs.mjs:519` (`vs send`); MCP `send` `server/mcp/tools.mjs:695`, `status` `:701`, `list` `:722`, `cancel` `:723` | @bug |
 | Archive sweep | "archive the done workers" | `cli/vs.mjs:526` (`vs archive --sweep`); docs/PLAN_PROVIDER_CONTINUITY.md:16 | @bug |
 | Provider cap / failover | "claude is capped" | `cli/vs.mjs:514` (`vs cap`); STANDING_RULES `server/lessons.mjs:162` | @per |
 | Compact in place | "compact first" | docs/PLAN_COMPACT_IN_PLACE_1108.md:8 | @bug |
 | Runtime restart | "restart the runner/server" | `cli/vs.mjs:517` (`vs restart`, owner/Overlord only); merge trailer `server/lessons.mjs:165` | @bug |
 | Merge trailer (Live-Needs) | every master merge | `server/lessons.mjs:165`; `server/sync-runtime.mjs:172` | @bug |
-| Usage dashboard / review | "how much did X cost" | docs/PLAN_USAGE_DASHBOARD.md:28; docs/lanes/perfection/USAGE_REVIEW_PROMPT.md:1 | @usage |
+| Usage dashboard / review | "how much did X cost" | docs/PLAN_USAGE_DASHBOARD.md:28; docs/lanes/perfection/USAGE_REVIEW_PROMPT.md:1 | @usa |
 | Pair a device | "pair my phone" | `cli/vs.mjs:533` (`vs pair`) | @and |
 | Lane artifact as truth | "check the spec, not the chat" | STANDING_RULES `server/lessons.mjs:164` | @per |
+| Owner interrupts / queued units | "/btw", "also", "on another note" | R9 `server/profiles.mjs:40` | @hub |
+| Cross-lane principles | "cross-lane principle" | R12 `server/profiles.mjs:43` | @hub |
