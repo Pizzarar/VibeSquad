@@ -16,6 +16,7 @@ import { createClaudeAdapter } from "../runner/adapters/claude.mjs";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { seedDefaultPack } from "../server/profiles.mjs";
+import { verifiedIdentity } from "./helpers/agent-token.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 const CLI_PATH = resolve(REPO_ROOT, "cli", "vs.mjs");
@@ -287,7 +288,7 @@ function leadCtx({ agents = [], identity = { agentId: "rn-buddy", team: "efi", l
     async createAgent(p) { const a = { id: "rn-new", title: p.config.title, labels: { ...p.labels } }; return a; },
   };
   const teams = [{ id: "efi", name: "EFI", paths: [], lanes: [{ id: "own", name: "Own" }] }];
-  const ctx = createContext({ identity, withBackend: async (_o, fn) => fn(backend), teams });
+  const ctx = createContext({ ...verifiedIdentity(identity, { backend, teams }), withBackend: async (_o, fn) => fn(backend), teams });
   ctx.findLiveLeads = createContext({ identity, withBackend: async (_o, fn) => fn(backend), teams }).findLiveLeads;
   ctx.loadProfiles = async () => [{ id: "p", name: "Lead - Opus", role: "lead", provider: "claude", model: "claude-opus-5-5", modeId: "auto" }];
   ctx.resolveProfile = async (name) => ({ profile: { id: "p", name: "Lead - Opus" }, spawn: { provider: "claude", model: "claude-opus-5-5", modeId: "auto" } });

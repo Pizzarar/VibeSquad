@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callTool, createContext, VS_TOOLS } from "../server/mcp/tools.mjs";
 import { commandAgentVerb, runAgentVerb } from "../cli/vs.mjs";
+import { tokenFor, verifiedIdentity } from "./helpers/agent-token.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
@@ -41,13 +42,14 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
   };
   const watchCalls = { add: [], list: [], cancel: [] };
   const identity = { agentId: callerId, team, lane, role: callerRole };
-  const ctx = createContext({ identity, teams: TEAMS, withBackend: async (_o, fn) => fn(backend) });
+  const verified = (who) => verifiedIdentity(who, { backend, teams: TEAMS });
+  const ctx = createContext({ ...verified(identity), teams: TEAMS, withBackend: async (_o, fn) => fn(backend) });
   ctx.watchSets = {
     async addWatch(p) { watchCalls.add.push(p); return { id: "w-1" }; },
     async listWatches(opts) { watchCalls.list.push(opts); return [{ id: "w-1", owner: opts.owner ?? "", team: opts.team ?? "" }]; },
     async cancelWatch(id, caller) { watchCalls.cancel.push({ id, caller }); return { id, cancelled: true }; },
   };
-  return { ctx, agents, watchCalls, dir, vsHome, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
+  return { ctx, verified, agents, watchCalls, dir, vsHome, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("watch is a listed tool with the right schema", () => {
@@ -276,20 +278,20 @@ test("F6: cancel is refused unless the caller owns the set or is the same-Squad 
     const othId = ws.addWatch({ owner: "rn-oth-lead", team: "oth", lane: "oth-main", items: [{ kind: "suite" }] }).id;
 
     // Buddy of lane A (site-polish) cancels lead B's set (lane other) -> error, set stays armed.
-    const buddy = { ...leadB, ctx: createContext({ identity: { agentId: "rn-buddy", team: "site", lane: "site-polish", role: "brainstorm" }, teams: TEAMS, withBackend: leadB.ctx.withBackend }) };
+    const buddy = { ...leadB, ctx: createContext({ ...leadB.verified({ agentId: "rn-buddy", team: "site", lane: "site-polish", role: "brainstorm" }), teams: TEAMS, withBackend: leadB.ctx.withBackend }) };
     buddy.ctx.watchSets = ws;
     await assert.rejects(callTool(buddy.ctx, "watch", { action: "cancel", id }), /only its owner or the same-Squad Overlord may cancel/);
     assert.equal(ws.listWatches({ owner: "rn-lead-b" })[0].status, "armed");
 
     // Another lead of the same Squad (non-hub) is refused too; a spoofed owner arg does not help.
-    const leadA = createContext({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" }, teams: TEAMS, withBackend: leadB.ctx.withBackend });
+    const leadA = createContext({ ...leadB.verified({ agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" }), teams: TEAMS, withBackend: leadB.ctx.withBackend });
     leadA.watchSets = ws;
     await assert.rejects(callTool(leadA, "watch", { action: "cancel", id, owner: "rn-lead-b" }), /only the same-Squad Overlord may set a different owner/);
     await assert.rejects(callTool(leadA, "watch", { action: "cancel", id }), /only its owner or the same-Squad Overlord may cancel/);
     assert.equal(ws.listWatches({ owner: "rn-lead-b" })[0].status, "armed");
 
     // The same-Squad Overlord may NOT cancel another Squad's set.
-    const ov = createContext({ identity: { agentId: "rn-hub-lead", team: "site", lane: "site-hub", role: "lead" }, teams: TEAMS, withBackend: leadB.ctx.withBackend });
+    const ov = createContext({ ...leadB.verified({ agentId: "rn-hub-lead", team: "site", lane: "site-hub", role: "lead" }), teams: TEAMS, withBackend: leadB.ctx.withBackend });
     ov.watchSets = ws;
     await assert.rejects(callTool(ov, "watch", { action: "cancel", id: othId }), /only its owner or the same-Squad Overlord may cancel/);
     assert.equal(ws.listWatches({ owner: "rn-oth-lead" })[0].status, "armed");

@@ -8,6 +8,7 @@ import { seedDefaultPack } from "../server/profiles.mjs";
 import { performBrainstormRestart } from "../server/brainstorm.mjs";
 import { callTool, createContext, VS_TOOLS } from "../server/mcp/tools.mjs";
 import { commandAgentVerb } from "../cli/vs.mjs";
+import { tokenFor, verifiedIdentity } from "./helpers/agent-token.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
@@ -51,7 +52,7 @@ function setup({ callerRole, callerId, lane = "site-polish", team = "site" }) {
   };
   const sent = [];
   const identity = { agentId: callerId, team, lane, role: callerRole };
-  const ctx = createContext({ identity, teams: TEAMS, withBackend: async (_o, fn) => fn(backend) });
+  const ctx = createContext({ ...verifiedIdentity(identity, { backend, teams: TEAMS }), teams: TEAMS, withBackend: async (_o, fn) => fn(backend) });
   ctx.restartBuddyRequest = async (body) => { sent.push(body); return { ok: true, newAgentId: "rn-buddy-new", title: "New Buddy" }; };
   return { ctx, agents, backend, calls, sent, dir, vsHome, profilesPath, cleanup() { if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome; rmSync(dir, { recursive: true, force: true }); } };
 }
@@ -256,7 +257,7 @@ test("a shared @<code> lane handle resolves inside the caller's own (non-primary
   const backend = { async fetchAgents() { return { entries: agents.map((agent) => ({ agent })) }; }, async fetchAgent(id) { return { agent: agents.find((a) => a.id === id) ?? null }; } };
   const sent = [];
   for (const [callerId, lane] of [["rn-s-hub", "second-hub"], ["rn-s-bug-lead", "second-chaser"]]) {
-    const ctx = createContext({ identity: { agentId: callerId, team: "second", lane, role: "lead" }, teams: SHARED, withBackend: async (_o, fn) => fn(backend) });
+    const ctx = createContext({ ...verifiedIdentity({ agentId: callerId, team: "second", lane, role: "lead" }, { backend, teams: SHARED }), teams: SHARED, withBackend: async (_o, fn) => fn(backend) });
     ctx.restartBuddyRequest = async (b) => { sent.push(b); return { ok: true, newAgentId: "rn-new" }; };
     const r = await callTool(ctx, "restart_buddy", { lane: "@bug" });
     assert.equal(r.team, "second");
