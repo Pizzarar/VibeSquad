@@ -61,6 +61,8 @@ ids.digest = mk({ team: "sq", lane: "art", role: "worker", profile: "Pre-check -
 const runnerSrv = createRunnerServer(runner, { token: ADMIN, hash: "h" });
 const runnerPort = await listen(runnerSrv);
 writeDiscovery(runnerHome, { port: runnerPort, token: ADMIN });
+const runnerHits = []; // every request the runner saw (X1d R1 H1: an agent shell must never reach it with the admin bearer)
+runnerSrv.on("request", (req) => runnerHits.push({ url: req.url, admin: Boolean(req.headers.authorization), agent: req.headers["x-vs-agent-id"] ?? null }));
 
 const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {} }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
 const api = createVibesquadMiddleware(ROOT, { backend });
@@ -297,4 +299,38 @@ test("X1d: a verified lead can --set-status and --merge through the server (--me
   assert.notEqual(w.status, 0);
   assert.match(w.stderr, /leads and Buddies of the card's Squad/);
   assert.equal(status("idea-m-a"), "accepted");
+});
+
+// ---------- X1d review R1 (Bug18) H1: vs archive verifies the caller; an agent shell never reaches the runner as admin ----------
+test("X1d R1 H1 guard: vs archive from an agent shell goes through verifyCaller: a leftover token with the id cleared, or an id without a token, is 403 before any socket (the runner sees no request, nothing is archived); vs inspect / vs logs refuse the same way; a verified worker cannot archive its lead; a verified lead archives its lane worker", async () => {
+  const victim = mk({ team: "sq", lane: "art", role: "worker", labels: { "vs.parent": ids.lead } });
+  const rh = runnerHits.length;
+  const vh = hits.length;
+  const leftover = await vs(["archive", ids.lead], { extra: { VS_AGENT_TOKEN: tokenOf(ids.worker) } });
+  assert.notEqual(leftover.status, 0, "a leftover token with the id cleared is not admin");
+  assert.match(leftover.stderr, /403/);
+  const noToken = await vs(["archive", ids.lead], { who: ids.worker, token: "" });
+  assert.notEqual(noToken.status, 0);
+  assert.match(noToken.stderr, /403/);
+  for (const args of [["inspect", ids.lead], ["logs", ids.lead]]) {
+    const r = await vs(args, { extra: { VS_AGENT_TOKEN: tokenOf(ids.worker) } });
+    assert.notEqual(r.status, 0, args.join(" "));
+    assert.match(r.stderr, /403/, `${args.join(" ")}: ${r.stderr}`);
+  }
+  assert.equal(runnerHits.length, rh, "the runner saw no request (admin or otherwise)");
+  assert.equal(hits.length, vh, "nothing reached the VS server");
+  assert.ok(!runner.status(ids.lead)?.archivedAt, "the lead is not archived");
+  // a verified worker is in scope for the runner, which refuses archiving its lead
+  const w = await vs(["archive", ids.lead], { who: ids.worker });
+  assert.notEqual(w.status, 0);
+  assert.match(w.stderr, /403|may not archive/, "the runner scope rule refuses (its own message, after verification)");
+  assert.ok(!runner.status(ids.lead)?.archivedAt);
+  // a verified lead archives a worker in its lane; every archive call the runner saw carried agent headers, never the bearer
+  const ok = await vs(["archive", victim], { who: ids.lead });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(JSON.parse(ok.stdout).archived, true); // the CLI pretty-prints the result
+  assert.ok(runner.status(victim)?.archivedAt, "the worker is archived");
+  const archives = runnerHits.slice(rh).filter((h) => h.url.endsWith("/archive"));
+  assert.ok(archives.length >= 1);
+  for (const h of archives) assert.deepEqual([h.admin, Boolean(h.agent)], [false, true], `${h.url}: an archive rode the admin bearer`);
 });

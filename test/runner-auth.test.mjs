@@ -648,3 +648,45 @@ test("X1a: runner-backend passes the caller through: an agent caller's spawn is 
     await assert.rejects(() => backend.sendAgentPrompt(s.ids.worker2, "x", { caller: { id: s.ids.foreign, token: s.runner.tokensById.get(s.ids.foreign) } }), (e) => e.status === 403);
   } finally { delete process.env.VIBESQUAD_HOME; await s.stop(); }
 });
+
+test("X1d R1 H1 guard: a leftover VS_AGENT_TOKEN with the id cleared, or an id without a token, is an incomplete agent caller: 403 in-process, nothing sent, never the admin bearer; a shell with no identity is still admin", async () => {
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_TOKEN: "leftover" }), { id: "", token: "leftover" });
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "leftover" }), { id: "", token: "leftover" });
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a" }), { id: "rn-a", token: "" });
+  assert.equal(agentCallerFromEnv({ VS_AGENT_ID: "", VS_AGENT_TOKEN: "" }), null, "no identity at all: the admin bearer");
+  for (const bad of [{ id: "", token: "leftover" }, { id: "rn-a", token: "" }, {}, { id: " ", token: "t" }]) {
+    assert.throws(() => authHeadersFor(bad, ADMIN), (e) => e instanceof RunnerHttpError && e.status === 403, JSON.stringify(bad));
+  }
+  assert.deepEqual(authHeadersFor(null, ADMIN), { authorization: `Bearer ${ADMIN}` });
+  assert.deepEqual(authHeadersFor(undefined, ADMIN), { authorization: `Bearer ${ADMIN}` });
+  // no socket at all: the recording fetch never sees a call, on any route, and the health probe is a 403, not RUNNER_DOWN
+  const home = clientHome();
+  const fetchImpl = recordingFetch();
+  for (const env of [{ VS_AGENT_TOKEN: "leftover" }, { VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "leftover" }, { VS_AGENT_ID: "rn-me" }]) {
+    const c = new RunnerClient({ home, fetchImpl, env });
+    for (const [m, r, b] of [["POST", "/agents/rn-x/archive", {}], ["GET", "/agents/rn-x"], ["GET", "/health"], ["POST", "/agents", { provider: "claude" }], ["POST", "/shutdown", {}]]) {
+      await assert.rejects(() => c.request(m, r, b), (e) => e instanceof RunnerHttpError && e.status === 403, `${JSON.stringify(env)} ${m} ${r}`);
+    }
+    await assert.rejects(() => c.healthy(), (e) => e.status === 403, `${JSON.stringify(env)} healthy()`);
+    await assert.rejects(() => c.requireRunning(), (e) => e.status === 403 && e.code !== "RUNNER_DOWN", `${JSON.stringify(env)} requireRunning()`);
+  }
+  assert.equal(fetchImpl.calls.length, 0, "nothing was sent");
+  // against a real runner: the lead is not archived and the runner saw no request; the backend seam (what vs archive rides) refuses the same way
+  const s = await squad();
+  try {
+    const rhome = tmp();
+    writeDiscovery(rhome, { port: s.port, token: ADMIN });
+    const seen = [];
+    s.srv.on("request", (req) => seen.push({ url: req.url, admin: Boolean(req.headers.authorization) }));
+    const leftover = new RunnerClient({ home: rhome, env: { VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: s.runner.tokensById.get(s.ids.worker) } });
+    await assert.rejects(() => leftover.request("POST", `/agents/${s.ids.lead}/archive`, {}), (e) => e.status === 403);
+    const backend = new RunnerBackend({ client: leftover, hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
+    await assert.rejects(() => backend.archiveAgent(s.ids.lead), (e) => e.status === 403);
+    assert.equal(seen.length, 0, "the runner saw no request at all");
+    assert.ok(!s.runner.status(s.ids.lead)?.archivedAt, "the lead is not archived");
+    const admin = new RunnerClient({ home: rhome, env: {} });
+    assert.equal((await admin.request("GET", "/health")).ok, true, "a shell with no identity is still admin");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].admin, true);
+  } finally { await s.stop(); }
+});

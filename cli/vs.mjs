@@ -1875,6 +1875,7 @@ export async function runAgentVerb(verb, flags, ctx) {
     return { ...(res && typeof res === "object" && !Array.isArray(res) ? res : {}), id, entries };
   }
   if (verb === "archive") {
+    await verifyCaller(ctx); // X1d R1 H1: a mutating verb verifies the caller first (403 in-process for an incomplete pair); the runner then scopes the archive
     const res = await ctx.withBackend({ id }, (b) => b.archiveAgent(id));
     return { id, archived: true, ...(res?.archivedAt ? { archivedAt: res.archivedAt } : {}) };
   }

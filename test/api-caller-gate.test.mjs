@@ -347,9 +347,9 @@ test("X1d guard: a process with VS_AGENT_ID and no VS_AGENT_TOKEN is 403 at the 
   const env = { VS_AGENT_ID: ids.worker, VIBESQUAD_HOME: HOME };
   assert.deepEqual(agentCallerFromEnv(env), { id: ids.worker, token: "" }, "X1d: no token → the id goes alone, never the admin bearer / local token");
   assert.deepEqual(agentCallerFromEnv({ ...env, VS_AGENT_TOKEN_REQUIRED: "0" }), { id: ids.worker, token: "" }, "the X1a-X1b rollout flag is gone");
-  // What cli/vs.mjs and server/mcp/tools.mjs would send from that process (they refuse before the socket; this is the wire shape).
-  const headers = authHeadersFor(agentCallerFromEnv(env));
-  assert.deepEqual(headers, { "x-vs-agent-id": ids.worker, "x-vs-agent-token": "" });
+  // The runner client refuses the incomplete pair in-process (R1 H1); `headers` is the wire shape, should anything send it.
+  assert.throws(() => authHeadersFor(agentCallerFromEnv(env)), (e) => e.status === 403);
+  const headers = { "x-vs-agent-id": ids.worker, "x-vs-agent-token": "" };
   const logFile = path.join(HOME, "logs", "sq--art.jsonl");
   const logLen = () => (existsSync(logFile) ? readFileSync(logFile, "utf8").split(/\r?\n/).filter(Boolean).length : 0);
   const n = logLen();
