@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { NO_OVERLORD_TEXT, fetchHubCwd, hubSpinUpError, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
+import { NO_OVERLORD_TEXT, fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const member = (id, kind, { status = "idle", attention = null, laneId = "sq1" } = {}) => ({
@@ -445,4 +445,16 @@ test("hub spin-up follow-ups: RiffBot Spin Up shows a disabled pending state fro
   assert.ok(app.includes("setOverlordErr(e?.message ?? String(e))"));
   assert.ok(app.includes('data-testid="sky-overlord-error"'));
   assert.ok(app.includes("setOverlordErr(null);"), "a new attempt clears the previous error");
+});
+
+test("hub spin-up L1: the Overlord spawn error is scoped to its Squad and hides once a live Overlord exists", () => {
+  const err = { squadId: "sqA", message: "boom" };
+  assert.equal(hubOverlordError(err, "sqA", null), "boom");
+  assert.equal(hubOverlordError(err, "sqB", null), null, "another Squad's TVs do not show it");
+  assert.equal(hubOverlordError(err, "sqA", "boss"), null, "a live Overlord clears it");
+  assert.equal(hubOverlordError(null, "sqA", null), null);
+  assert.equal(hubOverlordError(err, null, null), null);
+  const app = src("App.tsx");
+  assert.ok(app.includes("setOverlordErr({ squadId: view.team.id,"));
+  assert.ok(app.includes("hubOverlordError(overlordErr, pinFocusView?.team.id"));
 });

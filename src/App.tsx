@@ -85,7 +85,7 @@ import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
-import { fetchHubCwd, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
+import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -1730,7 +1730,7 @@ export function App() {
   );
   // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
   const [overlordBusy, setOverlordBusy] = useState(false);
-  const [overlordErr, setOverlordErr] = useState<string | null>(null); // shown inline under the TVs (was alert())
+  const [overlordErr, setOverlordErr] = useState<{ squadId: string; message: string } | null>(null); // shown inline under the TVs (was alert()), scoped to its Squad
   const onSpinUpOverlord = useCallback((view: TeamView) => {
     setOverlordBusy(true);
     setOverlordErr(null);
@@ -1744,7 +1744,7 @@ export function App() {
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
       resolveCwd: (hub) => fetchHubCwd(hub),
     })
-      .catch((e) => setOverlordErr(e?.message ?? String(e)))
+      .catch((e) => setOverlordErr({ squadId: view.team.id, message: e?.message ?? String(e) }))
       .finally(() => setOverlordBusy(false));
   }, []);
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
@@ -1758,6 +1758,7 @@ export function App() {
   const hubPinNow = pinFocusView ? hubPinForSquad(pinFocusView) : null;
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
   const hubSpinUpErr = hubSpinUpError(pinFocus, hubPinNow);
+  const overlordErrMsg = hubOverlordError(overlordErr, pinFocusView?.team.id, pinFocusView ? skyZonesFor(pinFocusView).overlord.agentId : null);
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
   const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
@@ -2071,7 +2072,7 @@ export function App() {
           {pinFocusView && (
             <HubPages
               agentOpen={hubAgentOpen}
-              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}{overlordErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-overlord-error">Could not start the Overlord: {overlordErr}</div>}</>}
+              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}{overlordErrMsg && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-overlord-error">Could not start the Overlord: {overlordErrMsg}</div>}</>}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />
