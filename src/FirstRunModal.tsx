@@ -29,38 +29,62 @@ export function shouldShowFirstLaunchVibePicker(opts?: { getItem?: (k: string) =
 }
 
 const cardStyle = (on: boolean): React.CSSProperties => ({
-  flex: "1 1 220px", display: "flex", flexDirection: "column", gap: 6, padding: 12, textAlign: "left", cursor: "pointer",
-  background: "var(--bg-card, var(--panel-hi, #181e2b))", color: "var(--text, #eef1f7)", borderRadius: 8,
-  border: `2px solid ${on ? "var(--accent, var(--cyan, #2563eb))" : "var(--border-strong, var(--line, #455370))"}`,
+  display: "flex", flexDirection: "column", gap: 12, padding: 20, textAlign: "left", cursor: "pointer",
+  background: "var(--bg-card, var(--panel-hi, #181e2b))", color: "var(--text, #eef1f7)", borderRadius: 10,
+  border: on ? "3px solid var(--accent, var(--cyan, #2563eb))" : "2px solid var(--border-strong, var(--line, #455370))",
+  boxShadow: on ? "0 0 0 3px rgba(37, 99, 235, 0.28)" : "none",
 });
 
+const previewSvgStyle: React.CSSProperties = { width: "100%", height: "auto", minHeight: 195, borderRadius: 6, display: "block" };
+
 const NormalPreview = () => (
-  <svg viewBox="0 0 160 90" width="100%" aria-hidden="true">
-    <rect width="160" height="90" fill="#f1f5f9" />
-    <rect width="38" height="90" fill="#e2e8f0" />
-    <rect x="5" y="6" width="28" height="8" rx="2" fill="#2563eb" />
-    <rect x="5" y="20" width="28" height="4" rx="1" fill="#94a3b8" />
-    <rect x="5" y="28" width="28" height="4" rx="1" fill="#94a3b8" />
-    <rect x="5" y="36" width="28" height="4" rx="1" fill="#94a3b8" />
-    <rect x="48" y="8" width="104" height="14" rx="3" fill="#ffffff" />
-    <rect x="48" y="28" width="104" height="14" rx="3" fill="#ffffff" />
-    <rect x="48" y="48" width="48" height="30" rx="3" fill="#ffffff" />
-    <rect x="102" y="48" width="50" height="30" rx="3" fill="#ffffff" />
+  <svg viewBox="0 0 320 180" width="100%" style={previewSvgStyle} aria-hidden="true">
+    <rect width="320" height="180" fill="#f1f5f9" />
+    <rect width="76" height="180" fill="#e2e8f0" />
+    <rect x="10" y="12" width="56" height="16" rx="4" fill="#2563eb" />
+    <rect x="10" y="40" width="56" height="8" rx="2" fill="#94a3b8" />
+    <rect x="10" y="56" width="56" height="8" rx="2" fill="#94a3b8" />
+    <rect x="10" y="72" width="56" height="8" rx="2" fill="#94a3b8" />
+    <rect x="10" y="88" width="40" height="8" rx="2" fill="#cbd5e1" />
+    <rect x="96" y="16" width="208" height="28" rx="6" fill="#ffffff" />
+    <rect x="106" y="26" width="90" height="8" rx="2" fill="#cbd5e1" />
+    <rect x="96" y="56" width="208" height="28" rx="6" fill="#ffffff" />
+    <rect x="106" y="66" width="120" height="8" rx="2" fill="#cbd5e1" />
+    <rect x="96" y="96" width="96" height="60" rx="6" fill="#ffffff" />
+    <rect x="204" y="96" width="100" height="60" rx="6" fill="#ffffff" />
+    <rect x="262" y="164" width="42" height="10" rx="3" fill="#2563eb" />
   </svg>
 );
 
 const PsychoPreview = () => (
-  <svg viewBox="0 0 160 90" width="100%" aria-hidden="true">
-    <rect width="160" height="90" fill="#1b1040" />
-    <rect x="8" y="6" width="34" height="22" fill="#0b0d12" stroke="#7df9ff" strokeWidth="2" />
-    <rect x="50" y="6" width="34" height="22" fill="#0b0d12" stroke="#ff6ad5" strokeWidth="2" />
-    <rect x="92" y="6" width="34" height="22" fill="#0b0d12" stroke="#c4a1ff" strokeWidth="2" />
-    <rect x="60" y="36" width="40" height="10" fill="#7df9ff" />
-    <rect x="56" y="48" width="48" height="10" fill="#ff6ad5" />
-    <rect x="52" y="60" width="56" height="10" fill="#c4a1ff" />
-    <rect x="0" y="78" width="160" height="12" fill="#3a2a70" />
+  <svg viewBox="0 0 320 180" width="100%" style={previewSvgStyle} aria-hidden="true">
+    <rect width="320" height="180" fill="#1b1040" />
+    <rect x="16" y="12" width="68" height="44" fill="#0b0d12" stroke="#7df9ff" strokeWidth="3" />
+    <rect x="100" y="12" width="68" height="44" fill="#0b0d12" stroke="#ff6ad5" strokeWidth="3" />
+    <rect x="184" y="12" width="68" height="44" fill="#0b0d12" stroke="#c4a1ff" strokeWidth="3" />
+    <rect x="268" y="12" width="36" height="44" fill="#0b0d12" stroke="#ffd166" strokeWidth="3" />
+    <rect x="120" y="72" width="80" height="20" fill="#7df9ff" />
+    <rect x="112" y="96" width="96" height="20" fill="#ff6ad5" />
+    <rect x="104" y="120" width="112" height="20" fill="#c4a1ff" />
+    <rect x="0" y="156" width="320" height="24" fill="#3a2a70" />
   </svg>
 );
+
+const SelectPill = ({ on }: { on: boolean }) => (
+  <span
+    data-testid={on ? "first-run-vibe-selected" : undefined}
+    style={{
+      alignSelf: "flex-start", fontSize: 13, fontWeight: 600, padding: "3px 12px", borderRadius: 999,
+      background: on ? "var(--accent, var(--cyan, #2563eb))" : "transparent", color: on ? "#ffffff" : "inherit",
+      border: on ? "1px solid var(--accent, var(--cyan, #2563eb))" : "1px solid var(--border-strong, var(--line, #455370))",
+    }}
+  >
+    {on ? "\u2713 Selected" : "Select"}
+  </span>
+);
+
+const cardTitle: React.CSSProperties = { fontSize: 22, fontWeight: 700, lineHeight: 1.2 };
+const cardCaption: React.CSSProperties = { fontSize: 15, lineHeight: 1.45, opacity: 0.9 };
 
 /** Two big Normal vs Psycho cards. Picking one sets app.vibe, records VIBE_PICKED_KEY and tells the parent. */
 export function VibePickerCards({ onPicked }: { onPicked?: () => void }) {
@@ -75,37 +99,64 @@ export function VibePickerCards({ onPicked }: { onPicked?: () => void }) {
     onPicked?.();
   };
   return (
-    <div data-testid="first-run-vibe-picker" style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
-      <button type="button" data-testid="first-run-vibe-normal" aria-pressed={vibe === "boring"} style={cardStyle(vibe === "boring")} onClick={() => pick("boring")}>
+    <div data-testid="first-run-vibe-picker" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(340px, 1fr))", gap: 20, marginBottom: 16 }}>
+      <button type="button" autoFocus data-testid="first-run-vibe-normal" aria-pressed={vibe === "boring"} style={cardStyle(vibe === "boring")} onClick={() => pick("boring")}>
         <NormalPreview />
-        <strong style={{ fontSize: 16 }}>Normal</strong>
-        <span style={{ fontSize: 12, opacity: 0.8 }}>Clean corporate ADE — left sidebar, centered chat &amp; project cards</span>
+        <strong style={cardTitle}>Normal</strong>
+        <span style={cardCaption}>Clean corporate ADE — left sidebar, centered chat &amp; project cards</span>
+        <SelectPill on={vibe === "boring"} />
       </button>
       <button type="button" data-testid="first-run-vibe-psycho" aria-pressed={vibe === "fun"} style={cardStyle(vibe === "fun")} onClick={() => pick("fun")}>
         <PsychoPreview />
-        <strong style={{ fontSize: 16 }}>Psycho</strong>
-        <span style={{ fontSize: 12, opacity: 0.8 }}>Full retro sky CRTs, pixel tower &amp; animated sprites</span>
+        <strong style={cardTitle}>Psycho</strong>
+        <span style={cardCaption}>Full retro sky CRTs, pixel tower &amp; animated sprites</span>
+        <SelectPill on={vibe === "fun"} />
       </button>
     </div>
   );
 }
 
-/** Standalone first-launch picker for desktop, web and phone; shows once until a card is picked or it is dismissed. */
+/** Standalone first-launch picker for desktop, web and phone; stays open after a pick (so the selection is visible) until Continue or Escape. */
 export function FirstLaunchVibePicker() {
   const [open, setOpen] = useState(() => shouldShowFirstLaunchVibePicker());
-  if (!open) return null;
-  const close = () => {
+  const close = useCallback(() => {
     try {
       localStorage.setItem(VIBE_PICKED_KEY, "1");
     } catch {
       /* ignore */
     }
     setOpen(false);
-  };
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const k = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("keydown", k);
+    return () => window.removeEventListener("keydown", k);
+  }, [open, close]);
+  if (!open) return null;
+  const sans = "var(--sans, system-ui, sans-serif)";
   return (
-    <Modal title="Choose your layout" onClose={close}>
-      <VibePickerCards onPicked={close} />
-    </Modal>
+    <div className="modal-back" onMouseDown={close}>
+      <div className="modal wide" role="dialog" aria-modal="true" aria-label="Choose your layout" data-testid="first-run-vibe-modal" style={{ width: "min(860px, 92vw)", maxWidth: "92vw" }} onMouseDown={(e) => e.stopPropagation()}>
+        <div className="modal-head" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+          <span data-testid="first-run-vibe-title" style={{ fontSize: 22, fontWeight: 700, fontFamily: sans, letterSpacing: "normal", textTransform: "none" }}>Choose your layout</span>
+          <span style={{ fontSize: 15, fontWeight: 400, fontFamily: sans, letterSpacing: "normal", textTransform: "none", opacity: 0.85 }}>Pick your workspace style. You can switch anytime in Settings or the sidebar.</span>
+        </div>
+        <div className="modal-body">
+          <VibePickerCards />
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", padding: "0 16px 16px" }}>
+          <button
+            type="button"
+            data-testid="first-run-vibe-continue"
+            style={{ minHeight: 42, padding: "8px 24px", fontSize: 15, fontWeight: 600, background: "var(--accent, #2563eb)", backgroundImage: "none", color: "#ffffff", border: "1px solid var(--accent, #2563eb)", borderRadius: 6, cursor: "pointer" }}
+            onClick={close}
+          >
+            Continue
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -155,6 +206,7 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
   return (
     <Modal
       title="Setup Checklist"
+      wide
       onClose={() => { localStorage.setItem(FIRST_RUN_DONE_KEY, "1"); localStorage.setItem(VIBE_PICKED_KEY, "1"); onClose(); }}
       footer={
         <>

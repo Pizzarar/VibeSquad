@@ -383,3 +383,16 @@ test("B4: boring-app height compensates the UI scale zoom so the composer stays 
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(css, /\.boring-app \{ width: calc\(100vw \/ var\(--vs-ui-scale, 1\)\); height: calc\(100vh \/ var\(--vs-ui-scale, 1\)\)/);
 });
+
+test("B4: first-launch picker is roomy, shows a selected state, and needs Continue or Escape to close", () => {
+  const fr = readFileSync(resolve(import.meta.dirname, "..", "src", "FirstRunModal.tsx"), "utf8");
+  assert.match(fr, /width: "min\(860px, 92vw\)"/);
+  assert.match(fr, /viewBox="0 0 320 180"/);
+  assert.match(fr, /minmax\(340px, 1fr\)/);
+  assert.match(fr, /data-testid="first-run-vibe-continue"/);
+  assert.match(fr, /Selected/);
+  assert.match(fr, /autoFocus data-testid="first-run-vibe-normal"/);
+  assert.match(fr, /e\.key === "Escape" && close\(\)/);
+  assert.match(fr, /title="Setup Checklist"\s+wide/);
+  assert.doesNotMatch(fr, /<VibePickerCards onPicked=\{close\}/);
+});
