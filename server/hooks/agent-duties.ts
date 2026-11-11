@@ -592,6 +592,38 @@ function logPath(team: string): string {
   return path.join(baseDir(), "teams", safeSegment(team), "log.jsonl");
 }
 
+/**
+ * idea-150: worker id -> last turn id already digested, persisted so a server restart or lead handoff that replays turn_ended
+ * does not re-digest a turn whose result was already delivered (the in-memory `digested` map is empty after a restart).
+ */
+function digestedTurnsPath(): string {
+  return path.join(baseDir(), "digested-turns.json");
+}
+function readDigestedTurns(): Record<string, string> {
+  try {
+    const v = JSON.parse(fs.readFileSync(digestedTurnsPath(), "utf8"));
+    return v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  } catch {
+    return {};
+  }
+}
+function persistDigestedTurn(workerId: string, turnId: string | null): void {
+  try {
+    const m = readDigestedTurns();
+    if (turnId) {
+      delete m[workerId]; // re-insert last so the oldest entries trim first
+      m[workerId] = turnId;
+    } else if (!(workerId in m)) return;
+    else delete m[workerId];
+    const keys = Object.keys(m);
+    for (const k of keys.slice(0, Math.max(0, keys.length - 2000))) delete m[k];
+    fs.mkdirSync(path.dirname(digestedTurnsPath()), { recursive: true });
+    fs.writeFileSync(digestedTurnsPath(), JSON.stringify(m), "utf8");
+  } catch {
+    /* best effort: the in-memory guard still applies */
+  }
+}
+
 /** A [done] entry naming `ref` written at or after `sinceMs` (1 s slack) in the last 200 lines of the team log. */
 function doneLoggedSince(team: string, ref: string, sinceMs: number): boolean {
   try {
@@ -2347,6 +2379,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // Clear `digested` so the next real idle turn_ended always spawns the digest, even if turn_started was missed or turnId is null.
       if (isWorkerBusy(worker) || isWorkerBusy(snapWorker)) {
         digested.delete(workerId);
+        persistDigestedTurn(workerId, null);
         void cancelStaleDigests(paseo, workerId);
         return;
       }
@@ -2355,9 +2388,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const key = `${epoch}:${tid}`;
       const prev = digested.get(workerId);
       if (inflightDigests.get(workerId) === epoch || prev === key || (!tid && prev?.startsWith(`${epoch}:`))) return;
+      // idea-150: this exact turn was already digested before a restart/handoff replay (persisted, keyed on the stable turn id).
+      if (tid && readDigestedTurns()[workerId] === tid) {
+        log(`digest for ${workerId} turn ${tid} already delivered: skipped (replayed turn_ended)`);
+        return;
+      }
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
       digested.set(workerId, key);
+      persistDigestedTurn(workerId, tid || null);
       inflightDigests.set(workerId, epoch);
       const { team, lane } = where;
       // idea-123: the runner may already hold a digest for this turn (spawned before a server restart, replayed turn_ended).
@@ -3008,6 +3047,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           if (agent?.id) {
             doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
             turnEpoch.set(agent.id, (turnEpoch.get(agent.id) ?? 0) + 1);
+            persistDigestedTurn(String(agent.id), null); // a live new turn: its own end must digest
             void cancelStaleDigests(paseo, String(agent.id));
           }
           try {
