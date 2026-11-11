@@ -187,7 +187,10 @@ describe("stored pairing session (v:3, E4a)", () => {
     assert.equal(migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [] }), null, "no hosts");
     assert.equal(migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "x", savedAt: "t" }] }), null, "unreachable host (no meshnetHost, no relay)");
     const relayOnly = migrateSession({ v: 3, activeHostId: "nope", hosts: [{ hostId: HOST_ID, label: "Home", relay: { endpoint: "wss://r.example/ws", pubKey: "k" }, savedAt: "t" }] });
-    assert.deepEqual(relayOnly, { v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "Home", relay: { endpoint: "wss://r.example/ws", pubKey: "k" }, savedAt: "t" }] });
+    assert.deepEqual(relayOnly, { v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "Home", relay: { hostId: HOST_ID, endpoint: "wss://r.example/ws", pubKey: "k" }, savedAt: "t" }] }, "a pre-fold pin is keyed by the entry id");
+    const folded = migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "Home", meshnetHost: "pc.example:4180", relay: { hostId: HOST_ID_2, endpoint: "wss://r.example/ws", pubKey: "k", token: "tok" }, savedAt: "t" }] });
+    assert.deepEqual(folded.hosts[0].relay, { hostId: HOST_ID_2, endpoint: "wss://r.example/ws", pubKey: "k", token: "tok" }, "relay id and token survive a read");
+    assert.equal(migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: HOST_ID, label: "Home", relay: { endpoint: "ws://r.example/ws", pubKey: "k" }, savedAt: "t" }] }), null, "a clear-text relay pin is not a way to reach a host");
     assert.equal(activeMeshnetHost(relayOnly), "", "no LAN/Meshnet address for a relay-only host");
     const bad = migrateSession({ v: 3, activeHostId: HOST_ID, hosts: [{ hostId: "bad id", label: "", meshnetHost: "pc.example", savedAt: "t" }, "junk"] });
     assert.deepEqual(bad, { v: 3, activeHostId: "", hosts: [{ hostId: "", label: "pc.example:4180", meshnetHost: "pc.example:4180", savedAt: "t" }] });
@@ -566,14 +569,17 @@ describe("E5 pin store: a pairing link never replaces a stored host key (threat 
   const KEY_A_URL = KEY_A.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const RELAY_ID = "c29tZS1yZWxheS1ob3N0LWlkLTEyMzQ1Ng"; // any url-safe 22-64 char id (self-certifying ids are 43 chars)
 
-  test("a new host is added with its pin and becomes active; the same key may refresh the relay endpoint", () => {
+  test("a new host is added with its pin and becomes active; the same key refreshes the relay endpoint ONLY with repoint (X1 wire L2)", () => {
     const store = fakeStore();
     saveRelayPin(RELAY_ID, { endpoint: "wss://relay-one.example/ws", pubKey: KEY_A }, store, new Date("2026-11-11T00:00:00Z"));
-    assert.deepEqual(relayPinFor(RELAY_ID, store), { endpoint: "wss://relay-one.example/ws", pubKey: KEY_A });
+    assert.deepEqual(relayPinFor(RELAY_ID, store), { hostId: RELAY_ID, endpoint: "wss://relay-one.example/ws", pubKey: KEY_A });
     assert.equal(readSession(store).activeHostId, RELAY_ID);
     assert.equal(readSession(store).hosts[0].label, "relay-one.example");
-    saveRelayPin(RELAY_ID, { endpoint: "wss://relay-two.example/ws", pubKey: KEY_A_URL }, store); // base64url spelling of the same key
-    assert.deepEqual(relayPinFor(RELAY_ID, store), { endpoint: "wss://relay-two.example/ws", pubKey: KEY_A }, "endpoint refreshed, key untouched");
+    const before = store.getItem(REMOTE_SESSION_KEY);
+    saveRelayPin(RELAY_ID, { endpoint: "wss://relay-two.example/ws", pubKey: KEY_A_URL }, store, new Date("2026-11-11T00:00:00Z")); // base64url spelling of the same key, new endpoint, no confirm
+    assert.equal(store.getItem(REMOTE_SESSION_KEY), before, "a same-key link does not move the endpoint by itself");
+    saveRelayPin(RELAY_ID, { endpoint: "wss://relay-two.example/ws", pubKey: KEY_A_URL }, store, new Date(), "", { repoint: true }); // the user said yes
+    assert.deepEqual(relayPinFor(RELAY_ID, store), { hostId: RELAY_ID, endpoint: "wss://relay-two.example/ws", pubKey: KEY_A }, "endpoint moved, key untouched");
     assert.equal(readSession(store).hosts.length, 1);
   });
 
@@ -583,7 +589,7 @@ describe("E5 pin store: a pairing link never replaces a stored host key (threat 
     const before = store.getItem(REMOTE_SESSION_KEY);
     assert.throws(() => saveRelayPin(RELAY_ID, { endpoint: "wss://evil.example/ws", pubKey: KEY_B }, store), RelayPinMismatchError);
     assert.equal(store.getItem(REMOTE_SESSION_KEY), before, "store byte-identical");
-    assert.deepEqual(relayPinFor(RELAY_ID, store), { endpoint: "wss://relay-one.example/ws", pubKey: KEY_A });
+    assert.deepEqual(relayPinFor(RELAY_ID, store), { hostId: RELAY_ID, endpoint: "wss://relay-one.example/ws", pubKey: KEY_A });
   });
 
   test("a LAN-paired host gets its relay pin added in place (CA pin and address kept); junk links are refused", () => {
@@ -594,7 +600,7 @@ describe("E5 pin store: a pairing link never replaces a stored host key (threat 
     assert.equal(h.length, 1);
     assert.equal(h[0].meshnetHost, "100.64.0.7:4180");
     assert.equal(h[0].caFp, "ab".repeat(32));
-    assert.deepEqual(h[0].relay, { endpoint: "wss://relay.example", pubKey: KEY_B });
+    assert.deepEqual(h[0].relay, { hostId: HOST_ID, endpoint: "wss://relay.example", pubKey: KEY_B });
     assert.throws(() => saveRelayPin(HOST_ID, { endpoint: "ws://relay.example", pubKey: KEY_B }, store), /wss:/);
     assert.throws(() => saveRelayPin(HOST_ID, { endpoint: "wss://relay.example", pubKey: "c2hvcnQ=" }, store), /host key/);
     assert.throws(() => saveRelayPin("bad id", { endpoint: "wss://relay.example", pubKey: KEY_B }, store), /host id/);

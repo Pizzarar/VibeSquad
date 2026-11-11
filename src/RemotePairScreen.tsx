@@ -1,7 +1,12 @@
 // Android APK pairing (PLAN_ANDROID_MESHNET.md A1): server address + 6-digit code, a pasted pairing link, a QR scan
 // or a vibesquad://pair deep link. All of them end in the same step the paired-PC browser takes: open
 // https://<host>/pair?code=… so the server sets the vs_device cookie and serves its own UI.
+// E5 §7 item 8: a RELAY link (`vibesquad://pair#hostId=&pub=&relay=&code=`) instead pairs inside the E2EE relay channel
+// (remoteRelayConnect.ts): pinned host key, stored token, one hosts[] entry per PC. The relay session UI itself is not
+// built yet (E5 §7 item 6), so this screen only pairs and reports; LAN/Meshnet still opens the PC's own UI.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { pairingFragment, type PairingFragment } from "./remoteRelayTransport"; // first: strips a #fragment from the URL before anything else runs
+import { connectWithRelayLink, parseRelayPairingLink, relayConnectErrorMessage } from "./remoteRelayConnect";
 import {
   activeMeshnetHost,
   fetchHostId,
@@ -86,6 +91,9 @@ export function RemotePairScreen() {
   const [fromLink, setFromLink] = useState(false);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  // A relay link waiting for the user's Pair press (a web client gets it from the URL fragment, captured at load).
+  const [relayLink, setRelayLink] = useState<PairingFragment | null>(() => pairingFragment);
+  const [relayDone, setRelayDone] = useState("");
   // A saved server reopens on launch unless the user came here to re-pair.
   const [reopening, setReopening] = useState(() => {
     let cameBack = false;
@@ -95,7 +103,7 @@ export function RemotePairScreen() {
     } catch {
       /* no sessionStorage */
     }
-    return Boolean(saved) && !cameBack;
+    return Boolean(saved) && !cameBack && !pairingFragment;
   });
 
   const pairWith = useCallback(async (h: string, c: string, f: string) => {
@@ -142,8 +150,44 @@ export function RemotePairScreen() {
     location.href = pairRedeemUrl(hostN, codeN, undefined, location.origin);
   }, []);
 
+  // E5: a relay link pairs inside the E2EE channel. Nothing is stored before the pinned handshake and the PC's redeem
+  // succeeded; a known PC's key always wins over the link's (RelayPinMismatchError), and a known PC's relay endpoint
+  // moves only after a plain yes/no (X1 wire L2; Cancel keeps the current relay and still pairs through it).
+  const pairRelay = useCallback(async (f: PairingFragment) => {
+    setBusy(true);
+    setError(null);
+    setRelayDone("");
+    try {
+      const r = await connectWithRelayLink(f, {
+        confirmRepoint: ({ label, from, to }) =>
+          window.confirm(`This link moves ${label} to a different relay:\n${to}\n\nIt is currently reached through:\n${from}\n\nSwitch to the new relay? Cancel keeps the current one.`),
+      });
+      r.client.close(); // nothing drives the session yet (E5 §7 item 6); the pin and token are stored for it
+      setRelayDone(
+        r.pending
+          ? `Code accepted. Approve this phone on the device that made the code; ${r.label} is then paired over the relay.`
+          : `Paired over the relay with ${r.label}${r.repointed ? " (relay endpoint updated)" : ""}. The relay session opens in a later build; LAN or Meshnet still opens the PC's UI.`,
+      );
+      setRelayLink(null);
+      setFromLink(false);
+    } catch (e) {
+      setError(remoteError("unknown", relayConnectErrorMessage(e)));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
   const apply = useCallback(
     (text: string, fromExternal = false) => {
+      const rf = parseRelayPairingLink(text);
+      if (rf) {
+        setRelayLink(rf);
+        setRelayDone("");
+        setLink("");
+        setError(null);
+        setFromLink(fromExternal);
+        return;
+      }
       const p = parsePairInput(text);
       if (!p) {
         setError(remoteError("bad-input", "That isn't a VibeSquad pairing link, address or code."));
@@ -249,6 +293,7 @@ export function RemotePairScreen() {
         onSubmit={(e) => {
           e.preventDefault();
           if (link.trim()) apply(link);
+          else if (relayLink) void pairRelay(relayLink);
           else void pairWith(host, code, fp);
         }}
       >
@@ -325,9 +370,24 @@ export function RemotePairScreen() {
             spellCheck={false}
           />
         </label>
-        {fromLink && host && (
-          <div className="remote-pair-help" data-testid="pair-confirm">
-            A link filled in <b>{host}</b>. Only press Pair if that is your PC.
+        {relayLink ? (
+          <div className="remote-pair-help remote-pair-relay" data-testid="relay-confirm">
+            A relay link for PC <b>{relayLink.hostId.slice(0, 12)}…</b> via <b>{safeRelayHost(relayLink.relay)}</b>. Only press Pair over relay if that is your PC.
+            <button type="button" className="btn ghost small remote-pair-relay-drop" onClick={() => setRelayLink(null)}>
+              Discard link
+            </button>
+          </div>
+        ) : (
+          fromLink &&
+          host && (
+            <div className="remote-pair-help" data-testid="pair-confirm">
+              A link filled in <b>{host}</b>. Only press Pair if that is your PC.
+            </div>
+          )
+        )}
+        {relayDone && (
+          <div className="remote-pair-help remote-pair-relay-done" data-testid="relay-done">
+            {relayDone}
           </div>
         )}
         {error && (
@@ -336,7 +396,7 @@ export function RemotePairScreen() {
           </div>
         )}
         <button type="submit" className="btn ok remote-pair-go" disabled={busy} data-testid="pair-go">
-          {busy ? "Connecting…" : "Pair"}
+          {busy ? "Connecting…" : relayLink ? "Pair over relay" : "Pair"}
         </button>
         {saved && (
           <button type="button" className="btn ok remote-pair-go" data-testid="reconnect-pc" disabled={busy} onClick={() => reconnect(saved.host)}>
@@ -359,6 +419,14 @@ export function RemotePairScreen() {
       </form>
     </div>
   );
+}
+
+function safeRelayHost(endpoint: string): string {
+  try {
+    return new URL(endpoint).host;
+  } catch {
+    return endpoint;
+  }
 }
 
 /** Camera QR scan: getUserMedia frames decoded by jsQR (lazy-loaded). Needs the CAMERA permission in the APK manifest. */
@@ -389,7 +457,7 @@ function QrScanner({ onResult, onClose, onError }: { onResult: (text: string) =>
             ctx.drawImage(v, 0, 0);
             const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
             const hit = jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
-            if (hit?.data && parsePairInput(hit.data)) return cb.current.onResult(hit.data);
+            if (hit?.data && (parsePairInput(hit.data) || parseRelayPairingLink(hit.data))) return cb.current.onResult(hit.data);
           }
           raf = requestAnimationFrame(tick);
         };

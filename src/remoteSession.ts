@@ -4,10 +4,19 @@
 // app then opens the server's own UI. No imports: the screen is src/RemotePairScreen.tsx and node tests use fakes.
 
 /**
+ * The E5 relay pin of a stored host (E5_THREAT_MODEL.md §7 pin-store rule). `hostId` is the PC's self-certifying relay
+ * id (base64url SHA-256 of `pubKey`), which differs from the E4a host id: one PC, two ids, ONE hosts[] entry once the
+ * two are folded (foldRelayHost). `pubKey` is write-once per relay id. `token` is the per-device bearer token the PC
+ * minted inside the E2EE channel (stored like the Meshnet cookie is, on this device only; revoked on the PC).
+ */
+export type StoredRelayPin = { hostId: string; endpoint: string; pubKey: string; token?: string };
+
+/**
  * One paired PC (PLAN_ANDROID_END_STATE.md E4a). `hostId` is the PC's ~/.vibesquad/host-id as /api/auth/status
- * reports it, or "" until the phone has heard it (a v:2 session knew no host id). `meshnetHost` is the
- * `host:port` this device pairs over LAN/Meshnet; `relay` is the E5 outbound relay (unused until E5 lands).
- * The device cookie itself lives in the WebView, and the CA pin lives in the native trust store keyed by meshnetHost.
+ * reports it, or "" until the phone has heard it (a v:2 session knew no host id; a relay-only entry carries its relay
+ * id here until the fold learns the E4a id). `meshnetHost` is the `host:port` this device pairs over LAN/Meshnet;
+ * `relay` is the E5 outbound relay pin. The device cookie itself lives in the WebView, and the CA pin lives in the
+ * native trust store keyed by meshnetHost.
  */
 export type StoredRemoteHost = {
   hostId: string;
@@ -15,7 +24,7 @@ export type StoredRemoteHost = {
   caFp?: string;
   label: string;
   meshnetHost?: string;
-  relay?: { endpoint: string; pubKey: string };
+  relay?: StoredRelayPin;
   savedAt: string;
 };
 
@@ -190,12 +199,14 @@ function validHost(h: unknown): StoredRemoteHost | null {
   const x = h as Partial<StoredRemoteHost> | null;
   if (!x || typeof x !== "object" || typeof x.savedAt !== "string") return null;
   const meshnetHost = typeof x.meshnetHost === "string" ? normalizeHost(x.meshnetHost) : null;
-  const relay =
-    x.relay && typeof x.relay === "object" && typeof x.relay.endpoint === "string" && typeof x.relay.pubKey === "string" && x.relay.endpoint && x.relay.pubKey
-      ? { endpoint: x.relay.endpoint, pubKey: x.relay.pubKey }
+  const hostId = normalizeHostId(x.hostId);
+  const r = x.relay as Partial<StoredRelayPin> | null | undefined;
+  const relayId = normalizeHostId(r?.hostId) || hostId; // entries written before the fold keyed the pin by the entry id
+  const relay: StoredRelayPin | null =
+    r && typeof r === "object" && typeof r.endpoint === "string" && typeof r.pubKey === "string" && /^wss:\/\//i.test(r.endpoint) && r.pubKey && relayId
+      ? { hostId: relayId, endpoint: r.endpoint, pubKey: r.pubKey, ...(typeof r.token === "string" && r.token ? { token: r.token } : {}) }
       : null;
   if (!meshnetHost && !relay) return null; // no way to reach it
-  const hostId = normalizeHostId(x.hostId);
   const caFp = normalizeFp(typeof x.caFp === "string" ? x.caFp : "") ?? "";
   const label = typeof x.label === "string" && x.label.trim() ? x.label.trim().slice(0, 60) : meshnetHost || relay!.endpoint;
   return { hostId, ...(caFp ? { caFp } : {}), label, ...(meshnetHost ? { meshnetHost } : {}), ...(relay ? { relay } : {}), savedAt: x.savedAt };
@@ -336,9 +347,12 @@ export function forgetHost(host: string, local: GetSet | null = browserStorage("
 }
 
 // ---- E5 relay pin store (docs/lanes/android-app/E5_THREAT_MODEL.md §7 "Pin-store rule") ----
-// The pin (host id -> host X25519 public key) is the trust anchor of the E2EE relay. It arrives out of band in a pairing
-// link and is stored once; a later link can never replace it. remoteRelayTransport.ts connects with the STORED key for
-// that exact host id, so a token is never sent to a host whose key differs from the one it was issued under.
+// The pin (relay host id -> host X25519 public key) is the trust anchor of the E2EE relay. It arrives out of band in a
+// pairing link and is stored once; a later link can never replace it. remoteRelayConnect.ts connects with the STORED
+// key for that exact relay id, so a token is never sent to a host whose key differs from the one it was issued under.
+// X1 wire L2: the relay ENDPOINT of a known host is not replaced by a link either, unless the user confirmed the move
+// (`repoint: true`); the key is public, so a crafted link could otherwise silently route the phone through a relay the
+// attacker runs (metadata, denial of service; never plaintext or tokens).
 
 /** A pairing link named a host this device already knows under a different key. Shown to the user; never a silent re-pair. */
 export class RelayPinMismatchError extends Error {
@@ -354,20 +368,65 @@ const b64Len = (s: string): number => safe(() => atob(b64Std(s) + "=".repeat((4 
 /** Two base64 / base64url encodings of the same 32 bytes compare equal. */
 export const sameRelayKey = (a: string, b: string): boolean => b64Std(a) === b64Std(b);
 
-/** The stored relay pin for `hostId`, or null. */
-export function relayPinFor(hostId: unknown, local: Get | null = browserStorage("localStorage")): { endpoint: string; pubKey: string } | null {
-  const id = normalizeHostId(hostId);
-  const s = readSession(local);
-  return (id && s?.hosts.find((h) => h.hostId === id)?.relay) || null;
+/** The endpoint as the link builder and the pin store compare it: origin + path, never userinfo, query or fragment. "" when not wss://. */
+export function publicRelayEndpoint(endpoint: unknown): string {
+  const t = typeof endpoint === "string" ? endpoint.trim() : "";
+  if (!/^wss:\/\//i.test(t)) return "";
+  return safe(() => {
+    const u = new URL(t);
+    return u.protocol === "wss:" ? `${u.origin}${u.pathname}` : "";
+  }, "");
 }
 
 /**
- * Pin-store rule 1: a link may ADD a relay host, or refresh the relay endpoint of a host whose stored key is the same,
- * but it never changes the key of a host that already has one (RelayPinMismatchError). The relay URL is not a trust
- * anchor, so updating it is harmless; the key is, so it is write-once per host id. Run acceptPairingFragment
- * (remoteRelayTransport.ts) on the link first: with self-certifying ids a crafted link can only name a NEW host.
+ * The hosts[] entry that owns relay id `relayId`: by its pin first, else the entry keyed by that id (an unfolded
+ * relay-only entry, or a LAN entry whose pin arrives under its own id). Safe: a link's id is self-certifying
+ * (acceptPairingFragment), so no link can name an E4a id it does not hold the key for.
  */
-export function saveRelayPin(hostId: unknown, relay: { endpoint: string; pubKey: string }, local: GetSet | null = browserStorage("localStorage"), now = new Date(), label = ""): void {
+function relayEntryIndex(hosts: StoredRemoteHost[], relayId: string): number {
+  const byPin = hosts.findIndex((h) => h.relay?.hostId === relayId);
+  return byPin >= 0 ? byPin : hosts.findIndex((h) => h.hostId === relayId);
+}
+
+/** The stored relay pin for relay id `hostId`, or null. The connect path reads this and never the link's key. */
+export function relayPinFor(hostId: unknown, local: Get | null = browserStorage("localStorage")): StoredRelayPin | null {
+  const id = normalizeHostId(hostId);
+  const s = readSession(local);
+  if (!id || !s) return null;
+  const i = relayEntryIndex(s.hosts, id);
+  return i >= 0 ? (s.hosts[i].relay ?? null) : null;
+}
+
+/** The entry a relay id belongs to (for its label in dialogs), or null. */
+export function relayHostFor(hostId: unknown, local: Get | null = browserStorage("localStorage")): StoredRemoteHost | null {
+  const id = normalizeHostId(hostId);
+  const s = readSession(local);
+  if (!id || !s) return null;
+  const i = relayEntryIndex(s.hosts, id);
+  return i >= 0 ? s.hosts[i] : null;
+}
+
+export type SaveRelayPinOptions = {
+  /** X1 wire L2: move a KNOWN host to the link's endpoint. Only after the user confirmed; default keeps the stored endpoint. */
+  repoint?: boolean;
+  /** A string replaces the stored device token for this relay, null removes it, undefined keeps it. */
+  token?: string | null;
+};
+
+/**
+ * Pin-store rule 1 + X1 L2: a link may ADD a relay host; for a host whose stored key is the same it changes nothing
+ * unless `repoint` is set (the user confirmed the endpoint move); it never changes the key of a host that already has
+ * one (RelayPinMismatchError, store untouched). Run acceptPairingFragment (remoteRelayTransport.ts) on the link first:
+ * with self-certifying ids a crafted link can only name a NEW host. Returns the pin as stored.
+ */
+export function saveRelayPin(
+  hostId: unknown,
+  relay: { endpoint: string; pubKey: string },
+  local: GetSet | null = browserStorage("localStorage"),
+  now = new Date(),
+  label = "",
+  opts: SaveRelayPinOptions = {},
+): StoredRelayPin {
   if (!local) throw new Error("remote: this browser has no localStorage");
   const id = normalizeHostId(hostId);
   if (!id) throw new Error("remote: not a valid host id");
@@ -377,17 +436,65 @@ export function saveRelayPin(hostId: unknown, relay: { endpoint: string; pubKey:
   if (b64Len(pubKey) !== 32) throw new Error("remote: not a valid host key");
   const prev = readSession(local);
   const hosts = prev?.hosts.slice() ?? [];
-  const i = hosts.findIndex((h) => h.hostId === id);
-  const pin = { endpoint, pubKey };
+  const i = relayEntryIndex(hosts, id);
+  const token = typeof opts.token === "string" && opts.token ? { token: opts.token } : {};
   if (i >= 0) {
     const cur = hosts[i].relay;
     if (cur && !sameRelayKey(cur.pubKey, pubKey)) throw new RelayPinMismatchError(id);
-    hosts[i] = { ...hosts[i], relay: cur ? { ...cur, endpoint } : pin, savedAt: now.toISOString() };
-    writeSession(local, { v: 3, activeHostId: prev?.activeHostId || id, hosts });
-    return;
+    const pin: StoredRelayPin = cur ? { ...cur, hostId: id, endpoint: opts.repoint ? endpoint : cur.endpoint, ...token } : { hostId: id, endpoint, pubKey, ...token };
+    if (opts.token === null) delete pin.token;
+    hosts[i] = { ...hosts[i], relay: pin, savedAt: now.toISOString() };
+    writeSession(local, { v: 3, activeHostId: prev?.activeHostId || hosts[i].hostId, hosts });
+    return pin;
   }
+  const pin: StoredRelayPin = { hostId: id, endpoint, pubKey, ...token };
   const entry: StoredRemoteHost = { hostId: id, label: (label || "").trim().slice(0, 60) || safe(() => new URL(endpoint).host, endpoint), relay: pin, savedAt: now.toISOString() };
   writeSession(local, { v: 3, activeHostId: id, hosts: [entry, ...hosts] });
+  return pin;
+}
+
+/**
+ * Folds the E4a host id and the E5 relay id of ONE PC into one hosts[] entry (E5_THREAT_MODEL.md §11 residual (a)).
+ * Call it only with an `e4aHostId` the PC reported over the pinned AND authenticated relay channel for `relayId`
+ * (/api/auth/status through the relay): never from a link, which is unauthenticated. Rules:
+ *  - a LAN entry with that E4a id and no relay pin (or the same key) takes the relay pin; the relay-only entry goes;
+ *  - a LAN entry whose relay pin has a DIFFERENT key keeps it (the PC rotated its key, or this is not that PC): no
+ *    fold, both entries stay, false is returned, so nothing the channel said ever moves an existing pin;
+ *  - a relay-only entry still keyed by its relay id learns the E4a id (the entry follows the PC, the pin stays).
+ * Returns true when the store changed.
+ */
+export function foldRelayHost(relayId: unknown, e4aHostId: unknown, local: GetSet | null = browserStorage("localStorage")): boolean {
+  const rid = normalizeHostId(relayId);
+  const hid = normalizeHostId(e4aHostId);
+  const s = local ? readSession(local) : null;
+  if (!local || !s || !rid || !hid) return false;
+  const ri = relayEntryIndex(s.hosts, rid);
+  if (ri < 0) return false;
+  const relayEntry = s.hosts[ri];
+  const pin: StoredRelayPin = { ...relayEntry.relay!, hostId: rid };
+  const li = s.hosts.findIndex((h, j) => j !== ri && h.hostId === hid);
+  if (li < 0) {
+    if (relayEntry.hostId === hid && relayEntry.relay?.hostId === rid) return false;
+    const hosts = s.hosts.slice();
+    hosts[ri] = { ...relayEntry, hostId: hid, relay: pin };
+    writeSession(local, { v: 3, activeHostId: s.activeHostId === relayEntry.hostId ? hid : s.activeHostId, hosts });
+    return true;
+  }
+  const lan = s.hosts[li];
+  if (lan.relay && !sameRelayKey(lan.relay.pubKey, pin.pubKey)) return false;
+  const relayHostLabel = safe(() => new URL(pin.endpoint).host, "");
+  const merged: StoredRemoteHost = {
+    ...lan,
+    relay: pin,
+    // Keep a label a person chose; a generated one (address or relay host) gives way to the other side's chosen one.
+    label: lan.label !== lan.meshnetHost ? lan.label : relayEntry.label !== relayHostLabel ? relayEntry.label : lan.label,
+    savedAt: relayEntry.savedAt > lan.savedAt ? relayEntry.savedAt : lan.savedAt,
+  };
+  const hosts = s.hosts.filter((_, j) => j !== ri && j !== li);
+  hosts.splice(Math.min(ri, li), 0, merged);
+  const wasActive = s.activeHostId === relayEntry.hostId || s.activeHostId === lan.hostId;
+  writeSession(local, { v: 3, activeHostId: wasActive ? merged.hostId : s.activeHostId, hosts });
+  return true;
 }
 
 /** Forget every pairing on this device (the server still lists the device until it is revoked on the PC). */
