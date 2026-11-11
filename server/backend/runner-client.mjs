@@ -34,29 +34,35 @@ export class RunnerHttpError extends Error {
 }
 
 const clean = (v) => String(v ?? "").trim();
-/** Rollout flag (PLAN_X1_IDENTITY, removed in X1d): `1` ends the client fallback; anything else keeps it (the `0` of the plan). */
-export const agentTokenRequired = (env = process.env) => clean(env.VS_AGENT_TOKEN_REQUIRED) === "1";
 
 /**
- * How this process authenticates to the runner (X1a), from its env:
- *   - no VS_AGENT_ID: the admin bearer (<home>/token): the VS server, its hook host, restart-runtime → null.
+ * How this process authenticates to the runner (X1a, final shape X1d), from its env. Same rule as tools.mjs agentCallerOf
+ * and cli/vs.mjs ownerProofFromEnv: any agent identity in the env makes this an agent shell.
+ *   - neither VS_AGENT_ID / PASEO_AGENT_ID nor VS_AGENT_TOKEN: the admin bearer (<home>/token): the VS server, its hook
+ *     host, restart-runtime → null.
  *   - VS_AGENT_ID + VS_AGENT_TOKEN: agent headers only (the bearer is never sent) → { id, token }.
- *   - VS_AGENT_ID without a token: with the flag off (default while X1a-X1b roll out) the admin bearer for this turn, so an
- *     agent whose child predates the runner restart keeps working; with VS_AGENT_TOKEN_REQUIRED=1 the id is sent without a
- *     token and the runner answers 403 (the X1d behaviour).
+ *   - one without the other (an id whose child predates the token, or a leftover token with the id cleared): an incomplete
+ *     agent caller → { id, token } with one of them empty; authHeadersFor refuses it (403) before any request is built.
+ *     An agent shell never falls back to the admin bearer (X1d review R1 H1; the X1a-X1b rollout flag is gone).
  */
 export function agentCallerFromEnv(env = process.env) {
   const id = clean(env.VS_AGENT_ID) || clean(env.PASEO_AGENT_ID);
-  if (!id) return null;
   const token = clean(env.VS_AGENT_TOKEN);
-  if (token) return { id, token };
-  return agentTokenRequired(env) ? { id, token: "" } : null;
+  if (!id && !token) return null;
+  return { id, token };
 }
 
-/** Request headers for a caller: agent headers for { id, token }, the bearer for null/undefined (admin). */
+/**
+ * Request headers for a caller: agent headers for a complete { id, token }; the bearer only for null/undefined (admin,
+ * an explicit choice by the VS server or restart-runtime). An incomplete pair throws a 403 RunnerHttpError: nothing is
+ * sent, and it is never the bearer.
+ */
 export function authHeadersFor(caller, bearer) {
-  if (caller?.id) return { "x-vs-agent-id": caller.id, "x-vs-agent-token": caller.token ?? "" };
-  return { authorization: `Bearer ${bearer}` };
+  if (caller === null || caller === undefined) return { authorization: `Bearer ${bearer}` };
+  const id = clean(caller.id);
+  const token = clean(caller.token);
+  if (!id || !token) throw new RunnerHttpError(403, `403: agent token invalid for ${id || "(no VS_AGENT_ID)"} (an agent caller needs both VS_AGENT_ID and VS_AGENT_TOKEN; an agent shell never uses the runner's admin bearer)`);
+  return { "x-vs-agent-id": id, "x-vs-agent-token": token };
 }
 
 /** Thrown by every non-owner path when the runner is not up: they connect, they never start it. */
@@ -245,7 +251,8 @@ export class RunnerClient {
     try {
       await this.request("GET", "/health");
       return true;
-    } catch {
+    } catch (e) {
+      if (e?.status === 403) throw e; // an incomplete or wrong agent identity is a refusal, not a runner that is down
       this.conn = null;
       return false;
     }

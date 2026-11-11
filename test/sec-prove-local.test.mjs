@@ -350,8 +350,8 @@ describe("source guard: the header is minted in one place", () => {
       [vs, "export async function requestWorkerSweep(", "export async function commandAgentVerb("],
       [vs, "export async function requestPairStart(", "async function commandPair("],
       [lt, "export async function requestLocalLoginUrl(", "export async function proveLocalServer("],
-      [tools, "async function postLeadHandoffToServer(", "\n}\n"],
-      [tools, "async function postBuddyRestartToServer(", "\n}\n"],
+      // X1d: the MCP posts (lead handoff, Buddy restart, vs-log / inbox triage) share one owner-shell path, postAsCaller.
+      [tools, "async function postAsCaller(", "\n}\n"],
     ]) {
       const body = fn(src, start, end);
       assert.ok(body.length > 0, start);
@@ -360,9 +360,13 @@ describe("source guard: the header is minted in one place", () => {
       // L1: a caller that defaulted fetchImpl to the global fetch would silently skip the single-connection client.
       assert.ok(!/fetchImpl\s*=\s*fetch\b/.test(body) && !body.includes("?? fetch"), `${start} leaves fetchImpl undefined outside tests so the proof binds the socket`);
     }
-    for (const start of ["async function postLeadHandoffToServer(", "async function postBuddyRestartToServer("]) {
-      assert.ok(fn(tools, start, "\n}\n").includes("if (e?.proofFailed) throw e;"), `${start}: a failed proof is never 'unreachable'`);
+    assert.ok(fn(tools, "async function postAsCaller(", "\n}\n").includes("if (e?.proofFailed) throw e;"), "postAsCaller: a failed proof is never 'unreachable'");
+    for (const start of ["async function postLeadHandoffToServer(", "async function postBuddyRestartToServer(", "export async function postToVsServer("]) {
+      const body = fn(tools, start, "\n}\n");
+      assert.ok(body.includes("await postAsCaller("), `${start} goes through postAsCaller`);
+      assert.ok(!body.includes("fetchWithLocalToken(") && !body.includes("readLocalToken(") && !body.includes("localTokenHeaders("), `${start} never touches the local token itself`);
     }
+    assert.equal((tools.match(/await fetchWithLocalToken\(/g) ?? []).length, 1, "tools.mjs sends the local token from exactly one place (postAsCaller)");
     assert.ok(/async function commandOpen\(flags\) \{\s*const url = await requestLocalLoginUrl\(/.test(vs), "vs open goes through requestLocalLoginUrl");
     assert.ok(vs.indexOf("export async function proveLocalServer") === -1 && !vs.includes("proveLocalServer("), "cli/vs.mjs no longer calls the proof by hand (one wrapper, not two patterns)");
   });

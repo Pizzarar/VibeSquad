@@ -27,8 +27,6 @@ import {
   addInboxCards,
   INBOX_STATUSES,
   listInboxCards,
-  assertInboxTriageCaller,
-  triageCardIds as triageIds,
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
@@ -913,23 +911,16 @@ async function commandInbox(flags) {
   }
 
   if (sub === "triage") {
-    // X1b + idea-137: the role check runs first, before any card id or action validation. A verified agent (id + token)
-    // triages through POST /__vibesquad/inbox/triage, where the server re-checks role, Squad and cards; the owner's shell
-    // goes through the server too when it holds the local token, and writes directly only when the server is down (or
-    // there is no token to present). An agent id without a token (rollout fallback) keeps the record-based local gate.
+    // X1b + idea-137: the role check runs first, before any card id or action validation. An agent (id + token) is
+    // verified with the runner and triages through POST /__vibesquad/inbox/triage, where the server re-checks role, Squad
+    // and cards; an id without its token is a 403 and nothing is sent (X1d: no record-based local gate). The owner's shell
+    // goes through the server too when it holds the local token, and writes directly only when the server is down.
     const me = resolveIdentity(flags, { recordWins: true });
     const ctx = createContext({ env: process.env, identity: callerIdentity(me) });
     const caller = agentCallerOf(ctx);
-    let role = me.role;
-    let teamId = me.team.id;
     if (caller) {
-      if (caller.verify) {
-        await verifyCaller(ctx); // 403 on a wrong/missing token
-        role = ctx.identity.role;
-        teamId = ctx.identity.team;
-      } else if (!(isRunnerId(caller.id) && readRunnerAgentSync(caller.id))) {
-        throw new Error(`inbox triage denied: agent ${caller.id} has no runner record, so its role/Squad cannot be verified`);
-      }
+      await verifyCaller(ctx); // 403 on a wrong/missing token
+      const role = ctx.identity.role;
       if (flags.delete) throw new Error("deleting cards is owner-only; use --archive");
       if (role !== "lead" && role !== "brainstorm") {
         throw new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${caller.id} is a ${role}. Put it in your final message for your lead to run.`);
@@ -939,11 +930,7 @@ async function commandInbox(flags) {
       throw new Error("vs inbox triage: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or a lead/Buddy of the card's Squad may triage.");
     }
     const viaServer = async (body) => {
-      if (caller?.verify) return postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
-      if (caller) {
-        assertInboxTriageCaller({ agentId: caller.id, role, teamId }, triageIds(body), baseHome);
-        return triageInboxCards({ ...body, baseHome });
-      }
+      if (caller) return postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
       try {
         return await postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
       } catch (e) {
@@ -1888,6 +1875,7 @@ export async function runAgentVerb(verb, flags, ctx) {
     return { ...(res && typeof res === "object" && !Array.isArray(res) ? res : {}), id, entries };
   }
   if (verb === "archive") {
+    await verifyCaller(ctx); // X1d R1 H1: a mutating verb verifies the caller first (403 in-process for an incomplete pair); the runner then scopes the archive
     const res = await ctx.withBackend({ id }, (b) => b.archiveAgent(id));
     return { id, archived: true, ...(res?.archivedAt ? { archivedAt: res.archivedAt } : {}) };
   }
@@ -2444,20 +2432,20 @@ async function verifyAgentForRestart({ id, token }, env = process.env) {
 
 /**
  * Who may run `vs restart`: the owner's shell (owner proof: no agent id + the local token), or the Overlord (role lead on
- * the Squad's hub lane). An agent is who its token says (X1b: /verify-agent); under the rollout fallback (an id without a
- * token, flag off) its runner record on disk decides, as before; a runner id with no record or a wrong token is refused.
- * `identity` is a DI shortcut for tests; `opts.hasOwnerProof(env)` / `opts.verify({ id, token })` inject the proofs.
+ * the Squad's hub lane). An agent is who its token says (X1b: /verify-agent): an id without a token, a wrong token or an
+ * unknown/retired agent is a 403. The disk record and the VS_ROLE/VS_LANE/VS_TEAM env are never consulted (X1d removed
+ * the rollout fallback). `identity` is a DI shortcut for tests; `opts.hasOwnerProof(env)` / `opts.verify({ id, token })`
+ * inject the proofs.
  */
-export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync, { hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env) } = {}) {
+export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, { hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env) } = {}) {
   const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
   if (!id || !isRunnerId(id)) {
     if (!hasOwnerProof(env)) throw new Error("vs restart: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Overlord may restart the runtime.");
     return;
   }
-  const token = String(env.VS_AGENT_TOKEN ?? "").trim();
-  const tokenRequired = String(env.VS_AGENT_TOKEN_REQUIRED ?? "").trim() === "1";
   let who = identity;
-  if (!who && (token || tokenRequired)) {
+  if (!who) {
+    const token = String(env.VS_AGENT_TOKEN ?? "").trim();
     if (!token) throw new Error(`vs restart: 403: ${id} has no VS_AGENT_TOKEN, so it cannot be verified; refusing.`);
     let rec;
     try {
@@ -2469,13 +2457,6 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
     rec = rec?.agent ?? rec;
     if (!rec || String(rec.id ?? "") !== id) throw new Error(`vs restart: 403: the runner does not know ${id}; refusing.`);
     who = { role: String(rec.role ?? "").trim().toLowerCase(), team: { id: rec.team ?? "" }, lane: rec.lane ?? "" };
-  } else if (!who) {
-    // Rollout fallback (X1a-X1b): identity comes only from the runner's own record of this agent id on disk. A runner id with
-    // no record gets nothing from VS_ROLE/VS_LANE/VS_TEAM env (spoofable), so it is refused.
-    const rec = readRecord(id);
-    if (!rec) throw new Error(`vs restart: ${id} has no runner record, so its role cannot be verified; refusing.`);
-    const labels = rec?.labels ?? {};
-    who = { role: String(labels.role ?? "").trim().toLowerCase(), team: { id: labels.team ?? "" }, lane: labels.lane || labels.lead || "" };
   }
   const team = teams.find((t) => String(t.id).toLowerCase() === String(who.team?.id ?? "").toLowerCase());
   const lane = team ? findLaneInRegistry(who.lane, teams, team.id)?.lane : null;
@@ -2510,9 +2491,9 @@ function assertSafeLaunchArg(a) {
  * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
  * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
  */
-export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, readRecord = readRunnerAgentSync, hasOwnerProof, verify } = {}) {
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
-  if (!flags.dryRun) await assertRestartCaller(identity, teams, env, readRecord, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");

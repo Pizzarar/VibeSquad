@@ -6,6 +6,7 @@ import test from "node:test";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { callTool } from "../server/mcp/tools.mjs";
 import { toPaseoSpawnConfig } from "../server/profiles.mjs";
+import { verifiedIdentity } from "./helpers/agent-token.mjs";
 
 const PROFILES = [
   { name: "Implement - Sonnet", role: "worker", provider: "claude", model: "claude-sonnet-5-5", modeId: "auto", thinkingOptionId: "medium" },
@@ -247,7 +248,7 @@ test(
 async function viaSpawnWorker(h, args) {
   let out;
   const ctx = {
-    identity: { agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" },
+    ...verifiedIdentity({ agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" }),
     cwd: CWD,
     loadProfiles: async () => PROFILES,
     resolveProfile: async (name) => {
@@ -310,7 +311,7 @@ test(
 test("create_agent with no profile: provider + model + thinkingOptionId=high (and the `thinking` alias) reach the create config", async () => {
   const seen = [];
   const ctx = {
-    identity: { agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" },
+    ...verifiedIdentity({ agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" }),
     cwd: CWD,
     loadProfiles: async () => [],
     resolveProfile: async () => null,

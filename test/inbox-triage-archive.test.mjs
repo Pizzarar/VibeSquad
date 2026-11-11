@@ -1,4 +1,6 @@
-// `vs inbox triage --archive|--park <cardId...>`: leads/Buddies of the card's Squad + owner; workers get a clear error.
+// `vs inbox triage --archive|--park <cardId...>`: the owner's shell (direct disk write when the server is down) and the
+// server-side role gate (assertInboxTriageCaller). An agent id without its token is a 403 before any card is looked at
+// (X1d); the verified-agent paths (lead/Buddy through the server, worker refusal) live in test/x1b-client-token.test.mjs.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -20,7 +22,7 @@ function setup(t) {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   writeFileSync(path.join(home, "inbox.json"), JSON.stringify({ cards: [card("a", "vibesquad"), card("b", "vibesquad"), card("c", "other")] }));
   // X1b: the owner cases hold the local token (owner proof); VIBESQUAD_PORT=1 keeps the VS server unreachable so the
-  // owner path takes the direct-disk fallback this file exercises (an agent id without a token stays on the local gate).
+  // owner path takes the direct-disk fallback this file exercises. An agent id without a token never gets that far (X1d).
   writeFileSync(path.join(home, "local-token"), "a".repeat(64) + String.fromCharCode(10));
   const statuses = () => Object.fromEntries((([j]) => (Array.isArray(j) ? j : j.cards))([JSON.parse(readFileSync(path.join(home, "inbox.json"), "utf8"))]).map((c) => [c.id, c.status]));
   const agent = (id, role, team = "vibesquad") => {
@@ -39,7 +41,6 @@ function setup(t) {
     delete e.PASEO_AGENT_ID;
     delete e.VS_AGENT_ID;
     delete e.VS_AGENT_TOKEN; // X1b: a token from the suite's own agent would turn the spawned CLI into a verified caller
-    delete e.VS_AGENT_TOKEN_REQUIRED;
     Object.assign(e, env);
     return spawnSync(process.execPath, [CLI, "inbox", "triage", ...args], { encoding: "utf8", env: e });
   };
@@ -58,10 +59,9 @@ test("CLI parses --archive <ids...> (owner, no agent id) and --park", (t) => {
   assert.equal(statuses().a, "parked");
 });
 
-test("a worker agent gets a clear error on EVERY mutating triage action (incl. --set-status bypass)", (t) => {
+test("X1d guard: an agent id without a token (worker or lead record on disk, or no record at all) is a 403 on EVERY mutating triage action, before any card is looked at; nothing is written", (t) => {
   const { run, statuses, agent } = setup(t);
-  const env = { PASEO_AGENT_ID: agent("rn-worker1", "worker") };
-  for (const args of [
+  const all = [
     ["--archive", "a"],
     ["--park", "a"],
     ["--set-status", "a", "--status", "archived"],
@@ -69,30 +69,22 @@ test("a worker agent gets a clear error on EVERY mutating triage action (incl. -
     ["--reject", "a"],
     ["--merge", "a", "b"],
     ["--bounce", "a", "--lane", "other-lane"],
-  ]) {
-    const r = run(args, env);
-    assert.notEqual(r.status, 0, args.join(" "));
-    assert.match(r.stderr, /leads and Buddies of the card's Squad/, args.join(" "));
+    ["--delete", "a"],
+  ];
+  const cases = [
+    [{ PASEO_AGENT_ID: agent("rn-worker1", "worker") }, all],
+    [{ PASEO_AGENT_ID: agent("rn-lead1", "lead") }, all], // the lead's record on disk is not an identity
+    [{ PASEO_AGENT_ID: "rn-lead1", VS_AGENT_TOKEN_REQUIRED: "0" }, [["--archive", "a"]]], // the X1a-X1b rollout flag is gone
+    [{ PASEO_AGENT_ID: "rn-ghost", VS_AGENT_ID: "rn-ghost", VS_ROLE: "lead", VS_TEAM: "vibesquad" }, [["--archive", "a"]]], // no record, env claims lead
+  ];
+  for (const [env, list] of cases) {
+    for (const args of list) {
+      const r = run(args, env);
+      assert.notEqual(r.status, 0, `${JSON.stringify(env)} ${args.join(" ")}`);
+      assert.match(r.stderr, /403/, `${JSON.stringify(env)} ${args.join(" ")}: ${r.stderr}`);
+    }
   }
   assert.deepEqual(statuses(), { a: "parked", b: "parked", c: "parked" });
-});
-
-test("a lead of the Squad can --set-status, and --merge archives its sources instead of deleting them", (t) => {
-  const { run, statuses, agent } = setup(t);
-  const env = { PASEO_AGENT_ID: agent("rn-lead1", "lead") };
-  assert.equal(run(["--set-status", "a", "--status", "accepted"], env).status, 0);
-  assert.equal(statuses().a, "accepted");
-  const m = run(["--merge", "a", "b"], env);
-  assert.equal(m.status, 0, m.stderr);
-  assert.deepEqual(statuses(), { a: "accepted", b: "archived", c: "parked" });
-});
-
-test("agent id with no runner record fails closed even if VS_ROLE=lead is in env", (t) => {
-  const { run, statuses } = setup(t);
-  const r = run(["--archive", "a"], { PASEO_AGENT_ID: "rn-ghost", VS_AGENT_ID: "rn-ghost", VS_ROLE: "lead", VS_TEAM: "vibesquad" });
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /no runner record/);
-  assert.equal(statuses().a, "parked");
 });
 
 test("assertInboxTriageCaller: lead/Buddy of the Squad pass, worker and other Squads are refused", (t) => {
@@ -106,12 +98,8 @@ test("assertInboxTriageCaller: lead/Buddy of the Squad pass, worker and other Sq
   assert.doesNotThrow(() => assertInboxTriageCaller({ agentId: "", role: "worker", teamId: "" }, ["c"], home));
 });
 
-test("--delete is owner-only: an agent is told to use --archive, the owner can delete", (t) => {
-  const { run, statuses, agent } = setup(t);
-  const r = run(["--delete", "a"], { PASEO_AGENT_ID: agent("rn-lead2", "lead") });
-  assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /deleting cards is owner-only; use --archive/);
-  assert.equal(statuses().a, "parked");
+test("--delete is owner-only: the owner can delete (a verified lead is told to use --archive in test/x1b-client-token.test.mjs)", (t) => {
+  const { run, statuses } = setup(t);
   const o = run(["--delete", "a"]);
   assert.equal(o.status, 0, o.stderr);
   assert.equal(statuses().a, undefined);

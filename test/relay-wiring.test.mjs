@@ -65,7 +65,7 @@ function startWiring(relay, over = {}) {
 const connect = (relay, w, pub = w.pub, hostId = w.hostId) => connectRelay({ endpoint: "wss://relay.example/ws", hostId, hostPubKey: pub, WebSocketImpl: relay.Sock });
 const jsonPost = (c, path, body) => c.fetch(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 // X1b: vs host-key is an owner verb; the suite may itself run inside an agent, so its identity never reaches the child.
-const cli = (...args) => spawnSync(process.execPath, [VS, ...args], { env: { ...process.env, VIBESQUAD_HOME: home, VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "", VS_AGENT_TOKEN_REQUIRED: "" }, encoding: "utf8" });
+const cli = (...args) => spawnSync(process.execPath, [VS, ...args], { env: { ...process.env, VIBESQUAD_HOME: home, VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "" }, encoding: "utf8" });
 
 describe("E5 wiring: pairing and principal", () => {
   test("a PC-minted code redeemed inside the channel pairs the device; relayed requests run as that device and never as the PC", async () => {

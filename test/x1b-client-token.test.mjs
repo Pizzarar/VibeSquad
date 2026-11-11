@@ -1,7 +1,7 @@
 // X1b (docs/PLAN_X1_IDENTITY.md): the vs CLI resolves its caller from VS_AGENT_TOKEN. Every write goes to the VS server
 // with x-vs-agent-id + x-vs-agent-token (never the owner's local token), the server verifies the pair against runner
 // memory and re-attributes the entry; a wrong token is a 403 from the CLI; `vs handoff` stays a packet writer; an agent
-// id without a token (rollout fallback, VS_AGENT_TOKEN_REQUIRED unset) keeps working exactly as before X1.
+// id without a token is a 403 before anything is sent (X1d: the rollout fallback and VS_AGENT_TOKEN_REQUIRED are gone).
 // A real Runner + runner HTTP server answers GET /verify-agent; the VS middleware runs on a temp VIBESQUAD_HOME.
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
@@ -25,7 +25,7 @@ const CLI = path.join(ROOT, "cli", "vs.mjs");
 const HOME = tmp("vs-x1b-home-");
 process.env.VIBESQUAD_HOME = HOME;
 delete process.env.VIBESQUAD_IGNORE_HOME_TEAMS;
-for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_AGENT_TOKEN_REQUIRED", "VS_TEAM", "VS_LANE", "VS_ROLE", "VS_DIGEST"]) delete process.env[k];
+for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_TEAM", "VS_LANE", "VS_ROLE", "VS_DIGEST"]) delete process.env[k];
 
 const { Runner } = await import("../runner/runner.mjs");
 const { createServer: createRunnerServer, writeDiscovery } = await import("../runner/server.mjs");
@@ -61,6 +61,8 @@ ids.digest = mk({ team: "sq", lane: "art", role: "worker", profile: "Pre-check -
 const runnerSrv = createRunnerServer(runner, { token: ADMIN, hash: "h" });
 const runnerPort = await listen(runnerSrv);
 writeDiscovery(runnerHome, { port: runnerPort, token: ADMIN });
+const runnerHits = []; // every request the runner saw (X1d R1 H1: an agent shell must never reach it with the admin bearer)
+runnerSrv.on("request", (req) => runnerHits.push({ url: req.url, admin: Boolean(req.headers.authorization), agent: req.headers["x-vs-agent-id"] ?? null }));
 
 const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {} }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
 const api = createVibesquadMiddleware(ROOT, { backend });
@@ -77,7 +79,7 @@ const tokenOf = (id) => runner.tokensById.get(id);
 /** Run the real CLI as `who` (an agent id, with its right token unless `token` is given; "" = the owner's shell). Async: the VS server lives in this process. */
 function vs(args, { who = "", token, extra = {} } = {}) {
   const env = { ...process.env, VIBESQUAD_HOME: HOME, VIBESQUAD_PORT: String(vsPort), VS_AGENT_ID: who, PASEO_AGENT_ID: who, VS_AGENT_TOKEN: token ?? (who ? tokenOf(who) : "") };
-  for (const k of ["VS_TEAM", "VS_LANE", "VS_ROLE", "VS_DIGEST", "VS_AGENT_TOKEN_REQUIRED"]) delete env[k];
+  for (const k of ["VS_TEAM", "VS_LANE", "VS_ROLE", "VS_DIGEST"]) delete env[k];
   Object.assign(env, extra);
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, ...args], { env, cwd: HOME, stdio: ["ignore", "pipe", "pipe"] });
@@ -121,7 +123,7 @@ test("vs log: a wrong or missing token is a 403 and nothing is written; `you` / 
   const wrong = await vs(["log", "decision", "spoof"], { who: ids.lead, token: "not-the-token" });
   assert.notEqual(wrong.status, 0);
   assert.match(wrong.stderr, /403/);
-  const missing = await vs(["log", "decision", "spoof"], { who: ids.lead, token: "", extra: { VS_AGENT_TOKEN_REQUIRED: "1" } });
+  const missing = await vs(["log", "decision", "spoof"], { who: ids.lead, token: "" });
   assert.notEqual(missing.status, 0);
   assert.match(missing.stderr, /403/);
   assert.equal(laneLog().length, n, "no entry landed");
@@ -143,12 +145,25 @@ test("vs log: a wrong or missing token is a 403 and nothing is written; `you` / 
   assert.equal(realDigest.status, 0, realDigest.stderr);
 });
 
-test("vs log: an agent id without a token (rollout fallback, flag unset) still works as before X1; the owner's shell posts with the local token", async () => {
-  const fb = await vs(["log", "decision", "pre-X1a child"], { who: ids.lead, token: "" });
-  assert.equal(fb.status, 0, fb.stderr);
-  assert.equal(fb.json().agent, ids.lead);
-  assert.equal(lastHit().headers["x-vibesquad-token"], OWNER_TOKEN, "the fallback rides the owner header (removed in X1d)");
-  assert.equal(lastHit().headers["x-vs-agent-id"], undefined);
+test("X1d guard: an agent id without a token is a 403 before anything is sent (vs log, vs inbox triage, vs restart): no request reaches the VS server, the owner's local token never leaves the process, nothing is written; the owner's shell still posts with the local token", async () => {
+  const n = laneLog().length;
+  const before = hits.length;
+  const noToken = await vs(["log", "decision", "pre-X1a child"], { who: ids.lead, token: "" });
+  assert.notEqual(noToken.status, 0, "an id without a token no longer rides the owner header");
+  assert.match(noToken.stderr, /403/);
+  const flagged = await vs(["log", "decision", "flag says fallback"], { who: ids.lead, token: "", extra: { VS_AGENT_TOKEN_REQUIRED: "0" } });
+  assert.notEqual(flagged.status, 0, "the X1a-X1b rollout flag is gone");
+  assert.match(flagged.stderr, /403/);
+  writeInboxCards([{ id: "idea-x1d", text: "x1d card", teamId: "sq", laneId: "art", status: "parked", createdAt: "2026-11-11T00:00:00.000Z" }]);
+  const triage = await vs(["inbox", "triage", "--archive", "idea-x1d"], { who: ids.lead, token: "" });
+  assert.notEqual(triage.status, 0);
+  assert.match(triage.stderr, /403/, "the record on disk alone no longer passes the triage gate");
+  assert.equal(readInboxCards().find((c) => c.id === "idea-x1d")?.status, "parked", "the card is untouched");
+  const restart = await vs(["restart"], { who: ids.overlord, token: "" });
+  assert.notEqual(restart.status, 0);
+  assert.match(restart.stderr, /403/, "the Overlord's record on disk alone no longer passes the restart gate");
+  assert.equal(hits.length, before, "nothing reached the VS server");
+  assert.equal(laneLog().length, n, "no entry landed");
   const owner = await vs(["log", "you", "owner says hi"]);
   assert.equal(owner.status, 0, owner.stderr);
   assert.equal(owner.json().type, "you");
@@ -255,11 +270,67 @@ test("R1 M1: a leftover VS_AGENT_TOKEN with the agent id cleared is not the owne
   const pair = await vs(["pair"], leftover);
   assert.notEqual(pair.status, 0);
   assert.match(pair.stderr, /owner verb/);
-  const mine = hits.slice(before);
-  assert.ok(mine.length >= 1, "the triage/log attempts reached the server as an agent and were refused there");
-  for (const h of mine) assert.equal(h.headers["x-vibesquad-token"], undefined, `${h.method} ${h.url}: the local token was presented`);
+  // X1d: an incomplete (id, token) pair is refused in-process, before any socket opens (X1b refused it at the server).
+  assert.equal(hits.length, before, "nothing reached the VS server, so the local token was never presented either");
   // masked id: PASEO_AGENT_ID="" must not hide VS_AGENT_ID (the lead still logs as itself)
   const masked = await vs(["log", "decision", "still me"], { who: ids.lead, extra: { PASEO_AGENT_ID: "" } });
   assert.equal(masked.status, 0, masked.stderr);
   assert.equal(masked.json().agent, ids.lead);
+});
+
+// ---------- X1d: the verified-lead triage paths that used to live on the record-based local gate ----------
+test("X1d: a verified lead can --set-status and --merge through the server (--merge archives its sources); the server re-checks the role from runner memory", async () => {
+  writeInboxCards([
+    { id: "idea-m-a", text: "merge target", teamId: "sq", laneId: "art", status: "parked", createdAt: "2026-11-11T00:00:00.000Z" },
+    { id: "idea-m-b", text: "merge source", teamId: "sq", laneId: "art", status: "parked", createdAt: "2026-11-11T00:00:00.000Z" },
+  ]);
+  const status = (id) => readInboxCards().find((c) => c.id === id)?.status;
+  const before = hits.length;
+  const set = await vs(["inbox", "triage", "--set-status", "idea-m-a", "--status", "accepted"], { who: ids.lead });
+  assert.equal(set.status, 0, set.stderr);
+  assert.equal(status("idea-m-a"), "accepted");
+  const m = await vs(["inbox", "triage", "--merge", "idea-m-a", "idea-m-b"], { who: ids.lead });
+  assert.equal(m.status, 0, m.stderr);
+  assert.deepEqual([status("idea-m-a"), status("idea-m-b")], ["accepted", "archived"]);
+  assert.equal(hits.length, before + 2, "both went through the VS server");
+  for (const h of hits.slice(before)) assert.deepEqual([h.url, h.headers["x-vs-agent-id"], h.headers["x-vibesquad-token"]], ["/__vibesquad/inbox/triage", ids.lead, undefined]);
+  // a verified worker is refused with the role message (the gate ran after verification, before any card lookup)
+  const w = await vs(["inbox", "triage", "--set-status", "idea-m-a", "--status", "archived"], { who: ids.worker });
+  assert.notEqual(w.status, 0);
+  assert.match(w.stderr, /leads and Buddies of the card's Squad/);
+  assert.equal(status("idea-m-a"), "accepted");
+});
+
+// ---------- X1d review R1 (Bug18) H1: vs archive verifies the caller; an agent shell never reaches the runner as admin ----------
+test("X1d R1 H1 guard: vs archive from an agent shell goes through verifyCaller: a leftover token with the id cleared, or an id without a token, is 403 before any socket (the runner sees no request, nothing is archived); vs inspect / vs logs refuse the same way; a verified worker cannot archive its lead; a verified lead archives its lane worker", async () => {
+  const victim = mk({ team: "sq", lane: "art", role: "worker", labels: { "vs.parent": ids.lead } });
+  const rh = runnerHits.length;
+  const vh = hits.length;
+  const leftover = await vs(["archive", ids.lead], { extra: { VS_AGENT_TOKEN: tokenOf(ids.worker) } });
+  assert.notEqual(leftover.status, 0, "a leftover token with the id cleared is not admin");
+  assert.match(leftover.stderr, /403/);
+  const noToken = await vs(["archive", ids.lead], { who: ids.worker, token: "" });
+  assert.notEqual(noToken.status, 0);
+  assert.match(noToken.stderr, /403/);
+  for (const args of [["inspect", ids.lead], ["logs", ids.lead]]) {
+    const r = await vs(args, { extra: { VS_AGENT_TOKEN: tokenOf(ids.worker) } });
+    assert.notEqual(r.status, 0, args.join(" "));
+    assert.match(r.stderr, /403/, `${args.join(" ")}: ${r.stderr}`);
+  }
+  assert.equal(runnerHits.length, rh, "the runner saw no request (admin or otherwise)");
+  assert.equal(hits.length, vh, "nothing reached the VS server");
+  assert.ok(!runner.status(ids.lead)?.archivedAt, "the lead is not archived");
+  // a verified worker is in scope for the runner, which refuses archiving its lead
+  const w = await vs(["archive", ids.lead], { who: ids.worker });
+  assert.notEqual(w.status, 0);
+  assert.match(w.stderr, /403|may not archive/, "the runner scope rule refuses (its own message, after verification)");
+  assert.ok(!runner.status(ids.lead)?.archivedAt);
+  // a verified lead archives a worker in its lane; every archive call the runner saw carried agent headers, never the bearer
+  const ok = await vs(["archive", victim], { who: ids.lead });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(JSON.parse(ok.stdout).archived, true); // the CLI pretty-prints the result
+  assert.ok(runner.status(victim)?.archivedAt, "the worker is archived");
+  const archives = runnerHits.slice(rh).filter((h) => h.url.endsWith("/archive"));
+  assert.ok(archives.length >= 1);
+  for (const h of archives) assert.deepEqual([h.admin, Boolean(h.agent)], [false, true], `${h.url}: an archive rode the admin bearer`);
 });
