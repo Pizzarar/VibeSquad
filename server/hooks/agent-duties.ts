@@ -2872,6 +2872,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!target) return undefined;
       // A worker closed by the done-report path is not a retired holder: the send revives it (RunnerBackend unarchives it).
       if (target.labels?.[AUTO_ARCHIVED_LABEL] === "1" && String(target.labels?.role ?? "").trim().toLowerCase() === "worker") return undefined;
+      // Only a lead/Buddy has a successor. A worker (archived, closed, or re-pointed) is never redirected to the lane's lead:
+      // the send goes to the worker itself (idea-86: it was relayed to a stale lead id and the worker never got the prompt).
+      if (String(target.labels?.role ?? "").trim().toLowerCase() === "worker") return undefined;
       const isRetired = Boolean(target.archivedAt || isRetiredLeadSnap(target) || (target.status === "closed" && target.resumable !== true));
       // A closed-but-resumable holder (a lost lead/Buddy) is live: a send to it must not resume a losing predecessor into a
       // duplicate-lead CONFLICT, so redirect to the live winner when one exists; otherwise the runner resumes it in place.
