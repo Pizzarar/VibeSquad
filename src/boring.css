@@ -360,3 +360,28 @@ html[data-vibe="boring"] .drawer-model-input { min-height: 36px; padding: 6px 12
 html[data-vibe="boring"] .drawer-head .drawer-controls,
 html[data-vibe="boring"] .drawer-head .drawer-row,
 html[data-vibe="boring"] .drawer-head .drawer-actions { gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* B4 round 2: kill 9-slice border-image chips/buttons, inline-style header sizes, plain ctx bar, solid Send */
+html[data-vibe="boring"] .role-tag, html[data-vibe="boring"] .prov-pill, html[data-vibe="boring"] .prov-badge, html[data-vibe="boring"] .badge,
+html[data-vibe="boring"] .unit-tag, html[data-vibe="boring"] .chip, html[data-vibe="boring"] .label-pill, html[data-vibe="boring"] .status-pill,
+html[data-vibe="boring"] .lane-tag, html[data-vibe="boring"] .warn-badge, html[data-vibe="boring"] .verdict, html[data-vibe="boring"] .pill,
+html[data-vibe="boring"] .brainstorm-ctx-pill, html[data-vibe="boring"] .quota-pill, html[data-vibe="boring"] .sidebar-role-pill,
+html[data-vibe="boring"] .rail-role-tag, html[data-vibe="boring"] .pin-lane-handle, html[data-vibe="boring"] .btn,
+html[data-vibe="boring"] .btn.ok, html[data-vibe="boring"] .btn.ghost, html[data-vibe="boring"] .btn.warn { border-image: none !important; image-rendering: auto !important; }
+html[data-vibe="boring"] .drawer-head .role-tag,
+html[data-vibe="boring"] .drawer-head .prov-pill,
+html[data-vibe="boring"] .drawer-head .prov-badge { border: 1px solid var(--border) !important; border-image: none !important; border-radius: 6px !important; padding: 4px 10px !important; font-size: clamp(12px, 0.3vw + 10px, 14px) !important; font-family: var(--sans) !important; background: var(--bg-card) !important; background-image: none !important; color: var(--text) !important; box-shadow: none !important; text-shadow: none !important; }
+html[data-vibe="boring"] .btn.ok { background: var(--accent) !important; background-image: none !important; border: 1px solid var(--accent) !important; border-image: none !important; color: #ffffff !important; border-radius: 6px !important; box-shadow: none !important; text-shadow: none !important; }
+html[data-vibe="boring"] .brainstorm-ctx-bar { padding: 8px 12px !important; margin: 6px 0 0 !important; background: var(--bg-elev) !important; background-image: none !important; border: 1px solid var(--border) !important; border-image: none !important; border-radius: 6px !important; box-shadow: none !important; }
+html[data-vibe="boring"] .brainstorm-ctx-readout { font-family: var(--sans) !important; font-size: clamp(12px, 0.3vw + 10px, 14px) !important; color: var(--text-muted) !important; }
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .brainstorm-ctx-actions { display: none !important; }
+html[data-vibe="boring"] .drawer-head .drawer-title { font-size: clamp(16px, 0.5vw + 13px, 20px) !important; font-weight: 600; }
+html[data-vibe="boring"] .drawer-head .drawer-meta-line { font-size: clamp(13px, 0.35vw + 11px, 15px) !important; gap: 8px !important; }
+html[data-vibe="boring"] .drawer-head .drawer-role-line { gap: 8px !important; align-items: center !important; }
+html[data-vibe="boring"] .drawer-head select, html[data-vibe="boring"] .drawer-head .chip, html[data-vibe="boring"] .drawer-head button,
+html[data-vibe="boring"] .drawer-provider-select, html[data-vibe="boring"] .drawer-mode-select, html[data-vibe="boring"] .drawer-thinking-select,
+html[data-vibe="boring"] .drawer-model-input { min-height: 36px !important; height: auto !important; width: auto !important; padding: 6px 12px !important; font-size: clamp(13px, 0.35vw + 11px, 15px) !important; font-family: var(--sans) !important; border-radius: 6px !important; background: var(--bg-card) !important; background-image: none !important; color: var(--text) !important; border: 1px solid var(--border-strong) !important; border-image: none !important; box-shadow: none !important; }
+html[data-vibe="boring"] .composer .send,
+html[data-vibe="boring"] .composer button[type="submit"],
+html[data-vibe="boring"] .composer-send,
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--accent) !important; background-color: var(--accent) !important; background-image: none !important; border: 1px solid var(--accent) !important; border-image: none !important; color: #ffffff !important; opacity: 1 !important; font-weight: 600 !important; min-height: 40px !important; padding: 0 18px !important; border-radius: 6px !important; }

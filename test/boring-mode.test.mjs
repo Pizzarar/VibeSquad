@@ -356,6 +356,11 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
   assert.match(css, /--accent: #0f62fe/);
   assert.doesNotMatch(css, /@media/);
+  assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
+  assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none !important/);
+  assert.match(css, /\.drawer-head \.drawer-title \{ font-size: clamp\(16px/);
+  assert.match(css, /\.composer-row > \.btn:not\(\.ghost\):not\(\.warn\)/);
+  assert.match(css, /\.brainstorm-ctx-actions \{ display: none !important/);
 });
 
 test("shouldShowFirstLaunchVibePicker: fresh installs only, never automation", async () => {

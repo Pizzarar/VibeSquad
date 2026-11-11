@@ -30,8 +30,8 @@ export function shouldShowFirstLaunchVibePicker(opts?: { getItem?: (k: string) =
 
 const cardStyle = (on: boolean): React.CSSProperties => ({
   flex: "1 1 220px", display: "flex", flexDirection: "column", gap: 6, padding: 12, textAlign: "left", cursor: "pointer",
-  background: "var(--bg-card, #181e2b)", color: "var(--text, #eef1f7)", borderRadius: 8,
-  border: `2px solid ${on ? "var(--accent, #2563eb)" : "var(--border-strong, #455370)"}`,
+  background: "var(--bg-card, var(--panel-hi, #181e2b))", color: "var(--text, #eef1f7)", borderRadius: 8,
+  border: `2px solid ${on ? "var(--accent, var(--cyan, #2563eb))" : "var(--border-strong, var(--line, #455370))"}`,
 });
 
 const NormalPreview = () => (
