@@ -1,14 +1,14 @@
 # VibeSquad: brief for writing a job-application artifact
 
-**Who this is for:** a Claude chat with no access to the repo. Everything you need is in this file, and every claim here was checked against the repo on 2026-11-11. Use it to write a portfolio one-pager or a resume section for an **AI automation** job. Do not add facts that are not here. If you need a number that is not here, ask Aub.
+**Who this is for:** a Claude chat with no access to the repo. Everything you need is in this file, and every claim here was checked against the repo on 2026-11-11. Use it to write a portfolio one-pager or a resume section for an **AI automation** job. Do not add facts that are not here. If you need a number that is not here, ask the user (the owner).
 
-**Who Aub is:** (pronouns: ask Aub; this file avoids them) the owner and sole human developer of VibeSquad. See section 8 for how to describe the role honestly. Read it before you write anything.
+**Who the owner is:** the sole human developer of VibeSquad, and the user talking to you. This file uses no name or pronouns for them; take both from the user. See section 8 for how to describe the role honestly. Read it before you write anything.
 
 ---
 
 ## 1. The pitch (one paragraph)
 
-VibeSquad is a local-first "agentic development environment": a desktop, web and phone app that runs whole teams of AI coding agents (Claude, Gemini and DeepSeek models) on real software projects. Instead of one chat window with one assistant, you get a roster of agents with defined jobs: a brainstorm partner who plans, a lead who dispatches work, and short-lived workers who each do one task. They coordinate through a shared log, an idea inbox, review gates and automatic handoffs, while the human owner makes the product and design decisions. The north star is "iOS for vibe coding": make directing a team of AI agents feel as approachable as using a phone. Aub designed and directed VibeSquad, running AI agents as the workforce that built it. It runs on Aub's own PC with no outbound telemetry.
+VibeSquad is a local-first "agentic development environment": a desktop, web and phone app that runs whole teams of AI coding agents (Claude, Gemini and DeepSeek models) on real software projects. Instead of one chat window with one assistant, you get a roster of agents with defined jobs: a brainstorm partner who plans, a lead who dispatches work, and short-lived workers who each do one task. They coordinate through a shared log, an idea inbox, review gates and automatic handoffs, while the human owner makes the product and design decisions. The north star is "iOS for vibe coding": make directing a team of AI agents feel as approachable as using a phone. The owner designed and directed VibeSquad, running AI agents as the workforce that built it. It runs on the owner's own PC with no outbound telemetry.
 
 ## 2. How it works
 
@@ -76,7 +76,7 @@ Squad (one per product, e.g. "VibeSquad", "a game", "a personal site")
 
 ## 4. Automation and ops highlights (the part that maps to an AI-automation role)
 
-Each item below exists in the repo. Frame them as systems Aub designed and directed.
+Each item below exists in the repo. Frame them as systems the owner designed and directed.
 
 1. **Autonomous multi-agent pipelines.** Brainstorm -> plan -> lead -> parallel workers in isolated git worktrees -> review -> merge. The git history shows hundreds of such units merged with reviewer verdicts in the commit messages.
 2. **Provider quota failover** (Claude -> Gemini -> DeepSeek-capable runner). Automatic counterpart-profile switch at 95% quota; a lead successor is placed on the better-capacity provider.
@@ -105,7 +105,7 @@ Repo snapshot: branch cut from `master` on 2026-11-11.
 | Tauri shell (`src-tauri/`) | ~16,000 lines in 66 files (Rust, Android project, installer files) | same pattern, `src-tauri` |
 | Test code (`test/`) | ~61,700 lines in 330 files | same pattern, `test` |
 | Test files | **316** in `test/` (318 repo-wide including a few co-located) | `git ls-files test \| grep -c 'test\.'` and `git ls-files \| grep -c '\.test\.'` |
-| Latest full suite (2026-11-11 run) | **3,245 tests, 3,231 passing**; remaining failures are pre-existing and queued as bugs | figure supplied by Aub from that run; the git history also records "suite 3231/1" for the latest merges |
+| Latest full suite (2026-11-11 run) | **3,245 tests, 3,231 passing**; remaining failures are pre-existing and queued as bugs | figure supplied by the owner from that run; the git history also records "suite 3231/1" for the latest merges |
 | Feature lanes with written specs/plans in `docs/lanes/` | 8 (android-app, bug-chaser, perfection, runner-pilot, standing-teams, ui-bois, ui-polish, usage) | `ls docs/lanes` |
 | Plan documents (`docs/PLAN_*.md`) in git history | 12 distinct files | `git log --all --name-only --format= -- 'docs/PLAN_*' \| sort -u \| wc -l` (the files are not in the current checkout; do not claim they exist now) |
 | Docs files | 149 tracked under `docs/` | `git ls-files docs \| wc -l` |
@@ -154,12 +154,12 @@ From the project's `CREDITS.md`, using its format "Implemented X, thanks to Y by
 
 These are optional in a resume; they belong in a portfolio page's "built on / thanks to" line.
 
-## 8. How to describe Aub's role honestly
+## 8. How to describe the owner's role honestly
 
-- **Say:** Aub is the product owner, designer and director. Aub sets the goals, makes the product and design decisions, chooses the architecture direction, reviews outcomes, and runs a team of AI agents as the workforce. The agents write most of the code.
-- **Do not say:** that Aub hand-wrote the code, or "built X lines". Use "designed and directed", "led", "orchestrated", "shipped with AI agents".
+- **Say:** the owner is the product owner, designer and director. The owner sets the goals, makes the product and design decisions, chooses the architecture direction, reviews outcomes, and runs a team of AI agents as the workforce. The agents write most of the code.
+- **Do not say:** that the owner hand-wrote the code, or "built X lines". Use "designed and directed", "led", "orchestrated", "shipped with AI agents".
 - **Frame this as the skill**, not an apology: AI orchestration is the job. The hard problems here are the ones an AI-automation role faces: splitting work across agents, keeping them from colliding, routing models by risk and cost, verifying output, recovering from failures, handling quota and context limits, and measuring what works. VibeSquad is a working answer to all of those, built and run daily.
-- **Be careful with claims about outcomes.** It is pre-1.0 (0.2.7), is used by Aub, and is still being live-tested. It is not a commercial product with customers. There is no user count, revenue or uptime figure; do not invent any.
+- **Be careful with claims about outcomes.** It is pre-1.0 (0.2.7), is used by the owner, and is still being live-tested. It is not a commercial product with customers. There is no user count, revenue or uptime figure; do not invent any.
 - **Be careful with maturity claims on the relay.** It is designed and partly implemented, not shipped.
 - **Interview-safe talking points** (all backed above): why an in-house runner replaced a daemon, why identity comes from labels not titles, why reviews cross providers, why stakes pick the model, and what the Tier A review caught in the restart-resume work.
 - **Suggested one-line summary:** "Designed and directed a multi-agent development platform (Claude/Gemini/DeepSeek) and used it to ship a web, desktop and Android app, with automated review gates, quota failover and self-healing ops."
