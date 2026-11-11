@@ -145,6 +145,8 @@ The Lead's rules live in `LEAD_RULES.md`. Only the Lead reads that file; workers
    `SendMessage` or `ListAgents` tools to report: on a team that mixes providers, the Lead may not
    be a Claude agent and never gets it. To reach the Lead mid-task (a blocker, a question), use
    `vs send <lead-id> "<message>"`. *Why: the Lead only sees what reaches it through VibeSquad.*
+   **VibeSquad:** if the Lead or Buddy you message was handed off, `vs send` delivers to its successor and the
+   reply says so (`redirectedTo`). Nothing to resend. If no live successor exists, it fails: report that instead.
 
 ### Verification (no exceptions)
 
