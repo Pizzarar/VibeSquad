@@ -56,6 +56,7 @@ export type PrefDef = {
   section: PrefSection;
   label: string;
   hint?: string;
+  keywords?: string[];
   kind: "bool" | "enum" | "number" | "text";
   options?: Opt[];
   min?: number;
@@ -109,7 +110,7 @@ export const PREF_DEFS: PrefDef[] = [
     kind: "enum",
     options: [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }],
   },
-  { key: "app.vibe", section: "app", label: "Layout vibe", hint: "Psycho or Normal layout.", kind: "enum", options: [{ value: "fun", label: "Psycho" }, { value: "boring", label: "Normal" }] },
+  { key: "app.vibe", section: "app", label: "Layout vibe", hint: "Psycho or Normal layout.", keywords: ["corpo", "normal", "psycho"], kind: "enum", options: [{ value: "fun", label: "Psycho" }, { value: "boring", label: "Normal" }] },
   {
     key: "app.accent",
     section: "app",
@@ -466,7 +467,8 @@ export function searchSettings(q: string): SettingHit[] {
   const terms = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (!terms.length) return [];
   return allSettings().filter((s) => {
-    const hay = `${s.label} ${PREF_SECTION_LABEL[s.section as PrefSection] ?? s.section}`.toLowerCase();
+    const d = s.pref ? DEF.get(s.pref) : undefined;
+    const hay = `${s.label} ${PREF_SECTION_LABEL[s.section as PrefSection] ?? s.section} ${d?.hint ?? ""} ${(d?.options ?? []).map((o) => o.label).join(" ")} ${(d?.keywords ?? []).join(" ")}`.toLowerCase();
     return terms.every((t) => hay.includes(t));
   });
 }
