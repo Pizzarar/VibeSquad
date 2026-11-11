@@ -14,6 +14,7 @@ import { createClaudeAdapter } from "../runner/adapters/claude.mjs";
 import { createAcpAdapter } from "../runner/adapters/acp.mjs";
 import { LogStore, redactSecrets } from "../runner/log.mjs";
 import { RunnerClient, RunnerHttpError, agentCallerFromEnv, authHeadersFor } from "../server/backend/runner-client.mjs";
+import * as runnerClientModule from "../server/backend/runner-client.mjs";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
 
 const dirs = [];
@@ -579,21 +580,25 @@ test("X1a: runner-client: VS_AGENT_TOKEN set → agent headers only (no bearer);
   assert.deepEqual(authHeadersFor(undefined, "b"), { authorization: "Bearer b" });
 });
 
-test("X1a: runner-client rollout flag: VS_AGENT_ID without a token falls back to the admin bearer (flag off / 0); with VS_AGENT_TOKEN_REQUIRED=1 the id goes alone and the runner says 403", async () => {
-  assert.equal(agentCallerFromEnv({ VS_AGENT_ID: "rn-a" }), null, "default: fallback for a pre-X1a child");
-  assert.equal(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN_REQUIRED: "0" }), null);
-  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN_REQUIRED: "1" }), { id: "rn-a", token: "" });
+test("X1d guard: runner-client with VS_AGENT_ID and no VS_AGENT_TOKEN never falls back to the admin bearer: the id goes alone, the runner says 403 and the target gets nothing; the admin bearer without VS_AGENT_ID still gets 2xx", async () => {
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a" }), { id: "rn-a", token: "" }, "no token: the id is sent alone (no fallback)");
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN_REQUIRED: "0" }), { id: "rn-a", token: "" }, "the X1a-X1b rollout flag is gone: 0 changes nothing");
   assert.deepEqual(agentCallerFromEnv({ PASEO_AGENT_ID: "rn-p", VS_AGENT_TOKEN: "t" }), { id: "rn-p", token: "t" });
-  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN: "t", VS_AGENT_TOKEN_REQUIRED: "1" }), { id: "rn-a", token: "t" });
   assert.equal(agentCallerFromEnv({}), null);
+  assert.equal("agentTokenRequired" in runnerClientModule, false, "the flag reader is gone");
   const s = await squad();
   try {
     const home = tmp();
     writeDiscovery(home, { port: s.port, token: ADMIN });
-    const fallback = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker } });
-    assert.equal((await fallback.request("GET", "/health")).ok, true, "fallback: the bearer still works for this turn");
-    const strict = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker, VS_AGENT_TOKEN_REQUIRED: "1" } });
-    await assert.rejects(() => strict.request("GET", "/health"), (e) => e instanceof RunnerHttpError && e.status === 403);
+    const noToken = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker } });
+    await assert.rejects(() => noToken.request("GET", "/health"), (e) => e instanceof RunnerHttpError && e.status === 403, "an id without a token is 403, never the bearer");
+    await assert.rejects(() => noToken.request("POST", `/agents/${s.ids.lead}/input`, { text: "x1d-spoof-turn" }), (e) => e instanceof RunnerHttpError && e.status === 403);
+    assert.equal(JSON.stringify(s.runner.timeline(s.ids.lead)).includes("x1d-spoof-turn"), false, "the lead got no turn");
+    const flagged = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker, VS_AGENT_TOKEN_REQUIRED: "0" } });
+    await assert.rejects(() => flagged.request("GET", "/health"), (e) => e instanceof RunnerHttpError && e.status === 403, "the old flag does not bring the fallback back");
+    const adminTurn = await s.call("admin", "POST", `/agents/${s.ids.worker}/input`, { text: "admin turn" });
+    assert.ok(adminTurn.status >= 200 && adminTurn.status < 300, `admin input: ${adminTurn.status} ${adminTurn.text}`);
+    assert.equal((await new RunnerClient({ home, env: { PATH: "p" } }).request("GET", "/health")).ok, true, "no VS_AGENT_ID: the admin bearer, as before");
     const real = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker, VS_AGENT_TOKEN: s.runner.tokensById.get(s.ids.worker) } });
     assert.equal((await real.verifyAgent({ id: s.ids.worker, token: s.runner.tokensById.get(s.ids.worker) })).role, "worker");
     assert.equal((await real.request("GET", "/verify-agent")).id, s.ids.worker, "the env identity is used when no per-call caller is given");

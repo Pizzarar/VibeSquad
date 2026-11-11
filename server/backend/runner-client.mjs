@@ -34,23 +34,18 @@ export class RunnerHttpError extends Error {
 }
 
 const clean = (v) => String(v ?? "").trim();
-/** Rollout flag (PLAN_X1_IDENTITY, removed in X1d): `1` ends the client fallback; anything else keeps it (the `0` of the plan). */
-export const agentTokenRequired = (env = process.env) => clean(env.VS_AGENT_TOKEN_REQUIRED) === "1";
 
 /**
- * How this process authenticates to the runner (X1a), from its env:
+ * How this process authenticates to the runner (X1a, final shape X1d), from its env:
  *   - no VS_AGENT_ID: the admin bearer (<home>/token): the VS server, its hook host, restart-runtime → null.
  *   - VS_AGENT_ID + VS_AGENT_TOKEN: agent headers only (the bearer is never sent) → { id, token }.
- *   - VS_AGENT_ID without a token: with the flag off (default while X1a-X1b roll out) the admin bearer for this turn, so an
- *     agent whose child predates the runner restart keeps working; with VS_AGENT_TOKEN_REQUIRED=1 the id is sent without a
- *     token and the runner answers 403 (the X1d behaviour).
+ *   - VS_AGENT_ID without a token: the id goes alone and the runner answers 403 → { id, token: "" }. An agent shell never
+ *     falls back to the admin bearer (the X1a-X1b rollout fallback and its VS_AGENT_TOKEN_REQUIRED flag are gone).
  */
 export function agentCallerFromEnv(env = process.env) {
   const id = clean(env.VS_AGENT_ID) || clean(env.PASEO_AGENT_ID);
   if (!id) return null;
-  const token = clean(env.VS_AGENT_TOKEN);
-  if (token) return { id, token };
-  return agentTokenRequired(env) ? { id, token: "" } : null;
+  return { id, token: clean(env.VS_AGENT_TOKEN) };
 }
 
 /** Request headers for a caller: agent headers for { id, token }, the bearer for null/undefined (admin). */
