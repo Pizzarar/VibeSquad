@@ -5,12 +5,16 @@
 // outlives both processes and finishes the job alone.
 //
 //   node scripts/restart-runtime.mjs [--dry-run] [--wait-timeout <sec=600>] [--stop-timeout <sec=30>] [--no-wait]
-//        [--no-force] [--no-resume] [--resume-all-lost] [--port <4180>] [--home <runner home>] [--runtime-dir <dir>] [--node <exe>]
-//        [--config-dir <desktop config dir>] [--out-dir <result dir>] [--log <file>] [--vs-home <dir>]
+//        [--no-force] [--no-resume] [--resume-all-lost] [--resume-verify <sec=90>] [--kill-background] [--port <4180>]
+//        [--home <runner home>] [--runtime-dir <dir>] [--node <exe>] [--config-dir <desktop config dir>] [--out-dir <result dir>]
+//        [--log <file>] [--vs-home <dir>]
 //
 // Steps (each logged with a timestamp, all recorded in ~/.vibesquad/restart-<ts>.json):
-//   lock -> detect -> marker (server.restarting, refreshed) -> wait runner running:0 -> stop runner -> stop server -> start server
-//   (it boots the runner; fallback: start the runner directly) -> verify -> resume lost agents -> clear marker -> result file.
+//   lock -> detect -> marker (server.restarting, refreshed) -> wait runner running:0 + held:0 -> stop runner -> stop server ->
+//   start server (it boots the runner; fallback: start the runner directly) -> verify -> resume lost agents -> check each
+//   resumed agent leaves `starting` (retry once, then mark it failed) -> clear marker -> result file.
+// Background work (an idle agent whose park is held by a suite/build it left running: /health `held`) is never killed by
+// default. If it outlasts --wait-timeout the restart is deferred (nothing stopped, exit 4) unless --kill-background.
 // Stop order: runner (POST /shutdown, token-authed, keeps agents resumable), then the server (Windows: taskkill /T /F, since
 // serve.mjs has no state to flush and a plain taskkill never stops headless node.exe; POSIX: SIGTERM then SIGKILL after
 // --stop-timeout), then a sweep for a runner the server's supervisor respawned in the gap. Runner force-kill only after
@@ -30,7 +34,7 @@ const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function parseArgs(argv) {
-  const o = { dryRun: false, wait: true, force: true, resume: true, waitTimeoutSec: 600, stopTimeoutSec: 30 };
+  const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90 };
   const val = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -39,6 +43,8 @@ export function parseArgs(argv) {
     else if (a === '--no-force') o.force = false;
     else if (a === '--no-resume') o.resume = false;
     else if (a === '--resume-all-lost') o.resumeAllLost = true;
+    else if (a === '--kill-background') o.killBackground = true;
+    else if (a === '--resume-verify') o.resumeVerifySec = Number(val(i++));
     else if (a === '--wait-timeout') o.waitTimeoutSec = Number(val(i++));
     else if (a === '--stop-timeout') o.stopTimeoutSec = Number(val(i++));
     else if (a === '--port') o.port = Number(val(i++));
@@ -51,7 +57,7 @@ export function parseArgs(argv) {
     else if (a === '--vs-home') o.vsHome = val(i++);
     else throw new Error(`unknown flag ${a}`);
   }
-  for (const k of ['waitTimeoutSec', 'stopTimeoutSec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
+  for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
   return o;
 }
 
@@ -128,18 +134,18 @@ export function spawnDetached(cmd, args, { cwd, env, logFile }) {
 }
 
 /** GET (or POST) returning { status, body } over http, or https with a self-signed cert (the server's mux). */
-export function httpCall(url, { method = 'GET', headers = {}, timeoutMs = 5000 } = {}) {
+export function httpCall(url, { method = 'GET', headers = {}, timeoutMs = 5000, body = null } = {}) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const lib = u.protocol === 'https:' ? https : http;
-    const req = lib.request(u, { method, headers, rejectUnauthorized: false, timeout: timeoutMs }, (res) => {
+    const req = lib.request(u, { method, headers: body ? { 'content-type': 'application/json', ...headers } : headers, rejectUnauthorized: false, timeout: timeoutMs }, (res) => {
       let s = '';
       res.on('data', (c) => { s += c; });
       res.on('end', () => { let body = s; try { body = s ? JSON.parse(s) : null; } catch { /* text */ } resolve({ status: res.statusCode, body }); });
     });
     req.on('timeout', () => req.destroy(new Error('timeout')));
     req.on('error', reject);
-    req.end(method === 'POST' ? '{}' : undefined);
+    req.end(method === 'POST' ? (body ? JSON.stringify(body) : '{}') : undefined);
   });
 }
 
@@ -226,20 +232,63 @@ async function finishDetect({ opts, d, env, home, port, configDir, runner, spid 
   return { home, port, configDir, runner, server, serverLaunch, runnerLaunch, outDir: opts.outDir ?? vsHome(env) };
 }
 
-async function runnerCall(det, d, method, route, timeoutMs = 10000) {
+async function runnerCall(det, d, method, route, timeoutMs = 10000, body = null) {
   const { runner } = det;
   if (!runner.port || !runner.token) throw new Error('no runner discovery');
-  return d.httpCall(`http://127.0.0.1:${runner.port}${route}`, { method, headers: { authorization: `Bearer ${runner.token}` }, timeoutMs });
+  return d.httpCall(`http://127.0.0.1:${runner.port}${route}`, { method, headers: { authorization: `Bearer ${runner.token}` }, timeoutMs, ...(body ? { body } : {}) });
 }
 const agentList = (body) => (Array.isArray(body) ? body : Array.isArray(body?.agents) ? body.agents : []);
 const brief = (a) => ({ id: a.id, title: a.title ?? a.name ?? null, status: a.status });
 
+/**
+ * A 202 from /resume only means the job was accepted. Each resumed agent must leave `starting` within --resume-verify;
+ * a stuck one is retried once (POST /unwedge {retry}), and one still stuck after that is stopped and logged as failed
+ * (POST /unwedge: it then reads `lost`, visible in vs who / the roster, and a send can still resume it) instead of sitting in
+ * "initializing" with a live slot until the next restart re-resumes it (idea-109).
+ */
+async function verifyResumed(det, d, opts, result, step, fail) {
+  const ids = result.resumedAgents.filter((a) => a.ok).map((a) => a.id);
+  if (!ids.length) return;
+  const stuck = async (list) => {
+    const out = [];
+    for (const id of list) {
+      try {
+        const r = await runnerCall(det, d, 'GET', `/agents/${encodeURIComponent(id)}`, 5000);
+        if (r.status === 200 && r.body?.status === 'starting') out.push(id);
+      } catch { /* unreachable: not proven stuck */ }
+    }
+    return out;
+  };
+  const waitOut = async (list) => {
+    const end = d.now() + opts.resumeVerifySec * 1000;
+    let left = await stuck(list);
+    while (left.length && d.now() < end) { await d.sleep(2000); left = await stuck(left); }
+    return left;
+  };
+  const unwedge = async (id, body) => {
+    try {
+      const r = await runnerCall(det, d, 'POST', `/agents/${encodeURIComponent(id)}/unwedge`, 10000, body);
+      return r.status === 200 ? (r.body?.action ?? null) : `http ${r.status}`; // 404: a runner build without /unwedge
+    } catch (e) { return `error ${e.message}`; }
+  };
+  let left = await waitOut(ids);
+  if (!left.length) { step('resumed agents started', { count: ids.length }); return; }
+  const retried = [];
+  for (const id of left) retried.push({ id, action: await unwedge(id, { retry: true }) });
+  step('resume stuck in starting, retried once', { afterSec: opts.resumeVerifySec, retried });
+  left = await waitOut(left);
+  for (const id of left) result.resumeFailed.push({ id, action: await unwedge(id, { retry: false, reason: `still starting ${opts.resumeVerifySec}s after a restart resume and one retry` }) });
+  if (result.resumeFailed.length) fail('resume verify', `${result.resumeFailed.length} agent(s) never left 'starting': ${result.resumeFailed.map((x) => x.id).join(', ')}`);
+  else step('resumed agents started after retry', { count: retried.length });
+}
+
 // ---- the run -------------------------------------------------------------------------------------------------------
 export async function restartRuntime(opts, deps = {}, env = process.env, log = (line) => console.log(line)) {
   const d = { ...defaultDeps, ...deps };
+  opts = { resumeVerifySec: 90, ...opts };
   const outDir = opts.outDir ?? vsHome(env);
   const configDir = opts.configDir ?? desktopConfigDir(env);
-  const result = { startedAt: new Date(d.now()).toISOString(), dryRun: !!opts.dryRun, steps: [], cutAgents: [], resumedAgents: [], errors: [], oldHash: null, newHash: null, forced: [], ok: false };
+  const result = { startedAt: new Date(d.now()).toISOString(), dryRun: !!opts.dryRun, steps: [], cutAgents: [], resumedAgents: [], resumeFailed: [], errors: [], oldHash: null, newHash: null, forced: [], ok: false };
   const step = (name, detail = {}) => {
     const rec = { step: name, at: new Date(d.now()).toISOString(), ...detail };
     result.steps.push(rec);
@@ -255,18 +304,19 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         runner: { pid: det.runner.pid, alive: det.runner.alive, port: det.runner.port, parentPid: det.runner.parent, cmd: det.runner.cmd, health: det.runner.health, hasToken: !!det.runner.token },
         server: { pid: det.server.pid, port: det.server.port, cmd: det.server.cmd, isServe: det.server.isServe, parentPid: det.server.parent, health: det.server.health },
         runningAgents: agents.filter((a) => a.status === 'running').map(brief),
+        heldAgents: det.runner.health?.heldAgents ?? [],
         lostAgents: agents.filter((a) => a.status === 'lost').map(brief),
         markerFile: path.join(det.configDir, 'server.restarting'),
       },
       steps: [
         `touch ${path.join(det.configDir, 'server.restarting')} (refreshed every 30s)`,
-        opts.wait ? `wait for runner /health running:0 (timeout ${opts.waitTimeoutSec}s, then proceed and record cut agents)` : 'skip waiting (--no-wait)',
+        opts.wait ? `wait for runner /health running:0 and held:0 (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
         det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : 'runner not running: nothing to stop',
         det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
         `start server: ${det.serverLaunch.node} ${det.serverLaunch.args.join(' ')} (cwd ${det.serverLaunch.cwd}, from ${det.serverLaunch.source}, log ${det.serverLaunch.logFile}); it boots the runner`,
         `fallback if the runner is not up after 45s: ${det.runnerLaunch.node} ${det.runnerLaunch.args.join(' ')}`,
         'verify: runner /health hash, GET /agents?full=1, server /api/health',
-        opts.resume ? 'POST /agents/:id/resume for every agent that is status=lost after the restart but was not lost before it (--resume-all-lost: every lost agent)' : 'skip resume (--no-resume)',
+        opts.resume ? `POST /agents/:id/resume for every agent that is status=lost after the restart but was not lost before it (--resume-all-lost: every lost agent); each must leave 'starting' within ${opts.resumeVerifySec}s, else one retry, else it is stopped and logged as failed (reads lost)` : 'skip resume (--no-resume)',
         `clear marker, write ${path.join(det.outDir, 'restart-<ts>.json')}`,
       ],
       launch: { server: det.serverLaunch, runner: det.runnerLaunch },
@@ -310,18 +360,34 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     markerTimer.unref?.();
     step('marker touched', { file: markerFile });
 
-    // 2. wait for the runner to go idle
+    // 2. wait for the runner to go idle: no open turns and no idle agent holding background work (a held park). A runner
+    // build without the `held` field reports none.
     if (det.runner.health && opts.wait) {
       const deadline = d.now() + opts.waitTimeoutSec * 1000;
       let running = det.runner.health.running;
-      step('waiting for runner idle', { running, timeoutSec: opts.waitTimeoutSec });
-      while (running !== 0 && d.now() < deadline) {
+      let heldAgents = det.runner.health.heldAgents ?? [];
+      let held = det.runner.health.held ?? heldAgents.length;
+      step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
+      while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
-        try { running = (await runnerCall(det, d, 'GET', '/health', 5000)).body?.running ?? running; } catch { running = 0; break; } // runner died on its own
+        try {
+          const h = (await runnerCall(det, d, 'GET', '/health', 5000)).body ?? {};
+          running = h.running ?? running;
+          heldAgents = h.heldAgents ?? [];
+          held = h.held ?? heldAgents.length;
+        } catch { running = 0; held = 0; break; } // runner died on its own
       }
-      if (running !== 0) {
+      if (held > 0 && !opts.killBackground) {
+        // Never kill a suite or build an agent left running (idea-88): defer, stop nothing, and say who holds it.
+        result.deferred = { held, heldAgents, running };
+        step('deferred: background work still running', result.deferred);
+        result.errors.push(`deferred: ${held} agent(s) still hold background work after ${opts.waitTimeoutSec}s (${heldAgents.join(', ') || 'ids unknown'}); rerun later or pass --kill-background`);
+        throw new Error('abort');
+      }
+      if (running !== 0 || held > 0) {
         try { result.cutAgents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1')).body).filter((a) => a.status === 'running').map(brief); } catch (e) { fail('list cut agents', e); }
-        step('wait timed out, proceeding', { running, cutAgents: result.cutAgents });
+        if (held > 0) result.killedBackground = heldAgents;
+        step('wait timed out, proceeding', { running, cutAgents: result.cutAgents, ...(held > 0 ? { killedBackground: heldAgents } : {}) });
       } else step('runner idle');
     } else step('wait skipped', { reason: det.runner.health ? 'no-wait' : 'runner not healthy' });
 
@@ -467,6 +533,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         } catch (e) { result.resumedAgents.push({ ...brief(a), ok: false, error: e.message }); }
       }
       step('resumed lost agents', { count: result.resumedAgents.length, failed: result.resumedAgents.filter((x) => !x.ok).length });
+      await verifyResumed(det, d, opts, result, step, fail);
     }
     result.ok = result.errors.length === 0;
   } catch (e) {
@@ -493,5 +560,5 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const log = (line) => { console.log(line); if (opts.log) { try { appendFileSync(opts.log, line + '\n'); } catch { /* console only */ } } };
   const r = await restartRuntime(opts, {}, process.env, log);
   if (r.dryRun) console.log(JSON.stringify(r.plan, null, 2));
-  process.exit(r.ok ? 0 : r.alreadyRunning ? 3 : 1);
+  process.exit(r.ok ? 0 : r.alreadyRunning ? 3 : r.deferred ? 4 : 1);
 }

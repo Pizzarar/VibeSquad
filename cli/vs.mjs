@@ -280,6 +280,7 @@ function parseArgs(argv) {
     "notes",
     "dryRun",
     "noForce",
+    "killBackground",
     "force",
     "print",
     "stdin",
@@ -513,7 +514,7 @@ Usage:
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
-  vs restart [--dry-run] [--timeout <sec>] [--no-force]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0, default 600s); result in ~/.vibesquad/restart-<ts>.json
+  vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s; background work still running then defers the restart unless --kill-background); result in ~/.vibesquad/restart-<ts>.json
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -2373,6 +2374,7 @@ export function commandRestart(flags, { spawnFn = null, identity = null, teams =
   if (env.VIBESQUAD_PORT && /^\d+$/.test(env.VIBESQUAD_PORT)) args.push("--port", env.VIBESQUAD_PORT);
   if (flags.dryRun) args.push("--dry-run");
   if (flags.noForce) args.push("--no-force");
+  if (flags.killBackground) args.push("--kill-background");
   if (flags.timeout) args.push("--wait-timeout", String(flags.timeout));
   for (const a of [process.execPath, ...args]) assertSafeLaunchArg(a);
   fs.mkdirSync(path.dirname(logFile), { recursive: true });
@@ -2396,7 +2398,7 @@ export function commandRestart(flags, { spawnFn = null, identity = null, teams =
     child.unref();
     pid = child.pid;
   }
-  process.stdout.write(`restart launched (pid ${pid}); it waits for the runner to go idle, then restarts runner + server.
+  process.stdout.write(`restart launched (pid ${pid}); it waits for the runner to go idle (no open turns, no background work), then restarts runner + server. If background work outlasts the wait it defers instead (exit 4, nothing stopped).
 log: ${logFile}
 result: ${vsHome}/restart-<ts>.json (also check: vs restart --dry-run)
 `);

@@ -646,8 +646,48 @@ export class Runner {
     if (this.live.has(id)) return true;
     const spec = this._parkedSpec(id) ?? this._lostSpec(id);
     if (!spec) return false;
-    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { this._resume(id, spec); } });
+    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { const e = this._resume(id, spec); if (e) this._settleResume(id, e); } });
     return true;
+  }
+
+  // A resume sends nothing, so no adapter ever reports a turn: the agent would read `starting` forever and, never idle, would
+  // never park (idea-109). Once the adapter is ready (ACP: its session handshake resolved; claude: spawned) it is idle, as
+  // after a turn, and the normal after-turn park takes over. A send that arrived meanwhile owns the status instead.
+  _settleResume(id, entry) {
+    Promise.resolve(entry.handle?.ready).then(() => {
+      if (this.live.get(id) !== entry || entry.parked || entry.status !== 'starting' || entry.inflight > 0) return; // shutdown clears live
+      entry.status = 'idle';
+      entry.lastActive = Date.now();
+      this.store.append(id, 'status', { status: 'idle' });
+      this._scheduleParkAfterTurn(id, entry);
+      this._pump();
+    }, () => {}); // a failed handshake ends the process: its onExit logs that
+  }
+
+  // A resume stuck in `starting` (its handshake never finished): stops that child without writing to the log, so the agent
+  // reads `lost` (still resumable). retry: resume it again at once. Otherwise log why, which leaves it visibly lost instead of
+  // silently "initializing" with a live slot. Anything not stuck (a turn open, already idle, not live) is left alone.
+  unwedge(id, { retry = false, reason = '' } = {}) {
+    if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    const e = this.live.get(id);
+    if (!e || e.status !== 'starting' || e.inflight > 0) return { action: 'not-wedged', status: this.status(id)?.status ?? null };
+    e.parked = true; // onExit / late emits log nothing for this child
+    clearTimeout(e.parkTimer);
+    this._clearArchive(e);
+    this._releaseOverCap(e, e.ownerOverCap ?? 0);
+    this.live.delete(id);
+    try { e.handle?.kill(); } catch { /* already gone */ }
+    if (retry && this.resume(id)) { this._pump(); return { action: 'retried' }; }
+    this.store.append(id, 'error', { message: `resume did not finish starting${reason ? `: ${reason}` : ''}` });
+    this._pump();
+    return { action: 'failed', status: this.status(id)?.status ?? null };
+  }
+
+  // Idle agents kept alive only because their tree still runs background work (a held park): a restart would kill that work.
+  heldIds() {
+    const ids = [];
+    for (const [id, e] of this.live) if (e.heldSince !== null && e.heldSince !== undefined) ids.push(id);
+    return ids;
   }
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
