@@ -42,6 +42,7 @@ export const SHARED_NOTE_PREFIX = [
   "- R11 (Bugs & fixes): Fix small in-unit root causes, report after. Other bugs/fixes: queue, keep working (leads/Buddies: `vs inbox add --lane <bug lane> --from-brainstorm \"<item>\"`; workers: final msg). Workarounds need a queued follow-up.",
   "- R12 (Owner principles): When the owner states a cross-lane principle (UI, process), escalate it to the hub Overlord (`vs who lead --lane vibesquad`) and queue a @bug audit item; don't keep it lane-local. (Workers: final message.)",
   "- R13 (Act on your lean): If you have a lean, act on it and report after: inbox triage, next steps, spikes. Ask only for scope changes, outward actions (push to others, release, external post), money, deletes or irreversible steps.",
+  "- R14 (Already covered): Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow covers it, say already-covered-by-X instead of rebuilding it.",
 ].join("\n");
 
 export const PRIOR_ART_CHECK_RULE =
