@@ -8,12 +8,41 @@ const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const STEP = 64; // sparse index granularity: one offset per STEP events
 const CHUNK = 1 << 20;
 
+export const REDACTED = '[redacted]';
+
+// Replaces every occurrence of each secret inside the strings of `value` (recursively: arrays, plain objects), leaving
+// everything else as is. Secrets are per-agent tokens (runner/runner.mjs tokensById): a child's stderr, an unparseable
+// stdout line, an error message or an echo in a reply must never land in the JSONL log or on the SSE tail.
+export function redactSecrets(value, secrets, mask = REDACTED) {
+  if (!secrets?.length) return value;
+  if (typeof value === 'string') {
+    let out = value;
+    for (const s of secrets) if (s && out.includes(s)) out = out.split(s).join(mask);
+    return out;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((v) => { const r = redactSecrets(v, secrets, mask); if (r !== v) changed = true; return r; });
+    return changed ? next : value;
+  }
+  if (value && typeof value === 'object') {
+    let out = null;
+    for (const [k, v] of Object.entries(value)) {
+      const r = redactSecrets(v, secrets, mask);
+      if (r !== v) { out ??= { ...value }; out[k] = r; }
+    }
+    return out ?? value;
+  }
+  return value;
+}
+
 export class LogStore {
   constructor(dir, fsImpl = nodeFs) {
     this.fs = fsImpl;
     this.dir = dir;
     this.idx = new Map(); // id -> { size, count, offs: [byte offset of event 0, STEP, 2*STEP...] }
     this.listeners = new Set(); // fn(id, ev) per append; see onAppend
+    this.secrets = null; // () -> iterable of strings never to be written (see redactSecrets); set by the Runner
     this.fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -70,7 +99,8 @@ export class LogStore {
   append(id, type, data = {}) {
     const ix = this.exists(id) ? this._index(id) : null;
     const seq = ix ? ix.count : 0;
-    const ev = { seq, ts: Date.now(), type, ...data };
+    const secrets = this.secrets ? [...this.secrets()] : null; // before the line is built: file and listeners both see the clean event
+    const ev = { seq, ts: Date.now(), type, ...(secrets?.length ? redactSecrets(data, secrets) : data) };
     const line = JSON.stringify(ev) + '\n';
     const before = ix ? ix.size : 0;
     this.fs.appendFileSync(this.file(id), line);

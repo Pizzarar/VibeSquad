@@ -33,6 +33,32 @@ export class RunnerHttpError extends Error {
   }
 }
 
+const clean = (v) => String(v ?? "").trim();
+/** Rollout flag (PLAN_X1_IDENTITY, removed in X1d): `1` ends the client fallback; anything else keeps it (the `0` of the plan). */
+export const agentTokenRequired = (env = process.env) => clean(env.VS_AGENT_TOKEN_REQUIRED) === "1";
+
+/**
+ * How this process authenticates to the runner (X1a), from its env:
+ *   - no VS_AGENT_ID: the admin bearer (<home>/token): the VS server, its hook host, restart-runtime → null.
+ *   - VS_AGENT_ID + VS_AGENT_TOKEN: agent headers only (the bearer is never sent) → { id, token }.
+ *   - VS_AGENT_ID without a token: with the flag off (default while X1a-X1b roll out) the admin bearer for this turn, so an
+ *     agent whose child predates the runner restart keeps working; with VS_AGENT_TOKEN_REQUIRED=1 the id is sent without a
+ *     token and the runner answers 403 (the X1d behaviour).
+ */
+export function agentCallerFromEnv(env = process.env) {
+  const id = clean(env.VS_AGENT_ID) || clean(env.PASEO_AGENT_ID);
+  if (!id) return null;
+  const token = clean(env.VS_AGENT_TOKEN);
+  if (token) return { id, token };
+  return agentTokenRequired(env) ? { id, token: "" } : null;
+}
+
+/** Request headers for a caller: agent headers for { id, token }, the bearer for null/undefined (admin). */
+export function authHeadersFor(caller, bearer) {
+  if (caller?.id) return { "x-vs-agent-id": caller.id, "x-vs-agent-token": caller.token ?? "" };
+  return { authorization: `Bearer ${bearer}` };
+}
+
 /** Thrown by every non-owner path when the runner is not up: they connect, they never start it. */
 export class RunnerDownError extends RunnerHttpError {
   constructor(message = "RUNNER_DOWN: the VibeSquad runner is not running. The VibeSquad server starts it (and restarts it if it dies); start or restart VibeSquad.") {
@@ -42,7 +68,12 @@ export class RunnerDownError extends RunnerHttpError {
 }
 
 export class RunnerClient {
-  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000, queueMs = 10 * 60_000, probeTimeoutMs = 2000 } = {}) {
+  /**
+   * caller: who this client is by default. undefined = resolved from the process env on every request (agentCallerFromEnv:
+   * an agent's MCP sidecar sends its own token, the VS server sends the admin bearer); null = always the admin bearer;
+   * { id, token } = always that agent. A per-request `opts.caller` (the VS server forwarding a verified agent, X1c) wins.
+   */
+  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000, queueMs = 10 * 60_000, probeTimeoutMs = 2000, caller, env = process.env } = {}) {
     this.queueMs = queueMs; // the runner's slot-queue wait: create/input may legitimately take this long
     this.probeTimeoutMs = probeTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -53,6 +84,19 @@ export class RunnerClient {
     this.startTimeoutMs = startTimeoutMs;
     this.conn = null; // { port, token }
     this.starting = null;
+    this.caller = caller;
+    this.env = env;
+  }
+
+  /** Headers for a request: the explicit per-call caller, else this client's, else the process env. Admin = the bearer. */
+  authHeaders(opts = {}) {
+    const caller = "caller" in opts ? opts.caller : this.caller !== undefined ? this.caller : agentCallerFromEnv(this.env);
+    return authHeadersFor(caller, this.conn?.token);
+  }
+
+  /** GET /verify-agent as `caller` ({ id, token }): the runner's verified record, or a 403 RunnerHttpError. */
+  verifyAgent(caller) {
+    return this.request("GET", "/verify-agent", undefined, { caller });
   }
 
   /** Explicit `home` wins; otherwise resolved per call so a cached client never keeps pointing at an earlier VIBESQUAD_HOME. */
@@ -68,24 +112,25 @@ export class RunnerClient {
     this._home = v;
   }
 
-  async request(method, route, body) {
+  async request(method, route, body, opts = {}) {
     try {
-      return await this._requestOnce(method, route, body);
+      return await this._requestOnce(method, route, body, opts);
     } catch (err) {
       if (!err?.transport || method !== "GET") throw err;
       // Idempotent read: one retry, but only if re-discovery found a different runner (a timeout on the same port would just hang again).
       const next = readDiscovery(this.home);
       if (!next || next.port === err.port) throw err;
       this.conn = next;
-      return this._requestOnce(method, route, body);
+      return this._requestOnce(method, route, body, opts);
     }
   }
 
-  async _requestOnce(method, route, body) {
+  async _requestOnce(method, route, body, opts = {}) {
     const home = this.home; // also drops a conn cached for a different home
     if (!this.conn) this.conn = readDiscovery(home);
     if (!this.conn) throw new RunnerHttpError(0, "runner is not running");
-    const { port, token } = this.conn;
+    const { port } = this.conn;
+    const auth = this.authHeaders(opts);
     const ac = new AbortController();
     // create/input queue for a slot inside the runner (up to queueMs), so a silent 15s is not proof of a hang: probe /health instead.
     const queued = method === "POST" && (route === "/agents" || /^\/agents\/[^/]+\/input$/.test(route));
@@ -97,7 +142,7 @@ export class RunnerClient {
         if (!queued || Date.now() >= hardDeadline) return ac.abort();
         let healthy = false;
         try {
-          const h = await this.fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(this.probeTimeoutMs) });
+          const h = await this.fetch(`http://127.0.0.1:${port}/health`, { headers: auth, signal: AbortSignal.timeout(this.probeTimeoutMs) });
           healthy = h.ok;
         } catch { /* unreachable */ }
         if (done || ac.signal.aborted) return;
@@ -111,7 +156,7 @@ export class RunnerClient {
     try {
       res = await this.fetch(`http://127.0.0.1:${port}${route}`, {
         method,
-        headers: { authorization: `Bearer ${token}`, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
+        headers: { ...auth, ...(body !== undefined ? { "content-type": "application/json" } : {}) },
         body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: ac.signal,
       });
@@ -153,7 +198,8 @@ export class RunnerClient {
         this.conn = readDiscovery(this.home) ?? this.conn;
         if (!this.conn) throw new Error("runner is not running");
         ac = new AbortController();
-        const res = await this.fetch(`http://127.0.0.1:${this.conn.port}/events`, { headers: { authorization: `Bearer ${this.conn.token}` }, signal: ac.signal });
+        // The event stream is admin only (the VS server's lifecycle bus): always the bearer.
+        const res = await this.fetch(`http://127.0.0.1:${this.conn.port}/events`, { headers: authHeadersFor(null, this.conn.token), signal: ac.signal });
         if (!res.ok || !res.body) throw new Error(`runner events ${res.status}`);
         opened = true;
         arm();
