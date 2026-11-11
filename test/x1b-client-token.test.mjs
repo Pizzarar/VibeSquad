@@ -220,3 +220,46 @@ test("owner verbs (pair, devices, open, archive --sweep) never run from an agent
   }
   assert.equal(hits.length, before, "no request reached the VS server");
 });
+
+// ---------- X1b review R1 (Bug17): H1 an empty id without owner proof is not the owner; M1 a leftover token is not the owner ----------
+test("R1 H1: a scrubbed shell (no agent id, no local token) is refused on vs inbox triage (--delete and --archive) and vs log you; nothing is written", async () => {
+  const home = tmp("vs-x1b-scrubbed-");
+  writeFileSync(path.join(home, "teams.json"), JSON.stringify({ teams: TEAMS }), "utf8");
+  writeInboxCards([{ id: "idea-s1", text: "scrubbed card", teamId: "sq", laneId: "art", status: "parked", createdAt: "2026-11-11T00:00:00.000Z" }], home);
+  const status = () => readInboxCards(home).find((c) => c.id === "idea-s1")?.status;
+  const before = hits.length;
+  for (const args of [["inbox", "triage", "--delete", "idea-s1"], ["inbox", "triage", "--archive", "idea-s1"], ["log", "you", "I am the owner"], ["log", "decision", "as nobody"]]) {
+    const r = await vs(args, { extra: { VIBESQUAD_HOME: home } });
+    assert.notEqual(r.status, 0, args.join(" "));
+    assert.match(r.stderr, /no owner proof/, args.join(" "));
+  }
+  assert.equal(status(), "parked", "the card is untouched");
+  assert.equal(existsSync(path.join(home, "logs")), false, "no log file was written");
+  assert.equal(hits.length, before, "nothing reached the VS server");
+});
+
+test("R1 M1: a leftover VS_AGENT_TOKEN with the agent id cleared is not the owner: triage/log/restart are refused and the local token is never sent", async () => {
+  writeInboxCards([{ id: "idea-m1", text: "m1 card", teamId: "sq", laneId: "art", status: "parked", createdAt: "2026-11-11T00:00:00.000Z" }]);
+  const before = hits.length;
+  const leftover = { extra: { VS_AGENT_TOKEN: tokenOf(ids.lead) } }; // who = "" (ids cleared), HOME holds the owner's local token
+  const del = await vs(["inbox", "triage", "--delete", "idea-m1"], leftover);
+  assert.notEqual(del.status, 0);
+  assert.match(del.stderr, /403/);
+  assert.equal(readInboxCards().find((c) => c.id === "idea-m1")?.status, "parked");
+  const you = await vs(["log", "you", "owner?"], leftover);
+  assert.notEqual(you.status, 0);
+  assert.match(you.stderr, /403|owner/);
+  const restart = await vs(["restart"], leftover);
+  assert.notEqual(restart.status, 0);
+  assert.match(restart.stderr, /no owner proof/);
+  const pair = await vs(["pair"], leftover);
+  assert.notEqual(pair.status, 0);
+  assert.match(pair.stderr, /owner verb/);
+  const mine = hits.slice(before);
+  assert.ok(mine.length >= 1, "the triage/log attempts reached the server as an agent and were refused there");
+  for (const h of mine) assert.equal(h.headers["x-vibesquad-token"], undefined, `${h.method} ${h.url}: the local token was presented`);
+  // masked id: PASEO_AGENT_ID="" must not hide VS_AGENT_ID (the lead still logs as itself)
+  const masked = await vs(["log", "decision", "still me"], { who: ids.lead, extra: { PASEO_AGENT_ID: "" } });
+  assert.equal(masked.status, 0, masked.stderr);
+  assert.equal(masked.json().agent, ids.lead);
+});

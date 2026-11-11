@@ -569,3 +569,37 @@ test("parseArgs: --kill-background and --resume-verify", () => {
   assert.deepEqual([o.killBackground, o.resumeVerifySec], [true, 15]);
   assert.throws(() => parseArgs(["--resume-verify", "-1"]));
 });
+
+test("X1b R1 M1/L1: a leftover VS_AGENT_TOKEN is never owner proof; owner verbs refuse it; both launch paths strip every VS_* identity key", async () => {
+  const { assertRestartCaller, assertOwnerShell, AGENT_ENV_KEYS: CLI_KEYS, stripAgentEnv: cliStrip } = await import("../cli/vs.mjs");
+  const { AGENT_ENV_KEYS } = await import("../scripts/restart-runtime.mjs");
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }] }];
+  const ownerHome = mkdtempSync(path.join(os.tmpdir(), "vs-owner-"));
+  writeFileSync(path.join(ownerHome, "local-token"), "a".repeat(64) + "\n");
+  try {
+    await assert.doesNotReject(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome }));
+    await assert.rejects(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome, VS_AGENT_TOKEN: "leftover" }), /no owner proof/, "a token with the id cleared is not the owner");
+    await assert.rejects(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome, VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "leftover" }), /no owner proof/);
+    assert.throws(() => assertOwnerShell("vs pair", { VS_AGENT_TOKEN: "leftover" }), /owner verb/);
+    assert.throws(() => assertOwnerShell("vs pair", { PASEO_AGENT_ID: "", VS_AGENT_ID: "rn-x" }), /owner verb/, "an empty PASEO_AGENT_ID does not mask VS_AGENT_ID");
+    assert.doesNotThrow(() => assertOwnerShell("vs pair", { VIBESQUAD_HOME: ownerHome }));
+  } finally {
+    rmSync(ownerHome, { recursive: true, force: true });
+  }
+  const all = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_LANE", "VS_TEAM", "VS_ORD", "VS_PROFILE"];
+  for (const k of all) {
+    assert.ok(AGENT_ENV_KEYS.includes(k), `restart-runtime strips ${k}`);
+    assert.ok(CLI_KEYS.includes(k), `cli strips ${k}`);
+  }
+  const full = Object.fromEntries(all.map((k) => [k, "x"]));
+  assert.deepEqual(Object.keys(cliStrip({ ...full, KEEP: "1" })), ["KEEP"]);
+  const w = await world({ serverBootsRunner: false, envExtra: { ...full, VS_AGENT_TOKEN: "s3cret-agent-token" } });
+  try {
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(w.spawnEnvs.length, 2);
+    for (const e of w.spawnEnvs) for (const k of all) assert.equal(k in e, false, `${k} must not reach the child`);
+  } finally {
+    await w.cleanup();
+  }
+});

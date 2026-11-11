@@ -22,6 +22,7 @@ function makeMockEnv() {
   const paseoHome = join(dir, ".paseo");
   const agentsDir = join(vsHome, "runner", "agents");
   mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(join(vsHome, "local-token"), "a".repeat(64) + String.fromCharCode(10), "utf8"); // X1b: owner proof for the owner's vs log
   mkdirSync(vsHome, { recursive: true });
   seedDefaultPack(join(vsHome, "profiles.json"));
   writeFileSync(
@@ -91,6 +92,7 @@ function makeMockEnv() {
             ...base,
             VIBESQUAD_HOME: vsHome,
             PASEO_HOME: paseoHome,
+            VIBESQUAD_PORT: "1", // X1b: no VS server here; the owner's `vs log` takes the direct-disk fallback
             ...extraEnv,
           },
         });

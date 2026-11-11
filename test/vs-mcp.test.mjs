@@ -617,3 +617,56 @@ test('X1b: report goes through POST /vs-log with agent headers only; a worker de
     vs.close();
   }
 });
+
+// ---------- X1b review R1 (Bug17): M1 a token without an id is never the owner; M2 alias metric after verifyCaller ----------
+import { agentCallerOf, hasOwnerProof, vsServerHeaders } from '../server/mcp/tools.mjs';
+
+test('X1b R1 M1: VS_AGENT_TOKEN with the agent id cleared or masked never reads as the owner: no local-token header, no owner proof, verifyCaller 403', async () => {
+  const env = isolatedEnv();
+  mkdirSync(env.VIBESQUAD_HOME, { recursive: true });
+  writeFileSync(path.join(env.VIBESQUAD_HOME, 'local-token'), 'a'.repeat(64) + '\n');
+  const home = { VIBESQUAD_HOME: env.VIBESQUAD_HOME };
+  const { ctx } = tokenCtx({ id: '', token: 'leftover-token', env: home });
+  assert.equal(agentCallerOf(ctx)?.verify, true, 'a token makes the caller an (unverifiable) agent, not the owner');
+  assert.equal((await vsServerHeaders(ctx))['x-vibesquad-token'], undefined, 'never the local token');
+  assert.equal(await hasOwnerProof(ctx), false);
+  await assert.rejects(verifyCaller(ctx), /403/);
+  // the flag alone (no id, no token) is not the owner either
+  const flagged = tokenCtx({ id: '', token: '', env: { ...home, VS_AGENT_TOKEN_REQUIRED: '1' } });
+  assert.equal((await vsServerHeaders(flagged.ctx))['x-vibesquad-token'], undefined);
+  assert.equal(await hasOwnerProof(flagged.ctx), false);
+  // send / report from such a shell: 403, no owner turn, nothing sent or logged
+  const seen = [];
+  const b = tokenBackend([LEAD_REC], { sendAgentPrompt: async (id, text, opts) => { seen.push(opts); } });
+  await assert.rejects(callTool(tokenCtx({ id: '', token: 'leftover-token', backend: b, env: home }).ctx, 'send', { id: 'rn-lead1', text: 'hi' }), /403/);
+  assert.equal(seen.length, 0);
+  // identityFromEnv: an empty PASEO_AGENT_ID never masks VS_AGENT_ID
+  assert.equal(identityFromEnv({ VS_AGENT_ID: 'rn-a', PASEO_AGENT_ID: '' }).agentId, 'rn-a');
+  // resolveIdentity (default mode): same rule
+  const saved = {};
+  const vars = { VS_AGENT_ID: 'rn-a', PASEO_AGENT_ID: '', VS_AGENT_TOKEN: '' };
+  for (const [k, v] of Object.entries(vars)) { saved[k] = process.env[k]; process.env[k] = v; }
+  try {
+    assert.equal(resolveIdentity({}).agentId, 'rn-a');
+  } finally {
+    for (const k of Object.keys(vars)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+});
+
+test('X1b R1 M2: a Paseo-alias call verifies the caller before its metric is logged (wrong token: 403 and no metric; right token: one verify, then the metric)', async () => {
+  const logs = [];
+  const wrong = tokenCtx({ id: 'rn-lead1', token: 'wrong', role: 'lead' });
+  wrong.ctx.writeLog = async (e) => { logs.push(e); };
+  await assert.rejects(callTool(wrong.ctx, 'send_agent_prompt', { agentId: 'rn-work1', prompt: 'hi' }), /403/);
+  assert.equal(logs.length, 0, 'no alias metric before the caller is verified');
+  assert.equal(wrong.backend.calls.length, 0);
+  let verifies = 0;
+  const b = tokenBackend([BUDDY_REC, WORKER_REC], { verifyAgent: async ({ id, token }) => { verifies += 1; if (token !== RIGHT) throw Object.assign(new Error('bad'), { status: 403 }); return { ...BUDDY_REC, id }; } });
+  const ok = tokenCtx({ id: 'rn-buddy1', token: RIGHT, role: 'worker', backend: b });
+  const order = [];
+  ok.ctx.writeLog = async (e) => { order.push(`log:${e.type}:${ok.ctx.identity.verified === true}`); };
+  await callTool(ok.ctx, 'send_agent_prompt', { agentId: 'rn-work1', prompt: 'hi' });
+  assert.equal(verifies, 1, 'the caller is verified once per call, not once per step');
+  assert.deepEqual(order, ['log:metric:true'], 'the metric is logged after verification, as the verified caller');
+  assert.deepEqual(b.calls.at(-1).slice(0, 2), ['send', 'rn-work1']);
+});

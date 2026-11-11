@@ -33,7 +33,7 @@ import {
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
-import { agentCallerOf, callTool, createContext, postToVsServer, verifyCaller, vsServerHeaders } from "../server/mcp/tools.mjs";
+import { agentCallerOf, callTool, createContext, hasOwnerProof, postToVsServer, verifyCaller, vsServerHeaders } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
 import {
@@ -331,7 +331,7 @@ const UNASSIGNED_LANE = "unassigned";
 export function resolveIdentity(flags = {}, { recordWins = false } = {}) {
   const envAgentId = recordWins
     ? (process.env.VS_AGENT_ID || process.env.PASEO_AGENT_ID)
-    : (process.env.PASEO_AGENT_ID ?? process.env.VS_AGENT_ID);
+    : (String(process.env.PASEO_AGENT_ID ?? "").trim() || process.env.VS_AGENT_ID); // R1 M1: an empty PASEO_AGENT_ID never masks VS_AGENT_ID
   // A caller that is a runner agent with a record is who its labels say: --agent/--role/--ord are claims, never overrides
   // (a worker passing `--role lead` or `--agent <lead>` must not pass a lead gate). --lane/--team still aim the verb.
   const envId = String(envAgentId ?? "").trim();
@@ -932,6 +932,9 @@ async function commandInbox(flags) {
       if (role !== "lead" && role !== "brainstorm") {
         throw new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${caller.id} is a ${role}. Put it in your final message for your lead to run.`);
       }
+    } else if (!(await hasOwnerProof(ctx))) {
+      // R1 H1: an empty agent id is the owner only with the local token in hand; a scrubbed shell is nobody.
+      throw new Error("vs inbox triage: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or a lead/Buddy of the card's Squad may triage.");
     }
     const viaServer = async (body) => {
       if (caller?.verify) return postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
@@ -939,7 +942,6 @@ async function commandInbox(flags) {
         assertInboxTriageCaller({ agentId: caller.id, role, teamId }, triageIds(body), baseHome);
         return triageInboxCards({ ...body, baseHome });
       }
-      if (!Object.keys(await vsServerHeaders(ctx)).length) return triageInboxCards({ ...body, baseHome });
       try {
         return await postToVsServer(ctx, "/__vibesquad/inbox/triage", body);
       } catch (e) {
@@ -2382,6 +2384,7 @@ function commandMcp(flags) {
  */
 export function ownerProofFromEnv(env = process.env) {
   if (String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim()) return false;
+  if (String(env.VS_AGENT_TOKEN ?? "").trim()) return false; // R1 M1: a leftover token with the id cleared is still an agent shell
   const base = String(env.VIBESQUAD_HOME || "").trim() || (env.USERPROFILE || env.HOME ? path.join(String(env.USERPROFILE || env.HOME), ".vibesquad") : "");
   if (!base) return false;
   return Boolean(readLocalToken(localTokenPath(base)));
@@ -2439,11 +2442,12 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
 export function assertOwnerShell(what, env = process.env) {
   const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
   if (id) throw new Error(`${what} is an owner verb; it never runs from an agent shell (VS_AGENT_ID=${id}). Ask the owner.`);
+  if (String(env.VS_AGENT_TOKEN ?? "").trim()) throw new Error(`${what} is an owner verb; it never runs from an agent shell (VS_AGENT_TOKEN is set). Ask the owner.`);
 }
 
 /** X1b: the agent identity keys a relaunched runtime must never inherit (mirrors scripts/restart-runtime.mjs AGENT_ENV_KEYS; not imported: the shim ships cli/ + server/ only). */
-const AGENT_ENV_KEYS = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN"];
-function stripAgentEnv(env = process.env) {
+export const AGENT_ENV_KEYS = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_LANE", "VS_TEAM", "VS_ORD", "VS_PROFILE"];
+export function stripAgentEnv(env = process.env) {
   const out = { ...env };
   for (const k of AGENT_ENV_KEYS) delete out[k];
   return out;
@@ -2495,7 +2499,7 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
   } else {
     // X1b: the relaunched server/runner must never inherit this shell's agent identity (VS_AGENT_ID / PASEO_AGENT_ID /
     // VS_AGENT_TOKEN), or the new server would call the runner as that agent. (WMI above never inherits our env.)
-    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(process.env) });
+    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(env) });
     child.unref();
     pid = child.pid;
   }

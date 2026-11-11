@@ -63,7 +63,7 @@ export function parseArgs(argv) {
 
 // X1b (docs/PLAN_X1_IDENTITY.md): the relaunched server and runner must never inherit the caller's agent identity. A lead
 // running `vs restart` carries VS_AGENT_ID + VS_AGENT_TOKEN; a server started with them would call the runner as that lead.
-export const AGENT_ENV_KEYS = ['VS_AGENT_ID', 'PASEO_AGENT_ID', 'VS_AGENT_TOKEN'];
+export const AGENT_ENV_KEYS = ['VS_AGENT_ID', 'PASEO_AGENT_ID', 'VS_AGENT_TOKEN', 'VS_ROLE', 'VS_LANE', 'VS_TEAM', 'VS_ORD', 'VS_PROFILE']; // + the identity claims (R1 L1)
 export function stripAgentEnv(env = process.env) {
   const out = { ...env };
   for (const k of AGENT_ENV_KEYS) delete out[k];

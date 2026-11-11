@@ -19,6 +19,9 @@ function setup(t) {
   const home = mkdtempSync(path.join(tmpdir(), "vs-inbox-arch-"));
   t.after(() => rmSync(home, { recursive: true, force: true }));
   writeFileSync(path.join(home, "inbox.json"), JSON.stringify({ cards: [card("a", "vibesquad"), card("b", "vibesquad"), card("c", "other")] }));
+  // X1b: the owner cases hold the local token (owner proof); VIBESQUAD_PORT=1 keeps the VS server unreachable so the
+  // owner path takes the direct-disk fallback this file exercises (an agent id without a token stays on the local gate).
+  writeFileSync(path.join(home, "local-token"), "a".repeat(64) + String.fromCharCode(10));
   const statuses = () => Object.fromEntries((([j]) => (Array.isArray(j) ? j : j.cards))([JSON.parse(readFileSync(path.join(home, "inbox.json"), "utf8"))]).map((c) => [c.id, c.status]));
   const agent = (id, role, team = "vibesquad") => {
     const dir = path.join(home, "runner", "agents");
@@ -32,7 +35,7 @@ function setup(t) {
     return id;
   };
   const run = (args, env = {}) => {
-    const e = { ...process.env, VIBESQUAD_HOME: home, ...env };
+    const e = { ...process.env, VIBESQUAD_HOME: home, VIBESQUAD_PORT: "1", ...env };
     delete e.PASEO_AGENT_ID;
     delete e.VS_AGENT_ID;
     delete e.VS_AGENT_TOKEN; // X1b: a token from the suite's own agent would turn the spawned CLI into a verified caller

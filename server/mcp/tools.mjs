@@ -40,9 +40,11 @@ export function identityFromEnv(env = process.env) {
  */
 export function agentCallerOf(ctx) {
   const id = clean(ctx?.identity?.agentId);
-  if (!id) return null;
   const token = clean(ctx?.identity?.token);
-  return { id, token, verify: Boolean(token) || agentTokenRequired(ctx?.env ?? {}) };
+  const verify = Boolean(token) || agentTokenRequired(ctx?.env ?? {});
+  // R1 M1: a token (or the flag) with the id cleared is still an agent shell, never the owner: it verifies (and fails closed).
+  if (!id) return verify ? { id: "", token, verify: true } : null;
+  return { id, token, verify };
 }
 
 /**
@@ -72,8 +74,11 @@ export async function verifyCaller(ctx) {
   const caller = agentCallerOf(ctx);
   if (!caller) return null;
   if (!caller.verify) return null;
-  const bad = `403: agent token invalid for ${caller.id} (VS_AGENT_TOKEN does not match the runner's token for VS_AGENT_ID, or the agent is gone/retired)`;
-  if (!caller.token) throw forbidden(bad);
+  const bad = `403: agent token invalid for ${caller.id || "(no VS_AGENT_ID)"} (VS_AGENT_TOKEN does not match the runner's token for VS_AGENT_ID, or the agent is gone/retired)`;
+  if (!caller.token || !caller.id) throw forbidden(bad);
+  // Verified once per context: a tool that is reached through callTool (alias metric) and its own gate does one runner call.
+  const done = ctx[VERIFIED];
+  if (done && done.id === caller.id && done.token === caller.token) return done.rec;
   let who;
   try {
     who = ctx.verifyAgent
@@ -101,8 +106,10 @@ export async function verifyCaller(ctx) {
     overlord: rec.overlord === true,
     verified: true,
   };
+  Object.defineProperty(ctx, VERIFIED, { value: { id: caller.id, token: caller.token, rec }, enumerable: false, configurable: true });
   return rec;
 }
+const VERIFIED = Symbol("vibesquad.verifiedCaller");
 
 const homeOf = (env = {}) => clean(env.VIBESQUAD_HOME) || null;
 
@@ -181,8 +188,10 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
         return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs }).entry;
       };
       if (!caller?.verify) {
+        // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
+        if (!caller && !(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
         const headers = await vsServerHeaders(ctx);
-        if (!Object.keys(headers).length) return direct(); // nothing to present: the server would refuse the write
+        if (!Object.keys(headers).length) return direct(); // the rollout fallback with nothing to present (removed in X1d)
         try {
           return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
         } catch (e) {
@@ -909,6 +918,7 @@ export async function callTool(ctx, name, args = {}) {
   const def = VS_TOOLS[target];
   if (!def) throw new Error(`unknown tool "${name}"`);
   if (ALIASES[name]) {
+    await verifyCaller(ctx); // R1 M2: the metric is logged as the verified caller (a bad token is a 403 before any log)
     const { agentId, lane } = ctx.identity;
     try {
       await ctx.writeLog({ type: "metric", text: `mcp-alias: tool=${name} caller=${agentId || "unknown"} lane=${lane || "unknown"}` });
