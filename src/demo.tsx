@@ -60,33 +60,33 @@ export const DEMO_AGY_ERR = "demo-agy-err";
 export const DEMO_AGY_HUNG = "demo-art-g";
 
 const CAST: Spec[] = [
-  { id: DEMO_LEAD_ID, who: "gemini", title: "★ VIBESQUAD ord1", status: "running", labels: vs({ role: "lead", "paseo.parent-agent-id": "demo-old-2" }), used: 134_000, ago: 0 },
+  { id: DEMO_LEAD_ID, who: "gemini", title: "★ VIBESQUAD ord1", status: "running", labels: vs({ role: "lead", "vs.parent": "demo-old-2", "paseo.parent-agent-id": "demo-old-2" }), used: 134_000, ago: 0 },
   { id: "demo-bs-vs", who: "claude", title: "BRAINSTORM · neon-noir cast", labels: vs({ role: "brainstorm" }), used: (typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("bsUsed"))) || 62_000, ago: 12 },
   { id: "demo-old-1", who: "claude", title: "(old) ★ LEAD · VIBESQUAD v0", status: "closed", labels: vs({ role: "old-lead" }), used: 128_000, ago: 300 },
   { id: "demo-old-2", who: "gemini", title: "(old) ★ LEAD · VIBESQUAD art round A", status: "closed", labels: vs({ role: "old-lead" }), used: 131_000, ago: 140 },
-  { id: "demo-art-o", who: "claude", title: "Art Painter - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },
-  { id: "demo-art-g", who: "gemini", title: "Art Director - Gemini · neon-noir", status: "running", labels: vs({ role: "worker", job: "art", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 41_000, cwd: WT + "vibesquad-neon-gemini", ago: 4 },
-  { id: "demo-impl-1", who: "deepseek", title: "Implement - drawer crash", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 245_000, ago: 2 },
-  { id: "demo-impl-2", who: "claude", title: "Implement - team actions", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-art-o" }), used: 37_000, ago: 4 },
-  { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-impl-2" }), used: 21_000, ago: 6 },
-  { id: "demo-rev", who: "sonnet", title: "Review - Sonnet · drawer", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 74_000, ago: 9 },
+  { id: "demo-art-o", who: "claude", title: "Art Painter - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "vs.parent": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },
+  { id: "demo-art-g", who: "gemini", title: "Art Director - Gemini · neon-noir", status: "running", labels: vs({ role: "worker", job: "art", "vs.parent": DEMO_LEAD_ID }), used: 41_000, cwd: WT + "vibesquad-neon-gemini", ago: 4 },
+  { id: "demo-impl-1", who: "deepseek", title: "Implement - drawer crash", status: "running", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 245_000, ago: 2 },
+  { id: "demo-impl-2", who: "claude", title: "Implement - team actions", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-art-o" }), used: 37_000, ago: 4 },
+  { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-impl-2" }), used: 21_000, ago: 6 },
+  { id: "demo-rev", who: "sonnet", title: "Review - Sonnet · drawer", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B", "vs.parent": DEMO_LEAD_ID }), used: 74_000, ago: 9 },
   {
     id: "demo-aud", who: "gemini", title: "Audit - token scout", labels: vs({ role: "worker" }), used: 186_000, ago: 5,
     extra: { pendingPermissions: [{ id: "p1", name: "Bash", title: "Bash: rg --stats", description: "Count tokens per handoff" }] },
   },
-  { id: "demo-attached", who: "claude", title: "Implement - legacy hook", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": "demo-old-2" }), used: 28_000, ago: 3 },
+  { id: "demo-attached", who: "claude", title: "Implement - legacy hook", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-old-2" }), used: 28_000, ago: 3 },
   { id: DEMO_AGY_IDLE, who: "gemini", title: "Mechanical - doc sweep (Gemini)", labels: vs({ role: "worker" }), used: 58_000, ago: 3 },
   { id: DEMO_AGY_ERR, who: "gemini", title: "Review - Gemini · retry", status: "error", labels: vs({ role: "worker" }), used: 66_000, ago: 2, extra: { lastError: 'Post "https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent": EOF' } },
   { id: "demo-spec", who: "claude", title: "Spec - step 6 server plugin", labels: vs({ role: "worker" }), used: 55_000, ago: 25 },
   { id: "demo-unk", who: "deepseek", title: "helper", labels: vs(), used: 9_000, ago: 40 },
-  { id: "demo-rev-2", who: "gemini", title: "Review - Gemini · art", status: "closed", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 92_000, ago: 200 },
+  { id: "demo-rev-2", who: "gemini", title: "Review - Gemini · art", status: "closed", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 92_000, ago: 200 },
   // One worker per provider row so ?demo=1 shows all 8 dedicated icons plus the generic fallback.
-  { id: "demo-prov-cursor", who: "cursor", title: "Implement - Cursor · settings", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 30_000, ago: 3 },
-  { id: "demo-prov-copilot", who: "copilot", title: "Review - Copilot · diff", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 26_000, ago: 5 },
-  { id: "demo-prov-codewhale", who: "codewhale", title: "Audit - CodeWhale · logs", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 44_000, ago: 4 },
-  { id: "demo-prov-pi", who: "pi", title: "Mechanical - Pi · rename", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 12_000, ago: 6 },
-  { id: "demo-prov-opencode", who: "opencode", title: "Implement - OpenCode · hooks", status: "running", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 52_000, ago: 2 },
-  { id: "demo-prov-aider", who: "aider", title: "Implement - Aider · generic", labels: vs({ role: "worker", "paseo.parent-agent-id": DEMO_LEAD_ID }), used: 18_000, ago: 7 },
+  { id: "demo-prov-cursor", who: "cursor", title: "Implement - Cursor · settings", status: "running", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 30_000, ago: 3 },
+  { id: "demo-prov-copilot", who: "copilot", title: "Review - Copilot · diff", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 26_000, ago: 5 },
+  { id: "demo-prov-codewhale", who: "codewhale", title: "Audit - CodeWhale · logs", status: "running", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 44_000, ago: 4 },
+  { id: "demo-prov-pi", who: "pi", title: "Mechanical - Pi · rename", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 12_000, ago: 6 },
+  { id: "demo-prov-opencode", who: "opencode", title: "Implement - OpenCode · hooks", status: "running", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 52_000, ago: 2 },
+  { id: "demo-prov-aider", who: "aider", title: "Implement - Aider · generic", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 18_000, ago: 7 },
   // Other teams, so the sidebar has several bosses.
   { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-you": "merge", "needs-you-reason": "approve the save-format merge" }, used: 97_000, cwd: EFI },
   { id: "demo-lead-efi-dup", who: "sonnet", title: "★ MAIN GAME ord74", labels: { team: "efi", lane: "main-game", role: "lead", ord: "74" }, used: 90_000, cwd: EFI, ago: 30 },
@@ -100,7 +100,7 @@ const CAST: Spec[] = [
 // More VibeSquad teams (lanes) so the floor pager has 3+ teams: 5 teams at 2 per floor = 3 floors (the last half empty) for the lift < > to page.
 CAST.push(
   { id: "demo-lead-ui-bois", who: "sonnet", title: "★ UI BOIS ord9", labels: vs({ role: "lead", lane: "ui-bois", ord: "9" }), used: 52_000, ago: 2 },
-  { id: "demo-impl-ui-bois", who: "claude", title: "Implement - overlap guard", status: "running", labels: vs({ role: "worker", lane: "ui-bois", "paseo.parent-agent-id": "demo-lead-ui-bois" }), used: 31_000, ago: 3 },
+  { id: "demo-impl-ui-bois", who: "claude", title: "Implement - overlap guard", status: "running", labels: vs({ role: "worker", lane: "ui-bois", "vs.parent": "demo-lead-ui-bois" }), used: 31_000, ago: 3 },
   { id: "demo-lead-art-dir", who: "gemini", title: "★ ART DIRECTION ord4", labels: vs({ role: "lead", lane: "art-direction", ord: "4" }), used: 70_000, ago: 8 },
   { id: "demo-lead-runner", who: "codex", title: "★ RUNNER PILOT ord2", labels: vs({ role: "lead", lane: "runner-pilot", ord: "2" }), used: 20_000, ago: 12 },
   { id: "demo-lead-wiki", who: "claude", title: "★ WIKI ord1", labels: vs({ role: "lead", lane: "wiki", ord: "1" }), used: 15_000, ago: 15 },
@@ -131,7 +131,7 @@ export function demoCrowd(): Spec[] {
     for (let i = 0; i < c.workers; i++) {
       const [who, kind] = CROWD_KINDS[i % CROWD_KINDS.length];
       const needs: Record<string, string> = i % 5 === 3 ? { "needs-you": "pick", "needs-you-reason": "pick option A or B" } : {};
-      out.push({ id: `demo-crowd-${c.lane}-${i}`, who, title: `${kind} - ${c.lane} task ${i + 1}`, status: "running", labels: vs({ role: "worker", lane: c.lane, "paseo.parent-agent-id": c.lead, ...needs }), used: 20_000 + i * 3_000, ago: 40 - i });
+      out.push({ id: `demo-crowd-${c.lane}-${i}`, who, title: `${kind} - ${c.lane} task ${i + 1}`, status: "running", labels: vs({ role: "worker", lane: c.lane, "vs.parent": c.lead, ...needs }), used: 20_000 + i * 3_000, ago: 40 - i });
     }
   }
   return out;

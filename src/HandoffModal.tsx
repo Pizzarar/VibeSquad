@@ -7,7 +7,7 @@ import { buildName, Field, Modal, TITLE_LIMIT, findProfile, useProfiles } from "
 import { postLog } from "./TeamFeed";
 import { fmtTok, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView } from "./teams";
 
-const PARENT = "paseo.parent-agent-id";
+const PARENT = "vs.parent"; // the runner's one parent key (server/identity.mjs, lead-handoff repoint)
 const labelsOf = (m: Member) => m.agent.labels as Record<string, string>;
 
 type Packet = { exists: boolean; path: string; running?: boolean; error?: string };

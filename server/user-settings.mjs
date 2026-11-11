@@ -190,7 +190,23 @@ function viewOf(data) {
   // Remote (relay) proxy gate, (the relay proxy is gone; kept so saves do not drop it). Hand-edited only: saveUserSettings
   // carries it over but never takes it from a patch, so no HTTP caller can switch it on.
   if (data.remote && typeof data.remote === "object") out.remote = { enabled: data.remote.enabled === true };
+  // E5 outbound E2EE relay (server/relay-wiring.mjs): off unless relay.endpoint is a wss:// URL. Hand-edited only, like
+  // `remote`: saveUserSettings carries it over but never takes it from a patch, so no HTTP caller can point the host at a relay.
+  const relay = normalizeRelaySettings(data.relay);
+  if (relay) out.relay = relay;
   return out;
+}
+
+/** `{ endpoint }` when `value.endpoint` is a wss:// URL, else null. The relay is opt-in and never enabled by an http(s) or ws:// value. */
+export function normalizeRelaySettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const endpoint = typeof value.endpoint === "string" ? value.endpoint.trim() : "";
+  try {
+    if (!endpoint || new URL(endpoint).protocol !== "wss:") return null;
+  } catch {
+    return null;
+  }
+  return { endpoint };
 }
 
 const isPlainObject = (v) => Boolean(v) && typeof v === "object" && !Array.isArray(v);

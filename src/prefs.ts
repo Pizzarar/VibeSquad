@@ -109,7 +109,7 @@ export const PREF_DEFS: PrefDef[] = [
     kind: "enum",
     options: [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }],
   },
-  { key: "app.vibe", section: "app", label: "Layout vibe", hint: "Vibespace (fun) or corporate ADE (boring).", kind: "enum", options: [{ value: "fun", label: "Fun (Vibespace)" }, { value: "boring", label: "Boring (Corporate ADE)" }] },
+  { key: "app.vibe", section: "app", label: "Layout vibe", hint: "Psycho or Normal layout.", kind: "enum", options: [{ value: "fun", label: "Psycho" }, { value: "boring", label: "Normal" }] },
   {
     key: "app.accent",
     section: "app",

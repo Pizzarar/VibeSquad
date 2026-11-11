@@ -52,6 +52,9 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
   return {
     name: 'claude',
     canPark: true, // the CLI keeps its transcript on disk, so a killed idle agent can be resumed with --resume <sessionId>
+    // A prompt-less resume starts nothing (idea-122): with no pre-input handshake there is nothing a bare process could verify,
+    // and the next send's --resume restores the session anyway. The runner marks the agent parked instead.
+    lazyResume: true,
     cleanup(id) { for (const f of [promptFile(id), mcpFile(id)]) { try { rmSync(f, { force: true }); } catch { /* best effort */ } } }, // on archive; start rewrites them
     start({ id, model, cwd, meta = {}, systemPrompt, env, emit, onExit, resume }) {
       const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose'];

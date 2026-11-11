@@ -34,7 +34,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleEnter, handlePairRedeem, handlePairStart, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -381,6 +381,7 @@ export function isGatedRead(pathOrMethod, urlOrPath = "") {
       ? urlOrPath
       : urlOrPath;
   if (path === "/__vibesquad/push/vapid-public-key") return true; // creates and writes vapid.json on first call
+  if (path === "/__vibesquad/devices" || path === "/__vibesquad/pair/pending") return true; // X1 E4a M3: device inventory, pending pairings
   if (path === "/__vibesquad/providers" || String(path).startsWith("/__vibesquad/providers/")) {
     return new URL(url, "http://x").searchParams.get("refresh") === "1"; // bypasses the probe TTL: spawns the provider CLIs
   }
@@ -449,6 +450,12 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   return sendJson(res, 200, { ok: true, distReady: true, ...extra });
 }
 
+// E5: the relay host's status() for the Host pill (serve.mjs registers it; null = no relay configured). Trusted callers only.
+let relayStatus = null;
+export function setRelayStatus(fn) {
+  relayStatus = typeof fn === "function" ? fn : null;
+}
+
 export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -456,7 +463,11 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   }
   const full = getAuthStatus(rootDir);
   if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
+  let relay = null;
+  try {
+    relay = relayStatus?.() ?? null;
+  } catch {}
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req), relay });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
@@ -1623,9 +1634,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
+    if (path === "/pair/status") return handlePairStatus(req, res); // E4b: cookie-scoped pending/approved/gone, nothing else
     if (path === "/__vibesquad/enter") return handleEnter(req, res);
     if (path === "/__vibesquad/local-login") return handleLocalLogin(req, res);
     if (path === "/__vibesquad/local-login/nonce") return handleLocalLoginNonce(req, res);
+    if (path === "/__vibesquad/local-proof") return handleLocalProof(req, res); // X1 L3: server proves the token before `vs pair` sends it
     const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
     if (isApi && !isTrusted(req)) {
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
@@ -1676,6 +1689,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);
+      case "/__vibesquad/pair/pending": // E4b: tickets waiting on this paired device's Approve
+        return handlePairPending(req, res);
+      case "/__vibesquad/pair/approve": // E4b: minting device only (owner-gated as non-GET above, re-checked inside)
+        return handlePairApprove(req, res, readBody);
       case "/__vibesquad/devices":
         return handleDevices(req, res);
       case "/__vibesquad/devices/revoke":

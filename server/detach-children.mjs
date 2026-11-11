@@ -1,5 +1,5 @@
-// Paseo archives an agent's children with it: every unarchived agent whose `paseo.parent-agent-id`
-// label points at the archived one (agent-manager cascadeArchiveChildren). A Buddy spawns its lead
+// Paseo archives an agent's children with it: every unarchived agent whose parent label points at the
+// archived one (agent-manager cascadeArchiveChildren). A Buddy spawns its lead
 // through MCP create_agent, so the lead (and nothing else) carries the Buddy as parent. Retiring and
 // archiving the Buddy then archived the lead too, and the lead's workers with it
 // (docs/PLAN_BUGS_BATCH1.md block 0: Basic ADE ord1 + 5 workers, 2026-11-02 04:25Z).
@@ -7,7 +7,9 @@
 
 import { getBackend } from "./backend/index.mjs";
 
-export const PARENT_LABEL = "paseo.parent-agent-id";
+// The runner's one parent key (server/identity.mjs, RunnerBackend.toAgent); X1c dropped paseo.parent-agent-id. A Paseo snapshot
+// still carries its parent as `parentAgentId`, which parentOf falls back to.
+export const PARENT_LABEL = "vs.parent";
 
 /** The parent id an agent is chained to, or "". */
 export const parentOf = (a) => String(a?.labels?.[PARENT_LABEL] || a?.parentAgentId || "");

@@ -9,6 +9,7 @@
 // the X1a runner restart) keeps today's env/record identity and the owner header; with the flag on it is a 403.
 import { isRunnerId } from "../backend/runner-backend.mjs";
 import { agentTokenRequired } from "../backend/runner-client.mjs";
+import { fetchWithLocalToken, localTokenPath, readLocalToken } from "../local-token.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
@@ -116,10 +117,15 @@ const homeOf = (env = {}) => clean(env.VIBESQUAD_HOME) || null;
 /** Owner proof for a CLI/MCP process: no agent id and the per-install local token (~/.vibesquad/local-token) is readable. */
 export async function hasOwnerProof(ctx) {
   if (agentCallerOf(ctx)) return false;
-  const { localTokenPath, readLocalToken } = await import("../local-token.mjs");
+  return localTokenAvailable(ctx);
+}
+
+/** The per-install local token file is readable for this context's home (the owner's proof; never read by an agent path). */
+const localTokenAvailable = (ctx) => {
   const home = homeOf(ctx?.env);
   return Boolean(readLocalToken(home ? localTokenPath(home) : undefined));
-}
+};
+const localTokenFile = (ctx) => { const home = homeOf(ctx?.env); return home ? { file: localTokenPath(home) } : {}; };
 
 /**
  * Auth headers for a call to the VS server: an agent sends x-vs-agent-id + x-vs-agent-token and nothing else (an agent
@@ -129,26 +135,49 @@ export async function hasOwnerProof(ctx) {
 export async function vsServerHeaders(ctx) {
   const caller = agentCallerOf(ctx);
   if (caller?.verify) return { "x-vs-agent-id": caller.id, "x-vs-agent-token": caller.token };
-  const { localTokenHeaders, localTokenPath } = await import("../local-token.mjs");
-  const home = homeOf(ctx?.env);
-  return localTokenHeaders(home ? localTokenPath(home) : undefined);
+  return {}; // the owner header is minted only inside fetchWithLocalToken, after the listener proved it holds the token
 }
+
+/** An agent's POST: its own headers, a plain socket (no local token leaves the process, so no loopback proof is needed). */
+async function postAsAgent(ctx, route, payload, timeoutMs) {
+  const port = Number(ctx?.env?.VIBESQUAD_PORT || process.env.VIBESQUAD_PORT || 4180);
+  return (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await vsServerHeaders(ctx)) },
+    body: payload,
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
+/** fetchWithLocalToken options for the owner's shell (or the rollout fallback): proof first, one socket, token from this home. */
+const ownerPostInit = (ctx, payload, timeoutMs) => ({
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: payload,
+  port: Number(ctx?.env?.VIBESQUAD_PORT || process.env.VIBESQUAD_PORT || 4180),
+  ...localTokenFile(ctx),
+  fetchImpl: ctx.fetch,
+  timeoutMs,
+  tokenOptional: true,
+});
 
 /**
  * POST `route` on the local VS server as this caller. Connection failures throw with `unreachable: true`; a non-2xx
  * answer throws `<status>: <server error>` tagged with `status` (so a 403 reads as 403 to the agent). Returns the JSON body.
  */
 export async function postToVsServer(ctx, route, body, { timeoutMs = 20_000 } = {}) {
-  const port = Number(ctx?.env?.VIBESQUAD_PORT || process.env.VIBESQUAD_PORT || 4180);
+  const payload = JSON.stringify(body ?? {});
   let r;
   try {
-    r = await (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}${route}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(await vsServerHeaders(ctx)) },
-      body: JSON.stringify(body ?? {}),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
+    // An agent sends its own headers; the owner's shell (or the rollout fallback) makes the listener prove it holds the
+    // local token over the one socket the request then rides (X1 E4a L3 / prove-local L1) before x-vibesquad-token goes
+    // out. A failed proof is an error (`proofFailed`), never a disk fallback; nothing listening is `unreachable`.
+    r = agentCallerOf(ctx)?.verify
+      ? await postAsAgent(ctx, route, payload, timeoutMs)
+      : await fetchWithLocalToken(route, ownerPostInit(ctx, payload, timeoutMs));
   } catch (e) {
+    if (e?.proofFailed) throw e;
     throw Object.assign(new Error(`VS server unreachable: ${e?.message ?? e}`), { unreachable: true });
   }
   const json = await r.json().catch(() => ({}));
@@ -190,8 +219,7 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       if (!caller?.verify) {
         // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
         if (!caller && !(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
-        const headers = await vsServerHeaders(ctx);
-        if (!Object.keys(headers).length) return direct(); // the rollout fallback with nothing to present (removed in X1d)
+        if (!localTokenAvailable(ctx)) return direct(); // the rollout fallback with nothing to present (removed in X1d)
         try {
           return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
         } catch (e) {
@@ -620,13 +648,18 @@ async function handoffLead(ctx, args = {}) {
  * (the caller reports it as a failed handoff), a 403 with its status in the text.
  */
 async function postLeadHandoffToServer(body, ctx) {
+  const payload = JSON.stringify(body);
+  let r;
   try {
-    return await postToVsServer(ctx, "/__vibesquad/lead-handoff", body, { timeoutMs: 200_000 });
+    r = agentCallerOf(ctx)?.verify
+      ? await postAsAgent(ctx, "/__vibesquad/lead-handoff", payload, 200_000)
+      : await fetchWithLocalToken("/__vibesquad/lead-handoff", ownerPostInit(ctx, payload, 200_000));
   } catch (e) {
-    if (e?.unreachable) throw e;
-    if (e?.status) return httpRefusal(e);
-    throw e;
+    if (e?.proofFailed) throw e;
+    throw Object.assign(new Error(`VS server unreachable: ${e?.message ?? e}`), { unreachable: true });
   }
+  const json = await r.json().catch(() => ({}));
+  return r.ok ? json : httpRefusal({ status: r.status, body: json });
 }
 
 /** A non-2xx answer as the `{ error }` the tools report: the server's own text, prefixed with the status only for a 403 (X1b). */
@@ -824,13 +857,18 @@ async function watchTool(ctx, args = {}) {
 
 /** POST /__vibesquad/brainstorm-restart as this caller (agent headers for an agent, never the owner's local token; X1b). */
 async function postBuddyRestartToServer(body, ctx) {
+  const payload = JSON.stringify(body);
+  let r;
   try {
-    return await postToVsServer(ctx, "/__vibesquad/brainstorm-restart", body, { timeoutMs: 200_000 });
+    r = agentCallerOf(ctx)?.verify
+      ? await postAsAgent(ctx, "/__vibesquad/brainstorm-restart", payload, 200_000)
+      : await fetchWithLocalToken("/__vibesquad/brainstorm-restart", ownerPostInit(ctx, payload, 200_000));
   } catch (e) {
-    if (e?.unreachable) throw new Error(`${e.message} (a Buddy restart runs through the server so its archive/spawn budgets apply)`);
-    if (e?.status) return httpRefusal(e);
-    throw e;
+    if (e?.proofFailed) throw e;
+    throw new Error(`VS server unreachable: ${e?.message ?? e} (a Buddy restart runs through the server so its archive/spawn budgets apply)`);
   }
+  const json = await r.json().catch(() => ({}));
+  return r.ok ? json : httpRefusal({ status: r.status, body: json });
 }
 
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });

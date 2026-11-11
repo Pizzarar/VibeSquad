@@ -33,7 +33,7 @@ import {
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
-import { agentCallerOf, callTool, createContext, hasOwnerProof, postToVsServer, verifyCaller, vsServerHeaders } from "../server/mcp/tools.mjs";
+import { agentCallerOf, callTool, createContext, hasOwnerProof, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
 import {
@@ -55,7 +55,7 @@ import {
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
-import { LOCAL_TOKEN_HEADER, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
+import { fetchWithLocalToken, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
   readLaneSpec,
   writeLaneSpec,
@@ -292,6 +292,7 @@ function parseArgs(argv) {
     "sweep",
     "suite",
     "restart",
+    "keepDevices",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -537,6 +538,7 @@ Usage:
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
   vs pair [--json]   mint a pairing code on the running local server (headless/SSH): prints the link, 6-digit code, CA fingerprint and an ASCII QR
   vs devices list [--json] | vs devices revoke <id|--all>   paired devices in ~/.vibesquad/devices.json; revoke drops the token (lost phone)
+  vs host-key show [--json] | vs host-key rotate [--keep-devices]   E5 relay host key (~/.vibesquad/host-keypair.json): show id + fingerprint; rotate replaces it (relay clients need a new link) and revokes every paired device unless --keep-devices
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
@@ -1951,14 +1953,16 @@ export function loadPromptInput(verb, flags, readStdin = () => fs.readFileSync(0
 }
 
 // B3 (lean boot): one-time sweep of long-done workers over the running server's runner route (the hook host lives there).
-export async function requestWorkerSweep({ apply = false, port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
-  const token = readLocalToken(file);
-  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
-  const res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/runner/sweep`, {
+export async function requestWorkerSweep({ apply = false, port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl } = {}) {
+  // X1 E4a L3: the listener proves it holds this install's token before the token leaves this process.
+  const res = await fetchWithLocalToken("/__vibesquad/runner/sweep", {
     method: "POST",
-    headers: { [LOCAL_TOKEN_HEADER]: token, "content-type": "application/json" },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ apply }),
-    signal: AbortSignal.timeout(120_000),
+    port,
+    file,
+    fetchImpl,
+    timeoutMs: 120_000,
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`sweep refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
@@ -2112,19 +2116,9 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
 }
 
 /** Mints a code on the running local server. Throws when the server is down or has no LAN/Meshnet address. */
-export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
-  const token = readLocalToken(file);
-  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
-  let res;
-  try {
-    res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/pair/start`, {
-      method: "POST",
-      headers: { [LOCAL_TOKEN_HEADER]: token },
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch (e) {
-    throw new Error(`no VibeSquad server on 127.0.0.1:${port} (${e?.cause?.code ?? e?.name ?? e}); start it first (or set VIBESQUAD_PORT)`);
-  }
+export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl } = {}) {
+  // X1 E4a L3: whatever listens on the port must prove it holds this install's token before the token leaves this process.
+  const res = await fetchWithLocalToken("/__vibesquad/pair/start", { method: "POST", port, file, fetchImpl, timeoutMs: 15_000 });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`pairing refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
   if (typeof body?.code !== "string" || typeof body?.pairUrl !== "string") throw new Error("unexpected pair/start response");
@@ -2189,11 +2183,63 @@ async function commandDevices(flags) {
     const matches = known.filter((d) => d.id === target || (target.length >= 8 && d.id.startsWith(target)));
     if (!matches.length) throw new Error(`no paired device matches "${target}" (vs devices list)`);
     if (matches.length > 1) throw new Error(`"${target}" matches ${matches.length} devices; give more of the id`);
-    if (!auth.revokeDevice(matches[0].id)) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    const removed = auth.revokeDevice(matches[0].id); // E4b: cascades over the devices it minted, in one locked write
+    if (!removed.length) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    const cascade = removed.filter((id) => id !== matches[0].id);
+    const names = cascade.map((id) => known.find((d) => d.id === id)?.name ?? id.slice(0, 8));
     process.stdout.write(`Revoked ${matches[0].id} (${matches[0].name}); its next request is refused.\n`);
+    if (cascade.length) process.stdout.write(`Also revoked ${cascade.length} device${cascade.length === 1 ? "" : "s"} it paired: ${names.join(", ")}.\n`);
     return 0;
   }
   throw new Error(DEVICES_USAGE);
+}
+
+// vs host-key — the E5 relay host identity (PLAN_ANDROID_END_STATE.md E5, threat model T11 / §7 item 3).
+// `show` prints only public material (self-certifying host id, fingerprint, public key). `rotate` replaces the keypair
+// atomically; the running server notices within ~10 s, drops every relay session and re-dials under the new id, so every
+// relay-paired client needs a fresh pairing link. A leaked host key may have been used to phish device tokens, so rotate
+// also revokes every paired device (LAN ones included) unless --keep-devices says the tokens are known good.
+const HOST_KEY_USAGE = "usage: vs host-key show [--json] | vs host-key rotate [--keep-devices]";
+
+/** The text `vs host-key show|rotate` prints. Pure, for tests; never includes the private half. */
+export function formatHostKey({ hostId, fingerprint, pub, file, rotated = false, revoked = null }) {
+  const lines = [];
+  if (rotated) lines.push("Host key rotated. Relay clients pinned to the old key will fail their next handshake: share a new pairing link (vs pair).");
+  lines.push(`Host id:        ${hostId}`);
+  lines.push(`Fingerprint:    ${fingerprint}`);
+  lines.push(`Public key:     ${pub}`);
+  lines.push(`File:           ${file}`);
+  if (rotated) lines.push(revoked === null ? "Paired devices kept (--keep-devices)." : `Revoked ${revoked} paired device${revoked === 1 ? "" : "s"}; every device must pair again.`);
+  return lines.join("\n") + "\n";
+}
+
+async function commandHostKey(flags) {
+  const sub = String(flags._.shift() ?? "");
+  if (flags._.length) throw new Error(HOST_KEY_USAGE);
+  const relay = await import("../server/relay-tunnel.mjs");
+  const file = path.join(BASE_DIR, "host-keypair.json");
+  const describe = (key) => ({ hostId: relay.selfCertifyingHostId(key.publicRaw), fingerprint: relay.hostFingerprint(key.publicRaw), pub: key.pubB64, file });
+  if (sub === "show" || sub === "") {
+    if (!fs.existsSync(file)) {
+      if (flags.json) process.stdout.write(JSON.stringify({ hostId: null, file }) + "\n");
+      else process.stdout.write(`No host key yet at ${file}. The server creates one when settings.json has relay.endpoint; vs host-key rotate creates one now.\n`);
+      return 0;
+    }
+    const info = describe(relay.loadOrCreateHostKeypair(file));
+    process.stdout.write(flags.json ? JSON.stringify(info) + "\n" : formatHostKey(info));
+    return 0;
+  }
+  if (sub === "rotate") {
+    const info = describe(relay.rotateHostKeypair(file));
+    let revoked = null;
+    if (!flags.keepDevices) {
+      const auth = await import("../server/auth.mjs");
+      revoked = auth.revokeAllDevices();
+    }
+    process.stdout.write(formatHostKey({ ...info, rotated: true, revoked }));
+    return 0;
+  }
+  throw new Error(HOST_KEY_USAGE);
 }
 
 // ---------------------------------------------------------------------------
@@ -2786,6 +2832,7 @@ export function main(argv) {
     if (command === "open") return commandOpen(flags);
     if (command === "pair") return commandPair(flags);
     if (command === "devices") return commandDevices(flags);
+    if (command === "host-key") return commandHostKey(flags);
     const hint = suggestVerb(command);
     const didYouMean = hint ? `, did you mean "${hint}"?` : ".";
     process.stderr.write(`Error: unknown verb "${command}"${didYouMean} Try "vs --help".\n`);

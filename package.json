@@ -19,7 +19,8 @@
     "desktop:dev": "tauri dev",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "test": "node scripts/run-tests.mjs",
-    "ui:overlap": "node scripts/ui-overlap.mjs"
+    "ui:overlap": "node scripts/ui-overlap.mjs",
+    "ui:clicks": "node scripts/ui-clicks.mjs"
   },
   "dependencies": {
     "@fontsource/jetbrains-mono": "5.3.0",

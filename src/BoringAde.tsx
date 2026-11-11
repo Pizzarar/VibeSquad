@@ -15,6 +15,8 @@ import type { PinHandler } from "./PinGrid";
 import { StatusDot } from "./ui";
 import { UsageDashboard } from "./UsageDashboard";
 
+export { VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker } from "./FirstRunModal";
+
 // Boring Mode B2 (docs/PLAN_BORING_MODE.md): the whole app as a corporate ADE. Sidebar of Projects > Conversations on the left,
 // one centered chat (the existing AgentDrawer) or a plain dashboard on the right. Replaces the sky/tower entirely when app.vibe = "boring".
 // Thanks to Antigravity by Google DeepMind for the layout inspiration.
@@ -257,7 +259,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             ⚙ Settings
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-switch-vibespace-btn" onClick={toVibespace}>
-            ✦ Switch to Vibespace
+            ✦ Switch to Psycho
           </button>
         </div>
       </aside>
@@ -284,7 +286,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
               </button>
             )}
             <button type="button" className="boring-footer-btn" onClick={onSettings}>⚙ Settings</button>
-            <button type="button" className="boring-footer-btn" onClick={toVibespace}>Switch to Vibespace</button>
+            <button type="button" className="boring-footer-btn" onClick={toVibespace}>Switch to Psycho</button>
           </div>
         </header>
         {mode === "usage" && (

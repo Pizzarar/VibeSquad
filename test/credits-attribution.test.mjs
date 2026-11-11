@@ -41,7 +41,7 @@ const REQUIRED_AUTHORS = [
   "Kingsley",
 ];
 
-test("1) CREDITS.md exists at repo root and includes all 11 community accolades and 16 authors", () => {
+test("1) CREDITS.md exists at repo root and includes at least 19 credit bullets, all 11 community accolades, and 16 authors", () => {
   const creditsPath = join(REPO_ROOT, "CREDITS.md");
   assert.equal(existsSync(creditsPath), true, "Expected CREDITS.md at repo root");
   const credits = readFileSync(creditsPath, "utf8");
@@ -55,10 +55,25 @@ test("1) CREDITS.md exists at repo root and includes all 11 community accolades 
   const bullets = credits
     .split(/\r?\n/)
     .filter((l) => l.startsWith("- Implemented ") || l.startsWith("- Built on the Paseo Daemon"));
-  // 11 v0.2.0 accolades + 8 later credits (VS agent runner adapters, VS MCP aliases, ACP adapters, native
-  // schedules, terminals, hand-pixelled office art pipeline, Aseprite pixel pipeline, QR pairing scan). The two
+  // Floor check: 11 v0.2.0 accolades + later credits (VS agent runner adapters, VS MCP aliases, ACP adapters,
+  // native schedules, terminals, hand-pixelled office art pipeline, Aseprite pixel pipeline, QR pairing scan, and
+  // more) — the exact total grows with every new credit, so assert "at least 19" rather than an exact count. The
   // "Inspired by the vibe of" lines are vibe-only and not counted.
-  assert.equal(bullets.length, 19, "Expected 11 community accolades + 8 later credits in CREDITS.md");
+  assert.ok(
+    bullets.length >= 19,
+    `Expected at least 19 "- Implemented "/"- Built on the Paseo Daemon" bullets in CREDITS.md, found ${bullets.length}`,
+  );
+
+  const implementedBullets = credits
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("- Implemented "));
+  for (const line of implementedBullets) {
+    assert.match(
+      line,
+      /^- Implemented .+ — Thanks to .+ by .+/,
+      `Malformed "- Implemented " bullet in CREDITS.md: ${line}`,
+    );
+  }
 });
 
 test("2) server/profiles.mjs and server/hooks/agent-duties.ts require attribution format in plans, commits, CREDITS.md, and release notes", () => {

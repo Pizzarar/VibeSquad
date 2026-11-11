@@ -76,6 +76,14 @@ export const DIGEST_PROVIDER = "antigravity-cli/gemini-3.8-flash";
 export const DIGEST_PROFILE = "Pre-check - Flash";
 export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
+/** Label on a worker digest: the worker turn (runner turnId) it reports on, so a restarted server can find it on the runner (idea-123). */
+export const DIGEST_TURN_LABEL = "digestTurn";
+/** A digest's waiter archives it after 10 min; one still open past this has no waiter left (server restarted) and is swept (idea-62). */
+export const DIGEST_STALE_MS = 15 * 60_000;
+/** An orphaned digest older than this is only archived: its worker's verdict may sit past the 200-line log window, and a late UNVERIFIED would wake the lead for old work. */
+export const DIGEST_ORPHAN_VERDICT_MAX_MS = 2 * 60 * 60_000;
+/** Label before(agent.create) stamps with the stakes route, so agent.created can log it with the new agent's id (idea-87). */
+export const ROUTE_LABEL = "vs.route";
 const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
 const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded|stream was interrupted|temporarily unavailable/i;
 const MAX_RETRIES = 2;
@@ -103,6 +111,7 @@ export const EVERYONE_LAYER = [
   "- R11 (Bugs & fixes): Fix small in-unit root causes, report after. Other bugs/fixes: queue, keep working (leads/Buddies: `vs inbox add --lane <bug lane> --from-brainstorm \"<item>\"`; workers: final msg). Workarounds need a queued follow-up.",
   "- R12 (Owner principles): When the owner states a cross-lane principle (UI, process), escalate it to the hub Overlord (`vs who lead --lane vibesquad`) and queue a @bug audit item; don't keep it lane-local. (Workers: final message.)",
   "- R13 (Act on your lean): If you have a lean, act on it and report after: inbox triage, next steps, spikes. Ask only for scope changes, outward actions (push to others, release, external post), money, deletes or irreversible steps.",
+  "- R14 (Already covered): Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow covers it, say already-covered-by-X instead of rebuilding it.",
   "- Attribution (Community Accolades): Whenever designing, committing, or releasing parity/plugin-inspired features, record the original plugin/project name and publisher in plans, commits, `CREDITS.md`, and release notes using: \"Implemented <feature> — Thanks to <Plugin/Project> by <Author>\".",
 ].join("\n");
 
@@ -583,6 +592,24 @@ function logPath(team: string): string {
   return path.join(baseDir(), "teams", safeSegment(team), "log.jsonl");
 }
 
+/** A [done] entry naming `ref` written at or after `sinceMs` (1 s slack) in the last 200 lines of the team log. */
+function doneLoggedSince(team: string, ref: string, sinceMs: number): boolean {
+  try {
+    const lines = fs.readFileSync(logPath(team), "utf8").split(/\r?\n/).slice(-200);
+    return lines.some((l) => {
+      if (!l.trim()) return false;
+      try {
+        const e = JSON.parse(l) as LogEntry;
+        return e.type === "done" && (e.refs ?? []).includes(ref) && Date.parse(e.ts) >= sinceMs - 1000;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function appendLog(team: string, entry: Omit<LogEntry, "ts" | "refs"> & { refs?: string[] }): void {
   const file = logPath(team);
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -961,6 +988,8 @@ export interface Deps {
   doneSweepIntervalMs?: number;
   /** A worker is archived this long after its last `done` report (lead may still send a fix round meanwhile). */
   doneArchiveGraceMs?: number;
+  /** An open digest agent older than this is orphaned (its waiter died with a server restart): the sweep archives it. */
+  digestStaleMs?: number;
   /** The worker's unit branch (its cwd's HEAD) and whether it is merged into master. Unknown => merged:false (keep). */
   unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
   /** Watch sets (server/watch-sets.mjs): engine options, or false for off. Default: on in the watcher host that has runner events. */
@@ -1096,6 +1125,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const timers = new Set<ReturnType<typeof setTimeout>>();
     const stops: (() => void)[] = [];
     const firstDispatchLogged = new Set<string>();
+    const routeLogged = new Set<string>(); // agent ids whose `route-agent` metric is written
     const childCount = new Map<string, number>();
     const pendingInitialPrompts: { id?: string; title: string; cwd: string; prompt: string; at: number }[] = [];
     const initialPromptsById = new Map<string, string>();
@@ -1119,6 +1149,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const turnEpoch = new Map<string, number>(); // worker id -> monotonically increasing turn counter (incremented on turn_started)
     const inflightDigests = new Map<string, number>(); // worker id -> turn epoch of the digest currently in flight
     const inflightDigestIds = new Map<string, string>(); // worker id -> digest agent id currently in flight
+    const waitedDigestIds = new Set<string>(); // digest ids whose waiter already ended here: done, never adopted again
 
     const isWorkerBusy = (a: any): boolean => {
       if (!a) return false;
@@ -1126,31 +1157,37 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       return st === "running" || st === "initializing" || st === "queued" || st === "starting" || Boolean(a.queued);
     };
 
+    const archiveDigest = (paseo: Paseo, id: string) =>
+      Promise.resolve()
+        .then(() => paseo.agents.ref(id).archive())
+        .catch(() => deps.archiveAgent(id))
+        .catch(() => {});
+
+    /** Open (not archived, not closed) digest agents on the backend, optionally only those for `digestFor`. Throws if the list fails. */
+    const openDigests = async (paseo: Paseo, digestFor?: string): Promise<any[]> => {
+      const res = await paseo.agents.list?.({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
+      return ((res?.entries ?? []) as any[])
+        .map((entry) => entry?.agent ?? entry)
+        .filter((a) => {
+          const forId = String(a?.labels?.digestFor ?? "").trim();
+          if (!String(a?.id ?? "").trim() || a?.archivedAt || a?.status === "closed" || !forId) return false;
+          return digestFor === undefined || forId === digestFor;
+        });
+    };
+
+    // Fast path: only a digest this process tracks (or one still being created). Digests orphaned by a server restart are
+    // found on the backend by spawnDigest (next turn end) and sweepStaleDigests instead (idea-62).
     const cancelStaleDigests = async (paseo: Paseo, workerId: string) => {
       const tracked = inflightDigestIds.get(workerId);
       const hadInflight = inflightDigests.delete(workerId);
       if (!tracked && !hadInflight) return;
       if (tracked) {
         inflightDigestIds.delete(workerId);
-        await Promise.resolve()
-          .then(() => paseo.agents.ref(tracked).archive())
-          .catch(() => deps.archiveAgent(tracked))
-          .catch(() => {});
+        await archiveDigest(paseo, tracked);
         return;
       }
       try {
-        const res = await paseo.agents.list?.({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
-        for (const entry of (res?.entries ?? []) as any[]) {
-          const a = entry?.agent ?? entry;
-          const id = String(a?.id ?? "").trim();
-          if (!id || a?.archivedAt || a?.status === "closed") continue;
-          if (a?.labels?.digestFor === workerId) {
-            await Promise.resolve()
-              .then(() => paseo.agents.ref(id).archive())
-              .catch(() => deps.archiveAgent(id))
-              .catch(() => {});
-          }
-        }
+        for (const a of await openDigests(paseo, workerId)) await archiveDigest(paseo, a.id);
       } catch {
         /* best effort */
       }
@@ -1774,11 +1811,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (reqAgentId) ladderSpawns.set(reqAgentId, at);
           }
           const reason = route.reason === "default" && failoverProfileName ? "failover" : route.reason;
-          logProfileMetric(
-            reqLabels,
-            cwd,
-            `route: stakes=${route.stakes} model=${next.model ?? "-"} effort=${next.thinkingOptionId ?? "-"} reason=${reason}`,
-          );
+          const routeText = `stakes=${route.stakes} model=${next.model ?? "-"} effort=${next.thinkingOptionId ?? "-"} reason=${reason}`;
+          logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
+          // idea-87: the id does not exist yet, so the route rides the spawn's labels and agent.created logs `route-agent` with it.
+          if (!reqAgentId && (request as any).labels) {
+            nextReqLabels = { ...(nextReqLabels ?? reqLabels), [ROUTE_LABEL]: routeText };
+            changed = true;
+          }
         }
 
         // A1: Antigravity must never hang on an unsurfaced permission prompt. Keyed on the
@@ -1972,7 +2011,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // Never let a wrong-provider agent go on to retire a predecessor or count as a dispatch.
           if ((await enforceProfileAfterSpawn(agent, me, labels)) === "refused") return;
           st.mark("enforce-profile");
-          const parentId = agent.parentAgentId || labels["paseo.parent-agent-id"];
+          // idea-87: before(agent.create) logged `route:` without an id; this pairs it with the agent it spawned.
+          const routeText = String(labels[ROUTE_LABEL] ?? "").trim();
+          if (routeText && agent?.id && !routeLogged.has(agent.id)) {
+            routeLogged.add(agent.id);
+            logProfileMetric(labels, agent.cwd ?? me?.cwd ?? "", `route-agent: id=${agent.id} ${routeText}`, [agent.id]);
+          }
+          const parentId = agent.parentAgentId || labels["vs.parent"];
           const parent = parentId ? await snap(paseo, parentId) : null;
           st.mark("parent-snap");
           const pl = parent?.labels ?? {};
@@ -2315,6 +2360,28 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       digested.set(workerId, key);
       inflightDigests.set(workerId, epoch);
       const { team, lane } = where;
+      // idea-123: the runner may already hold a digest for this turn (spawned before a server restart, replayed turn_ended).
+      // Adopt it instead of spawning a second; archive the worker's other open digests (older turns, or finished but not yet
+      // archived) so a worker never holds two (idea-62). Only a digest that has not finished its turn can be adopted. A null
+      // turnId can't be matched: the newest such digest is adopted (it reads the worker's latest report when it runs).
+      try {
+        const open = (await openDigests(paseo, workerId)).sort((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")));
+        const pending = open.filter((a) => isWorkerBusy(a) && !waitedDigestIds.has(a.id));
+        const keep = tid ? pending.find((a) => a.labels?.[DIGEST_TURN_LABEL] === tid) : pending[0];
+        for (const a of open) {
+          if (a === keep) continue;
+          await archiveDigest(paseo, a.id);
+          waitedDigestIds.delete(a.id);
+        }
+        if (keep) {
+          if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
+          inflightDigestIds.set(workerId, keep.id);
+          log(`digest for ${workerId} turn ${tid || "-"} already on the backend (${keep.id}): adopted, not respawned`);
+          return;
+        }
+      } catch {
+        /* list failed: spawn as before */
+      }
       const prompt = [
         `You are a digest agent. Inspect the final result of worker agent ${worker.id} ("${worker.title ?? ""}"):`,
         String(worker.id).startsWith("rn-")
@@ -2327,22 +2394,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
       const startedAt = Date.now();
       /** A [done] entry for this worker written since the digest started (by the digest agent). */
-      const verdictLogged = () => {
-        try {
-          const lines = fs.readFileSync(logPath(teamIdOf(team, currentTeams())), "utf8").split(/\r?\n/).slice(-200);
-          return lines.some((l) => {
-            if (!l.trim()) return false;
-            try {
-              const e = JSON.parse(l) as LogEntry;
-              return e.type === "done" && (e.refs ?? []).includes(worker.id) && Date.parse(e.ts) >= startedAt - 1000;
-            } catch {
-              return false;
-            }
-          });
-        } catch {
-          return false;
-        }
-      };
+      const verdictLogged = () => doneLoggedSince(teamIdOf(team, currentTeams()), worker.id, startedAt);
       const fallback = async (why: string) => {
         if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
         const fresh = await snap(paseo, workerId);
@@ -2380,7 +2432,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           cwd: worker.cwd,
           title: `${DIGEST_PROFILE} digest`,
           prompt,
-          labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: worker.id },
+          labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: worker.id, ...(tid ? { [DIGEST_TURN_LABEL]: tid } : {}) },
           env: { VS_PROFILE: DIGEST_PROFILE },
           autoArchive: true,
         });
@@ -2410,6 +2462,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           .finally(() => {
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
             if (createdDigestId && inflightDigestIds.get(workerId) === createdDigestId) inflightDigestIds.delete(workerId);
+            if (createdDigestId) {
+              waitedDigestIds.add(createdDigestId);
+              if (waitedDigestIds.size > 500) waitedDigestIds.delete(waitedDigestIds.values().next().value as string);
+            }
           });
       } catch (err) {
         if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
@@ -3379,6 +3435,47 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       return (await sweepDoneWorkersReport({ apply: true, now })).archive.map((i) => i.id);
     }
 
+    /**
+     * idea-62: archive digest agents still open past `digestStaleMs`. A live waiter archives its digest at 10 min, so these were
+     * orphaned by a server restart (typically still queued behind the digest provider's turn cap, where they sat forever).
+     * A worker digest whose verdict never got logged gets the UNVERIFIED direct write, as when a live waiter gives up.
+     * Returns the archived ids.
+     */
+    let sweepingDigests = false;
+    async function sweepStaleDigests(now = Date.now()): Promise<string[]> {
+      const paseo = paseoApi;
+      if (!paseo || sweepingDigests) return [];
+      sweepingDigests = true;
+      const archived: string[] = [];
+      try {
+        const staleMs = deps.digestStaleMs ?? DIGEST_STALE_MS;
+        for (const d of await openDigests(paseo)) {
+          const born = Date.parse(String(d.createdAt ?? ""));
+          if (!Number.isFinite(born) || now - born < staleMs) continue;
+          await archiveDigest(paseo, d.id);
+          archived.push(d.id);
+          const workerId = String(d.labels.digestFor);
+          if (inflightDigestIds.get(workerId) === d.id) inflightDigestIds.delete(workerId);
+          if (now - born > DIGEST_ORPHAN_VERDICT_MAX_MS) continue;
+          // Watch-set merges name a set id, not an agent: snap() is null and nothing is written.
+          const worker = await snap(paseo, workerId);
+          if (!worker || worker.archivedAt || isWorkerBusy(worker)) continue;
+          const where = teamOf(worker.labels, worker.cwd);
+          if (!where || doneLoggedSince(teamIdOf(where.team, currentTeams()), workerId, born)) continue;
+          const last = await lastAssistantText(paseo, workerId);
+          if (!statesVerdict(last)) continue;
+          const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
+          appendLog(teamIdOf(where.team, currentTeams()), { agent: workerId, lane: where.lane, type: "done", text: `UNVERIFIED (digest orphaned): ${line}`, refs: [workerId] });
+        }
+      } catch (err) {
+        log(`digest sweep failed: ${err}`);
+      } finally {
+        sweepingDigests = false;
+      }
+      if (archived.length) log(`digest sweep archived ${archived.length} orphaned digest(s): ${archived.join(", ")}`);
+      return archived;
+    }
+
     scanLogs(true); // baseline offsets
     let interval: ReturnType<typeof setInterval> | null = null;
     let lastSweepAt = Date.now();
@@ -3391,6 +3488,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (every > 0 && Date.now() - lastSweepAt >= every) {
           lastSweepAt = Date.now();
           void sweepDoneWorkers().catch((err) => log(`worker sweep failed: ${err}`));
+          void sweepStaleDigests().catch((err) => log(`digest sweep failed: ${err}`));
         }
       }, deps.watchIntervalMs);
       interval.unref?.();
@@ -3408,6 +3506,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     (dispose as any).watchSets = watch;
     (dispose as any).sweepDoneWorkers = sweepDoneWorkers;
     (dispose as any).sweepDoneWorkersReport = sweepDoneWorkersReport;
+    (dispose as any).sweepStaleDigests = sweepStaleDigests;
     (dispose as any).handoffCoordinator = handoffCoordinator;
     (dispose as any).confirmTakeover = handoffCoordinator.confirmTakeover;
     (dispose as any).sendAgentPrompt = (req: any, ctx?: any) =>

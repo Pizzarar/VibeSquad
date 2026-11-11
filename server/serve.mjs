@@ -17,7 +17,9 @@ import {
   handleDesktopUpdateJson,
   handleHealth,
   setExposure,
+  setRelayStatus,
 } from "./vibesquad-api.mjs";
+import { startRelayFromSettings } from "./relay-wiring.mjs";
 import {
   authenticate,
   discardPlainHttpPairCode,
@@ -27,6 +29,7 @@ import {
   handleCaCrt,
   handleEnter,
   handlePairRedeem,
+  handlePairStatus,
   isAllowedHostHeader,
   lockDownVibesquadHome,
   netConfig,
@@ -423,6 +426,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if (path === "/pair" && req.method === "GET") {
       return handlePairRedeem(req, res);
     }
+    if (path === "/pair/status" && req.method === "GET") return handlePairStatus(req, res); // E4b waiting page poll (cookie-scoped)
     if (path === "/__vibesquad/enter") return handleEnter(req, res);
     const dev = authenticate(req);
     if (!dev) return sendUnpaired(req, res);
@@ -528,6 +532,19 @@ if (isMain) {
       }
     };
     applyLanListeners(lanEnabled);
+    // E5 outbound E2EE relay (server/relay-wiring.mjs): opt-in via settings.json relay.endpoint (wss://), off otherwise.
+    // Relayed requests run in-process through this same `handle` as a remote relayDevice principal: never a loopback
+    // fetch, so a relayed device can never look like the PC itself (threat model H1).
+    try {
+      const relay = startRelayFromSettings({ requestListener: guardHandler(handle) });
+      if (relay) {
+        setRelayStatus(() => relay.status());
+        server.once("close", () => relay.stop());
+        console.log(`VibeSquad relay: dialing ${relay.endpoint} as host ${relay.hostId} (key ${relay.fingerprint})`);
+      }
+    } catch (err) {
+      console.warn("relay not started:", err?.message ?? err);
+    }
     // Agent lifecycle hooks (prompt layering lives in createAgent; this feeds created / turn events + lead wakeups).
     // First, so its baseline + subscription exist before the push watcher opens the shared runner event stream.
     if (process.env.VS_RUNNER_HOOKS !== "0") {

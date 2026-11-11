@@ -1,5 +1,5 @@
 // E5 client side of the VibeSquad outbound E2EE relay. Protocol + threat model: server/relay-tunnel.mjs header and
-// docs/lanes/android-app/E5_THREAT_MODEL.md. UNWIRED: nothing imports this yet.
+// docs/lanes/android-app/E5_THREAT_MODEL.md (§11 is the wiring). The pin store lives in src/remoteSession.ts (saveRelayPin).
 // Crypto: WebCrypto (AES-256-GCM, HKDF, SHA-256) plus X25519 from WebCrypto when the runtime has it (Chrome/WebView >= 133,
 // Safari >= 17, Firefox >= 130), else audited @noble/curves. Channel keys and counters live only in memory: any socket
 // drop means a fresh handshake, never a resume.
@@ -17,6 +17,13 @@ const MAX_WIRE_CHARS = Math.ceil(((MAX_RECORD_BYTES + 8 + TAG_LEN) * 4) / 3) + 5
 const DEFAULT_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 
 export class RelayAuthError extends Error {}
+/** The token is waiting for the minting phone's approval (E4b two-step confirm): keep it, retry `authenticate` later. */
+export class RelayPendingError extends RelayAuthError {
+  constructor() {
+    super("waiting for approval on the phone that showed the code");
+    this.name = "RelayPendingError";
+  }
+}
 /** The host asked for a fresh handshake (24 h / 2^20 records). Reconnect and re-authenticate. */
 export class RelayRekeyError extends Error {
   constructor() {
@@ -270,7 +277,9 @@ export interface RelayWebSocket {
 
 export interface RelayClient {
   kex: "webcrypto" | "noble";
-  redeem(code: string, label?: string): Promise<{ deviceId: string; token: string }>;
+  /** `pending` = device-minted code (E4b): keep the token, the session is NOT authenticated until `authenticate` succeeds. */
+  redeem(code: string, label?: string): Promise<{ deviceId: string; token: string; pending?: boolean }>;
+  /** Throws RelayPendingError while the token still waits for approval, RelayAuthError when it is rejected/revoked. */
   authenticate(token: string): Promise<{ deviceId: string }>;
   fetch(input: string | URL | Request, init?: RequestInit): Promise<Response>;
   openWebSocket(path: string): Promise<RelayWebSocket>;
@@ -419,11 +428,11 @@ export async function connectRelay(opts: RelayOptions): Promise<RelayClient> {
   client.redeem = async (code, label = "") => {
     const r = await rpc({ t: "redeem", code, label }, "redeem-res");
     if (!r.ok) throw new RelayAuthError(r.locked ? "pairing locked; mint a new code" : "code rejected");
-    return { deviceId: String(r.deviceId), token: String(r.token) };
+    return { deviceId: String(r.deviceId), token: String(r.token), ...(r.pending === true ? { pending: true } : {}) };
   };
   client.authenticate = async (token) => {
     const r = await rpc({ t: "auth", token }, "auth-res");
-    if (!r.ok) throw new RelayAuthError("token rejected");
+    if (!r.ok) throw r.pending === true ? new RelayPendingError() : new RelayAuthError("token rejected");
     return { deviceId: String(r.deviceId) };
   };
   client.fetch = async (input, init = {}) => {

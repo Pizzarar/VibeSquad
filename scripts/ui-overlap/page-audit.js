@@ -87,6 +87,23 @@
     return { left: l, top: t, right: rr, bottom: b, width: rr - l, height: b - t, text: str.replace(/\s+/g, " ").trim() };
   };
 
+  // Like textBoxOf, but only the non-whitespace runs: white-space:pre-wrap lets a trailing space hang past the box edge (never painted).
+  const inkBoxOf = (el) => {
+    let l = Infinity, t = Infinity, rr = -Infinity, b = -Infinity;
+    for (const n of el.childNodes) {
+      if (n.nodeType !== 3) continue;
+      for (const m of n.nodeValue.matchAll(/\S+/g)) {
+        const rg = document.createRange();
+        rg.setStart(n, m.index); rg.setEnd(n, m.index + m[0].length);
+        for (const r of rg.getClientRects()) {
+          if (r.width <= 0 || r.height <= 0) continue;
+          l = Math.min(l, r.left); t = Math.min(t, r.top); rr = Math.max(rr, r.right); b = Math.max(b, r.bottom);
+        }
+      }
+    }
+    return l === Infinity ? null : { left: l, top: t, right: rr, bottom: b };
+  };
+
   const SKIP = new Set(["script", "style", "path", "option", "br", "canvas", "g", "defs", "use", "rect", "circle", "line", "polygon", "polyline", "text"]);
   const allEls = [...root.querySelectorAll("*")].filter((el) => !SKIP.has(el.tagName.toLowerCase()) && visible(el));
   // An open modal sits on an 80% backdrop: the page beneath it is not what the user sees, so only the modal itself is audited.
@@ -161,7 +178,11 @@
     const p = el.parentElement;
     if (p && p !== document.body && style(p).display !== "contents" && !["auto", "scroll"].includes(style(p).overflowX)) {
       const pr = p.getBoundingClientRect();
-      const out = Math.max(pr.left - vis.left, vis.right - pr.right, pr.top - vis.top, vis.bottom - pr.bottom);
+      let out = Math.max(pr.left - vis.left, vis.right - pr.right, pr.top - vis.top, vis.bottom - pr.bottom);
+      if (out > TOL + 1) {
+        const ink = inkBoxOf(el);
+        if (ink) out = Math.max(pr.left - Math.max(ink.left, vis.left), Math.min(ink.right, vis.right) - pr.right, pr.top - Math.max(ink.top, vis.top), Math.min(ink.bottom, vis.bottom) - pr.bottom);
+      }
       if (pr.width > 0 && out > TOL + 1) add("text-outside-container", "ours", el, p, `text box pokes ${out.toFixed(1)}px outside parent ${cssPath(p)}`, rectOf(vis));
     }
   }
