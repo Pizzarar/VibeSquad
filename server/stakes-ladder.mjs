@@ -10,7 +10,7 @@ export const STAKES_VALUES = ["tierA-security", "tierA-invariant", "normal", "me
 /** A rung with no `model` keeps the profile's model; no `effort` keeps the profile's effort. */
 export const DEFAULT_STAKES_LADDER = {
   claude: {
-    "tierA-security": { model: "claude-fable-5-1", effort: "high" },
+    "tierA-security": { model: "claude-opus-5-5", effort: "high" },
     "tierA-invariant": { model: "claude-opus-5-5", effort: "high" },
     mechanical: { model: "claude-sonnet-5-5", effort: "low" },
   },
