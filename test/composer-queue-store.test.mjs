@@ -106,3 +106,28 @@ test("queue: requeueQueued puts taken items back in front (Send now failure)", (
   const drawer = readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
   assert.match(drawer, /catch \(e\) \{\s*requeueQueued\(agent\.id, items\);\s*setSendError\(`Send failed/);
 });
+
+test("queue: entries for agents gone from the roster are pruned once the roster has loaded (idea-56)", () => {
+  q.__resetQueueForTest();
+  q.enqueueQueued("live", item("a", "keep"));
+  q.enqueueQueued("gone", item("b", "drop"));
+  let loaded = false;
+  const stop = q.startQueueFlusher({
+    getStatus: () => "running",
+    subscribe: () => () => {},
+    send: async () => {},
+    roster: () => ({ loaded, has: (id) => id === "live" }),
+  });
+  assert.equal(q.getQueued("gone").length, 1, "not pruned before the roster loads");
+  loaded = true;
+  q.enqueueQueued("live", item("c", "more")); // any queue change re-runs the pass
+  assert.equal(q.getQueued("gone").length, 0);
+  assert.deepEqual(q.getQueued("live").map((i) => i.text), ["keep", "more"]);
+  assert.ok(!("gone" in JSON.parse(store.get(q.QUEUE_STORAGE_KEY))));
+  stop();
+});
+
+test("modal: max-height compensates html zoom (idea-129)", () => {
+  const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+  assert.match(css, /\n\.modal \{[^}]*max-height: calc\(90dvh \/ var\(--vs-ui-scale, 1\)\)/);
+});

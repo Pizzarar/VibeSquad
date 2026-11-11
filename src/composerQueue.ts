@@ -72,12 +72,27 @@ type FlushDeps = {
   getStatus: (agentId: string) => string | undefined;
   subscribe: (l: () => void) => () => void;
   send: (agentId: string, text: string, images: Array<{ blob: Blob }>) => Promise<void>;
+  /** Once the first roster has arrived, entries for agents missing from it are pruned (they can never flush). */
+  roster?: () => { loaded: boolean; has: (agentId: string) => boolean };
 };
+
+/** Drop queued entries for agents that are gone from the roster (lingered in vs.composer-queue forever). */
+export function pruneQueued(has: (agentId: string) => boolean) {
+  const next: Record<string, QueuedTurnItem[]> = {};
+  let changed = false;
+  for (const [id, list] of Object.entries(queues)) {
+    if (has(id)) next[id] = list;
+    else changed = true;
+  }
+  if (changed) commit(next);
+}
 
 /** Sends each agent's queue as one steer turn as soon as that agent is neither running nor closed. Needs no drawer. */
 export function startQueueFlusher(deps: FlushDeps): () => void {
   const inflight = new Set<string>();
   const run = () => {
+    const r = deps.roster?.();
+    if (r?.loaded) pruneQueued(r.has);
     for (const agentId of Object.keys(queues)) {
       const status = deps.getStatus(agentId);
       if (!status || status === "running" || status === "closed" || inflight.has(agentId)) continue;

@@ -1367,7 +1367,7 @@ code {
 
 /* ---- Step 4: team actions modals ---- */
 .modal-back { position: fixed; inset: 0; background: color-mix(in srgb, var(--well) 80%, transparent); display: flex; align-items: center; justify-content: center; z-index: 50; }
-.modal { background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); width: 520px; max-width: 94vw; max-height: 90vh; display: flex; flex-direction: column; }
+.modal { background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); width: 520px; max-width: 94vw; max-height: 90vh; max-height: calc(90dvh / var(--vs-ui-scale, 1)); display: flex; flex-direction: column; }
 .modal.wide { width: 1000px; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--line); font-family: var(--arcade); color: var(--cyan-t); letter-spacing: 1px; }
 .modal-body { padding: 14px; overflow-y: auto; flex: 1; }

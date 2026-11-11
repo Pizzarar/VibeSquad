@@ -17,5 +17,9 @@ export function startComposerQueueFlusher() {
     getStatus: (id) => getPaseoState().agents.get(id)?.status,
     subscribe: subscribePaseo,
     send: flushQueued,
+    roster: () => {
+      const st = getPaseoState();
+      return { loaded: st.rosterLoaded, has: (id) => st.agents.has(id) };
+    },
   });
 }
