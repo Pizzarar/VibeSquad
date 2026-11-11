@@ -1243,6 +1243,33 @@ describe("E5 wiring: in-process stream bridge (openWs for a server without WebSo
     assert.deepEqual(got, []);
     host.stop();
   });
+
+  test("Gemini wire R1 #1: a handler that only listens on req close and destroys res directly still gets its cleanup; the stream closes", async () => {
+    const seen = [];
+    const relay = makeRelay();
+    const listener = (req, res) => {
+      req.on("close", () => seen.push("req-close")); // terminals-api.mjs style: cleanup on the request only
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: hi\n\n");
+      setTimeout(() => res.destroy(), 5); // no end(), no final(): the handler tears the response down itself
+    };
+    const { host } = makeHost(relay, { openWs: createInProcessStreamBridge(listener) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const ws = await c.openWebSocket("/api/abrupt");
+    const got = [];
+    let closeCode = null;
+    ws.onmessage = (ev) => got.push(ev.data);
+    ws.onclose = (ev) => (closeCode = ev.code);
+    await until(() => closeCode !== null);
+    await until(() => seen.includes("req-close"));
+    assert.deepEqual(got, ["data: hi\n\n"]);
+    assert.equal(closeCode, 1000);
+    assert.deepEqual(seen, ["req-close"], "cleanup ran exactly once");
+    assert.equal(host.status().sessions, 1, "only the stream ended, not the session");
+    host.stop();
+  });
 });
 
 describe("E5 wiring: E4b pending redeem inside the channel", () => {

@@ -492,6 +492,10 @@ export function createInProcessStreamBridge(requestListener, { maxBodyBytes } = 
       });
       Object.defineProperty(res, "headersSent", { get: () => total > 0 || res.writableEnded || res.writableFinished, enumerable: true });
       res.on("error", () => finish(1011));
+      // Gemini wire R1 #1: finish() is the one teardown path (it destroys req too). A handler that ends or destroys res
+      // directly, without going through final(), still lands here, so req emits "close" and req-only cleanup (e.g.
+      // terminals-api.mjs req.on("close")) runs instead of leaking until the session dies. finish() is idempotent.
+      res.on("close", () => finish(1000));
       const handle = {
         message() {}, // one-way: the app never sends over its event streams
         close() {
