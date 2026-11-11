@@ -79,17 +79,35 @@ async function toFocus(page) {
   await page.locator(tid("drawer-head-compact")).waitFor({ timeout: 8000 });
   await sleep(700);
 }
-// Mobile (390): the sidebar lives in the "Teams" bottom-bar sheet; rows there open the agent drawer.
-async function mobileOpenRow(page, text) {
-  await reset(page);
-  await click(page, tid("mobile-bar-teams"));
-  await sleep(500);
-  await click(page, `.rrow:has-text("${text}")`);
-  await page.locator(tid("drawer-subagents-bar")).waitFor({ timeout: 8000 }).catch(() => {});
+// Mobile (390): only <PhoneCockpit /> mounts (src/PhoneCockpit.tsx): a squad pill + "..." drawer on top, the Overlord / RiffBot
+// tabs at the bottom, and one chat-only AgentDrawer. No sidebar, pin grid, squads home or modals. `&riff=1` gives the demo a live
+// RiffBot + Overlord; the drawer's lane rows open a lane's Buddy (the "neon-noir cast" brainstorm for `vibesquad`).
+const phoneUrl = (query = "") => `&riff=1${query}`;
+async function phoneHome(page, query = "") {
+  // Storage is cleared so a previously opened lane/tab can't leak in; vs.vibePicked skips the first-launch vibe picker.
+  await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("vs.vibePicked", "1"); });
+  await reload(page, phoneUrl(query));
+  await page.locator(tid("phone-cockpit")).waitFor({ timeout: 8000 });
+}
+async function phoneTab(page, surface, query = "") {
+  await phoneHome(page, query);
+  await click(page, tid(`phone-tab-${surface}`));
+  await page.locator(`${tid("phone-cockpit")}[data-surface="${surface}"]`).waitFor({ timeout: 4000 });
   await sleep(900);
 }
-// Opened agents persist across reloads, so clear storage to land on the pin grid again.
-const mobileGrid = async (page) => { await page.evaluate(() => { localStorage.clear(); sessionStorage.clear(); }); await reload(page); };
+async function phoneBuddy(page, lane, query = "") {
+  await phoneHome(page, query);
+  await click(page, tid("phone-more"));
+  await click(page, tid(`phone-lane-${lane}`));
+  await page.locator(`${tid("phone-cockpit")}[data-surface="buddy"]`).waitFor({ timeout: 4000 });
+  await sleep(900);
+}
+async function phoneDrawer(page) {
+  await phoneHome(page);
+  await click(page, tid("phone-more"));
+  await page.locator(tid("phone-drawer")).waitFor({ timeout: 4000 });
+  await sleep(500);
+}
 
 // Hub view (HP5/HP6): the sidebar RiffBot row opens ONE view: the Riff/Overlord TVs band on top, one full-height squad floor
 // below (the lift's < > page the floors). `query` reloads the demo first (e.g. "&riff=1" for a live RiffBot + Overlord).
@@ -119,18 +137,18 @@ const COMPOSER_ROOTS = ['footer.composer', tid("drawer-subagents-bar"), tid("dra
 
 // `mobile`: undefined = same setup as desktop, function = alternate route, false = "no mobile route".
 export const SURFACES = [
-  { id: "squads-home", setup: toSquadsHome, mobile: async (p) => { await mobileGrid(p); await click(p, tid("breadcrumb-squads")); await p.locator(tid("squads-home")).waitFor({ timeout: 6000 }); await sleep(500); } },
-  { id: "pin-grid-usage", setup: toPinGrid, mobile: mobileGrid },
-  { id: "focus-brainstorm", setup: toFocus, mobile: (p) => mobileOpenRow(p, "neon-noir cast") },
-  { id: "composer", setup: toFocus, roots: COMPOSER_ROOTS, mobile: (p) => mobileOpenRow(p, "neon-noir cast") },
+  { id: "squads-home", setup: toSquadsHome, mobile: phoneDrawer, mobileRoots: [tid("phone-drawer")] }, // closest phone analogue: the "..." drawer with the Teams list (the squad pill is disabled with one squad)
+  { id: "pin-grid-usage", setup: toPinGrid, mobile: (p) => phoneHome(p) },
+  { id: "focus-brainstorm", setup: toFocus, mobile: (p) => phoneBuddy(p, "vibesquad") },
+  { id: "composer", setup: toFocus, roots: COMPOSER_ROOTS, mobile: (p) => phoneBuddy(p, "vibesquad") },
   {
     id: "focus-brainstorm-hot", // token bar in warn state (115K/150K, the owner's R1 shot) via demo fixture ?bsUsed=
     setup: async (p) => { await reload(p, "&bsUsed=115000"); await toFocus(p); },
     after: async (p) => { await reload(p); },
-    mobile: async (p) => { await reload(p, "&bsUsed=115000"); await mobileOpenRow(p, "neon-noir cast"); },
+    mobile: (p) => phoneBuddy(p, "vibesquad", "&bsUsed=115000"),
   },
-  { id: "focus-lead", setup: async (p) => { await toFocus(p); await click(p, tid("pin-team-lead")); await sleep(700); }, mobile: (p) => mobileOpenRow(p, "VIBESQUAD ord1") },
-  { id: "focus-worker", setup: async (p) => { await toFocus(p); await click(p, tid("pin-team-worker-demo-art-o")); await sleep(700); }, mobile: (p) => mobileOpenRow(p, "Art Painter - Opus") },
+  { id: "focus-lead", setup: async (p) => { await toFocus(p); await click(p, tid("pin-team-lead")); await sleep(700); }, mobile: (p) => phoneTab(p, "overlord") },
+  { id: "focus-worker", setup: async (p) => { await toFocus(p); await click(p, tid("pin-team-worker-demo-art-o")); await sleep(700); }, mobile: (p) => phoneTab(p, "riffbot") },
   { id: "hub", setup: (p) => toHub(p), mobile: false },
   { id: "sky-idle", setup: (p) => toHub(p), mobile: false }, // no live RiffBot / Overlord: the "Spin Up" TVs
   { id: "sky-rest", setup: (p) => toHub(p, "&riff=1"), after: async (p) => { await reload(p); }, mobile: false },
@@ -145,9 +163,9 @@ export const SURFACES = [
   { id: "settings", setup: async (p) => { await reset(p); await click(p, tid("sidebar-settings-btn")); await p.locator(tid("settings-pane")).waitFor({ timeout: 6000 }); await sleep(600); }, mobile: false },
   { id: "menu-drawer-config", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-config-menu-btn")); await sleep(400); }, mobile: false },
   { id: "menu-drawer-more", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-more-toggle")); await sleep(400); }, mobile: false },
-  { id: "menu-pin-tile", setup: async (p) => { await toPinGrid(p); await click(p, `${tid(`pin-tile-${SQUAD}`)} ${tid(`pin-menu-${SQUAD}`)}, ${tid(`pin-menu-${SQUAD}`)}`); await sleep(400); }, mobile: async (p) => { await mobileGrid(p); await click(p, `${tid(`pin-menu-${SQUAD}`)}:visible`); await sleep(400); } },
+  { id: "menu-pin-tile", setup: async (p) => { await toPinGrid(p); await click(p, `${tid(`pin-tile-${SQUAD}`)} ${tid(`pin-menu-${SQUAD}`)}, ${tid(`pin-menu-${SQUAD}`)}`); await sleep(400); }, mobile: false },
   { id: "modal-command-palette", setup: async (p) => { await reset(p); await p.keyboard.press("Control+k"); await p.locator(tid("command-palette")).waitFor({ timeout: 4000 }); await sleep(300); }, mobile: false },
-  { id: "modal-new-squad", setup: async (p) => { await reset(p); await click(p, tid("sidebar-new-squad-btn")); await sleep(600); }, mobile: async (p) => { await mobileGrid(p); await click(p, tid("breadcrumb-squads")); await click(p, tid("squad-home-new-tile")); await sleep(600); } },
+  { id: "modal-new-squad", setup: async (p) => { await reset(p); await click(p, tid("sidebar-new-squad-btn")); await sleep(600); }, mobile: false },
   { id: "modal-diagnostics", setup: async (p) => { await reset(p); await click(p, tid("open-diagnostics-btn")); await p.locator(tid("diagnostics-modal")).waitFor({ timeout: 4000 }); await sleep(500); }, mobile: false },
 ];
 
@@ -155,7 +173,7 @@ export const SURFACES = [
 const HIDE_TEXT = `*,*::before,*::after{-webkit-text-fill-color:transparent!important;text-shadow:none!important;caret-color:transparent!important;-webkit-text-stroke:0!important;transition:none!important;animation:none!important}`;
 
 async function auditSurface(page, size, surf) {
-  const res = await page.evaluate(`(${AUDIT_SRC})(${JSON.stringify({ tolerance: 2, rootSelectors: surf.roots ?? null })})`);
+  const res = await page.evaluate(`(${AUDIT_SRC})(${JSON.stringify({ tolerance: 2, rootSelectors: (size.mobile && surf.mobileRoots) || surf.roots || null })})`);
   if (res.missing) return res;
   // Pixel pass: text hidden → sample the real rendered background under every text box.
   const h = await page.addStyleTag({ content: HIDE_TEXT });
