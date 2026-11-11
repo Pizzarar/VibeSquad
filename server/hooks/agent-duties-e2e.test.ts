@@ -1614,10 +1614,11 @@ test(
       (h.paseo.agents as any).create = async (payload: any) => {
         const id = `dig-${created.length + 1}`;
         created.push({ id, ...payload });
-        return { id, agent: { id }, waitForFinish: () => new Promise<void>(() => {}) };
+        return { id, agent: { id }, waitForFinish: async () => ({ status: "idle" }) };
       };
       try {
         await h.onTurnEnded(w, { kind: "completed" }, turnId);
+        await wait(50); // the digest finished: the turn is now recorded as delivered
       } finally {
         h.stop?.();
       }

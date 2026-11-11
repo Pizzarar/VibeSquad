@@ -618,7 +618,9 @@ function persistDigestedTurn(workerId: string, turnId: string | null): void {
     const keys = Object.keys(m);
     for (const k of keys.slice(0, Math.max(0, keys.length - 2000))) delete m[k];
     fs.mkdirSync(path.dirname(digestedTurnsPath()), { recursive: true });
-    fs.writeFileSync(digestedTurnsPath(), JSON.stringify(m), "utf8");
+    const tmp = `${digestedTurnsPath()}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(m), "utf8");
+    fs.renameSync(tmp, digestedTurnsPath());
   } catch {
     /* best effort: the in-memory guard still applies */
   }
@@ -2396,7 +2398,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const where = teamOf(labels, worker.cwd);
       if (!where) return;
       digested.set(workerId, key);
-      persistDigestedTurn(workerId, tid || null);
       inflightDigests.set(workerId, epoch);
       const { team, lane } = where;
       // idea-123: the runner may already hold a digest for this turn (spawned before a server restart, replayed turn_ended).
@@ -2499,6 +2500,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           })
           .catch(() => fallback("errored"))
           .finally(() => {
+            // idea-150: record the turn as delivered only once its digest finished (not at spawn: a spawned digest a restart
+            // re-adopts, idea-123, must still pass the replayed turn_ended). A newer turn (epoch moved) is not this turn's delivery.
+            if (tid && (turnEpoch.get(workerId) ?? 0) === epoch) persistDigestedTurn(workerId, tid);
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
             if (createdDigestId && inflightDigestIds.get(workerId) === createdDigestId) inflightDigestIds.delete(workerId);
             if (createdDigestId) {
