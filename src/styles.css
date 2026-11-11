@@ -1295,7 +1295,7 @@ code {
 .btn.confirm.danger { color: var(--pink-t); border-color: var(--hot-pink); }
 .btn.confirm.warn { color: var(--amber-t); border-color: var(--amber); }
 .btn.confirm.cool { color: var(--cyan-t); border-color: var(--cyan); }
-.btn.confirm.armed { background: var(--pink-fill); color: var(--bg); box-shadow: var(--bevel); animation: arm-pulse 0.8s infinite alternate; }
+.btn.confirm.armed { background: var(--pink-fill); color: var(--on-pink-fill); box-shadow: var(--bevel); animation: arm-pulse 0.8s infinite alternate; }
 .btn.confirm.warn.armed { background: var(--amber); color: var(--on-amber); }
 .btn.confirm.cool.armed { background: var(--cyan-fill); }
 .btn.confirm.busy { opacity: 0.6; }
@@ -1338,7 +1338,7 @@ code {
 
 .you-bar, .you-flag, .lint-bar { display: flex; flex-wrap: wrap; min-width: 0; max-width: 100%; box-sizing: border-box; align-items: center; gap: 8px; margin: 8px 12px 0; padding: 6px 10px; font-size: 12px; }
 .you-bar { background: var(--well); border: 1px solid var(--hot-pink); box-shadow: var(--bevel); }
-.you-tag { font-family: var(--arcade); font-size: 10px; color: var(--bg); background: var(--pink-fill); padding: 1px 6px; }
+.you-tag { font-family: var(--arcade); font-size: 10px; color: var(--on-pink-fill); background: var(--pink-fill); padding: 1px 6px; }
 .you-reason { flex: 1; color: var(--pink-t); font-family: var(--display); font-size: 14px; }
 .you-flag { border: 1px dashed var(--line); }
 .you-flag input { flex: 1 1 110px; min-width: 0; max-width: 100%; padding: 3px 8px; }
@@ -1413,7 +1413,7 @@ code {
 .hard-text .muted { color: var(--muted); }
 .hard-bar > .btn { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .btn.warn { color: var(--amber-t); border-color: var(--amber); }
-.btn.hot { color: var(--bg); background: var(--pink-fill); border-color: var(--hot-pink); font-weight: 700; box-shadow: var(--bevel); }
+.btn.hot { color: var(--on-pink-fill); background: var(--pink-fill); border-color: var(--hot-pink); font-weight: 700; box-shadow: var(--bevel); }
 .btn.successor { margin-top: 6px; font-family: var(--arcade); font-size: 10px; letter-spacing: 1px; width: 100%; }
 .btn.successor.warn { background: var(--bg); }
 .successor-bar { border-color: var(--hot-pink); color: var(--pink-t); background: var(--well); }
@@ -1444,11 +1444,11 @@ code {
 .feed-text { flex: 1; min-width: 0; }
 .feed-meta { flex: none; white-space: nowrap; }
 .feed-type { font-family: var(--arcade); font-size: 9px; padding: 1px 6px; border: 1px solid var(--line); flex: none; text-transform: uppercase; color: var(--muted); }
-.feed-type.you { color: var(--bg); background: linear-gradient(90deg, var(--pink-fill), var(--amber)); border-color: var(--hot-pink); font-weight: 700; }
+.feed-type.you { color: var(--on-pink-fill); background: linear-gradient(90deg, var(--pink-fill), var(--amber)); border-color: var(--hot-pink); font-weight: 700; }
 .feed-type.done { color: var(--mint-t); border-color: var(--emerald); }
 .feed-type.decision { color: var(--cyan-t); border-color: var(--cyan); }
 .feed-type.blocker { color: var(--pink-t); border-color: var(--hot-pink); }
-.feed-type.needs-you { color: var(--bg); background: var(--pink-fill); border-color: var(--pink-fill); }
+.feed-type.needs-you { color: var(--on-pink-fill); background: var(--pink-fill); border-color: var(--pink-fill); }
 .feed-type.handoff { color: var(--violet-t); border-color: var(--violet); }
 .feed-type.metric { color: var(--amber-t); border-color: var(--amber); }
 .feed-ref { all: unset; cursor: pointer; margin-left: 6px; color: var(--cyan-t); text-decoration: underline dotted; font-size: 11px; }
@@ -3965,7 +3965,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-role-name { width: 84px; flex-shrink: 0; text-transform: capitalize; }
 .usage-coord { margin-top: 6px; }
 .usage-loop { padding: 2px 0; }
-.usage-flag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; text-transform: uppercase; color: var(--bg); background: var(--pink-fill); border-radius: 999px; }
+.usage-flag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; text-transform: uppercase; color: var(--on-pink-fill); background: var(--pink-fill); border-radius: 999px; }
 .usage-flag-storm { background: var(--amber); color: var(--on-amber); }
 .usage-table-wrap { overflow-x: auto; }
 .usage-profiles { display: flex; flex-direction: column; gap: 6px; }
@@ -6035,8 +6035,8 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 
 /* Slim composer (PLAN_CHAT_ROOM C4): ◂ tab on the composer edge opens the rarer controls; Stop is a small icon. */
 .composer-stop-btn { min-width: 0; padding-left: var(--sp-2, 8px); padding-right: var(--sp-2, 8px); }
-.composer-more-tab { flex: none; align-self: stretch; min-width: var(--sp-4, 16px); padding: 0 var(--sp-1, 4px); background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--text); border: 1px solid var(--line); opacity: 0.6; cursor: pointer; font: inherit; line-height: 1; }
-.composer-more-tab:hover, .composer-more-tab:focus-visible, .composer-more-tab[aria-expanded="true"] { opacity: 1; background: var(--panel); color: var(--cyan-t); }
+.composer-more-tab { flex: none; align-self: stretch; min-width: var(--sp-4, 16px); padding: 0 var(--sp-1, 4px); background: color-mix(in srgb, var(--panel) 55%, transparent); color: var(--muted); border: 1px solid var(--line); opacity: 1; cursor: pointer; font: inherit; line-height: 1; }
+.composer-more-tab:hover, .composer-more-tab:focus-visible, .composer-more-tab[aria-expanded="true"] { background: var(--panel); color: var(--cyan-t); }
 .composer-more-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1, 4px) 0; }
 .composer-more-item { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .composer-more-item:hover:not(:disabled), .composer-more-item:focus-visible { background: var(--navy); color: var(--cyan-t); outline: none; }
@@ -6234,7 +6234,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   gap: 6px;
 }
 .phone-tab.on { color: var(--text); border-top-color: var(--hot-pink); background: var(--panel-hi); }
-.phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--hot-pink); color: var(--well); font-size: 12px; font-weight: 800; text-align: center; }
+.phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--pink-fill); color: var(--on-pink-fill); font-size: 12px; font-weight: 800; text-align: center; }
 
 /* ---- E2 decision card (Overlord escalation) ---- */
 .decision-card { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--violet); border-radius: 10px; background: var(--violet-dim); color: var(--text); }
