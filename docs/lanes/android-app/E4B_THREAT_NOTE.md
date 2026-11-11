@@ -39,7 +39,7 @@ Files: `server/auth.mjs`, `server/file-lock.mjs`, `server/local-token.mjs`, `ser
 ## 4. Residual risks
 - A pending ticket is in memory only: a server restart during the 60 s window drops it and the new device re-pairs. Chosen on purpose so `devices.json` never contains anything that is not an approved device.
 - The minting device is the only approver (not any owner device, not the PC). If that phone is lost between mint and approve, the ticket expires in 60 s.
-- `vs open` / `requestLocalLoginUrl` and `requestWorkerSweep` still send the header first (older pattern, X1 L3 "shared"). `proveLocalServer()` is written so they can adopt it; wiring them is a follow-up, not in this unit.
+- `vs open` / `requestLocalLoginUrl`, `requestWorkerSweep` and the two MCP posts (lead handoff, Buddy restart) used to send the header first (older pattern, X1 L3 "shared"). Done in `unit-and-prove-local`: every in-repo caller goes through `fetchWithLocalToken()` (`server/local-token.mjs`), which runs `proveLocalServer()` and the token request on one TCP connection (`singleConnectionClient`: a second dial is refused), so the proof binds the socket, not just the port a millisecond earlier (X1 prove-local L1). `redirect: "error"` on both requests; no proof cache (the MCP process is long-lived); `test/sec-prove-local.test.mjs` pins that `cli/`, `server/`, `runner/` and `scripts/` emit the header nowhere else.
 - E5 relay wiring (`redeem()` for relay clients) is out of scope. `redeemPairCode()` is factored so the relay can reuse it and will see `state: "pending"` for phone-minted codes.
 
 ## 5. Review fix round (rev 2)

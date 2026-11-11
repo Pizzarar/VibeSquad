@@ -469,7 +469,7 @@ async function postLeadHandoffToServer(body, ctx) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      fetchImpl: ctx.fetch ?? fetch,
+      fetchImpl: ctx.fetch,
       timeoutMs: 200_000,
       tokenOptional: true,
     });
@@ -676,7 +676,7 @@ async function postBuddyRestartToServer(body, ctx) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      fetchImpl: ctx.fetch ?? fetch,
+      fetchImpl: ctx.fetch,
       timeoutMs: 200_000,
       tokenOptional: true,
     });

@@ -57,6 +57,7 @@ test("vs archive --sweep posts apply flag with the local token and prints the re
   assert.equal(reqs[0].url, "http://127.0.0.1:1/__vibesquad/runner/sweep");
   assert.equal(reqs[0].init.headers["x-vibesquad-token"], "a".repeat(64));
   assert.equal(reqs[0].init.headers["content-type"], "application/json");
+  assert.equal(reqs[0].init.redirect, "error", "a 3xx never forwards the header");
   assert.deepEqual([JSON.parse(reqs[0].init.body), JSON.parse(reqs[1].init.body)], [{ apply: false }, { apply: true }]);
   await assert.rejects(() => requestWorkerSweep({ file: join(tmpdir(), "nope-token"), fetchImpl }), /no local token/);
 });

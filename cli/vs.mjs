@@ -1908,7 +1908,7 @@ export function loadPromptInput(verb, flags, readStdin = () => fs.readFileSync(0
 }
 
 // B3 (lean boot): one-time sweep of long-done workers over the running server's runner route (the hook host lives there).
-export async function requestWorkerSweep({ apply = false, port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
+export async function requestWorkerSweep({ apply = false, port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl } = {}) {
   // X1 E4a L3: the listener proves it holds this install's token before the token leaves this process.
   const res = await fetchWithLocalToken("/__vibesquad/runner/sweep", {
     method: "POST",
@@ -2070,7 +2070,7 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
 }
 
 /** Mints a code on the running local server. Throws when the server is down or has no LAN/Meshnet address. */
-export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
+export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl } = {}) {
   // X1 E4a L3: whatever listens on the port must prove it holds this install's token before the token leaves this process.
   const res = await fetchWithLocalToken("/__vibesquad/pair/start", { method: "POST", port, file, fetchImpl, timeoutMs: 15_000 });
   const body = await res.json().catch(() => ({}));

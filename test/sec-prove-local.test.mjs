@@ -31,22 +31,25 @@ function rogueServer(seen) {
   return createServer((req, res) => {
     seen.push({ url: req.url, token: req.headers["x-vibesquad-token"] ?? null });
     res.setHeader("content-type", "application/json");
-    res.setHeader("connection", "close"); // no keep-alive pooling across the fake servers a test swaps on one port
     res.end(JSON.stringify({ ok: true, proof: "f".repeat(64), path: "/__vibesquad/local-login?t=" + "0".repeat(32), dryRun: true, count: 0, successorId: "rn-x", newAgentId: "rn-y" }));
   });
 }
 
-/** A stand-in that really holds the token: answers the proof correctly and records the order of what it saw. */
-function honestServer(seen) {
+/**
+ * A stand-in that really holds the token: answers the proof correctly and records the order of what it saw, with the
+ * socket each request arrived on. Keeps connections alive, as the real server does. `onProof` may tweak the proof reply.
+ */
+function honestServer(seen, { onProof = () => {}, onRequest = () => {} } = {}) {
   return createServer((req, res) => {
     const u = new URL(req.url, "http://x");
-    seen.push({ url: req.url, token: req.headers["x-vibesquad-token"] ?? null });
+    seen.push({ url: req.url, token: req.headers["x-vibesquad-token"] ?? null, socket: req.socket, clientPort: req.socket.remotePort });
     res.setHeader("content-type", "application/json");
-    res.setHeader("connection", "close"); // no keep-alive pooling across the fake servers a test swaps on one port
     if (u.pathname === "/__vibesquad/local-proof") {
+      onProof(req, res);
       const port = req.socket.localPort;
       return res.end(JSON.stringify({ proof: auth.localProof(token, u.searchParams.get("c"), port), port }));
     }
+    if (onRequest(req, res) === true) return;
     res.end(JSON.stringify({ ok: true, path: "/__vibesquad/local-login?t=" + "a".repeat(32), dryRun: true, count: 0, code: "123456", pairUrl: "https://127.0.0.1/pair?code=123456" }));
   });
 }
@@ -222,6 +225,96 @@ describe("fetchWithLocalToken: the shared helper", () => {
     assert.equal(calls[1].init.method, "POST");
     assert.equal(calls[1].init.body, "{}");
     assert.deepEqual(calls[1].init.headers, { "content-type": "application/json", "x-vibesquad-token": token });
+    // X1 prove-local I1: a 3xx must never forward the header to another origin
+    assert.equal(calls[0].init.redirect, "error");
+    assert.equal(calls[1].init.redirect, "error");
+  });
+});
+
+describe("X1 prove-local L1: the proof binds the socket, not the port", () => {
+  test("the token request rides the very socket the proof came back on", async () => {
+    const seen = [];
+    const honest = honestServer(seen);
+    const port = await listen(honest);
+    try {
+      await cli.requestWorkerSweep({ port, file: tokenFile });
+      await localTokenMod.requestLocalLoginUrl({ port, file: tokenFile });
+    } finally {
+      await close(honest);
+    }
+    assert.equal(seen.length, 4);
+    assert.ok(seen[0].socket === seen[1].socket, "sweep: challenge and token request share one TCP connection");
+    assert.equal(seen[0].clientPort, seen[1].clientPort);
+    assert.ok(seen[2].socket === seen[3].socket, "vs open: same");
+    assert.ok(seen[1].socket !== seen[2].socket, "each call owns its own connection and drops it after (no cross-call reuse)");
+    assert.deepEqual(seen.map((s) => s.token), [null, token, null, token]);
+  });
+
+  test("attacker: if the proven socket is gone before the token request, no second connection is dialed and the token is not sent", async () => {
+    const seen = [];
+    // The listener answers the challenge correctly, then closes the connection: whatever answers the next dial is unproven.
+    const honest = honestServer(seen, { onProof: (_req, res) => res.setHeader("connection", "close") });
+    const port = await listen(honest);
+    try {
+      const err = await cli.requestWorkerSweep({ port, file: tokenFile }).catch((e) => e);
+      assert.match(err.message, /the proven connection to 127\.0\.0\.1:\d+ closed before the request; the local token was not sent/);
+      assert.equal(err.proofFailed, true, "tagged like a failed proof: the MCP posts never fall back in-process on it");
+      assert.equal(err.unreachable, undefined);
+      const err2 = await localTokenMod.fetchWithLocalToken("/__vibesquad/lead-handoff", { method: "POST", port, file: tokenFile, tokenOptional: true }).catch((e) => e);
+      assert.equal(err2.proofFailed, true, "tokenOptional changes nothing once a token exists");
+    } finally {
+      await close(honest);
+    }
+    assert.equal(seen.length, 2, "two calls, one challenge each, nothing else reached the port");
+    assert.ok(seen.every((s) => s.url.startsWith("/__vibesquad/local-proof?c=") && s.token === null));
+  });
+
+  test("singleConnectionClient: one dial per client, a second dial is refused, close() drops the socket", async () => {
+    const seen = [];
+    const honest = honestServer(seen, { onProof: (_req, res) => res.setHeader("connection", "close") });
+    const port = await listen(honest);
+    const client = localTokenMod.singleConnectionClient(port);
+    try {
+      assert.equal(client.dialed, false);
+      const r = await client.fetch(`http://127.0.0.1:${port}/__vibesquad/local-proof?c=${"a".repeat(32)}`);
+      assert.equal(r.status, 200);
+      assert.equal(client.dialed, true);
+      assert.equal((await r.json()).port, port);
+      await assert.rejects(client.fetch(`http://127.0.0.1:${port}/__vibesquad/x`, { method: "POST", headers: { "x-vibesquad-token": token }, body: "{}" }), /closed before the request/);
+      await assert.rejects(client.fetch(`http://127.0.0.1:${port + 1}/__vibesquad/x`), /is not 127\.0\.0\.1:/, "the client cannot be pointed elsewhere");
+      await assert.rejects(client.fetch(`http://localhost:${port}/__vibesquad/x`), /is not 127\.0\.0\.1:/);
+    } finally {
+      client.close();
+      await close(honest);
+    }
+    assert.equal(seen.length, 1);
+  });
+
+  test("attacker: a proven listener that answers the token request with a 3xx gets a refusal, not a forwarded header (I1)", async () => {
+    const sinkSeen = [];
+    const sink = createServer((req, res) => {
+      sinkSeen.push(req.headers["x-vibesquad-token"] ?? null);
+      res.end("{}");
+    });
+    const sinkPort = await listen(sink);
+    const seen = [];
+    const honest = honestServer(seen, {
+      onRequest: (_req, res) => {
+        res.statusCode = 302;
+        res.setHeader("location", `http://127.0.0.1:${sinkPort}/__vibesquad/runner/sweep`);
+        res.end();
+        return true;
+      },
+    });
+    const port = await listen(honest);
+    try {
+      await assert.rejects(cli.requestWorkerSweep({ port, file: tokenFile }), /sweep refused \(302\)/);
+    } finally {
+      await close(honest);
+      await close(sink);
+    }
+    assert.deepEqual(sinkSeen, [], "nothing followed the redirect");
+    assert.equal(seen.length, 2);
   });
 });
 
@@ -234,9 +327,11 @@ describe("source guard: the header is minted in one place", () => {
     });
   const emits = /\[LOCAL_TOKEN_HEADER\]\s*:|localTokenHeaders\(|["']x-vibesquad-token["']\s*:/;
 
-  test("cli/ and server/ emit x-vibesquad-token only inside server/local-token.mjs (fetchWithLocalToken + the exported out-of-repo helper)", () => {
+  test("cli/, server/, runner/ and scripts/ emit x-vibesquad-token only inside server/local-token.mjs (fetchWithLocalToken + the exported out-of-repo helper)", () => {
     const offenders = [];
-    for (const f of [...walk(join(rootDir, "cli")), ...walk(join(rootDir, "server"))]) {
+    const files = ["cli", "server", "runner", "scripts"].flatMap((d) => walk(join(rootDir, d)));
+    assert.ok(files.length > 40, `walked ${files.length} files`);
+    for (const f of files) {
       if (f.endsWith(join("server", "local-token.mjs"))) continue;
       const src = readFileSync(f, "utf8");
       src.split("\n").forEach((line, i) => {
@@ -262,6 +357,8 @@ describe("source guard: the header is minted in one place", () => {
       assert.ok(body.length > 0, start);
       assert.ok(body.includes("await fetchWithLocalToken("), `${start} goes through the helper`);
       assert.ok(!body.includes("readLocalToken(") && !body.includes("localTokenHeaders("), `${start} never reads the token itself`);
+      // L1: a caller that defaulted fetchImpl to the global fetch would silently skip the single-connection client.
+      assert.ok(!/fetchImpl\s*=\s*fetch\b/.test(body) && !body.includes("?? fetch"), `${start} leaves fetchImpl undefined outside tests so the proof binds the socket`);
     }
     for (const start of ["async function postLeadHandoffToServer(", "async function postBuddyRestartToServer("]) {
       assert.ok(fn(tools, start, "\n}\n").includes("if (e?.proofFailed) throw e;"), `${start}: a failed proof is never 'unreachable'`);
