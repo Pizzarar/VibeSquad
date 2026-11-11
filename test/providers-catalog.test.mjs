@@ -2076,3 +2076,18 @@ test('usa-14: withPoolAgents attributes antigravity-cli claude-*/gpt-* agents to
   const some = withPoolAgents(rows, [{ agentId: 'a', provider: 'antigravity-cli', model: 'claude-sonnet-5-5' }, { agentId: 'c', provider: 'antigravity-cli', model: 'gpt-5' }, { agentId: 'd', provider: 'antigravity-cli', model: 'gemini-4' }]);
   assert.deepEqual(some[1].poolAgents, { count: 2, agentIds: ['a', 'c'], text: '2 VibeSquad agents' });
 });
+
+test('usa-12 fix1: review prompt emits successRate + basis per profile row, "-" for no-signal, not passRate', () => {
+  const usage = {
+    totals: { turns: 1 },
+    byProfile: [
+      { provider: 'claude', profile: 'Implement - Sonnet', role: 'worker', runs: 3, turns: 12, costUsd: 1.5, passRate: 0, successRate: 0.667, successBasis: 'implementer-first-try-pass', costPerMergedUnit: 0.5, avgReviewRounds: 1.3, fixAfterMergeRate: 0 },
+      { provider: 'claude', profile: 'Lead - Claude', role: 'lead', runs: 1, turns: 5, costUsd: 1, passRate: 0, successRate: null, successBasis: 'no-signal', costPerMergedUnit: null, avgReviewRounds: 0, fixAfterMergeRate: 0 },
+    ],
+  };
+  const prompt = buildUsageReviewPrompt(usage, { home: tmp(), promptPath: path.join(tmp(), 'missing.md'), warn: () => {} });
+  assert.match(prompt, /successRate \(basis\)/);
+  assert.match(prompt, /Implement - Sonnet \| worker \| 3 \| 12 \| 1\.5 \| 0\.667 \(implementer-first-try-pass\) \|/);
+  assert.match(prompt, /Lead - Claude \| lead \| 1 \| 5 \| 1 \| - \(no-signal\) \|/);
+  assert.doesNotMatch(prompt, /\| passRate \|/);
+});

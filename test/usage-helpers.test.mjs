@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, successText, successTooltip, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -347,4 +347,20 @@ test("usa-14: providerLabel names the Antigravity 3rd-party pool; limitTooltip e
   assert.equal(limitTooltip({ provider: "claude" }), undefined);
   assert.match(limitTooltip({ provider: "antigravity-cli/claude-gpt" }), /built-in 3rd-party model pool.*separate from the Anthropic Claude subscription.*0 VibeSquad agents \(used outside VibeSquad\)/);
   assert.match(limitTooltip({ provider: "antigravity-cli/claude-gpt", poolAgents: { count: 2, agentIds: [], text: "2 VibeSquad agents" } }), /2 VibeSquad agents/);
+});
+
+test("usa-12 fix1: buildProfiles carries successRate/basis; no-signal renders — not 0%; old servers fall back to passRate", () => {
+  const base = { provider: "claude", runs: 2, turns: 4, avgTurnsPerRun: 2, workingMs: 0, idleMs: 0, passRate: 0, avgReviewRounds: 0, costPerMergedUnit: null, mergedUnits: 0, fixAfterMergeRate: 0 };
+  const d = { limits: [], lanes: [], byRole: [], byProfile: [
+    { ...base, profile: "Lead - Claude", role: "lead", successRate: null, successBasis: "no-signal" },
+    { ...base, profile: "Implement - Sonnet", role: "worker", mergedUnits: 4, successRate: 0.75, successBasis: "implementer-first-try-pass" },
+    { ...base, profile: "Review - Old", role: "worker", passRate: 0.5 },
+  ] };
+  const by = Object.fromEntries(buildProfiles(d).map((p) => [p.profile, p]));
+  assert.equal(by["Lead - Claude"].successRate, null);
+  assert.equal(successText(by["Lead - Claude"]), "—");
+  assert.match(successTooltip(by["Lead - Claude"]), /No reliable log signal/);
+  assert.equal(successText(by["Implement - Sonnet"]), "75%");
+  assert.match(successTooltip(by["Implement - Sonnet"]), /first try/);
+  assert.equal(successText(by["Review - Old"]), "50%", "older server: passRate fallback");
 });

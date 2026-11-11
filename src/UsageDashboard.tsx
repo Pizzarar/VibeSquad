@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
@@ -431,7 +431,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                     <th>Provider</th>
                     <th className="num">Runs</th>
                     <th className="num">Turns/run</th>
-                    <th className="num">PASS %</th>
+                    <th className="num" title="Role-specific success: implementer first-try review PASS, reviewer PASS verdicts; — when the role leaves no log signal">Success</th>
                     <th className="num">Merged</th>
                     <th className="num">Rev/unit</th>
                     <th className="num">Cost/unit</th>
@@ -446,7 +446,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                       <td className="muted">{providerLabel(p.provider)}</td>
                       <td className="num">{p.runs}</td>
                       <td className="num">{p.avgTurnsPerRun.toFixed(1)}</td>
-                      <td className="num">{pctText(p.passRate)}</td>
+                      <td className="num" title={successTooltip(p)}>{successText(p)}</td>
                       <td className="num">{p.mergedUnits}</td>
                       <td className="num">{p.mergedUnits > 0 ? p.avgReviewRounds.toFixed(1) : "–"}</td>
                       <td className="num">{p.costPerMergedUnit === null ? "–" : usd(p.costPerMergedUnit)}</td>

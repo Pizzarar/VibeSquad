@@ -1478,8 +1478,8 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   const storms = u.spawnStorms ?? [];
   if (storms.length) out.push(`Spawn storms: ${storms.map((s) => `${s.lane}/${s.role} x${s.count}`).join("; ")}.`);
   const bp = u.byProfile ?? [];
-  out.push("By provider/profile/role (runs | turns | costUsd | passRate | costPerMergedUnit | avgReviewRounds | fixAfterMergeRate):");
-  for (const g of bp.slice(0, 30)) out.push(`- ${g.provider} | ${g.profile} | ${g.role} | ${g.runs} | ${g.turns} | ${round2(g.costUsd)} | ${g.passRate} | ${g.costPerMergedUnit ?? "-"} | ${g.avgReviewRounds} | ${g.fixAfterMergeRate}`);
+  out.push("By provider/profile/role (runs | turns | costUsd | successRate (basis) | costPerMergedUnit | avgReviewRounds | fixAfterMergeRate):");
+  for (const g of bp.slice(0, 30)) out.push(`- ${g.provider} | ${g.profile} | ${g.role} | ${g.runs} | ${g.turns} | ${round2(g.costUsd)} | ${g.successRate === null || g.successRate === undefined ? "-" : g.successRate} (${g.successBasis ?? "no-signal"}) | ${g.costPerMergedUnit ?? "-"} | ${g.avgReviewRounds} | ${g.fixAfterMergeRate}`);
   const perLane = u.merged?.perLane ?? [];
   const lanes = u.lanes ?? [];
   const handoffByLane = new Map(lanes.map((l) => [l.lane, l.handoffs ?? 0]));
