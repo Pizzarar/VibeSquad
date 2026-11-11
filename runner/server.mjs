@@ -10,11 +10,11 @@
 // Discovery for VS: <home>/runner.json = { port, pid, startedAt }.
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Runner, agentMay, protectedMetaIn, spawnMetaForAgent } from './runner.mjs';
+import { Runner, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent } from './runner.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
 import { acquireRunnerLock, releaseLock } from './lock.mjs';
@@ -74,7 +74,8 @@ export function tokenMatches(header, token) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS, hash = hashRunnerFiles(), onShutdown = null } = {}) {
+// teamLog(entry): appends { team, lane, agent, type, text, refs } to the VS team log (teamLogWriter); a no-op when not wired (tests).
+export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, maxInputBytes = MAX_INPUT_BYTES, heartbeatMs = SSE_HEARTBEAT_MS, hash = hashRunnerFiles(), onShutdown = null, teamLog = () => {} } = {}) {
   const json = (res, code, body) => {
     res.writeHead(code, { 'content-type': 'application/json' });
     res.end(JSON.stringify(body));
@@ -196,13 +197,20 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);
         if (!scoped(res, caller, 'input', id)) return;
+        const target = isAgent ? runner.status(id) : null;
+        const xsquad = isAgent && crossSquadInput(caller, target); // passed scope only through the Overlord's cross-Squad grant
         // Agent callers: owner and senderId come from the verified caller, never the body; an interrupt needs cancel rights
         // on the target (runner.send cancels from input), else it is a steer.
         const owner = isAgent ? false : b.owner === true;
         const senderId = isAgent ? caller.id : undefined;
         let activeTurnBehavior = b.activeTurnBehavior;
-        if (isAgent && activeTurnBehavior === 'interrupt' && !agentMay(caller, 'cancel', runner.status(id))) activeTurnBehavior = 'steer';
+        if (isAgent && activeTurnBehavior === 'interrupt' && !agentMay(caller, 'cancel', target)) activeTurnBehavior = 'steer';
         const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior, owner, senderId }); // over a turn cap it queues and answers at once
+        if (xsquad) {
+          // Audit: every cross-Squad input lands in the sender's team log. Never fails the delivered send.
+          const to = target.meta?.team ?? target.meta?.labels?.team;
+          try { teamLog({ team: caller.team, lane: caller.lane, agent: caller.id, type: 'decision', text: `xsquad input ${caller.id} (${caller.team}) -> ${id} (${to})`, refs: [caller.id, id] }); } catch (err) { console.error('xsquad audit log failed', err); }
+        }
         return json(res, 202, { ok: true, ...pos, ...(senderId ? { senderId } : {}) });
       }
       if (parts[2] === 'resume' && req.method === 'POST') {
@@ -290,6 +298,21 @@ export function hubLaneReader(vsHome, env = process.env) {
   };
 }
 
+// The runner's writer for the VS team log, mirroring server/brainstorm.mjs appendVsLogEntry without importing server
+// code: one JSON line in <vsHome>/logs/<team>--<lane>.jsonl and <vsHome>/teams/<team>/log.jsonl.
+export function teamLogWriter(vsHome) {
+  const seg = (v) => String(v ?? '').trim().replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'vibesquad';
+  return ({ team, lane, agent, type = 'metric', text, refs = [] }) => {
+    const t = seg(team);
+    const l = seg(lane || team);
+    const line = JSON.stringify({ ts: new Date().toISOString(), agent: String(agent || 'runner'), lane: l, type, text: String(text ?? '').trim(), refs: refs.map(String) }) + '\n';
+    mkdirSync(path.join(vsHome, 'logs'), { recursive: true });
+    appendFileSync(path.join(vsHome, 'logs', `${t}--${l}.jsonl`), line, 'utf8');
+    mkdirSync(path.join(vsHome, 'teams', t), { recursive: true });
+    appendFileSync(path.join(vsHome, 'teams', t, 'log.jsonl'), line, 'utf8');
+  };
+}
+
 export function writeDiscovery(home, { port, token }) {
   mkdirSync(home, { recursive: true });
   const tokenFile = path.join(home, 'token');
@@ -318,7 +341,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
-  const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }) });
+  const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
   try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     const port = server.address().port;
