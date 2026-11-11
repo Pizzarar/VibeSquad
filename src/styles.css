@@ -6294,3 +6294,17 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .phone-pair-cascade { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .phone-pair-cascade .small { flex-basis: 100%; }
 .phone-pair-err { color: var(--pink-t); font-size: 12px; }
+
+/* E4b (X1 L5): desktop PairDeviceModal approve list for codes minted by a remote paired browser. */
+.pair-pending { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.pair-pending-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--violet);
+  border-radius: 8px;
+  background: var(--violet-dim);
+}
+.pair-pending-item .btn { min-height: 32px; }

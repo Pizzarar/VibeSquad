@@ -243,8 +243,8 @@ describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for th
     const phoneToken = pairFromPc("Phone R");
     const phone = byName("Phone R");
     const { data: a } = await mint(phoneToken);
-    const { data: b } = await mint(phoneToken);
     const { token } = redeem(a.code, "Pending child");
+    const { data: b } = await mint(phoneToken); // minted after the redeem: the cap (X1 L2) replaces only *live* codes
     assert.equal(auth.pendingCountForTest(), 1);
     assert.deepEqual(auth.revokeDevice(phone.id), [phone.id]);
     assert.equal(auth.pendingCountForTest(), 0, "the ticket died with the minter");
@@ -574,5 +574,159 @@ describe("E4b MUST 8: the phone ⋯ sheet (PhonePairSheet) lists, warns on casca
     const css = src("src/styles.css");
     for (const cls of [".phone-pair-sheet", ".phone-pair-code", ".phone-pair-pending-item", ".phone-pair-cascade", ".phone-pair-device"]) assert.ok(css.includes(cls), `css rule for ${cls}`);
     assert.match(css, /\.phone-pair-sheet[^}]*--phone-safe-top/, "E1b: top-anchored sheets respect the phone safe area");
+  });
+});
+
+describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", () => {
+  const lock = `${devicesFile}.lock`;
+
+  test("X1-L2: one live code per minter; a new mint replaces the previous one (phone and PC alike)", async () => {
+    const phoneToken = pairFromPc("Capped phone");
+    const phone = byName("Capped phone");
+    const { data: first } = await mint(phoneToken);
+    const { data: second } = await mint(phoneToken);
+    assert.notEqual(first.code, second.code);
+    assert.equal(auth.liveCodeCountForTest(phone.id), 1, "only the newest code is live");
+    const dead = redeem(first.code, "Old QR");
+    assert.equal(dead.res.statusCode, 401, "the replaced code is invalid");
+    assert.equal(dead.token, null);
+    const live = redeem(second.code, "New QR");
+    assert.equal(live.res.statusCode, 200, "the newest code still lands in pending");
+    assert.equal(auth.pendingCountForTest(), 1);
+    const { data: p } = await pendingFor(phoneToken);
+    await decide(phoneToken, p.pending[0].pendingId, false);
+    // the PC / CLI is one minter too
+    const a = auth.createPairCode();
+    const b = auth.createPairCode();
+    assert.equal(auth.liveCodeCountForTest(null), 1);
+    assert.equal(redeem(a, "Stale PC code").res.statusCode, 401);
+    assert.equal(redeem(b, "Fresh PC code").res.statusCode, 302);
+    // a phone's mint never touches the PC's live code and vice versa
+    const pc = auth.createPairCode();
+    await mint(phoneToken);
+    assert.equal(auth.liveCodeCountForTest(null), 1);
+    assert.equal(auth.liveCodeCountForTest(phone.id), 1);
+    assert.equal(redeem(pc, "PC code survives").res.statusCode, 302);
+  });
+
+  test("X1-L3: approve and deny write a vs log audit entry (needs-you on approve) with names, IP and ids, never a token or code", async () => {
+    const phoneToken = pairFromPc("Auditor phone");
+    const phone = byName("Auditor phone");
+    const { data: start } = await mint(phoneToken);
+    const { token } = redeem(start.code, "Audited PC", "100.64.0.77");
+    const { data: p } = await pendingFor(phoneToken);
+    const ok = await decide(phoneToken, p.pending[0].pendingId, true);
+    assert.equal(ok.res.statusCode, 200, ok.res.body);
+    const laneLog = join(home, "logs", `${auth.PAIR_AUDIT_TEAM}--${auth.PAIR_AUDIT_LANE}.jsonl`);
+    const teamLog = join(home, "teams", auth.PAIR_AUDIT_TEAM, "log.jsonl");
+    assert.ok(existsSync(laneLog) && existsSync(teamLog), "lane log + team log (what every paired device's log view reads)");
+    const entries = readFileSync(laneLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const e = entries.at(-1);
+    assert.equal(e.type, "needs-you");
+    assert.match(e.text, /approved/);
+    assert.ok(e.text.includes("Audited PC") && e.text.includes("100.64.0.77") && e.text.includes("Auditor phone"));
+    const audited = byName("Audited PC");
+    assert.ok(e.refs.includes(`mintedBy:${phone.id}`) && e.refs.includes(`device:${audited.id}`));
+    const hash = readDevicesJson().find((d) => d.id === audited.id).tokenHash;
+    const raw = readFileSync(laneLog, "utf8") + readFileSync(teamLog, "utf8");
+    assert.ok(!raw.includes(token) && !raw.includes(start.code) && !raw.includes(hash), "no token, hash or code in the log");
+    // deny is audited as a metric
+    const { data: s2 } = await mint(phoneToken);
+    redeem(s2.code, "Denied PC", "100.64.0.78");
+    const { data: p2 } = await pendingFor(phoneToken);
+    await decide(phoneToken, p2.pending[0].pendingId, false);
+    const after = readFileSync(laneLog, "utf8");
+    const last = after.trim().split("\n").map((l) => JSON.parse(l)).at(-1);
+    assert.equal(last.type, "metric");
+    assert.match(last.text, /denied/);
+    assert.ok(last.text.includes("Denied PC") && !after.includes(s2.code));
+  });
+
+  test("X1-L1: an already-paired device opening a device-minted link keeps its cookie; the code stays live", async () => {
+    const ownerToken = pairFromPc("Owner phone L1");
+    const owner = byName("Owner phone L1");
+    const p1 = pairFromPc("Paired not owner");
+    const { data: start } = await mint(p1); // attacker: P1 sends the owner this link
+    const res = fakeRes();
+    auth.handlePairRedeem(meshReq({ url: `/pair?code=${start.code}`, token: ownerToken, ip: "100.64.0.80" }), res);
+    assert.equal(res.statusCode, 200);
+    assert.match(res.body, /Already paired/);
+    assert.match(res.body, /\/__vibesquad\/enter/);
+    assert.equal(res.headers["set-cookie"], undefined, "the live cookie is not replaced");
+    assert.equal(authAs(ownerToken)?.id, owner.id, "still the owner's own device");
+    assert.equal(auth.pendingCountForTest(), 0, "no ticket was created for the owner");
+    assert.equal(auth.liveCodeCountForTest(byName("Paired not owner").id), 1, "the code was not spent");
+    const fresh = redeem(start.code, "Intended device", "100.64.0.81");
+    assert.equal(fresh.res.statusCode, 200, "the device it was meant for still lands in pending");
+    const { data: p } = await pendingFor(p1);
+    await decide(p1, p.pending[0].pendingId, false);
+    // a stale cookie (revoked device) does not count as paired: the link redeems normally
+    const stale = pairFromPc("Stale cookie");
+    auth.revokeDevice(byName("Stale cookie").id);
+    const { data: s2 } = await mint(p1);
+    const r2 = fakeRes();
+    auth.handlePairRedeem(meshReq({ url: `/pair?code=${s2.code}`, token: stale, ip: "100.64.0.82" }), r2);
+    assert.equal(r2.statusCode, 200);
+    assert.match(r2.body, /Waiting for approval/);
+    const { data: p3 } = await pendingFor(p1);
+    await decide(p1, p3.pending[0].pendingId, false);
+  });
+
+  test("X1-L5: the PC owner (local token) mints no-approval codes even with a vs_device cookie; a remote paired browser gets the approve UI", async () => {
+    const browser = pairFromPc("PC browser");
+    let res = fakeRes();
+    await auth.handlePairStart(localReq({ url: "/__vibesquad/pair/start", method: "POST", withToken: true, headers: { cookie: `vs_device=${browser}` } }), res);
+    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(res.json().requiresApproval, false, "local owner wins over the cookie");
+    assert.equal(res.json().mintedByDeviceId, null);
+    assert.equal(redeem(res.json().code, "Immediate").res.statusCode, 302);
+    res = fakeRes(); // the same cookie from a remote listener (a work PC browser paired over https) still needs approval
+    await auth.handlePairStart(meshReq({ url: "/__vibesquad/pair/start", method: "POST", token: browser }), res);
+    assert.equal(res.json().requiresApproval, true);
+    const modal = src("src/PairDeviceModal.tsx");
+    assert.ok(modal.includes('"/__vibesquad/pair/pending"') && modal.includes('"/__vibesquad/pair/approve"'), "desktop modal polls and decides");
+    assert.ok(modal.includes('data-testid="pair-pending-approve"') && modal.includes('data-testid="pair-pending-deny"'));
+    assert.ok(modal.includes("pair?.requiresApproval"), "only when this browser's mint needs a second tap");
+    assert.ok(src("src/styles.css").includes(".pair-pending-item"));
+  });
+
+  test("Gemini-L1: a 503 lock timeout on approve keeps the ticket, so the retry succeeds", async () => {
+    const phoneToken = pairFromPc("Retry phone");
+    const { data: start } = await mint(phoneToken);
+    const { token } = redeem(start.code, "Retry PC");
+    const { data: p } = await pendingFor(phoneToken);
+    const id = p.pending[0].pendingId;
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
+    let r;
+    try {
+      r = await decide(phoneToken, id, true);
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    assert.equal(r.res.statusCode, 503);
+    assert.equal(r.data.retryable, true);
+    assert.equal(auth.pendingCountForTest(), 1, "the ticket survived the failed write");
+    assert.equal(statusOf(token), "pending");
+    assert.equal(authAs(token), null, "nothing was written");
+    const again = await decide(phoneToken, id, true);
+    assert.equal(again.res.statusCode, 200, again.res.body);
+    assert.ok(authAs(token), "the retry paired it");
+    assert.equal(auth.pendingCountForTest(), 0);
+  });
+
+  test("Gemini-L2: an out-of-process `vs devices revoke` of the minter discards its pending ticket on reload", async () => {
+    const phoneToken = pairFromPc("CLI-revoked phone");
+    const phone = byName("CLI-revoked phone");
+    const { data: start } = await mint(phoneToken);
+    const { token } = redeem(start.code, "Orphan ticket");
+    assert.equal(auth.pendingCountForTest(), 1);
+    ageDevicesFile();
+    const r = spawnSync(process.execPath, [VS, "devices", "revoke", phone.id], { encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: "", VS_AGENT_ID: "" }, windowsHide: true, timeout: 60_000 });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(authAs(phoneToken), null, "the server reloaded the file");
+    assert.equal(auth.pendingCountForTest(), 0, "the minter's ticket went with it");
+    assert.equal(statusOf(token), "gone");
+    const late = await decide(phoneToken, "whatever", true);
+    assert.equal(late.res.statusCode, 403, "the revoked minter can't decide anything");
   });
 });

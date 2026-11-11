@@ -33,8 +33,12 @@ type PairStartResponse = {
   expiresAt: number;
   qrSvg: string;
   qrSvgIp: string;
+  /** E4b: true when this browser is itself a remote paired device, so the redeem waits for Approve below. */
+  requiresApproval?: boolean;
   error?: string;
 };
+
+type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number };
 
 type DevicesResponse = {
   devices: PairedDevice[];
@@ -225,6 +229,39 @@ export function PairDeviceModal({
     void loadDevices();
     void startPairing();
   }, [loadDevices, startPairing]);
+
+  // E4b (X1 L5): a remote paired browser mints approval-required codes; the redeemed device waits for Approve here.
+  const [pending, setPending] = useState<PendingPair[]>([]);
+  useEffect(() => {
+    if (!pair?.requiresApproval) return;
+    const poll = async () => {
+      try {
+        const r = await fetch("/__vibesquad/pair/pending");
+        if (!r.ok) return;
+        const data = (await r.json()) as { pending?: PendingPair[] };
+        setPending(data.pending ?? []);
+      } catch {}
+    };
+    void poll();
+    const id = setInterval(() => void poll(), 2000);
+    return () => clearInterval(id);
+  }, [pair?.requiresApproval]);
+
+  const decidePending = async (pendingId: string, approve: boolean) => {
+    try {
+      const r = await fetch("/__vibesquad/pair/approve", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pendingId, approve }),
+      });
+      const data = (await r.json()) as { pending?: PendingPair[]; error?: string };
+      if (!r.ok) setErr(data.error || `HTTP ${r.status}`);
+      if (Array.isArray(data.pending)) setPending(data.pending);
+      if (r.ok && approve) void loadDevices();
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
 
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -649,6 +686,29 @@ export function PairDeviceModal({
             </div>
           </div>
         </div>
+
+        {pair?.requiresApproval && (
+          <div className="preview pair-pending" data-testid="pair-pending">
+            <span className="field-label">WAITING FOR YOUR APPROVAL ({pending.length})</span>
+            <div className="muted small">
+              This browser is a paired device, so a device that opens this code waits until you approve it here (60 s).
+            </div>
+            {pending.map((p) => (
+              <div key={p.pendingId} className="pair-pending-item" data-testid="pair-pending-item">
+                <b>{p.name}</b>
+                <span className="muted small">
+                  from {p.ip} · {Math.ceil(p.expiresInMs / 1000)} s left
+                </span>
+                <button className="btn small" data-testid="pair-pending-approve" onClick={() => void decidePending(p.pendingId, true)}>
+                  Approve
+                </button>
+                <button className="btn ghost small" data-testid="pair-pending-deny" onClick={() => void decidePending(p.pendingId, false)}>
+                  Deny
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
 
         <div className="preview" style={{ marginBottom: 0 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

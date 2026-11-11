@@ -1,6 +1,6 @@
 # E4b Phone-Minted Pairing · Threat Note (branch `unit-and-end-e4b`)
 
-Status: rev 1, written before implementation (Tier A, 0.3 `X1`). Plan: `docs/PLAN_ANDROID_END_STATE.md` E4b. Prior walk: `X1_E4A_WALK.md` / `X1_E4A_WALK_R2.md` (M3, L3 and the four R2 Lows land here).
+Status: rev 2, after Review-Gemini R1 (`E4B_REVIEW_R1.md`, PASS 0/0/2L) and the X1 walk (`X1_E4B_WALK.md`, PASS 0/0/5L); the fix round is in §5. Rev 1 was written before implementation (Tier A, 0.3 `X1`). Plan: `docs/PLAN_ANDROID_END_STATE.md` E4b. Prior walk: `X1_E4A_WALK.md` / `X1_E4A_WALK_R2.md` (M3, L3 and the four R2 Lows land here).
 Files: `server/auth.mjs`, `server/file-lock.mjs`, `server/local-token.mjs`, `server/vibesquad-api.mjs`, `server/serve.mjs`, `cli/vs.mjs`, `src/PhonePairSheet.tsx`, `src/phonePairLogic.ts`, `src/PhoneCockpit.tsx` (slot only), `src/App.tsx`, `test/sec-phone-mint-pair.test.mjs`.
 
 ## 1. Assets
@@ -41,3 +41,14 @@ Files: `server/auth.mjs`, `server/file-lock.mjs`, `server/local-token.mjs`, `ser
 - The minting device is the only approver (not any owner device, not the PC). If that phone is lost between mint and approve, the ticket expires in 60 s.
 - `vs open` / `requestLocalLoginUrl` and `requestWorkerSweep` still send the header first (older pattern, X1 L3 "shared"). `proveLocalServer()` is written so they can adopt it; wiring them is a follow-up, not in this unit.
 - E5 relay wiring (`redeem()` for relay clients) is out of scope. `redeemPairCode()` is factored so the relay can reuse it and will see `state: "pending"` for phone-minted codes.
+
+## 5. Review fix round (rev 2)
+| Finding | Decision | Where |
+|---|---|---|
+| X1-L2 (plan guard 2): no cap on live codes per minter | **Replace, not refuse.** `createPairCode` discards the minter's previous live code before minting a new one, so each minter (every paired device, and the PC/CLI as one more minter keyed `null`) has at most one unredeemed code. Replace matches the sheet's "New code" button and keeps `vs pair` usable from SSH while a stale desktop dialog is open; the old QR is dead at once. Residual: `vs pair` and the desktop dialog share one live code; minting in one invalidates the other, which the dialog's expiry countdown makes visible. | `server/auth.mjs` `createPairCode` |
+| X1-L3 (plan guard 2): no audit entry on approve | Every decision on a phone-minted device is appended to the vs log (team log + `security` lane log under `~/.vibesquad/logs`): approve = `needs-you` with the new device's name, IP, the minter's name and a one-line revoke hint; deny = `metric`. Refs carry the device id and `mintedBy` id. Never a token, hash or code. Best effort after the locked append, so a log failure cannot fail or roll back the pairing. | `auditPairDecision` |
+| X1-L1: a paired phone opening a device-minted link lost its cookie | `handlePairRedeem` answers "Already paired" (200, link to `/__vibesquad/enter`) when the request already authenticates, before the rate limiter and before the code is spent. The code stays live for the device it was meant for; the owner phone can't be lured into becoming a pending child of a paired-but-not-owner minter (P1). | `handlePairRedeem` |
+| X1-L5: nothing could approve a code minted by a paired PC browser | Two root fixes. (1) The PC owner (local token, `isLocalOwner`) is the stronger principal (it can edit `devices.json` directly), so its mints never require approval even when the same browser also carries a `vs_device` cookie. (2) A remote paired browser still mints approval-required codes (the stricter path is right there: that browser is exactly P1), and `PairDeviceModal` now shows the pending tickets with Approve / Deny when `requiresApproval` is set, polling the same `pair/pending` route as the phone sheet. | `handlePairStart`, `src/PairDeviceModal.tsx` |
+| Gemini-L1: ticket deleted before the locked append | The ticket is removed only after the device is on disk, on deny, or when the minter is no longer paired. A 200 ms lock timeout returns the retryable 503 and the phone's retry finds the ticket. | `handlePairApprove` |
+| Gemini-L2: out-of-process revoke left the minter's tickets | `adoptDevices` (the reload after an external `vs devices revoke`) discards pending tickets minted by every device that vanished, alongside dropping their sockets. | `adoptDevices` |
+| X1-L4: Origin / Sec-Fetch-Site on cookie-auth writes | Not in this unit (queued as its own unit by the lead). | |

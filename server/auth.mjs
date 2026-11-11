@@ -425,7 +425,11 @@ function adoptDevices(fresh, stamp) {
   if (devices) {
     // The file changed under us (another process): anything it dropped is revoked here too, live sockets included.
     const keep = new Set(fresh.map((d) => d.id));
-    for (const d of devices) if (!keep.has(d.id)) dropDeviceSockets(d.id);
+    for (const d of devices) {
+      if (keep.has(d.id)) continue;
+      dropDeviceSockets(d.id);
+      discardPendingMintedBy(d.id); // Gemini E4b L2: an out-of-process revoke (vs devices) kills the minter's tickets too
+    }
   }
   devices = fresh;
   devicesStamp = stamp;
@@ -845,13 +849,26 @@ function recordPairFailure(ip, now = Date.now()) {
   pairFailuresByIp.set(ip, f);
 }
 
-/** A fresh one-shot code. `mintedBy` = the paired device that asked for it (E4b: its redeem lands in pending-approval). */
+/**
+ * A fresh one-shot code. `mintedBy` = the paired device that asked for it (E4b: its redeem lands in pending-approval).
+ * X1 E4b L2 / plan guard 2: one active unredeemed code per minter. Minting again *replaces* the minter's previous live
+ * code (the sheet's "New code" button; the old QR is dead at once), so a device can't stack codes for a LAN guesser.
+ * The PC / CLI (mintedBy null) is one minter too: `vs pair` and the desktop dialog share a single live code.
+ */
 export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null) {
   sweepCodes();
+  const minter = typeof mintedBy === "string" ? mintedBy : null;
+  for (const [c, v] of codes) if (v.mintedBy === minter) codes.delete(c);
   let code = String(randomInt(100_000, 1_000_000));
   while (codes.has(code)) code = String(randomInt(100_000, 1_000_000));
-  codes.set(code, { expiresAt: Date.now() + ttlMs, mintedBy: typeof mintedBy === "string" ? mintedBy : null });
+  codes.set(code, { expiresAt: Date.now() + ttlMs, mintedBy: minter });
   return code;
+}
+
+/** Tests: live (unredeemed, unexpired) codes for a minter (null = PC / CLI). */
+export function liveCodeCountForTest(mintedBy = null) {
+  sweepCodes();
+  return [...codes.values()].filter((v) => v.mintedBy === mintedBy).length;
 }
 
 function pairRateLimited(ip) {
@@ -1001,8 +1018,12 @@ export async function handlePairStart(req, res) {
   // Hub5 MUST / X1 M3: the handler gates itself, not only the router. A loopback caller needs the local token (header or
   // vs_local cookie); a token-less loopback process, browser or not, can't mint. A paired device may mint (E4b), but its
   // code lands in pending-approval (mintedBy) instead of granting access on redeem.
-  const minter = authenticate(req);
-  if (!isLocalOwner(req) && !minter) {
+  // X1 E4b L5: the PC owner (local token) is the stronger principal and can edit devices.json directly, so its mints never
+  // need a second tap, even when the same browser also carries a vs_device cookie. Only remote paired devices mint
+  // approval-required codes.
+  const localOwner = isLocalOwner(req);
+  const minter = localOwner ? null : authenticate(req);
+  if (!localOwner && !minter) {
     return sendJson(res, 403, { error: "pairing can only be started from the PC (local token) or an already paired device" });
   }
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
@@ -1050,6 +1071,13 @@ export function handlePairRedeem(req, res) {
   if (req.method !== "GET") {
     res.statusCode = 405;
     return res.end();
+  }
+  // X1 E4b L1: a device that is already paired keeps its live cookie. A device-minted link opened on the owner's phone
+  // must not downgrade that phone to a pending token (and then make it a child of whoever minted). Spend nothing.
+  if (parseCookies(req.headers.cookie)[DEVICE_COOKIE] && authenticate(req)) {
+    const app = appOrigin(req);
+    const href = app ? `/__vibesquad/enter?${new URLSearchParams({ vs_app: app }).toString()}` : "/__vibesquad/enter";
+    return sendHtml(res, 200, "Already paired", "This device is already paired with this PC, so the pairing code was left untouched for the device it was meant for.", { href, label: "Open VibeSquad" });
   }
   const ip = String(req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
   const lockedMs = pairLockRemainingMs(ip);
@@ -1189,12 +1217,15 @@ export async function handlePairApprove(req, res, readBody) {
   const p = pendingDevices.get(pendingId);
   if (!p) return sendJson(res, 404, { error: "no such pending device (expired or already decided)" });
   if (p.mintedBy !== dev.id) return sendJson(res, 403, { error: "only the device that minted this code can decide it" });
-  pendingDevices.delete(pendingId);
   if (body?.approve !== true) {
+    pendingDevices.delete(pendingId);
     if (denied.size > 64) denied.clear();
     denied.add(p.tokenHash);
+    await auditPairDecision({ approved: false, pending: p, minter: dev });
     return sendJson(res, 200, { ok: true, approved: false, pending: listPendingMintedBy(dev.id) });
   }
+  // Gemini E4b L1: the ticket is removed only once the device is on disk (or the minter is gone), so a 200 ms lock
+  // timeout (503, retryable) leaves the ticket for the phone's retry instead of turning it into a 404 / "gone".
   try {
     mutateDevices(
       (list) => {
@@ -1204,10 +1235,34 @@ export async function handlePairApprove(req, res, readBody) {
       { timeoutMs: REQUEST_LOCK_MS },
     );
   } catch (e) {
-    if (/no longer paired/.test(String(e?.message))) return sendJson(res, 403, { error: "this device is no longer paired" });
+    if (/no longer paired/.test(String(e?.message))) {
+      pendingDevices.delete(pendingId);
+      return sendJson(res, 403, { error: "this device is no longer paired" });
+    }
     return sendJson(res, 503, { error: "device list busy or unreadable; retry", retryable: true });
   }
+  pendingDevices.delete(pendingId);
+  await auditPairDecision({ approved: true, pending: p, minter: dev });
   sendJson(res, 200, { ok: true, approved: true, device: publicDevice({ ...p, mintedByDeviceId: dev.id }, dev.id), pending: listPendingMintedBy(dev.id) });
+}
+
+export const PAIR_AUDIT_TEAM = "vibesquad";
+export const PAIR_AUDIT_LANE = "security";
+
+/**
+ * X1 E4b L3 / plan guard 2: every decision on a phone-minted device is written to the vs log (team log + the `security`
+ * lane log under ~/.vibesquad/logs), where all paired devices see it. An approval is a `needs-you` entry (the owner should
+ * know a new device exists); a denial is a `metric`. Names, IP and ids only: never a token, hash or code. Best effort:
+ * the device is already recorded, so a log write failure must not fail the approval.
+ */
+function auditPairDecision({ approved, pending, minter }) {
+  const text = approved
+    ? `Security: new device "${pending.name}" (${pending.ip}) was approved by "${minter.name}". Not you? Revoke it: vs devices revoke ${pending.id.slice(0, 8)} (cascades over devices it pairs).`
+    : `Security: pairing of "${pending.name}" (${pending.ip}) was denied by "${minter.name}".`;
+  const refs = [`device:${pending.id}`, `mintedBy:${minter.id}`];
+  return import("./brainstorm.mjs")
+    .then(({ appendVsLogEntry }) => appendVsLogEntry({ teamId: PAIR_AUDIT_TEAM, laneId: PAIR_AUDIT_LANE, agent: "vibesquad-server", type: approved ? "needs-you" : "metric", text, refs }))
+    .catch((e) => console.error(`[vibesquad] pair audit log failed: ${e?.message ?? e}`));
 }
 
 // ---- Loopback server proof (X1 E4a L3): the server proves it holds the local token before a CLI sends it ----
