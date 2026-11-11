@@ -75,6 +75,10 @@ Expected: the `vs` command prints its usage text without an error (`cli/vs.mjs:2
    - **Git (optional)** (`:92`): "Installed" with a version, or an optional link.
 
    Buttons: **Check again** (`:60`) and **Continue** (`:63`).
+
+   The checklist also shows two cards, **Normal** and **Psycho**, to choose how VibeSquad looks. A
+   **Choose your layout** window with the same cards appears once on first launch. Pick either; you can
+   switch later (see [Normal and Psycho](../../../Concepts/Modes.md)).
 2. **Continue** stays grey until Claude Code or Gemini is detected (`:48`). The checklist does
    not list Codex or OpenCode. If your provider is one of those, close the checklist with its close button: closing it
    also marks it done (`:57`). UNVERIFIED: how this looks on a real machine, and that Codex or OpenCode then work in
