@@ -45,13 +45,6 @@
       "reason": "Config popover floats over the chat timeline by design."
     },
     {
-      "kind": "overlap",
-      "selector": "drawer-config-popover",
-      "other": "timeline",
-      "surface": "menu-drawer-config",
-      "reason": "Config popover rows (labels) float over the chat timeline by design; the popover is the top layer."
-    },
-    {
       "kind": "bar-misalign",
       "selector": "sky-face-hit",
       "other": "sky-zones",
