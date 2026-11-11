@@ -18,6 +18,9 @@ const commonRootDir = (() => {
   }
 })();
 
+// Tests point this elsewhere; the default is the tracked file.
+const outFile = process.env.VIBESQUAD_LICENSES_OUT || join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
+
 const ALLOWED = new Set([
   "MIT", "ISC", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "0BSD", "BlueOak-1.0.0", "CC0-1.0",
   "Unlicense", "MPL-2.0", "Unicode-3.0", "Unicode-DFS-2016", "Zlib", "CC-BY-4.0", "OFL-1.1", "Python-2.0",
@@ -107,7 +110,7 @@ function collectNpm() {
       notice: noticeFile ? readText(join(dir, noticeFile)) : "",
     });
   }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+  return out.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)); // not localeCompare: ICU/locale-dependent order
 }
 
 function findCargoLicense(name, version, srcRoots) {
@@ -121,7 +124,22 @@ function findCargoLicense(name, version, srcRoots) {
   return "";
 }
 
-function collectCargo() {
+/** `name@version` -> license from the previously generated file, so a machine without ~/.cargo sources keeps the same output. */
+function previousCargoLicenses(file) {
+  const map = new Map();
+  if (!existsSync(file)) return map;
+  const text = readFileSync(file, "utf8").replace(/\r\n/g, "\n");
+  const start = text.indexOf("Rust crates (src-tauri/Cargo.lock");
+  if (start < 0) return map;
+  for (const line of text.slice(start).split("\n").slice(2)) {
+    if (!line.trim()) break;
+    const m = line.match(/^(\S+@\S+)  (.+)$/);
+    if (m) map.set(m[1], m[2]);
+  }
+  return map;
+}
+
+function collectCargo(previous) {
   const lock = join(rootDir, "src-tauri", "Cargo.lock");
   if (!existsSync(lock)) return [];
   const cargoSrcBase = join(process.env.CARGO_HOME || join(homedir(), ".cargo"), "registry", "src");
@@ -133,7 +151,7 @@ function collectCargo() {
     const name = block.match(/^name = "(.+)"/m)?.[1];
     const version = block.match(/^version = "(.+)"/m)?.[1];
     if (name && version && name !== "vibesquad-desktop") {
-      const lic = findCargoLicense(name, version, srcRoots);
+      const lic = findCargoLicense(name, version, srcRoots) || previous.get(`${name}@${version}`) || "";
       crates.push(lic ? `${name}@${version}  ${lic}` : `${name}@${version}`);
     }
   }
@@ -146,7 +164,7 @@ function build() {
   const creditsPath = join(rootDir, "CREDITS.md");
   const credits = existsSync(creditsPath) ? readText(creditsPath) : "";
   const npm = collectNpm();
-  const cargo = collectCargo();
+  const cargo = collectCargo(previousCargoLicenses(outFile));
   const bar = "=".repeat(78);
   const lines = [
     "VibeSquad - Third-Party Licenses",
@@ -195,10 +213,10 @@ function build() {
 }
 
 const text = build();
-const targets = [join(rootDir, "public", "THIRD-PARTY-LICENSES.txt")];
-mkdirSync(join(rootDir, "public"), { recursive: true });
+const targets = [outFile];
+mkdirSync(dirname(outFile), { recursive: true });
 writeFileSync(targets[0], text);
-if (existsSync(join(rootDir, "dist"))) {
+if (!process.env.VIBESQUAD_LICENSES_OUT && existsSync(join(rootDir, "dist"))) {
   copyFileSync(targets[0], join(rootDir, "dist", "THIRD-PARTY-LICENSES.txt"));
 }
 console.log(`[licenses] wrote ${targets[0]} (${text.length} bytes)`);

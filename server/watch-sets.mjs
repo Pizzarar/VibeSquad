@@ -136,11 +136,18 @@ export function listWatches({ owner, team } = {}, { home } = {}) {
     .map((s) => ({ ...structuredClone(s), status: s.firedAt ? "fired" : s.cancelledAt ? "cancelled" : "armed" }));
 }
 
-/** Disarm a set. A fired set cannot be cancelled (it already pinged). Returns `{ok, id, error?}`. */
-export function cancelWatch(id, callerId, { home, now = Date.now() } = {}) {
+/**
+ * Disarm a set. A fired set cannot be cancelled (it already pinged). Returns `{ok, id, error?}`.
+ * `opts.allow(set)` is the caller's ownership rule (X1 F6: the MCP/CLI verb passes "owner or same-Squad Overlord"); when it
+ * returns false the set is left untouched and `{ok:false, refused:true}` comes back. No predicate = the caller already authorized.
+ */
+export function cancelWatch(id, callerId, { home, now = Date.now(), allow } = {}) {
   return mutateDoc(watchesPath({ home }), (doc) => {
     const set = doc.sets.find((s) => s.id === id);
     if (!set) return { ok: false, id, error: `no watch ${id}` };
+    if (typeof allow === "function" && !allow(set)) {
+      return { ok: false, id, refused: true, error: `watch ${id} is owned by ${set.owner}: only its owner or the same-Squad Overlord may cancel it` };
+    }
     if (set.firedAt) return { ok: false, id, error: `watch ${id} already fired at ${set.firedAt}` };
     if (set.cancelledAt) return { ok: true, id, already: true };
     set.cancelledAt = iso(now);

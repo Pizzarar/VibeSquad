@@ -49,6 +49,7 @@ import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
+import { BoringApp } from "./BoringAde";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { FocusRail, railAlerts } from "./FocusRail";
@@ -85,7 +86,7 @@ import { SquadQueue } from "./SquadQueue";
 import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
-import { fetchHubCwd, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
+import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
 import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
@@ -108,7 +109,7 @@ import { Avatar, TeamEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
 import { claimAlert } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
-import { alertEnabled, getPrefs, getPref , getRestoreLastView } from "./prefs";
+import { alertEnabled, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
 import { setCloseGuard } from "./drafts";
 import {
   applyUiScaleToDom,
@@ -1316,6 +1317,14 @@ const Toolbar = memo(function Toolbar(props: {
           Vibe mode
         </button>
       )}
+      <button
+        className="tchip"
+        data-testid="toolbar-vibe-toggle"
+        title="Switch to Boring Mode (corporate ADE layout)"
+        onClick={() => setPref("app.vibe", "boring")}
+      >
+        Boring mode
+      </button>
       <button className="tchip" data-testid="global-transcript-search-btn" title="Search all transcripts" onClick={() => openOverlay("search")}>
         🔍
       </button>
@@ -1441,6 +1450,7 @@ export function App() {
   const split = useSplit();
   const mobileTeamView = useMobileTeamView();
   const phoneShell = usePhoneShell();
+  const [vibe] = usePref("app.vibe");
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
   const chatScale = useChatScale();
@@ -1730,8 +1740,10 @@ export function App() {
   );
   // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
   const [overlordBusy, setOverlordBusy] = useState(false);
+  const [overlordErr, setOverlordErr] = useState<{ squadId: string; message: string } | null>(null); // shown inline under the TVs (was alert()), scoped to its Squad
   const onSpinUpOverlord = useCallback((view: TeamView) => {
     setOverlordBusy(true);
+    setOverlordErr(null);
     const profileName = overlordProfileName(view);
     const profile = findProfile(profileName, getProfiles());
     void spinUpOverlord(view, {
@@ -1742,7 +1754,7 @@ export function App() {
       defaults: defaultSpawnConfigFor(profile?.provider ?? (profileName === "Lead - Gemini" ? "antigravity-cli" : "claude")),
       resolveCwd: (hub) => fetchHubCwd(hub),
     })
-      .catch((e) => alert(`Could not start the Overlord: ${e?.message ?? e}`))
+      .catch((e) => setOverlordErr({ squadId: view.team.id, message: e?.message ?? String(e) }))
       .finally(() => setOverlordBusy(false));
   }, []);
   // The pinned layout (focus view + rail, or the clean grid) is the default page only: FULL, focus mode
@@ -1756,6 +1768,7 @@ export function App() {
   const hubPinNow = pinFocusView ? hubPinForSquad(pinFocusView) : null;
   const hubFocused = !!pinFocus && !!hubPinNow && hubPinNow.lane.id === pinFocus.laneId;
   const hubSpinUpErr = hubSpinUpError(pinFocus, hubPinNow);
+  const overlordErrMsg = hubOverlordError(overlordErr, pinFocusView?.team.id, pinFocusView ? skyZonesFor(pinFocusView).overlord.agentId : null);
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
   const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
@@ -1842,6 +1855,58 @@ export function App() {
     />
   ) : null;
 
+  // Shared by the Vibespace and Boring Mode shells so every modal, shortcut host and toast works identically in both.
+  const overlays = (
+    <>
+      <PinToast />
+      {modal === "add-buddy" && view && (
+        <AddBuddyModal
+          view={view}
+          onClose={() => setModal(null)}
+          onCreated={selectAgent}
+          onOpenExisting={(id) => {
+            selectAgent(id);
+            setModal(null);
+          }}
+        />
+      )}
+      {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
+      {modal === "settings" && (
+        <SettingsHome
+          onClose={() => setModal(null)}
+          onDiagnostics={openDiagnostics}
+          onLicenses={openAbout}
+          onChecklist={() => setModal("first-run")}
+        />
+      )}
+      {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
+      {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
+      {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
+      {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
+      {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
+      {modal === "new-squad" && (
+        <NewSquadModal
+          onClose={() => setModal(null)}
+          onCreated={(newTeamId) => {
+            setModal(null);
+            onTeam(newTeamId);
+          }}
+        />
+      )}
+      <CommandPaletteHost members={members} archived={archivedMembers} views={views} onAgent={onPaletteAgent} onTeam={onTeam} actions={paletteActions} />
+      <BriefEditorHost />
+      {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
+      {successorLead && (
+        <HandoffModal
+          view={views.find((v) => v.team.id === successorLead.team.id) ?? view!}
+          lead={successorLead}
+          onClose={() => setSuccessorId(null)}
+          onCreated={selectAgent}
+        />
+      )}
+    </>
+  );
+
   // E1: on a phone nothing else mounts. No desktop panels, no sidebar, no escape hatch (E3 passes bugSlot, E4b pairSlot).
   if (phoneShell) {
     return (
@@ -1856,6 +1921,26 @@ export function App() {
         overlordBusy={overlordBusy}
         bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
       />
+    );
+  }
+
+  if (vibe === "boring") {
+    return (
+      <BoringApp
+        views={sidebarViews}
+        view={view}
+        onSelectSquad={onTeam}
+        onOpenPin={onQuickStart}
+        onSpinUpPin={onSpinUpPin}
+        onSpinUpOverlord={onSpinUpOverlord}
+        overlordBusy={overlordBusy}
+        onAddBuddy={openAddBuddy}
+        onNewSquad={openNewSquad}
+        onSettings={openSettings}
+        onSuccessor={paneSuccessor}
+      >
+        {overlays}
+      </BoringApp>
     );
   }
 
@@ -2069,7 +2154,7 @@ export function App() {
           {pinFocusView && (
             <HubPages
               agentOpen={hubAgentOpen}
-              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}</>}
+              sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}{overlordErrMsg && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-overlord-error">Could not start the Overlord: {overlordErrMsg}</div>}</>}
               strip={<SquadQueue view={pinFocusView} variant="strip" />}
               tower={<SquadFloor view={pinFocusView} />}
             />
@@ -2079,7 +2164,6 @@ export function App() {
         panesNode
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
-      <PinToast />
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">
@@ -2088,51 +2172,7 @@ export function App() {
           <span className="muted">(Ctrl+0 to reset)</span>
         </div>
       )}
-      {modal === "add-buddy" && view && (
-        <AddBuddyModal
-          view={view}
-          onClose={() => setModal(null)}
-          onCreated={selectAgent}
-          onOpenExisting={(id) => {
-            selectAgent(id);
-            setModal(null);
-          }}
-        />
-      )}
-      {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
-      {modal === "settings" && (
-        <SettingsHome
-          onClose={() => setModal(null)}
-          onDiagnostics={openDiagnostics}
-          onLicenses={openAbout}
-          onChecklist={() => setModal("first-run")}
-        />
-      )}
-      {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
-      {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
-      {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
-      {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
-      {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
-      {modal === "new-squad" && (
-        <NewSquadModal
-          onClose={() => setModal(null)}
-          onCreated={(newTeamId) => {
-            setModal(null);
-            onTeam(newTeamId);
-          }}
-        />
-      )}
-      <CommandPaletteHost members={members} archived={archivedMembers} views={views} onAgent={onPaletteAgent} onTeam={onTeam} actions={paletteActions} />
-      <BriefEditorHost />
-      {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
-      {successorLead && (
-        <HandoffModal
-          view={views.find((v) => v.team.id === successorLead.team.id) ?? view!}
-          lead={successorLead}
-          onClose={() => setSuccessorId(null)}
-          onCreated={selectAgent}
-        />
-      )}
+      {overlays}
     </div>
   );
 }

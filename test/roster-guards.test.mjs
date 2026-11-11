@@ -483,6 +483,46 @@ test("Done-when #3 (Fix C): Sending to an (old)/archived lead delivers to the cu
   }
 });
 
+test("idea-86: a send to an archived / closed worker is never redirected to the lane's lead (workers have no successor)", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const sentMessages = [];
+    const labels = { team: "vibesquad", lane: "vibesquad" };
+    const agents = new Map([
+      ["rn-worker-archived", { id: "rn-worker-archived", title: "worker a", cwd: "/p", status: "closed", archivedAt: "2026-11-10T01:00:00Z", labels: { ...labels, role: "worker" } }],
+      ["rn-worker-closed", { id: "rn-worker-closed", title: "worker b", cwd: "/p", status: "closed", resumable: false, labels: { ...labels, role: "worker" } }],
+      ["rn-lead", { id: "rn-lead", title: "Hub lead", cwd: "/p", status: "idle", labels: { ...labels, role: "lead" } }],
+      ["rn-sender", { id: "rn-sender", title: "sender", cwd: "/p", status: "idle", labels: { ...labels, role: "brainstorm" } }],
+    ]);
+    const paseo = {
+      agents: {
+        ref: (id) => ({
+          async refresh() { const a = agents.get(id); return a ? { agent: a } : null; },
+          async send(text) { sentMessages.push({ to: id, text }); },
+        }),
+        async list() { return { entries: [...agents.values()].map((agent) => ({ agent })) }; },
+      },
+    };
+    const { handle } = createHarness();
+    handle.setPaseo(paseo);
+    try {
+      for (const agentId of ["rn-worker-archived", "rn-worker-closed"]) {
+        const res = await handle.sendAgentPrompt({ agentId, senderAgentId: "rn-sender", prompt: "hi" }, { paseo });
+        assert.equal(res, undefined, `${agentId}: no redirect`);
+      }
+      assert.deepEqual(sentMessages, []);
+    } finally {
+      handle();
+    }
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
 test("Done-when #5 (Fix E): create_agent with labels: { role: 'lead' } gets the lead pack (never WORKER_PACK)", async () => {
   const env = makeTempEnv();
   const prevHome = process.env.VIBESQUAD_HOME;

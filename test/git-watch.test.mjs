@@ -1,6 +1,6 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,14 @@ import { handleGitApi } from "../server/git-api.mjs";
 
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Async git for actions fired while a waiter is held: a sync git call blocks the event loop, so under load the waiter's
+// hold timer expires (changed:false) before the loop can deliver the very change the action made.
+const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+const gitAsync = (cwd, ...a) => new Promise((res, rej) => execFile("git", a, { cwd, env: gitEnv }, (err) => (err ? rej(err) : res())));
+// Let a just-issued gitWatch() run to the point where its waiter is registered (no timer: it only needs the microtask/IO turn).
+const attached = () => new Promise((r) => setImmediate(() => setImmediate(r)));
+// A held waiter ends on the change (event-driven); the hold is only a safety cap, so it is far above any loaded-machine git time.
+const HOLD_CAP = 60_000;
 
 // Poll `_gitWatcherCount()` until it equals `expected`, instead of a fixed sleep that races the async
 // watcher close under full-suite load. Fails with a clear message once the bounded deadline passes.
@@ -46,9 +54,9 @@ const noChange = (cwd, since, holdMs = 700) => gitWatch(cwd, since, { ...FAST, h
 async function expectFires(cwd, action, label) {
   const base = await gitWatch(cwd, undefined, FAST);
   assert.equal(base.changed, false);
-  const p = gitWatch(cwd, base.seq, FAST);
-  await sleep(100); // let the waiter attach
-  action();
+  const p = gitWatch(cwd, base.seq, { ...FAST, holdMs: HOLD_CAP });
+  await attached();
+  await action();
   const r = await p;
   assert.equal(r.changed, true, label);
   assert.notEqual(r.seq, base.seq, label);
@@ -71,15 +79,15 @@ test("fires on a working-tree edit, a new untracked file, git add, commit and br
   await expectFires(d, () => writeFileSync(join(d, "a.txt"), "two\n"), "edit");
   await expectFires(d, () => writeFileSync(join(d, "new.txt"), "n\n"), "untracked file");
   await expectFires(d, () => mkdirSync(join(d, "sub", "deep"), { recursive: true }) || writeFileSync(join(d, "sub", "deep", "f.txt"), "x"), "nested new file");
-  await expectFires(d, () => git(d, "add", "new.txt"), "git add");
-  await expectFires(d, () => git(d, "commit", "-q", "-m", "second"), "commit");
-  await expectFires(d, () => git(d, "switch", "-q", "-c", "feature/x"), "branch switch");
-  await expectFires(d, () => git(d, "switch", "-q", "main"), "switch back");
+  await expectFires(d, () => gitAsync(d, "add", "new.txt"), "git add");
+  await expectFires(d, () => gitAsync(d, "commit", "-q", "-m", "second"), "commit");
+  await expectFires(d, () => gitAsync(d, "switch", "-q", "-c", "feature/x"), "branch switch");
+  await expectFires(d, () => gitAsync(d, "switch", "-q", "main"), "switch back");
 });
 
 test("an empty commit (refs only) fires too", async () => {
   const d = repo();
-  await expectFires(d, () => git(d, "commit", "-q", "--allow-empty", "-m", "empty"), "empty commit");
+  await expectFires(d, () => gitAsync(d, "commit", "-q", "--allow-empty", "-m", "empty"), "empty commit");
 });
 
 test("ignores node_modules and .git internals; times out unchanged", async () => {
@@ -147,13 +155,13 @@ test("fallback (no recursive watch) detects edits, untracked files, add and comm
   for (const [label, act] of [
     ["edit", () => writeFileSync(join(d, "a.txt"), "fallback\n")],
     ["untracked", () => writeFileSync(join(d, "u.txt"), "u")],
-    ["add", () => git(d, "add", "u.txt")],
-    ["commit", () => git(d, "commit", "-q", "-m", "fb")],
+    ["add", () => gitAsync(d, "add", "u.txt")],
+    ["commit", () => gitAsync(d, "commit", "-q", "-m", "fb")],
   ]) {
     const base = await gitWatch(d, undefined, opts);
-    const p = gitWatch(d, base.seq, { ...opts, holdMs: 6000 });
-    await sleep(100);
-    act();
+    const p = gitWatch(d, base.seq, { ...opts, holdMs: HOLD_CAP });
+    await attached();
+    await act();
     assert.equal((await p).changed, true, label);
   }
 });

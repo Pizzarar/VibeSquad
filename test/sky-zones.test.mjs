@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
-import { NO_OVERLORD_TEXT, fetchHubCwd, hubSpinUpError, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
+import { NO_OVERLORD_TEXT, fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, overlordStarting, overlordState, skyZoneIds, skyZonesFor, spinUpOverlord } from "../src/skyZonesLogic.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 const member = (id, kind, { status = "idle", attention = null, laneId = "sq1" } = {}) => ({
@@ -432,4 +432,29 @@ test("hub spin-up H3: the failed Spin Up error is shown under the hub TVs only w
   assert.ok(app.includes("hubSpinUpError(pinFocus, hubPinNow)"));
   assert.ok(app.includes('data-testid="sky-spin-up-error"'));
   assert.ok(app.includes("resolveCwd: (hub) => fetchHubCwd(hub)"));
+});
+
+test("hub spin-up follow-ups: RiffBot Spin Up shows a disabled pending state from the shared pinActions in-flight; Overlord errors render inline, not alert()", () => {
+  const sky = src("SkyZones.tsx");
+  assert.ok(sky.includes("useSyncExternalStore(subscribePinStarts, () => (hub ? isPinStarting(hub) : false))"));
+  assert.ok(sky.includes('data-testid="sky-start-riffbot" disabled={busy}'));
+  assert.ok(sky.includes('{busy ? "Spinning up…" : "Spin Up RiffBot"}'));
+  assert.equal((sky.match(/busy=\{riffStarting\}/g) ?? []).length, 2, "TV and panel zones both get the RiffBot pending flag");
+  const app = src("App.tsx");
+  assert.ok(!app.includes("alert(`Could not start the Overlord"));
+  assert.ok(app.includes("message: e?.message ?? String(e)"));
+  assert.ok(app.includes('data-testid="sky-overlord-error"'));
+  assert.ok(app.includes("setOverlordErr(null);"), "a new attempt clears the previous error");
+});
+
+test("hub spin-up L1: the Overlord spawn error is scoped to its Squad and hides once a live Overlord exists", () => {
+  const err = { squadId: "sqA", message: "boom" };
+  assert.equal(hubOverlordError(err, "sqA", null), "boom");
+  assert.equal(hubOverlordError(err, "sqB", null), null, "another Squad's TVs do not show it");
+  assert.equal(hubOverlordError(err, "sqA", "boss"), null, "a live Overlord clears it");
+  assert.equal(hubOverlordError(null, "sqA", null), null);
+  assert.equal(hubOverlordError(err, null, null), null);
+  const app = src("App.tsx");
+  assert.ok(app.includes("setOverlordErr({ squadId: view.team.id,"));
+  assert.ok(app.includes("hubOverlordError(overlordErr, pinFocusView?.team.id"));
 });

@@ -1354,9 +1354,10 @@ test(
       assert.equal(w.labels["vs.auto-archived"], "1", "marker set before archive");
       // handleSendAgentPrompt: an auto-archived worker is not a retired holder (no redirect, no throw).
       assert.equal(await h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), undefined);
-      // The same archived agent WITHOUT the marker is still treated as retired (no live lead -> throws).
+      // The same archived worker WITHOUT the marker is not redirected to the lane's lead either (idea-86): the hook
+      // stays out and the backend refuses ("not running"), so the sender learns the worker is gone.
       delete w.labels["vs.auto-archived"];
-      await assert.rejects(() => h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), /retired/);
+      assert.equal(await h.beforeSend({ agentId: "w-9", senderAgentId: "lead-x", prompt: "more" }), undefined);
     } finally {
       h.stop?.();
     }

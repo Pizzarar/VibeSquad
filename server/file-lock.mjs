@@ -38,17 +38,22 @@ function reapStale(lockFile, seen) {
 }
 
 /**
- * Run fn() while holding <targetPath>.lock. Waits (sync) up to timeoutMs, taking over locks whose owner pid is dead
+ * Run fn() while holding <targetPath>.lock. Waits (sync) up to timeoutMs without the holder changing, taking over locks whose owner pid is dead
  * or that are older than staleMs. Always releases (only a lock this process owns). Returns fn()'s value.
  * Not re-entrant: a nested call on the same path in one process waits out the timeout and throws.
  */
 export function withFileLockSync(targetPath, fn, { timeoutMs = FILE_LOCK_TIMEOUT_MS, staleMs = FILE_LOCK_STALE_MS, alive = pidAlive } = {}) {
   const lockFile = `${targetPath}.lock`;
   mkdirSync(dirname(lockFile), { recursive: true });
-  const deadline = Date.now() + timeoutMs;
+  let deadline = Date.now() + timeoutMs;
+  let holderKey = null;
   for (;;) {
     if (tryCreateLock(lockFile)) break;
     const info = readLock(lockFile);
+    // The timeout detects a stuck holder, not total queue time: a different holder than last poll means the lock is
+    // turning over (a busy convoy under load), so restart the clock.
+    const key = info ? `${info.pid}:${info.startedAt}` : null;
+    if (key && key !== holderKey) { holderKey = key; deadline = Date.now() + timeoutMs; }
     if (Date.now() >= deadline) {
       throw new Error(`Timed out after ${timeoutMs}ms waiting for lock ${lockFile} (held by pid ${info?.pid ?? "unknown"})`);
     }

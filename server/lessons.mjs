@@ -162,6 +162,7 @@ export const STANDING_RULES = [
   "Route by Role + Tier with automatic provider failover (Claude -> Gemini -> DeepSeek); never pin every profile to one provider.",
   "Detach live children before archiving a Paseo-backed agent (Paseo cascades archives to its children; the runner has no such cascade, so this applies only to Paseo-backed lanes).",
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",
+  "Every master merge commit carries Live-Needs: none|frontend-reload|build|server-restart|runner-restart in the final trailer block, with Co-Authored-By; sync-runtime reads it.",
 ];
 
 /**

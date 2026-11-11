@@ -11,13 +11,14 @@ VibeSquad is a **local-first** tool. Its default attack surface is minimal:
 - **UNC paths:** client-supplied paths (`local-image`, `workspace-package-scripts`, `attach`) that start with `\\` or `//` are refused before any filesystem call, so a request can't make Windows contact another host and send NTLM credentials. The allowlist is checked on the resolved path before `stat`/`realpath`, then again on the real path.
 - The Paseo daemon and Claude Code agents run on the same host and communicate over loopback.
 - **What requires explicit opt-in (LAN/meshnet access):** set `VIBESQUAD_LAN_IP` and/or `VIBESQUAD_MESHNET_HOST`. When enabled, the server generates a local root CA with strict X.509 `nameConstraints` (only the configured hosts and private IP ranges), and all remote access requires a device token obtained by scanning a QR code from the local UI (single-use, 5-minute TTL).
-- **Token pairing:** each device receives a per-device cookie (`vs_device`) after completing the pairing flow. The cookie is bound to the device's CA fingerprint.
+- **Token pairing:** each device receives a per-device cookie (`vs_device`) after completing the pairing flow. The cookie is a random bearer token: the server stores only its SHA-256 hash and compares it in constant time; it is `HttpOnly; Secure; SameSite=Strict` with a one-year lifetime. It is **not** bound to the device or to the CA fingerprint, so a cookie copied off a device works from any client that trusts the local CA until it is revoked (`vs devices revoke <id|--all>`, or the Pair a device dialog).
 - **Web Push:** push notifications are sent to endpoints the user subscribed to from their own browser. No message content other than agent status events is sent.
 - **No outbound telemetry.** VibeSquad makes no calls to external analytics or telemetry services.
 
 ## Known Scope Limits
 
 - **Multi-user PCs:** the local token stops other Windows users and other local apps from changing VibeSquad, but they can still **read** through the loopback API (teams, logs, settings, inbox). Anyone who can read your `~/.vibesquad` (an administrator, or malware running as you) has full access. Browsers send cookies to every port on `127.0.0.1`/`localhost`, so a hostile server another user runs on a loopback port could capture your `vs_local` cookie if you browse to it. Delete `~/.vibesquad/local-token` and restart the server to rotate it.
+- **Accepted limit (same OS user):** agents run as the same OS user as the owner. An agent that deliberately reads `~/.vibesquad/local-token` is therefore treated as the owner. This is accepted for 0.3. The real fix (a separate OS account or sandbox per agent) is post-0.3.
 - Rotating the token needs a server restart, and clients re-read the file on their next request.
 
 - The Paseo daemon runs on localhost with its own access controls (see Paseo documentation).

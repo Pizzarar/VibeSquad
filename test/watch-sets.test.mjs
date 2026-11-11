@@ -953,3 +953,23 @@ test(
     }
   }),
 );
+
+test("F6: cancelWatch honours an `allow(set)` predicate and never flips the set when refused", () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "suite" }] }, { home: sb.home, now: T0 });
+    const refused = cancelWatch(id, "lead-2", { home: sb.home, now: T0 + 1, allow: (set) => set.owner === "lead-2" });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.refused, true);
+    assert.match(refused.error, /only its owner or the same-Squad Overlord may cancel/);
+    const still = listWatches({ owner: "lead-1" }, { home: sb.home })[0];
+    assert.equal(still.status, "armed");
+    assert.equal(still.cancelledBy, undefined);
+    assert.deepEqual(cancelWatch(id, "lead-1", { home: sb.home, now: T0 + 2, allow: (set) => set.owner === "lead-1" }), { ok: true, id });
+    // no predicate = legacy trust-the-caller behaviour (W1 callers that already authorized)
+    const other = addWatch({ owner: "lead-3", team: "vibesquad", lane: "x", items: [{ kind: "suite" }] }, { home: sb.home, now: T0 }).id;
+    assert.deepEqual(cancelWatch(other, "anyone", { home: sb.home, now: T0 + 3 }), { ok: true, id: other });
+  } finally {
+    sb.cleanup();
+  }
+});
