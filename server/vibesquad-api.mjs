@@ -449,6 +449,12 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   return sendJson(res, 200, { ok: true, distReady: true, ...extra });
 }
 
+// E5: the relay host's status() for the Host pill (serve.mjs registers it; null = no relay configured). Trusted callers only.
+let relayStatus = null;
+export function setRelayStatus(fn) {
+  relayStatus = typeof fn === "function" ? fn : null;
+}
+
 export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   if (req.method !== "GET" && req.method !== "HEAD") {
     res.statusCode = 405;
@@ -456,7 +462,11 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   }
   const full = getAuthStatus(rootDir);
   if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint });
-  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req) });
+  let relay = null;
+  try {
+    relay = relayStatus?.() ?? null;
+  } catch {}
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req), relay });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };

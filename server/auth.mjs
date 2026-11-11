@@ -7,6 +7,7 @@ import { withFileLockSync } from "./file-lock.mjs";
 import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
+import { isRelayRequest } from "./relay-tunnel.mjs";
 import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
@@ -383,10 +384,26 @@ function readDevicesFromDisk() {
 const wsByDevice = new Map(); // deviceId -> Set<socket>
 const DEVICE_WATCH_MS = 1000;
 let deviceWatch = null;
+const deviceDroppedListeners = new Set(); // E5: the relay host closes that device's sessions at once (relay-wiring.mjs)
+
+/**
+ * Called with a device id every time this process learns the device is gone: UI/CLI revoke (cascade members included),
+ * an out-of-process edit of devices.json, or an unreadable file (fail closed). The E5 relay registers `relayHost.revoke`.
+ * Returns an unsubscribe function. Listener errors are swallowed: a revoke must never fail because a hook did.
+ */
+export function onDeviceDropped(fn) {
+  deviceDroppedListeners.add(fn);
+  return () => deviceDroppedListeners.delete(fn);
+}
 
 function dropDeviceSockets(id) {
   for (const s of wsByDevice.get(id) ?? []) s.destroy();
   wsByDevice.delete(id);
+  for (const fn of deviceDroppedListeners) {
+    try {
+      fn(id);
+    } catch {}
+  }
 }
 
 /** While any device socket is open, re-check devices.json every second so an external revoke cuts streams without a request. */
@@ -551,17 +568,53 @@ export function parseCookies(header) {
   return out;
 }
 
-/** The paired, non-revoked device behind this request's vs_device cookie, or null. */
-export function authenticate(req) {
-  const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
-  if (!token) return null;
-  const hash = Buffer.from(sha256Hex(token), "hex");
+/** The paired device whose token hash matches `tokenHash` (constant-time), or null (also when the list can't be read). */
+function deviceByTokenHash(tokenHash) {
+  const hash = Buffer.from(tokenHash, "hex");
   const list = loadDevices();
   if (!list) return null; // devices.json unreadable: fail closed rather than trust a stale or empty list
-  const dev = list.find((d) => {
-    const want = Buffer.from(String(d.tokenHash ?? ""), "hex");
-    return want.length === hash.length && timingSafeEqual(want, hash);
-  });
+  return (
+    list.find((d) => {
+      const want = Buffer.from(String(d.tokenHash ?? ""), "hex");
+      return want.length === hash.length && timingSafeEqual(want, hash);
+    }) ?? null
+  );
+}
+
+/**
+ * E5 relay `authenticate(token)` callback: the device behind a bearer token presented INSIDE the E2EE channel.
+ * `{ deviceId }` for a paired device, `{ pending: true }` for a token still waiting for the minter's approval (E4b; it
+ * opens nothing until then), null otherwise. Never a cookie, never a socket: the relay session carries the result.
+ */
+export function deviceForToken(token) {
+  if (typeof token !== "string" || !token) return null;
+  const dev = deviceByTokenHash(sha256Hex(token));
+  if (dev) return { deviceId: dev.id };
+  return pendingForToken(token) ? { pending: true } : null;
+}
+
+/**
+ * E5 relay `isRevoked` callback, re-checked on every relayed dispatch: true only while `id` is in devices.json right now.
+ * Cheap by construction: loadDevices() is one statSync (path + mtime + size) unless another process changed the file.
+ * An unreadable file counts as inactive (fail closed), like every other read.
+ */
+export function deviceActive(id) {
+  const list = loadDevices();
+  return Boolean(list?.some((d) => d.id === id));
+}
+
+/**
+ * The paired, non-revoked device behind this request, or null. Two kinds of request:
+ *  - LAN / loopback: the vs_device cookie, hashed and matched in constant time.
+ *  - E5 relay (req.relayDevice, set only by the in-process dispatcher after the device authenticated inside the E2EE
+ *    channel): the device id itself, looked up in devices.json again so a revoke lands on the very next request. Any
+ *    cookie or token header such a request carries is ignored: the channel identity is the only credential.
+ */
+export function authenticate(req) {
+  if (isRelayRequest(req)) return authenticateRelayDevice(req);
+  const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+  if (!token) return null;
+  const dev = deviceByTokenHash(sha256Hex(token));
   if (!dev) return null;
   const now = Date.now();
   dev.lastSeenAt = new Date(now).toISOString();
@@ -577,10 +630,28 @@ export function authenticate(req) {
   return dev;
 }
 
+function authenticateRelayDevice(req) {
+  const id = String(req.relayDevice.id);
+  const list = loadDevices();
+  const dev = list?.find((d) => d.id === id) ?? null; // unreadable list: fail closed, like the cookie path
+  if (!dev) return null;
+  const now = Date.now();
+  dev.lastSeenAt = new Date(now).toISOString();
+  if (now - lastPersist > 60_000) {
+    try {
+      persistLastSeen();
+    } catch {
+      lastPersist = now;
+    }
+  }
+  return dev; // no trackSocket: the relay host closes the device's sessions through onDeviceDropped
+}
+
 // The loopback listener is the PC itself, but not only its owner (other apps, other Windows users):
 // owner access there needs the local token (header) or the vs_local cookie the launcher sets.
+// A relayed request (req.relayDevice) is never local, whatever its synthetic socket or headers say (E5 H1).
 const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
-export const isLocal = (req) => LOOPBACK.has(req.socket.localAddress ?? "");
+export const isLocal = (req) => !isRelayRequest(req) && LOOPBACK.has(req.socket.localAddress ?? "");
 
 const LOOPBACK_HOST_RE = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
 const LOOPBACK_ORIGIN_RE = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$/;
@@ -595,7 +666,7 @@ const isBrowserRequest = (h) => /^Mozilla\//.test(String(h["user-agent"] ?? ""))
  * Browsers always send Origin on POST and Sec-Fetch-Site on every request; plain CLI/test clients send neither.
  */
 export function isLocalBrowserSafe(req) {
-  if (!isLocal(req)) return false;
+  if (isRelayRequest(req) || !isLocal(req)) return false;
   if (req.socket.remoteAddress && !LOOPBACK.has(req.socket.remoteAddress)) return false;
   const h = req.headers;
   if (!LOOPBACK_HOST_RE.test(h.host ?? "")) return false;
@@ -633,8 +704,9 @@ const sameSecret = (got, want) => {
   return a.length === b.length && timingSafeEqual(a, b);
 };
 
-/** True when the request carries the local token header or the vs_local cookie. Says nothing about the listener. */
+/** True when the request carries the local token header or the vs_local cookie. Says nothing about the listener. Never for a relayed request. */
 export function hasLocalToken(req) {
+  if (isRelayRequest(req)) return false; // E5 L2: the channel identity is the only credential a relayed request has
   const token = getLocalToken();
   const header = req.headers[LOCAL_TOKEN_HEADER] ?? req.headers["x-vs-token"];
   if (typeof header === "string" && sameSecret(header.trim(), token)) return true;
@@ -647,6 +719,7 @@ export const isLocalOwner = (req) => isLocalBrowserSafe(req) && hasLocalToken(re
 
 /** True only for the x-vibesquad-token header (never the cookie): the nonce endpoint is for CLI/launcher callers. */
 export function hasLocalTokenHeader(req) {
+  if (isRelayRequest(req)) return false;
   const header = req.headers[LOCAL_TOKEN_HEADER] ?? req.headers["x-vs-token"];
   return typeof header === "string" && sameSecret(header.trim(), getLocalToken());
 }
@@ -943,7 +1016,27 @@ export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null) {
   let code = String(randomInt(100_000, 1_000_000));
   while (codes.has(code)) code = String(randomInt(100_000, 1_000_000));
   codes.set(code, { expiresAt: Date.now() + ttlMs, mintedBy: minter });
+  for (const fn of pairCodeMintedListeners) {
+    try {
+      fn();
+    } catch {}
+  }
   return code;
+}
+
+const pairCodeMintedListeners = new Set(); // E5: relayHost.noteFreshMint() lifts the host-wide redeem lock (threat model T8)
+
+/** Runs after every new pairing code exists (PC, CLI or device minted). Returns an unsubscribe function. */
+export function onPairCodeMinted(fn) {
+  pairCodeMintedListeners.add(fn);
+  return () => pairCodeMintedListeners.delete(fn);
+}
+
+/** E5 relay `burnCodes` callback (T8): the host-wide failed-redeem limit invalidates every outstanding code at once. */
+export function burnAllPairCodes() {
+  const n = codes.size;
+  codes.clear();
+  return n;
 }
 
 /** Tests: live (unredeemed, unexpired) codes for a minter (null = PC / CLI). */
