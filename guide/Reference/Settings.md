@@ -124,8 +124,8 @@ The **Remote Control** tab lets paired phones, tablets and laptops open VibeSqua
 
 The window scrolls, so on a small screen you can reach everything; the header and **Close** stay put. From top to bottom it shows:
 
-1. **ANDROID APP (SIDELOAD APK)**: download the app (**⬇ Download VibeSquad.apk (Android)**), then use the app's own scan, not the phone camera.
-2. **CONNECTION MODE**: pick Home LAN or Meshnet. The 6-digit code works for both.
+1. **CONNECTION MODE**: pick Home LAN or Meshnet. The 6-digit code works for both.
+2. **ANDROID APP (SIDELOAD APK)**: download the app (**⬇ Download VibeSquad.apk (Android)**), then use the app's own scan, not the phone camera.
 3. **PHONE — SCAN QR TO PAIR**: the QR code, a countdown, and a **DIRECT PAIRING LINK**. Also holds the certificate step and the **CA SHA-256 FINGERPRINT**.
 4. **WINDOWS DESKTOP APP — ZERO-CERT PAIRING (RECOMMENDED)**: for another PC. This is where the 6-digit code is, with **Copy Code** and **↻ New Code**.
 5. **ACTIVE SERVER ADDRESSES**: the addresses to type into the other device.
