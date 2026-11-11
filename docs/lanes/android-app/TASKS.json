@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-10T14:53:49.444Z",
+  "updatedAt": "2026-11-10T21:40:09.897Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -319,6 +319,18 @@
       ],
       "doneCheck": "node --test test/cli-devices.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
       "status": "todo"
+    },
+    {
+      "id": "unit-and-end-e1b",
+      "goal": "E1b: Phone Cockpit top safe-area inset (env(safe-area-inset-top) + 28px Android floor on .phone-bar, .phone-squad-menu, .phone-drawer, and safe-area-inset-bottom on .phone-bug-sheet so top bar never sits under the Android notification bar)",
+      "files": [
+        "src/PhoneCockpit.tsx",
+        "src/styles.css",
+        "test/phone-cockpit.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs && npm run typecheck",
+      "status": "done",
+      "commit": "f2a18fc"
     },
     {
       "id": "unit-and-end-e5-wire",

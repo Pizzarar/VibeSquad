@@ -56,7 +56,7 @@ Squad (one per product, e.g. "VibeSquad", "a game", "a personal site")
 
 ### 2.6 The agent runner (replaced the Paseo daemon)
 
-- VibeSquad was first built on top of **Paseo**, an open-source agent manager. It now has its **own agent runner** (`runner/`, ~2,600 lines) that is the default backend; Paseo remains only as an opt-in rollback path. The runner has adapters for Claude, ACP-based agents (Agent Client Protocol), and MCP, and a pricing table covering Claude and DeepSeek models for usage metering.
+- VibeSquad was first built on top of **Paseo**, an open-source agent manager. It now has its **own agent runner** (`runner/`, ~2,600 lines) that is now the only backend; the Paseo daemon has been fully removed. The runner has adapters for Claude, ACP-based agents (Agent Client Protocol), and MCP, and a pricing table covering Claude and DeepSeek models for usage metering.
 - **Restart-safe resume:** the server and runner can restart without cutting or wedging running agents. Prompt-less resumes are settled, verified and retried or failed explicitly; `vs restart` is held while background work is running; events missed during a server restart gap are replayed. This went through a Tier A review (see 2.4).
 - **Live-Needs runtime sync:** a build step syncs the built runtime into the live install, and commits declare whether they need a live sync or restart (`Live-Needs: <what>` or `none`), so changes do not silently fail to reach the running app.
 - Also built: native schedules and heartbeats, a session janitor that archives closed worker sessions, keep-host-awake while agents run, sealed secret input (secrets pass through a 0600 temp file and are never logged in chat), and PTY terminals per agent.
