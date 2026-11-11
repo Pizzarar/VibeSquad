@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-11T05:38:25.434Z",
+  "updatedAt": "2026-11-11T06:50:54.495Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -283,7 +283,8 @@
         "test/sec-phone-mint-pair.test.mjs"
       ],
       "doneCheck": "node --test test/sec-phone-mint-pair.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done",
+      "commit": "d55f02b"
     },
     {
       "id": "unit-and-end-e5",
@@ -372,6 +373,27 @@
       "doneCheck": "node --test test/pair-modal-scroll.test.mjs test/pair-modal-apk.test.mjs && npm run typecheck",
       "status": "done",
       "commit": "fc51517"
+    },
+    {
+      "id": "unit-and-origin-check",
+      "goal": "X1-E4b L4 (Tier A): cookie-authenticated write routes check Origin / Sec-Fetch-Site (not SameSite=Strict alone) in server/vibesquad-api.mjs:298 + serve.mjs:429",
+      "files": [
+        "server/vibesquad-api.mjs",
+        "server/serve.mjs",
+        "server/auth.mjs",
+        "test/sec-origin-check.test.mjs"
+      ],
+      "doneCheck": "node --test test/sec-origin-check.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
+      "status": "todo"
+    },
+    {
+      "id": "unit-and-prove-local",
+      "goal": "E4b follow-up: vs open + worker sweep use proveLocalServer before sending x-vibesquad-token",
+      "files": [
+        "cli/vs.mjs"
+      ],
+      "doneCheck": "node --test test/cli-devices.test.mjs && npm run typecheck",
+      "status": "todo"
     }
   ]
 }
