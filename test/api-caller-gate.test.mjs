@@ -376,3 +376,15 @@ test("idea-134: verifyAgent treats labels.orphan \"true\" like \"1\" (both are 4
   assert.equal((await call(word, "POST", "/__vibesquad/vs-log", logBody())).status, 403);
   assert.equal((await call(fine, "POST", "/__vibesquad/vs-log", logBody())).status, 200);
 });
+
+test("idea-137 (X1b): /inbox/triage checks the role before the body: a worker gets 403 with no card ids, a bogus action or a missing card; a lead/owner still gets the validation answer", async () => {
+  seedCards();
+  for (const body of [{}, { action: "bogus" }, { action: "archive" }, { action: "archive", cardId: "idea-nope" }, { action: "merge", targetId: "idea-1" }]) {
+    const r = await call(ids.worker, "POST", "/__vibesquad/inbox/triage", body);
+    assert.equal(r.status, 403, JSON.stringify(body));
+    assert.match(String(r.body?.error), /leads and Buddies/, JSON.stringify(body));
+  }
+  assert.equal((await call(ids.lead, "POST", "/__vibesquad/inbox/triage", {})).status, 400, "a lead reaches validation");
+  assert.equal((await call(ids.lead, "POST", "/__vibesquad/inbox/triage", { action: "archive", cardId: "idea-nope" })).status, 404, "a lead reaches the card lookup");
+  assert.equal((await call("header", "POST", "/__vibesquad/inbox/triage", {})).status, 400, "the owner reaches validation");
+});

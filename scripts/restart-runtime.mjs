@@ -61,6 +61,15 @@ export function parseArgs(argv) {
   return o;
 }
 
+// X1b (docs/PLAN_X1_IDENTITY.md): the relaunched server and runner must never inherit the caller's agent identity. A lead
+// running `vs restart` carries VS_AGENT_ID + VS_AGENT_TOKEN; a server started with them would call the runner as that lead.
+export const AGENT_ENV_KEYS = ['VS_AGENT_ID', 'PASEO_AGENT_ID', 'VS_AGENT_TOKEN', 'VS_ROLE', 'VS_LANE', 'VS_TEAM', 'VS_ORD', 'VS_PROFILE']; // + the identity claims (R1 L1)
+export function stripAgentEnv(env = process.env) {
+  const out = { ...env };
+  for (const k of AGENT_ENV_KEYS) delete out[k];
+  return out;
+}
+
 export function vsHome(env = process.env) { return env.VIBESQUAD_HOME || path.join(os.homedir(), '.vibesquad'); }
 /** Same rule as src-tauri config_dir(). */
 export function desktopConfigDir(env = process.env) {
@@ -487,7 +496,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (await healthy()) step('server already up, not starting another', { port: det.port });
     else {
       const sl = det.serverLaunch;
-      const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...env, ...sl.env }, logFile: sl.logFile });
+      const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...stripAgentEnv(env), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
       try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* desktop pid file is best effort */ }
       step('server started', { pid, cwd: sl.cwd, log: sl.logFile });
     }
@@ -508,7 +517,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
     if (!health) {
       const rl = det.runnerLaunch;
-      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: { ...env }, logFile: rl.logFile });
+      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: stripAgentEnv(env), logFile: rl.logFile }); // never as an agent (X1b)
       step('runner not booted by the server, started directly', { pid });
       for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
     }

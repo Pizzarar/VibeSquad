@@ -1,7 +1,15 @@
 // VS agent tools, shared by the VS MCP server (server/mcp/server.mjs) and the vs CLI (spawn/send/status/wait).
-// Every tool takes plain args and a context, and returns a plain object. Backend routing goes through the existing seam:
-// rn- ids -> RunnerBackend, other ids -> Paseo, creates by lane (every lane runs on the runner unless pinned to Paseo).
+// Every tool takes plain args and a context, and returns a plain object. Every agent is a runner agent (rn- id); the
+// runner is the only backend (server/backend/index.mjs).
+//
+// X1b (docs/PLAN_X1_IDENTITY.md): the caller is (VS_AGENT_ID, VS_AGENT_TOKEN), verified against runner memory with
+// GET /verify-agent (verifyCaller) before every tool that acts on identity; the env's VS_ROLE/VS_LANE/VS_TEAM are only
+// a claim until then. Calls to the VS server carry x-vs-agent-id + x-vs-agent-token and never the owner's local token.
+// Rollout fallback (VS_AGENT_TOKEN_REQUIRED unset/0, removed in X1d): an agent id without a token (a child from before
+// the X1a runner restart) keeps today's env/record identity and the owner header; with the flag on it is a 403.
 import { isRunnerId } from "../backend/runner-backend.mjs";
+import { agentTokenRequired } from "../backend/runner-client.mjs";
+import { fetchWithLocalToken, localTokenPath, readLocalToken } from "../local-token.mjs";
 import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
@@ -13,17 +21,168 @@ const WORKER_ROLE = "worker";
 const LEAD_ROLE = "lead";
 const LEAD_PROFILE_PREFIX = "Lead - ";
 const clean = (v) => String(v ?? "").trim();
-/** A runner agent is calling: its id is the spawn parent / message sender the runner hook host needs (Paseo supplies both natively). */
-const isRunnerCaller = (ctx) => String(ctx.identity?.agentId ?? "").startsWith("rn-");
+const forbidden = (why) => Object.assign(new Error(why.startsWith("403") ? why : `403: ${why}`), { status: 403 });
 
-/** Caller identity from env: VS_AGENT_ID (fallback PASEO_AGENT_ID), VS_TEAM, VS_LANE, VS_ROLE. */
+/** Caller identity from env: VS_AGENT_ID (fallback PASEO_AGENT_ID) + VS_AGENT_TOKEN, VS_TEAM, VS_LANE, VS_ROLE. */
 export function identityFromEnv(env = process.env) {
   return {
     agentId: clean(env.VS_AGENT_ID) || clean(env.PASEO_AGENT_ID),
+    token: clean(env.VS_AGENT_TOKEN),
     team: clean(env.VS_TEAM),
     lane: clean(env.VS_LANE),
     role: clean(env.VS_ROLE),
   };
+}
+
+/**
+ * The agent this context calls as, from its identity (the token is the identity's own field; the CLI copies it from
+ * VS_AGENT_TOKEN): null when there is no agent id (the owner's shell, or unknown); `{ id, token, verify }` otherwise.
+ * `verify` is false only under the rollout fallback (no token, flag off): the id is then a claim, as before X1.
+ */
+export function agentCallerOf(ctx) {
+  const id = clean(ctx?.identity?.agentId);
+  const token = clean(ctx?.identity?.token);
+  const verify = Boolean(token) || agentTokenRequired(ctx?.env ?? {});
+  // R1 M1: a token (or the flag) with the id cleared is still an agent shell, never the owner: it verifies (and fails closed).
+  if (!id) return verify ? { id: "", token, verify: true } : null;
+  return { id, token, verify };
+}
+
+/**
+ * The caller's own agent record. A missing record reads as null (the tool then refuses as "not a live ..."); any other
+ * failure (a 403 from the runner, a transport error) propagates: the caller lookup is never swallowed into null (X1b).
+ */
+async function fetchCallerRecord(ctx, id) {
+  try {
+    const a = agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)));
+    return a && a.id ? a : null;
+  } catch (e) {
+    if (e?.status === 404 || String(e?.message ?? "").toLowerCase().includes("not found")) return null;
+    throw e;
+  }
+}
+
+/** The agent id to stamp as spawn parent / message sender: the verified caller, or the claimed id under the fallback. */
+const callerAgentId = (ctx) => agentCallerOf(ctx)?.id ?? "";
+
+/**
+ * Resolve the caller from its token: GET /verify-agent through the backend (RunnerBackend.verifyAgent). On success the
+ * context's identity is overwritten with the runner's record (role/lane/team/profile/digest/digestFor/overlord) and
+ * `verified: true`; a wrong/missing token, or a gone/retired agent, throws a 403-tagged error (never swallowed).
+ * Returns null when there is nothing to verify: no agent id (owner / unknown), or the rollout fallback.
+ */
+export async function verifyCaller(ctx) {
+  const caller = agentCallerOf(ctx);
+  if (!caller) return null;
+  if (!caller.verify) return null;
+  const bad = `403: agent token invalid for ${caller.id || "(no VS_AGENT_ID)"} (VS_AGENT_TOKEN does not match the runner's token for VS_AGENT_ID, or the agent is gone/retired)`;
+  if (!caller.token || !caller.id) throw forbidden(bad);
+  // Verified once per context: a tool that is reached through callTool (alias metric) and its own gate does one runner call.
+  const done = ctx[VERIFIED];
+  if (done && done.id === caller.id && done.token === caller.token) return done.rec;
+  let who;
+  try {
+    who = ctx.verifyAgent
+      ? await ctx.verifyAgent({ id: caller.id, token: caller.token })
+      : await ctx.withBackend({ id: caller.id, verify: true }, (b) => {
+        if (typeof b.verifyAgent !== "function") throw new Error("backend cannot verify agent callers (no verifyAgent)");
+        return b.verifyAgent({ id: caller.id, token: caller.token });
+      });
+  } catch (e) {
+    if (e?.status === 403) throw forbidden(bad);
+    throw e;
+  }
+  const rec = who?.agent ?? who;
+  if (!rec || typeof rec !== "object" || clean(rec.id) !== caller.id) throw forbidden(bad);
+  ctx.identity = {
+    ...ctx.identity,
+    agentId: caller.id,
+    token: caller.token,
+    role: clean(rec.role).toLowerCase() || WORKER_ROLE,
+    lane: clean(rec.lane),
+    team: clean(rec.team),
+    profile: clean(rec.profile),
+    digest: rec.digest === true,
+    digestFor: rec.digestFor ? String(rec.digestFor) : null,
+    overlord: rec.overlord === true,
+    verified: true,
+  };
+  Object.defineProperty(ctx, VERIFIED, { value: { id: caller.id, token: caller.token, rec }, enumerable: false, configurable: true });
+  return rec;
+}
+const VERIFIED = Symbol("vibesquad.verifiedCaller");
+
+const homeOf = (env = {}) => clean(env.VIBESQUAD_HOME) || null;
+
+/** Owner proof for a CLI/MCP process: no agent id and the per-install local token (~/.vibesquad/local-token) is readable. */
+export async function hasOwnerProof(ctx) {
+  if (agentCallerOf(ctx)) return false;
+  return localTokenAvailable(ctx);
+}
+
+/** The per-install local token file is readable for this context's home (the owner's proof; never read by an agent path). */
+const localTokenAvailable = (ctx) => {
+  const home = homeOf(ctx?.env);
+  return Boolean(readLocalToken(home ? localTokenPath(home) : undefined));
+};
+const localTokenFile = (ctx) => { const home = homeOf(ctx?.env); return home ? { file: localTokenPath(home) } : {}; };
+
+/**
+ * Auth headers for a call to the VS server: an agent sends x-vs-agent-id + x-vs-agent-token and nothing else (an agent
+ * never presents the owner's local token); the owner's shell (no agent id), and an agent under the rollout fallback,
+ * send the local-token header when the file is readable (empty headers otherwise: the server treats that as unknown).
+ */
+export async function vsServerHeaders(ctx) {
+  const caller = agentCallerOf(ctx);
+  if (caller?.verify) return { "x-vs-agent-id": caller.id, "x-vs-agent-token": caller.token };
+  return {}; // the owner header is minted only inside fetchWithLocalToken, after the listener proved it holds the token
+}
+
+/** An agent's POST: its own headers, a plain socket (no local token leaves the process, so no loopback proof is needed). */
+async function postAsAgent(ctx, route, payload, timeoutMs) {
+  const port = Number(ctx?.env?.VIBESQUAD_PORT || process.env.VIBESQUAD_PORT || 4180);
+  return (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}${route}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(await vsServerHeaders(ctx)) },
+    body: payload,
+    redirect: "error",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+}
+
+/** fetchWithLocalToken options for the owner's shell (or the rollout fallback): proof first, one socket, token from this home. */
+const ownerPostInit = (ctx, payload, timeoutMs) => ({
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: payload,
+  port: Number(ctx?.env?.VIBESQUAD_PORT || process.env.VIBESQUAD_PORT || 4180),
+  ...localTokenFile(ctx),
+  fetchImpl: ctx.fetch,
+  timeoutMs,
+  tokenOptional: true,
+});
+
+/**
+ * POST `route` on the local VS server as this caller. Connection failures throw with `unreachable: true`; a non-2xx
+ * answer throws `<status>: <server error>` tagged with `status` (so a 403 reads as 403 to the agent). Returns the JSON body.
+ */
+export async function postToVsServer(ctx, route, body, { timeoutMs = 20_000 } = {}) {
+  const payload = JSON.stringify(body ?? {});
+  let r;
+  try {
+    // An agent sends its own headers; the owner's shell (or the rollout fallback) makes the listener prove it holds the
+    // local token over the one socket the request then rides (X1 E4a L3 / prove-local L1) before x-vibesquad-token goes
+    // out. A failed proof is an error (`proofFailed`), never a disk fallback; nothing listening is `unreachable`.
+    r = agentCallerOf(ctx)?.verify
+      ? await postAsAgent(ctx, route, payload, timeoutMs)
+      : await fetchWithLocalToken(route, ownerPostInit(ctx, payload, timeoutMs));
+  } catch (e) {
+    if (e?.proofFailed) throw e;
+    throw Object.assign(new Error(`VS server unreachable: ${e?.message ?? e}`), { unreachable: true });
+  }
+  const json = await r.json().catch(() => ({}));
+  if (!r.ok) throw Object.assign(new Error(`${r.status}: ${json?.error ?? `server answered ${r.status}`}`), { status: r.status, body: json });
+  return json;
 }
 
 /**
@@ -45,15 +204,38 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       if (!profile) return null;
       return { profile, spawn: toPaseoSpawnConfig(profile, {}, profiles) };
     },
-    async writeLog({ type, text, refs }) {
-      const { appendVsLogEntry } = await import("../brainstorm.mjs");
-      appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: ctx.identity.agentId || "you", type, text, refs });
+    // X1b: the log entry goes to the VS server (POST /__vibesquad/vs-log), which attributes it to the verified caller
+    // (worker/digest/lead rules, `you` owner-only). Direct disk append only for a caller without agent proof (the owner's
+    // shell, or the rollout fallback) when there is no local token to present or the server is down. Returns the entry.
+    async writeLog({ type, text, refs, agent }) {
+      // `agent` names the owner's entry only (the CLI passes the configured user name); the server ignores it for an agent.
+      const name = ctx.identity.agentId || clean(agent);
+      const body = { teamId: ctx.identity.team, laneId: ctx.identity.lane, type, text, refs, ...(name ? { agent: name } : {}) };
+      const caller = agentCallerOf(ctx);
+      const direct = async () => {
+        const { appendVsLogEntry } = await import("../brainstorm.mjs");
+        return appendVsLogEntry({ teamId: ctx.identity.team, laneId: ctx.identity.lane, agent: name || "you", type, text, refs }).entry;
+      };
+      if (!caller?.verify) {
+        // R1 H1: the owner's shell must hold the local token; a scrubbed shell (no id, no token) is nobody and writes nothing.
+        if (!caller && !(await hasOwnerProof(ctx))) throw new Error("vs log: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or an agent may write the log");
+        if (!localTokenAvailable(ctx)) return direct(); // the rollout fallback with nothing to present (removed in X1d)
+        try {
+          return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
+        } catch (e) {
+          if (e?.unreachable) return direct();
+          throw e;
+        }
+      }
+      return (await postToVsServer(ctx, "/__vibesquad/vs-log", body)).entry;
     },
     // fn(backend) runs against the runner. Connect-only: with the runner down this is RUNNER_DOWN. The VS server owns starting it.
-    async withBackend(_opts, fn) {
+    // opts.verify (verifyCaller): skip the /health probe, which an agent with a wrong token cannot pass either (the
+    // runner answers 403 to every route for it); the verify call itself then reports the 403 instead of RUNNER_DOWN.
+    async withBackend(opts, fn) {
       const { sharedRunnerBackend } = await import("../backend/index.mjs");
       const runner = sharedRunnerBackend();
-      await runner.requireRunning?.();
+      if (!opts?.verify) await runner.requireRunning?.();
       return fn(runner);
     },
     // Live leads in (team, lane): the exact `vs who lead` filter (whoCandidate), over the agent list. Fails closed:
@@ -118,6 +300,7 @@ async function spawnWorker(ctx, args = {}) {
 }
 
 async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
+  await verifyCaller(ctx); // X1b: role/lane/team below are the runner's record, not the env claim (403 propagates)
   const prompt = need(args, "prompt", "initialPrompt");
   const profileName = clean(pick(args, "profile", "profileId") ?? args.labels?.profile);
   const given = { provider: clean(args.provider), model: clean(args.model), modeId: clean(pick(args, "modeId", "mode")) };
@@ -173,7 +356,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
     if (callerRole === LEAD_ROLE) {
       // Cross-lane power is never granted from env alone: the caller's own agent record must say it is a live lead on this hub lane.
       const callerId = clean(ctx.identity.agentId);
-      const rec = callerId ? agentOf(await ctx.withBackend({ id: callerId }, (b) => b.fetchAgent(callerId)).catch(() => null)) : null;
+      const rec = callerId ? await fetchCallerRecord(ctx, callerId) : null; // X1b: a failed caller lookup propagates (missing = null)
       const recLane = rec ? findLaneInRegistry(clean(rec.labels?.lane || rec.labels?.lead), teams) : null;
       const recTeam = rec ? findTeamInRegistry(clean(rec.labels?.team), teams) : null;
       if (!rec || effectiveAgentRole(rec) !== LEAD_ROLE || isRetiredAgent(rec) || rec.archivedAt || (rec.status === "closed" && rec.resumable !== true) || recLane?.lane.id !== callerLane.lane.id || recTeam?.id !== canonTeam) {
@@ -212,7 +395,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   labels.role = role;
   if (profile) labels.profile = profile.name || profile.id; // by name: the plugin, failover and digest identity all match names
   else delete labels.profile; // a caller-supplied profile label can make the agent read as a digest
-  if (isRunnerCaller(ctx)) labels["vs.parent"] = ctx.identity.agentId;
+  if (callerAgentId(ctx)) labels["vs.parent"] = callerAgentId(ctx); // the verified caller (or the claimed id under the fallback)
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
   // Which of model/thinking came from the profile rather than the caller: the before.agent.create hook must not read those as an explicit override of the stakes ladder.
@@ -268,21 +451,18 @@ async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job,
   const msg = painterId
     ? `Your Art Director is agent ${p.id}. Send it each gallery PNG via \`send\`.`
     : `Your Art Painter is agent ${p.id}; it will send you gallery PNGs. Judge them and reply with numbered fixes or PASS.`;
-  await ctx.withBackend({ id: self.id }, (b) => b.sendAgentPrompt(self.id, msg, isRunnerCaller(ctx) && self.id.startsWith("rn-") ? { senderId: ctx.identity.agentId } : undefined)).catch(() => {});
+  await ctx.withBackend({ id: self.id }, (b) => b.sendAgentPrompt(self.id, msg, callerAgentId(ctx) ? { senderId: callerAgentId(ctx) } : undefined)).catch(() => {});
   return p.id;
 }
 
 async function sendTool(ctx, args = {}) {
   const id = need(args, "id", "agentId");
   const text = need(args, "text", "prompt", "message");
-  // Owner turns jump the queue: only a human `vs send` (no VS_AGENT_ID / PASEO_AGENT_ID in the environment) is the owner.
-  // An agent calling `send` (MCP) is not: a runner agent carries senderId instead, a Paseo agent tracks its sender natively.
-  const isOwner = !ctx.identity.agentId;
-  const opts = isRunnerCaller(ctx) && id.startsWith("rn-")
-    ? { senderId: ctx.identity.agentId }
-    : isOwner
-      ? { owner: true }
-      : undefined;
+  await verifyCaller(ctx); // X1b: a wrong/missing token is a 403 before anything is sent
+  // Owner turns jump the queue: only a caller with no agent id AND owner proof (the local token) is the owner. An agent
+  // carries senderId instead (the runner sets owner/senderId from the verified caller anyway); no proof = no opts.
+  const sender = callerAgentId(ctx);
+  const opts = sender ? { senderId: sender } : (await hasOwnerProof(ctx)) ? { owner: true } : undefined;
   const res = await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, opts));
   return res?.redirectedTo ? { id, sent: true, redirectedTo: res.redirectedTo } : { id, sent: true };
 }
@@ -301,6 +481,7 @@ async function statusTool(ctx, args = {}) {
 
 async function cancelTool(ctx, args = {}) {
   const id = need(args, "id", "agentId");
+  await verifyCaller(ctx); // X1b: the runner then scopes the cancel to the verified caller
   await ctx.withBackend({ id }, (b) => b.cancelAgent(id));
   return { id, cancelled: true };
 }
@@ -319,8 +500,9 @@ async function reportTool(ctx, args = {}) {
   if (!REPORT_TYPES.includes(type)) throw new Error(`type must be one of: ${REPORT_TYPES.join(", ")}`);
   const text = clean(args.text);
   if (!text) throw new Error("text is required");
-  await ctx.writeLog({ type, text, refs: args.refs });
-  return { logged: true, type };
+  await verifyCaller(ctx); // X1b: 403 on a bad token before the server is asked; the server re-attributes the entry
+  const entry = await ctx.writeLog({ type, text, refs: args.refs });
+  return { logged: true, type, ...(entry && typeof entry === "object" ? { agent: entry.agent, refs: entry.refs } : {}) };
 }
 
 const HANDOFF_DEDUPE_MS = 10 * 60_000;
@@ -348,18 +530,21 @@ async function isCrossLaneRequest(ctx, askedId, askedLane, callerId) {
  * nobody else. Idempotent: a second call returns the existing successor.
  */
 async function handoffLead(ctx, args = {}) {
+  await verifyCaller(ctx); // X1b: callerRole/lane/team below come from the runner's record (403 propagates)
   const callerRole = clean(ctx.identity.role).toLowerCase();
   const callerId = clean(ctx.identity.agentId);
   const askedId = clean(pick(args, "id", "agentId"));
   const askedLane = clean(pick(args, "lane", "laneId"));
+  // Targets may be missing (null); the caller's own lookup never swallows an error (X1b).
   const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
+  const fetchCaller = (id) => fetchCallerRecord(ctx, id);
   let target;
   let trigger;
   if (callerRole === "brainstorm") {
     const { team, lane } = ctx.identity;
     if (!team || !lane) throw new Error("cannot hand off a lead: caller has no team and lane");
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
-    const caller = await fetchAgent(callerId);
+    const caller = await fetchCaller(callerId);
     if (!caller || effectiveAgentRole(caller) !== "brainstorm" || isRetiredAgent(caller)) {
       throw new Error(`cannot hand off a lead: ${callerId} is not a live Buddy`);
     }
@@ -382,7 +567,7 @@ async function handoffLead(ctx, args = {}) {
   } else if (callerRole === LEAD_ROLE && (await isCrossLaneRequest(ctx, askedId, askedLane, callerId))) {
     // (c) The Squad's hub lead (Overlord) hands off any lane's live lead in its own Squad. Identity is the runner record's, never args.
     if (!callerId) throw new Error("cannot hand off a lead: caller has no agent id");
-    const caller = await fetchAgent(callerId);
+    const caller = await fetchCaller(callerId);
     if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || isRetiredAgent(caller) || caller.archivedAt || (caller.status === "closed" && caller.resumable !== true)) {
       throw new Error(`cannot hand off a lead: ${callerId} is not a live lead`);
     }
@@ -419,7 +604,7 @@ async function handoffLead(ctx, args = {}) {
     if ((askedId && askedId !== callerId) || (askedLane && findLaneInRegistry(askedLane, ctx.teams ?? loadTeamsRegistry())?.lane.id !== callerLane.lane.id)) {
       throw new Error("cannot hand off a lead: a lead may only hand off itself");
     }
-    target = await fetchAgent(callerId);
+    target = await fetchCaller(callerId);
     const known = Boolean(target);
     if (!target) target = { id: callerId };
     trigger = "self";
@@ -458,29 +643,31 @@ async function handoffLead(ctx, args = {}) {
 }
 
 /**
- * POST the handoff to the running VS server's single /__vibesquad/lead-handoff endpoint. Connection failures carry
- * `unreachable`; a listener that fails the local-token proof (X1 E4a L3) is an error, never an in-process fallback.
+ * POST the handoff to the running VS server's single /__vibesquad/lead-handoff endpoint as this caller (agent headers for an
+ * agent, never the owner's local token; X1b). Connection failures carry `unreachable`; a refusal is returned as `{ error }`
+ * (the caller reports it as a failed handoff), a 403 with its status in the text.
  */
 async function postLeadHandoffToServer(body, ctx) {
-  const { fetchWithLocalToken } = await import("../local-token.mjs");
+  const payload = JSON.stringify(body);
   let r;
   try {
-    r = await fetchWithLocalToken("/__vibesquad/lead-handoff", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      fetchImpl: ctx.fetch,
-      timeoutMs: 200_000,
-      tokenOptional: true,
-    });
+    r = agentCallerOf(ctx)?.verify
+      ? await postAsAgent(ctx, "/__vibesquad/lead-handoff", payload, 200_000)
+      : await fetchWithLocalToken("/__vibesquad/lead-handoff", ownerPostInit(ctx, payload, 200_000));
   } catch (e) {
     if (e?.proofFailed) throw e;
     throw Object.assign(new Error(`VS server unreachable: ${e?.message ?? e}`), { unreachable: true });
   }
   const json = await r.json().catch(() => ({}));
-  if (!r.ok && !json?.error) json.error = `server answered ${r.status}`;
-  return json;
+  return r.ok ? json : httpRefusal({ status: r.status, body: json });
 }
+
+/** A non-2xx answer as the `{ error }` the tools report: the server's own text, prefixed with the status only for a 403 (X1b). */
+const httpRefusal = (e) => {
+  const body = e.body && typeof e.body === "object" ? e.body : {};
+  const text = String(body.error ?? `server answered ${e.status}`);
+  return { ...body, error: e.status === 403 && !text.startsWith("403") ? `403: ${text}` : text };
+};
 
 /**
  * Restart a lane's Buddy through the existing /__vibesquad/brainstorm-restart path (archives the old Buddy, keeps its children, spawns a
@@ -490,6 +677,7 @@ async function postLeadHandoffToServer(body, ctx) {
  * first one through the same start-brainstorm path the UI's first pin click uses (idea-95), with the same grants.
  */
 async function restartBuddy(ctx, args = {}) {
+  await verifyCaller(ctx); // X1b: a wrong/missing token is a 403 here; the owner path below needs owner proof
   const callerId = clean(ctx.identity.agentId);
   const askedLane = clean(pick(args, "lane", "laneId"));
   const profileName = buddyProfileArg(args);
@@ -499,7 +687,7 @@ async function restartBuddy(ctx, args = {}) {
   let laneId;
   let caller = null;
   if (callerId) {
-    caller = await fetchAgent(callerId);
+    caller = await fetchCallerRecord(ctx, callerId); // the caller's own lookup never swallows an error (X1b)
     if (!caller || effectiveAgentRole(caller) !== LEAD_ROLE || !isLiveAgent(caller)) {
       throw new Error(`cannot restart a Buddy: ${callerId} is not a live lead (only the owner, the lane's lead or the Squad's Overlord may)`);
     }
@@ -581,18 +769,18 @@ async function getWatchSets(ctx) {
 async function watchTool(ctx, args = {}) {
   const action = clean(args.action);
   if (!["add", "list", "cancel"].includes(action)) throw new Error("watch action must be one of: add, list, cancel");
+  await verifyCaller(ctx); // X1b: the gate is the verified caller; a wrong/missing token is a 403 before any lookup
   const callerId = clean(ctx.identity.agentId);
   const callerRole = clean(ctx.identity.role).toLowerCase();
   const teams = ctx.teams ?? loadTeamsRegistry();
   // agentOf keeps a `{ agent: null }` wrapper when the backend has no record; normalize to null so a missing agent is detectable.
-  const fetchAgent = async (id) => {
-    const a = agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
-    return a && a.id ? a : null;
-  };
+  const norm = (a) => (a && a.id ? a : null);
+  const fetchAgent = async (id) => norm(agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null)));
 
   // Resolve the caller's identity from its runner record (never env/args), exactly like handoff_lead / restart_buddy.
+  // The caller's own lookup never swallows an error (X1b).
   let caller = null;
-  if (callerId) caller = await fetchAgent(callerId);
+  if (callerId) caller = await fetchCallerRecord(ctx, callerId);
   const recRole = caller ? effectiveAgentRole(caller) : "";
   // Workers and digest agents get no watch verb (a digest worker is not a lead/Buddy and must never register watches).
   if (recRole === "worker" || recRole === "digest" || (!caller && (!callerRole || callerRole === "worker"))) {
@@ -667,26 +855,20 @@ async function watchTool(ctx, args = {}) {
   return ws.addWatch({ owner, team, lane, items, stallMin });
 }
 
+/** POST /__vibesquad/brainstorm-restart as this caller (agent headers for an agent, never the owner's local token; X1b). */
 async function postBuddyRestartToServer(body, ctx) {
-  const { fetchWithLocalToken } = await import("../local-token.mjs");
+  const payload = JSON.stringify(body);
   let r;
   try {
-    // X1 E4a L3: the listener proves it holds the local token before the header goes out.
-    r = await fetchWithLocalToken("/__vibesquad/brainstorm-restart", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-      fetchImpl: ctx.fetch,
-      timeoutMs: 200_000,
-      tokenOptional: true,
-    });
+    r = agentCallerOf(ctx)?.verify
+      ? await postAsAgent(ctx, "/__vibesquad/brainstorm-restart", payload, 200_000)
+      : await fetchWithLocalToken("/__vibesquad/brainstorm-restart", ownerPostInit(ctx, payload, 200_000));
   } catch (e) {
     if (e?.proofFailed) throw e;
     throw new Error(`VS server unreachable: ${e?.message ?? e} (a Buddy restart runs through the server so its archive/spawn budgets apply)`);
   }
   const json = await r.json().catch(() => ({}));
-  if (!r.ok && !json?.error) json.error = `server answered ${r.status}`;
-  return json;
+  return r.ok ? json : httpRefusal({ status: r.status, body: json });
 }
 
 const obj = (properties, required = []) => ({ type: "object", properties, required, additionalProperties: true });
@@ -774,6 +956,7 @@ export async function callTool(ctx, name, args = {}) {
   const def = VS_TOOLS[target];
   if (!def) throw new Error(`unknown tool "${name}"`);
   if (ALIASES[name]) {
+    await verifyCaller(ctx); // R1 M2: the metric is logged as the verified caller (a bad token is a 403 before any log)
     const { agentId, lane } = ctx.identity;
     try {
       await ctx.writeLog({ type: "metric", text: `mcp-alias: tool=${name} caller=${agentId || "unknown"} lane=${lane || "unknown"}` });
