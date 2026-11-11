@@ -49,6 +49,7 @@ import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
 import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
+import { BoringApp } from "./BoringAde";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { FocusRail, railAlerts } from "./FocusRail";
@@ -108,7 +109,7 @@ import { Avatar, TeamEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
 import { claimAlert } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
-import { alertEnabled, getPrefs, getPref , getRestoreLastView } from "./prefs";
+import { alertEnabled, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
 import { setCloseGuard } from "./drafts";
 import {
   applyUiScaleToDom,
@@ -1316,6 +1317,14 @@ const Toolbar = memo(function Toolbar(props: {
           Vibe mode
         </button>
       )}
+      <button
+        className="tchip"
+        data-testid="toolbar-vibe-toggle"
+        title="Switch to Boring Mode (corporate ADE layout)"
+        onClick={() => setPref("app.vibe", "boring")}
+      >
+        Boring mode
+      </button>
       <button className="tchip" data-testid="global-transcript-search-btn" title="Search all transcripts" onClick={() => openOverlay("search")}>
         🔍
       </button>
@@ -1441,6 +1450,7 @@ export function App() {
   const split = useSplit();
   const mobileTeamView = useMobileTeamView();
   const phoneShell = usePhoneShell();
+  const [vibe] = usePref("app.vibe");
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
   const chatScale = useChatScale();
@@ -1845,6 +1855,58 @@ export function App() {
     />
   ) : null;
 
+  // Shared by the Vibespace and Boring Mode shells so every modal, shortcut host and toast works identically in both.
+  const overlays = (
+    <>
+      <PinToast />
+      {modal === "add-buddy" && view && (
+        <AddBuddyModal
+          view={view}
+          onClose={() => setModal(null)}
+          onCreated={selectAgent}
+          onOpenExisting={(id) => {
+            selectAgent(id);
+            setModal(null);
+          }}
+        />
+      )}
+      {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
+      {modal === "settings" && (
+        <SettingsHome
+          onClose={() => setModal(null)}
+          onDiagnostics={openDiagnostics}
+          onLicenses={openAbout}
+          onChecklist={() => setModal("first-run")}
+        />
+      )}
+      {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
+      {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
+      {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
+      {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
+      {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
+      {modal === "new-squad" && (
+        <NewSquadModal
+          onClose={() => setModal(null)}
+          onCreated={(newTeamId) => {
+            setModal(null);
+            onTeam(newTeamId);
+          }}
+        />
+      )}
+      <CommandPaletteHost members={members} archived={archivedMembers} views={views} onAgent={onPaletteAgent} onTeam={onTeam} actions={paletteActions} />
+      <BriefEditorHost />
+      {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
+      {successorLead && (
+        <HandoffModal
+          view={views.find((v) => v.team.id === successorLead.team.id) ?? view!}
+          lead={successorLead}
+          onClose={() => setSuccessorId(null)}
+          onCreated={selectAgent}
+        />
+      )}
+    </>
+  );
+
   // E1: on a phone nothing else mounts. No desktop panels, no sidebar, no escape hatch (E3 passes bugSlot, E4b pairSlot).
   if (phoneShell) {
     return (
@@ -1859,6 +1921,26 @@ export function App() {
         overlordBusy={overlordBusy}
         bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
       />
+    );
+  }
+
+  if (vibe === "boring") {
+    return (
+      <BoringApp
+        views={sidebarViews}
+        view={view}
+        onSelectSquad={onTeam}
+        onOpenPin={onQuickStart}
+        onSpinUpPin={onSpinUpPin}
+        onSpinUpOverlord={onSpinUpOverlord}
+        overlordBusy={overlordBusy}
+        onAddBuddy={openAddBuddy}
+        onNewSquad={openNewSquad}
+        onSettings={openSettings}
+        onSuccessor={paneSuccessor}
+      >
+        {overlays}
+      </BoringApp>
     );
   }
 
@@ -2082,7 +2164,6 @@ export function App() {
         panesNode
       )}
       {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
-      <PinToast />
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">
@@ -2091,51 +2172,7 @@ export function App() {
           <span className="muted">(Ctrl+0 to reset)</span>
         </div>
       )}
-      {modal === "add-buddy" && view && (
-        <AddBuddyModal
-          view={view}
-          onClose={() => setModal(null)}
-          onCreated={selectAgent}
-          onOpenExisting={(id) => {
-            selectAgent(id);
-            setModal(null);
-          }}
-        />
-      )}
-      {modal === "new-agent" && view && <NewAgentModal view={view} onClose={() => setModal(null)} onCreated={selectAgent} />}
-      {modal === "settings" && (
-        <SettingsHome
-          onClose={() => setModal(null)}
-          onDiagnostics={openDiagnostics}
-          onLicenses={openAbout}
-          onChecklist={() => setModal("first-run")}
-        />
-      )}
-      {modal === "pair-device" && <PairDeviceModal onClose={() => setModal(null)} />}
-      {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
-      {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
-      {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
-      {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
-      {modal === "new-squad" && (
-        <NewSquadModal
-          onClose={() => setModal(null)}
-          onCreated={(newTeamId) => {
-            setModal(null);
-            onTeam(newTeamId);
-          }}
-        />
-      )}
-      <CommandPaletteHost members={members} archived={archivedMembers} views={views} onAgent={onPaletteAgent} onTeam={onTeam} actions={paletteActions} />
-      <BriefEditorHost />
-      {!modal && profilesNeedSetup && !profilesSetupDismissed && <ProfileImportModal onClose={() => {}} />}
-      {successorLead && (
-        <HandoffModal
-          view={views.find((v) => v.team.id === successorLead.team.id) ?? view!}
-          lead={successorLead}
-          onClose={() => setSuccessorId(null)}
-          onCreated={selectAgent}
-        />
-      )}
+      {overlays}
     </div>
   );
 }
