@@ -364,7 +364,7 @@ export function PairDeviceModal({
             <div className="preview" style={{ marginBottom: 0 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                 <span className="field-label">
-                  PHONE STEP 1 — SCAN QR TO PAIR ({isLan ? `HOME LAN ${lanIp}` : "MESHNET"})
+                  PHONE — SCAN QR TO PAIR ({isLan ? `HOME LAN ${lanIp}` : "MESHNET"})
                 </span>
                 {!isLan && (
                   <div className="seg">
@@ -430,7 +430,7 @@ export function PairDeviceModal({
 
           <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="preview" style={{ marginBottom: 0 }}>
-              <div className="field-label">PHONE / BROWSER STEP 2 — INSTALL ROOT CA (ONE-TIME PER DEVICE)</div>
+              <div className="field-label">BROWSER / iPHONE (NO APK) — INSTALL ROOT CA FIRST (ONE-TIME PER DEVICE)</div>
               <div className="muted small" style={{ margin: "4px 0 8px" }}>
                 Plain HTTP on {isLan ? "Home LAN" : "Meshnet"} serves <code>/ca.crt</code> and <code>/VibeSquad-setup.exe</code>. If you previously installed an older CA before LAN mode, re-install <code>/ca.crt</code> once.
               </div>
@@ -489,7 +489,7 @@ export function PairDeviceModal({
                   <div className="muted small" style={{ padding: "6px 8px", background: "var(--navy)", border: "1px solid var(--line)" }}>
                     1. On your phone connected to {isLan ? "Home Wi-Fi" : "NordVPN Meshnet"}, open <code>{caUrl}</code> in Chrome/Safari to download <code>vibesquad-ca.crt</code>.<br />
                     2. <b>Android:</b> Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate (Tap &ldquo;Install anyway&rdquo;).<br />
-                    3. Verify the SHA-256 fingerprint starts with <code>{fp?.short ?? ""}</code>, then scan the Step 1 QR code!
+                    3. Verify the SHA-256 fingerprint starts with <code>{fp?.short ?? ""}</code>, then scan the pairing QR code above!
                   </div>
                 )}
               </div>
