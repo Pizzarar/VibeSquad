@@ -549,24 +549,33 @@ function toBulletLines(text) {
     .filter(Boolean);
 }
 
+/** Every card id a triage body names: `[cardId, targetId, sourceId, ...sourceIds]` (merge / bounce / update / archive / delete). */
+export function triageCardIds(body = {}) {
+  const ids = [body.cardId, body.targetId, body.sourceId, ...(Array.isArray(body.sourceIds) ? body.sourceIds : [])];
+  return [...new Set(ids.map((s) => String(s ?? "").trim()).filter(Boolean))];
+}
+
 /**
  * Who may archive/park inbox cards. The owner (no agent id: a human shell) always may; an agent may only if
  * it is a lead or Buddy of the card's Squad (any lane: triage routes cards between lanes). Workers and
- * other Squads get a clear error instead of the HTTP gate's bare 403. Returns normally when allowed.
+ * other Squads get a clear 403-tagged error instead of the HTTP gate's bare 403. Returns normally when allowed.
+ * `caller` is the verified caller (X1c: `{ id, role, team }` from /verify-agent) or the CLI's `{ agentId, role, teamId }`.
  */
 export function assertInboxTriageCaller(caller = {}, cardIds = [], baseHome) {
-  const agentId = String(caller.agentId || "").trim();
+  const agentId = String(caller.id || caller.agentId || "").trim();
   if (!agentId) return;
+  const forbid = (why) => Object.assign(new Error(why), { status: 403 });
   const role = String(caller.role || "worker");
+  const teamId = String(caller.team ?? caller.teamId ?? "");
   if (role !== "lead" && role !== "brainstorm") {
-    throw new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`);
+    throw forbid(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`);
   }
   const cards = readInboxCards(baseHome);
   for (const id of cardIds) {
     const card = cards.find((c) => c.id === id);
-    if (!card) throw new Error(`Card not found: ${id}`);
-    if ((card.teamId || "") !== (caller.teamId || "")) {
-      throw new Error(`card ${id} belongs to Squad "${card.teamId}", not "${caller.teamId}": only that Squad's leads/Buddies (or the owner) may archive or park it`);
+    if (!card) throw Object.assign(new Error(`Card not found: ${id}`), { status: 404 });
+    if ((card.teamId || "") !== teamId) {
+      throw forbid(`card ${id} belongs to Squad "${card.teamId}", not "${teamId}": only that Squad's leads/Buddies (or the owner) may archive or park it`);
     }
   }
 }

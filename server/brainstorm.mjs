@@ -443,7 +443,7 @@ const startInFlight = new Map();
  * no callerId (owner) passes. A start-brainstorm with a callerId (restart_buddy on a lane with no Buddy, idea-95) is checked here against
  * the exact team/lane the start will spawn into. performBrainstormRestartOnce re-checks a restart's rule against its own records.
  */
-export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
+export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT, { agentsForTest } = {}) {
   if (body?.callerId == null || body.callerId === "") return; // owner path
   const forbid = (why) => Object.assign(new Error(`buddy restart: forbidden: ${why}`), { status: 403 });
   const callerId = String(body.callerId);
@@ -451,7 +451,8 @@ export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
   let client = null;
   let backend = null;
   const load = async (id) => {
-    const listed = Array.isArray(body.agents) ? body.agents.map((a) => a?.agent ?? a).find((a) => a?.id === id) : null;
+    // X1c: the caller and target records come from the runner (or the DI-only `agentsForTest`), never from a body roster.
+    const listed = Array.isArray(agentsForTest) ? agentsForTest.map((a) => a?.agent ?? a).find((a) => a?.id === id) : null;
     if (listed) return listed;
     if (isRunnerId(id)) {
       const rec = readRunnerAgentSync(id);
@@ -496,36 +497,37 @@ export async function authorizeBuddyRestartRequest(body, rootDir = REPO_ROOT) {
   }
 }
 
-export function performBrainstormRestart(body, rootDir = REPO_ROOT) {
+/** opts.agentsForTest: DI-only roster for the caller re-check (never read from an HTTP body; X1c). */
+export function performBrainstormRestart(body, rootDir = REPO_ROOT, opts = {}) {
   // O5: a named caller is authorized before the request can join (or start) an in-flight restart.
-  if (body?.callerId != null && body.callerId !== "") return authorizeBuddyRestartRequest(body, rootDir).then(() => performBrainstormRestartDispatch(body, rootDir));
-  return performBrainstormRestartDispatch(body, rootDir);
+  if (body?.callerId != null && body.callerId !== "") return authorizeBuddyRestartRequest(body, rootDir, opts).then(() => performBrainstormRestartDispatch(body, rootDir, opts));
+  return performBrainstormRestartDispatch(body, rootDir, opts);
 }
 
-function performBrainstormRestartDispatch(body, rootDir) {
+function performBrainstormRestartDispatch(body, rootDir, opts = {}) {
   const isStart = String(body?.reason || "").trim() === "start-brainstorm" || String(body?.agentId || "") === "start-brainstorm";
-  if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir);
+  if (body?.forceNew) return performBrainstormRestartOnce(body, rootDir, opts);
   if (!isStart) {
     // A restart click while the first one is still spawning (createAgent took ~110 s at 04:24Z) shares that
     // spawn: two clicks made two Buddies, the second retired the first (docs/PLAN_BUGS_BATCH1.md block 0c).
     const oldId = String(body?.agentId || "").trim();
-    if (!oldId) return performBrainstormRestartOnce(body, rootDir);
+    if (!oldId) return performBrainstormRestartOnce(body, rootDir, opts);
     const rkey = `restart:${oldId}`;
     const busy = startInFlight.get(rkey);
     if (busy) return busy.then((r) => (r?.ok ? { ...r, reused: true, reason: "already-restarting" } : r));
-    const once = performBrainstormRestartOnce(body, rootDir).finally(() => startInFlight.delete(rkey));
+    const once = performBrainstormRestartOnce(body, rootDir, opts).finally(() => startInFlight.delete(rkey));
     startInFlight.set(rkey, once);
     return once;
   }
   const key = [body.teamId || body.team || "", body.laneId || body.lane || "", body.topic || ""].map((s) => String(s).trim().toLowerCase()).join(":");
   const pending = startInFlight.get(key);
   if (pending) return pending.then((r) => (r?.ok && r.newAgentId ? { ...r, reused: true, existingAgentId: r.newAgentId } : r));
-  const run = performBrainstormRestartOnce(body, rootDir).finally(() => startInFlight.delete(key));
+  const run = performBrainstormRestartOnce(body, rootDir, opts).finally(() => startInFlight.delete(key));
   startInFlight.set(key, run);
   return run;
 }
 
-async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
+async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsForTest } = {}) {
   const reason = String(body.reason || "manual").trim();
   const agentId = String(body.agentId || (reason === "start-brainstorm" ? "start-brainstorm" : "")).trim();
   if (!agentId) throw new Error("agentId is required");
@@ -569,7 +571,8 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
     if (body.callerId != null && body.callerId !== "" && agentId !== "start-brainstorm") {
       const callerId = String(body.callerId);
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw Object.assign(new Error("buddy restart: forbidden: bad callerId"), { status: 403 });
-      let caller = Array.isArray(body.agents) ? body.agents.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
+      // X1c: the caller's record comes from the runner (or the DI-only agentsForTest), never from a body roster.
+      let caller = Array.isArray(agentsForTest) ? agentsForTest.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
       if (!caller && isRunnerId(callerId)) caller = readRunnerAgentSync(callerId);
       if (!caller && connected && client && typeof backend.fetchAgent === "function") {
         caller = (await backend.fetchAgent(callerId).catch(() => null))?.agent ?? null;
@@ -660,9 +663,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT) {
         if (reopened) {
           let refreshFailure = null;
           const refreshed = await backend.refreshAgent(existing.id).catch((e) => {
-            // 409, or any throw from a Paseo id (it throws plain Errors for a gone session): replace. A runner (rn-) failure (agent cap, runner down, IPC) leaves a
-            // resumable Buddy alone: report the error rather than spawn a second one.
-            if (e?.status === 409 || !String(existing.id).startsWith("rn-")) {
+            // 409 (not resumable): replace. Any other runner failure (agent cap, runner down, IPC) leaves a resumable Buddy
+            // alone: report the error rather than spawn a second one. (X1c dropped the Paseo-id "any throw → replace" branch.)
+            if (e?.status === 409) {
               reopenFailed = true;
               console.warn(`[vibesquad] reopen ${existing.id} not resumable: ${e?.message ?? e}; spawning a replacement`);
             } else refreshFailure = e;

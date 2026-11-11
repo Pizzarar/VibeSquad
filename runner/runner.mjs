@@ -317,7 +317,8 @@ export class Runner {
     const meta = s.meta ?? {};
     if (isRetiredMeta(meta)) return null;
     const { role, lane, team, profile, labels } = identityOf(meta);
-    if (String(labels.orphan ?? '') === '1') return null;
+    const orphan = String(labels.orphan ?? '').trim().toLowerCase();
+    if (orphan === '1' || orphan === 'true') return null; // idea-134: both spellings mark an orphan
     const digestFor = labels.digestFor ? String(labels.digestFor) : null;
     const digest = profile === DIGEST_PROFILE && !!digestFor;
     const overlord = role === 'lead' && !!lane && !!team && this.hubLane(team) === lane;
