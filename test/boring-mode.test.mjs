@@ -318,3 +318,21 @@ test("BoringApp renders App's overlays as children", () => {
   const t = render(props(squad(), { children: React.createElement("div", { "data-testid": "overlay" }) }));
   assert.ok(byId(t, "overlay"));
 });
+
+test("B2r boring.css: system fonts, full-height chat geometry, lane-only role pills, 4K card grid, details disclosure", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(css, /--arcade: var\(--sans\)/);
+  assert.match(css, /--display: var\(--sans\)/);
+  assert.match(css, /\.boring-chat-column > \.drawer,[^{]*\{[^}]*flex: 1 1 0/);
+  assert.match(css, /\.drawer-shell\s*\{[^}]*flex: 1 1 0/);
+  assert.match(css, /\.boring-conv-row:not\(\.on\) \.boring-role-pills \{ display: none/);
+  assert.match(css, /\.boring-card-grid \{[^}]*repeat\(auto-fit, minmax\(clamp\(/);
+  assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.successor-bar/);
+  assert.ok(!/min-height: 32px/.test(css));
+});
+
+test("B2r: Details toggle lives in the topbar (not the sidebar) and the chat column carries boring-details-open", () => {
+  assert.match(ade, /data-testid="boring-details-toggle"/);
+  assert.match(ade, /boring-chat-column\$\{detailsOpen \? " boring-details-open" : ""\}/);
+  assert.ok(!/>Project Overview<\/button>\s*\n\s*<button[^>]*>Usage & Workflows<\/button>/.test(ade.split('className="boring-topbar-actions"')[1] ?? ""));
+});

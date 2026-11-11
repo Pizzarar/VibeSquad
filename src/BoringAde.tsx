@@ -96,6 +96,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [mode, setMode] = useState<Mode>("chat");
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const { agents } = usePaseo();
   const panes = usePanes();
   const activeAgentId = panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId;
@@ -231,6 +232,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           {conversations.map((c) => (
             <div key={c.laneId} className={`boring-conv-row ${selectedLaneId === c.laneId ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
               <button type="button" className="boring-conv-title" onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>
+                <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
                 <span className="boring-row-label">{c.name}</span>
                 <code className="boring-conv-code">{c.code}</code>
                 <span className="boring-conv-age">{c.age}</span>
@@ -276,8 +278,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             </div>
           )}
           <div className="boring-topbar-actions">
-            <button type="button" className="boring-footer-btn" onClick={() => setMode("project")}>Project Overview</button>
-            <button type="button" className="boring-footer-btn" onClick={() => setMode("usage")}>Usage & Workflows</button>
+            {mode === "chat" && agent && (
+              <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
+                {detailsOpen ? "▾ Details" : "⋯ Details"}
+              </button>
+            )}
             <button type="button" className="boring-footer-btn" onClick={onSettings}>⚙ Settings</button>
             <button type="button" className="boring-footer-btn" onClick={toVibespace}>Switch to Vibespace</button>
           </div>
@@ -318,7 +323,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           </div>
         )}
         {mode === "chat" && (
-          <div className="boring-chat-column" data-testid="boring-chat-column">
+          <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
             {agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active /> : emptyCard()}
           </div>
         )}
