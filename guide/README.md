@@ -1,5 +1,7 @@
 # everyone-can-vibe
 
+> **[Interactive tour: how VibeSquad works](https://pizzarar.github.io/VibeSquad/how-it-works.html)**
+
 A guide to making things with AI agents, for people who do not code. It is also an [Obsidian](https://obsidian.md) vault, and it holds a setup kit that gets a Windows PC ready.
 
 Built for VibeSquad. You can point any agent at this folder and it'll walk you through it. Buddy means this chat; Lead means a second chat you hand the plan to.
