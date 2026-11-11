@@ -131,3 +131,19 @@ test("modal: max-height compensates html zoom (idea-129)", () => {
   const css = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
   assert.match(css, /\n\.modal \{[^}]*max-height: calc\(90dvh \/ var\(--vs-ui-scale, 1\)\)/);
 });
+
+test("queue: wire never prunes on an empty or not-yet-populated roster (H1)", async () => {
+  const { rosterForQueue } = q;
+  const agents = new Map();
+  assert.equal(rosterForQueue({ rosterLoaded: false, agents }).loaded, false, "before the first roster event");
+  assert.equal(rosterForQueue({ rosterLoaded: true, agents }).loaded, false, "loaded but empty");
+  agents.set("live", {});
+  const r = rosterForQueue({ rosterLoaded: true, agents });
+  assert.equal(r.loaded, true);
+  assert.ok(r.has("live") && !r.has("gone"));
+  q.__resetQueueForTest();
+  q.enqueueQueued("a1", item("x", "keep"));
+  const stop = q.startQueueFlusher({ getStatus: () => "running", subscribe: () => () => {}, send: async () => {}, roster: () => rosterForQueue({ rosterLoaded: true, agents: new Map() }) });
+  assert.equal(q.getQueued("a1").length, 1, "empty roster leaves the queue alone");
+  stop();
+});

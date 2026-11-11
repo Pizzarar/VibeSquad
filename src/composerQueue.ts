@@ -76,6 +76,12 @@ type FlushDeps = {
   roster?: () => { loaded: boolean; has: (agentId: string) => boolean };
 };
 
+/** Roster view for pruning: an empty or not-yet-populated roster is "unknown", never "everyone is gone". */
+export const rosterForQueue = (st: { rosterLoaded: boolean; agents: Map<string, unknown> }) => ({
+  loaded: st.rosterLoaded && st.agents.size > 0,
+  has: (id: string) => st.agents.has(id),
+});
+
 /** Drop queued entries for agents that are gone from the roster (lingered in vs.composer-queue forever). */
 export function pruneQueued(has: (agentId: string) => boolean) {
   const next: Record<string, QueuedTurnItem[]> = {};
