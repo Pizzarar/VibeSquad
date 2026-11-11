@@ -476,6 +476,40 @@ test('usage v2: byProfile compares Implement - Sonnet vs a Gemini implementer vi
   assert.equal(su.implementerAgentId, 'rn-sonnet');
   assert.equal(su.implementerProfile, 'Implement - Sonnet');
   assert.equal(su.unitCycleMs, 50000, 'worker createdAt -> mergedAt');
+  // usa-12: implementer success = first-try review PASS (reviewRounds <= 1); passRate stays for back-compat
+  assert.equal(sonnet.successRate, 0, 'sonnet needed 2 review rounds');
+  assert.equal(sonnet.successBasis, 'implementer-first-try-pass');
+  assert.equal(gemini.successRate, 1, 'gemini passed on round 1');
+  assert.equal(gemini.successBasis, 'implementer-first-try-pass');
+  assert.equal(typeof sonnet.passRate, 'number');
+  const workerRole = u.byRole.find((r) => r.role === 'worker');
+  assert.equal(workerRole.successRate, 0.5);
+  assert.equal(workerRole.successBasis, 'implementer-first-try-pass');
+});
+
+test('usa-12: lead and Buddy report null / no-signal; reviewer uses PASS lines; implementer with no merged unit is no-signal', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, role, profile, lines) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role, profile } },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 10, outputTokens: 5 },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.1 },
+    ...lines,
+  ]);
+  mk('rn-lead', 'lead', 'Lead - Claude', []);
+  mk('rn-buddy', 'brainstorm', 'Buddy', []);
+  mk('rn-impl', 'worker', 'Implement - Sonnet', []);
+  mk('rn-rev', 'worker', 'Review - Gemini', [{ ts: T0 + 2000, type: 'output', text: 'PASS 0/0/0\n' }]);
+  const u = getUsage({ home, git: noGit });
+  for (const profile of ['Lead - Claude', 'Buddy']) {
+    const p = byProfileOf(u, profile);
+    assert.equal(p.successRate, null, profile);
+    assert.equal(p.successBasis, 'no-signal', profile);
+  }
+  assert.deepEqual([byProfileOf(u, 'Implement - Sonnet').successRate, byProfileOf(u, 'Implement - Sonnet').successBasis], [null, 'no-signal']);
+  assert.equal(byProfileOf(u, 'Review - Gemini').successBasis, 'reviewer-pass-lines');
+  assert.equal(u.byRole.find((r) => r.role === 'lead').successBasis, 'no-signal');
 });
 
 test('usage v2: byProfile falls back to the single worker in the lane when cwd does not match', () => {

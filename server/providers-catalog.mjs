@@ -1892,11 +1892,22 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     };
   });
 
+  // Role-specific success (passRate is reviewer-style PASS lines, so 0% for everyone else). implementer = first-try review PASS
+  // of its merged units; reviewer = PASS-line rate; lead (plan done) and Buddy (handoff accepted) leave no reliable log signal
+  // (vs.handoff-from only marks a carrier, nothing records acceptance or plan completion), so they report null / no-signal.
+  const roleSuccess = (g) => {
+    const rate = (n, d) => Math.round((n / d) * 1000) / 1000;
+    if (g.role === "lead" || g.role === "brainstorm") return { successRate: null, successBasis: "no-signal" };
+    if (g.role === "worker" && /review/i.test(g.profile || "")) return g.runs ? { successRate: rate(g.passCount, g.runs), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
+    if (g.role === "worker") return g.mergedUnits ? { successRate: rate(g.firstTryCount, g.mergedUnits), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
+    return { successRate: null, successBasis: "no-signal" };
+  };
+
   // byProfile: group agents by (provider, profile, role); fold in attributed merged units.
   const profileMap = new Map();
   for (const a of agents) {
     const key = `${a.provider}|${a.profile}|${a.role}`;
-    const g = getOrSet(profileMap, key, () => ({ provider: a.provider, profile: a.profile, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, key, () => ({ provider: a.provider, profile: a.profile, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -1915,6 +1926,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     const g = profileMap.get(`${a.provider}|${a.profile}|${a.role}`);
     if (!g) continue;
     g.mergedUnits += 1;
+    if (u.reviewRounds <= 1) g.firstTryCount += 1;
     g.reviewRounds += u.reviewRounds;
     if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
@@ -1925,9 +1937,10 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
     workingMs: g.workingMs, idleMs: g.idleMs,
     passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
+    ...roleSuccess(g),
     loopCount: g.loopCount,
     errorCount: g.errorCount,
-    mergedUnits: g.mergedUnits, reviewRounds: g.reviewRounds, avgReviewRounds: g.mergedUnits ? Math.round((g.reviewRounds / g.mergedUnits) * 100) / 100 : 0,
+    mergedUnits: g.mergedUnits, firstTryCount: g.firstTryCount, reviewRounds: g.reviewRounds, avgReviewRounds: g.mergedUnits ? Math.round((g.reviewRounds / g.mergedUnits) * 100) / 100 : 0,
     costPerMergedUnit: g.mergedUnits ? g.costUsd / g.mergedUnits : null,
     fixAfterMergeCount: g.fixAfterMergeCount, fixAfterMergeRate: g.mergedUnits ? Math.round((g.fixAfterMergeCount / g.mergedUnits) * 1000) / 1000 : 0,
     avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
@@ -2043,7 +2056,15 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     byDay: byDayFinal,
     rows,
     limits: readLimits(home),
-    byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)),
+    byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
+      // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)
+      const gs = byProfile.filter((p) => p.role === r.role && p.successRate !== null);
+      const basis = gs.find((p) => p.successBasis === "implementer-first-try-pass") ? "implementer-first-try-pass" : gs[0]?.successBasis;
+      const use = gs.filter((p) => p.successBasis === basis);
+      const num = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.firstTryCount, 0) : use.reduce((t, p) => t + p.passCount, 0);
+      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.mergedUnits, 0) : use.reduce((t, p) => t + p.runs, 0);
+      return { ...r, successRate: den ? Math.round((num / den) * 1000) / 1000 : null, successBasis: den ? basis : "no-signal" };
+    }),
     lanes: lanes.map((l) => ({ ...l, ...(laneV2.get(l.lane) ?? {}) })),
     laneRole: lrRows,
     coordination: split(lrRows),
