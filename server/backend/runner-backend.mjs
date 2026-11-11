@@ -1113,6 +1113,11 @@ export class RunnerBackend {
     const seen = typeof this.rc?.home === "string" ? readSeen(this.rc.home) : null;
     const cutoff = seen && seen.aliveAt <= now && now - seen.aliveAt <= maxGapMs ? seen.ts : null;
     this.live.seenTs = cutoff ?? 0;
+    // A re-init on the same instance (stopRunnerLifecycle + startRunnerLifecycle) starts from this baseline only: a throttled
+    // write of the previous run must not land later, and noteSeen must not compare with the previous run's last write.
+    clearTimeout(this.live.seenTimer);
+    this.live.seenTimer = null;
+    this.live.seenFlushed = 0;
     if (!this.live.seenAlive) {
       this.live.seenAlive = setInterval(() => this.flushSeen(), SEEN_ALIVE_MS);
       this.live.seenAlive.unref?.();
