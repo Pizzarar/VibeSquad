@@ -4619,12 +4619,10 @@ button.project-file-name:hover { text-decoration: underline; }
   max-width: 100%;
 }
 /* Short windows: the buddy tools sit on the rail floor, so a downward panel falls below the viewport; open it upward instead. */
-@media (max-height: 820px) {
-  .pin-rail :is(.drawer-sandbox-panel, .drawer-features-menu) {
-    top: auto;
-    bottom: calc(100% + 2px);
-    margin-top: 0;
-  }
+.pin-rail[data-short-height="true"] :is(.drawer-sandbox-panel, .drawer-features-menu) {
+  top: auto;
+  bottom: calc(100% + 2px);
+  margin-top: 0;
 }
 
 /* Issue 3.1: Right Dock tabs scroll/wrap cleanly, bodies wrap and stay bounded. */
