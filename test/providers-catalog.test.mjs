@@ -11,10 +11,16 @@ import {
   runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
-import { realVibesquadHome } from '../server/test-guard.mjs';
 import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-'));
+// Declares a temp dir as "the real ~/.vibesquad" (VS_TEST_REAL_HOME) so forbidden-home guards are exercised without touching the developer's actual home.
+function withFakeRealHome(fn) {
+  const fakeReal = tmp();
+  const prev = process.env.VS_TEST_REAL_HOME;
+  process.env.VS_TEST_REAL_HOME = fakeReal;
+  try { return fn(fakeReal); } finally { prev === undefined ? delete process.env.VS_TEST_REAL_HOME : (process.env.VS_TEST_REAL_HOME = prev); }
+}
 const okExec = (file, args, o, cb) => cb(null, `${path.basename(file)} 1.2.3\n`);
 const resolveImpl = (cmd) => {
   if (cmd === 'opencode') throw new Error('nope');
@@ -1137,7 +1143,10 @@ test('usa-10: usage-ledger write/read/fold, idempotent sync, no double count, fo
   assert.equal(u.totals.turns, 3, 'folded day turns added (1 raw + 2 ledger)');
   assert.ok(u.byDay.some((r) => r.day === '2026-11-01'), 'folded day appears in byDay');
 
-  assert.equal(syncUsageLedger(realVibesquadHome(), [{ kind: 'day', day: '2099-01-01', turns: 1 }]), 0, 'forbidden real home: no write');
+  withFakeRealHome((fakeReal) => {
+    assert.equal(syncUsageLedger(fakeReal, [{ kind: 'day', day: '2099-01-01', turns: 1 }]), 0, 'forbidden real home: no write');
+    assert.deepEqual(fs.readdirSync(fakeReal), [], 'forbidden real home: nothing created');
+  });
 });
 
 test('usa-10: syncUsageLedger only writes completed days (day < today UTC)', () => {
@@ -1445,9 +1454,17 @@ test('usa-15 / usa-19: a model that fails to return ok contributes no inbox card
 test('usa-15: forbidden real home -> no inbox write, empty sentCardIds', async () => {
   const runOpus = async () => ({ ok: true, text: 'No prior review.\n- Route to Gemini.', ms: 1 });
   const runGemini = async () => ({ ok: true, text: 'No prior review.\n- Reduce rounds.', ms: 1 });
-  const rec = await runUsageReview({ home: realVibesquadHome(), trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
-  assert.deepEqual(rec.sentCardIds, [], 'forbidden real home: nothing enqueued');
-  assert.equal(rec.opus.ok, true);
+  const fakeReal = tmp();
+  const prev = process.env.VS_TEST_REAL_HOME;
+  process.env.VS_TEST_REAL_HOME = fakeReal;
+  try {
+    const rec = await runUsageReview({ home: fakeReal, trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
+    assert.deepEqual(rec.sentCardIds, [], 'forbidden real home: nothing enqueued');
+    assert.equal(rec.opus.ok, true);
+    assert.deepEqual(fs.readdirSync(fakeReal), [], 'forbidden real home: no file or dir created (no review record, no inbox)');
+  } finally {
+    prev === undefined ? delete process.env.VS_TEST_REAL_HOME : (process.env.VS_TEST_REAL_HOME = prev);
+  }
 });
 
 test('usa-15: triageInboxCards update accepts accepted/rejected and rejects bogus statuses', () => {
