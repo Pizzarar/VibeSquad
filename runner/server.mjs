@@ -106,7 +106,9 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         let running = 0;
         let quiet = 0;
         for (const e of runner.live.values()) { if (e.inflight > 0) running += 1; if (e.quiet) quiet += 1; }
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, pid: process.pid, hash });
+        // held: idle agents whose background work (a suite, a build) holds their park; running counts open turns only.
+        const heldAgents = runner.heldIds?.() ?? [];
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, pid: process.pid, hash });
       }
       if (req.method === 'POST' && parts[0] === 'shutdown' && parts.length === 1) {
         // Graceful stop for the detached restart script (scripts/restart-runtime.mjs): Windows has no SIGTERM. It kills every
@@ -156,6 +158,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
         if (!runner.resume(id)) return json(res, 409, { error: 'agent cannot be resumed' });
         return json(res, 202, { ok: true });
+      }
+      if (parts[2] === 'unwedge' && req.method === 'POST') {
+        if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
+        const b = await readBody(req);
+        return json(res, 200, { ok: true, ...runner.unwedge(id, { retry: b.retry === true, reason: typeof b.reason === 'string' ? b.reason.slice(0, 300) : '' }) });
       }
       if (parts[2] === 'cancel' && req.method === 'POST') {
         runner.cancel(id);

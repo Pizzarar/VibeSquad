@@ -88,7 +88,7 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
     for (const id of [cut, idle]) assert.equal((await call(port, "POST", `/agents/${id}/resume`, auth)).status, 202, `resume ${id}`);
     await new Promise((r) => setTimeout(r, 30));
     assert.deepEqual(starts.slice(resumeFrom).map((x) => x.resume).sort(), [`sess-${cut}`, `sess-${idle}`].sort(), "resumed from their saved sessions");
-    assert.equal(await status(cut), "starting");
+    assert.equal(await status(cut), "idle", "a prompt-less resume settles to idle once the adapter is up (never `starting` forever: idea-109)");
   } finally { await close(srv); }
   // Contrast (the old behaviour this replaces): a plain shutdown() exits every agent for good.
   const r2 = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: adapter } });
@@ -100,13 +100,13 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null } = {}) {
+async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
   const outDir = path.join(tmp, "vs");
   mkdirSync(home, { recursive: true });
-  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0 };
+  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [] };
   const agents = { current: [
     { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" },
   ] };
@@ -116,12 +116,27 @@ async function world({ running = [0], supportsShutdown = true, serverBootsRunner
     const token = `tok-${w.pidSeq}`;
     const pid = ++w.pidSeq;
     const polls = [...running];
+    const heldPolls = held ? [...held] : null; // each entry: the heldAgents ids /health reports on that poll
     const st = { pid, token, hash, srv: null, dead: false };
     st.srv = http.createServer((req, res) => {
       const json = (c, b) => { res.writeHead(c, { "content-type": "application/json" }); res.end(JSON.stringify(b)); };
       if (req.headers.authorization !== `Bearer ${token}`) return json(401, { error: "unauthorized" });
       const url = req.url.split("?")[0];
-      if (url === "/health") return json(200, { ok: true, running: polls.length > 1 ? polls.shift() : polls[0], pid, hash });
+      if (url === "/health") {
+        const h = heldPolls ? (heldPolls.length > 1 ? heldPolls.shift() : heldPolls[0]) : undefined;
+        return json(200, { ok: true, running: polls.length > 1 ? polls.shift() : polls[0], ...(h ? { held: h.length, heldAgents: h } : {}), pid, hash });
+      }
+      const one = /^\/agents\/([^/]+)$/.exec(url);
+      if (one && req.method === "GET" && agentStatus) { // agentStatus(id) -> the agent's status right now (per-id GET)
+        const s = agentStatus(one[1]);
+        return s ? json(200, { id: one[1], status: s }) : json(404, { error: "no such agent" });
+      }
+      const uw = /^\/agents\/([^/]+)\/unwedge$/.exec(url);
+      if (uw && req.method === "POST") {
+        let b = ""; req.on("data", (c) => { b += c; });
+        req.on("end", () => { const body = JSON.parse(b || "{}"); w.calls.push(`unwedge ${uw[1]} ${body.retry ? "retry" : "fail"}`); w.unwedgeBodies.push(body); json(200, { ok: true, action: body.retry ? "retried" : "failed" }); });
+        return;
+      }
       if (url === "/agents") return json(200, { agents: agents.current });
       if (url === "/shutdown" && req.method === "POST") {
         w.shutdownAuth.push(req.headers.authorization);
@@ -388,6 +403,7 @@ test("vs restart: --timeout must be a positive integer; unsafe launch args rejec
   assert.ok(ok.seen[0][0].split(path.sep).join("/").endsWith("scripts/restart-runtime.mjs"));
   assert.deepEqual(ok.seen[0].slice(3), ["--no-force", "--wait-timeout", "90"]);
   assert.match(ok.out, /restart launched \(pid 4321\)/);
+  assert.deepEqual(run({ killBackground: true }).seen[0].slice(3), ["--kill-background"], "background work is only killed when asked (idea-88)");
   for (const bad of ["0", "-5", "1.5", "abc", "10 --no-wait", "1e3", ""]) assert.throws(() => run({ timeout: bad }), /positive integer/, bad);
   // WMI CommandLine: a quote or control char in any path (e.g. VIBESQUAD_HOME) is refused, never escaped into the string
   assert.throws(() => run({}, { env: { VIBESQUAD_HOME: 'C:\\x" --evil "' } }), /quote or control/);
@@ -436,4 +452,85 @@ test("recycled runner pid: never killed (cmdline must be the runner) at detect t
     assert.deepEqual(w2.hardKills, [], "nothing killed");
     assert.ok(r.errors.some((e) => /no longer the runner/.test(e)));
   } finally { await w2.cleanup(); }
+});
+
+// idea-88 (c): an idle agent whose park is held by background work (a suite it left running) never counts as running, so the
+// old wait proceeded at once and the runner stop killed the suite. It must be waited for, and past the timeout the restart
+// defers (nothing stopped) unless --kill-background.
+test("held background work outlasting the wait defers the restart: nothing stopped, marker + lock cleared, holders named", async () => {
+  const w = await world({ running: [0], held: [["rn-suite"]] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], running: 0 });
+    assert.ok(r.errors.some((e) => /deferred: 1 agent\(s\) still hold background work .*rn-suite.*--kill-background/.test(e)), JSON.stringify(r.errors));
+    assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");
+    assert.deepEqual(w.hardKills, [], "nothing killed");
+    assert.deepEqual(w.spawned, [], "nothing started");
+    assert.equal(w.calls.some((c) => c.startsWith("term")), false, "server left alone");
+    assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false, "marker cleared");
+    assert.equal(existsSync(path.join(w.outDir, "restart-runtime.lock")), false, "lock released");
+    assert.ok(r.resultFile && existsSync(r.resultFile), "result file says why");
+  } finally { await w.cleanup(); }
+});
+
+test("held background work that finishes during the wait: the restart proceeds normally; --kill-background proceeds and records it", async () => {
+  const w = await world({ running: [0], held: [["rn-suite"], ["rn-suite"], []] });
+  try {
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(r.deferred, undefined);
+    assert.ok(r.steps.some((s) => s.step === "runner idle"));
+    assert.equal(w.shutdownAuth.length, 1);
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0], held: [["rn-suite"]] });
+  try {
+    const r = await w2.run({ waitTimeoutSec: 0.05, killBackground: true });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.killedBackground, ["rn-suite"]);
+    assert.equal(w2.shutdownAuth.length, 1);
+  } finally { await w2.cleanup(); }
+});
+
+// idea-109: a 202 from /resume was the only check, so an agent stuck in `starting` stayed "initializing" for 40+ min.
+test("resumed agent stuck in starting: retried once, then stopped and recorded as failed (ok=false), never left silently wedged", async () => {
+  const w = await world({ running: [0], agentStatus: () => "starting" });
+  try {
+    const r = await w.run({ resumeVerifySec: 0.05 });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.resumeFailed, [{ id: "rn-busy", action: "failed" }]);
+    assert.deepEqual(w.calls.filter((c) => /^(resume|unwedge)/.test(c)), ["resume rn-busy", "unwedge rn-busy retry", "unwedge rn-busy fail"]);
+    assert.match(w.unwedgeBodies[1].reason, /still starting 0.05s after a restart resume and one retry/);
+    assert.ok(r.errors.some((e) => /resume verify: 1 agent\(s\) never left 'starting': rn-busy/.test(e)), JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "resume stuck in starting, retried once"));
+    assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false, "marker still cleared");
+  } finally { await w.cleanup(); }
+});
+
+test("resumed agent that starts after the retry: ok, no failure; one that starts at once: no unwedge at all", async () => {
+  let wref;
+  const w = await world({ running: [0], agentStatus: (id) => (wref.calls.includes(`unwedge ${id} retry`) ? "idle" : "starting") });
+  wref = w;
+  try {
+    const r = await w.run({ resumeVerifySec: 0.05 });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.resumeFailed, []);
+    assert.deepEqual(w.calls.filter((c) => c.startsWith("unwedge")), ["unwedge rn-busy retry"]);
+    assert.ok(r.steps.some((s) => s.step === "resumed agents started after retry"));
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0], agentStatus: () => "idle" });
+  try {
+    const r = await w2.run({ resumeVerifySec: 0.05 });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(w2.calls.some((c) => c.startsWith("unwedge")), false);
+    assert.ok(r.steps.some((s) => s.step === "resumed agents started"));
+  } finally { await w2.cleanup(); }
+});
+
+test("parseArgs: --kill-background and --resume-verify", () => {
+  const d = parseArgs([]);
+  assert.deepEqual([d.killBackground, d.resumeVerifySec], [false, 90]);
+  const o = parseArgs(["--kill-background", "--resume-verify", "15"]);
+  assert.deepEqual([o.killBackground, o.resumeVerifySec], [true, 15]);
+  assert.throws(() => parseArgs(["--resume-verify", "-1"]));
 });
