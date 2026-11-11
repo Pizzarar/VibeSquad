@@ -283,8 +283,8 @@ async function sendTool(ctx, args = {}) {
     : isOwner
       ? { owner: true }
       : undefined;
-  await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, opts));
-  return { id, sent: true };
+  const res = await ctx.withBackend({ id }, (b) => b.sendAgentPrompt(id, text, opts));
+  return res?.redirectedTo ? { id, sent: true, redirectedTo: res.redirectedTo } : { id, sent: true };
 }
 
 async function waitTool(ctx, args = {}) {
