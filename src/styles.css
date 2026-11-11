@@ -3227,6 +3227,8 @@ html {
 .sidebar.collapsed .team-head-line { flex-direction: column; align-items: center; gap: 2px; }
 .sidebar.collapsed .team-head-line .team-head { flex: none; width: 100%; flex-direction: column; gap: 2px; }
 .sidebar.collapsed .team-head-line > .badge.alert { align-self: center; padding: 2px 6px; }
+/* Compact rail: the menu and bug buttons stay on the expanded sidebar only (they were clipped off the 56px edge before). */
+.sidebar.collapsed .team-head-line > :is(.tchip, .bug-btn) { display: none; }
 
 .focus-rail.collapsed .rcol,
 .focus-rail.collapsed .rtok,
