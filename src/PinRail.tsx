@@ -18,6 +18,8 @@ import { slotRef } from "./pinSlots";
 import type { TeamView } from "./teams";
 import { laneCodeFor } from "./identity";
 import { Avatar, TeamEmblem } from "./pixel";
+import { isShortCssHeight } from "./hubPagesLogic";
+import { useUiScale } from "./uiScale";
 import { Spinner } from "./QuickWinsUi";
 import { openPinMember, useFocusDrawerOpen } from "./pinFocus";
 import { sendMessage } from "./paseo";
@@ -133,8 +135,16 @@ export function PinRail({ view, focus, onPick, collapsed = false, onToggleCollap
   const others = pinned.filter((p) => p.lane.id !== focus.laneId);
   const bs = active?.brainstorm;
   const drawerOpen = useFocusDrawerOpen();
+  // C5 short-height hook: the same <=820px css-height test the hub uses, so bottom-of-rail panels open upward.
+  const [vh, setVh] = useState(() => (typeof window !== "undefined" ? window.innerHeight : 1080));
+  const uiScale = useUiScale();
+  useEffect(() => {
+    const onResize = () => setVh(window.innerHeight);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   return (
-    <aside className={`pin-rail${collapsed ? " compact" : ""}`} data-testid="pin-rail" aria-label={`${view.team.name} teams`}>
+    <aside className={`pin-rail${collapsed ? " compact" : ""}`} data-testid="pin-rail" data-short-height={isShortCssHeight(vh, uiScale) ? "true" : undefined} aria-label={`${view.team.name} teams`}>
       <div className="pin-rail-head">
         {onToggleCollapsed && (
           <button

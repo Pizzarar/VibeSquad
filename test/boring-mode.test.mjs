@@ -121,6 +121,7 @@ stub(
   `export const setPref = ${rec("setPref")};
 export const formatTimestamp = (iso, _f, now) => (iso ? Math.round((now - Date.parse(iso)) / 60000) + "m" : "");`,
 );
+stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; export const VibePickerCards = () => null; export const FirstLaunchVibePicker = () => null; export const shouldShowFirstLaunchVibePicker = () => false;`);
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; };`);
@@ -231,7 +232,7 @@ test("BoringApp sidebar: CTA, core rows, conversation pills and bottom dock are 
   assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["onAddBuddy", "onSettings"]);
 });
 
-test("Switch to Vibespace sets app.vibe back to fun", () => {
+test("Switch to Psycho sets app.vibe back to fun", () => {
   reset();
   byId(render(props(squad())), "boring-switch-vibespace-btn").props.onClick();
   assert.deepEqual(globalThis.__calls, [["setPref", "app.vibe", "fun"]]);
@@ -335,4 +336,68 @@ test("B2r: Details toggle lives in the topbar (not the sidebar) and the chat col
   assert.match(ade, /data-testid="boring-details-toggle"/);
   assert.match(ade, /boring-chat-column\$\{detailsOpen \? " boring-details-open" : ""\}/);
   assert.ok(!/>Project Overview<\/button>\s*\n\s*<button[^>]*>Usage & Workflows<\/button>/.test(ade.split('className="boring-topbar-actions"')[1] ?? ""));
+});
+
+test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => {
+  const read = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
+  const fr = read("FirstRunModal.tsx"), app = read("App.tsx"), css = read("boring.css");
+  assert.match(ade, /✦ Switch to Psycho/);
+  assert.doesNotMatch(ade + fr + app, /Switch to Vibespace|Hypnospace/);
+  assert.match(app, /data-testid="toolbar-vibe-toggle"\s+title="Switch to Normal mode"/);
+  assert.match(app, /Normal mode\n/);
+  assert.match(fr, /VIBE_PICKED_KEY = "vs\.vibePicked"/);
+  for (const id of ["first-run-vibe-picker", "first-run-vibe-normal", "first-run-vibe-psycho"]) assert.ok(fr.includes(`data-testid="${id}"`), id);
+  assert.match(fr, /export function FirstLaunchVibePicker/);
+  assert.match(ade, /export \{ VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker \}/);
+  assert.equal((app.match(/<FirstLaunchVibePicker \/>/g) ?? []).length, 2);
+  assert.match(css, /\.composer \.send,[\s\S]*background: var\(--accent\) !important/);
+  assert.match(css, /#475569 !important/);
+  assert.match(css, /clamp\(14px, 0\.45vw \+ 12px, 18px\); line-height: 1\.55/);
+  assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
+  assert.match(css, /--accent: #0f62fe/);
+  assert.doesNotMatch(css, /@media/);
+  assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
+  assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none !important/);
+  assert.match(css, /\.drawer-head \.drawer-title \{ font-size: clamp\(16px/);
+  assert.match(css, /\.composer-row > \.btn:not\(\.ghost\):not\(\.warn\)/);
+  assert.match(css, /\.brainstorm-ctx-actions \{ display: none !important/);
+});
+
+test("shouldShowFirstLaunchVibePicker: fresh installs only, never automation", async () => {
+  const src = readFileSync(resolve(import.meta.dirname, "..", "src", "FirstRunModal.tsx"), "utf8");
+  const fnSrc = src.slice(src.indexOf("export function shouldShowFirstLaunchVibePicker"), src.indexOf("const cardStyle"));
+  const code = transformSync("f.ts", `const VIBE_PICKED_KEY = "vs.vibePicked"; const FIRST_RUN_DONE_KEY = "vs.firstRunDone"; ${fnSrc}`, { lang: "ts" }).code;
+  writeFileSync(join(dir, "shouldShow.mjs"), code);
+  const { shouldShowFirstLaunchVibePicker: show } = await import(pathToFileURL(join(dir, "shouldShow.mjs")).href);
+  const st = (o) => (k) => o[k] ?? null;
+  assert.equal(show({ getItem: st({}), webdriver: false }), true);
+  assert.equal(show({ getItem: st({}), webdriver: true }), false);
+  assert.equal(show({ getItem: st({ "vs.forceVibePicker": "1" }), webdriver: true }), true);
+  assert.equal(show({ getItem: st({ "vs.vibePicked": "1" }), webdriver: false }), false);
+  assert.equal(show({ getItem: st({ "vs.firstRunDone": "1" }), webdriver: false }), false);
+  assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "app.vibe": "fun" }) }), webdriver: false }), false);
+  assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "chat.x": 1 }) }), webdriver: false }), true);
+});
+
+test("B4: boring-app height compensates the UI scale zoom so the composer stays in view", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(css, /\.boring-app \{ width: calc\(100vw \/ var\(--vs-ui-scale, 1\)\); height: calc\(100vh \/ var\(--vs-ui-scale, 1\)\)/);
+});
+
+test("B4: first-launch picker is roomy, shows a selected state, and needs Continue or Escape to close", () => {
+  const fr = readFileSync(resolve(import.meta.dirname, "..", "src", "FirstRunModal.tsx"), "utf8");
+  assert.match(fr, /width: "min\(860px, 92vw\)"/);
+  assert.match(fr, /viewBox="0 0 320 180"/);
+  assert.match(fr, /minmax\(340px, 1fr\)/);
+  assert.match(fr, /data-testid="first-run-vibe-continue"/);
+  assert.match(fr, /Selected/);
+  assert.match(fr, /autoFocus data-testid="first-run-vibe-normal"/);
+  assert.match(fr, /e\.key === "Escape" && close\(\)/);
+  assert.match(fr, /title="Setup Checklist"\s+wide/);
+  assert.doesNotMatch(fr, /<VibePickerCards onPicked=\{close\}/);
+});
+
+test("B4: picker header grows to fit the 22px title plus subtitle", () => {
+  const fr = readFileSync(resolve(import.meta.dirname, "..", "src", "FirstRunModal.tsx"), "utf8");
+  assert.match(fr, /height: "auto", minHeight: 0, padding: "14px 16px"/);
 });
