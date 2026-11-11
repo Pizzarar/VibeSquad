@@ -457,19 +457,24 @@ async function handoffLead(ctx, args = {}) {
   return handoffView(res, { trigger, via });
 }
 
-/** POST the handoff to the running VS server's single /__vibesquad/lead-handoff endpoint. Connection failures carry `unreachable`. */
+/**
+ * POST the handoff to the running VS server's single /__vibesquad/lead-handoff endpoint. Connection failures carry
+ * `unreachable`; a listener that fails the local-token proof (X1 E4a L3) is an error, never an in-process fallback.
+ */
 async function postLeadHandoffToServer(body, ctx) {
-  const { localTokenHeaders } = await import("../local-token.mjs");
-  const port = Number(process.env.VIBESQUAD_PORT || 4180);
+  const { fetchWithLocalToken } = await import("../local-token.mjs");
   let r;
   try {
-    r = await (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}/__vibesquad/lead-handoff`, {
+    r = await fetchWithLocalToken("/__vibesquad/lead-handoff", {
       method: "POST",
-      headers: { "content-type": "application/json", ...localTokenHeaders() },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(200_000),
+      fetchImpl: ctx.fetch ?? fetch,
+      timeoutMs: 200_000,
+      tokenOptional: true,
     });
   } catch (e) {
+    if (e?.proofFailed) throw e;
     throw Object.assign(new Error(`VS server unreachable: ${e?.message ?? e}`), { unreachable: true });
   }
   const json = await r.json().catch(() => ({}));
@@ -663,17 +668,20 @@ async function watchTool(ctx, args = {}) {
 }
 
 async function postBuddyRestartToServer(body, ctx) {
-  const { localTokenHeaders } = await import("../local-token.mjs");
-  const port = Number(process.env.VIBESQUAD_PORT || 4180);
+  const { fetchWithLocalToken } = await import("../local-token.mjs");
   let r;
   try {
-    r = await (ctx.fetch ?? fetch)(`http://127.0.0.1:${port}/__vibesquad/brainstorm-restart`, {
+    // X1 E4a L3: the listener proves it holds the local token before the header goes out.
+    r = await fetchWithLocalToken("/__vibesquad/brainstorm-restart", {
       method: "POST",
-      headers: { "content-type": "application/json", ...localTokenHeaders() },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(200_000),
+      fetchImpl: ctx.fetch ?? fetch,
+      timeoutMs: 200_000,
+      tokenOptional: true,
     });
   } catch (e) {
+    if (e?.proofFailed) throw e;
     throw new Error(`VS server unreachable: ${e?.message ?? e} (a Buddy restart runs through the server so its archive/spawn budgets apply)`);
   }
   const json = await r.json().catch(() => ({}));

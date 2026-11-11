@@ -51,7 +51,7 @@ import {
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
-import { LOCAL_TOKEN_HEADER, localTokenPath, proveLocalServer, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
+import { fetchWithLocalToken, localTokenPath, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
   readLaneSpec,
   writeLaneSpec,
@@ -1909,13 +1909,15 @@ export function loadPromptInput(verb, flags, readStdin = () => fs.readFileSync(0
 
 // B3 (lean boot): one-time sweep of long-done workers over the running server's runner route (the hook host lives there).
 export async function requestWorkerSweep({ apply = false, port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
-  const token = readLocalToken(file);
-  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
-  const res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/runner/sweep`, {
+  // X1 E4a L3: the listener proves it holds this install's token before the token leaves this process.
+  const res = await fetchWithLocalToken("/__vibesquad/runner/sweep", {
     method: "POST",
-    headers: { [LOCAL_TOKEN_HEADER]: token, "content-type": "application/json" },
+    headers: { "content-type": "application/json" },
     body: JSON.stringify({ apply }),
-    signal: AbortSignal.timeout(120_000),
+    port,
+    file,
+    fetchImpl,
+    timeoutMs: 120_000,
   });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`sweep refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
@@ -2069,20 +2071,8 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
 
 /** Mints a code on the running local server. Throws when the server is down or has no LAN/Meshnet address. */
 export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
-  const token = readLocalToken(file);
-  if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
   // X1 E4a L3: whatever listens on the port must prove it holds this install's token before the token leaves this process.
-  await proveLocalServer({ port, token, fetchImpl });
-  let res;
-  try {
-    res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/pair/start`, {
-      method: "POST",
-      headers: { [LOCAL_TOKEN_HEADER]: token },
-      signal: AbortSignal.timeout(15_000),
-    });
-  } catch (e) {
-    throw new Error(`no VibeSquad server on 127.0.0.1:${port} (${e?.cause?.code ?? e?.name ?? e}); start it first (or set VIBESQUAD_PORT)`);
-  }
+  const res = await fetchWithLocalToken("/__vibesquad/pair/start", { method: "POST", port, file, fetchImpl, timeoutMs: 15_000 });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`pairing refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
   if (typeof body?.code !== "string" || typeof body?.pairUrl !== "string") throw new Error("unexpected pair/start response");

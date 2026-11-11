@@ -448,7 +448,9 @@ describe("E4b MUST 5 (X1 L3): `vs pair` makes the listener prove the local token
     assert.ok(!res.body.includes(auth.getLocalToken()), "the token itself never leaves the server");
     const vs = src("cli/vs.mjs");
     const fn = vs.slice(vs.indexOf("export async function requestPairStart("), vs.indexOf("async function commandPair("));
-    assert.ok(fn.indexOf("await proveLocalServer(") < fn.indexOf("[LOCAL_TOKEN_HEADER]: token"), "proof before the header goes out");
+    // unit-and-prove-local: the proof-then-header order now lives in fetchWithLocalToken (server/local-token.mjs); `vs pair` only calls it.
+    assert.ok(fn.includes("await fetchWithLocalToken("), "the token goes out only through the proving helper");
+    assert.ok(!fn.includes("LOCAL_TOKEN_HEADER") && !fn.includes("readLocalToken("), "requestPairStart never touches the token itself");
   });
 });
 
