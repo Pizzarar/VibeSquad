@@ -96,9 +96,12 @@ describe("cookieWriteRefusal: the decision table", () => {
   const refusal = (method, headers, encrypted = true) => auth.cookieWriteRefusal({ method, headers: { host: MESH_HOST, ...headers }, socket: { encrypted } });
 
   test("safe methods never refuse, whatever the headers say (reads are not CSRF targets; SSE/WS upgrades are GETs)", () => {
-    for (const method of ["GET", "HEAD", "OPTIONS", "get"]) {
+    for (const method of ["GET", "HEAD", "get"]) {
       assert.equal(refusal(method, { origin: "https://evil.example", "sec-fetch-site": "cross-site" }), null, method);
     }
+    // X1 I1: one definition of "write" with the middleware (vibesquad-api.mjs gated: anything but GET/HEAD), so OPTIONS is checked.
+    assert.match(refusal("OPTIONS", { origin: "https://evil.example" }), /is not this host/);
+    assert.equal(refusal("OPTIONS", { origin: MESH_ORIGIN }), null);
   });
 
   test("Origin present: only the listener's own scheme://Host passes (case-insensitive); null, foreign, or wrong scheme is refused", () => {
@@ -148,13 +151,38 @@ describe("cookieWriteRefusal: the decision table", () => {
 });
 
 describe("authenticate() is the chokepoint", () => {
-  test("attacker: a valid cookie on a cross-site POST authenticates nothing, records the refusal, and touches no device state", () => {
+  test("attacker: a valid cookie on a cross-site POST authenticates nothing, the reason is readable, and no device state is touched", () => {
     const before = auth.listDevices().find((d) => d.name === "Owner phone").lastSeenAt;
     const req = meshReq({ token: phone, headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site" } });
     assert.equal(auth.authenticate(req), null);
     assert.match(auth.originRefusal(req), /Origin https:\/\/evil\.example is not this host/);
     assert.equal(auth.listDevices().find((d) => d.name === "Owner phone").lastSeenAt, before, "no last-seen update for a refused write");
     assert.equal(auth.ownerProof(req), false, "ownerProof follows authenticate");
+  });
+
+  test("Gemini R1 L1: the refusal is stateless, so nothing stale can leak into a later decision on the same request", () => {
+    const headers = { origin: "https://evil.example", "sec-fetch-site": "cross-site" };
+    const req = meshReq({ token: phone, headers });
+    assert.equal(auth.authenticate(req), null);
+    assert.deepEqual(Object.getOwnPropertySymbols(req), [], "authenticate() writes nothing on the request");
+    assert.equal(auth.originRefusal(meshReq({ token: phone, headers })), auth.originRefusal(req), "same headers, same answer, no history needed");
+    // The same request object, re-asked as a read: no refusal (the answer follows the request, not an earlier call).
+    req.method = "GET";
+    assert.equal(auth.originRefusal(req), null);
+    assert.equal(auth.authenticate(req)?.name, "Owner phone");
+    // A loopback request whose vs_device cookie fails the proof but which holds the local token is the owner, and a later
+    // originRefusal() on it is irrelevant to the gates (they only ask on the not-owner branch) and reads the same truth.
+    const local = {
+      url: "/__vibesquad/pair/start",
+      method: "POST",
+      headers: { host: "127.0.0.1:4180", origin: "http://tauri.localhost", "x-vibesquad-token": auth.getLocalToken(), cookie: `vs_device=${phone}` },
+      socket: { remoteAddress: "127.0.0.1", localAddress: "127.0.0.1" },
+      on() {},
+    };
+    assert.equal(auth.isLocalBrowserSafe(local), true, "the Tauri shell origin is allowed on loopback");
+    assert.equal(auth.authenticate(local), null, "the cookie alone does not authenticate this shape");
+    assert.equal(auth.ownerProof(local), true, "the local token does (local owner is checked first)");
+    assert.match(auth.originRefusal(local), /is not this host/);
   });
 
   test("the same cookie on a same-origin POST, a GET, or a header-less POST authenticates", () => {
@@ -292,6 +320,30 @@ describe("loopback listener: the gate in vibesquad-api.mjs", () => {
     assert.equal(r.json().error, auth.CROSS_SITE_ERROR);
   });
 
+  test("X1 L1 / M5: the vs_local cookie from another loopback port (legacy browser, no Sec-Fetch-Site) is refused; the served origin and the Tauri shell pass", async () => {
+    const login = await http({ port, path: `/__vibesquad/local-login?t=${auth.mintLocalLoginNonce()}` });
+    assert.equal(login.status, 302, login.text);
+    const m = /vs_local=([^;]+)/.exec(String(login.headers["set-cookie"] ?? ""));
+    assert.ok(m, "the launcher login sets vs_local");
+    const session = (origin) => ({ cookie: `vs_local=${m[1]}`, "user-agent": "Mozilla/5.0", ...(origin ? { origin } : {}) });
+    // attacker: M5, a page on another loopback port in a browser that sends no Sec-Fetch-* (vs_local is same-site, so it is attached)
+    let r = await http({ port, path: "/__vibesquad/pair/start", method: "POST", headers: session("http://127.0.0.1:3000") });
+    assert.equal(r.status, 403, r.text);
+    assert.equal(r.json().error, "forbidden");
+    // attacker: same port, other loopback name: a different origin
+    r = await http({ port, path: "/__vibesquad/pair/start", method: "POST", headers: session(`http://localhost:${port}`) });
+    assert.equal(r.status, 403, r.text);
+    // the served URL (launcher / vs open land here) and the Tauri shell origins keep working
+    r = await http({ port, path: "/__vibesquad/pair/start", method: "POST", headers: session(`http://127.0.0.1:${port}`) });
+    assert.equal(r.status, 200, r.text);
+    assert.equal(r.json().requiresApproval, false, "vs_local is the PC owner");
+    r = await http({ port, path: "/__vibesquad/pair/start", method: "POST", headers: session("http://tauri.localhost") });
+    assert.equal(r.status, 200, r.text);
+    // Host and Origin compare case-insensitively
+    r = await http({ port, path: "/__vibesquad/pair/start", method: "POST", headers: { ...session(`HTTP://127.0.0.1:${port}`), host: `127.0.0.1:${port}` } });
+    assert.equal(r.status, 200, r.text);
+  });
+
   test("attacker: the loopback foreign-Origin refusal for token-less browsers is unchanged (403 forbidden)", async () => {
     const r = await http({ port, path: "/__vibesquad/pair/start", method: "POST", headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site", "user-agent": "Mozilla/5.0" } });
     assert.equal(r.status, 403, r.text);
@@ -303,7 +355,8 @@ describe("loopback listener: the gate in vibesquad-api.mjs", () => {
     assert.ok(readFileSync(join(rootDir, "server/vibesquad-api.mjs"), "utf8").includes("if (originRefusal(req)) return sendCrossSiteRefused(req, res);"));
     const authSrc = readFileSync(join(rootDir, "server/auth.mjs"), "utf8");
     const fn = authSrc.slice(authSrc.indexOf("export function authenticate(req) {"), authSrc.indexOf("function authenticateRelayDevice(req) {"));
-    assert.ok(fn.indexOf("const refused = cookieWriteRefusal(req);") > 0, "authenticate() calls the check");
-    assert.ok(fn.indexOf("const refused = cookieWriteRefusal(req);") < fn.indexOf("deviceByTokenHash("), "refused before the hash lookup");
+    assert.ok(fn.indexOf("if (cookieWriteRefusal(req)) return null;") > 0, "authenticate() calls the check");
+    assert.ok(fn.indexOf("if (cookieWriteRefusal(req)) return null;") < fn.indexOf("deviceByTokenHash("), "refused before the hash lookup");
+    assert.ok(!authSrc.includes("ORIGIN_REFUSED"), "no per-request refusal flag (Gemini R1 L1)");
   });
 });

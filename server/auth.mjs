@@ -615,12 +615,9 @@ export function authenticate(req) {
   const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
   if (!token) return null;
   // X1-E4b L4: a cookie-authenticated write must also prove it came from this site (Origin / Sec-Fetch-Site), not rest on
-  // SameSite=Strict alone. Refused before the hash lookup: no devices.json read, no last-seen, no tracked socket.
-  const refused = cookieWriteRefusal(req);
-  if (refused) {
-    req[ORIGIN_REFUSED] = refused;
-    return null;
-  }
+  // SameSite=Strict alone. Refused before the hash lookup: no devices.json read, no last-seen, no tracked socket. Nothing is
+  // recorded on the request (Gemini R1 L1): originRefusal() recomputes the same answer when a gate wants the reason.
+  if (cookieWriteRefusal(req)) return null;
   const dev = deviceByTokenHash(sha256Hex(token));
   if (!dev) return null;
   const now = Date.now();
@@ -671,6 +668,10 @@ const isBrowserRequest = (h) => /^Mozilla\//.test(String(h["user-agent"] ?? ""))
 /**
  * Loopback-only calls also refuse foreign Host/Origin headers (DNS-rebinding / cross-site posts).
  * Browsers always send Origin on POST and Sec-Fetch-Site on every request; plain CLI/test clients send neither.
+ * X1 origin-check L1: an Origin must be this listener's own origin (scheme://Host) or the Tauri shell's. Another loopback
+ * port is a different origin on the same site, and a browser without Sec-Fetch-* would still attach the Strict vs_local
+ * cookie to its POST. The launcher / `vs open` land the browser on the served URL and the desktop proxy sends
+ * Origin: http://<Host> for a local upstream, so every shipped caller already matches.
  */
 export function isLocalBrowserSafe(req) {
   if (isRelayRequest(req) || !isLocal(req)) return false;
@@ -678,7 +679,7 @@ export function isLocalBrowserSafe(req) {
   const h = req.headers;
   if (!LOOPBACK_HOST_RE.test(h.host ?? "")) return false;
   const origin = h.origin;
-  if (origin !== undefined && !isLoopbackOrigin(origin)) return false;
+  if (origin !== undefined && String(origin).toLowerCase() !== ownOrigin(req) && !TAURI_ORIGINS.has(origin)) return false;
   const site = h["sec-fetch-site"];
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method ?? "") && isBrowserRequest(h) && origin === undefined) return false;
@@ -698,8 +699,10 @@ export function isLocalBrowserSafe(req) {
 // Failing closed there would break the desktop app on a remote host without stopping any browser attack.
 // Relayed requests (req.relayDevice) never reach this: authenticate() answers them from the channel identity first.
 // Token-header and agent-header callers are not cookie auth and are not checked here (isLocalBrowserSafe covers loopback).
-const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
-const ORIGIN_REFUSED = Symbol("vibesquad.origin-refused");
+// Safe = GET/HEAD only, the one definition the middleware's write rule uses too (vibesquad-api.mjs gated(); X1 I1): a
+// cookie'd OPTIONS is a write here as well, even though no browser sends a credentialed one (no CORS headers, every
+// handler answers 405).
+const SAFE_METHODS = new Set(["GET", "HEAD"]);
 export const CROSS_SITE_ERROR = "cross-site request refused: Origin / Sec-Fetch-Site do not match this host";
 
 const singleHeader = (h, name) => {
@@ -716,7 +719,7 @@ export function ownOrigin(req) {
 
 /**
  * Why a state-changing request must NOT be authenticated by its vs_device cookie, or null when it may be. Safe methods
- * (GET/HEAD/OPTIONS) always pass: reads are not CSRF targets and the SSE/WebSocket upgrades are GETs. See the table above.
+ * (GET/HEAD) always pass: reads are not CSRF targets and the SSE/WebSocket upgrades are GETs. See the table above.
  */
 export function cookieWriteRefusal(req) {
   if (SAFE_METHODS.has(String(req.method ?? "GET").toUpperCase())) return null;
@@ -732,8 +735,16 @@ export function cookieWriteRefusal(req) {
   return `Sec-Fetch-Site ${site} without an Origin`;
 }
 
-/** The refusal authenticate() recorded for this request (a cookie write that failed the same-origin proof), or null. */
-export const originRefusal = (req) => req?.[ORIGIN_REFUSED] ?? null;
+/**
+ * Why this request's vs_device cookie did not authenticate its write, or null (no cookie, a relayed request, a safe method,
+ * or the proof held). Stateless on purpose (Gemini R1 L1): a pure function of the request's headers and method, so a gate
+ * that asks after an earlier authenticate()/isTrusted() pass cannot read a stale answer, and a request that is the owner
+ * by another credential (local token, vs_local) is never affected because the gates only ask on their not-owner branch.
+ */
+export function originRefusal(req) {
+  if (!req || isRelayRequest(req)) return null;
+  return parseCookies(req.headers?.cookie)[DEVICE_COOKIE] ? cookieWriteRefusal(req) : null;
+}
 
 /** 403 with a plain error for a refused cookie write: JSON on API paths / JSON callers, text otherwise. Never HTML. */
 export function sendCrossSiteRefused(req, res) {
@@ -819,7 +830,9 @@ export const hasAgentHeaders = (req) => headerValue(req, AGENT_ID_HEADER) !== ""
 /** Owner proof: a paired device cookie, or the loopback local token (header or vs_local cookie). Never for an agent request. */
 export function ownerProof(req) {
   if (hasAgentHeaders(req)) return false;
-  return Boolean(authenticate(req)) || isLocalOwner(req);
+  // Local owner first (Gemini R1 L1, same order as handlePairStart): a proven PC owner never runs the cookie path, so a
+  // stray vs_device cookie neither touches devices.json / last-seen nor registers the socket for a device revoke.
+  return isLocalOwner(req) || Boolean(authenticate(req));
 }
 
 async function defaultVerifyAgent(caller) {
