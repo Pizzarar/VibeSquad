@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod local_proof;
 mod ui_pages;
 mod updater;
 
@@ -39,7 +40,7 @@ use tauri::{
 use tauri_plugin_notification::NotificationExt;
 use tokio::net::TcpListener;
 use tokio_tungstenite::{
-    connect_async_tls_with_config,
+    client_async_tls_with_config, connect_async_tls_with_config,
     tungstenite::{client::IntoClientRequest, Message as TungMessage},
     Connector,
 };
@@ -1845,12 +1846,12 @@ async fn proxy_websocket(
                 ws_req.headers_mut().insert("Sec-WebSocket-Protocol", hv);
             }
         }
+        // The token is only attached by the proven path below; a client-supplied copy never reaches here
+        // (handle_ws_upgrade builds ws_req from the path, not the client's headers).
+        let local_token = if is_local { state.local_token() } else { None };
         if is_local {
             if let Ok(hv) = HeaderValue::from_str(&format!("http://{}", host)) {
                 ws_req.headers_mut().insert("Origin", hv);
-            }
-            if let Some(hv) = state.local_token().and_then(|t| HeaderValue::from_str(&t).ok()) {
-                ws_req.headers_mut().insert(LOCAL_TOKEN_HEADER, hv);
             }
         }
         if !cfg.device_token.is_empty() {
@@ -1858,7 +1859,29 @@ async fn proxy_websocket(
                 ws_req.headers_mut().insert("Cookie", hv);
             }
         }
-        let conn_res = if is_local {
+        let conn_res = if let Some(token) = local_token {
+            // X1 prove-local: the listener proves it holds the token on this socket (local_proof.rs), then the
+            // upgrade carrying x-vibesquad-token rides the same socket. A failed proof closes the client side
+            // and never dials again; the token was not sent.
+            match local_proof::dial_proven(&host, &token).await {
+                Ok(stream) => {
+                    if let Ok(hv) = HeaderValue::from_str(&token) {
+                        ws_req.headers_mut().insert(LOCAL_TOKEN_HEADER, hv);
+                    }
+                    tokio::time::timeout(
+                        Duration::from_millis(2000),
+                        client_async_tls_with_config(ws_req, stream, None, None),
+                    )
+                    .await
+                }
+                Err(local_proof::ProofError::ProofFailed(msg)) => {
+                    eprintln!("[vs-desktop] websocket upgrade refused: {}", msg);
+                    let _ = client_ws.close().await;
+                    return;
+                }
+                Err(local_proof::ProofError::Unreachable(_)) => continue,
+            }
+        } else if is_local {
             tokio::time::timeout(
                 Duration::from_millis(2000),
                 connect_async_tls_with_config(ws_req, None, false, None),
@@ -2183,6 +2206,119 @@ async fn check_shell_ready(client: &reqwest::Client, host: &str, token: &str) ->
 /// Short in-relay retry for page navigations while the upstream restarts (the page itself keeps polling for ~30 s).
 const RELAY_RETRY_BACKOFF_MS: [u64; 3] = [250, 500, 1000];
 
+/// An upstream response from either client: the pooled reqwest client (remote servers, and a local server when
+/// there is no token to protect) or the single proven hyper connection that carried the local token.
+enum Upstream {
+    Pooled(reqwest::Response),
+    Proven(hyper::Response<hyper::body::Incoming>),
+}
+
+impl Upstream {
+    fn status(&self) -> reqwest::StatusCode {
+        match self {
+            Upstream::Pooled(r) => r.status(),
+            Upstream::Proven(r) => r.status(),
+        }
+    }
+    fn headers(&self) -> &HeaderMap {
+        match self {
+            Upstream::Pooled(r) => r.headers(),
+            Upstream::Proven(r) => r.headers(),
+        }
+    }
+    /// The body as a stream (SSE, downloads): the proven connection stays open until the body is drained.
+    fn into_body(self) -> Body {
+        match self {
+            Upstream::Pooled(r) => Body::from_stream(r.bytes_stream()),
+            Upstream::Proven(r) => Body::new(r.into_body()),
+        }
+    }
+    async fn bytes(self) -> Result<axum::body::Bytes, String> {
+        match self {
+            Upstream::Pooled(r) => r.bytes().await.map_err(|e| e.to_string()),
+            Upstream::Proven(r) => http_body_util::BodyExt::collect(r.into_body()).await.map(|c| c.to_bytes()).map_err(|e| e.to_string()),
+        }
+    }
+}
+
+enum UpstreamError {
+    /// Dial / send failed: the ordinary "server down" path (retry after ensure_local_server_running, next candidate).
+    Transport(String),
+    /// The local listener answered but did not prove it holds the token: fail closed, nothing was sent.
+    ProofFailed(String),
+}
+
+impl std::fmt::Display for UpstreamError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UpstreamError::Transport(m) | UpstreamError::ProofFailed(m) => f.write_str(m),
+        }
+    }
+}
+
+/// X1 prove-local: one hand-dialed loopback socket carries the HMAC proof (local_proof::dial_proven) and then the
+/// token-bearing request over a hyper http1 connection, so the proof means "this socket". hyper never follows a
+/// redirect, so a 3xx cannot forward the header. A socket that dies after the proof (the listener closed it) is a
+/// Transport error: the caller's one retry re-dials and re-proves, never re-sends blind.
+#[allow(clippy::too_many_arguments)]
+async fn send_proven_local(
+    host: &str,
+    token: &str,
+    method: &reqwest::Method,
+    path_and_query: &str,
+    forwarded: &[(HeaderName, HeaderValue)],
+    origin: &str,
+    cookie: Option<&str>,
+    body: axum::body::Bytes,
+) -> Result<Upstream, UpstreamError> {
+    let stream = match local_proof::dial_proven(host, token).await {
+        Ok(s) => s,
+        Err(local_proof::ProofError::ProofFailed(m)) => return Err(UpstreamError::ProofFailed(m)),
+        Err(local_proof::ProofError::Unreachable(m)) => return Err(UpstreamError::Transport(m)),
+    };
+    let io = hyper_util::rt::TokioIo::new(stream);
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(io)
+        .await
+        .map_err(|e| UpstreamError::Transport(format!("{}: {}", host, e)))?;
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut builder = hyper::Request::builder()
+        .method(method.clone())
+        .uri(path_and_query)
+        .header("host", host)
+        .header("origin", origin)
+        .header(LOCAL_TOKEN_HEADER, token);
+    for (k, v) in forwarded {
+        builder = builder.header(k.clone(), v.clone());
+    }
+    if let Some(c) = cookie {
+        builder = builder.header("cookie", c);
+    }
+    let req = builder
+        .body(http_body_util::Full::new(body))
+        .map_err(|e| UpstreamError::Transport(format!("{}: {}", host, e)))?;
+    sender
+        .send_request(req)
+        .await
+        .map(Upstream::Proven)
+        .map_err(|e| UpstreamError::Transport(format!("{}: {}", host, e)))
+}
+
+/// The plain, uncached error the window sees when the local port is held by something that is not this install's
+/// VibeSquad server. Never an HTML page: nothing on it should look like the app.
+fn proof_failed_response(msg: &str) -> Response {
+    (
+        StatusCode::BAD_GATEWAY,
+        [
+            (axum::http::header::CACHE_CONTROL, "no-store, no-cache, must-revalidate"),
+            (axum::http::header::CONTENT_TYPE, "text/plain; charset=utf-8"),
+        ],
+        format!("VibeSquad desktop: {}", msg),
+    )
+        .into_response()
+}
+
 async fn proxy_http_handler(
     State(state): State<Arc<SharedAppState>>,
     req: Request,
@@ -2272,67 +2408,93 @@ async fn proxy_http_handler(
             Err(_) => reqwest::Method::GET,
         };
 
-        let build_req = || {
-            let mut builder = state.client().request(req_method.clone(), &target_url);
+        // Headers forwarded upstream: never the client's Host/Origin/Referer/Cookie (rebuilt below), the
+        // hop-by-hop Connection/Content-Length/Transfer-Encoding, or a client-supplied copy of the local token.
+        let forwarded: Vec<(HeaderName, HeaderValue)> = req_headers
+            .iter()
+            .filter(|(k, _)| {
+                let n = k.as_str(); // HeaderName is already lowercase
+                !(n == "host"
+                    || n == "connection"
+                    || n == "content-length"
+                    || n == "transfer-encoding"
+                    || n == "origin"
+                    || n == "referer"
+                    || n == "cookie"
+                    || n == LOCAL_TOKEN_HEADER)
+            })
+            .filter(|(_, v)| v.to_str().is_ok())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
 
-            for (k, v) in req_headers.iter() {
-                let name_lower = k.as_str().to_lowercase();
-                if name_lower == "host"
-                    || name_lower == "connection"
-                    || name_lower == "content-length"
-                    || name_lower == "origin"
-                    || name_lower == "referer"
-                    || name_lower == "cookie"
-                    || name_lower == LOCAL_TOKEN_HEADER
-                {
-                    continue;
-                }
-                if let Ok(val_str) = v.to_str() {
-                    builder = builder.header(k.as_str(), val_str);
-                }
-            }
+        // Cookie upstream: the client's cookies minus vs_desktop/vs_local (loopback-only, never forwarded),
+        // plus the paired vs_device for a remote server.
+        let existing_cookie = strip_local_cookies(
+            req_headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
+        );
+        let merged_cookie = if cfg.device_token.is_empty() || existing_cookie.contains("vs_device=") {
+            existing_cookie
+        } else if existing_cookie.is_empty() {
+            format!("vs_device={}", cfg.device_token)
+        } else {
+            format!("{}; vs_device={}", existing_cookie, cfg.device_token)
+        };
+        let merged_cookie = (!merged_cookie.is_empty()).then_some(merged_cookie);
 
+        // X1 origin-check I2: the server's same-origin proof for cookie-authenticated writes (auth.mjs
+        // cookieWriteRefusal) wants Origin == its own scheme://Host, so the proxy states it for local (http)
+        // and remote (https) upstreams alike instead of leaning on the webview's Sec-Fetch-Site for its page.
+        let upstream_origin = format!("{}://{}", scheme, host);
+
+        let send_upstream = || async {
             if host_is_local {
-                builder = builder
-                    .header("Host", &host)
-                    .header("Origin", format!("http://{}", host));
-                if let Some(t) = state.local_token() {
-                    builder = builder.header(LOCAL_TOKEN_HEADER, t);
+                if let Some(token) = state.local_token() {
+                    // X1 prove-local: the listener proves it holds the token on this very socket before the
+                    // header goes out, and the request rides that socket (local_proof.rs). A pooled reqwest
+                    // connection cannot give that binding, so the token path never uses the pool.
+                    return send_proven_local(
+                        &host,
+                        &token,
+                        &req_method,
+                        &path_and_query,
+                        &forwarded,
+                        &upstream_origin,
+                        merged_cookie.as_deref(),
+                        body_bytes.clone(),
+                    )
+                    .await;
                 }
             }
-
-            let existing_cookie = strip_local_cookies(
-                req_headers
-                    .get(axum::http::header::COOKIE)
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or(""),
-            );
-            let merged = if cfg.device_token.is_empty() || existing_cookie.contains("vs_device=") {
-                existing_cookie
-            } else if existing_cookie.is_empty() {
-                format!("vs_device={}", cfg.device_token)
-            } else {
-                format!("{}; vs_device={}", existing_cookie, cfg.device_token)
-            };
-            if !merged.is_empty() {
-                builder = builder.header("Cookie", merged);
+            let mut builder = state.client().request(req_method.clone(), &target_url);
+            for (k, v) in forwarded.iter() {
+                builder = builder.header(k.clone(), v.clone());
             }
-
+            if host_is_local {
+                builder = builder.header("Host", &host);
+            }
+            builder = builder.header("Origin", &upstream_origin);
+            if let Some(c) = merged_cookie.as_deref() {
+                builder = builder.header("Cookie", c);
+            }
             if !body_bytes.is_empty() {
                 builder = builder.body(body_bytes.clone());
             }
-
-            builder
+            builder.send().await.map(Upstream::Pooled).map_err(|e| UpstreamError::Transport(e.to_string()))
         };
 
-        let send_res = match build_req().send().await {
-            Ok(resp) => Ok(resp),
-            Err(_) if host_is_local && is_local => {
-                ensure_local_server_running(&state).await;
-                build_req().send().await
-            }
-            Err(e) => Err(e),
-        };
+        let mut send_res = send_upstream().await;
+        if matches!(send_res, Err(UpstreamError::Transport(_))) && host_is_local && is_local {
+            ensure_local_server_running(&state).await;
+            send_res = send_upstream().await;
+        }
+        // Fail closed: something answered on the local port but could not prove it holds the token. A plain
+        // error, no retry, no other candidate; the token was not sent.
+        if let Err(UpstreamError::ProofFailed(msg)) = send_res {
+            return proof_failed_response(&msg);
+        }
 
         match send_res {
             Ok(up_resp) => {
@@ -2401,7 +2563,7 @@ async fn proxy_http_handler(
                         );
                     }
                     return res_builder
-                        .body(Body::from_stream(up_resp.bytes_stream()))
+                        .body(up_resp.into_body())
                         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
                 }
 
@@ -2410,7 +2572,7 @@ async fn proxy_http_handler(
                     Err(e) => {
                         return (
                             StatusCode::BAD_GATEWAY,
-                            Json(json!({ "error": e.to_string() })),
+                            Json(json!({ "error": e })),
                         )
                             .into_response();
                     }
@@ -3096,6 +3258,81 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
     }
 
+    /// An upstream that answers /__vibesquad/local-proof keyed with `proof_token` (the real server, or a rogue that
+    /// holds another key) and records the x-vibesquad-token / origin every other request carried.
+    async fn proof_upstream(proof_token: &'static str, seen: Arc<Mutex<Vec<(Option<String>, Option<String>)>>>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let port = addr.port();
+        let router = Router::new()
+            .route(
+                "/__vibesquad/local-proof",
+                get(move |q: axum::extract::Query<HashMap<String, String>>| async move {
+                    let nonce = q.get("c").cloned().unwrap_or_default();
+                    let proof: String = local_proof::local_proof(proof_token, &nonce, port).iter().map(|b| format!("{:02x}", b)).collect();
+                    Json(json!({ "proof": proof, "port": port }))
+                }),
+            )
+            .fallback(move |headers: HeaderMap| {
+                let seen = seen.clone();
+                async move {
+                    let h = |n: &str| headers.get(n).and_then(|v| v.to_str().ok()).map(|s| s.to_string());
+                    seen.lock().unwrap().push((h(LOCAL_TOKEN_HEADER), h("origin")));
+                    Json(json!({ "ok": true }))
+                }
+            });
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        addr.to_string()
+    }
+
+    const TEST_TOKEN: &str = "abababababababababababababababababababababababababababababababab";
+
+    /// A local-mode state whose token file holds TEST_TOKEN (the desktop key is on, as in the real window).
+    fn local_token_state(host: &str) -> Arc<SharedAppState> {
+        let mut state = direct_state(host);
+        let file = std::env::temp_dir().join(format!("vs-desktop-test-token-{}-{:?}", std::process::id(), std::thread::current().id()));
+        fs::write(&file, format!("{}\n", TEST_TOKEN)).unwrap();
+        Arc::get_mut(&mut state).unwrap().local_token_file = file;
+        state.require_desktop_key.store(true, Ordering::SeqCst);
+        state
+    }
+
+    #[tokio::test]
+    async fn local_token_is_sent_only_after_the_listener_proves_it_holds_it() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let addr = proof_upstream(TEST_TOKEN, seen.clone()).await;
+        let state = local_token_state(&addr);
+        for (method, body) in [("GET", Body::empty()), ("POST", Body::from("{}"))] {
+            let req = Request::builder().method(method).uri("/api/x").header("content-type", "application/json").body(body).unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            assert_eq!(resp.status(), StatusCode::OK, "{method}");
+            let out = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            assert!(String::from_utf8_lossy(&out).contains("\"ok\":true"), "{method}");
+        }
+        let seen = seen.lock().unwrap().clone();
+        // Both requests carried the token and the proxy-stated Origin (X1 origin-check I2) after a passed proof.
+        assert_eq!(seen, vec![(Some(TEST_TOKEN.to_string()), Some(format!("http://{}", addr))); 2]);
+    }
+
+    #[tokio::test]
+    async fn a_rogue_listener_never_sees_the_token_and_the_window_gets_a_plain_error() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let addr = proof_upstream("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd", seen.clone()).await;
+        let state = local_token_state(&addr);
+        for (method, uri) in [("GET", "/api/x"), ("POST", "/__vibesquad/local-login/nonce"), ("GET", "/some/spa/path")] {
+            let req = Request::builder().method(method).uri(uri).header("accept", "text/html").body(Body::empty()).unwrap();
+            let resp = proxy_http_handler(State(state.clone()), req).await;
+            assert_eq!(resp.status(), StatusCode::BAD_GATEWAY, "{method} {uri}");
+            assert_eq!(resp.headers().get("content-type").unwrap(), "text/plain; charset=utf-8", "{method} {uri}");
+            let out = axum::body::to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let text = String::from_utf8_lossy(&out);
+            assert!(text.contains("failed the local-token proof") && text.contains("the local token was not sent"), "{method} {uri}: {text}");
+            assert!(!text.contains(TEST_TOKEN));
+        }
+        // The rogue answered the proof route only; no other request (and so no header) ever reached it.
+        assert!(seen.lock().unwrap().is_empty(), "{:?}", seen.lock().unwrap());
+    }
+
     #[tokio::test]
     async fn deep_link_navigation_gets_desktop_bridge() {
         let upstream = Router::new().fallback(|| async {
@@ -3587,7 +3824,25 @@ mod tests {
         // Upstream echoes the token header and cookie it received.
         let hits = Arc::new(Counter::new(0));
         let hits_up = hits.clone();
-        let upstream = Router::new().fallback(move |headers: HeaderMap| {
+        let token = "cd".repeat(32);
+        // The upstream answers the loopback proof with the token (X1 prove-local): without that the proxy never
+        // sends the header (a_rogue_listener_never_sees_the_token_... covers that side).
+        let up_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let up_port = up_listener.local_addr().unwrap().port();
+        let proof_token = token.clone();
+        let upstream = Router::new()
+            .route(
+                "/__vibesquad/local-proof",
+                get(move |q: axum::extract::Query<HashMap<String, String>>| {
+                    let proof_token = proof_token.clone();
+                    async move {
+                        let nonce = q.get("c").cloned().unwrap_or_default();
+                        let proof: String = local_proof::local_proof(&proof_token, &nonce, up_port).iter().map(|b| format!("{:02x}", b)).collect();
+                        Json(json!({ "proof": proof, "port": up_port }))
+                    }
+                }),
+            )
+            .fallback(move |headers: HeaderMap| {
             let hits = hits_up.clone();
             async move {
                 hits.fetch_add(1, Ordering::SeqCst);
@@ -3595,10 +3850,10 @@ mod tests {
                 format!("token={} cookie={}", h(LOCAL_TOKEN_HEADER), h("cookie"))
             }
         });
-        let upstream_host = spawn_upstream(upstream).await;
+        tokio::spawn(async move { axum::serve(up_listener, upstream).await.unwrap() });
+        let upstream_host = format!("127.0.0.1:{}", up_port);
         let dir = std::env::temp_dir().join(format!("vs-desktop-gate-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let token = "cd".repeat(32);
         fs::write(dir.join("local-token"), &token).unwrap();
         let state = {
             let base = make_test_state();
