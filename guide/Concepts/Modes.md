@@ -12,7 +12,7 @@ The first time you open VibeSquad (on the desktop app, in a browser, or on a pho
 - **Normal** — "Clean corporate ADE — left sidebar, centered chat & project cards".
 - **Psycho** — "Full retro sky CRTs, pixel tower & animated sprites".
 
-Click a card to choose. It shows once. If you close the window without choosing, it will not nag you again. The same two cards also sit at the top of the **Setup Checklist**, above the provider rows.
+Click a card to choose. The window stays open so you can see your pick; press **Continue** (or Escape, or click outside it) to close it. It shows once, and closing it without choosing will not bring it back. The same two cards also sit at the top of the **Setup Checklist**, above the provider rows.
 
 ## Switching later
 
