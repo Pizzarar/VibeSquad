@@ -51,6 +51,7 @@ import { RunnerUsageHeaderChip } from "./RunnerSettingsSection";
 import { MobileBar, useMobileTeamView } from "./MobileBar";
 import { BoringApp } from "./BoringAde";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
+import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { FocusRail, railAlerts } from "./FocusRail";
 import { perfEndPainted, perfStart } from "./perf";
@@ -1920,6 +1921,7 @@ export function App() {
         onSpinUpOverlord={onSpinUpOverlord}
         overlordBusy={overlordBusy}
         bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
+        pairSlot={<PhonePairSheet />}
       />
     );
   }

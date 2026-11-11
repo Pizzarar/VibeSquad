@@ -102,7 +102,7 @@ describe("vs devices list", () => {
     assert.equal(r.status, 0, r.err);
     const j = JSON.parse(r.out);
     assert.equal(j.devices.length, 2);
-    assert.deepEqual(Object.keys(j.devices[0]).sort(), ["createdAt", "current", "id", "lastSeenAt", "name"]);
+    assert.deepEqual(Object.keys(j.devices[0]).sort(), ["createdAt", "current", "id", "lastSeenAt", "mintedByDeviceId", "name"]);
     assert.ok(!r.out.includes("tokenHash"));
     assert.ok(authAs(phoneToken), "the phone is still paired");
   });

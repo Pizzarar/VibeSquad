@@ -51,7 +51,7 @@ import {
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
-import { LOCAL_TOKEN_HEADER, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
+import { LOCAL_TOKEN_HEADER, localTokenPath, proveLocalServer, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
   readLaneSpec,
   writeLaneSpec,
@@ -2071,6 +2071,8 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
 export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl = fetch } = {}) {
   const token = readLocalToken(file);
   if (!token) throw new Error(`no local token at ${file}; start the VibeSquad server once to create it`);
+  // X1 E4a L3: whatever listens on the port must prove it holds this install's token before the token leaves this process.
+  await proveLocalServer({ port, token, fetchImpl });
   let res;
   try {
     res = await fetchImpl(`http://127.0.0.1:${port}/__vibesquad/pair/start`, {
@@ -2145,8 +2147,12 @@ async function commandDevices(flags) {
     const matches = known.filter((d) => d.id === target || (target.length >= 8 && d.id.startsWith(target)));
     if (!matches.length) throw new Error(`no paired device matches "${target}" (vs devices list)`);
     if (matches.length > 1) throw new Error(`"${target}" matches ${matches.length} devices; give more of the id`);
-    if (!auth.revokeDevice(matches[0].id)) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    const removed = auth.revokeDevice(matches[0].id); // E4b: cascades over the devices it minted, in one locked write
+    if (!removed.length) throw new Error(`no paired device matches "${target}" (vs devices list)`);
+    const cascade = removed.filter((id) => id !== matches[0].id);
+    const names = cascade.map((id) => known.find((d) => d.id === id)?.name ?? id.slice(0, 8));
     process.stdout.write(`Revoked ${matches[0].id} (${matches[0].name}); its next request is refused.\n`);
+    if (cascade.length) process.stdout.write(`Also revoked ${cascade.length} device${cascade.length === 1 ? "" : "s"} it paired: ${names.join(", ")}.\n`);
     return 0;
   }
   throw new Error(DEVICES_USAGE);
