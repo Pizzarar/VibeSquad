@@ -62,6 +62,16 @@ Then **human check**: http://127.0.0.1:4180 opens and shows the VibeSquad main s
 Same as `core/vibesquad.md`, from the provider step on. UNVERIFIED: whether the browser version shows the Setup
 Checklist.
 
+## Keeping a source checkout live (sync-runtime)
+`npm run build` ends by running `server/sync-runtime.mjs`, which copies the new build into the runtime the app runs from. It never restarts anything. It prints what the merges since the last sync need to go live, read from the `Live-Needs:` trailer on each merge commit (`none`, `build`, `frontend-reload`, `runner-restart`, `server-restart`). If a merge has no trailer, it guesses from the changed files; if it cannot tell where it last synced, it assumes the server and runner need a restart. Typical outcomes:
+- `frontend-reload`: reload open VibeSquad windows (Ctrl+R).
+- `runner-restart`: the runner restarts itself once idle.
+- `server-restart`: pick a quiet moment, run `vs restart --dry-run`, then `vs restart`.
+Skipped or refused syncs (for example a dirty checkout) say why and leave the running copy unchanged; `--force` overrides.
+
+## Worktree cleanup
+Contributors working in many worktrees can run `vs worktree sweep` (dry run) and `vs worktree sweep --apply`. `--apply` removes every merged, clean worktree of the repo, including other lanes'.
+
 ## Gotchas
 - In PowerShell use `npm.cmd`, not `npm` (a fresh PC blocks scripts). If a command you installed says "running scripts is disabled", run its `.cmd` form, for example `codex.cmd --version`.
 - There is no daemon to install or keep in sync: the server starts and restarts the built-in runner itself.

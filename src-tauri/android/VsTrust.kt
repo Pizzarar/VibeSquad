@@ -44,6 +44,9 @@ object VsTrust {
     private const val MAX_CA_BYTES = 64 * 1024
     private const val MAX_STATUS_BYTES = 64 * 1024
     private const val FLUSH_EVERY_MS = 3000L
+    // server/build-android.mjs rewrites this to true for --sideload/--debug builds only (never a published build), so
+    // chrome://inspect can attach to the WebView and show why a page is blank.
+    private const val WEB_DEBUG = false
 
     /** `host:port` (host without IPv6 brackets, lowercase) or null. */
     fun key(authority: String): String? {
@@ -219,6 +222,7 @@ object VsTrust {
 
     fun install(webView: WebView) {
         if (!WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) return // fail closed: no pairing possible
+        if (WEB_DEBUG) WebView.setWebContentsDebuggingEnabled(true)
         val app = webView.context.applicationContext
         // vs_device (HttpOnly, Secure, Strict) is set on the /pair response; make sure the WebView keeps it across restarts.
         persistCookies()

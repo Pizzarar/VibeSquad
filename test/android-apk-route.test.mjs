@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
@@ -594,7 +594,9 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
   test("syncRuntimeDir copies the staged APK + sidecar into runtime/dist-desktop, and tolerates their absence", () => {
     const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
     const prev = process.env.LOCALAPPDATA;
+    const prevHome = process.env.VIBESQUAD_HOME;
     process.env.LOCALAPPDATA = lad;
+    process.env.VIBESQUAD_HOME = join(lad, ".vibesquad");
     const runtime = join(lad, "VibeSquad", "runtime");
     mkdirSync(runtime, { recursive: true });
     try {
@@ -609,13 +611,17 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
       assert.equal(readFileSync(join(runtime, "dist-desktop", "VibeSquad.apk.sha256"), "utf8").trim(), APK_SHA);
     } finally {
       if (prev === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prev;
+      if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
+      rmSync(lad, { recursive: true, force: true });
     }
   });
 
   test("syncRuntimeDir does not copy without a sidecar or with a mismatched one, and keeps the live pair", () => {
     const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
     const prev = process.env.LOCALAPPDATA;
+    const prevHome = process.env.VIBESQUAD_HOME;
     process.env.LOCALAPPDATA = lad;
+    process.env.VIBESQUAD_HOME = join(lad, ".vibesquad");
     const live = join(lad, "VibeSquad", "runtime", "dist-desktop");
     mkdirSync(live, { recursive: true });
     writeFileSync(join(live, "VibeSquad.apk"), "live-old");
@@ -635,6 +641,8 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
       assert.deepEqual(readdirSync(live).sort(), ["VibeSquad.apk", "VibeSquad.apk.sha256"]);
     } finally {
       if (prev === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prev;
+      if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
+      rmSync(lad, { recursive: true, force: true });
     }
   });
 

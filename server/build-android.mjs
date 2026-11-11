@@ -129,10 +129,12 @@ const TRUST_KOTLIN_SRC = resolve(import.meta.dirname, "..", "src-tauri", "androi
  * call it (RustWebViewClient.onReceivedSslError, RustWebView init) come from src-tauri/.cargo/config.toml [env] for wry.
  * Idempotent: rewrites only when the content differs; returns false when unchanged or the project dir is missing.
  */
-export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC) {
+export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC, { webDebug = false } = {}) {
   if (!existsSync(mainActivityDir) || !existsSync(src)) return false;
   const dest = join(mainActivityDir, "VsTrust.kt");
-  const text = readFileSync(src, "utf8");
+  let text = readFileSync(src, "utf8");
+  // Sideload/debug builds only: WebView remote debugging (chrome://inspect). Published builds keep the source's false.
+  if (webDebug) text = text.replace("private const val WEB_DEBUG = false", "private const val WEB_DEBUG = true");
   if (existsSync(dest) && readFileSync(dest, "utf8") === text) return false;
   writeFileSync(dest, text, "utf8");
   return true;
@@ -310,7 +312,7 @@ export function buildAndroidApk({
   ensureAndroidCameraPermission(manifest);
   const activityDir = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop");
   ensureAndroidSystemBarFit(join(activityDir, "MainActivity.kt"));
-  ensureAndroidTrustKotlin(activityDir);
+  ensureAndroidTrustKotlin(activityDir, undefined, { webDebug: sideload });
 
   // Step 4: build the release APK.
   console.log(`[build:android] 3/6 Building release APK (tauri android build --apk)...`);

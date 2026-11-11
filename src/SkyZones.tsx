@@ -2,9 +2,10 @@
 // left, the Overlord (hub lead) on the right. Each zone is a CRT bezel with the bot's face and that bot's live
 // chat, rendered by the same DrawerSlot AgentPanes uses, so nothing about the chat is re-implemented. Every
 // zone owns its own agent, drawer and composer; nothing is shared between them.
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { DrawerSlot } from "./AgentPanes";
 import type { Pin } from "./pins";
+import { isPinStarting, subscribePinStarts } from "./pinActions";
 import { NO_OVERLORD_TEXT, skyCanOpen, SKY_COLUMNS, SKY_FRAME_URL, SKY_POPOVER_SELECTOR, SKY_WALL_URL, SKY_URL, TAKEOVER_FALLBACK, TAKEOVER_FALLBACK_MS, TAKEOVER_LABEL_URL, TAKEOVER_URL, SLAM_PUFF_URL, faceBg, faceContain, hasFaceMode, skyAssets, skyEffectiveOpen, skyEscCloses, skyExit, skyFaceClick, skyLeftBot, skyOutsideCloses, skyRiffMode, skyWallFallbackStyle, skyWallStyle, skyZonesFor, slamFaceForce, slamPuffBox, slamPuffPoints, slamPuffScale, slamRiffForce, slamTransform, takeoverLabelGeom, takeoverLanded, takeoverVisible, type SkyBot, type SkyCan, type SkyOpen, type SkyZone, type SlamPuff, type SlamView, type TakeoverLabel, type TakeoverModel } from "./skyZonesLogic";
 import type { FaceBot, FaceMode } from "./squadFloorLogic";
 import type { TeamView } from "./teams";
@@ -332,8 +333,8 @@ function Zone({
           <div className="sky-static" data-testid="sky-idle-riffbot" role="status">
             <span className="sky-static-text">RiffBot is not running</span>
             {onSpinUp && (
-              <button type="button" className="btn small" data-testid="sky-start-riffbot" onClick={onSpinUp}>
-                Spin Up RiffBot
+              <button type="button" className="btn small" data-testid="sky-start-riffbot" disabled={busy} onClick={onSpinUp}>
+                {busy ? "Spinning up…" : "Spin Up RiffBot"}
               </button>
             )}
           </div>
@@ -423,6 +424,8 @@ export function SkyZones({
   const reduced = usePrefersReducedMotion();
   const puff = useSlamPuffModel();
   const { hub } = zones;
+  // RiffBot Spin Up pending: the shared in-flight quick start for the hub lane (pinActions.openPin) disables the button until it settles.
+  const riffStarting = useSyncExternalStore(subscribePinStarts, () => (hub ? isPinStarting(hub) : false));
   // G8c: the wall between the TVs. Art from sky-crt.json `wall` when its PNG loads, else the CSS ink seam. Absolute: takes no grid space.
   const wallUrl = crt?.wall ? SKY_WALL_URL(theme) : null;
   const wallStyle = skyWallStyle(crt?.wall, crt?.scale ?? 1, useImageOk(wallUrl) ? wallUrl : null, dpr);
@@ -478,9 +481,9 @@ export function SkyZones({
       data-open={open ?? "none"}
       style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null), ...slamStyle }}
     >
-      <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared")) ?? slamRiffForce(slam, faces)} takeover={takeover} labelModel={labelModel} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared")) ?? slamRiffForce(slam, faces)} takeover={takeover} labelModel={labelModel} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} busy={riffStarting} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} force={slamFaceForce(slam, faces)} fx={slamOn ? { shake: true } : null} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
-      <Zone panel zone={zones.riffbot} slamArt={puff} faces={faces} frameStyle={frameStyle} fx={slamOn || slam.closing ? { shake: slamOn, closing: slam.closing, smear: slam.smear } : null} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} />
+      <Zone panel zone={zones.riffbot} slamArt={puff} faces={faces} frameStyle={frameStyle} fx={slamOn || slam.closing ? { shake: slamOn, closing: slam.closing, smear: slam.smear } : null} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} busy={riffStarting} />
       <SlamFx root={root} view={slam} faces={faces} puff={puff} />
       <span className={`sky-wall${wallStyle ? " has-art" : ""}`} data-testid="sky-wall" aria-hidden="true" style={wallStyle ?? skyWallFallbackStyle(dpr)} />
       <Zone panel zone={zones.overlord} faces={faces} frameStyle={frameStyle} isOpen={open === "overlord"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />

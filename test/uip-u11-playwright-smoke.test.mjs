@@ -263,6 +263,13 @@ after(async () => {
 });
 
 // ── The 5 core flows ─────────────────────────────────────────────────────────
+// The pin rail starts collapsed under 1600 css px (src/railCollapse.ts); open it the way a user would before reading the Active Buddy card.
+async function expandPinRail(page) {
+  const toggle = page.locator('[data-testid="pin-rail-collapse-toggle"]');
+  await toggle.waitFor({ timeout: 15000 });
+  if ((await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+}
+
 test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, async (t) => {
   if (unavailable) {
     t.skip(unavailable);
@@ -286,6 +293,7 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
     await page.locator(`[data-testid="pin-tile-${LANE_ID}"]`).click();
 
     await page.locator('[data-testid="drawer-head-compact"]').waitFor({ timeout: 15000 });
+    await expandPinRail(page);
     await page.locator('[data-testid="pin-rail-active-buddy"]').waitFor({ timeout: 15000 });
     assert.ok(
       await page.locator('[data-testid="drawer-head-compact"]').count(),
@@ -375,6 +383,7 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
   await t.test("flow 4: click ★ Lead and a worker while keeping pinFocus", async () => {
     resetErrors();
 
+    await expandPinRail(page);
     const activeBuddy = page.locator('[data-testid="pin-rail-active-buddy"]');
     await activeBuddy.waitFor({ timeout: 15000 });
 

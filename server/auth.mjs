@@ -651,6 +651,87 @@ export function hasLocalTokenHeader(req) {
   return typeof header === "string" && sameSecret(header.trim(), getLocalToken());
 }
 
+// ---- Caller kinds (X1c, docs/PLAN_X1_IDENTITY.md) ----
+// Every /__vibesquad request has exactly one caller:
+//   owner   = a paired device (vs_device cookie) or the loopback local token (x-vibesquad-token header / vs_local cookie),
+//   agent   = x-vs-agent-id + x-vs-agent-token, verified against runner memory with GET /verify-agent (never the env, never a
+//             claimed id). The record carries role/lane/team/profile/digest/digestFor/status/overlord; the token stays on the
+//             caller as a non-enumerable field (so the VS server can forward the call as that agent) and is never serialised.
+//   unknown = neither (read-only). An empty id is never the owner.
+// A request that names an agent is never the owner, whatever else it carries: a wrong/missing token is a refusal
+// ({ kind: "denied", status: 403 }); a runner that cannot answer is a refusal too (503), never a fallback to owner.
+export const AGENT_ID_HEADER = "x-vs-agent-id";
+export const AGENT_TOKEN_HEADER = "x-vs-agent-token";
+const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const CALLER_PROMISE = Symbol("vibesquad.caller.promise");
+const CALLER_VALUE = Symbol("vibesquad.caller");
+
+const headerValue = (req, name) => {
+  const v = req.headers?.[name];
+  return String(Array.isArray(v) ? v[0] : v ?? "").trim();
+};
+
+/** True when the request names an agent (a non-empty x-vs-agent-id). Such a request is never the owner. */
+export const hasAgentHeaders = (req) => headerValue(req, AGENT_ID_HEADER) !== "";
+
+/** Owner proof: a paired device cookie, or the loopback local token (header or vs_local cookie). Never for an agent request. */
+export function ownerProof(req) {
+  if (hasAgentHeaders(req)) return false;
+  return Boolean(authenticate(req)) || isLocalOwner(req);
+}
+
+async function defaultVerifyAgent(caller) {
+  const { sharedRunnerBackend } = await import("./backend/index.mjs"); // lazy: auth.mjs stays light for the pair/TLS callers
+  return sharedRunnerBackend().verifyAgent(caller);
+}
+
+const denied = (status, error) => ({ kind: "denied", status, error });
+
+async function resolveCaller(req, verifyAgent) {
+  const id = headerValue(req, AGENT_ID_HEADER);
+  if (!id) return ownerProof(req) ? { kind: "owner" } : { kind: "unknown" };
+  const token = headerValue(req, AGENT_TOKEN_HEADER);
+  const bad = "agent token invalid (x-vs-agent-id does not match x-vs-agent-token, or the agent is gone/retired)";
+  if (!AGENT_ID_RE.test(id) || !token) return denied(403, bad);
+  let who = null;
+  try {
+    who = await verifyAgent({ id, token });
+  } catch (e) {
+    if (e?.status === 403) return denied(403, bad);
+    return denied(503, `could not verify the agent caller: ${e?.message ?? e}`);
+  }
+  if (!who || typeof who !== "object" || who.id !== id) return denied(403, bad);
+  const caller = { kind: "agent", ...who, id };
+  Object.defineProperty(caller, "token", { value: token, enumerable: false });
+  return caller;
+}
+
+/**
+ * The caller of `req`, resolved once per request (later calls return the same record). `verifyAgent({ id, token })` is the
+ * runner lookup (RunnerBackend.verifyAgent: GET /verify-agent as that agent; throws a 403 RunnerHttpError on mismatch).
+ */
+export function callerFromRequest(req, { verifyAgent = defaultVerifyAgent } = {}) {
+  if (req[CALLER_PROMISE]) return req[CALLER_PROMISE];
+  const p = resolveCaller(req, verifyAgent).then((c) => {
+    req[CALLER_VALUE] = c;
+    return c;
+  });
+  req[CALLER_PROMISE] = p;
+  return p;
+}
+
+/** The already-resolved caller of `req` (set by callerFromRequest / the middleware), or null before resolution. */
+export const callerOf = (req) => req?.[CALLER_VALUE] ?? null;
+
+/** Synchronous resolution for a request without agent headers (owner | unknown); cached like callerFromRequest. */
+export function resolveNonAgentCaller(req) {
+  if (req[CALLER_VALUE]) return req[CALLER_VALUE];
+  const c = ownerProof(req) ? { kind: "owner" } : { kind: "unknown" };
+  req[CALLER_VALUE] = c;
+  req[CALLER_PROMISE] = Promise.resolve(c);
+  return c;
+}
+
 // Single-use login nonces: the URL a launcher puts on a command line never carries the master token.
 const LOGIN_NONCE_TTL_MS = 60_000;
 const loginNonces = new Map(); // nonce -> expiresAt
@@ -987,7 +1068,15 @@ export function handleEnter(req, res) {
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
   const safe = href.replace(/&/g, "&amp;");
   if (req.method === "HEAD") return res.end();
-  res.end(`<!doctype html><html><head><meta charset="utf-8"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}"></head><body><a href="${safe}">Continue</a><script>location.replace(${JSON.stringify(href).replace(/</g, "\\u003c")})</script></body></html>`);
+  // Styled on purpose: the old bare page was a white screen with one "Continue" link whenever the automatic hop did not fire.
+  // If this page is still showing after 2.5s the script prints what it can see, so a screenshot of it is a trace.
+  const target = JSON.stringify(href).replace(/</g, "\u003c");
+  res.end(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>VibeSquad</title><meta http-equiv="refresh" content="0;url=${safe}">
+<style>body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#070710;color:#eef2ff;font-family:"JetBrains Mono",Consolas,monospace}
+.c{max-width:480px;margin:16px;padding:22px;background:#111326;border:1px solid #ff2a85}p{margin:0 0 10px;color:#828ba8}a{color:#ff2a85}#d{white-space:pre-wrap;font-size:12px;color:#828ba8}</style></head>
+<body><div class="c"><p>Opening VibeSquad…</p><p><a id="go" href="${safe}">Continue</a></p><div id="d"></div></div>
+<script>try{location.replace(${target})}catch(e){document.getElementById("d").textContent="redirect threw: "+e}
+setTimeout(function(){document.getElementById("d").textContent="Redirect did not leave this page (hop to "+${target}+") | cookies enabled: "+navigator.cookieEnabled+" | UA: "+navigator.userAgent+" | ref: "+document.referrer}, 2500)</script></body></html>`);
 }
 
 export function handleCaCrt(req, res) {
@@ -1021,8 +1110,8 @@ export async function handlePairStart(req, res) {
   // X1 E4b L5: the PC owner (local token) is the stronger principal and can edit devices.json directly, so its mints never
   // need a second tap, even when the same browser also carries a vs_device cookie. Only remote paired devices mint
   // approval-required codes.
-  const localOwner = isLocalOwner(req);
-  const minter = localOwner ? null : authenticate(req);
+  const localOwner = !hasAgentHeaders(req) && isLocalOwner(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
+  const minter = localOwner || hasAgentHeaders(req) ? null : authenticate(req);
   if (!localOwner && !minter) {
     return sendJson(res, 403, { error: "pairing can only be started from the PC (local token) or an already paired device" });
   }
@@ -1170,7 +1259,7 @@ export function redeemPairCode({ rawCode, ip = "unknown", name = "Device" }) {
  * GET /pair/status: public (both listeners), cookie-scoped. Tells the waiting page whether its vs_device token is still
  * pending, now approved (in devices.json), or gone (denied / expired / minter revoked). Reveals nothing else.
  */
-const denied = new Set(); // token hashes the minter denied, so the waiting page can say so (bounded; cleared past 64)
+const deniedTokenHashes = new Set(); // token hashes the minter denied, so the waiting page can say so (bounded; cleared past 64)
 export function handlePairStatus(req, res) {
   if (req.method !== "GET") {
     res.statusCode = 405;
@@ -1180,7 +1269,7 @@ export function handlePairStatus(req, res) {
   if (!token) return sendJson(res, 200, { state: "gone" });
   if (pendingForToken(token)) return sendJson(res, 200, { state: "pending" });
   if (authenticate(req)) return sendJson(res, 200, { state: "approved" });
-  return sendJson(res, 200, { state: denied.has(sha256Hex(token)) ? "denied" : "gone" });
+  return sendJson(res, 200, { state: deniedTokenHashes.has(sha256Hex(token)) ? "denied" : "gone" });
 }
 
 /** GET /__vibesquad/pair/pending: tickets waiting on *this* paired device's Approve (the minter only). */
@@ -1219,8 +1308,8 @@ export async function handlePairApprove(req, res, readBody) {
   if (p.mintedBy !== dev.id) return sendJson(res, 403, { error: "only the device that minted this code can decide it" });
   if (body?.approve !== true) {
     pendingDevices.delete(pendingId);
-    if (denied.size > 64) denied.clear();
-    denied.add(p.tokenHash);
+    if (deniedTokenHashes.size > 64) deniedTokenHashes.clear();
+    deniedTokenHashes.add(p.tokenHash);
     await auditPairDecision({ approved: false, pending: p, minter: dev });
     return sendJson(res, 200, { ok: true, approved: false, pending: listPendingMintedBy(dev.id) });
   }
@@ -1300,8 +1389,8 @@ export function handleDevices(req, res) {
   // in the router (isGatedRead), so a token-less local process can't read it.
   const list = loadDevices();
   if (!list) return sendJson(res, 503, { error: "devices.json is unreadable on the PC" }); // fail closed first (X1 M2); says nothing else
+  if (!ownerProof(req)) return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true }); // paired cookie or loopback token, never an agent
   const current = authenticate(req)?.id;
-  if (!current && !isLocalOwner(req)) return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   sendJson(res, 200, {
     devices: list.map((d) => publicDevice(d, current)),

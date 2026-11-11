@@ -19,6 +19,7 @@ import {
   setSessionHostId,
   type RemoteError,
 } from "./remoteSession";
+import { diagStep } from "./diagOverlay";
 import { createTrustClient, nativeTrust, type TrustClient } from "./vsTrust";
 
 const PROBE_MS = 5000;
@@ -126,6 +127,7 @@ export function RemotePairScreen() {
     // a stale session that the next launch drops: the reopen probe checks the PC still recognizes this phone.
     // The host id (E4a) is best effort here: the status route answers unpaired callers, but a plain browser without
     // CORS gets "" and fills it in on a later reconnect.
+    diagStep(`pinned ${hostN}; saving session`);
     saveSession(hostN, undefined, undefined, await fetchHostId(hostN), pinnedFp);
     // Android Back from the PC's UI should land on this form (with Forget), not bounce straight back to the PC.
     try {
@@ -133,6 +135,7 @@ export function RemotePairScreen() {
     } catch {
       /* no sessionStorage */
     }
+    diagStep("leaving for /pair (redeem)");
     // Best effort: persist cookies now, but never hold the navigation more than ~500ms.
     // Shared client only: a second one would overwrite native.onmessage.
     await Promise.race([trust()?.flush().catch(() => {}), new Promise((r) => setTimeout(r, 500))]);

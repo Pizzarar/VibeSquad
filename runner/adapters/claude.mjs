@@ -41,7 +41,12 @@ export function playwrightSpec(home = os.homedir()) {
 }
 
 // promptsDir: <runner home>/prompts (the Runner passes it); the tmpdir fallback only serves adapters built standalone.
-export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts') } = {}) {
+// The CLI has no pre-input handshake (stream-json prints nothing, not even system/init, before its first user message), so
+// "ready" for a prompt-less resume is: spawned and still alive after this settle window. A missing binary, a refused
+// --resume or a crash at boot exits first and rejects it; a CLI that hangs while alive is not detectable without a prompt.
+export const CLAUDE_READY_SETTLE_MS = 1000;
+
+export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts'), readySettleMs = CLAUDE_READY_SETTLE_MS } = {}) {
   const promptFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.md`);
   const mcpFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.mcp.json`);
   return {
@@ -61,7 +66,10 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         const file = mcpFile(id);
         mkdirSync(path.dirname(file), { recursive: true });
         const extra = wantsPlaywright(meta);
-        const servers = { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } };
+        // The per-agent token (X1a) never lands on disk: the file carries the literal `${VS_AGENT_TOKEN}`, which the CLI
+        // expands from its own process env (set by the runner's spawn env) when it starts the sidecar.
+        const serverEnv = { ...spec.env, ...(env?.VS_AGENT_TOKEN ? { VS_AGENT_TOKEN: '${VS_AGENT_TOKEN}' } : {}) };
+        const servers = { [spec.name]: { command: spec.command, args: spec.args, env: serverEnv } };
         if (extra) servers.playwright = playwrightSpec();
         writeFileSync(file, JSON.stringify({ mcpServers: servers }), 'utf8');
         args.push('--strict-mcp-config', '--mcp-config', file);
@@ -126,8 +134,18 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       lineReader(child.stderr, (line) => emit('stderr', { line }));
       child.on('error', (err) => onExit({ code: null, error: String(err.message) }));
       child.on('exit', (code, signal) => onExit({ code, signal }));
+      let settled = false;
+      const ready = new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { settled = true; resolve(); }, readySettleMs);
+        timer.unref?.();
+        const early = (why) => { if (settled) return; settled = true; clearTimeout(timer); reject(new Error(why)); };
+        child.once('exit', (code, signal) => early(`claude exited before it was ready (code ${code ?? signal ?? '?'})`));
+        child.once('error', (err) => early(String(err?.message ?? err)));
+      });
+      ready.catch(() => {}); // only a prompt-less resume waits on it
       return {
         pid: child.pid, // the runner probes this tree for background work before an after-turn park
+        ready, // a prompt-less resume reads `starting` until this settles (see CLAUDE_READY_SETTLE_MS)
         send(text, { images = [] } = {}) {
           // A send into an open, non-interrupted turn merges into it (the CLI emits ONE result for the merged turn), so
           // it must not open another slot. Only a fresh turn (none open) or one after an interrupt/cancel opens its own.

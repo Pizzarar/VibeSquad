@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(vs worktree sweep --apply)",
+      "Bash(vs worktree sweep --apply:*)",
+      "PowerShell(vs worktree sweep --apply)",
+      "PowerShell(vs worktree sweep --apply:*)"
+    ]
+  }
+}

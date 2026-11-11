@@ -166,7 +166,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       const ready = (async () => {
         const init = await request('initialize', { protocolVersion: 1, clientCapabilities: {} });
         imageCapable = !!init?.agentCapabilities?.promptCapabilities?.image;
-        const sessionParams = { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }))] : [] };
+        const sessionParams = { cwd, mcpServers: mcp ? [acpMcpServer(mcpServerSpec({ env, path: mcpPath }), env)] : [] };
         const caps = init?.agentCapabilities ?? {};
         let s = null;
         if (resume) {
@@ -278,6 +278,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       }
       return {
         pid: child.pid, // the runner probes this tree for background work before an after-turn park
+        ready, // the session handshake: a prompt-less resume reads `starting` until it resolves
         send(text, { images = [] } = {}) {
           if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
           queue.push({ text, images });
@@ -295,9 +296,12 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
   };
 }
 
-// ACP wants env as a [{name, value}] list.
-function acpMcpServer(spec) {
-  return { name: spec.name, command: spec.command, args: spec.args, env: Object.entries(spec.env).map(([name, value]) => ({ name, value })) };
+// ACP wants env as a [{name, value}] list. The per-agent token (X1a) goes in as a literal: this frame lives in memory and
+// on the child's stdin only (stdin frames are never logged; only unparseable stdout lines emit `raw`, redacted by the runner).
+export function acpMcpServer(spec, env = {}) {
+  const list = Object.entries(spec.env).map(([name, value]) => ({ name, value }));
+  if (env?.VS_AGENT_TOKEN) list.push({ name: 'VS_AGENT_TOKEN', value: String(env.VS_AGENT_TOKEN) });
+  return { name: spec.name, command: spec.command, args: spec.args, env: list };
 }
 
 // Auto-approve unless the lane explicitly asks to deny (meta.permissionMode === 'deny'); a profile's own mode

@@ -34,7 +34,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, READ_ONLY_ERROR } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -55,6 +55,8 @@ import {
   readInboxCards,
   sendInboxCard,
   sortIdeaCard,
+  assertInboxTriageCaller,
+  triageCardIds,
   triageInboxCards,
   writeInboxCards,
 } from "./inbox.mjs";
@@ -80,7 +82,7 @@ import {
   writePushSubscriptions,
 } from "./push.mjs";
 import { removeTeamWorktrees, resolveManagedWorktreeRoot } from "./team-worktrees.mjs";
-import { extractManagedWorktreeRepoName } from "./identity.mjs";
+import { extractManagedWorktreeRepoName, findLaneInRegistry, loadTeamsRegistry } from "./identity.mjs";
 import {
   DEFAULT_PACK_PROFILES,
   DEFAULT_PROFILES,
@@ -295,9 +297,77 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
 }
 
 // Trusted = may read. Owner = may also change things: a paired device, or a loopback caller with the local token.
+// X1c: a request that names an agent (x-vs-agent-id) is never the owner, whatever else it carries (auth.mjs ownerProof).
 const isTrusted = (req) => isLocalBrowserSafe(req) || Boolean(authenticate(req));
-const isOwner = (req) => Boolean(authenticate(req)) || isLocalOwner(req);
+const isOwner = (req) => ownerProof(req);
 const localAccess = (req) => (isOwner(req) ? "owner" : "read-only");
+
+// ---- X1c: what a verified agent may write (docs/PLAN_X1_IDENTITY.md "Server middleware is default-deny") ----
+// Every non-GET/HEAD and every gated read needs the owner, except these routes for a verified agent; each handler then
+// re-checks the agent's role for what it asks (attribution on the logs, lane roles on the brief/handoff/triage routes, the
+// runner's own scope rules on the forwarded runner calls). Everything else is owner-only by construction: no list to maintain.
+export const AGENT_WRITE_ALLOWLIST = Object.freeze([
+  "/__vibesquad/log",
+  "/__vibesquad/vs-log",
+  "/__vibesquad/inbox",
+  "/__vibesquad/inbox/triage",
+  "/__vibesquad/handoff",
+  "/__vibesquad/lead-handoff",
+  "/__vibesquad/lead-handoff/confirm",
+  "/__vibesquad/brainstorm-restart",
+  "/__vibesquad/brainstorm-summary",
+  "/__vibesquad/runner/spawn",
+  /^\/__vibesquad\/runner\/agents\/[^/]+\/(input|cancel|meta|archive|unarchive|resume)$/,
+]);
+export const agentWriteAllowed = (path) => AGENT_WRITE_ALLOWLIST.some((r) => (r instanceof RegExp ? r.test(path) : r === path));
+
+const forbidden = (why) => Object.assign(new Error(why), { status: 403 });
+const sameId = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+/** The verified agent caller of a request, or null for the owner (handlers treat null as today's owner path). */
+const agentCaller = (req) => { const c = callerOf(req); return c?.kind === "agent" ? c : null; };
+
+/**
+ * X1c log attribution for a verified agent (`/log`, `/vs-log`; X1b routes the MCP `report` tool and `vs log` here):
+ * `you` is the owner's. A lead/Buddy keeps today's types; `agent` is always the verified id. A plain worker logs only
+ * `metric`, and `done`/`blocker` with refs forced to itself (noteWorkerDone then only ever closes the author); it never refs
+ * another agent. A digest worker logs `done`/`metric` only, refs forced to the worker it digests (`digestFor`).
+ */
+export function agentLogFields(caller, { type, refs }) {
+  const list = Array.isArray(refs) ? refs.map(String) : [];
+  if (type === "you" || type === LEGACY_USER_TYPE) throw forbidden(`log type "${type}" is the owner's; an agent cannot write it`);
+  if (caller.role === "lead" || caller.role === "brainstorm") return { agent: caller.id, type, refs: list };
+  if (caller.digest) {
+    if (type !== "done" && type !== "metric") throw forbidden(`a digest worker may only log done or metric, not ${type}`);
+    return { agent: caller.id, type, refs: [String(caller.digestFor)] };
+  }
+  if (type === "done" || type === "blocker") return { agent: caller.id, type, refs: [caller.id] };
+  if (type === "metric") return { agent: caller.id, type, refs: list.filter((r) => !isRunnerId(r) || r === caller.id) };
+  throw forbidden(`a worker may only log done, blocker or metric, not ${type}; put it in your final message for your lead`);
+}
+
+/**
+ * X1c lane role check: the agent must be one of `roles` on exactly (team, lane), or the Squad's Overlord for any lane of its
+ * Squad. The lane is resolved through the registry (id / alias / name / code) so an alias cannot name another Squad's lane.
+ */
+function assertAgentOnLane(caller, { teamId, lane }, rootDir, roles, what) {
+  const teams = loadTeamsRegistry(rootDir);
+  const hit = findLaneInRegistry(String(lane ?? ""), teams, String(teamId ?? "")) ?? null;
+  const wantTeam = hit ? hit.team.id : String(teamId ?? "");
+  const wantLane = hit ? hit.lane.id : String(lane ?? "");
+  if (!wantTeam || !sameId(caller.team, wantTeam)) throw forbidden(`${what}: ${caller.id} is not in Squad "${wantTeam || teamId || "?"}"`);
+  if (caller.overlord) return "overlord";
+  if (!roles.includes(caller.role) || !sameId(caller.lane, wantLane)) {
+    throw forbidden(`${what}: only the ${roles.join("/")} of lane "${wantLane}" (or the Squad's Overlord, or the owner) may do this; ${caller.id} is the ${caller.role ?? "worker"} of "${caller.lane ?? "?"}"`);
+  }
+  return "lane";
+}
+
+/** X1c: an agent's `callerId` must be the verified id (missing → filled in); never another agent's. */
+function bindCallerId(caller, body, what) {
+  if (!caller) return body;
+  if (body.callerId != null && body.callerId !== "" && String(body.callerId) !== caller.id) throw forbidden(`${what}: callerId "${body.callerId}" is not the verified caller ${caller.id}`);
+  return { ...body, callerId: caller.id };
+}
 
 // GETs a read-only loopback caller still can't make: they hand out a credential, write a key, or launch provider CLIs.
 export function isGatedRead(pathOrMethod, urlOrPath = "") {
@@ -504,20 +574,23 @@ async function handleLog(req, res) {
       const t = String(text ?? "").trim();
       if (!t) return sendJson(res, 400, { error: "empty text" });
       if (t.length > 240) return sendJson(res, 400, { error: `text is ${t.length} chars, limit 240` });
+      // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
+      const caller = agentCaller(req);
+      const who = caller ? agentLogFields(caller, { type, refs }) : { agent: String(agent), type, refs: Array.isArray(refs) ? refs.map(String) : [] };
       const { entry } = appendVsLogEntry({
         teamId: String(team),
         laneId: String(lane || team),
-        agent: String(agent),
-        type,
+        agent: who.agent,
+        type: who.type,
         text: t,
-        refs: Array.isArray(refs) ? refs.map(String) : [],
+        refs: who.refs,
       });
       return sendJson(res, 200, entry);
     }
     res.statusCode = 405;
     res.end();
   } catch (e) {
-    sendJson(res, 400, { error: String(e) });
+    sendJson(res, e?.status === 403 ? 403 : 400, { error: String(e?.message ?? e) });
   }
 }
 
@@ -766,6 +839,16 @@ async function handleHandoff(req, res, rootDir) {
       return res.end();
     }
     if (body.agentId !== undefined && !AGENT_ID_STRICT.test(String(body.agentId))) return sendJson(res, 400, { error: "bad agentId" });
+    // X1c: the owner, that lane's lead (for itself), or the Squad's Overlord (for the lane's lead) may run the handoff.
+    const caller = agentCaller(req);
+    if (caller) {
+      if (caller.role !== "lead" || !sameId(caller.team, team)) throw forbidden(`handoff: only the lead of ${team}/${lane}, the Squad's Overlord, or the owner may run it; ${caller.id} is the ${caller.role ?? "worker"} of ${caller.team ?? "?"}/${caller.lane ?? "?"}`);
+      if (!caller.overlord) {
+        if (!sameId(caller.lane, lane)) throw forbidden(`handoff: ${caller.id} leads ${caller.lane ?? "?"}, not ${lane}`);
+        if (body.agentId !== undefined && String(body.agentId) !== caller.id) throw forbidden("handoff: a lead hands off itself only");
+        body.agentId = caller.id;
+      }
+    }
     const cli = join(rootDir, "cli", "vs.mjs");
     if (!existsSync(cli)) return sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: false, note: "cli/vs.mjs not found" });
     if (handoffRunning) return sendJson(res, 429, { error: "a handoff is already running; try again when it finishes" });
@@ -794,7 +877,7 @@ async function handleHandoff(req, res, rootDir) {
     if (outcome.error) return sendJson(res, 500, { error: outcome.error });
     sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: true });
   } catch (e) {
-    sendJson(res, 500, { error: String(e) });
+    sendJson(res, e?.status === 403 ? 403 : 500, { error: String(e?.message ?? e) });
   }
 }
 
@@ -813,6 +896,9 @@ async function handleBrainstormSummary(req, res, rootDir) {
       const lane = body.laneId || body.lane || "vibesquad";
       const teamId = String(body.teamId || body.team || "");
       const content = String(body.content ?? "");
+      // X1c: an agent writes only its own lane's brief (as its Buddy or lead), or any lane of its Squad as the Overlord.
+      const caller = agentCaller(req);
+      if (caller) assertAgentOnLane(caller, { teamId, lane }, rootDir, ["brainstorm", "lead"], "brainstorm-summary");
       if (content.length >= 20_000) {
         return sendJson(res, 400, { ok: false, error: `Summary is ${content.length} chars; must be < 20000 chars (~5k tokens)` });
       }
@@ -828,7 +914,7 @@ async function handleBrainstormSummary(req, res, rootDir) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
-    sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -864,20 +950,23 @@ async function handleVsLog(req, res) {
       const type = body.type || "metric";
       const text = String(body.text ?? "").trim();
       if (!text) return sendJson(res, 400, { ok: false, error: "empty text" });
+      // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
+      const caller = agentCaller(req);
+      const who = caller ? agentLogFields(caller, { type, refs: body.refs }) : { agent: body.agent || body.agentId || loadUserSettings().userName, type, refs: body.refs };
       const resEntry = appendVsLogEntry({
         teamId,
         laneId,
-        agent: body.agent || body.agentId || loadUserSettings().userName,
-        type,
+        agent: who.agent,
+        type: who.type,
         text,
-        refs: body.refs,
+        refs: who.refs,
       });
       return sendJson(res, 200, { ok: true, entry: resEntry.entry, path: resEntry.path });
     }
     res.statusCode = 405;
     res.end();
   } catch (e) {
-    sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -887,7 +976,8 @@ async function handleBrainstormRestart(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readCleanBody(req);
+    // X1c: an agent's callerId is the verified id (a lead's own record then decides, as before); the owner keeps today's path.
+    const body = bindCallerId(agentCaller(req), await readCleanBody(req), "buddy restart");
     if (body?.agentId != null && body.agentId !== "" && !AGENT_ID_STRICT.test(String(body.agentId))) {
       return sendJson(res, 400, { ok: false, error: "bad agentId" });
     }
@@ -914,7 +1004,14 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
     return res.end();
   }
   try {
-    const body = await readCleanBody(req);
+    // X1c: an agent's callerId is the verified id (performLeadHandoffHttp then re-checks self/Buddy/Overlord from its record);
+    // a takeover is confirmed by the successor itself. The owner keeps today's path.
+    const caller = agentCaller(req);
+    const body = bindCallerId(caller, await readCleanBody(req), "lead-handoff");
+    if (caller && (actionOverride === "confirm" || body.action === "confirm" || body.confirmSuccessorId)) {
+      const succ = String(body.confirmSuccessorId || body.successorId || body.agentId || "");
+      if (succ !== caller.id) throw forbidden(`lead-handoff: only the successor (${succ || "?"}) or the owner confirms its takeover, not ${caller.id}`);
+    }
     const result = await performLeadHandoffHttp(
       actionOverride ? { ...body, action: actionOverride } : { httpWaitMs: 2000, ...body },
       rootDir,
@@ -959,10 +1056,16 @@ async function handleInboxTriage(req, res, rootDir) {
   }
   try {
     const body = await readCleanBody(req);
+    // X1c: an agent triages only as a lead/Buddy of the cards' Squad; delete is the owner's.
+    const caller = agentCaller(req);
+    if (caller) {
+      if (String(body.action || "").trim() === "delete") throw forbidden("inbox delete is owner-only; archive it instead");
+      assertInboxTriageCaller(caller, triageCardIds(body));
+    }
     const result = triageInboxCards(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 403 ? 403 : e?.status === 404 ? 404 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -1506,15 +1609,15 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
 
 // Connect-style middleware: handles /__vibesquad/* and /api/*, calls next() for everything else.
 // Everything except health, /ca.crt, /pair and /__vibesquad/local-login needs a paired device or a same-origin loopback
-// caller; a loopback caller without the local token is read-only (GET/HEAD, minus isGatedRead).
+// caller. The caller is resolved once per request (auth.mjs callerFromRequest: owner | agent | unknown); every write and
+// every gated read needs the owner, except AGENT_WRITE_ALLOWLIST for a verified agent (default-deny, X1c). A caller with
+// neither proof is read-only (GET/HEAD, minus isGatedRead). opts.backend: the runner backend (tests); default shared.
 export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   const readOnlyCache = createReadOnlyCache(opts.readOnlyCacheMs);
+  const verifyAgent = opts.verifyAgent ?? ((c) => (opts.backend ?? sharedRunnerBackend()).verifyAgent(c));
   refreshRunnerRoster(); // background scan so the first file request already knows the runner worktrees
   return (req, res, next) => {
     const path = (req.url ?? "").split("?")[0];
-    const cachedRead = (run) => readOnlyCache(path, isOwner(req), run);
-    // An owner write (install, toggle) can change what those reads return.
-    if (req.method !== "GET" && req.method !== "HEAD" && isOwner(req)) readOnlyCache.clear();
     if (path === "/api/health" || path === "/__vibesquad/health") return handleHealth(req, res, rootDir);
     if (path === "/ca.crt") return handleCaCrt(req, res);
     if (path === "/pair") return handlePairRedeem(req, res);
@@ -1528,9 +1631,27 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
       return sendJson(res, 401, { error: "unpaired device" });
     }
-    if (isApi && !isOwner(req) && ((req.method !== "GET" && req.method !== "HEAD") || isGatedRead(path, req.url))) {
-      return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
+    // Agent headers need the runner (one GET /verify-agent per request); everything else resolves synchronously as before.
+    if (isApi && hasAgentHeaders(req)) {
+      return callerFromRequest(req, { verifyAgent }).then(
+        (caller) => gated(req, res, next, path, isApi, caller),
+        (e) => sendJson(res, 500, { error: String(e?.message ?? e) }),
+      );
     }
+    return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : { kind: ownerProof(req) ? "owner" : "unknown" });
+  };
+
+  function gated(req, res, next, path, isApi, caller) {
+    const owner = caller.kind === "owner";
+    const write = req.method !== "GET" && req.method !== "HEAD";
+    if (caller.kind === "denied") return sendJson(res, caller.status, { error: caller.error });
+    if (isApi && !owner && (write || isGatedRead(path, req.url))) {
+      if (caller.kind !== "agent") return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
+      if (!write || !agentWriteAllowed(path)) return sendJson(res, 403, { error: `agent ${caller.id} may not ${req.method} ${path} (owner-only route)` });
+    }
+    const cachedRead = (run) => readOnlyCache(path, owner, run);
+    // An owner write (install, toggle) can change what those reads return.
+    if (write && owner) readOnlyCache.clear();
     const bodyLimit = RUNNER_INPUT_RE.test(path) ? MAX_RUNNER_INPUT_BYTES : path === "/__vibesquad/inbox/attachment" ? INBOX_MEDIA_MAX_BYTES : MAX_BODY_BYTES;
     if (Number(req.headers["content-length"] ?? 0) > bodyLimit) return sendJson(res, 413, { error: "payload too large" });
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
@@ -1547,7 +1668,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
-    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson });
+    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, caller, ...(opts.backend ? { backend: opts.backend } : {}) });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
     if (isGitPath(path)) return handleGitApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });

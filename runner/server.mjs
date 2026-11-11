@@ -1,7 +1,12 @@
 // Runner entry point + local API. Loopback HTTP/JSON: any VS process (or curl) can talk to it,
 // it survives VS restarts, and needs no framing code.
 //   node runner/server.mjs [--port 0] [--dir <agent log dir>] [--home <runner home>]
-// Every request needs `Authorization: Bearer <token>`; the token lives in <home>/token (mode 0600).
+// Two caller kinds (PLAN_X1_IDENTITY X1a):
+//   admin: `Authorization: Bearer <token>` (the token lives in <home>/token, mode 0600) and NO `x-vs-agent-id` header: the
+//          VS server, its hook host and scripts/restart-runtime.mjs. Authorised on every route, as always.
+//   agent: `x-vs-agent-id` + `x-vs-agent-token` (the per-agent token the runner minted into that agent's env). Verified
+//          against runner memory (GET /verify-agent tells the VS server who is calling); scoped per route (see agentMay).
+//          A request that carries `x-vs-agent-id` without a matching token is 403 whatever else it carries.
 // Discovery for VS: <home>/runner.json = { port, pid, startedAt }.
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -9,7 +14,7 @@ import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writ
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Runner } from './runner.mjs';
+import { Runner, agentMay, protectedMetaIn, spawnMetaForAgent } from './runner.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
 import { acquireRunnerLock, releaseLock } from './lock.mjs';
@@ -94,9 +99,34 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
     req.on('error', reject);
   });
 
+  // The caller of a request: { kind: 'admin' } or { kind: 'agent', id, role, lane, team, status, ... } (verifyAgent's record),
+  // or a refusal { deny: 401 | 403, error }. Agent headers win over the bearer: a claimed id is never looked up unverified.
+  const resolveCaller = (req) => {
+    const h = (k) => { const v = req.headers[k]; return Array.isArray(v) ? v[0] : v; };
+    const agentId = String(h('x-vs-agent-id') ?? '').trim();
+    if (agentId) {
+      const v = runner.verifyAgent(agentId, String(h('x-vs-agent-token') ?? ''));
+      return v ? { kind: 'agent', ...v } : { deny: 403, error: 'agent token invalid (x-vs-agent-id does not match x-vs-agent-token, or the agent is gone/retired)' };
+    }
+    if (token && !tokenMatches(req.headers.authorization, token)) return { deny: 401, error: 'unauthorized' };
+    return { kind: 'admin' };
+  };
+  const forbid = (res, what) => json(res, 403, { error: what });
+  // Scope check for an agent caller on an existing target (admin passes). 404 for a missing target, 403 when out of scope.
+  const scoped = (res, caller, action, id) => {
+    if (caller.kind !== 'agent') return true;
+    const target = runner.status(id);
+    if (!target) { json(res, 404, { error: 'no such agent' }); return false; }
+    if (agentMay(caller, action, target)) return true;
+    forbid(res, `${caller.id} may not ${action} ${id}`);
+    return false;
+  };
+
   return http.createServer(async (req, res) => {
     try {
-      if (token && !tokenMatches(req.headers.authorization, token)) return json(res, 401, { error: 'unauthorized' });
+      const caller = resolveCaller(req);
+      if (caller.deny) return json(res, caller.deny, { error: caller.error });
+      const isAgent = caller.kind === 'agent';
       const declared = Number(req.headers['content-length'] ?? 0);
       const isInput = req.method === 'POST' && /^\/agents\/[^/]+\/input$/.test(req.url.split('?')[0]);
       if (declared > (isInput ? maxInputBytes : maxBodyBytes)) { res.setHeader('connection', 'close'); return json(res, 413, { error: 'request body too large' }); }
@@ -106,17 +136,27 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         let running = 0;
         let quiet = 0;
         for (const e of runner.live.values()) { if (e.inflight > 0) running += 1; if (e.quiet) quiet += 1; }
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, pid: process.pid, hash });
+        // held: idle agents whose background work (a suite, a build) holds their park; running counts open turns only.
+        const heldAgents = runner.heldIds?.() ?? [];
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, pid: process.pid, hash });
+      }
+      if (req.method === 'GET' && parts[0] === 'verify-agent' && parts.length === 1) {
+        // Who is calling, from runner memory: the VS server forwards an agent's headers here once per request (X1c).
+        if (!isAgent) return json(res, 400, { error: 'agent headers required (x-vs-agent-id + x-vs-agent-token)' });
+        const { kind, ...who } = caller;
+        return json(res, 200, who);
       }
       if (req.method === 'POST' && parts[0] === 'shutdown' && parts.length === 1) {
         // Graceful stop for the detached restart script (scripts/restart-runtime.mjs): Windows has no SIGTERM. It kills every
-        // agent, so it is only served when a token is configured (the 401 above already rejected a missing/wrong one).
+        // agent, so it is only served to the admin bearer (a missing/wrong one was rejected above) when a token is configured.
+        if (isAgent) return forbid(res, 'shutdown is admin only');
         if (!token || !onShutdown) return json(res, 403, { error: 'shutdown not enabled' });
         json(res, 202, { ok: true, pid: process.pid });
         setImmediate(onShutdown);
         return;
       }
       if (req.method === 'GET' && parts[0] === 'events' && parts.length === 1) {
+        if (isAgent) return forbid(res, 'the event stream is admin only');
         // SSE tail of every log append. Cleaned up on client disconnect; nothing buffers per client.
         res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
         res.write(': ok\n\n');
@@ -132,7 +172,13 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[0] !== 'agents') return json(res, 404, { error: 'not found' });
       if (parts.length === 1) {
-        if (req.method === 'POST') { const nid = runner.create(await readBody(req)); return json(res, 201, { id: nid, ...runner.queuePosition(nid) }); } // over a turn cap it queues and answers at once
+        if (req.method === 'POST') {
+          const b = await readBody(req);
+          // An agent spawn gets the caller's team + parent stamped and its role checked (never silently downgraded): see spawnMetaForAgent.
+          if (isAgent) b.meta = spawnMetaForAgent(caller, b.meta ?? {}, { laneHasLiveLead: (team, lane) => runner.laneHasLiveLead(team, lane) });
+          const nid = runner.create(b);
+          return json(res, 201, { id: nid, ...runner.queuePosition(nid) }); // over a turn cap it queues and answers at once
+        }
         if (req.method === 'GET') return json(res, 200, url.searchParams.get('full') === '1' ? await runner.statusAllAsync() : { ids: runner.list() }); // async: yields between slices so a full scan never stalls POST /agents
       }
       const id = parts[1];
@@ -149,30 +195,55 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);
-        const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior: b.activeTurnBehavior, owner: b.owner === true }); // over a turn cap it queues and answers at once
-        return json(res, 202, { ok: true, ...pos });
+        if (!scoped(res, caller, 'input', id)) return;
+        // Agent callers: owner and senderId come from the verified caller, never the body; an interrupt needs cancel rights
+        // on the target (runner.send cancels from input), else it is a steer.
+        const owner = isAgent ? false : b.owner === true;
+        const senderId = isAgent ? caller.id : undefined;
+        let activeTurnBehavior = b.activeTurnBehavior;
+        if (isAgent && activeTurnBehavior === 'interrupt' && !agentMay(caller, 'cancel', runner.status(id))) activeTurnBehavior = 'steer';
+        const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior, owner, senderId }); // over a turn cap it queues and answers at once
+        return json(res, 202, { ok: true, ...pos, ...(senderId ? { senderId } : {}) });
       }
       if (parts[2] === 'resume' && req.method === 'POST') {
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
+        if (!scoped(res, caller, 'resume', id)) return;
         if (!runner.resume(id)) return json(res, 409, { error: 'agent cannot be resumed' });
         return json(res, 202, { ok: true });
       }
+      if (parts[2] === 'unwedge' && req.method === 'POST') {
+        if (isAgent) return forbid(res, 'unwedge is admin only');
+        if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
+        const b = await readBody(req);
+        return json(res, 200, { ok: true, ...runner.unwedge(id, { retry: b.retry === true, reason: typeof b.reason === 'string' ? b.reason.slice(0, 300) : '' }) });
+      }
       if (parts[2] === 'cancel' && req.method === 'POST') {
+        if (!scoped(res, caller, 'cancel', id)) return;
         runner.cancel(id);
         return json(res, 202, { ok: true });
       }
       if (parts[2] === 'meta' && req.method === 'POST') {
-        runner.updateMeta(id, await readBody(req));
+        const patch = await readBody(req);
+        if (isAgent) {
+          const hit = protectedMetaIn(patch);
+          if (hit) return forbid(res, `an agent may not set ${hit.join(', ')} (admin only)`);
+          if (!scoped(res, caller, 'meta', id)) return;
+        }
+        runner.updateMeta(id, patch);
         return json(res, 202, { ok: true });
       }
       if (parts[2] === 'config' && req.method === 'POST') {
-        return json(res, 202, { ok: true, ...runner.setConfig(id, await readBody(req)) });
+        const b = await readBody(req);
+        if (!scoped(res, caller, 'config', id)) return;
+        return json(res, 202, { ok: true, ...runner.setConfig(id, b) });
       }
       if (parts[2] === 'archive' && req.method === 'POST') {
+        if (!scoped(res, caller, 'archive', id)) return;
         runner.archive(id);
         return json(res, 202, { ok: true });
       }
       if (parts[2] === 'unarchive' && req.method === 'POST') {
+        if (!scoped(res, caller, 'unarchive', id)) return;
         runner.unarchive(id);
         return json(res, 202, { ok: true });
       }
@@ -192,6 +263,31 @@ async function holderHealthy(home) {
   } catch {
     return false;
   }
+}
+
+// The Squad's hub lane (its Overlord's lane) from the teams registry, mirroring server/lane-pure.mjs isHubLane without
+// importing server code into the runner: a lane flagged `hub: true`, else the lane whose id is the team id. Reads
+// VIBESQUAD_TEAMS_FILE or <VIBESQUAD_HOME>/teams.json, re-parsed only when the file changed; no file → the default rule.
+export function hubLaneReader(vsHome, env = process.env) {
+  const file = env.VIBESQUAD_TEAMS_FILE || path.join(vsHome, 'teams.json');
+  let stamp = null;
+  let hubs = new Map(); // team id -> hub lane id
+  return (team) => {
+    try {
+      const st = statSync(file);
+      const now = `${st.size}:${st.mtimeMs}`;
+      if (now !== stamp) {
+        const next = new Map();
+        for (const t of JSON.parse(readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))?.teams ?? []) {
+          const flagged = (t?.lanes ?? []).find((l) => l?.hub === true);
+          if (t?.id) next.set(String(t.id), flagged?.id != null ? String(flagged.id) : String(t.id));
+        }
+        hubs = next;
+        stamp = now;
+      }
+    } catch { /* no registry here: default rule */ }
+    return hubs.get(String(team)) ?? String(team);
+  };
 }
 
 export function writeDiscovery(home, { port, token }) {
@@ -221,7 +317,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (err) { console.error('orphan sweep failed', err); }
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
-  const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true });
+  const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }) });
   try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {

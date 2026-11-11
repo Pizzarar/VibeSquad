@@ -5,7 +5,7 @@ import os from "node:os";
 import { join, resolve } from "node:path";
 import { createAgentClient } from "./brainstorm.mjs";
 import { getBackend } from "./backend/index.mjs";
-import { resolveLeadWinner, whoCandidate } from "./identity.mjs";
+import { AUDIT_LANE_FALLBACK_IDS, BUG_LANE_FALLBACK_IDS, findLaneInRegistry, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { isHubLane } from "./lane-pure.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
@@ -457,6 +457,25 @@ export function listInboxCards(filter = {}, rootDir = REPO_ROOT) {
   });
 }
 
+/**
+ * A card parked on a lane nobody has (a typo'd `--lane`, a bad bounce) is invisible: no column, no Buddy, and Send fails
+ * later. Refuse it at the door so the sender sees the error. Returns the CANONICAL lane id (an alias or @code like "bug"
+ * resolves to its lane.id), which is what gets stored. Legacy INBOX_LANES, `_unassigned` and the standing bug/audit
+ * fallback lanes (lane-pure.mjs: the server resolves those without a registry entry) stay valid as typed; with no
+ * registry loaded there is nothing to check against.
+ */
+function assertKnownLane(laneId, teams) {
+  const raw = String(laneId ?? "").trim().replace(/^@+/, "");
+  if (!raw) return "";
+  const hit = findLaneInRegistry(raw, teams);
+  if (hit) return String(hit.lane.id);
+  const lower = raw.toLowerCase();
+  if (lower === "_unassigned" || !teams.length) return raw;
+  if (INBOX_LANES.includes(raw)) return raw;
+  if ([...BUG_LANE_FALLBACK_IDS, ...AUDIT_LANE_FALLBACK_IDS].includes(lower)) return lower;
+  throw new Error(`unknown lane "${raw}": not in the teams registry (cards on an unknown lane never reach a Buddy)`);
+}
+
 export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
@@ -470,10 +489,11 @@ export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
     throw new Error("No idea text provided");
   }
 
-  const explicitLane = typeof body.laneId === "string" && body.laneId.trim() ? body.laneId.trim() : "";
+  const explicitLaneRaw = typeof body.laneId === "string" && body.laneId.trim() ? body.laneId.trim() : "";
   const defaultLane = typeof body.defaultLaneId === "string" && body.defaultLaneId.trim() ? body.defaultLaneId.trim() : "";
   const explicitTeam = typeof body.teamId === "string" && body.teamId.trim() ? body.teamId.trim() : "";
   const source = typeof body.source === "string" && body.source.trim() ? body.source.trim() : "ui";
+  const explicitLane = explicitLaneRaw ? assertKnownLane(explicitLaneRaw, teams) : "";
 
   let added = [];
   const cards = updateInboxCardsSync(baseHome, (working) => {
@@ -529,24 +549,33 @@ function toBulletLines(text) {
     .filter(Boolean);
 }
 
+/** Every card id a triage body names: `[cardId, targetId, sourceId, ...sourceIds]` (merge / bounce / update / archive / delete). */
+export function triageCardIds(body = {}) {
+  const ids = [body.cardId, body.targetId, body.sourceId, ...(Array.isArray(body.sourceIds) ? body.sourceIds : [])];
+  return [...new Set(ids.map((s) => String(s ?? "").trim()).filter(Boolean))];
+}
+
 /**
  * Who may archive/park inbox cards. The owner (no agent id: a human shell) always may; an agent may only if
  * it is a lead or Buddy of the card's Squad (any lane: triage routes cards between lanes). Workers and
- * other Squads get a clear error instead of the HTTP gate's bare 403. Returns normally when allowed.
+ * other Squads get a clear 403-tagged error instead of the HTTP gate's bare 403. Returns normally when allowed.
+ * `caller` is the verified caller (X1c: `{ id, role, team }` from /verify-agent) or the CLI's `{ agentId, role, teamId }`.
  */
 export function assertInboxTriageCaller(caller = {}, cardIds = [], baseHome) {
-  const agentId = String(caller.agentId || "").trim();
+  const agentId = String(caller.id || caller.agentId || "").trim();
   if (!agentId) return;
+  const forbid = (why) => Object.assign(new Error(why), { status: 403 });
   const role = String(caller.role || "worker");
+  const teamId = String(caller.team ?? caller.teamId ?? "");
   if (role !== "lead" && role !== "brainstorm") {
-    throw new Error(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`);
+    throw forbid(`inbox archive/park is for leads and Buddies of the card's Squad; ${agentId} is a ${role}. Put it in your final message for your lead to run.`);
   }
   const cards = readInboxCards(baseHome);
   for (const id of cardIds) {
     const card = cards.find((c) => c.id === id);
-    if (!card) throw new Error(`Card not found: ${id}`);
-    if ((card.teamId || "") !== (caller.teamId || "")) {
-      throw new Error(`card ${id} belongs to Squad "${card.teamId}", not "${caller.teamId}": only that Squad's leads/Buddies (or the owner) may archive or park it`);
+    if (!card) throw Object.assign(new Error(`Card not found: ${id}`), { status: 404 });
+    if ((card.teamId || "") !== teamId) {
+      throw forbid(`card ${id} belongs to Squad "${card.teamId}", not "${teamId}": only that Squad's leads/Buddies (or the owner) may archive or park it`);
     }
   }
 }
@@ -626,8 +655,9 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
 
     if (action === "bounce") {
       const cardId = String(body.cardId || "").trim();
-      const laneId = String(body.laneId || body.lane || "").trim();
-      if (!cardId || !laneId) throw new Error("bounce requires cardId and laneId");
+      const laneRaw = String(body.laneId || body.lane || "").trim();
+      if (!cardId || !laneRaw) throw new Error("bounce requires cardId and laneId");
+      const laneId = assertKnownLane(laneRaw, teams);
       const card = cards.find((c) => c.id === cardId);
       if (!card) throw new Error(`Card not found: ${cardId}`);
 
@@ -659,6 +689,18 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
       // Status is a closed lifecycle set; reject unknown values (e.g. a typo'd "accept") before mutating.
       if (patch.status !== undefined && patch.status !== null && !INBOX_STATUSES.includes(patch.status)) {
         throw new Error(`Unknown inbox status "${patch.status}"`);
+      }
+
+      // Same door as add/bounce: a lane patch must exist and is stored canonical; a real move re-opens delivery.
+      if (patch.laneId !== undefined && patch.laneId !== null && String(patch.laneId).trim()) {
+        const canon = assertKnownLane(patch.laneId, teams);
+        if (card.laneId !== canon) {
+          delete card.deliveredTo;
+          delete card.deliveredLane;
+          delete card.deliveredToTitle;
+          delete card.deliveredAt;
+        }
+        patch.laneId = canon;
       }
 
       const allowed = [

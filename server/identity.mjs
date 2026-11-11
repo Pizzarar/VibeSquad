@@ -123,8 +123,8 @@ export function isRetiredAgent(agentOrLabels) {
 /**
  * Shared predicate: is an agent live for roster / lead resolution / send routing?
  * Non-archived, non-internal, non-retired-role, and not closed-dead. A closed agent is live only when the runner marked it
- * `resumable` (lost, saved session, no exit); a closed agent with no resumable session is retired as before. Runner agents
- * carry `resumable` from toAgent(); Paseo/daemon agents without it are treated as retired when closed (the old behaviour).
+ * `resumable` (lost, saved session, no exit); a closed agent with no resumable session is retired. Every agent is a runner
+ * agent and carries `resumable` from toAgent() (X1c dropped the non-runner clause).
  */
 export function isLiveAgent(agentOrLabels) {
   if (!agentOrLabels || typeof agentOrLabels !== "object") return false;
@@ -579,9 +579,9 @@ export function resolveAgentIdentity(agentOrInput, options = {}) {
     }
   }
 
-  // Step 4: Parent chain (`paseo.parent-agent-id`, depth <= 8)
+  // Step 4: Parent chain (`vs.parent`, the runner's one parent key; depth <= 8)
   const depth = Number(options._depth ?? 0);
-  const parentId = String(labels["paseo.parent-agent-id"] ?? agentOrInput?.parentAgentId ?? "").trim();
+  const parentId = String(labels["vs.parent"] ?? agentOrInput?.parentAgentId ?? "").trim();
   if (parentId && depth < 8) {
     const parentAgent = resolveParentMapLookup(parentId, options);
     if (parentAgent) {

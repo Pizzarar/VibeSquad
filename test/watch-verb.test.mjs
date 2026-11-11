@@ -265,3 +265,54 @@ test("CLI: main() accepts --suite/--restart/--stall (no unknown-option error)", 
   assert.ok(!/unknown option/.test(text), text);
   assert.match(text, /workers may not use the watch verb/);
 });
+
+// X1 F6: `watch cancel` applies the same owner / same-Squad-Overlord rule as `add` (real registry under the test VIBESQUAD_HOME).
+test("F6: cancel is refused unless the caller owns the set or is the same-Squad Overlord", async () => {
+  const ws = await import("../server/watch-sets.mjs");
+  const leadB = setup({ callerRole: "lead", callerId: "rn-lead-b", lane: "other" });
+  try {
+    leadB.ctx.watchSets = ws;
+    const { id } = ws.addWatch({ owner: "rn-lead-b", team: "site", lane: "other", items: [{ kind: "suite" }] });
+    const othId = ws.addWatch({ owner: "rn-oth-lead", team: "oth", lane: "oth-main", items: [{ kind: "suite" }] }).id;
+
+    // Buddy of lane A (site-polish) cancels lead B's set (lane other) -> error, set stays armed.
+    const buddy = { ...leadB, ctx: createContext({ identity: { agentId: "rn-buddy", team: "site", lane: "site-polish", role: "brainstorm" }, teams: TEAMS, withBackend: leadB.ctx.withBackend }) };
+    buddy.ctx.watchSets = ws;
+    await assert.rejects(callTool(buddy.ctx, "watch", { action: "cancel", id }), /only its owner or the same-Squad Overlord may cancel/);
+    assert.equal(ws.listWatches({ owner: "rn-lead-b" })[0].status, "armed");
+
+    // Another lead of the same Squad (non-hub) is refused too; a spoofed owner arg does not help.
+    const leadA = createContext({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" }, teams: TEAMS, withBackend: leadB.ctx.withBackend });
+    leadA.watchSets = ws;
+    await assert.rejects(callTool(leadA, "watch", { action: "cancel", id, owner: "rn-lead-b" }), /only the same-Squad Overlord may set a different owner/);
+    await assert.rejects(callTool(leadA, "watch", { action: "cancel", id }), /only its owner or the same-Squad Overlord may cancel/);
+    assert.equal(ws.listWatches({ owner: "rn-lead-b" })[0].status, "armed");
+
+    // The same-Squad Overlord may NOT cancel another Squad's set.
+    const ov = createContext({ identity: { agentId: "rn-hub-lead", team: "site", lane: "site-hub", role: "lead" }, teams: TEAMS, withBackend: leadB.ctx.withBackend });
+    ov.watchSets = ws;
+    await assert.rejects(callTool(ov, "watch", { action: "cancel", id: othId }), /only its owner or the same-Squad Overlord may cancel/);
+    assert.equal(ws.listWatches({ owner: "rn-oth-lead" })[0].status, "armed");
+
+    // The same-Squad Overlord cancels another lane's set in its Squad -> ok, cancelledBy is the Overlord.
+    assert.deepEqual(await callTool(ov, "watch", { action: "cancel", id }), { ok: true, id });
+    const cancelled = ws.listWatches({ owner: "rn-lead-b" })[0];
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.cancelledBy, "rn-hub-lead");
+
+    // The owner cancels its own set -> ok (and a second cancel is idempotent).
+    const mine = ws.addWatch({ owner: "rn-lead-b", team: "site", lane: "other", items: [{ kind: "restart" }] }).id;
+    assert.deepEqual(await callTool(leadB.ctx, "watch", { action: "cancel", id: mine }), { ok: true, id: mine });
+    assert.deepEqual(await callTool(leadB.ctx, "watch", { action: "cancel", id: mine }), { ok: true, id: mine, already: true });
+    // Unknown ids still answer {ok:false} (no owner to check), never leak another set's existence by a different message.
+    assert.equal((await callTool(leadB.ctx, "watch", { action: "cancel", id: "w-nope" })).ok, false);
+  } finally { leadB.cleanup(); }
+});
+
+test("F6: a worker cannot cancel a watch set", async () => {
+  const t = setup({ callerRole: "worker", callerId: "rn-worker" });
+  try {
+    await assert.rejects(callTool(t.ctx, "watch", { action: "cancel", id: "w-1" }), /workers may not use the watch verb/);
+    assert.equal(t.watchCalls.cancel.length, 0);
+  } finally { t.cleanup(); }
+});

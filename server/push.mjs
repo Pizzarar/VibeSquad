@@ -322,8 +322,11 @@ export async function sendWebPushToSubscription(sub, payloadObj, vapid = getOrCr
   const { body } = encryptWebPushPayload(jsonPayload, sub.keys);
   const { authorization } = buildVapidHeaders(sub.endpoint, vapid);
 
+  // X1 F10: assertPublicHttpsEndpoint() vetted the subscribed URL only. Never follow a redirect from it (the target could be
+  // loopback / LAN / metadata, and the request carries the VAPID Authorization header): a 3xx is a failed send below.
   const res = await fetch(sub.endpoint, {
     method: "POST",
+    redirect: "manual",
     headers: {
       "Content-Type": "application/octet-stream",
       "Content-Encoding": "aes128gcm",

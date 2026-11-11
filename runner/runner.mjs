@@ -1,5 +1,5 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { statSync } from 'node:fs';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
@@ -27,14 +27,134 @@ export function validateCreate({ model, cwd, meta = {} }) {
 }
 
 // Env a child gets: the runner's own env is stale for identity (it carries whichever lead started the runner),
-// so every agent id/team/lane/role is overwritten from its own meta.
-export function agentEnv(id, meta = {}, base = process.env) {
+// so every agent id/team/lane/role is overwritten from its own meta. The per-agent token (X1a) is set from the runner's
+// memory only, and an inherited one (the runner was started from an agent's shell) is always dropped first: a child
+// never carries another agent's token.
+export function agentEnv(id, meta = {}, base = process.env, { token } = {}) {
   const env = { ...base, VS_AGENT_ID: id, PASEO_AGENT_ID: id };
+  delete env.VS_AGENT_TOKEN;
+  if (typeof token === 'string' && token) env.VS_AGENT_TOKEN = token;
   for (const [k, v] of [['VS_TEAM', meta.team], ['VS_LANE', meta.lane], ['VS_ROLE', meta.role], ['VS_ORD', meta.ord], ['VS_PROFILE', meta.profile]]) {
     if (v !== undefined && v !== null && v !== '') env[k] = String(v);
     else delete env[k];
   }
   return env;
+}
+
+// ---- Per-agent identity (PLAN_X1_IDENTITY X1a) ---------------------------------------------------------------------
+// The runner mints one secret per agent id, once per runner process lifetime, held in memory only (never in the JSONL,
+// runner.json, a prompt file or a log line: LogStore.secrets redacts it) and exported into that agent's child env as
+// VS_AGENT_TOKEN. A caller is (id, token): a mismatch is refused and the claimed id is ignored. Same-user memory reads stay
+// the accepted limit (SECURITY.md).
+
+const DIGEST_PROFILE = 'Pre-check - Flash'; // server/hooks/agent-duties.ts DIGEST_PROFILE: a digest is this profile + labels.digestFor
+// Spawning these needs the VS server (admin): a Buddy or a digest is never created by an agent caller.
+const ADMIN_ONLY_PROFILE_RE = /^(brainstorm|pre-check)\b/i;
+// Meta an agent caller may never set, on `meta.*` or `meta.labels.*` (every key server/identity.mjs, lead-handoff.mjs and
+// agent-duties.ts read for privilege: role, lane, team, ord, parent, digest, orphan, retirement markers).
+export const PROTECTED_META_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile'];
+export const PROTECTED_LABEL_KEYS = ['role', 'lane', 'team', 'squad', 'ord', 'profile', 'lead', 'digestFor', 'orphan', 'topic', 'vs.parent', 'paseo.parent-agent-id', 'vs.auto-archived'];
+const isHandoffKey = (k) => k.startsWith('vs.handoff') || k.startsWith('handoff-');
+const isProtectedLabel = (k) => PROTECTED_LABEL_KEYS.includes(k) || isHandoffKey(k);
+// Labels an agent spawn may never pass: ownership, ordinal, digest and handoff markers are stamped by the runner / the VS server.
+const STRIPPED_SPAWN_LABELS = new Set(['ord', 'digestFor', 'vs.auto-archived', 'vs.parent', 'paseo.parent-agent-id', 'lead', 'orphan']);
+
+export function secretEquals(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string' || !a || !b) return false;
+  const x = Buffer.from(a);
+  const y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+// Normalised identity fields of a status record / fold meta: first-class meta wins, labels fill in (runner-backend toAgent folds both).
+export function identityOf(meta = {}) {
+  const labels = meta?.labels ?? {};
+  const pick = (k) => { const v = meta?.[k] ?? labels[k]; return v === undefined || v === null || v === '' ? null : String(v); };
+  const rawRole = String(pick('role') ?? '').trim().toLowerCase();
+  const role = rawRole === 'buddy' ? 'brainstorm' : rawRole;
+  return { role, lane: pick('lane'), team: pick('team'), profile: pick('profile'), labels };
+}
+
+// The protected part of a meta patch (what an agent caller is refused for), or null when the patch touches none of it.
+export function protectedMetaIn(patch = {}) {
+  const hit = [];
+  for (const k of Object.keys(patch ?? {})) if (PROTECTED_META_KEYS.includes(k) || isHandoffKey(k)) hit.push(k);
+  for (const k of Object.keys(patch?.labels ?? {})) if (isProtectedLabel(k)) hit.push(`labels.${k}`);
+  return hit.length ? hit : null;
+}
+
+/**
+ * Whether a verified agent caller may run `action` on `target` (a status record with meta, or null). Pure: the runner
+ * resolves caller and target, this is the rule table of PLAN_X1_IDENTITY "Runner scope for agent callers".
+ *   input: any agent of the caller's Squad.
+ *   cancel: self; own children; lane workers for a lead; any Squad agent for the Overlord; never a lead/Buddy from a worker.
+ *   archive/unarchive/resume/meta: own children; lane workers for a lead; Squad workers for the Overlord. config: also self.
+ */
+export function agentMay(caller, action, target) {
+  if (!caller || !target?.meta) return false;
+  const t = identityOf(target.meta);
+  const sameSquad = !!caller.team && t.team === caller.team;
+  const self = target.id === caller.id;
+  const child = String(t.labels['vs.parent'] ?? '') === caller.id;
+  const laneWorker = sameSquad && t.role === 'worker' && !!caller.lane && t.lane === caller.lane;
+  const squadWorker = sameSquad && t.role === 'worker';
+  const isLead = caller.role === 'lead';
+  switch (action) {
+    case 'input': return sameSquad;
+    case 'cancel':
+      if (self || child) return true;
+      if (caller.overlord && sameSquad) return true;
+      if (isLead && laneWorker) return true;
+      return false;
+    case 'config':
+      if (self) return true;
+      // falls through: otherwise like archive
+    case 'archive': case 'unarchive': case 'resume': case 'meta':
+      if (child) return true;
+      if (caller.overlord && squadWorker) return true;
+      if (isLead && laneWorker) return true;
+      return false;
+    default: return false;
+  }
+}
+
+/**
+ * The meta an agent caller's spawn request actually gets. Throws a 403-tagged error when the requested role is not
+ * allowed (never a silent downgrade, tools.mjs rule): `brainstorm`/Brainstorm/Pre-check profiles need the VS server;
+ * `lead` only for a Buddy on its own lane or the Overlord inside its Squad, and only when that lane has no live lead.
+ * Anything else becomes `worker` in the caller's lane (the Overlord may name another lane of its Squad). Team + parent are
+ * always the caller's. Enforced on both meta.* and meta.labels.* (runner-backend folds them together).
+ */
+export function spawnMetaForAgent(caller, meta = {}, { laneHasLiveLead = () => false } = {}) {
+  const forbid = (m) => { const e = new Error(m); e.status = 403; return e; };
+  const want = identityOf(meta);
+  const labels = { ...(meta.labels ?? {}) };
+  for (const k of Object.keys(labels)) if (STRIPPED_SPAWN_LABELS.has(k) || isHandoffKey(k)) delete labels[k];
+  const out = { ...meta, labels };
+  for (const k of ['ord', 'squad']) delete out[k];
+  if (want.profile && ADMIN_ONLY_PROFILE_RE.test(want.profile)) throw forbid(`an agent may not spawn profile "${want.profile}" (the VS server spawns Buddies and digests)`);
+  if (want.role === 'brainstorm') throw forbid('an agent may not spawn a brainstorm (Buddy)');
+  let role = 'worker';
+  let lane = caller.lane ?? null;
+  if (want.role === 'lead') {
+    const targetLane = want.lane ?? caller.lane ?? null;
+    const asBuddy = caller.role === 'brainstorm' && !!caller.lane && targetLane === caller.lane;
+    const asOverlord = caller.overlord === true && !!targetLane;
+    if (!asBuddy && !asOverlord) throw forbid(`${caller.id} (${caller.role || 'worker'}) may not spawn a lead${targetLane ? ` on lane "${targetLane}"` : ''}: only that lane's Buddy or the Squad's Overlord may`);
+    if (laneHasLiveLead(caller.team, targetLane)) throw forbid(`lane "${targetLane}" already has a live lead`);
+    role = 'lead';
+    lane = targetLane;
+  } else if (want.role && want.role !== 'worker') {
+    throw forbid(`an agent may not spawn role "${want.role}"`);
+  } else if (caller.overlord && want.lane) {
+    lane = want.lane; // the Overlord may place a worker on any lane of its Squad
+  }
+  out.role = role;
+  out.labels.role = role;
+  if (lane) { out.lane = lane; out.labels.lane = lane; } else { delete out.lane; delete out.labels.lane; }
+  if (caller.team) { out.team = caller.team; out.labels.team = caller.team; } else { delete out.team; delete out.labels.team; }
+  out.labels['vs.parent'] = caller.id;
+  return out;
 }
 
 export function defaultAdapters(opts = {}) {
@@ -110,8 +230,13 @@ export function providerFamily(provider) {
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
-  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe() }) {
+  // hubLane: (team) -> the Squad's hub lane id (its Overlord's lane). Default: the lane whose id is the team id, the
+  // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
+  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe(), hubLane = (team) => team }) {
     this.store = new LogStore(dir);
+    this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
+    this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
+    this.hubLane = hubLane;
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
     this.limits = new LimitStore(limitsFile);
     this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
@@ -136,6 +261,7 @@ export class Runner {
     if (!this.adapters[provider]) throw new Error(`unknown provider "${provider}"`);
     validateCreate({ model, cwd, meta });
     const id = `rn-${randomBytes(6).toString('hex')}`; // rn- prefix: the VS router tells runner ids from Paseo uuids without a lookup
+    this.tokenFor(id); // minted before anything is logged: the log store redacts it from this agent's first line on
     this.store.append(id, 'created', { provider, model: model ?? null, cwd, meta: pickMeta(meta), ...(systemPrompt ? { systemPrompt } : {}) }); // kept so a lost resume restores the role prompt
     if (prompt) this.store.append(id, 'input', { text: prompt });
     // Over a cap the agent still exists (its log says queued, N ahead) and starts when its turn comes: never refused.
@@ -150,6 +276,67 @@ export class Runner {
     };
     this._admit(job);
     return id;
+  }
+
+  // The agent's token: minted on first use, then the same for the rest of this runner process (park/resume and every
+  // later turn reuse it, so a running `vs` shell keeps working across turns). Never persisted.
+  tokenFor(id) {
+    let t = this.tokensById.get(id);
+    if (!t) { t = randomBytes(32).toString('hex'); this.tokensById.set(id, t); }
+    return t;
+  }
+
+  // Boot: a token for every agent that may still act (non-exited, non-archived), so agents alive across a runner restart
+  // verify from the first request (their shells pick the token up on their next turn's fresh child; see the plan's migration note).
+  mintBootTokens() {
+    const minted = [];
+    for (const id of this.store.ids()) {
+      let f = null;
+      try { f = this.folds.get(id) ?? this._fold(id); } catch { continue; }
+      if (!f?.created || f.exit || f.archivedAt) continue;
+      if (!this.tokensById.has(id)) minted.push(id);
+      this.tokenFor(id);
+    }
+    return minted;
+  }
+
+  /**
+   * The verified caller for (id, token), or null (→ 403). Constant-time token compare, then the agent's folded status
+   * (never `live`: a parked agent left `live` seconds after its turn and is still that agent). Refused when the agent is
+   * gone (no status, exited, archived), retired (former-* / old-lead / retired role: a former lead keeps its process for a
+   * while but no longer speaks for the lane) or flagged orphan. `digest` is the shape spawnWorkerDigest writes.
+   * `overlord` = a lead on its Squad's hub lane.
+   */
+  verifyAgent(id, token) {
+    if (typeof id !== 'string' || !id) return null;
+    const want = this.tokensById.get(id);
+    if (!want || !secretEquals(token, want)) return null;
+    let s = null;
+    try { s = this.status(id); } catch { return null; }
+    if (!s || s.status === 'exited' || s.exit || s.archivedAt) return null;
+    const meta = s.meta ?? {};
+    if (isRetiredMeta(meta)) return null;
+    const { role, lane, team, profile, labels } = identityOf(meta);
+    const orphan = String(labels.orphan ?? '').trim().toLowerCase();
+    if (orphan === '1' || orphan === 'true') return null; // idea-134: both spellings mark an orphan
+    const digestFor = labels.digestFor ? String(labels.digestFor) : null;
+    const digest = profile === DIGEST_PROFILE && !!digestFor;
+    const overlord = role === 'lead' && !!lane && !!team && this.hubLane(team) === lane;
+    return { id, role, lane, team, profile, digest, digestFor, status: s.status, overlord };
+  }
+
+  // A lead that still counts for the lane: created, not exited, not archived, not retired, role lead, same team + lane.
+  // Same liveness as verifyAgent (a lost-but-resumable lead is still the lane's lead: server/identity.mjs isLiveAgent).
+  laneHasLiveLead(team, lane) {
+    if (!lane) return false;
+    for (const id of this.store.ids()) {
+      let f = null;
+      try { f = this._fold(id); } catch { continue; }
+      if (!f?.created || f.exit || f.archivedAt || isRetiredMeta(f.meta)) continue;
+      const t = identityOf(f.meta);
+      if (t.role === 'lead' && t.lane === lane && (t.team ?? null) === (team ?? null)) return true;
+    }
+    return false;
   }
 
   // Where a request landed: { queued: false } or { queued: true, ahead } (jobs of the same family ahead of it).
@@ -204,7 +391,7 @@ export class Runner {
     };
     try {
       entry.handle = this.adapters[provider].start({
-        id, env: agentEnv(id, meta), model, cwd, meta, systemPrompt, emit, resume, history: () => this._primer(id),
+        id, env: agentEnv(id, meta, process.env, { token: this.tokenFor(id) }), model, cwd, meta, systemPrompt, emit, resume, history: () => this._primer(id),
         onExit: (info) => {
           if (entry.parked) return; // stopped on purpose; the log already says parked
           entry.status = 'exited';
@@ -624,6 +811,7 @@ export class Runner {
     this._foldsWarm = false;
     for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
     this._foldsWarm = true;
+    this.mintBootTokens(); // from the same pass: every agent that may still act verifies from the first request after a restart
     for (const id of this.store.ids()) {
       let plan = null;
       try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
@@ -646,16 +834,69 @@ export class Runner {
     if (this.live.has(id)) return true;
     const spec = this._parkedSpec(id) ?? this._lostSpec(id);
     if (!spec) return false;
-    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { this._resume(id, spec); } });
+    this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { const e = this._resume(id, spec, { promptless: true }); if (e) this._settleResume(id, e); } });
     return true;
   }
 
+  // A resume sends nothing, so no adapter ever reports a turn: the agent would read `starting` forever and, never idle, would
+  // never park (idea-109). Once the adapter is ready (ACP: its session handshake resolved; claude: survived its settle window)
+  // it is idle, as after a turn, and the normal after-turn park takes over. Its `starting` and `idle` carry `resume: true`:
+  // process lifecycle, not a turn, so the server never reads them as a completed turn (no digest, no takeover confirm).
+  // A send that arrived meanwhile owns the status instead: delivered (a turn is open) or queued behind a turn cap (its
+  // `queued` must stay the log's last status, or a runner restart would drop the prompt and the park would kill the agent).
+  _settleResume(id, entry) {
+    Promise.resolve(entry.handle?.ready).then(() => {
+      if (this.live.get(id) !== entry || entry.parked || entry.status !== 'starting' || entry.inflight > 0) return; // shutdown clears live
+      if (this.queue.some((j) => j.id === id)) return; // a queued send: its job delivers into this live process when it runs
+      entry.status = 'idle';
+      entry.lastActive = Date.now();
+      this.store.append(id, 'status', { status: 'idle', resume: true });
+      this._scheduleParkAfterTurn(id, entry);
+      this._pump();
+    }, () => {}); // a failed handshake ends the process: its onExit logs that
+  }
+
+  // A resume stuck in `starting` (its handshake never finished): stops that child. retry: resume it again at once (the log
+  // is left as is). Otherwise log why plus a terminal `lost` status, so every reader (vs who, the server's roster/turn state)
+  // shows it closed+lost (still resumable by a send) instead of "initializing" with a live slot. Anything not stuck (a turn
+  // open, already idle, not live) is left alone.
+  unwedge(id, { retry = false, reason = '' } = {}) {
+    if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
+    const e = this.live.get(id);
+    if (!e || e.status !== 'starting' || e.inflight > 0) return { action: 'not-wedged', status: this.status(id)?.status ?? null };
+    e.parked = true; // onExit / late emits log nothing for this child
+    clearTimeout(e.parkTimer);
+    this._clearArchive(e);
+    this._releaseOverCap(e, e.ownerOverCap ?? 0);
+    this.live.delete(id);
+    try { e.handle?.kill(); } catch { /* already gone */ }
+    if (retry && this.resume(id)) { this._pump(); return { action: 'retried' }; }
+    const message = `resume did not finish starting${reason ? `: ${reason}` : ''}`;
+    this.store.append(id, 'error', { message });
+    this.store.append(id, 'status', { status: 'lost', resume: true, reason: message });
+    this._pump();
+    return { action: 'failed', status: this.status(id)?.status ?? null };
+  }
+
+  // Idle agents a restart would cut background work under: held parks, AND every parkable idle agent whose after-turn probe
+  // has not yet come back clean. Right after a turn ends the park grace + the first probe take seconds with heldSince still
+  // null, and a suite started with run_in_background is already running then. Only a probe that saw nothing clears it.
+  heldIds() {
+    const ids = [];
+    for (const [id, e] of this.live) {
+      if (e.heldSince !== null && e.heldSince !== undefined) ids.push(id);
+      else if (this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0) ids.push(id);
+    }
+    return ids;
+  }
+
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
-  _resume(id, fallbackSpec = null) {
+  // promptless: a bare resume (no send behind it), whose `starting` is tagged `resume: true` (see _settleResume).
+  _resume(id, fallbackSpec = null, { promptless = false } = {}) {
     const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
     if (!this._makeRoom(id)) throw new Error('no live process slot free');
-    this.store.append(id, 'status', { status: 'starting' });
+    this.store.append(id, 'status', { status: 'starting', ...(promptless ? { resume: true } : {}) });
     return this._start(id, spec);
   }
 
@@ -677,9 +918,11 @@ export class Runner {
 
   // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)
   // or 'interrupt' (cancel the active turn first). opts.owner marks a human (UI / `vs send`) turn: it jumps the family
-  // queue and may run over the turn cap (see _fits). The log keeps the image count, never the base64 payload.
+  // queue and may run over the turn cap (see _fits). opts.senderId: the verified agent that sent it (logged on the input
+  // event; the HTTP layer sets it from the caller, never from the body). The log keeps the image count, never the base64 payload.
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
   send(id, text, opts = {}) {
+    const senderId = typeof opts.senderId === 'string' && opts.senderId ? { senderId: opts.senderId } : {};
     let live = this.live.get(id);
     if (live?.configStale && live.inflight === 0 && this._parkableNow(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process (one with background work keeps serving: never killed for a config change)
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
@@ -700,7 +943,7 @@ export class Runner {
 
     // Texts join in order with a blank line, images append, and the owner flag is the OR (an owner line makes the merged job owner).
     if (queued) {
-      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}) });
+      this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
       queued.text = queued.text ? `${queued.text}\n\n${text}` : text;
       queued.needsTurn = true; // a create without a prompt now has one
       queued.images = [...(queued.images ?? []), ...images];
@@ -712,7 +955,7 @@ export class Runner {
       return this.queuePosition(id);
     }
 
-    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}) });
+    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
     const job = {
       id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, text: pending ? `${pending.text}\n\n${text}` : text, images,
       run: () => this._deliverJob(job),

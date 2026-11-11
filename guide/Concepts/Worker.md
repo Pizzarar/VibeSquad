@@ -11,6 +11,8 @@ Rules for a worker:
 
 **VibeSquad:** workers show as cards under their Lead, named after their job.
 
+A worker's report is its only channel to the Lead. To ask something mid-job, it uses `vs send`; if the Lead was handed off meanwhile, the message reaches the new Lead.
+
 In any other agent, a worker is a sub-agent, or a fresh chat given one job and the project's rules file.
 
 Used in [Step 2](../Guide/02-lead-and-workers.md).
