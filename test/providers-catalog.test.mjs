@@ -8,7 +8,7 @@ import {
   buildCatalog, buildUsageReviewPrompt, clearProbeCache, clearUsageCache, DEFAULT_USAGE_REVIEW_PROMPT, getModels, getProviders, getUsage, handleProvidersApi, intervalMs,
   loadRunnerSettings, loadUsageReviewPrompt, LOOP_TURN_THRESHOLD, normalizeRunnerSettings, oneShotReviewRun, parseReviewBullets, probeProviders, probeStats,
   readBootSizes, foldBootSizes, readMergedUnits, readUsageLedger, readUsageLogSignals, readUsageReviews, resetUsageReviewPromptWarnForTest, resolveUsageReviewPromptPath,
-  runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats,
+  runUsageReview, saveRunnerSettings, syncUsageLedger, USAGE_REVIEW_PROMPT_REL_PATH, usageStats, withPoolAgents,
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
@@ -2063,4 +2063,16 @@ test('usa-22: bootSize rollup folds boot-size metrics by role/provider/lane (avg
   await handleProvidersApi({ method: 'GET', url: '/__vibesquad/providers/usage-export?format=md' }, {}, { home, ...probeOpts, readBody: async () => ({}), sendJson: (_r, _c, data) => { md = data.markdown; } });
   assert.match(md, /## Boot size/);
   assert.match(md, /\| worker \| claude \| usage \| 10 \| 550 \| 900 \|/);
+});
+
+test('usa-14: withPoolAgents attributes antigravity-cli claude-*/gpt-* agents to the 3rd-party pool row only', () => {
+  const rows = [
+    { provider: 'antigravity-cli', window: '5h', usedPct: 4 },
+    { provider: 'antigravity-cli/claude-gpt', window: 'weekly', usedPct: 19 },
+  ];
+  const none = withPoolAgents(rows, [{ agentId: 'a', provider: 'antigravity-cli', model: 'gemini-4-argon' }, { agentId: 'b', provider: 'claude', model: 'claude-sonnet-5-5' }]);
+  assert.equal(none[0].poolAgents, undefined, 'Gemini pool row untouched');
+  assert.deepEqual(none[1].poolAgents, { count: 0, agentIds: [], text: '0 VibeSquad agents (used outside VibeSquad)' });
+  const some = withPoolAgents(rows, [{ agentId: 'a', provider: 'antigravity-cli', model: 'claude-sonnet-5-5' }, { agentId: 'c', provider: 'antigravity-cli', model: 'gpt-5' }, { agentId: 'd', provider: 'antigravity-cli', model: 'gemini-4' }]);
+  assert.deepEqual(some[1].poolAgents, { count: 2, agentIds: ['a', 'c'], text: '2 VibeSquad agents' });
 });

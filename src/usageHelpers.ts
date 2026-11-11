@@ -11,7 +11,21 @@ export type LimitRow = {
   at?: string;
   burnPctPerHour: number;
   etaToCap: string | null;
+  poolAgents?: { count: number; agentIds: string[]; text: string };
 };
+
+const PROVIDER_LABEL: Record<string, string> = {
+  claude: "Claude",
+  "antigravity-cli": "Gemini",
+  "antigravity-cli/claude-gpt": "Gemini plan · 3rd-party models (Claude/GPT)",
+};
+export const providerLabel = (p: string): string => PROVIDER_LABEL[p] ?? p;
+
+/** Hover text for a limit card's name; only the Antigravity 3rd-party pool needs one. */
+export function limitTooltip(l: Pick<LimitRow, "provider" | "poolAgents">): string | undefined {
+  if (l.provider !== "antigravity-cli/claude-gpt") return undefined;
+  return `Google Antigravity's built-in 3rd-party model pool (Claude/GPT through your Gemini plan), separate from the Anthropic Claude subscription. Used here by: ${l.poolAgents?.text ?? "0 VibeSquad agents (used outside VibeSquad)"}.`;
+}
 export type Stats = { turns: number; costUsd: number; inputTokens: number; outputTokens: number; avgTokensPerTurn: number };
 export type LaneRow = Stats & {
   lane: string;

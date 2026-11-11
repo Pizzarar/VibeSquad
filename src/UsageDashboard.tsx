@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
@@ -16,14 +16,8 @@ const USAGE_TIMEOUT_MS = 45_000; // a busy runtime can answer slowly; past this 
 const HIGH_REVIEW_ROUNDS = 2;
 const HIGH_FIX_RATE = 0.25;
 
-const PROVIDER_LABEL: Record<string, string> = {
-  claude: "Claude",
-  "antigravity-cli": "Gemini",
-  "antigravity-cli/claude-gpt": "Google plan · Claude/GPT",
-};
 const WINDOW_LABEL: Record<string, string> = { "5h": "5h", weekly: "weekly" };
 
-const providerLabel = (p: string) => PROVIDER_LABEL[p] ?? p;
 const tok = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(Math.round(n)));
 const usd = (n: number) => `$${n >= 100 ? n.toFixed(0) : n.toFixed(2)}`;
 const pct = (n: number) => `${Math.round(n * 100)}%`;
@@ -152,10 +146,11 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   return (
     <div className={`usage-limit usage-${level}`} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
       <div className="usage-limit-head">
-        <span className="usage-limit-name">{providerLabel(l.provider)}</span>
+        <span className="usage-limit-name" title={limitTooltip(l)}>{providerLabel(l.provider)}</span>
         <span className="usage-limit-win">{WINDOW_LABEL[l.window] ?? l.window}</span>
         {estimate && <span className="usage-estimate" title="Local estimate from our own token counts, not a provider-reported number">estimate</span>}
       </div>
+      {l.poolAgents && <div className="usage-limit-pool small muted">{l.poolAgents.text}</div>}
       <div className="usage-limit-pct">{100 - Math.round(used)}% left<small>({Math.round(used)}% used)</small></div>
       <div className="usage-bar" role="progressbar" aria-valuenow={Math.round(used)} aria-valuemin={0} aria-valuemax={100}>
         <div className="usage-bar-fill" style={{ width: `${used}%` }} />

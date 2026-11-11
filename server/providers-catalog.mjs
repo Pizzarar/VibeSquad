@@ -490,6 +490,16 @@ const getOrSet = (m, k, mk) => m.get(k) ?? m.set(k, mk()).get(k);
 // {at, provider, window:"5h"|"weekly", usedPct, resetsAt, source:"provider"|"estimate", agentId}
 const BURN_LOOKBACK_MS = 2 * 3600_000;
 
+const AGY_THIRD_PARTY_POOL = "antigravity-cli/claude-gpt";
+/** Attribute the Antigravity 3rd-party (Claude/GPT) pool to VibeSquad agents: antigravity-cli agents running claude or gpt models. */
+export function withPoolAgents(limits, agents) {
+  return limits.map((l) => {
+    if (l.provider !== AGY_THIRD_PARTY_POOL) return l;
+    const ids = agents.filter((a) => a.provider === "antigravity-cli" && /^(claude|gpt)/i.test(a.model || "")).map((a) => a.agentId);
+    return { ...l, poolAgents: { count: ids.length, agentIds: ids, text: ids.length ? `${ids.length} VibeSquad agent${ids.length === 1 ? "" : "s"}` : "0 VibeSquad agents (used outside VibeSquad)" } };
+  });
+}
+
 /** Latest sample per provider/window + burn rate (%/h over the last 2h of the current window) + ETA-to-cap. Missing file -> []. */
 export function readLimits(home) {
   const dir = home || vibesquadHome();
@@ -2055,7 +2065,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     byLane: by("lane"),
     byDay: byDayFinal,
     rows,
-    limits: readLimits(home),
+    limits: withPoolAgents(readLimits(home), agents),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
       // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)
       const gs = byProfile.filter((p) => p.role === r.role && p.successRate !== null);

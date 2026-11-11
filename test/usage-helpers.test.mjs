@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -339,4 +339,12 @@ test("buildProfiles fold weights workPct by working+idle ms across 3 orphan rows
   const rows = buildProfiles(d);
   assert.equal(rows.length, 1);
   assert.ok(Math.abs(rows[0].workPct - 1 / 3) < 1e-9, "1/3 working, not pairwise-halved 0.25");
+});
+
+test("usa-14: providerLabel names the Antigravity 3rd-party pool; limitTooltip explains it and attributes agents", () => {
+  assert.equal(providerLabel("antigravity-cli/claude-gpt"), "Gemini plan · 3rd-party models (Claude/GPT)");
+  assert.equal(providerLabel("claude"), "Claude");
+  assert.equal(limitTooltip({ provider: "claude" }), undefined);
+  assert.match(limitTooltip({ provider: "antigravity-cli/claude-gpt" }), /built-in 3rd-party model pool.*separate from the Anthropic Claude subscription.*0 VibeSquad agents \(used outside VibeSquad\)/);
+  assert.match(limitTooltip({ provider: "antigravity-cli/claude-gpt", poolAgents: { count: 2, agentIds: [], text: "2 VibeSquad agents" } }), /2 VibeSquad agents/);
 });
