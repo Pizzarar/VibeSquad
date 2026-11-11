@@ -730,3 +730,44 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
     assert.equal(late.res.statusCode, 403, "the revoked minter can't decide anything");
   });
 });
+
+describe("E4b X1 R2 L1: pending, approve and revoke self-gate against agent-header callers (defence in depth, like pair/start and devices)", () => {
+  test("a valid paired cookie plus x-vs-agent-id is refused by each handler itself, and nothing changes", async () => {
+    const phoneToken = pairFromPc("Agent-proof phone");
+    const victim = pairFromPc("Agent-proof victim");
+    const victimId = byName("Agent-proof victim").id;
+    const { data: start } = await mint(phoneToken);
+    const { token } = redeem(start.code, "Agent-proof pending");
+    const { data: p } = await pendingFor(phoneToken);
+    const id = p.pending[0].pendingId;
+    const agent = { "x-vs-agent-id": "rn-deadbeefdeadbeef", "x-vs-agent-token": "nope" };
+
+    let res = fakeRes();
+    auth.handlePairPending(meshReq({ url: "/__vibesquad/pair/pending", token: phoneToken, headers: agent }), res);
+    assert.equal(res.statusCode, 403, res.body);
+    assert.ok(!res.body.includes(id), "the ticket is not listed to an agent caller");
+
+    res = fakeRes();
+    await auth.handlePairApprove(meshReq({ url: "/__vibesquad/pair/approve", method: "POST", token: phoneToken, headers: agent, body: { pendingId: id, approve: true } }), res, bodyOf);
+    assert.equal(res.statusCode, 403, res.body);
+    assert.equal(auth.pendingCountForTest(), 1, "still pending");
+    assert.equal(authAs(token), null);
+
+    res = fakeRes();
+    await auth.handleRevoke(meshReq({ url: "/__vibesquad/devices/revoke", method: "POST", token: phoneToken, headers: agent, body: { id: victimId } }), res, bodyOf);
+    assert.equal(res.statusCode, 403, res.body);
+    assert.ok(authAs(victim), "nothing was revoked");
+
+    // the same calls without the agent header still work for the paired device
+    res = fakeRes();
+    auth.handlePairPending(meshReq({ url: "/__vibesquad/pair/pending", token: phoneToken }), res);
+    assert.equal(res.statusCode, 200);
+    const ok = await decide(phoneToken, id, true);
+    assert.equal(ok.res.statusCode, 200, ok.res.body);
+    assert.ok(authAs(token));
+    res = fakeRes();
+    await auth.handleRevoke(meshReq({ url: "/__vibesquad/devices/revoke", method: "POST", token: phoneToken, body: { id: victimId } }), res, bodyOf);
+    assert.equal(res.statusCode, 200, res.body);
+    assert.equal(authAs(victim), null);
+  });
+});

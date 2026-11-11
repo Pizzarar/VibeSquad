@@ -1278,7 +1278,7 @@ export function handlePairPending(req, res) {
     res.statusCode = 405;
     return res.end();
   }
-  const dev = authenticate(req);
+  const dev = hasAgentHeaders(req) ? null : authenticate(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
   if (!dev) return sendJson(res, 403, { error: "only a paired device sees the approvals it minted" });
   sendJson(res, 200, { pending: listPendingMintedBy(dev.id), ttlMs: PENDING_TTL_MS });
 }
@@ -1293,7 +1293,7 @@ export async function handlePairApprove(req, res, readBody) {
     res.statusCode = 405;
     return res.end();
   }
-  const dev = authenticate(req);
+  const dev = hasAgentHeaders(req) ? null : authenticate(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
   if (!dev) return sendJson(res, 403, { error: "only the paired device that minted the code can approve it" });
   let body;
   try {
@@ -1415,6 +1415,7 @@ export async function handleRevoke(req, res, readBody) {
     res.statusCode = 405;
     return res.end();
   }
+  if (!ownerProof(req)) return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true }); // paired cookie or loopback token, never an agent
   let id;
   try {
     ({ id } = await readBody(req));
