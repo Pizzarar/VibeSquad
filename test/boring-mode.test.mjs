@@ -396,3 +396,8 @@ test("B4: first-launch picker is roomy, shows a selected state, and needs Contin
   assert.match(fr, /title="Setup Checklist"\s+wide/);
   assert.doesNotMatch(fr, /<VibePickerCards onPicked=\{close\}/);
 });
+
+test("B4: picker header grows to fit the 22px title plus subtitle", () => {
+  const fr = readFileSync(resolve(import.meta.dirname, "..", "src", "FirstRunModal.tsx"), "utf8");
+  assert.match(fr, /height: "auto", minHeight: 0, padding: "14px 16px"/);
+});

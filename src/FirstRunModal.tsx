@@ -138,7 +138,7 @@ export function FirstLaunchVibePicker() {
   return (
     <div className="modal-back" onMouseDown={close}>
       <div className="modal wide" role="dialog" aria-modal="true" aria-label="Choose your layout" data-testid="first-run-vibe-modal" style={{ width: "min(860px, 92vw)", maxWidth: "92vw" }} onMouseDown={(e) => e.stopPropagation()}>
-        <div className="modal-head" style={{ flexDirection: "column", alignItems: "flex-start", gap: 4 }}>
+        <div className="modal-head" style={{ flexDirection: "column", alignItems: "flex-start", justifyContent: "center", gap: 4, height: "auto", minHeight: 0, padding: "14px 16px", lineHeight: 1.3 }}>
           <span data-testid="first-run-vibe-title" style={{ fontSize: 22, fontWeight: 700, fontFamily: sans, letterSpacing: "normal", textTransform: "none" }}>Choose your layout</span>
           <span style={{ fontSize: 15, fontWeight: 400, fontFamily: sans, letterSpacing: "normal", textTransform: "none", opacity: 0.85 }}>Pick your workspace style. You can switch anytime in Settings or the sidebar.</span>
         </div>
