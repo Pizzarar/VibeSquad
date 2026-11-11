@@ -26,7 +26,7 @@ import { Avatar, TeamEmblem, providerSpec } from "./pixel";
 // Also the <600px tab/team switcher sheet. Nothing here spawns an agent.
 
 const NEEDS_MAX = 5;
-const PARENT = "paseo.parent-agent-id";
+const PARENT = "vs.parent";
 
 let ac: { members: Member[] | null; list: Member[]; ids: Set<string> } = { members: null, list: [], ids: new Set() };
 
