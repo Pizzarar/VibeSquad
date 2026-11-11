@@ -288,6 +288,7 @@ function parseArgs(argv) {
     "sweep",
     "suite",
     "restart",
+    "keepDevices",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -532,6 +533,7 @@ Usage:
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
   vs pair [--json]   mint a pairing code on the running local server (headless/SSH): prints the link, 6-digit code, CA fingerprint and an ASCII QR
   vs devices list [--json] | vs devices revoke <id|--all>   paired devices in ~/.vibesquad/devices.json; revoke drops the token (lost phone)
+  vs host-key show [--json] | vs host-key rotate [--keep-devices]   E5 relay host key (~/.vibesquad/host-keypair.json): show id + fingerprint; rotate replaces it (relay clients need a new link) and revokes every paired device unless --keep-devices
 
 Types: ${LOG_TYPES.join(", ")} (text 1..${MAX_TEXT} chars)
 
@@ -2158,6 +2160,54 @@ async function commandDevices(flags) {
   throw new Error(DEVICES_USAGE);
 }
 
+// vs host-key — the E5 relay host identity (PLAN_ANDROID_END_STATE.md E5, threat model T11 / §7 item 3).
+// `show` prints only public material (self-certifying host id, fingerprint, public key). `rotate` replaces the keypair
+// atomically; the running server notices within ~10 s, drops every relay session and re-dials under the new id, so every
+// relay-paired client needs a fresh pairing link. A leaked host key may have been used to phish device tokens, so rotate
+// also revokes every paired device (LAN ones included) unless --keep-devices says the tokens are known good.
+const HOST_KEY_USAGE = "usage: vs host-key show [--json] | vs host-key rotate [--keep-devices]";
+
+/** The text `vs host-key show|rotate` prints. Pure, for tests; never includes the private half. */
+export function formatHostKey({ hostId, fingerprint, pub, file, rotated = false, revoked = null }) {
+  const lines = [];
+  if (rotated) lines.push("Host key rotated. Relay clients pinned to the old key will fail their next handshake: share a new pairing link (vs pair).");
+  lines.push(`Host id:        ${hostId}`);
+  lines.push(`Fingerprint:    ${fingerprint}`);
+  lines.push(`Public key:     ${pub}`);
+  lines.push(`File:           ${file}`);
+  if (rotated) lines.push(revoked === null ? "Paired devices kept (--keep-devices)." : `Revoked ${revoked} paired device${revoked === 1 ? "" : "s"}; every device must pair again.`);
+  return lines.join("\n") + "\n";
+}
+
+async function commandHostKey(flags) {
+  const sub = String(flags._.shift() ?? "");
+  if (flags._.length) throw new Error(HOST_KEY_USAGE);
+  const relay = await import("../server/relay-tunnel.mjs");
+  const file = path.join(BASE_DIR, "host-keypair.json");
+  const describe = (key) => ({ hostId: relay.selfCertifyingHostId(key.publicRaw), fingerprint: relay.hostFingerprint(key.publicRaw), pub: key.pubB64, file });
+  if (sub === "show" || sub === "") {
+    if (!fs.existsSync(file)) {
+      if (flags.json) process.stdout.write(JSON.stringify({ hostId: null, file }) + "\n");
+      else process.stdout.write(`No host key yet at ${file}. The server creates one when settings.json has relay.endpoint; vs host-key rotate creates one now.\n`);
+      return 0;
+    }
+    const info = describe(relay.loadOrCreateHostKeypair(file));
+    process.stdout.write(flags.json ? JSON.stringify(info) + "\n" : formatHostKey(info));
+    return 0;
+  }
+  if (sub === "rotate") {
+    const info = describe(relay.rotateHostKeypair(file));
+    let revoked = null;
+    if (!flags.keepDevices) {
+      const auth = await import("../server/auth.mjs");
+      revoked = auth.revokeAllDevices();
+    }
+    process.stdout.write(formatHostKey({ ...info, rotated: true, revoked }));
+    return 0;
+  }
+  throw new Error(HOST_KEY_USAGE);
+}
+
 // ---------------------------------------------------------------------------
 // vs spec / vs task / vs cap — durable lane artifacts (docs/lanes/<lane>/)
 // ---------------------------------------------------------------------------
@@ -2685,6 +2735,7 @@ export function main(argv) {
     if (command === "open") return commandOpen(flags);
     if (command === "pair") return commandPair(flags);
     if (command === "devices") return commandDevices(flags);
+    if (command === "host-key") return commandHostKey(flags);
     const hint = suggestVerb(command);
     const didYouMean = hint ? `, did you mean "${hint}"?` : ".";
     process.stderr.write(`Error: unknown verb "${command}"${didYouMean} Try "vs --help".\n`);

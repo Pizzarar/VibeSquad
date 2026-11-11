@@ -2,7 +2,7 @@
 // recording, untrusted relay. No network. Run: node --test --import ./test/setup/hermetic.mjs test/relay-tunnel.test.mjs
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -10,6 +10,7 @@ import {
   connectRelay as connectRelayStrict,
   newKex,
   RelayAuthError,
+  RelayPendingError,
   RelayRekeyError,
   selfCertifyingHostId as tsSelfId,
   takePairingFragment,
@@ -19,6 +20,7 @@ import {
   acceptHandshake,
   backoffDelay,
   createInProcessDispatcher,
+  createInProcessStreamBridge,
   createRelayHost,
   createSyntheticRequest,
   hostFingerprint,
@@ -27,9 +29,12 @@ import {
   normalizeRelayTarget,
   selfCertifyingHostId,
   transcriptHash,
+  keypairFileStamp,
   loadOrCreateHostKeypair,
+  rotateHostKeypair,
   startClientHandshake,
 } from "../server/relay-tunnel.mjs";
+import { makeRelay } from "./helpers/fake-relay.mjs";
 
 // Tests use free-form host ids; production default is self-certified (X1 M-2). Strict behaviour has its own tests.
 const connectRelay = (o) => connectRelayStrict({ requireSelfCertifiedHostId: false, ...o });
@@ -46,66 +51,6 @@ const until = async (fn, n = 200000) => {
   throw new Error("timed out waiting");
 };
 
-/** In-memory untrusted relay. `Sock` is used as the WebSocket implementation for both host and clients. */
-function makeRelay() {
-  const relay = { frames: [], host: null, clients: new Map(), hostConnects: 0, mutate: null, nextCid: 1 };
-  class Sock {
-    constructor(url) {
-      const q = new URL(url).searchParams;
-      this.role = q.get("role");
-      this.readyState = 0;
-      this.l = {};
-      queueMicrotask(() => {
-        this.readyState = 1;
-        if (this.role === "host") {
-          relay.host = this;
-          relay.hostConnects++;
-        } else {
-          this.cid = `c${relay.nextCid++}`;
-          relay.clients.set(this.cid, this);
-          relay.host?.fire("message", { data: JSON.stringify({ t: "open", cid: this.cid }) });
-        }
-        this.fire("open", {});
-      });
-    }
-    addEventListener(t, fn) {
-      (this.l[t] ||= []).push(fn);
-    }
-    fire(t, ev) {
-      for (const fn of this.l[t] ?? []) fn(ev);
-    }
-    send(data) {
-      let dir = this.role === "host" ? "h2c" : "c2h";
-      let raw = String(data);
-      relay.frames.push({ dir, raw });
-      if (relay.mutate) {
-        raw = relay.mutate(dir, raw, this.cid);
-        if (raw == null) return;
-      }
-      const f = JSON.parse(raw);
-      queueMicrotask(() => {
-        if (dir === "c2h") relay.host?.fire("message", { data: JSON.stringify({ ...f, cid: this.cid }) });
-        else relay.clients.get(f.cid)?.fire("message", { data: JSON.stringify(f.t === "close" ? { t: "close" } : { t: "msg", b: f.b }) });
-        if (dir === "h2c" && f.t === "close") relay.clients.get(f.cid)?.fire("close", {});
-      });
-    }
-    close() {
-      if (this.readyState === 3) return;
-      this.readyState = 3;
-      if (this.role === "host") {
-        if (relay.host === this) relay.host = null;
-        this.fire("close", {});
-      } else {
-        relay.clients.delete(this.cid);
-        relay.host?.fire("message", { data: JSON.stringify({ t: "close", cid: this.cid }) });
-        this.fire("close", {});
-      }
-    }
-  }
-  relay.Sock = Sock;
-  relay.dropHost = () => relay.host?.close();
-  return relay;
-}
 
 function makeHost(relay, over = {}) {
   const calls = { http: [], redeem: [] };
@@ -1164,6 +1109,171 @@ describe("X1 R2 lows", () => {
     for (let i = 0; i < 50; i++) await tick();
     await new Promise((res) => setTimeout(res, 20));
     assert.equal(r.inbox.length, 0, "no http-body frames after the 502");
+    host.stop();
+  });
+});
+
+// ---- E5 wiring hooks that live in the core (unit-and-end-e5-wire): key rotation, the SSE stream bridge, E4b pending ----
+describe("E5 wiring: host key rotation", () => {
+  test("rotateHostKeypair replaces the file atomically with a different key; the stamp changes; the old key is gone", () => {
+    const file = join(tmp, "rot", "host-keypair.json");
+    const before = loadOrCreateHostKeypair(file);
+    const stampBefore = keypairFileStamp(file);
+    const next = rotateHostKeypair(file);
+    assert.notEqual(next.pubB64, before.pubB64, "a fresh key");
+    assert.equal(loadOrCreateHostKeypair(file).pubB64, next.pubB64, "the file now holds the new key");
+    assert.notEqual(keypairFileStamp(file), stampBefore, "a running host can notice the rotation by stat alone");
+    assert.notEqual(selfCertifyingHostId(next.publicRaw), selfCertifyingHostId(before.publicRaw), "new self-certifying host id");
+    const oldPubUrl = before.pubB64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    assert.ok(!readFileSync(file, "utf8").includes(oldPubUrl), "old public key not in the file");
+    if (process.platform !== "win32") assert.equal(statSync(file).mode & 0o777, 0o600);
+    assert.equal(keypairFileStamp(join(tmp, "rot", "missing.json")).endsWith("|missing"), true);
+    assert.deepEqual(readdirSync(join(tmp, "rot")), ["host-keypair.json"], "no leftover temp files next to the key");
+  });
+
+  test("a client pinned to the old key fails the handshake against a host that rotated; the new key works", async () => {
+    const file = join(tmp, "rot2", "host-keypair.json");
+    const oldKey = loadOrCreateHostKeypair(file);
+    const newKey = rotateHostKeypair(file);
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { hostKey: newKey });
+    host.start();
+    await tick();
+    await assert.rejects(connect(relay, oldKey.pubB64), RelayAuthError);
+    const c = await connect(relay, newKey.pubB64);
+    await c.redeem("123456");
+    assert.equal((await c.fetch("/api/x")).status, 200);
+    host.stop();
+  });
+});
+
+describe("E5 wiring: in-process stream bridge (openWs for a server without WebSockets)", () => {
+  /** A request listener with an SSE route, a never-ending route and an error route; records what it saw. */
+  function sseListener(seen) {
+    return (req, res) => {
+      seen.push({ url: req.url, method: req.method, relayDevice: req.relayDevice?.id, local: req.socket.localAddress });
+      if (req.url.startsWith("/api/events")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write("event: a\ndata: 1\n\n");
+        let n = 1;
+        const t = setInterval(() => {
+          n++;
+          res.write(`data: ${n}\n\n`);
+          if (n === 3) {
+            clearInterval(t);
+            res.end();
+          }
+        }, 2);
+        res.on("close", () => {
+          clearInterval(t);
+          seen.push({ closed: req.url });
+        });
+        return;
+      }
+      if (req.url.startsWith("/api/forever")) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write("data: open\n\n");
+        res.on("close", () => seen.push({ closed: req.url }));
+        return;
+      }
+      res.setHeader("set-cookie", "vs_local=leak");
+      res.writeHead(401, { "content-type": "application/json" });
+      res.end('{"error":"unpaired device"}');
+    };
+  }
+
+  test("every chunk the handler writes arrives in order as ws-data; the handler ending closes the stream with 1000", async () => {
+    const seen = [];
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { openWs: createInProcessStreamBridge(sseListener(seen)) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const ws = await c.openWebSocket("/api/events?x=1");
+    const got = [];
+    let closeCode = null;
+    ws.onmessage = (ev) => got.push(ev.data);
+    ws.onclose = (ev) => (closeCode = ev.code);
+    await until(() => closeCode !== null, 20000);
+    assert.deepEqual(got, ["event: a\ndata: 1\n\n", "data: 2\n\n", "data: 3\n\n"]);
+    assert.equal(closeCode, 1000);
+    assert.equal(seen[0].relayDevice, "dev-1", "the stream runs as the relay principal");
+    assert.equal(seen[0].local, "relay", "never a loopback socket");
+    assert.equal(seen[0].url, "/api/events?x=1");
+    host.stop();
+  });
+
+  test("the client closing, or a revoke closing the session, destroys the in-process request so the handler's close listener runs", async () => {
+    const seen = [];
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { openWs: createInProcessStreamBridge(sseListener(seen)) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const ws = await c.openWebSocket("/api/forever");
+    const got = [];
+    ws.onmessage = (ev) => got.push(ev.data);
+    await until(() => got.length === 1);
+    ws.close();
+    await until(() => seen.some((s) => s.closed === "/api/forever"));
+    const ws2 = await c.openWebSocket("/api/forever");
+    let closed2 = null;
+    ws2.onclose = (ev) => (closed2 = ev.code);
+    await until(() => seen.filter((s) => s.url === "/api/forever").length === 2);
+    host.revoke("dev-1");
+    await until(() => seen.filter((s) => s.closed === "/api/forever").length === 2);
+    await until(() => closed2 !== null);
+    host.stop();
+  });
+
+  test("a non-2xx answer closes the stream with 4000+status and never sends its body", async () => {
+    const seen = [];
+    const relay = makeRelay();
+    const { host } = makeHost(relay, { openWs: createInProcessStreamBridge(sseListener(seen)) });
+    host.start();
+    await tick();
+    const c = await paired(relay);
+    const ws = await c.openWebSocket("/api/denied");
+    const got = [];
+    let closeCode = null;
+    ws.onmessage = (ev) => got.push(ev.data);
+    ws.onclose = (ev) => (closeCode = ev.code);
+    await until(() => closeCode !== null);
+    assert.equal(closeCode, 4401);
+    assert.deepEqual(got, []);
+    host.stop();
+  });
+});
+
+describe("E5 wiring: E4b pending redeem inside the channel", () => {
+  test("a device-minted code answers pending without authenticating the session; polling with the pending token costs no attempt; approval then authenticates", async () => {
+    const relay = makeRelay();
+    let approved = false;
+    const { host, calls } = makeHost(relay, {
+      redeem: async ({ code }) => (code === "222222" ? { deviceId: "pend-1", token: "tok-PENDING", pending: true } : null),
+      authenticate: async (t) => (t === "tok-PENDING" ? (approved ? { deviceId: "dev-9" } : { pending: true }) : null),
+      authFailLimit: 2,
+    });
+    host.start();
+    await tick();
+    const c = await connect(relay);
+    const r = await c.redeem("222222", "Work PC");
+    assert.deepEqual(r, { deviceId: "pend-1", token: "tok-PENDING", pending: true });
+    let closedReason = null;
+    c.onclose = (e) => (closedReason = e);
+    await assert.rejects(c.fetch("/api/x")); // not authenticated: a request is a protocol violation, session closed
+    assert.ok(closedReason);
+    const c2 = await connect(relay);
+    for (let i = 0; i < 6; i++) await assert.rejects(c2.authenticate("tok-PENDING"), RelayPendingError);
+    assert.equal(host.status().sessions, 1, "polling never closed the session (per-session cap is 5)");
+    approved = true;
+    assert.deepEqual(await c2.authenticate("tok-PENDING"), { deviceId: "dev-9" });
+    assert.equal((await c2.fetch("/api/after")).status, 200);
+    assert.equal(calls.http.at(-1).deviceId, "dev-9");
+    const c3 = await connect(relay);
+    await assert.rejects(c3.authenticate("tok-WRONG"), /token rejected/);
+    await assert.rejects(c3.authenticate("tok-WRONG"), /token rejected/);
+    await assert.rejects(c3.authenticate("tok-PENDING"), /token rejected/); // host-wide throttle (authFailLimit 2) now applies
     host.stop();
   });
 });

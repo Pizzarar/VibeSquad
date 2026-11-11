@@ -1,7 +1,8 @@
 // E5 host side of the VibeSquad outbound E2EE relay (docs/lanes/android-app/E5_THREAT_MODEL.md).
 // The Home PC dials OUT to a dumb relay; clients (phone / Project PC browser) dial the same relay. The relay only
 // routes opaque frames. Every byte that matters is inside a Noise_NK-style channel pinned to this host's X25519 key.
-// UNWIRED: nothing imports this yet (serve.mjs / auth.mjs wiring is a later unit). All I/O is injected.
+// Wired by server/relay-wiring.mjs (serve.mjs starts it when ~/.vibesquad/settings.json has relay.endpoint; off by
+// default). All I/O is injected: this module never reads devices.json or touches a socket of its own.
 //
 // Relay framing (JSON text frames; b = base64):
 //   host <-> relay : {t:"open",cid} | {t:"msg",cid,b} | {t:"close",cid}   (relay assigns cid per client socket)
@@ -25,7 +26,7 @@ import {
   hkdfSync,
   randomBytes,
 } from "node:crypto";
-import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { homedir } from "node:os";
 import { Readable, Writable } from "node:stream";
 import { dirname, join } from "node:path";
@@ -103,6 +104,37 @@ export function loadOrCreateHostKeypair(file = defaultKeypairPath()) {
     } catch {}
   }
   return read();
+}
+
+/**
+ * `vs host-key rotate` (threat model T11 / §7 item 3): a fresh keypair replaces the file atomically (new key written
+ * exclusively to a temp path, then renamed over the old one), so there is never a moment without a key and a server
+ * that reads mid-rotation sees either the old or the new key, never a partial file. Every client pinned to the old key
+ * fails its next handshake and needs a new pairing link; the caller decides what to do with devices.json (the CLI
+ * revokes every device unless told otherwise, since a leaked host key may have been used to phish tokens).
+ * Returns the new key. Never logs or returns the private half.
+ */
+export function rotateHostKeypair(file = defaultKeypairPath()) {
+  const tmp = `${file}.rotate.${process.pid}.${randomBytes(4).toString("hex")}`;
+  const next = loadOrCreateHostKeypair(tmp); // exclusive create + 0600, same directory
+  try {
+    renameSync(tmp, file); // replaces an existing file on both POSIX and Windows
+  } catch (e) {
+    try {
+      unlinkSync(tmp);
+    } catch {}
+    throw e;
+  }
+  try {
+    chmodSync(file, 0o600);
+  } catch {}
+  return next;
+}
+
+/** Cheap identity of the keypair file (path + mtime + size) so a running host can notice a rotation without reading it. */
+export function keypairFileStamp(file = defaultKeypairPath()) {
+  const st = statSync(file, { throwIfNoEntry: false });
+  return st ? `${file}|${st.mtimeMs}|${st.size}` : `${file}|missing`;
 }
 
 /** Short human-comparable fingerprint of a host public key (base64 or Buffer): first 16 hex of SHA-256, grouped. */
@@ -383,6 +415,99 @@ export function createInProcessDispatcher(requestListener, { timeoutMs = 60_000,
     });
 }
 
+const TEXT_TYPE_RE = /^(text\/|application\/(json|javascript|x-ndjson))/i;
+
+/**
+ * The `openWs` bridge for a server that has no WebSocket endpoint (the app streams over SSE): a relayed `ws-open` on
+ * `path` runs an in-process GET through the same request listener (same relayDevice principal, same auth gates) and
+ * forwards every response chunk as a `ws-data` frame while the handler keeps writing, which is what `/…/events` SSE
+ * routes need (the buffering dispatcher above would hold them until its timeout). A non-2xx answer closes the stream
+ * with code 4000 + status and sends no body; the handler finishing closes it with 1000; the client closing (or a revoke
+ * closing the session) destroys the synthetic request/response so the handler's own close listeners run.
+ * The request starts on the next macrotask, after the host has answered `ws-open-res`, so no chunk overtakes the open.
+ */
+export function createInProcessStreamBridge(requestListener, { maxBodyBytes } = {}) {
+  return ({ path, deviceId, send, close }) =>
+    new Promise((resolve) => {
+      let ended = false;
+      let text = true;
+      const req = createSyntheticRequest({ method: "GET", path, headers: { accept: "text/event-stream, */*" }, deviceId });
+      let total = 0;
+      const limit = maxBodyBytes ?? 32 * 1024 * 1024;
+      const finish = (code) => {
+        if (ended) return;
+        ended = true;
+        try {
+          close(code);
+        } catch {}
+        try {
+          req.destroy();
+        } catch {}
+        try {
+          res.destroy();
+        } catch {}
+      };
+      const res = new Writable({
+        write(chunk, _enc, cb) {
+          if (ended) return cb();
+          const buf = Buffer.from(chunk);
+          total += buf.length;
+          if (total > limit) {
+            finish(1009);
+            return cb();
+          }
+          if (res.statusCode < 200 || res.statusCode >= 300) return cb(); // body of an error answer never reaches the client
+          if (text) send(buf.toString("utf8"), false);
+          else send(buf, true);
+          cb();
+        },
+        final(cb) {
+          finish(res.statusCode >= 200 && res.statusCode < 300 ? 1000 : 4000 + Math.min(res.statusCode, 999));
+          cb();
+        },
+      });
+      const headers = new Map();
+      const noteType = () => {
+        const ct = String(headers.get("content-type") ?? "");
+        text = ct === "" || TEXT_TYPE_RE.test(ct);
+      };
+      Object.assign(res, {
+        statusCode: 200,
+        setHeader(k, v) {
+          headers.set(String(k).toLowerCase(), v);
+          noteType();
+          return res;
+        },
+        getHeader: (k) => headers.get(String(k).toLowerCase()),
+        getHeaders: () => Object.fromEntries(headers),
+        hasHeader: (k) => headers.has(String(k).toLowerCase()),
+        removeHeader: (k) => void headers.delete(String(k).toLowerCase()),
+        flushHeaders() {},
+        writeHead(status, a, b) {
+          res.statusCode = status;
+          for (const [k, v] of Object.entries(typeof a === "object" && a ? a : (b ?? {}))) headers.set(k.toLowerCase(), v);
+          noteType();
+          return res;
+        },
+      });
+      Object.defineProperty(res, "headersSent", { get: () => total > 0 || res.writableEnded || res.writableFinished, enumerable: true });
+      res.on("error", () => finish(1011));
+      const handle = {
+        message() {}, // one-way: the app never sends over its event streams
+        close() {
+          finish(1000);
+        },
+      };
+      resolve(handle);
+      setImmediate(() => {
+        if (ended) return;
+        Promise.resolve()
+          .then(() => requestListener(req, res))
+          .catch(() => finish(1011));
+      });
+    });
+}
+
 // ---- the tunnel -------------------------------------------------------------------------------------------------------
 
 const MAX_WIRE_CHARS = Math.ceil(((MAX_RECORD_BYTES + 8 + TAG_LEN) * 4) / 3) + 512; // raw relay frame, before JSON/base64
@@ -601,6 +726,12 @@ export function createRelayHost(opts) {
       else if (redeemFails >= redeemFailLimit) lockRedeem();
       if (s.dead) return;
       if (!ok) return send(s, { t: "redeem-res", id, ok: false });
+      if (r.pending) {
+        // E4b two-step confirm: a device-minted code yields a token that is not in devices.json until the minting phone
+        // approves it. The code was valid (not a guess), but the session stays UNauthenticated: the client keeps the
+        // token and authenticates once approved (an `auth` with a still-pending token answers pending, see below).
+        return send(s, { t: "redeem-res", id, ok: true, pending: true, deviceId: String(r.deviceId), token: r.token });
+      }
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);
       return send(s, { t: "redeem-res", id, ok: true, deviceId: s.deviceId, token: r.token });
@@ -615,11 +746,17 @@ export function createRelayHost(opts) {
       try {
         if (validToken(m.token)) r = await authenticate(m.token);
       } catch {}
-      if (r?.deviceId) {
+      if (r?.deviceId || r?.pending) {
         const i = authFails.indexOf(stamp);
         if (i >= 0) authFails.splice(i, 1);
       }
       if (s.dead) return;
+      if (r?.pending && !r.deviceId) {
+        // A host-minted token still waiting for the minter's approval (E4b): not a guess, so it costs no attempt; the
+        // session stays unauthenticated and the 30 s auth timer still bounds a polling client.
+        s.redeems--;
+        return send(s, { t: "auth-res", id, ok: false, pending: true });
+      }
       if (!r?.deviceId) return send(s, { t: "auth-res", id, ok: false });
       s.deviceId = String(r.deviceId);
       if (s.authTimer) clearTimeoutFn(s.authTimer);

@@ -335,6 +335,61 @@ export function forgetHost(host: string, local: GetSet | null = browserStorage("
   writeSession(local, { v: 3, activeHostId: active.hostId, hosts });
 }
 
+// ---- E5 relay pin store (docs/lanes/android-app/E5_THREAT_MODEL.md §7 "Pin-store rule") ----
+// The pin (host id -> host X25519 public key) is the trust anchor of the E2EE relay. It arrives out of band in a pairing
+// link and is stored once; a later link can never replace it. remoteRelayTransport.ts connects with the STORED key for
+// that exact host id, so a token is never sent to a host whose key differs from the one it was issued under.
+
+/** A pairing link named a host this device already knows under a different key. Shown to the user; never a silent re-pair. */
+export class RelayPinMismatchError extends Error {
+  constructor(hostId: string) {
+    super(`this device already trusts a different key for host ${hostId}; the link was ignored. Forget the host first if the PC really changed its key.`);
+    this.name = "RelayPinMismatchError";
+  }
+}
+
+const b64Std = (s: string) => s.trim().replace(/-/g, "+").replace(/_/g, "/").replace(/=+$/, "");
+const b64Pad = (s: string) => s + "=".repeat((4 - (s.length % 4)) % 4); // stored padded, the form the transport consumes
+const b64Len = (s: string): number => safe(() => atob(b64Std(s) + "=".repeat((4 - (b64Std(s).length % 4)) % 4)).length, 0);
+/** Two base64 / base64url encodings of the same 32 bytes compare equal. */
+export const sameRelayKey = (a: string, b: string): boolean => b64Std(a) === b64Std(b);
+
+/** The stored relay pin for `hostId`, or null. */
+export function relayPinFor(hostId: unknown, local: Get | null = browserStorage("localStorage")): { endpoint: string; pubKey: string } | null {
+  const id = normalizeHostId(hostId);
+  const s = readSession(local);
+  return (id && s?.hosts.find((h) => h.hostId === id)?.relay) || null;
+}
+
+/**
+ * Pin-store rule 1: a link may ADD a relay host, or refresh the relay endpoint of a host whose stored key is the same,
+ * but it never changes the key of a host that already has one (RelayPinMismatchError). The relay URL is not a trust
+ * anchor, so updating it is harmless; the key is, so it is write-once per host id. Run acceptPairingFragment
+ * (remoteRelayTransport.ts) on the link first: with self-certifying ids a crafted link can only name a NEW host.
+ */
+export function saveRelayPin(hostId: unknown, relay: { endpoint: string; pubKey: string }, local: GetSet | null = browserStorage("localStorage"), now = new Date(), label = ""): void {
+  if (!local) throw new Error("remote: this browser has no localStorage");
+  const id = normalizeHostId(hostId);
+  if (!id) throw new Error("remote: not a valid host id");
+  const endpoint = typeof relay?.endpoint === "string" ? relay.endpoint.trim() : "";
+  if (!/^wss:\/\//i.test(endpoint)) throw new Error("remote: relay endpoint must be wss://");
+  const pubKey = typeof relay?.pubKey === "string" ? b64Pad(b64Std(relay.pubKey)) : "";
+  if (b64Len(pubKey) !== 32) throw new Error("remote: not a valid host key");
+  const prev = readSession(local);
+  const hosts = prev?.hosts.slice() ?? [];
+  const i = hosts.findIndex((h) => h.hostId === id);
+  const pin = { endpoint, pubKey };
+  if (i >= 0) {
+    const cur = hosts[i].relay;
+    if (cur && !sameRelayKey(cur.pubKey, pubKey)) throw new RelayPinMismatchError(id);
+    hosts[i] = { ...hosts[i], relay: cur ? { ...cur, endpoint } : pin, savedAt: now.toISOString() };
+    writeSession(local, { v: 3, activeHostId: prev?.activeHostId || id, hosts });
+    return;
+  }
+  const entry: StoredRemoteHost = { hostId: id, label: (label || "").trim().slice(0, 60) || safe(() => new URL(endpoint).host, endpoint), relay: pin, savedAt: now.toISOString() };
+  writeSession(local, { v: 3, activeHostId: id, hosts: [entry, ...hosts] });
+}
+
 /** Forget every pairing on this device (the server still lists the device until it is revoked on the PC). */
 export function clearSession(local: GetSet | null = browserStorage("localStorage")): void {
   safe(() => local?.removeItem(REMOTE_SESSION_KEY), undefined);
