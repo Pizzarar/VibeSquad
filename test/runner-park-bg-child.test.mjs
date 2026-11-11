@@ -4,7 +4,7 @@
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, parkHoldMaxFromEnv, parkHoldPollFromEnv } from '../runner/runner.mjs';
@@ -339,12 +339,15 @@ test('real process: a live shell under the agent holds the park; it parks after 
   const kills = [];
   let em;
   let child;
+  // The shell lives until this file exists, not for a fixed time: under load the first process probe can take longer than any fixed budget.
+  const release = path.join(tmp(), 'release');
   const adapter = {
     canPark: true,
     start({ emit }) {
       em = emit;
       // root = a node "CLI" that leaves a shell running (cmd.exe on Windows, /bin/sh elsewhere), like a background Bash
-      const script = "require('child_process').spawn('node -e \"setTimeout(()=>{},1500)\" && echo done', { shell: true, stdio: 'ignore' }); setInterval(() => {}, 1000);";
+      const shellCmd = `node -e "const f=process.argv[1],fs=require('fs');const t=setInterval(()=>{if(fs.existsSync(f))clearInterval(t)},50)" "${release}" && echo done`;
+      const script = `require('child_process').spawn(${JSON.stringify(shellCmd)}, { shell: true, stdio: 'ignore' }); setInterval(() => {}, 1000);`;
       child = spawn(process.execPath, ['-e', script], { stdio: 'ignore', windowsHide: true });
       return { pid: child.pid, send() { emit('status', { status: 'running' }); }, cancel() {}, kill() { kills.push(Date.now()); killTree(child); } };
     },
@@ -354,9 +357,10 @@ test('real process: a live shell under the agent holds the park; it parks after 
     const id = runner.create({ provider: 'fake', cwd: os.tmpdir(), prompt: 'x' });
     await tick(400); // let the shell start
     em('session', { sessionId: 's' }); em('turn_done', {}); em('status', { status: 'idle' });
-    await until(() => runner.timeline(id).some((e) => e.type === 'park-held'), 8000);
+    await until(() => runner.timeline(id).some((e) => e.type === 'park-held'), 30000);
     assert.deepEqual(kills, [], 'held, not killed');
-    await until(() => kills.length === 1, 15000);
+    writeFileSync(release, '');
+    await until(() => kills.length === 1, 30000);
     assert.equal(runner.status(id).status, 'parked');
     assert.ok(!runner.timeline(id).some((e) => e.type === 'park-forced'));
   } finally {

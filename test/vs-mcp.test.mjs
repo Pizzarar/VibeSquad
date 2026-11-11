@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, agentEnv } from '../runner/runner.mjs';
@@ -66,9 +66,11 @@ test('toAgent: modeId reflects the effective claude mode', () => {
   assert.equal(toAgent({ id: 'rn-1', provider: 'opencode', meta: {} }).modeId, null);
 });
 
-test('claude adapter: --mcp-config names the vibesquad server and tools are pre-allowed', () => {
+test('claude adapter: --mcp-config names the vibesquad server and tools are pre-allowed', (t) => {
   const spawnImpl = fakeSpawn();
-  const promptsDir = path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-cfg-')), 'prompts');
+  const cfgRoot = mkdtempSync(path.join(os.tmpdir(), 'vs-mcp-cfg-'));
+  t.after(() => rmSync(cfgRoot, { recursive: true, force: true }));
+  const promptsDir = path.join(cfgRoot, 'prompts');
   const adapter = createClaudeAdapter({ spawnImpl, command: process.execPath, promptsDir });
   const env = { VS_AGENT_ID: 'rn-a1', VS_LANE: 'own', SECRET_THING: 'nope' };
   adapter.start({ cwd: process.cwd(), meta: {}, env, emit() {}, onExit() {} });
