@@ -70,7 +70,7 @@ What I learned about this: [Cross-family review](../Concepts/Cross-Family-Review
 
 Every team you create is pinned on its Squad's home screen, as a tile next to the **New idea** card, so you can click straight back into it. Nothing leaves the screen on its own. When a feature is really done, use **Mark complete** on its tile. Press it twice to confirm. The team moves to the **Done** list at the bottom of the page, its Brainstorm and Lead retire, and **Reopen** brings it back.
 
-![The Choose your layout window shown on first launch, with Normal and Psycho cards, over a Squad's home screen](../assets/screenshots/01-first-run.png)
+![A Squad's home screen: pinned teams as tiles (Main Game, UI Lab) next to the New idea card, with the Squad list on the left](../assets/screenshots/01-first-run.png)
 
 ## Done looks like
 

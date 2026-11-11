@@ -10,7 +10,7 @@ The guide is written for VibeSquad, the app where you chat with a Buddy and watc
 
 This is the home screen. Each product is a Squad in the left column, and each feature in it is a team.
 
-![VibeSquad's first-launch Choose your layout window: Normal and Psycho cards and a Continue button, over the Squad home screen](../assets/screenshots/01-first-run.png)
+![VibeSquad home screen: the Squad list on the left, the Open RiffBot bar and the Squad's teams (Main Game, UI Lab) with the New idea card in the middle](../assets/screenshots/01-first-run.png)
 
 > **Aub:** My first projects were a WoW add-on, fixing friends' PCs by having agents read their logs, and some Android apps. I knew basically nothing. Everything I got looked like a patchwork zombie: each feature worked on its own, but the way they worked together sucked. I'd bought into the "make me a game, make no mistakes" meme. What I learned is that it's all about iteration.
 
