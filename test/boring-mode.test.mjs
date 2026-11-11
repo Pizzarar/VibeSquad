@@ -378,3 +378,8 @@ test("shouldShowFirstLaunchVibePicker: fresh installs only, never automation", a
   assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "app.vibe": "fun" }) }), webdriver: false }), false);
   assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "chat.x": 1 }) }), webdriver: false }), true);
 });
+
+test("B4: boring-app height compensates the UI scale zoom so the composer stays in view", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(css, /\.boring-app \{ width: calc\(100vw \/ var\(--vs-ui-scale, 1\)\); height: calc\(100vh \/ var\(--vs-ui-scale, 1\)\)/);
+});

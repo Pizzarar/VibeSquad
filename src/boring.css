@@ -385,3 +385,4 @@ html[data-vibe="boring"] .composer .send,
 html[data-vibe="boring"] .composer button[type="submit"],
 html[data-vibe="boring"] .composer-send,
 html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--accent) !important; background-color: var(--accent) !important; background-image: none !important; border: 1px solid var(--accent) !important; border-image: none !important; color: #ffffff !important; opacity: 1 !important; font-weight: 600 !important; min-height: 40px !important; padding: 0 18px !important; border-radius: 6px !important; }
+html[data-vibe="boring"] .boring-app { width: calc(100vw / var(--vs-ui-scale, 1)); height: calc(100vh / var(--vs-ui-scale, 1)); height: calc(100dvh / var(--vs-ui-scale, 1)); }
