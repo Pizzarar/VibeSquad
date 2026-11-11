@@ -42,7 +42,7 @@ function fakeSpawn() {
 }
 const mkRunner = (dir, spawnImpl) => new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) } });
 
-test('a runner restart makes an idle agent lost; resume() brings it back in place with --resume', async () => {
+test('a runner restart makes an idle agent lost; resume() brings it back in place (parked, idea-122), the next send with --resume', async () => {
   const dir = tmp();
   const s1 = fakeSpawn();
   const r1 = mkRunner(dir, s1);
@@ -55,9 +55,12 @@ test('a runner restart makes an idle agent lost; resume() brings it back in plac
   assert.equal(r2.status(id).status, 'lost');
   assert.equal(r2.resume(id), true);
   await tick();
+  assert.equal(s2.calls.length, 0, 'a prompt-less claude resume starts no process');
+  assert.equal(r2.status(id).status, 'parked', 'back in place: parked until its next send');
+  r2.send(id, 'next');
+  await tick();
   assert.equal(s2.calls.length, 1);
   assert.ok(s2.calls[0].args.includes('--resume') && s2.calls[0].args.includes('sess-1'), s2.calls[0].args.join(' '));
-  assert.notEqual(r2.status(id).status, 'lost', 'back in place (starting until its first turn)');
   assert.deepEqual(r2.list(), [id], 'same id, no new agent');
   assert.ok(r2.timeline(id).some((e) => e.type === 'input' && e.text === 'hello'), 'history kept');
 });
@@ -107,6 +110,7 @@ test('resume() keeps the role prompt of a lost agent (--append-system-prompt-fil
   const s2 = fakeSpawn();
   const r2 = mkRunner(dir, s2);
   assert.equal(r2.resume(id), true);
+  r2.send(id, 'next'); // the parked agent's process starts on its next send
   await tick();
   const args = s2.calls[0].args;
   const i = args.indexOf('--append-system-prompt-file');

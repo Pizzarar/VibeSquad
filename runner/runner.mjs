@@ -219,6 +219,9 @@ export function quietFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_QUIET_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_QUIET_MS;
 }
+// idea-126: what a turn the runner going away cut (a `vs restart` whose idle wait timed out, a crash) is resumed with, so
+// the agent finishes its work instead of resuming to idle. Logged as an `input` tagged `resume: true` (not an owner line).
+export const CONTINUE_PROMPT = '[VibeSquad runtime] Your previous turn was interrupted by a runtime restart before it finished. Continue where you left off: check what was already done before redoing anything.';
 export function providerFamily(provider) {
   const p = PROVIDER_ALIASES[provider] ?? provider;
   if (p === 'claude') return 'claude';
@@ -828,14 +831,54 @@ export class Runner {
     return plans.map((p) => p.id);
   }
 
-  // Brings a parked or lost agent back in place (same id, same log) without sending anything. False if it can't be resumed.
+  // Brings a parked or lost agent back in place (same id, same log), sending nothing but a cut turn's continue. False if it can't be resumed.
   // A resume needs no turn slot, only a live-process slot; it may queue like a send.
+  // A queued job for it (recoverQueued's, a continue, a send) already brings it back: a second resume adds nothing.
+  // A turn the previous runner cut continues (idea-126). Otherwise, for an adapter with lazyResume (claude, idea-122), there is
+  // nothing to start: it is marked parked and the next send resumes the session.
   resume(id) {
-    if (this.live.has(id)) return true;
-    const spec = this._parkedSpec(id) ?? this._lostSpec(id);
+    if (this.live.has(id) || this.queue.some((j) => j.id === id)) return true;
+    const parked = this._parkedSpec(id);
+    const spec = parked ?? this._lostSpec(id);
     if (!spec) return false;
+    if (!parked && this._cutTurn(id, spec.meta)) {
+      // The cut turn is closed first (tagged: never a completed turn on the server): the inputs before it were delivered, so
+      // a runner restart while the continue sits queued replays only what comes after it (recoverQueued's cut).
+      this.store.append(id, 'status', { status: 'lost', resume: true, reason: 'turn cut by a runner restart; continuing' });
+      this.store.append(id, 'input', { text: CONTINUE_PROMPT, resume: true });
+      this._admit(this._continueJob(id, spec, CONTINUE_PROMPT));
+      return true;
+    }
+    if (this.adapters[spec.provider]?.lazyResume) {
+      if (!parked) {
+        this.store.append(id, 'parked', { sessionId: spec.resume, systemPrompt: spec.systemPrompt ?? null });
+        this.store.append(id, 'status', { status: 'parked', resume: true });
+      }
+      return true;
+    }
     this._admit({ id, spec, family: providerFamily(spec.provider), needsTurn: false, run: () => { const e = this._resume(id, spec, { promptless: true }); if (e) this._settleResume(id, e); } });
     return true;
+  }
+
+  // A send job carrying a cut turn's continue. Its entry keeps the job, so an unwedge retry of a continue stuck in its resume
+  // handshake re-delivers the same text (a send coalesced into it included) instead of dropping it.
+  _continueJob(id, spec, text, owner = false) {
+    const job = {
+      id, spec, family: providerFamily(spec.provider), needsTurn: true, kind: 'send', owner, text, images: [],
+      run: () => { this._deliverJob(job); const e = this.live.get(id); if (e) e.continueJob = job; },
+    };
+    return job;
+  }
+
+  // Whether the log says a turn was open when the previous runner went away: its last status is `running`, or an untagged
+  // `starting` (a send's resume had taken the turn slot). Never for an agent that may no longer act (retired, superseded) or
+  // a turn older than queueMaxAgeMs (an old turn must not start again on a whim; same bound as recoverQueued).
+  _cutTurn(id, meta) {
+    let last = null;
+    for (const e of this.store.read(id)) if (e.type === 'status') last = e;
+    if (!last || !(last.status === 'running' || (last.status === 'starting' && last.resume !== true))) return false;
+    if (this.queueMaxAgeMs > 0 && Date.now() - (last.ts ?? 0) > this.queueMaxAgeMs) return false;
+    return !isRetiredMeta(meta) && !this._successorOf(id, meta);
   }
 
   // A resume sends nothing, so no adapter ever reports a turn: the agent would read `starting` forever and, never idle, would
@@ -859,17 +902,20 @@ export class Runner {
   // A resume stuck in `starting` (its handshake never finished): stops that child. retry: resume it again at once (the log
   // is left as is). Otherwise log why plus a terminal `lost` status, so every reader (vs who, the server's roster/turn state)
   // shows it closed+lost (still resumable by a send) instead of "initializing" with a live slot. Anything not stuck (a turn
-  // open, already idle, not live) is left alone.
+  // open, already idle, not live) is left alone, except a continue (idea-126) whose handshake hangs: its turn is open but
+  // never ran, so the retry re-delivers the same job and the failure closes it like any stuck resume.
   unwedge(id, { retry = false, reason = '' } = {}) {
     if (!this.store.exists(id)) throw new Error(`no such agent ${id}`);
     const e = this.live.get(id);
-    if (!e || e.status !== 'starting' || e.inflight > 0) return { action: 'not-wedged', status: this.status(id)?.status ?? null };
+    const cont = e?.continueJob ?? null;
+    if (!e || e.status !== 'starting' || (e.inflight > 0 && !cont)) return { action: 'not-wedged', status: this.status(id)?.status ?? null };
     e.parked = true; // onExit / late emits log nothing for this child
     clearTimeout(e.parkTimer);
     this._clearArchive(e);
     this._releaseOverCap(e, e.ownerOverCap ?? 0);
     this.live.delete(id);
     try { e.handle?.kill(); } catch { /* already gone */ }
+    if (retry && cont) { this._admit(this._continueJob(id, cont.spec, cont.text, cont.owner === true)); this._pump(); return { action: 'retried' }; }
     if (retry && this.resume(id)) { this._pump(); return { action: 'retried' }; }
     const message = `resume did not finish starting${reason ? `: ${reason}` : ''}`;
     this.store.append(id, 'error', { message });

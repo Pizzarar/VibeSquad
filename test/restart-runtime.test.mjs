@@ -88,7 +88,8 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
     for (const id of [cut, idle]) assert.equal((await call(port, "POST", `/agents/${id}/resume`, auth)).status, 202, `resume ${id}`);
     await new Promise((r) => setTimeout(r, 30));
     assert.deepEqual(starts.slice(resumeFrom).map((x) => x.resume).sort(), [`sess-${cut}`, `sess-${idle}`].sort(), "resumed from their saved sessions");
-    assert.equal(await status(cut), "idle", "a prompt-less resume settles to idle once the adapter is up (never `starting` forever: idea-109)");
+    assert.equal(await status(cut), "running", "the cut agent continues its turn (idea-126), never `starting` forever");
+    assert.equal(await status(idle), "idle", "a prompt-less resume settles to idle once the adapter is up (never `starting` forever: idea-109)");
   } finally { await close(srv); }
   // Contrast (the old behaviour this replaces): a plain shutdown() exits every agent for good.
   const r2 = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: adapter } });
