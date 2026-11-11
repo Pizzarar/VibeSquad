@@ -185,17 +185,20 @@ async fn read_chunked<S: AsyncRead + Unpin>(stream: &mut S, pending: &mut Vec<u8
             }
             return Ok(body);
         }
-        if body.len() + size > MAX_PROOF_BODY {
+        // Gemini R1 L1: cap the chunk size before any arithmetic on it. A hex size near usize::MAX would otherwise
+        // overflow `body.len() + size` / `size + 2` (debug panic, release wrap-around past the cap and a slice panic).
+        if size > MAX_PROOF_BODY || body.len().checked_add(size).map_or(true, |t| t > MAX_PROOF_BODY) {
             return Err("response body too large".into());
         }
-        while pending.len() < size + 2 {
+        let framed = size + 2; // size <= MAX_PROOF_BODY here, so this cannot overflow
+        while pending.len() < framed {
             fill(stream, pending).await?;
         }
         body.extend_from_slice(&pending[..size]);
-        if &pending[size..size + 2] != b"\r\n" {
+        if &pending[size..framed] != b"\r\n" {
             return Err("bad chunk terminator".into());
         }
-        pending.drain(..size + 2);
+        pending.drain(..framed);
     }
 }
 
@@ -333,6 +336,48 @@ mod tests {
         let (mut a, b) = tokio::io::duplex(4096);
         drop(b);
         assert!(read_http1_response(&mut a).await.unwrap_err().contains("closed"));
+    }
+
+    /// Gemini R1 L1: a chunk size near usize::MAX must be a plain "too large" error, never an overflow panic
+    /// (debug) or a wrapped-past-the-cap slice panic (release). First reply is the exact crafted one from the review.
+    #[tokio::test]
+    async fn read_chunked_refuses_an_overflowing_chunk_size_without_panicking() {
+        for reply in [
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\nffffffffffffffff\r\nx"[..],
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\nx"[..],
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffffffe\r\nx"[..],
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n10001\r\nx"[..], // 64 KiB + 1: over the cap
+            &b"HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551615\r\n\r\nx"[..],
+        ] {
+            let (mut a, mut b) = tokio::io::duplex(4096);
+            b.write_all(reply).await.unwrap();
+            drop(b);
+            let err = read_http1_response(&mut a).await.unwrap_err();
+            assert!(err.contains("too large"), "{:?}: {}", String::from_utf8_lossy(reply), err);
+        }
+        // A 17-digit hex size does not even parse as usize: still a plain error.
+        let (mut a, mut b) = tokio::io::duplex(4096);
+        b.write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1ffffffffffffffff\r\nx").await.unwrap();
+        drop(b);
+        assert!(read_http1_response(&mut a).await.unwrap_err().contains("bad chunk size"));
+        // Through the proof path such a reply is ProofFailed, not a task panic.
+        let (host, _) = raw_listener(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\nffffffffffffffff\r\nx").await;
+        assert!(matches!(dial_proven(&host, TOKEN).await, Err(ProofError::ProofFailed(m)) if m.contains("did not answer the local-token proof")));
+    }
+
+    /// A listener that writes `reply` verbatim to every connection.
+    async fn raw_listener(reply: &'static [u8]) -> (String, u16) {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = l.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            loop {
+                let (mut s, _) = l.accept().await.unwrap();
+                let mut buf = [0u8; 1024];
+                let _ = s.read(&mut buf).await;
+                let _ = s.write_all(reply).await;
+            }
+        });
+        (format!("127.0.0.1:{}", port), port)
     }
 
     /// A listener that answers the proof route with `answer(nonce, port)` and then echoes a second request,
