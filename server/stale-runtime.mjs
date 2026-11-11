@@ -15,11 +15,17 @@ export function staleFilePath(env = process.env) {
   return join(env.VIBESQUAD_HOME || join(homedir(), ".vibesquad"), "stale.json");
 }
 
-/** Build-time stamp `{commit, repo}` written by `build:desktop` into the runtime; null when absent or malformed. */
+/** Stamp shipped in the installer: commit + time only, never the build machine's checkout path (`repo` is dev-sync only). */
+export function packagedStamp({ commit, builtAt }) {
+  return { commit, builtAt };
+}
+
+/** Build stamp `{commit, builtAt, repo?}`; `repo` exists only for dev-synced runtimes, not the packaged app. Null when absent or malformed. */
 export function readBuildStamp(rootDir) {
   try {
     const s = JSON.parse(readFileSync(join(rootDir, STAMP_FILE), "utf8"));
-    return s && typeof s.commit === "string" && typeof s.repo === "string" ? s : null;
+    if (!s || typeof s.commit !== "string") return null;
+    return typeof s.repo === "string" ? s : { ...s, repo: undefined };
   } catch {
     return null;
   }
@@ -29,7 +35,7 @@ export function readBuildStamp(rootDir) {
 export function computeStale({ rootDir, git = defaultGit, exists = existsSync } = {}) {
   try {
     const stamp = readBuildStamp(rootDir);
-    if (!stamp || !exists(stamp.repo)) return null;
+    if (!stamp?.repo || !exists(stamp.repo)) return null;
     const head = git(stamp.repo, ["rev-parse", "master"]);
     if (!head || head === stamp.commit) return null;
     const behind = Number.parseInt(git(stamp.repo, ["rev-list", "--count", `${stamp.commit}..${head}`]), 10);

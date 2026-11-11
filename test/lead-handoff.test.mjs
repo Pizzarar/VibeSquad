@@ -484,7 +484,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
         lane: "site-polish",
         role: "worker",
         job: "audit-contrast",
-        "paseo.parent-agent-id": oldLead.id,
+        "vs.parent": oldLead.id,
       },
     };
     const closedWorker = {
@@ -498,7 +498,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
         team: "site",
         lane: "site-polish",
         role: "worker",
-        "paseo.parent-agent-id": oldLead.id,
+        "vs.parent": oldLead.id,
       },
     };
     agents.set(oldLead.id, oldLead);
@@ -577,8 +577,8 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     assert.match(succ.prompt, /Reply confirming takeover so the previous lead can be retired\./);
 
     // 3. Open worker re-pointed & notified; closed worker untouched
-    assert.equal(openWorker.labels["paseo.parent-agent-id"], succ.id);
-    assert.equal(closedWorker.labels["paseo.parent-agent-id"], oldLead.id);
+    assert.equal(openWorker.labels["vs.parent"], succ.id);
+    assert.equal(closedWorker.labels["vs.parent"], oldLead.id);
     const workerNotice = messages.find((m) => m.id === openWorker.id);
     assert.ok(workerNotice, "Expected open worker to be notified of new lead");
     assert.match(workerNotice.text, /Report to ★ Sit19 \(succ-ord19\)/i);
@@ -792,7 +792,7 @@ test("HTTP handoff with a real-shaped daemon client re-points the open workers t
       model: "claude-sonnet-5-5",
       cwd: env.dir,
       status: "running",
-      labels: { team: "site", lane: "site-polish", role: "worker", job: id, "paseo.parent-agent-id": oldLead.id },
+      labels: { team: "site", lane: "site-polish", role: "worker", job: id, "vs.parent": oldLead.id },
       ...over,
     });
     const agents = new Map([oldLead, worker("w1"), worker("w2"), worker("w3", { status: "closed" })].map((a) => [a.id, a]));
@@ -801,10 +801,10 @@ test("HTTP handoff with a real-shaped daemon client re-points the open workers t
     assert.ok(client.calls.fetchAgents.length >= 1, "the real list call is used");
     const succId = res?.successor?.id ?? res?.successorId ?? "succ-http";
     for (const id of ["w1", "w2"]) {
-      assert.equal(agents.get(id).labels["paseo.parent-agent-id"], succId, `${id} re-pointed`);
+      assert.equal(agents.get(id).labels["vs.parent"], succId, `${id} re-pointed`);
       assert.ok(client.calls.sendAgentPrompt.some((m) => m.id === id), `${id} told about the new lead`);
     }
-    assert.equal(agents.get("w3").labels["paseo.parent-agent-id"], oldLead.id, "closed worker untouched");
+    assert.equal(agents.get("w3").labels["vs.parent"], oldLead.id, "closed worker untouched");
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;

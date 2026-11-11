@@ -66,7 +66,10 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         const file = mcpFile(id);
         mkdirSync(path.dirname(file), { recursive: true });
         const extra = wantsPlaywright(meta);
-        const servers = { [spec.name]: { command: spec.command, args: spec.args, env: spec.env } };
+        // The per-agent token (X1a) never lands on disk: the file carries the literal `${VS_AGENT_TOKEN}`, which the CLI
+        // expands from its own process env (set by the runner's spawn env) when it starts the sidecar.
+        const serverEnv = { ...spec.env, ...(env?.VS_AGENT_TOKEN ? { VS_AGENT_TOKEN: '${VS_AGENT_TOKEN}' } : {}) };
+        const servers = { [spec.name]: { command: spec.command, args: spec.args, env: serverEnv } };
         if (extra) servers.playwright = playwrightSpec();
         writeFileSync(file, JSON.stringify({ mcpServers: servers }), 'utf8');
         args.push('--strict-mcp-config', '--mcp-config', file);

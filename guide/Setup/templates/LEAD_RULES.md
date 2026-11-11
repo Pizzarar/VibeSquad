@@ -46,6 +46,9 @@ All of `AGENTS.md` still applies to the Lead. These rules only add to it.
    branch/worktree. Before each dispatch, list the block's files and check them against every running
    block. Start with 1-2 parallel workers and add more only when the file check keeps conflicts at zero.
    *Why: conflicts came from overlap, not from parallelism.*
+   **VibeSquad:** after merges, `vs worktree sweep` lists worktrees whose branch is merged into master and clean
+   (dry run). `vs worktree sweep --apply` deletes them. It covers every lane of the repo, not only yours, so
+   run it with `--apply` only when nobody is still using a merged worktree.
 7. **Merge gate.** The Lead merges to `main` through a pull request, never a direct push, when all hold:
    the review required by rule 4 returned PASS with findings resolved or accepted as low; CI on the PR
    is green; the Lead spot-checked at least one claim; the PR embeds no unconfirmed design decision.
@@ -54,6 +57,10 @@ All of `AGENTS.md` still applies to the Lead. These rules only add to it.
    (rulesets) and `gh api repos/{owner}/{repo}/branches/main/protection/required_status_checks` (classic branch
    protection). Either must print a check list; empty output or a 404 means none. With a required check, GitHub
    enforces the gate rather than anyone's attention. With none, open the PR and stop for the owner to merge.
+   **VibeSquad:** also put a `Live-Needs:` line in the merge commit's last trailer block, next to `Co-Authored-By`
+   (a separate paragraph is ignored by git). Values: `none`, `build`, `frontend-reload`, `runner-restart`,
+   `server-restart`, comma-separated. It tells the person syncing what the merge needs to go live. *Why: a
+   merge that changes server code does nothing until the server restarts; the line makes that visible.*
    Never bypass the check as admin.
    **The Lead runs autonomously until it needs the owner.** It stops only for: (a) a design decision;
    (b) edits to `AGENTS.md` or this file; (c) overriding a failed review. A failed review is not an owner stop:

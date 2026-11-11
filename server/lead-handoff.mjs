@@ -327,7 +327,7 @@ export function findOpenWorkersForLead(agents, oldLead, teamId, laneId) {
     if (isDigestAgent(a)) return false;
     if (effectiveAgentRole(a) !== "worker") return false;
 
-    const parentId = l["paseo.parent-agent-id"] || a.parentAgentId || "";
+    const parentId = l["vs.parent"] || a.parentAgentId || ""; // X1c: vs.parent is the one parent key
     if (parentId === oldLead.id) return true;
     if (parentId && parentId !== oldLead.id) return false;
 
@@ -807,9 +807,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     for (const w of openWorkers) {
       const updatedWorkerLabels = {
         ...(w.labels ?? {}),
-        "paseo.parent-agent-id": successor.id,
-        // runner agents read their parent from this label (RunnerBackend.toAgent)
-        ...(String(w.id).startsWith("rn-") ? { "vs.parent": successor.id } : {}),
+        "vs.parent": successor.id, // the one parent key (RunnerBackend.toAgent reads it; X1c dropped paseo.parent-agent-id)
       };
       // Best-effort per worker: a failed repoint must not abort the handoff after the successor exists (that strands two leads).
       try {
@@ -1168,7 +1166,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
   };
 }
 
-export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
+/** opts.agentsForTest: DI-only roster for the callerId re-check (never read from an HTTP body; X1c). */
+export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { agentsForTest } = {}) {
   const trigger = String(body.trigger || "self").trim();
   const injectedClient = body.agentClient || null;
   const client = injectedClient || (body.skipBackend ? null : createAgentClient(rootDir));
@@ -1305,7 +1304,8 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT) {
       if (trigger === "self") {
         if (callerId !== lead.id) throw forbid("a lead may only hand off itself");
       } else {
-        let caller = Array.isArray(body.agents) ? body.agents.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
+        // X1c: the caller's record comes from the runner (or the DI-only agentsForTest), never from a body roster.
+        let caller = Array.isArray(agentsForTest) ? agentsForTest.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
         if (!caller && isRunnerId(callerId)) caller = readRunnerAgentSync(callerId);
         if (!caller && connected && client && typeof backend.fetchAgent === "function") {
           caller = (await backend.fetchAgent(callerId).catch(() => null))?.agent ?? null;

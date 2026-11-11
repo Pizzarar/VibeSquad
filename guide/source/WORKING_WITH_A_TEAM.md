@@ -340,6 +340,8 @@ Once you trust the loop, you want several agents at once. That works, with condi
 Each worker gets its own **branch** and its own **worktree**: a second checkout of the same
 repo in its own folder, so two agents never edit the same working files at once.
 
+**VibeSquad:** finished branches leave their worktrees behind. `vs worktree sweep` shows which are merged and clean (dry run); `vs worktree sweep --apply` removes them. Careful: it covers every lane of the repo, so `--apply` also removes other lanes' merged worktrees.
+
 Before the Lead hands out a job, it lists the files that job will touch and checks that list
 against every job already running. If there's overlap, the job waits.
 

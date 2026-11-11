@@ -6,7 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProfiles, profileMcpExtras } from "../profiles.mjs";
-import { RunnerClient, runnerHome } from "./runner-client.mjs";
+import { RunnerClient, RunnerHttpError, runnerHome } from "./runner-client.mjs";
+import { protectedMetaIn } from "../../runner/runner.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { pidAlive } from "../../runner/lock.mjs";
@@ -46,6 +47,9 @@ const bounded =(p, ms = ROSTER_FETCH_MS) => {
 };
 
 export const isRunnerId =(id) => typeof id === "string" && id.startsWith("rn-");
+
+/** The runner-client request option for a backend call's opts: only when the caller was given explicitly (null = admin). */
+const asCaller = (opts) => (opts && "caller" in opts ? { caller: opts.caller } : {});
 
 // Non-enumerable key on a created agent carrying per-await createAgent timing (ms, in order) so the caller's
 // `spawn-timing` metric can print createAgent sub-parts (docs/PLAN_WORKAROUND_FOLLOWUPS.md F1b). Object spread drops it.
@@ -563,7 +567,16 @@ export class RunnerBackend {
 
   async close() {}
 
-  async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {} } = {}) {
+  /**
+   * X1a: a verified agent caller ({ id, token }) is forwarded to the runner, which applies the agent scope rules (team +
+   * parent stamped, role checked, protected meta refused). Pass nothing (or caller: null) for the server's own admin call.
+   */
+  verifyAgent(caller) {
+    return this.rc.verifyAgent(caller);
+  }
+
+  async createAgent({ config = {}, initialPrompt, prompt, labels = {}, env = {}, caller } = {}) {
+    const as = caller !== undefined ? { caller } : {};
     // Per-await spawn timing (docs/PLAN_WORKAROUND_FOLLOWUPS.md F1b): ms since the previous await, so a slow step
     // shows up in the caller's `spawn-timing` metric as createAgent sub-parts. Each mark runs in a finally so a
     // throw mid-spawn keeps the partial timing; it is attached to the returned agent under SPAWN_TIMING (non-
@@ -635,7 +648,7 @@ export class RunnerBackend {
           prompt: initialPrompt || prompt || undefined,
           systemPrompt,
           meta,
-        })).id;
+        }, as)).id;
       } finally { mark("post"); }
       let agent;
       try { agent = (await this.fetchAgent(id)).agent; } finally { mark("get"); }
@@ -775,8 +788,13 @@ export class RunnerBackend {
     return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
   }
 
-  /** opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior: 'steer' (default) | 'interrupt', owner (a human UI/`vs send` turn that jumps the queue) }. */
+  /**
+   * opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior:
+   * 'steer' (default) | 'interrupt', owner (a human UI/`vs send` turn that jumps the queue), caller ({ id, token }: forwarded to
+   * the runner, which then sets owner/senderId from the verified caller and scopes the send; see X1a) }.
+   */
   async sendAgentPrompt(id, text, opts = {}) {
+    const as = "caller" in opts ? { caller: opts.caller } : {};
     // An agent (opts.senderId) writing to a retired Lead/Buddy is redirected to the live one (plugin handleSendAgentPrompt).
     if (opts.senderId) {
       const host = await this.hookHost();
@@ -791,14 +809,16 @@ export class RunnerBackend {
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
     if (opts.owner) body.owner = true;
-    const post = () => this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body);
+    const post = () => this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body, as);
     // A worker closed by the done-report path (role=worker + vs.auto-archived) is archived but resumable: a follow-up brings it back
     // first, because the runner refuses to resume an archived agent. Retired leads / Buddies and manually archived agents are never revived.
+    // The unarchive is the gated step (an agent caller needs unarchive rights on the worker: its lead, its parent, the Overlord);
+    // clearing the auto-archived marker afterwards is this backend's own bookkeeping (vs.auto-archived is admin-only meta).
     const revive = async () => {
       const a = (await this.fetchAgent(id)).agent;
       if (!a.archivedAt || a.labels?.role !== "worker" || a.labels?.["vs.auto-archived"] !== "1") return false;
-      await this.unarchiveAgent(id);
-      await this.updateAgent(id, { labels: { "vs.auto-archived": "" } }).catch(() => {});
+      await this.unarchiveAgent(id, as);
+      await this.updateAgent(id, { labels: { "vs.auto-archived": "" } }, { caller: null }).catch(() => {});
       return true;
     };
     if (this.live.archived.has(id)) await revive().catch(() => false);
@@ -828,26 +848,27 @@ export class RunnerBackend {
     return (await this.fetchAgentTimeline(id)).entries;
   }
 
-  async cancelAgent(id) {
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/cancel`, {});
+  async cancelAgent(id, opts = {}) {
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/cancel`, {}, asCaller(opts));
   }
 
-  async archiveAgent(id) {
+  async archiveAgent(id, opts = {}) {
     const lane = (await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane;
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {});
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {}, asCaller(opts));
     await this.deleteHeartbeat(id).catch(() => {}); // an archived agent's self-heartbeats would otherwise fire at it forever
     await this.refreshLaneWhosHere(lane);
     return { archivedAt: new Date().toISOString() };
   }
 
   /** Brings an archived agent back to the roster as it was (closed/idle history, no resume). */
-  async unarchiveAgent(id) {
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/unarchive`, {});
+  async unarchiveAgent(id, opts = {}) {
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/unarchive`, {}, asCaller(opts));
     await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
     return { archivedAt: null };
   }
 
-  async updateAgent(id, { name, labels } = {}) {
+  /** opts.caller: an agent caller may not set protected keys (role/lane/team/ord/profile, digestFor, vs.parent, ...): 403 before any request. */
+  async updateAgent(id, { name, labels } = {}, opts = {}) {
     const patch = {};
     if (name) patch.title = name;
     if (labels) {
@@ -857,7 +878,11 @@ export class RunnerBackend {
         else patch.labels[k] = String(v);
       }
     }
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch);
+    if (opts.caller?.id) {
+      const hit = protectedMetaIn(patch);
+      if (hit) throw new RunnerHttpError(403, `an agent may not set ${hit.join(", ")} (admin only)`);
+    }
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch, asCaller(opts));
     // role / lane changes (a Lead or Buddy retiring to former-*) change who is listed
     if (patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined) {
       await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
@@ -869,21 +894,21 @@ export class RunnerBackend {
    * Resolves { appliesFrom: "next-turn", busy } (busy = a turn is running now and keeps its old settings); the runner
    * rejects values the provider cannot take (400 -> thrown here with its message).
    */
-  async setAgentConfig(id, { model, modeId, thinkingOptionId } = {}) {
+  async setAgentConfig(id, { model, modeId, thinkingOptionId } = {}, opts = {}) {
     const body = {};
     if (model !== undefined) body.model = model;
     if (modeId !== undefined) body.modeId = modeId;
     if (thinkingOptionId !== undefined) body.thinkingOptionId = thinkingOptionId;
-    const r = await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/config`, body);
+    const r = await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/config`, body, asCaller(opts));
     return { appliesFrom: r?.appliesFrom ?? "next-turn", busy: !!r?.busy };
   }
 
   /** Reopens a closed agent in place when the runner can resume it (lost or parked with a saved session): same id, same history. */
-  async refreshAgent(id) {
+  async refreshAgent(id, opts = {}) {
     const agent = (await this.fetchAgent(id)).agent;
     if (agent.status !== "closed" || agent.archivedAt) return agent;
     try {
-      await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/resume`, {});
+      await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/resume`, {}, asCaller(opts));
     } catch (err) {
       if (err?.status === 409) return agent; // not resumable (exited, no session): the caller replaces it
       throw err; // runner down / agent cap / IPC failure: surface it, don't replace a resumable Buddy

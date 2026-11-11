@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
+import { packagedStamp } from "./stale-runtime.mjs";
 import { resolveSecret } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -85,7 +86,7 @@ copyFileSync(join(rootDir, "package.json"), join(runtimeDir, "package.json"));
 copyFileSync(join(rootDir, "teams.example.json"), join(runtimeDir, "teams.example.json"));
 try {
   const gitOut = (...args) => execFileSync("git", ["-C", rootDir, ...args], { encoding: "utf8" }).trim();
-  const stamp = { commit: gitOut("rev-parse", "HEAD"), repo: gitOut("rev-parse", "--path-format=absolute", "--git-common-dir"), builtAt: new Date().toISOString() };
+  const stamp = packagedStamp({ commit: gitOut("rev-parse", "HEAD"), builtAt: new Date().toISOString() });
   writeFileSync(join(runtimeDir, "build-stamp.json"), JSON.stringify(stamp));
   console.log(`[build:desktop] stamped runtime with commit ${stamp.commit.slice(0, 7)}`);
 } catch {
