@@ -201,6 +201,20 @@ ${global.toString("base64")}
       assert.equal(row(none.checks, "B7").result, "REVIEW");
     });
 
+    test("B8 fails when the packaged build-stamp embeds an absolute local path, without echoing it", () => {
+      for (const repo of ["C:/Users/someone/projects/VibeSquad/.git", "/home/someone/VibeSquad/.git"]) {
+        const files = { [`${ROOT}/src-tauri/runtime/build-stamp.json`]: JSON.stringify({ commit: C, repo }) };
+        const r = row(runAudit({ repoRoot: ROOT, from: "v0", commit: C }, { fs: memFs(files), exec: gitExec({ tracked: {}, head: C }), env: {} }).checks, "B8");
+        assert.equal(r.result, "FAIL");
+        assert.match(r.evidence, /absolute local path/);
+        assert.ok(!r.evidence.includes("someone"));
+      }
+      const clean = { [`${ROOT}/src-tauri/runtime/build-stamp.json`]: JSON.stringify({ commit: C, builtAt: "2026-11-11T00:00:00.000Z" }) };
+      const ok = row(runAudit({ repoRoot: ROOT, from: "v0", commit: C }, { fs: memFs(clean), exec: gitExec({ tracked: {}, head: C }), env: {} }).checks, "B8");
+      assert.match(ok.evidence, /no local path/);
+      assert.doesNotMatch(ok.evidence, /absolute local path/);
+    });
+
     test("B5 runs cargo audit only when src-tauri/Cargo.lock exists", () => {
       assert.match(row(scenario().checks, "B5").evidence, /cargo audit SKIP: no src-tauri\/Cargo\.lock/);
       assert.match(row(scenario({ cargoLock: true }).checks, "B5").evidence, /cargo audit not installed/);
