@@ -52,6 +52,12 @@
       "reason": "Config popover rows (labels) float over the chat timeline by design; the popover is the top layer."
     },
     {
+      "kind": "bar-misalign",
+      "selector": "sky-face-hit",
+      "other": "sky-zones",
+      "reason": "The Sky TV face-hit is a transparent click layer over the TV art; the sky wall's painted strips behind it are art, not a bar the control should line up with (seen at 1280x720 with the plan header open)."
+    },
+    {
       "kind": "overlap",
       "selector": "angel-hit",
       "other": "angel-name",
