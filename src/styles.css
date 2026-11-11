@@ -3187,6 +3187,12 @@ html {
   align-items: center;
 }
 
+/* The collapsed rail is a fixed-width strip: its 6px drag handle would sit over the alert badge at the strip edge. */
+.sidebar.collapsed .sidebar-resizer,
+.focus-rail.collapsed .sidebar-resizer {
+  display: none;
+}
+
 .sidebar.collapsed .brand {
   flex-direction: column;
   padding: 4px 2px 8px;
@@ -4611,6 +4617,14 @@ button.project-file-name:hover { text-decoration: underline; }
   top: calc(100% + 2px);
   width: auto;
   max-width: 100%;
+}
+/* Short windows: the buddy tools sit on the rail floor, so a downward panel falls below the viewport; open it upward instead. */
+@media (max-height: 820px) {
+  .pin-rail :is(.drawer-sandbox-panel, .drawer-features-menu) {
+    top: auto;
+    bottom: calc(100% + 2px);
+    margin-top: 0;
+  }
 }
 
 /* Issue 3.1: Right Dock tabs scroll/wrap cleanly, bodies wrap and stay bounded. */
