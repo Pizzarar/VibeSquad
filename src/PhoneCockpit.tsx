@@ -1,6 +1,11 @@
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import { AgentDrawer } from "./AgentDrawer";
+import { AgentDrawer, triggerBrainstormRestart } from "./AgentDrawer";
 import type { RunnerConn } from "./daemonOverlay";
+import { oppositeProviderTarget } from "./DrawerHeader";
+import { updateAgent } from "./paseo";
+import { getLastBrainstormProfile, setLastBrainstormProfile } from "./pinActions";
+import { providerSpec } from "./pixel";
+import { setPref, usePref } from "./prefs";
 import { isAndroidUserAgent } from "./remoteSession";
 import {
   defaultSurface,
@@ -15,7 +20,7 @@ import {
 } from "./phoneCockpitLogic";
 import type { Pin } from "./pins";
 import { skyZonesFor } from "./skyZonesLogic";
-import type { Member, TeamView } from "./teams";
+import { brainstormUsedTokens, type Member, type TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 
 // E1 (docs/PLAN_ANDROID_END_STATE.md): the whole phone UI. Three surfaces, one chat each, no desktop chrome and no way back to it.
@@ -32,9 +37,10 @@ type Props = {
   /** `⋯` drawer slot for "Pair Another Device / Paired Devices". E4b fills it. */
   pairSlot?: ReactNode;
   onSuccessor: (id: string) => void;
-  onSpinUp: (pin: Pin) => void;
-  onSpinUpOverlord: (view: TeamView) => void;
+  onSpinUp: (pin: Pin, profile?: string) => void;
+  onSpinUpOverlord: (view: TeamView, profileName?: string) => void;
   overlordBusy?: boolean;
+  onSettings?: () => void;
 };
 
 const SURFACE_LABEL: Record<PhoneSurface, string> = { overlord: "Overlord", riffbot: "RiffBot", buddy: "Buddy" };
@@ -92,12 +98,24 @@ function Empty({ what, action, busy, onAction }: { what: string; action: string;
   );
 }
 
-export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSlot, onSuccessor, onSpinUp, onSpinUpOverlord, overlordBusy = false }: Props) {
+export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSlot, onSuccessor, onSpinUp, onSpinUpOverlord, overlordBusy = false, onSettings }: Props) {
   const needsYou = view?.needsYou ?? 0;
+  const [vibe] = usePref("app.vibe");
   const [surface, setSurface] = useState<PhoneSurface>(() => defaultSurface(needsYou));
   const [buddyLane, setBuddyLane] = useState<string | null>(null);
   const [menu, setMenu] = useState(false);
   const [squadMenu, setSquadMenu] = useState(false);
+  const [defaultProv, setDefaultProv] = useState<"claude" | "gemini">(() =>
+    /gemini/i.test(getLastBrainstormProfile()) ? "gemini" : "claude",
+  );
+  const [switching, setSwitching] = useState(false);
+
+  const chooseDefaultProv = (next: "claude" | "gemini") => {
+    setDefaultProv(next);
+    setLastBrainstormProfile(next === "gemini" ? "Brainstorm - Gemini" : "Brainstorm - Claude");
+  };
+  const brainstormProfile = defaultProv === "gemini" ? "Brainstorm - Gemini" : "Brainstorm - Claude";
+  const overlordProfile = defaultProv === "gemini" ? "Lead - Gemini" : "Lead - Claude";
 
   // E2's contract: openBuddy(laneId) (phoneCockpitLogic.ts) lands here.
   const req = useSyncExternalStore(subscribeBuddyRequest, getBuddyRequest);
@@ -113,6 +131,40 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   const health = hostHealthLine(runnerConn);
   const buddy = buddyOf(view, buddyLane);
   const laneRows = phoneLaneRows(view);
+  const activeMember = shown === "overlord" ? zones.overlord.member : shown === "riffbot" ? zones.riffbot.member : buddy;
+  const activeProv = activeMember ? providerSpec(activeMember.agent.provider) : null;
+  const switchTarget = activeMember
+    ? oppositeProviderTarget(activeMember.agent.provider, (activeMember.agent.labels as Record<string, string> | undefined)?.profile)
+    : null;
+
+  const onSwitchActiveProvider = async () => {
+    if (!activeMember || !switchTarget || switching) return;
+    const nextDefault = switchTarget.provider === "antigravity-cli" ? "gemini" : "claude";
+    chooseDefaultProv(nextDefault);
+    if (activeMember.kind === "brainstorm") {
+      const nextProfile = switchTarget.profile ?? (switchTarget.provider === "antigravity-cli" ? "Brainstorm - Gemini" : "Brainstorm - Claude");
+      setLastBrainstormProfile(nextProfile);
+      setSwitching(true);
+      try {
+        await triggerBrainstormRestart({
+          agent: activeMember.agent,
+          teamId: view?.team.id ?? ((activeMember.agent.labels as any)?.team ?? ""),
+          laneId: activeMember.laneId || ((activeMember.agent.labels as any)?.lane ?? ""),
+          reason: "provider-switch",
+          usedTokens: brainstormUsedTokens(activeMember.agent),
+          profileName: nextProfile,
+        });
+      } finally {
+        setSwitching(false);
+      }
+      return;
+    }
+    const nextLeadProfile = switchTarget.profile ?? (switchTarget.provider === "antigravity-cli" ? "Lead - Gemini" : "Lead - Claude");
+    void updateAgent(activeMember.agent.id, {
+      labels: { ...(activeMember.agent.labels as Record<string, string>), ...(nextLeadProfile ? { profile: nextLeadProfile } : {}) },
+    }).catch(() => {});
+    onSuccessor(activeMember.agent.id);
+  };
 
   const pick = (s: PhoneSurface) => {
     setSurface(s);
@@ -126,14 +178,14 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
     body = m ? (
       <AgentDrawer key={m.agent.id} agent={m.agent} chatOnly pinDecisions onClose={() => {}} onSuccessor={() => onSuccessor(m.agent.id)} />
     ) : (
-      <Empty what="No Overlord is on duty for this Squad." action="Start Overlord" busy={overlordBusy} onAction={view ? () => onSpinUpOverlord(view) : undefined} />
+      <Empty what="No Overlord is on duty for this Squad." action="Start Overlord" busy={overlordBusy} onAction={view ? () => onSpinUpOverlord(view, overlordProfile) : undefined} />
     );
   } else if (shown === "riffbot") {
     const m = zones.riffbot.member;
     body = m ? (
       <AgentDrawer key={m.agent.id} agent={m.agent} chatOnly onClose={() => {}} onSuccessor={() => onSuccessor(m.agent.id)} />
     ) : (
-      <Empty what="RiffBot isn't running yet." action="Start RiffBot" onAction={zones.hub ? () => onSpinUp(zones.hub!) : undefined} />
+      <Empty what="RiffBot isn't running yet." action="Start RiffBot" onAction={zones.hub ? () => onSpinUp(zones.hub!, brainstormProfile) : undefined} />
     );
   } else {
     body = buddy ? (
@@ -159,7 +211,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
   );
 
   return (
-    <div className="phone-cockpit" data-testid="phone-cockpit" data-surface={shown} data-android={isAndroidUserAgent() ? "true" : undefined}>
+    <div className="phone-cockpit" data-testid="phone-cockpit" data-surface={shown} data-vibe={vibe} data-android={isAndroidUserAgent() ? "true" : undefined}>
       <header className="phone-bar">
         <button
           type="button"
@@ -204,6 +256,52 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
           </div>
+          <div className="phone-seg-group" data-testid="phone-vibe-toggle" role="group" aria-label="Layout vibe">
+            <span className="phone-lanes-head">VIBE</span>
+            <div className="phone-seg-row">
+              <button
+                type="button"
+                className={`phone-seg-btn ${vibe === "fun" ? "on" : ""}`}
+                data-testid="phone-vibe-fun"
+                aria-pressed={vibe === "fun"}
+                onClick={() => setPref("app.vibe", "fun")}
+              >
+                Psycho
+              </button>
+              <button
+                type="button"
+                className={`phone-seg-btn ${vibe === "boring" ? "on" : ""}`}
+                data-testid="phone-vibe-boring"
+                aria-pressed={vibe === "boring"}
+                onClick={() => setPref("app.vibe", "boring")}
+              >
+                Corpo
+              </button>
+            </div>
+          </div>
+          <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
+            <span className="phone-lanes-head">PROVIDER</span>
+            <div className="phone-seg-row">
+              <button
+                type="button"
+                className={`phone-seg-btn ${defaultProv === "claude" ? "on" : ""}`}
+                data-testid="phone-provider-claude"
+                aria-pressed={defaultProv === "claude"}
+                onClick={() => chooseDefaultProv("claude")}
+              >
+                ✶ Claude
+              </button>
+              <button
+                type="button"
+                className={`phone-seg-btn ${defaultProv === "gemini" ? "on" : ""}`}
+                data-testid="phone-provider-gemini"
+                aria-pressed={defaultProv === "gemini"}
+                onClick={() => chooseDefaultProv("gemini")}
+              >
+                ◆ Gemini
+              </button>
+            </div>
+          </div>
           <div className="phone-lanes" data-testid="phone-lanes">
             <div className="phone-lanes-head">TEAMS</div>
             {laneRows.length === 0 && <p className="muted small">No teams pinned yet.</p>}
@@ -215,7 +313,7 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
                 data-testid={`phone-lane-${r.laneId}`}
                 data-state={r.state}
                 onClick={() => {
-                  if (r.state === "none") onSpinUp(r.pin);
+                  if (r.state === "none") onSpinUp(r.pin, brainstormProfile);
                   openBuddy(r.laneId);
                   setMenu(false);
                 }}
@@ -225,6 +323,17 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            className="btn ghost phone-settings-btn"
+            data-testid="phone-settings-btn"
+            onClick={() => {
+              setMenu(false);
+              onSettings?.();
+            }}
+          >
+            ⚙ Settings
+          </button>
           <RestartHost />
           <div className="phone-pair-slot" data-testid="phone-pair-slot">{pairSlot}</div>
         </aside>
@@ -236,6 +345,24 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
               ← Back to Overlord
             </button>
             <span className="phone-buddy-name">@{buddyLane}{buddy ? ` · ${cleanTitle(buddy.agent.title)}` : ""}</span>
+          </div>
+        )}
+        {activeMember && activeProv && (
+          <div className="phone-provider-bar" data-testid="phone-provider-bar">
+            <span className="phone-active-provider" data-testid="phone-active-provider">
+              {activeProv.symbol} {activeProv.name}{activeMember.agent.model ? ` · ${activeMember.agent.model}` : ""}
+            </span>
+            {switchTarget && (
+              <button
+                type="button"
+                className="btn ghost small phone-switch-provider-btn"
+                data-testid="phone-switch-provider-btn"
+                disabled={switching}
+                onClick={() => void onSwitchActiveProvider()}
+              >
+                {switching ? "Switching…" : switchTarget.label}
+              </button>
+            )}
           </div>
         )}
         <div className="phone-chat">{body}</div>

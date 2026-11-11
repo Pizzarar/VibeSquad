@@ -14,6 +14,7 @@ import {
   resetBuddyRequest,
   subscribeBuddyRequest,
 } from "../src/phoneCockpitLogic.ts";
+import { searchSettings } from "../src/prefs.ts";
 
 const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
 
@@ -102,7 +103,40 @@ test("drawer lane list: a no-agent pinned lane from `vs pin new` appears (state 
 test("PhoneCockpit drawer renders the lane list and wires tap to openBuddy / onSpinUp", () => {
   const s = src("PhoneCockpit.tsx");
   assert.ok(s.includes("phoneLaneRows(view)") && s.includes("phone-lane-"));
-  assert.ok(/state === "none"\) onSpinUp\(r\.pin\);\s*openBuddy\(r\.laneId\)/.test(s));
+  assert.ok(/state === "none"\) onSpinUp\(r\.pin(?:,\s*[^)]+)?\);\s*openBuddy\(r\.laneId\)/.test(s));
+});
+
+test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher & corpo settings search", () => {
+  const app = src("App.tsx");
+  const gate = app.indexOf("if (phoneShell)");
+  const endGate = app.indexOf('if (vibe === "boring")', gate);
+  const phoneBlock = app.slice(gate, endGate);
+  assert.ok(phoneBlock.includes("onSettings={openSettings}"), "App passes onSettings={openSettings} to PhoneCockpit");
+  assert.ok(phoneBlock.includes("{overlays}"), "App mounts {overlays} inside phoneShell");
+
+  const c = src("PhoneCockpit.tsx");
+  for (const id of [
+    "phone-vibe-toggle",
+    "phone-vibe-fun",
+    "phone-vibe-boring",
+    "phone-provider-toggle",
+    "phone-provider-claude",
+    "phone-provider-gemini",
+    "phone-settings-btn",
+    "phone-provider-bar",
+    "phone-active-provider",
+    "phone-switch-provider-btn",
+  ]) {
+    assert.ok(c.includes(id), `PhoneCockpit includes ${id}`);
+  }
+  assert.match(c, /Psycho/);
+  assert.match(c, /Corpo/);
+  assert.match(c, /⚙ Settings/);
+  assert.match(c, /oppositeProviderTarget/);
+  assert.match(c, /triggerBrainstormRestart/);
+
+  const hits = searchSettings("corpo");
+  assert.ok(hits.some((h) => h.id === "app.vibe"), "searchSettings('corpo') finds app.vibe");
 });
 
 test("E1b: top safe-area inset applied once on the cockpit (App's .app padding is not mounted in the phone shell)", () => {
