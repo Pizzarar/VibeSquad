@@ -1742,10 +1742,10 @@ export function App() {
   // Spin Up / Resume Overlord (sky-CRT): spawn the hub lead with the Squad's Lead profile; the right zone picks it up from the store.
   const [overlordBusy, setOverlordBusy] = useState(false);
   const [overlordErr, setOverlordErr] = useState<{ squadId: string; message: string } | null>(null); // shown inline under the TVs (was alert()), scoped to its Squad
-  const onSpinUpOverlord = useCallback((view: TeamView) => {
+  const onSpinUpOverlord = useCallback((view: TeamView, profileOverride?: string) => {
     setOverlordBusy(true);
     setOverlordErr(null);
-    const profileName = overlordProfileName(view);
+    const profileName = profileOverride || overlordProfileName(view);
     const profile = findProfile(profileName, getProfiles());
     void spinUpOverlord(view, {
       spawn: spawnTeamAgent,
@@ -1922,10 +1922,11 @@ export function App() {
         onSpinUp={onSpinUpPin}
         onSpinUpOverlord={onSpinUpOverlord}
         overlordBusy={overlordBusy}
+        onSettings={openSettings}
         bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
         pairSlot={<PhonePairSheet />}
       />
-      <FirstLaunchVibePicker />
+      {overlays}
       </>
     );
   }

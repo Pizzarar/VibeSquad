@@ -7,9 +7,9 @@ import { DEFAULT_STAKES_LADDER, loadStakesLadder, normalizeStakes, resolveStakes
 
 const claudeProfile = { model: "claude-sonnet-5-5", thinkingOptionId: "medium" };
 
-test("tierA-security on claude -> fable-5-1 / high", () => {
+test("tierA-security on claude -> opus-5-5 / high", () => {
   const r = resolveStakesRoute("claude", claudeProfile, "tierA-security", false);
-  assert.deepEqual([r.model, r.effort, r.reason, r.apply], ["claude-fable-5-1", "high", "ladder", true]);
+  assert.deepEqual([r.model, r.effort, r.reason, r.apply], ["claude-opus-5-5", "high", "ladder", true]);
 });
 
 test("tierA-invariant claude -> opus high; mechanical -> sonnet low", () => {

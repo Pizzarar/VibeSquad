@@ -7,6 +7,7 @@ import { withFileLockSync } from "./file-lock.mjs";
 import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
+import { buildRelayPairingLink, publicRelayEndpoint } from "./relay-link.mjs";
 import { isRelayRequest } from "./relay-tunnel.mjs";
 import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
@@ -614,6 +615,10 @@ export function authenticate(req) {
   if (isRelayRequest(req)) return authenticateRelayDevice(req);
   const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
   if (!token) return null;
+  // X1-E4b L4: a cookie-authenticated write must also prove it came from this site (Origin / Sec-Fetch-Site), not rest on
+  // SameSite=Strict alone. Refused before the hash lookup: no devices.json read, no last-seen, no tracked socket. Nothing is
+  // recorded on the request (Gemini R1 L1): originRefusal() recomputes the same answer when a gate wants the reason.
+  if (cookieWriteRefusal(req)) return null;
   const dev = deviceByTokenHash(sha256Hex(token));
   if (!dev) return null;
   const now = Date.now();
@@ -664,6 +669,10 @@ const isBrowserRequest = (h) => /^Mozilla\//.test(String(h["user-agent"] ?? ""))
 /**
  * Loopback-only calls also refuse foreign Host/Origin headers (DNS-rebinding / cross-site posts).
  * Browsers always send Origin on POST and Sec-Fetch-Site on every request; plain CLI/test clients send neither.
+ * X1 origin-check L1: an Origin must be this listener's own origin (scheme://Host) or the Tauri shell's. Another loopback
+ * port is a different origin on the same site, and a browser without Sec-Fetch-* would still attach the Strict vs_local
+ * cookie to its POST. The launcher / `vs open` land the browser on the served URL and the desktop proxy sends
+ * Origin: http://<Host> for a local upstream, so every shipped caller already matches.
  */
 export function isLocalBrowserSafe(req) {
   if (isRelayRequest(req) || !isLocal(req)) return false;
@@ -671,11 +680,83 @@ export function isLocalBrowserSafe(req) {
   const h = req.headers;
   if (!LOOPBACK_HOST_RE.test(h.host ?? "")) return false;
   const origin = h.origin;
-  if (origin !== undefined && !isLoopbackOrigin(origin)) return false;
+  if (origin !== undefined && String(origin).toLowerCase() !== ownOrigin(req) && !TAURI_ORIGINS.has(origin)) return false;
   const site = h["sec-fetch-site"];
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method ?? "") && isBrowserRequest(h) && origin === undefined) return false;
   return true;
+}
+
+// ---- X1-E4b L4: same-origin proof for cookie-authenticated writes (both listeners, one chokepoint: authenticate) ----
+// vs_device is Secure; SameSite=Strict, so a browser withholds it from cross-site requests; this is the second layer for
+// the day that fails (a WebView or browser quirk, a same-site sibling origin, a leaked cookie replayed from a page).
+// Decision table for a non-GET/HEAD/OPTIONS request carrying vs_device:
+//   Origin present      -> must equal this listener's own origin (scheme://Host); "null" or any other value is refused.
+//   Origin absent       -> Sec-Fetch-Site absent, "none" or "same-origin" passes; "cross-site" / "same-site" is refused.
+// Missing BOTH headers is allowed on purpose: every browser (and the Android WebView, which is Chromium) sends Origin on
+// every POST/PUT/PATCH/DELETE, so a cross-site page cannot produce that shape. The clients that do produce it are not
+// browsers: the desktop proxy forwarding to a remote host (src-tauri main.rs strips Origin/Referer and passes the
+// webview's Sec-Fetch-Site through, which an older WebKit may omit altogether), curl-style tooling and the test suite.
+// Failing closed there would break the desktop app on a remote host without stopping any browser attack.
+// Relayed requests (req.relayDevice) never reach this: authenticate() answers them from the channel identity first.
+// Token-header and agent-header callers are not cookie auth and are not checked here (isLocalBrowserSafe covers loopback).
+// Safe = GET/HEAD only, the one definition the middleware's write rule uses too (vibesquad-api.mjs gated(); X1 I1): a
+// cookie'd OPTIONS is a write here as well, even though no browser sends a credentialed one (no CORS headers, every
+// handler answers 405).
+const SAFE_METHODS = new Set(["GET", "HEAD"]);
+export const CROSS_SITE_ERROR = "cross-site request refused: Origin / Sec-Fetch-Site do not match this host";
+
+const singleHeader = (h, name) => {
+  const v = h?.[name];
+  return v === undefined ? undefined : String(Array.isArray(v) ? v.join(", ") : v).trim();
+};
+
+/** `scheme://host` as a browser on this listener puts it in Origin (lower-cased), or null without a Host header. */
+export function ownOrigin(req) {
+  const host = singleHeader(req.headers, "host")?.toLowerCase();
+  if (!host) return null;
+  return `${req.socket?.encrypted ? "https" : "http"}://${host}`;
+}
+
+/**
+ * Why a state-changing request must NOT be authenticated by its vs_device cookie, or null when it may be. Safe methods
+ * (GET/HEAD) always pass: reads are not CSRF targets and the SSE/WebSocket upgrades are GETs. See the table above.
+ */
+export function cookieWriteRefusal(req) {
+  if (SAFE_METHODS.has(String(req.method ?? "GET").toUpperCase())) return null;
+  const h = req.headers ?? {};
+  const origin = singleHeader(h, "origin");
+  if (origin !== undefined) {
+    const own = ownOrigin(req);
+    if (own && origin.toLowerCase() === own) return null;
+    return `Origin ${origin || "(empty)"} is not this host${own ? ` (${own})` : ""}`;
+  }
+  const site = singleHeader(h, "sec-fetch-site");
+  if (site === undefined || site === "none" || site === "same-origin") return null;
+  return `Sec-Fetch-Site ${site} without an Origin`;
+}
+
+/**
+ * Why this request's vs_device cookie did not authenticate its write, or null (no cookie, a relayed request, a safe method,
+ * or the proof held). Stateless on purpose (Gemini R1 L1): a pure function of the request's headers and method, so a gate
+ * that asks after an earlier authenticate()/isTrusted() pass cannot read a stale answer, and a request that is the owner
+ * by another credential (local token, vs_local) is never affected because the gates only ask on their not-owner branch.
+ */
+export function originRefusal(req) {
+  if (!req || isRelayRequest(req)) return null;
+  return parseCookies(req.headers?.cookie)[DEVICE_COOKIE] ? cookieWriteRefusal(req) : null;
+}
+
+/** 403 with a plain error for a refused cookie write: JSON on API paths / JSON callers, text otherwise. Never HTML. */
+export function sendCrossSiteRefused(req, res) {
+  const path = (req.url ?? "").split("?")[0];
+  if (path.startsWith("/__vibesquad/") || path.startsWith("/api/") || String(req.headers.accept ?? "").includes("application/json")) {
+    return sendJson(res, 403, { error: CROSS_SITE_ERROR });
+  }
+  res.statusCode = 403;
+  res.setHeader("content-type", "text/plain; charset=utf-8");
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  res.end(CROSS_SITE_ERROR);
 }
 
 // ---- Local token (owner trust on loopback) ----
@@ -750,7 +831,9 @@ export const hasAgentHeaders = (req) => headerValue(req, AGENT_ID_HEADER) !== ""
 /** Owner proof: a paired device cookie, or the loopback local token (header or vs_local cookie). Never for an agent request. */
 export function ownerProof(req) {
   if (hasAgentHeaders(req)) return false;
-  return Boolean(authenticate(req)) || isLocalOwner(req);
+  // Local owner first (Gemini R1 L1, same order as handlePairStart): a proven PC owner never runs the cookie path, so a
+  // stray vs_device cookie neither touches devices.json / last-seen nor registers the socket for a device revoke.
+  return isLocalOwner(req) || Boolean(authenticate(req));
 }
 
 async function defaultVerifyAgent(caller) {
@@ -1024,6 +1107,28 @@ export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null) {
   return code;
 }
 
+// E5 §7 item 8: serve.mjs registers the running relay wiring's status() (never key material) so pair/start can hand out a
+// relay pairing link + QR for the code it just minted. null = no relay configured (the default); the link is built only
+// while the wiring reports running on a wss:// endpoint. Read-only: nothing here can set relay settings.
+let relayStatusProvider = null;
+export function setRelayStatusProvider(fn) {
+  relayStatusProvider = typeof fn === "function" ? fn : null;
+}
+
+/** The relay pairing offer for a freshly minted `code`, or null when no relay is running (or the status is unusable). */
+export function relayPairingFor(code) {
+  let st = null;
+  try {
+    st = relayStatusProvider?.() ?? null;
+  } catch {
+    return null;
+  }
+  if (!st || st.running !== true || typeof st.endpoint !== "string" || !/^wss:\/\//i.test(st.endpoint)) return null;
+  const link = buildRelayPairingLink({ hostId: st.hostId, pub: st.pub, relay: st.endpoint, code });
+  if (!link) return null;
+  return { endpoint: publicRelayEndpoint(st.endpoint), hostId: String(st.hostId), connected: st.connected === true, link };
+}
+
 const pairCodeMintedListeners = new Set(); // E5: relayHost.noteFreshMint() lifts the host-wide redeem lock (threat model T8)
 
 /** Runs after every new pairing code exists (PC, CLI or device minted). Returns an unsubscribe function. */
@@ -1222,8 +1327,12 @@ export async function handlePairStart(req, res) {
   const pairUrl = `https://${pairHost}:${port}/pair?code=${code}${fpQuery}`;
   const pairIpUrl = `https://${effectiveMeshnetIp || lanIp}:${port}/pair?code=${code}${fpQuery}`;
   const lanPairUrl = lanIp ? `https://${lanIp}:${port}/pair?code=${code}${fpQuery}` : null;
+  // E5 §7 item 8: the same one-time code also redeems inside the E2EE relay channel, so the dialog can show a relay
+  // link/QR whenever the relay is running (the fragment carries the code; the server never sees it in a URL).
+  const relayOffer = relayPairingFor(code);
   sendJson(res, 200, {
     code,
+    relay: relayOffer ? { ...relayOffer, qrSvg: await qrSvg(relayOffer.link) } : null,
     pairUrl,
     pairIpUrl,
     lanIp,

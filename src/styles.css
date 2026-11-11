@@ -6199,10 +6199,38 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .phone-lane-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .phone-lane-state { font-size: 0.8rem; opacity: 0.7; white-space: nowrap; }
 .phone-health-line { display: flex; align-items: center; gap: 8px; font-weight: 700; }
-.phone-restart .btn, .phone-pair-slot .btn { min-height: 44px; width: 100%; }
+.phone-seg-group { display: flex; flex-direction: column; gap: 4px; }
+.phone-seg-row { display: flex; gap: 6px; }
+.phone-seg-btn {
+  flex: 1;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+}
+.phone-seg-btn.on { border-color: var(--violet); background: var(--violet-dim); font-weight: 700; }
+.phone-settings-btn, .phone-restart .btn, .phone-pair-slot .btn { min-height: 44px; width: 100%; }
 .phone-pair-slot:empty { display: none; }
 .phone-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .phone-buddy-head { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.phone-provider-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  font-size: 0.85rem;
+}
+.phone-active-provider { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.phone-switch-provider-btn { min-height: 40px; padding: 0 12px; white-space: nowrap; flex: none; }
+.phone-cockpit[data-vibe="boring"] .phone-bar { box-shadow: none; }
+.phone-cockpit[data-vibe="boring"] .phone-tab.on { border-top-color: var(--text); }
 .phone-back-pill {
   min-height: 40px;
   padding: 0 14px;
@@ -6335,3 +6363,18 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .pair-modal-dialog .modal-head { position: sticky; top: 0; z-index: 2; flex: none; }
 .pair-modal-dialog .modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .pair-modal-dialog .modal-foot { position: sticky; bottom: 0; z-index: 2; flex: none; }
+
+/* E5 §7 item 8: relay pairing link card in Pair a device (PairDeviceModal.tsx) and the relay confirm on the phone pair screen (RemotePairScreen.tsx). */
+.pair-relay-card { margin-bottom: 0; }
+.pair-relay-help { margin-top: 2px; }
+.pair-relay-row { display: flex; gap: 12px; align-items: flex-start; margin-top: 8px; }
+.pair-relay-qr { width: 148px; height: 148px; flex: none; background: #fff; padding: 4px; border: 2px solid var(--cyan); }
+.pair-relay-qr svg { width: 100%; height: 100%; display: block; }
+.pair-relay-body { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.pair-relay-state { color: var(--cyan-t); font-size: 11px; }
+.pair-relay-state.off { color: var(--muted); }
+.pair-relay-link { color: var(--cyan-t); word-break: break-all; font-size: 11px; user-select: all; }
+.remote-pair-relay { display: flex; flex-direction: column; gap: 8px; }
+.remote-pair-relay b { word-break: break-all; }
+.remote-pair-relay-drop { align-self: flex-start; }
+.remote-pair-relay-done { color: var(--cyan-t); border: 1px solid var(--line); border-radius: 4px; padding: var(--sp-2) 10px; }

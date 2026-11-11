@@ -41,10 +41,19 @@ export function diagError(kind: string, detail: string, doc?: Document): void {
 }
 
 /** Installs the listeners once; returns false (and does nothing) off Android. */
+/**
+ * The URL as it may be logged: secret-bearing query values redacted and the #fragment dropped whole. This runs before
+ * remoteRelayTransport.ts strips a relay pairing fragment (`#hostId=&pub=&relay=&code=`), so the fragment must never
+ * reach the overlay in any order of its parameters (E5 relay links R1 L1).
+ */
+export function redactHref(href: string): string {
+  return href.replace(/#.*$/, "#…").replace(/([?&#](?:code|fp|token)=)[^&#]*/gi, "$1…");
+}
+
 export function installDiagOverlay(win: DiagWindow = window): boolean {
   if (!/Android/i.test(win.navigator?.userAgent ?? "")) return false;
   active = true;
-  diagStep(`boot ${win.location.href.replace(/([?&](?:code|fp|token)=)[^&#]*/gi, "$1…")}`);
+  diagStep(`boot ${redactHref(win.location.href)}`);
   win.addEventListener("error", (e) => {
     const ev = e as ErrorEvent;
     diagError("error", `${ev.message || "script error"} @ ${ev.filename || "?"}:${ev.lineno ?? "?"}:${ev.colno ?? "?"}${ev.error?.stack ? `\n${String(ev.error.stack).split("\n").slice(0, 4).join("\n")}` : ""}`, win.document);
