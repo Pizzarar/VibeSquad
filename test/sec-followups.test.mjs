@@ -125,7 +125,9 @@ describe("ungated side-effect GETs (read-only callers)", () => {
     assert.equal((await call(port, "/ca.crt")).status, 404);
     assert.equal(json(await call(port, "/__vibesquad/auth/status")).caFingerprint.full, null);
     assert.equal(json(await call(port, "/__vibesquad/auth/status", { headers: { "x-vibesquad-token": token } })).caFingerprint.full, null);
-    assert.equal((await call(port, "/__vibesquad/devices")).status, 200);
+    // E4b (X1 E4a M3): the device inventory is a gated read; a token-less loopback caller gets 403, the owner 200.
+    assert.equal((await call(port, "/__vibesquad/devices")).status, 403);
+    assert.equal((await call(port, "/__vibesquad/devices", { headers: { "x-vibesquad-token": token } })).status, 200);
     assert.equal(existsSync(join(tls, "ca.crt")), false, "no CA or key written by a GET");
   });
 
