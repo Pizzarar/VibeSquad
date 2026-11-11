@@ -1295,7 +1295,7 @@ code {
 .btn.confirm.danger { color: var(--pink-t); border-color: var(--hot-pink); }
 .btn.confirm.warn { color: var(--amber-t); border-color: var(--amber); }
 .btn.confirm.cool { color: var(--cyan-t); border-color: var(--cyan); }
-.btn.confirm.armed { background: var(--pink-fill); color: var(--bg); box-shadow: var(--bevel); animation: arm-pulse 0.8s infinite alternate; }
+.btn.confirm.armed { background: var(--pink-fill); color: var(--on-pink-fill); box-shadow: var(--bevel); animation: arm-pulse 0.8s infinite alternate; }
 .btn.confirm.warn.armed { background: var(--amber); color: var(--on-amber); }
 .btn.confirm.cool.armed { background: var(--cyan-fill); }
 .btn.confirm.busy { opacity: 0.6; }
@@ -1338,7 +1338,7 @@ code {
 
 .you-bar, .you-flag, .lint-bar { display: flex; flex-wrap: wrap; min-width: 0; max-width: 100%; box-sizing: border-box; align-items: center; gap: 8px; margin: 8px 12px 0; padding: 6px 10px; font-size: 12px; }
 .you-bar { background: var(--well); border: 1px solid var(--hot-pink); box-shadow: var(--bevel); }
-.you-tag { font-family: var(--arcade); font-size: 10px; color: var(--bg); background: var(--pink-fill); padding: 1px 6px; }
+.you-tag { font-family: var(--arcade); font-size: 10px; color: var(--on-pink-fill); background: var(--pink-fill); padding: 1px 6px; }
 .you-reason { flex: 1; color: var(--pink-t); font-family: var(--display); font-size: 14px; }
 .you-flag { border: 1px dashed var(--line); }
 .you-flag input { flex: 1 1 110px; min-width: 0; max-width: 100%; padding: 3px 8px; }
@@ -1413,7 +1413,7 @@ code {
 .hard-text .muted { color: var(--muted); }
 .hard-bar > .btn { flex: 0 0 auto; max-width: 100%; white-space: normal; }
 .btn.warn { color: var(--amber-t); border-color: var(--amber); }
-.btn.hot { color: var(--bg); background: var(--pink-fill); border-color: var(--hot-pink); font-weight: 700; box-shadow: var(--bevel); }
+.btn.hot { color: var(--on-pink-fill); background: var(--pink-fill); border-color: var(--hot-pink); font-weight: 700; box-shadow: var(--bevel); }
 .btn.successor { margin-top: 6px; font-family: var(--arcade); font-size: 10px; letter-spacing: 1px; width: 100%; }
 .btn.successor.warn { background: var(--bg); }
 .successor-bar { border-color: var(--hot-pink); color: var(--pink-t); background: var(--well); }
@@ -1444,11 +1444,11 @@ code {
 .feed-text { flex: 1; min-width: 0; }
 .feed-meta { flex: none; white-space: nowrap; }
 .feed-type { font-family: var(--arcade); font-size: 9px; padding: 1px 6px; border: 1px solid var(--line); flex: none; text-transform: uppercase; color: var(--muted); }
-.feed-type.you { color: var(--bg); background: linear-gradient(90deg, var(--pink-fill), var(--amber)); border-color: var(--hot-pink); font-weight: 700; }
+.feed-type.you { color: var(--on-pink-fill); background: linear-gradient(90deg, var(--pink-fill), var(--amber)); border-color: var(--hot-pink); font-weight: 700; }
 .feed-type.done { color: var(--mint-t); border-color: var(--emerald); }
 .feed-type.decision { color: var(--cyan-t); border-color: var(--cyan); }
 .feed-type.blocker { color: var(--pink-t); border-color: var(--hot-pink); }
-.feed-type.needs-you { color: var(--bg); background: var(--pink-fill); border-color: var(--pink-fill); }
+.feed-type.needs-you { color: var(--on-pink-fill); background: var(--pink-fill); border-color: var(--pink-fill); }
 .feed-type.handoff { color: var(--violet-t); border-color: var(--violet); }
 .feed-type.metric { color: var(--amber-t); border-color: var(--amber); }
 .feed-ref { all: unset; cursor: pointer; margin-left: 6px; color: var(--cyan-t); text-decoration: underline dotted; font-size: 11px; }
@@ -3958,7 +3958,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-role-name { width: 84px; flex-shrink: 0; text-transform: capitalize; }
 .usage-coord { margin-top: 6px; }
 .usage-loop { padding: 2px 0; }
-.usage-flag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; text-transform: uppercase; color: var(--bg); background: var(--pink-fill); border-radius: 999px; }
+.usage-flag { display: inline-block; margin-left: 6px; padding: 0 6px; font-size: 10px; text-transform: uppercase; color: var(--on-pink-fill); background: var(--pink-fill); border-radius: 999px; }
 .usage-flag-storm { background: var(--amber); color: var(--on-amber); }
 .usage-table-wrap { overflow-x: auto; }
 .usage-profiles { display: flex; flex-direction: column; gap: 6px; }
@@ -6221,7 +6221,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   gap: 6px;
 }
 .phone-tab.on { color: var(--text); border-top-color: var(--hot-pink); background: var(--panel-hi); }
-.phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--hot-pink); color: var(--well); font-size: 12px; font-weight: 800; text-align: center; }
+.phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--pink-fill); color: var(--on-pink-fill); font-size: 12px; font-weight: 800; text-align: center; }
 
 /* ---- E2 decision card (Overlord escalation) ---- */
 .decision-card { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; padding: 10px 12px; border: 1px solid var(--violet); border-radius: 10px; background: var(--violet-dim); color: var(--text); }
