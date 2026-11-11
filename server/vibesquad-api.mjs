@@ -56,6 +56,7 @@ import {
   sendInboxCard,
   sortIdeaCard,
   assertInboxTriageCaller,
+  assertInboxTriageRole,
   triageCardIds,
   triageInboxCards,
   writeInboxCards,
@@ -1054,9 +1055,11 @@ async function handleInboxTriage(req, res, rootDir) {
     return res.end();
   }
   try {
-    const body = await readCleanBody(req);
-    // X1c: an agent triages only as a lead/Buddy of the cards' Squad; delete is the owner's.
+    // X1c: an agent triages only as a lead/Buddy of the cards' Squad; delete is the owner's. idea-137: the role check
+    // comes first, before the body is parsed and before any action/card validation can answer a worker with a 400/404.
     const caller = agentCaller(req);
+    if (caller) assertInboxTriageRole(caller);
+    const body = await readCleanBody(req);
     if (caller) {
       if (String(body.action || "").trim() === "delete") throw forbidden("inbox delete is owner-only; archive it instead");
       assertInboxTriageCaller(caller, triageCardIds(body));

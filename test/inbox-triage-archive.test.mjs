@@ -35,6 +35,8 @@ function setup(t) {
     const e = { ...process.env, VIBESQUAD_HOME: home, ...env };
     delete e.PASEO_AGENT_ID;
     delete e.VS_AGENT_ID;
+    delete e.VS_AGENT_TOKEN; // X1b: a token from the suite's own agent would turn the spawned CLI into a verified caller
+    delete e.VS_AGENT_TOKEN_REQUIRED;
     Object.assign(e, env);
     return spawnSync(process.execPath, [CLI, "inbox", "triage", ...args], { encoding: "utf8", env: e });
   };

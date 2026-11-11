@@ -100,13 +100,13 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null } = {}) {
+async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {} } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
   const outDir = path.join(tmp, "vs");
   mkdirSync(home, { recursive: true });
-  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [] };
+  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [], spawnEnvs: [] };
   const agents = { current: [
     { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" },
   ] };
@@ -200,7 +200,8 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       if (pid === serverPid) { close(serverSrv); if (strayAfterServerStop) startRunner("stray-hash"); }
       if (runnerState?.pid === pid) { runnerState.dead = true; close(runnerSrv); }
     },
-    spawnDetached: (cmd, args) => {
+    spawnDetached: (cmd, args, o) => {
+      w.spawnEnvs.push(o?.env);
       w.markerSeenAtSpawn.push(existsSync(path.join(configDir, "server.restarting")));
       const isServer = args.some((a) => /serve\.mjs/.test(a));
       w.spawned.push(isServer ? "server" : "runner");
@@ -214,7 +215,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       return pid;
     },
   };
-  const env = { ...process.env, VIBESQUAD_HOME: outDir, VIBESQUAD_DESKTOP_CONFIG_DIR: configDir };
+  const env = { ...process.env, VIBESQUAD_HOME: outDir, VIBESQUAD_DESKTOP_CONFIG_DIR: configDir, ...envExtra };
   w.opts = (extra = {}) => ({ ...parseArgs(["--stop-timeout", "2", "--wait-timeout", "5"]), home, port: serverPort, configDir, outDir, runtimeDir: tmp, node: process.execPath, ...extra });
   w.run = (extra, logs = []) => restartRuntime(w.opts(extra), deps, env, (l) => logs.push(l));
   w.cleanup = async () => { for (const s of [...w.allSrvs, serverSrv]) if (s?.listening) await close(s); rmSync(tmp, { recursive: true, force: true }); };
@@ -391,47 +392,81 @@ test("detection runs under the lock: a refused second run never reads or touches
 test("vs restart: --timeout must be a positive integer; unsafe launch args rejected; caller gate; env passed as flags", async () => {
   const { commandRestart, assertRestartCaller } = await import("../cli/vs.mjs");
   const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
-  const run = (flags, opts = {}) => {
+  const owner = { hasOwnerProof: () => true }; // the owner's shell: no agent id + a readable local token (X1b)
+  const run = async (flags, opts = {}) => {
     const seen = [];
     const out = [];
     const orig = process.stdout.write.bind(process.stdout);
     process.stdout.write = (c) => { out.push(String(c)); return true; };
-    try { return { code: commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, env: {}, teams, ...opts }), seen, out: out.join("") }; } finally { process.stdout.write = orig; }
+    try { return { code: await commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, env: {}, teams, ...owner, ...opts }), seen, out: out.join("") }; } finally { process.stdout.write = orig; }
   };
-  const ok = run({ timeout: "90", noForce: true });
+  const ok = await run({ timeout: "90", noForce: true });
   assert.equal(ok.code, 0);
   assert.ok(ok.seen[0][0].split(path.sep).join("/").endsWith("scripts/restart-runtime.mjs"));
   assert.deepEqual(ok.seen[0].slice(3), ["--no-force", "--wait-timeout", "90"]);
   assert.match(ok.out, /restart launched \(pid 4321\)/);
-  assert.deepEqual(run({ killBackground: true }).seen[0].slice(3), ["--kill-background"], "background work is only killed when asked (idea-88)");
-  for (const bad of ["0", "-5", "1.5", "abc", "10 --no-wait", "1e3", ""]) assert.throws(() => run({ timeout: bad }), /positive integer/, bad);
+  assert.deepEqual((await run({ killBackground: true })).seen[0].slice(3), ["--kill-background"], "background work is only killed when asked (idea-88)");
+  for (const bad of ["0", "-5", "1.5", "abc", "10 --no-wait", "1e3", ""]) await assert.rejects(run({ timeout: bad }), /positive integer/, bad);
   // WMI CommandLine: a quote or control char in any path (e.g. VIBESQUAD_HOME) is refused, never escaped into the string
-  assert.throws(() => run({}, { env: { VIBESQUAD_HOME: 'C:\\x" --evil "' } }), /quote or control/);
-  assert.throws(() => run({}, { env: { VIBESQUAD_HOME: "C:\\x\ny" } }), /quote or control/);
+  await assert.rejects(run({}, { env: { VIBESQUAD_HOME: 'C:\\x" --evil "' } }), /quote or control/);
+  await assert.rejects(run({}, { env: { VIBESQUAD_HOME: "C:\\x\ny" } }), /quote or control/);
   // WMI drops our env, so the values travel as flags
   const home = path.join(os.tmpdir(), "vs-home-x");
-  const env = run({}, { env: { VIBESQUAD_HOME: home, VIBESQUAD_DESKTOP_CONFIG_DIR: path.join(os.tmpdir(), "cfg-x"), VIBESQUAD_PORT: "4999" } });
+  const env = await run({}, { env: { VIBESQUAD_HOME: home, VIBESQUAD_DESKTOP_CONFIG_DIR: path.join(os.tmpdir(), "cfg-x"), VIBESQUAD_PORT: "4999" } });
   const a = env.seen[0];
   for (const f of ["--vs-home", "--home", "--out-dir", "--config-dir", "--port"]) assert.ok(a.includes(f), f);
   assert.equal(a[a.indexOf("--port") + 1], "4999");
   assert.equal(a[a.indexOf("--home") + 1], path.join(home, "runner"));
-  // caller gate: runner agent ids only; the owner's shell has none
+  // caller gate (X1b guard): no agent id needs owner proof; an empty env has none (no home, no local token)
   const as = (role, lane) => ({ role, lane, team: { id: "vibesquad" } });
   const agentEnv = { VS_AGENT_ID: "rn-abcdef123456" };
-  assert.doesNotThrow(() => assertRestartCaller(null, teams, {}), "owner shell");
-  assert.throws(() => assertRestartCaller(as("worker", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/);
-  assert.throws(() => assertRestartCaller(as("lead", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/, "a non-hub lead");
-  assert.throws(() => assertRestartCaller(as("brainstorm", "vibesquad"), teams, agentEnv), /only the owner/);
-  assert.doesNotThrow(() => assertRestartCaller(as("lead", "vibesquad"), teams, agentEnv), "hub lead = Overlord");
+  await assert.rejects(assertRestartCaller(null, teams, {}), /no owner proof/, "a scrubbed shell is not the owner");
+  await assert.rejects(run({}, { hasOwnerProof: undefined, env: {} }), /no owner proof/);
+  const ownerHome = mkdtempSync(path.join(os.tmpdir(), "vs-owner-"));
+  writeFileSync(path.join(ownerHome, "local-token"), "a".repeat(64) + "\n");
+  await assert.doesNotReject(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome }), "owner shell: the local token is the proof");
+  await assert.rejects(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome, VS_AGENT_ID: "rn-abcdef123456" }, () => null), /no runner record/, "an agent id is never the owner, whatever it can read");
+  rmSync(ownerHome, { recursive: true, force: true });
+  await assert.rejects(assertRestartCaller(as("worker", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/);
+  await assert.rejects(assertRestartCaller(as("lead", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/, "a non-hub lead");
+  await assert.rejects(assertRestartCaller(as("brainstorm", "vibesquad"), teams, agentEnv), /only the owner/);
+  await assert.doesNotReject(assertRestartCaller(as("lead", "vibesquad"), teams, agentEnv), "hub lead = Overlord");
   // fail closed: an rn- id with no runner record is refused even if VS_ROLE/VS_LANE/VS_TEAM claim to be the Overlord
   const spoof = { VS_AGENT_ID: "rn-deadbeef0000", VS_ROLE: "lead", VS_LANE: "vibesquad", VS_TEAM: "vibesquad" };
-  assert.throws(() => assertRestartCaller(null, teams, spoof, () => null), /no runner record/);
-  assert.throws(() => run({}, { env: spoof, readRecord: () => null }), /no runner record/);
+  await assert.rejects(assertRestartCaller(null, teams, spoof, () => null), /no runner record/);
+  await assert.rejects(run({}, { env: spoof, readRecord: () => null }), /no runner record/);
   const rec = (labels) => () => ({ labels });
-  assert.doesNotThrow(() => assertRestartCaller(null, teams, spoof, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" })), "the record, not env, decides");
-  assert.throws(() => assertRestartCaller(null, teams, spoof, rec({ role: "worker", team: "vibesquad", lane: "bug-chaser" })), /only the owner/, "env claiming lead is ignored when the record says worker");
-  assert.throws(() => run({}, { identity: as("worker", "bug-chaser"), env: agentEnv }), /only the owner/);
-  assert.equal(run({}, { identity: as("lead", "vibesquad"), env: agentEnv }).code, 0);
+  await assert.doesNotReject(assertRestartCaller(null, teams, spoof, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" })), "the record, not env, decides (rollout fallback: no token)");
+  await assert.rejects(assertRestartCaller(null, teams, spoof, rec({ role: "worker", team: "vibesquad", lane: "bug-chaser" })), /only the owner/, "env claiming lead is ignored when the record says worker");
+  await assert.rejects(run({}, { identity: as("worker", "bug-chaser"), env: agentEnv }), /only the owner/);
+  assert.equal((await run({}, { identity: as("lead", "vibesquad"), env: agentEnv })).code, 0);
+  // X1b: with a token the runner decides (GET /verify-agent); the disk record is not consulted. A wrong token is 403.
+  const tokenEnv = { ...spoof, VS_AGENT_TOKEN: "t0k" };
+  const verifyOk = async ({ id, token }) => { assert.deepEqual([id, token], ["rn-deadbeef0000", "t0k"]); return { id, role: "lead", lane: "vibesquad", team: "vibesquad", overlord: true }; };
+  const verify403 = async () => { throw Object.assign(new Error("agent token invalid"), { status: 403 }); };
+  await assert.doesNotReject(assertRestartCaller(null, teams, tokenEnv, () => { throw new Error("disk record must not be read"); }, { verify: verifyOk }), "verified Overlord");
+  await assert.rejects(assertRestartCaller(null, teams, tokenEnv, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" }), { verify: verify403 }), /403/, "a wrong token is refused even when the disk record says Overlord");
+  await assert.rejects(assertRestartCaller(null, teams, tokenEnv, () => null, { verify: async ({ id }) => ({ id, role: "worker", lane: "bug-chaser", team: "vibesquad" }) }), /only the owner/, "the runner's record decides the role");
+  await assert.rejects(assertRestartCaller(null, teams, { ...spoof, VS_AGENT_TOKEN_REQUIRED: "1" }, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" })), /403/, "flag on + no token: refused");
+  await assert.rejects(run({}, { env: tokenEnv, verify: verify403 }), /403/);
+});
+
+test("X1b: a restart launched from an env with an agent id/token starts the server and runner without them", async () => {
+  const w = await world({ serverBootsRunner: false, envExtra: { VS_AGENT_ID: "rn-lead-shell", PASEO_AGENT_ID: "rn-lead-shell", VS_AGENT_TOKEN: "s3cret-agent-token" } });
+  try {
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual(w.spawned, ["server", "runner"], "both children were launched by the restart");
+    assert.equal(w.spawnEnvs.length, 2);
+    for (const e of w.spawnEnvs) {
+      assert.ok(e && typeof e === "object", "a launch env was passed");
+      for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN"]) assert.equal(k in e, false, `${k} must not reach the child`);
+      assert.equal(e.VIBESQUAD_HOME, w.outDir, "the rest of the env still passes through");
+    }
+    assert.equal(JSON.stringify(w.spawnEnvs).includes("s3cret-agent-token"), false, "the token string never reaches a child");
+  } finally {
+    await w.cleanup();
+  }
 });
 
 test("recycled runner pid: never killed (cmdline must be the runner) at detect time or right before the kill", async () => {
