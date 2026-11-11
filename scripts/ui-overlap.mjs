@@ -126,6 +126,8 @@ async function toSkyRiff(page, waitMs) {
   await toHub(page, "&riff=1");
   await click(page, `${tid("sky-face-hit-riffbot")}:visible`);
   await sleep(waitMs);
+  // RS-b..d: the slam is clock-driven (rAF writes --slam-swing / --slam-body-a, the panel carries .is-slam-fx), so there is no animationend: it is over when the fx class and both vars are gone. Auditing mid-fade samples the see-through body (false contrast hits).
+  await page.waitForFunction(() => !document.querySelector(".sky-chat-panel.is-slam-fx") && !/--slam-(swing|body-a)/.test(document.querySelector(".sky-zones")?.style.cssText ?? ""), null, { timeout: 8000 });
 }
 // Lift call button on the floor: floor n is reached with n presses of "next" (HP6: needs a squad with 3+ teams).
 async function toFloor(page, n) {
