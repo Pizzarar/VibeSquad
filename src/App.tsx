@@ -1,4 +1,4 @@
-import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
+import { FIRST_RUN_DONE_KEY, FirstLaunchVibePicker, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
 import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
 import { statusDot } from "./daemonOverlay";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -1321,10 +1321,10 @@ const Toolbar = memo(function Toolbar(props: {
       <button
         className="tchip"
         data-testid="toolbar-vibe-toggle"
-        title="Switch to Boring Mode (corporate ADE layout)"
+        title="Switch to Normal mode"
         onClick={() => setPref("app.vibe", "boring")}
       >
-        Boring mode
+        Normal mode
       </button>
       <button className="tchip" data-testid="global-transcript-search-btn" title="Search all transcripts" onClick={() => openOverlay("search")}>
         🔍
@@ -1884,6 +1884,7 @@ export function App() {
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
       {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
       {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
+      {modal !== "first-run" && <FirstLaunchVibePicker />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
       {modal === "new-squad" && (
         <NewSquadModal
@@ -1911,6 +1912,7 @@ export function App() {
   // E1: on a phone nothing else mounts. No desktop panels, no sidebar, no escape hatch (E3 passes bugSlot, E4b pairSlot).
   if (phoneShell) {
     return (
+      <>
       <PhoneCockpit
         views={sidebarViews}
         view={view}
@@ -1923,6 +1925,8 @@ export function App() {
         bugSlot={view ? <PhoneBugPill view={view} /> : undefined}
         pairSlot={<PhonePairSheet />}
       />
+      <FirstLaunchVibePicker />
+      </>
     );
   }
 

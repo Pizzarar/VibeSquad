@@ -34,11 +34,12 @@ test('applyPrefsToDom sets documentElement.dataset.vibe', () => {
   }
 });
 
-test('app.vibe pref UI copy says Vibespace and no pref copy says Hypnospace', () => {
+test('app.vibe pref UI copy says Psycho/Normal and no pref copy says Hypnospace', () => {
   const vibe = PREF_DEFS.find((d) => d.key === 'app.vibe');
   assert.ok(vibe, 'app.vibe pref def exists');
-  assert.equal(vibe.hint, 'Vibespace (fun) or corporate ADE (boring).');
-  assert.equal(vibe.options.find((o) => o.value === 'fun').label, 'Fun (Vibespace)');
+  assert.equal(vibe.hint, 'Psycho or Normal layout.');
+  assert.equal(vibe.options.find((o) => o.value === 'fun').label, 'Psycho');
+  assert.equal(vibe.options.find((o) => o.value === 'boring').label, 'Normal');
   for (const d of PREF_DEFS) {
     assert.ok(!/hypnospace/i.test(d.label ?? ''), `label says Hypnospace: ${d.key}`);
     assert.ok(!/hypnospace/i.test(d.hint ?? ''), `hint says Hypnospace: ${d.key}`);
