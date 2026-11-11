@@ -442,9 +442,9 @@ export function resolveAgentIdentity(
     }
   }
 
-  // Step 4: Parent chain (`paseo.parent-agent-id`, depth <= 8)
+  // Step 4: Parent chain (`vs.parent`, the runner's one parent key, as server/identity.mjs; depth <= 8)
   const depth = Number(options._depth ?? 0);
-  const parentId = String(labels["paseo.parent-agent-id"] ?? maybeAgent.parentAgentId ?? "").trim();
+  const parentId = String(labels["vs.parent"] ?? maybeAgent.parentAgentId ?? "").trim();
   if (parentId && depth < 8) {
     const parentAgent = resolveParentMapLookup(parentId, options);
     if (parentAgent) {

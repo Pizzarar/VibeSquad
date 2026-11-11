@@ -789,3 +789,81 @@ test('turn_ended: does not digest a worker that is still running or queued, and 
 });
 
 
+// idea-62 / idea-123: digests are tracked in server memory only, so a VS server restart orphaned every digest still queued
+// behind the antigravity turn cap (no waiter left to archive it) and a replayed turn_ended spawned a second one for the same turn.
+const { createRunnerHookHost } = await import('../server/backend/runner-hooks.mjs');
+const lastIdleSeq = (b, id) => String(b.runner.store.read(id).filter((e) => e.type === 'status' && e.status === 'idle').at(-1).seq);
+const digestsOf = async (b, workerId, { archived = true } = {}) =>
+  (await b.backend.listAgents({ filter: { includeArchived: archived } })).filter((a) => a.labels.digestFor === workerId);
+/** Every digest for `workerId` is created but never finishes its turn (stuck behind a turn cap, as far as the plugin can tell). */
+const holdDigests = (b, workerId) => {
+  const orig = b.backend.createAgent.bind(b.backend);
+  b.backend.createAgent = async (payload) =>
+    orig(payload?.labels?.digestFor === workerId ? { ...payload, prompt: 'HOLD: digest', initialPrompt: 'HOLD: digest' } : payload);
+};
+
+test('idea-123: after a server restart, a replayed turn_ended for a turn whose digest is still on the runner spawns no second digest, and the new server adopts it', async () => {
+  const b = await boot({ agy: true });
+  let host2 = null;
+  try {
+    const w = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'build thing' }, { initialPrompt: 'PASS: built' }));
+    holdDigests(b, w.id);
+    const d1 = await until(async () => (await digestsOf(b, w.id))[0], 8000, 'first digest');
+    const tid = lastIdleSeq(b, w.id);
+    // A fresh plugin closure over the same runner = a restarted VS server (empty digested / inflight maps).
+    host2 = await createRunnerHookHost(b.backend, { startWatcher: false });
+    const agent = await b.backend.getAgent(w.id);
+    await host2.emit('agent.turn_ended', { agent, turnId: tid, outcome: { kind: 'completed' } });
+    await settle(300);
+    const after = await digestsOf(b, w.id);
+    assert.deepEqual(after.map((a) => a.id), [d1.id], 'the replayed turn reuses the digest already on the runner');
+    assert.equal((await b.backend.getAgent(d1.id)).archivedAt, null, 'the live digest is kept');
+    // Adopted: the worker's next turn cancels it on the new server too (it used to stay queued forever).
+    await host2.emit('agent.turn_started', { agent });
+    await until(async () => (await b.backend.getAgent(d1.id)).archivedAt, 8000, 'adopted digest archived on turn_started');
+  } finally {
+    host2?.dispose?.();
+    await b.close();
+  }
+});
+
+test('idea-62: a digest left open for an older turn is archived when the worker\'s next turn ends, so one worker never holds two', async () => {
+  const b = await boot({ agy: true });
+  let host2 = null;
+  try {
+    const w = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'build thing' }, { initialPrompt: 'PASS: built' }));
+    holdDigests(b, w.id);
+    const d1 = await until(async () => (await digestsOf(b, w.id))[0], 8000, 'first digest');
+    host2 = await createRunnerHookHost(b.backend, { startWatcher: false });
+    const agent = await b.backend.getAgent(w.id);
+    // The worker ran another turn while the server was down (turn_started was history, only the turn end replays).
+    await host2.emit('agent.turn_ended', { agent, turnId: '9999', outcome: { kind: 'completed' } });
+    const d2 = await until(async () => (await digestsOf(b, w.id)).find((a) => a.id !== d1.id), 8000, 'digest for the newer turn');
+    await until(async () => (await b.backend.getAgent(d1.id)).archivedAt, 8000, 'older open digest archived');
+    assert.deepEqual((await digestsOf(b, w.id, { archived: false })).map((a) => a.id), [d2.id], 'one open digest per worker');
+  } finally {
+    host2?.dispose?.();
+    await b.close();
+  }
+});
+
+test('idea-62: the stale-digest sweep archives an orphaned digest (no waiter left) and writes the UNVERIFIED verdict; a fresh one is kept', async () => {
+  const b = await boot({ agy: true });
+  let host2 = null;
+  try {
+    const w = await b.backend.createAgent(req({ lane: 'bug-chaser', role: 'worker', job: 'sweep thing' }, { initialPrompt: 'PASS: swept' }));
+    holdDigests(b, w.id);
+    const d1 = await until(async () => (await digestsOf(b, w.id))[0], 8000, 'digest');
+    host2 = await createRunnerHookHost(b.backend, { startWatcher: false });
+    assert.deepEqual(await host2.dispose.sweepStaleDigests(Date.now()), [], 'a digest younger than the stale age is kept');
+    assert.equal((await b.backend.getAgent(d1.id)).archivedAt, null);
+    const swept = await host2.dispose.sweepStaleDigests(Date.now() + 60 * 60_000);
+    assert.deepEqual(swept, [d1.id]);
+    assert.ok((await b.backend.getAgent(d1.id)).archivedAt, 'orphaned digest archived');
+    const done = await until(() => teamLog().find((e) => e.type === 'done' && (e.refs ?? []).includes(w.id) && /^UNVERIFIED \(digest orphaned\)/.test(e.text)), 4000, 'UNVERIFIED verdict');
+    assert.match(done.text, /echo:PASS: swept/);
+  } finally {
+    host2?.dispose?.();
+    await b.close();
+  }
+});

@@ -688,7 +688,7 @@ export function ChangesPanel({ agent }: { agent: PaseoAgent }) {
           role: "worker",
           profile: REVIEW_PROFILE,
           job: "diff-review",
-          "paseo.parent-agent-id": agent.id,
+          "vs.parent": agent.id,
         },
         prompt,
         cwd,

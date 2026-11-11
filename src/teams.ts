@@ -1105,11 +1105,14 @@ export function matchesSearch(m: Member, query: string): boolean {
   return terms.every((t) => hay.includes(t));
 }
 
-const PARENT = "paseo.parent-agent-id";
+const PARENT = "vs.parent"; // the runner's one parent key (server/identity.mjs)
+// Paseo's parent label: Paseo cascade-archived an agent's children with it. The runner has no cascade and stamps vs.parent on
+// every agent spawn, so a "chained" lead is only a Paseo-label one (App.tsx ChainedRow clears the same label).
+const PASEO_PARENT = "paseo.parent-agent-id";
 
-// Live leads that still carry a parent link: a handoff chain that never got cut.
+// Live leads that still carry a Paseo parent link: a handoff chain that never got cut.
 export function chainedLeads(members: Member[]): Member[] {
-  return members.filter((m) => m.kind === "lead" && !m.agent.archivedAt && labelsOf(m.agent)[PARENT]);
+  return members.filter((m) => m.kind === "lead" && !m.agent.archivedAt && labelsOf(m.agent)[PASEO_PARENT]);
 }
 
 export type HandoffPair = { team: TeamDef; laneId: string | null; oldLead: Member; lead: Member | null; liveWorkers: number };

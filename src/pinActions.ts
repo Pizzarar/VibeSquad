@@ -248,7 +248,7 @@ export async function reopenPin(pin: Pin, deps: Pick<CompleteDeps, "fetch" | "sa
 
 // ── Duplicate Buddies (docs/PLAN_BUGS_BATCH2.md block 0) ──────────────────────
 
-const PARENT_LABEL = "paseo.parent-agent-id";
+const PARENT_LABEL = "vs.parent";
 
 /** "Keep this one": retire the pin's other live Buddies (no archive). Their live children are detached first. */
 export function keepPinBuddy(pin: Pin, keepId: string): Promise<{ retired: string[]; failed: string[] }> {
