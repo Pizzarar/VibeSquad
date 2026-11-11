@@ -96,6 +96,7 @@ Expected: the `vs` command prints its usage text without an error (`cli/vs.mjs:2
 6. Later, to update VibeSquad: when a **Restart & Update** bar appears at the top, click it (or **Later**). You can also
    check by hand in **⚙ SETTINGS**, **About** tab. Details: [Settings](../../../Reference/Settings.md), "Update channel".
    (Read from the source; UNVERIFIED on a real update.)
+   **Restart & Update** installs and restarts straight away, so finish or pause running agents first. Other restarts are gentler; see [Settings](../../../Reference/Settings.md), "Unstick VibeSquad and Restart runner".
 
 ## Name agents with labels, from day one
 VibeSquad sets labels for the agents it starts. If you start agents by hand, give each one labels when
