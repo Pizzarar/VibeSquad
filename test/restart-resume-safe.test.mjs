@@ -372,3 +372,19 @@ test("R1 M3b: a turn-edge event is persisted before its lifecycle reaches the ho
   assert.equal(b2.live.hwm.get("rn-worker"), 4, "history includes the dispatched idle");
   assert.equal(b2.live.turn.get("rn-worker").status, "idle", "no open turn left to end again");
 });
+
+test("R2: a turn-edge event in the same millisecond as a throttled one is still written at once (cold-start restart replayed its turn_ended)", async () => {
+  const now = Date.now();
+  const { home, t0 } = gapHome({ seen: "fresh", now });
+  const b = backendFor(home);
+  await b.enableCatchUp({ now });
+  const T = t0 + 60_000;
+  const log = path.join(home, "agents", "rn-worker.jsonl"); // same-ms turn_done + idle on disk too (the fake adapter emits both back to back)
+  writeFileSync(log, readFileSync(log, "utf8").replace(`"ts":${t0 + 60_001}`, `"ts":${T}`));
+  await b.handleLogEvent({ id: "rn-worker", event: { seq: 3, ts: T, type: "turn_done" } }); // throttled: arms the 1s timer, seenTs = T
+  await b.handleLogEvent({ id: "rn-worker", event: { seq: 4, ts: T, type: "status", status: "idle" } }); // same ms: must still flush now
+  assert.equal(JSON.parse(readFileSync(path.join(home, "server-seen.json"), "utf8")).ts, T, "the idle is on disk before the 1s timer");
+  const b2 = backendFor(home); // a lifecycle restart right now
+  await b2.enableCatchUp({ now: Date.now() });
+  assert.equal(b2.live.hwm.get("rn-worker"), 4, "the idle is history: no second turn_ended");
+});

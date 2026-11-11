@@ -1134,8 +1134,10 @@ export class RunnerBackend {
    * turn_ended into a second digest. The cost is at-most-once: a kill between this write and the dispatch drops it.
    */
   noteSeen(ts, { sync = false } = {}) {
-    if (!Number.isFinite(ts) || ts <= (this.live.seenTs ?? 0)) return;
-    this.live.seenTs = ts;
+    if (Number.isFinite(ts) && ts > (this.live.seenTs ?? 0)) this.live.seenTs = ts;
+    // Compare with what is ON DISK, not with seenTs: a throttled event in the same ms (turn_done right before its idle)
+    // already raised seenTs, and returning on ts <= seenTs then skipped the idle's sync write (the cold-start replay).
+    if ((this.live.seenTs ?? 0) <= (this.live.seenFlushed ?? 0)) return;
     if (sync) {
       clearTimeout(this.live.seenTimer);
       this.live.seenTimer = null;
@@ -1155,6 +1157,7 @@ export class RunnerBackend {
     try {
       fs.writeFileSync(`${file}.tmp`, JSON.stringify({ ts: this.live.seenTs, aliveAt: Date.now(), pid: process.pid }));
       fs.renameSync(`${file}.tmp`, file);
+      this.live.seenFlushed = this.live.seenTs;
     } catch { /* best effort: a missing file only means the next boot treats the gap as history (the old behaviour) */ }
   }
 
