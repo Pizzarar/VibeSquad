@@ -1,6 +1,6 @@
 # VibeSquad
 
-Multi-agent coordination system for [Claude Code](https://claude.com/claude-code) powered by [Paseo](https://getpaseo.com).
+Multi-agent coordination system for [Claude Code](https://claude.com/claude-code) and Gemini, running on VibeSquad's own agent runner. Use it as a Windows desktop app, in the browser, or from your phone (Android app or PWA).
 
 VibeSquad organizes Claude Code agents into **Squads** (product-level teams) and **Feature Lanes** (parallel workstreams), each with a **Buddy** (brainstorm partner), a **Lead** (implementation coordinator), and **Workers** (task agents). A lightweight `vs` CLI records decisions, reads team logs, and generates handoff packets — with no prompt or transcript content ever written to disk.
 
@@ -17,25 +17,31 @@ Squad (team)
         └── Workers — role=worker     — one task each, report via digest
 ```
 
-The **Paseo daemon** manages agent sessions. VibeSquad adds:
+The VibeSquad **agent runner** (`runner/`) manages agent sessions; the VS server (`server/`) hosts it. VibeSquad adds:
 
-- `vs` CLI: team log, `vs who`, `vs whoami`, `vs handoff`, `vs inbox`, `vs profiles`
-- Agent duties hook module (`server/hooks/agent-duties.ts`, hosted by the VS server for runner agents): prompt layering, auto-labelling, digest routing, lead handoff
-- Web UI (`src/`): roster view, team settings, idea inbox, profile management, pair-device QR modal
+- `vs` CLI: team log, `vs who`, `vs whoami`, `vs handoff`, `vs inbox`, `vs profiles`, `vs restart`
+- Agent duties hook module (`server/hooks/agent-duties.ts`, hosted by the VS server): prompt layering, auto-labelling, digest routing, lead handoff
+- Web UI (`src/`): roster view, team settings, idea inbox, profile management, Pair a Device modal. Two looks: the playful **Fun** pixel-art Vibespace, and **Boring Mode** (a plain corporate layout)
 - Push server (`server/push.mjs`): Web Push notifications for agent attention events
+
+## Where it runs
+
+- **Desktop app (Windows):** a Tauri shell with an NSIS installer (`src-tauri/tauri.conf.json`).
+- **Web:** the same UI served by the local server (`npm start`, default port 4180).
+- **Android app / PWA:** open **Link / Pair a Device (QR & 6-Digit Code)** on the PC, then scan the QR (or type the 6-digit code) on the phone. The window shows the **CA SHA-256 FINGERPRINT** to compare against what the phone shows, and **PAIRED DEVICES** has a **Revoke** button that signs a device out at once. Other devices are off by default (loopback only) until you enable remote access. Details: [Settings reference](guide/Reference/Settings.md).
+- **`vs restart`:** owner/Overlord only. It waits for agents to go idle (and for background work such as a test run), then restarts the runner and VS server and resumes the agents the restart lost. If background work is still running when the wait ends, the restart is put off and nothing is stopped.
+- **Live-Needs:** merge commits carry a `Live-Needs:` trailer (`none`, `build`, `frontend-reload`, `runner-restart`, `server-restart`) saying what a merge needs to go live.
 
 ## Install (Windows, one-stop installer)
 
 Run `VibeSquad-setup.exe`. It bundles everything VibeSquad itself needs: a pinned Node.js LTS (`node.exe` plus npm), the built web app, the server, the `vs` CLI and its production dependencies. No system-wide Node is required, and `vs` works from any terminal afterwards.
 
-- **Paseo:** if you already have Paseo installed (or a daemon is already listening on its port), VibeSquad reuses it and never starts a second daemon.
-- **No Paseo yet:** on first launch the Setup Checklist screen downloads `@getpaseo/cli@0.14.0` (~500 MB) from npm into `%LOCALAPPDATA%\com.vibesquad.desktop\paseo`, with live progress and a Retry button if you are offline.
-- **Your accounts:** you still install and log in to Claude Code and/or Gemini yourself; the checklist shows what it detects and links to the installers.
+- **Your accounts:** you still install and log in to Claude Code and/or Gemini yourself; the first-launch **Setup Checklist** shows what it detects (Claude Code, Gemini / Antigravity, optional Git) and links to the installers; you need at least one of Claude Code or Gemini to continue.
 - Quitting VibeSquad stops the server it started.
 
 ## Quickstart (from source)
 
-**Requirements:** Node.js 22+, [Paseo](https://getpaseo.com) running locally.
+**Requirements:** Node.js 22+, and Claude Code and/or Gemini installed and logged in.
 
 ```sh
 # 1. Clone and install
@@ -85,20 +91,11 @@ Each lane is a pinned **Team** in the UI. Optional pin fields:
 - `order`: sort position inside the squad (defaults to the order in the file).
 - `lastProfile`: profile of the last Brainstorm, reused when the Team quick-starts a new one.
 
-The CLI and plugin find `teams.json` in this order:
+The CLI and server find `teams.json` in this order:
 1. `$VIBESQUAD_TEAMS_FILE` (if set and exists)
 2. `~/.vibesquad/teams.json` (unless `$VIBESQUAD_IGNORE_HOME_TEAMS`)
 3. `<repo>/teams.json`
 4. `<repo>/teams.example.json` (tracked fallback — works on a fresh clone)
-
-### Plugin installation
-
-Install the server plugin in the Paseo daemon to enable prompt layering and agent auto-labelling:
-
-```sh
-# In the Paseo config, point the plugin path at plugin/index.ts
-# (exact steps depend on your Paseo version — see paseo --help plugins)
-```
 
 ## Environment variables
 
@@ -110,11 +107,11 @@ Install the server plugin in the Paseo daemon to enable prompt layering and agen
 | `VIBESQUAD_PORT` | `4180` | HTTP/HTTPS listen port |
 | `VIBESQUAD_LAN_IP` | auto-detected | Bind to a specific LAN IP for HTTPS |
 | `VIBESQUAD_MESHNET_HOST` | — | Meshnet hostname for HTTPS (e.g. a VPN host) |
-| `VS_PASEO_LANES` | — | Comma-separated lanes pinned to Paseo (also `"backend": "paseo"` on a lane in `teams.json`). Every other lane runs on the VS runner |
-| `VS_DEFAULT_BACKEND` | `runner` | Set to `paseo` to roll back to pre-cutover routing: only `VS_RUNNER_LANES` / `"backend": "runner"` lanes use the runner |
 | `VIBESQUAD_MESHNET_IP` | auto-detected | Meshnet IPv4 |
-| `PASEO_HOME` | `~/.paseo` | Paseo daemon home directory |
-| `PASEO_DAEMON` | `127.0.0.1:6767` | Paseo daemon address |
+
+## Credits
+
+VibeSquad was first built on [Paseo](https://getpaseo.com) by getpaseo and has since replaced it with its own runner; Paseo is not used or needed at runtime. Implemented VS agent runner adapters, native schedules and heartbeats, and MCP name aliases — Thanks to **Paseo** by `getpaseo`. See [CREDITS.md](./CREDITS.md) for the full list.
 
 ## Security
 
