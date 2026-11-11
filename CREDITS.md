@@ -26,3 +26,14 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented hand-pixelled office art pipeline (indexed palettes, batch scripts) — Thanks to **Aseprite** by `Igara Studio`
 - Implemented Aseprite pixel pipeline — Thanks to **aseprite-mcp** by `diivi`
 - Implemented QR pairing scan — Thanks to **jsQR** by `cozmo`
+
+## Community Accolades (v0.3)
+
+- Implemented README refresh — Thanks to **Paseo** by `getpaseo` (credit retained)
+- Implemented Boring Mode B1 (app.vibe + standalone boring.css) — Thanks to **Claude Code** by `Anthropic` and **Antigravity** by `Google DeepMind`
+- Implemented Boring Mode B2 (whole-app Antigravity ADE shell + card-grid dashboards) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
+- Implemented Boring Mode B3 (Perfection compact corporate header) — Thanks to **Claude Code** by `Anthropic` and **Antigravity** by `Google DeepMind`
+- Implemented Boring Mode B2r layout/readability refine (idea-125) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
+- Implemented Boring Mode B2r live 4K refine round 1 (idea-125) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
+- Implemented outbound E2EE relay hardening — Thanks to **@noble/curves** by `Paul Miller (paulmillr)`
+- Implemented hub skyline backdrop wiring — Thanks to **@art A1 (08bfe64)**
