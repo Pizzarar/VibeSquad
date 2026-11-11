@@ -46,6 +46,8 @@ Both are on the **About** tab, on the host PC only (they don't show on a remotel
 - **Unstick VibeSquad**: for when sends stall. It kills stray node processes (never VibeSquad's own server, the runner, MCP servers or live agents) and restarts the runner if it is down. It then reports how many it killed and whether the runner is healthy or DOWN (and "(restarted)" if it brought it back). If the runner isn't responding, it asks "Runner not responding — restart it? Running agents stop; Spin Up resumes them in place." and offers a **Restart runner** button.
 - **Restart runner**: for when runner fixes aren't going live. It restarts the runner so the latest runner code loads. Pressing it asks first: "Restart runner? Running turns are cancelled; agents resume on next message." Choose **Restart now** or **Cancel**. Afterwards it says "Runner restarted" and how many turns it cancelled.
 
+Restarts are now careful with your agents. When the `vs restart` command (or a runner restart on an update) runs, it waits for agents to go idle, and for any background work an idle agent started (like a test run), before it stops anything. If background work is still going after the wait, the restart is put off and nothing is stopped. Agents that were running are resumed afterwards and checked, with one retry; one that still won't wake is marked as an error instead of showing "initializing" forever. If the server itself restarted, an agent turn that finished while it was down is replayed once, so you still get the ping. The **Restart runner** button in Settings still cancels running turns, as its prompt says.
+
 - **Change it when:** a send hangs (try **Unstick VibeSquad** first), or after an update the runner still behaves like the old version (**Restart runner**).
 - **Safe default:** don't press either while an agent is mid-turn that you care about, since a restart cancels running turns.
 
@@ -113,6 +115,20 @@ The **Remote Control** tab lets paired phones, tablets and laptops open VibeSqua
 - **REMOTE CONTROL & REMOTE ACCESS**: the master switch, **Enabled** or **Off**. If a device reports that remote access is off on the PC, this is the one to turn on.
 - **DIRECT HOME LAN / NORDVPN MESHNET**: **Enabled** or **Off (loopback only)**. When on, VibeSquad serves HTTPS on port 4180 to your home network or meshnet and lists the addresses it is active on.
 - **LINK / PAIR A DEVICE**: the button **📱 Link / Pair a Device (QR & 6-Digit Code)** opens a window with a QR code and a 6-digit pairing code that expires after a short time. Scan the QR or type the code on the other device, and generate a new one when it expires. The window also shows the server addresses to type into the other device. A phone or browser may first need a one-time certificate step, which the same window explains.
+
+The window scrolls, so on a small screen you can reach everything; the header and **Close** stay put. From top to bottom it shows:
+
+1. **ANDROID APP (SIDELOAD APK)**: **⬇ Download VibeSquad.apk (Android)** and **Copy APK URL**, when the app is available. Install it, then use the app's own scan (not the phone camera).
+2. **PHONE: SCAN QR TO PAIR**: the QR code, the countdown, and the 6-digit code.
+3. The certificate step and the **CA SHA-256 FINGERPRINT**.
+4. The desktop block (server addresses to type into another PC).
+5. **PAIRED DEVICES**: every phone or PC that has paired, with when it was last seen.
+
+**Pairing on the phone.** In the Android app, **Pair with your PC** has a **Scan QR code** button. Scanning fills in the address, the code and the fingerprint; you then press **Pair** after checking the address is your PC. If you type things in by hand instead, you also have to type the **CA fingerprint** (the first 8 pairs of characters at least).
+
+**Checking the fingerprint.** The window shows a short fingerprint under **CA SHA-256 FINGERPRINT** (**Full hex** shows all of it). It identifies your PC's private certificate. When you install the certificate on a phone, compare the fingerprint the phone shows with the one on your PC screen. If the first characters match, it's your PC's certificate. If they don't, stop and don't install it. Never post or screenshot a real fingerprint.
+
+**Revoking a device.** If a phone is lost or you no longer trust it, open **PAIRED DEVICES** and press **Revoke** next to its name. That device is signed out right away, including any live connection it had open, and has to pair again with a new code to come back. **↻ Refresh** reloads the list.
 
 Pairing is always required, even with the network switch on. Treat the code like a password: don't post it, or a screenshot of it, anywhere.
 
