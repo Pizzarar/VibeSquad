@@ -614,6 +614,13 @@ export function authenticate(req) {
   if (isRelayRequest(req)) return authenticateRelayDevice(req);
   const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
   if (!token) return null;
+  // X1-E4b L4: a cookie-authenticated write must also prove it came from this site (Origin / Sec-Fetch-Site), not rest on
+  // SameSite=Strict alone. Refused before the hash lookup: no devices.json read, no last-seen, no tracked socket.
+  const refused = cookieWriteRefusal(req);
+  if (refused) {
+    req[ORIGIN_REFUSED] = refused;
+    return null;
+  }
   const dev = deviceByTokenHash(sha256Hex(token));
   if (!dev) return null;
   const now = Date.now();
@@ -676,6 +683,68 @@ export function isLocalBrowserSafe(req) {
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
   if (["POST", "PUT", "DELETE", "PATCH"].includes(req.method ?? "") && isBrowserRequest(h) && origin === undefined) return false;
   return true;
+}
+
+// ---- X1-E4b L4: same-origin proof for cookie-authenticated writes (both listeners, one chokepoint: authenticate) ----
+// vs_device is Secure; SameSite=Strict, so a browser withholds it from cross-site requests; this is the second layer for
+// the day that fails (a WebView or browser quirk, a same-site sibling origin, a leaked cookie replayed from a page).
+// Decision table for a non-GET/HEAD/OPTIONS request carrying vs_device:
+//   Origin present      -> must equal this listener's own origin (scheme://Host); "null" or any other value is refused.
+//   Origin absent       -> Sec-Fetch-Site absent, "none" or "same-origin" passes; "cross-site" / "same-site" is refused.
+// Missing BOTH headers is allowed on purpose: every browser (and the Android WebView, which is Chromium) sends Origin on
+// every POST/PUT/PATCH/DELETE, so a cross-site page cannot produce that shape. The clients that do produce it are not
+// browsers: the desktop proxy forwarding to a remote host (src-tauri main.rs strips Origin/Referer and passes the
+// webview's Sec-Fetch-Site through, which an older WebKit may omit altogether), curl-style tooling and the test suite.
+// Failing closed there would break the desktop app on a remote host without stopping any browser attack.
+// Relayed requests (req.relayDevice) never reach this: authenticate() answers them from the channel identity first.
+// Token-header and agent-header callers are not cookie auth and are not checked here (isLocalBrowserSafe covers loopback).
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+const ORIGIN_REFUSED = Symbol("vibesquad.origin-refused");
+export const CROSS_SITE_ERROR = "cross-site request refused: Origin / Sec-Fetch-Site do not match this host";
+
+const singleHeader = (h, name) => {
+  const v = h?.[name];
+  return v === undefined ? undefined : String(Array.isArray(v) ? v.join(", ") : v).trim();
+};
+
+/** `scheme://host` as a browser on this listener puts it in Origin (lower-cased), or null without a Host header. */
+export function ownOrigin(req) {
+  const host = singleHeader(req.headers, "host")?.toLowerCase();
+  if (!host) return null;
+  return `${req.socket?.encrypted ? "https" : "http"}://${host}`;
+}
+
+/**
+ * Why a state-changing request must NOT be authenticated by its vs_device cookie, or null when it may be. Safe methods
+ * (GET/HEAD/OPTIONS) always pass: reads are not CSRF targets and the SSE/WebSocket upgrades are GETs. See the table above.
+ */
+export function cookieWriteRefusal(req) {
+  if (SAFE_METHODS.has(String(req.method ?? "GET").toUpperCase())) return null;
+  const h = req.headers ?? {};
+  const origin = singleHeader(h, "origin");
+  if (origin !== undefined) {
+    const own = ownOrigin(req);
+    if (own && origin.toLowerCase() === own) return null;
+    return `Origin ${origin || "(empty)"} is not this host${own ? ` (${own})` : ""}`;
+  }
+  const site = singleHeader(h, "sec-fetch-site");
+  if (site === undefined || site === "none" || site === "same-origin") return null;
+  return `Sec-Fetch-Site ${site} without an Origin`;
+}
+
+/** The refusal authenticate() recorded for this request (a cookie write that failed the same-origin proof), or null. */
+export const originRefusal = (req) => req?.[ORIGIN_REFUSED] ?? null;
+
+/** 403 with a plain error for a refused cookie write: JSON on API paths / JSON callers, text otherwise. Never HTML. */
+export function sendCrossSiteRefused(req, res) {
+  const path = (req.url ?? "").split("?")[0];
+  if (path.startsWith("/__vibesquad/") || path.startsWith("/api/") || String(req.headers.accept ?? "").includes("application/json")) {
+    return sendJson(res, 403, { error: CROSS_SITE_ERROR });
+  }
+  res.statusCode = 403;
+  res.setHeader("content-type", "text/plain; charset=utf-8");
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  res.end(CROSS_SITE_ERROR);
 }
 
 // ---- Local token (owner trust on loopback) ----

@@ -33,6 +33,8 @@ import {
   isAllowedHostHeader,
   lockDownVibesquadHome,
   netConfig,
+  originRefusal,
+  sendCrossSiteRefused,
   sendUnpaired,
   setNoFraming,
 } from "./auth.mjs";
@@ -429,7 +431,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if (path === "/pair/status" && req.method === "GET") return handlePairStatus(req, res); // E4b waiting page poll (cookie-scoped)
     if (path === "/__vibesquad/enter") return handleEnter(req, res);
     const dev = authenticate(req);
-    if (!dev) return sendUnpaired(req, res);
+    if (!dev) return originRefusal(req) ? sendCrossSiteRefused(req, res) : sendUnpaired(req, res); // X1-E4b L4: cookie write off-site
     return handle(req, res);
   };
 
