@@ -6243,3 +6243,9 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .dc-riff { border-color: var(--violet); font-weight: 600; }
 .dc-more { min-height: 44px; align-self: flex-start; }
 .dc-alt { width: 100%; }
+
+/* Pair a Device: viewport-bound dialog, only the body scrolls; header + Close footer stay pinned (both vibes) */
+.modal.pair-modal-dialog { max-height: calc(100vh - 32px); max-height: calc(100dvh - 32px); overflow: hidden; }
+.pair-modal-dialog .modal-head { position: sticky; top: 0; z-index: 2; flex: none; background: var(--panel); }
+.pair-modal-dialog .modal-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.pair-modal-dialog .modal-foot { position: sticky; bottom: 0; z-index: 2; flex: none; background: var(--panel); }

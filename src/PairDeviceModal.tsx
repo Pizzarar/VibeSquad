@@ -283,6 +283,7 @@ export function PairDeviceModal({
       title="📱 PAIR A DEVICE · HOME LAN &amp; NORDVPN MESHNET HTTPS"
       onClose={onClose}
       wide
+      className="pair-modal-dialog"
       footer={
         <>
           {err && <span className="stat-alert small">{err}</span>}
@@ -329,6 +330,170 @@ export function PairDeviceModal({
             >
               🌐 NordVPN Meshnet ({host}:{port})
             </button>
+          </div>
+        </div>
+
+        {androidApkAvailable && apkUrl && (
+          <div className="preview" style={{ marginBottom: 0 }} data-testid="android-apk-card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+              <div>
+                <div className="field-label">🤖 ANDROID APP (SIDELOAD APK · {isLan ? "HOME LAN" : "MESHNET"})</div>
+                <div className="muted small" style={{ marginTop: 2 }}>
+                  Install the app, then scan with the in-app Scan (not the phone camera). Direct HTTP link: <code>{apkUrl}</code>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                <a
+                  className="btn ok small"
+                  data-testid="download-android-apk"
+                  href={apkUrl}
+                  download="VibeSquad.apk"
+                >
+                  ⬇ Download VibeSquad.apk (Android)
+                </a>
+                <button type="button" className="btn ghost small" onClick={() => copyText("apk", apkUrl)}>
+                  {copied === "apk" ? "✓ Copied APK URL" : "Copy APK URL"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div className="na-grid">
+          <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="preview" style={{ marginBottom: 0 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="field-label">
+                  PHONE STEP 1 — SCAN QR TO PAIR ({isLan ? `HOME LAN ${lanIp}` : "MESHNET"})
+                </span>
+                {!isLan && (
+                  <div className="seg">
+                    <button className={!effectiveIpMode ? "on" : ""} onClick={() => setUseIpMode(false)}>
+                      Meshnet Host
+                    </button>
+                    <button className={effectiveIpMode ? "on" : ""} onClick={() => setUseIpMode(true)}>
+                      Meshnet IP
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {pair && remainingSec > 0 && activePairUrl ? (
+                <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
+                  <div
+                    style={{ width: 148, height: 148, flex: "none", background: "#fff", padding: 4, border: "2px solid var(--cyan)" }}
+                    dangerouslySetInnerHTML={{ __html: activeQrSvg }}
+                  />
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: 1 }}>
+                    <div className="small">
+                      Expires in{" "}
+                      <b style={{ color: remainingSec < 60 ? "var(--pink-t)" : "var(--cyan-t)" }}>
+                        {mins}:{String(secs).padStart(2, "0")}
+                      </b>
+                    </div>
+                    <div className="field-label">DIRECT PAIRING LINK ({isLan ? "HOME LAN" : "MESHNET"})</div>
+                    <a
+                      href={activePairUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "var(--cyan-t)", wordBreak: "break-all", fontSize: 11 }}
+                      data-testid="active-pair-url"
+                    >
+                      {activePairUrl}
+                    </a>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+                      <button className="btn ok small" onClick={() => copyText("pair", activePairUrl)}>
+                        {copied === "pair" ? "✓ Copied Link" : "Copy Pairing Link"}
+                      </button>
+                      <button className="btn ghost small" disabled={busy} onClick={startPairing}>
+                        {busy ? "Generating…" : "↻ New QR Code"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                  <span className="muted small">
+                    {busy
+                      ? "Generating one-time pairing code…"
+                      : pair && remainingSec > 0 && !activePairUrl
+                        ? "No LAN or Meshnet address available for pairing."
+                        : "Pairing code expired or unavailable."}
+                  </span>
+                  <button className="btn ok small" disabled={busy} onClick={startPairing}>
+                    ↻ New QR Code
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <div className="preview" style={{ marginBottom: 0 }}>
+              <div className="field-label">PHONE / BROWSER STEP 2 — INSTALL ROOT CA (ONE-TIME PER DEVICE)</div>
+              <div className="muted small" style={{ margin: "4px 0 8px" }}>
+                Plain HTTP on {isLan ? "Home LAN" : "Meshnet"} serves <code>/ca.crt</code> and <code>/VibeSquad-setup.exe</code>. If you previously installed an older CA before LAN mode, re-install <code>/ca.crt</code> once.
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                <a className="btn ok small" href="/ca.crt" download="vibesquad-ca.crt">
+                  ⬇ Download /ca.crt
+                </a>
+                <a className="btn ghost small" href={caUrl} target="_blank" rel="noreferrer" data-testid="ca-http-link">
+                  {caUrl}
+                </a>
+                <button className="btn ghost small" onClick={() => copyText("ca", caUrl)}>
+                  {copied === "ca" ? "✓ Copied" : "Copy URL"}
+                </button>
+              </div>
+
+              <div className="field-label">CA SHA-256 FINGERPRINT</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
+                <code style={{ color: "var(--cyan-t)", fontWeight: 700 }}>{fp?.short ?? "generating…"}</code>
+                {fp?.full && (
+                  <button className="btn ghost small" onClick={() => setShowFullFp((v) => !v)}>
+                    {showFullFp ? "Hide full" : "Full hex"}
+                  </button>
+                )}
+              </div>
+              {showFullFp && fp?.full && (
+                <div style={{ marginTop: 4, wordBreak: "break-all" }}>
+                  <code className="small">{fp.full}</code>
+                </div>
+              )}
+
+              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                <button className="btn ghost small" onClick={() => setShowWinHelp((v) => !v)}>
+                  {showWinHelp ? "▾" : "▸"} Windows browser install steps (not needed for Desktop App)
+                </button>
+                {showWinHelp && (
+                  <div style={{ padding: "6px 8px", background: "var(--navy)", border: "1px solid var(--line)" }}>
+                    <div className="muted small">PowerShell (CurrentUser Root store, no admin prompt needed):</div>
+                    <pre style={{ margin: "4px 0", whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 11, color: "var(--cyan-t)" }}>
+                      {psCmd}
+                    </pre>
+                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                      <button className="btn ghost small" onClick={() => copyText("ps", psCmd)}>
+                        {copied === "ps" ? "✓ Copied PowerShell" : "Copy PowerShell"}
+                      </button>
+                      <span className="muted small">
+                        or <code>certutil -user -addstore Root vibesquad-ca.crt</code>
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                <button className="btn ghost small" onClick={() => setShowAndroidHelp((v) => !v)}>
+                  {showAndroidHelp ? "▾" : "▸"} Android / iPhone install steps ({isLan ? "Home LAN" : "Meshnet"})
+                </button>
+                {showAndroidHelp && (
+                  <div className="muted small" style={{ padding: "6px 8px", background: "var(--navy)", border: "1px solid var(--line)" }}>
+                    1. On your phone connected to {isLan ? "Home Wi-Fi" : "NordVPN Meshnet"}, open <code>{caUrl}</code> in Chrome/Safari to download <code>vibesquad-ca.crt</code>.<br />
+                    2. <b>Android:</b> Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate (Tap &ldquo;Install anyway&rdquo;).<br />
+                    3. Verify the SHA-256 fingerprint starts with <code>{fp?.short ?? ""}</code>, then scan the Step 1 QR code!
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -483,170 +648,6 @@ export function PairDeviceModal({
           </div>
           <div className="muted small" style={{ marginTop: 4 }}>
             Type either address into the Desktop App&apos;s Server Address field along with the 6-digit code above.
-          </div>
-        </div>
-
-        {androidApkAvailable && apkUrl && (
-          <div className="preview" style={{ marginBottom: 0 }} data-testid="android-apk-card">
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-              <div>
-                <div className="field-label">🤖 ANDROID APP (SIDELOAD APK · {isLan ? "HOME LAN" : "MESHNET"})</div>
-                <div className="muted small" style={{ marginTop: 2 }}>
-                  Install the app, then scan with the in-app Scan (not the phone camera). Direct HTTP link: <code>{apkUrl}</code>
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                <a
-                  className="btn ok small"
-                  data-testid="download-android-apk"
-                  href={apkUrl}
-                  download="VibeSquad.apk"
-                >
-                  ⬇ Download VibeSquad.apk (Android)
-                </a>
-                <button type="button" className="btn ghost small" onClick={() => copyText("apk", apkUrl)}>
-                  {copied === "apk" ? "✓ Copied APK URL" : "Copy APK URL"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        <div className="na-grid">
-          <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div className="preview" style={{ marginBottom: 0 }}>
-              <div className="field-label">PHONE / BROWSER STEP 1 — INSTALL ROOT CA (ONE-TIME PER DEVICE)</div>
-              <div className="muted small" style={{ margin: "4px 0 8px" }}>
-                Plain HTTP on {isLan ? "Home LAN" : "Meshnet"} serves <code>/ca.crt</code> and <code>/VibeSquad-setup.exe</code>. If you previously installed an older CA before LAN mode, re-install <code>/ca.crt</code> once.
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                <a className="btn ok small" href="/ca.crt" download="vibesquad-ca.crt">
-                  ⬇ Download /ca.crt
-                </a>
-                <a className="btn ghost small" href={caUrl} target="_blank" rel="noreferrer" data-testid="ca-http-link">
-                  {caUrl}
-                </a>
-                <button className="btn ghost small" onClick={() => copyText("ca", caUrl)}>
-                  {copied === "ca" ? "✓ Copied" : "Copy URL"}
-                </button>
-              </div>
-
-              <div className="field-label">CA SHA-256 FINGERPRINT</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 2 }}>
-                <code style={{ color: "var(--cyan-t)", fontWeight: 700 }}>{fp?.short ?? "generating…"}</code>
-                {fp?.full && (
-                  <button className="btn ghost small" onClick={() => setShowFullFp((v) => !v)}>
-                    {showFullFp ? "Hide full" : "Full hex"}
-                  </button>
-                )}
-              </div>
-              {showFullFp && fp?.full && (
-                <div style={{ marginTop: 4, wordBreak: "break-all" }}>
-                  <code className="small">{fp.full}</code>
-                </div>
-              )}
-
-              <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
-                <button className="btn ghost small" onClick={() => setShowWinHelp((v) => !v)}>
-                  {showWinHelp ? "▾" : "▸"} Windows browser install steps (not needed for Desktop App)
-                </button>
-                {showWinHelp && (
-                  <div style={{ padding: "6px 8px", background: "var(--navy)", border: "1px solid var(--line)" }}>
-                    <div className="muted small">PowerShell (CurrentUser Root store, no admin prompt needed):</div>
-                    <pre style={{ margin: "4px 0", whiteSpace: "pre-wrap", wordBreak: "break-all", fontSize: 11, color: "var(--cyan-t)" }}>
-                      {psCmd}
-                    </pre>
-                    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                      <button className="btn ghost small" onClick={() => copyText("ps", psCmd)}>
-                        {copied === "ps" ? "✓ Copied PowerShell" : "Copy PowerShell"}
-                      </button>
-                      <span className="muted small">
-                        or <code>certutil -user -addstore Root vibesquad-ca.crt</code>
-                      </span>
-                    </div>
-                  </div>
-                )}
-
-                <button className="btn ghost small" onClick={() => setShowAndroidHelp((v) => !v)}>
-                  {showAndroidHelp ? "▾" : "▸"} Android / iPhone install steps ({isLan ? "Home LAN" : "Meshnet"})
-                </button>
-                {showAndroidHelp && (
-                  <div className="muted small" style={{ padding: "6px 8px", background: "var(--navy)", border: "1px solid var(--line)" }}>
-                    1. On your phone connected to {isLan ? "Home Wi-Fi" : "NordVPN Meshnet"}, open <code>{caUrl}</code> in Chrome/Safari to download <code>vibesquad-ca.crt</code>.<br />
-                    2. <b>Android:</b> Settings → Security → Encryption &amp; credentials → Install a certificate → CA certificate (Tap &ldquo;Install anyway&rdquo;).<br />
-                    3. Verify the SHA-256 fingerprint starts with <code>{fp?.short ?? ""}</code>, then scan the Step 2 QR code!
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div className="preview" style={{ marginBottom: 0 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                <span className="field-label">
-                  PHONE STEP 2 — SCAN QR TO PAIR ({isLan ? `HOME LAN ${lanIp}` : "MESHNET"})
-                </span>
-                {!isLan && (
-                  <div className="seg">
-                    <button className={!effectiveIpMode ? "on" : ""} onClick={() => setUseIpMode(false)}>
-                      Meshnet Host
-                    </button>
-                    <button className={effectiveIpMode ? "on" : ""} onClick={() => setUseIpMode(true)}>
-                      Meshnet IP
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {pair && remainingSec > 0 && activePairUrl ? (
-                <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 8 }}>
-                  <div
-                    style={{ width: 148, height: 148, flex: "none", background: "#fff", padding: 4, border: "2px solid var(--cyan)" }}
-                    dangerouslySetInnerHTML={{ __html: activeQrSvg }}
-                  />
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 0, flex: 1 }}>
-                    <div className="small">
-                      Expires in{" "}
-                      <b style={{ color: remainingSec < 60 ? "var(--pink-t)" : "var(--cyan-t)" }}>
-                        {mins}:{String(secs).padStart(2, "0")}
-                      </b>
-                    </div>
-                    <div className="field-label">DIRECT PAIRING LINK ({isLan ? "HOME LAN" : "MESHNET"})</div>
-                    <a
-                      href={activePairUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ color: "var(--cyan-t)", wordBreak: "break-all", fontSize: 11 }}
-                      data-testid="active-pair-url"
-                    >
-                      {activePairUrl}
-                    </a>
-                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
-                      <button className="btn ok small" onClick={() => copyText("pair", activePairUrl)}>
-                        {copied === "pair" ? "✓ Copied Link" : "Copy Pairing Link"}
-                      </button>
-                      <button className="btn ghost small" disabled={busy} onClick={startPairing}>
-                        {busy ? "Generating…" : "↻ New QR Code"}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <span className="muted small">
-                    {busy
-                      ? "Generating one-time pairing code…"
-                      : pair && remainingSec > 0 && !activePairUrl
-                        ? "No LAN or Meshnet address available for pairing."
-                        : "Pairing code expired or unavailable."}
-                  </span>
-                  <button className="btn ok small" disabled={busy} onClick={startPairing}>
-                    ↻ New QR Code
-                  </button>
-                </div>
-              )}
-            </div>
           </div>
         </div>
 
