@@ -2813,7 +2813,7 @@ html {
 
 /* SS1/SS3: chat regions counter-zoom so root zoom x --chat-zoom = the chat scale; the kit pixel inside is snapped for that scale. */
 :root { --chat-zoom: 1; --u3-px-chat: 2px; }
-.drawer-shell > .timeline,
+.drawer-shell > .timeline-col,
 .drawer .composer {
   zoom: var(--chat-zoom, 1);
   --u3-px: var(--u3-px-chat, 2px);
@@ -3362,6 +3362,16 @@ html, body, #root { overflow-x: hidden; }
 .drawer-shell {
   display: flex;
   flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* The timeline column wraps the sticky header (search bar / pinned todo) ABOVE the scrollable timeline, so the
+   header is always visible (pinned) and the messages scroll in their own box beneath it — no overlap between them. */
+.drawer-shell .timeline-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -4254,11 +4264,10 @@ button.file-chip { cursor: pointer; font: inherit; }
 }
 
 /* Timeline search / prompt navigator / filters */
-/* The header is only sticky while the search bar is open (it owns the pinned search row). A bare pinned-todo header
-   scrolls with the timeline so it never overlaps the messages passing beneath it (overlap guard: tl-pinned-todo vs
-   tl-assistant). */
-.tl-head { display: flex; flex-direction: column; }
-.tl-head:has(.tl-bar) { position: sticky; top: 0; z-index: 10; }
+/* The header (search bar and/or pinned plan todo) lives above the scrollable timeline (src/Timeline.tsx renders it in
+   .timeline-col, outside .timeline), so it stays pinned whether or not the search bar is open and the messages scroll
+   in their own box beneath it. */
+.tl-head { display: flex; flex-direction: column; padding: 12px 12px 0; }
 .tl-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--well); border: 1px solid var(--cyan); }
 .tl-bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .tl-bar-row input { flex: 1 1 140px; min-width: 0; }

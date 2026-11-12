@@ -1474,19 +1474,7 @@ export function Timeline({
   };
 
   return (
-    <div
-      className="timeline"
-      ref={timelineRef}
-      onClick={(ev) => {
-        if (ev.target === ev.currentTarget) setSelectedEntryKey(null);
-      }}
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        const near = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-        pinned.current = near;
-        setIsPinned((p) => (p === near ? p : near));
-      }}
-    >
+    <div className="timeline-col">
       {(barOpen || pinnedTodo) && <div className="tl-head">
       {barOpen && (
         <div className="tl-bar" data-testid="tl-bar">
@@ -1535,6 +1523,19 @@ export function Timeline({
       )}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       </div>}
+      <div
+        className="timeline"
+        ref={timelineRef}
+        onClick={(ev) => {
+          if (ev.target === ev.currentTarget) setSelectedEntryKey(null);
+        }}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+          pinned.current = near;
+          setIsPinned((p) => (p === near ? p : near));
+        }}
+      >
       {slowFirstLoad && <TimelineSkeleton />}
       <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {shouldShowLoadOlder(entries, hasMore) && (
@@ -1638,6 +1639,7 @@ export function Timeline({
           ↓ Follow output
         </button>
       )}
+      </div>
     </div>
   );
 }
