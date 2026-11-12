@@ -3,6 +3,8 @@ import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readRunnerCwdSync } from "./backend/index.mjs";
+import { lastAssistantText } from "./mcp/tools.mjs";
+import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
@@ -347,6 +349,24 @@ export function agentLogFields(caller, { type, refs }) {
 }
 
 /**
+ * idea-175: a digest's `done` entry starts with the digested worker's own verdict line (`PASS|FAIL H/M/L <hash>`), copied
+ * byte-for-byte here in code, never the model's paraphrase; a disagreeing digest word is marked VERDICT-MISMATCH, and a
+ * reviewer with no verdict line logs NO-VERDICT. Any other entry is unchanged. An unreadable worker report is marked UNVERIFIED.
+ */
+export async function verbatimDigestText(caller, type, text, backend) {
+  if (!caller?.digest || type !== "done" || !caller.digestFor) return text;
+  const id = String(caller.digestFor);
+  try {
+    const b = backend ?? sharedRunnerBackend();
+    const [rec, tl] = await Promise.all([b.fetchAgent(id), b.fetchAgentTimeline(id, { direction: "tail" })]);
+    const worker = rec?.agent ?? rec;
+    return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker) }).text;
+  } catch {
+    return `UNVERIFIED (worker report unreadable): ${text}`;
+  }
+}
+
+/**
  * X1c lane role check: the agent must be one of `roles` on exactly (team, lane), or the Squad's Overlord for any lane of its
  * Squad. The lane is resolved through the registry (id / alias / name / code) so an alias cannot name another Squad's lane.
  */
@@ -563,7 +583,7 @@ async function handleSettings(req, res) {
   return sendJson(res, 405, { error: "method not allowed" });
 }
 
-async function handleLog(req, res) {
+async function handleLog(req, res, opts = {}) {
   try {
     if (req.method === "GET") {
       const team = new URL(req.url, "http://x").searchParams.get("team") ?? "";
@@ -594,7 +614,7 @@ async function handleLog(req, res) {
         laneId: String(lane || team),
         agent: who.agent,
         type: who.type,
-        text: t,
+        text: await verbatimDigestText(caller, who.type, t, opts.backend),
         refs: who.refs,
       });
       return sendJson(res, 200, entry);
@@ -930,7 +950,7 @@ async function handleBrainstormSummary(req, res, rootDir) {
   }
 }
 
-async function handleVsLog(req, res) {
+async function handleVsLog(req, res, opts = {}) {
   try {
     if (req.method === "GET") {
       const q = new URL(req.url, "http://x").searchParams;
@@ -970,7 +990,7 @@ async function handleVsLog(req, res) {
         laneId,
         agent: who.agent,
         type: who.type,
-        text,
+        text: await verbatimDigestText(caller, who.type, text, opts.backend),
         refs: who.refs,
       });
       return sendJson(res, 200, { ok: true, entry: resEntry.entry, path: resEntry.path });
@@ -1710,7 +1730,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
           if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
         });
       case "/__vibesquad/log":
-        return handleLog(req, res);
+        return handleLog(req, res, opts);
       case "/__vibesquad/attach":
       case "/__vibesquad/attach-files":
         return handleAttach(req, res, rootDir, opts);
@@ -1719,7 +1739,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       case "/__vibesquad/brainstorm-summary":
         return handleBrainstormSummary(req, res, rootDir);
       case "/__vibesquad/vs-log":
-        return handleVsLog(req, res);
+        return handleVsLog(req, res, opts);
       case "/__vibesquad/unstick": // owner-only: POST is gated above (isOwner for every non-GET)
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
         return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
