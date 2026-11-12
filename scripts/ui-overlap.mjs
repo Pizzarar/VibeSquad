@@ -171,11 +171,21 @@ export const SURFACES = [
   { id: "modal-diagnostics", setup: async (p) => { await reset(p); await click(p, tid("open-diagnostics-btn")); await p.locator(tid("diagnostics-modal")).waitFor({ timeout: 4000 }); await sleep(500); }, mobile: false },
 ];
 
+// Surfaces whose setup deliberately leaves a non-modal popover/menu/panel open: that layer is the top layer, so
+// content beneath it is covered. A pair with one element inside the layer and the other outside is NOT an
+// overlap (same idea as ui-clicks OPEN_LAYER); overlaps between elements inside the layer still are.
+const OPEN_LAYER = {
+  "menu-drawer-config": ".drawer-config-popover",
+  "menu-pin-tile": ".pin-menu-list",
+  "sky-riff-open": ".sky-chat-panel",
+  "sky-riff-landed": ".sky-chat-panel",
+};
+
 // ── Per-surface audit ────────────────────────────────────────────────────────
 const HIDE_TEXT = `*,*::before,*::after{-webkit-text-fill-color:transparent!important;text-shadow:none!important;caret-color:transparent!important;-webkit-text-stroke:0!important;transition:none!important;animation:none!important}`;
 
 async function auditSurface(page, size, surf) {
-  const res = await page.evaluate(`(${AUDIT_SRC})(${JSON.stringify({ tolerance: 2, rootSelectors: (size.mobile && surf.mobileRoots) || surf.roots || null })})`);
+  const res = await page.evaluate(`(${AUDIT_SRC})(${JSON.stringify({ tolerance: 2, rootSelectors: (size.mobile && surf.mobileRoots) || surf.roots || null, openLayer: OPEN_LAYER[surf.id] ?? null })})`);
   if (res.missing) return res;
   // Pixel pass: text hidden → sample the real rendered background under every text box.
   const h = await page.addStyleTag({ content: HIDE_TEXT });
