@@ -2502,7 +2502,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           .finally(() => {
             // idea-150: record the turn as delivered only once its digest finished (not at spawn: a spawned digest a restart
             // re-adopts, idea-123, must still pass the replayed turn_ended). A newer turn (epoch moved) is not this turn's delivery.
-            if (tid && (turnEpoch.get(workerId) ?? 0) === epoch) persistDigestedTurn(workerId, tid);
+            // Only a logged verdict (digest agent or fallback) counts: a failed/rejected digest with nothing logged must retry after a restart.
+            if (tid && (turnEpoch.get(workerId) ?? 0) === epoch && verdictLogged()) persistDigestedTurn(workerId, tid);
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
             if (createdDigestId && inflightDigestIds.get(workerId) === createdDigestId) inflightDigestIds.delete(workerId);
             if (createdDigestId) {
