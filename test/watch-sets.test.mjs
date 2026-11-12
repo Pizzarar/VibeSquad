@@ -693,6 +693,107 @@ test("a set spawns at most one Flash worker across multiple over-long pings (sta
 });
 
 // ---------------------------------------------------------------------------
+// idea-160 R3
+// ---------------------------------------------------------------------------
+
+test("escalation (R3 H): every item stalled, no sibling done: after the last step the set closes with its one ping", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-a" }, { kind: "agent", ref: "w-b" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-a", "idle"));
+    engine.onRunnerEvent(agentEv("w-b", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick();
+    assert.equal(engine.list()[0].firedAt, undefined, "esc2 just fired");
+    clock.t += 1 * MIN;
+    await engine.tick();
+    assert.ok(engine.list()[0].firedAt, "closed after the last step");
+    const done = delivered.filter((d) => d.pingKey === "done");
+    assert.equal(done.length, 1);
+    assert.match(done[0].text, /still stalled/);
+    const n = delivered.length;
+    clock.t += 300 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, n, "nothing after the close");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation (R3 H): siblings finished BEFORE the stall ping; the idle one escalates, then the set closes once", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-idle" }, { kind: "agent", ref: "w-ok" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    engine.onRunnerEvent(agentEv("w-ok", "idle"));
+    await engine.tick();
+    clock.t = T0 + 10 * MIN;
+    engine.onLogEntry("t", doneEntry("w-ok", clock.t));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick(); // stall ping (w-idle)
+    clock.t += 25 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick();
+    clock.t += 1 * MIN;
+    await engine.tick();
+    assert.ok(engine.list()[0].firedAt);
+    assert.equal(delivered.filter((d) => d.pingKey === "done").length, 1);
+    assert.deepEqual(delivered.map((d) => d.target).filter(Boolean), ["owner", "overlord"]);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation (R3 M): a real turn after the nudge's clears nudgeTurnAt (persisted), so a restart does not revive the episode", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-m" }] }, { home: sb.home, now: T0 });
+    const clock = { t: T0 };
+    const a = escEngine(sb, { clock });
+    a.engine.onRunnerEvent(agentEv("w-m", "idle"));
+    await a.engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await a.engine.tick();
+    clock.t += 25 * MIN;
+    await a.engine.tick(); // esc1 + nudge
+    clock.t += 10_000;
+    a.engine.onRunnerEvent(agentEv("w-m", "running"));
+    a.engine.onRunnerEvent({ kind: "turn_started", agentId: "w-m" }); // the nudge's turn
+    await a.engine.tick();
+    assert.ok(a.engine.list()[0].items[0].nudgeTurnAt, "recorded");
+    clock.t += 2 * MIN;
+    a.engine.onRunnerEvent(agentEv("w-m", "idle"));
+    await a.engine.tick();
+    clock.t += 10 * MIN;
+    a.engine.onRunnerEvent(agentEv("w-m", "running"));
+    a.engine.onRunnerEvent({ kind: "turn_started", agentId: "w-m" }); // a real turn
+    await a.engine.tick();
+    assert.equal(a.engine.list()[0].items[0].nudgeTurnAt, undefined, "cleared and persisted");
+    clock.t += 2 * MIN;
+    a.engine.onRunnerEvent(agentEv("w-m", "idle"));
+    await a.engine.tick();
+    // restart: the new engine has no turn time in memory
+    const b = escEngine(sb, { clock });
+    b.engine.onRunnerEvent(agentEv("w-m", "idle"));
+    clock.t += 90 * MIN;
+    await b.engine.tick();
+    await b.engine.tick();
+    assert.equal(b.delivered.filter((d) => d.target === "overlord").length, 0, "no Overlord ping from the ended episode");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Plugin integration: the wake path (agent-duties.ts Hook 3 / 3b)
 // ---------------------------------------------------------------------------
 
@@ -707,6 +808,8 @@ const TEAMS_DOC = {
       ],
       paths: ["VibeSquad"],
     },
+    { id: "efi", name: "EFI", lanes: [{ id: "efi", name: "EFI", hub: true, paths: ["EFI"] }, { id: "main-game", name: "Main", paths: ["EFI"] }], paths: ["EFI"] },
+    { id: "nf", name: "NF", lanes: [{ id: "nf", name: "NF", paths: ["NF"] }, { id: "ln", name: "LN", paths: ["NF"] }], paths: ["NF"] },
   ],
 };
 const CWD = "/projects/VibeSquad";
@@ -725,12 +828,15 @@ async function pluginHarness(sb, agents, extra = {}) {
     firstPromptRedeliverMs: 60_000,
     setLabels: async () => {},
     archiveAgent: async () => {},
-    watchSets: { home: sb.home, tmpdir: sb.tmp, retryMs: 0 },
+    watchSets: { home: sb.home, tmpdir: sb.tmp, retryMs: 0, ...(extra.watchSets ?? {}) },
   })(server);
   const paseo = {
     agents: {
       ref: (id) => ({
-        refresh: async () => (agents.has(id) ? { agent: agents.get(id) } : null),
+        refresh: async () => {
+          extra.onRefresh?.(id);
+          return agents.has(id) ? { agent: agents.get(id) } : null;
+        },
         send: async (text) => void sent.push({ to: id, text }),
         archive: async () => {},
         detach: async () => {},
@@ -1036,9 +1142,10 @@ test("escalation: idle-no-report stall ping, then owner re-ping 25 min later, th
       clock.t += 30 * MIN;
       await engine.tick();
     }
-    assert.equal(delivered.length, 3, "each step fires once");
+    assert.equal(delivered.length, 4, "stall, esc1, esc2, then the one completion ping; each once");
+    assert.equal(delivered.filter((d) => d.pingKey === "done").length, 1);
     assert.equal(nudges.length, 1, "nudge once");
-    assert.equal(engine.get(id).firedAt, undefined);
+    assert.ok(engine.get(id).firedAt, "the set closes after the last step");
   } finally {
     sb.cleanup();
   }
@@ -1292,3 +1399,131 @@ test("escalation survives a server restart: persisted steps are not re-fired, th
     sb.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// idea-160 R3: plugin-level Overlord fallback chain + idle nudge (resolveWatchOverlord / nudgeIdleWorker)
+// ---------------------------------------------------------------------------
+
+const ag = (id, team, lane, role, status = "idle") => ({
+  id,
+  title: id,
+  cwd: `/projects/${team === "efi" ? "EFI" : team === "nf" ? "NF" : "VibeSquad"}`,
+  status,
+  provider: "claude",
+  labels: { team, lane, role },
+});
+
+/** Runs a watch through stall + esc1 + esc2 on a fake clock inside the real plugin; returns what each agent was sent and the plugin log. */
+async function escalateInPlugin(sb, agents, { team, lane, owner = "own", worker = "w", onRefresh } = {}) {
+  const clock = { t: Date.now() };
+  addWatch({ owner, team, lane, items: [{ kind: "agent", ref: worker }] }, { home: sb.home, now: clock.t });
+  const logs = [];
+  const origLog = console.log;
+  console.log = (...a) => void logs.push(a.join(" "));
+  const h = await pluginHarness(sb, agents, { watchSets: { now: () => clock.t }, onRefresh });
+  const step = async (min) => {
+    clock.t += min * MIN;
+    await h.watch.tick();
+    await wait(250);
+    await h.watch.tick();
+  };
+  try {
+    await h.watch.tick();
+    await step(16);
+    await step(26);
+    await step(26);
+  } finally {
+    console.log = origLog;
+    h.stop();
+  }
+  return { sent: h.sent, logs };
+}
+
+const esc2 = /escalation 2\/2/;
+
+test(
+  "plugin R3: Overlord step goes to the Squad's flagged hub Lead (EFI), the owner gets the stall + esc1 pings",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["own", ag("own", "efi", "main-game", "lead")],
+      ["hub", ag("hub", "efi", "efi", "lead")],
+      ["vs-hub", ag("vs-hub", "vibesquad", "vibesquad", "lead")],
+      ["w", ag("w", "efi", "main-game", "worker")],
+    ]);
+    const { sent, logs } = await escalateInPlugin(sb, agents, { team: "efi", lane: "main-game" });
+    assert.equal(sent.filter((x) => x.to === "hub" && esc2.test(x.text)).length, 1, JSON.stringify(sent));
+    assert.equal(sent.filter((x) => x.to === "own" && /escalation 1\/2/.test(x.text)).length, 1);
+    assert.equal(sent.filter((x) => x.to === "vs-hub").length, 0);
+    assert.ok(!logs.some((l) => /escalation 2 goes to/.test(l)), "no fallback needed");
+  }),
+);
+
+test(
+  "plugin R3: a Squad with no hub flag but lane id == team id still resolves its hub Lead (isHubCwd fallback)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["own", ag("own", "nf", "ln", "lead")],
+      ["hub", ag("hub", "nf", "nf", "lead")],
+      ["w", ag("w", "nf", "ln", "worker")],
+    ]);
+    const { sent } = await escalateInPlugin(sb, agents, { team: "nf", lane: "ln" });
+    assert.equal(sent.filter((x) => x.to === "hub" && esc2.test(x.text)).length, 1, JSON.stringify(sent));
+  }),
+);
+
+test(
+  "plugin R3: no live hub Lead in the Squad -> the vibesquad Overlord, logged",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["own", ag("own", "efi", "main-game", "lead")],
+      ["vs-hub", ag("vs-hub", "vibesquad", "vibesquad", "lead")],
+      ["w", ag("w", "efi", "main-game", "worker")],
+    ]);
+    const { sent, logs } = await escalateInPlugin(sb, agents, { team: "efi", lane: "main-game" });
+    assert.equal(sent.filter((x) => x.to === "vs-hub" && esc2.test(x.text)).length, 1, JSON.stringify(sent));
+    assert.ok(logs.some((l) => /escalation 2 goes to the vibesquad Overlord vs-hub/.test(l)), logs.join("\n"));
+  }),
+);
+
+test(
+  "plugin R3: no Overlord anywhere -> the watch owner's target, logged (the ping is not dropped)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["own", ag("own", "efi", "main-game", "lead")],
+      ["w", ag("w", "efi", "main-game", "worker")],
+    ]);
+    const { sent, logs } = await escalateInPlugin(sb, agents, { team: "efi", lane: "main-game" });
+    assert.equal(sent.filter((x) => x.to === "own" && esc2.test(x.text)).length, 1, JSON.stringify(sent));
+    assert.ok(logs.some((l) => /no live Overlord anywhere; escalation 2 goes to the owner's target own/.test(l)), logs.join("\n"));
+  }),
+);
+
+test(
+  "plugin R3: nudgeIdleWorker sends the nudge once to an idle worker",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["own", ag("own", "efi", "main-game", "lead")],
+      ["w", ag("w", "efi", "main-game", "worker")],
+    ]);
+    const { sent } = await escalateInPlugin(sb, agents, { team: "efi", lane: "main-game" });
+    assert.equal(sent.filter((x) => x.to === "w" && /went idle without a report/.test(x.text)).length, 1, JSON.stringify(sent));
+  }),
+);
+
+test(
+  "plugin R3: nudgeIdleWorker never sends to a worker that is running at send time",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["own", ag("own", "efi", "main-game", "lead")],
+      ["w", ag("w", "efi", "main-game", "worker")],
+    ]);
+    // the worker is idle for the engine's snapshots, then busy by the time the nudge re-reads it
+    // reads of "w": 1 first tick, 2 stall tick, 3 esc1 tick (engine snapshot), 4 = the nudge's own re-read
+    let reads = 0;
+    const onRefresh = (id) => {
+      if (id === "w" && ++reads >= 4) agents.get("w").status = "running";
+    };
+    const { sent } = await escalateInPlugin(sb, agents, { team: "efi", lane: "main-game", onRefresh });
+    assert.equal(sent.filter((x) => x.to === "w").length, 0, JSON.stringify(sent));
+  }),
+);
