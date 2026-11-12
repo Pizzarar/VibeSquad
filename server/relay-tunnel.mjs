@@ -131,10 +131,23 @@ export function rotateHostKeypair(file = defaultKeypairPath()) {
   return next;
 }
 
-/** Cheap identity of the keypair file (path + mtime + size) so a running host can notice a rotation without reading it. */
+/**
+ * Identity of the keypair file so a running host can notice a rotation: path + mtime + size + the first 16 hex of a
+ * SHA-256 of the bytes. The content hash is what catches a rotation inside one mtime tick (~15.6ms on Windows; key
+ * size never changes). In-memory comparison only: never log or return this stamp (the hash covers the private key).
+ */
 export function keypairFileStamp(file = defaultKeypairPath()) {
-  const st = statSync(file, { throwIfNoEntry: false });
-  return st ? `${file}|${st.mtimeMs}|${st.size}` : `${file}|missing`;
+  let st, bytes;
+  try {
+    st = statSync(file, { throwIfNoEntry: false });
+    if (!st) return `${file}|missing`;
+    bytes = readFileSync(file);
+  } catch (e) {
+    if (e?.code === "ENOENT") return `${file}|missing`;
+    // Mid-rename/locked: never throw from the poller; a distinct stamp makes it try one load (keeps the old key on failure) and then stay quiet until the file reads again.
+    return `${file}|unreadable`;
+  }
+  return `${file}|${st.mtimeMs}|${st.size}|${createHash("sha256").update(bytes).digest("hex").slice(0, 16)}`;
 }
 
 /** Short human-comparable fingerprint of a host public key (base64 or Buffer): first 16 hex of SHA-256, grouped. */

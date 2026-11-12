@@ -45,7 +45,7 @@ function defaultNeedsYou(event) {
  * createRelayWiring({ endpoint, requestListener }) -> { start, stop, status, revoke, hostId, pub, fingerprint, endpoint }
  *   requestListener(req, res): the server's full request handler (serve.mjs `handle`, guarded). Relayed HTTP runs through
  *   createInProcessDispatcher; relayed `ws-open` streams an in-process GET (SSE) through createInProcessStreamBridge.
- *   keypairFile: ~/.vibesquad/host-keypair.json (in HOME_SECRET_FILES). The file is polled (stat only) every
+ *   keypairFile: ~/.vibesquad/host-keypair.json (in HOME_SECRET_FILES). The file is polled (stat + content hash) every
  *   `keyPollMs`: `vs host-key rotate` replaces it atomically, and the running host then drops every session, re-dials
  *   the relay under the new self-certifying hostId and never answers for the old key again, without a server restart.
  *   log / onNeedsYou / now / timers are injectable for tests; `hostOptions` is passed through to createRelayHost.
