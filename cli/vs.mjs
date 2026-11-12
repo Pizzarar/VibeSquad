@@ -31,7 +31,8 @@ import {
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
 import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
-import { agentCallerOf, callTool, createContext, hasOwnerProof, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
+import { agentCallerOf, callTool, createContext, hasOwnerProof, lastAssistantText, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
+import { evaluateVerdictGate } from "../server/verdict.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath, teamsRevision, writeTeamsRegistry } from "../server/teams-file.mjs";
 import {
@@ -525,6 +526,7 @@ Usage:
   vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
   vs logs <agent> [--limit <N>]   agent timeline entries
   vs inspect <agent>   full agent record
+  vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]   merge gate: exit 0 only if the reviewer's own FIRST line is "PASS H/M/L <hash>" and <hash> prefixes git rev-parse <branch>; else non-zero (1 FAIL, 2 no verdict line, 3 hash mismatch/stale review, 4 not a reviewer, 5 branch unresolved)
   vs stop <agent>   interrupt an agent's current turn
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
@@ -2070,6 +2072,37 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   return 0;
 }
 
+/** `git rev-parse --verify <branch>^{commit}` in `cwd`: the full tip hash, or "" when it does not resolve. */
+function gitRevParse(branch, cwd) {
+  const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${branch}^{commit}`], { cwd, encoding: "utf8", windowsHide: true, timeout: 15_000 });
+  return r.status === 0 ? String(r.stdout ?? "").trim() : "";
+}
+
+/**
+ * idea-170 merge gate: `vs verdict <reviewerAgentId> --branch <branch>`. Reads the reviewer's record + last assistant message
+ * over the same read-only backend path as `vs inspect` / `vs logs` (it writes nothing), takes the FIRST line, and exits 0 only
+ * for `PASS H/M/L <hash>` with <hash> a prefix of the branch tip. Prints the verdict line, then the reason.
+ */
+export async function commandVerdict(flags, makeContext = createContext, { out = (s) => process.stdout.write(s), err = (s) => process.stderr.write(s), revParse = gitRevParse } = {}) {
+  const id = String(flags._[0] ?? "").trim();
+  const branch = flags.branch === undefined || flags.branch === true ? "" : String(flags.branch).trim();
+  if (!id || flags._.length > 1 || !branch) throw new Error("usage: vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]");
+  if (branch.startsWith("-")) throw new Error(`--branch must name a branch or commit, got "${branch}"`);
+  const identity = resolveIdentity(flags);
+  const ctx = makeContext({ identity: { agentId: identity.agentId, token: identity.token, team: identity.team.id, lane: identity.lane, role: identity.role } });
+  const { agent, lastMessage } = await ctx.withBackend({ id }, async (b) => {
+    const rec = await (b.fetchAgent ?? b.getAgent).call(b, id);
+    const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline).call(b, id, { direction: "tail", limit: 50, projection: "projected" });
+    return { agent: rec?.agent ?? rec, lastMessage: lastAssistantText(tl, Infinity) };
+  });
+  const tip = revParse(branch, flags.cwd ? path.resolve(String(flags.cwd)) : process.cwd());
+  const res = evaluateVerdictGate({ agent: { id, ...(agent ?? {}) }, lastMessage, tip, branch });
+  out(`${res.line || "(no final message)"}\n`);
+  if (res.ok) out(`vs verdict: ${res.reason}\n`);
+  else err(`vs verdict: REFUSED: ${res.reason}\n`);
+  return res.code;
+}
+
 // Every repo file cli/vs.mjs can reach through relative imports (static or dynamic), so the runtime copy stays complete.
 function vsImportClosure(repoRoot) {
   const seen = new Set();
@@ -2737,6 +2770,7 @@ export const KNOWN_VERBS = [
   "ls",
   "logs",
   "inspect",
+  "verdict",
   "stop",
   "archive",
   "mcp",
@@ -2832,6 +2866,7 @@ export function main(argv) {
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
+    if (command === "verdict") return commandVerdict(flags);
     if (
       command === "spawn" ||
       command === "send" ||

@@ -32,6 +32,7 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Provider cap / failover | "claude is capped" | `cli/vs.mjs:514` (`vs cap`); STANDING_RULES `server/lessons.mjs:162` | @per |
 | Compact in place | "compact first" | docs/PLAN_COMPACT_IN_PLACE_1108.md:8 | @bug |
 | Runtime restart | "restart the runner/server" | `cli/vs.mjs:517` (`vs restart`, owner/Overlord only); merge trailer `server/lessons.mjs:165` | @bug |
+| Merge gate (reviewer verdict) | every unit merge, "is it reviewed?" | `cli/vs.mjs:529` (`vs verdict <reviewerAgentId> --branch <branch>`: exit 0 only on the reviewer's own first line `PASS H/M/L <hash>` matching the branch tip; run it before `git merge`); STANDING_RULES `server/lessons.mjs:167`; digest copies the line verbatim `server/vibesquad-api.mjs:356` | @bug |
 | Merge trailer (Live-Needs) | every master merge | `server/lessons.mjs:165`; `server/sync-runtime.mjs:172` | @bug |
 | Usage dashboard / review | "how much did X cost" | docs/PLAN_USAGE_DASHBOARD.md:28; docs/lanes/perfection/USAGE_REVIEW_PROMPT.md:1 | @usa |
 | Pair a device | "pair my phone" | `cli/vs.mjs:533` (`vs pair`) | @and |
