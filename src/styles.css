@@ -4818,7 +4818,9 @@ button.project-file-name:hover { text-decoration: underline; }
 /* G8b/G8c: the wall between the TVs: one thin divider (2px theme ink by default; sky-crt.json `wall` art when it loads, inline style) on the centre line, above both TVs and the chat panel. Absolute, so it never takes grid space. */
 .sky-wall { position: absolute; top: 8px; bottom: 12px; left: 50%; width: 2px; margin-left: -1px; background: var(--u3-ink, #07040f); z-index: 4; pointer-events: none; box-sizing: border-box; }
 .sky-wall.has-art { top: 0; bottom: 0; }
-.sky-zones.has-sky-art { background-size: auto 100%; background-position: left bottom; background-repeat: repeat-x; image-rendering: pixelated; } /* @art: horizontally tileable band */
+/* @art: horizontally tileable sky band, drawn as its own layer (not the .sky-zones background) so the overlap guard's
+   bar-strip probe never mistakes it for a painted title bar behind the TVs' Spin Up controls. */
+.sky-band { position: absolute; inset: 0; z-index: 0; pointer-events: none; background-size: auto 100%; background-position: left bottom; background-repeat: repeat-x; image-rendering: pixelated; }
 .sky-zone {
   display: flex;
   flex-direction: column;
