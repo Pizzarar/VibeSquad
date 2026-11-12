@@ -1,14 +1,14 @@
 # Probe the old server as a new CI runner host (admin task)
 
-Asked by Aub on 2026-11-12 (via EFI Overlord Rif2 → VibeSquad Hub9). Run this in a Claude Code (or plain shell) session **on the old server itself**. If it has no Claude, open an SSH session from DEVPC and paste the commands in.
+Asked by the owner on 2026-11-12 (via EFI Overlord Rif2 → VibeSquad Hub9). Run this in a Claude Code (or plain shell) session **on the old server itself**. If it has no Claude, open an SSH session from DEVPC and paste the commands in.
 
 ## Why
 EFI's Linux GitHub Actions runners live in the `gh-runner` Hyper-V VM on DEVPC (12 GB RAM, 8 vCPU of an i9-13900H, Ubuntu 24.04). The plan is to move them onto this server, so DEVPC only does dev work (agents + local Godot). The server will be upgraded to 32 GB RAM, and its CPU stays as it is, so **the CPU decides go/no-go**. Target layout: 2 priority runners at 4-8 GB, 2 general runners at 2 GB, with headroom. This task only measures. Nothing gets registered or moved.
 
 ## Scope (do only this)
-- Read-only checks, plus installing `sysbench` (and Docker only if Aub says yes).
+- Read-only checks, plus installing `sysbench` (and Docker only if the owner says yes).
 - Add DEVPC's SSH public key so VibeSquad workers can reach this box.
-- Do NOT register GitHub runners, change the network config, touch the `gh-runner` VM, or reboot without asking Aub.
+- Do NOT register GitHub runners, change the network config, touch the `gh-runner` VM, or reboot without asking the owner.
 
 ## Steps
 1. **Specs.** Paste the output of:
@@ -31,7 +31,7 @@ EFI's Linux GitHub Actions runners live in the `gh-runner` Hyper-V VM on DEVPC (
    ```
    The 4-thread run roughly matches one priority runner's share, which is what a single suite gets.
 
-3. **SSH access from DEVPC.** Append the contents of `C:\Users\Fugma\.ssh\gh-runner.pub` (on DEVPC) to `~/.ssh/authorized_keys` for the user the runners will run as. Then on DEVPC add a `Host old-server` entry to `~/.ssh/config` (HostName = this box's IP, User = that user, IdentityFile `~/.ssh/gh-runner`) and check `ssh -o BatchMode=yes old-server hostname`. Never paste private keys anywhere.
+3. **SSH access from DEVPC.** Append the contents of `%USERPROFILE%\.ssh\gh-runner.pub` (on DEVPC) to `~/.ssh/authorized_keys` for the user the runners will run as. Then on DEVPC add a `Host old-server` entry to `~/.ssh/config` (HostName = this box's IP, User = that user, IdentityFile `~/.ssh/gh-runner`) and check `ssh -o BatchMode=yes old-server hostname`. Never paste private keys anywhere.
 
 4. **VM baseline (from DEVPC, only while the VM is idle).** Check it's idle: `ssh gh-runner "docker top gh-runner-priority | grep -c Runner.Worker"` (0 = idle). Then:
    ```bash
@@ -39,7 +39,7 @@ EFI's Linux GitHub Actions runners live in the `gh-runner` Hyper-V VM on DEVPC (
    ```
 
 ## Report back
-Paste all the output to Aub or into the VibeSquad hub chat (Hub9). Hub9 then:
+Paste all the output to the owner or into the VibeSquad hub chat (Hub9). Hub9 then:
 - works out the suite-time estimate (server ÷ VM, at 4 threads, applied to recent EFI priority CI job durations), and whether 2 suites at once fit inside `--timeout 3600`,
 - has a worker do a real timing run if the estimate is close,
-- posts specs + go/no-go to EFI (Rif2) and drafts the no-gap cut-over: new runners registered under new names with the same labels → both pools live → drain and stop the VM's runners → watch for 1 day → retire the VM. The cut-over waits for Aub's OK.
+- posts specs + go/no-go to EFI (Rif2) and drafts the no-gap cut-over: new runners registered under new names with the same labels → both pools live → drain and stop the VM's runners → watch for 1 day → retire the VM. The cut-over waits for the owner's OK.
