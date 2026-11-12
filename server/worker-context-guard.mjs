@@ -79,8 +79,15 @@ export async function lastAssistantMessage(runner, id) {
 }
 
 /**
- * deps: rootDir, baseHome, sendMessage(id, text), listAgents() (live snapshots), getAgent(id), lastMessage(id), log({teamId, laneId, agent, text}), getThresholds(agent).
- * Returns { evaluateWorker, findLead, marks }.
+ * deps: rootDir, baseHome, sendMessage(id, text), listAgents() (live snapshots), getAgent(id), lastMessage(id),
+ * currentStatus(id) (the runner's status NOW, not the event's), log({teamId, laneId, agent, text}), getThresholds(agent).
+ * Returns { observeWorker, evaluateWorker, endEpisode, findLead, marks }.
+ *
+ * Fresh usage only (idea-162 P0 fix round). A roster pass (startup / reconnect seed) and a catch-up replay carry OLD usage: the first
+ * shipped guard nudged every idle worker in the roster at restart, and the input itself resumed them (parked -> queued -> starting).
+ * Now: a roster pass only observes (baseline count, `seen` mark for an idle worker already over the line, no input, no ping); an
+ * agent upsert is evaluated only while it reads running, its count moved since the last reading (or the `seen` baseline), and the
+ * runner still reports the worker running right before any send. Hard needs the soft rung to have fired in this same running episode.
  */
 export function createWorkerContextGuard(deps = {}) {
   const rootDir = deps.rootDir ?? REPO_ROOT;
@@ -89,9 +96,12 @@ export function createWorkerContextGuard(deps = {}) {
   const listAgents = deps.listAgents ?? (async () => []);
   const getAgent = deps.getAgent ?? (async () => null);
   const lastMessage = deps.lastMessage ?? (async () => "");
+  const currentStatus = deps.currentStatus ?? (async () => "");
   const getThresholds = deps.getThresholds ?? ((a) => loadWorkerThresholds(a, rootDir));
   const log = deps.log ?? (({ teamId, laneId, agent, text }) => appendVsLogEntry({ teamId, laneId, agent, type: "metric", text }));
-  const marks = readMarks(file); // id -> { soft?: iso, hard?: iso }; loaded once, the file is the restart-safe copy
+  const marks = readMarks(file); // id -> { soft?: iso, hard?: iso, seen?: { at, tokens } }; loaded once, the file is the restart-safe copy
+  const lastSeen = new Map(); // id -> last token count read (roster or upsert): an unchanged count is stale data, never a trigger
+  const episodes = new Map(); // id -> { softFired } for the running episode in progress (cleared when the worker stops running)
 
   function setMark(id, stage, value) {
     const cur = { ...(marks[id] ?? {}) };
@@ -135,32 +145,72 @@ export function createWorkerContextGuard(deps = {}) {
     } catch {}
   }
 
+  const isOut = (w) => !w?.id || w.archivedAt || w.archived || w.status === "closed" || !isGuardedWorker(w);
+  const readUsed = (w, override) => {
+    const used = leadUsedTokens(w, override);
+    return Number.isFinite(used) && used > 0 ? used : 0; // unknown/absent count: 0, never a trigger
+  };
+  const runningNow = async (id) => String((await currentStatus(id).catch(() => "")) ?? "") === "running";
+
+  /** A roster (startup / reconnect) or replayed snapshot: record the baseline, never send. An idle worker already over the soft line is marked seen. */
+  function observeWorker(worker, options = {}) {
+    if (isOut(worker)) return { stage: "skip" };
+    const used = readUsed(worker, options.usedTokens);
+    if (!used) return { stage: "none", usedTokens: 0 };
+    lastSeen.set(worker.id, used);
+    if (worker.status !== "running") episodes.delete(worker.id);
+    const { softTokens } = options.thresholds ?? getThresholds(worker);
+    if (worker.status !== "running" && used >= softTokens && !marks[worker.id]?.soft && marks[worker.id]?.seen?.tokens !== used) {
+      setMark(worker.id, "seen", { at: new Date().toISOString(), tokens: used });
+      return { stage: "seen", usedTokens: used };
+    }
+    return { stage: "observed", usedTokens: used };
+  }
+
+  /** The worker's running episode ended (turn_ended / not running): the hard rung needs a fresh soft in the next one. */
+  function endEpisode(id) {
+    episodes.delete(id);
+  }
+
   async function evaluateWorker(worker, options = {}) {
-    if (!worker?.id || worker.archivedAt || worker.archived || worker.status === "closed" || !isGuardedWorker(worker)) return { stage: "skip" };
-    const used = leadUsedTokens(worker, options.usedTokens);
-    if (!(Number.isFinite(used) && used > 0)) return { stage: "none", usedTokens: 0 }; // unknown/absent count never triggers
+    if (isOut(worker)) {
+      if (worker?.id) episodes.delete(worker.id);
+      return { stage: "skip" };
+    }
+    const used = readUsed(worker, options.usedTokens);
+    if (!used) return { stage: "none", usedTokens: 0 };
+    const prev = lastSeen.has(worker.id) ? lastSeen.get(worker.id) : marks[worker.id]?.seen?.tokens;
+    lastSeen.set(worker.id, used);
+    if (worker.status !== "running") {
+      episodes.delete(worker.id); // idle / queued / starting / error: never an input (it would START a turn), never a lead ping
+      return { stage: "not-running", usedTokens: used };
+    }
+    if (!episodes.has(worker.id)) episodes.set(worker.id, { softFired: false });
+    const episode = episodes.get(worker.id);
+    if (prev !== undefined && prev === used) return { stage: "stale", usedTokens: used }; // same count re-sent (label/meta upsert, replay)
     const { softTokens, hardTokens } = options.thresholds ?? getThresholds(worker);
     const fired = [];
     let lead;
 
     // Soft: also covers a worker that jumped straight past hard (it still needs the wrap-up instruction).
     if (used >= softTokens && !marks[worker.id]?.soft) {
-      const at = new Date().toISOString();
-      setMark(worker.id, "soft", at);
+      if (!(await runningNow(worker.id))) return { stage: "not-running", usedTokens: used }; // the event's turn is over (replay / race): no input
+      setMark(worker.id, "soft", new Date().toISOString());
       try {
-        await sendMessage(worker.id, WORKER_WRAP_NUDGE);
+        await sendMessage(worker.id, WORKER_WRAP_NUDGE); // default activeTurnBehavior 'steer': joins the running turn
       } catch (e) {
-        setMark(worker.id, "soft", null); // not delivered: the next usage event retries
+        setMark(worker.id, "soft", null); // not delivered: the next fresh usage event retries
         throw e;
       }
+      episode.softFired = true;
       lead = await findLead(worker);
       const pinged = await notifyLead(lead, `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrapping; spawn a fresh worker from its final note.`);
       metric(worker, `worker-context soft ${worker.id} ${kTokens(used)} (soft ${kTokens(softTokens)}) lead=${lead?.id ?? "none"}${lead && !pinged ? " (ping failed)" : ""}`);
       fired.push("soft");
     }
 
-    // Hard while still running: one "respawn fresh now" to the lead. No cancel, no respawn: the lead decides.
-    if (used >= hardTokens && worker.status === "running" && !marks[worker.id]?.hard) {
+    // Hard: still running, in the same episode the soft rung fired in. One "respawn fresh now" to the lead; no cancel, no respawn.
+    if (used >= hardTokens && episode.softFired && !marks[worker.id]?.hard && (fired.length || (await runningNow(worker.id)))) {
       lead = lead === undefined ? await findLead(worker) : lead;
       setMark(worker.id, "hard", new Date().toISOString());
       if (lead) {
@@ -183,5 +233,5 @@ export function createWorkerContextGuard(deps = {}) {
     return { stage, triggered: fired.length > 0, fired, usedTokens: used, leadId: lead?.id ?? null };
   }
 
-  return { evaluateWorker, findLead, marks };
+  return { observeWorker, evaluateWorker, endEpisode, findLead, marks };
 }
