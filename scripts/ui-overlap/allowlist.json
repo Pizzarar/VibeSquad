@@ -45,6 +45,24 @@
       "reason": "Config popover floats over the chat timeline by design."
     },
     {
+      "kind": "bar-misalign",
+      "selector": "sky-face-hit",
+      "other": "sky-zones",
+      "reason": "The Sky TV face-hit is a transparent click layer over the TV art; the sky wall's painted strips behind it are art, not a bar the control should line up with (seen at 1280x720 with the plan header open)."
+    },
+    {
+      "kind": "overlap",
+      "selector": "angel-hit",
+      "other": "angel-name",
+      "reason": "Angel bezel face-hit is a transparent full-TV click layer over the name chip by design (same as sky-face-hit, AngelBezel.tsx:113); the chip stays readable under it."
+    },
+    {
+      "kind": "overlap",
+      "selector": "tl-pinned-todo",
+      "other": "tl-stamp",
+      "reason": "The pinned plan header is sticky (.tl-head, opaque) and the scrolled timeline passes under it; the stamp underneath is covered content, not an overlap in the layout."
+    },
+    {
       "kind": "decor-line",
       "selector": "drawer-config-popover",
       "other": "timeline",
