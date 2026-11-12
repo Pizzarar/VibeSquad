@@ -872,3 +872,120 @@ test("R2 [L]: cross-lane retire refuses a stale (lower-ord) or lost (closed+resu
   }
 });
 
+
+function r3Fixture(prefix) {
+  resetLeadHandoffState();
+  const dir = mkdtempSync(join(os.tmpdir(), prefix));
+  const vsHome = join(dir, ".vibesquad");
+  const profilesPath = join(vsHome, "profiles.json");
+  mkdirSync(vsHome, { recursive: true });
+  mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
+  writeFileSync(
+    join(dir, "teams.json"),
+    JSON.stringify({ teams: [{ id: "vibesquad", name: "VibeSquad", paths: ["vibesquad"], lanes: [{ id: "bug-chaser", name: "Bug Chaser", code: "bug" }] }] }),
+    "utf8",
+  );
+  seedDefaultPack(profilesPath);
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = vsHome;
+  const lead = (id, ord, extra = {}) => ({ id, title: `★ Bug${ord}`, status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "bug-chaser", role: "lead", ord: String(ord), ...extra } });
+  const agents = new Map();
+  const coord = () =>
+    createLeadHandoffCoordinator({
+      rootDir: dir,
+      baseHome: vsHome,
+      profilesPath,
+      listAgents: async () => [...agents.values()],
+      getAgent: async (id) => agents.get(id) ?? null,
+      setLabels: async (id, labels, name) => {
+        const a = agents.get(id);
+        if (a) {
+          a.labels = { ...a.labels, ...labels };
+          if (name) a.title = name;
+        }
+      },
+      createAgent: async (p) => {
+        const a = { id: "rn-r3-succ", title: "★ Bug5", status: "idle", cwd: dir, labels: { ...p.labels, ord: "5" } };
+        agents.set(a.id, a);
+        return a;
+      },
+      sendMessage: async () => {},
+      deleteHeartbeat: async () => {},
+    });
+  const cleanup = () => {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+  };
+  return { dir, agents, lead, coord, cleanup };
+}
+
+test("R3 [H]: a stale ord>=2 lead whose vs.handoff-from predecessor is already former-lead is retired and swept, not treated as pending", async () => {
+  const fx = r3Fixture("vs-r3-stale-handoff-from-");
+  try {
+    const { agents, lead } = fx;
+    agents.set("rn-r3-old1", { ...lead("rn-r3-old1", 1), labels: { ...lead("rn-r3-old1", 1).labels, role: "former-lead" } });
+    agents.set("rn-r3-stale2", lead("rn-r3-stale2", 2, { "vs.handoff-from": "rn-r3-old1" }));
+    agents.set("rn-r3-old3", { ...lead("rn-r3-old3", 3), labels: { ...lead("rn-r3-old3", 3).labels, role: "former-lead" } });
+    agents.set("rn-r3-win4", lead("rn-r3-win4", 4, { "vs.handoff-from": "rn-r3-old3" }));
+
+    const res = await fx.coord().retireStaleLeads({ teamId: "vibesquad", laneId: "bug-chaser", callerId: "rn-r3-win4" });
+    assert.equal(res.ok, true, res.error);
+    assert.equal(res.winnerId, "rn-r3-win4");
+    assert.deepEqual(res.retired.map((r) => r.id), ["rn-r3-stale2"]);
+    assert.equal(agents.get("rn-r3-stale2").labels.role, "former-lead");
+    assert.equal(agents.get("rn-r3-win4").labels.role, "lead");
+
+    // Sweep on a confirmed handoff also clears a stale lead whose handoff-from is history.
+    agents.set("rn-r3-stale3b", lead("rn-r3-stale3b", 3, { "vs.handoff-from": "rn-r3-old3" }));
+    const c = fx.coord();
+    const spawned = await c.spawnSuccessor({ oldLead: agents.get("rn-r3-win4"), trigger: "auto-250", retireImmediately: false });
+    const confirmed = await c.confirmTakeover(spawned.successorId);
+    assert.equal(confirmed.confirmed, true);
+    assert.equal(agents.get("rn-r3-win4").labels.role, "former-lead");
+    assert.equal(agents.get("rn-r3-stale3b").labels.role, "former-lead", "stale lead with retired handoff-from predecessor is swept");
+    assert.equal(agents.get(spawned.successorId).labels.role, "lead");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("R3 [H]: a real pending successor (predecessor still role=lead) stays protected from retire", async () => {
+  const fx = r3Fixture("vs-r3-real-pending-");
+  try {
+    const { agents, lead } = fx;
+    agents.set("rn-r3-stale1", lead("rn-r3-stale1", 1));
+    agents.set("rn-r3-lead4", lead("rn-r3-lead4", 4));
+    agents.set("rn-r3-next5", lead("rn-r3-next5", 5, { "vs.handoff-from": "rn-r3-lead4" }));
+    const res = await fx.coord().retireStaleLeads({ teamId: "vibesquad", laneId: "bug-chaser" });
+    assert.equal(res.ok, false);
+    assert.match(res.error, /takeover is pending \(rn-r3-next5\)/);
+    for (const id of ["rn-r3-stale1", "rn-r3-lead4", "rn-r3-next5"]) assert.equal(agents.get(id).labels.role, "lead", id);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("R3 [L]: coordinator.retireStaleLeads refuses a same-lane worker (and an unknown) callerId directly", async () => {
+  const fx = r3Fixture("vs-r3-worker-caller-");
+  try {
+    const { agents, lead } = fx;
+    agents.set("rn-r3-stale1", lead("rn-r3-stale1", 1));
+    agents.set("rn-r3-win3", lead("rn-r3-win3", 3));
+    agents.set("rn-r3-worker", { id: "rn-r3-worker", title: "Worker", status: "idle", cwd: fx.dir, labels: { team: "vibesquad", lane: "bug-chaser", role: "worker" } });
+    await assert.rejects(
+      fx.coord().retireStaleLeads({ teamId: "vibesquad", laneId: "bug-chaser", callerId: "rn-r3-worker" }),
+      (e) => e.status === 403 && /only the owner, a brainstorm \(Buddy\) or a lead/.test(e.message),
+    );
+    await assert.rejects(
+      fx.coord().retireStaleLeads({ teamId: "vibesquad", laneId: "bug-chaser", callerId: "rn-r3-ghost" }),
+      (e) => e.status === 403 && /not found/.test(e.message),
+    );
+    assert.equal(agents.get("rn-r3-stale1").labels.role, "lead");
+    const ok = await fx.coord().retireStaleLeads({ teamId: "vibesquad", laneId: "bug-chaser", callerId: "rn-r3-win3" });
+    assert.equal(ok.ok, true, ok.error);
+    assert.deepEqual(ok.retired.map((r) => r.id), ["rn-r3-stale1"]);
+  } finally {
+    fx.cleanup();
+  }
+});

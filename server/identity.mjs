@@ -755,6 +755,16 @@ export function explicitLeadOrd(agentOrLabels) {
 }
 
 /**
+ * True when `agent` is a handoff successor still mid-takeover: it carries `vs.handoff-from=<id>` (stamped permanently by spawnSuccessor)
+ * AND that predecessor is still an unretired lead in `leadIds` (a Set of ids). Once the predecessor is former-lead the label is history,
+ * not a pending takeover.
+ */
+export function isHandoffPending(agent, leadIds) {
+  const from = String(agent?.labels?.["vs.handoff-from"] ?? "").trim();
+  return Boolean(from) && from !== agent?.id && Boolean(leadIds?.has?.(from));
+}
+
+/**
  * Pick the single live winner from same-(team,lane,role) candidates (read-only):
  * - Lost/closed agents (`lost: true` or `status === "closed" | "lost"`) never count when any active candidate exists.
  * - Among active settled candidates, the newest ★ / highest-ord lead wins (`hasStarLeadTitle`, then `explicitLeadOrd`, then
@@ -771,10 +781,7 @@ export function resolveLeadWinner(candidates) {
   // A successor stamped vs.handoff-from=<a live non-closed candidate> is a handoff in flight, not a duplicate: the predecessor stays the
   // winner until the successor confirms (the predecessor is then relabelled former-lead and leaves the set).
   const liveIds = new Set(nonClosed.map((a) => a.id));
-  const isPending = (a) => {
-    const from = String(a?.labels?.["vs.handoff-from"] ?? "").trim();
-    return Boolean(from) && from !== a.id && liveIds.has(from);
-  };
+  const isPending = (a) => isHandoffPending(a, liveIds);
   const settled = nonClosed.filter((a) => !isPending(a));
   const pending = settled.length ? nonClosed.filter(isPending).map((a) => a.id) : [];
   const decided = settled.length ? settled : nonClosed;

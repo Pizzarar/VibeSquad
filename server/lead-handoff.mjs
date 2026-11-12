@@ -14,6 +14,7 @@ import {
   findTeamInRegistry,
   formatDisplayTitle,
   isDigestAgent,
+  isHandoffPending,
   isHubLane,
   isRetiredAgent,
   LEAD_HANDOFF_MIN_TOKENS,
@@ -905,10 +906,6 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
   }
 
-  function hasHandoffFrom(agent) {
-    return Boolean(String(agent?.labels?.["vs.handoff-from"] ?? "").trim());
-  }
-
   function isLostOrClosedLead(agent) {
     return Boolean(agent?.lost) || ["closed", "lost"].includes(String(agent?.status ?? "").trim().toLowerCase());
   }
@@ -967,9 +964,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const res = resolveLeadWinner(laneLeads);
     const pendingSet = new Set(res.pending ?? []);
     const contenderSet = new Set(res.conflict ? (res.contenders ?? []) : []);
+    const laneLeadIds = new Set(laneLeads.map((a) => a.id));
     for (const a of laneLeads) {
       if (excludeIds.has(a.id) || pendingTakeover.has(a.id) || pendingSet.has(a.id) || contenderSet.has(a.id)) continue;
-      if (hasHandoffFrom(a)) continue;
+      if (isHandoffPending(a, laneLeadIds)) continue;
       if (Number.isFinite(maxOrd) && parseLeadOrd(a) >= maxOrd) continue;
       try {
         await retireLeadRecord(a, { successorId, laneId, laneName, nextOrd: maxOrd });
@@ -996,9 +994,19 @@ export function createLeadHandoffCoordinator(deps = {}) {
     });
 
     if (callerId) {
-      const caller = allAgents.find((a) => a.id === callerId) ?? (await getAgent(callerId));
-      if (caller) {
-        if (isRetiredAgent(caller) || caller.archivedAt || isLostOrClosedLead(caller)) {
+      const caller = allAgents.find((a) => a.id === callerId) ?? (await getAgent(callerId).catch(() => null));
+      if (!caller) {
+        throw Object.assign(new Error(`lead-handoff: forbidden: caller ${callerId} not found`), { status: 403 });
+      }
+      {
+        const callerRole = effectiveAgentRole(caller);
+        if ((callerRole !== "lead" && callerRole !== "brainstorm") || isRetiredAgent(caller) || caller.archivedAt) {
+          throw Object.assign(
+            new Error("lead-handoff: forbidden: only the owner, a brainstorm (Buddy) or a lead may retire stale leads"),
+            { status: 403 },
+          );
+        }
+        if (isLostOrClosedLead(caller)) {
           throw Object.assign(
             new Error(`lead-handoff: forbidden: ${callerId} is lost/closed, not an active live lead or Buddy`),
             { status: 403 },
@@ -1061,10 +1069,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const laneLeadIds = new Set(laneLeads.map((a) => a.id));
     const pendingSet = new Set(res.pending ?? []);
     for (const a of laneLeads) {
-      const from = String(a?.labels?.["vs.handoff-from"] ?? "").trim();
-      if (pendingTakeover.has(a.id) || (from && from !== a.id && (laneLeadIds.has(from) || a.id !== winner.id))) {
-        pendingSet.add(a.id);
-      }
+      // vs.handoff-from is permanent history; only a successor whose predecessor is still an unretired lane lead is mid-takeover.
+      if (pendingTakeover.has(a.id) || isHandoffPending(a, laneLeadIds)) pendingSet.add(a.id);
     }
     if (pendingSet.size > 0) {
       const ids = [...pendingSet].join(", ");
@@ -1077,7 +1083,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const winnerOrd = parseLeadOrd(winner);
     const retired = [];
     for (const old of laneLeads) {
-      if (old.id === winner.id || pendingSet.has(old.id) || pendingTakeover.has(old.id) || hasHandoffFrom(old)) continue;
+      if (old.id === winner.id || pendingSet.has(old.id) || pendingTakeover.has(old.id) || isHandoffPending(old, laneLeadIds)) continue;
       if (parseLeadOrd(old) >= winnerOrd) continue;
       const item = await retireLeadRecord(old, { successorId: winner.id, laneId, laneName, nextOrd: winnerOrd });
       retired.push(item);
