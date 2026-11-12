@@ -6388,3 +6388,4 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .usage-autonomy { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-autonomy-tile .usage-cohort-value { font-variant-numeric: tabular-nums; }
 .squads-dashboard.is-stale .usage-limits, .squads-dashboard.is-stale .usage-collapse { opacity: 0.55; transition: opacity 0.15s; }
+.usage-squad-label { margin-right: var(--sp-1, 4px); }
