@@ -2350,3 +2350,54 @@ test('usage ready-time: a queued status after the first response (follow-up turn
   assert.equal(g.medianQueuedMs, null);
   assert.equal(g.medianFirstResponseExclQueueMs, 5000);
 });
+
+// usa-28: live-data fixes. EFI shape: 1,100+ pooled merges that all predate the squad's first log entry (git history older
+// than the logs), touches that only start afterwards, and a Squad with touches but zero merges ("site").
+test('usa-28: merges older than the squad log coverage are not unassisted-streak units; no-merge squads get null units/touch', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 10, 12);
+  const at = (s) => T0 + s * 1000;
+  fs.writeFileSync(path.join(home, 'teams.json'), JSON.stringify({ teams: [
+    { id: 'efi', lanes: [{ id: 'game', code: 'gam' }] },
+    { id: 'site', lanes: [{ id: 'web', code: 'web' }] },
+  ] }));
+  // logs begin at +1000s; the 5 efi merges are at +10..+50s (before any log), +1050s is one real in-coverage merge, before the touches
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(1000), 'rn-l', 'game', 'handoff', 'plan A'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(1100), 'rn-l', 'game', 'needs-you', 'pick a boss'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(1200), 'rn-l', 'game', 'you', 'ok'));
+  writeLog(home, 'teams/site/log.jsonl', L_ENTRY(at(1000), 'rn-l', 'web', 'needs-you', 'a'));
+  writeLog(home, 'teams/site/log.jsonl', L_ENTRY(at(1010), 'rn-l', 'web', 'needs-you', 'b'));
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm6\n';
+    if (args[0] === 'log') return [
+      L('m6', 'm5 b6', sec(at(1050)), "Merge branch 'unit-e6' (@gam)"),
+      L('b6', 'm5', sec(at(1040)), 'feat: e6 (@gam)'),
+      ...[5, 4, 3, 2, 1].flatMap((i) => [
+        L(`m${i}`, `${i > 1 ? `m${i - 1}` : 'a1'} b${i}`, sec(at(i * 10)), `Merge branch 'unit-e${i}' (@gam)`),
+        L(`b${i}`, i > 1 ? `m${i - 1}` : 'a1', sec(at(i * 10 - 5)), `feat: e${i} (@gam)`),
+      ]),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const laneCodes = { gam: 'game', web: 'web' };
+  const u = getUsage({ home, git, laneCodes, squad: 'efi' });
+  assert.equal(u.merged.units.length, 6);
+  const a = u.autonomy;
+  assert.deepEqual(a.unassistedStreak, { current: 1, longest: 1 }, 'only the in-coverage merge counts, not all 6');
+  assert.equal(a.ownerTouches.total, 2);
+  assert.equal(a.ownerTouches.unitsPerOwnerTouch, 0.5);
+  // handoff@1000 -> merge@1050 on the same lane still produces a plan cycle
+  assert.equal(a.planAutonomy.avgPlanCycleMs, 50000);
+  const rows = Object.fromEntries(u.autonomy.bySquad.map((r) => [r.squad, r]));
+  assert.equal(rows.efi.mergedUnits, 6, 'bySquad still reports every merge');
+  assert.equal(rows.site.ownerTouches, 2);
+  assert.equal(rows.site.mergedUnits, 0);
+  assert.equal(rows.site.unitsPerOwnerTouch, null, 'no units -> null, consistent with perMergedUnit');
+  const s = getUsage({ home, git, laneCodes, squad: 'site' }).autonomy;
+  assert.equal(s.ownerTouches.perMergedUnit, null);
+  assert.equal(s.ownerTouches.unitsPerOwnerTouch, null);
+  assert.deepEqual(s.unassistedStreak, { current: 0, longest: 0 });
+});
