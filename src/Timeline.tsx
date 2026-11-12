@@ -841,9 +841,11 @@ export function TimelineItem({
             style={failed ? { borderLeft: "3px solid #ff4d6d" } : undefined}
             onClick={() => setExpanded((v) => !v)}
           >
-            <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
-            <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
-            {summary} <span className="muted">· {it.status}</span>
+            <div className="tl-sub-summary">
+              <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+              <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
+              {summary} <span className="muted">· {it.status}</span>
+            </div>
             {failed && errText && <div style={{ color: "var(--pink-t)", fontSize: "0.85em" }}>{errText}</div>}
             {expanded && (
               <SubAgentBody agentId={agentId} subagentKey={subagentKey} d={d} />

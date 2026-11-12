@@ -1166,9 +1166,14 @@ code {
   border-left: 3px solid var(--cyan);
   padding: 3px var(--sp-2);
   background: color-mix(in srgb, var(--cyan) 7%, transparent);
+}
+
+/* Only the one-line sub-agent summary is nowrap/ellipsized; the expanded body + error wrap normally. */
+.tl-sub-summary {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .tl-sub.running {
