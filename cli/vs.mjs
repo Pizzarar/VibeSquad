@@ -270,6 +270,8 @@ function parseArgs(argv) {
     "revision",
     "stall",
     "owner",
+    "judgment",
+    "judgmentFile",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -506,7 +508,7 @@ Usage:
   vs profiles [--role <role>] [--name <name>] [--notes] [--json]
   vs log <type> "<text>" [--ref <ref>...]
   vs log --since-me [--limit <N>] [--peek]
-  vs handoff [--out <path>]
+  vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
   vs inbox list [--lane <lane>|bug]
   vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...> (leads/Buddies of the card's Squad + owner)
@@ -729,7 +731,20 @@ function openPrs(cwd) {
   }
 }
 
-function buildHandoffPacket(identity, agents, source) {
+export const MAX_JUDGMENT_LINES = 40;
+
+/** Validates lead-supplied Judgment text: non-empty, at most MAX_JUDGMENT_LINES lines. Throws (never truncates). */
+export function validateJudgment(text) {
+  const body = String(text ?? "").replace(/\r\n/g, "\n").replace(/\s+$/, "").replace(/^\s*\n/, "");
+  if (!body.trim()) throw new Error("judgment is empty; write your Decisions/Gotchas/Next 3 Steps/Don't-Do");
+  const count = body.split("\n").length;
+  if (count > MAX_JUDGMENT_LINES) {
+    throw new Error(`judgment is ${count} lines; the cap is ${MAX_JUDGMENT_LINES}. Shorten it and rerun (nothing was written).`);
+  }
+  return body;
+}
+
+function buildHandoffPacket(identity, agents, source, judgment) {
   const entries = readLog(identity);
   const lines = [];
   const now = new Date().toISOString();
@@ -811,24 +826,53 @@ function buildHandoffPacket(identity, agents, source) {
   for (const pr of openPrs(identity.cwd)) lines.push(`  - ${pr}`);
 
   lines.push("");
-  lines.push("## Judgment (Lead fills in — max 40 lines total)");
-  lines.push("");
-  lines.push("### Decisions");
-  lines.push("");
-  lines.push("### Gotchas");
-  lines.push("");
-  lines.push("### Next 3 Steps");
-  lines.push("");
-  lines.push("### Don't-Do");
-  lines.push("");
+  if (judgment) {
+    lines.push("## Judgment (max 40 lines)");
+    lines.push("");
+    lines.push(judgment);
+    lines.push("");
+  } else {
+    lines.push("## Judgment (rerun `vs handoff --judgment-file <file>` or `--judgment -`; max 40 lines)");
+    lines.push("");
+    lines.push("### Decisions");
+    lines.push("");
+    lines.push("### Gotchas");
+    lines.push("");
+    lines.push("### Next 3 Steps");
+    lines.push("");
+    lines.push("### Don't-Do");
+    lines.push("");
+  }
 
   return lines.join("\n");
 }
 
+function readJudgmentInput(flags) {
+  if (flags.judgmentFile !== undefined && flags.judgment !== undefined) {
+    throw new Error("pass only one of --judgment-file and --judgment -");
+  }
+  if (flags.judgmentFile !== undefined) {
+    const file = path.resolve(String(flags.judgmentFile));
+    let text;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch (err) {
+      throw new Error(`cannot read --judgment-file ${file}: ${err.message}`);
+    }
+    return validateJudgment(text);
+  }
+  if (flags.judgment !== undefined) {
+    if (flags.judgment !== "-") throw new Error('--judgment takes "-" (read stdin); use --judgment-file <path> for a file');
+    return validateJudgment(fs.readFileSync(0, "utf8"));
+  }
+  return null;
+}
+
 function commandHandoff(flags) {
+  const judgment = readJudgmentInput(flags); // validate before any write
   const identity = resolveIdentity(flags);
   const { agents, source } = collectAgents();
-  const packet = buildHandoffPacket(identity, agents, source);
+  const packet = buildHandoffPacket(identity, agents, source, judgment);
 
   fs.mkdirSync(identity.teamDir, { recursive: true });
   const out = flags.out
@@ -842,6 +886,9 @@ function commandHandoff(flags) {
   if (path.resolve(snapshot) !== path.resolve(out)) fs.writeFileSync(snapshot, packet, "utf8");
 
   process.stdout.write(out + "\n");
+  if (!judgment) {
+    process.stderr.write("Judgment not filled: rerun with `vs handoff --judgment-file <file>` or `vs handoff --judgment -` (never hand-edit the packet).\n");
+  }
   return 0;
 }
 

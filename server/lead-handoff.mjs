@@ -48,9 +48,9 @@ export const STALE_PREDECESSOR_MS =
 
 export const SOFT_FLAG_REASON = "Lead at 150k+ tokens: wrap up and hand off at a good stopping point";
 export const SOFT_FLAG_NUDGE =
-  "Wrap up: stop dispatching new blocks, let in-flight workers finish, write your Judgment in the packet, then run handoff_lead.";
+  "Wrap up: stop dispatching new blocks, let in-flight workers finish, run `vs handoff --judgment-file <file>` (or `--judgment -`) with your Judgment (max 40 lines; never edit ~/.vibesquad files by hand), then run handoff_lead.";
 export const WRITE_HANDOFF_PROMPT =
-  "Write handoff now: run 'vs handoff' and finish your turn so VS can auto-handoff.";
+  "Write handoff now: run 'vs handoff --judgment-file <file>' (or '--judgment -') and finish your turn so VS can auto-handoff. Never edit ~/.vibesquad files by hand.";
 export const TAKEOVER_CONFIRM_INSTRUCTION =
   "Reply confirming takeover so the previous lead can be retired.";
 

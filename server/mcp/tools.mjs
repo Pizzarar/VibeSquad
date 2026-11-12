@@ -961,7 +961,7 @@ export const VS_TOOLS = {
     run: reportTool,
   },
   handoff_lead: {
-    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
     inputSchema: obj({ action: { type: "string", enum: ["handoff", "retire"] }, lane: S, steer: S, force: { type: "boolean" } }),
     run: handoffLead,
   },
