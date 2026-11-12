@@ -111,6 +111,16 @@
   const scoped = opts.rootSelectors ? allEls.filter((el) => roots.some((r) => r.contains(el))) : allEls;
   const els = openModal ? scoped.filter((el) => openModal.contains(el)) : scoped;
 
+  // Open layer: a surface that leaves a popover/menu open makes that layer the top layer — content beneath it is
+  // covered, not overlapping. Pairs where exactly one element lives inside the layer are skipped (overlaps BETWEEN
+  // elements inside the layer are still reported). Empty when the surface opens no layer (or the layer is closed).
+  const openLayerEls = opts.openLayer
+    ? (Array.isArray(opts.openLayer) ? opts.openLayer : [opts.openLayer])
+        .flatMap((q) => [...document.querySelectorAll(q)])
+        .filter(visible)
+    : [];
+  const inOpenLayer = (el) => openLayerEls.length > 0 && openLayerEls.some((l) => l === el || l.contains(el));
+
   const hits = [];
   const add = (kind, split, el, other, detail, box) => hits.push({
     kind, split, selector: cssPath(el), classes: [...el.classList], tag: el.tagName.toLowerCase(), text: short(el),
@@ -142,6 +152,7 @@
     for (let j = i + 1; j < cands.length; j++) {
       const a = cands[i], b = cands[j];
       if (a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el)) continue;
+      if (inOpenLayer(a.el) !== inOpenLayer(b.el)) continue; // one is inside the open popover, the other page content beneath it
       const ow = Math.min(a.box.right, b.box.right) - Math.max(a.box.left, b.box.left);
       const oh = Math.min(a.box.bottom, b.box.bottom) - Math.max(a.box.top, b.box.top);
       if (ow <= TOL || oh <= TOL) continue;
@@ -342,6 +353,7 @@
     if (!d.onTop) continue;
     for (const { el, vis: tb } of textLeaves) {
       if (el === d.el && d.from === "border") continue;
+      if (inOpenLayer(el) !== inOpenLayer(d.el)) continue; // line owner vs text: one inside the open popover, the other covered content beneath it
       const ox = Math.min(d.x + d.w, tb.right) - Math.max(d.x, tb.left);
       const oy = Math.min(d.y + d.h, tb.bottom) - Math.max(d.y, tb.top);
       if (ox <= TOL || oy <= 0) continue;
