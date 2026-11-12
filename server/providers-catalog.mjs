@@ -1196,7 +1196,10 @@ function computeAutonomy(entries, mergedUnits) {
   const needsYou = touches.filter((e) => e.type === "needs-you").length;
   const you = touches.filter((e) => e.type === "you").length;
   const handoffEntries = entries.filter((e) => e.type === "handoff");
-  const merges = mergedUnits.filter((u) => u.mergedAtMs !== null && u.mergedAtMs !== undefined).sort((a, b) => a.mergedAtMs - b.mergedAtMs);
+  // usa-28: owner touches only exist from the first log entry on, so a merge older than that (e.g. EFI git history from
+  // before its logs begin) has unknown assistance: counting it as "unassisted" made the streak equal every merge.
+  const coverageStart = entries.length ? entries[0].ts : Infinity;
+  const merges = mergedUnits.filter((u) => u.mergedAtMs !== null && u.mergedAtMs !== undefined && u.mergedAtMs >= coverageStart).sort((a, b) => a.mergedAtMs - b.mergedAtMs);
   // streak: a merge is unassisted when no owner touch landed since the previous merge
   let current = 0, longest = 0, prev = -Infinity;
   for (const m of merges) {
@@ -1225,7 +1228,7 @@ function computeAutonomy(entries, mergedUnits) {
   return {
     ownerTouches: {
       total: touches.length, needsYou, you, xsquadInput: touches.length - needsYou - you,
-      perMergedUnit: ratio2(touches.length, merges.length), unitsPerOwnerTouch: ratio2(merges.length, touches.length), perHandoff: ratio2(touches.length, handoffEntries.length),
+      perMergedUnit: ratio2(touches.length, merges.length), unitsPerOwnerTouch: merges.length ? ratio2(merges.length, touches.length) : null, perHandoff: ratio2(touches.length, handoffEntries.length),
     },
     unassistedStreak: { current, longest },
     stalls: {
