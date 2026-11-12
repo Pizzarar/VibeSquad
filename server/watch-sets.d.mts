@@ -12,6 +12,11 @@ export interface WatchItem {
   report?: string;
   doneAt?: string;
   stallFiredAt?: string;
+  /** idea-160: idle-no-report escalation steps (owner re-ping, Overlord ping) and the one auto-nudge */
+  esc1At?: string;
+  esc2At?: string;
+  nudgeDueAt?: string;
+  nudgeSentAt?: string;
   /** suite: the full run whose record set the verdict */
   run?: { pid: number | null; startedAt: number | string };
 }
@@ -23,6 +28,8 @@ export interface WatchPing {
   attemptedAt?: string;
   deliveredAt?: string;
   to?: string;
+  /** idea-160: "overlord" = deliver to the Squad's hub Lead; "owner" (or absent) = the watch owner */
+  target?: "owner" | "overlord";
   error?: string;
 }
 
@@ -33,6 +40,10 @@ export interface WatchSet {
   lane: string;
   createdAt: string;
   stallMin: number;
+  /** idea-160: minutes between idle-no-report escalation steps (default DEFAULT_ESCALATE_MIN) */
+  escalateMin?: number;
+  /** idea-160: false = no auto-nudge */
+  nudge?: boolean;
   items: WatchItem[];
   pings: WatchPing[];
   firedAt?: string;
@@ -51,11 +62,14 @@ export interface WatchDelivery {
   owner: string;
   team: string;
   lane: string;
+  target?: "owner" | "overlord";
   set: WatchSet;
 }
 
 export const WATCH_KINDS: readonly WatchKind[];
 export const DEFAULT_STALL_MIN: number;
+export const DEFAULT_ESCALATE_MIN: number;
+export const IDLE_NUDGE_TEXT: string;
 export const SUITE_RESULT_FILE: string;
 export const SUITE_LOCK_FILE: string;
 export const PRUNE_AFTER_MS: number;
@@ -63,7 +77,7 @@ export const DIGEST_MERGE_MAX: number;
 export function watchesPath(opts?: { home?: string }): string;
 
 export function addWatch(
-  spec: { owner: string; team?: string; lane?: string; items: Array<{ kind: WatchKind; ref?: string }>; stallMin?: number },
+  spec: { owner: string; team?: string; lane?: string; items: Array<{ kind: WatchKind; ref?: string }>; stallMin?: number; escalateMin?: number },
   opts?: { home?: string; now?: number },
 ): { id: string };
 export function listWatches(filter?: { owner?: string; team?: string }, opts?: { home?: string }): Array<WatchSet & { status: "armed" | "fired" | "cancelled" }>;
@@ -81,6 +95,8 @@ export interface WatchEngineOptions {
   deliver?: (d: WatchDelivery) => Promise<void> | void;
   /** W4: spawn the merge worker for a too-long ping; truthy = spawned (the worker sends the merged digest). */
   spawnDigest?: (d: WatchDelivery) => Promise<boolean> | boolean;
+  /** idea-160: send the worker its one idle nudge (the caller re-checks it is idle and live) */
+  nudge?: (agentId: string, text: string) => Promise<void> | void;
   log?: (msg: string) => void;
   retryMs?: number;
 }

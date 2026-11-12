@@ -23,6 +23,10 @@ import { isDigestAgent, isRetiredRole } from "./identity.mjs";
 
 export const WATCH_KINDS = Object.freeze(["agent", "suite", "restart"]);
 export const DEFAULT_STALL_MIN = 15;
+/** idea-160: minutes between an idle-no-report stall ping and the owner re-ping, and again to the Overlord (set.escalateMin overrides). */
+export const DEFAULT_ESCALATE_MIN = 25;
+/** idea-160: the one auto-nudge a worker gets at the first escalation. */
+export const IDLE_NUDGE_TEXT = "You went idle without a report. Commit + push your branch, run your tests in the FOREGROUND, then report.";
 export const SUITE_RESULT_FILE = "vibesquad-npm-test-last.json";
 export const SUITE_LOCK_FILE = "vibesquad-npm-test.lock";
 /** Fired / cancelled sets whose pings are all attempted are dropped from the file after this long. */
@@ -104,12 +108,14 @@ function normalizeItem(raw) {
 // ---------------------------------------------------------------------------
 
 /** Register a watch set. `opts.home` / `opts.now` are for tests. Returns `{id}`. */
-export function addWatch({ owner, team, lane, items, stallMin = DEFAULT_STALL_MIN } = {}, { home, now = Date.now() } = {}) {
+export function addWatch({ owner, team, lane, items, stallMin = DEFAULT_STALL_MIN, escalateMin } = {}, { home, now = Date.now() } = {}) {
   const who = String(owner ?? "").trim();
   if (!who) throw new Error("addWatch: owner is required");
   if (!Array.isArray(items) || !items.length) throw new Error("addWatch: at least one item is required");
   const sm = Number(stallMin ?? DEFAULT_STALL_MIN);
   if (!Number.isFinite(sm) || sm <= 0) throw new Error(`addWatch: stallMin must be a positive number of minutes (got ${JSON.stringify(stallMin)})`);
+  const em = escalateMin == null ? undefined : Number(escalateMin);
+  if (em !== undefined && (!Number.isFinite(em) || em <= 0)) throw new Error(`addWatch: escalateMin must be a positive number of minutes (got ${JSON.stringify(escalateMin)})`);
   const seen = new Set();
   const at = iso(now);
   const norm = [];
@@ -120,7 +126,7 @@ export function addWatch({ owner, team, lane, items, stallMin = DEFAULT_STALL_MI
     seen.add(k);
     norm.push({ ...it, state: "waiting", phase: "pending", since: at, phaseSince: at });
   }
-  const set = { id: `w-${randomBytes(4).toString("hex")}`, owner: who, team: String(team ?? "").trim(), lane: String(lane ?? "").trim(), createdAt: at, stallMin: sm, items: norm, pings: [] };
+  const set = { id: `w-${randomBytes(4).toString("hex")}`, owner: who, team: String(team ?? "").trim(), lane: String(lane ?? "").trim(), createdAt: at, stallMin: sm, ...(em !== undefined ? { escalateMin: em } : {}), items: norm, pings: [] };
   mutateDoc(watchesPath({ home }), (doc) => {
     prune(doc, now);
     doc.sets.push(set);
@@ -314,12 +320,52 @@ export function stepSet(set, ctx) {
     return ping;
   }
   const fresh = set.items.filter((i) => (i.state === "stalled" || i.state === "fail") && !i.stallFiredAt);
-  if (!fresh.length) return null;
-  for (const i of fresh) i.stallFiredAt = at;
-  const ping = { key: `stall-${set.pings.filter((p) => p.key !== "done").length + 1}`, at, text: stallText(set, fresh) };
-  set.pings.push(ping);
-  set.lastPingAt = at;
-  return ping;
+  if (fresh.length) {
+    for (const i of fresh) i.stallFiredAt = at;
+    const ping = { key: `stall-${set.pings.filter((p) => p.key !== "done").length + 1}`, at, text: stallText(set, fresh) };
+    set.pings.push(ping);
+    set.lastPingAt = at;
+    return ping;
+  }
+  return escalateIdle(set, ctx.now, at);
+}
+
+/**
+ * idea-160: a worker still idle-no-report escalateMin after its stall ping re-pings the owner (once per item); escalateMin after
+ * that, the Squad Overlord (once). The first step also marks one auto-nudge (item.nudgeDueAt; the engine sends it). Only the SAME
+ * idle episode counts: an item that left idle (a new turn, a report, closed) is no longer stalled/idle-no-report, and one that
+ * went idle again after the stall ping has a newer phaseSince, so neither is escalated.
+ */
+function escalateIdle(set, t, at) {
+  const escMs = (Number(set.escalateMin) > 0 ? Number(set.escalateMin) : DEFAULT_ESCALATE_MIN) * 60_000;
+  const idle = (i) =>
+    i.kind === "agent" && i.state === "stalled" && i.reason === "idle-no-report" && i.phase === "idle" && i.stallFiredAt &&
+    !(timeOf(i.phaseSince) > timeOf(i.stallFiredAt));
+  const step1 = set.items.filter((i) => idle(i) && !i.esc1At && t - timeOf(i.stallFiredAt) >= escMs);
+  const step2 = set.items.filter((i) => idle(i) && i.esc1At && !i.esc2At && t - timeOf(i.esc1At) >= escMs);
+  let last = null;
+  const push = (items, step, target, head) => {
+    if (!items.length) return;
+    const n = set.pings.filter((p) => p.key !== "done").length + 1;
+    const what = items.map((i) => itemLabel(i)).join(", ");
+    const since = step === 1 ? "its stall ping" : "the last escalation";
+    last = {
+      key: `esc${step}-${n}`,
+      at,
+      target,
+      text: [`Watch ${set.id} ${head}: ${what} still idle with no report (${Math.round(escMs / 60_000)} min since ${since}).`, ...set.items.map(itemLine)].join("\n"),
+    };
+    set.pings.push(last);
+    set.lastPingAt = at;
+  };
+  for (const i of step1) {
+    i.esc1At = at;
+    if (set.nudge !== false) i.nudgeDueAt = at;
+  }
+  for (const i of step2) i.esc2At = at;
+  push(step1, 1, "owner", "escalation 1/2");
+  push(step2, 2, "overlord", "escalation 2/2 (Overlord)");
+  return last;
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +386,7 @@ export function createWatchEngine({
   getAgent,
   deliver,
   spawnDigest,
+  nudge,
   log = () => {},
   retryMs = 10_000,
 } = {}) {
@@ -622,7 +669,41 @@ export function createWatchEngine({
       // Release the evaluation lock before offering: a slow deliver (or a W4 Flash merge) must not block other sets' ticks.
       ticking = false;
     }
+    await sendNudges();
     await offerPending();
+  }
+
+  /**
+   * idea-160: the one auto-nudge per worker. Claimed (nudgeSentAt, atomic) BEFORE the send so it never repeats, also across a
+   * restart. Only for an open set and only while the item is still stalled idle-no-report (the worker is idle, not running,
+   * closed or archived); the plugin's `nudge` re-checks the live agent.
+   */
+  async function sendNudges() {
+    if (!nudge) return;
+    const due = openSets().flatMap((s) => s.items.filter((i) => i.nudgeDueAt && !i.nudgeSentAt).map((i) => ({ set: s, item: i })));
+    for (const { set, item } of due) {
+      let claimed = false;
+      try {
+        mutateDoc(file, (doc) => {
+          const s = doc.sets.find((x) => x.id === set.id);
+          const it = s?.items.find((x) => x.kind === item.kind && x.ref === item.ref);
+          if (!s || !it || !isOpen(s) || it.nudgeSentAt) return;
+          it.nudgeSentAt = iso(now());
+          claimed = it.state === "stalled" && it.reason === "idle-no-report";
+        });
+      } catch (e) {
+        log(`watch nudge claim failed: ${e?.message ?? e}`);
+        continue;
+      }
+      cacheStamp = "";
+      reload();
+      if (!claimed) continue;
+      try {
+        await nudge(item.ref, IDLE_NUDGE_TEXT);
+      } catch (e) {
+        log(`watch ${set.id} nudge to ${item.ref} failed: ${e?.message ?? e}`);
+      }
+    }
   }
 
   async function offerPending() {
@@ -635,7 +716,7 @@ export function createWatchEngine({
         const key = pingKeyOf(set, ping);
         if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue;
         lastOffer.set(key, t);
-        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, owner: set.owner, team: set.team, lane: set.lane, set: structuredClone(set) };
+        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, owner: set.owner, team: set.team, lane: set.lane, ...(ping.target ? { target: ping.target } : {}), set: structuredClone(set) };
         if (spawnDigest && ping.text.length > DIGEST_MERGE_MAX) {
           // W4: a too-long ping is merged by one Pre-check - Flash worker, which sends the digest to the owner. The one-ping
           // guarantee holds: attemptedAt is persisted BEFORE the spawn, so the ping is never offered (spawned) twice. At most

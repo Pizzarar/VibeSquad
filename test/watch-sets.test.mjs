@@ -991,3 +991,190 @@ test("F6: cancelWatch honours an `allow(set)` predicate and never flips the set 
     sb.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// idea-160: idle-no-report escalation (owner re-ping, then Overlord, plus one auto-nudge)
+// ---------------------------------------------------------------------------
+
+function escEngine(sb, extra = {}) {
+  const nudges = [];
+  const r = engineFor(sb, { nudge: (ref, text) => nudges.push({ ref, text }), ...extra });
+  return { ...r, nudges };
+}
+
+test("escalation: idle-no-report stall ping, then owner re-ping 25 min later, then Overlord 25 min after that; each once; one nudge", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-idle" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock, nudges } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1, "stall ping");
+    assert.equal(delivered[0].target, undefined);
+    clock.t = T0 + 16 * MIN + 24 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1, "inside the escalation window");
+    assert.equal(nudges.length, 0);
+    clock.t = T0 + 16 * MIN + 25 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 2);
+    assert.equal(delivered[1].target, "owner");
+    assert.match(delivered[1].text, /still idle/i);
+    assert.equal(nudges.length, 1);
+    assert.equal(nudges[0].ref, "w-idle");
+    assert.match(nudges[0].text, /went idle without a report/);
+    clock.t += 24 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 2);
+    clock.t += 1 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 3);
+    assert.equal(delivered[2].target, "overlord");
+    for (let i = 0; i < 4; i++) {
+      clock.t += 30 * MIN;
+      await engine.tick();
+    }
+    assert.equal(delivered.length, 3, "each step fires once");
+    assert.equal(nudges.length, 1, "nudge once");
+    assert.equal(engine.get(id).firedAt, undefined);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation: escalateMin is configurable per set; nudge:false in engine opts is off by omitting the hook", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", stallMin: 5, escalateMin: 3, items: [{ kind: "agent", ref: "w-idle" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    await engine.tick();
+    clock.t = T0 + 6 * MIN;
+    await engine.tick();
+    clock.t += 3 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 2);
+    clock.t += 3 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 3);
+    assert.equal(delivered[2].target, "overlord");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation stops when the worker starts a turn or reports", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-a" }, { kind: "agent", ref: "w-b" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock, nudges } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-a", "idle"));
+    engine.onRunnerEvent(agentEv("w-b", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    // w-a starts a turn (nudge from nobody, e.g. the lead), w-b reports
+    clock.t = T0 + 30 * MIN;
+    engine.onRunnerEvent(agentEv("w-a", "running", { turnStartedAt: clock.t }));
+    engine.onLogEntry("t", doneEntry("w-b", clock.t));
+    clock.t = T0 + 16 * MIN + 26 * MIN;
+    engine.onRunnerEvent({ kind: "timeline", agentId: "w-a" });
+    await engine.tick();
+    assert.equal(delivered.length, 1, "no escalation for a running or reported worker");
+    assert.equal(nudges.length, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation: only idle-no-report stalls escalate (a closed worker is not nudged or escalated)", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-x" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock, nudges } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-x", "closed"));
+    await engine.tick();
+    assert.equal(delivered.length, 1, "stall ping for closed");
+    clock.t = T0 + 120 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.equal(nudges.length, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation: a cancelled set never escalates", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-idle" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock, nudges } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    cancelWatch(id, "lead-1", { home: sb.home, now: clock.t });
+    clock.t += 100 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.equal(nudges.length, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation: a completed set never escalates", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-idle" }, { kind: "agent", ref: "w-ok" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock, nudges } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    engine.onRunnerEvent(agentEv("w-ok", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick(); // w-idle stalls (stall ping)
+    clock.t = T0 + 20 * MIN;
+    engine.onLogEntry("t", doneEntry("w-ok", clock.t));
+    await engine.tick(); // every item settled + progress = completion ping closes the set
+    const n = delivered.length;
+    assert.ok(engine.list()[0].firedAt, "set fired");
+    clock.t += 200 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, n);
+    assert.equal(nudges.length, 0);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation survives a server restart: persisted steps are not re-fired, the pending one still fires", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-idle" }] }, { home: sb.home, now: T0 });
+    const clock = { t: T0 };
+    let a = escEngine(sb, { clock });
+    a.engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    await a.engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await a.engine.tick();
+    clock.t += 25 * MIN;
+    await a.engine.tick();
+    assert.equal(a.delivered.length, 2);
+    // restart: a new engine on the same home
+    const b = escEngine(sb, { clock });
+    b.engine.onRunnerEvent(agentEv("w-idle", "idle"));
+    await b.engine.tick();
+    assert.equal(b.delivered.length, 0, "stall + owner re-ping not re-sent");
+    assert.equal(b.nudges.length, 0, "nudge not re-sent");
+    clock.t += 25 * MIN;
+    await b.engine.tick();
+    assert.equal(b.delivered.length, 1);
+    assert.equal(b.delivered[0].target, "overlord");
+  } finally {
+    sb.cleanup();
+  }
+});
