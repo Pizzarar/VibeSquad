@@ -175,10 +175,10 @@ export const SURFACES = [
 // content beneath it is covered. A pair with one element inside the layer and the other outside is NOT an
 // overlap (same idea as ui-clicks OPEN_LAYER); overlaps between elements inside the layer still are.
 const OPEN_LAYER = {
-  "menu-drawer-config": ".drawer-config-popover",
-  "menu-pin-tile": ".pin-menu-list",
-  "sky-riff-open": ".sky-chat-panel",
-  "sky-riff-landed": ".sky-chat-panel",
+  "menu-drawer-config": ".drawer-config-popover", // the ⚙ config popover floats over the drawer/timeline beneath it
+  "menu-pin-tile": ".pin-menu-list", // the tile ⋯ row menu floats over the sidebar/tile beneath it
+  "sky-riff-open": ".sky-chat-panel", // the riff chat panel overlays the dimmed floor behind it
+  "sky-riff-landed": ".sky-chat-panel", // the landed riff chat panel overlays the dimmed floor behind it
 };
 
 // ── Per-surface audit ────────────────────────────────────────────────────────

@@ -25,19 +25,6 @@
       "reason": "Sky wall: CRT zones are framed on the wall art by design."
     },
     {
-      "kind": "overlap",
-      "other": "pin-menu-list",
-      "surface": "menu-pin-tile",
-      "reason": "Open row menu (popover) floats over the sidebar by design; it is the top layer at that point."
-    },
-    {
-      "kind": "decor-line",
-      "selector": "pin-menu-list",
-      "other": "sidebar-new-squad-btn",
-      "surface": "menu-pin-tile",
-      "reason": "Same popover over the sidebar: the button border under the menu is covered content, not a line through menu text."
-    },
-    {
       "kind": "bar-misalign",
       "selector": "sky-face-hit",
       "other": "sky-zones",
@@ -64,18 +51,6 @@
       "kind": "text-overflow",
       "selector": "chrome-real",
       "reason": "Visually hidden real-text twin of the painted chrome lettering (1x1 clip-path), kept for screen readers."
-    },
-    {
-      "kind": "overlap",
-      "surface": "menu-pin-tile",
-      "other": "pin-(standing-toggle|complete|remove-item)",
-      "reason": "Row menu popover (mobile sheet) floats over the tile; menu items are the top layer."
-    },
-    {
-      "kind": "decor-line",
-      "surface": "menu-pin-tile",
-      "selector": "pin-(complete|remove-item|standing-toggle)",
-      "reason": "Row menu popover (mobile sheet) is opaque and floats over the tile; the tile borders under it are covered, not drawn through the menu text."
     },
     {
       "kind": "overlap",
