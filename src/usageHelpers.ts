@@ -16,6 +16,9 @@ export type LimitRow = {
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude",
+  deepseek: "DeepSeek",
+  codex: "Codex",
+  opencode: "OpenCode",
   "antigravity-cli": "Gemini",
   "antigravity-cli/claude-gpt": "Gemini plan · 3rd-party models (Claude/GPT)",
 };
@@ -107,6 +110,8 @@ export type UsageData = {
   squad?: string | null;
   squads?: string[];
   autonomy?: Autonomy;
+  readyTime?: ReadyTime | null;
+  compaction?: CompactionStats | null;
 };
 
 /** usa-24 autonomy block (server/providers-catalog.mjs getUsage). Ratios are null when their denominator is 0. */
@@ -693,5 +698,67 @@ export function autonomyTiles(a: Autonomy): AutonomyTile[] {
     { key: "needs-you-per-unit", label: "Needs-You / Unit", value: ratioText(o.perMergedUnit), sub: `${ratioText(o.perHandoff)} touches / handoff` },
     { key: "stalls", label: "Stalls & Median Unblock", value: dur(a.stalls.medianUnblockMs), sub: `${a.stalls.total} stalls (${a.stalls.blockers} blocker, ${a.stalls.failRuns} FAIL) · p90 ${dur(a.stalls.p90UnblockMs)}` },
     { key: "units-per-handoff", label: "Units / Plan Handoff", value: ratioText(a.planAutonomy.unitsPerHandoff), sub: `${a.planAutonomy.handoffs} handoffs -> ${a.planAutonomy.mergedUnits} units` },
+  ];
+}
+
+/** usa-26 ready-time + compaction blocks (server/providers-catalog.mjs buildReadyTime/buildCompaction). All ms; null = no data. */
+export type ReadyGroup = {
+  provider: string; count: number; queuedCount: number; queuedShare: number | null;
+  medianFirstResponseMs: number | null; p90FirstResponseMs: number | null;
+  medianFirstResponseExclQueueMs: number | null; p90FirstResponseExclQueueMs: number | null;
+  medianReadyMs: number | null; p90ReadyMs: number | null;
+  medianReadyExclQueueMs: number | null; p90ReadyExclQueueMs: number | null;
+  medianQueuedMs: number | null; p90QueuedMs: number | null;
+};
+export type ReadyTime = { overall: ReadyGroup | null; byProvider: ReadyGroup[]; baseline: { paseoSpawnMedianMs: number; runnerSpawnMedianMs: number } };
+export type CompactionStats = {
+  runs: number; totalCostUsd: number; avgCostUsd: number | null; totalTokens: number; avgTokens: number | null;
+  tokensSaved: number; handoffRuns: number; restartOverheadCostUsd: number; avgHandoffCostUsd: number | null;
+};
+
+const isNum = (n: number | null | undefined): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+
+/** Sub-minute-friendly latency: `450ms`, `3.2s`, then dur() (`2m`, `1.1h`); `—` for missing. */
+export function msText(ms: number | null | undefined): string {
+  if (!isNum(ms)) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
+  return dur(ms);
+}
+
+/** `med / p90` pair, `—` when both missing. */
+export const medP90Text = (med: number | null | undefined, p90: number | null | undefined): string => (isNum(med) || isNum(p90) ? `${msText(med)} / ${msText(p90)}` : "—");
+
+/** Spawn speedup pill: `Spawn: 0.45s vs 165s · ~367x faster`; `—` when the baseline is unusable. */
+export function readyPillText(r: ReadyTime | null | undefined): string {
+  const b = r?.baseline;
+  if (!b || !isNum(b.paseoSpawnMedianMs) || !isNum(b.runnerSpawnMedianMs) || b.runnerSpawnMedianMs <= 0) return "—";
+  const secs = (ms: number) => (ms < 10_000 ? parseFloat((ms / 1000).toFixed(2)).toString() : String(Math.round(ms / 1000)));
+  return `Spawn: ${secs(b.runnerSpawnMedianMs)}s vs ${secs(b.paseoSpawnMedianMs)}s · ~${Math.round(b.paseoSpawnMedianMs / b.runnerSpawnMedianMs)}x faster`;
+}
+
+/** Collapsed header for the Ready-Time section. */
+export function readyTimeSummary(r: ReadyTime | null | undefined, c?: CompactionStats | null): string {
+  const o = r?.overall;
+  if (!o || !o.count) return "Ready Time & Compaction · no data";
+  const comp = c && c.runs ? ` · ${c.runs} compaction${c.runs === 1 ? "" : "s"}` : "";
+  return `Ready Time & Compaction · ${o.count} run${o.count === 1 ? "" : "s"} · 1st response ${msText(o.medianFirstResponseExclQueueMs)} med (excl queue) · queue ${pctText(o.queuedShare)}${comp}`;
+}
+
+export type ReadyTile = { key: string; label: string; value: string; sub: string };
+
+/** KPI tiles: First Response excl/incl queue, Queue Share, Compaction vs Handoff cost. Missing data renders `—`. */
+export function readyTimeTiles(r: ReadyTime | null | undefined, c: CompactionStats | null | undefined): ReadyTile[] {
+  const o = r?.overall ?? null;
+  const usdOrDash = (n: number | null | undefined) => (isNum(n) ? usdText(n) : "—");
+  return [
+    { key: "first-response-excl", label: "1st Response (excl queue)", value: msText(o?.medianFirstResponseExclQueueMs), sub: `p90 ${msText(o?.p90FirstResponseExclQueueMs)}` },
+    { key: "first-response-incl", label: "1st Response (incl queue)", value: msText(o?.medianFirstResponseMs), sub: `p90 ${msText(o?.p90FirstResponseMs)}` },
+    { key: "queue-share", label: "Queue Share", value: pctText(o?.queuedShare), sub: o ? `${o.queuedCount} of ${o.count} runs · wait med ${msText(o.medianQueuedMs)}` : "no runs" },
+    {
+      key: "compaction-vs-handoff", label: "Compaction vs Handoff",
+      value: c ? `${usdOrDash(c.avgCostUsd)} vs ${usdOrDash(c.avgHandoffCostUsd)}` : "—",
+      sub: c ? `${c.runs} compaction${c.runs === 1 ? "" : "s"} · ${tokText(c.tokensSaved)} tok saved · ${c.handoffRuns} handoff${c.handoffRuns === 1 ? "" : "s"}` : "no data",
+    },
   ];
 }

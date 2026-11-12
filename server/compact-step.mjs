@@ -2,13 +2,64 @@
 // (lead-handoff.mjs). Claude agents only: the runner keeps one long-lived `claude -p` child, so a `/compact <focus>` user turn shrinks the
 // context in place (same id, labels, worktree). Anything else -- non-Claude, busy, already tried, failed, timed out, still over the cap --
 // returns a non-"ok" outcome and the caller runs its existing handoff ladder unchanged. Reuses runner.sendAgentPrompt; no new route.
+import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { LEAD_COMPACT_FOCUS, leadUsedTokens } from "./lead-handoff.mjs";
+import { vibesquadHome } from "./user-settings.mjs";
 
 export const COMPACTED_AT_LABEL = "vs.compacted-at";
 export const COMPACT_TIMEOUT_MS = 120_000;
 export const COMPACT_SETTLE_MS = 1_500;
 
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
+
+const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
+const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
+
+/**
+ * Cost + tokens of the `/compact` turn from the agent's raw runner-log events (the live timeline events carry only seq + type, and the
+ * agent snapshot's usage is a per-call overwrite with no cost, so the log is the one place `turn_done.costUsd` (session-cumulative)
+ * and `usage` live). Anchors on the last `compacted` event and the last `/compact` input before it; a turn_done between the two
+ * (the /compact arrived mid-turn, so that turn ended first) resets the tokens and moves the cost baseline. Real claude /compact emits
+ * no usage before `compacted`: the turn's only usage is the adapter's post_tokens one right after it (counted). Returns { costUsd?, tokens } or null without a /compact anchor.
+ */
+export function compactSpendFromLog(events) {
+  let c = -1;
+  for (let i = events.length - 1; i >= 0; i--) if (events[i]?.type === "compacted") { c = i; break; }
+  if (c < 0) return null;
+  let j = -1;
+  for (let i = c - 1; i >= 0; i--) if (events[i]?.type === "input" && COMPACT_INPUT_RE.test(String(events[i].text ?? ""))) { j = i; break; }
+  if (j < 0) return null;
+  let base = 0;
+  for (let i = j - 1; i >= 0; i--) if (events[i]?.type === "turn_done" && Number.isFinite(Number(events[i].costUsd))) { base = Number(events[i].costUsd); break; }
+  let tokens = 0;
+  for (let i = j + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e?.type === "usage") tokens += num(e.inputTokens) + num(e.outputTokens);
+    else if (e?.type === "turn_done") {
+      const cost = Number(e.costUsd);
+      if (i < c) { tokens = 0; if (Number.isFinite(cost)) base = cost; continue; } // mid-turn /compact: the prior turn ended first
+      if (!Number.isFinite(cost)) return { tokens };
+      return { costUsd: Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6, tokens };
+    }
+  }
+  return { tokens }; // turn_done not logged yet
+}
+
+/** Default log reader: the tail (last 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events; [] when unreadable. */
+function readAgentLogTail(id) {
+  try {
+    const file = join(vibesquadHome(), "runner", "agents", `${id}.jsonl`);
+    const size = statSync(file).size;
+    const from = Math.max(0, size - 512 * 1024);
+    const fd = openSync(file, "r");
+    let text;
+    try { const buf = Buffer.alloc(size - from); readSync(fd, buf, 0, buf.length, from); text = buf.toString("utf8"); } finally { closeSync(fd); }
+    const lines = text.split("\n");
+    if (from > 0) lines.shift(); // torn first line
+    return lines.flatMap((l) => { try { return l.trim() ? [JSON.parse(l)] : []; } catch { return []; } });
+  } catch { return []; }
+}
 
 export function isClaudeAgent(agent) {
   return String(agent?.provider ?? "").toLowerCase() === "claude";
@@ -22,10 +73,10 @@ export function isIdleForCompact(agent) {
 
 /**
  * deps: runner (sendAgentPrompt, updateAgent, fetchAgent, subscribeEvents), log({agent, text, teamId, laneId}) (lane-aware),
- * timeoutMs, settleMs. run() never throws; its outcome is one of
+ * timeoutMs, settleMs, readEvents(id) (parsed runner-log events; default reads the agent log under VIBESQUAD_HOME). run() never throws; its outcome is one of
  * ok | still-over | failed | timeout | skipped (skipped carries a reason and sends nothing).
  */
-export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TIMEOUT_MS, settleMs = COMPACT_SETTLE_MS } = {}) {
+export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TIMEOUT_MS, settleMs = COMPACT_SETTLE_MS, readEvents = readAgentLogTail } = {}) {
   const tried = new Set(); // agent ids: one compaction per agent, even before the label write lands or across a replay
 
   function wait(id, { signal }) {
@@ -55,6 +106,17 @@ export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TI
     }
   }
 
+  /** The /compact turn's spend off the log; waits up to settleMs for its turn_done to land (compacted fires just before it). */
+  async function spendOf(id) {
+    const t0 = Date.now();
+    for (;;) {
+      let r = null;
+      try { r = compactSpendFromLog(await readEvents(id)); } catch { /* unreadable log: no spend figure */ }
+      if (r?.costUsd !== undefined || Date.now() - t0 >= settleMs) return r;
+      await new Promise((res) => setTimeout(res, 50));
+    }
+  }
+
   async function run(agent, { focus, cap, kind = "agent", teamId, laneId } = {}) {
     const id = agent?.id;
     if (!id || !isClaudeAgent(agent)) return { outcome: "skipped", reason: "non-claude" };
@@ -66,13 +128,14 @@ export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TI
     tried.add(id);
     const startedAt = Date.now();
     const finish = (outcome, extra = {}) => {
-      const res = { outcome, before, ...extra };
+      const { costUsd, tokens, ...rest } = extra;
+      const res = { outcome, before, ...rest, ...(costUsd != null ? { costUsd } : {}), ...(tokens != null ? { tokens } : {}) };
       try {
         log({
           agent: id,
           teamId,
           laneId,
-          text: `compact-step ${kind} agent=${id} outcome=${outcome} before=${before} after=${extra.after ?? "?"} cap=${cap ?? "?"} ms=${Date.now() - startedAt}${outcome === "ok" ? "" : " -> falling through to handoff"}`,
+          text: `compact-step ${kind} agent=${id} outcome=${outcome} before=${before} after=${extra.after ?? "?"} cap=${cap ?? "?"} ms=${Date.now() - startedAt}${extra.costUsd != null ? ` costUsd=${extra.costUsd}` : ""}${extra.tokens != null ? ` tokens=${extra.tokens}` : ""}${outcome === "ok" ? "" : " -> falling through to handoff"}`,
         });
       } catch { /* logging never blocks the ladder */ }
       return res;
@@ -96,8 +159,10 @@ export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TI
     if (got === "timeout") return finish("timeout");
     if (got !== "compacted") return finish("failed", { reason: got });
     const after = await usedNow(id, before);
-    if (Number.isFinite(cap) && after >= cap) return finish("still-over", { after });
-    return finish("ok", { after });
+    const spend = await spendOf(id);
+    const costUsd = spend?.costUsd, tokens = spend ? spend.tokens : undefined;
+    if (Number.isFinite(cap) && after >= cap) return finish("still-over", { after, costUsd, tokens });
+    return finish("ok", { after, costUsd, tokens });
   }
 
   return { run, tried };

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
@@ -411,6 +411,51 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         </section>
         </Collapse>
       )}
+
+      <Collapse id="ready-time" testid="usage-ready-time" summary={readyTimeSummary(data.readyTime, data.compaction)}>
+        <section className="usage-ready" data-testid="usage-ready-time-body">
+          <div className="usage-ready-pill small" data-testid="usage-ready-pill" title="VS Runner spawn vs the old Paseo spawn (median)">{readyPillText(data.readyTime)}</div>
+          <div className="usage-cohort-tiles">
+            {readyTimeTiles(data.readyTime, data.compaction).map((t) => (
+              <div className="usage-cohort-tile usage-ready-tile" key={t.key} data-metric={t.key}>
+                <div className="usage-cohort-label small">{t.label}</div>
+                <div className="usage-cohort-value">{t.value}</div>
+                <div className="small muted">{t.sub}</div>
+              </div>
+            ))}
+          </div>
+          {data.readyTime && data.readyTime.byProvider.length > 0 ? (
+            <div className="usage-table-wrap">
+              <table className="usage-table" data-testid="usage-ready-table">
+                <thead>
+                  <tr>
+                    <th>Provider</th>
+                    <th className="num">Runs</th>
+                    <th className="num">1st Resp (excl Q) med / p90</th>
+                    <th className="num">1st Resp (incl Q) med / p90</th>
+                    <th className="num">1st Text (excl Q) med / p90</th>
+                    <th className="num">Queue wait med / p90</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.readyTime.byProvider.map((g) => (
+                    <tr key={g.provider} data-provider={g.provider}>
+                      <td>{providerLabel(g.provider)}</td>
+                      <td className="num">{g.count}</td>
+                      <td className="num">{medP90Text(g.medianFirstResponseExclQueueMs, g.p90FirstResponseExclQueueMs)}</td>
+                      <td className="num">{medP90Text(g.medianFirstResponseMs, g.p90FirstResponseMs)}</td>
+                      <td className="num">{medP90Text(g.medianReadyExclQueueMs, g.p90ReadyExclQueueMs)}</td>
+                      <td className="num">{medP90Text(g.medianQueuedMs, g.p90QueuedMs)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="usage-empty muted small" data-testid="usage-ready-empty">no ready-time data yet — appears after the next run starts</div>
+          )}
+        </section>
+      </Collapse>
 
       <Collapse id="roles" testid="usage-roles-collapse" summary={rolesSummary(data.coordination?.coordinationShare, flagged.length, storms.length)}>
       <div className="usage-split">
