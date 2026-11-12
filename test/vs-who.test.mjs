@@ -179,7 +179,7 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
     assert.equal(noneJson.status, 1);
     assert.equal(JSON.parse(noneJson.stdout).status, "none");
 
-    // 2 live leads -> CONFLICT + both lines, exit code 2
+    // 2 live leads of different ord -> highest-ord wins (exit 0) and flags the older one as stale; 2 equally-new leads (same ord) -> CONFLICT (exit 2)
     env.writeAgent({
       id: "rn-lead-a",
       title: "★ VIBESQUAD ord1",
@@ -195,6 +195,19 @@ test("Done-when #2: vs who lead handles NONE (exit 1) and CONFLICT (exit 2), and
       cwd: REPO_ROOT,
       labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "2" },
       lastUsage: { contextWindowUsedTokens: 20_000 },
+    });
+
+    const staleWinRes = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"]);
+    assert.equal(staleWinRes.status, 0);
+    assert.match(staleWinRes.stdout.trim(), /^★ VIBESQUAD ord2 · rn-lead-b · running · 20k · stale: ★ VIBESQUAD ord1 \(rn-lead-a\)$/);
+
+    env.writeAgent({
+      id: "rn-lead-a",
+      title: "★ VIBESQUAD ord2",
+      lastStatus: "idle",
+      cwd: REPO_ROOT,
+      labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "2" },
+      lastUsage: { contextWindowUsedTokens: 80_000 },
     });
 
     const conflictRes = env.runVs(["who", "lead", "--team", "vibesquad", "--lane", "vibesquad"]);
