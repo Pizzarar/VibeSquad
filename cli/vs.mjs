@@ -847,7 +847,9 @@ function buildHandoffPacket(identity, agents, source, judgment) {
   return lines.join("\n");
 }
 
-function readJudgmentInput(flags) {
+export function readJudgmentInput(flags, io = {}) {
+  const isTTY = io.isTTY ?? (() => Boolean(process.stdin.isTTY));
+  const readStdin = io.readStdin ?? (() => fs.readFileSync(0, "utf8"));
   if (flags.judgmentFile !== undefined && flags.judgment !== undefined) {
     throw new Error("pass only one of --judgment-file and --judgment -");
   }
@@ -863,7 +865,8 @@ function readJudgmentInput(flags) {
   }
   if (flags.judgment !== undefined) {
     if (flags.judgment !== "-") throw new Error('--judgment takes "-" (read stdin); use --judgment-file <path> for a file');
-    return validateJudgment(fs.readFileSync(0, "utf8"));
+    if (isTTY()) throw new Error("--judgment - needs piped stdin; use --judgment-file <path>");
+    return validateJudgment(readStdin());
   }
   return null;
 }

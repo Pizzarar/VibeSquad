@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { DEFAULT_PACK_PROFILES, LEAD_NOTE_BODY, BRAINSTORM_NOTE_BODY, SHARED_NOTE_PREFIX } from "../server/profiles.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
 import { SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from "../server/lead-handoff.mjs";
-import { validateJudgment, MAX_JUDGMENT_LINES } from "../cli/vs.mjs";
+import { validateJudgment, readJudgmentInput, MAX_JUDGMENT_LINES } from "../cli/vs.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const VS = join(ROOT, "cli/vs.mjs");
@@ -18,7 +18,7 @@ const VS = join(ROOT, "cli/vs.mjs");
 export const HAND_EDIT = [
   /\b(?:fill|fill in|complete)\s+(?:in\s+)?the\s+judgment\b/i,
   /\b(?:write|put|add|type)\s+(?:your\s+)?judgment\s+(?:in|into|to)\s+the\s+(?:packet|handoff)\b/i,
-  /\b(?:edit|open|modify|update)\s+(?:the\s+|your\s+)?(?:handoff\s+)?packet\b/i,
+  /(?<!never\s)(?<!not\s)(?<!n't\s)(?<![-\w])(?:edit|open|modify|update)\s+(?:the\s+|your\s+)?(?:handoff\s+)?packet\b/i,
   /\bwrite\s+(?:your\s+)?packet\s+judgment\b/i,
   // negated forms ("never edit ~/.vibesquad", "never hand-edit files under ~/.vibesquad") are the rule itself, not a violation
   /(?<!never\s)(?<!not\s)(?<!n't\s)(?<![-\w])(?:edit|open|modify|write\s+(?:to|into)|append\s+to)\s+(?:the\s+)?(?:files?\s+(?:under\s+|in\s+)?)?~\/\.vibesquad\b/i,
@@ -40,6 +40,8 @@ test("audit: no injected prompt/rule/steer source tells an agent to edit a packe
     "src/profiles.ts": read("src/profiles.ts"),
     "mcp/tools.mjs": read("server/mcp/tools.mjs"),
     "brainstorm.mjs": read("server/brainstorm.mjs"),
+    "cli/vs.mjs": read("cli/vs.mjs"),
+    "profiles-pack.json": read("docs/profiles/vibesquad-profiles-pack.json"),
     "profile notes": [flat(SHARED_NOTE_PREFIX), flat(LEAD_NOTE_BODY), flat(BRAINSTORM_NOTE_BODY), ...DEFAULT_PACK_PROFILES.map((p) => p.notes || "")].join("\n"),
     steers: `${SOFT_FLAG_NUDGE}\n${WRITE_HANDOFF_PROMPT}`,
     "STANDING_RULES": STANDING_RULES.join("\n"),
@@ -60,6 +62,7 @@ test("audit positive control: catches planted bad phrases, allows the vs verb ph
   ]) assert.ok(findHandEdit(s).length > 0, s);
   for (const s of [
     "run `vs handoff --judgment-file <file>` (or `--judgment -`); never edit ~/.vibesquad files by hand",
+    "(never hand-edit the packet)",
     "Never hand-edit files under ~/.vibesquad (handoff packets, teams, logs, marks); use the vs verb",
   ]) assert.deepEqual(findHandEdit(s), [], s);
 });
@@ -78,6 +81,24 @@ test("validateJudgment: 40 lines ok, 41 refused (not truncated), empty refused",
   assert.equal(validateJudgment(n(MAX_JUDGMENT_LINES)).split("\n").length, 40);
   assert.throws(() => validateJudgment(n(41)), /41 lines; the cap is 40/);
   assert.throws(() => validateJudgment("  \n\n "), /empty/);
+});
+
+test("validateJudgment: CRLF input is normalized; trailing newlines don't count as lines", () => {
+  assert.equal(validateJudgment("a\r\nb\r\n"), "a\nb");
+  assert.equal(validateJudgment("a\nb\n\n\n"), "a\nb");
+  const forty = Array.from({ length: 40 }, (_, i) => `l${i}`).join("\r\n") + "\r\n\r\n";
+  assert.equal(validateJudgment(forty).split("\n").length, 40);
+  assert.throws(() => validateJudgment(Array.from({ length: 41 }, () => "x").join("\r\n") + "\r\n"), /41 lines/);
+});
+
+test("readJudgmentInput: `--judgment -` on a TTY is refused at once without reading stdin", () => {
+  let read = 0;
+  assert.throws(
+    () => readJudgmentInput({ judgment: "-" }, { isTTY: () => true, readStdin: () => { read++; return "x"; } }),
+    /--judgment - needs piped stdin; use --judgment-file <path>/,
+  );
+  assert.equal(read, 0);
+  assert.equal(readJudgmentInput({ judgment: "-" }, { isTTY: () => false, readStdin: () => "piped\n" }), "piped");
 });
 
 // ---- the real CLI
