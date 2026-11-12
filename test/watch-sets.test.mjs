@@ -1127,25 +1127,139 @@ test("escalation: a cancelled set never escalates", async () => {
   }
 });
 
-test("escalation: a completed set never escalates", async () => {
+test("escalation (H1): siblings finishing after the stall ping do not close the set; it escalates, then completes once", async () => {
   const sb = sandbox();
   try {
-    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-idle" }, { kind: "agent", ref: "w-ok" }] }, { home: sb.home, now: T0 });
+    addWatch({ owner: "lead-1", team: "t", lane: "l", items: [{ kind: "agent", ref: "w-idle" }, { kind: "agent", ref: "w-a" }, { kind: "agent", ref: "w-b" }] }, { home: sb.home, now: T0 });
     const { engine, delivered, clock, nudges } = escEngine(sb);
-    engine.onRunnerEvent(agentEv("w-idle", "idle"));
-    engine.onRunnerEvent(agentEv("w-ok", "idle"));
+    for (const id of ["w-idle", "w-a", "w-b"]) engine.onRunnerEvent(agentEv(id, "idle"));
     await engine.tick();
     clock.t = T0 + 16 * MIN;
-    await engine.tick(); // w-idle stalls (stall ping)
+    await engine.tick(); // stall ping (w-idle; w-a/w-b stall too unless they report): report them first
     clock.t = T0 + 20 * MIN;
-    engine.onLogEntry("t", doneEntry("w-ok", clock.t));
-    await engine.tick(); // every item settled + progress = completion ping closes the set
+    engine.onLogEntry("t", doneEntry("w-a", clock.t));
+    engine.onLogEntry("t", doneEntry("w-b", clock.t));
+    await engine.tick();
+    assert.equal(engine.list()[0].firedAt, undefined, "the set stays armed while the idle worker owes escalation");
+    clock.t = T0 + 16 * MIN + 25 * MIN;
+    await engine.tick();
+    assert.equal(delivered.at(-1).target, "owner");
+    assert.equal(nudges.length, 1);
+    clock.t += 25 * MIN;
+    await engine.tick();
+    assert.equal(delivered.at(-1).target, "overlord");
+    // escalation exhausted: the completion ping may now close the set, and nothing escalates afterwards
+    clock.t += 5 * MIN;
+    await engine.tick();
+    assert.ok(engine.list()[0].firedAt, "completion fires after the escalation is exhausted");
     const n = delivered.length;
-    assert.ok(engine.list()[0].firedAt, "set fired");
     clock.t += 200 * MIN;
     await engine.tick();
     assert.equal(delivered.length, n);
-    assert.equal(nudges.length, 0);
+    assert.equal(nudges.length, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation (H1): a 1-of-1 idle set escalates owner then Overlord", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-only" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-only", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick();
+    assert.deepEqual(delivered.map((d) => d.target), [undefined, "owner", "overlord"]);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation (H2): a turn started by our own nudge does not stop the Overlord step", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-n" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock, nudges } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-n", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick(); // esc1 + nudge
+    assert.equal(nudges.length, 1);
+    // the worker answers the nudge: a turn starts right after, runs, and ends with no report
+    clock.t += 10_000;
+    engine.onRunnerEvent(agentEv("w-n", "running"));
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-n" });
+    await engine.tick();
+    clock.t += 2 * MIN;
+    engine.onRunnerEvent(agentEv("w-n", "idle"));
+    await engine.tick();
+    clock.t += 30 * MIN; // idle again past stallMin, 25+ min after esc1
+    await engine.tick();
+    assert.equal(delivered.at(-1).target, "overlord", "still escalates to the Overlord");
+    assert.equal(nudges.length, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation (H2): a real turn (not the nudge's) stops escalation, as does a report", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-r" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = escEngine(sb);
+    engine.onRunnerEvent(agentEv("w-r", "idle"));
+    await engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await engine.tick();
+    clock.t += 25 * MIN;
+    await engine.tick(); // esc1 + nudge (ignored by this worker)
+    // minutes later the lead pokes it: a real turn, no report
+    clock.t += 10 * MIN;
+    engine.onRunnerEvent(agentEv("w-r", "running"));
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-r" });
+    await engine.tick();
+    clock.t += 2 * MIN;
+    engine.onRunnerEvent(agentEv("w-r", "idle"));
+    await engine.tick();
+    clock.t += 60 * MIN;
+    await engine.tick();
+    assert.equal(delivered.filter((d) => d.target === "overlord").length, 0, "a real turn ends the episode");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("escalation (Medium): a tick before the first agent snapshot holds the state, then resumes", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-s" }] }, { home: sb.home, now: T0 });
+    const clock = { t: T0 };
+    const a = escEngine(sb, { clock });
+    a.engine.onRunnerEvent(agentEv("w-s", "idle"));
+    await a.engine.tick();
+    clock.t = T0 + 16 * MIN;
+    await a.engine.tick();
+    clock.t += 25 * MIN;
+    await a.engine.tick(); // esc1
+    clock.t += 24 * MIN;
+    // restart: a tick runs before any snapshot arrives
+    const b = escEngine(sb, { clock });
+    clock.t += 1 * MIN;
+    await b.engine.tick();
+    assert.equal(b.delivered.length, 0, "nothing fires before the first snapshot");
+    assert.equal(b.engine.list()[0].items[0].reason, "idle-no-report", "the idle state is held, not reset to no-events");
+    b.engine.onRunnerEvent(agentEv("w-s", "idle"));
+    await b.engine.tick();
+    assert.equal(b.delivered.length, 1);
+    assert.equal(b.delivered[0].target, "overlord", "resumes at the Overlord step");
   } finally {
     sb.cleanup();
   }

@@ -293,6 +293,10 @@ export function stepSet(set, ctx) {
   const at = iso(ctx.now);
   for (const item of set.items) {
     if (item.state === "done") continue; // sticky
+    // Restart resume: until the runner snapshot of a stalled-idle worker loads, classifyItem would read it as never-seen
+    // ("no-events", phase pending) and lose the idle episode. Hold its state for one stall window after startup.
+    if (item.kind === "agent" && item.reason === "idle-no-report" && item.stallFiredAt && !ctx.agents.get(item.ref) && ctx.now - (ctx.startedAt ?? 0) < Number(set.stallMin) * 60_000) continue;
+    noteNudgeTurn(item, ctx.agents.get(item.ref));
     const c = classifyItem(item, set, ctx);
     if (c.phase !== item.phase) {
       item.phase = c.phase;
@@ -310,9 +314,10 @@ export function stepSet(set, ctx) {
   }
   set.pings ??= [];
   const lastPing = timeOf(set.lastPingAt);
+  const escPending = (i) => idleEpisode(i, ctx.agents.get(i.ref)) && !i.esc2At; // an idle worker still owes escalation steps
   const settled = (i) => i.state === "done" || i.state === "fail" || (i.state === "stalled" && Boolean(i.stallFiredAt));
   const progressed = set.items.some((i) => (i.state === "done" || i.state === "fail") && !(timeOf(i.doneAt) <= lastPing));
-  if (set.items.every(settled) && progressed) {
+  if (set.items.every(settled) && !set.items.some(escPending) && progressed) {
     const ping = { key: "done", at, text: completionText(set) };
     set.pings.push(ping);
     set.firedAt = at;
@@ -327,20 +332,39 @@ export function stepSet(set, ctx) {
     set.lastPingAt = at;
     return ping;
   }
-  return escalateIdle(set, ctx.now, at);
+  return escalateIdle(set, ctx, at);
+}
+
+/** A turn that starts within this window after our own nudge is the nudge's turn, not the worker "starting a turn" by itself. */
+const NUDGE_TURN_MS = 3 * 60_000;
+
+/** Record (once) that the worker's latest turn is the one our nudge started. */
+function noteNudgeTurn(item, o) {
+  if (!item.nudgeSentAt || item.nudgeTurnAt || !Number.isFinite(o?.turnStartedAt)) return;
+  const d = o.turnStartedAt - timeOf(item.nudgeSentAt);
+  if (d >= 0 && d <= NUDGE_TURN_MS) item.nudgeTurnAt = iso(o.turnStartedAt);
+}
+
+/**
+ * Still the same idle-no-report episode the stall ping was for. A newer phaseSince means the worker ran a turn and went idle
+ * again: that only keeps the episode if the turn was our own nudge's (and no later turn happened); any other turn ends it.
+ */
+function idleEpisode(i, o) {
+  if (!(i.kind === "agent" && i.state === "stalled" && i.reason === "idle-no-report" && i.phase === "idle" && i.stallFiredAt)) return false;
+  if (!(timeOf(i.phaseSince) > timeOf(i.stallFiredAt))) return true;
+  return Boolean(i.nudgeTurnAt) && (o?.turnStartedAt === undefined || o.turnStartedAt === timeOf(i.nudgeTurnAt));
 }
 
 /**
  * idea-160: a worker still idle-no-report escalateMin after its stall ping re-pings the owner (once per item); escalateMin after
  * that, the Squad Overlord (once). The first step also marks one auto-nudge (item.nudgeDueAt; the engine sends it). Only the SAME
  * idle episode counts: an item that left idle (a new turn, a report, closed) is no longer stalled/idle-no-report, and one that
- * went idle again after the stall ping has a newer phaseSince, so neither is escalated.
+ * went idle again after the stall ping has a newer phaseSince (unless it was our nudge's turn), so neither is escalated.
  */
-function escalateIdle(set, t, at) {
+function escalateIdle(set, ctx, at) {
+  const t = ctx.now;
   const escMs = (Number(set.escalateMin) > 0 ? Number(set.escalateMin) : DEFAULT_ESCALATE_MIN) * 60_000;
-  const idle = (i) =>
-    i.kind === "agent" && i.state === "stalled" && i.reason === "idle-no-report" && i.phase === "idle" && i.stallFiredAt &&
-    !(timeOf(i.phaseSince) > timeOf(i.stallFiredAt));
+  const idle = (i) => ctx.agents.has(i.ref) && idleEpisode(i, ctx.agents.get(i.ref)); // no step before the first snapshot
   const step1 = set.items.filter((i) => idle(i) && !i.esc1At && t - timeOf(i.stallFiredAt) >= escMs);
   const step2 = set.items.filter((i) => idle(i) && i.esc1At && !i.esc2At && t - timeOf(i.esc1At) >= escMs);
   let last = null;
@@ -355,8 +379,7 @@ function escalateIdle(set, t, at) {
       target,
       text: [`Watch ${set.id} ${head}: ${what} still idle with no report (${Math.round(escMs / 60_000)} min since ${since}).`, ...set.items.map(itemLine)].join("\n"),
     };
-    set.pings.push(last);
-    set.lastPingAt = at;
+    set.pings.push(last); // lastPingAt stays: escalation is not "progress" for the completion rule
   };
   for (const i of step1) {
     i.esc1At = at;
