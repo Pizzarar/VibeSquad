@@ -274,6 +274,8 @@ function bucketFor(st, day) {
   return b;
 }
 
+const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
+
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
   if (t !== null) {
@@ -287,6 +289,9 @@ function foldEvent(st, ev) {
     if (ev.cwd !== undefined) st.cwd = ev.cwd;
     if (st.createdAt === undefined && t !== null) st.createdAt = t;
     foldIdentity(st, ev.meta);
+    if (ev.meta?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
+  } else if (ev.type === "resume") {
+    st.restartedOrResumed = true;
   } else if (ev.type === "session" && ev.model) {
     st.model = ev.model;
   } else if (ev.type === "meta") {
@@ -294,7 +299,12 @@ function foldEvent(st, ev) {
     const lane = ev.patch?.lane ?? ev.patch?.labels?.lane;
     if (typeof lane === "string" && lane) st.lane = lane;
     foldIdentity(st, ev.patch);
+    if (ev.patch?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "status") {
+    if (t !== null) {
+      if (ev.status === "queued") { if (st.queuedAt === undefined) st.queuedAt = t; }
+      else if ((ev.status === "starting" || ev.status === "running") && st.queuedAt !== undefined && st.queueEndedAt === undefined) st.queueEndedAt = t;
+    }
     // working intervals run from status "running" to "idle"/"parked"/"exited"; an open interval is closed at lastTs.
     if (ev.status === "running") {
       if (st.runningSince === undefined && t !== null) st.runningSince = t;
@@ -326,10 +336,18 @@ function foldEvent(st, ev) {
     st.curLine = "";
     st.msgVerdict = null;
     st.pass = st.priorPass;
+    if (typeof ev.text === "string" && COMPACT_INPUT_RE.test(ev.text)) st.compactPending = { costUsd: 0, inputTokens: 0, outputTokens: 0 };
     if (!st.roleOnly && typeof ev.text === "string" && /^\s*(?:ROLE:\s*reviewer\b|You are (?:acting as )?a READ-ONLY\b)/i.test(ev.text)) {
       st.roleOnly = true;
     }
+  } else if (ev.type === "thought") {
+    if (st.firstThoughtTs === undefined && t !== null) st.firstThoughtTs = t;
+  } else if (ev.type === "compacted") {
+    st.compactions = (st.compactions ?? 0) + 1;
+    const before = tokenCount(ev.before), after = tokenCount(ev.after);
+    if (before && after) st.compactSavedTokens = (st.compactSavedTokens ?? 0) + Math.max(0, before - after);
   } else if (ev.type === "output") {
+    if (st.firstOutputTs === undefined && t !== null) st.firstOutputTs = t;
     if (typeof ev.text === "string") {
       foldOutputLines(st, ev.text);
       st.msgVerdict = messageVerdict(st);
@@ -345,6 +363,7 @@ function foldEvent(st, ev) {
       b.inputTokens += inT;
       b.outputTokens += outT;
     }
+    if (st.compactPending) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
   } else if (ev.type === "turn_done") {
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);
@@ -352,6 +371,12 @@ function foldEvent(st, ev) {
     if (Number.isFinite(c) && c >= 0) {
       delta = c >= st.prevCost ? c - st.prevCost : c;
       st.prevCost = c;
+    }
+    if (st.compactPending) { // the turn answering a `/compact` input: its cost + tokens are the compaction's
+      st.compactCostUsd = (st.compactCostUsd ?? 0) + delta;
+      st.compactInputTokens = (st.compactInputTokens ?? 0) + st.compactPending.inputTokens;
+      st.compactOutputTokens = (st.compactOutputTokens ?? 0) + st.compactPending.outputTokens;
+      st.compactPending = undefined;
     }
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
@@ -829,6 +854,81 @@ function agentV2(st, agentId) {
     lastErrorTs: st.lastErrorTs ?? null,
     handoff: !!st.handoff,
     loop: st.turns > LOOP_TURN_THRESHOLD && !st.pass,
+    restartedOrResumed: !!st.restartedOrResumed,
+    queuedMs: st.queuedAt !== undefined && st.queueEndedAt !== undefined ? Math.max(0, st.queueEndedAt - st.queuedAt) : null,
+    firstResponseTs: minTs(st.firstThoughtTs, st.firstOutputTs),
+    firstOutputTs: st.firstOutputTs ?? null,
+    compactions: st.compactions ?? 0,
+    compactCostUsd: st.compactCostUsd ?? 0,
+    compactInputTokens: st.compactInputTokens ?? 0,
+    compactOutputTokens: st.compactOutputTokens ?? 0,
+    compactSavedTokens: st.compactSavedTokens ?? 0,
+  };
+}
+
+const minTs = (a, b) => (a === undefined ? (b ?? null) : (b === undefined ? a : Math.min(a, b)));
+
+export const READY_TIME_MAX_MS = 30 * 60_000;
+export const READY_TIME_BASELINE = { paseoSpawnMedianMs: 165000, runnerSpawnMedianMs: 450 };
+
+/**
+ * Ready-time gauge (idea-153), whole-log over the (Squad-filtered) agents. Per run, from the `created` event:
+ *   firstResponseMs = min(first thought, first output) - created;  readyMs = first output - created;
+ *   queuedMs = first status:queued -> first starting|running (time behind the live cap). "ExclQueue" subtracts queuedMs.
+ * Skipped: restarted/resumed runs (vs.restarted-from label or resume event) and any value > READY_TIME_MAX_MS.
+ * Group shape (overall has provider "all"; byProvider is sorted by count desc):
+ *   { provider, count, queuedCount, queuedShare,
+ *     medianFirstResponseMs, p90FirstResponseMs, medianFirstResponseExclQueueMs, p90FirstResponseExclQueueMs,
+ *     medianReadyMs, p90ReadyMs, medianReadyExclQueueMs, p90ReadyExclQueueMs, medianQueuedMs, p90QueuedMs }   // all ms, null = no data
+ * getUsage().readyTime = { overall, byProvider: [group], baseline: { paseoSpawnMedianMs, runnerSpawnMedianMs } }
+ */
+function buildReadyTime(agents) {
+  const groups = new Map();
+  const mk = (provider) => ({ provider, count: 0, queuedCount: 0, fr: [], frx: [], rd: [], rdx: [], q: [] });
+  const all = mk("all");
+  for (const a of agents) {
+    if (a.restartedOrResumed || a.createdAt === null || a.createdAt === undefined) continue;
+    const fr = a.firstResponseTs === null ? null : a.firstResponseTs - a.createdAt;
+    const rd = a.firstOutputTs === null ? null : a.firstOutputTs - a.createdAt;
+    if (fr === null || fr < 0 || fr > READY_TIME_MAX_MS) continue;
+    const q = Math.max(0, a.queuedMs ?? 0);
+    const g = getOrSet(groups, a.provider, () => mk(a.provider));
+    for (const t of [g, all]) {
+      t.count += 1;
+      if (q > 0) { t.queuedCount += 1; t.q.push(q); }
+      t.fr.push(fr);
+      t.frx.push(Math.max(0, fr - q));
+      if (rd !== null && rd >= 0 && rd <= READY_TIME_MAX_MS) { t.rd.push(rd); t.rdx.push(Math.max(0, rd - q)); }
+    }
+  }
+  const fin = (t) => {
+    const stat = (arr, p) => pctile(arr.sort((x, y) => x - y), p);
+    return {
+      provider: t.provider, count: t.count, queuedCount: t.queuedCount, queuedShare: t.count ? Math.round((t.queuedCount / t.count) * 1000) / 1000 : null,
+      medianFirstResponseMs: stat(t.fr, 0.5), p90FirstResponseMs: stat(t.fr, 0.9),
+      medianFirstResponseExclQueueMs: stat(t.frx, 0.5), p90FirstResponseExclQueueMs: stat(t.frx, 0.9),
+      medianReadyMs: stat(t.rd, 0.5), p90ReadyMs: stat(t.rd, 0.9),
+      medianReadyExclQueueMs: stat(t.rdx, 0.5), p90ReadyExclQueueMs: stat(t.rdx, 0.9),
+      medianQueuedMs: stat(t.q, 0.5), p90QueuedMs: stat(t.q, 0.9),
+    };
+  };
+  return { overall: fin(all), byProvider: [...groups.values()].map(fin).sort((x, y) => y.count - x.count), baseline: { ...READY_TIME_BASELINE } };
+}
+
+/**
+ * Compaction vs handoff (idea-132). A compaction = a `compacted` event (before/after tokens -> tokensSaved); its cost/tokens are the turn
+ * answering the `/compact` input. Handoff cost = agents carrying vs.handoff-from. Shape:
+ * getUsage().compaction = { runs, totalCostUsd, avgCostUsd, totalTokens, avgTokens, tokensSaved, handoffRuns, restartOverheadCostUsd, avgHandoffCostUsd }
+ */
+function buildCompaction(agents, floor) {
+  let runs = 0, cost = 0, tokens = 0, saved = 0, handoffRuns = 0, handoffCost = 0;
+  for (const a of agents) {
+    runs += a.compactions; cost += a.compactCostUsd; tokens += a.compactInputTokens + a.compactOutputTokens; saved += a.compactSavedTokens;
+    if (a.handoff) { handoffRuns += 1; handoffCost += a.costUsd; }
+  }
+  return {
+    runs, totalCostUsd: cost, avgCostUsd: runs ? cost / runs : null, totalTokens: tokens, avgTokens: runs ? Math.round(tokens / runs) : null,
+    tokensSaved: saved, handoffRuns, restartOverheadCostUsd: floor?.restartOverheadCostUsd ?? 0, avgHandoffCostUsd: handoffRuns ? handoffCost / handoffRuns : null,
   };
 }
 
@@ -2250,6 +2350,8 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms: computeSpawnStorms(agents),
+    readyTime: buildReadyTime(agents),
+    compaction: buildCompaction(agents, floor),
     bootSize: readBootSizes(home, { since, until }),
     recentErrors,
     byWorkflow,
@@ -2332,6 +2434,25 @@ function usageToMarkdown(u) {
       lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
       for (const r of au.bySquad) lines.push(`| ${r.squad} | ${r.mergedUnits} | ${r.turns} | $${round2(r.costUsd)} | ${r.firstTryPassRate ?? "-"} | ${r.avgReviewRounds ?? "-"} | ${r.costPerUnit === null ? "-" : `$${round2(r.costPerUnit)}`} | ${r.ownerTouches} | ${r.unitsPerOwnerTouch ?? "-"} | ${r.longestUnassistedStreak} | ${r.stalls} | ${r.medianUnblockMs ?? "-"} |`);
     }
+  }
+  const rt = u.readyTime;
+  if (rt?.overall?.count) {
+    const sec = (ms) => (ms === null || ms === undefined ? "-" : `${round2(ms / 1000)}s`);
+    const o = rt.overall;
+    lines.push("");
+    lines.push("## Ready time (spawn -> first response)");
+    lines.push(`- runner spawn ${rt.baseline.runnerSpawnMedianMs}ms vs Paseo ${rt.baseline.paseoSpawnMedianMs}ms`);
+    lines.push(`- 1st response median/p90: ${sec(o.medianFirstResponseMs)}/${sec(o.p90FirstResponseMs)} incl queue, ${sec(o.medianFirstResponseExclQueueMs)}/${sec(o.p90FirstResponseExclQueueMs)} excl | queued ${o.queuedCount}/${o.count}`);
+    lines.push("| provider | runs | 1st resp excl Q med/p90 | 1st resp incl Q med/p90 | 1st text excl Q med/p90 | queue wait med/p90 |");
+    lines.push("|---|---|---|---|---|---|");
+    for (const g of rt.byProvider) lines.push(`| ${g.provider} | ${g.count} | ${sec(g.medianFirstResponseExclQueueMs)}/${sec(g.p90FirstResponseExclQueueMs)} | ${sec(g.medianFirstResponseMs)}/${sec(g.p90FirstResponseMs)} | ${sec(g.medianReadyExclQueueMs)}/${sec(g.p90ReadyExclQueueMs)} | ${sec(g.medianQueuedMs)}/${sec(g.p90QueuedMs)} |`);
+  }
+  const cp = u.compaction;
+  if (cp && (cp.runs || cp.handoffRuns)) {
+    lines.push("");
+    lines.push("## Compaction vs handoff");
+    lines.push(`- compactions: ${cp.runs} | $${round2(cp.totalCostUsd)} total, ${cp.avgCostUsd === null ? "-" : `$${round2(cp.avgCostUsd)}`} avg | ${cp.totalTokens} tokens | saved ${cp.tokensSaved}`);
+    lines.push(`- handoffs: ${cp.handoffRuns} | avg $${cp.avgHandoffCostUsd === null ? "-" : round2(cp.avgHandoffCostUsd)} | restart overhead $${round2(cp.restartOverheadCostUsd)}`);
   }
   const bs = u.bootSize ?? [];
   if (bs.length) {

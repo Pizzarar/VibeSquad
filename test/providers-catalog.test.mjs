@@ -2226,3 +2226,87 @@ test('usa-24: /usage and /usage-export honour ?squad=, markdown has the Autonomy
   assert.match(md.data.markdown, /\| efi \| 2 \| 1 \|/);
   assert.match((await call('/__vibesquad/providers/usage-export?format=md')).data.markdown, /## Autonomy scorecard\n/);
 });
+
+// ---- usa-26: ready-time gauge + compaction cost (idea-153, idea-132) ----
+
+test('usage ready-time: median/p90 first response + first text, excl/incl queue, per provider; restarts and outliers skipped', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 10, 12);
+  const mk = (id, provider, evs, meta = { lane: 'usage', role: 'worker' }) =>
+    writeAgent(home, id, [{ ts: T0, type: 'created', provider, model: 'm', meta }, ...evs.map((e) => ({ ...e, ts: T0 + e.at }))]);
+  // claude: no queue, first output at 10s / 20s
+  mk('c1', 'claude', [{ at: 10_000, type: 'output', text: 'hi' }]);
+  mk('c2', 'claude', [{ at: 20_000, type: 'output', text: 'hi' }]);
+  // gemini: thought at 4s, text at 30s; queued 0..20s -> excl queue 4s-... (first response 4s... queue 20s clamps to 0)
+  mk('g1', 'gemini', [{ at: 100, type: 'status', status: 'queued' }, { at: 20_100, type: 'status', status: 'running' }, { at: 24_000, type: 'thought', text: 'x' }, { at: 30_000, type: 'output', text: 'y' }]);
+  // restarted (label) and resumed (event) runs are excluded
+  mk('r1', 'claude', [{ at: 1000, type: 'output', text: 'hi' }], { lane: 'usage', role: 'worker', labels: { 'vs.restarted-from': 'rn-old' } });
+  mk('r2', 'claude', [{ at: 500, type: 'resume' }, { at: 1000, type: 'output', text: 'hi' }]);
+  // outlier > 30 min and a run that never answered
+  mk('o1', 'claude', [{ at: 31 * 60_000, type: 'output', text: 'late' }]);
+  mk('n1', 'claude', [{ at: 1000, type: 'status', status: 'running' }]);
+  const rt = getUsage({ home, git: noGit }).readyTime;
+  assert.deepEqual(rt.baseline, { paseoSpawnMedianMs: 165000, runnerSpawnMedianMs: 450 });
+  assert.equal(rt.overall.count, 3);
+  assert.equal(rt.overall.queuedCount, 1);
+  assert.equal(rt.overall.queuedShare, 0.333);
+  const c = rt.byProvider.find((g) => g.provider === 'claude');
+  assert.equal(c.count, 2);
+  assert.equal(c.medianFirstResponseMs, 10_000);
+  assert.equal(c.p90FirstResponseMs, 20_000);
+  assert.equal(c.medianQueuedMs, null);
+  const g = rt.byProvider.find((x) => x.provider === 'gemini');
+  assert.equal(g.count, 1);
+  assert.equal(g.medianFirstResponseMs, 24_000); // thought beats text
+  assert.equal(g.medianFirstResponseExclQueueMs, 4_000); // minus the 20s queue
+  assert.equal(g.medianReadyMs, 30_000);
+  assert.equal(g.medianReadyExclQueueMs, 10_000);
+  assert.equal(g.medianQueuedMs, 20_000);
+  assert.equal(rt.byProvider[0].provider, 'claude'); // sorted by count desc
+});
+
+test('usage ready-time: empty home yields null stats and zeroed compaction', () => {
+  const home = tmp();
+  clearUsageCache();
+  const u = getUsage({ home, git: noGit });
+  assert.equal(u.readyTime.overall.count, 0);
+  assert.equal(u.readyTime.overall.medianFirstResponseMs, null);
+  assert.deepEqual(u.readyTime.byProvider, []);
+  assert.equal(u.compaction.runs, 0);
+  assert.equal(u.compaction.avgCostUsd, null);
+});
+
+test('usage compaction: /compact turn cost + tokens, tokens saved, and handoff overhead', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 10, 12);
+  writeAgent(home, 'rn-l', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: 'work' },
+    { ts: T0 + 2, type: 'usage', inputTokens: 5000, outputTokens: 500 },
+    { ts: T0 + 3, type: 'turn_done', costUsd: 1.0 },
+    { ts: T0 + 4, type: 'input', text: '/compact keep the brief' },
+    { ts: T0 + 5, type: 'usage', inputTokens: 900, outputTokens: 100 },
+    { ts: T0 + 6, type: 'compacted', before: 150000, after: 40000 },
+    { ts: T0 + 7, type: 'turn_done', costUsd: 1.25 },
+    { ts: T0 + 8, type: 'input', text: 'more work' },
+    { ts: T0 + 9, type: 'usage', inputTokens: 300, outputTokens: 50 },
+    { ts: T0 + 10, type: 'turn_done', costUsd: 1.5 },
+  ]);
+  writeAgent(home, 'rn-h', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-l' } } },
+    { ts: T0 + 1, type: 'input', text: 'continue' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.6 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.runs, 1);
+  assert.equal(cp.totalCostUsd, 0.25); // only the turn answering /compact
+  assert.equal(cp.avgCostUsd, 0.25);
+  assert.equal(cp.totalTokens, 1000);
+  assert.equal(cp.avgTokens, 1000);
+  assert.equal(cp.tokensSaved, 110000);
+  assert.equal(cp.handoffRuns, 1);
+  assert.equal(cp.avgHandoffCostUsd, 0.6);
+  assert.ok(cp.restartOverheadCostUsd >= 0.6);
+});

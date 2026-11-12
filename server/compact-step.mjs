@@ -10,6 +10,14 @@ export const COMPACT_SETTLE_MS = 1_500;
 
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
 
+/** Cumulative cost / in+out tokens off a runner agent snapshot (usage or lastUsage); null when the snapshot carries none. */
+export function agentSpend(agent) {
+  const u = agent?.usage ?? agent?.lastUsage ?? {};
+  const cost = Number(u.costUsd);
+  const tok = Number(u.inputTokens ?? 0) + Number(u.outputTokens ?? 0);
+  return { costUsd: Number.isFinite(cost) ? cost : null, tokens: Number.isFinite(tok) && (u.inputTokens != null || u.outputTokens != null) ? tok : null };
+}
+
 export function isClaudeAgent(agent) {
   return String(agent?.provider ?? "").toLowerCase() === "claude";
 }
@@ -47,10 +55,11 @@ export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TI
   async function usedNow(id, before) {
     const t0 = Date.now();
     let used = before;
+    let spend = null;
     for (;;) {
       const fresh = (await runner.fetchAgent(id).catch(() => null))?.agent;
-      if (fresh) used = leadUsedTokens(fresh);
-      if (used < before || Date.now() - t0 >= settleMs) return used;
+      if (fresh) { used = leadUsedTokens(fresh); spend = agentSpend(fresh); }
+      if (used < before || Date.now() - t0 >= settleMs) return { used, spend };
       await new Promise((r) => setTimeout(r, 100));
     }
   }
@@ -63,16 +72,18 @@ export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TI
     if (!isIdleForCompact(agent)) return { outcome: "skipped", reason: "busy" };
 
     const before = leadUsedTokens(agent);
+    const spendBefore = agentSpend(agent);
     tried.add(id);
     const startedAt = Date.now();
     const finish = (outcome, extra = {}) => {
-      const res = { outcome, before, ...extra };
+      const { costUsd, tokens, ...rest } = extra;
+      const res = { outcome, before, ...rest, ...(costUsd != null ? { costUsd } : {}), ...(tokens != null ? { tokens } : {}) };
       try {
         log({
           agent: id,
           teamId,
           laneId,
-          text: `compact-step ${kind} agent=${id} outcome=${outcome} before=${before} after=${extra.after ?? "?"} cap=${cap ?? "?"} ms=${Date.now() - startedAt}${outcome === "ok" ? "" : " -> falling through to handoff"}`,
+          text: `compact-step ${kind} agent=${id} outcome=${outcome} before=${before} after=${extra.after ?? "?"} cap=${cap ?? "?"} ms=${Date.now() - startedAt}${extra.costUsd != null ? ` costUsd=${extra.costUsd}` : ""}${extra.tokens != null ? ` tokens=${extra.tokens}` : ""}${outcome === "ok" ? "" : " -> falling through to handoff"}`,
         });
       } catch { /* logging never blocks the ladder */ }
       return res;
@@ -95,9 +106,12 @@ export function createCompactor({ runner, log = () => {}, timeoutMs = COMPACT_TI
     const got = await waiting;
     if (got === "timeout") return finish("timeout");
     if (got !== "compacted") return finish("failed", { reason: got });
-    const after = await usedNow(id, before);
-    if (Number.isFinite(cap) && after >= cap) return finish("still-over", { after });
-    return finish("ok", { after });
+    const { used: after, spend } = await usedNow(id, before);
+    // cost/tokens of the /compact turn = growth of the cumulative usage totals across it (clamped: a fresh process resets them)
+    const delta = (b, a) => (b != null && a != null ? Math.max(0, Math.round((a - b) * 1e6) / 1e6) : undefined);
+    const costUsd = delta(spendBefore.costUsd, spend?.costUsd), tokens = delta(spendBefore.tokens, spend?.tokens);
+    if (Number.isFinite(cap) && after >= cap) return finish("still-over", { after, costUsd, tokens });
+    return finish("ok", { after, costUsd, tokens });
   }
 
   return { run, tried };

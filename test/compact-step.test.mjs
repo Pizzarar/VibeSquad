@@ -242,3 +242,43 @@ test("lead: running lead past the hard cap still goes to the forced handoff (no 
   assert.equal(r.created.length, 1);
   w.stop();
 });
+
+test("compact-step logs the /compact turn costUsd + tokens (growth of cumulative usage across it)", async () => {
+  const lines = [];
+  const listeners = new Set();
+  const a = { id: "rn-c", provider: "claude", status: "idle", labels: {}, lastUsage: { contextWindowUsedTokens: 150_000, inputTokens: 1000, outputTokens: 200, costUsd: 1.5 } };
+  const runner = {
+    subscribeEvents(l) { listeners.add(l); return () => listeners.delete(l); },
+    async updateAgent() {},
+    async sendAgentPrompt() {
+      setTimeout(() => {
+        a.lastUsage = { contextWindowUsedTokens: 30_000, inputTokens: 1900, outputTokens: 350, costUsd: 1.75 };
+        for (const l of listeners) l({ kind: "timeline", agentId: "rn-c", type: "compacted" });
+      }, 5);
+    },
+    async fetchAgent() { return { agent: a }; },
+  };
+  const c = createCompactor({ runner, timeoutMs: 200, settleMs: 40, log: (e) => lines.push(e.text) });
+  const res = await c.run(a, { focus: "x", cap: 100_000 });
+  assert.equal(res.outcome, "ok");
+  assert.equal(res.costUsd, 0.25);
+  assert.equal(res.tokens, 1050);
+  assert.match(lines[0], /outcome=ok before=150000 after=30000 cap=100000 ms=\d+ costUsd=0\.25 tokens=1050/);
+});
+
+test("compact-step without usage totals omits costUsd/tokens instead of guessing", async () => {
+  const lines = [];
+  const listeners = new Set();
+  const a = { id: "rn-d", provider: "claude", status: "idle", labels: {}, usedTokens: 150_000 };
+  const runner = {
+    subscribeEvents(l) { listeners.add(l); return () => listeners.delete(l); },
+    async updateAgent() {},
+    async sendAgentPrompt() { setTimeout(() => { a.usedTokens = 20_000; for (const l of listeners) l({ kind: "timeline", agentId: "rn-d", type: "compacted" }); }, 5); },
+    async fetchAgent() { return { agent: a }; },
+  };
+  const c = createCompactor({ runner, timeoutMs: 200, settleMs: 40, log: (e) => lines.push(e.text) });
+  const res = await c.run(a, { cap: 100_000 });
+  assert.equal(res.outcome, "ok");
+  assert.equal(res.costUsd, undefined);
+  assert.doesNotMatch(lines[0], /costUsd=|tokens=/);
+});
