@@ -1159,9 +1159,15 @@ interface AgentSnap {
   lastUsage?: { contextWindowUsedTokens?: number; inputTokens?: number } | null;
 }
 
+let logStream: "stderr" | "stdout" | null = null;
+/** The runner hook host (server/backend/runner-hooks.mjs) runs inside MCP stdio servers, where stdout is the protocol channel. It sets this instead of mutating process.env (which leaked to the runner and every agent). */
+export function setLogStream(stream: "stderr" | "stdout" | null) {
+  logStream = stream;
+}
+
 function log(message: string) {
-  // The runner hook host (server/backend/runner-hooks.mjs) runs inside MCP stdio servers, where stdout is the protocol channel.
-  (process.env.VS_PLUGIN_LOG === "stderr" ? console.error : console.log)(`[vibesquad] ${message}`);
+  const toStderr = logStream ? logStream === "stderr" : process.env.VS_PLUGIN_LOG === "stderr"; // env: MCP stdio servers that set it explicitly
+  (toStderr ? console.error : console.log)(`[vibesquad] ${message}`);
 }
 
 export function createPlugin(overrides: Partial<Deps> = {}) {

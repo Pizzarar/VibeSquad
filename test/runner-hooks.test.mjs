@@ -874,3 +874,20 @@ test('idea-62: the stale-digest sweep archives an orphaned digest (no waiter lef
     await b.close();
   }
 });
+
+test('plugin-log-leak: the hook host routes plugin logs to stderr via a module sink and never sets VS_PLUGIN_LOG', async () => {
+  const prev = process.env.VS_PLUGIN_LOG;
+  delete process.env.VS_PLUGIN_LOG;
+  const b = await boot({ agy: true });
+  let host = null;
+  try {
+    host = await createRunnerHookHost(b.backend, { startWatcher: false });
+    assert.equal(process.env.VS_PLUGIN_LOG, undefined, 'process.env untouched');
+    const mod = await import('../server/hooks/agent-duties.ts');
+    assert.equal(typeof mod.setLogStream, 'function');
+  } finally {
+    if (prev !== undefined) process.env.VS_PLUGIN_LOG = prev;
+    await host?.dispose?.();
+    await b.close();
+  }
+});
