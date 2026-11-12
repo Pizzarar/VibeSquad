@@ -274,8 +274,8 @@ function harness(
     onTurnStarted(agent: any) {
       return on.get("agent.turn_started")!({ agent }, { paseo });
     },
-    onTurnEnded(agent: any, outcome: any = { kind: "completed" }) {
-      return on.get("agent.turn_ended")!({ agent, turnId: "t1", outcome }, { paseo });
+    onTurnEnded(agent: any, outcome: any = { kind: "completed" }, turnId = "t1") {
+      return on.get("agent.turn_ended")!({ agent, turnId, outcome }, { paseo });
     },
     setLabelsCalls,
     detachedIds,
@@ -1591,6 +1591,85 @@ test(
     } finally {
       h.stop?.();
     }
+  }),
+);
+
+test(
+  "idea-150: spawnDigest skips a replayed turn already delivered (survives a restart) but still digests a new turn on the same worker",
+  withEnv(async ({ briefRoot }) => {
+    const mk = () => ({
+      id: "w-replay",
+      title: "Bug1 · replay",
+      cwd: CWD,
+      status: "idle",
+      provider: "antigravity-cli",
+      model: "gemini-4-argon",
+      labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "replay" },
+    });
+    const run = async (turnId: string) => {
+      const w: any = mk();
+      const agents = new Map<string, any>([["w-replay", w]]);
+      const created: any[] = [];
+      const h = harness(agents, { briefRoot });
+      (h.paseo.agents as any).create = async (payload: any) => {
+        const id = `dig-${created.length + 1}`;
+        created.push({ id, ...payload });
+        return {
+          id,
+          agent: { id },
+          waitForFinish: async () => {
+            // the digest agent logs its verdict (done entry referencing the worker) before it finishes
+            const dir = join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad");
+            mkdirSync(dir, { recursive: true });
+            writeFileSync(join(dir, "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: id, lane: "bug-chaser", type: "done", text: "PASS: ok", refs: ["w-replay"] }) + "\n", { flag: "a" });
+            return { status: "idle" };
+          },
+        };
+      };
+      try {
+        await h.onTurnEnded(w, { kind: "completed" }, turnId);
+        await wait(50); // the digest finished: the turn is now recorded as delivered
+      } finally {
+        h.stop?.();
+      }
+      return created.length;
+    };
+    assert.equal(await run("t-A"), 1, "first delivery digests");
+    assert.equal(await run("t-A"), 0, "replay of the same turn after a restart is skipped");
+    assert.equal(await run("t-B"), 1, "a new turn on the same worker is still delivered");
+  }),
+);
+
+test(
+  "idea-150: a digest that rejects with no verdict logged is not recorded, so a replay after a restart re-digests it",
+  withEnv(async ({ briefRoot }) => {
+    const run = async (turnId: string) => {
+      const w: any = {
+        id: "w-lost",
+        title: "Bug1 · lost",
+        cwd: CWD,
+        status: "idle",
+        provider: "antigravity-cli",
+        model: "gemini-4-argon",
+        labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "lost" },
+      };
+      const agents = new Map<string, any>([["w-lost", w]]);
+      let created = 0;
+      const h = harness(agents, { briefRoot });
+      (h.paseo.agents as any).create = async () => {
+        const id = `dig-${++created}`;
+        return { id, agent: { id }, waitForFinish: async () => Promise.reject(new Error("digest died")) };
+      };
+      try {
+        await h.onTurnEnded(w, { kind: "completed" }, turnId);
+        await wait(50);
+      } finally {
+        h.stop?.();
+      }
+      return created;
+    };
+    assert.equal(await run("t-L"), 1, "first delivery spawns a digest that dies without a verdict");
+    assert.equal(await run("t-L"), 1, "the replay after a restart re-digests the lost turn");
   }),
 );
 
