@@ -4520,6 +4520,10 @@ button.project-file-name:hover { text-decoration: underline; }
 .drawer-config-summary { list-style: none; cursor: pointer; user-select: none; white-space: nowrap; }
 .drawer-config-summary::-webkit-details-marker { display: none; }
 .drawer-config-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; background: var(--panel); border: 1px solid var(--cyan); padding: var(--sp-2); display: flex; flex-direction: column; gap: 6px; min-width: 190px; box-shadow: var(--bevel), 0px 2px 0 var(--shadow-hard); }
+/* A closed <details> hides its non-summary children via a shadow-slot that getComputedStyle can't see (display stays
+   "flex"), so the overlap guard still measures the popover's selects and flags them over the working chips. Make the
+   closed state explicit so the guard's visibility check sees it. */
+.drawer-config-menu:not([open]) .drawer-config-popover { display: none; }
 .drawer-config-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .drawer-head-compact > * { flex: none; }
 .drawer-head-compact .avatar { flex: none; }
