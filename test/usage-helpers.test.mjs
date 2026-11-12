@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
 import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, successText, successTooltip, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
-import { autonomySummary, autonomyTiles, squadLabel, usageExportMdUrl, usageUrl, validSquad, USAGE_SQUAD_KEY } from "../src/usageHelpers.ts";
+import { msText, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, usageExportMdUrl, usageUrl, validSquad, USAGE_SQUAD_KEY } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -397,4 +397,22 @@ test("autonomySummary + autonomyTiles", () => {
   assert.deepEqual(t.map((x) => x.value), ["2", "3", "0.50", "10m", "2.67"]);
   const empty = autonomyTiles({ ...au, ownerTouches: { ...au.ownerTouches, unitsPerOwnerTouch: null, perMergedUnit: null }, stalls: { ...au.stalls, medianUnblockMs: null } });
   assert.deepEqual([empty[0].value, empty[2].value, empty[3].value], ["—", "—", "—"]);
+});
+
+const rg = { provider: "all", count: 4, queuedCount: 1, queuedShare: 0.25, medianFirstResponseMs: 3200, p90FirstResponseMs: 9000, medianFirstResponseExclQueueMs: 2100, p90FirstResponseExclQueueMs: 5000, medianReadyMs: 4000, p90ReadyMs: 8000, medianReadyExclQueueMs: 3000, p90ReadyExclQueueMs: 7000, medianQueuedMs: 60000, p90QueuedMs: 120000 };
+const rt = { overall: rg, byProvider: [rg], baseline: { paseoSpawnMedianMs: 165000, runnerSpawnMedianMs: 450 } };
+const cp = { runs: 2, totalCostUsd: 0.5, avgCostUsd: 0.25, totalTokens: 1000, avgTokens: 500, tokensSaved: 40000, handoffRuns: 1, restartOverheadCostUsd: 1, avgHandoffCostUsd: 1.5 };
+
+test("ready-time helpers", () => {
+  assert.equal(msText(450), "450ms");
+  assert.equal(msText(3200), "3.2s");
+  assert.equal(msText(null), "—");
+  assert.equal(medP90Text(null, null), "—");
+  assert.equal(medP90Text(2100, 5000), "2.1s / 5.0s");
+  assert.equal(readyPillText(rt), "0.45s vs 165s · ~367x faster");
+  assert.equal(readyPillText(null), "—");
+  assert.match(readyTimeSummary(rt, cp), /^Ready Time & Compaction · 4 runs · 1st response 2\.1s med \(excl queue\) · queue 25% · 2 compactions$/);
+  assert.match(readyTimeSummary(null, null), /no data$/);
+  assert.deepEqual(readyTimeTiles(rt, cp).map((x) => x.value), ["2.1s", "3.2s", "25%", "$0.25 vs $1.50"]);
+  assert.ok(readyTimeTiles(null, null).every((x) => x.value === "—" && !/NaN/.test(x.sub)));
 });
