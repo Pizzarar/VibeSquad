@@ -16,6 +16,9 @@ export type LimitRow = {
 
 const PROVIDER_LABEL: Record<string, string> = {
   claude: "Claude",
+  deepseek: "DeepSeek",
+  codex: "Codex",
+  opencode: "OpenCode",
   "antigravity-cli": "Gemini",
   "antigravity-cli/claude-gpt": "Gemini plan · 3rd-party models (Claude/GPT)",
 };
@@ -726,12 +729,12 @@ export function msText(ms: number | null | undefined): string {
 /** `med / p90` pair, `—` when both missing. */
 export const medP90Text = (med: number | null | undefined, p90: number | null | undefined): string => (isNum(med) || isNum(p90) ? `${msText(med)} / ${msText(p90)}` : "—");
 
-/** Spawn speedup pill: `0.45s vs 165s · ~367x faster`; `—` when the baseline is unusable. */
+/** Spawn speedup pill: `Spawn: 0.45s vs 165s · ~367x faster`; `—` when the baseline is unusable. */
 export function readyPillText(r: ReadyTime | null | undefined): string {
   const b = r?.baseline;
   if (!b || !isNum(b.paseoSpawnMedianMs) || !isNum(b.runnerSpawnMedianMs) || b.runnerSpawnMedianMs <= 0) return "—";
   const secs = (ms: number) => (ms < 10_000 ? parseFloat((ms / 1000).toFixed(2)).toString() : String(Math.round(ms / 1000)));
-  return `${secs(b.runnerSpawnMedianMs)}s vs ${secs(b.paseoSpawnMedianMs)}s · ~${Math.round(b.paseoSpawnMedianMs / b.runnerSpawnMedianMs)}x faster`;
+  return `Spawn: ${secs(b.runnerSpawnMedianMs)}s vs ${secs(b.paseoSpawnMedianMs)}s · ~${Math.round(b.paseoSpawnMedianMs / b.runnerSpawnMedianMs)}x faster`;
 }
 
 /** Collapsed header for the Ready-Time section. */

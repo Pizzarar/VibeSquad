@@ -404,12 +404,14 @@ const rt = { overall: rg, byProvider: [rg], baseline: { paseoSpawnMedianMs: 1650
 const cp = { runs: 2, totalCostUsd: 0.5, avgCostUsd: 0.25, totalTokens: 1000, avgTokens: 500, tokensSaved: 40000, handoffRuns: 1, restartOverheadCostUsd: 1, avgHandoffCostUsd: 1.5 };
 
 test("ready-time helpers", () => {
+  assert.equal(providerLabel("deepseek"), "DeepSeek");
+  assert.equal(providerLabel("opencode"), "OpenCode");
   assert.equal(msText(450), "450ms");
   assert.equal(msText(3200), "3.2s");
   assert.equal(msText(null), "—");
   assert.equal(medP90Text(null, null), "—");
   assert.equal(medP90Text(2100, 5000), "2.1s / 5.0s");
-  assert.equal(readyPillText(rt), "0.45s vs 165s · ~367x faster");
+  assert.equal(readyPillText(rt), "Spawn: 0.45s vs 165s · ~367x faster");
   assert.equal(readyPillText(null), "—");
   assert.match(readyTimeSummary(rt, cp), /^Ready Time & Compaction · 4 runs · 1st response 2\.1s med \(excl queue\) · queue 25% · 2 compactions$/);
   assert.match(readyTimeSummary(null, null), /no data$/);
