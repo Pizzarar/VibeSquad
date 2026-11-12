@@ -8,7 +8,7 @@
 | Release commits | `10b6675` (`release: vibesquad 0.3.0 (stable) version bump, frozen from 22d924d`) + `546e45f` (`release: vibesquad 0.3.0 test/hygiene fixes and Boring Mode B4 credit`) on `release/vibesquad-0.3.0`, plus merges `ad86f60` and `1e09283` landing the v0.2.8 and v0.2.9 release records; built/tested commit = `546e45fe8f` (build stamp, audit B8) |
 | Requester | Release Desk lead Rele5 (rn-cd9dc6ddfea4) |
 | Approval | the owner; publish is ordered by Rele5, not by this record |
-| Release URL | not yet published (this record is written before the tag) |
+| Release URL | https://github.com/Pizzarar/VibeSquad/releases/tag/v0.3.0 (tag `v0.3.0` = `ab9cc63`, published 2026-11-12 13:28Z) |
 | Range | `v0.2.9..22d924d`: 242 commits, 86 merges |
 
 Windows only. No Authenticode (no Azure Trusted Signing yet, owner waiver; `NO-AUTHENTICODE` marker): updater-signed with minisign only. `latest.json` is Windows-only (`windows-x86_64` is its only platform entry). No Android APK was built or attached.
