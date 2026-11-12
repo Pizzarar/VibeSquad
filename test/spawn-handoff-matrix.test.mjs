@@ -376,8 +376,13 @@ test("who lead: pending handoff keeps the old lead as sole winner, the confirmed
   try {
     lead(u);
     u.seed({ id: "rn-lead9", title: "Lead 9", labels: { role: "lead", lead: "feat", ord: "2" } });
+    const higherWins = u.who("lead");
+    assert.equal(higherWins.conflict, false, "higher-ord lead wins over older ord1 without CONFLICT");
+    assert.equal(higherWins.winner, "rn-lead9");
+    // Two equally-new leads (same ord) with no handoff link are a real CONFLICT.
+    u.agents.get("rn-lead9").labels.ord = "1";
     const r = u.who("lead");
-    assert.equal(r.conflict, true, "two live leads with no handoff link are a real CONFLICT");
+    assert.equal(r.conflict, true, "two equally-new live leads with no handoff link are a real CONFLICT");
     // a link to an agent that is not a live lead does not excuse a duplicate either
     u.agents.get("rn-lead9").labels["vs.handoff-from"] = "rn-gone";
     assert.equal(u.who("lead").conflict, true);

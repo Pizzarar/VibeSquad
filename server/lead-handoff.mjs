@@ -14,6 +14,7 @@ import {
   findTeamInRegistry,
   formatDisplayTitle,
   isDigestAgent,
+  isHandoffPending,
   isHubLane,
   isRetiredAgent,
   LEAD_HANDOFF_MIN_TOKENS,
@@ -884,6 +885,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       );
       pendingTakeover.delete(successor.id);
       confirmedTakeovers.add(successor.id);
+      await sweepEarlierLaneLeads({ teamId, laneId, laneName, successorId: successor.id, excludeIds: new Set([successor.id, oldLead.id]), maxOrd: nextOrd, roster: allAgents });
     } else {
       pendingTakeover.set(successor.id, takeoverRecord);
     }
@@ -902,6 +904,213 @@ export function createLeadHandoffCoordinator(deps = {}) {
     } finally {
       if (inFlightBySlot.get(slotKey) === p) inFlightBySlot.delete(slotKey);
     }
+  }
+
+  function isLostOrClosedLead(agent) {
+    return Boolean(agent?.lost) || ["closed", "lost"].includes(String(agent?.status ?? "").trim().toLowerCase());
+  }
+
+  function agentTeamAndLane(agent, teams) {
+    const rawTeam = String(agent?.labels?.team ?? "").trim();
+    const rawLane = String(agent?.labels?.lane || agent?.labels?.lead || "").trim();
+    const teamObj = rawTeam ? findTeamInRegistry(rawTeam, teams) : null;
+    const preferTeamId = teamObj?.id || rawTeam;
+    const resolved = rawLane ? findLaneInRegistry(rawLane, teams, preferTeamId) : null;
+    if (resolved && (!preferTeamId || resolved.team.id.toLowerCase() === preferTeamId.toLowerCase())) {
+      return { teamId: resolved.team.id.toLowerCase(), laneId: resolved.lane.id.toLowerCase() };
+    }
+    const fallback = resolveTeamAndLane(agent, rootDir);
+    return {
+      teamId: String(teamObj?.id || rawTeam || fallback.teamId || "").trim().toLowerCase(),
+      laneId: String(resolved?.lane?.id || rawLane || fallback.laneId || "").trim().toLowerCase(),
+    };
+  }
+
+  async function retireLeadRecord(old, { successorId, laneId, laneName, nextOrd }) {
+    const oldOrd = parseLeadOrd(old);
+    const { oldTitle } = leadTitles({
+      laneId,
+      laneName,
+      nextOrd: nextOrd ?? oldOrd + 1,
+      oldOrd,
+      oldLead: old,
+      rootDir,
+    });
+    const nextLabels = {
+      ...(old.labels ?? {}),
+      role: "former-lead",
+      ord: String(oldOrd),
+      ...(successorId ? { "handoff-successor": successorId } : {}),
+    };
+    await deleteHeartbeat(old.id);
+    await setLabels(old.id, nextLabels, oldTitle);
+    return { id: old.id, oldTitle: old.title ?? "", newTitle: oldTitle, ord: oldOrd };
+  }
+
+  async function sweepEarlierLaneLeads({ teamId, laneId, laneName, successorId, excludeIds, maxOrd, roster }) {
+    const list = Array.isArray(roster) ? roster : await listAgents().catch(() => []);
+    const teams = loadTeamsRegistry(rootDir);
+    const foundLane = findLaneInRegistry(String(laneId || teamId || "vibesquad"), teams, teamId ? String(teamId) : "");
+    const wantTeam = String(teamId || foundLane?.team?.id || "vibesquad").trim().toLowerCase();
+    const wantLane = String(foundLane?.lane?.id || laneId || wantTeam).trim().toLowerCase();
+    const laneLeads = list
+      .map((raw) => raw?.agent ?? raw)
+      .filter((a) => {
+        if (!a?.id || a.archivedAt || a.internal || (a.status === "closed" && a.resumable !== true)) return false;
+        if (effectiveAgentRole(a) !== "lead" || isRetiredAgent(a)) return false;
+        const { teamId: aTeam, laneId: aLane } = agentTeamAndLane(a, teams);
+        return aTeam === wantTeam && aLane === wantLane;
+      });
+    const res = resolveLeadWinner(laneLeads);
+    const pendingSet = new Set(res.pending ?? []);
+    const contenderSet = new Set(res.conflict ? (res.contenders ?? []) : []);
+    const laneLeadIds = new Set(laneLeads.map((a) => a.id));
+    for (const a of laneLeads) {
+      if (excludeIds.has(a.id) || pendingTakeover.has(a.id) || pendingSet.has(a.id) || contenderSet.has(a.id)) continue;
+      if (isHandoffPending(a, laneLeadIds)) continue;
+      if (Number.isFinite(maxOrd) && parseLeadOrd(a) >= maxOrd) continue;
+      try {
+        await retireLeadRecord(a, { successorId, laneId, laneName, nextOrd: maxOrd });
+      } catch {}
+    }
+  }
+
+  async function retireStaleLeads({ teamId: rawTeamId, laneId: rawLaneId, callerId } = {}) {
+    const teams = loadTeamsRegistry(rootDir);
+    const foundLane = findLaneInRegistry(String(rawLaneId || rawTeamId || "vibesquad"), teams, rawTeamId ? String(rawTeamId) : "");
+    const teamId = (rawTeamId && findTeamInRegistry(String(rawTeamId), teams)?.id) || foundLane?.team?.id || safeSegment(rawTeamId || "vibesquad");
+    const laneId = foundLane?.lane?.id || safeSegment(rawLaneId || teamId);
+    const laneName = foundLane?.lane?.name || laneId;
+    const wantTeam = teamId.toLowerCase();
+    const wantLane = laneId.toLowerCase();
+
+    const rawList = await listAgents();
+    const allAgents = (Array.isArray(rawList) ? rawList : []).map((x) => x?.agent ?? x).filter(Boolean);
+    const laneLeads = allAgents.filter((a) => {
+      if (!a?.id || a.archivedAt || a.internal || (a.status === "closed" && a.resumable !== true)) return false;
+      if (effectiveAgentRole(a) !== "lead" || isRetiredAgent(a)) return false;
+      const { teamId: aTeam, laneId: aLane } = agentTeamAndLane(a, teams);
+      return aTeam === wantTeam && aLane === wantLane;
+    });
+
+    if (callerId) {
+      const caller = allAgents.find((a) => a.id === callerId) ?? (await getAgent(callerId).catch(() => null));
+      if (!caller) {
+        throw Object.assign(new Error(`lead-handoff: forbidden: caller ${callerId} not found`), { status: 403 });
+      }
+      {
+        const callerRole = effectiveAgentRole(caller);
+        if ((callerRole !== "lead" && callerRole !== "brainstorm") || isRetiredAgent(caller) || caller.archivedAt) {
+          throw Object.assign(
+            new Error("lead-handoff: forbidden: only the owner, a brainstorm (Buddy) or a lead may retire stale leads"),
+            { status: 403 },
+          );
+        }
+        if (isLostOrClosedLead(caller)) {
+          throw Object.assign(
+            new Error(`lead-handoff: forbidden: ${callerId} is lost/closed, not an active live lead or Buddy`),
+            { status: 403 },
+          );
+        }
+        const { teamId: callerTeamId, laneId: callerLaneId } = agentTeamAndLane(caller, teams);
+        if (callerTeamId !== wantTeam) {
+          throw Object.assign(
+            new Error(`lead-handoff: forbidden: target lane "${laneId}" is not in the caller's Squad "${callerTeamId}"`),
+            { status: 403 },
+          );
+        }
+        if (callerLaneId !== wantLane) {
+          const callerTeamObj = findTeamInRegistry(callerTeamId, teams);
+          const callerLaneObj = findLaneInRegistry(callerLaneId, teams, callerTeamId)?.lane;
+          if (effectiveAgentRole(caller) !== "lead" || !callerTeamObj || !callerLaneObj || !isHubLane(callerTeamObj, callerLaneObj)) {
+            throw Object.assign(
+              new Error("lead-handoff: forbidden: only the Squad's hub lead (Overlord) or the owner may retire stale leads in another lane"),
+              { status: 403 },
+            );
+          }
+          const hubLeads = allAgents.filter((a) => {
+            if (!a?.id || a.archivedAt || a.internal || (a.status === "closed" && a.resumable !== true)) return false;
+            if (effectiveAgentRole(a) !== "lead" || isRetiredAgent(a)) return false;
+            const { teamId: aTeam, laneId: aLane } = agentTeamAndLane(a, teams);
+            return aTeam === callerTeamId && aLane === callerLaneId;
+          });
+          const hubRes = resolveLeadWinner(hubLeads);
+          if (hubRes.conflict || !hubRes.winner || hubRes.winner.id !== callerId) {
+            throw Object.assign(
+              new Error(`lead-handoff: forbidden: ${callerId} is not the active hub lead (Overlord) of Squad "${teamId}" (${hubRes.winner?.id || "conflict"})`),
+              { status: 403 },
+            );
+          }
+        }
+      }
+    }
+
+    if (!laneLeads.length) {
+      return { ok: true, action: "retire", teamId, laneId, winnerId: null, title: "", retired: [] };
+    }
+
+    const res = resolveLeadWinner(laneLeads);
+    if (callerId && laneLeads.some((a) => a.id === callerId) && (res.conflict || callerId !== res.winner?.id)) {
+      throw Object.assign(
+        new Error(`lead-handoff: forbidden: ${callerId} is not the active lead of lane "${laneId}" (${res.winner?.id || "conflict"})`),
+        { status: 403 },
+      );
+    }
+
+    if (res.conflict || !res.winner) {
+      const ids = (res.contenders?.length ? res.contenders : laneLeads).map((a) => `${a.title || a.id} (${a.id})`).join(", ");
+      return {
+        ok: false,
+        error: `cannot retire leads in lane "${laneId}": top leads are genuinely ambiguous (${ids})`,
+      };
+    }
+
+    const winner = res.winner;
+    const laneLeadIds = new Set(laneLeads.map((a) => a.id));
+    const pendingSet = new Set(res.pending ?? []);
+    for (const a of laneLeads) {
+      // vs.handoff-from is permanent history; only a successor whose predecessor is still an unretired lane lead is mid-takeover.
+      if (pendingTakeover.has(a.id) || isHandoffPending(a, laneLeadIds)) pendingSet.add(a.id);
+    }
+    if (pendingSet.size > 0) {
+      const ids = [...pendingSet].join(", ");
+      return {
+        ok: false,
+        error: `cannot retire leads in lane "${laneId}": takeover is pending (${ids})`,
+      };
+    }
+
+    const winnerOrd = parseLeadOrd(winner);
+    const retired = [];
+    for (const old of laneLeads) {
+      if (old.id === winner.id || pendingSet.has(old.id) || pendingTakeover.has(old.id) || isHandoffPending(old, laneLeadIds)) continue;
+      if (parseLeadOrd(old) >= winnerOrd) continue;
+      const item = await retireLeadRecord(old, { successorId: winner.id, laneId, laneName, nextOrd: winnerOrd });
+      retired.push(item);
+    }
+
+    if (retired.length) {
+      const retiredSummary = retired.map((r) => `${r.id} (ord${r.ord})`).join(", ");
+      try {
+        appendLog(teamId, {
+          agent: callerId || winner.id,
+          lane: laneId,
+          type: "handoff",
+          text: `lead retire in ${laneId}: kept ${winner.title || winner.id} (${winner.id}); retired ${retiredSummary}`.slice(0, 240),
+          refs: [winner.id, ...retired.map((r) => r.id)],
+        });
+      } catch {}
+    }
+
+    return {
+      ok: true,
+      action: "retire",
+      teamId,
+      laneId,
+      winnerId: winner.id,
+      title: winner.title ?? "",
+      retired,
+    };
   }
 
   async function confirmTakeover(successorId) {
@@ -959,6 +1168,16 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
     pendingTakeover.delete(id);
     confirmedTakeovers.add(id);
+
+    const { teamId: succTeamId, laneId: succLaneId, laneName: succLaneName } = resolveTeamAndLane(succAgent, rootDir);
+    await sweepEarlierLaneLeads({
+      teamId: rec.teamId || succTeamId,
+      laneId: rec.laneId || succLaneId,
+      laneName: succLaneName,
+      successorId: id,
+      excludeIds: new Set([id, rec.oldLeadId]),
+      maxOrd: parseLeadOrd(succAgent),
+    });
 
     return {
       confirmed: true,
@@ -1151,6 +1370,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     triggerSelfHandoff,
     confirmTakeover,
     spawnSuccessor,
+    retireStaleLeads,
     hasPendingTakeover: (successorId) => pendingTakeover.has(String(successorId ?? "")),
     getPendingTakeover: (successorId) => pendingTakeover.get(String(successorId ?? "")) ?? null,
     deletedHeartbeats,
@@ -1192,7 +1412,9 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
       sharedSlots: body.sharedSlots ?? true,
       async listAgents() {
         if (Array.isArray(body.agents)) return body.agents;
-        return connected && client ? listDaemonAgents(backend) : [];
+        if (connected && client) return listDaemonAgents(backend);
+        if (Array.isArray(agentsForTest)) return agentsForTest;
+        return [];
       },
       async getAgent(id) {
         if (body.oldLead && body.oldLead.id === id) return body.oldLead;
@@ -1207,6 +1429,10 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
             throw err;
           });
           return r?.agent ?? null;
+        }
+        if (Array.isArray(agentsForTest)) {
+          const found = agentsForTest.map((a) => a?.agent ?? a).find((a) => a?.id === id);
+          if (found) return found;
         }
         return null;
       },
@@ -1245,6 +1471,47 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
 
     if (body.action === "confirm" || body.confirmSuccessorId) {
       return await coordinator.confirmTakeover(body.confirmSuccessorId || body.successorId || body.agentId);
+    }
+
+    if (body.action === "retire") {
+      const forbid = (why) => Object.assign(new Error(`lead-handoff: forbidden: ${why}`), { status: 403 });
+      const teams = loadTeamsRegistry(rootDir);
+      let targetTeamId = String(body.teamId || body.team || "").trim();
+      let targetLaneId = String(body.laneId || body.lane || "").trim();
+      if (body.callerId) {
+        const callerId = String(body.callerId);
+        if (!/^[A-Za-z0-9_-]{1,64}$/.test(callerId)) throw forbid("bad callerId");
+        let caller = Array.isArray(agentsForTest) ? agentsForTest.map((a) => a?.agent ?? a).find((a) => a?.id === callerId) ?? null : null;
+        if (!caller && isRunnerId(callerId)) caller = readRunnerAgentSync(callerId);
+        if (!caller && connected && client && typeof backend.fetchAgent === "function") {
+          caller = (await backend.fetchAgent(callerId).catch(() => null))?.agent ?? null;
+        }
+        if (!caller) throw forbid("caller not found");
+        const callerRole = effectiveAgentRole(caller);
+        const callerLost = Boolean(caller.lost) || ["closed", "lost"].includes(String(caller.status ?? "").trim().toLowerCase());
+        if ((callerRole !== "lead" && callerRole !== "brainstorm") || isRetiredAgent(caller) || caller.archivedAt) {
+          throw forbid("only the owner, a brainstorm (Buddy) or a lead may retire stale leads");
+        }
+        if (callerLost) {
+          throw forbid(`${callerId} is lost/closed, not the active live ${callerRole === "lead" ? "lead" : "Buddy"}`);
+        }
+        const callerTeam = findTeamInRegistry(String(caller.labels?.team || ""), teams);
+        const callerLane = findLaneInRegistry(String(caller.labels?.lane || caller.labels?.lead || ""), teams, callerTeam?.id)?.lane;
+        if (!callerTeam || !callerLane) throw forbid("caller team/lane not in registry");
+        const target = targetLaneId ? findLaneInRegistry(targetLaneId, teams, callerTeam.id) : { team: callerTeam, lane: callerLane };
+        if (!target || target.team.id !== callerTeam.id) throw forbid(`target lane "${targetLaneId}" is not in the caller's Squad "${callerTeam.id}"`);
+        if (target.lane.id !== callerLane.id && !(callerRole === "lead" && isHubLane(callerTeam, callerLane))) {
+          throw forbid("only the Squad's hub lead (Overlord) or the owner may retire stale leads in another lane");
+        }
+        targetTeamId = callerTeam.id;
+        targetLaneId = target.lane.id;
+      } else {
+        const found = findLaneInRegistry(targetLaneId || targetTeamId || "vibesquad", teams, targetTeamId);
+        if (!found) throw new Error(`lead-handoff: unknown lane "${targetLaneId || targetTeamId || "vibesquad"}"`);
+        targetTeamId = found.team.id;
+        targetLaneId = found.lane.id;
+      }
+      return await coordinator.retireStaleLeads({ teamId: targetTeamId, laneId: targetLaneId, callerId: body.callerId });
     }
 
     // In-process callers may pass oldLead; HTTP callers can't (sanitizeBody strips it and `agents`), so the

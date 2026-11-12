@@ -541,9 +541,81 @@ async function handoffLead(ctx, args = {}) {
   const callerId = clean(ctx.identity.agentId);
   const askedId = clean(pick(args, "id", "agentId"));
   const askedLane = clean(pick(args, "lane", "laneId"));
+  const action = clean(args.action).toLowerCase();
+  if (action && action !== "handoff" && action !== "retire") {
+    throw new Error('handoff_lead action must be "handoff" or "retire"');
+  }
   // Targets may be missing (null); the caller's own lookup never swallows an error (X1b).
   const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
   const fetchCaller = (id) => fetchCallerRecord(ctx, id);
+  if (action === "retire") {
+    const teams = ctx.teams ?? loadTeamsRegistry();
+    let target;
+    if (callerId) {
+      const caller = await fetchCaller(callerId);
+      const role = caller ? effectiveAgentRole(caller) : "";
+      if (!caller || (role !== LEAD_ROLE && role !== "brainstorm") || isRetiredAgent(caller) || caller.archivedAt) {
+        throw new Error(`cannot retire stale leads: caller role is "${callerRole || "none"}", only the owner, a brainstorm (Buddy) or a lead may`);
+      }
+      const callerLost = Boolean(caller.lost) || ["closed", "lost"].includes(clean(caller.status).toLowerCase());
+      if (callerLost) {
+        throw new Error(`cannot retire stale leads: ${callerId} is lost/closed, not the active live ${role === LEAD_ROLE ? "lead" : "Buddy"}`);
+      }
+      const callerTeam = findTeamInRegistry(clean(caller.labels?.team), teams);
+      const callerLane = findLaneInRegistry(clean(caller.labels?.lane || caller.labels?.lead), teams, callerTeam?.id);
+      if (!callerLane || !callerTeam || callerLane.team.id !== callerTeam.id) {
+        throw new Error(`cannot retire stale leads: caller record team "${caller.labels?.team ?? ""}" / lane "${caller.labels?.lane ?? ""}" is not in the team registry`);
+      }
+      target = askedLane ? findLaneInRegistry(askedLane, teams, callerTeam.id) : callerLane;
+      if (!target || target.team.id !== callerTeam.id) {
+        throw new Error(`cannot retire stale leads: target lane "${askedLane}" is not in the caller's Squad "${callerTeam.id}"`);
+      }
+      if (target.lane.id !== callerLane.lane.id) {
+        if (!(role === LEAD_ROLE && isHubLane(callerTeam, callerLane.lane))) {
+          throw new Error("cannot retire stale leads: only the Squad's hub lead (Overlord) or the owner may retire stale leads in another lane");
+        }
+        const hubLeads = await ctx.findLiveLeads({ team: callerTeam.id, lane: callerLane.lane.id });
+        const hubRes = resolveLeadWinner(hubLeads);
+        if (hubRes.conflict || !hubRes.winner || hubRes.winner.id !== callerId) {
+          throw new Error(`cannot retire stale leads: ${callerId} is not the active hub lead (Overlord) of Squad "${callerTeam.id}" (${hubRes.winner?.id || "conflict"})`);
+        }
+      }
+    } else {
+      if (!(await hasOwnerProof(ctx))) {
+        throw new Error("cannot retire stale leads: no owner proof (only the owner, a brainstorm (Buddy) or a lead may)");
+      }
+      const teamHint = clean(args.team || args.teamId || ctx.identity.team);
+      const laneHint = askedLane || clean(ctx.identity.lane) || teamHint || "vibesquad";
+      target = findLaneInRegistry(laneHint, teams, teamHint);
+      if (!target) throw new Error(`cannot retire stale leads: lane "${laneHint}" is not in the team registry`);
+    }
+    const body = { action: "retire", teamId: target.team.id, laneId: target.lane.id, ...(callerId ? { callerId } : {}) };
+    let res;
+    let via = "server";
+    if (ctx.performHandoff) {
+      res = await ctx.performHandoff(body);
+      via = "injected";
+    } else {
+      try {
+        res = await postLeadHandoffToServer(body, ctx);
+      } catch (e) {
+        if (!e?.unreachable) throw e;
+        via = "in-process (VS server unreachable)";
+        res = await (await import("../lead-handoff.mjs")).performLeadHandoffHttp({ ...body, ...(ctx.inProcessDeps ?? {}) });
+      }
+    }
+    if (res?.ok === false || res?.error) throw new Error(`lead retire failed: ${res.error ?? "unknown"}`);
+    const retired = Array.isArray(res?.retired) ? res.retired : [];
+    return {
+      id: res?.winnerId ?? null,
+      title: res?.title ?? "",
+      lane: res?.laneId ?? target.lane.id,
+      team: res?.teamId ?? target.team.id,
+      retired,
+      retiredIds: retired.map((x) => x.id),
+      via,
+    };
+  }
   let target;
   let trigger;
   if (callerRole === "brainstorm") {
@@ -889,8 +961,8 @@ export const VS_TOOLS = {
     run: reportTool,
   },
   handoff_lead: {
-    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
-    inputSchema: obj({ lane: S, steer: S, force: { type: "boolean" } }),
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (write your packet Judgment first); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
+    inputSchema: obj({ action: { type: "string", enum: ["handoff", "retire"] }, lane: S, steer: S, force: { type: "boolean" } }),
     run: handoffLead,
   },
   restart_buddy: {

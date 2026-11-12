@@ -116,7 +116,7 @@ export function isRetiredAgent(agentOrLabels) {
   if (agentOrLabels.archivedAt) return true;
   // A closed agent is retired only when it cannot be resumed in place (exited / no saved session). A lost-but-resumable
   // agent (runner restart) stays live: the roster/who/send treat it as live, so the lane is never left leaderless by a restart.
-  if (agentOrLabels.status === "closed") return agentOrLabels.resumable !== true;
+  if (agentOrLabels.status === "closed" || agentOrLabels.status === "lost") return agentOrLabels.resumable !== true;
   return false;
 }
 
@@ -131,7 +131,7 @@ export function isLiveAgent(agentOrLabels) {
   const labels = extractLabels(agentOrLabels);
   if (isRetiredRole(labels.role)) return false;
   if (agentOrLabels.archivedAt || agentOrLabels.archived || agentOrLabels.internal) return false;
-  if (agentOrLabels.status === "closed") return agentOrLabels.resumable === true;
+  if (agentOrLabels.status === "closed" || agentOrLabels.status === "lost") return agentOrLabels.resumable === true;
   return true;
 }
 
@@ -236,7 +236,14 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
   const hadAt = raw.startsWith("@");
   const q = raw.replace(/^@+/, "").trim().toLowerCase();
   if (!q) return null;
-  for (const team of teams) {
+  const pref = String(preferTeamId ?? "").trim().toLowerCase();
+  const orderedTeams = pref
+    ? [
+        ...teams.filter((t) => String(t.id ?? "").toLowerCase() === pref || String(t.name ?? "").toLowerCase() === pref),
+        ...teams.filter((t) => String(t.id ?? "").toLowerCase() !== pref && String(t.name ?? "").toLowerCase() !== pref),
+      ]
+    : teams;
+  for (const team of orderedTeams) {
     for (const lane of team.lanes || []) {
       if (String(lane.id ?? "").toLowerCase() === q) {
         return { team, lane };
@@ -246,7 +253,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
       }
     }
   }
-  for (const team of teams) {
+  for (const team of orderedTeams) {
     for (const lane of team.lanes || []) {
       if (String(lane.name ?? "").toLowerCase() === q) {
         return { team, lane };
@@ -265,7 +272,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
     }
   }
   if (hits.length) {
-    const own = preferTeamId ? hits.find((h) => h.team.id === preferTeamId) : null;
+    const own = pref ? hits.find((h) => String(h.team.id ?? "").toLowerCase() === pref || String(h.team.name ?? "").toLowerCase() === pref) : null;
     return own ?? hits.find((h) => !h.lane.hidden) ?? hits[0];
   }
   return null;
@@ -466,10 +473,10 @@ export function resolveAgentIdentity(agentOrInput, options = {}) {
 
   // Step 1: Registry lookup on `labels.lane` (or legacy `labels.lead`)
   if (rawLane && !explicitOrphan) {
-    const regMatch = findLaneInRegistry(rawLane, teams) || matchDynamicPrefixedLane(rawLane, rawTeam, teams);
+    const callerTeamObj = rawTeam ? findTeamInRegistry(rawTeam, teams) : null;
+    const regMatch = findLaneInRegistry(rawLane, teams, callerTeamObj?.id || rawTeam) || matchDynamicPrefixedLane(rawLane, rawTeam, teams);
     if (regMatch) {
       const { team, lane } = regMatch;
-      const callerTeamObj = rawTeam ? findTeamInRegistry(rawTeam, teams) : null;
       const teamMismatch = Boolean(rawTeam && (!callerTeamObj || callerTeamObj.id !== team.id));
       return {
         laneId: lane.id,
@@ -713,28 +720,71 @@ export function whoCandidate(a, { teams, wantTeamId, wantLane, squadWide = false
   return { role: effectiveAgentRole(a), teamId, lane };
 }
 
+/** True when the agent's title prefix (before `·`) is a `★ <Code><ord>` starred lead title. */
+export function hasStarLeadTitle(agentOrTitle) {
+  const raw = typeof agentOrTitle === "string" ? agentOrTitle : String(agentOrTitle?.title ?? agentOrTitle?.name ?? "");
+  const prefix = raw.split("·")[0].trim();
+  return prefix.startsWith("★") && prefix.slice(1).trim().length > 0;
+}
+
 /**
- * Pick the single live winner from same-(team,lane,role) candidates, mirroring the runner's `_successorOf` preference:
- * a non-closed agent beats a closed-but-resumable one (its successor is live, so a lost predecessor must not surface as a
- * duplicate live lead); among equals the newest wins (createdAt, then updatedAt, then id). `conflict` is true only when 2+
- * non-closed agents remain (the genuine duplicate-live-lead case). Returns { winner, conflict, pending } (pending: successors of an unconfirmed handoff, ignored for the winner).
+ * Explicit lead ordinal (>= 1) from `labels.ord` or a `★ <Code><ord>` / `ord<ord>` title prefix (before `·`).
+ * Returns 0 when neither is present so unnumbered candidates tie at 0.
+ */
+export function explicitLeadOrd(agentOrLabels) {
+  if (!agentOrLabels || typeof agentOrLabels !== "object") return 0;
+  const labels = extractLabels(agentOrLabels);
+  const rawLabel = String(labels.ord ?? "").trim();
+  let labelOrd = 0;
+  if (rawLabel) {
+    const cleaned = rawLabel.replace(/^ord/i, "").trim();
+    if (/^\d+$/.test(cleaned)) {
+      const n = Number.parseInt(cleaned, 10);
+      if (Number.isFinite(n) && n >= 1) labelOrd = n;
+    }
+  }
+  const rawTitle = String(agentOrLabels.title ?? agentOrLabels.name ?? "").trim();
+  const prefix = rawTitle.split("·")[0].trim();
+  let titleOrd = 0;
+  const m = /(?:\bord\s*|★\s*[A-Za-z_-]+)(\d+)\b/i.exec(prefix);
+  if (m) {
+    const n = Number.parseInt(m[1], 10);
+    if (Number.isFinite(n) && n >= 1) titleOrd = n;
+  }
+  return Math.max(labelOrd, titleOrd);
+}
+
+/**
+ * True when `agent` is a handoff successor still mid-takeover: it carries `vs.handoff-from=<id>` (stamped permanently by spawnSuccessor)
+ * AND that predecessor is still an unretired lead in `leadIds` (a Set of ids). Once the predecessor is former-lead the label is history,
+ * not a pending takeover.
+ */
+export function isHandoffPending(agent, leadIds) {
+  const from = String(agent?.labels?.["vs.handoff-from"] ?? "").trim();
+  return Boolean(from) && from !== agent?.id && Boolean(leadIds?.has?.(from));
+}
+
+/**
+ * Pick the single live winner from same-(team,lane,role) candidates (read-only):
+ * - Lost/closed agents (`lost: true` or `status === "closed" | "lost"`) never count when any active candidate exists.
+ * - Among active settled candidates, the newest ★ / highest-ord lead wins (`hasStarLeadTitle`, then `explicitLeadOrd`, then
+ *   `createdAt`, `updatedAt`, `id`). Older/lower-ord/unstarred leads are returned in `stale` (flagged, not CONFLICT).
+ * - `conflict` is true only when 2+ top-ranked active candidates tie on `(star, ord)` (`contenders`).
+ * Returns `{ winner, conflict, pending, stale, contenders }`.
  */
 export function resolveLeadWinner(candidates) {
   const live = (candidates ?? []).filter((a) => a && isLiveAgent(a));
-  if (!live.length) return { winner: null, conflict: false, pending: [] };
-  const nonClosed = live.filter((a) => String(a.status ?? "").toLowerCase() !== "closed");
+  if (!live.length) return { winner: null, conflict: false, pending: [], stale: [], contenders: [] };
+  const isLostOrClosed = (a) =>
+    Boolean(a?.lost) || ["closed", "lost"].includes(String(a?.status ?? "").trim().toLowerCase());
+  const nonClosed = live.filter((a) => !isLostOrClosed(a));
   // A successor stamped vs.handoff-from=<a live non-closed candidate> is a handoff in flight, not a duplicate: the predecessor stays the
-  // winner until the successor confirms (the predecessor is then relabelled former-lead and leaves the set). Unlinked pairs still conflict.
+  // winner until the successor confirms (the predecessor is then relabelled former-lead and leaves the set).
   const liveIds = new Set(nonClosed.map((a) => a.id));
-  const isPending = (a) => {
-    const from = String(a?.labels?.["vs.handoff-from"] ?? "").trim();
-    return Boolean(from) && from !== a.id && liveIds.has(from);
-  };
+  const isPending = (a) => isHandoffPending(a, liveIds);
   const settled = nonClosed.filter((a) => !isPending(a));
   const pending = settled.length ? nonClosed.filter(isPending).map((a) => a.id) : [];
   const decided = settled.length ? settled : nonClosed;
-  const conflict = decided.length >= 2;
-  const pool = decided.length ? decided : live;
   const newest = (a, b) => {
     const at = Date.parse(a?.createdAt ?? a?.updatedAt ?? "") || 0;
     const bt = Date.parse(b?.createdAt ?? b?.updatedAt ?? "") || 0;
@@ -744,5 +794,32 @@ export function resolveLeadWinner(candidates) {
     if (au !== bu) return bu - au;
     return String(b?.id ?? "").localeCompare(String(a?.id ?? ""));
   };
-  return { winner: [...pool].sort(newest)[0], conflict, pending };
+  const rank = (a) => ({
+    star: hasStarLeadTitle(a) ? 1 : 0,
+    ord: explicitLeadOrd(a),
+  });
+  const compare = (a, b) => {
+    const ra = rank(a);
+    const rb = rank(b);
+    if (ra.star !== rb.star) return rb.star - ra.star;
+    if (ra.ord !== rb.ord) return rb.ord - ra.ord;
+    return newest(a, b);
+  };
+  const sortedDecided = [...decided].sort(compare);
+  const top = sortedDecided[0];
+  const topRank = top ? rank(top) : { star: 0, ord: 0 };
+  const topTier = sortedDecided.filter((a) => {
+    const r = rank(a);
+    return r.star === topRank.star && r.ord === topRank.ord;
+  });
+  const stale = sortedDecided
+    .filter((a) => {
+      const r = rank(a);
+      return r.star !== topRank.star || r.ord !== topRank.ord;
+    })
+    .map((a) => a.id);
+  const conflict = topTier.length >= 2;
+  const contenders = conflict ? topTier.map((a) => a.id) : [];
+  const pool = sortedDecided.length ? sortedDecided : [...live].sort(compare);
+  return { winner: pool[0] ?? null, conflict, pending, stale, contenders };
 }

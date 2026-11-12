@@ -47,6 +47,7 @@ import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
+import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -547,6 +548,20 @@ export function isDigestNoise(labels: Labels, title?: string | null): boolean {
 /** A report is loggable as [done] only if it states PASS or FAIL. */
 export function statesVerdict(text: string): boolean {
   return /\b(PASS|FAIL)\b/.test(text);
+}
+
+/**
+ * idea-175: the text of an UNVERIFIED direct write (digest failed / logged nothing / orphaned), or null when the report states
+ * no verdict. The worker's own `PASS|FAIL H/M/L <hash>` line is copied byte-for-byte (extracted in code); a reviewer without
+ * one gets NO-VERDICT, never a PASS; anyone else keeps the first non-blank line as before.
+ */
+export function unverifiedDigestText(why: string, last: string, worker?: { title?: string | null; labels?: Labels } | null): string | null {
+  if (!statesVerdict(last)) return null;
+  const head = `UNVERIFIED (digest ${why}): `;
+  const line = extractVerdictLine(last);
+  if (line) return head + line;
+  const first = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
+  return head + (isReviewerAgent(worker) ? `NO-VERDICT: ${first}` : first);
 }
 
 /** Role label to stamp on a spawn: a digest is labelled `worker` (digestFor/profile mark it), never `digest`. */
@@ -2430,6 +2445,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         `Then run exactly once:`,
         `vs log done "<PASS|FAIL>: <1-line summary, max 200 chars>" --digest --ref ${worker.id}`,
         `Use FAIL if the worker reported errors, failing tests, or did not finish. If the worker is currently running or queued, or its report states neither PASS nor FAIL, log nothing. Then stop.`,
+        `Reviewer verdicts: if the report has a line \`PASS|FAIL H/M/L <hash>\` (e.g. "FAIL 1/0/1 3528a4c"), start your text with that line copied exactly, never a paraphrase or the opposite word. The server copies the worker's own line to the front of your entry and marks any PASS/FAIL disagreement. A reviewer with no such line is logged as "NO-VERDICT: ...", never PASS.`,
       ].join("\n");
 
       const startedAt = Date.now();
@@ -2440,13 +2456,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const fresh = await snap(paseo, workerId);
         if (isWorkerBusy(fresh)) return;
         const last = await lastAssistantText(paseo, worker.id);
-        if (!statesVerdict(last)) return;
-        const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
+        const text = unverifiedDigestText(why, last, { title: worker.title, labels });
+        if (!text) return;
         appendLog(teamIdOf(team, currentTeams()), {
           agent: worker.id,
           lane,
           type: "done",
-          text: `UNVERIFIED (digest ${why}): ${line}`,
+          text,
           refs: [worker.id],
         });
       };
@@ -2866,7 +2882,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
       const others = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
-        .filter((a) => a.id !== newId && !a.archivedAt && !a.internal && a.status !== "closed")
+        .filter((a) => a.id !== newId && !a.archivedAt && !a.internal)
         .filter((a) => !isRetiredAgent(a))
         // Only agents created before the new one are its predecessors (a replayed `created` must not retire a later sibling).
         .filter((a) => {
@@ -2875,8 +2891,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           return !Number.isFinite(mine) || !Number.isFinite(theirs) || theirs <= mine;
         })
         .filter((a) => sameLaneRole(a, { role, team, lane, topic }, currentTeams()));
+      const pendingOldId = handoffFrom || handoffCoordinator.getPendingTakeover(newId)?.oldLeadId || "";
       for (const old of others) {
-        if (role === "lead" && (old.id === handoffFrom || handoffCoordinator.hasPendingTakeover(newId))) {
+        if (role === "lead" && (pendingOldId ? old.id === pendingOldId : handoffCoordinator.hasPendingTakeover(newId))) {
           // Delayed retirement: wait until successor confirms takeover in turn_ended / confirmTakeover.
           continue;
         }
@@ -3543,9 +3560,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const where = teamOf(worker.labels, worker.cwd);
           if (!where || doneLoggedSince(teamIdOf(where.team, currentTeams()), workerId, born)) continue;
           const last = await lastAssistantText(paseo, workerId);
-          if (!statesVerdict(last)) continue;
-          const line = last.split(/\r?\n/).find((l) => l.trim()) ?? "no final message";
-          appendLog(teamIdOf(where.team, currentTeams()), { agent: workerId, lane: where.lane, type: "done", text: `UNVERIFIED (digest orphaned): ${line}`, refs: [workerId] });
+          const text = unverifiedDigestText("orphaned", last, worker);
+          if (!text) continue;
+          appendLog(teamIdOf(where.team, currentTeams()), { agent: workerId, lane: where.lane, type: "done", text, refs: [workerId] });
         }
       } catch (err) {
         log(`digest sweep failed: ${err}`);
