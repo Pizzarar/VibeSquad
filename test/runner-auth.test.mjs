@@ -778,3 +778,9 @@ test("X1d R1 H1 guard: a leftover VS_AGENT_TOKEN with the id cleared, or an id w
     assert.equal(seen[0].admin, true);
   } finally { await s.stop(); }
 });
+
+test("plugin-log-leak: agentEnv drops an inherited VS_PLUGIN_LOG so an agent's plugin logs to stdout like its own process", () => {
+  const env = agentEnv("rn-child", { team: "sq" }, { PATH: "x", VS_PLUGIN_LOG: "stderr" }, {});
+  assert.equal(env.VS_PLUGIN_LOG, undefined);
+  assert.equal(env.PATH, "x");
+});

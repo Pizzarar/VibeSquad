@@ -33,6 +33,7 @@ export function validateCreate({ model, cwd, meta = {} }) {
 export function agentEnv(id, meta = {}, base = process.env, { token } = {}) {
   const env = { ...base, VS_AGENT_ID: id, PASEO_AGENT_ID: id };
   delete env.VS_AGENT_TOKEN;
+  delete env.VS_PLUGIN_LOG; // a polluted parent must not make an agent's own plugin log to stderr
   if (typeof token === 'string' && token) env.VS_AGENT_TOKEN = token;
   for (const [k, v] of [['VS_TEAM', meta.team], ['VS_LANE', meta.lane], ['VS_ROLE', meta.role], ['VS_ORD', meta.ord], ['VS_PROFILE', meta.profile]]) {
     if (v !== undefined && v !== null && v !== '') env[k] = String(v);

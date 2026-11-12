@@ -80,8 +80,8 @@ export function runnerPaseoFacade(backend, plugin) {
  * Returns { before(name, payload), emit(name, payload), scanLogs, dispose, plugin }.
  */
 export async function createRunnerHookHost(backend, { startWatcher = false, deps = {} } = {}) {
-  process.env.VS_PLUGIN_LOG = "stderr"; // hooks may run inside an MCP stdio server: stdout belongs to the protocol
   const plugin = await loadPlugin();
+  plugin.setLogStream?.("stderr"); // hooks may run inside an MCP stdio server: stdout belongs to the protocol (a module sink, not process.env: env leaks to the runner and agents)
   const befores = new Map();
   const ons = new Map();
   const add = (map, name, fn) => {

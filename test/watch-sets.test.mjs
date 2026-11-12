@@ -1419,7 +1419,8 @@ async function escalateInPlugin(sb, agents, { team, lane, owner = "own", worker 
   addWatch({ owner, team, lane, items: [{ kind: "agent", ref: worker }] }, { home: sb.home, now: clock.t });
   const logs = [];
   const origLog = console.log;
-  console.log = (...a) => void logs.push(a.join(" "));
+  const origErr = console.error;
+  console.log = console.error = (...a) => void logs.push(a.join(" "));
   const h = await pluginHarness(sb, agents, { watchSets: { now: () => clock.t }, onRefresh });
   const step = async (min) => {
     clock.t += min * MIN;
@@ -1434,6 +1435,7 @@ async function escalateInPlugin(sb, agents, { team, lane, owner = "own", worker 
     await step(26);
   } finally {
     console.log = origLog;
+    console.error = origErr;
     h.stop();
   }
   return { sent: h.sent, logs };
