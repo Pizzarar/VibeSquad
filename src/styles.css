@@ -4758,6 +4758,9 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-body .sq-strip {
   position: relative;
   max-height: 26vh;
+  /* A 720-tall window squeezes this flex item below its chips (min-height:0 from .sq-panel), so the row's
+     buttons overflow the .sq-row border-bottom and clip. Keep it at least as tall as its chips. */
+  min-height: max-content;
   padding: 8px 18px 10px;
   border: 0;
   border-top: 2px solid var(--hot-pink);
@@ -4783,6 +4786,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .hub-body .sq-strip .sq-head { flex: none; margin: 0; align-self: center; flex-direction: column; align-items: center; gap: 2px; }
 .hub-body .sq-strip .sq-rows { flex-direction: row; overflow-x: auto; flex: 1; min-width: 0; }
 .hub-body .sq-strip .sq-row { flex: none; width: 300px; background: var(--navy); }
+/* Compact by default: a chip's reason stays one line so a long error (a URL) can't blow the strip up past its 26vh cap. */
+.hub-body .sq-strip .sq-reason { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hub-body .sq-strip .attn-err { flex: none; align-self: center; }
 .hub-body .sq-floor {
   grid-column: 1 / -1;
