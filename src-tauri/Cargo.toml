@@ -40,6 +40,12 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 webpki-roots = "0.26"
 futures-util = "0.3"
+# Loopback proof (unit-and-prove-local-rust): one hand-dialed TcpStream carries the HMAC challenge and then the
+# token-bearing request (hyper http1 conn), so the proof means "this socket". ring is already in the tree via rustls.
+hyper = { version = "1", features = ["client", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+ring = "0.17"
 url = "2"
 image = { version = "0.25", default-features = false, features = ["png", "ico"] }
 

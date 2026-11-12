@@ -24,6 +24,7 @@ import {
   loadOrCreateHostKeypair,
   selfCertifyingHostId,
 } from "./relay-tunnel.mjs";
+import { publicRelayEndpoint } from "./relay-link.mjs";
 import { loadUserSettings, normalizeRelaySettings } from "./user-settings.mjs";
 import { EventEmitter } from "node:events";
 
@@ -208,11 +209,7 @@ export function createRelayWiring({
   return api;
 }
 
-/** The endpoint as it may be shown or logged: scheme, host, port and path; userinfo, query and fragment removed (X1 wire L1). */
-export function publicRelayEndpoint(endpoint) {
-  const u = new URL(endpoint);
-  return `${u.origin}${u.pathname}`;
-}
+export { publicRelayEndpoint }; // lives in relay-link.mjs so auth.mjs (pair/start links) can share it without importing the tunnel
 
 /** serve.mjs: the running wiring when settings.json has relay.endpoint, else null (the relay stays off by default). */
 export function startRelayFromSettings({ requestListener, settings = loadUserSettings(), ...rest } = {}) {

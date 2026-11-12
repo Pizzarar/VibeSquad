@@ -426,29 +426,28 @@ test("vs restart: --timeout must be a positive integer; unsafe launch args rejec
   const ownerHome = mkdtempSync(path.join(os.tmpdir(), "vs-owner-"));
   writeFileSync(path.join(ownerHome, "local-token"), "a".repeat(64) + "\n");
   await assert.doesNotReject(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome }), "owner shell: the local token is the proof");
-  await assert.rejects(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome, VS_AGENT_ID: "rn-abcdef123456" }, () => null), /no runner record/, "an agent id is never the owner, whatever it can read");
+  await assert.rejects(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome, VS_AGENT_ID: "rn-abcdef123456" }), /403/, "an agent id is never the owner, whatever it can read; without a token it is refused outright (X1d)");
   rmSync(ownerHome, { recursive: true, force: true });
   await assert.rejects(assertRestartCaller(as("worker", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/);
   await assert.rejects(assertRestartCaller(as("lead", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/, "a non-hub lead");
   await assert.rejects(assertRestartCaller(as("brainstorm", "vibesquad"), teams, agentEnv), /only the owner/);
   await assert.doesNotReject(assertRestartCaller(as("lead", "vibesquad"), teams, agentEnv), "hub lead = Overlord");
-  // fail closed: an rn- id with no runner record is refused even if VS_ROLE/VS_LANE/VS_TEAM claim to be the Overlord
+  // X1d guard: an rn- id without a token is a 403 before the runner is asked, even if VS_ROLE/VS_LANE/VS_TEAM claim to be
+  // the Overlord; the disk record is never consulted (the X1a-X1b rollout fallback and its flag are gone).
   const spoof = { VS_AGENT_ID: "rn-deadbeef0000", VS_ROLE: "lead", VS_LANE: "vibesquad", VS_TEAM: "vibesquad" };
-  await assert.rejects(assertRestartCaller(null, teams, spoof, () => null), /no runner record/);
-  await assert.rejects(run({}, { env: spoof, readRecord: () => null }), /no runner record/);
-  const rec = (labels) => () => ({ labels });
-  await assert.doesNotReject(assertRestartCaller(null, teams, spoof, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" })), "the record, not env, decides (rollout fallback: no token)");
-  await assert.rejects(assertRestartCaller(null, teams, spoof, rec({ role: "worker", team: "vibesquad", lane: "bug-chaser" })), /only the owner/, "env claiming lead is ignored when the record says worker");
+  const verifyNever = async () => { throw new Error("verify must not be called without a token"); };
+  await assert.rejects(assertRestartCaller(null, teams, spoof, { verify: verifyNever }), /403/, "no token: 403, no runner call");
+  await assert.rejects(run({}, { env: spoof, verify: verifyNever }), /403/);
+  await assert.rejects(assertRestartCaller(null, teams, { ...spoof, VS_AGENT_TOKEN_REQUIRED: "0" }, { verify: verifyNever }), /403/, "the old flag does not bring the record-based fallback back");
   await assert.rejects(run({}, { identity: as("worker", "bug-chaser"), env: agentEnv }), /only the owner/);
   assert.equal((await run({}, { identity: as("lead", "vibesquad"), env: agentEnv })).code, 0);
-  // X1b: with a token the runner decides (GET /verify-agent); the disk record is not consulted. A wrong token is 403.
+  // X1b: with a token the runner decides (GET /verify-agent). A wrong token is 403.
   const tokenEnv = { ...spoof, VS_AGENT_TOKEN: "t0k" };
   const verifyOk = async ({ id, token }) => { assert.deepEqual([id, token], ["rn-deadbeef0000", "t0k"]); return { id, role: "lead", lane: "vibesquad", team: "vibesquad", overlord: true }; };
   const verify403 = async () => { throw Object.assign(new Error("agent token invalid"), { status: 403 }); };
-  await assert.doesNotReject(assertRestartCaller(null, teams, tokenEnv, () => { throw new Error("disk record must not be read"); }, { verify: verifyOk }), "verified Overlord");
-  await assert.rejects(assertRestartCaller(null, teams, tokenEnv, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" }), { verify: verify403 }), /403/, "a wrong token is refused even when the disk record says Overlord");
-  await assert.rejects(assertRestartCaller(null, teams, tokenEnv, () => null, { verify: async ({ id }) => ({ id, role: "worker", lane: "bug-chaser", team: "vibesquad" }) }), /only the owner/, "the runner's record decides the role");
-  await assert.rejects(assertRestartCaller(null, teams, { ...spoof, VS_AGENT_TOKEN_REQUIRED: "1" }, rec({ role: "lead", team: "vibesquad", lane: "vibesquad" })), /403/, "flag on + no token: refused");
+  await assert.doesNotReject(assertRestartCaller(null, teams, tokenEnv, { verify: verifyOk }), "verified Overlord");
+  await assert.rejects(assertRestartCaller(null, teams, tokenEnv, { verify: verify403 }), /403/, "a wrong token is refused whatever the env claims");
+  await assert.rejects(assertRestartCaller(null, teams, tokenEnv, { verify: async ({ id }) => ({ id, role: "worker", lane: "bug-chaser", team: "vibesquad" }) }), /only the owner/, "the runner's record decides the role");
   await assert.rejects(run({}, { env: tokenEnv, verify: verify403 }), /403/);
 });
 

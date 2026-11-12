@@ -7,6 +7,7 @@ import { withFileLockSync } from "./file-lock.mjs";
 import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
+import { buildRelayPairingLink, publicRelayEndpoint } from "./relay-link.mjs";
 import { isRelayRequest } from "./relay-tunnel.mjs";
 import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
@@ -1106,6 +1107,28 @@ export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null) {
   return code;
 }
 
+// E5 §7 item 8: serve.mjs registers the running relay wiring's status() (never key material) so pair/start can hand out a
+// relay pairing link + QR for the code it just minted. null = no relay configured (the default); the link is built only
+// while the wiring reports running on a wss:// endpoint. Read-only: nothing here can set relay settings.
+let relayStatusProvider = null;
+export function setRelayStatusProvider(fn) {
+  relayStatusProvider = typeof fn === "function" ? fn : null;
+}
+
+/** The relay pairing offer for a freshly minted `code`, or null when no relay is running (or the status is unusable). */
+export function relayPairingFor(code) {
+  let st = null;
+  try {
+    st = relayStatusProvider?.() ?? null;
+  } catch {
+    return null;
+  }
+  if (!st || st.running !== true || typeof st.endpoint !== "string" || !/^wss:\/\//i.test(st.endpoint)) return null;
+  const link = buildRelayPairingLink({ hostId: st.hostId, pub: st.pub, relay: st.endpoint, code });
+  if (!link) return null;
+  return { endpoint: publicRelayEndpoint(st.endpoint), hostId: String(st.hostId), connected: st.connected === true, link };
+}
+
 const pairCodeMintedListeners = new Set(); // E5: relayHost.noteFreshMint() lifts the host-wide redeem lock (threat model T8)
 
 /** Runs after every new pairing code exists (PC, CLI or device minted). Returns an unsubscribe function. */
@@ -1304,8 +1327,12 @@ export async function handlePairStart(req, res) {
   const pairUrl = `https://${pairHost}:${port}/pair?code=${code}${fpQuery}`;
   const pairIpUrl = `https://${effectiveMeshnetIp || lanIp}:${port}/pair?code=${code}${fpQuery}`;
   const lanPairUrl = lanIp ? `https://${lanIp}:${port}/pair?code=${code}${fpQuery}` : null;
+  // E5 §7 item 8: the same one-time code also redeems inside the E2EE relay channel, so the dialog can show a relay
+  // link/QR whenever the relay is running (the fragment carries the code; the server never sees it in a URL).
+  const relayOffer = relayPairingFor(code);
   sendJson(res, 200, {
     code,
+    relay: relayOffer ? { ...relayOffer, qrSvg: await qrSvg(relayOffer.link) } : null,
     pairUrl,
     pairIpUrl,
     lanIp,

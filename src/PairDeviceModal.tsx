@@ -35,6 +35,8 @@ type PairStartResponse = {
   qrSvgIp: string;
   /** E4b: true when this browser is itself a remote paired device, so the redeem waits for Approve below. */
   requiresApproval?: boolean;
+  /** E5 §7 item 8: present only while the PC's outbound relay is running (settings.json relay.endpoint, wss://). The same code redeems inside the E2EE channel. */
+  relay?: { endpoint: string; hostId: string; connected: boolean; link: string; qrSvg: string } | null;
   error?: string;
 };
 
@@ -466,6 +468,31 @@ export function PairDeviceModal({
           </div>
 
           <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {pair?.relay?.link && remainingSec > 0 && (
+              <div className="preview pair-relay-card" data-testid="relay-pair-card">
+                <div className="field-label">RELAY PAIRING LINK (AWAY FROM LAN &amp; MESHNET · END-TO-END ENCRYPTED)</div>
+                <div className="muted small pair-relay-help">
+                  Same one-time code, carried in the link&apos;s #fragment so no server ever logs it. The phone pins this PC&apos;s relay key on first use and keeps it.
+                </div>
+                <div className="pair-relay-row">
+                  <div className="pair-relay-qr" dangerouslySetInnerHTML={{ __html: pair.relay.qrSvg }} />
+                  <div className="pair-relay-body">
+                    <span className={`pair-relay-state${pair.relay.connected ? "" : " off"}`} data-testid="relay-pair-state">
+                      {pair.relay.connected ? "● relay connected" : "○ relay not connected yet (link works once it is)"}
+                    </span>
+                    <span className="muted small">via {pair.relay.endpoint}</span>
+                    <code className="small pair-relay-link" data-testid="relay-pair-link">
+                      {pair.relay.link}
+                    </code>
+                    <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                      <button className="btn ok small" onClick={() => copyText("relay", pair.relay!.link)}>
+                        {copied === "relay" ? "✓ Copied Relay Link" : "Copy Relay Link"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="preview" style={{ marginBottom: 0 }}>
               <div className="field-label">BROWSER / iPHONE (NO APK) — INSTALL ROOT CA FIRST (ONE-TIME PER DEVICE)</div>
               <div className="muted small" style={{ margin: "4px 0 8px" }}>

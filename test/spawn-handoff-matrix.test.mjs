@@ -13,6 +13,7 @@ import { performBrainstormRestart, resetBrainstormRestartState } from "../server
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { resolveLeadWinner, whoCandidate } from "../server/identity.mjs";
 import { commandAgentVerb, resolveIdentity } from "../cli/vs.mjs";
+import { tokenFor, verifiedIdentity } from "./helpers/agent-token.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
@@ -264,7 +265,7 @@ function buddyCtx(w, identity = { agentId: "rn-bud1", team: "mx", lane: "feat", 
   const profiles = [{ id: "p-l", name: "Lead - Opus", role: "lead", provider: "claude", model: "claude-opus-5-5", modeId: "auto", notes: "lead it" }];
   const withBackend = async (_t, fn) => fn(w);
   return {
-    identity, cwd: w.dir, teams: TEAMS,
+    ...verifiedIdentity(identity, { backend: w, teams: TEAMS }), cwd: w.dir, teams: TEAMS,
     loadProfiles: async () => profiles,
     resolveProfile: async (name) => { const p = profiles.find((x) => x.name === name); return p ? { profile: p, spawn: { provider: p.provider, model: p.model, modeId: p.modeId, systemPrompt: p.notes } } : null; },
     writeLog: async () => {},
@@ -314,14 +315,14 @@ function writeRunnerRecord(vsHome, id, meta) {
 
 test("spoofed --role/--lane/--team/--agent/--ord cannot make a worker spawn a lead, hand off, or restart a Buddy", async () => {
   const w = setup();
-  const keys = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_ROLE", "VS_TEAM", "VS_LANE"];
+  const keys = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_TEAM", "VS_LANE"];
   const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
   try {
     buddy(w);
     lead(w);
     writeRunnerRecord(w.vsHome, "rn-work1", { team: "mx", lane: "feat", role: "worker", title: "Worker" });
     writeRunnerRecord(w.vsHome, "rn-lead1", { team: "mx", lane: "feat", role: "lead", title: "Lead 1", ord: "1" });
-    Object.assign(process.env, { VS_AGENT_ID: "rn-work1", PASEO_AGENT_ID: "rn-work1", VS_ROLE: "lead", VS_TEAM: "mx", VS_LANE: "hub" });
+    Object.assign(process.env, { VS_AGENT_ID: "rn-work1", PASEO_AGENT_ID: "rn-work1", VS_AGENT_TOKEN: tokenFor("rn-work1"), VS_ROLE: "lead", VS_TEAM: "mx", VS_LANE: "hub" });
     const spoof = { role: "lead", lane: "hub", team: "mx", agent: "rn-lead1", ord: "9" };
     const seen = [];
     const makeContext = (opts) => { seen.push(opts.identity); return buddyCtx(w, opts.identity); };

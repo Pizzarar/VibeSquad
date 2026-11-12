@@ -116,14 +116,14 @@ test(
     try {
       const labels = { profile: "Implement - Sonnet", team: "vibesquad", lane: "vibesquad", role: "worker", job: "x", stakes: "tierA-security" };
       const out = await h.spawn({ config: { cwd: CWD, provider: "claude" }, labels });
-      assert.equal(out.labels[ROUTE_LABEL], "stakes=tierA-security model=claude-fable-5-1 effort=high reason=ladder");
+      assert.equal(out.labels[ROUTE_LABEL], "stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder");
       const agent = { id: "rn-routed", title: "Implement - x", cwd: CWD, status: "running", provider: "claude", model: out.config.model, thinkingOptionId: out.config.thinkingOptionId, labels: out.labels };
       h.agents.set(agent.id, agent);
       await h.created(agent);
       await h.created(agent); // a second created event logs nothing new
       const paired = teamLog(vsHome).filter((e) => e.text.startsWith("route-agent:"));
       assert.equal(paired.length, 1);
-      assert.equal(paired[0].text, "route-agent: id=rn-routed stakes=tierA-security model=claude-fable-5-1 effort=high reason=ladder");
+      assert.equal(paired[0].text, "route-agent: id=rn-routed stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder");
       assert.deepEqual(paired[0].refs, ["rn-routed"]);
       assert.equal(teamLog(vsHome).filter((e) => e.text.startsWith("route:")).length, 1, "the before() route metric is unchanged");
     } finally {

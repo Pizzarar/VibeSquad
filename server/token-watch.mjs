@@ -15,6 +15,7 @@ import {
 } from "./lead-handoff.mjs";
 import { appendVsLogEntry, performBrainstormRestart } from "./brainstorm.mjs";
 import { BUDDY_COMPACT_FOCUS, COMPACTED_AT_LABEL, createCompactor, isClaudeAgent, isIdleForCompact } from "./compact-step.mjs";
+import { createWorkerContextGuard, lastAssistantMessage } from "./worker-context-guard.mjs";
 
 const REPO_ROOT = resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta.dirname === "string" ? join(import.meta.dirname, "..") : join(homedir(), "projects", "VibeSquad")));
 
@@ -35,8 +36,9 @@ export function loadBrainstormThresholds(agent, rootDir = REPO_ROOT) {
 }
 
 /**
- * Watches runner usage and acts by role (leads: coordinator stages; Buddies: warn then restart; workers: nothing).
- * deps (all optional, for tests): restartExtra (merged into the default restart body: agentClient, profilesPath, ...), runner, rootDir, coordinator, restartBuddy, getBuddyThresholds, baseHome, profilesPath.
+ * Watches runner usage and acts by role (leads: coordinator stages; Buddies: warn then restart; workers and digest workers: the
+ * worker context guard, soft wrap-up + lead ping, then a hard "respawn fresh now" lead ping; idea-162).
+ * deps (all optional, for tests): restartExtra (merged into the default restart body: agentClient, profilesPath, ...), runner, rootDir, coordinator, restartBuddy, getBuddyThresholds, workerGuard, baseHome, profilesPath.
  * Returns { stop, evaluate }.
  */
 export function startTokenWatcher({
@@ -48,6 +50,7 @@ export function startTokenWatcher({
   getBuddyThresholds = (agent) => loadBrainstormThresholds(agent, rootDir),
   compactor,
   briefWaitMs = BRIEF_WAIT_MS,
+  workerGuard,
   baseHome,
   profilesPath,
 } = {}) {
@@ -85,6 +88,17 @@ export function startTokenWatcher({
       listAgents: async () => [...live.values()],
       getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch((err) => { if (isAgentNotFoundError(err)) return null; throw err; }))?.agent ?? null,
       deleteHeartbeat: (id) => runner.deleteHeartbeat(id),
+    });
+
+  const workers =
+    workerGuard ??
+    createWorkerContextGuard({
+      rootDir,
+      baseHome,
+      sendMessage: (id, text) => runner.sendAgentPrompt(id, text),
+      listAgents: async () => [...live.values()],
+      getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch(() => null))?.agent ?? null,
+      lastMessage: (id) => lastAssistantMessage(runner, id),
     });
 
   // The brief-update turn must END before /compact: an "idle" upsert can still arrive between sending the nudge and its turn starting.
@@ -129,6 +143,7 @@ export function startTokenWatcher({
     const role = effectiveAgentRole(agent);
     if (role === "lead") return { role, result: await coord.evaluateLead(agent) };
     if (role === "brainstorm") return { role, result: await evaluateBuddy(agent) };
+    if (role === "worker" || role === "digest") return { role, result: await workers.evaluateWorker(agent) };
     return { role };
   }
 
@@ -146,7 +161,7 @@ export function startTokenWatcher({
         .finally(() => busy.delete(agent.id));
     }
   });
-  return { stop, evaluate, coordinator: coord };
+  return { stop, evaluate, coordinator: coord, workerGuard: workers };
 }
 
 export { SOFT_FLAG_NUDGE };

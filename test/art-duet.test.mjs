@@ -2,6 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { callTool } from '../server/mcp/tools.mjs';
+import { verifiedIdentity } from './helpers/agent-token.mjs';
 
 const PROFILES = ['Art Painter - Opus', 'Art Director - Gemini', 'Implement - Sonnet'].map((name, i) => ({
   id: `p${i}`, name, role: 'worker', provider: 'claude', model: 'm', modeId: 'auto', notes: 'n',
@@ -16,7 +17,7 @@ function ctxWith(existing = []) {
     fetchAgents: async () => ({ entries: existing.map((a) => ({ agent: a })) }),
   };
   return {
-    calls, identity: { agentId: 'rn-lead', team: 'efi', lane: 'own', role: 'lead' }, cwd: '/w',
+    calls, ...verifiedIdentity({ agentId: 'rn-lead', team: 'efi', lane: 'own', role: 'lead' }), cwd: '/w',
     loadProfiles: async () => PROFILES,
     resolveProfile: async (name) => { const p = PROFILES.find((x) => x.name === name); return p ? { profile: p, spawn: { provider: p.provider, model: p.model, modeId: p.modeId } } : null; },
     withBackend: async (_t, fn) => fn(backend),

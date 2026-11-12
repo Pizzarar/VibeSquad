@@ -26,7 +26,7 @@ function isolatedEnv(extra = {}) {
   const home = tmp();
   return {
     ...process.env, HOME: home, USERPROFILE: home, VIBESQUAD_HOME: path.join(home, '.vibesquad'), PASEO_HOME: path.join(home, '.paseo'),
-    PASEO_AGENT_ID: '', VS_AGENT_ID: '', VS_AGENT_TOKEN: '', VS_AGENT_TOKEN_REQUIRED: '', VS_TEAM: '', VS_LANE: '', VS_ROLE: '', VS_ORD: '', VS_RUNNER_LANES: '', ...extra,
+    PASEO_AGENT_ID: '', VS_AGENT_ID: '', VS_AGENT_TOKEN: '', VS_TEAM: '', VS_LANE: '', VS_ROLE: '', VS_ORD: '', VS_RUNNER_LANES: '', ...extra,
   };
 }
 
@@ -128,13 +128,22 @@ test('runner passes the per-agent env to the child process', () => {
 
 // ---------- MCP server ----------
 
+// X1d: every identity tool verifies its caller first, so a fake caller carries a token and the stub `verifyAgent` answers
+// with the identity the test claims (the real one asks the runner over GET /verify-agent).
+const FAKE_TOKEN = 'fake-agent-token';
 function fakeCtx({ identity = { agentId: 'rn-caller', team: 'efi', lane: 'own', role: 'lead' }, runnerBackend, paseoBackend } = {}) {
   const logs = [];
   const used = [];
   const profiles = [{ id: 'agent_profile_x', name: 'Implement - Sonnet', role: 'worker', provider: 'claude', model: 'claude-sonnet-5-5', modeId: 'auto', notes: 'be good' },
     { id: 'agent_profile_l', name: 'Lead - Opus', role: 'lead', provider: 'claude', model: 'claude-opus-5-5', modeId: 'auto', notes: 'lead it' }];
+  if (identity.agentId && !identity.token) identity = { ...identity, token: FAKE_TOKEN };
+  const claimed = { ...identity };
   return {
     logs, used, identity, cwd: '/work',
+    verifyAgent: async ({ id, token }) => {
+      if (id !== claimed.agentId || token !== claimed.token) throw Object.assign(new Error('agent token invalid'), { status: 403 });
+      return { id, role: claimed.role, lane: claimed.lane, team: claimed.team };
+    },
     loadProfiles: async () => profiles,
     resolveProfile: async (name) => {
       const p = profiles.find((x) => x.name === name || x.id === name);
@@ -185,14 +194,12 @@ test('MCP: initialize / tools/list / tools/call round trip over stdio', async ()
     const list = await rpc({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
     const names = list.result.tools.map((t) => t.name);
     for (const n of [...Object.keys(VS_TOOLS), ...Object.keys(ALIASES)]) assert.ok(names.includes(n), `tool ${n} listed`);
+    // X1d guard: an MCP server launched with VS_AGENT_ID and no VS_AGENT_TOKEN is nobody: report is a 403 tool error and
+    // nothing lands on disk (before X1d the rollout fallback wrote the entry as rn-w1 straight to the team log).
     const call = await rpc({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'report', arguments: { type: 'done', text: 'finished the thing' } } });
-    assert.ok(!call.result.isError, JSON.stringify(call));
-    assert.deepEqual(JSON.parse(call.result.content[0].text), { logged: true, type: 'done', agent: 'rn-w1', refs: [] }); // X1b: the entry attribution comes back (fallback: no token, no local token -> disk)
-    const logPath = path.join(env.VIBESQUAD_HOME, 'teams', 'efi', 'log.jsonl');
-    const entry = JSON.parse(readFileSync(logPath, 'utf8').trim().split('\n').pop());
-    assert.equal(entry.agent, 'rn-w1');
-    assert.equal(entry.lane, 'own');
-    assert.equal(entry.type, 'done');
+    assert.equal(call.result.isError, true, JSON.stringify(call));
+    assert.match(call.result.content[0].text, /403/);
+    assert.equal(existsSync(path.join(env.VIBESQUAD_HOME, 'teams', 'efi', 'log.jsonl')), false, 'no entry was written');
     const bad = await rpc({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'report', arguments: { type: 'nope', text: 'x' } } });
     assert.equal(bad.result.isError, true);
     const unknown = await rpc({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'zzz', arguments: {} } });
@@ -377,6 +384,7 @@ test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --ro
     VIBESQUAD_HOME: env.VIBESQUAD_HOME,
     VS_AGENT_ID: 'rn-work1',
     PASEO_AGENT_ID: 'rn-work1',
+    VS_AGENT_TOKEN: FAKE_TOKEN, // X1d: the shared tools verify the caller; fakeCtx answers for this token
     VS_ROLE: 'lead',
     VS_LANE: 'other',
     VS_TEAM: 'oth',
@@ -399,7 +407,7 @@ test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --ro
     );
     assert.equal(code, 0);
     assert.deepEqual(JSON.parse(out), { id: 'rn-new', title: 'Sub job' });
-    assert.deepEqual(seen, [{ agentId: 'rn-work1', token: '', team: 'efi', lane: 'own', role: 'worker' }]);
+    assert.deepEqual(seen, [{ agentId: 'rn-work1', token: FAKE_TOKEN, team: 'efi', lane: 'own', role: 'worker' }]);
     const req = runnerBackend.calls[0][1];
     assert.deepEqual(
       [req.labels.team, req.labels.lane, req.labels.role, req.labels['vs.parent']],
@@ -437,9 +445,11 @@ test('rn- agents resolve through the runner log: vs log as a runner lead, vs who
   writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-lead1', { team: 'efi', lane: 'own', role: 'lead', title: 'Lead One' });
   writeRunnerAgent(env.VIBESQUAD_HOME, 'rn-work1', { team: 'efi', lane: 'own', role: 'worker', title: 'Worker One' });
   Object.assign(env, { VIBESQUAD_ROOT: env.VIBESQUAD_HOME });
+  // X1d guard: the lead's record on disk is not an identity; without VS_AGENT_TOKEN `vs log` is a 403 and writes nothing
   const asLead = spawnSync(process.execPath, [CLI, 'log', 'decision', 'runner lead can log'], { env: { ...env, PASEO_AGENT_ID: 'rn-lead1' }, encoding: 'utf8' });
-  assert.equal(asLead.status, 0, asLead.stderr);
-  assert.equal(JSON.parse(asLead.stdout).agent, 'rn-lead1');
+  assert.notEqual(asLead.status, 0);
+  assert.match(asLead.stderr, /403/);
+  assert.equal(existsSync(path.join(env.VIBESQUAD_HOME, 'teams', 'efi', 'log.jsonl')), false, 'no entry was written');
   const asWorker = spawnSync(process.execPath, [CLI, 'log', 'decision', 'worker may not'], { env: { ...env, PASEO_AGENT_ID: 'rn-work1' }, encoding: 'utf8' });
   assert.notEqual(asWorker.status, 0);
   assert.match(asWorker.stderr, /role=worker cannot write/);
@@ -515,7 +525,7 @@ function tokenBackend(records, extra = {}) {
 function tokenCtx({ id, token, role = '', env = {}, records = [LEAD_REC, BUDDY_REC, WORKER_REC], backend, vsPort } = {}) {
   const b = backend ?? tokenBackend(records);
   const ctx = createContext({
-    env: { ...isolatedEnv(), VS_AGENT_TOKEN_REQUIRED: '', ...(vsPort ? { VIBESQUAD_PORT: String(vsPort) } : {}), ...env },
+    env: { ...isolatedEnv(), ...(vsPort ? { VIBESQUAD_PORT: String(vsPort) } : {}), ...env },
     identity: { agentId: id, token, team: 'efi', lane: 'own', role },
     teams: X1B_TEAMS,
     withBackend: async (_o, fn) => fn(b),
@@ -537,14 +547,14 @@ test('X1b: identityFromEnv carries VS_AGENT_TOKEN; verifyCaller overwrites role/
   await assert.rejects(verifyCaller(tokenCtx({ id: 'rn-buddy1', token: 'wrong' }).ctx), /403/);
   // no agent id: nothing to verify (owner / unknown)
   assert.equal(await verifyCaller(tokenCtx({ id: '', token: '' }).ctx), null);
-  // flag 0 (default) + no token: the pre-X1a fallback keeps the env identity, no verification call
+  // X1d guard: an id without a token is a 403 before the runner is asked; the env identity is never kept as a claim
   const seen = [];
   const { ctx: fb } = tokenCtx({ id: 'rn-buddy1', token: '', role: 'brainstorm', backend: tokenBackend([BUDDY_REC], { verifyAgent: async () => { seen.push(1); throw new Error('must not verify'); } }) });
-  assert.equal(await verifyCaller(fb), null);
-  assert.equal(seen.length, 0);
-  assert.equal(fb.identity.role, 'brainstorm');
-  // flag 1 + no token: 403
-  await assert.rejects(verifyCaller(tokenCtx({ id: 'rn-buddy1', token: '', env: { VS_AGENT_TOKEN_REQUIRED: '1' } }).ctx), /403/);
+  await assert.rejects(verifyCaller(fb), /403/);
+  assert.equal(seen.length, 0, 'nothing was sent to the runner');
+  assert.notEqual(fb.identity.verified, true);
+  // the old X1a-X1b rollout flag changes nothing
+  await assert.rejects(verifyCaller(tokenCtx({ id: 'rn-buddy1', token: '', env: { VS_AGENT_TOKEN_REQUIRED: '0' } }).ctx), /403/);
 });
 
 test('X1b: spawn-lead / handoff_lead / restart_buddy / watch / report / send / cancel with a live lead id and a wrong or missing token -> 403; right token -> the existing path', async () => {
@@ -561,8 +571,8 @@ test('X1b: spawn-lead / handoff_lead / restart_buddy / watch / report / send / c
     const wrong = tokenCtx({ id: 'rn-lead1', token: 'wrong', role: 'lead' });
     await assert.rejects(run(wrong.ctx), /403/, `${name} wrong token`);
     assert.equal(wrong.backend.calls.length, 0, `${name}: nothing reached the backend on a wrong token`);
-    const missing = tokenCtx({ id: 'rn-lead1', token: '', role: 'lead', env: { VS_AGENT_TOKEN_REQUIRED: '1' } });
-    await assert.rejects(run(missing.ctx), /403/, `${name} missing token under the flag`);
+    const missing = tokenCtx({ id: 'rn-lead1', token: '', role: 'lead' });
+    await assert.rejects(run(missing.ctx), /403/, `${name} missing token`);
     assert.equal(missing.backend.calls.length, 0, `${name}: nothing reached the backend on a missing token`);
   }
   // right token: the Buddy's lead spawn still works (its verified role is brainstorm even though env claims worker)
@@ -629,14 +639,15 @@ test('X1b R1 M1: VS_AGENT_TOKEN with the agent id cleared or masked never reads 
   writeFileSync(path.join(env.VIBESQUAD_HOME, 'local-token'), 'a'.repeat(64) + '\n');
   const home = { VIBESQUAD_HOME: env.VIBESQUAD_HOME };
   const { ctx } = tokenCtx({ id: '', token: 'leftover-token', env: home });
-  assert.equal(agentCallerOf(ctx)?.verify, true, 'a token makes the caller an (unverifiable) agent, not the owner');
-  assert.equal((await vsServerHeaders(ctx))['x-vibesquad-token'], undefined, 'never the local token');
+  assert.deepEqual(agentCallerOf(ctx), { id: '', token: 'leftover-token' }, 'a token makes the caller an (unverifiable) agent, not the owner');
+  await assert.rejects(vsServerHeaders(ctx), /403/, 'never the local token: an incomplete (id, token) pair is a 403 before any header exists');
   assert.equal(await hasOwnerProof(ctx), false);
   await assert.rejects(verifyCaller(ctx), /403/);
-  // the flag alone (no id, no token) is not the owner either
-  const flagged = tokenCtx({ id: '', token: '', env: { ...home, VS_AGENT_TOKEN_REQUIRED: '1' } });
-  assert.equal((await vsServerHeaders(flagged.ctx))['x-vibesquad-token'], undefined);
-  assert.equal(await hasOwnerProof(flagged.ctx), false);
+  // X1d: an id alone (no token) is an agent shell too, never the owner, and never a claim
+  const idOnly = tokenCtx({ id: 'rn-lead1', token: '', env: home });
+  assert.deepEqual(agentCallerOf(idOnly.ctx), { id: 'rn-lead1', token: '' });
+  await assert.rejects(vsServerHeaders(idOnly.ctx), /403/);
+  assert.equal(await hasOwnerProof(idOnly.ctx), false);
   // send / report from such a shell: 403, no owner turn, nothing sent or logged
   const seen = [];
   const b = tokenBackend([LEAD_REC], { sendAgentPrompt: async (id, text, opts) => { seen.push(opts); } });

@@ -8,12 +8,13 @@ import { PassThrough } from "node:stream";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Runner, agentEnv, agentMay, protectedMetaIn, spawnMetaForAgent } from "../runner/runner.mjs";
-import { createServer as createRunnerServer, hubLaneReader, writeDiscovery } from "../runner/server.mjs";
+import { Runner, agentEnv, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent } from "../runner/runner.mjs";
+import { createServer as createRunnerServer, hubLaneReader, teamLogWriter, writeDiscovery } from "../runner/server.mjs";
 import { createClaudeAdapter } from "../runner/adapters/claude.mjs";
 import { createAcpAdapter } from "../runner/adapters/acp.mjs";
 import { LogStore, redactSecrets } from "../runner/log.mjs";
 import { RunnerClient, RunnerHttpError, agentCallerFromEnv, authHeadersFor } from "../server/backend/runner-client.mjs";
+import * as runnerClientModule from "../server/backend/runner-client.mjs";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
 
 const dirs = [];
@@ -47,7 +48,7 @@ function fakeAdapter() {
 }
 
 /** A runner + server with a Squad: Overlord (hub lane = team id), lane Buddy, lane lead, two lane workers, a second Squad's worker. */
-async function squad({ parkGraceMs = 60_000 } = {}) {
+async function squad({ parkGraceMs = 60_000, teamLog } = {}) {
   const dir = path.join(tmp(), "agents");
   const fake = fakeAdapter();
   const runner = new Runner({ dir, adapters: { claude: fake.adapter }, parkGraceMs, bgProbe: null });
@@ -62,7 +63,7 @@ async function squad({ parkGraceMs = 60_000 } = {}) {
   ids.worker2 = mk({ team: "sq", lane: "art", role: "worker", labels: { "vs.parent": ids.other } }); // spawned by another lead
   ids.uiWorker = mk({ team: "sq", lane: "ui", role: "worker", labels: { "vs.parent": ids.other } });
   ids.foreign = mk({ team: "other-squad", lane: "other-squad", role: "lead", labels: {} });
-  const srv = createRunnerServer(runner, { token: ADMIN, hash: "h", onShutdown: () => { srv.shutdowns = (srv.shutdowns ?? 0) + 1; } });
+  const srv = createRunnerServer(runner, { token: ADMIN, hash: "h", onShutdown: () => { srv.shutdowns = (srv.shutdowns ?? 0) + 1; }, ...(teamLog ? { teamLog } : {}) });
   const port = await listen(srv);
   const hdr = (who) => (who === "admin" ? { authorization: `Bearer ${ADMIN}` } : who === "none" ? {} : { "x-vs-agent-id": who.id, "x-vs-agent-token": who.token ?? runner.tokensById.get(who.id) });
   const call = async (who, method, route, body) => {
@@ -516,6 +517,94 @@ test("X1a: agentMay / spawnMetaForAgent are pure rule tables", () => {
   assert.equal(spawnMetaForAgent(overlord, { lane: "ui" }).lane, "ui");
 });
 
+test("xsquad: agentMay input across Squads only for an Overlord to a live lead of the other Squad; everything else stays same-Squad", () => {
+  const overlord = { id: "rn-ov", role: "lead", lane: "sq", team: "sq", overlord: true };
+  const lead = { id: "rn-lead", role: "lead", lane: "art", team: "sq", overlord: false };
+  const buddy = { id: "rn-b", role: "brainstorm", lane: "art", team: "sq", overlord: false };
+  const t = (id, meta, extra = {}) => ({ id, meta, status: "idle", ...extra });
+  const otherOverlord = t("rn-o2", { team: "efi", lane: "efi", role: "lead", labels: {} });
+  const otherLead = t("rn-o3", { labels: { team: "efi", lane: "ui", role: "lead" } }); // labels-only shape
+  assert.equal(agentMay(overlord, "input", otherOverlord), true, "Overlord -> other Squad's Overlord");
+  assert.equal(agentMay(overlord, "input", otherLead), true, "Overlord -> other Squad's lane lead");
+  assert.equal(agentMay(overlord, "input", t("rn-o4", { team: "efi", lane: "ui", role: "worker", labels: {} })), false, "other Squad's worker");
+  assert.equal(agentMay(overlord, "input", t("rn-o5", { team: "efi", lane: "ui", role: "brainstorm", labels: {} })), false, "other Squad's Buddy");
+  assert.equal(agentMay(overlord, "input", t("rn-o6", { team: "efi", lane: "ui", role: "buddy", labels: {} })), false, "Buddy alias");
+  assert.equal(agentMay(overlord, "input", t("rn-o7", { team: "efi", lane: "ui", role: "former-lead", labels: {} })), false, "retired lead");
+  assert.equal(agentMay(overlord, "input", t("rn-o8", { team: "efi", lane: "ui", role: "lead", labels: { role: "former-lead" } })), false, "retired by label");
+  assert.equal(agentMay(overlord, "input", t("rn-o9", { team: "efi", lane: "ui", role: "lead", labels: {} }, { archivedAt: 1 })), false, "archived lead");
+  assert.equal(agentMay(overlord, "input", t("rn-oa", { team: "efi", lane: "ui", role: "lead", labels: {} }, { status: "exited" })), false, "exited lead");
+  assert.equal(agentMay(overlord, "input", t("rn-ob", { team: "efi", lane: "ui", role: "lead", labels: { orphan: "true" } })), false, "orphan lead");
+  assert.equal(agentMay(overlord, "input", t("rn-oc", { lane: "ui", role: "lead", labels: {} })), false, "a lead with no team");
+  assert.equal(agentMay(lead, "input", otherOverlord), false, "a plain lead never crosses Squads");
+  assert.equal(agentMay(lead, "input", otherLead), false);
+  assert.equal(agentMay(buddy, "input", otherOverlord), false, "a Buddy never crosses Squads");
+  assert.equal(agentMay({ ...overlord, overlord: "true" }, "input", otherOverlord), false, "overlord must be exactly true");
+  assert.equal(agentMay({ ...overlord, team: null }, "input", otherOverlord), false, "an Overlord without a team");
+  for (const action of ["cancel", "archive", "unarchive", "resume", "meta", "config"]) {
+    assert.equal(agentMay(overlord, action, otherOverlord), false, `cross-Squad ${action} stays denied`);
+    assert.equal(agentMay(overlord, action, otherLead), false, `cross-Squad ${action} on a lane lead stays denied`);
+  }
+  assert.equal(crossSquadInput(overlord, t("rn-l", { team: "sq", lane: "art", role: "lead", labels: {} })), false, "same Squad is not the cross-Squad grant");
+  assert.equal(agentMay(overlord, "input", t("rn-l", { team: "sq", lane: "art", role: "worker", labels: {} })), true, "same-Squad input unchanged");
+});
+
+test("xsquad: runner HTTP: Overlord input to another Squad's Overlord/lead is 202 and audited in the sender's team log; workers/Buddies/retired, plain leads and cancel/archive/meta/config are 403 and not logged", async () => {
+  const logged = [];
+  const s = await squad({ teamLog: (e) => logged.push(e) });
+  try {
+    const { ids, runner } = s;
+    const mk = (meta) => runner.create({ provider: "claude", cwd: process.cwd(), meta });
+    const fLead = mk({ team: "other-squad", lane: "ui", role: "lead", labels: {} });
+    const fWorker = mk({ team: "other-squad", lane: "ui", role: "worker", labels: {} });
+    const fBuddy = mk({ team: "other-squad", lane: "ui", role: "brainstorm", labels: {} });
+    const fFormer = mk({ team: "other-squad", lane: "ui2", role: "former-lead", labels: {} });
+    const fArchived = mk({ team: "other-squad", lane: "ui3", role: "lead", labels: {} });
+    runner.archive(fArchived);
+    const input = (from, to, body = { text: "pause your bg suite" }) => s.call(s.as(from), "POST", `/agents/${to}/input`, body);
+    const r = await input(ids.overlord, ids.foreign);
+    assert.equal(r.status, 202, r.text);
+    assert.equal(r.body.senderId, ids.overlord);
+    assert.equal(runner.timeline(ids.foreign).find((e) => e.type === "input")?.senderId, ids.overlord);
+    assert.equal((await input(ids.overlord, fLead)).status, 202, "other Squad's lane lead");
+    assert.equal((await input(ids.foreign, ids.overlord)).status, 202, "symmetric: the other Overlord answers back");
+    assert.deepEqual(logged.map((e) => [e.team, e.type, e.agent]), [["sq", "decision", ids.overlord], ["sq", "decision", ids.overlord], ["other-squad", "decision", ids.foreign]]);
+    assert.equal(logged[0].text, `xsquad input ${ids.overlord} (sq) -> ${ids.foreign} (other-squad)`);
+    assert.equal(logged[0].lane, "sq");
+    assert.deepEqual(logged[0].refs, [ids.overlord, ids.foreign]);
+    for (const to of [fWorker, fBuddy, fFormer, fArchived]) assert.equal((await input(ids.overlord, to)).status, 403, `Overlord -> ${to}`);
+    assert.equal((await input(ids.lead, ids.foreign)).status, 403, "a plain lead -> other Squad's Overlord");
+    assert.equal((await input(ids.lead, fLead)).status, 403, "a plain lead -> other Squad's lead");
+    assert.equal((await input(ids.buddy, ids.foreign)).status, 403, "a Buddy -> other Squad's Overlord");
+    assert.equal((await input(ids.worker, ids.foreign)).status, 403, "a worker -> other Squad's Overlord");
+    for (const action of ["cancel", "archive", "unarchive", "resume", "meta", "config"]) {
+      assert.equal((await s.call(s.as(ids.overlord), "POST", `/agents/${ids.foreign}/${action}`, {})).status, 403, `cross-Squad ${action}`);
+    }
+    assert.equal((await input(ids.overlord, ids.lead)).status, 202, "same-Squad input");
+    assert.equal(logged.length, 3, "denied and same-Squad sends are not cross-Squad audit entries");
+    // An interrupt across Squads is downgraded to a steer: input does not carry cancel rights there.
+    runner.send(fLead, "HOLD: long turn");
+    await tick(30);
+    assert.equal((await input(ids.overlord, fLead, { text: "stop", activeTurnBehavior: "interrupt" })).status, 202);
+    assert.equal(s.fake.starts.find((x) => x.id === fLead).cancels, 0, "the other Squad's lead turn was not cancelled");
+  } finally { await s.stop(); }
+});
+
+test("xsquad: teamLogWriter appends one entry to the lane log and the team log under the VS home", () => {
+  const home = tmp("vs-xsquad-log-");
+  teamLogWriter(home)({ team: "vibesquad", lane: "vibesquad", agent: "rn-a", type: "decision", text: "xsquad input rn-a (vibesquad) -> rn-b (efi)", refs: ["rn-a", "rn-b"] });
+  const read = (...p) => readFileSync(path.join(home, ...p), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  const lane = read("logs", "vibesquad--vibesquad.jsonl");
+  assert.equal(lane.length, 1);
+  assert.deepEqual(read("teams", "vibesquad", "log.jsonl"), lane);
+  assert.equal(lane[0].type, "decision");
+  assert.equal(lane[0].agent, "rn-a");
+  assert.equal(lane[0].lane, "vibesquad");
+  assert.deepEqual(lane[0].refs, ["rn-a", "rn-b"]);
+  assert.ok(lane[0].ts);
+  teamLogWriter(home)({ team: "../evil", lane: null, agent: "rn-a", text: "x" });
+  assert.ok(readdirSync(path.join(home, "teams")).every((d) => !d.includes("..")), "team segment is sanitised");
+});
+
 test("X1a: hubLaneReader mirrors isHubLane: a lane flagged hub wins, else the lane whose id is the team id; no file → the default rule; the file is re-read when it changes", () => {
   const home = tmp();
   const hub = hubLaneReader(home, {});
@@ -579,21 +668,25 @@ test("X1a: runner-client: VS_AGENT_TOKEN set → agent headers only (no bearer);
   assert.deepEqual(authHeadersFor(undefined, "b"), { authorization: "Bearer b" });
 });
 
-test("X1a: runner-client rollout flag: VS_AGENT_ID without a token falls back to the admin bearer (flag off / 0); with VS_AGENT_TOKEN_REQUIRED=1 the id goes alone and the runner says 403", async () => {
-  assert.equal(agentCallerFromEnv({ VS_AGENT_ID: "rn-a" }), null, "default: fallback for a pre-X1a child");
-  assert.equal(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN_REQUIRED: "0" }), null);
-  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN_REQUIRED: "1" }), { id: "rn-a", token: "" });
+test("X1d guard: runner-client with VS_AGENT_ID and no VS_AGENT_TOKEN never falls back to the admin bearer: the id goes alone, the runner says 403 and the target gets nothing; the admin bearer without VS_AGENT_ID still gets 2xx", async () => {
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a" }), { id: "rn-a", token: "" }, "no token: the id is sent alone (no fallback)");
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN_REQUIRED: "0" }), { id: "rn-a", token: "" }, "the X1a-X1b rollout flag is gone: 0 changes nothing");
   assert.deepEqual(agentCallerFromEnv({ PASEO_AGENT_ID: "rn-p", VS_AGENT_TOKEN: "t" }), { id: "rn-p", token: "t" });
-  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a", VS_AGENT_TOKEN: "t", VS_AGENT_TOKEN_REQUIRED: "1" }), { id: "rn-a", token: "t" });
   assert.equal(agentCallerFromEnv({}), null);
+  assert.equal("agentTokenRequired" in runnerClientModule, false, "the flag reader is gone");
   const s = await squad();
   try {
     const home = tmp();
     writeDiscovery(home, { port: s.port, token: ADMIN });
-    const fallback = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker } });
-    assert.equal((await fallback.request("GET", "/health")).ok, true, "fallback: the bearer still works for this turn");
-    const strict = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker, VS_AGENT_TOKEN_REQUIRED: "1" } });
-    await assert.rejects(() => strict.request("GET", "/health"), (e) => e instanceof RunnerHttpError && e.status === 403);
+    const noToken = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker } });
+    await assert.rejects(() => noToken.request("GET", "/health"), (e) => e instanceof RunnerHttpError && e.status === 403, "an id without a token is 403, never the bearer");
+    await assert.rejects(() => noToken.request("POST", `/agents/${s.ids.lead}/input`, { text: "x1d-spoof-turn" }), (e) => e instanceof RunnerHttpError && e.status === 403);
+    assert.equal(JSON.stringify(s.runner.timeline(s.ids.lead)).includes("x1d-spoof-turn"), false, "the lead got no turn");
+    const flagged = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker, VS_AGENT_TOKEN_REQUIRED: "0" } });
+    await assert.rejects(() => flagged.request("GET", "/health"), (e) => e instanceof RunnerHttpError && e.status === 403, "the old flag does not bring the fallback back");
+    const adminTurn = await s.call("admin", "POST", `/agents/${s.ids.worker}/input`, { text: "admin turn" });
+    assert.ok(adminTurn.status >= 200 && adminTurn.status < 300, `admin input: ${adminTurn.status} ${adminTurn.text}`);
+    assert.equal((await new RunnerClient({ home, env: { PATH: "p" } }).request("GET", "/health")).ok, true, "no VS_AGENT_ID: the admin bearer, as before");
     const real = new RunnerClient({ home, env: { VS_AGENT_ID: s.ids.worker, VS_AGENT_TOKEN: s.runner.tokensById.get(s.ids.worker) } });
     assert.equal((await real.verifyAgent({ id: s.ids.worker, token: s.runner.tokensById.get(s.ids.worker) })).role, "worker");
     assert.equal((await real.request("GET", "/verify-agent")).id, s.ids.worker, "the env identity is used when no per-call caller is given");
@@ -642,4 +735,46 @@ test("X1a: runner-backend passes the caller through: an agent caller's spawn is 
     assert.equal(s.runner.timeline(s.ids.worker2).findLast((e) => e.type === "input").senderId, s.ids.lead);
     await assert.rejects(() => backend.sendAgentPrompt(s.ids.worker2, "x", { caller: { id: s.ids.foreign, token: s.runner.tokensById.get(s.ids.foreign) } }), (e) => e.status === 403);
   } finally { delete process.env.VIBESQUAD_HOME; await s.stop(); }
+});
+
+test("X1d R1 H1 guard: a leftover VS_AGENT_TOKEN with the id cleared, or an id without a token, is an incomplete agent caller: 403 in-process, nothing sent, never the admin bearer; a shell with no identity is still admin", async () => {
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_TOKEN: "leftover" }), { id: "", token: "leftover" });
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "leftover" }), { id: "", token: "leftover" });
+  assert.deepEqual(agentCallerFromEnv({ VS_AGENT_ID: "rn-a" }), { id: "rn-a", token: "" });
+  assert.equal(agentCallerFromEnv({ VS_AGENT_ID: "", VS_AGENT_TOKEN: "" }), null, "no identity at all: the admin bearer");
+  for (const bad of [{ id: "", token: "leftover" }, { id: "rn-a", token: "" }, {}, { id: " ", token: "t" }]) {
+    assert.throws(() => authHeadersFor(bad, ADMIN), (e) => e instanceof RunnerHttpError && e.status === 403, JSON.stringify(bad));
+  }
+  assert.deepEqual(authHeadersFor(null, ADMIN), { authorization: `Bearer ${ADMIN}` });
+  assert.deepEqual(authHeadersFor(undefined, ADMIN), { authorization: `Bearer ${ADMIN}` });
+  // no socket at all: the recording fetch never sees a call, on any route, and the health probe is a 403, not RUNNER_DOWN
+  const home = clientHome();
+  const fetchImpl = recordingFetch();
+  for (const env of [{ VS_AGENT_TOKEN: "leftover" }, { VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: "leftover" }, { VS_AGENT_ID: "rn-me" }]) {
+    const c = new RunnerClient({ home, fetchImpl, env });
+    for (const [m, r, b] of [["POST", "/agents/rn-x/archive", {}], ["GET", "/agents/rn-x"], ["GET", "/health"], ["POST", "/agents", { provider: "claude" }], ["POST", "/shutdown", {}]]) {
+      await assert.rejects(() => c.request(m, r, b), (e) => e instanceof RunnerHttpError && e.status === 403, `${JSON.stringify(env)} ${m} ${r}`);
+    }
+    await assert.rejects(() => c.healthy(), (e) => e.status === 403, `${JSON.stringify(env)} healthy()`);
+    await assert.rejects(() => c.requireRunning(), (e) => e.status === 403 && e.code !== "RUNNER_DOWN", `${JSON.stringify(env)} requireRunning()`);
+  }
+  assert.equal(fetchImpl.calls.length, 0, "nothing was sent");
+  // against a real runner: the lead is not archived and the runner saw no request; the backend seam (what vs archive rides) refuses the same way
+  const s = await squad();
+  try {
+    const rhome = tmp();
+    writeDiscovery(rhome, { port: s.port, token: ADMIN });
+    const seen = [];
+    s.srv.on("request", (req) => seen.push({ url: req.url, admin: Boolean(req.headers.authorization) }));
+    const leftover = new RunnerClient({ home: rhome, env: { VS_AGENT_ID: "", PASEO_AGENT_ID: "", VS_AGENT_TOKEN: s.runner.tokensById.get(s.ids.worker) } });
+    await assert.rejects(() => leftover.request("POST", `/agents/${s.ids.lead}/archive`, {}), (e) => e.status === 403);
+    const backend = new RunnerBackend({ client: leftover, hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
+    await assert.rejects(() => backend.archiveAgent(s.ids.lead), (e) => e.status === 403);
+    assert.equal(seen.length, 0, "the runner saw no request at all");
+    assert.ok(!s.runner.status(s.ids.lead)?.archivedAt, "the lead is not archived");
+    const admin = new RunnerClient({ home: rhome, env: {} });
+    assert.equal((await admin.request("GET", "/health")).ok, true, "a shell with no identity is still admin");
+    assert.equal(seen.length, 1);
+    assert.equal(seen[0].admin, true);
+  } finally { await s.stop(); }
 });

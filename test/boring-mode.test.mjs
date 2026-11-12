@@ -349,7 +349,10 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   for (const id of ["first-run-vibe-picker", "first-run-vibe-normal", "first-run-vibe-psycho"]) assert.ok(fr.includes(`data-testid="${id}"`), id);
   assert.match(fr, /export function FirstLaunchVibePicker/);
   assert.match(ade, /export \{ VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker \}/);
-  assert.equal((app.match(/<FirstLaunchVibePicker \/>/g) ?? []).length, 2);
+  // 2e23764 folded the per-branch pickers into the shared `overlays` block (one literal), rendered by every layout.
+  assert.equal((app.match(/<FirstLaunchVibePicker \/>/g) ?? []).length, 1);
+  assert.ok(app.indexOf("<FirstLaunchVibePicker />") > app.indexOf("const overlays = ("));
+  assert.ok((app.match(/\{overlays\}/g) ?? []).length >= 2);
   assert.match(css, /\.composer \.send,[\s\S]*background: var\(--accent\) !important/);
   assert.match(css, /#475569 !important/);
   assert.match(css, /clamp\(14px, 0\.45vw \+ 12px, 18px\); line-height: 1\.55/);

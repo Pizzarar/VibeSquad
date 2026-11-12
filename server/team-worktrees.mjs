@@ -3,7 +3,7 @@
 // refuses a dirty worktree and `git branch -d` refuses an unmerged branch, and both come back as "kept"
 // with git's reason so the dialog can say why.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, resolve } from "node:path";
 
@@ -55,6 +55,9 @@ export function removeTeamWorktrees(items, { git = defaultGit, exists = existsSy
       } catch {}
       r.branch = branch || null;
     }
+    // A node_modules junction (see linkNodeModules) must be detached, never recursed into: git/rm walking it
+    // would delete the main checkout's real node_modules.
+    unlinkNodeModulesLink(path);
     try {
       git(["worktree", "remove", path], repoRoot);
       r.worktree = "removed";
@@ -126,7 +129,59 @@ export function createManagedWorktree(repoRoot, branch, { baseRef = "HEAD", git 
   const dest = resolveManagedWorktreePath(repoRoot, branch, env);
   mkdirSync(dirname(dest), { recursive: true });
   git(["worktree", "add", "-f", "-B", branch, dest, baseRef], repoRoot);
-  return { path: dest, branch, repoRoot: resolve(repoRoot) };
+  let nodeModules = "none";
+  try {
+    nodeModules = linkNodeModules(repoRoot, dest, git);
+  } catch {
+    // best-effort: a worker can still npm ci
+  }
+  return { path: dest, branch, repoRoot: resolve(repoRoot), nodeModules };
+}
+
+/**
+ * Junction the worktree's node_modules to the main checkout's (idea-79), so workers do not need npm ci.
+ * Idempotent; never replaces a real node_modules. The repo .gitignore pattern `node_modules/` only matches a
+ * directory, and git sees a junction as a symlink, so `/node_modules` is also added to info/exclude to keep the
+ * link untracked (else it shows dirty and sweep keeps the worktree).
+ * Returns "linked" | "exists" | "no-source".
+ */
+export function linkNodeModules(repoRoot, dest, git = defaultGit) {
+  const src = resolve(repoRoot, "node_modules");
+  const link = resolve(dest, "node_modules");
+  if (!existsSync(src) || !statSync(src).isDirectory()) return "no-source";
+  let present = false;
+  try {
+    lstatSync(link);
+    present = true;
+  } catch {}
+  if (present) return "exists";
+  symlinkSync(src, link, "junction");
+  try {
+    const common = resolve(repoRoot, git(["rev-parse", "--git-common-dir"], repoRoot));
+    const exclude = resolve(common, "info", "exclude");
+    mkdirSync(dirname(exclude), { recursive: true });
+    const cur = existsSync(exclude) ? readFileSync(exclude, "utf8") : "";
+    if (!cur.split(/\r?\n/).includes("/node_modules")) {
+      appendFileSync(exclude, (cur && !cur.endsWith("\n") ? "\n" : "") + "/node_modules\n");
+    }
+  } catch {}
+  return "linked";
+}
+
+/** Remove only the link itself when <wt>/node_modules is a symlink/junction. Returns true if detached. */
+export function unlinkNodeModulesLink(wtPath) {
+  const link = resolve(wtPath, "node_modules");
+  try {
+    if (!lstatSync(link).isSymbolicLink()) return false;
+  } catch {
+    return false;
+  }
+  try {
+    unlinkSync(link);
+  } catch {
+    rmdirSync(link); // non-recursive: fails on a real dir rather than emptying it
+  }
+  return true;
 }
 
 /**

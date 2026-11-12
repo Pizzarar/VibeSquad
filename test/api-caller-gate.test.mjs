@@ -25,7 +25,6 @@ process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 delete process.env.VS_AGENT_ID;
 delete process.env.PASEO_AGENT_ID;
 delete process.env.VS_AGENT_TOKEN;
-delete process.env.VS_AGENT_TOKEN_REQUIRED;
 
 const { Runner } = await import("../runner/runner.mjs");
 const { createServer: createRunnerServer, writeDiscovery } = await import("../runner/server.mjs");
@@ -344,26 +343,30 @@ test("X1c: the x-vibesquad-token header alone (desktop proxy / owner shell) and 
   assert.equal((await call({ headers: { "x-vibesquad-token": "not-the-token" } }, "POST", "/__vibesquad/vs-log", logBody())).status, 403);
 });
 
-test("X1c: rollout: a process with VS_AGENT_ID and no VS_AGENT_TOKEN (flag 0, X1a's client fallback) reaches the VS server with today's owner header and is not 403'd; with the flag on it is 403", async () => {
-  const env = { VS_AGENT_ID: ids.worker, VS_AGENT_TOKEN_REQUIRED: "0", VIBESQUAD_HOME: HOME };
-  assert.equal(agentCallerFromEnv(env), null, "X1a: no token + flag 0 → the admin bearer / local token for this turn");
-  // What cli/vs.mjs and server/mcp/tools.mjs send to the VS server today from that process: localTokenHeaders() and nothing else.
-  const headers = { ...localTokenHeaders(), ...(agentCallerFromEnv(env) ? authHeadersFor(agentCallerFromEnv(env)) : {}) };
-  assert.deepEqual(Object.keys(headers), ["x-vibesquad-token"]);
+test("X1d guard: a process with VS_AGENT_ID and no VS_AGENT_TOKEN is 403 at the VS server and nothing is written or delivered; the old flag and the owner header do not rescue it; with its token the same process is a worker", async () => {
+  const env = { VS_AGENT_ID: ids.worker, VIBESQUAD_HOME: HOME };
+  assert.deepEqual(agentCallerFromEnv(env), { id: ids.worker, token: "" }, "X1d: no token → the id goes alone, never the admin bearer / local token");
+  assert.deepEqual(agentCallerFromEnv({ ...env, VS_AGENT_TOKEN_REQUIRED: "0" }), { id: ids.worker, token: "" }, "the X1a-X1b rollout flag is gone");
+  // The runner client refuses the incomplete pair in-process (R1 H1); `headers` is the wire shape, should anything send it.
+  assert.throws(() => authHeadersFor(agentCallerFromEnv(env)), (e) => e.status === 403);
+  const headers = { "x-vs-agent-id": ids.worker, "x-vs-agent-token": "" };
+  const logFile = path.join(HOME, "logs", "sq--art.jsonl");
+  const logLen = () => (existsSync(logFile) ? readFileSync(logFile, "utf8").split(/\r?\n/).filter(Boolean).length : 0);
+  const n = logLen();
   const r = await call({ headers }, "POST", "/__vibesquad/vs-log", logBody({ type: "done", agent: ids.worker, refs: [ids.lead] }));
-  assert.equal(r.status, 200, JSON.stringify(r.body));
-  assert.equal(r.body.entry.agent, ids.worker);
-  assert.equal((await call({ headers }, "POST", `/__vibesquad/runner/agents/${ids.lead}/input`, { text: "worker fallback send" })).status, 200);
-  const strict = { ...env, VS_AGENT_TOKEN_REQUIRED: "1" };
-  const strictHeaders = { ...localTokenHeaders(), ...authHeadersFor(agentCallerFromEnv(strict)) };
-  assert.equal(strictHeaders["x-vs-agent-id"], ids.worker);
-  assert.equal(strictHeaders["x-vs-agent-token"], "");
-  assert.equal((await call({ headers: strictHeaders }, "POST", "/__vibesquad/vs-log", logBody())).status, 403, "an id without its token is refused whatever else the request carries");
-  // With the token (X1b will send exactly this) the same process is a worker.
-  const withToken = { ...localTokenHeaders(), ...authHeadersFor(agentCallerFromEnv({ ...env, VS_AGENT_TOKEN: runner.tokensById.get(ids.worker) })) };
+  assert.equal(r.status, 403, JSON.stringify(r.body));
+  assert.equal(logLen(), n, "nothing was written");
+  assert.equal((await call({ headers }, "POST", `/__vibesquad/runner/agents/${ids.lead}/input`, { text: "x1d-no-token-turn" })).status, 403);
+  assert.equal(JSON.stringify(runner.timeline(ids.lead)).includes("x1d-no-token-turn"), false, "the lead got no turn");
+  // The owner's local token next to a token-less id does not rescue it: the agent identity wins and fails closed.
+  assert.equal((await call({ headers: { ...localTokenHeaders(), ...headers } }, "POST", "/__vibesquad/vs-log", logBody())).status, 403, "an id without its token is refused whatever else the request carries");
+  assert.equal(logLen(), n);
+  // With the token (exactly what cli/vs.mjs and tools.mjs send) the same process is a worker.
+  const withToken = authHeadersFor(agentCallerFromEnv({ ...env, VS_AGENT_TOKEN: runner.tokensById.get(ids.worker) }));
   const w = await call({ headers: withToken }, "POST", "/__vibesquad/vs-log", logBody({ type: "done", agent: "the-owner", refs: [ids.lead] }));
   assert.equal(w.status, 200);
   assert.deepEqual(w.body.entry.refs, [ids.worker]);
+  assert.equal(w.body.entry.agent, ids.worker);
 });
 
 test("idea-134: verifyAgent treats labels.orphan \"true\" like \"1\" (both are 403 at the VS server)", async () => {

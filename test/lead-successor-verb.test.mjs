@@ -8,6 +8,7 @@ import { seedDefaultPack } from "../server/profiles.mjs";
 import { performLeadHandoffHttp, resetLeadHandoffState } from "../server/lead-handoff.mjs";
 import { callTool, createContext, VS_TOOLS } from "../server/mcp/tools.mjs";
 import { commandAgentVerb, runAgentVerb } from "../cli/vs.mjs";
+import { tokenFor, verifiedIdentity } from "./helpers/agent-token.mjs";
 
 process.env.VS_DEFAULT_BACKEND = "paseo";
 delete process.env.VS_BACKEND;
@@ -52,7 +53,7 @@ function setup({ callerRole, callerId, lane = "site-polish" }) {
   };
   const identity = { agentId: callerId, team: "site", lane, role: callerRole };
   const makeCtx = (opts) => {
-    const c = createContext({ teams: TEAMS, withBackend: async (_o, fn) => fn(backend), ...opts });
+    const c = createContext({ teams: TEAMS, withBackend: async (_o, fn) => fn(backend), ...opts, ...(opts.identity ? verifiedIdentity(opts.identity, { backend, teams: TEAMS }) : {}) });
     c.performHandoff = (body) => performLeadHandoffHttp({ ...body, agentClient: backend, baseHome: vsHome, profilesPath }, dir);
     return c;
   };
@@ -164,11 +165,11 @@ test("double call gives one successor (Buddy twice, and the old lead calling aga
     assert.equal(b.id, a.id);
     assert.equal(b.deduped, true);
     assert.equal(t.calls.createAgent.length, 1);
-    // The retired lead retrying hands back the same successor.
-    const oldCtx = createContext({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" }, teams: TEAMS, withBackend: t.ctx.withBackend });
+    // X1: the retired lead retrying is refused: its record is former-lead now (the runner's /verify-agent answers 403 for a
+    // former-lead; the fixture's roster-backed verify keeps the record, so the tool's own gate refuses). No second successor.
+    const oldCtx = t.makeCtx({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" } });
     oldCtx.performHandoff = t.ctx.performHandoff;
-    const c = await callTool(oldCtx, "handoff_lead", {});
-    assert.equal(c.id, a.id);
+    await assert.rejects(callTool(oldCtx, "handoff_lead", {}), /caller role is "former-lead"/);
     assert.equal(t.calls.createAgent.length, 1);
   } finally { t.cleanup(); }
 });
@@ -176,7 +177,7 @@ test("double call gives one successor (Buddy twice, and the old lead calling aga
 test("vs lead handoff: --lane/--role/--team/--agent flags cannot spoof the caller (commandAgentVerb)", async () => {
   const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
   const saved = {};
-  const env = { VS_AGENT_ID: "rn-buddy", VS_ROLE: "brainstorm", VS_TEAM: "site", VS_LANE: "site-polish" };
+  const env = { VS_AGENT_ID: "rn-buddy", VS_AGENT_TOKEN: tokenFor("rn-buddy"), VS_ROLE: "brainstorm", VS_TEAM: "site", VS_LANE: "site-polish" };
   for (const k of Object.keys(env)) { saved[k] = process.env[k]; process.env[k] = env[k]; }
   delete process.env.PASEO_AGENT_ID;
   const seen = [];
@@ -246,21 +247,25 @@ test("explicit id bypasses the 10-minute fresh-successor window", async () => {
   } finally { t.cleanup(); }
 });
 
-test("retired-lead dedupe returns the successor's real title", async () => {
+test("dedupe returns the successor's real title (the Buddy asking again); the retired lead's own retry is refused (X1)", async () => {
   const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
   try {
     const a = await callTool(t.ctx, "handoff_lead", {});
-    const oldCtx = t.makeCtx({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" } });
-    const c = await callTool(oldCtx, "handoff_lead", {});
+    const c = await callTool(t.ctx, "handoff_lead", {});
     assert.equal(c.id, a.id);
+    assert.equal(c.deduped, true);
     assert.equal(c.title, t.agents.get(a.id).title);
     assert.ok(c.title);
+    const oldCtx = t.makeCtx({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" } });
+    await assert.rejects(callTool(oldCtx, "handoff_lead", {}), /caller role is "former-lead"/);
+    assert.equal(t.calls.createAgent.length, 1);
   } finally { t.cleanup(); }
 });
 
 test("lead self branch is refused when its lane is empty or not in the registry", async () => {
   for (const lane of ["", "ghost-lane"]) {
     const t = setup({ callerRole: "lead", callerId: "rn-lead", lane });
+    t.agents.get("rn-lead").labels.lane = lane; // X1: the verified record decides the caller's lane, so the bad lane sits on the record
     try {
       await assert.rejects(callTool(t.ctx, "handoff_lead", {}), /no lane|not in the team registry/, lane);
       assert.equal(t.calls.createAgent.length, 0);
@@ -306,7 +311,7 @@ test("fetch rejects with ECONNREFUSED: in-process fallback runs on the injected 
 
 test("env spoof: a runner record with role=worker plus VS_ROLE=brainstorm is refused", async () => {
   const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
-  const env = { VS_AGENT_ID: "rn-spoof", VS_ROLE: "brainstorm", VS_TEAM: "site", VS_LANE: "site-polish" };
+  const env = { VS_AGENT_ID: "rn-spoof", VS_AGENT_TOKEN: tokenFor("rn-spoof"), VS_ROLE: "brainstorm", VS_TEAM: "site", VS_LANE: "site-polish" };
   const saved = {};
   for (const k of Object.keys(env)) { saved[k] = process.env[k]; process.env[k] = env[k]; }
   delete process.env.PASEO_AGENT_ID;
@@ -404,8 +409,9 @@ test("a non-hub lead (and another Squad's hub lead) cannot hand off another lane
 test("Overlord env spoof: a worker record claiming role=lead on the hub lane is refused", async () => {
   const t = setup({ callerRole: "lead", callerId: "rn-worker", lane: "site-hub" });
   try {
-    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other" }), /not a live lead/);
-    await assert.rejects(spawnLead(t.ctx, { labels: { role: "lead", lane: "empty" } }), /per its agent record/);
+    // X1: the verified record says worker, so the role gate refuses before the live-lead lookup ever runs.
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { lane: "other" }), /caller role is "worker"/);
+    await assert.rejects(spawnLead(t.ctx, { labels: { role: "lead", lane: "empty" } }), /caller role is "worker"/);
     assert.equal(t.calls.createAgent.length, 0);
   } finally { t.cleanup(); }
 });

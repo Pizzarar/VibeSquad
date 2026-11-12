@@ -6,6 +6,7 @@ import test from "node:test";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { callTool } from "../server/mcp/tools.mjs";
 import { toPaseoSpawnConfig } from "../server/profiles.mjs";
+import { verifiedIdentity } from "./helpers/agent-token.mjs";
 
 const PROFILES = [
   { name: "Implement - Sonnet", role: "worker", provider: "claude", model: "claude-sonnet-5-5", modeId: "auto", thinkingOptionId: "medium" },
@@ -79,14 +80,14 @@ const routeMetrics = (vsHome) => {
 };
 
 test(
-  "hook: claude + tierA-security -> fable-5-1/high, route metric reason=ladder",
+  "hook: claude + tierA-security -> opus-5-5/high, route metric reason=ladder",
   withEnv(async ({ vsHome }) => {
     const h = harness();
     try {
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS({ stakes: "tierA-security" }) });
-      assert.equal(out.config.model, "claude-fable-5-1");
+      assert.equal(out.config.model, "claude-opus-5-5");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-fable-5-1 effort=high reason=ladder"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder"]);
     } finally {
       h.stop?.();
     }
@@ -203,7 +204,7 @@ test(
         { provider: "claude", title: "Worker" },
         { labels: { team: "vibesquad", lane: "vibesquad", role: "worker" }, env: { VS_STAKES: "tierA-security" } },
       );
-      assert.equal(out.config.model, "claude-fable-5-1");
+      assert.equal(out.config.model, "claude-opus-5-5");
       const labels = LABELS({ stakes: "tierA-security" });
       const agent = {
         id: "w-1",
@@ -211,7 +212,7 @@ test(
         cwd: CWD,
         status: "idle",
         provider: "claude",
-        model: "claude-fable-5-1",
+        model: "claude-opus-5-5",
         modeId: "auto",
         thinkingOptionId: "high",
         labels,
@@ -247,7 +248,7 @@ test(
 async function viaSpawnWorker(h, args) {
   let out;
   const ctx = {
-    identity: { agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" },
+    ...verifiedIdentity({ agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" }),
     cwd: CWD,
     loadProfiles: async () => PROFILES,
     resolveProfile: async (name) => {
@@ -263,14 +264,14 @@ async function viaSpawnWorker(h, args) {
 }
 
 test(
-  "e2e spawn_worker: profile + stakes tierA-security, no explicit -> fable-5-1/high, reason=ladder",
+  "e2e spawn_worker: profile + stakes tierA-security, no explicit -> opus-5-5/high, reason=ladder",
   withEnv(async ({ vsHome }) => {
     const h = harness();
     try {
       const out = await viaSpawnWorker(h, { stakes: "tierA-security" });
-      assert.equal(out.config.model, "claude-fable-5-1");
+      assert.equal(out.config.model, "claude-opus-5-5");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-fable-5-1 effort=high reason=ladder"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder"]);
     } finally {
       h.stop?.();
     }
@@ -310,7 +311,7 @@ test(
 test("create_agent with no profile: provider + model + thinkingOptionId=high (and the `thinking` alias) reach the create config", async () => {
   const seen = [];
   const ctx = {
-    identity: { agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" },
+    ...verifiedIdentity({ agentId: "rn-lead", team: "vibesquad", lane: "vibesquad", role: "lead" }),
     cwd: CWD,
     loadProfiles: async () => [],
     resolveProfile: async () => null,
