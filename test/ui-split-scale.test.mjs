@@ -39,7 +39,7 @@ test('storage: key is separate from uiScale, null clears, no window = follow', (
 });
 
 test('chat containers carry the counter-zoom and the chat-snapped kit pixel', () => {
-  assert.match(css, /\.drawer-shell > \.timeline,\s*\.drawer \.composer\s*\{[^}]*zoom: var\(--chat-zoom, 1\);[^}]*--u3-px: var\(--u3-px-chat, 2px\);/);
+  assert.match(css, /\.drawer-shell > \.timeline-col,\s*\.drawer \.composer\s*\{[^}]*zoom: var\(--chat-zoom, 1\);[^}]*--u3-px: var\(--u3-px-chat, 2px\);/);
   assert.match(css, /:root \{ --chat-zoom: 1; --u3-px-chat: 2px; \}/);
 });
 
