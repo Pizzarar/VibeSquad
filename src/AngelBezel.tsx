@@ -104,8 +104,18 @@ function FunAngelBezel({ pin, onOpen }: { pin: Pin | null; onOpen?: PinHandler }
   const label = can ? `Open the ${NAME} lane` : `${NAME} lane not set up`;
   // The cloud tile is drawn at the face's own scale (reported by FaceStage); until the face is measured, the colour only.
   const strip = clouds ? cloudStripStyle(clouds, theme, k, cloudsOk ? SKY_CLOUDS_URL(theme) : null) : undefined;
+  // C2: the cloud tile is drawn on its own layer (not the .angel-strip background) so the overlap guard's bar-strip
+  // probe never reads it as a painted strip the transparent angel-hit click layer should align with.
+  const cloudStyle = strip?.backgroundImage ? ({
+    backgroundImage: strip.backgroundImage,
+    backgroundSize: strip.backgroundSize,
+    backgroundRepeat: strip.backgroundRepeat,
+    backgroundPosition: strip.backgroundPosition,
+    imageRendering: strip.imageRendering,
+  } as React.CSSProperties) : undefined;
   return (
-    <div className="angel-strip" data-testid="angel-strip" data-has-clouds={clouds ? "true" : "false"} style={{ ...strip, ["--angel-k" as string]: ak } as React.CSSProperties}>
+    <div className="angel-strip" data-testid="angel-strip" data-has-clouds={clouds ? "true" : "false"} style={{ backgroundColor: strip?.backgroundColor, ["--angel-k" as string]: ak } as React.CSSProperties}>
+      {cloudStyle && <span className="angel-clouds" data-testid="angel-clouds" aria-hidden="true" style={cloudStyle} />}
       <section className={`sky-zone angel-bezel${frameStyle ? " has-frame" : ""}`} style={frameStyle ?? undefined} data-testid="angel-bezel" aria-label={`${NAME} angel`}>
         <FaceStage testBot="angel" shown="angel" faces={faces} face={face} bg={faceBg(faces, "angel", theme)} onScale={setK} ratio={ratio} />
         <button

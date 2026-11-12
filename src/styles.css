@@ -4065,7 +4065,7 @@ html, body, #root { overflow-x: hidden; }
 .squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
 .squad-home-tile.needs-you { border-color: var(--hot-pink); }
 .squad-home-tile.pin-plus { align-items: center; justify-content: center; min-height: 120px; }
-.squad-home-tile-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.squad-home-tile-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .squad-home-tile-name { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .squad-home-huddle { display: flex; align-items: center; padding-left: 10px; min-height: 42px; }
 .squad-home-portrait { position: relative; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 50%; }
@@ -6107,7 +6107,8 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 }
 
 /* C2: the Perfection angel strip on top of the Usage panel: the sky-god bezel (.sky-zone, same FaceStage) at the face's integer DEVICE scale (--angel-k = css px per art px, set inline from skyZonesLogic angelCssScale: 6 device px at 4K@120%, 4 at 1080, 2 at 720), cloud fill (inline from sky-clouds.json) on either side. The bezel is 49 art px tall: 1 art px of headroom above the 48px face for the hover hop. */
-.angel-strip { --angel-k: 4; --sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2; display: flex; justify-content: center; align-items: flex-end; padding: 0; margin-bottom: 8px; background-color: var(--sky-face-bg-dark); overflow: hidden; image-rendering: pixelated; }
+.angel-strip { --angel-k: 4; --sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2; display: flex; justify-content: center; align-items: flex-end; padding: 0; margin-bottom: 8px; background-color: var(--sky-face-bg-dark); overflow: hidden; image-rendering: pixelated; position: relative; }
+.angel-clouds { position: absolute; inset: 0; pointer-events: none; }
 :root[data-theme="light"] .angel-strip { background-color: var(--sky-face-bg-light); }
 .angel-bezel { box-sizing: content-box; flex: none; width: calc(160px * var(--angel-k)); max-width: calc(100% - 48px); height: calc(49px * var(--angel-k)); }
 .angel-bezel:not(.has-frame) { border-width: 2px; }
