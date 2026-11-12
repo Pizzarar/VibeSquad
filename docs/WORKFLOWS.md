@@ -21,7 +21,7 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Find the lead | "who's the lead" | `cli/vs.mjs:500` (`vs who`); STANDING_RULES `server/lessons.mjs:158`; docs/PLAN_VS_WHO.md:3 | @bug |
 | Team log write | "log that", "record the decision" | `cli/vs.mjs:502` (`vs log`); MCP `report` `server/mcp/tools.mjs:886` | @bug |
 | Catch up on Squad state | "catch me up" | `cli/vs.mjs:503` (`vs log --since-me`) | @bug |
-| Handoff packet | "write a handoff" | `cli/vs.mjs:504` (`vs handoff`) | @bug |
+| Handoff packet | "write a handoff" | `cli/vs.mjs:504` (`vs handoff --judgment-file <file>` or `--judgment -`; leads never hand-edit ~/.vibesquad files) | @bug |
 | Lane spec / tasks | "update the spec", "show tasks" | `cli/vs.mjs:510,511,512` (`vs spec`, `vs task list`) | @bug |
 | Merge pins / lanes | "fold perfection-2 into perfection" | `cli/vs.mjs:509` (`vs pin merge`) | @hub |
 | Bugs chip (standing Bug lane) | "bugs chip" | docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md:5-11 (Workflows chip dropped 11-09) | @ui |
