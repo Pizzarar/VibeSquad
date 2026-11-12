@@ -71,44 +71,96 @@ export function stripAgentEnv(env = process.env) {
 }
 
 /** Raw `reg query <key> /v Path` -> { type, value } or null. Injectable so tests never touch the registry. */
-export function regQueryPath(key) {
-  const r = spawnSync('reg', ['query', key, '/v', 'Path'], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
+export function regQueryPath(key, name = 'Path') {
+  const r = spawnSync('reg', ['query', key, '/v', name], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
   if (r.status !== 0 || !r.stdout) throw new Error(`reg query ${key} failed (${r.status ?? r.error?.message})`);
-  const m = /^\s*Path\s+(REG_EXPAND_SZ|REG_SZ)\s+(.*?)\s*$/im.exec(r.stdout);
-  if (!m) throw new Error(`reg query ${key}: no Path value`);
+  const m = new RegExp(`^\\s*${name}\\s+(REG_EXPAND_SZ|REG_SZ)\\s+(.*?)\\s*$`, 'im').exec(r.stdout);
+  if (!m) throw new Error(`reg query ${key}: no ${name} value`);
   return { type: m[1], value: m[2] };
 }
 const PATH_KEYS = ['HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', 'HKCU\\Environment'];
+const GIT_KEYS = ['HKLM\\SOFTWARE\\GitForWindows', 'HKCU\\SOFTWARE\\GitForWindows', 'HKLM\\SOFTWARE\\WOW6432Node\\GitForWindows'];
 const EMPTY_DROP_KEYS = ['HOME', 'SHELL'];
 const pathNorm = (p) => p.trim().replace(/[\\/]+$/, '').toLowerCase();
+const SYS_DIR_RE = /[\\/](system32|syswow64)([\\/]|$)/i;
+/** `where git` (first hit) -> absolute git.exe path or ''. */
+export function whereGit() {
+  try { const r = spawnSync('where', ['git'], { windowsHide: true, encoding: 'utf8', timeout: 5000 }); return (r.stdout || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || ''; } catch { return ''; }
+}
+/** Git for Windows root (registry InstallPath, else derived from git.exe on PATH) that has bin\bash.exe or usr\bin\sh.exe; '' if none. Never throws. */
+const unq = (s) => String(s ?? '').trim().replace(/^"+|"+$/g, '').trim(); // PATH entries / registry values may be quoted
+/** Root for the known git.exe layouts only (<root>\cmd, <root>\bin, <root>\mingw64\bin); '' otherwise (e.g. a scoop shim). */
+function gitRootFromExe(exe) {
+  const w = path.win32; const dir = w.dirname(unq(exe));
+  const leaf = w.basename(dir).toLowerCase();
+  if (leaf === 'cmd' || leaf === 'bin') {
+    const parent = w.dirname(dir);
+    if (/^(mingw64|mingw32)$/i.test(w.basename(parent)) && leaf === 'bin') return w.dirname(parent);
+    return parent;
+  }
+  return '';
+}
+/**
+ * Git for Windows root (registry InstallPath, else derived from git.exe on PATH) that has bin\bash.exe or usr\bin\sh.exe;
+ * '' if none. Never throws. regQuery/exists/which are explicit: a missing one means "unavailable", never the real thing.
+ */
+export function findGitRoot({ regQuery, exists, which, pathList = [] } = {}) {
+  const ok = (r) => { try { return !!r && !!exists && (exists(path.win32.join(r, 'bin', 'bash.exe')) || exists(path.win32.join(r, 'usr', 'bin', 'sh.exe'))); } catch { return false; } };
+  if (regQuery) for (const k of GIT_KEYS) { try { const r = unq(regQuery(k, 'InstallPath')?.value); if (ok(r)) return r; } catch { /* next */ } }
+  const cands = [];
+  try { const w = which?.(); if (w) cands.push(w); } catch { /* none */ }
+  for (const e of pathList) { try { const g = path.win32.join(unq(e), 'git.exe'); if (exists?.(g)) cands.push(g); } catch { /* skip */ } }
+  for (const g of cands) { const r = gitRootFromExe(g); if (ok(r)) return r; }
+  return '';
+}
+/** Put <root>\bin and <root>\usr\bin ahead of the first System32/SysWOW64 entry (the WSL bash.exe stub lives there). */
+export function insertGitBin(list, root) {
+  const bins = [path.win32.join(root, 'bin'), path.win32.join(root, 'usr', 'bin')];
+  const drop = new Set(bins.map(pathNorm));
+  const rest = list.filter((e) => !drop.has(pathNorm(e)));
+  let at = rest.findIndex((e) => SYS_DIR_RE.test(e));
+  if (at < 0) at = rest.length;
+  rest.splice(at, 0, ...bins);
+  return rest;
+}
 /**
  * A runtime relaunched from an agent tool shell inherits a stripped env (no Git bin on PATH, HOME=''), and every restart
  * compounds it (idea-178). Win32: PATH = registry machine+user entries first, then inherited extras (dedupe, nothing
  * lost); empty HOME/SHELL removed; exactly one Path key. Never throws. Non-win32: unchanged.
  */
-export function repairShellEnv(env = process.env, { regQuery = regQueryPath, platform = process.platform, log = () => {} } = {}) {
+export function repairShellEnv(env = process.env, { regQuery, exists, which, platform = process.platform, log = () => {} } = {}) {
   if (platform !== 'win32') return env;
   const out = { ...env };
   for (const k of EMPTY_DROP_KEYS) if (out[k] === '') delete out[k];
   const pathKeys = Object.keys(out).filter((k) => k.toLowerCase() === 'path');
   const inherited = pathKeys.map((k) => out[k]).find((v) => v) || '';
   try {
-    const reg = [];
-    for (const key of PATH_KEYS) {
-      const { type, value } = regQuery(key);
-      const v = type === 'REG_EXPAND_SZ' ? value.replace(/%([^%]+)%/g, (m, n) => { const hit = Object.keys(out).find((k) => k.toLowerCase() === n.toLowerCase()); return hit ? out[hit] : m; }) : value;
-      reg.push(...v.split(';'));
+    const reg = []; let lastErr = null; let got = 0;
+    for (const key of PATH_KEYS) { // read independently: a missing HKCU Path must not discard HKLM (idea-179 L1)
+      try {
+        if (!regQuery) throw new Error('no registry reader');
+        const { type, value } = regQuery(key);
+        const v = type === 'REG_EXPAND_SZ' ? value.replace(/%([^%]+)%/g, (m, n) => { const hit = Object.keys(out).find((k) => k.toLowerCase() === n.toLowerCase()); return hit ? out[hit] : m; }) : value;
+        reg.push(...v.split(';')); got++;
+      } catch (e) { lastErr = e; }
     }
-    const seen = new Set(); const list = [];
+    if (!got) throw lastErr || new Error('no registry Path');
+    const seen = new Set(); let list = [];
     for (const e of [...reg, ...inherited.split(';')]) {
-      const n = pathNorm(e);
+      const q = unq(e);
+      const n = pathNorm(q);
       if (!n || seen.has(n)) continue;
-      seen.add(n); list.push(e.trim());
+      seen.add(n); list.push(q);
     }
+    try {
+      const root = findGitRoot({ regQuery, exists, which, pathList: list });
+      if (root) list = insertGitBin(list, root);
+    } catch (e) { log(`env repair: git bin skipped (${e?.message || e})`); }
     for (const k of pathKeys) delete out[k];
     out.Path = list.join(';');
   } catch (e) {
     log(`env repair: registry PATH unavailable (${e?.message || e}); keeping inherited PATH`);
+    if (pathKeys.length > 1) { for (const k of pathKeys) delete out[k]; out.Path = inherited; } // idea-179 L2: one Path key
   }
   return out;
 }
@@ -201,7 +253,7 @@ export function httpCall(url, { method = 'GET', headers = {}, timeoutMs = 5000, 
   });
 }
 
-const defaultDeps = { sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
+const defaultDeps = { regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
 
 // ---- detection -----------------------------------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
@@ -539,7 +591,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (await healthy()) step('server already up, not starting another', { port: det.port });
     else {
       const sl = det.serverLaunch;
-      const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, log }), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
+      const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
       try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* desktop pid file is best effort */ }
       step('server started', { pid, cwd: sl.cwd, log: sl.logFile });
     }
@@ -560,7 +612,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
     if (!health) {
       const rl = det.runnerLaunch;
-      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, log }), logFile: rl.logFile }); // never as an agent (X1b)
+      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), logFile: rl.logFile }); // never as an agent (X1b)
       step('runner not booted by the server, started directly', { pid });
       for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
     }
