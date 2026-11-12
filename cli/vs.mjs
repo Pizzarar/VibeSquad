@@ -517,7 +517,7 @@ Usage:
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
-  vs lead handoff [--lane <code>] [--steer "<note>"]   hand the lane's lead to a successor (Buddy: its own lane's lead; lead: itself; Overlord: any lane in its Squad, steer goes to the successor)
+  vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]   hand the lane's lead to a successor, or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s; background work still running then defers the restart unless --kill-background); result in ~/.vibesquad/restart-<ts>.json
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
@@ -1136,15 +1136,28 @@ async function commandWho(flags) {
     const winners = [];
     const conflictRows = [];
     const handoffPending = new Map(); // winner id -> successor short name
+    const staleByWinner = new Map(); // winner id -> stale entries
     const shortTitle = (t) => String(t).split(" · ")[0].trim() || String(t);
     for (const group of groups.values()) {
-      const { winner, conflict, pending } = resolveLeadWinner(group.map((m) => m.agent));
-      if (conflict) conflictRows.push(...group);
-      else if (winner) {
+      const { winner, conflict, pending, stale = [], contenders = [] } = resolveLeadWinner(group.map((m) => m.agent));
+      if (conflict) {
+        const contenderSet = new Set(contenders);
+        conflictRows.push(...group.filter((m) => (contenderSet.size ? contenderSet.has(m.agent.id) : !m.agent.lost)));
+      } else if (winner) {
         winners.push(winner);
         if (pending.length) {
           const succ = group.find((m) => m.agent.id === pending[pending.length - 1]);
           handoffPending.set(winner.id, succ ? shortTitle(succ.title) : pending[0]);
+        }
+        if (stale.length) {
+          const staleSet = new Set(stale);
+          const byId = new Map(group.map((m) => [m.agent.id, m]));
+          const staleItems = stale
+            .map((id) => byId.get(id))
+            .filter(Boolean)
+            .filter((m) => staleSet.has(m.agent.id))
+            .map((m) => ({ id: m.agent.id, title: shortTitle(m.title) }));
+          if (staleItems.length) staleByWinner.set(winner.id, staleItems);
         }
       }
     }
@@ -1152,7 +1165,19 @@ async function commandWho(flags) {
     const entries = (conflictIds.size
       ? matched.filter((m) => conflictIds.has(m.id))
       : matched.filter((m) => winners.some((w) => w.id === m.id))
-    ).map((m) => (handoffPending.has(m.id) ? { ...m, handoffPending: handoffPending.get(m.id), line: `${m.line} · handoff pending → ${handoffPending.get(m.id)}` } : m));
+    ).map((m) => {
+      let next = m;
+      if (handoffPending.has(m.id)) {
+        const hp = handoffPending.get(m.id);
+        next = { ...next, handoffPending: hp, line: `${next.line} · handoff pending → ${hp}` };
+      }
+      if (staleByWinner.has(m.id)) {
+        const st = staleByWinner.get(m.id);
+        const label = st.map((s) => `${s.title} (${s.id})`).join(", ");
+        next = { ...next, staleLeads: st.map((s) => s.id), line: `${next.line} · stale: ${label}` };
+      }
+      return next;
+    });
     const status = conflictIds.size ? "conflict" : entries.length ? "ok" : "none";
     const exitCode = conflictIds.size ? 2 : entries.length ? 0 : 1;
     if (flags.json) {
@@ -1896,7 +1921,12 @@ export async function runAgentVerb(verb, flags, ctx) {
       ...(flags.stakes !== undefined ? { stakes: String(flags.stakes) } : {}),
     };
   } else if (verb === "handoff_lead") {
-    args = { ...(flags.lane ? { lane: String(flags.lane) } : {}), ...(flags.steer ? { steer: String(flags.steer) } : {}), ...(flags.force ? { force: true } : {}) };
+    args = {
+      ...(flags.leadAction === "retire" ? { action: "retire" } : {}),
+      ...(flags.lane ? { lane: String(flags.lane) } : {}),
+      ...(flags.steer ? { steer: String(flags.steer) } : {}),
+      ...(flags.force ? { force: true } : {}),
+    };
   } else if (verb === "restart_buddy") {
     args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}), ...(flags.profile ? { profile: String(flags.profile) } : {}), ...(flags.provider ? { provider: String(flags.provider) } : {}) };
   } else if (verb === "watch") {
@@ -1976,7 +2006,11 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   loadPromptInput(verb, flags, readStdin);
   if (verb === "lead") {
-    if (flags._.shift() !== "handoff") throw new Error("usage: vs lead handoff [--lane <code>] [--steer \"<note>\"]");
+    const sub = String(flags._.shift() ?? "").toLowerCase();
+    if (sub !== "handoff" && sub !== "retire") {
+      throw new Error('usage: vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]');
+    }
+    flags.leadAction = sub;
     verb = "handoff_lead";
   }
   if (verb === "buddy") {

@@ -2866,7 +2866,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const res = await paseo.agents.list({ includeBackground: true, filter: { includeBackground: true }, page: { limit: 200 } });
       const others = (res.entries as any[])
         .map((e) => ({ ...e.agent, labels: e.agent.labels ?? {} }) as AgentSnap)
-        .filter((a) => a.id !== newId && !a.archivedAt && !a.internal && a.status !== "closed")
+        .filter((a) => a.id !== newId && !a.archivedAt && !a.internal)
         .filter((a) => !isRetiredAgent(a))
         // Only agents created before the new one are its predecessors (a replayed `created` must not retire a later sibling).
         .filter((a) => {
@@ -2875,8 +2875,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           return !Number.isFinite(mine) || !Number.isFinite(theirs) || theirs <= mine;
         })
         .filter((a) => sameLaneRole(a, { role, team, lane, topic }, currentTeams()));
+      const pendingOldId = handoffFrom || handoffCoordinator.getPendingTakeover(newId)?.oldLeadId || "";
       for (const old of others) {
-        if (role === "lead" && (old.id === handoffFrom || handoffCoordinator.hasPendingTakeover(newId))) {
+        if (role === "lead" && (pendingOldId ? old.id === pendingOldId : handoffCoordinator.hasPendingTakeover(newId))) {
           // Delayed retirement: wait until successor confirms takeover in turn_ended / confirmTakeover.
           continue;
         }
