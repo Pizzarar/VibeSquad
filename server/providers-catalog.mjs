@@ -1006,6 +1006,156 @@ export function readUsageLogSignals(home, { sinceMs } = {}) {
   return { notes: capped.filter((h) => h.note).map(strip), friction: capped.filter((h) => h.friction).map(strip), mcpAlias };
 }
 
+/** Plan cycles: for each handoff ts, ms to the last merge before the next handoff (handoffs without a merge are skipped). */
+function planCycles(handoffTs, mergeMs) {
+  const hts = [...handoffTs].sort((a, b) => a - b);
+  const cycles = [];
+  for (let i = 0; i < hts.length; i++) {
+    const next = i + 1 < hts.length ? hts[i + 1] : Infinity;
+    const last = mergeMs.filter((m) => m >= hts[i] && m < next).at(-1);
+    if (last !== undefined) cycles.push(Math.max(0, last - hts[i]));
+  }
+  return cycles;
+}
+
+/** lane id -> first Squad (team) id that owns it, from <home>/teams.json. */
+function readLaneTeams(home) {
+  const map = new Map();
+  try {
+    const own = home ? join(home, "teams.json") : null;
+    const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(gitRepoRoot());
+    const t = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+    for (const team of t.teams ?? []) for (const l of team.lanes ?? []) if (l?.id && team?.id && !map.has(String(l.id))) map.set(String(l.id), String(team.id));
+  } catch { /* no teams.json */ }
+  return map;
+}
+
+// ---------------------------------------------------------------- Autonomy scorecard (usa-24, idea-161)
+// getUsage({ squad }) result gains: `squad` (filter or null), `squads` (all known Squad ids), and
+//   autonomy: {
+//     ownerTouches: { total, needsYou, you, xsquadInput, perMergedUnit, unitsPerOwnerTouch, perHandoff },   // ratios null when denominator 0
+//     unassistedStreak: { current, longest },            // consecutive merged units with 0 owner touches since the previous merge
+//     stalls: { total, blockers, failRuns, medianUnblockMs, p90UnblockMs },
+//     planAutonomy: { handoffs, mergedUnits, unitsPerHandoff, avgPlanCycleMs },
+//     bySquad: [{ squad, mergedUnits, turns, costUsd, firstTryPassRate, avgReviewRounds, costPerUnit, ownerTouches,
+//                 unitsPerOwnerTouch, longestUnassistedStreak, stalls, medianUnblockMs }],   // every Squad, even when filtered
+//   }
+// Owner touch = vs-log `needs-you` | `you` | `decision` matching /xsquad input/i. Stall = `blocker` or `done` with FAIL; unblock time =
+// ms from a stall or needs-you to the next `decision` / `done` PASS / merge on the same lane (unresolved ones are not counted).
+const XSQUAD_INPUT_RE = /\bxsquad input\b/i;
+
+/** Log entries { ts, lane, type, text, squad } from <home>/logs and <home>/teams/<t>/log.jsonl, deduped like readUsageLogSignals.
+ * teams/<t>/log.jsonl is read first so its dir name wins as the Squad; logs/<squad>--<lane>.jsonl falls back to its prefix. */
+function readAutonomyEntries(home, laneTeams) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  const files = [];
+  try {
+    const teams = join(dir, "teams");
+    if (existsSync(teams)) for (const t of readdirSync(teams)) { const p = join(teams, t, "log.jsonl"); if (existsSync(p)) files.push({ file: p, squad: t }); }
+  } catch { /* none */ }
+  try {
+    const logs = join(dir, "logs");
+    if (existsSync(logs)) for (const n of readdirSync(logs)) if (n.endsWith(".jsonl")) files.push({ file: join(logs, n), squad: n.includes("--") ? n.split("--")[0] : null });
+  } catch { /* none */ }
+  const seen = new Set();
+  const out = [];
+  for (const { file, squad } of files) {
+    let text = "";
+    try { text = readFileSync(file, "utf8"); } catch { continue; }
+    for (const line of text.split("\n")) {
+      if (!line.trim()) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      const t = tsMs(e?.ts);
+      if (t === null) continue;
+      const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
+      const textStr = typeof e.text === "string" ? e.text : "";
+      const key = `${lane}\u0000${t}\u0000${textStr.slice(0, 60)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const own = typeof e.team === "string" && e.team ? e.team : typeof e.squad === "string" && e.squad ? e.squad : null;
+      out.push({ ts: t, lane, type: e.type, text: textStr, squad: squad ?? own ?? laneTeams.get(lane) ?? null });
+    }
+  }
+  return out.sort((a, b) => a.ts - b.ts);
+}
+
+const pctile = (sorted, p) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)] : null);
+const ratio2 = (n, d) => (d ? Math.round((n / d) * 100) / 100 : null);
+const isFailDone = (e) => e.type === "done" && /\bFAIL\b/i.test(e.text);
+
+/** Autonomy KPIs for one scope: entries (sorted by ts) and merged units ({ lane, mergedAtMs }) already filtered to the Squad. */
+function computeAutonomy(entries, mergedUnits) {
+  const touches = entries.filter((e) => e.type === "needs-you" || e.type === "you" || (e.type === "decision" && XSQUAD_INPUT_RE.test(e.text)));
+  const needsYou = touches.filter((e) => e.type === "needs-you").length;
+  const you = touches.filter((e) => e.type === "you").length;
+  const handoffEntries = entries.filter((e) => e.type === "handoff");
+  const merges = mergedUnits.filter((u) => u.mergedAtMs !== null && u.mergedAtMs !== undefined).sort((a, b) => a.mergedAtMs - b.mergedAtMs);
+  // streak: a merge is unassisted when no owner touch landed since the previous merge
+  let current = 0, longest = 0, prev = -Infinity;
+  for (const m of merges) {
+    if (touches.some((e) => e.ts > prev && e.ts <= m.mergedAtMs)) current = 0;
+    else current += 1;
+    longest = Math.max(longest, current);
+    prev = m.mergedAtMs;
+  }
+  // stalls + time-to-unblock
+  const stalls = entries.filter((e) => e.type === "blocker" || isFailDone(e));
+  const unblock = [];
+  for (const s of entries.filter((e) => e.type === "blocker" || e.type === "needs-you" || isFailDone(e))) {
+    let best = null;
+    for (const e of entries) {
+      if (e.ts <= s.ts || e.lane !== s.lane) continue;
+      if (e.type === "decision" || (e.type === "done" && /\bPASS\b/i.test(e.text) && !/\bFAIL\b/i.test(e.text))) { best = e.ts; break; }
+    }
+    for (const m of merges) if (m.lane === s.lane && m.mergedAtMs > s.ts) { if (best === null || m.mergedAtMs < best) best = m.mergedAtMs; break; }
+    if (best !== null) unblock.push(best - s.ts);
+  }
+  unblock.sort((a, b) => a - b);
+  const handoffsByLane = new Map();
+  for (const h of handoffEntries) getOrSet(handoffsByLane, h.lane, () => []).push(h.ts);
+  const cycles = [];
+  for (const [lane, hts] of handoffsByLane) cycles.push(...planCycles(hts, merges.filter((m) => m.lane === lane).map((m) => m.mergedAtMs)));
+  return {
+    ownerTouches: {
+      total: touches.length, needsYou, you, xsquadInput: touches.length - needsYou - you,
+      perMergedUnit: ratio2(touches.length, merges.length), unitsPerOwnerTouch: ratio2(merges.length, touches.length), perHandoff: ratio2(touches.length, handoffEntries.length),
+    },
+    unassistedStreak: { current, longest },
+    stalls: {
+      total: stalls.length, blockers: stalls.filter((e) => e.type === "blocker").length, failRuns: stalls.filter(isFailDone).length,
+      medianUnblockMs: pctile(unblock, 0.5), p90UnblockMs: pctile(unblock, 0.9),
+    },
+    planAutonomy: {
+      handoffs: handoffEntries.length, mergedUnits: merges.length, unitsPerHandoff: ratio2(merges.length, handoffEntries.length),
+      avgPlanCycleMs: cycles.length ? Math.round(cycles.reduce((s, c) => s + c, 0) / cycles.length) : null,
+    },
+  };
+}
+
+/** Autonomy block + per-Squad comparison rows. `merged` (UNFILTERED) carry { squad, lane, mergedAtMs, reviewRounds }; `agents` carry { squad, turns, costUsd }. */
+function buildAutonomy({ entries, merged, agents, squads, squad }) {
+  const inSquad = (s) => !squad || s === squad;
+  const scoped = computeAutonomy(entries.filter((e) => inSquad(e.squad)), merged.filter((u) => inSquad(u.squad)));
+  const bySquad = squads.map((sq) => {
+    const mine = merged.filter((u) => u.squad === sq);
+    const a = computeAutonomy(entries.filter((e) => e.squad === sq), mine);
+    const mineAgents = agents.filter((x) => x.squad === sq);
+    const costUsd = mineAgents.reduce((t, x) => t + x.costUsd, 0);
+    const rounds = mine.reduce((t, u) => t + (u.reviewRounds ?? 0), 0);
+    return {
+      squad: sq, mergedUnits: mine.length, turns: mineAgents.reduce((t, x) => t + x.turns, 0), costUsd,
+      firstTryPassRate: mine.length ? Math.round((mine.filter((u) => (u.reviewRounds ?? 0) <= 1).length / mine.length) * 1000) / 1000 : null,
+      avgReviewRounds: mine.length ? Math.round((rounds / mine.length) * 100) / 100 : null,
+      costPerUnit: mine.length ? costUsd / mine.length : null,
+      ownerTouches: a.ownerTouches.total, unitsPerOwnerTouch: a.ownerTouches.unitsPerOwnerTouch,
+      longestUnassistedStreak: a.unassistedStreak.longest, stalls: a.stalls.total, medianUnblockMs: a.stalls.medianUnblockMs,
+    };
+  });
+  return { ...scoped, bySquad };
+}
+
 /** Maximal clusters of >=min timestamps within windowMs, merged when they overlap. Returns [{ firstAt, lastAt, count }]. */
 function findStorms(tsList, windowMs, min) {
   const ts = tsList.filter((t) => t !== null && t !== undefined).map(Number).sort((a, b) => a - b);
@@ -1541,6 +1691,12 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
     }
   }
 
+  const au = u.autonomy;
+  if (au?.bySquad?.length) {
+    out.push("Autonomy by squad (squad | merged | ownerTouches | units/touch | longestUnassistedStreak | stalls | medianUnblockMs | costPerUnit):");
+    for (const r of au.bySquad.slice(0, 12)) out.push(`- ${r.squad} | ${r.mergedUnits} | ${r.ownerTouches} | ${r.unitsPerOwnerTouch ?? "-"} | ${r.longestUnassistedStreak} | ${r.stalls} | ${r.medianUnblockMs ?? "-"} | ${r.costPerUnit === null ? "-" : round2(r.costPerUnit)}`);
+    out.push(`Autonomy scope${u.squad ? ` (${u.squad})` : " (all)"}: touches ${au.ownerTouches.total} (needs-you ${au.ownerTouches.needsYou}, you ${au.ownerTouches.you}, xsquad ${au.ownerTouches.xsquadInput}), streak ${au.unassistedStreak.current}/${au.unassistedStreak.longest}, units/handoff ${au.planAutonomy.unitsPerHandoff ?? "-"}.`);
+  }
   out.push(loadUsageReviewPrompt({ promptPath, runtimeRoot, envRoot, warn }));
   return out.join("\n");
 }
@@ -1801,8 +1957,10 @@ export function readBootSizes(home, { since, until } = {}) {
   return foldBootSizes(hits);
 }
 
-export function getUsage({ home, since, until, git, laneCodes, usageReview, now = Date.now } = {}) {
+export function getUsage({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now } = {}) {
   const homeDir = home || vibesquadHome();
+  const squad = typeof squadOpt === "string" && squadOpt.trim() ? squadOpt.trim() : null; // usa-24: optional per-Squad filter
+  const laneTeams = readLaneTeams(home);
   const dir = join(homeDir, "runner", "agents");
   const seen = new Set();
   const agg = new Map();
@@ -1811,6 +1969,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
   const laneAgents = new Map(); // lane -> { agents, handoffs, byRole: Map<role, count> }
   const loops = [];
   const agentStates = []; // { st, agentId } for whole-log v2 rollups
+  const allAgentSquads = []; // unfiltered { st, squad } for the autonomy bySquad comparison
   let names = [];
   if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
   for (const n of names) {
@@ -1818,6 +1977,9 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     seen.add(file);
     let st;
     try { st = refreshFile(file, statSync(file)); } catch { continue; }
+    const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
+    allAgentSquads.push({ st, squad: agentSquad });
+    if (squad && agentSquad !== squad) continue;
     agentStates.push({ st, agentId: n.slice(0, -6) });
     const la = getOrSet(laneAgents, st.lane, () => ({ agents: 0, handoffs: 0, byRole: new Map() }));
     la.agents += 1;
@@ -1871,7 +2033,9 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
   const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
   const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
-  const mergedRaw = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now);
+  const mergedRawAll = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now);
+  const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
+  const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
   const mergedByLane = new Map();
   for (const u of mergedRaw) if (u.lane) getOrSet(mergedByLane, u.lane, () => []).push(u);
   const laneCost = new Map(lanes.map((l) => [l.lane, l.costUsd]));
@@ -1978,13 +2142,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
   for (const h of readHandoffs(home)) getOrSet(handoffsByLane, h.lane, () => []).push(h.ts);
   const planByLane = new Map();
   for (const [lane, hts] of handoffsByLane) {
-    const merges = mergesByLaneMs.get(lane) ?? [];
-    const cycles = [];
-    for (let i = 0; i < hts.length; i++) {
-      const next = i + 1 < hts.length ? hts[i + 1] : Infinity;
-      const last = merges.filter((m) => m >= hts[i] && m < next).at(-1);
-      if (last !== undefined) cycles.push(Math.max(0, last - hts[i]));
-    }
+    const cycles = planCycles(hts, mergesByLaneMs.get(lane) ?? []);
     planByLane.set(lane, { cycles, avg: cycles.length ? Math.round(cycles.reduce((s, c) => s + c, 0) / cycles.length) : null });
   }
   const laneV2 = new Map();
@@ -2018,14 +2176,14 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
 
   // ---- usa-10: durable ledger sync + fold archived entries (units/days absent from raw), then benchmark rollups.
   const agentById = new Map(agents.map((a) => [a.agentId, a]));
-  syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now);
+  if (!squad) syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now); // a filtered view would archive partial data
   const ledger = readUsageLedger(homeDir);
   const rawShas = new Set(merged.map((u) => u.sha));
   const rawDays = new Set(rows.map((r) => r.day));
   // Fold only when the raw source is present but partial: units when git returned a (non-empty) bounded log whose older
   // merges fell off MAX_COMMITS, days when agent logs were pruned (respect the since/until day filter like rows do).
-  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !rawShas.has(r.sha)) : [];
-  const foldedDays = ledger.filter((r) => r.kind === "day" && r.day && !rawDays.has(r.day) && (!since || r.day >= since) && (!until || r.day <= until));
+  const foldedUnits = merged.length > 0 ? ledger.filter((r) => r.kind === "unit" && r.sha && !rawShas.has(r.sha) && (!squad || r.squad === squad)) : [];
+  const foldedDays = squad ? [] : ledger.filter((r) => r.kind === "day" && r.day && !rawDays.has(r.day) && (!since || r.day >= since) && (!until || r.day <= until));
   for (const r of foldedUnits) {
     merged.push({
       sha: r.sha, unit: r.unit ?? null, code: null, reviewRounds: r.reviewRounds ?? 0,
@@ -2056,7 +2214,17 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
   const cohorts = buildCohorts(merged);
   const floor = buildFloor(merged, agents, totalsFinal);
 
+  // ---- usa-24: Squad filter + autonomy scorecard (bySquad always compares every Squad, unfiltered)
+  const entries = readAutonomyEntries(home, laneTeams);
+  const squads = [...new Set([...laneTeams.values(), ...entries.map((e) => e.squad), ...allAgentSquads.map((a) => a.squad), ...mergedRawAll.map(unitSquad)].filter(Boolean))].sort();
+  const autonomy = buildAutonomy({
+    entries, squads, squad,
+    merged: mergedRawAll.map((u) => ({ squad: unitSquad(u), lane: u.lane, mergedAtMs: tsMs(u.mergedAt), reviewRounds: u.reviewRounds })),
+    agents: allAgentSquads.map(({ st, squad: sq }) => { const a = agentV2(st, ""); return { squad: sq, turns: a.turns, costUsd: a.costUsd }; }),
+  });
+
   const result = {
+    squad, squads, autonomy,
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
     totals: totalsFinal,
@@ -2089,7 +2257,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, now 
     cohorts,
     floor,
   };
-  maybeScheduleUsageReview(result, home, usageReview ?? {});
+  if (!squad) maybeScheduleUsageReview(result, home, usageReview ?? {}); // the periodic review always audits the full rollup
   return { ...result, usageReview: usageReviewState(home, result, usageReview ?? {}) };
 }
 
@@ -2149,6 +2317,22 @@ function usageToMarkdown(u) {
     lines.push("|---|---|---|---|");
     for (const l of pl) lines.push(`| ${l.lane} | ${l.mergedUnits} | $${l.costPerMergedUnit} | ${l.fixAfterMergeRate} |`);
   }
+  const au = u.autonomy;
+  if (au) {
+    lines.push("");
+    lines.push(`## Autonomy scorecard${u.squad ? ` (${u.squad})` : ""}`);
+    const o = au.ownerTouches, st = au.stalls, pa = au.planAutonomy;
+    lines.push(`- owner touches: ${o.total} (needs-you ${o.needsYou}, you ${o.you}, xsquad input ${o.xsquadInput}) | per unit ${o.perMergedUnit ?? "-"} | units/touch ${o.unitsPerOwnerTouch ?? "-"} | per handoff ${o.perHandoff ?? "-"}`);
+    lines.push(`- unassisted merge streak: current ${au.unassistedStreak.current}, longest ${au.unassistedStreak.longest}`);
+    lines.push(`- stalls: ${st.total} (blockers ${st.blockers}, FAIL runs ${st.failRuns}) | median unblock ${st.medianUnblockMs ?? "-"}ms | p90 ${st.p90UnblockMs ?? "-"}ms`);
+    lines.push(`- plan autonomy: ${pa.handoffs} handoffs -> ${pa.mergedUnits} units (${pa.unitsPerHandoff ?? "-"}/handoff) | avg plan cycle ${pa.avgPlanCycleMs ?? "-"}ms`);
+    if (au.bySquad.length) {
+      lines.push("");
+      lines.push("| squad | merged | turns | cost | 1st-pass | rev/unit | $/unit | touches | units/touch | longest streak | stalls | median unblock ms |");
+      lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
+      for (const r of au.bySquad) lines.push(`| ${r.squad} | ${r.mergedUnits} | ${r.turns} | $${round2(r.costUsd)} | ${r.firstTryPassRate ?? "-"} | ${r.avgReviewRounds ?? "-"} | ${r.costPerUnit === null ? "-" : `$${round2(r.costPerUnit)}`} | ${r.ownerTouches} | ${r.unitsPerOwnerTouch ?? "-"} | ${r.longestUnassistedStreak} | ${r.stalls} | ${r.medianUnblockMs ?? "-"} |`);
+    }
+  }
   const bs = u.bootSize ?? [];
   if (bs.length) {
     lines.push("");
@@ -2199,7 +2383,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
       if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const format = url.searchParams.get("format") ?? "json";
       if (format !== "md" && format !== "json") return sendJson(res, 400, { error: `bad format "${format}"` });
-      const usage = getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git, usageReview });
+      const usage = getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview });
       if (format === "json") return sendJson(res, 200, { ok: true, exportedAt: new Date().toISOString(), ...usage });
       return sendJson(res, 200, { ok: true, markdown: usageToMarkdown(usage) });
     }
@@ -2207,7 +2391,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
-    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, git: probeOpts.git, usageReview }));
+    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     return sendJson(res, 500, { error: String(err?.message ?? err) });

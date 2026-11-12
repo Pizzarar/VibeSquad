@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
 import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, successText, successTooltip, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { autonomySummary, autonomyTiles, squadLabel, usageExportMdUrl, usageUrl, validSquad, USAGE_SQUAD_KEY } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
 
@@ -363,4 +364,37 @@ test("usa-12 fix1: buildProfiles carries successRate/basis; no-signal renders �
   assert.equal(successText(by["Implement - Sonnet"]), "75%");
   assert.match(successTooltip(by["Implement - Sonnet"]), /first try/);
   assert.equal(successText(by["Review - Old"]), "50%", "older server: passRate fallback");
+});
+
+const au = {
+  ownerTouches: { total: 4, needsYou: 2, you: 1, xsquadInput: 1, perMergedUnit: 0.5, unitsPerOwnerTouch: 2, perHandoff: 1.33 },
+  unassistedStreak: { current: 3, longest: 5 },
+  stalls: { total: 2, blockers: 1, failRuns: 1, medianUnblockMs: 600_000, p90UnblockMs: 3_600_000 },
+  planAutonomy: { handoffs: 3, mergedUnits: 8, unitsPerHandoff: 2.67, avgPlanCycleMs: null },
+  bySquad: [],
+};
+
+test("squad urls: filter query, export href, label, valid selection", () => {
+  assert.equal(USAGE_SQUAD_KEY, "vs.usage.squad");
+  assert.equal(usageUrl(null), "/__vibesquad/providers/usage");
+  assert.equal(usageUrl("efi"), "/__vibesquad/providers/usage?squad=efi");
+  assert.equal(usageExportMdUrl(null), "/__vibesquad/providers/usage-export?format=md");
+  assert.equal(usageExportMdUrl("efi"), "/__vibesquad/providers/usage-export?format=md&squad=efi");
+  assert.equal(squadLabel("efi"), "EFI");
+  assert.equal(squadLabel("vibesquad"), "Vibesquad");
+  assert.equal(validSquad("efi", ["efi", "vibesquad"]), "efi");
+  assert.equal(validSquad("gone", ["efi"]), null);
+  assert.equal(validSquad("efi", undefined), "efi");
+  assert.equal(validSquad(null, ["efi"]), null);
+});
+
+test("autonomySummary + autonomyTiles", () => {
+  assert.equal(autonomySummary(au, null), "Autonomy & Dogfood · All Squads · 2 units/touch · streak 3 (best 5) · 2 stalls");
+  assert.match(autonomySummary(au, "efi"), /^Autonomy & Dogfood · EFI ·/);
+  assert.match(autonomySummary(undefined, null), /no data$/);
+  const t = autonomyTiles(au);
+  assert.deepEqual(t.map((x) => x.label), ["Units / Owner Touch", "Unassisted Merge Streak", "Needs-You / Unit", "Stalls & Median Unblock", "Units / Plan Handoff"]);
+  assert.deepEqual(t.map((x) => x.value), ["2", "3", "0.50", "10m", "2.67"]);
+  const empty = autonomyTiles({ ...au, ownerTouches: { ...au.ownerTouches, unitsPerOwnerTouch: null, perMergedUnit: null }, stalls: { ...au.stalls, medianUnblockMs: null } });
+  assert.deepEqual([empty[0].value, empty[2].value, empty[3].value], ["—", "—", "—"]);
 });

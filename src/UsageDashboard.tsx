@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, USAGE_EXPORT_MD_URL, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
@@ -203,7 +203,7 @@ const COLS: { key: SortKey; label: string; num: boolean }[] = [
   { key: "fixRate", label: "Fix rate", num: true },
 ];
 
-export function useUsage(): { data: UsageData | null; error: string | null; refresh: (force?: boolean) => void; applyUsageReview: (review: UsageReview | null | undefined) => void } {
+export function useUsage(squad: string | null = null): { data: UsageData | null; error: string | null; refresh: (force?: boolean) => void; applyUsageReview: (review: UsageReview | null | undefined) => void } {
   const [data, setData] = useState<UsageData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loadRef = useRef<((force?: boolean) => void) | null>(null);
@@ -217,7 +217,7 @@ export function useUsage(): { data: UsageData | null; error: string | null; refr
       inflight = true;
       last = t;
       try {
-        const j = (await fetchJsonTimeout("/__vibesquad/providers/usage", USAGE_TIMEOUT_MS)) as UsageData;
+        const j = (await fetchJsonTimeout(usageUrl(squad), USAGE_TIMEOUT_MS)) as UsageData;
         if (alive) { setData(j); setError(null); }
       } catch (e) {
         if (alive) setError(String((e as Error)?.message ?? e));
@@ -238,7 +238,7 @@ export function useUsage(): { data: UsageData | null; error: string | null; refr
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onFocus);
     };
-  }, []);
+  }, [squad]);
   const refresh = useCallback((force = false) => loadRef.current?.(force), []);
   const applyUsageReview = useCallback((review: UsageReview | null | undefined) => {
     setData((d) => (d ? withUsageReview(d, review) : d));
@@ -250,7 +250,19 @@ export function useUsage(): { data: UsageData | null; error: string | null; refr
 export type UsagePerfection = { pin: Pin | null; onOpen?: PinHandler };
 
 export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } = {}) {
-  const { data, error, refresh, applyUsageReview } = useUsage();
+  const [squad, setSquad] = useState<string | null>(() => {
+    try { return localStorage.getItem(USAGE_SQUAD_KEY) || null; } catch { return null; }
+  });
+  const { data, error, refresh, applyUsageReview } = useUsage(squad);
+  const pickSquad = (next: string | null) => {
+    setSquad(next);
+    try { if (next) localStorage.setItem(USAGE_SQUAD_KEY, next); else localStorage.removeItem(USAGE_SQUAD_KEY); } catch { /* storage unavailable */ }
+  };
+  // A stored Squad the server no longer lists falls back to All Squads.
+  useEffect(() => {
+    if (data?.squads && squad && validSquad(squad, data.squads) === null) pickSquad(null);
+  }, [data?.squads, squad]);
+  const activeSquad = squad;
   const [sort, setSort] = useState<{ key: SortKey; dir: 1 | -1 }>({ key: "costUsd", dir: -1 });
   const [now, setNow] = useState(() => Date.now());
   const [reviewBusy, setReviewBusy] = useState(false);
@@ -311,6 +323,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
       </div>
     );
   }
+  const stale = (data.squad ?? null) !== activeSquad; // scope switch in flight: keep the old numbers visible but dimmed
   const flagged = data.loops?.flagged ?? [];
   const storms = data.spawnStorms ?? [];
   const roles = foldRoles(data.byRole ?? []);
@@ -318,10 +331,29 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
   const click = (key: SortKey) => setSort((s) => (s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: key === "lane" ? 1 : -1 }));
 
   return (
-    <div className="squads-dashboard" data-testid="squads-dashboard">
+    <div className={`squads-dashboard${stale ? " is-stale" : ""}`} data-testid="squads-dashboard" aria-busy={stale}>
       <AngelBezel pin={perfection?.pin ?? null} onOpen={perfection?.onOpen} />
       <TriageCrt now={now} review={review} running={running} status={reviewStatus} error={reviewError} onInterval={changeInterval} onRun={runNow} />
-      <div className="usage-title">Usage</div>
+      <div className="usage-title-row">
+        <div className="usage-title">Usage</div>
+        {data.squads && data.squads.length > 0 && (
+          <div className="usage-squad-filter" data-testid="usage-squad-filter" role="group" aria-label="Squad filter">
+            <span className="usage-squad-label small muted">Squad:</span>
+            {[null, ...data.squads].map((id) => (
+              <button
+                key={id ?? "all"}
+                type="button"
+                className={`usage-squad-pill${activeSquad === id ? " is-active" : ""}`}
+                data-squad={id ?? "all"}
+                aria-pressed={activeSquad === id}
+                onClick={() => pickSquad(id)}
+              >
+                {id ? squadLabel(id) : "All Squads"}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="usage-limits" data-testid="usage-limits">
         {limits.length === 0 ? (
           <div className="usage-empty muted small" data-testid="usage-limits-empty">no limit data yet — appears after the next Claude/Gemini turn</div>
@@ -329,6 +361,56 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
           limits.map((l) => <LimitCard key={`${l.provider}|${l.window}`} l={l} now={now} />)
         )}
       </div>
+
+      {data.autonomy && (
+        <Collapse id="autonomy" testid="usage-autonomy-collapse" summary={autonomySummary(data.autonomy, activeSquad)}>
+        <section className="usage-autonomy" data-testid="usage-autonomy-strip">
+          <div className="usage-cohort-tiles">
+            {autonomyTiles(data.autonomy).map((t) => (
+              <div className="usage-cohort-tile usage-autonomy-tile" key={t.key} data-metric={t.key}>
+                <div className="usage-cohort-label small">{t.label}</div>
+                <div className="usage-cohort-value">{t.value}</div>
+                <div className="small muted">{t.sub}</div>
+              </div>
+            ))}
+          </div>
+          {!activeSquad && data.autonomy.bySquad.length > 0 && (
+            <div className="usage-table-wrap">
+              <table className="usage-table" data-testid="usage-squad-table">
+                <thead>
+                  <tr>
+                    <th>Squad</th>
+                    <th className="num">Merged</th>
+                    <th className="num">Touches</th>
+                    <th className="num">Units/touch</th>
+                    <th className="num">Best streak</th>
+                    <th className="num">Stalls</th>
+                    <th className="num">Median unblock</th>
+                    <th className="num">1st-try PASS</th>
+                    <th className="num">Cost/unit</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.autonomy.bySquad.map((r) => (
+                    <tr key={r.squad} data-squad={r.squad}>
+                      <td>{squadLabel(r.squad)}</td>
+                      <td className="num">{r.mergedUnits}</td>
+                      <td className="num">{r.ownerTouches}</td>
+                      <td className="num">{r.unitsPerOwnerTouch === null ? "–" : r.unitsPerOwnerTouch.toFixed(1)}</td>
+                      <td className="num">{r.longestUnassistedStreak}</td>
+                      <td className="num">{r.stalls}</td>
+                      <td className="num">{dur(r.medianUnblockMs)}</td>
+                      <td className="num">{pctText(r.firstTryPassRate)}</td>
+                      <td className="num">{r.costPerUnit === null ? "–" : usd(r.costPerUnit)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+        </Collapse>
+      )}
 
       <Collapse id="roles" testid="usage-roles-collapse" summary={rolesSummary(data.coordination?.coordinationShare, flagged.length, storms.length)}>
       <div className="usage-split">
@@ -517,7 +599,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         <section className="usage-workflows" data-testid="usage-workflows">
           <div className="usage-review-head">
             <div className="usage-sub">Savings vs solo workflow &amp; A/B workflow era</div>
-            <a className="usage-export" href={USAGE_EXPORT_MD_URL} download data-testid="usage-export-md">Export Benchmark (.md)</a>
+            <a className="usage-export" href={usageExportMdUrl(activeSquad)} download data-testid="usage-export-md">Export Benchmark (.md)</a>
           </div>
           {data.savings && (
             <div className="usage-saving-cards">
