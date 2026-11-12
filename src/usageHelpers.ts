@@ -104,6 +104,22 @@ export type UsageData = {
   floor?: Floor;
   savings?: Savings;
   byWorkflow?: WorkflowRow[];
+  squad?: string | null;
+  squads?: string[];
+  autonomy?: Autonomy;
+};
+
+/** usa-24 autonomy block (server/providers-catalog.mjs getUsage). Ratios are null when their denominator is 0. */
+export type SquadAutonomyRow = {
+  squad: string; mergedUnits: number; turns: number; costUsd: number; firstTryPassRate: number | null; avgReviewRounds: number | null;
+  costPerUnit: number | null; ownerTouches: number; unitsPerOwnerTouch: number | null; longestUnassistedStreak: number; stalls: number; medianUnblockMs: number | null;
+};
+export type Autonomy = {
+  ownerTouches: { total: number; needsYou: number; you: number; xsquadInput: number; perMergedUnit: number | null; unitsPerOwnerTouch: number | null; perHandoff: number | null };
+  unassistedStreak: { current: number; longest: number };
+  stalls: { total: number; blockers: number; failRuns: number; medianUnblockMs: number | null; p90UnblockMs: number | null };
+  planAutonomy: { handoffs: number; mergedUnits: number; unitsPerHandoff: number | null; avgPlanCycleMs: number | null };
+  bySquad: SquadAutonomyRow[];
 };
 
 export function relTime(ms: number, now: number): string {
@@ -637,3 +653,45 @@ export function sortWorkflows(rows: WorkflowRow[] | null | undefined): WorkflowR
 }
 
 export const USAGE_EXPORT_MD_URL = "/__vibesquad/providers/usage-export?format=md";
+
+/** Squad filter persistence + URLs (usa-25). */
+export const USAGE_SQUAD_KEY = "vs.usage.squad";
+export const USAGE_URL = "/__vibesquad/providers/usage";
+export const squadQuery = (squad: string | null | undefined): string => (squad ? `squad=${encodeURIComponent(squad)}` : "");
+export const usageUrl = (squad: string | null | undefined): string => (squad ? `${USAGE_URL}?${squadQuery(squad)}` : USAGE_URL);
+export const usageExportMdUrl = (squad: string | null | undefined): string => (squad ? `${USAGE_EXPORT_MD_URL}&${squadQuery(squad)}` : USAGE_EXPORT_MD_URL);
+
+/** Pill label: `efi` -> `EFI` (short ids), `vibesquad` -> `Vibesquad`; the server id stays the filter value. */
+export function squadLabel(id: string): string {
+  if (!id) return id;
+  return id.length <= 3 ? id.toUpperCase() : id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+/** A stored/clicked squad only counts while the server still lists it (or before the list arrives). */
+export function validSquad(squad: string | null | undefined, squads: string[] | null | undefined): string | null {
+  if (!squad) return null;
+  return !squads || squads.length === 0 || squads.includes(squad) ? squad : null;
+}
+
+const ratioText = (n: number | null | undefined): string => (typeof n === "number" && Number.isFinite(n) ? (Number.isInteger(n) ? String(n) : n.toFixed(2)) : "—");
+
+/** One-line collapsed header for the Autonomy section. */
+export function autonomySummary(a: Autonomy | null | undefined, squad: string | null | undefined): string {
+  const scope = squad ? squadLabel(squad) : "All Squads";
+  if (!a) return `Autonomy & Dogfood · ${scope} · no data`;
+  return `Autonomy & Dogfood · ${scope} · ${ratioText(a.ownerTouches.unitsPerOwnerTouch)} units/touch · streak ${a.unassistedStreak.current} (best ${a.unassistedStreak.longest}) · ${a.stalls.total} stall${a.stalls.total === 1 ? "" : "s"}`;
+}
+
+export type AutonomyTile = { key: string; label: string; value: string; sub: string };
+
+/** The five KPI tiles of the scorecard strip. */
+export function autonomyTiles(a: Autonomy): AutonomyTile[] {
+  const o = a.ownerTouches;
+  return [
+    { key: "units-per-touch", label: "Units / Owner Touch", value: ratioText(o.unitsPerOwnerTouch), sub: `${o.total} touches (needs-you ${o.needsYou}, you ${o.you}, xsquad ${o.xsquadInput})` },
+    { key: "streak", label: "Unassisted Merge Streak", value: String(a.unassistedStreak.current), sub: `longest ${a.unassistedStreak.longest}` },
+    { key: "needs-you-per-unit", label: "Needs-You / Unit", value: ratioText(o.perMergedUnit), sub: `${ratioText(o.perHandoff)} touches / handoff` },
+    { key: "stalls", label: "Stalls & Median Unblock", value: dur(a.stalls.medianUnblockMs), sub: `${a.stalls.total} stalls (${a.stalls.blockers} blocker, ${a.stalls.failRuns} FAIL) · p90 ${dur(a.stalls.p90UnblockMs)}` },
+    { key: "units-per-handoff", label: "Units / Plan Handoff", value: ratioText(a.planAutonomy.unitsPerHandoff), sub: `${a.planAutonomy.handoffs} handoffs -> ${a.planAutonomy.mergedUnits} units` },
+  ];
+}
