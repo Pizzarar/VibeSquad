@@ -171,7 +171,12 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
   await startRunner("old-hash");
   agents.current[1].status = "running";
 
+  w.lookups = [];
   const deps = {
+    // fakes only: no test may reach the real reg.exe / where.exe / filesystem for the shell-env repair (Bug19 M2)
+    regQuery: (key, name = "Path") => { w.lookups.push(`reg ${key} ${name}`); if (name !== "Path") throw new Error("no such value"); return { type: "REG_SZ", value: String.raw`C:\Windows\system32` }; },
+    exists: (p) => { w.lookups.push(`exists ${p}`); return false; },
+    which: () => { w.lookups.push("which"); return ""; },
     serverStopMode: treeKill ? "tree-kill" : "graceful",
     sleep: async (ms) => {
       if (swapRunnerOnFirstSleep && !w.swapped) { // the runner restarted on its own while we waited: new pid, port and token
@@ -632,19 +637,61 @@ test("repairShellEnv git bin: ahead of System32; root from registry or git.exe p
   const x = String.raw`C:\x`;
   const files = new Set([String.raw`C:\Program Files\Git\bin\bash.exe`.toLowerCase(), String.raw`C:\Program Files\Git\cmd\git.exe`.toLowerCase()]);
   const exists = (p) => files.has(String(p).toLowerCase());
-  const regQuery = (key) => { if (key.startsWith("HKLM")) return { type: "REG_SZ", value: [sys, `${root}\\cmd`, tools].join(";") }; throw new Error("no HKCU Path"); };
-  const noGitReg = () => { throw new Error("none"); };
+  // one registry fake: Path values by hive, InstallPath by key (missing = throws, like reg.exe exit 1)
+  const mkReg = ({ hklm = null, hkcu = null, install = {} } = {}) => (key, name = "Path") => {
+    const hit = name === "InstallPath" ? install[key] : (key.startsWith("HKLM") ? hklm : hkcu);
+    if (!hit) throw new Error(`no ${name} in ${key}`);
+    return { type: "REG_SZ", value: hit };
+  };
+  const hklm = [sys, `${root}\\cmd`, tools].join(";");
+  const base = { platform: "win32", exists, which: () => "" };
   const env = { PATH: x, HOME: "" };
-  let out = repairShellEnv(env, { regQuery, platform: "win32", exists, which: () => "", gitRegQuery: (k, n) => { assert.equal(n, "InstallPath"); if (k.startsWith("HKLM\\SOFTWARE\\GitForWindows")) return { type: "REG_SZ", value: root }; throw new Error("x"); } });
+  let out = repairShellEnv(env, { ...base, regQuery: mkReg({ hklm, install: { "HKLM\\SOFTWARE\\GitForWindows": root } }) });
   assert.deepEqual(out.Path.split(";"), [`${root}\\bin`, `${root}\\usr\\bin`, sys, `${root}\\cmd`, tools, x], "registry root; HKLM kept without HKCU");
-  out = repairShellEnv(env, { regQuery, platform: "win32", exists, which: () => "", gitRegQuery: noGitReg });
+  out = repairShellEnv(env, { ...base, regQuery: mkReg({ hklm }) });
   assert.deepEqual(out.Path.split(";").slice(0, 3), [`${root}\\bin`, `${root}\\usr\\bin`, sys], "root derived from git.exe on PATH");
-  out = repairShellEnv({ PATH: "" }, { regQuery: () => ({ type: "REG_SZ", value: sys }), platform: "win32", exists, which: () => `${root}\\cmd\\git.exe`, gitRegQuery: noGitReg });
+  out = repairShellEnv({ PATH: "" }, { ...base, regQuery: mkReg({ hklm: sys }), which: () => `${root}\\cmd\\git.exe` });
   assert.deepEqual(out.Path.split(";"), [`${root}\\bin`, `${root}\\usr\\bin`, sys], "root from where git");
-  out = repairShellEnv(env, { regQuery, platform: "win32", exists: () => false, which: () => "", gitRegQuery: noGitReg });
+  out = repairShellEnv(env, { ...base, regQuery: mkReg({ hklm }), exists: () => false });
   assert.deepEqual(out.Path.split(";"), [sys, `${root}\\cmd`, tools, x], "no git: unchanged");
   const lines = [];
   out = repairShellEnv({ PATH: "C:/a", Path: "C:/b" }, { regQuery: () => { throw new Error("boom"); }, platform: "win32", log: (m) => lines.push(m) });
   assert.deepEqual(Object.keys(out).filter((k) => k.toLowerCase() === "path"), ["Path"]);
   assert.equal(out.Path, "C:/a"); assert.equal(lines.length, 1);
+
+  // M1: quoted InstallPath / PATH entries / git.exe path / System32
+  const q = (s) => `"${s}"`;
+  out = repairShellEnv({ PATH: q(tools) }, { ...base, regQuery: mkReg({ hklm: [q(sys), tools].join(";"), install: { "HKLM\\SOFTWARE\\GitForWindows": q(root) } }) });
+  assert.deepEqual(out.Path.split(";"), [`${root}\\bin`, `${root}\\usr\\bin`, sys, tools], "quoted InstallPath + quoted System32 handled, entries unquoted, deduped");
+  out = repairShellEnv({ PATH: "" }, { ...base, regQuery: mkReg({ hklm: sys }), which: () => q(`${root}\\cmd\\git.exe`) });
+  assert.deepEqual(out.Path.split(";").slice(0, 2), [`${root}\\bin`, `${root}\\usr\\bin`], "quoted where-git result");
+  out = repairShellEnv({ PATH: q(`${root}\\cmd`) }, { ...base, regQuery: mkReg({ hklm: sys }), which: () => "" });
+  assert.deepEqual(out.Path.split(";").slice(0, 2), [`${root}\\bin`, `${root}\\usr\\bin`], "quoted git\\cmd PATH entry");
+
+  // L1: only known layouts; mingw64 ok; scoop shim gets no root even if something bash-like sits nearby
+  const mg = String.raw`C:\Program Files\Git\mingw64\bin`;
+  out = repairShellEnv({ PATH: "" }, { ...base, regQuery: mkReg({ hklm: sys }), which: () => `${mg}\\git.exe` });
+  assert.deepEqual(out.Path.split(";"), [`${root}\\bin`, `${root}\\usr\\bin`, sys], "mingw64\\bin\\git.exe -> Git root");
+  const scoop = String.raw`C:\Users\u\scoop\shims`;
+  const sfiles = new Set([`${scoop}\\git.exe`, String.raw`C:\Users\u\scoop\bin\bash.exe`, String.raw`C:\Users\u\bash.exe`, String.raw`C:\Users\bin\bash.exe`].map((s) => s.toLowerCase()));
+  out = repairShellEnv({ PATH: scoop }, { ...base, regQuery: mkReg({ hklm: sys }), exists: (p) => sfiles.has(String(p).toLowerCase()), which: () => `${scoop}\\git.exe` });
+  assert.deepEqual(out.Path.split(";"), [sys, scoop], "scoop shim: no root, PATH unchanged");
+});
+
+test("shell-env repair: the restart only uses injected lookups; no deps means no lookups (Bug19 M2)", async () => {
+  const { repairShellEnv } = await import("../scripts/restart-runtime.mjs");
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r));
+    if (process.platform === "win32") {
+      assert.ok(w.lookups.some((l) => l.startsWith("reg HKLM")), "the restart read the registry through the injected fake");
+      assert.ok(w.spawnEnvs.every((e) => typeof (e.Path ?? e.PATH) === "string"));
+    }
+  } finally {
+    await w.cleanup();
+  }
+  // a missing dep is "unavailable", never the real reg.exe / where.exe / fs
+  const out = repairShellEnv({ PATH: "C:\\keep" }, { platform: "win32" });
+  assert.equal(out.PATH ?? out.Path, "C:\\keep");
 });
