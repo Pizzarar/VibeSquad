@@ -365,8 +365,8 @@ function foldEvent(st, ev) {
       b.inputTokens += inT;
       b.outputTokens += outT;
     }
-    // usage after `compacted` is the adapter's synthetic post_tokens context meter, not spend
-    if (st.compactPending && !st.compactPending.compacted) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
+    // real claude /compact emits no usage before `compacted`; the turn's usage is the adapter's post_tokens one right after it
+    if (st.compactPending) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
   } else if (ev.type === "turn_done") {
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);

@@ -260,21 +260,20 @@ function fakeRun(agent, events) {
   return { c, lines };
 }
 
-test("compact-step logs the /compact turn costUsd + tokens from the log (turn_done cumulative cost, usage before compacted only)", async () => {
+test("compact-step logs the /compact turn costUsd + tokens from the log (turn_done cumulative cost, post_tokens usage after compacted counts)", async () => {
   const a = { id: "rn-c", provider: "claude", status: "idle", labels: {}, usedTokens: 150_000 };
   const { c, lines } = fakeRun(a, [
     ev("input", { text: "work" }), ev("usage", { inputTokens: 5000, outputTokens: 500 }), ev("turn_done", { costUsd: 1.5 }),
     ev("input", { text: "/compact keep the brief" }),
-    ev("usage", { inputTokens: 900, outputTokens: 100 }),
-    ev("compacted", { before: 150000, after: 30000 }),
-    ev("usage", { contextTokens: 30000, inputTokens: 30000, outputTokens: 0 }), // synthetic post_tokens meter: not spend
+    ev("compacted", { before: 150000, after: 30000 }), // real /compact: no usage before compacted
+    ev("usage", { contextTokens: 30000, inputTokens: 30000, outputTokens: 0 }), // the only usage in the turn: adapter post_tokens
     ev("turn_done", { costUsd: 1.75 }),
   ]);
   const res = await c.run(a, { focus: "x", cap: 100_000 });
   assert.equal(res.outcome, "ok");
   assert.equal(res.costUsd, 0.25);
-  assert.equal(res.tokens, 1000);
-  assert.match(lines[0], /outcome=ok before=150000 after=30000 cap=100000 ms=\d+ costUsd=0\.25 tokens=1000/);
+  assert.equal(res.tokens, 30000);
+  assert.match(lines[0], /outcome=ok before=150000 after=30000 cap=100000 ms=\d+ costUsd=0\.25 tokens=30000/);
 });
 
 test("compact-step: /compact arriving mid-turn -> the prior turn_done only moves the baseline", async () => {
@@ -284,13 +283,13 @@ test("compact-step: /compact arriving mid-turn -> the prior turn_done only moves
     ev("input", { text: "/compact" }),
     ev("usage", { inputTokens: 4000, outputTokens: 1000 }), // still the old turn
     ev("turn_done", { costUsd: 3.0 }), // old turn ends: reset
-    ev("usage", { inputTokens: 700, outputTokens: 300 }),
     ev("compacted", { before: 150000, after: 30000 }),
+    ev("usage", { inputTokens: 30000, outputTokens: 0 }),
     ev("turn_done", { costUsd: 3.2 }),
   ]);
   const res = await c.run(a, { cap: 100_000 });
   assert.equal(res.costUsd, 0.2);
-  assert.equal(res.tokens, 1000);
+  assert.equal(res.tokens, 30000);
 });
 
 test("compact-step without a readable log omits costUsd/tokens instead of guessing", async () => {

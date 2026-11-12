@@ -2287,8 +2287,8 @@ test('usage compaction: /compact turn cost + tokens, tokens saved, and handoff o
     { ts: T0 + 2, type: 'usage', inputTokens: 5000, outputTokens: 500 },
     { ts: T0 + 3, type: 'turn_done', costUsd: 1.0 },
     { ts: T0 + 4, type: 'input', text: '/compact keep the brief' },
-    { ts: T0 + 5, type: 'usage', inputTokens: 900, outputTokens: 100 },
-    { ts: T0 + 6, type: 'compacted', before: 150000, after: 40000 },
+    { ts: T0 + 6, type: 'compacted', before: 150000, after: 40000 }, // real /compact: no usage before compacted
+    { ts: T0 + 6.5, type: 'usage', contextTokens: 40000, inputTokens: 40000, outputTokens: 0 }, // adapter post_tokens
     { ts: T0 + 7, type: 'turn_done', costUsd: 1.25 },
     { ts: T0 + 8, type: 'input', text: 'more work' },
     { ts: T0 + 9, type: 'usage', inputTokens: 300, outputTokens: 50 },
@@ -2303,8 +2303,8 @@ test('usage compaction: /compact turn cost + tokens, tokens saved, and handoff o
   assert.equal(cp.runs, 1);
   assert.equal(cp.totalCostUsd, 0.25); // only the turn answering /compact
   assert.equal(cp.avgCostUsd, 0.25);
-  assert.equal(cp.totalTokens, 1000);
-  assert.equal(cp.avgTokens, 1000);
+  assert.equal(cp.totalTokens, 40000);
+  assert.equal(cp.avgTokens, 40000);
   assert.equal(cp.tokensSaved, 110000);
   assert.equal(cp.handoffRuns, 1);
   assert.equal(cp.avgHandoffCostUsd, 0.6);
@@ -2321,14 +2321,13 @@ test('usage compaction: /compact arriving mid-turn is not charged the prior turn
     { ts: T0 + 2, type: 'input', text: '/compact keep the brief' }, // steered into the live turn
     { ts: T0 + 3, type: 'usage', inputTokens: 120000, outputTokens: 20000 }, // old turn's call
     { ts: T0 + 4, type: 'turn_done', costUsd: 2.0 }, // old turn ends first: must not be consumed
-    { ts: T0 + 5, type: 'usage', inputTokens: 900, outputTokens: 100 }, // the compaction's own call
     { ts: T0 + 6, type: 'compacted', before: 150000, after: 12000 },
-    { ts: T0 + 7, type: 'usage', contextTokens: 12000, inputTokens: 12000, outputTokens: 0 }, // synthetic meter
+    { ts: T0 + 7, type: 'usage', contextTokens: 12000, inputTokens: 12000, outputTokens: 0 }, // the turn's only usage: adapter post_tokens
     { ts: T0 + 8, type: 'turn_done', costUsd: 2.1 },
   ]);
   const cp = getUsage({ home, git: noGit }).compaction;
   assert.equal(cp.runs, 1);
-  assert.equal(cp.totalTokens, 1000);
+  assert.equal(cp.totalTokens, 12000);
   assert.equal(cp.totalCostUsd, 0.1);
   assert.equal(cp.tokensSaved, 138000);
 });

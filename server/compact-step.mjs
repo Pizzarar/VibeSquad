@@ -20,8 +20,8 @@ const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0)
  * Cost + tokens of the `/compact` turn from the agent's raw runner-log events (the live timeline events carry only seq + type, and the
  * agent snapshot's usage is a per-call overwrite with no cost, so the log is the one place `turn_done.costUsd` (session-cumulative)
  * and `usage` live). Anchors on the last `compacted` event and the last `/compact` input before it; a turn_done between the two
- * (the /compact arrived mid-turn, so that turn ended first) resets the tokens and moves the cost baseline. Usage after `compacted`
- * is the adapter's synthetic post_tokens context meter, never spend. Returns { costUsd?, tokens } or null without a /compact anchor.
+ * (the /compact arrived mid-turn, so that turn ended first) resets the tokens and moves the cost baseline. Real claude /compact emits
+ * no usage before `compacted`: the turn's only usage is the adapter's post_tokens one right after it (counted). Returns { costUsd?, tokens } or null without a /compact anchor.
  */
 export function compactSpendFromLog(events) {
   let c = -1;
@@ -33,16 +33,15 @@ export function compactSpendFromLog(events) {
   let base = 0;
   for (let i = j - 1; i >= 0; i--) if (events[i]?.type === "turn_done" && Number.isFinite(Number(events[i].costUsd))) { base = Number(events[i].costUsd); break; }
   let tokens = 0;
-  for (let i = j + 1; i < c; i++) {
+  for (let i = j + 1; i < events.length; i++) {
     const e = events[i];
     if (e?.type === "usage") tokens += num(e.inputTokens) + num(e.outputTokens);
-    else if (e?.type === "turn_done") { tokens = 0; if (Number.isFinite(Number(e.costUsd))) base = Number(e.costUsd); }
-  }
-  for (let i = c + 1; i < events.length; i++) {
-    if (events[i]?.type !== "turn_done") continue;
-    const cost = Number(events[i].costUsd);
-    if (!Number.isFinite(cost)) return { tokens };
-    return { costUsd: Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6, tokens };
+    else if (e?.type === "turn_done") {
+      const cost = Number(e.costUsd);
+      if (i < c) { tokens = 0; if (Number.isFinite(cost)) base = cost; continue; } // mid-turn /compact: the prior turn ended first
+      if (!Number.isFinite(cost)) return { tokens };
+      return { costUsd: Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6, tokens };
+    }
   }
   return { tokens }; // turn_done not logged yet
 }
