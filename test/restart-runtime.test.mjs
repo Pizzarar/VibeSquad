@@ -623,3 +623,28 @@ test("repairShellEnv (win32): registry PATH first, inherited extras kept, dedupe
   assert.equal(repairShellEnv(posix, { platform: "linux", regQuery }), posix);
   assert.deepEqual(stripAgentEnv({ VS_AGENT_ID: "x", VS_AGENT_TOKEN: "t", KEEP: "1" }), { KEEP: "1" });
 });
+
+test("repairShellEnv git bin: ahead of System32; root from registry or git.exe path; none = no change; HKCU missing keeps HKLM; failure path one Path key", async () => {
+  const { repairShellEnv } = await import("../scripts/restart-runtime.mjs");
+  const root = String.raw`C:\Program Files\Git`;
+  const sys = String.raw`C:\Windows\system32`;
+  const tools = String.raw`C:\Tools`;
+  const x = String.raw`C:\x`;
+  const files = new Set([String.raw`C:\Program Files\Git\bin\bash.exe`.toLowerCase(), String.raw`C:\Program Files\Git\cmd\git.exe`.toLowerCase()]);
+  const exists = (p) => files.has(String(p).toLowerCase());
+  const regQuery = (key) => { if (key.startsWith("HKLM")) return { type: "REG_SZ", value: [sys, `${root}\\cmd`, tools].join(";") }; throw new Error("no HKCU Path"); };
+  const noGitReg = () => { throw new Error("none"); };
+  const env = { PATH: x, HOME: "" };
+  let out = repairShellEnv(env, { regQuery, platform: "win32", exists, which: () => "", gitRegQuery: (k, n) => { assert.equal(n, "InstallPath"); if (k.startsWith("HKLM\\SOFTWARE\\GitForWindows")) return { type: "REG_SZ", value: root }; throw new Error("x"); } });
+  assert.deepEqual(out.Path.split(";"), [`${root}\\bin`, `${root}\\usr\\bin`, sys, `${root}\\cmd`, tools, x], "registry root; HKLM kept without HKCU");
+  out = repairShellEnv(env, { regQuery, platform: "win32", exists, which: () => "", gitRegQuery: noGitReg });
+  assert.deepEqual(out.Path.split(";").slice(0, 3), [`${root}\\bin`, `${root}\\usr\\bin`, sys], "root derived from git.exe on PATH");
+  out = repairShellEnv({ PATH: "" }, { regQuery: () => ({ type: "REG_SZ", value: sys }), platform: "win32", exists, which: () => `${root}\\cmd\\git.exe`, gitRegQuery: noGitReg });
+  assert.deepEqual(out.Path.split(";"), [`${root}\\bin`, `${root}\\usr\\bin`, sys], "root from where git");
+  out = repairShellEnv(env, { regQuery, platform: "win32", exists: () => false, which: () => "", gitRegQuery: noGitReg });
+  assert.deepEqual(out.Path.split(";"), [sys, `${root}\\cmd`, tools, x], "no git: unchanged");
+  const lines = [];
+  out = repairShellEnv({ PATH: "C:/a", Path: "C:/b" }, { regQuery: () => { throw new Error("boom"); }, platform: "win32", log: (m) => lines.push(m) });
+  assert.deepEqual(Object.keys(out).filter((k) => k.toLowerCase() === "path"), ["Path"]);
+  assert.equal(out.Path, "C:/a"); assert.equal(lines.length, 1);
+});
