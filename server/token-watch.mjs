@@ -99,6 +99,8 @@ export function startTokenWatcher({
       listAgents: async () => [...live.values()],
       getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch(() => null))?.agent ?? null,
       lastMessage: (id) => lastAssistantMessage(runner, id),
+      // The runner's status now (tail of log), not the event's: a replayed usage event can read running for a turn long over.
+      currentStatus: async (id) => (await runner.fetchAgent(id))?.agent?.status ?? "",
     });
 
   // The brief-update turn must END before /compact: an "idle" upsert can still arrive between sending the nudge and its turn starting.
@@ -138,25 +140,35 @@ export function startTokenWatcher({
     }
   }
 
-  async function evaluate(agent) {
+  // source "roster": a startup / reconnect seed. Leads and Buddies evaluate it as before; workers only observe it (old usage, idea-162 P0).
+  async function evaluate(agent, { source = "agent" } = {}) {
     if (!agent?.id || agent.archivedAt || agent.status === "closed") return { role: "skip" };
     const role = effectiveAgentRole(agent);
     if (role === "lead") return { role, result: await coord.evaluateLead(agent) };
     if (role === "brainstorm") return { role, result: await evaluateBuddy(agent) };
-    if (role === "worker" || role === "digest") return { role, result: await workers.evaluateWorker(agent) };
+    if (role === "worker" || role === "digest") {
+      return { role, result: source === "roster" ? workers.observeWorker(agent) : await workers.evaluateWorker(agent) };
+    }
     return { role };
   }
 
   const stop = runner.subscribeEvents((ev) => {
     const agents = ev.kind === "roster" ? ev.agents ?? [] : ev.kind === "agent" && ev.agent ? [ev.agent] : [];
     if (ev.kind === "remove") live.delete(ev.agentId);
-    if (ev.kind === "turn_ended" && ev.agentId) briefPending.delete(ev.agentId);
+    if (ev.kind === "turn_ended" && ev.agentId) {
+      briefPending.delete(ev.agentId);
+      workers.endEpisode(ev.agentId); // not gated by `busy`: a dropped idle upsert must not carry the soft rung into the next turn
+    }
+    const source = ev.kind === "roster" ? "roster" : "agent";
     for (const agent of agents) {
       if (!agent?.id) continue;
       live.set(agent.id, agent);
-      if (busy.has(agent.id)) continue; // one evaluation per agent at a time; the next usage event re-checks
+      if (busy.has(agent.id)) {
+        if (source === "roster") workers.observeWorker(agent); // still baseline a worker whose upsert is mid-evaluation (sync, never sends)
+        continue; // one evaluation per agent at a time; the next usage event re-checks
+      }
       busy.add(agent.id);
-      evaluate(agent)
+      evaluate(agent, { source })
         .catch((e) => console.warn(`[vibesquad] token watch ${agent.id}: ${e?.message ?? e}`))
         .finally(() => busy.delete(agent.id));
     }

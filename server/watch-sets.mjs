@@ -317,7 +317,10 @@ export function stepSet(set, ctx) {
   const escPending = (i) => idleEpisode(i, ctx.agents.get(i.ref)) && !i.esc2At; // an idle worker still owes escalation steps
   const settled = (i) => i.state === "done" || i.state === "fail" || (i.state === "stalled" && Boolean(i.stallFiredAt));
   const progressed = set.items.some((i) => (i.state === "done" || i.state === "fail") && !(timeOf(i.doneAt) <= lastPing));
-  if (set.items.every(settled) && !set.items.some(escPending) && progressed) {
+  // An escalated item (esc1At/esc2At) counts as progress: once its steps are exhausted (or its episode ended) the set closes with
+  // its one ping, also when every item is stalled or the siblings finished before the stall ping.
+  const escalated = set.items.some((i) => i.esc1At || i.esc2At);
+  if (set.items.every(settled) && !set.items.some(escPending) && (progressed || escalated)) {
     const ping = { key: "done", at, text: completionText(set) };
     set.pings.push(ping);
     set.firedAt = at;
@@ -340,6 +343,12 @@ const NUDGE_TURN_MS = 3 * 60_000;
 
 /** Record (once) that the worker's latest turn is the one our nudge started. */
 function noteNudgeTurn(item, o) {
+  // A later turn that is not the nudge's ends the episode for good: clear the (persisted) marker so a restart, which loses the
+  // in-memory turn time, cannot bring the ended episode back.
+  if (item.nudgeTurnAt && Number.isFinite(o?.turnStartedAt) && o.turnStartedAt !== timeOf(item.nudgeTurnAt)) {
+    delete item.nudgeTurnAt;
+    return;
+  }
   if (!item.nudgeSentAt || item.nudgeTurnAt || !Number.isFinite(o?.turnStartedAt)) return;
   const d = o.turnStartedAt - timeOf(item.nudgeSentAt);
   if (d >= 0 && d <= NUDGE_TURN_MS) item.nudgeTurnAt = iso(o.turnStartedAt);
