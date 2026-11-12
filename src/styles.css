@@ -1334,8 +1334,12 @@ code {
 .handoff-row .row-name { flex: 1; min-width: 0; }
 .handoff-row.warn { color: var(--pink-t); }
 /* Orphan cwd/labels <code> stays on one line (ellipsized) so a long value never wraps into a two-line box that the
-   overlap guard unions across the sibling code. */
-.handoff-row.unassigned-row > span.muted.small code { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+   overlap guard unions across the sibling code. The flex parent needs min-width:0 for the ellipsis to kick in; at the
+   small-window breakpoint (ResponsiveSmallWindow.css) the code wraps instead. */
+.handoff-row.unassigned-row > span.muted.small { min-width: 0; }
+@media (min-width: 1001px) and (min-height: 761px) {
+  .handoff-row.unassigned-row > span.muted.small code { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+}
 .warn-badge { font-family: var(--arcade); font-size: 9px; padding: 1px 6px; border: 1px solid var(--hot-pink); background: var(--hot-pink-dim); }
 .lane-tag { font-family: var(--arcade); font-size: 9px; color: var(--cyan-t); border: 1px solid color-mix(in srgb, var(--line) 50%, transparent); padding: 1px 6px; }
 .handoff-row .arrow { color: var(--violet-t); }
