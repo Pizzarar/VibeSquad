@@ -302,7 +302,8 @@ function foldEvent(st, ev) {
     if (ev.patch?.labels?.["vs.restarted-from"]) st.restartedOrResumed = true;
   } else if (ev.type === "status") {
     if (t !== null) {
-      if (ev.status === "queued") { if (st.queuedAt === undefined) st.queuedAt = t; }
+      // queue wait is the pre-start one: a later queued (a follow-up turn behind the cap) must not move the window past the first response
+      if (ev.status === "queued") { if (st.queuedAt === undefined && st.firstThoughtTs === undefined && st.firstOutputTs === undefined) st.queuedAt = t; }
       else if ((ev.status === "starting" || ev.status === "running") && st.queuedAt !== undefined && st.queueEndedAt === undefined) st.queueEndedAt = t;
     }
     // working intervals run from status "running" to "idle"/"parked"/"exited"; an open interval is closed at lastTs.
@@ -344,6 +345,7 @@ function foldEvent(st, ev) {
     if (st.firstThoughtTs === undefined && t !== null) st.firstThoughtTs = t;
   } else if (ev.type === "compacted") {
     st.compactions = (st.compactions ?? 0) + 1;
+    if (st.compactPending) st.compactPending.compacted = true;
     const before = tokenCount(ev.before), after = tokenCount(ev.after);
     if (before && after) st.compactSavedTokens = (st.compactSavedTokens ?? 0) + Math.max(0, before - after);
   } else if (ev.type === "output") {
@@ -363,7 +365,8 @@ function foldEvent(st, ev) {
       b.inputTokens += inT;
       b.outputTokens += outT;
     }
-    if (st.compactPending) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
+    // usage after `compacted` is the adapter's synthetic post_tokens context meter, not spend
+    if (st.compactPending && !st.compactPending.compacted) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
   } else if (ev.type === "turn_done") {
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);
@@ -372,8 +375,10 @@ function foldEvent(st, ev) {
       delta = c >= st.prevCost ? c - st.prevCost : c;
       st.prevCost = c;
     }
-    if (st.compactPending) { // the turn answering a `/compact` input: its cost + tokens are the compaction's
-      st.compactCostUsd = (st.compactCostUsd ?? 0) + delta;
+    if (st.compactPending && !st.compactPending.compacted) {
+      st.compactPending.inputTokens = 0; st.compactPending.outputTokens = 0; // /compact arrived mid-turn: this turn_done closes the prior turn, not the compaction
+    } else if (st.compactPending) { // the turn after `compacted`: its cost + tokens are the compaction's
+      st.compactCostUsd = Math.round(((st.compactCostUsd ?? 0) + delta) * 1e6) / 1e6;
       st.compactInputTokens = (st.compactInputTokens ?? 0) + st.compactPending.inputTokens;
       st.compactOutputTokens = (st.compactOutputTokens ?? 0) + st.compactPending.outputTokens;
       st.compactPending = undefined;

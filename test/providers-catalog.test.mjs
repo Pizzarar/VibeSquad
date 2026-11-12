@@ -2310,3 +2310,44 @@ test('usage compaction: /compact turn cost + tokens, tokens saved, and handoff o
   assert.equal(cp.avgHandoffCostUsd, 0.6);
   assert.ok(cp.restartOverheadCostUsd >= 0.6);
 });
+
+test('usage compaction: /compact arriving mid-turn is not charged the prior turn (real shape: input, usage, turn_done, usage, compacted, turn_done)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 10, 12);
+  writeAgent(home, 'rn-m', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: 'work' },
+    { ts: T0 + 2, type: 'input', text: '/compact keep the brief' }, // steered into the live turn
+    { ts: T0 + 3, type: 'usage', inputTokens: 120000, outputTokens: 20000 }, // old turn's call
+    { ts: T0 + 4, type: 'turn_done', costUsd: 2.0 }, // old turn ends first: must not be consumed
+    { ts: T0 + 5, type: 'usage', inputTokens: 900, outputTokens: 100 }, // the compaction's own call
+    { ts: T0 + 6, type: 'compacted', before: 150000, after: 12000 },
+    { ts: T0 + 7, type: 'usage', contextTokens: 12000, inputTokens: 12000, outputTokens: 0 }, // synthetic meter
+    { ts: T0 + 8, type: 'turn_done', costUsd: 2.1 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.runs, 1);
+  assert.equal(cp.totalTokens, 1000);
+  assert.equal(cp.totalCostUsd, 0.1);
+  assert.equal(cp.tokensSaved, 138000);
+});
+
+test('usage ready-time: a queued status after the first response (follow-up turn behind the cap) does not redefine the spawn queue wait', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 10, 12);
+  writeAgent(home, 'late-q', [
+    { ts: T0, type: 'created', provider: 'gemini', model: 'm', meta: { lane: 'usage', role: 'worker' } },
+    { ts: T0 + 1000, type: 'status', status: 'running' },
+    { ts: T0 + 5000, type: 'output', text: 'hi' },
+    { ts: T0 + 6000, type: 'status', status: 'idle' },
+    { ts: T0 + 60_000, type: 'status', status: 'queued' }, // later follow-up queued
+    { ts: T0 + 90_000, type: 'status', status: 'running' },
+  ]);
+  const g = getUsage({ home, git: noGit }).readyTime.byProvider[0];
+  assert.equal(g.count, 1);
+  assert.equal(g.queuedCount, 0);
+  assert.equal(g.medianQueuedMs, null);
+  assert.equal(g.medianFirstResponseExclQueueMs, 5000);
+});
