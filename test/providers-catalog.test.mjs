@@ -2091,3 +2091,138 @@ test('usa-12 fix1: review prompt emits successRate + basis per profile row, "-" 
   assert.match(prompt, /Lead - Claude \| lead \| 1 \| 5 \| 1 \| - \(no-signal\) \|/);
   assert.doesNotMatch(prompt, /\| passRate \|/);
 });
+
+// ---------------------------------------------------------------- usa-24: per-Squad filter + autonomy scorecard
+function setupAutonomyHome() {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 10, 12);
+  fs.writeFileSync(path.join(home, 'teams.json'), JSON.stringify({ teams: [
+    { id: 'efi', lanes: [{ id: 'game', code: 'gam' }] },
+    { id: 'vibesquad', lanes: [{ id: 'usage', code: 'usa' }] },
+  ] }));
+  // efi agent resolves its Squad from the team label, vibesquad agent via the lane -> teams.json fallback
+  writeAgent(home, 'rn-e', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/wt/unit-e1', meta: { lane: 'game', role: 'worker', profile: 'Implement - Sonnet', labels: { team: 'efi' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 2 },
+  ]);
+  writeAgent(home, 'rn-v', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/wt/unit-v1', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+    { ts: T0 + 2000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const at = (s) => T0 + s * 1000;
+  // efi: handoff@10, merge e1@100, xsquad decision@120, needs-you@150 (stalls), blocker@210, decision@260 (unblocks), merge e2@300, you@310
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(10), 'rn-l', 'game', 'handoff', 'plan A'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(120), 'rn-l', 'game', 'decision', 'xsquad input: need art from VibeSquad'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(150), 'rn-l', 'game', 'needs-you', 'pick a boss'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(210), 'rn-w', 'game', 'blocker', 'turn cap'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(260), 'rn-l', 'game', 'decision', 'bump the cap'));
+  writeLog(home, 'teams/efi/log.jsonl', L_ENTRY(at(310), 'rn-l', 'game', 'you', 'thanks'));
+  // same needs-you also lands in logs/ (deduped); vibesquad has one quiet decision
+  writeLog(home, 'logs/efi--game.jsonl', L_ENTRY(at(150), 'rn-l', 'game', 'needs-you', 'pick a boss'));
+  writeLog(home, 'teams/vibesquad/log.jsonl', L_ENTRY(at(50), 'rn-l', 'usage', 'decision', 'ship it'));
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm3\n';
+    if (args[0] === 'log') return [
+      L('m3', 'm2 b3', sec(at(300)), "Merge branch 'unit-e2' (@gam)"),
+      L('b3', 'm2', sec(at(290)), 'feat: e2 (@gam) review r1'),
+      L('m2', 'm1 b2', sec(at(200)), "Merge branch 'unit-v1' (@usa)"),
+      L('b2', 'm1', sec(at(190)), 'feat: v1 (@usa) review r1'),
+      L('m1', 'a1 b1', sec(at(100)), "Merge branch 'unit-e1' (@gam)"),
+      L('b1', 'a1', sec(at(90)), 'feat: e1 (@gam) review r1'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  return { home, git, laneCodes: { gam: 'game', usa: 'usage' } };
+}
+
+test('usa-24: getUsage({squad}) filters to one Squad, lists all squads, and computes autonomy KPIs', () => {
+  const { home, git, laneCodes } = setupAutonomyHome();
+  const all = getUsage({ home, git, laneCodes });
+  assert.equal(all.squad, null);
+  assert.deepEqual(all.squads, ['efi', 'vibesquad']);
+  assert.equal(all.totals.turns, 3);
+  assert.equal(all.merged.units.length, 3);
+
+  const u = getUsage({ home, git, laneCodes, squad: 'efi' });
+  assert.equal(u.squad, 'efi');
+  assert.deepEqual(u.squads, ['efi', 'vibesquad'], 'squads stay complete when filtered');
+  assert.equal(u.totals.turns, 1, 'only efi turns');
+  assert.equal(u.totals.costUsd, 2);
+  assert.deepEqual(u.merged.units.map((x) => x.unit).sort(), ['unit-e1', 'unit-e2']);
+  assert.deepEqual(u.byLane.map((l) => l.lane), ['game']);
+
+  const a = u.autonomy;
+  assert.deepEqual(a.ownerTouches, { total: 3, needsYou: 1, you: 1, xsquadInput: 1, perMergedUnit: 1.5, unitsPerOwnerTouch: 0.67, perHandoff: 3 });
+  assert.deepEqual(a.unassistedStreak, { current: 0, longest: 1 }, 'e1 unassisted, e2 had touches since e1');
+  // needs-you@150 -> decision@260 = 110s; blocker@210 -> decision@260 = 50s
+  assert.deepEqual(a.stalls, { total: 1, blockers: 1, failRuns: 0, medianUnblockMs: 50000, p90UnblockMs: 110000 });
+  assert.deepEqual(a.planAutonomy, { handoffs: 1, mergedUnits: 2, unitsPerHandoff: 2, avgPlanCycleMs: 290000 });
+
+  const v = getUsage({ home, git, laneCodes, squad: 'vibesquad' }).autonomy;
+  assert.equal(v.ownerTouches.total, 0);
+  assert.equal(v.ownerTouches.unitsPerOwnerTouch, null);
+  assert.deepEqual(v.unassistedStreak, { current: 1, longest: 1 });
+  assert.equal(v.stalls.medianUnblockMs, null);
+});
+
+test('usa-24: autonomy.bySquad compares every Squad side by side, also when filtered', () => {
+  const { home, git, laneCodes } = setupAutonomyHome();
+  for (const squad of [undefined, 'efi']) {
+    const rows = getUsage({ home, git, laneCodes, squad }).autonomy.bySquad;
+    assert.deepEqual(rows.map((r) => r.squad), ['efi', 'vibesquad']);
+    const { squad: _s, ...efi } = rows[0];
+    assert.deepEqual(efi, {
+      mergedUnits: 2, turns: 1, costUsd: 2, firstTryPassRate: 1, avgReviewRounds: 1, costPerUnit: 1,
+      ownerTouches: 3, unitsPerOwnerTouch: 0.67, longestUnassistedStreak: 1, stalls: 1, medianUnblockMs: 50000,
+    });
+    assert.equal(rows[1].mergedUnits, 1);
+    assert.equal(rows[1].turns, 2);
+    assert.equal(rows[1].ownerTouches, 0);
+  }
+});
+
+test('usa-24: filtered view never archives partial data to the ledger', () => {
+  const { home, git, laneCodes } = setupAutonomyHome();
+  getUsage({ home, git, laneCodes, squad: 'efi' });
+  assert.deepEqual(readUsageLedger(home), [], 'squad-filtered call must not sync the ledger');
+  getUsage({ home, git, laneCodes });
+  assert.ok(readUsageLedger(home).some((r) => r.kind === 'unit'));
+});
+
+test('usa-24: review prompt carries the Autonomy by squad block', () => {
+  const { home, git, laneCodes } = setupAutonomyHome();
+  const prompt = buildUsageReviewPrompt(getUsage({ home, git, laneCodes }), { home });
+  assert.match(prompt, /Autonomy by squad/);
+  assert.match(prompt, /- efi \| 2 \| 3 \| 0\.67 \| 1 \| 1 \| 50000 \|/);
+  assert.match(prompt, /- vibesquad \| 1 \| 0 \|/);
+});
+
+test('usa-24: /usage and /usage-export honour ?squad=, markdown has the Autonomy scorecard', async () => {
+  const { home, git } = setupAutonomyHome(); // lane codes come from the home teams.json over HTTP
+  const call = async (url) => {
+    let out;
+    await handleProvidersApi({ method: 'GET', url }, {}, {
+      home, ...probeOpts, git,
+      readBody: async () => ({}),
+      sendJson: (_r, code, data) => { out = { code, data }; },
+    });
+    return out;
+  };
+  const j = await call('/__vibesquad/providers/usage-export?format=json&squad=efi');
+  assert.equal(j.code, 200);
+  assert.equal(j.data.squad, 'efi');
+  assert.equal(j.data.autonomy.ownerTouches.total, 3);
+  const live = await call('/__vibesquad/providers/usage?squad=vibesquad');
+  assert.equal(live.data.squad, 'vibesquad');
+  assert.equal(live.data.totals.turns, 2);
+  const md = await call('/__vibesquad/providers/usage-export?format=md&squad=efi');
+  assert.match(md.data.markdown, /## Autonomy scorecard \(efi\)/);
+  assert.match(md.data.markdown, /owner touches: 3 \(needs-you 1, you 1, xsquad input 1\)/);
+  assert.match(md.data.markdown, /unassisted merge streak: current 0, longest 1/);
+  assert.match(md.data.markdown, /\| efi \| 2 \| 1 \|/);
+  assert.match((await call('/__vibesquad/providers/usage-export?format=md')).data.markdown, /## Autonomy scorecard\n/);
+});

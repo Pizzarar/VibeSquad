@@ -20,7 +20,9 @@ test("fetchJsonTimeout: data passes through, http errors surface", async () => {
 
 test("useUsage loads through the timeout helper and the dashboard shows the error", () => {
   const s = src("UsageDashboard.tsx");
-  assert.match(s, /fetchJsonTimeout\("\/__vibesquad\/providers\/usage"/);
+  // usa-25: the URL is built by usageUrl(squad) (adds ?squad=), whose base is USAGE_URL; still via the timeout helper.
+  assert.match(s, /fetchJsonTimeout\(usageUrl\(squad\), USAGE_TIMEOUT_MS\)/);
+  assert.match(readFileSync(new URL("../src/usageHelpers.ts", import.meta.url), "utf8"), /USAGE_URL = "\/__vibesquad\/providers\/usage"/);
   assert.doesNotMatch(s, /await fetch\("\/__vibesquad\/providers\/usage"\)/);
   assert.match(s, /Usage unavailable: \$\{error\}/);
 });
