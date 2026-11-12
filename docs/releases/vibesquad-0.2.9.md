@@ -7,7 +7,7 @@
 | Frozen commit | `e8380d3` (master, 2026-11-10; master tip 3f66803 = TASKS.json only, deliberately left out) |
 | Release commits | `4f23507` (`release: vibesquad 0.2.9 (stable) version bump, frozen from e8380d3`) + `8085dd5` (`release: credit @noble/curves as a third-party dependency line`) on `release/vibesquad-0.2.9`; built/tested commit = `8085dd591d2fecd25821b973d4826f20788ad4d2` |
 | Requester | Release Desk lead Rele5 (rn-cd9dc6ddfea4) |
-| Approval | Aub GO (via Hub6), publish ordered by Rele5 on 2026-11-10 after the Tier A B4 review |
+| Approval | the owner GO (via Hub6), publish ordered by Rele5 on 2026-11-10 after the Tier A B4 review |
 | Tier A review | Review-Gemini rn-a33adefaa531 PASS 0H/0M/4L (relay unwired; build-stamp path + updater key pw tracked) |
 | Release URL | https://github.com/Pizzarar/VibeSquad/releases/tag/v0.2.9 (tag `v0.2.9` on `8085dd5`) |
 | Range | `7a638bf..e8380d3` (v0.2.8 frozen commit to this freeze): 500 commits, 183 merges |

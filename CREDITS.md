@@ -35,6 +35,7 @@ Attribution format used across plans, commits, `CREDITS.md`, and release notes:
 - Implemented Boring Mode B3 (Perfection compact corporate header) — Thanks to **Claude Code** by `Anthropic` and **Antigravity** by `Google DeepMind`
 - Implemented Boring Mode B2r layout/readability refine (idea-125) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
 - Implemented Boring Mode B2r live 4K refine round 1 (idea-125) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
+- Implemented Boring Mode B4 (Normal/Psycho first-launch picker, label rename & B2r2 4K polish) — Thanks to **Antigravity** by `Google DeepMind` and **Claude Code** by `Anthropic`
 - Implemented outbound E2EE relay hardening — Thanks to **@noble/curves** by `Paul Miller (paulmillr)`
 
 ## Third-party runtime dependencies (v0.2.9)

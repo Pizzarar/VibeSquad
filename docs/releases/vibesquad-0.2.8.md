@@ -6,8 +6,8 @@
 | Channel | stable |
 | Frozen commit | `7a638bf` (master, 2026-11-08) |
 | Built / tagged commit | `646d2ae9a33d3c532495e8e9b571e0638623e1c1` (`release: vibesquad 0.2.8 (stable) version bump only, frozen from 7a638bf`) on `release/vibesquad-0.2.8` |
-| Requester | owner (Aub), via @bugc |
-| Approval | Aub, 2026-11-08: publish once build + audit pass; 848f3d9 lock fix NOT taken (conflicts in `runner/lock.mjs`); ship with the Known Issue below |
+| Requester | the owner, via @bugc |
+| Approval | the owner, 2026-11-08: publish once build + audit pass; 848f3d9 lock fix NOT taken (conflicts in `runner/lock.mjs`); ship with the Known Issue below |
 | Release URL | https://github.com/Pizzarar/VibeSquad/releases/tag/v0.2.8 |
 | Range | `v0.2.7..7a638bf`: 696 commits, 214 merges |
 
