@@ -70,6 +70,49 @@ export function stripAgentEnv(env = process.env) {
   return out;
 }
 
+/** Raw `reg query <key> /v Path` -> { type, value } or null. Injectable so tests never touch the registry. */
+export function regQueryPath(key) {
+  const r = spawnSync('reg', ['query', key, '/v', 'Path'], { windowsHide: true, encoding: 'utf8', timeout: 5000 });
+  if (r.status !== 0 || !r.stdout) throw new Error(`reg query ${key} failed (${r.status ?? r.error?.message})`);
+  const m = /^\s*Path\s+(REG_EXPAND_SZ|REG_SZ)\s+(.*?)\s*$/im.exec(r.stdout);
+  if (!m) throw new Error(`reg query ${key}: no Path value`);
+  return { type: m[1], value: m[2] };
+}
+const PATH_KEYS = ['HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment', 'HKCU\\Environment'];
+const EMPTY_DROP_KEYS = ['HOME', 'SHELL'];
+const pathNorm = (p) => p.trim().replace(/[\\/]+$/, '').toLowerCase();
+/**
+ * A runtime relaunched from an agent tool shell inherits a stripped env (no Git bin on PATH, HOME=''), and every restart
+ * compounds it (idea-178). Win32: PATH = registry machine+user entries first, then inherited extras (dedupe, nothing
+ * lost); empty HOME/SHELL removed; exactly one Path key. Never throws. Non-win32: unchanged.
+ */
+export function repairShellEnv(env = process.env, { regQuery = regQueryPath, platform = process.platform, log = () => {} } = {}) {
+  if (platform !== 'win32') return env;
+  const out = { ...env };
+  for (const k of EMPTY_DROP_KEYS) if (out[k] === '') delete out[k];
+  const pathKeys = Object.keys(out).filter((k) => k.toLowerCase() === 'path');
+  const inherited = pathKeys.map((k) => out[k]).find((v) => v) || '';
+  try {
+    const reg = [];
+    for (const key of PATH_KEYS) {
+      const { type, value } = regQuery(key);
+      const v = type === 'REG_EXPAND_SZ' ? value.replace(/%([^%]+)%/g, (m, n) => { const hit = Object.keys(out).find((k) => k.toLowerCase() === n.toLowerCase()); return hit ? out[hit] : m; }) : value;
+      reg.push(...v.split(';'));
+    }
+    const seen = new Set(); const list = [];
+    for (const e of [...reg, ...inherited.split(';')]) {
+      const n = pathNorm(e);
+      if (!n || seen.has(n)) continue;
+      seen.add(n); list.push(e.trim());
+    }
+    for (const k of pathKeys) delete out[k];
+    out.Path = list.join(';');
+  } catch (e) {
+    log(`env repair: registry PATH unavailable (${e?.message || e}); keeping inherited PATH`);
+  }
+  return out;
+}
+
 export function vsHome(env = process.env) { return env.VIBESQUAD_HOME || path.join(os.homedir(), '.vibesquad'); }
 /** Same rule as src-tauri config_dir(). */
 export function desktopConfigDir(env = process.env) {
@@ -496,7 +539,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (await healthy()) step('server already up, not starting another', { port: det.port });
     else {
       const sl = det.serverLaunch;
-      const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...stripAgentEnv(env), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
+      const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, log }), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
       try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* desktop pid file is best effort */ }
       step('server started', { pid, cwd: sl.cwd, log: sl.logFile });
     }
@@ -517,7 +560,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
     if (!health) {
       const rl = det.runnerLaunch;
-      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: stripAgentEnv(env), logFile: rl.logFile }); // never as an agent (X1b)
+      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, log }), logFile: rl.logFile }); // never as an agent (X1b)
       step('runner not booted by the server, started directly', { pid });
       for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
     }
