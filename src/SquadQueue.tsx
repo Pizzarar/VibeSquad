@@ -50,7 +50,7 @@ function Row({ item, member, lane, now, onOpen, onError }: { item: AttentionItem
             <b>{item.who}</b>
             <span className="sq-lane muted small">{lane}</span>
           </span>
-          <span className="sq-reason">{item.reason}</span>
+          <span className="sq-reason" title={item.reason}>{item.reason}</span>
         </span>
         <span className="sq-age muted small" data-testid="sq-age">{age}</span>
       </button>
