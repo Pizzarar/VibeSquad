@@ -1166,6 +1166,9 @@ code {
   border-left: 3px solid var(--cyan);
   padding: 3px var(--sp-2);
   background: color-mix(in srgb, var(--cyan) 7%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tl-sub.running {
@@ -1325,6 +1328,9 @@ code {
 .handoff-row { display: flex; align-items: center; gap: var(--sp-3); padding: 5px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); font-family: var(--display); font-size: 13px; }
 .handoff-row .row-name { flex: 1; min-width: 0; }
 .handoff-row.warn { color: var(--pink-t); }
+/* Orphan cwd/labels <code> stays on one line (ellipsized) so a long value never wraps into a two-line box that the
+   overlap guard unions across the sibling code. */
+.handoff-row.unassigned-row > span.muted.small code { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
 .warn-badge { font-family: var(--arcade); font-size: 9px; padding: 1px 6px; border: 1px solid var(--hot-pink); background: var(--hot-pink-dim); }
 .lane-tag { font-family: var(--arcade); font-size: 9px; color: var(--cyan-t); border: 1px solid color-mix(in srgb, var(--line) 50%, transparent); padding: 1px 6px; }
 .handoff-row .arrow { color: var(--violet-t); }
@@ -4248,7 +4254,11 @@ button.file-chip { cursor: pointer; font: inherit; }
 }
 
 /* Timeline search / prompt navigator / filters */
-.tl-head { position: sticky; top: 0; z-index: 10; display: flex; flex-direction: column; }
+/* The header is only sticky while the search bar is open (it owns the pinned search row). A bare pinned-todo header
+   scrolls with the timeline so it never overlaps the messages passing beneath it (overlap guard: tl-pinned-todo vs
+   tl-assistant). */
+.tl-head { display: flex; flex-direction: column; }
+.tl-head:has(.tl-bar) { position: sticky; top: 0; z-index: 10; }
 .tl-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--well); border: 1px solid var(--cyan); }
 .tl-bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .tl-bar-row input { flex: 1 1 140px; min-width: 0; }
