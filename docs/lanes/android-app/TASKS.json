@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-11T06:50:54.495Z",
+  "updatedAt": "2026-11-11T14:16:49.522Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -308,7 +308,8 @@
         "dist-desktop/VibeSquad.apk.sha256"
       ],
       "doneCheck": "node --test test/android-apk-route.test.mjs",
-      "status": "todo"
+      "status": "done",
+      "commit": "0e05c85"
     },
     {
       "id": "unit-and-end-e4a-lows",
@@ -319,7 +320,8 @@
         "test/cli-devices.test.mjs"
       ],
       "doneCheck": "node --test test/cli-devices.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done",
+      "commit": "d55f02b"
     },
     {
       "id": "unit-and-end-e1b",
@@ -343,7 +345,9 @@
         "cli/vs.mjs"
       ],
       "doneCheck": "node --test test/relay-tunnel.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done",
+      "branch": "unit-and-end-e5-wire",
+      "commit": "4996b66"
     },
     {
       "id": "unit-and-p0-white",
@@ -384,7 +388,9 @@
         "test/sec-origin-check.test.mjs"
       ],
       "doneCheck": "node --test test/sec-origin-check.test.mjs test/sec-s2-http.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done",
+      "branch": "unit-and-origin-check",
+      "commit": "0e05c85"
     },
     {
       "id": "unit-and-prove-local",
@@ -393,7 +399,48 @@
         "cli/vs.mjs"
       ],
       "doneCheck": "node --test test/cli-devices.test.mjs && npm run typecheck",
-      "status": "todo"
+      "status": "done",
+      "commit": "1b6b2e6"
+    },
+    {
+      "id": "unit-and-prove-local-rust",
+      "goal": "Rust desktop app token/proxy hardening: (a) X1 prove-local Low: src-tauri/src/main.rs:688,1853,2300 port the HMAC loopback proof to Rust, prove per connection before sending x-vibesquad-token; (b) X1 origin-check I2: build_req sets Origin https://<host> for remote upstreams like it does for local (main.rs ~2602); (c) Info: art/h1/src/h1b-shot.mjs:13 + art/ui/u4b/src/u4b-shot.mjs:9 use the nonce login URL instead of extraHTTPHeaders",
+      "files": [
+        "src-tauri/src/main.rs",
+        "art/h1/src/h1b-shot.mjs",
+        "art/ui/u4b/src/u4b-shot.mjs"
+      ],
+      "doneCheck": "",
+      "status": "done",
+      "commit": "1258e3d"
+    },
+    {
+      "id": "unit-and-e5-relay-links",
+      "goal": "E5 §7 item 8: PairDeviceModal relay links (#hostId=&pub=&relay=&code=), UI connect path reads relayPinFor, fold E4a host-id + relay id into one hosts[] entry; X1 E5-wire L2: confirm with the user before saveRelayPin repoints a known host's relay endpoint",
+      "files": [
+        "src/PairDeviceModal.tsx",
+        "src/remoteSession.ts",
+        "src/remoteRelayTransport.ts"
+      ],
+      "doneCheck": "",
+      "status": "done",
+      "commit": "8ee794d"
+    },
+    {
+      "id": "unit-and-end-e1c",
+      "goal": "E1c: Phone Cockpit Settings, Psycho/Corpo toggle & Claude<->Gemini provider switcher (mount overlays + onSettings in App.tsx phoneShell, add Psycho|Corpo + Claude|Gemini + Settings in PhoneCockpit ⋯, show compact provider/model + Switch to Gemini bar on PhoneCockpit chats, label Corpo in prefs.ts)",
+      "files": [
+        "src/PhoneCockpit.tsx",
+        "src/App.tsx",
+        "src/DrawerHeader.tsx",
+        "src/AgentDrawer.tsx",
+        "src/prefs.ts",
+        "src/styles.css",
+        "test/phone-cockpit.test.mjs"
+      ],
+      "doneCheck": "node --test test/phone-cockpit.test.mjs && npm run typecheck",
+      "status": "done",
+      "commit": "fafc5a7"
     }
   ]
 }

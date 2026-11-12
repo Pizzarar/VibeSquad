@@ -1,8 +1,8 @@
 # PLAN · Android App (`@and` / `android-app`)
 
 Older Tauri plan: `docs/PLAN_ANDROID_APP.md` (A1-A6, all done). Prior 0.3 A1 plan: `docs/PLAN_ANDROID_MESHNET.md` (**ALL DONE & CLOSED 2026-11-10** at `7fb55ab` / APK `aac22b2d…`; Aub passed the full `docs/lanes/android-app/RETEST_A1.md` on-device checklist including edge cases). Current 0.3 end-state plan: `docs/PLAN_ANDROID_END_STATE.md` (approved by Aub 2026-11-10 for 0.3: `"proceed with plan implimentation. if we can finish the new app for .3 that would be coool"` — `E1`, `E2`, `E3`, `E4a`, and `E5` core merged at `e8380d3`; `E1b` top status-bar safe-area inset fix (`unit-and-end-e1b`), `E4b` Tier A phone-minted pairing guards, `E5` wiring, and `E-APK` sideload rebuild handed to Lead `And4` `rn-0f8d6e128eab`).
-Lead: And4 rn-0f8d6e128eab (took over from And3 rn-888c2308845f, 2026-11-10). Keystore/signing stay with Aub + Release Desk. Never publish; hand to Release Desk.
-Status 2026-11-11: lane PARKED (owner back-burnered P0; app workable). Landed since `e8380d3`: E1b `f2a18fc`, P0 diagnostics `d01e9b5` (root fix waits for owner `RETEST_P0.md` trace), Pair a Device scroll + idea-127 `fc51517`. E4b (Tier A) in flight; then E5 wiring, E-APK.
+Lead: And7 rn-0c5479f72670 (took over from And6 rn-ff0443695f20, 2026-11-11). Keystore/signing stay with Aub + Release Desk. Never publish; hand to Release Desk.
+Status 2026-11-11: `E1`–`E5` + `E1b` + `E1c` (`fafc5a7`) + `E4b` + `E5` wiring + `E5` relay links (`8ee794d`) + `prove-local-rust` (`1258e3d`) + `E-APK` landed on `master`. All 36 `@and` units complete.
 
 ## Units (older Tauri plan, done)
 - `unit-and-a1` (`6e19c17`), `unit-and-a2` (`749c12a`), `unit-and-a3` (`6364ecb`), `unit-and-a4` (`42f4d67`), `unit-and-a5` (`684f1f6`), `unit-and-a6` (`3e5f581`)
