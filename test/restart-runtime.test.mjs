@@ -603,3 +603,23 @@ test("X1b R1 M1/L1: a leftover VS_AGENT_TOKEN is never owner proof; owner verbs 
     await w.cleanup();
   }
 });
+
+// idea-178: a runtime relaunched from an agent tool shell must get a repaired shell env (registry PATH, no empty HOME).
+test("repairShellEnv (win32): registry PATH first, inherited extras kept, dedupe, expansion, one Path key, empty HOME/SHELL dropped", async () => {
+  const { repairShellEnv, stripAgentEnv } = await import("../scripts/restart-runtime.mjs");
+  const BS = String.fromCharCode(92);
+  const reg = { HKLM: { type: "REG_EXPAND_SZ", value: String.raw`%SystemRoot%\system32;C:\Program Files\Git\usr\bin;C:\Tools` + BS }, HKCU: { type: "REG_SZ", value: String.raw`C:\Users\u\bin` } };
+  const regQuery = (key) => reg[key.startsWith("HKLM") ? "HKLM" : "HKCU"];
+  const env = { PATH: String.raw`c:\tools;C:\Program Files\Git\cmd;C:\Users\u\bin` + BS, SystemRoot: String.raw`C:\Windows`, Path: "ignored", HOME: "", SHELL: "", FOO: "" };
+  const out = repairShellEnv(env, { regQuery, platform: "win32" });
+  assert.deepEqual(out.Path.split(";"), [String.raw`C:\Windows\system32`, String.raw`C:\Program Files\Git\usr\bin`, String.raw`C:\Tools` + BS, String.raw`C:\Users\u\bin`, String.raw`C:\Program Files\Git\cmd`]);
+  assert.deepEqual(Object.keys(out).filter((k) => k.toLowerCase() === "path"), ["Path"]);
+  assert.ok(!("HOME" in out) && !("SHELL" in out)); assert.equal(out.FOO, "");
+  assert.equal(env.HOME, "", "input not mutated");
+  const lines = [];
+  const bad = repairShellEnv({ PATH: "C:/a", HOME: "" }, { regQuery: () => { throw new Error("boom"); }, platform: "win32", log: (l) => lines.push(l) });
+  assert.equal(bad.PATH, "C:/a"); assert.ok(!("HOME" in bad)); assert.equal(lines.length, 1);
+  const posix = { PATH: "/bin", HOME: "" };
+  assert.equal(repairShellEnv(posix, { platform: "linux", regQuery }), posix);
+  assert.deepEqual(stripAgentEnv({ VS_AGENT_ID: "x", VS_AGENT_TOKEN: "t", KEEP: "1" }), { KEEP: "1" });
+});
