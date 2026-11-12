@@ -465,6 +465,7 @@ test('aliases expose Paseo-shaped schemas and every alias result carries agentId
   assert.deepEqual(tools.create_agent.inputSchema.required, []);
   for (const n of ['send_agent_prompt', 'get_agent_status', 'cancel_agent', 'wait_for_agent']) assert.ok(tools[n].inputSchema.properties.agentId, n);
   assert.ok(tools.spawn_worker.inputSchema.required.includes('profile'), 'canonical schema untouched');
+  assert.deepEqual(tools.handoff_lead.inputSchema.properties.action, { type: 'string', enum: ['handoff', 'retire'] }, 'handoff_lead exposes action in tools/list');
   const ctx = fakeCtx({ runnerBackend: fakeBackend('rn'), paseoBackend: fakeBackend('ps') });
   for (const [name, args] of [['send_agent_prompt', { agentId: 'rn-1', prompt: 'x' }], ['cancel_agent', { agentId: 'rn-1' }], ['wait_for_agent', { agentId: 'rn-1' }]]) {
     assert.equal((await callTool(ctx, name, args)).agentId, 'rn-1', name);

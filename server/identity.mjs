@@ -236,7 +236,14 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
   const hadAt = raw.startsWith("@");
   const q = raw.replace(/^@+/, "").trim().toLowerCase();
   if (!q) return null;
-  for (const team of teams) {
+  const pref = String(preferTeamId ?? "").trim().toLowerCase();
+  const orderedTeams = pref
+    ? [
+        ...teams.filter((t) => String(t.id ?? "").toLowerCase() === pref || String(t.name ?? "").toLowerCase() === pref),
+        ...teams.filter((t) => String(t.id ?? "").toLowerCase() !== pref && String(t.name ?? "").toLowerCase() !== pref),
+      ]
+    : teams;
+  for (const team of orderedTeams) {
     for (const lane of team.lanes || []) {
       if (String(lane.id ?? "").toLowerCase() === q) {
         return { team, lane };
@@ -246,7 +253,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
       }
     }
   }
-  for (const team of teams) {
+  for (const team of orderedTeams) {
     for (const lane of team.lanes || []) {
       if (String(lane.name ?? "").toLowerCase() === q) {
         return { team, lane };
@@ -265,7 +272,7 @@ export function findLaneInRegistry(laneQuery, teams = loadTeamsRegistry(), prefe
     }
   }
   if (hits.length) {
-    const own = preferTeamId ? hits.find((h) => h.team.id === preferTeamId) : null;
+    const own = pref ? hits.find((h) => String(h.team.id ?? "").toLowerCase() === pref || String(h.team.name ?? "").toLowerCase() === pref) : null;
     return own ?? hits.find((h) => !h.lane.hidden) ?? hits[0];
   }
   return null;
@@ -466,10 +473,10 @@ export function resolveAgentIdentity(agentOrInput, options = {}) {
 
   // Step 1: Registry lookup on `labels.lane` (or legacy `labels.lead`)
   if (rawLane && !explicitOrphan) {
-    const regMatch = findLaneInRegistry(rawLane, teams) || matchDynamicPrefixedLane(rawLane, rawTeam, teams);
+    const callerTeamObj = rawTeam ? findTeamInRegistry(rawTeam, teams) : null;
+    const regMatch = findLaneInRegistry(rawLane, teams, callerTeamObj?.id || rawTeam) || matchDynamicPrefixedLane(rawLane, rawTeam, teams);
     if (regMatch) {
       const { team, lane } = regMatch;
-      const callerTeamObj = rawTeam ? findTeamInRegistry(rawTeam, teams) : null;
       const teamMismatch = Boolean(rawTeam && (!callerTeamObj || callerTeamObj.id !== team.id));
       return {
         laneId: lane.id,

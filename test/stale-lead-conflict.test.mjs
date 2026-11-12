@@ -11,7 +11,8 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveLeadWinner } from "../server/identity.mjs";
 import { createLeadHandoffCoordinator, performLeadHandoffHttp, resetLeadHandoffState } from "../server/lead-handoff.mjs";
-import { callTool, createContext } from "../server/mcp/tools.mjs";
+import { callTool, createContext, VS_TOOLS } from "../server/mcp/tools.mjs";
+import { toolList } from "../server/mcp/server.mjs";
 import { commandAgentVerb } from "../cli/vs.mjs";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
 import { seedDefaultPack } from "../server/profiles.mjs";
@@ -607,6 +608,263 @@ test("vs lead retire [--lane <code>]: retires stale and lost leads in usage, per
     // 7. Genuine conflict (two equally-new ★ Per9 leads) refuses to auto-retire
     agents.set("rn-per9-dup", { id: "rn-per9-dup", title: "★ Per9", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "perfection", role: "lead", ord: "9" } });
     await assert.rejects(callTool(ownerCtx, "handoff_lead", { action: "retire", lane: "perfection" }), /ambiguous/);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 4. R2 review fixes: [H] pending takeover guard, [M] handoff_lead action schema,
+//    [M] teamId scoping + equal-ord contender / pending exclusion in sweep,
+//    [L] stale/lost Overlord refused on cross-lane retire
+// ---------------------------------------------------------------------------
+
+test("R2 [H]: retireStaleLeads / performLeadHandoffHttp refuses to retire while a takeover is pending (durable state, fresh coordinator per HTTP call)", async () => {
+  resetLeadHandoffState();
+  const dir = mkdtempSync(join(os.tmpdir(), "vs-r2-pending-takeover-"));
+  const vsHome = join(dir, ".vibesquad");
+  const profilesPath = join(vsHome, "profiles.json");
+  mkdirSync(vsHome, { recursive: true });
+  writeFileSync(
+    join(dir, "teams.json"),
+    JSON.stringify({
+      teams: [{ id: "vibesquad", name: "VibeSquad", paths: ["vibesquad"], lanes: [{ id: "usage", name: "Usage" }] }],
+    }),
+    "utf8",
+  );
+  seedDefaultPack(profilesPath);
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = vsHome;
+
+  try {
+    // Old lead (ord 5) + unconfirmed successor (ord 6, vs.handoff-from=rn-usa5) + older stale lead (ord 2)
+    const agents = new Map([
+      ["rn-usa2", { id: "rn-usa2", title: "Usage Lead", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "usage", role: "lead", ord: "2" } }],
+      ["rn-usa5", { id: "rn-usa5", title: "★ Usa5", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "usage", role: "lead", ord: "5" } }],
+      ["rn-usa6", { id: "rn-usa6", title: "★ Usa6", status: "running", cwd: dir, labels: { team: "vibesquad", lane: "usage", role: "lead", ord: "6", "vs.handoff-from": "rn-usa5" } }],
+    ]);
+
+    const backend = {
+      async fetchAgents() { return { entries: [...agents.values()].map((agent) => ({ agent })), pageInfo: { hasMore: false } }; },
+      async fetchAgent(id) { return { agent: agents.get(id) ?? null }; },
+      async updateAgent(id, { name, labels }) {
+        const a = agents.get(id);
+        if (a) {
+          a.labels = { ...a.labels, ...labels };
+          if (name) a.title = name;
+        }
+      },
+      async deleteHeartbeat() {},
+    };
+
+    // Fresh coordinator per HTTP call (pendingTakeover Map is empty): must detect pending takeover from durable labels/res.pending
+    const res = await performLeadHandoffHttp(
+      { action: "retire", teamId: "vibesquad", laneId: "usage", agentClient: backend, baseHome: vsHome, profilesPath },
+      dir,
+      { agentsForTest: [...agents.values()] },
+    );
+    assert.equal(res.ok, false, "must refuse retire while a takeover is pending in the lane");
+    assert.match(res.error, /takeover is pending.*rn-usa6/);
+    assert.equal(agents.get("rn-usa6").labels.role, "lead", "live unconfirmed successor must never be retired");
+    assert.equal(agents.get("rn-usa5").labels.role, "lead", "predecessor stays lead until takeover confirms");
+    assert.equal(agents.get("rn-usa2").labels.role, "lead", "nothing is mutated while takeover is pending");
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R2 [M1]: handoff_lead inputSchema and MCP tools/list expose action enum ['handoff', 'retire']", () => {
+  assert.deepEqual(VS_TOOLS.handoff_lead.inputSchema.properties.action, {
+    type: "string",
+    enum: ["handoff", "retire"],
+  });
+  const listed = toolList().find((t) => t.name === "handoff_lead");
+  assert.ok(listed, "handoff_lead is in tools/list");
+  assert.deepEqual(listed.inputSchema.properties.action, {
+    type: "string",
+    enum: ["handoff", "retire"],
+  });
+});
+
+test("R2 [M2]: retireStaleLeads and sweepEarlierLaneLeads scope by teamId (shared lane code/id), exclude res.pending/vs.handoff-from, and never sweep equal-ord contenders", async () => {
+  resetLeadHandoffState();
+  const dir = mkdtempSync(join(os.tmpdir(), "vs-r2-team-scope-sweep-"));
+  const vsHome = join(dir, ".vibesquad");
+  const profilesPath = join(vsHome, "profiles.json");
+  mkdirSync(vsHome, { recursive: true });
+  mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
+  writeFileSync(
+    join(dir, "teams.json"),
+    JSON.stringify({
+      teams: [
+        {
+          id: "vibesquad",
+          name: "VibeSquad",
+          paths: ["vibesquad"],
+          lanes: [{ id: "bug-chaser", name: "Bug Chaser", code: "bug" }],
+        },
+        {
+          id: "other-squad",
+          name: "Other Squad",
+          paths: ["other"],
+          lanes: [{ id: "bug-chaser", name: "Other Bug", code: "bug" }],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  seedDefaultPack(profilesPath);
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = vsHome;
+
+  try {
+    const agents = new Map([
+      // vibesquad/bug-chaser: ord 1 stale, ord 4 oldLead, ord 5 equal-ord contender to successor, plus a lead carrying vs.handoff-from
+      ["rn-vs-old1", { id: "rn-vs-old1", title: "★ Bug1", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "bug-chaser", role: "lead", ord: "1" } }],
+      ["rn-vs-lead4", { id: "rn-vs-lead4", title: "★ Bug4", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "bug-chaser", role: "lead", ord: "4", profile: "Lead - Claude" } }],
+      ["rn-vs-tie5", { id: "rn-vs-tie5", title: "★ Bug5", status: "idle", createdAt: "2026-11-11T00:00:00.000Z", cwd: dir, labels: { team: "vibesquad", lane: "bug-chaser", role: "lead", ord: "5" } }],
+      ["rn-vs-pending", { id: "rn-vs-pending", title: "★ Bug3", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "bug-chaser", role: "lead", ord: "3", "vs.handoff-from": "rn-vs-tie5" } }],
+      // other-squad/bug-chaser (shares lane id & code @bug): must NEVER be touched by vibesquad sweep or retire
+      ["rn-other-old1", { id: "rn-other-old1", title: "★ Bug1", status: "idle", cwd: dir, labels: { team: "other-squad", lane: "bug-chaser", role: "lead", ord: "1" } }],
+      ["rn-other-win3", { id: "rn-other-win3", title: "★ Bug3", status: "idle", cwd: dir, labels: { team: "other-squad", lane: "bug-chaser", role: "lead", ord: "3" } }],
+    ]);
+
+    const coord = createLeadHandoffCoordinator({
+      rootDir: dir,
+      baseHome: vsHome,
+      profilesPath,
+      listAgents: async () => [...agents.values()],
+      getAgent: async (id) => agents.get(id) ?? null,
+      setLabels: async (id, labels, name) => {
+        const a = agents.get(id);
+        if (a) {
+          a.labels = { ...a.labels, ...labels };
+          if (name) a.title = name;
+        }
+      },
+      createAgent: async (p) => {
+        // Force successor ord to 5 so it ties rn-vs-tie5 on ord 5
+        const a = { id: "rn-vs-succ5", title: "★ Bug5", status: "idle", createdAt: "2026-11-11T00:01:00.000Z", cwd: dir, labels: { ...p.labels, ord: "5" } };
+        agents.set(a.id, a);
+        return a;
+      },
+      sendMessage: async () => {},
+      deleteHeartbeat: async () => {},
+    });
+
+    const spawned = await coord.spawnSuccessor({ oldLead: agents.get("rn-vs-lead4"), trigger: "auto-250", retireImmediately: false });
+    const confirmed = await coord.confirmTakeover(spawned.successorId);
+    assert.equal(confirmed.confirmed, true);
+
+    // Lower-ord stale lead in vibesquad is swept; oldLead is retired
+    assert.equal(agents.get("rn-vs-old1").labels.role, "former-lead", "earlier ord 1 lead in same team+lane is swept");
+    assert.equal(agents.get("rn-vs-lead4").labels.role, "former-lead", "handoff predecessor is retired");
+    // Equal-ord contender (ord 5 === maxOrd 5) is NOT swept (>=, not >), leaving the tie as CONFLICT for a human
+    assert.equal(agents.get("rn-vs-tie5").labels.role, "lead", "equal-ord contender must not be swept");
+    // Lead in res.pending / carrying vs.handoff-from is NOT swept
+    assert.equal(agents.get("rn-vs-pending").labels.role, "lead", "pending / vs.handoff-from lead must not be swept");
+    // Other Squad's leads sharing the same lane id/code are untouched
+    assert.equal(agents.get("rn-other-old1").labels.role, "lead", "other-squad lead must not be swept by vibesquad");
+    assert.equal(agents.get("rn-other-win3").labels.role, "lead", "other-squad winner untouched");
+
+    // Retiring other-squad @bug retires only other-squad's stale lead, leaving vibesquad untouched
+    const otherRetire = await coord.retireStaleLeads({ teamId: "other-squad", laneId: "@bug" });
+    assert.equal(otherRetire.ok, true);
+    assert.equal(otherRetire.teamId, "other-squad");
+    assert.equal(otherRetire.winnerId, "rn-other-win3");
+    assert.deepEqual(otherRetire.retired.map((r) => r.id), ["rn-other-old1"]);
+    assert.equal(agents.get("rn-other-old1").labels.role, "former-lead");
+    assert.equal(agents.get("rn-vs-tie5").labels.role, "lead");
+    assert.equal(agents.get("rn-vs-succ5").labels.role, "lead");
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("R2 [L]: cross-lane retire refuses a stale (lower-ord) or lost (closed+resumable) former Overlord", async () => {
+  resetLeadHandoffState();
+  const dir = mkdtempSync(join(os.tmpdir(), "vs-r2-overlord-auth-"));
+  const vsHome = join(dir, ".vibesquad");
+  const profilesPath = join(vsHome, "profiles.json");
+  mkdirSync(vsHome, { recursive: true });
+  const teams = [
+    {
+      id: "vibesquad",
+      name: "VibeSquad",
+      paths: ["vibesquad"],
+      lanes: [
+        { id: "vibesquad", name: "VibeSquad", hub: true },
+        { id: "usage", name: "Usage" },
+      ],
+    },
+  ];
+  writeFileSync(join(dir, "teams.json"), JSON.stringify({ teams }), "utf8");
+  seedDefaultPack(profilesPath);
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = vsHome;
+
+  try {
+    const agents = new Map([
+      ["rn-overlord-stale", { id: "rn-overlord-stale", title: "★ Hub2", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "2" } }],
+      ["rn-overlord-lost", { id: "rn-overlord-lost", title: "★ Hub12", status: "closed", resumable: true, lost: true, cwd: dir, labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "12" } }],
+      ["rn-overlord-live", { id: "rn-overlord-live", title: "★ Hub9", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "vibesquad", role: "lead", ord: "9" } }],
+      ["rn-usa2", { id: "rn-usa2", title: "Usage Lead", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "usage", role: "lead", ord: "2" } }],
+      ["rn-usa6", { id: "rn-usa6", title: "★ Usa6", status: "idle", cwd: dir, labels: { team: "vibesquad", lane: "usage", role: "lead", ord: "6" } }],
+    ]);
+
+    const backend = {
+      async fetchAgents() { return { entries: [...agents.values()].map((agent) => ({ agent })), pageInfo: { hasMore: false } }; },
+      async fetchAgent(id) { return { agent: agents.get(id) ?? null }; },
+      async updateAgent(id, { name, labels }) {
+        const a = agents.get(id);
+        if (a) {
+          a.labels = { ...a.labels, ...labels };
+          if (name) a.title = name;
+        }
+      },
+      async deleteHeartbeat() {},
+    };
+
+    const makeCtx = (identity) => {
+      const c = createContext({
+        teams,
+        withBackend: async (_o, fn) => fn(backend),
+        identity,
+        ...verifiedIdentity(identity, { backend, teams }),
+      });
+      c.performHandoff = (body) => performLeadHandoffHttp({ ...body, agentClient: backend, baseHome: vsHome, profilesPath }, dir, { agentsForTest: [...agents.values()] });
+      return c;
+    };
+
+    // 1. Stale Overlord (ord 2 vs live ord 9) is refused both in MCP tool and direct HTTP handler
+    const staleOverlordCtx = makeCtx({ agentId: "rn-overlord-stale", team: "vibesquad", lane: "vibesquad", role: "lead" });
+    await assert.rejects(callTool(staleOverlordCtx, "handoff_lead", { action: "retire", lane: "usage" }), /not the active hub lead/);
+    await assert.rejects(
+      performLeadHandoffHttp({ action: "retire", lane: "usage", callerId: "rn-overlord-stale", agentClient: backend, baseHome: vsHome, profilesPath }, dir, { agentsForTest: [...agents.values()] }),
+      /not the active hub lead/,
+    );
+
+    // 2. Lost (closed+resumable) Overlord (even with higher ord 12) is refused both in MCP tool and direct HTTP handler
+    const lostOverlordCtx = makeCtx({ agentId: "rn-overlord-lost", team: "vibesquad", lane: "vibesquad", role: "lead" });
+    await assert.rejects(callTool(lostOverlordCtx, "handoff_lead", { action: "retire", lane: "usage" }), /lost\/closed/);
+    await assert.rejects(
+      performLeadHandoffHttp({ action: "retire", lane: "usage", callerId: "rn-overlord-lost", agentClient: backend, baseHome: vsHome, profilesPath }, dir, { agentsForTest: [...agents.values()] }),
+      /lost\/closed/,
+    );
+    assert.equal(agents.get("rn-usa2").labels.role, "lead", "stale/lost Overlords must not mutate target lane");
+
+    // 3. Current live hub winner (ord 9) succeeds
+    const liveOverlordCtx = makeCtx({ agentId: "rn-overlord-live", team: "vibesquad", lane: "vibesquad", role: "lead" });
+    const ok = await callTool(liveOverlordCtx, "handoff_lead", { action: "retire", lane: "usage" });
+    assert.equal(ok.id, "rn-usa6");
+    assert.deepEqual(ok.retiredIds, ["rn-usa2"]);
+    assert.equal(agents.get("rn-usa2").labels.role, "former-lead");
   } finally {
     if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
     else process.env.VIBESQUAD_HOME = prevHome;
