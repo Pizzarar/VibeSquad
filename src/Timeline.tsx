@@ -841,9 +841,11 @@ export function TimelineItem({
             style={failed ? { borderLeft: "3px solid #ff4d6d" } : undefined}
             onClick={() => setExpanded((v) => !v)}
           >
-            <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
-            <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
-            {summary} <span className="muted">· {it.status}</span>
+            <div className="tl-sub-summary">
+              <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+              <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
+              {summary} <span className="muted">· {it.status}</span>
+            </div>
             {failed && errText && <div style={{ color: "var(--pink-t)", fontSize: "0.85em" }}>{errText}</div>}
             {expanded && (
               <SubAgentBody agentId={agentId} subagentKey={subagentKey} d={d} />
@@ -1474,19 +1476,7 @@ export function Timeline({
   };
 
   return (
-    <div
-      className="timeline"
-      ref={timelineRef}
-      onClick={(ev) => {
-        if (ev.target === ev.currentTarget) setSelectedEntryKey(null);
-      }}
-      onScroll={(e) => {
-        const el = e.currentTarget;
-        const near = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-        pinned.current = near;
-        setIsPinned((p) => (p === near ? p : near));
-      }}
-    >
+    <div className="timeline-col">
       {(barOpen || pinnedTodo) && <div className="tl-head">
       {barOpen && (
         <div className="tl-bar" data-testid="tl-bar">
@@ -1535,6 +1525,19 @@ export function Timeline({
       )}
       {pinnedTodo && <PinnedTodo entry={pinnedTodo} />}
       </div>}
+      <div
+        className="timeline"
+        ref={timelineRef}
+        onClick={(ev) => {
+          if (ev.target === ev.currentTarget) setSelectedEntryKey(null);
+        }}
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          const near = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+          pinned.current = near;
+          setIsPinned((p) => (p === near ? p : near));
+        }}
+      >
       {slowFirstLoad && <TimelineSkeleton />}
       <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {shouldShowLoadOlder(entries, hasMore) && (
@@ -1638,6 +1641,7 @@ export function Timeline({
           ↓ Follow output
         </button>
       )}
+      </div>
     </div>
   );
 }

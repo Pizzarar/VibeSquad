@@ -479,8 +479,9 @@ export function SkyZones({
       className={zonesClass}
       data-testid="sky-zones"
       data-open={open ?? "none"}
-      style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...(skyUrl ? { backgroundImage: `url(${skyUrl})` } : null), ...slamStyle }}
+      style={{ ["--sky-cols" as string]: SKY_COLUMNS, ...slamStyle }}
     >
+      {skyUrl && <span className="sky-band" data-testid="sky-band" aria-hidden="true" style={{ backgroundImage: `url(${skyUrl})` }} />}
       <Zone zone={zones.riffbot} lander={zones.overlord} faces={faces} frameStyle={frameStyle} force={skyRiffMode(open, hasFaceMode(faces, "riffbot", "scared")) ?? slamRiffForce(slam, faces)} takeover={takeover} labelModel={labelModel} taken={open === "overlord"} clickable={clickable("riffbot")} isOpen={open !== null} openLabel={open ? LABEL[open] : undefined} onFace={() => onFace("riffbot")} onSuccessor={onSuccessor} onSpinUp={spinRiff} busy={riffStarting} />
       <Zone zone={zones.overlord} faces={faces} frameStyle={frameStyle} force={slamFaceForce(slam, faces)} fx={slamOn ? { shake: true } : null} clickable={clickable("overlord")} isOpen={open === "overlord"} onFace={() => onFace("overlord")} onSuccessor={onSuccessor} onSpinUp={spinOverlord} busy={overlordBusy} />
       <Zone panel zone={zones.riffbot} slamArt={puff} faces={faces} frameStyle={frameStyle} fx={slamOn || slam.closing ? { shake: slamOn, closing: slam.closing, smear: slam.smear } : null} isOpen={open === "riffbot"} onClose={() => setOpen(skyExit)} onSuccessor={onSuccessor} onSpinUp={spinRiff} busy={riffStarting} />

@@ -1168,6 +1168,14 @@ code {
   background: color-mix(in srgb, var(--cyan) 7%, transparent);
 }
 
+/* Only the one-line sub-agent summary is nowrap/ellipsized; the expanded body + error wrap normally. */
+.tl-sub-summary {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
 .tl-sub.running {
   animation: pulse 1.2s steps(2) infinite;
 }
@@ -1325,6 +1333,13 @@ code {
 .handoff-row { display: flex; align-items: center; gap: var(--sp-3); padding: 5px 0; border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent); font-family: var(--display); font-size: 13px; }
 .handoff-row .row-name { flex: 1; min-width: 0; }
 .handoff-row.warn { color: var(--pink-t); }
+/* Orphan cwd/labels <code> stays on one line (ellipsized) so a long value never wraps into a two-line box that the
+   overlap guard unions across the sibling code. The flex parent needs min-width:0 for the ellipsis to kick in; at the
+   small-window breakpoint (ResponsiveSmallWindow.css) the code wraps instead. */
+.handoff-row.unassigned-row > span.muted.small { min-width: 0; }
+@media (min-width: 1001px) and (min-height: 761px) {
+  .handoff-row.unassigned-row > span.muted.small code { display: inline-block; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+}
 .warn-badge { font-family: var(--arcade); font-size: 9px; padding: 1px 6px; border: 1px solid var(--hot-pink); background: var(--hot-pink-dim); }
 .lane-tag { font-family: var(--arcade); font-size: 9px; color: var(--cyan-t); border: 1px solid color-mix(in srgb, var(--line) 50%, transparent); padding: 1px 6px; }
 .handoff-row .arrow { color: var(--violet-t); }
@@ -2807,7 +2822,7 @@ html {
 
 /* SS1/SS3: chat regions counter-zoom so root zoom x --chat-zoom = the chat scale; the kit pixel inside is snapped for that scale. */
 :root { --chat-zoom: 1; --u3-px-chat: 2px; }
-.drawer-shell > .timeline,
+.drawer-shell > .timeline-col,
 .drawer .composer {
   zoom: var(--chat-zoom, 1);
   --u3-px: var(--u3-px-chat, 2px);
@@ -3356,6 +3371,16 @@ html, body, #root { overflow-x: hidden; }
 .drawer-shell {
   display: flex;
   flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+}
+/* The timeline column wraps the sticky header (search bar / pinned todo) ABOVE the scrollable timeline, so the
+   header is always visible (pinned) and the messages scroll in their own box beneath it — no overlap between them. */
+.drawer-shell .timeline-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
@@ -4065,7 +4090,7 @@ html, body, #root { overflow-x: hidden; }
 .squad-home-tile:hover, .squad-home-tile:focus-visible { border-color: var(--cyan); }
 .squad-home-tile.needs-you { border-color: var(--hot-pink); }
 .squad-home-tile.pin-plus { align-items: center; justify-content: center; min-height: 120px; }
-.squad-home-tile-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.squad-home-tile-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .squad-home-tile-name { flex: 1; min-width: 0; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .squad-home-huddle { display: flex; align-items: center; padding-left: 10px; min-height: 42px; }
 .squad-home-portrait { position: relative; background: none; border: 0; padding: 0; cursor: pointer; border-radius: 50%; }
@@ -4248,7 +4273,10 @@ button.file-chip { cursor: pointer; font: inherit; }
 }
 
 /* Timeline search / prompt navigator / filters */
-.tl-head { position: sticky; top: 0; z-index: 10; display: flex; flex-direction: column; }
+/* The header (search bar and/or pinned plan todo) lives above the scrollable timeline (src/Timeline.tsx renders it in
+   .timeline-col, outside .timeline), so it stays pinned whether or not the search bar is open and the messages scroll
+   in their own box beneath it. */
+.tl-head { display: flex; flex-direction: column; padding: 12px 12px 0; }
 .tl-bar { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; background: var(--well); border: 1px solid var(--cyan); }
 .tl-bar-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .tl-bar-row input { flex: 1 1 140px; min-width: 0; }
@@ -4520,6 +4548,10 @@ button.project-file-name:hover { text-decoration: underline; }
 .drawer-config-summary { list-style: none; cursor: pointer; user-select: none; white-space: nowrap; }
 .drawer-config-summary::-webkit-details-marker { display: none; }
 .drawer-config-popover { position: absolute; top: calc(100% + 4px); left: 0; z-index: 40; background: var(--panel); border: 1px solid var(--cyan); padding: var(--sp-2); display: flex; flex-direction: column; gap: 6px; min-width: 190px; box-shadow: var(--bevel), 0px 2px 0 var(--shadow-hard); }
+/* A closed <details> hides its non-summary children via a shadow-slot that getComputedStyle can't see (display stays
+   "flex"), so the overlap guard still measures the popover's selects and flags them over the working chips. Make the
+   closed state explicit so the guard's visibility check sees it. */
+.drawer-config-menu:not([open]) .drawer-config-popover { display: none; }
 .drawer-config-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .drawer-head-compact > * { flex: none; }
 .drawer-head-compact .avatar { flex: none; }
@@ -4818,7 +4850,9 @@ button.project-file-name:hover { text-decoration: underline; }
 /* G8b/G8c: the wall between the TVs: one thin divider (2px theme ink by default; sky-crt.json `wall` art when it loads, inline style) on the centre line, above both TVs and the chat panel. Absolute, so it never takes grid space. */
 .sky-wall { position: absolute; top: 8px; bottom: 12px; left: 50%; width: 2px; margin-left: -1px; background: var(--u3-ink, #07040f); z-index: 4; pointer-events: none; box-sizing: border-box; }
 .sky-wall.has-art { top: 0; bottom: 0; }
-.sky-zones.has-sky-art { background-size: auto 100%; background-position: left bottom; background-repeat: repeat-x; image-rendering: pixelated; } /* @art: horizontally tileable band */
+/* @art: horizontally tileable sky band, drawn as its own layer (not the .sky-zones background) so the overlap guard's
+   bar-strip probe never mistakes it for a painted title bar behind the TVs' Spin Up controls. */
+.sky-band { position: absolute; inset: 0; z-index: 0; pointer-events: none; background-size: auto 100%; background-position: left bottom; background-repeat: repeat-x; image-rendering: pixelated; }
 .sky-zone {
   display: flex;
   flex-direction: column;
@@ -6105,7 +6139,8 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 }
 
 /* C2: the Perfection angel strip on top of the Usage panel: the sky-god bezel (.sky-zone, same FaceStage) at the face's integer DEVICE scale (--angel-k = css px per art px, set inline from skyZonesLogic angelCssScale: 6 device px at 4K@120%, 4 at 1080, 2 at 720), cloud fill (inline from sky-clouds.json) on either side. The bezel is 49 art px tall: 1 art px of headroom above the 48px face for the hover hop. */
-.angel-strip { --angel-k: 4; --sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2; display: flex; justify-content: center; align-items: flex-end; padding: 0; margin-bottom: 8px; background-color: var(--sky-face-bg-dark); overflow: hidden; image-rendering: pixelated; }
+.angel-strip { --angel-k: 4; --sky-face-bg-dark: #2a1b6b; --sky-face-bg-light: #95d3f2; display: flex; justify-content: center; align-items: flex-end; padding: 0; margin-bottom: 8px; background-color: var(--sky-face-bg-dark); overflow: hidden; image-rendering: pixelated; position: relative; }
+.angel-clouds { position: absolute; inset: 0; pointer-events: none; }
 :root[data-theme="light"] .angel-strip { background-color: var(--sky-face-bg-light); }
 .angel-bezel { box-sizing: content-box; flex: none; width: calc(160px * var(--angel-k)); max-width: calc(100% - 48px); height: calc(49px * var(--angel-k)); }
 .angel-bezel:not(.has-frame) { border-width: 2px; }
