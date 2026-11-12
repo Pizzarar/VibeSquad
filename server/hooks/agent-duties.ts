@@ -2636,6 +2636,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
           deliver: (d: WatchDelivery) => deliverWatchPing(d),
           spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
+          nudge: (id: string, text: string) => nudgeIdleWorker(id, text),
           log,
         })
       : null;
@@ -2664,6 +2665,39 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       return findLead(paseo, teamIdOf(team, currentTeams()), lane);
     }
 
+    /**
+     * idea-160: the Squad Overlord (the team's hub-lane Lead) for an escalation-2 ping. Never null while anyone is live: a Squad
+     * without a hub lane/Lead falls back to the home Squad's Overlord (`vs who lead --lane vibesquad`), then to the watch
+     * owner's own target, and logs which fallback was used (the real teams.json flags every Squad's hub, so this is a safety net).
+     */
+    async function resolveWatchOverlord(paseo: Paseo, set: WatchSet): Promise<AgentSnap | null> {
+      const teams = currentTeams();
+      const hubLead = async (teamId: string) => {
+        const team = teams.find((t) => t.id === teamId);
+        const hub = team?.lanes?.find((l) => isHubCwd(team, l.id));
+        return hub ? findLead(paseo, teamId, hub.id) : null;
+      };
+      const teamId = teamIdOf(set.team || (await snap(paseo, set.owner))?.labels?.team, teams);
+      const own = teamId ? await hubLead(teamId) : null;
+      if (own) return own;
+      const home = await hubLead("vibesquad");
+      if (home) {
+        log(`watch ${set.id}: no live hub Lead for ${teamId || "?"}; escalation 2 goes to the vibesquad Overlord ${home.id}`);
+        return home;
+      }
+      const owner = await resolveWatchTarget(paseo, set);
+      if (owner) log(`watch ${set.id}: no live Overlord anywhere; escalation 2 goes to the owner's target ${owner.id}`);
+      return owner;
+    }
+
+    /** idea-160: the one auto-nudge for a worker idle without a report. Re-checks it is idle and live: never interrupts a running turn. */
+    async function nudgeIdleWorker(id: string, text: string) {
+      if (!paseoApi) return;
+      const w = await snap(paseoApi, id);
+      if (!w || w.archivedAt || w.status !== "idle" || !isLiveAgent(w)) return;
+      await paseoApi.agents.ref(id).send(text).catch((e: unknown) => log(`watch idle nudge to ${id} failed: ${e}`));
+    }
+
     /** True when `entry` was taken over by a watch set whose ping goes to `leadId`: the set's one ping replaces this wake. */
     async function watchHolds(paseo: Paseo, entry: LogEntry, leadId: string): Promise<boolean> {
       const setIds = watchTaken.get(entry);
@@ -2690,10 +2724,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (queuedAt) void flushWake(paseo, queuedAt);
         return;
       }
-      const target = await resolveWatchTarget(paseo, d.set);
-      if (!target) return log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; ping held`);
+      const toOverlord = d.target === "overlord";
+      const target = toOverlord ? await resolveWatchOverlord(paseo, d.set) : await resolveWatchTarget(paseo, d.set);
+      if (!target) return log(`watch ${d.setId}: no live ${toOverlord ? "Overlord" : "owner or lead"} for ${d.team}/${d.lane}; ping held`);
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
-      const text = target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
+      const text = toOverlord ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text, refs: [d.setId] };
       watchKeyOf.set(entry, d.key);
       pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
