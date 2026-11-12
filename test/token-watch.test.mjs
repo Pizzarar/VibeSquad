@@ -161,7 +161,7 @@ test("buddy: team thresholds override defaults", async () => {
   w.stop();
 });
 
-test("workers (and archived / closed agents): nothing at any size", async () => {
+test("workers: only the worker context guard's wrap-up (idea-162), never a spawn or restart; closed agents: nothing at any size", async () => {
   const rootDir = makeRoot();
   const r = makeRunner();
   r.agents.set("rn-w", worker("rn-w"));
@@ -170,7 +170,8 @@ test("workers (and archived / closed agents): nothing at any size", async () => 
   r.usage("rn-w", 900_000);
   r.usage("rn-closed", 900_000);
   await tick();
-  assert.equal(r.sent.length, 0);
+  assert.deepEqual(r.sent.map((s) => s.id), ["rn-w"]); // idle worker, no lead in the lane: the wrap-up only (worker-context-guard.test.mjs covers the rest)
+  assert.match(r.sent[0].text, /worker soft limit/);
   assert.equal(r.created.length, 0);
   w.stop();
 });
