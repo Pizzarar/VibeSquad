@@ -5,7 +5,7 @@
 // Run: node --test --import ./test/setup/hermetic.mjs test/relay-wiring.test.mjs
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, describe, test } from "node:test";
@@ -258,6 +258,28 @@ describe("E5 wiring: host key rotation", () => {
     assert.equal(r3.status, 0, r3.stderr);
     assert.equal(JSON.parse(r3.stdout).hostId, w.hostId);
     assert.equal(w.checkKeyFile(), false, "unchanged file: no restart");
+    w.stop();
+  });
+});
+
+describe("idea-180: a rotation inside one mtime tick is still noticed", () => {
+  test("rotate, then force the old mtime back: checkKeyFile reloads once, then stays quiet", async () => {
+    const relay = makeRelay();
+    const w = startWiring(relay);
+    await tick();
+    const t = new Date("2026-01-01T00:00:00Z");
+    utimesSync(keyFile, t, t);
+    assert.equal(w.checkKeyFile(), false, "touching the mtime alone is not a rotation");
+    const oldPub = w.pub;
+    const size = readFileSync(keyFile).length;
+    const next = tunnel.rotateHostKeypair(keyFile);
+    utimesSync(keyFile, t, t);
+    assert.equal(readFileSync(keyFile).length, size, "same size");
+    assert.equal(w.checkKeyFile(), true, "same mtime and size, different key: reloaded");
+    assert.equal(w.pub, next.pubB64);
+    assert.notEqual(w.pub, oldPub);
+    assert.equal(w.checkKeyFile(), false, "no reload loop when nothing changed");
+    assert.equal(w.checkKeyFile(), false);
     w.stop();
   });
 });

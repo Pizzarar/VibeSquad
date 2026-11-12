@@ -2,7 +2,7 @@
 // recording, untrusted relay. No network. Run: node --test --import ./test/setup/hermetic.mjs test/relay-tunnel.test.mjs
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -1129,6 +1129,26 @@ describe("E5 wiring: host key rotation", () => {
     if (process.platform !== "win32") assert.equal(statSync(file).mode & 0o777, 0o600);
     assert.equal(keypairFileStamp(join(tmp, "rot", "missing.json")).endsWith("|missing"), true);
     assert.deepEqual(readdirSync(join(tmp, "rot")), ["host-keypair.json"], "no leftover temp files next to the key");
+  });
+
+  test("idea-180: the stamp changes on a rotation even when mtime and size are forced identical (one Windows mtime tick)", () => {
+    const file = join(tmp, "rot-tick", "host-keypair.json");
+    const t = new Date("2026-01-01T00:00:00Z");
+    loadOrCreateHostKeypair(file);
+    utimesSync(file, t, t);
+    const st1 = statSync(file);
+    const stampBefore = keypairFileStamp(file);
+    rotateHostKeypair(file);
+    utimesSync(file, t, t);
+    const st2 = statSync(file);
+    assert.equal(st2.mtimeMs, st1.mtimeMs, "same mtime");
+    assert.equal(st2.size, st1.size, "same size");
+    assert.notEqual(keypairFileStamp(file), stampBefore, "the content hash still tells the keys apart");
+    assert.equal(keypairFileStamp(file), keypairFileStamp(file), "stable when nothing changed");
+    assert.match(keypairFileStamp(file), /\|[0-9a-f]{16}$/);
+    const dir = join(tmp, "rot-tick", "is-a-dir");
+    mkdirSync(dir);
+    assert.equal(keypairFileStamp(dir), `${dir}|unreadable`, "a read error never throws from the poller");
   });
 
   test("a client pinned to the old key fails the handshake against a host that rotated; the new key works", async () => {
