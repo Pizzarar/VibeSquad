@@ -2486,7 +2486,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const startedAt = Date.now();
       /** A [done] entry for this worker written since the digest started (by the digest agent). */
       const verdictLogged = () => doneLoggedSince(teamIdOf(team, currentTeams()), worker.id, startedAt);
-      const fallback = async (why: string) => {
+      let digestIdForFallback = "";
+      const fallback = async (why: string, archiveDigestAfter = true) => {
         if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
         const fresh = await snap(paseo, workerId);
         if (isWorkerBusy(fresh)) return;
@@ -2500,6 +2501,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           text,
           refs: [worker.id],
         });
+        // idea-207a: the turn now has its fallback entry. Archive the digest so the runner's transient retry (antigravity
+        // "unexpected EOF" resends after the waiter already gave up) cannot add a second, real verdict for the same turn.
+        if (archiveDigestAfter && digestIdForFallback) await archiveDigest(paseo, digestIdForFallback);
       };
 
       try {
@@ -2528,6 +2532,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           autoArchive: true,
         });
         const createdDigestId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+        digestIdForFallback = createdDigestId;
         if (createdDigestId) {
           if ((turnEpoch.get(workerId) ?? 0) !== epoch) {
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
@@ -2544,7 +2549,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           .then((res: any) => {
             if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
             if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
-              return fallback("failed");
+              // a "timeout" status means awaitDigestFinish already archived the digest on giving up
+              return fallback("failed", res.status !== "timeout");
             }
             // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
             if (!verdictLogged()) return fallback("logged nothing");
@@ -3394,8 +3400,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
     /** The newest done entry attributed to a worker. */
     type DoneIndex = Map<string, LogEntry>;
-    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …". */
-    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL)\b/;
+    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", "NO-VERDICT: …". */
+    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL|NO-VERDICT)\b/;
     /**
      * One pass over a team log: per worker, the NEWEST `done` entry that belongs to it. Workers cannot `vs log`, so the report
      * is normally the digest's `{agent: digest, refs: [worker]}`. An entry belongs to worker W when its author is W, or when it

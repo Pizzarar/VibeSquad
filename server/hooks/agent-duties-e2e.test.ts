@@ -1759,6 +1759,46 @@ test(
   }),
 );
 
+test(
+  "idea-207a: a digest that errors (EOF) gets one UNVERIFIED fallback and is archived, so a runner retry cannot add a second verdict",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = { id: "w-eof", title: "Bug1 · eof", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "eof" } };
+    const agents = new Map<string, any>([["w-eof", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-eof", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    (h.paseo.agents as any).create = async () => ({ id: "dig-eof", agent: { id: "dig-eof" }, waitForFinish: async () => ({ status: "error" }) });
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-E");
+      await wait(100);
+    } finally {
+      h.stop?.();
+    }
+    assert.deepEqual(h.archivedIds, ["dig-eof"], "archived right after the fallback, once");
+    const lines = readFileSync(join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl"), "utf8").split(String.fromCharCode(10)).filter((l) => l.includes("UNVERIFIED"));
+    assert.equal(lines.length, 1);
+  }),
+);
+
+test(
+  "idea-204 L1: a NO-VERDICT ref entry from a non-digest, non-manager author is credited as the worker report (kept as fail, not no-done-report)",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const base = { cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true };
+    const agents = new Map<string, any>([
+      ["w-nv", { id: "w-nv", title: "w-nv", ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "worker" } }],
+      ["lead-1", { id: "lead-1", title: "lead-1", ...base, labels: { team: "vibesquad", lane: "vibesquad", role: "lead", lead: "vibesquad" } }],
+    ]);
+    const h = harness(agents, { briefRoot, unitBranchState: async () => ({ unit: "u", merged: true }) });
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      await h.onTurnEnded(agents.get("lead-1"));
+      writeFileSync(join(vsHome, "teams", "vibesquad", "log.jsonl"), JSON.stringify({ ts: new Date(Date.now() - 45 * 60_000).toISOString(), agent: "digest-x", lane: "vibesquad", type: "done", text: "NO-VERDICT: reviewer vague", refs: ["w-nv"] }) + "\n", "utf8");
+      const rep = await h.sweepDoneWorkersReport({ now: Date.now() }); assert.deepEqual(rep.kept.fail.map((i: any) => i.id), ["w-nv"], "credited (a NO-VERDICT is not a pass), not no-done-report"); assert.deepEqual(rep.kept["no-done-report"], []);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // B3 — one-time sweep: dry run lists, apply archives exactly that set (same predicate)
 // ---------------------------------------------------------------------------
