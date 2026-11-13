@@ -1019,7 +1019,12 @@ export class Runner {
       entry.quiet = false;
       this._turnStarted(entry);
     }
-    try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) { if (fresh) entry.inflight = 0; throw err; }
+    try { entry.handle.send(text, images.length ? { images } : undefined); } catch (err) {
+      // The turn never opened: give back its slot and any over-cap owner/digest mark _noteOverCap took for it (marks are
+      // only taken for a fresh turn, so this releases exactly that one; every deliver path comes through here).
+      if (fresh) { entry.inflight = 0; this._releaseOverCap(entry, 1); }
+      throw err;
+    }
   }
 
   // opts.images: [{ data (base64), mimeType }]; opts.activeTurnBehavior: 'steer' (default, queue behind/into the turn)

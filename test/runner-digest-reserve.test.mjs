@@ -16,9 +16,16 @@ function controlledAdapter() {
   const byId = new Map();
   const adapter = {
     canPark: true,
+    throwSend: 0, // the next N sends throw synchronously (an adapter whose child stdin is gone)
     start({ id, emit, onExit }) {
       byId.set(id, { emit, onExit });
-      return { send() { emit('status', { status: 'running' }); }, cancel() {}, kill() {} };
+      return {
+        send() {
+          if (adapter.throwSend > 0) { adapter.throwSend--; throw new Error('send failed (test)'); }
+          emit('status', { status: 'running' });
+        },
+        cancel() {}, kill() {},
+      };
     },
   };
   adapter.idle = (id) => byId.get(id).emit('status', { status: 'idle' });
@@ -130,6 +137,37 @@ test('reserve: a digest process that exits mid-turn releases its reserve (no lea
   assert.equal(runner.overCapDigest.get('claude'), 0);
   const d2 = digest(runner, 'rn-w2');
   assert.ok(isRunning(runner, d2), 'the reserve is free again');
+  runner.shutdown();
+});
+
+test('reserve: a digest whose send throws synchronously gives its reserve back (the next digest starts)', () => {
+  const { runner, adapter } = mkRunner();
+  plain(runner, 'a'); // holds the single slot
+  adapter.throwSend = 1;
+  const d1 = digest(runner, 'rn-w1'); // create -> _noteOverCap (reserve) -> _deliver throws -> _failJob
+  assert.ok(!isRunning(runner, d1), 'the failed digest holds no turn');
+  assert.equal(runner.overCapDigest.get('claude') ?? 0, 0, 'reserve released on the sync send failure');
+  assert.equal(runner.live.get(d1)?.digestOverCap ?? 0, 0);
+  const d2 = digest(runner, 'rn-w2');
+  assert.ok(isRunning(runner, d2), 'the reserve is free for the next digest');
+  assert.equal(runner.overCapDigest.get('claude'), 1);
+  runner.shutdown();
+});
+
+test('owner over-cap: a send that throws synchronously gives the owner budget back', () => {
+  const { runner, adapter } = mkRunner();
+  plain(runner, 'a'); // holds the single slot
+  const o = plain(runner, 'o'); // queued plain create
+  owner(runner, o); // coalesces: starts over the cap as an owner turn
+  assert.ok(isRunning(runner, o));
+  assert.equal(runner.overCapOwner.get('claude'), 1);
+  adapter.idle(o); // releases; o is now a live idle agent
+  assert.equal(runner.overCapOwner.get('claude'), 0);
+  adapter.throwSend = 1;
+  owner(runner, o); // _deliverJob -> _noteOverCap (owner) -> _deliver throws -> _failJob
+  assert.ok(!isRunning(runner, o));
+  assert.equal(runner.overCapOwner.get('claude') ?? 0, 0, 'owner budget released on the sync send failure');
+  assert.equal(runner.live.get(o)?.ownerOverCap ?? 0, 0);
   runner.shutdown();
 });
 
