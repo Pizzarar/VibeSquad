@@ -720,6 +720,15 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     };
     const sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
     if (sres !== true) { fail('server start', sres === 'died' ? `server process ${spawnedServerPid} died during start` : `not healthy after ${Math.round(serverBootMs / 1000)}s`); throw new Error('server not healthy'); }
+    // A launcher that handed off and went healthy inside serverDead's 3s guard never got adopted: do it on success too (idea-217).
+    if (spawnedServerPid != null && !adoptedListener) {
+      const lp = d.listenerPid(det.port);
+      if (lp != null && lp !== spawnedServerPid && d.pidAlive(lp)) {
+        step('server launcher handed off, tracking listener', { launcher: spawnedServerPid, pid: lp });
+        spawnedServerPid = lp; adoptedListener = true;
+        try { writeFileSync(path.join(det.configDir, 'server.pid'), String(lp)); } catch { /* best effort, as at spawn */ }
+      }
+    }
     step('server healthy');
 
     let seenPid = null; let directPid = null; let directAt = 0;
