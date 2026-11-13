@@ -107,6 +107,15 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       lineReader(child.stdout, (line) => {
         let m;
         try { m = JSON.parse(line); } catch { emit('raw', { line }); return; }
+        // idea-112: a turn the CLI opens on its own (a run_in_background task finished while idle: the CLI feeds its
+        // completion notice back as a new turn) has no send() behind it. Without a 'running' the runner keeps it idle (a
+        // park could cut it) and the server sees idle -> idle, so the turn's final reaches nobody. Any turn message while no
+        // turn is open opens one; its `result` closes it like a prompted turn. Only assistant/user lines count: they exist
+        // only inside a turn, while a system/init (sent first in a turn) could also come from a bare start and never close.
+        if (pending === 0 && !stopped && (m.type === 'assistant' || m.type === 'user')) {
+          pending = 1;
+          emit('status', { status: 'running' });
+        }
         if (m.type === 'system' && m.subtype === 'init') emit('session', { sessionId: m.session_id, model: m.model });
         else if (m.type === 'system' && m.subtype === 'compact_boundary') {
           // K0 probe 11-08: a `/compact <focus>` user turn emits this with compact_metadata {trigger, pre_tokens, post_tokens, ...}.

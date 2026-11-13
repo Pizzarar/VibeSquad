@@ -249,6 +249,13 @@ export function drainNoticeText(drain, work) {
   const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
   return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped when your turn ended: the runtime was draining for a restart (${drain.reason || 'vs restart'}), which refuses new background work. Rerun it now if it is still needed.`;
 }
+// idea-112: what a held agent reads when the background work it ended its turn on has exited and nothing woke it (ACP has
+// no agent-initiated turn; a Claude CLI that self-started one never reaches this). The work runs `2>&1 | tail`-style, so
+// the agent is told to read its output, not to rerun it.
+export function bgWakeText(work) {
+  const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  return `[VibeSquad runtime] Background work you started before your turn ended (${cmds || 'a shell'}) has finished. Read its output (task output / log file; do not rerun it unless the output is gone) and continue your task. If you were waiting on it to finish your work, report your result now.`;
+}
 export function parkHoldMaxFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_HOLD_MAX_MS);
   return env.VS_RUNNER_PARK_HOLD_MAX_MS !== undefined && env.VS_RUNNER_PARK_HOLD_MAX_MS !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_HOLD_MAX_MS;
@@ -563,7 +570,9 @@ export class Runner {
   _parkable(e) { return e.status === 'idle' && e.handle && e.sessionId && e.inflight === 0 && this.adapters[e.provider]?.canPark; }
 
   // A turn opened: what the last probe saw (and any hold) no longer applies; the turn's own idle re-checks.
-  _turnStarted(e) { e.turnGen++; e.work = null; e.heldSince = null; }
+  // heldWork: what the last hold held; cleared here because a turn that ran after the work started (self-woken or prompted)
+  // already had the chance to read it, so no runtime wake is owed.
+  _turnStarted(e) { e.turnGen++; e.work = null; e.heldSince = null; e.heldWork = null; }
 
   // Background work is only possible after a turn ran in this process, and only checkable with a pid and the hold on.
   _mayHoldWork(e) { return this.parkHoldMaxMs > 0 && !!this.bgProbe && Number.isInteger(e.handle?.pid) && e.turnGen > 0; }
@@ -760,7 +769,8 @@ export class Runner {
 
   // park() kills the whole tree, so a background shell the CLI left running (run_in_background: a full test suite, a
   // build) would die with no exit notice to the agent. Hold the park while one lives, re-check every parkHoldPollMs, and
-  // park once it is gone (after one more grace, so the CLI can report the finished task first). Past parkHoldMaxMs the
+  // act once it is gone (after one more grace, so the CLI can open its own turn on the finished task first): park, or, if the
+  // agent ended its turn on that work and no turn ran since, wake it (_wakeAfterBackground, idea-112). Past parkHoldMaxMs the
   // park is forced and logged with what it kills (park-forced), so a held agent cannot keep its live slot forever.
   // Explicit stops (archive, shutdown, kill) still kill at once.
   _parkWhenClear(id, entry) {
@@ -774,7 +784,10 @@ export class Runner {
         return;
       }
       if (!work.length) {
-        if (entry.heldSince === null) { this.park(id); this._pump(); return; }
+        if (entry.heldSince === null) {
+          if (entry.heldWork) { this._wakeAfterBackground(id, entry); return; } // idea-112: it ended its turn waiting on that work
+          this.park(id); this._pump(); return;
+        }
         entry.heldSince = null;
         entry.work = null;
         this._scheduleParkAfterTurn(id, entry);
@@ -790,6 +803,7 @@ export class Runner {
       }
       if (entry.heldSince === null) {
         entry.heldSince = now;
+        entry.heldWork = work;
         this.store.append(id, 'park-held', { work, maxHoldMs: this.parkHoldMaxMs });
       }
       const heldMs = now - entry.heldSince;
@@ -802,6 +816,21 @@ export class Runner {
       entry.work = null; // the next check takes a fresh snapshot
       this._armPark(id, entry, Math.min(this.parkHoldPollMs, this.parkHoldMaxMs - heldMs));
     }).catch((err) => { try { this.store.append(id, 'error', { message: `park: ${err.message}` }); } catch { /* log gone */ } }); // never an unhandled rejection in the runner
+  }
+
+  // idea-112: held background work exited, one more grace passed and no turn ran since (the CLI did not start one on its
+  // own: ACP agents never can, a Claude CLI normally does and its 'running' clears heldWork first). The agent ended its turn
+  // waiting on that work, so it is woken with a normal input (a real turn: the server sees turn_started/turn_ended, the lead
+  // is told) instead of parked into silence. Not a hold: a draining runner still refuses any NEW background work the woken
+  // turn starts (drain hook in-turn, _drainRefusesHold at its end). A send that throws falls back to the old park.
+  _wakeAfterBackground(id, entry) {
+    const work = entry.heldWork;
+    entry.heldWork = null;
+    this.store.append(id, 'bg-wake', { work });
+    try { this.send(id, bgWakeText(work), { origin: 'bg-wake' }); } catch (err) {
+      try { this.store.append(id, 'error', { message: `bg-wake: ${err.message}` }); } catch { /* log gone */ }
+      if (this.live.get(id) === entry && this._parkable(entry)) { this.park(id); this._pump(); }
+    }
   }
 
   // Stops an idle agent's process tree but keeps its transcript; the next send() resumes it with --resume.
@@ -1134,7 +1163,7 @@ export class Runner {
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
   // opts.steerOnly: see _sendSteerOnly (never starts, resumes or queues a turn; returns { queued: false, delivered, reason? }).
   send(id, text, opts = {}) {
-    const senderId = typeof opts.senderId === 'string' && opts.senderId ? { senderId: opts.senderId } : {};
+    const senderId = typeof opts.senderId === 'string' && opts.senderId ? { senderId: opts.senderId } : opts.origin === 'bg-wake' ? { origin: 'bg-wake' } : {}; // origin: a runtime wake (idea-112), never a caller's
     if (opts.steerOnly === true) return this._sendSteerOnly(id, text, opts, senderId);
     let live = this.live.get(id);
     if (live?.configStale && live.inflight === 0 && this._parkableNow(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process (one with background work keeps serving: never killed for a config change)
