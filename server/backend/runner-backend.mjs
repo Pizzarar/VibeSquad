@@ -1291,7 +1291,7 @@ export class RunnerBackend {
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
-    if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, request: { id: e.id, toolName: e.toolName } });
+    if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, agent: shown, request: { id: e.id, toolName: e.toolName } }); // snapshot lets watch-sets see an already auto-resolved request (ACP) is not pending
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
   }
 
