@@ -55,7 +55,7 @@ test('env knobs: park hold max / poll', () => {
   assert.equal(parkHoldPollFromEnv({ VS_RUNNER_PARK_HOLD_POLL_MS: '500' }), 500);
 });
 
-test('park is held while a background shell lives under the agent, and happens after it exits', async () => {
+test('park is held while a background shell lives under the agent; once it exits the agent is woken (idea-112), then parks', async () => {
   const h = harness();
   const id = h.create();
   const pid = h.pidOf(id);
@@ -70,9 +70,19 @@ test('park is held while a background shell lives under the agent, and happens a
   assert.equal(held[0].work[0].pid, 9000);
   assert.ok(h.probes.filter((p) => p === pid).length >= 2, 're-checked while held');
   h.clear(id, pid);
+  await until(() => types(h.runner, id).includes('bg-wake'));
+  await until(() => h.runner.status(id).status === 'running');
+  assert.deepEqual(h.kills, [], 'woken in place, not parked into silence');
+  const wake = h.runner.timeline(id).filter((e) => e.type === 'input').at(-1);
+  assert.equal(wake.origin, 'bg-wake');
+  assert.match(wake.text, /npm test/, 'names the work');
+  assert.match(wake.text, /has finished/);
+  assert.equal(h.runner.timeline(id).find((e) => e.type === 'bg-wake').work[0].pid, 9000);
+  h.endTurn(id); // the woken turn reports and ends: no work left, no hold, so it parks
   await until(() => h.kills.length === 1);
   assert.deepEqual(h.kills, [id]);
   assert.equal(h.runner.status(id).status, 'parked');
+  assert.equal(types(h.runner, id).filter((t) => t === 'bg-wake').length, 1, 'one wake per hold');
   assert.ok(!types(h.runner, id).includes('park-forced'));
   h.runner.shutdown();
 });
@@ -204,7 +214,7 @@ test('makeRoom probes an idle agent inside its grace before parking it for room'
   h2.runner.shutdown();
 });
 
-test('setConfig on a held idle agent does not kill it; it parks after the shell exits', async () => {
+test('setConfig on a held idle agent does not kill it; after the shell exits the wake runs in a fresh process with the new config', async () => {
   const h = harness({ parkGraceMs: 60_000 });
   const id = h.create();
   const pid = h.pidOf(id);
@@ -217,7 +227,9 @@ test('setConfig on a held idle agent does not kill it; it parks after the shell 
   assert.ok(h.runner.timeline(id).some((e) => e.type === 'park-held'));
   h.clear(id, pid);
   await until(() => h.kills.length === 1); // configStale: no 60s grace, the stale process goes as soon as the shell is gone
-  assert.equal(h.runner.status(id).status, 'parked');
+  await until(() => h.runner.status(id).status === 'running'); // the wake resumes it on the new config
+  assert.notEqual(h.pidOf(id), pid, 'a fresh process');
+  assert.equal(h.runner.timeline(id).filter((e) => e.type === 'input').at(-1).origin, 'bg-wake');
   h.runner.shutdown();
 });
 
@@ -335,7 +347,7 @@ test('runner passes the turn-end time as minAt to the probe', async () => {
 
 // ---- one real process tree (cheap: node + one shell for ~1.5s) ----
 
-test('real process: a live shell under the agent holds the park; it parks after the shell exits', async () => {
+test('real process: a live shell under the agent holds the park; after the shell exits it is woken, then parks', async () => {
   const kills = [];
   let em;
   let child;
@@ -360,6 +372,10 @@ test('real process: a live shell under the agent holds the park; it parks after 
     await until(() => runner.timeline(id).some((e) => e.type === 'park-held'), 30000);
     assert.deepEqual(kills, [], 'held, not killed');
     writeFileSync(release, '');
+    await until(() => runner.status(id).status === 'running', 30000); // idea-112: woken, not parked into silence
+    assert.deepEqual(kills, []);
+    assert.equal(runner.timeline(id).filter((e) => e.type === 'input').at(-1).origin, 'bg-wake');
+    em('turn_done', {}); em('status', { status: 'idle' });
     await until(() => kills.length === 1, 30000);
     assert.equal(runner.status(id).status, 'parked');
     assert.ok(!runner.timeline(id).some((e) => e.type === 'park-forced'));

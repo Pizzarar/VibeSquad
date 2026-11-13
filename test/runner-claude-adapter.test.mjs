@@ -131,3 +131,50 @@ test('K4: profiles opt into playwright by mcpExtras field (stored value wins, de
   assert.deepEqual(profileMcpExtras('Review - Sonnet', [{ name: 'Review - Sonnet', mcpExtras: [] }]), []);
   assert.ok(DEFAULT_PACK_PROFILES.length > 0);
 });
+
+// idea-112 (rn-4131b28b10ed, 11-13): a run_in_background task finished after the turn ended and the CLI opened a turn of
+// its own (system/init, Read of the task output, final report, result). With no 'running' the runner and server saw idle ->
+// idle: no turn_started/turn_ended, the final reached nobody and the lead pinged "you went idle without a final".
+test('a turn the CLI opens on its own (background task finished) reads running -> idle, once, like a prompted one', async (t) => {
+  const root = mkdtempSync(path.join(os.tmpdir(), 'vs-claude-selfturn-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  let child;
+  const spawnImpl = () => { child = new EventEmitter(); child.stdin = new PassThrough(); child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.kill = () => {}; return child; };
+  const events = [];
+  const h = createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: false, promptsDir: path.join(root, 'prompts') })
+    .start({ id: 'rn-self', cwd: os.tmpdir(), env: {}, emit: (type, data) => events.push({ type, ...data }), onExit() {} });
+  const out = (o) => child.stdout.write(JSON.stringify(o) + '\n');
+  const flush = () => new Promise((r) => setTimeout(r, 30));
+  const statuses = () => events.filter((e) => e.type === 'status').map((e) => e.status);
+  // prompted turn: running from send(), no second running from its init/assistant lines
+  h.send('run the suite in the background');
+  out({ type: 'system', subtype: 'init', session_id: 's1', model: 'm' });
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: "I'll pick it up when it finishes." }] } });
+  out({ type: 'result', subtype: 'success', stop_reason: 'end_turn' });
+  await flush();
+  assert.deepEqual(statuses(), ['running', 'idle']);
+  assert.equal(h.steerable(), false, 'no open turn');
+  // the task finishes: the CLI's own turn
+  out({ type: 'system', subtype: 'init', session_id: 's1', model: 'm' });
+  out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: 'x.output' } }] } });
+  out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1' }] } });
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: '55/55 pass' }] } });
+  await flush();
+  assert.deepEqual(statuses(), ['running', 'idle', 'running'], 'the self-opened turn reads running at its first assistant line, once');
+  assert.equal(h.steerable(), true, 'a send now merges into the open self-turn (no second slot)');
+  out({ type: 'result', subtype: 'success', stop_reason: 'end_turn' });
+  await flush();
+  assert.deepEqual(statuses(), ['running', 'idle', 'running', 'idle']);
+  assert.equal(events.filter((e) => e.type === 'turn_done').length, 2);
+  // stray non-turn lines while idle (an init, rate limits, a compact boundary) open nothing
+  out({ type: 'system', subtype: 'init', session_id: 's1', model: 'm' });
+  out({ type: 'rate_limit_event', rate_limit_info: {} });
+  out({ type: 'system', subtype: 'compact_boundary' });
+  await flush();
+  assert.deepEqual(statuses(), ['running', 'idle', 'running', 'idle']);
+  // after kill(), late lines open nothing
+  h.kill();
+  out({ type: 'assistant', message: { content: [{ type: 'text', text: 'late' }] } });
+  await flush();
+  assert.equal(statuses().at(-1), 'idle');
+});

@@ -264,7 +264,11 @@ test("R1 H1: an idle agent counts as held from the moment its turn ends until it
     settle([{ pid: 9000, name: "bash", cmd: "npm test" }]);
     await until(() => runner.timeline(id).some((e) => e.type === "park-held"), 1000);
     assert.deepEqual(runner.heldIds(), [id], "held park");
-    answer = []; // the suite exits: the next probe is clean and the agent parks
+    answer = []; // the suite exits: the next probe is clean, the agent is woken to read it (idea-112), then parks
+    await until(() => runner.status(id).status === "running", 2000);
+    assert.equal(starts[0].sends.at(-1).startsWith("[VibeSquad runtime] Background work"), true, "the bg-wake");
+    assert.deepEqual(runner.heldIds(), [], "a running turn is not held: the restart counts it as running");
+    starts[0].emit("status", { status: "idle" }); // the woken turn reports and ends
     await until(() => runner.status(id).status === "parked", 2000);
     assert.deepEqual(runner.heldIds(), []);
     const fresh = await lostAgent();
