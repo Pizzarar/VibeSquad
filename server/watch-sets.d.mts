@@ -80,7 +80,7 @@ export function addWatch(
   spec: { owner: string; team?: string; lane?: string; items: Array<{ kind: WatchKind; ref?: string }>; stallMin?: number; escalateMin?: number },
   opts?: { home?: string; now?: number },
 ): { id: string };
-export function listWatches(filter?: { owner?: string; team?: string }, opts?: { home?: string }): Array<WatchSet & { status: "armed" | "fired" | "cancelled" }>;
+export function listWatches(filter?: { owner?: string; team?: string; all?: boolean }, opts?: { home?: string }): Array<WatchSet & { status: "armed" | "fired" | "cancelled" }>;
 export function cancelWatch(id: string, callerId: string, opts?: { home?: string; now?: number }): { ok: boolean; id: string; error?: string; already?: boolean };
 
 export function classifyItem(item: WatchItem, set: WatchSet, ctx: any): { phase: string; phaseSince?: string; state: WatchItemState; reason?: string; report?: string };

@@ -1196,3 +1196,49 @@ test("drain end to end: the restart's POST/DELETE against a real runner server s
     assert.equal((await httpCall(`http://127.0.0.1:${port}/health`, { headers: auth })).body.drain, null);
   } finally { runner.shutdown(); await close(srv); }
 });
+
+test("server launcher exits early (handoff), server healthy later: success, not 'died during start' (idea-212)", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock();
+    const spawn = (...a) => { w.deps.spawnDetached(...a); return 777001; }; // launcher pid: never alive in the fake table
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: clock.sleep, spawnDetached: spawn, httpCall: gated(w, clock, 20_000, (u) => u.includes("api/health")) });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(!r.errors.some((e) => /died during start/.test(e)), JSON.stringify(r.errors));
+  } finally { await w.cleanup(); }
+});
+
+test("server launcher exited and nothing ever healthy: fails at the deadline, not after ~3s", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const spawn = (...a) => { w.deps.spawnDetached(...a); return 777002; };
+    const r = await w.run({ bootTimeoutSec: 30, serverBootMs: 30_000 }, [], { now: clock.now, sleep: clock.sleep, spawnDetached: spawn, listenerPid: (p) => (w.spawned.length ? null : w.deps.listenerPid(p)), httpCall: gated(w, clock, Infinity, (u) => u.includes("api/health")) });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => /server start: not healthy after 30s/.test(e)), JSON.stringify(r.errors));
+    assert.ok(clock.t - t0 >= 30_000, "waited the full window before failing");
+  } finally { await w.cleanup(); }
+});
+
+test("adopted listener crashes mid-boot: 'died during start' well before the deadline, server.pid rewritten (Bug20 H1/M1)", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const spawn = (...a) => { w.deps.spawnDetached(...a); return 777003; }; // launcher: dead from the start
+    let adopted = null; let crashed = false;
+    const lp = (p) => {
+      if (!w.spawned.length) return w.deps.listenerPid(p);
+      if (crashed) return null;
+      adopted = adopted ?? 888001; w.alive.add(adopted); return adopted;
+    };
+    const r = await w.run({ bootTimeoutSec: 120 }, [], {
+      now: clock.now, spawnDetached: spawn, listenerPid: lp,
+      sleep: async (ms) => { await clock.sleep(ms); if (adopted && !crashed && clock.t > t0 + 15_000) { crashed = true; w.alive.delete(adopted); } },
+      httpCall: gated(w, clock, Infinity, (u) => u.includes("api/health")),
+    });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => /server start: server process 888001 died during start/.test(e)), JSON.stringify(r.errors));
+    assert.ok(clock.t - t0 < 120_000, "did not wait out the deadline");
+    assert.equal(readFileSync(path.join(w.configDir, "server.pid"), "utf8"), "888001");
+  } finally { await w.cleanup(); }
+});
