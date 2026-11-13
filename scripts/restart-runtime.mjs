@@ -37,8 +37,12 @@ import { fileURLToPath } from 'node:url';
 const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+export const BOOT_TIMEOUT_DEFAULT_SEC = 120;
+// Blank, non-numeric or <= 0 env values fall back to the default (a 0ms wait would fail every slow start).
+export function bootDefault(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN; return Number.isFinite(n) && n > 0 ? n : BOOT_TIMEOUT_DEFAULT_SEC; }
+
 export function parseArgs(argv) {
-  const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90, bootTimeoutSec: Number(process.env.VS_RESTART_BOOT_TIMEOUT ?? 120) };
+  const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90, bootTimeoutSec: bootDefault(process.env.VS_RESTART_BOOT_TIMEOUT) };
   const val = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -50,7 +54,7 @@ export function parseArgs(argv) {
     else if (a === '--kill-background') o.killBackground = true;
     else if (a === '--resume-verify') o.resumeVerifySec = Number(val(i++));
     else if (a === '--wait-timeout') o.waitTimeoutSec = Number(val(i++));
-    else if (a === '--boot-timeout') o.bootTimeoutSec = Number(val(i++));
+    else if (a === '--boot-timeout') { const v = val(i++); o.bootTimeoutSec = v.trim() === '' ? NaN : Number(v); }
     else if (a === '--stop-timeout') o.stopTimeoutSec = Number(val(i++));
     else if (a === '--port') o.port = Number(val(i++));
     else if (a === '--home') o.home = val(i++);
@@ -62,7 +66,8 @@ export function parseArgs(argv) {
     else if (a === '--vs-home') o.vsHome = val(i++);
     else throw new Error(`unknown flag ${a}`);
   }
-  for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec', 'bootTimeoutSec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
+  for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
+  if (!Number.isFinite(o.bootTimeoutSec) || o.bootTimeoutSec <= 0) throw new Error('bad bootTimeoutSec');
   return o;
 }
 
@@ -644,6 +649,9 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       if (!(await stopRunner())) throw new Error('stray runner did not stop');
     }
 
+    // Anything runner.json says now is stale (e.g. a stray killed by the server tree-kill): clear it, so that any runner.json
+    // present after the start was written by the new runner. Pid inequality is not freshness (the OS can reuse a pid).
+    rmSync(path.join(det.home, 'runner.json'), { force: true });
     // 5. start the server (same launch as the desktop app); it boots the runner
     const healthy = async () => { for (const s of ['http', 'https']) { try { if ((await d.httpCall(`${s}://127.0.0.1:${det.port}/api/health`, { timeoutMs: 3000 })).status === 200) return true; } catch { /* next */ } } return false; };
     let spawnedServerPid = null;
@@ -658,7 +666,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // Post-start waits poll with backoff up to --boot-timeout (VS_RESTART_BOOT_TIMEOUT, default 120s): a slow boot (the runner resumes
     // the agents the restart cut; X1b waits 45s by design) is reported as "slow start (N s)", never failed. Fail only if the process
     // died or the deadline passed. Exit codes unchanged (any fail -> the same nonzero as before).
-    const bootMs = opts.runnerBootMs ?? opts.bootTimeoutSec * 1000;
+    const bootMs = opts.runnerBootMs ?? bootDefault(String(opts.bootTimeoutSec ?? '')) * 1000; // restartRuntime may be called without parseArgs: never NaN
     const bootWait = async (label, until, probe, isDead) => {
       const t0 = d.now(); let delay = 500; let nextNote = 15000;
       for (;;) {
@@ -677,28 +685,29 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (sres !== true) { fail('server start', sres === 'died' ? `server process ${spawnedServerPid} died during start` : `not healthy after ${Math.round(serverBootMs / 1000)}s`); throw new Error('server not healthy'); }
     step('server healthy');
 
-    const oldRunnerPid = det.runner.pid;
+    let seenPid = null; let directPid = null; let directAt = 0;
     const fresh = async () => {
       const disc = readJson(path.join(det.home, 'runner.json'));
       let token = null;
       try { token = readFileSync(path.join(det.home, 'token'), 'utf8').trim(); } catch { /* not yet */ }
-      if (!disc?.port || !token || disc.pid === oldRunnerPid) return null; // compare with the pre-restart pid, not det.runner: a slow first /health must not hide the new runner from later polls
-      det.runner = { ...det.runner, port: disc.port, pid: disc.pid, token };
+      if (!disc?.port || !token || !Number.isFinite(disc.pid)) return null; // runner.json was cleared before the start: any file now is the new runner's
+      det.runner = { ...det.runner, port: disc.port, pid: disc.pid, token }; seenPid = disc.pid;
       try { const h = await runnerCall(det, d, 'GET', '/health', 3000); return h.status === 200 ? h.body : null; } catch { return null; }
     };
-    const runnerDead = () => det.runner.pid !== oldRunnerPid && det.runner.pid != null && !d.pidAlive(det.runner.pid);
+    const runnerDead = () => (seenPid != null && !d.pidAlive(seenPid)) || (seenPid == null && directPid != null && d.now() - directAt > 3000 && !d.pidAlive(directPid)); // direct-spawn pid counts until runner.json shows up
     const runnerT0 = d.now();
     // Phase 1: give the server the usual 45s to boot the runner; only start one directly if no new runner appeared by then.
     let health = await bootWait('runner', runnerT0 + Math.min(45000, bootMs), fresh, runnerDead);
     if (!health) {
-      if (det.runner.pid === oldRunnerPid) {
+      if (seenPid == null) {
         const rl = det.runnerLaunch;
         const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), logFile: rl.logFile }); // never as an agent (X1b)
+        directPid = pid; directAt = d.now();
         step('runner not booted by the server, started directly', { pid });
         health = await bootWait('runner', d.now() + bootMs, fresh, runnerDead);
       } else health = await bootWait('runner', runnerT0 + bootMs, fresh, runnerDead); // a new runner is up and booting: wait out the full window
     }
-    if (health === 'died') { fail('runner start', `runner process ${det.runner.pid} died during start`); throw new Error('runner not healthy'); }
+    if (health === 'died') { fail('runner start', `runner process ${seenPid ?? directPid} died during start`); throw new Error('runner not healthy'); }
     if (!health) { fail('runner start', `no healthy runner after start (${Math.round(bootMs / 1000)}s)`); throw new Error('runner not healthy'); }
 
     // 6. verify

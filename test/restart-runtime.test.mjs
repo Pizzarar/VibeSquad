@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, restartRuntime, httpCall } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall } from "../scripts/restart-runtime.mjs";
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
@@ -224,6 +224,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       return pid;
     },
   };
+  w.deps = deps;
   const env = { ...process.env, VIBESQUAD_HOME: outDir, VIBESQUAD_DESKTOP_CONFIG_DIR: configDir, ...envExtra };
   w.opts = (extra = {}) => ({ ...parseArgs(["--stop-timeout", "2", "--wait-timeout", "5"]), home, port: serverPort, configDir, outDir, runtimeDir: tmp, node: process.execPath, ...extra });
   w.run = (extra, logs = [], depsOver = {}) => restartRuntime(w.opts(extra), { ...deps, ...depsOver }, env, (l) => logs.push(l));
@@ -1037,4 +1038,61 @@ test("--boot-timeout / VS_RESTART_BOOT_TIMEOUT configure the window", () => {
   assert.equal(parseArgs([]).bootTimeoutSec, 120);
   assert.equal(parseArgs(["--boot-timeout", "200"]).bootTimeoutSec, 200);
   assert.throws(() => parseArgs(["--boot-timeout", "-1"]), /bad bootTimeoutSec/);
+});
+
+// review fixes (H1/M1/M2)
+test("restartRuntime without bootTimeoutSec/runnerBootMs defaults to 120s (never NaN / forever)", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const r = await w.run({ bootTimeoutSec: undefined }, [], { now: clock.now, sleep: clock.sleep, httpCall: gated(w, clock, Infinity, runnerHealth) });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => e.includes("no healthy runner after start (120s)")), JSON.stringify(r.errors));
+    assert.ok(clock.t - t0 >= 120_000);
+  } finally { await w.cleanup(); }
+});
+
+test("boot timeout parsing: blank/zero/negative/non-numeric env falls back to 120; flag must be a finite value > 0", () => {
+  for (const v of [undefined, "", "  ", "0", "-5", "abc", "NaN"]) assert.equal(bootDefault(v), 120, JSON.stringify(v));
+  assert.equal(bootDefault("45"), 45);
+  const saved = process.env.VS_RESTART_BOOT_TIMEOUT;
+  try {
+    process.env.VS_RESTART_BOOT_TIMEOUT = "";
+    assert.equal(parseArgs([]).bootTimeoutSec, 120);
+    process.env.VS_RESTART_BOOT_TIMEOUT = "0";
+    assert.equal(parseArgs([]).bootTimeoutSec, 120);
+    process.env.VS_RESTART_BOOT_TIMEOUT = "30";
+    assert.equal(parseArgs([]).bootTimeoutSec, 30);
+  } finally { if (saved === undefined) delete process.env.VS_RESTART_BOOT_TIMEOUT; else process.env.VS_RESTART_BOOT_TIMEOUT = saved; }
+  for (const v of ["0", "", "  ", "-1", "abc"]) assert.throws(() => parseArgs(["--boot-timeout", v]), /bad bootTimeoutSec/, JSON.stringify(v));
+  assert.equal(parseArgs(["--boot-timeout", "0.5"]).bootTimeoutSec, 0.5);
+});
+
+for (const reuse of [false, true]) {
+  test(`stale runner.json left by a tree-killed stray (${reuse ? "pid reused from the old runner" : "dead pid"}) is not adopted: the new runner is still found`, async () => {
+    const w = await world({ treeKill: true });
+    try {
+      const oldPid = w.runner().pid;
+      const clock = fakeClock();
+      const killHard = (pid) => {
+        w.deps.killHard(pid);
+        if (pid !== oldPid) writeFileSync(path.join(w.home, "runner.json"), JSON.stringify({ port: 1, pid: reuse ? oldPid : 4242, startedAt: 1 })); // the server's kill leaves the stray's file behind
+      };
+      const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: clock.sleep, killHard });
+      assert.equal(r.ok, true, JSON.stringify(r.errors));
+      assert.equal(r.newHash, "new-hash");
+    } finally { await w.cleanup(); }
+  });
+}
+
+test("direct-started runner that dies before writing runner.json fails fast (its pid is checked)", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const spawnDetached = (cmd, args, o) => (args.some((a) => /serve.mjs/.test(a)) ? w.deps.spawnDetached(cmd, args, o) : 987654); // runner "starts" but its pid is dead and no runner.json appears
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: clock.sleep, spawnDetached });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => /runner start: runner process 987654 died during start/.test(e)), JSON.stringify(r.errors));
+    assert.ok(clock.t - t0 < 120_000, "did not wait out the deadline");
+  } finally { await w.cleanup(); }
 });
