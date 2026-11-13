@@ -77,6 +77,33 @@ export const DIGEST_PROVIDER = "antigravity-cli/gemini-3.8-flash";
 export const DIGEST_PROFILE = "Pre-check - Flash";
 export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
+
+/** What a worker digest agent is created with (the primary digest profile, or the idea-218 one-time alternate). */
+export interface DigestSpawnConfig {
+  profile: string;
+  provider: string;
+  modeId: string;
+  thinkingOptionId: string;
+  featureValues?: Record<string, any>;
+}
+
+/** The digest create config for `p` (null: the built-in digest defaults), labelled `profile`. */
+export function digestSpawnConfig(p: StoredProfile | null, profile: string): DigestSpawnConfig {
+  const provider = p ? `${p.provider}/${p.model}` : DIGEST_PROVIDER;
+  // Antigravity must never wait on a permission prompt (A1); other providers get the profile's own feature values only.
+  const featureValues = p?.featureValues
+    ? { ...p.featureValues }
+    : normalizeProviderFamily(provider) === "antigravity-cli"
+      ? { approvalPolicy: "skip" }
+      : undefined;
+  return {
+    profile,
+    provider,
+    modeId: p?.modeId || DIGEST_MODE_ID,
+    thinkingOptionId: p?.thinkingOptionId || DIGEST_THINKING_OPTION_ID,
+    ...(featureValues ? { featureValues } : {}),
+  };
+}
 /** Label on a worker digest: the worker turn (runner turnId) it reports on, so a restarted server can find it on the runner (idea-123). */
 export const DIGEST_TURN_LABEL = "digestTurn";
 /** A digest's waiter gives up (and archives it) after DIGEST_WAIT_ROUNDS x 10 min; one open past this with no live waiter in this process (server restarted) is swept (idea-62). */
@@ -1529,6 +1556,27 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
+    /**
+     * idea-218: the profile a worker digest respawns on (once) after it ended with no verdict. The spawn failover order of the
+     * digest profile (counterpart, then its role chain: Pre-check - Flash -> Check - Haiku -> Audit - DSF, then same-role
+     * profiles on other providers), skipping every capped / over-quota provider and the provider(s) the failed digest ran on.
+     * null when no other provider is available.
+     */
+    const alternateDigestProfile = (failedProviders: string[]): StoredProfile | null => {
+      const failed = new Set(failedProviders.map((p) => normalizeProviderFamily(p)).filter(Boolean));
+      const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
+      // Failed and capped families first: isProviderOverQuota reads the first entry that matches a family.
+      const usage: any[] = [
+        ...[...failed].map(exhausted),
+        ...Object.keys(readCappedProviderMap()).map(exhausted),
+        ...(typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : []),
+      ];
+      const fo = resolveProfileWithFailover(DIGEST_PROFILE, loadStoredProfiles(), usage);
+      const alt = fo.failedOver ? (fo.profile as StoredProfile | null) : null;
+      if (!alt?.provider || failed.has(normalizeProviderFamily(alt.provider))) return null;
+      return alt;
+    };
+
     // ---- Hook 1: before agent.create ---------------------------------------
 
     stops.push(
@@ -2532,79 +2580,122 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // No archive here: awaitWithRetries archives the digest exactly once, after its A4 retries are done (idea-207 H1).
       };
 
-      try {
-        const digestProfile = resolveStoredProfile(DIGEST_PROFILE, DIGEST_PROVIDER, DIGEST_PROFILE, "worker");
-        const digestProvider = digestProfile ? `${digestProfile.provider}/${digestProfile.model}` : DIGEST_PROVIDER;
-        const digestModeId = digestProfile?.modeId || DIGEST_MODE_ID;
-        const digestThinking = digestProfile?.thinkingOptionId || DIGEST_THINKING_OPTION_ID;
-        const digestFeatures = digestProfile?.featureValues ? { ...digestProfile.featureValues } : { approvalPolicy: "skip" };
+      // Backstop: if the digest agent errors out, write the entry directly.
+      const isFailedRes = (res: any) => !!(res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished" && res.status !== "timeout");
+      type DigestRun = { id: string; handle: any; provider: string };
+      const createdIds: string[] = []; // every digest agent this turn's waiter owns (primary, then at most one alternate)
+
+      /** Create one digest agent on `cfg`. null when the worker's turn moved on meanwhile (a created agent is archived). Throws if create fails. */
+      const createDigest = async (cfg: DigestSpawnConfig): Promise<DigestRun | null> => {
         // Re-check right before creating the digest: if the worker started a new turn while we resolved profiles, abort.
         if ((turnEpoch.get(workerId) ?? 0) !== epoch) {
           if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
-          return;
+          return null;
         }
         const handle = await paseo.agents.create({
           config: {
-            provider: digestProvider,
-            modeId: digestModeId,
-            thinkingOptionId: digestThinking,
-            featureValues: digestFeatures,
+            provider: cfg.provider,
+            modeId: cfg.modeId,
+            thinkingOptionId: cfg.thinkingOptionId,
+            ...(cfg.featureValues ? { featureValues: cfg.featureValues } : {}),
           },
           cwd: worker.cwd,
-          title: `${DIGEST_PROFILE} digest`,
+          title: `${cfg.profile} digest`,
           prompt,
-          labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: worker.id, ...(tid ? { [DIGEST_TURN_LABEL]: tid } : {}) },
-          env: { VS_PROFILE: DIGEST_PROFILE },
+          labels: { team, lane, role: "worker", profile: cfg.profile, digestFor: worker.id, ...(tid ? { [DIGEST_TURN_LABEL]: tid } : {}) },
+          env: { VS_PROFILE: cfg.profile },
           // No autoArchive (idea-207 H1): the host would archive on the first failed turn, before the A4 retry is delivered
           // (the resend then throws "is not running"). awaitWithRetries owns the one archive, after the retry loop.
         });
-        const createdDigestId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
-        if (createdDigestId) {
+        const id = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+        if (id) {
           if ((turnEpoch.get(workerId) ?? 0) !== epoch) {
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
-            await Promise.resolve()
-              .then(() => paseo.agents.ref(createdDigestId).archive())
-              .catch(() => deps.archiveAgent(createdDigestId))
-              .catch(() => {});
-            return;
+            await archiveDigest(paseo, id); // never waited on: this is its one archive
+            return null;
           }
-          inflightDigestIds.set(workerId, createdDigestId);
+          createdIds.push(id);
+          inflightDigestIds.set(workerId, id);
         }
-        // Backstop: if the digest agent errors out, write the entry directly.
-        const isFailedRes = (res: any) => !!(res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished" && res.status !== "timeout");
-        const awaitWithRetries = async () => {
-          if (createdDigestId) liveDigestIds.add(createdDigestId); // held across every retry wait: the stale sweep must not archive it
-          try {
-            let scheduled = digestRetryCount.get(createdDigestId) ?? 0;
-            let res = await awaitDigestFinish(paseo, handle, createdDigestId, { owned: true });
-            // M1: an EOF-style failure is retried by handleFailure (A4); the retry can still deliver the real verdict, so the
-            // fallback waits for it (up to MAX_RETRIES resends) instead of writing UNVERIFIED over a turn that is about to succeed.
-            for (let i = 0; i < MAX_RETRIES && isFailedRes(res) && createdDigestId; i++) {
-              if (!(await a4RetryScheduled(createdDigestId, scheduled, res))) break; // the failure is final
-              scheduled = digestRetryCount.get(createdDigestId) ?? 0;
-              await digestRetryPending.get(createdDigestId); // undefined once the resend already went out
-              res = await awaitDigestFinish(paseo, handle, createdDigestId, { owned: true });
-            }
-            return res;
-          } finally {
-            if (createdDigestId) {
-              liveDigestIds.delete(createdDigestId);
-              // The one archive, after the retry loop (H1), before any fallback: a digest still queued after the last wait can't
-              // run later and log a second verdict next to the UNVERIFIED entry.
-              await archiveDigest(paseo, createdDigestId);
+        return { id, handle, provider: String(handle?.agent?.provider ?? "").trim() || cfg.provider };
+      };
+
+      const awaitWithRetries = async ({ id, handle }: DigestRun) => {
+        if (id) liveDigestIds.add(id); // held across every retry wait: the stale sweep must not archive it
+        try {
+          let scheduled = digestRetryCount.get(id) ?? 0;
+          let res = await awaitDigestFinish(paseo, handle, id, { owned: true });
+          // M1: an EOF-style failure is retried by handleFailure (A4); the retry can still deliver the real verdict, so the
+          // fallback waits for it (up to MAX_RETRIES resends) instead of writing UNVERIFIED over a turn that is about to succeed.
+          for (let i = 0; i < MAX_RETRIES && isFailedRes(res) && id; i++) {
+            if (!(await a4RetryScheduled(id, scheduled, res))) break; // the failure is final
+            scheduled = digestRetryCount.get(id) ?? 0;
+            await digestRetryPending.get(id); // undefined once the resend already went out
+            res = await awaitDigestFinish(paseo, handle, id, { owned: true });
+          }
+          return res;
+        } finally {
+          if (id) {
+            liveDigestIds.delete(id);
+            // The one archive, after the retry loop (H1), before any fallback or respawn: a digest still queued after the last
+            // wait can't run later and log a second verdict next to the alternate's verdict or the UNVERIFIED entry.
+            await archiveDigest(paseo, id);
+            // Archived: cancelStaleDigests (worker busy again) must not archive it a second time.
+            if (inflightDigestIds.get(workerId) === id) inflightDigestIds.delete(workerId);
+          }
+        }
+      };
+      /** One digest agent's outcome: its final wait result, or `errored` when the wait itself rejected. */
+      const settle = (run: DigestRun) =>
+        awaitWithRetries(run).then(
+          (res: any) => ({ res, errored: false }),
+          () => ({ res: null as any, errored: true }),
+        );
+      const failedOutcome = (o: { res: any; errored: boolean }) => o.errored || isFailedRes(o.res) || o.res?.status === "timeout";
+      /**
+       * idea-218: where a failed digest respawns, once. null (UNVERIFIED as before) when the worker started a new turn, the
+       * failed digest is somehow still queued/running (its archive failed: it could still log), the worker is busy, or the
+       * failover chain has no uncapped provider other than the one(s) that just failed.
+       */
+      const respawnTarget = async (run: DigestRun, primary: DigestSpawnConfig): Promise<DigestSpawnConfig | null> => {
+        if ((turnEpoch.get(workerId) ?? 0) !== epoch || inflightDigests.get(workerId) !== epoch) return null;
+        if (run.id) {
+          const s = await snap(paseo, run.id);
+          if (s && !s.archivedAt && isWorkerBusy(s)) return null;
+        }
+        if (isWorkerBusy(await snap(paseo, workerId))) return null;
+        const alt = alternateDigestProfile([primary.provider, run.provider]);
+        return alt ? digestSpawnConfig(alt, alt.name) : null;
+      };
+
+      try {
+        const primaryCfg = digestSpawnConfig(resolveStoredProfile(DIGEST_PROFILE, DIGEST_PROVIDER, DIGEST_PROFILE, "worker"), DIGEST_PROFILE);
+        const first = await createDigest(primaryCfg);
+        if (!first) return;
+        void (async () => {
+          let out = await settle(first);
+          if ((turnEpoch.get(workerId) ?? 0) !== epoch || verdictLogged()) return;
+          if (failedOutcome(out)) {
+            // idea-218: the primary ended with no verdict after its A4 retries: respawn ONCE on another provider before UNVERIFIED.
+            const altCfg = await respawnTarget(first, primaryCfg);
+            if (altCfg) {
+              log(`digest for ${workerId} turn ${tid || "-"} failed on ${primaryCfg.profile} (${first.provider}): respawning once on ${altCfg.profile} (${altCfg.provider})`);
+              let second: DigestRun | null | undefined;
+              try {
+                second = await createDigest(altCfg);
+              } catch (err) {
+                log(`digest respawn failed for ${workerId}: ${err}`); // the primary's outcome stands: UNVERIFIED below
+              }
+              if (second === null) return; // the worker's turn moved on: this turn needs no entry
+              if (second) out = await settle(second);
+              if ((turnEpoch.get(workerId) ?? 0) !== epoch || verdictLogged()) return;
             }
           }
-        };
-        void awaitWithRetries()
-          .then((res: any) => {
-            if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
-            if (isFailedRes(res) || res?.status === "timeout") {
-              if (verdictLogged()) return;
-              return fallback("failed");
-            }
-            // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
-            if (!verdictLogged()) return fallback("logged nothing");
-          })
+          if (out.errored) return fallback("errored");
+          if (isFailedRes(out.res) || out.res?.status === "timeout") return fallback("failed");
+          // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
+          if (!verdictLogged()) return fallback("logged nothing");
+        })()
           .catch(() => fallback("errored"))
           .finally(() => {
             // idea-150: record the turn as delivered only once its digest finished (not at spawn: a spawned digest a restart
@@ -2612,9 +2703,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             // Only a logged verdict (digest agent or fallback) counts: a failed/rejected digest with nothing logged must retry after a restart.
             if (tid && (turnEpoch.get(workerId) ?? 0) === epoch && verdictLogged()) persistDigestedTurn(workerId, tid);
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
-            if (createdDigestId && inflightDigestIds.get(workerId) === createdDigestId) inflightDigestIds.delete(workerId);
-            if (createdDigestId) {
-              waitedDigestIds.add(createdDigestId);
+            for (const id of createdIds) {
+              if (inflightDigestIds.get(workerId) === id) inflightDigestIds.delete(workerId);
+              waitedDigestIds.add(id);
               if (waitedDigestIds.size > 500) waitedDigestIds.delete(waitedDigestIds.values().next().value as string);
             }
           });

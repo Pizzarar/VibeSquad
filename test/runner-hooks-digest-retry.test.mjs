@@ -124,18 +124,20 @@ function fakeRunner(turns, workerId) {
   };
 }
 
-async function run(turns, workerId) {
+async function run(turns, workerId, { cappedProviders = [] } = {}) {
   const f = fakeRunner(turns, workerId);
   // retryBaseMs 1200: the A4 resend goes out well after the waiter's next poll (also the old 1s poll), so a waiter that
   // archives or gives up on the failed turn (H1/H2) is caught instead of being masked by a retry that already finished.
-  const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { retryBaseMs: 1200 }, pollMs: 20 });
+  const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { retryBaseMs: 1200, cappedProviders }, pollMs: 20 });
   f.setHost(host);
   try {
     await host.emit('agent.turn_ended', { agent: await f.backend.getAgent(workerId), turnId: 't1', outcome: { kind: 'completed' } });
     const [dig] = await until(() => (f.digestIds().length ? f.digestIds() : null), 2000, 'digest spawned');
-    await until(() => f.archived.includes(dig), 15000, 'digest archived');
-    await sleep(400); // anything late (a second verdict, a fallback, a second archive) lands here
-    const entries = teamLog().filter((e) => e.type === 'done' && (e.refs ?? []).includes(workerId));
+    const doneEntries = () => teamLog().filter((e) => e.type === 'done' && (e.refs ?? []).includes(workerId));
+    // Settled: an entry for the turn is in, and every digest (the primary and any idea-218 alternate) is archived.
+    await until(() => doneEntries().length && f.digestIds().every((id) => f.archived.includes(id)), 30000, 'digest(s) settled');
+    await sleep(400); // anything late (a second verdict, a fallback, a second archive, a third digest) lands here
+    const entries = doneEntries();
     return { ...f, dig, entries };
   } finally {
     host.dispose();
@@ -157,12 +159,51 @@ test('H2: an ACP turn that errors then goes idle is a failed turn: retried, then
   assert.deepEqual(r.archived, [r.dig]);
 });
 
-test('retries exhausted: three EOF turns -> two resends, then exactly one UNVERIFIED, archived once', async () => {
-  const r = await run(['claude-eof', 'acp-eof', 'claude-eof'], 'rn-w-dead');
+test('retries exhausted, no alternate (claude + opencode capped): two resends, then exactly one UNVERIFIED, archived once', async () => {
+  const r = await run(['claude-eof', 'acp-eof', 'claude-eof'], 'rn-w-dead', { cappedProviders: ['claude', 'opencode'] });
+  assert.equal(r.digestIds().length, 1, 'no alternate: never respawned');
   assert.equal(r.sends.filter((s) => s.id === r.dig).length, 2, 'MAX_RETRIES resends');
   assert.equal(r.entries.length, 1, 'one entry for the turn');
   assert.match(r.entries[0].text, /^UNVERIFIED \(digest failed\): PASS: built thing/);
   assert.deepEqual(r.archived, [r.dig]);
+});
+
+const EXHAUST = ['claude-eof', 'acp-eof', 'claude-eof']; // turn 1 + MAX_RETRIES resends, all EOF
+
+test('idea-218: primary EOF through its retries -> respawned ONCE on the failover alternate (Check - Haiku); one real verdict, each archived once', async () => {
+  const r = await run([...EXHAUST, 'verdict'], 'rn-w-alt');
+  const ids = r.digestIds();
+  assert.equal(ids.length, 2, 'primary + one alternate');
+  const [primary, alt] = ids.map((id) => r.agents.get(id));
+  assert.equal(primary.labels.profile, 'Pre-check - Flash');
+  assert.equal(primary.provider, 'antigravity-cli');
+  assert.equal(alt.labels.profile, 'Check - Haiku', 'counterpart of the digest profile');
+  assert.equal(alt.provider, 'claude', 'a different provider');
+  assert.equal(alt.labels.digestFor, 'rn-w-alt');
+  assert.equal(r.sends.filter((s) => s.id === primary.id).length, 2, 'the primary got its MAX_RETRIES resends first');
+  assert.deepEqual(r.entries.map((e) => e.text), ['PASS: real verdict for rn-w-alt'], 'exactly one entry: the alternate verdict, no UNVERIFIED');
+  assert.deepEqual(r.archived, [primary.id, alt.id], 'each archived exactly once, the primary before the alternate spawned');
+});
+
+test('idea-218: the alternate skips capped providers (claude capped -> Audit - DSF on opencode)', async () => {
+  const r = await run([...EXHAUST, 'verdict'], 'rn-w-skip', { cappedProviders: ['claude'] });
+  const ids = r.digestIds();
+  assert.equal(ids.length, 2);
+  const alt = r.agents.get(ids[1]);
+  assert.equal(alt.labels.profile, 'Audit - DSF');
+  assert.equal(alt.provider, 'opencode');
+  assert.deepEqual(r.entries.map((e) => e.text), ['PASS: real verdict for rn-w-skip']);
+  assert.deepEqual(r.archived, ids);
+});
+
+test('idea-218: the alternate also fails through its retries -> no third digest, exactly one UNVERIFIED, both archived once', async () => {
+  const r = await run([...EXHAUST, ...EXHAUST], 'rn-w-both');
+  const ids = r.digestIds();
+  assert.equal(ids.length, 2, 'respawned once, never twice');
+  assert.equal(r.sends.filter((s) => s.id === ids[1]).length, 2, 'the alternate gets its own A4 retries');
+  assert.equal(r.entries.length, 1, 'one entry for the turn');
+  assert.match(r.entries[0].text, /^UNVERIFIED \(digest failed\): PASS: built thing/);
+  assert.deepEqual(r.archived, ids, 'each archived exactly once');
 });
 
 test('M1: a second waitForFinish after a resend does not return on the previous turn (floor past the reported turn)', async () => {
