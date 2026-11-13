@@ -2683,6 +2683,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       ? createWatchEngine({
           ...watchOpts,
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
+          lastMessage: (id: string) => (paseoApi ? lastAssistantText(paseoApi, id) : Promise.resolve("")),
           deliver: (d: WatchDelivery) => deliverWatchPing(d),
           spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
           nudge: (id: string, text: string) => nudgeIdleWorker(id, text),

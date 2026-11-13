@@ -192,6 +192,9 @@ export function classifyItem(item, set, ctx) {
     }
     const busy = o.status === "running" || o.status === "initializing";
     if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text };
+    // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
+    // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
+    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText) return { phase: o.status || "idle", state: "done", report: o.finalText };
     if (o.archived) return { phase: "archived", state: "stalled", reason: "archived" };
     if (o.status === "closed") return { phase: "closed", state: "stalled", reason: o.lost || o.resumable ? "lost" : "exited" };
     if (o.status === "error") return { phase: "error", state: "stalled", reason: "error" };
@@ -416,6 +419,7 @@ export function createWatchEngine({
   now = () => Date.now(),
   alive = pidAlive,
   getAgent,
+  lastMessage,
   deliver,
   spawnDigest,
   nudge,
@@ -470,6 +474,7 @@ export function createWatchEngine({
     if (o.status !== st) {
       o.status = st;
       o.statusSince = t;
+      if (st === "running" || st === "initializing") o.finalText = "";
     }
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
@@ -498,8 +503,20 @@ export function createWatchEngine({
       }
       if (ev.agent) observe(ev.agent, t);
       else if (ev.agentId) obsFor(String(ev.agentId)).lastEventAt = t;
-      if (ev.kind === "permission" && ev.agentId) obsFor(String(ev.agentId)).attention = true;
-      if (ev.kind === "turn_started" && ev.agentId) obsFor(String(ev.agentId)).turnStartedAt = t;
+      // Bug B (idea-171): a permission event only raises attention while the snapshot it rides with (if any) still lists a
+      // pending permission; a new or finished turn clears it (the answered request never sent its own "resolved" event).
+      if (ev.kind === "permission" && ev.agentId && (!ev.agent || (ev.agent.pendingPermissions?.length ?? 0) > 0)) obsFor(String(ev.agentId)).attention = true;
+      if (ev.kind === "turn_started" && ev.agentId) {
+        const o = obsFor(String(ev.agentId));
+        o.turnStartedAt = t;
+        o.attention = false;
+        o.finalText = "";
+      }
+      if (ev.kind === "turn_ended" && ev.agentId) {
+        const o = obsFor(String(ev.agentId));
+        o.attention = false;
+        o.finalChecked = 0; // re-read the final message on the next tick
+      }
     } catch (e) {
       log(`watch runner event failed: ${e?.message ?? e}`);
     }
@@ -650,6 +667,18 @@ export function createWatchEngine({
           if (a) observe({ ...a, id: a.id ?? ref }, t, false);
         } catch {
           /* runner hiccup: the stall clock still runs */
+        }
+      }
+    }
+    if (lastMessage) {
+      for (const ref of refs) {
+        const o = agents.get(ref);
+        if (!o || o.status !== "idle" || o.archived || o.finalText || t - (o.finalChecked ?? 0) < SNAP_REFRESH_MS) continue;
+        o.finalChecked = t;
+        try {
+          o.finalText = String((await lastMessage(ref)) ?? "").trim();
+        } catch {
+          /* no timeline: stays not-done */
         }
       }
     }
