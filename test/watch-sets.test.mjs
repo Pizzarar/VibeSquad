@@ -74,7 +74,8 @@ test("addWatch / listWatches / cancelWatch: persisted to <home>/watches.json, va
     assert.throws(() => addWatch({ owner: "a", items: [{ kind: "suite" }], stallMin: 0 }, { home: sb.home }), /stallMin/);
 
     assert.deepEqual(cancelWatch(id, "lead-1", { home: sb.home, now: T0 + 1 }), { ok: true, id });
-    const after = listWatches({ owner: "lead-1" }, { home: sb.home })[0];
+    assert.equal(listWatches({ owner: "lead-1" }, { home: sb.home }).length, 0, "cancelled hidden by default");
+    const after = listWatches({ owner: "lead-1", all: true }, { home: sb.home })[0];
     assert.equal(after.status, "cancelled");
     assert.equal(after.cancelledBy, "lead-1");
     assert.equal(cancelWatch("w-nope", "x", { home: sb.home }).ok, false);
@@ -1673,3 +1674,46 @@ test(
     assert.equal(sent.filter((x) => x.to === "w").length, 0, JSON.stringify(sent));
   }),
 );
+
+test("idea-209/210: a cancelled set never fires again (stall or completion), also after a restart; list hides closed sets; prune at 24h", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: T0 });
+    const keep = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-9" }] }, { home: sb.home, now: T0 }).id;
+    const a = engineFor(sb);
+    a.engine.onRunnerEvent(agentEv("w-1", "running"));
+    a.engine.onRunnerEvent(agentEv("w-2", "running"));
+    assert.deepEqual(cancelWatch(id, "lead-1", { home: sb.home, now: T0 + 1 }), { ok: true, id });
+    // Stall + completion conditions after the cancel: nothing is delivered.
+    a.engine.onRunnerEvent({ kind: "roster", agents: [{ id: "w-1", status: "closed", lost: true, resumable: true }] });
+    a.clock.t = T0 + 30 * MIN;
+    await a.engine.tick();
+    a.engine.onRunnerEvent(agentEv("w-1", "idle"));
+    a.engine.onRunnerEvent(agentEv("w-2", "idle"));
+    a.engine.onLogEntry("vibesquad", doneEntry("w-1", a.clock.t + 1));
+    a.engine.onLogEntry("vibesquad", doneEntry("w-2", a.clock.t + 2));
+    a.clock.t += 60 * MIN;
+    await a.engine.tick();
+    assert.equal(a.delivered.filter((d) => d.setId === id).length, 0, "no ping for the cancelled set");
+    assert.equal(a.engine.get(id).firedAt, undefined);
+    a.engine.stop?.();
+    // Server restart: a fresh engine reloads the persisted set and still never fires it.
+    const b = engineFor(sb, { clock: { t: a.clock.t + MIN } });
+    b.engine.onRunnerEvent({ kind: "roster", agents: [{ id: "w-1", status: "closed", lost: true }, { id: "w-2", status: "idle" }] });
+    b.clock.t += 60 * MIN;
+    await b.engine.tick();
+    b.clock.t += 60 * MIN;
+    await b.engine.tick();
+    assert.equal(b.delivered.filter((d) => d.setId === id).length, 0, "no ping after a restart");
+    assert.equal(b.engine.get(id).firedAt, undefined);
+    // list: default hides cancelled, --all shows it.
+    assert.deepEqual(listWatches({}, { home: sb.home }).map((s) => s.id), [keep]);
+    assert.equal(listWatches({ all: true }, { home: sb.home }).length, 2);
+    // prune: a cancelled set older than 24h is dropped from the file on the next write.
+    addWatch({ owner: "lead-1", items: [{ kind: "suite" }] }, { home: sb.home, now: T0 + 25 * 60 * MIN });
+    assert.equal(listWatches({ all: true }, { home: sb.home }).some((s) => s.id === id), false, "pruned after 24h");
+    b.engine.stop?.();
+  } finally {
+    sb.cleanup();
+  }
+});

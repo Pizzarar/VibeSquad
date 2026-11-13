@@ -902,6 +902,7 @@ async function watchTool(ctx, args = {}) {
     const opts = {};
     if (owner) opts.owner = owner;
     if (team) opts.team = team;
+    if (args.all) opts.all = true;
     return ws.listWatches(opts);
   }
   // add
@@ -972,7 +973,7 @@ export const VS_TOOLS = {
   },
   watch: {
     description: "Register, list or cancel a watch set: a lead registers the agents + its suite run + a restart it is waiting on and ends its turn; a server-side watcher pings once when the whole set completes or stalls (stallMin, default 15). Default owner is the caller; workers are refused; only the same-Squad Overlord may set a different owner (within its own Squad). Returns {id} for add, the watch list for list, and a cancel confirmation for cancel.",
-    inputSchema: obj({ action: { type: "string", enum: ["add", "list", "cancel"] }, agents: { type: "array", items: S }, suite: { type: "boolean" }, restart: { type: "boolean" }, stallMin: { type: "number" }, id: S, owner: S }, ["action"]),
+    inputSchema: obj({ action: { type: "string", enum: ["add", "list", "cancel"] }, agents: { type: "array", items: S }, suite: { type: "boolean" }, restart: { type: "boolean" }, stallMin: { type: "number" }, id: S, owner: S, all: { type: "boolean" } }, ["action"]),
     run: watchTool,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },

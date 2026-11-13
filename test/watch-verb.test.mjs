@@ -298,7 +298,7 @@ test("F6: cancel is refused unless the caller owns the set or is the same-Squad 
 
     // The same-Squad Overlord cancels another lane's set in its Squad -> ok, cancelledBy is the Overlord.
     assert.deepEqual(await callTool(ov, "watch", { action: "cancel", id }), { ok: true, id });
-    const cancelled = ws.listWatches({ owner: "rn-lead-b" })[0];
+    const cancelled = ws.listWatches({ owner: "rn-lead-b", all: true })[0];
     assert.equal(cancelled.status, "cancelled");
     assert.equal(cancelled.cancelledBy, "rn-hub-lead");
 
