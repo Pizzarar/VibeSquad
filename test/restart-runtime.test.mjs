@@ -1247,7 +1247,7 @@ test("adopted listener crashes mid-boot: 'died during start' well before the dea
 // normalise them (they used to read as label-less workers: "no live lead in vibesquad/vibesquad") and prefer the spawner.
 test("holderLeads: raw runner records resolve the lane lead; the holder's vs.parent lead wins; a dead parent falls back to team+lane", async () => {
   const { holderLeads } = await import("../server/restart-coord.mjs");
-  const teams = [{ id: "vs", name: "VS", paths: ["vs"], lanes: [{ id: "vs", name: "VS" }, { id: "bug", name: "Bug" }] }];
+  const teams = [{ id: "vs", name: "VS", paths: ["vs"], lanes: [{ id: "vs", name: "VS", paths: ["vs"] }, { id: "bug", name: "Bug", paths: ["vs"] }] }];
   const raw = (id, labels, over = {}) => ({ id, provider: "claude", status: "idle", cwd: "C:/wt/vs/unit-x", meta: { title: id, labels }, ...over });
   const agents = [
     raw("rn-hub", { team: "vs", lane: "vs", role: "lead" }),
@@ -1261,4 +1261,21 @@ test("holderLeads: raw runner records resolve the lane lead; the holder's vs.par
   // parent is a live lead of the holder's lane even if another lead would sort first
   const two = [...agents, raw("rn-bug2", { team: "vs", lane: "bug", role: "lead" }, { createdAt: Date.now() + 1000 })];
   assert.equal(holderLeads(["rn-w"], two, teams).leads[0].leadId, "rn-bug");
+  // a vs.parent that is an in-list former-lead (handed off) is not a lead: fall back to the live team+lane lead
+  const old = [...agents, raw("rn-old", { team: "vs", lane: "bug", role: "former-lead" }), raw("rn-w3", { team: "vs", lane: "bug", role: "worker", "vs.parent": "rn-old" })];
+  const rf = holderLeads(["rn-w3"], old, teams);
+  assert.deepEqual(rf.unresolved, []);
+  assert.deepEqual(rf.leads.map((l) => l.leadId), ["rn-bug"]);
+});
+
+test("launcher hands off and server is healthy within the 3s guard: server.pid still adopts the listener (idea-217)", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock();
+    const spawn = (...a) => { w.deps.spawnDetached(...a); return 777004; }; // launcher pid: not alive
+    const lp = (p) => { if (!w.spawned.length) return w.deps.listenerPid(p); w.alive.add(888004); return 888004; };
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: clock.sleep, spawnDetached: spawn, listenerPid: lp, httpCall: gated(w, clock, 0, (u) => u.includes("api/health")) });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(readFileSync(path.join(w.configDir, "server.pid"), "utf8"), "888004");
+  } finally { await w.cleanup(); }
 });
