@@ -3358,7 +3358,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
-    const FAIL_RE = /\bFAIL(ED)?\b/;
+    /** FAIL, or a reviewer with no verdict line ("NO-VERDICT: ..."): either way the worker stays for a fix round. */
+    const FAIL_RE = /\b(?:FAIL(?:ED)?|NO-VERDICT)\b/;
     /** Only an explicit role=worker label is archivable: a missing/empty/unknown role normalizes to "worker" elsewhere. */
     const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
     /** The newest done entry attributed to a worker. */

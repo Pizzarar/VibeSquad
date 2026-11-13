@@ -2142,7 +2142,7 @@ export async function commandVerdict(flags, makeContext = createContext, { out =
   const ctx = makeContext({ identity: { agentId: identity.agentId, token: identity.token, team: identity.team.id, lane: identity.lane, role: identity.role } });
   const { agent, lastMessage } = await ctx.withBackend({ id }, async (b) => {
     const rec = await (b.fetchAgent ?? b.getAgent).call(b, id);
-    const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline).call(b, id, { direction: "tail", limit: 50, projection: "projected" });
+    const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline).call(b, id, { direction: "tail", projection: "projected" }); // no limit (as the digest path): a long tool tail must not hide the verdict message
     return { agent: rec?.agent ?? rec, lastMessage: lastAssistantText(tl, Infinity) };
   });
   const tip = revParse(branch, flags.cwd ? path.resolve(String(flags.cwd)) : process.cwd());

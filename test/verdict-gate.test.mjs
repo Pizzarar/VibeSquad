@@ -206,3 +206,26 @@ test("vs verdict <reviewer> --branch <b>: real runner + real git: PASS on the ti
   await assert.rejects(commandVerdict({ _: ["rn-x"] }, makeContext), /usage: vs verdict/);
   await assert.rejects(commandVerdict({ _: ["rn-x"], branch: "--all" }, makeContext), /--branch must name/);
 });
+
+test("vs verdict (idea-177 L1): a verdict message buried under a long tool tail (>50 entries) is still found; no verdict still fails closed", async () => {
+  const repo = tmp("vs-verdict-repo-");
+  const git = (...a) => { const r = spawnSync("git", a, { cwd: repo, encoding: "utf8" }); assert.equal(r.status, 0, r.stderr); return r.stdout.trim(); };
+  git("init", "-q", "-b", "unit-x");
+  git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "c1");
+  const tip = git("rev-parse", "HEAD");
+  const tail = Array.from({ length: 120 }, (_, i) => ({ item: { type: "tool_call", name: `t${i}` } }));
+  const mk = (msg) => ({
+    withBackend: (_o, fn) => fn({
+      fetchAgent: async () => ({ agent: { id: "rn-r", title: "Review", labels: { profile: "Review - Gemini" } } }),
+      // honours `limit` like the real backend: only the newest N entries
+      fetchAgentTimeline: async (_id, opts = {}) => {
+        const all = [...(msg ? [{ item: { type: "assistant_message", text: msg } }] : []), ...tail];
+        return { entries: Number(opts.limit) > 0 ? all.slice(-Number(opts.limit)) : all };
+      },
+    }),
+  });
+  const run = async (msg) => { let out = ""; let err = ""; const code = await commandVerdict({ _: ["rn-r"], branch: "unit-x", cwd: repo }, () => mk(msg), { out: (s) => (out += s), err: (s) => (err += s) }); return { code, out, err }; };
+  const ok = await run(`PASS 0/0/0 ${tip.slice(0, 7)}`);
+  assert.equal(ok.code, 0, ok.err);
+  assert.equal((await run("")).code, GATE_EXIT.noVerdict);
+});
