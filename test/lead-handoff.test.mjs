@@ -244,8 +244,8 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
         }
         labelUpdates.push({ id, labels, name });
       },
-      sendMessage: async (id, text) => {
-        messages.push({ id, text });
+      sendMessage: async (id, text, opts) => {
+        messages.push({ id, text, ...(opts?.steerOnly ? { steerOnly: true } : {}) });
       },
       createAgent: async (payload) => {
         const created = {
@@ -286,6 +286,8 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
     assert.equal(messages.length, 1);
     assert.equal(messages[0].id, lead.id);
     assert.equal(messages[0].text, SOFT_FLAG_NUDGE);
+    // idea-214: a plain send. It asks the lead to start its handoff and fires once (handoff-nudged), so a drop would lose it.
+    assert.equal(messages[0].steerOnly, undefined, "the 150k nudge may wake an idle lead");
 
     // Repeated evaluation at 150k / 180k -> does NOT fire again
     const r150b = await coordinator.evaluateLead(lead, { usedTokens: 150_000 });
@@ -301,6 +303,8 @@ test("Done-when #1: simulated lead stepping 150k -> 250k -> 300k triggers flag, 
     assert.equal(r250RunningA.stage, "prompt-250");
     assert.equal(messages.length, 2);
     assert.equal(messages[1].text, WRITE_HANDOFF_PROMPT);
+    // idea-214: a plain send. With no packet an idle lead must be woken to write one; a dropped prompt would stall the ladder.
+    assert.equal(messages[1].steerOnly, undefined, "the write-handoff prompt may wake an idle lead");
     assert.equal(createdAgents.length, 0);
 
     const r250RunningB = await coordinator.evaluateLead(lead, { usedTokens: 255_000 });
@@ -519,8 +523,8 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
           if (name) cur.title = name;
         }
       },
-      sendMessage: async (id, text) => {
-        messages.push({ id, text });
+      sendMessage: async (id, text, opts) => {
+        messages.push({ id, text, ...(opts?.steerOnly ? { steerOnly: true } : {}) });
       },
       createAgent: async (payload) => {
         const created = {
@@ -583,6 +587,8 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     const workerNotice = messages.find((m) => m.id === openWorker.id);
     assert.ok(workerNotice, "Expected open worker to be notified of new lead");
     assert.match(workerNotice.text, /Report to ★ Sit19 \(succ-ord19\)/i);
+    // idea-214: steer-only, so a worker that went idle after the status snapshot is never woken (dropped; vs.parent suffices).
+    assert.equal(workerNotice.steerOnly, true, "the repoint notice is a steer-only send");
     // idea-201: an idle worker is re-pointed by label only (no message => no replayed report / re-digest).
     assert.equal(messages.filter((m) => m.id === "w-idle-1").length, 0);
     assert.equal(agents.get("w-idle-1").labels["vs.parent"], succ.id);

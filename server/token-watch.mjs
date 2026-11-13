@@ -76,7 +76,7 @@ export function startTokenWatcher({
       profilesPath,
       sharedSlots: true,
       setLabels: (id, labels, name) => runner.updateAgent(id, { ...(name ? { name } : {}), labels }),
-      sendMessage: (id, text) => runner.sendAgentPrompt(id, text),
+      sendMessage: (id, text, opts) => (opts ? runner.sendAgentPrompt(id, text, opts) : runner.sendAgentPrompt(id, text)),
       createAgent: (p) =>
         runner.createAgent({
           config: p.config,

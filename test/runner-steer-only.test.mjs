@@ -8,8 +8,11 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Runner } from '../runner/runner.mjs';
-import { createServer } from '../runner/server.mjs';
+import { Runner, droppedSteerSeqs } from '../runner/runner.mjs';
+import { createServer, writeDiscovery } from '../runner/server.mjs';
+import { RunnerClient } from '../server/backend/runner-client.mjs';
+import { RunnerBackend } from '../server/backend/runner-backend.mjs';
+import { handleRunnerApi } from '../server/runner-api.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { createAcpAdapter } from '../runner/adapters/acp.mjs';
 
@@ -365,4 +368,158 @@ test('default send unchanged: a parked agent resumes', () => {
   assert.equal(adapter.started.length, 2, 'a new process resumed the session');
   assert.equal(adapter.started[1].sends.at(-1).text, 'back');
   runner.shutdown();
+});
+
+// ---- idea-214 (1): the VS server's own input route forwards steerOnly end to end (route -> RunnerBackend -> runner) ----
+
+async function bootRoute() {
+  const adapter = controlledAdapter();
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, parkGraceMs: 60_000 });
+  const server = createServer(runner, { token: 't' });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const home = tmp();
+  writeDiscovery(home, { port: server.address().port, token: 't' });
+  const backend = new RunnerBackend({ client: new RunnerClient({ home }), hooks: false, buildPrefix: async () => '' });
+  const post = async (id, body) => {
+    const out = {};
+    await handleRunnerApi({ url: `/__vibesquad/runner/agents/${id}/input`, method: 'POST', headers: {} }, {}, {
+      readBody: async () => body, sendJson: (_r, code, json) => Object.assign(out, { code, json }), backend, caller: { kind: 'owner' },
+    });
+    return out;
+  };
+  return { adapter, runner, post, close: () => { server.close(); server.closeAllConnections?.(); runner.shutdown(); } };
+}
+
+test('server input route: { steerOnly } to an idle agent is dropped end to end (no turn, no input) and says so', async () => {
+  const t = await bootRoute();
+  try {
+    const a = mk(t.runner, { prompt: 'work' });
+    t.adapter.started[0].emit('status', { status: 'idle' });
+    const before = t.adapter.started[0].sends.length;
+    const r = await t.post(a, { text: 'wrap up', steerOnly: true });
+    assert.deepEqual(r, { code: 200, json: { ok: true, delivered: false, reason: 'idle' } });
+    assert.equal(t.runner.live.get(a).inflight, 0, 'still idle: the route never started a turn');
+    assert.equal(t.adapter.started[0].sends.length, before, 'nothing reached the adapter');
+    assert.deepEqual(inputs(t.runner, a).map((e) => e.text), ['work'], 'no input logged');
+  } finally { t.close(); }
+});
+
+test('server input route: { steerOnly } to a running agent joins its turn (delivered, logged steer-only)', async () => {
+  const t = await bootRoute();
+  try {
+    const a = mk(t.runner, { prompt: 'work' });
+    const r = await t.post(a, { text: 'wrap up', steerOnly: true, activeTurnBehavior: 'interrupt' });
+    assert.deepEqual(r, { code: 200, json: { ok: true, delivered: true } });
+    assert.equal(t.adapter.started[0].sends.at(-1).text, 'wrap up');
+    assert.equal(t.adapter.started[0].sends.at(-1).opts.steerOnly, true);
+    assert.equal(inputs(t.runner, a).at(-1).steerOnly, true);
+    assert.equal(t.runner.live.get(a).inflight, 1, 'one turn, never interrupted');
+  } finally { t.close(); }
+});
+
+test('server input route: a plain send is unchanged (wakes an idle agent, answers { ok })', async () => {
+  const t = await bootRoute();
+  try {
+    const a = mk(t.runner, { prompt: 'work' });
+    t.adapter.started[0].emit('status', { status: 'idle' });
+    const r = await t.post(a, { text: 'next' });
+    assert.deepEqual(r, { code: 200, json: { ok: true } });
+    assert.equal(t.runner.live.get(a).inflight, 1, 'a fresh turn');
+    assert.equal(inputs(t.runner, a).at(-1).steerOnly, undefined);
+  } finally { t.close(); }
+});
+
+// ---- idea-214 (3): a dropped steer is not part of the fresh-session recap ----
+
+test('ACP: a steer dropped at prompt end names its input, and the fresh-session primer skips it', async () => {
+  const spawnImpl = fakeAcpSpawn();
+  const runner = acpRunner(spawnImpl);
+  const a = runner.create({ provider: 'antigravity-cli', cwd: os.tmpdir(), prompt: 'one' });
+  await settle();
+  runner.send(a, 'wrap up', { steerOnly: true });
+  spawnImpl.finishPrompt();
+  await settle();
+  const steerIn = inputs(runner, a).find((e) => e.text === 'wrap up');
+  const [drop] = runner.timeline(a).filter((e) => e.type === 'steer_dropped');
+  assert.equal(drop.input, steerIn.seq, 'the drop names the input it drops');
+  runner.store.append(a, 'input', { text: 'resume trigger' }); // the prompt a resume would send right after the primer
+  const primer = runner._primer(a);
+  assert.match(primer, /User: one/);
+  assert.doesNotMatch(primer, /wrap up/, 'the dropped steer never reached the agent');
+  runner.shutdown();
+});
+
+test('ACP: a steer that rode along with a real prompt stays in the primer', async () => {
+  const spawnImpl = fakeAcpSpawn();
+  const runner = acpRunner(spawnImpl);
+  const a = runner.create({ provider: 'antigravity-cli', cwd: os.tmpdir(), prompt: 'one' });
+  await settle();
+  runner.send(a, 'wrap up', { steerOnly: true });
+  runner.send(a, 'two');
+  spawnImpl.finishPrompt();
+  await settle();
+  spawnImpl.finishPrompt();
+  await settle();
+  runner.store.append(a, 'input', { text: 'resume trigger' });
+  const primer = runner._primer(a);
+  assert.match(primer, /User: wrap up/);
+  assert.match(primer, /User: two/);
+  runner.shutdown();
+});
+
+test('ACP: cancel drops a queued steer with a logged steer_dropped (reason cancelled), so the primer skips it too', async () => {
+  const spawnImpl = fakeAcpSpawn();
+  const runner = acpRunner(spawnImpl);
+  const a = runner.create({ provider: 'antigravity-cli', cwd: os.tmpdir(), prompt: 'one' });
+  await settle();
+  runner.send(a, 'wrap up', { steerOnly: true });
+  runner.cancel(a);
+  await settle();
+  const drops = runner.timeline(a).filter((e) => e.type === 'steer_dropped');
+  assert.equal(drops.length, 1);
+  assert.equal(drops[0].reason, 'cancelled');
+  assert.equal(drops[0].input, inputs(runner, a).find((e) => e.text === 'wrap up').seq);
+  runner.store.append(a, 'input', { text: 'resume trigger' });
+  assert.doesNotMatch(runner._primer(a), /wrap up/);
+  runner.shutdown();
+});
+
+test('runner-side drop (adapter refuses the steer) names its input; the primer skips it, earlier joined steers stay', () => {
+  const started = [];
+  const adapter = {
+    canPark: true,
+    start({ emit }) {
+      const rec = { emit, sends: [], refuse: false };
+      started.push(rec);
+      return { send(text, opts) { if (opts?.steerOnly && rec.refuse) return false; rec.sends.push({ text, opts }); emit('status', { status: 'running' }); return true; }, cancel() {}, kill() {} };
+    },
+  };
+  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, parkGraceMs: 60_000 });
+  const a = mk(runner, { prompt: 'work' });
+  assert.equal(runner.send(a, 'joined steer', { steerOnly: true }).delivered, true);
+  started[0].refuse = true;
+  assert.deepEqual(runner.send(a, 'refused steer', { steerOnly: true }), { queued: false, delivered: false, reason: 'turn-ending' });
+  const refused = inputs(runner, a).find((e) => e.text === 'refused steer');
+  assert.equal(runner.timeline(a).find((e) => e.type === 'steer_dropped').input, refused.seq);
+  runner.store.append(a, 'input', { text: 'resume trigger' });
+  const primer = runner._primer(a);
+  assert.match(primer, /User: joined steer/);
+  assert.doesNotMatch(primer, /refused steer/);
+  runner.shutdown();
+});
+
+test('droppedSteerSeqs: logs from before the input field resolve by position (turn-ended = oldest pending, runner-side = newest)', () => {
+  const ev = (seq, type, extra = {}) => ({ seq, type, ...extra });
+  // ACP turn-end drop of two queued steers, after a real input; an earlier steer rode along with that real input.
+  const acp = [
+    ev(0, 'input', { text: 'one' }), ev(1, 'input', { text: 's0', steerOnly: true }), ev(2, 'input', { text: 'two' }),
+    ev(3, 'input', { text: 's1', steerOnly: true }), ev(4, 'input', { text: 's2', steerOnly: true }),
+    ev(5, 'steer_dropped', { reason: 'turn-ended' }), ev(6, 'steer_dropped', { reason: 'turn-ended' }),
+  ];
+  assert.deepEqual([...droppedSteerSeqs(acp)].sort(), [3, 4], 's0 rode along with "two"; s1 and s2 dropped');
+  // claude: a joined steer, then a refused one right after its own input.
+  const claude = [ev(0, 'input', { text: 'w' }), ev(1, 'input', { text: 'j', steerOnly: true }), ev(2, 'input', { text: 'r', steerOnly: true }), ev(3, 'steer_dropped', { reason: 'turn-ending' })];
+  assert.deepEqual([...droppedSteerSeqs(claude)], [2]);
+  // New logs name the input exactly; a drop with nothing pending is ignored.
+  assert.deepEqual([...droppedSteerSeqs([ev(0, 'input', { text: 'x', steerOnly: true }), ev(1, 'steer_dropped', { reason: 'turn-ended', input: 0 }), ev(2, 'steer_dropped', { reason: 'turn-ended' })])], [0]);
 });

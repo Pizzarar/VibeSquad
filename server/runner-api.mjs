@@ -87,14 +87,19 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
       if (req.method === "POST") {
         const body = await readBody(req);
         if (action === "input") {
-          await backend.sendAgentPrompt(id, String(body?.text ?? ""), {
+          // steerOnly (idea-169/214): join the agent's open turn or drop; never starts, resumes or revives a turn. The runner's
+          // answer ({ delivered, reason? }) goes back to the caller so it learns whether the steer was dropped.
+          const steerOnly = body?.steerOnly === true;
+          const r = await backend.sendAgentPrompt(id, String(body?.text ?? ""), {
             images: Array.isArray(body?.images) ? body.images : undefined,
-            activeTurnBehavior: body?.activeTurnBehavior === "interrupt" ? "interrupt" : undefined,
+            activeTurnBehavior: !steerOnly && body?.activeTurnBehavior === "interrupt" ? "interrupt" : undefined,
             // Only the owner's composer is a human send; an agent's send is forwarded as that agent (the runner sets
             // senderId from the verified caller, ignores a body `owner`, and downgrades an interrupt it may not cancel).
             owner: !agent,
+            ...(steerOnly ? { steerOnly: true } : {}),
             ...as,
           });
+          if (steerOnly) return sendJson(res, 200, { ok: true, delivered: r?.delivered === true, ...(r?.reason ? { reason: r.reason } : {}) });
         }
         else if (action === "cancel") await backend.cancelAgent(id, as);
         else if (action === "archive") await backend.archiveAgent(id, as);

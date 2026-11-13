@@ -557,9 +557,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
   };
 
-  const sendMessage = async (agentId, text) => {
+  // opts.steerOnly (idea-169/214): join the target's open turn or drop; never wakes an idle agent.
+  const sendMessage = async (agentId, text, opts) => {
     if (typeof deps.sendMessage === "function") {
-      return await deps.sendMessage(agentId, text);
+      return opts ? await deps.sendMessage(agentId, text, opts) : await deps.sendMessage(agentId, text);
     }
   };
 
@@ -820,8 +821,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
         // idea-201: messaging an IDLE worker starts a turn that re-states its last final report; turn_ended then
         // re-delivers it (and spawns a fresh digest) to the successor as if new. The vs.parent label is all an idle
         // worker needs; only a worker mid-turn is told, since it will report on its own.
+        // idea-214: steerOnly, because the status above is a snapshot: a worker that went idle since then must not be woken
+        // (same replay as above). A dropped notice costs nothing: vs.parent already points at the successor.
         if (BUSY_STATUSES.has(String(w.status ?? "").toLowerCase())) {
-          await sendMessage(w.id, `Report to ${successor.title} (${successor.id}).`);
+          await sendMessage(w.id, `Report to ${successor.title} (${successor.id}).`, { steerOnly: true });
         } else idleRepointed++;
       } catch {}
     }
@@ -1451,9 +1454,9 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
           await backend.updateAgent(agentId, { ...(name ? { name } : {}), labels });
         }
       },
-      async sendMessage(agentId, text) {
+      async sendMessage(agentId, text, opts) {
         if (connected && client && typeof backend.sendAgentPrompt === "function") {
-          await backend.sendAgentPrompt(agentId, text).catch(() => {});
+          return await (opts ? backend.sendAgentPrompt(agentId, text, opts) : backend.sendAgentPrompt(agentId, text)).catch(() => {});
         }
       },
       async createAgent(payload) {
