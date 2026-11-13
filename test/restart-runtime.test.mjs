@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, bootDefault, restartRuntime, httpCall } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs } from "../scripts/restart-runtime.mjs";
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
@@ -101,13 +101,13 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null } = {}) {
+async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null, supportsDrain = true } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
   const outDir = path.join(tmp, "vs");
   mkdirSync(home, { recursive: true });
-  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [], spawnEnvs: [], vsCalls: [] };
+  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [], spawnEnvs: [], vsCalls: [], drainCalls: [] };
   const agents = { current: [
     { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" }, ...extraAgents,
   ] };
@@ -144,6 +144,18 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
         if (!supportsShutdown) return json(404, { error: "not found" });
         json(202, { ok: true });
         setImmediate(() => { st.dead = true; w.alive.delete(pid); rmSync(path.join(home, "runner.json"), { force: true }); close(st.srv); });
+        return;
+      }
+      if (url === "/drain") { // restart drain (ideas 198 + 186): records { pid, method, body }; st.drain mirrors the runner's state
+        let b = ""; req.on("data", (c) => { b += c; });
+        req.on("end", () => {
+          const body = b ? JSON.parse(b) : null;
+          w.drainCalls.push({ pid, method: req.method, body });
+          if (!supportsDrain) return json(404, { error: "not found" });
+          if (req.method === "POST") { st.drain = { since: Date.now(), until: Date.now() + body.ttlMs, reason: body.reason }; return json(200, { ok: true, drain: st.drain }); }
+          if (req.method === "DELETE") { const was = !!st.drain; st.drain = null; return json(200, { ok: true, cleared: was, drain: null }); }
+          return json(404, {});
+        });
         return;
       }
       const m = /^\/agents\/([^/]+)\/resume$/.exec(url);
@@ -1095,4 +1107,92 @@ test("direct-started runner that dies before writing runner.json fails fast (its
     assert.ok(r.errors.some((e) => /runner start: runner process 987654 died during start/.test(e)), JSON.stringify(r.errors));
     assert.ok(clock.t - t0 < 120_000, "did not wait out the deadline");
   } finally { await w.cleanup(); }
+});
+
+// ---- Restart drain (ideas 198 + 186): the restart flow sets the runner drain before the idle wait and clears it after ----
+
+test("drain: a restart sets the runner drain (TTL = wait + stop + margin) before waiting; success ends it with the stopped runner", async () => {
+  const w = await world({ running: [1, 0] });
+  try {
+    const oldPid = w.runner().pid;
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.indexOf("drain set") > names.indexOf("marker touched") && names.indexOf("drain set") < names.indexOf("waiting for runner idle"), names.join(" | "));
+    const set = w.drainCalls.filter((c) => c.method === "POST");
+    assert.deepEqual(set.map((c) => c.pid), [oldPid], "set once, on the runner being restarted");
+    assert.equal(set[0].body.ttlMs, (5 + 2 + 120) * 1000, "wait-timeout 5 + stop-timeout 2 + 120 s margin");
+    assert.match(set[0].body.reason, /^vs restart pid \d+$/);
+    assert.ok(names.includes("drain clear skipped"), "the drained runner was stopped: nothing left to clear");
+    assert.equal(w.drainCalls.filter((c) => c.method === "DELETE" && c.pid !== oldPid).length, 0, "never touches the new runner");
+    assert.equal(w.runner().drain ?? null, null, "the new runner is not draining");
+  } finally { await w.cleanup(); }
+});
+
+test("drain: a deferral (failure) clears the drain on the runner it left up; a preflight refusal does too", async () => {
+  const w = await world({ running: [0], held: [["rn-suite"]] });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.ok, false);
+    assert.ok(r.deferred);
+    assert.deepEqual(w.drainCalls.map((c) => c.method), ["POST", "DELETE"]);
+    assert.equal(w.runner().drain, null, "drain cleared on the still-running runner");
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.indexOf("drain cleared") > names.indexOf("deferred: background work still running"));
+    assert.equal(r.steps.find((s) => s.step === "drain cleared").wasActive, true);
+  } finally { await w.cleanup(); }
+  const w2 = await world({ serveCmd: false });
+  try {
+    const r = await w2.run({});
+    assert.equal(r.ok, false);
+    assert.deepEqual(w2.drainCalls.map((c) => c.method), ["POST", "DELETE"]);
+    assert.equal(w2.runner().drain, null);
+  } finally { await w2.cleanup(); }
+});
+
+test("drain: a runner without /drain (404) or --no-wait never fails the restart; dry run sets nothing", async () => {
+  const w = await world({ running: [0], supportsDrain: false });
+  try {
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const ns = r.steps.find((s) => s.step === "drain not set");
+    assert.equal(ns.status, 404);
+    assert.match(ns.error, /predates \/drain/);
+    assert.deepEqual(w.drainCalls.map((c) => c.method), ["POST"], "no clear for a drain never set");
+  } finally { await w.cleanup(); }
+  const w2 = await world({ running: [0] });
+  try {
+    const r = await w2.run({ wait: false });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(w2.drainCalls, [], "nothing to drain without a wait");
+    const d = await w2.run({ dryRun: true });
+    assert.ok(d.plan.steps.some((x) => /^drain: runner POST \/drain/.test(x)));
+    assert.deepEqual(w2.drainCalls, []);
+  } finally { await w2.cleanup(); }
+});
+
+test("drainTtlMs: wait + stop + 120 s, floored at 1 s, capped at the runner's 2 h ceiling", () => {
+  assert.equal(drainTtlMs({ waitTimeoutSec: 600, stopTimeoutSec: 30 }), 750_000);
+  assert.equal(drainTtlMs({ waitTimeoutSec: 0, stopTimeoutSec: 0 }), 120_000);
+  assert.equal(drainTtlMs({ waitTimeoutSec: 99_999, stopTimeoutSec: 30 }), 2 * 3600_000);
+});
+
+// Real Runner + real runner HTTP server + the real restart flow's /drain calls against it (only the provider is fake).
+test("drain end to end: the restart's POST/DELETE against a real runner server set and clear Runner.drainState and /health", async () => {
+  const runner = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: { canPark: true, start() { return { send() {}, cancel() {}, kill() {} }; } } } });
+  const srv = createRunnerServer(runner, { token: "t0k", hash: "h" });
+  const port = await listen(srv);
+  try {
+    const auth = { authorization: "Bearer t0k" };
+    const set = await httpCall(`http://127.0.0.1:${port}/drain`, { method: "POST", headers: auth, body: { ttlMs: 60_000, reason: "vs restart pid 1" } });
+    assert.equal(set.status, 200);
+    assert.equal(runner.drainState().reason, "vs restart pid 1");
+    const h = await httpCall(`http://127.0.0.1:${port}/health`, { headers: auth });
+    assert.equal(h.body.drain.reason, "vs restart pid 1");
+    assert.ok(h.body.drain.until > Date.now());
+    const del = await httpCall(`http://127.0.0.1:${port}/drain`, { method: "DELETE", headers: auth });
+    assert.deepEqual([del.status, del.body.cleared], [200, true]);
+    assert.equal(runner.drainState(), null);
+    assert.equal((await httpCall(`http://127.0.0.1:${port}/health`, { headers: auth })).body.drain, null);
+  } finally { runner.shutdown(); await close(srv); }
 });

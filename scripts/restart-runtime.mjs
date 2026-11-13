@@ -11,9 +11,11 @@
 //        [--log <file>] [--vs-home <dir>]
 //
 // Steps (each logged with a timestamp, all recorded in ~/.vibesquad/restart-<ts>.json):
-//   lock -> detect -> marker (server.restarting, refreshed) -> wait runner running:0 + held:0 -> stop runner -> stop server ->
+//   lock -> detect -> marker (server.restarting, refreshed) -> drain (runner refuses new background work, TTL) ->
+//   wait runner running:0 + held:0 -> stop runner -> stop server ->
 //   start server (it boots the runner; fallback: start the runner directly) -> verify -> resume lost agents -> check each
-//   resumed agent leaves `starting` (retry once, then mark it failed) -> clear marker -> result file.
+//   resumed agent leaves `starting` (retry once, then mark it failed) -> clear drain (if that runner is still up) -> clear marker ->
+//   result file.
 // Background work (an idle agent whose park is held by a suite/build it left running: /health `held`) is never killed by
 // default. If it outlasts --wait-timeout the restart is deferred (nothing stopped, exit 4) unless --kill-background.
 // A deferral names each holder's lane lead (the `vs who lead` resolution) with a ready-to-send drain ask, in the result file
@@ -38,6 +40,15 @@ const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export const BOOT_TIMEOUT_DEFAULT_SEC = 120;
+// Restart drain (ideas 198 + 186): while the idle wait runs, the runner refuses NEW background work (runner POST /drain).
+// TTL = wait timeout + stop timeout + this margin, capped at the runner's 2 h ceiling, so a restart that crashes before its
+// finally never leaves the runner draining; the finally clears it on every path that keeps the old runner.
+export const DRAIN_MARGIN_SEC = 120;
+export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
+export function drainTtlMs(opts) {
+  const sec = (Number(opts.waitTimeoutSec) || 0) + (Number(opts.stopTimeoutSec) || 0) + DRAIN_MARGIN_SEC;
+  return Math.min(DRAIN_TTL_MAX_MS, Math.max(1000, Math.round(sec * 1000)));
+}
 // Blank, non-numeric or <= 0 env values fall back to the default (a 0ms wait would fail every slow start).
 export function bootDefault(v) { const n = typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN; return Number.isFinite(n) && n > 0 ? n : BOOT_TIMEOUT_DEFAULT_SEC; }
 
@@ -462,6 +473,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       },
       steps: [
         `touch ${path.join(det.configDir, 'server.restarting')} (refreshed every 30s)`,
+        ...(opts.wait ? [`drain: runner POST /drain (ttl ${Math.round(drainTtlMs(opts) / 1000)}s): new background work is refused while waiting; cleared at the end`] : []),
         opts.wait ? `wait for runner /health running:0 and held:0 (timeout ${opts.waitTimeoutSec}s; then running turns are cut and recorded, and held background work ${opts.killBackground ? 'is killed (--kill-background)' : 'defers the restart (nothing stopped, exit 4)'})` : 'skip waiting (--no-wait)',
         det.runner.alive ? `stop runner pid ${det.runner.pid} via POST /shutdown (token-authed, keeps agents resumable: no exit events), force after ${opts.stopTimeoutSec}s${opts.force ? '' : ' (disabled: --no-force)'}` : 'runner not running: nothing to stop',
         det.server.pid ? (det.server.isServe ? `stop server pid ${det.server.pid}: ${d.serverStopMode === 'tree-kill' ? 'taskkill /T /F (serve.mjs has no state to flush)' : `SIGTERM, force after ${opts.stopTimeoutSec}s`}; then sweep any runner it respawned` : `REFUSE: pid ${det.server.pid} on port ${det.server.port} is not a serve.mjs process`) : `server not running on port ${det.server.port}: nothing to stop`,
@@ -499,6 +511,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     try { mkdirSync(configDir, { recursive: true }); if (existsSync(markerFile)) utimesSync(markerFile, new Date(), new Date()); else writeFileSync(markerFile, String(process.pid)); } catch (e) { result.errors.push(`marker: ${e.message}`); }
   };
   let markerTimer = null;
+  let drainOn = null; // { runner: { port, token } }: the runner this restart set a drain on (cleared in the finally)
   const fail = (what, e) => { result.errors.push(`${what}: ${e?.message ?? e}`); step('error', { what, error: String(e?.message ?? e) }); };
 
   let det;
@@ -515,6 +528,16 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // 2. wait for the runner to go idle: no open turns and no idle agent holding background work (a held park). A runner
     // build without the `held` field reports none.
     if (det.runner.health && opts.wait) {
+      // Drain first (ideas 198 + 186): from now on the runner refuses new background work machine-wide, so held work only
+      // drains while we wait. A runner without /drain (404) or a failed call just waits as before: never a restart error.
+      const ttlMs = drainTtlMs(opts);
+      try {
+        const r = await runnerCall(det, d, 'POST', '/drain', 5000, { ttlMs, reason: `vs restart pid ${process.pid}` });
+        if (r.status === 200) {
+          drainOn = { runner: { port: det.runner.port, token: det.runner.token } };
+          step('drain set', { ttlSec: Math.round(ttlMs / 1000), until: r.body?.drain?.until ? new Date(r.body.drain.until).toISOString() : null });
+        } else step('drain not set', { status: r.status, error: r.status === 404 ? 'runner predates /drain' : String(r.body?.error ?? '') });
+      } catch (e) { step('drain not set', { error: e.message }); }
       const deadline = d.now() + opts.waitTimeoutSec * 1000;
       let running = det.runner.health.running;
       let heldAgents = det.runner.health.heldAgents ?? [];
@@ -737,7 +760,14 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (e.message !== 'abort' && !result.errors.length) fail('restart', e);
     result.ok = false;
   } finally {
-    // 8. clear marker, release lock, write the result file
+    // 8. end the drain, clear marker, release lock, write the result file. A drain on a runner this restart stopped ended
+    // with it (the call then fails or meets a new runner's token: 401); a deferral or a failed stop leaves that runner up.
+    if (drainOn) {
+      try {
+        const r = await runnerCall(drainOn, d, 'DELETE', '/drain', 3000);
+        step(r.status === 200 ? 'drain cleared' : 'drain clear skipped', r.status === 200 ? { wasActive: r.body?.cleared === true } : { status: r.status, reason: 'not the drained runner any more' });
+      } catch (e) { step('drain clear skipped', { reason: `drained runner gone (${e.message})` }); }
+    }
     if (markerTimer) clearInterval(markerTimer);
     rmSync(markerFile, { force: true });
     step('marker cleared');

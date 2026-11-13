@@ -43,7 +43,7 @@ export function backgroundWork(procs, rootPid) {
       seen.add(c.pid);
       if (parent?.createdMs && c.createdMs && c.createdMs + 50 < parent.createdMs) continue;
       if (isSidecar(c)) continue; // at any depth: wrapper CLIs start their MCP servers one level down
-      if (SHELLS.has(imageOf(c.name))) { out.push({ pid: c.pid, name: imageOf(c.name), cmd: String(c.cmd ?? '').slice(-240) }); continue; }
+      if (SHELLS.has(imageOf(c.name))) { out.push({ pid: c.pid, name: imageOf(c.name), cmd: String(c.cmd ?? '').slice(-240), ...(c.createdMs ? { createdMs: c.createdMs } : {}) }); continue; } // createdMs: a restart drain refuses holds on work started after it (Runner._drainRefusesHold)
       walk(c.pid);
     }
   };
@@ -90,7 +90,7 @@ function parsePs(text) {
   return out;
 }
 
-// probe(rootPid, minAt) -> Promise<[{ pid, name, cmd }]>. Probes that land together share one snapshot (many agents park
+// probe(rootPid, minAt) -> Promise<[{ pid, name, cmd, createdMs? }]>. Probes that land together share one snapshot (many agents park
 // at once when a burst of turns ends), and a snapshot is reused for ttlMs. minAt (the agent's turn end): a snapshot that
 // STARTED before it, cached or still in flight, may miss a shell started late in that turn, so it is never used.
 export function createBackgroundProbe({ snapshot = snapshotProcesses, ttlMs = 1000 } = {}) {
