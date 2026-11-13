@@ -2384,12 +2384,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       ),
     );
 
-    async function lastAssistantText(paseo: Paseo, id: string): Promise<string> {
+    // strict (watch sets): a user_message after the last assistant message means a newer turn began, so that text is stale -> "".
+    async function lastAssistantText(paseo: Paseo, id: string, strict = false): Promise<string> {
       try {
         const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 20 });
         let last = "";
         for (const { item } of page.entries) {
           if (item.type === "assistant_message" && item.text?.trim()) last = item.text.trim();
+          else if (strict && item.type === "user_message") last = "";
         }
         return last;
       } catch {
@@ -2683,6 +2685,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       ? createWatchEngine({
           ...watchOpts,
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
+          lastMessage: (id: string) => (paseoApi ? lastAssistantText(paseoApi, id, true) : Promise.resolve("")),
           deliver: (d: WatchDelivery) => deliverWatchPing(d),
           spawnDigest: (d: WatchDelivery) => spawnWatchDigest(paseoApi, d),
           nudge: (id: string, text: string) => nudgeIdleWorker(id, text),

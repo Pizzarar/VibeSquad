@@ -341,6 +341,150 @@ test("idea-110: requiresAttention without a pending permission is not 'blocked (
   }
 });
 
+test("unit-watch-false-stall-2 A: idle after a turn with a final assistant message is done, in round 1 and after a re-prompt", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    let text = "";
+    const { engine, delivered, clock } = engineFor(sb, { lastMessage: async () => text });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+    text = "round 1 report";
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    clock.t = T0 + 20 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].pingKey, "done", "round 1: no STALLED ping");
+    assert.match(delivered[0].text, /round 1 report/);
+    // Second set, the same worker re-prompted for a fix round that ends with a final message.
+    const second = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    text = "PASS 0/0/0 ea0c2bc";
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    clock.t += 20 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 2);
+    assert.equal(delivered[1].pingKey, "done", "round 2: no STALLED ping");
+    assert.match(delivered[1].text, /PASS 0\/0\/0 ea0c2bc/);
+    assert.notEqual(second.id, id);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("unit-watch-false-stall-2 A (review H1): round 1's final text does not complete a set created after it, even when tick() runs before the re-prompt's turn_started", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    let text = "round 1 report";
+    const { engine, delivered } = engineFor(sb, { clock, lastMessage: async () => text });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    clock.t = T0 + 5 * MIN;
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+    await engine.tick(); // before the re-prompt's turn_started: the old text must not count
+    assert.equal(delivered.length, 0);
+    assert.equal(engine.get(id).items[0].state, "waiting");
+    clock.t += MIN;
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    text = "round 2 report";
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].text, /round 2 report/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test(
+  "unit-watch-false-stall-2 A (review H2): a user_message after the last assistant message makes the watch's final text empty (stale), not done",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    let entries = [{ item: { type: "assistant_message", text: "old report" } }, { item: { type: "user_message", text: "fix round" } }];
+    const h = await pluginHarness(sb, agents, { timelineFor: () => entries });
+    try {
+      h.watch.onRunnerEvent(agentEv("w-1", "running"));
+      await h.watch.tick();
+      assert.equal(h.watch.get(id).items[0].state, "waiting", "stale text before the user message is not a report");
+      entries = [{ item: { type: "user_message", text: "fix round" } }, { item: { type: "assistant_message", text: "new report" } }];
+      h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" }); // re-read
+      await h.watch.tick();
+      assert.equal(h.watch.get(id).items[0].state, "done");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test("unit-watch-false-stall-2 A (review R2): turn started BEFORE the watch was added, ends after: final text is done", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    let text = "round 1 report";
+    const { engine, delivered } = engineFor(sb, { clock, lastMessage: async () => text });
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-1" }); // T1
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    clock.t = T0 + 5 * MIN;
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t }); // T2
+    clock.t += MIN; // T3
+    text = "PASS 0/0/0 final";
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].pingKey, "done");
+    assert.match(delivered[0].text, /PASS 0\/0\/0 final/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("unit-watch-false-stall-2 A: an idle worker with no final message still stalls idle-no-report", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb, { lastMessage: async () => "" });
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    await engine.tick(); // starts the idle clock
+    clock.t = T0 + 20 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].text, /idle-no-report/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("unit-watch-false-stall-2 B (idea-171): a permission event with an empty pendingPermissions, and a stale flag after the turn moves on, is not 'blocked (permission)'", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    // w-1: the permission event carries a snapshot whose pending list is already empty (answered before we saw it).
+    engine.onRunnerEvent({ kind: "permission", agentId: "w-1", agent: { id: "w-1", status: "running", labels: { role: "worker" }, pendingPermissions: [] } });
+    // w-2: real permission, answered; only id-only events (no snapshot) follow, then the next turn.
+    engine.onRunnerEvent(agentEv("w-2", "running", { pendingPermissions: [{ id: "p1" }] }));
+    engine.onRunnerEvent({ kind: "permission", agentId: "w-2", request: { id: "p1" } });
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-2" });
+    clock.t = T0 + MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 0, "neither is blocked on a permission");
+  } finally {
+    sb.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Suite + restart items (W3 / restart-runtime contracts, from fixtures)
 // ---------------------------------------------------------------------------
