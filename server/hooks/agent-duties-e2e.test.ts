@@ -1673,6 +1673,45 @@ test(
   }),
 );
 
+test(
+  "idea-189: a digest still queued past one wait window (waitForFinish timeout) keeps being awaited, not logged UNVERIFIED (digest failed)",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = {
+      id: "w-queued",
+      title: "Bug1 · queued",
+      cwd: CWD,
+      status: "idle",
+      provider: "antigravity-cli",
+      model: "gemini-4-argon",
+      labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "queued" },
+    };
+    const agents = new Map<string, any>([["w-queued", w]]);
+    const h = harness(agents, { briefRoot });
+    let calls = 0;
+    (h.paseo.agents as any).create = async () => ({
+      id: "dig-q",
+      agent: { id: "dig-q" },
+      waitForFinish: async () => {
+        if (++calls === 1) return { status: "timeout" }; // still queued behind the provider family
+        const dir = join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad");
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "log.jsonl"), JSON.stringify({ ts: new Date().toISOString(), agent: "dig-q", lane: "bug-chaser", type: "done", text: "PASS: ok", refs: ["w-queued"] }) + "\n", { flag: "a" });
+        return { status: "idle" };
+      },
+    });
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-Q");
+      await wait(50);
+    } finally {
+      h.stop?.();
+    }
+    assert.equal(calls, 2, "a timeout re-waits instead of failing");
+    const logFile = join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl");
+    const lines = readFileSync(logFile, "utf8");
+    assert.ok(!lines.includes("digest failed"), "no UNVERIFIED (digest failed) entry for a merely queued digest");
+  }),
+);
+
 // ---------------------------------------------------------------------------
 // B3 — one-time sweep: dry run lists, apply archives exactly that set (same predicate)
 // ---------------------------------------------------------------------------

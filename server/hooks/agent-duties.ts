@@ -641,6 +641,10 @@ function persistDigestedTurn(workerId: string, turnId: string | null): void {
   }
 }
 
+/** One digest wait window, and how many windows a still-pending (queued/running) digest gets before the backstop gives up. */
+const DIGEST_WAIT_MS = 10 * 60_000;
+const DIGEST_WAIT_ROUNDS = 3;
+
 /** A [done] entry naming `ref` written at or after `sinceMs` (1 s slack) in the last 200 lines of the team log. */
 function doneLoggedSince(team: string, ref: string, sinceMs: number): boolean {
   try {
@@ -2392,6 +2396,21 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    /**
+     * idea-189/168: the runner queues digests per provider family, so a digest can sit queued ~10 min behind other runs
+     * (queue 430-584s + run, observed on antigravity) and a single 10-min waitForFinish came back "timeout" while the digest was
+     * merely pending, which the backstop read as "failed" and logged UNVERIFIED for every digest. A timeout only means "not done
+     * yet": keep waiting (DIGEST_WAIT_ROUNDS windows); only an error/closed status or a rejection is a failure.
+     */
+    async function awaitDigestFinish(handle: any): Promise<any> {
+      let res: any = null;
+      for (let i = 0; i < DIGEST_WAIT_ROUNDS; i++) {
+        res = await handle?.waitForFinish?.(DIGEST_WAIT_MS);
+        if (!res || res.status !== "timeout") return res;
+      }
+      return res;
+    }
+
     async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels, snapWorker?: AgentSnap | null) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
       const workerId = String(worker.id ?? "").trim();
@@ -2511,7 +2530,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           inflightDigestIds.set(workerId, createdDigestId);
         }
         // Backstop: if the digest agent errors out, write the entry directly.
-        void Promise.resolve(handle?.waitForFinish?.(10 * 60_000))
+        void awaitDigestFinish(handle)
           .then((res: any) => {
             if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
             if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
