@@ -30,7 +30,7 @@ export const IDLE_NUDGE_TEXT = "You went idle without a report. Commit + push yo
 export const SUITE_RESULT_FILE = "vibesquad-npm-test-last.json";
 export const SUITE_LOCK_FILE = "vibesquad-npm-test.lock";
 /** Fired / cancelled sets whose pings are all attempted are dropped from the file after this long. */
-export const PRUNE_AFTER_MS = 7 * 24 * 60 * 60_000;
+export const PRUNE_AFTER_MS = 24 * 60 * 60_000;
 /** A fired ping whose text is over this many chars is merged by a Pre-check - Flash worker instead of sent raw (block W4). */
 export const DIGEST_MERGE_MAX = 1500;
 const REPORT_CAP = 400; // per item in a ping; W4 merges long texts
@@ -134,11 +134,11 @@ export function addWatch({ owner, team, lane, items, stallMin = DEFAULT_STALL_MI
   return { id: set.id };
 }
 
-/** Every registered set (newest last), optionally filtered by owner and/or team. Each carries `status`: armed | fired | cancelled. */
-export function listWatches({ owner, team } = {}, { home } = {}) {
+/** Every registered set (newest last), optionally filtered by owner and/or team. Armed sets only unless `all` (cancelled and fired ones are hidden). Each carries `status`: armed | fired | cancelled. */
+export function listWatches({ owner, team, all } = {}, { home } = {}) {
   const doc = readDoc(watchesPath({ home }));
   return doc.sets
-    .filter((s) => (!owner || s.owner === owner) && (!team || s.team === team))
+    .filter((s) => (!owner || s.owner === owner) && (!team || s.team === team) && (all || isOpen(s)))
     .map((s) => ({ ...structuredClone(s), status: s.firedAt ? "fired" : s.cancelledAt ? "cancelled" : "armed" }));
 }
 

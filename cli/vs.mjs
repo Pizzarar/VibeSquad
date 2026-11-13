@@ -293,6 +293,7 @@ function parseArgs(argv) {
     "apply",
     "sweep",
     "suite",
+    "all",
     "restart",
     "keepDevices",
   ]);
@@ -535,7 +536,7 @@ Usage:
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs watch add <agent...> [--suite] [--restart] [--stall <min>] [--owner <agent>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
-  vs watch list | vs watch cancel <id>   list or cancel your watch sets (only the same-Squad Overlord may name another owner via --owner)
+  vs watch list [--all] | vs watch cancel <id>   list (armed only; --all adds fired/cancelled) or cancel your watch sets (only the same-Squad Overlord may name another owner via --owner)
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
@@ -1990,6 +1991,8 @@ export async function runAgentVerb(verb, flags, ctx) {
       if (flags.restart) args.restart = true;
       if (flags.stall !== undefined) args.stallMin = flags.stall;
       if (flags.owner !== undefined) args.owner = String(flags.owner);
+    } else if (flags.watchAction === "list") {
+      if (flags.all) args.all = true;
     } else if (flags.watchAction === "cancel") {
       args.id = String(flags._[0] ?? "").trim();
     }
