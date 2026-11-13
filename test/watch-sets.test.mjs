@@ -342,6 +342,22 @@ test("idea-110: requiresAttention without a pending permission is not 'blocked (
   }
 });
 
+test("idea-216: an ACP auto-resolved permission (event carries a snapshot with no pending permission) never reads 'blocked (permission)'", async () => {
+  const sb = sandbox();
+  try {
+    addWatch({ owner: "lead-1", stallMin: 15, items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    engine.onRunnerEvent(agentEv("w-1", "running", { pendingPermissions: [] }));
+    // request + resolved are logged back to back; the fetch behind the request already shows no pending permission.
+    engine.onRunnerEvent({ kind: "permission", agentId: "w-1", agent: { id: "w-1", status: "running", labels: { role: "worker" }, pendingPermissions: [] }, request: { id: "p1", toolName: "Edit" } });
+    clock.t = T0 + 20 * MIN;
+    await engine.tick();
+    assert.doesNotMatch(delivered.map((d) => d.text).join("\n"), /blocked \(permission\)/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
 test("unit-watch-false-stall-2 A: idle after a turn with a final assistant message is done, in round 1 and after a re-prompt", async () => {
   const sb = sandbox();
   try {
