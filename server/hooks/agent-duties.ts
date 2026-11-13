@@ -1253,6 +1253,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
     const retries = new Map<string, number>();
+    /** Agents with a scheduled A4 transient-retry resend not yet delivered (the digest waiter holds its UNVERIFIED fallback until then). */
+    const digestRetryPending = new Map<string, Promise<void>>();
+    /** Per agent: how many A4 resends were ever scheduled (lets a waiter tell that a retry was scheduled during its wait). */
+    const digestRetryCount = new Map<string, number>();
     const offsets = new Map<string, number>();
     const misrouteCounts = new Map<string, number>();
     const relayCounts = new Map<string, number>();
@@ -2486,14 +2490,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const startedAt = Date.now();
       /** A [done] entry for this worker written since the digest started (by the digest agent). */
       const verdictLogged = () => doneLoggedSince(teamIdOf(team, currentTeams()), worker.id, startedAt);
-      let digestIdForFallback = "";
-      const fallback = async (why: string, archiveDigestAfter = true) => {
+      const fallback = async (why: string) => {
         if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
         const fresh = await snap(paseo, workerId);
         if (isWorkerBusy(fresh)) return;
         const last = await lastAssistantText(paseo, worker.id);
         const text = unverifiedDigestText(why, last, { title: worker.title, labels });
         if (!text) return;
+        // idea-207a/M1: re-check right before writing (the awaits above can outlast a digest that logged its verdict): a real
+        // verdict already logged for this turn always wins, so one turn never gets both a verdict and an UNVERIFIED entry.
+        if (verdictLogged()) return;
         appendLog(teamIdOf(team, currentTeams()), {
           agent: worker.id,
           lane,
@@ -2501,9 +2507,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           text,
           refs: [worker.id],
         });
-        // idea-207a: the turn now has its fallback entry. Archive the digest so the runner's transient retry (antigravity
-        // "unexpected EOF" resends after the waiter already gave up) cannot add a second, real verdict for the same turn.
-        if (archiveDigestAfter && digestIdForFallback) await archiveDigest(paseo, digestIdForFallback);
+        // No extra archive here (L1): the runner host already archives a digest after any non-timeout wait, and
+        // awaitDigestFinish archives it on giving up. Archiving earlier would also kill the A4 transient retry's delivery.
       };
 
       try {
@@ -2532,7 +2537,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           autoArchive: true,
         });
         const createdDigestId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
-        digestIdForFallback = createdDigestId;
         if (createdDigestId) {
           if ((turnEpoch.get(workerId) ?? 0) !== epoch) {
             if (inflightDigests.get(workerId) === epoch) inflightDigests.delete(workerId);
@@ -2545,12 +2549,28 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           inflightDigestIds.set(workerId, createdDigestId);
         }
         // Backstop: if the digest agent errors out, write the entry directly.
-        void awaitDigestFinish(paseo, handle, createdDigestId)
+        const isFailedRes = (res: any) => !!(res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished" && res.status !== "timeout");
+        const awaitWithRetries = async () => {
+          let scheduled = digestRetryCount.get(createdDigestId) ?? 0;
+          let res = await awaitDigestFinish(paseo, handle, createdDigestId);
+          // M1: an EOF-style failure is retried by handleFailure (A4); the retry can still deliver the real verdict, so the
+          // fallback waits for it (up to MAX_RETRIES resends) instead of writing UNVERIFIED over a turn that is about to succeed.
+          for (let i = 0; i < MAX_RETRIES && isFailedRes(res) && createdDigestId; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 50)); // let the digest's own failed turn_ended register its retry
+            const now = digestRetryCount.get(createdDigestId) ?? 0;
+            if (now === scheduled) break; // no retry was scheduled during this wait: the failure is final
+            scheduled = now;
+            await digestRetryPending.get(createdDigestId); // undefined once the resend already went out
+            res = await awaitDigestFinish(paseo, handle, createdDigestId);
+          }
+          return res;
+        };
+        void awaitWithRetries()
           .then((res: any) => {
             if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
-            if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
-              // a "timeout" status means awaitDigestFinish already archived the digest on giving up
-              return fallback("failed", res.status !== "timeout");
+            if (isFailedRes(res) || res?.status === "timeout") {
+              if (verdictLogged()) return;
+              return fallback("failed");
             }
             // The digest ended its turn without logging a verdict (it errored in-turn or skipped the command).
             if (!verdictLogged()) return fallback("logged nothing");
@@ -2589,11 +2609,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       retries.set(agent.id, n + 1);
       const delay = deps.retryBaseMs * 2 ** n;
       log(`transient error on ${agent.id}; retry ${n + 1}/${MAX_RETRIES} in ${delay}ms`);
+      digestRetryCount.set(agent.id, (digestRetryCount.get(agent.id) ?? 0) + 1);
+      let done!: () => void;
+      digestRetryPending.set(agent.id, new Promise<void>((resolve) => (done = resolve)));
       later(() => {
         paseo.agents
           .ref(agent.id)
           .send("The previous turn failed on a transient network error. Please continue where you left off.")
-          .catch((e: unknown) => log(`retry send failed: ${e}`));
+          .catch((e: unknown) => log(`retry send failed: ${e}`))
+          .finally(() => {
+            digestRetryPending.delete(agent.id);
+            done();
+          });
       }, delay);
     }
 
