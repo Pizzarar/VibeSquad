@@ -316,6 +316,8 @@ export function readLaneLogEntries({ teamId, laneId, sinceIso, baseHome }) {
   return entries;
 }
 
+const BUSY_STATUSES = new Set(["running", "queued", "initializing", "starting", "working"]);
+
 export function findOpenWorkersForLead(agents, oldLead, teamId, laneId) {
   if (!Array.isArray(agents) || !oldLead) return [];
   const safeTeam = safeSegment(teamId).toLowerCase();
@@ -805,6 +807,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
 
     // Re-point open in-flight workers and notify them to report to the new lead.
     const repointedWorkers = [];
+    let idleRepointed = 0;
     for (const w of openWorkers) {
       const updatedWorkerLabels = {
         ...(w.labels ?? {}),
@@ -814,7 +817,12 @@ export function createLeadHandoffCoordinator(deps = {}) {
       try {
         await setLabels(w.id, updatedWorkerLabels);
         repointedWorkers.push(w.id);
-        await sendMessage(w.id, `Report to ${successor.title} (${successor.id}).`);
+        // idea-201: messaging an IDLE worker starts a turn that re-states its last final report; turn_ended then
+        // re-delivers it (and spawns a fresh digest) to the successor as if new. The vs.parent label is all an idle
+        // worker needs; only a worker mid-turn is told, since it will report on its own.
+        if (BUSY_STATUSES.has(String(w.status ?? "").toLowerCase())) {
+          await sendMessage(w.id, `Report to ${successor.title} (${successor.id}).`);
+        } else idleRepointed++;
       } catch {}
     }
 
@@ -823,7 +831,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
     await deleteHeartbeat(oldLead.id);
 
     // Record handoff log entry with trigger=self | auto-250 | hard-300.
-    const logText = `lead ${oldLead.id} -> ${successor.id} (ord${oldOrd} -> ord${nextOrd}): handoff (trigger=${trigger})`.slice(
+    const logText = `lead ${oldLead.id} -> ${successor.id} (ord${oldOrd} -> ord${nextOrd}): handoff (trigger=${trigger})${
+      idleRepointed ? `; ${idleRepointed} idle workers re-pointed; last reports already delivered` : ""
+    }`.slice(
       0,
       240,
     );
