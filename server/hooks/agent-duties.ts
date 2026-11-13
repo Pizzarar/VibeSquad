@@ -79,7 +79,7 @@ export const DIGEST_MODE_ID = "default";
 export const DIGEST_THINKING_OPTION_ID = "low";
 /** Label on a worker digest: the worker turn (runner turnId) it reports on, so a restarted server can find it on the runner (idea-123). */
 export const DIGEST_TURN_LABEL = "digestTurn";
-/** A digest's waiter archives it after 10 min; one still open past this has no waiter left (server restarted) and is swept (idea-62). */
+/** A digest's waiter gives up (and archives it) after DIGEST_WAIT_ROUNDS x 10 min; one open past this with no live waiter in this process (server restarted) is swept (idea-62). */
 export const DIGEST_STALE_MS = 15 * 60_000;
 /** An orphaned digest older than this is only archived: its worker's verdict may sit past the 200-line log window, and a late UNVERIFIED would wake the lead for old work. */
 export const DIGEST_ORPHAN_VERDICT_MAX_MS = 2 * 60 * 60_000;
@@ -640,6 +640,10 @@ function persistDigestedTurn(workerId: string, turnId: string | null): void {
     /* best effort: the in-memory guard still applies */
   }
 }
+
+/** One digest wait window, and how many windows a still-pending (queued/running) digest gets before the backstop gives up. */
+const DIGEST_WAIT_MS = 10 * 60_000;
+const DIGEST_WAIT_ROUNDS = 3;
 
 /** A [done] entry naming `ref` written at or after `sinceMs` (1 s slack) in the last 200 lines of the team log. */
 function doneLoggedSince(team: string, ref: string, sinceMs: number): boolean {
@@ -1203,6 +1207,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const digested = new Map<string, string>(); // worker id -> last digested turn key (`${epoch}:${turnId}`)
     const turnEpoch = new Map<string, number>(); // worker id -> monotonically increasing turn counter (incremented on turn_started)
     const inflightDigests = new Map<string, number>(); // worker id -> turn epoch of the digest currently in flight
+    const liveDigestIds = new Set<string>(); // digest agents this process is actively waiting on (spawnDigest / spawnWatchDigest)
     const inflightDigestIds = new Map<string, string>(); // worker id -> digest agent id currently in flight
     const waitedDigestIds = new Set<string>(); // digest ids whose waiter already ended here: done, never adopted again
 
@@ -2392,6 +2397,28 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    /**
+     * idea-189/168: the runner queues digests per provider family, so a digest can sit queued ~10 min behind other runs
+     * (queue 430-584s + run, observed on antigravity) and a single 10-min waitForFinish came back "timeout" while the digest was
+     * merely pending, which the backstop read as "failed" and logged UNVERIFIED for every digest. A timeout only means "not done
+     * yet": keep waiting (DIGEST_WAIT_ROUNDS windows); only an error/closed status or a rejection is a failure.
+     */
+    async function awaitDigestFinish(paseo: Paseo, handle: any, digestId: string): Promise<any> {
+      let res: any = null;
+      if (digestId) liveDigestIds.add(digestId); // the stale sweep must not archive a digest this waiter is still awaiting
+      try {
+        for (let i = 0; i < DIGEST_WAIT_ROUNDS; i++) {
+          res = await handle?.waitForFinish?.(DIGEST_WAIT_MS);
+          if (!res || res.status !== "timeout") return res;
+        }
+        // Gave up while it is still queued/running: cancel it, or it could run later and log a duplicate done after the fallback.
+        if (digestId) await archiveDigest(paseo, digestId);
+        return res;
+      } finally {
+        if (digestId) liveDigestIds.delete(digestId);
+      }
+    }
+
     async function spawnDigest(paseo: Paseo, worker: any, turnId: string | null, labels: Labels, snapWorker?: AgentSnap | null) {
       if (isDigestAgent(labels, worker.title) || isDigestNoise(labels, worker.title)) return;
       const workerId = String(worker.id ?? "").trim();
@@ -2511,7 +2538,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           inflightDigestIds.set(workerId, createdDigestId);
         }
         // Backstop: if the digest agent errors out, write the entry directly.
-        void Promise.resolve(handle?.waitForFinish?.(10 * 60_000))
+        void awaitDigestFinish(paseo, handle, createdDigestId)
           .then((res: any) => {
             if ((turnEpoch.get(workerId) ?? 0) !== epoch) return;
             if (res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished") {
@@ -2796,7 +2823,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           return false;
         }
         // Await the worker's turn so a failure is detected and `autoArchive` runs; then read the merged digest it produced.
-        const res = await (handle?.waitForFinish ? handle.waitForFinish(10 * 60_000) : Promise.resolve(null));
+        const res = await (handle?.waitForFinish ? awaitDigestFinish(paseo, handle, createdId) : Promise.resolve(null));
         const ok = !res?.status || ["idle", "completed", "finished"].includes(res.status);
         const merged = ok ? await lastAssistantText(paseo, createdId) : "";
         if (!merged) {
@@ -3555,7 +3582,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const staleMs = deps.digestStaleMs ?? DIGEST_STALE_MS;
         for (const d of await openDigests(paseo)) {
           const born = Date.parse(String(d.createdAt ?? ""));
-          if (!Number.isFinite(born) || now - born < staleMs) continue;
+          if (!Number.isFinite(born) || now - born < staleMs || liveDigestIds.has(String(d.id))) continue;
           await archiveDigest(paseo, d.id);
           archived.push(d.id);
           const workerId = String(d.labels.digestFor);

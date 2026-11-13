@@ -62,10 +62,14 @@ export function runnerPaseoFacade(backend, plugin) {
           id: agent.id,
           agent,
           async waitForFinish(ms) {
+            let res = null;
             try {
-              return await waitForFinish(agent.id, ms);
+              res = await waitForFinish(agent.id, ms);
+              return res;
             } finally {
-              if (autoArchive) await backend.archiveAgent(agent.id).catch(() => {});
+              // A "timeout" means still queued/running (idea-189): archiving it here killed a digest queued past one wait window,
+              // so the caller's backstop logged UNVERIFIED (digest failed). The caller re-waits; archive only when finished/failed.
+              if (autoArchive && res?.status !== "timeout") await backend.archiveAgent(agent.id).catch(() => {});
             }
           },
         };
