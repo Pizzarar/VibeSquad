@@ -503,6 +503,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     };
     agents.set(oldLead.id, oldLead);
     agents.set(openWorker.id, openWorker);
+    agents.set("w-idle-1", { ...openWorker, id: "w-idle-1", status: "idle", labels: { ...openWorker.labels, job: "done-job" } });
     agents.set(closedWorker.id, closedWorker);
 
     const coordinator = createLeadHandoffCoordinator({
@@ -582,6 +583,10 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     const workerNotice = messages.find((m) => m.id === openWorker.id);
     assert.ok(workerNotice, "Expected open worker to be notified of new lead");
     assert.match(workerNotice.text, /Report to ★ Sit19 \(succ-ord19\)/i);
+    // idea-201: an idle worker is re-pointed by label only (no message => no replayed report / re-digest).
+    assert.equal(messages.filter((m) => m.id === "w-idle-1").length, 0);
+    assert.equal(agents.get("w-idle-1").labels["vs.parent"], succ.id);
+    assert.match(logEntries[0].text, /1 idle workers re-pointed; last reports already delivered/);
 
     // 4. Old lead's heartbeat deleted and handoff logged with trigger=hard-300
     assert.deepEqual(deletedHeartbeats, [oldLead.id]);
