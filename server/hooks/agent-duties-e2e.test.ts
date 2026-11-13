@@ -1760,7 +1760,7 @@ test(
 );
 
 test(
-  "idea-207a: a digest that errors with no retry pending gets exactly one UNVERIFIED fallback and no extra archive",
+  "idea-207a: a digest that errors with no retry pending gets exactly one UNVERIFIED fallback and is archived exactly once",
   withEnv(async ({ briefRoot }) => {
     const w: any = { id: "w-eof", title: "Bug1 · eof", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "eof" } };
     const agents = new Map<string, any>([["w-eof", w]]);
@@ -1773,7 +1773,7 @@ test(
     } finally {
       h.stop?.();
     }
-    assert.deepEqual(h.archivedIds, [], "the plugin adds no archive of its own (the runner host archives a finished digest once)");
+    assert.deepEqual(h.archivedIds, ["dig-eof"], "archived once, by the waiter after its retry loop (no autoArchive, idea-207 H1)");
     const lines = readFileSync(join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl"), "utf8").split(String.fromCharCode(10)).filter((l) => l.includes("UNVERIFIED"));
     assert.equal(lines.length, 1);
   }),

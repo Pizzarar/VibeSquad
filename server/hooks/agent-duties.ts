@@ -88,6 +88,8 @@ export const ROUTE_LABEL = "vs.route";
 const WAKE_TYPES = new Set(["done", "blocker", "decision", "needs-you", "you", LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE]);
 const TRANSIENT_ERROR = /googleapis|EOF|no such host|ECONNRESET|stream idle timeout|context deadline exceeded|stream was interrupted|temporarily unavailable/i;
 const MAX_RETRIES = 2;
+/** How long a digest waiter gives a transient failure's A4 retry to be scheduled (its turn_ended hook may trail the wait). */
+const DIGEST_RETRY_GRACE_MS = 5000;
 const MAX_TEXT = 240;
 const REPO_ROOT = path.resolve(process.env.VIBESQUAD_ROOT || (typeof import.meta?.dirname === "string" ? path.join(import.meta.dirname, "..", "..") : path.join(os.homedir(), "projects", "VibeSquad")));
 
@@ -2409,19 +2411,39 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * merely pending, which the backstop read as "failed" and logged UNVERIFIED for every digest. A timeout only means "not done
      * yet": keep waiting (DIGEST_WAIT_ROUNDS windows); only an error/closed status or a rejection is a failure.
      */
-    async function awaitDigestFinish(paseo: Paseo, handle: any, digestId: string): Promise<any> {
+    // owned: the caller holds liveDigestIds and archives the digest itself once it is done with it (spawnDigest: the A4 retry
+    // loop spans several waits, idea-207 H1), so this wait neither releases the sweep guard nor archives on giving up.
+    async function awaitDigestFinish(paseo: Paseo, handle: any, digestId: string, { owned = false } = {}): Promise<any> {
       let res: any = null;
-      if (digestId) liveDigestIds.add(digestId); // the stale sweep must not archive a digest this waiter is still awaiting
+      const guard = !!digestId && !owned;
+      if (guard) liveDigestIds.add(digestId); // the stale sweep must not archive a digest this waiter is still awaiting
       try {
         for (let i = 0; i < DIGEST_WAIT_ROUNDS; i++) {
           res = await handle?.waitForFinish?.(DIGEST_WAIT_MS);
           if (!res || res.status !== "timeout") return res;
         }
         // Gave up while it is still queued/running: cancel it, or it could run later and log a duplicate done after the fallback.
-        if (digestId) await archiveDigest(paseo, digestId);
+        if (guard) await archiveDigest(paseo, digestId);
         return res;
       } finally {
-        if (digestId) liveDigestIds.delete(digestId);
+        if (guard) liveDigestIds.delete(digestId);
+      }
+    }
+
+    /**
+     * After a failed digest turn: did (or will) A4 schedule a resend? handleFailure runs from the digest's own failed turn_ended,
+     * which can land after this waiter saw the turn end, so a transient error gets a grace window for the schedule to show up.
+     * A known non-transient error, or a streak already at MAX_RETRIES, is final at once.
+     */
+    async function a4RetryScheduled(digestId: string, before: number, res: any): Promise<boolean> {
+      const msg = String(res?.error?.message ?? res?.error ?? "");
+      if (msg && !TRANSIENT_ERROR.test(msg)) return false;
+      const end = Date.now() + (msg ? DIGEST_RETRY_GRACE_MS : 50); // no message (daemon handle): the old short settle
+      for (;;) {
+        if ((digestRetryCount.get(digestId) ?? 0) !== before) return true;
+        if ((retries.get(digestId) ?? 0) >= MAX_RETRIES) return false; // handleFailure will refuse: exhausted
+        if (Date.now() >= end) return false;
+        await new Promise((resolve) => setTimeout(resolve, 25));
       }
     }
 
@@ -2507,8 +2529,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           text,
           refs: [worker.id],
         });
-        // No extra archive here (L1): the runner host already archives a digest after any non-timeout wait, and
-        // awaitDigestFinish archives it on giving up. Archiving earlier would also kill the A4 transient retry's delivery.
+        // No archive here: awaitWithRetries archives the digest exactly once, after its A4 retries are done (idea-207 H1).
       };
 
       try {
@@ -2534,7 +2555,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           prompt,
           labels: { team, lane, role: "worker", profile: DIGEST_PROFILE, digestFor: worker.id, ...(tid ? { [DIGEST_TURN_LABEL]: tid } : {}) },
           env: { VS_PROFILE: DIGEST_PROFILE },
-          autoArchive: true,
+          // No autoArchive (idea-207 H1): the host would archive on the first failed turn, before the A4 retry is delivered
+          // (the resend then throws "is not running"). awaitWithRetries owns the one archive, after the retry loop.
         });
         const createdDigestId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
         if (createdDigestId) {
@@ -2551,19 +2573,27 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // Backstop: if the digest agent errors out, write the entry directly.
         const isFailedRes = (res: any) => !!(res && res.status && res.status !== "idle" && res.status !== "completed" && res.status !== "finished" && res.status !== "timeout");
         const awaitWithRetries = async () => {
-          let scheduled = digestRetryCount.get(createdDigestId) ?? 0;
-          let res = await awaitDigestFinish(paseo, handle, createdDigestId);
-          // M1: an EOF-style failure is retried by handleFailure (A4); the retry can still deliver the real verdict, so the
-          // fallback waits for it (up to MAX_RETRIES resends) instead of writing UNVERIFIED over a turn that is about to succeed.
-          for (let i = 0; i < MAX_RETRIES && isFailedRes(res) && createdDigestId; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 50)); // let the digest's own failed turn_ended register its retry
-            const now = digestRetryCount.get(createdDigestId) ?? 0;
-            if (now === scheduled) break; // no retry was scheduled during this wait: the failure is final
-            scheduled = now;
-            await digestRetryPending.get(createdDigestId); // undefined once the resend already went out
-            res = await awaitDigestFinish(paseo, handle, createdDigestId);
+          if (createdDigestId) liveDigestIds.add(createdDigestId); // held across every retry wait: the stale sweep must not archive it
+          try {
+            let scheduled = digestRetryCount.get(createdDigestId) ?? 0;
+            let res = await awaitDigestFinish(paseo, handle, createdDigestId, { owned: true });
+            // M1: an EOF-style failure is retried by handleFailure (A4); the retry can still deliver the real verdict, so the
+            // fallback waits for it (up to MAX_RETRIES resends) instead of writing UNVERIFIED over a turn that is about to succeed.
+            for (let i = 0; i < MAX_RETRIES && isFailedRes(res) && createdDigestId; i++) {
+              if (!(await a4RetryScheduled(createdDigestId, scheduled, res))) break; // the failure is final
+              scheduled = digestRetryCount.get(createdDigestId) ?? 0;
+              await digestRetryPending.get(createdDigestId); // undefined once the resend already went out
+              res = await awaitDigestFinish(paseo, handle, createdDigestId, { owned: true });
+            }
+            return res;
+          } finally {
+            if (createdDigestId) {
+              liveDigestIds.delete(createdDigestId);
+              // The one archive, after the retry loop (H1), before any fallback: a digest still queued after the last wait can't
+              // run later and log a second verdict next to the UNVERIFIED entry.
+              await archiveDigest(paseo, createdDigestId);
+            }
           }
-          return res;
         };
         void awaitWithRetries()
           .then((res: any) => {
