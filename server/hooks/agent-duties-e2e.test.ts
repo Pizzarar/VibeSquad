@@ -1760,7 +1760,7 @@ test(
 );
 
 test(
-  "idea-207a: a digest that errors (EOF) gets one UNVERIFIED fallback and is archived, so a runner retry cannot add a second verdict",
+  "idea-207a: a digest that errors with no retry pending gets exactly one UNVERIFIED fallback and is archived exactly once",
   withEnv(async ({ briefRoot }) => {
     const w: any = { id: "w-eof", title: "Bug1 · eof", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "eof" } };
     const agents = new Map<string, any>([["w-eof", w]]);
@@ -1773,7 +1773,7 @@ test(
     } finally {
       h.stop?.();
     }
-    assert.deepEqual(h.archivedIds, ["dig-eof"], "archived right after the fallback, once");
+    assert.deepEqual(h.archivedIds, ["dig-eof"], "archived once, by the waiter after its retry loop (no autoArchive, idea-207 H1)");
     const lines = readFileSync(join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl"), "utf8").split(String.fromCharCode(10)).filter((l) => l.includes("UNVERIFIED"));
     assert.equal(lines.length, 1);
   }),
@@ -1796,6 +1796,79 @@ test(
     } finally {
       h.stop?.();
     }
+  }),
+);
+
+const NL = String.fromCharCode(10);
+const teamLog = () => join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl");
+const logLines = () => (existsSync(teamLog()) ? readFileSync(teamLog(), "utf8").split(NL).filter(Boolean) : []);
+const appendVerdict = (digest: string, worker: string, text: string) => {
+  mkdirSync(join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad"), { recursive: true });
+  writeFileSync(teamLog(), JSON.stringify({ ts: new Date().toISOString(), agent: digest, lane: "bug-chaser", type: "done", text, refs: [worker] }) + NL, { flag: "a" });
+};
+
+test(
+  "idea-207 M1: a digest EOF with an A4 transient retry pending waits for the retry; the real verdict lands, no UNVERIFIED",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = { id: "w-retry", title: "Bug1 · retry", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "retry" } };
+    const agents = new Map<string, any>([["w-retry", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-retry", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    let calls = 0;
+    (h.paseo.agents as any).create = async (payload: any) => {
+      agents.set("dig-r", { id: "dig-r", ...payload, status: "error", archivedAt: null });
+      return {
+        id: "dig-r",
+        agent: { id: "dig-r" },
+        waitForFinish: async () => {
+          if (++calls === 1) {
+            // turn 1 dies on an antigravity EOF; the hook's A4 retry is scheduled by the digest's failed turn_ended
+            await h.onTurnEnded(agents.get("dig-r"), { kind: "failed", error: { message: "unexpected EOF" } }, "dt1");
+            return { status: "error" };
+          }
+          appendVerdict("dig-r", "w-retry", "PASS: real verdict after retry");
+          return { status: "idle" };
+        },
+      };
+    };
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-R");
+      await wait(300);
+    } finally {
+      h.stop?.();
+    }
+    assert.equal(calls, 2, "waited again after the retry was sent");
+    assert.ok(h.sent.some((m: any) => m.to === "dig-r" && /transient network error/.test(m.text)), "the A4 retry was delivered to the digest");
+    const lines = logLines();
+    assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0, "no UNVERIFIED fallback");
+    assert.equal(lines.filter((l) => l.includes("real verdict after retry")).length, 1, "exactly one real verdict");
+  }),
+);
+
+test(
+  "idea-207 M1: a verdict the digest logged before the fallback runs is never followed by an UNVERIFIED entry (error status)",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = { id: "w-late", title: "Bug1 · late", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "late" } };
+    const agents = new Map<string, any>([["w-late", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-late", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    (h.paseo.agents as any).create = async () => ({
+      id: "dig-l2",
+      agent: { id: "dig-l2" },
+      waitForFinish: async () => {
+        appendVerdict("dig-l2", "w-late", "PASS: logged then errored");
+        return { status: "error" };
+      },
+    });
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-La");
+      await wait(150);
+    } finally {
+      h.stop?.();
+    }
+    const lines = logLines();
+    assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0);
+    assert.equal(lines.filter((l) => l.includes("logged then errored")).length, 1);
   }),
 );
 

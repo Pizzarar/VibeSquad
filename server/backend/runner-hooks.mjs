@@ -11,12 +11,30 @@ const loadPlugin = () => (pluginModule ??= import("../hooks/agent-duties.ts"));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const NOT_FINISHED_AFTER_MS = 60_000;
 
-/** The `paseo.agents` / `paseo.schedules` surface the plugin calls, answered by the runner. */
-export function runnerPaseoFacade(backend, plugin) {
+/** The `paseo.agents` / `paseo.schedules` surface the plugin calls, answered by the runner. `pollMs`: status poll interval (tests shorten it). */
+export function runnerPaseoFacade(backend, plugin, { pollMs = 1000 } = {}) {
   const tl = async (id, opts = {}) => ({ entries: (await backend.fetchAgentTimeline(id, { limit: opts.limit })).entries });
+  const seqOf = (e) => e.seqEnd ?? e.seqStart;
 
-  /** Resolves like DaemonClient.waitForFinish, but an agent that has not started its first turn is not "finished". */
-  const waitForFinish = async (id, timeoutMs) => {
+  /**
+   * The turn after timeline seq `floor`: entries other than the user's prompts, the last error among them, and the newest seq.
+   * A runner turn that dies on a provider error (EOF, ACP prompt rejection) logs `error` then goes idle, so the status alone reads
+   * like a clean finish: the error item is how the caller learns the turn failed (and waits for the A4 retry, idea-207 H2).
+   */
+  const turnAfter = async (id, floor) => {
+    const { entries } = await tl(id, { limit: 50 }).catch(() => ({ entries: [] }));
+    const fresh = entries.filter((e) => e.item?.type !== "user_message" && (seqOf(e) ?? Infinity) > floor);
+    const err = fresh.findLast((e) => e.item.type === "error");
+    const lastSeq = entries.reduce((m, e) => Math.max(m, seqOf(e) ?? -1), floor);
+    return { any: fresh.length > 0, error: err ? String(err.item.message ?? "turn failed") : null, lastSeq };
+  };
+
+  /**
+   * Resolves like DaemonClient.waitForFinish, but an agent that has not started its first turn is not "finished", and only timeline
+   * items after `floor` count: a second wait (after an A4 retry was sent) must not return on the previous turn's items (idea-207 M1).
+   * Returns `lastSeq` so the handle can move its floor past the turn it just reported.
+   */
+  const waitForFinish = async (id, timeoutMs, floor = -1) => {
     const start = Date.now();
     const deadline = start + (timeoutMs > 0 ? timeoutMs : Infinity);
     let sawRunning = false;
@@ -24,13 +42,15 @@ export function runnerPaseoFacade(backend, plugin) {
       const agent = await backend.getAgent(id);
       if (agent.status === "running") sawRunning = true;
       if (agent.status === "closed") return { status: "error", error: "agent exited", agent };
-      if (agent.status === "idle") {
-        // A turn that came and went between two polls still counts: the timeline has something other than the user's prompt.
-        if (!sawRunning) sawRunning = (await tl(id, { limit: 50 }).catch(() => ({ entries: [] }))).entries.some((e) => e.item.type !== "user_message");
-        if (sawRunning || Date.now() - start > NOT_FINISHED_AFTER_MS) return { status: "idle", agent };
+      if (agent.status === "idle" || agent.status === "error") {
+        // A turn that came and went between two polls still counts: the timeline has something after the floor besides prompts.
+        const turn = await turnAfter(id, floor);
+        if (turn.any || sawRunning || Date.now() - start > NOT_FINISHED_AFTER_MS) {
+          return turn.error ? { status: "error", error: turn.error, agent, lastSeq: turn.lastSeq } : { status: "idle", agent, lastSeq: turn.lastSeq };
+        }
       }
       if (Date.now() >= deadline) return { status: "timeout", agent };
-      await sleep(1000);
+      await sleep(pollMs);
     }
   };
 
@@ -58,17 +78,20 @@ export function runnerPaseoFacade(backend, plugin) {
           labels,
           env,
         });
+        let floor = -1; // timeline seq of the last turn a wait already reported
         return {
           id: agent.id,
           agent,
           async waitForFinish(ms) {
             let res = null;
             try {
-              res = await waitForFinish(agent.id, ms);
+              res = await waitForFinish(agent.id, ms, floor);
+              if (res.status !== "timeout" && Number.isFinite(res.lastSeq)) floor = res.lastSeq; // the next wait is for the next turn
               return res;
             } finally {
               // A "timeout" means still queued/running (idea-189): archiving it here killed a digest queued past one wait window,
               // so the caller's backstop logged UNVERIFIED (digest failed). The caller re-waits; archive only when finished/failed.
+              // A caller that may resend after a failed turn (the worker digest's A4 retry) must not pass autoArchive: it archives itself.
               if (autoArchive && res?.status !== "timeout") await backend.archiveAgent(agent.id).catch(() => {});
             }
           },
@@ -83,7 +106,7 @@ export function runnerPaseoFacade(backend, plugin) {
  * Build a host. `startWatcher` turns on the log.jsonl wakeup watcher: exactly one host per machine should (the VS server's).
  * Returns { before(name, payload), emit(name, payload), scanLogs, dispose, plugin }.
  */
-export async function createRunnerHookHost(backend, { startWatcher = false, deps = {} } = {}) {
+export async function createRunnerHookHost(backend, { startWatcher = false, deps = {}, pollMs } = {}) {
   const plugin = await loadPlugin();
   plugin.setLogStream?.("stderr"); // hooks may run inside an MCP stdio server: stdout belongs to the protocol (a module sink, not process.env: env leaks to the runner and agents)
   const befores = new Map();
@@ -99,7 +122,7 @@ export async function createRunnerHookHost(backend, { startWatcher = false, deps
   };
   // No `handle`: the vs.http remote RPC is a Paseo-daemon feature.
   const server = { before: (name, fn) => add(befores, name, fn), on: (name, fn) => add(ons, name, fn) };
-  const paseo = runnerPaseoFacade(backend, plugin);
+  const paseo = runnerPaseoFacade(backend, plugin, pollMs ? { pollMs } : {});
   const dispose = plugin.createPlugin({
     setLabels: (id, labels, name) => backend.updateAgent(id, { labels, ...(name ? { name } : {}) }),
     archiveAgent: (id) => backend.archiveAgent(id),
