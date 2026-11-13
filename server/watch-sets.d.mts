@@ -97,6 +97,8 @@ export interface WatchEngineOptions {
   spawnDigest?: (d: WatchDelivery) => Promise<boolean> | boolean;
   /** idea-160: send the worker its one idle nudge (the caller re-checks it is idle and live) */
   nudge?: (agentId: string, text: string) => Promise<void> | void;
+  /** idea-171: the agent's final assistant message text ("" when none), for the activeAt-floor done check */
+  lastMessage?: (id: string) => Promise<string> | string;
   log?: (msg: string) => void;
   retryMs?: number;
 }
