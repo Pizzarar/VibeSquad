@@ -31,7 +31,9 @@ export function pluginsOffSettings(home = os.homedir(), extra = {}) {
 }
 // Restart drain (ideas 198 + 186): a PreToolUse hook that refuses a NEW run_in_background Bash/PowerShell while the runner
 // drains for a `vs restart` (runner/drain-hook.mjs reads <runner home>/drain.json). Bare `node` on PATH, forward slashes,
-// quotes only around a path with whitespace: the command must parse the same in bash and cmd. Not installed without a drain file.
+// quotes only around a path with whitespace: the command must parse the same in bash and cmd. Installed at EVERY spawn when the
+// runner has a drain path (whether or not drain.json exists yet), so agents spawned before a drain still get it; with no drain
+// it exits 0 before reading stdin (one node start per Bash/PowerShell call) and any error fails open.
 export const DRAIN_HOOK_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'drain-hook.mjs');
 export function drainHookSettings(drainFile, script = DRAIN_HOOK_SCRIPT) {
   const arg = (p) => { const s = path.resolve(p).replace(/\\/g, '/'); return /\s/.test(s) ? `"${s}"` : s; };
