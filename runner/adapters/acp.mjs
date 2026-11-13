@@ -223,12 +223,14 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       });
 
       let running = false;
+      // The drop names the runner's input event (inputSeq) so the fresh-session recap can skip it (idea-214).
+      const steerDrop = (reason, q) => ({ reason, chars: q.text.length, ...(Number.isInteger(q.inputSeq) ? { input: q.inputSeq } : {}) });
       // A steer-only prompt (idea-169) never runs as a session/prompt of its own: ACP cannot inject into a running prompt,
       // so leading steer-only items ride along with the next real prompt, and ones left with no real prompt behind them
       // are dropped when the turn ends (running them would start a new turn).
       const dropOrphanSteers = () => {
         if (!queue.length || queue.some((q) => !q.steerOnly)) return;
-        for (const q of queue.splice(0)) emit('steer_dropped', { reason: 'turn-ended', chars: q.text.length });
+        for (const q of queue.splice(0)) emit('steer_dropped', steerDrop('turn-ended', q));
       };
       // True while a send would join work already under way (a prompt in flight or a real one queued).
       const steerable = () => !failed && !stopped && (promptInFlight || queue.some((q) => !q.steerOnly));
@@ -297,17 +299,17 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         steerable,
         // opts.steerOnly (idea-169): joins the running turn or is dropped (returns false now, or a steer_dropped event later);
         // it never starts a session/prompt of its own.
-        send(text, { images = [], steerOnly = false } = {}) {
+        send(text, { images = [], steerOnly = false, inputSeq } = {}) {
           if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
           if (steerOnly && !steerable()) return false;
-          queue.push({ text, images, ...(steerOnly ? { steerOnly: true } : {}) });
+          queue.push({ text, images, ...(steerOnly ? { steerOnly: true, inputSeq } : {}) });
           ready.then(pump, () => {});
           return true;
         },
         // Cancel ends the current turn AND drops prompts queued behind it (a cancelled lane must not resume on stale asks).
         // Differs from the claude adapter, whose cancel only interrupts the current turn and lets later prompts run.
         cancel() {
-          queue.length = 0;
+          for (const q of queue.splice(0)) if (q.steerOnly) emit('steer_dropped', steerDrop('cancelled', q)); // logged, so the recap skips it too
           if (sessionId) write({ method: 'session/cancel', params: { sessionId } });
         },
         kill() { stopped = true; killTree(child); },

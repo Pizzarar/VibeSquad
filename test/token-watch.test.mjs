@@ -33,8 +33,8 @@ function makeRunner() {
       if (labels) a.labels = { ...labels };
       if (name) a.title = name;
     },
-    async sendAgentPrompt(id, text) {
-      sent.push({ id, text });
+    async sendAgentPrompt(id, text, opts) {
+      sent.push({ id, text, ...(opts?.steerOnly ? { steerOnly: true } : {}) });
     },
     async createAgent(p) {
       const id = `rn-new${created.length}`;
@@ -79,6 +79,7 @@ test("lead: one soft nudge + needs-you at 150k, none again after a restarted wat
   r.usage("rn-lead", LEAD_FLAG_DEFAULT + 20);
   await tick();
   assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE]);
+  assert.equal(r.sent[0].steerOnly, undefined, "the 150k lead nudge is a plain send (idea-214)");
   assert.equal(r.agents.get("rn-lead").labels["handoff-flagged"], "1");
   assert.ok(r.agents.get("rn-lead").labels["needs-you"]);
   // server restart: new watcher over the same labels, roster replay + more usage
@@ -112,6 +113,25 @@ test("lead: hard cap runs one successor handoff, none again after restart", asyn
   w.stop();
 });
 
+test("idea-214: the hard-cap handoff re-points a busy worker with a steer-only notice through the token-watch wiring", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  const w1 = { ...worker("rn-w1"), status: "running", labels: { ...worker("rn-w1").labels, "vs.parent": "rn-lead" } };
+  r.agents.set("rn-w1", w1);
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: join(rootDir, "home") });
+  r.emit({ kind: "agent", agent: { ...w1, labels: { ...w1.labels } } }); // the watcher's live roster sees the busy worker
+  r.usage("rn-lead", LEAD_HARD_CAP_DEFAULT + 1);
+  await tick();
+  await tick();
+  assert.equal(r.created.length, 1);
+  const notice = r.sent.filter((s) => s.id === "rn-w1");
+  assert.equal(notice.length, 1);
+  assert.match(notice[0].text, /^Report to /);
+  assert.equal(notice[0].steerOnly, true, "steerOnly reaches runner.sendAgentPrompt: a worker idle by now is never woken");
+  w.stop();
+});
+
 test("buddy: one warn at 80k, one restart at the hard limit, none after restart", async () => {
   const rootDir = makeRoot();
   const r = makeRunner();
@@ -126,6 +146,8 @@ test("buddy: one warn at 80k, one restart at the hard limit, none after restart"
   r.usage("rn-bud", 90_000);
   await tick();
   assert.deepEqual(r.sent.map((s) => s.text), [BRAINSTORM_WARN_NUDGE]);
+  // idea-214: a plain send. It starts the brief-update turn that compaction/restart waits on, and fires once (WARN_LABEL).
+  assert.equal(r.sent[0].steerOnly, undefined, "the Buddy warn nudge may wake an idle Buddy");
   assert.equal(r.agents.get("rn-bud").labels[WARN_LABEL], "1");
   assert.equal(restarts.length, 0);
   w.stop();

@@ -15,6 +15,25 @@ const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title',
 // output, tool activity, status and the like count as a turn still making progress).
 const NON_PROGRESS_EVENTS = new Set(['stderr', 'raw', 'limit', 'steer_dropped']);
 
+// Seqs of steer-only inputs that were dropped (idea-169/214). A `steer_dropped` names its input (`input`: the input's seq);
+// one logged before that field existed falls back to position: an adapter drop at turn end ('turn-ended') takes the oldest
+// steer since the last real input (ACP drops its queue in order), a runner-side drop the newest (it follows its own input).
+// A real input clears the pending steers: anything queued ahead of it rode along with it.
+export function droppedSteerSeqs(events) {
+  const dropped = new Set();
+  let pending = [];
+  for (const e of events) {
+    if (e.type === 'input') { if (e.steerOnly) pending.push(e.seq); else pending = []; }
+    else if (e.type === 'steer_dropped') {
+      const seq = Number.isInteger(e.input) ? e.input : e.reason === 'turn-ended' ? pending[0] : pending.at(-1);
+      if (seq === undefined) continue;
+      dropped.add(seq);
+      pending = pending.filter((s) => s !== seq);
+    }
+  }
+  return dropped;
+}
+
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
   for (const [name, v] of [['model', model], ['permissionMode', meta.permissionMode]]) {
@@ -518,10 +537,13 @@ export class Runner {
   }
 
   // Short recap of the conversation so far (from the log) to prime a fresh session when a provider cannot resume the old one.
+  // A steer-only input that was dropped (a `steer_dropped` after it) never reached the agent, so it is not part of the recap.
   _primer(id, maxChars = 8000) {
+    const events = this.store.read(id);
+    const dropped = droppedSteerSeqs(events);
     const turns = [];
-    for (const e of this.store.read(id)) {
-      if (e.type === 'input' && typeof e.text === 'string') turns.push({ who: 'User', text: e.text });
+    for (const e of events) {
+      if (e.type === 'input' && typeof e.text === 'string') { if (!dropped.has(e.seq)) turns.push({ who: 'User', text: e.text }); }
       else if (e.type === 'output' && typeof e.text === 'string') {
         if (turns.at(-1)?.who === 'Assistant') turns.at(-1).text += e.text; else turns.push({ who: 'Assistant', text: e.text });
       }
@@ -1173,14 +1195,15 @@ export class Runner {
     if (!(live.inflight > 0)) return drop('idle');
     if (typeof live.handle.steerable === 'function' && !live.handle.steerable()) return drop('turn-ending');
     const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
-    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), steerOnly: true, ...senderId });
+    // The input's seq rides along (inputSeq) so every steer_dropped names the input it drops; the fresh-session primer skips those.
+    const input = this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), steerOnly: true, ...senderId }).seq;
     let joined;
-    try { joined = live.handle.send(text, { ...(images.length ? { images } : {}), steerOnly: true }); } catch (err) {
-      this.store.append(id, 'steer_dropped', { reason: 'send-failed', message: String(err?.message ?? err) });
+    try { joined = live.handle.send(text, { ...(images.length ? { images } : {}), steerOnly: true, inputSeq: input }); } catch (err) {
+      this.store.append(id, 'steer_dropped', { reason: 'send-failed', input, message: String(err?.message ?? err) });
       return drop('send-failed');
     }
     if (joined === false) { // steerable() said yes in this same tick; kept as a backstop for adapters without it
-      this.store.append(id, 'steer_dropped', { reason: 'turn-ending' });
+      this.store.append(id, 'steer_dropped', { reason: 'turn-ending', input });
       return drop('turn-ending');
     }
     return { queued: false, delivered: true, steer: true };
