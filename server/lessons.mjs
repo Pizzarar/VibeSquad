@@ -166,6 +166,7 @@ export const STANDING_RULES = [
   "Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow already covers it, say \"already covered by <X>\" instead of rebuilding it.",
   "Merge only on the reviewer's own first-line verdict PASS|FAIL H/M/L <tip-hash>, never a digest summary; the hash must match the branch tip.",
   "Never hand-edit files under ~/.vibesquad (handoff packets, teams, logs, marks); use the vs verb (vs handoff --judgment-file/--judgment -, vs log, vs inbox, vs task).",
+  "Shared-machine actions (vs restart, full-suite slot, runtime sync): ask the holders' leads to drain, wait for each `drained`, act, then log `<action>-done`. No timer retries; `--kill-background` only with the owner's per-run OK.",
 ];
 
 /**
