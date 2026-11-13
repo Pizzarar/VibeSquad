@@ -139,7 +139,23 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         for (const e of runner.live.values()) { if (e.inflight > 0) running += 1; if (e.quiet) quiet += 1; }
         // held: idle agents whose background work (a suite, a build) holds their park; running counts open turns only.
         const heldAgents = runner.heldIds?.() ?? [];
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, pid: process.pid, hash });
+        // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, drain: runner.drainState?.() ?? null, pid: process.pid, hash });
+      }
+      if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
+        // Restart drain (ideas 198 + 186), set/cleared by scripts/restart-runtime.mjs: POST { ttlMs, reason } starts or refreshes
+        // it, DELETE ends it. Admin bearer only and only with a token configured (like /shutdown): an agent token never sets it.
+        if (isAgent) return forbid(res, 'drain is admin only (set by vs restart)');
+        if (!token || typeof runner.setDrain !== 'function') return json(res, 403, { error: 'drain not enabled' });
+        if (req.method === 'DELETE') {
+          const cleared = runner.clearDrain();
+          console.log(JSON.stringify({ drain: 'cleared', active: cleared }));
+          return json(res, 200, { ok: true, cleared, drain: null });
+        }
+        const b = await readBody(req);
+        const drain = runner.setDrain({ ttlMs: b.ttlMs, reason: typeof b.reason === 'string' ? b.reason : '' });
+        console.log(JSON.stringify({ drain: 'set', ...drain }));
+        return json(res, 200, { ok: true, drain });
       }
       if (req.method === 'GET' && parts[0] === 'verify-agent' && parts.length === 1) {
         // Who is calling, from runner memory: the VS server forwards an agent's headers here once per request (X1c).
@@ -340,7 +356,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   } catch (err) { console.error('orphan sweep failed', err); }
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
-  const runner = new Runner({ dir, limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
+  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
   try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {

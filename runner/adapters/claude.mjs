@@ -4,6 +4,7 @@
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { killTree, spawnNoShell } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
@@ -20,13 +21,23 @@ export const effectivePermissionMode = (meta = {}) => meta.permissionMode || DEF
 // The user setting source stays: ~/.claude/CLAUDE.md and user settings (global git/push rules) must reach every agent.
 // VS hooks run on the runner lifecycle bus, not CLI settings. Never --bare (skips hooks) or --disable-slash-commands (/compact).
 export const SYNCED_PLUGINS = ['engineering', 'productivity', 'cowork-plugin-management', 'data'];
-export function pluginsOffSettings(home = os.homedir()) {
+export function pluginsOffSettings(home = os.homedir(), extra = {}) {
   const names = new Set(SYNCED_PLUGINS);
   try { // also any other synced plugin on this machine: <synced>/<account>/<name>.meta.json
     const root = path.join(home, '.claude', 'plugins', 'synced');
     for (const acct of readdirSync(root)) for (const f of readdirSync(path.join(root, acct))) if (f.endsWith('.meta.json')) names.add(f.slice(0, -'.meta.json'.length));
   } catch { /* no synced plugins */ }
-  return JSON.stringify({ enabledPlugins: Object.fromEntries([...names].map((n) => [`${n}@synced`, false])) });
+  return JSON.stringify({ enabledPlugins: Object.fromEntries([...names].map((n) => [`${n}@synced`, false])), ...extra });
+}
+// Restart drain (ideas 198 + 186): a PreToolUse hook that refuses a NEW run_in_background Bash/PowerShell while the runner
+// drains for a `vs restart` (runner/drain-hook.mjs reads <runner home>/drain.json). Bare `node` on PATH, forward slashes,
+// quotes only around a path with whitespace: the command must parse the same in bash and cmd. Installed at EVERY spawn when the
+// runner has a drain path (whether or not drain.json exists yet), so agents spawned before a drain still get it; with no drain
+// it exits 0 before reading stdin (one node start per Bash/PowerShell call) and any error fails open.
+export const DRAIN_HOOK_SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'drain-hook.mjs');
+export function drainHookSettings(drainFile, script = DRAIN_HOOK_SCRIPT) {
+  const arg = (p) => { const s = path.resolve(p).replace(/\\/g, '/'); return /\s/.test(s) ? `"${s}"` : s; };
+  return { PreToolUse: [{ matcher: 'Bash|PowerShell', hooks: [{ type: 'command', command: `node ${arg(script)} ${arg(drainFile)}`, timeout: 10 }] }] };
 }
 // Extras are opt-in: a profile with mcpExtras:["playwright"] (server/profiles.mjs; the backend stamps it as the vs.mcp label)
 // or any agent labelled vs.mcp=playwright (comma list).
@@ -46,7 +57,7 @@ export function playwrightSpec(home = os.homedir()) {
 // --resume or a crash at boot exits first and rejects it; a CLI that hangs while alive is not detectable without a prompt.
 export const CLAUDE_READY_SETTLE_MS = 1000;
 
-export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts'), readySettleMs = CLAUDE_READY_SETTLE_MS } = {}) {
+export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true, mcpPath = mcpServerPath(), promptsDir = path.join(os.tmpdir(), 'vibesquad-runner-prompts'), readySettleMs = CLAUDE_READY_SETTLE_MS, drainFile = null } = {}) {
   const promptFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.md`);
   const mcpFile = (id) => path.join(promptsDir, `${String(id ?? 'agent').replace(/[^\w.-]/g, '_')}.mcp.json`);
   return {
@@ -62,7 +73,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       if (model) args.push('--model', model);
       args.push('--permission-mode', effectivePermissionMode(meta));
       if (CLAUDE_EFFORTS.includes(meta.thinkingOptionId)) args.push('--effort', meta.thinkingOptionId);
-      args.push('--settings', pluginsOffSettings());
+      args.push('--settings', pluginsOffSettings(os.homedir(), drainFile ? { hooks: drainHookSettings(drainFile) } : {}));
       if (mcp) {
         const spec = mcpServerSpec({ env, path: mcpPath });
         // Via a file too: server args/env grow without bound toward the same 32,767-char cap.

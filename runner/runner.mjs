@@ -1,6 +1,6 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { statSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
@@ -220,9 +220,16 @@ export function parkGraceFromEnv(env = process.env) {
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_GRACE_MS;
 }
 // The after-turn park is held while the agent has background work (a shell its CLI left running: a test suite, a build;
-// see background.mjs), re-checked every poll, and forced (logged as park-forced, with what was killed) past the max hold
+// see background.mjs), re-checked every poll (unless a restart drain refuses a new hold: see Runner.setDrain), and forced (logged as park-forced, with what was killed) past the max hold
 // so a held agent cannot keep its live slot forever. A max hold of 0 turns the hold off (park kills the tree at once).
 export const DEFAULT_PARK_HOLD_MAX_MS = 60 * 60 * 1000;
+// A restart drain's TTL ceiling: `vs restart` asks for its wait timeout + stop timeout + a margin.
+export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
+// What an agent whose new background work a drain refused reads at the start of its next input.
+export function drainNoticeText(drain, work) {
+  const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped when your turn ended: the runtime was draining for a restart (${drain.reason || 'vs restart'}), which refuses new background work. Rerun it now if it is still needed.`;
+}
 export function parkHoldMaxFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_HOLD_MAX_MS);
   return env.VS_RUNNER_PARK_HOLD_MAX_MS !== undefined && env.VS_RUNNER_PARK_HOLD_MAX_MS !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_HOLD_MAX_MS;
@@ -266,7 +273,9 @@ export class Runner {
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
   // hubLane: (team) -> the Squad's hub lane id (its Overlord's lane). Default: the lane whose id is the team id, the
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
-  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe(), hubLane = (team) => team, digestReserve = digestReserveFromEnv() }) {
+  // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
+  // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe(), hubLane = (team) => team, digestReserve = digestReserveFromEnv() }) {
     this.store = new LogStore(dir);
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
@@ -291,6 +300,65 @@ export class Runner {
     this.overCapOwner = new Map(); // family -> count of owner turns currently running OVER that family's turn cap (released on turn end)
     this.digestReserve = digestReserve;
     this.overCapDigest = new Map(); // family -> count of digest turns currently running over that family's turn cap (idea-203)
+    this.drainFile = drainFile;
+    this._drain = null; // { since, until, reason } while a `vs restart` drains (see setDrain); memory only, so a runner start clears it
+    this._drainTimer = null;
+    this._removeDrainFile(); // a drain file a crashed runner left behind
+  }
+
+  // ---- Restart drain (ideas 198 + 186) ----
+  // While `vs restart` waits for running:0 + held:0 (scripts/restart-runtime.mjs sets this over the admin-only POST /drain),
+  // NEW background work is refused machine-wide: claude agents' run_in_background Bash/PowerShell is blocked in-turn by the
+  // drain hook (adapters/claude.mjs, drain-hook.mjs), and for every provider a park hold whose background shells were all
+  // started after the drain began is refused at turn end (the agent is parked, the work stopped, and its next input says
+  // why). Work that predates the drain keeps holding as before. Expires on its own after ttlMs (a crashed restart cannot
+  // leave the runner draining) and never survives a runner start.
+  setDrain({ ttlMs, reason = '' } = {}) {
+    const ttl = Number(ttlMs);
+    if (!Number.isInteger(ttl) || ttl < 1000 || ttl > DRAIN_TTL_MAX_MS) throw Object.assign(new Error(`ttlMs must be an integer from 1000 to ${DRAIN_TTL_MAX_MS}`), { status: 400 });
+    const now = Date.now();
+    const since = this.drainState()?.since ?? now; // a refresh extends the drain; work started since the first set is still new
+    this._drain = { since, until: now + ttl, reason: String(reason ?? '').slice(0, 200) };
+    clearTimeout(this._drainTimer);
+    this._drainTimer = setTimeout(() => this.clearDrain(), ttl);
+    this._drainTimer.unref?.();
+    if (this.drainFile) {
+      try {
+        mkdirSync(path.dirname(this.drainFile), { recursive: true });
+        const tmp = `${this.drainFile}.${process.pid}.tmp`;
+        writeFileSync(tmp, JSON.stringify(this._drain));
+        renameSync(tmp, this.drainFile); // the hook never reads a half-written file
+      } catch (err) { console.error('drain file write failed', err); } // the runner-side refusal still applies
+    }
+    return this.drainState();
+  }
+
+  /** Ends a drain. True when one was active (an expired one counts as already ended). */
+  clearDrain() {
+    const was = this._drain !== null && Date.now() < this._drain.until;
+    clearTimeout(this._drainTimer);
+    this._drainTimer = null;
+    this._drain = null;
+    this._removeDrainFile();
+    return was;
+  }
+
+  /** { since, until, reason } while draining, else null. Expiry is checked here too, not only by the timer. */
+  drainState() {
+    if (this._drain && Date.now() >= this._drain.until) this.clearDrain();
+    return this._drain ? { ...this._drain } : null;
+  }
+
+  _removeDrainFile() {
+    if (!this.drainFile) return;
+    try { rmSync(this.drainFile, { force: true }); } catch { /* the hook checks `until` itself */ }
+  }
+
+  // A hold the drain refuses: every background shell was started after the drain began. A shell without a start time
+  // (POSIX ps) is treated as older work and keeps holding: the drain never stops what it cannot date.
+  _drainRefusesHold(work) {
+    const d = this.drainState();
+    return !!d && work.length > 0 && work.every((w) => Number.isFinite(w.createdMs) && w.createdMs >= d.since);
   }
 
   create({ provider, model, cwd, prompt, systemPrompt, meta = {} }) {
@@ -691,6 +759,13 @@ export class Runner {
         return;
       }
       const now = Date.now();
+      if (entry.heldSince === null && this._drainRefusesHold(work)) { // a restart is draining: no NEW hold (ideas 198 + 186)
+        const drain = this.drainState();
+        this.store.append(id, 'park-drain-refused', { work, drain }); // the next send reads it (_parkedSpec) and tells the agent
+        this.park(id);
+        this._pump();
+        return;
+      }
       if (entry.heldSince === null) {
         entry.heldSince = now;
         this.store.append(id, 'park-held', { work, maxHoldMs: this.parkHoldMaxMs });
@@ -752,11 +827,14 @@ export class Runner {
     const events = this.store.read(id);
     let parked = null;
     let archived = false;
+    let refused = null; // a park-drain-refused no input has seen yet: the next send tells the agent (survives a runner restart)
     // Fold later meta patches (labels, permissionMode, ...) the same way the summary does, so a resume uses the current meta.
     const meta = { ...(events[0]?.meta ?? {}) };
     for (const e of events) {
       if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
       if (e.type === 'parked') parked = e;
+      else if (e.type === 'park-drain-refused') refused = e;
+      else if (e.type === 'input') refused = null;
       else if (e.type === 'exit') return null;
       else if (e.type === 'archive') archived = true;
       else if (e.type === 'unarchive') archived = false;
@@ -764,7 +842,7 @@ export class Runner {
     }
     if (archived || !parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
     const c = events[0];
-    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId };
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}) };
   }
 
   // Whether a closed agent can come back in place (same id + session). Mirrors the resume endpoint's 409 condition
@@ -1066,9 +1144,11 @@ export class Runner {
       return this.queuePosition(id);
     }
 
+    if (spec?.drainNotice) this.store.append(id, 'drain-notice', { text: spec.drainNotice });
     this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
+    const lead = [spec?.drainNotice, pending?.text].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
     const job = {
-      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: pending ? `${pending.text}\n\n${text}` : text, images,
+      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
       run: () => this._deliverJob(job),
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
@@ -1274,6 +1354,7 @@ export class Runner {
     this._shutDown = true;
     this._pollAgy?.shutdown();
     clearInterval(this._quietSweep);
+    this.clearDrain(); // the drain ends with this runner (its timer and the hook's file)
     const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
     this.queue.length = 0;
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }
