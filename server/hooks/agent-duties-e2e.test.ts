@@ -1641,6 +1641,9 @@ test(
   }),
 );
 
+/** idea-218: capping the digest failover providers leaves a failed digest no alternate, so these keep testing the single-digest path. */
+const NO_DIGEST_ALTERNATE = ["claude", "opencode"];
+
 test(
   "idea-150: a digest that rejects with no verdict logged is not recorded, so a replay after a restart re-digests it",
   withEnv(async ({ briefRoot }) => {
@@ -1656,7 +1659,7 @@ test(
       };
       const agents = new Map<string, any>([["w-lost", w]]);
       let created = 0;
-      const h = harness(agents, { briefRoot });
+      const h = harness(agents, { briefRoot, cappedProviders: NO_DIGEST_ALTERNATE });
       (h.paseo.agents as any).create = async () => {
         const id = `dig-${++created}`;
         return { id, agent: { id }, waitForFinish: async () => Promise.reject(new Error("digest died")) };
@@ -1727,7 +1730,7 @@ test(
     };
     const agents = new Map<string, any>([["w-live", w]]);
     const timelineByAgent = new Map<string, any[]>([["w-live", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
-    const h = harness(agents, { briefRoot, timelineByAgent });
+    const h = harness(agents, { briefRoot, timelineByAgent, cappedProviders: NO_DIGEST_ALTERNATE });
     let calls = 0;
     let sweptMidWait: string[] | null = null;
     (h.paseo.agents as any).create = async (payload: any) => {
@@ -1765,7 +1768,8 @@ test(
     const w: any = { id: "w-eof", title: "Bug1 · eof", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "eof" } };
     const agents = new Map<string, any>([["w-eof", w]]);
     const timelineByAgent = new Map<string, any[]>([["w-eof", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
-    const h = harness(agents, { briefRoot, timelineByAgent });
+    // No idea-218 alternate (every other digest provider capped): the UNVERIFIED path is unchanged.
+    const h = harness(agents, { briefRoot, timelineByAgent, cappedProviders: NO_DIGEST_ALTERNATE });
     (h.paseo.agents as any).create = async () => ({ id: "dig-eof", agent: { id: "dig-eof" }, waitForFinish: async () => ({ status: "error" }) });
     try {
       await h.onTurnEnded(w, { kind: "completed" }, "t-E");
@@ -1776,6 +1780,48 @@ test(
     assert.deepEqual(h.archivedIds, ["dig-eof"], "archived once, by the waiter after its retry loop (no autoArchive, idea-207 H1)");
     const lines = readFileSync(join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl"), "utf8").split(String.fromCharCode(10)).filter((l) => l.includes("UNVERIFIED"));
     assert.equal(lines.length, 1);
+  }),
+);
+
+test(
+  "idea-218: a digest whose wait rejects (errored) is respawned once on the failover alternate; its verdict is the one entry, both archived once",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = { id: "w-alt", title: "Bug1 · alt", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "alt" } };
+    const agents = new Map<string, any>([["w-alt", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-alt", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    const payloads: any[] = [];
+    (h.paseo.agents as any).create = async (payload: any) => {
+      payloads.push(payload);
+      const id = `dig-a${payloads.length}`;
+      agents.set(id, { id, ...payload, status: "idle", archivedAt: null });
+      const first = payloads.length === 1;
+      return {
+        id,
+        agent: { id },
+        waitForFinish: async () => {
+          if (first) throw new Error("digest died");
+          appendVerdict(id, "w-alt", "PASS: alternate verdict");
+          return { status: "idle" };
+        },
+      };
+    };
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-A");
+      await wait(300);
+    } finally {
+      h.stop?.();
+    }
+    assert.equal(payloads.length, 2, "respawned exactly once");
+    assert.equal(payloads[0].labels.profile, "Pre-check - Flash");
+    assert.equal(payloads[1].labels.profile, "Check - Haiku");
+    assert.match(payloads[1].config.provider, /^claude\//);
+    assert.equal(payloads[1].labels.digestFor, "w-alt");
+    assert.equal(payloads[1].labels.digestTurn, "t-A", "the alternate carries the turn label (a restart adopts it, idea-123)");
+    assert.deepEqual(h.archivedIds, ["dig-a1", "dig-a2"], "each archived exactly once");
+    const lines = logLines();
+    assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0);
+    assert.equal(lines.filter((l) => l.includes("alternate verdict")).length, 1);
   }),
 );
 
