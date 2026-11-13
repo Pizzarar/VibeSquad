@@ -111,21 +111,68 @@ export function drainedLeadIds(vsHome, teamIds, since) {
 }
 
 /**
- * D2 retry guard: when the newest restart deferred less than DRAIN_WINDOW_MS ago, every lead it named must have logged a
- * drain since the deferral chain began. Returns { pending: [lead...], deferral } (pending empty = go).
+ * The lane's live lead now, the `vs who lead` way (whoCandidate + resolveLeadWinner over the runner's agent list).
+ * { ids: [lead ids whose drain counts], none: true when the lane has no live lead any more }.
  */
-export function drainGuard(vsHome, { now = Date.now() } = {}) {
-  const chain = deferralChain(vsHome, { now, maxAgeMs: DRAIN_WINDOW_MS });
-  if (!chain) return { pending: [], deferral: null };
-  const need = chain.latestLeads;
-  const drained = drainedLeadIds(vsHome, need.map((l) => l.team), chain.since);
-  return { pending: need.filter((l) => !drained.has(l.leadId)), deferral: chain.latest, since: chain.since };
+function currentLaneLeads(agents, teams, team, lane) {
+  const candidates = agents.filter((x) => whoCandidate(x, { teams, wantTeamId: team, wantLane: lane })?.role === "lead");
+  const { winner, conflict, contenders = [] } = resolveLeadWinner(candidates);
+  if (winner) return { ids: [winner.id], none: false };
+  if (conflict) return { ids: contenders, none: false };
+  return { ids: [], none: true };
 }
 
-export function drainGuardMessage({ pending, deferral }, now = Date.now()) {
+/**
+ * D2 retry guard: when the newest restart deferred less than DRAIN_WINDOW_MS ago, every lead it named must have logged a
+ * drain after that deferral ended (R2 M1: not the chain's first start, so a drain before a later deferral, or one logged
+ * while the deferral was still waiting, never satisfies it). With `agents` (the runner's list, the `vs who lead` source),
+ * a drain by the lane's CURRENT live lead counts too (R2 M2: the named lead handed off or retired), and a lane with no
+ * live lead any more is skipped (returned in `skipped`). Without an agent list (or an empty one) only the named lead
+ * counts and nothing is skipped (fail closed). `agents` may be a thunk, called only when a named lead is still undrained.
+ * Returns { pending: [lead...], skipped: [lead...], deferral, since }.
+ */
+export function drainGuard(vsHome, { now = Date.now(), agents = null, teams = null } = {}) {
+  const chain = deferralChain(vsHome, { now, maxAgeMs: DRAIN_WINDOW_MS });
+  if (!chain) return { pending: [], skipped: [], deferral: null };
+  const since = chain.latest.finishedAt ?? chain.latest.startedAt;
+  const need = chain.latestLeads;
+  const drained = drainedLeadIds(vsHome, need.map((l) => l.team), since);
+  let list;
+  let reg = null;
+  const pending = [];
+  const skipped = [];
+  for (const l of need) {
+    if (drained.has(l.leadId)) continue;
+    if (list === undefined) {
+      let got = null;
+      try { got = typeof agents === "function" ? agents() : agents; } catch { got = null; }
+      list = Array.isArray(got) && got.length ? got : null;
+      if (list) reg = teams ?? loadTeamsRegistry();
+    }
+    if (list) {
+      const cur = currentLaneLeads(list, reg, l.team, l.lane);
+      if (cur.none) { skipped.push(l); continue; }
+      if (cur.ids.some((id) => drained.has(id))) continue;
+      pending.push({ ...l, currentLeadIds: cur.ids.filter((id) => id !== l.leadId) });
+      continue;
+    }
+    pending.push(l);
+  }
+  return { pending, skipped, deferral: chain.latest, since };
+}
+
+/** One line for the lanes the guard skipped because they have no live lead any more ('' when none). */
+export function drainSkippedNote(skipped) {
+  if (!skipped?.length) return "";
+  return `skipped (no live lead in the lane any more): ${skipped.map((l) => `${l.team}/${l.lane} (named lead ${l.leadId}, held ${l.heldAgents.join(", ")})`).join("; ")}.`;
+}
+
+export function drainGuardMessage({ pending, skipped = [], deferral }, now = Date.now()) {
   const ago = Math.max(0, Math.round((now - (Date.parse(deferral?.finishedAt ?? deferral?.startedAt ?? "") || now)) / 60000));
-  const who = pending.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} [holds ${l.heldAgents.join(", ")}]`).join("; ");
+  const who = pending.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""}${l.currentLeadIds?.length ? ` (now ${l.currentLeadIds.join(", ")})` : ""} [holds ${l.heldAgents.join(", ")}]`).join("; ");
+  const skip = drainSkippedNote(skipped);
   return `vs restart: refused: the last restart deferred ${ago} min ago on background work, and these leads have not logged vs log restart-feedback '${DRAINED_TEXT}' yet: ${who}. ` +
     `Ask each to drain and hold background suites (ready-to-send asks: ${deferral?.file ?? "the restart-<ts>.json"} deferred.leads[].ask), wait for every 'drained', then rerun vs restart. ` +
+    (skip ? `${skip[0].toUpperCase()}${skip.slice(1)} ` : "") +
     `No timer retries; --kill-background needs the owner's per-run OK.`;
 }

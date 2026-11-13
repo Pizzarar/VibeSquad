@@ -792,6 +792,125 @@ test("D2 guard: a rerun within 30 min of a deferral is refused, listing the pend
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+test("D2 guard R2 M1: a drain counts only after the LATEST deferral ended, not the chain's first start or mid-wait", async () => {
+  const { drainGuard } = await import("../server/restart-coord.mjs");
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-drain-m1-"));
+  const at = (hhmm, s = 0) => `2026-11-12T${hhmm}:${String(s).padStart(2, "0")}.000Z`;
+  const L = { team: "efi", lane: "godot", leadId: "rn-lead-godot", leadTitle: null, heldAgents: ["rn-a"], ask: "x" };
+  const put = (start, end) => writeFileSync(path.join(home, `restart-${start.replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: start, finishedAt: end, dryRun: false, ok: false, errors: [], deferred: { held: 1, heldAgents: ["rn-a"], running: 0, leads: [L], unresolved: [] } }));
+  const drain = (ts) => { mkdirSync(path.join(home, "teams", "efi"), { recursive: true }); writeFileSync(path.join(home, "teams", "efi", "log.jsonl"), JSON.stringify({ ts, agent: "rn-lead-godot", lane: "godot", type: "metric", text: "restart-feedback: drained restart", refs: [] }) + "\n", { flag: "a" }); };
+  try {
+    put(at("10:00"), at("10:10"));
+    drain(at("10:02")); // logged while deferral #1 was still waiting
+    assert.deepEqual(drainGuard(home, { now: Date.parse(at("10:11")) }).pending.map((l) => l.leadId), ["rn-lead-godot"], "a mid-wait drain does not satisfy a deferral that ended later");
+    drain(at("10:12"));
+    assert.deepEqual(drainGuard(home, { now: Date.parse(at("10:12", 30)) }).pending, [], "drained after #1 ended: go");
+    put(at("10:13"), at("10:15")); // retry #2 defers again on the same lead
+    const g = drainGuard(home, { now: Date.parse(at("10:16")) });
+    assert.deepEqual(g.pending.map((l) => l.leadId), ["rn-lead-godot"], "the 10:12 drain predates deferral #2: retry #3 is refused");
+    assert.equal(g.since, at("10:15"));
+    drain(at("10:15", 30));
+    assert.deepEqual(drainGuard(home, { now: Date.parse(at("10:16")) }).pending, [], "drained after #2 ended: go");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("D2 guard R2 M2: a drain by the lane's CURRENT live lead counts (named lead handed off); a lane with no live lead is skipped and listed; no agent list fails closed", async () => {
+  const { commandRestart } = await import("../cli/vs.mjs");
+  const { drainGuard, drainGuardMessage } = await import("../server/restart-coord.mjs");
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-drain-m2-"));
+  const now = Date.parse("2026-11-12T10:20:00.000Z");
+  const iso = (min) => new Date(now - min * 60000).toISOString();
+  const L = (leadId, lane, held) => ({ team: "efi", lane, leadId, leadTitle: null, heldAgents: held, ask: "x" });
+  writeFileSync(path.join(home, `restart-${iso(10).replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: iso(10), finishedAt: iso(9), dryRun: false, ok: false, errors: [],
+    deferred: { held: 2, heldAgents: ["rn-a", "rn-b"], running: 0, leads: [L("rn-lead-old", "godot", ["rn-a"]), L("rn-lead-ui", "ui", ["rn-b"])], unresolved: [] } }));
+  const drain = (agent, min) => { mkdirSync(path.join(home, "teams", "efi"), { recursive: true }); writeFileSync(path.join(home, "teams", "efi", "log.jsonl"), JSON.stringify({ ts: iso(min), agent, lane: "godot", type: "metric", text: "restart-feedback: drained restart", refs: [] }) + "\n", { flag: "a" }); };
+  const agents = [
+    { id: "rn-lead-old", status: "idle", title: "★ God2 · Godot", labels: { team: "efi", lane: "godot", role: "former-lead" } }, // handed off
+    { id: "rn-lead-new", status: "idle", title: "★ God3 · Godot", labels: { team: "efi", lane: "godot", role: "lead", ord: "3" } },
+    { id: "rn-godot-worker", status: "idle", labels: { team: "efi", lane: "godot", role: "worker" } },
+    // lane ui: its named lead retired, nobody took the seat
+  ];
+  const guard = (o = {}) => drainGuard(home, { now, teams: EFI_TEAMS, agents, ...o });
+  try {
+    let g = guard();
+    assert.deepEqual(g.pending.map((l) => l.leadId), ["rn-lead-old"], "godot pending until its current lead drains");
+    assert.deepEqual(g.skipped.map((l) => `${l.lane}:${l.leadId}`), ["ui:rn-lead-ui"], "ui has no live lead any more: skipped");
+    const msg = drainGuardMessage(g, now);
+    assert.match(msg, /godot lead rn-lead-old \(now rn-lead-new\) \[holds rn-a\]/);
+    assert.match(msg, /Skipped \(no live lead in the lane any more\): efi\/ui \(named lead rn-lead-ui, held rn-b\)/);
+    assert.ok(!/ui lead rn-lead-ui \[/.test(msg), "a skipped lane is not listed as pending");
+    // fail closed: no agent list (or an empty one) -> only the named leads count, nothing is skipped
+    for (const a of [null, [], () => [], () => { throw new Error("runner down"); }]) {
+      const f = guard({ agents: a });
+      assert.deepEqual(f.pending.map((l) => l.leadId), ["rn-lead-old", "rn-lead-ui"]);
+      assert.deepEqual(f.skipped, []);
+    }
+    drain("rn-godot-worker", 5);
+    assert.deepEqual(guard().pending.map((l) => l.leadId), ["rn-lead-old"], "a worker's drain never counts");
+    drain("rn-lead-new", 4);
+    g = guard();
+    assert.deepEqual(g.pending, [], "the lane's current lead drained: go");
+    assert.deepEqual(g.skipped.map((l) => l.lane), ["ui"]);
+    assert.deepEqual(guard({ agents: null }).pending.map((l) => l.leadId), ["rn-lead-old", "rn-lead-ui"], "without the agent list the successor's drain is not provable");
+    // through vs restart: the runner list is read lazily from the restart's home; it proceeds and prints the skipped lane
+    const out = [];
+    const seenEnv = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = (s) => { out.push(String(s)); return true; };
+    let code;
+    try {
+      code = await commandRestart({}, { spawnFn: () => 7, env: { VIBESQUAD_HOME: home }, teams: [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }] }], hasOwnerProof: () => true, now: () => now,
+        listAgents: (env) => { seenEnv.push(env.VIBESQUAD_HOME); return agents; }, drainGuard: (h, o) => drainGuard(h, { ...o, teams: EFI_TEAMS }) });
+    } finally { process.stdout.write = orig; }
+    assert.equal(code, 0);
+    assert.deepEqual(seenEnv, [home], "the agent list is read from the restart's own VibeSquad home");
+    assert.ok(out.some((s) => /drain guard skipped \(no live lead in the lane any more\): efi\/ui/.test(s)), out.join(""));
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("R2 L1: a blank VS_AGENT_ID never masks PASEO_AGENT_ID or VS_AGENT_TOKEN (owner proof, owner shell, restart caller, --kill-background)", async () => {
+  const { assertKillBackgroundOwner, assertOwnerShell, ownerProofFromEnv, assertRestartCaller } = await import("../cli/vs.mjs");
+  const { ensureLocalToken, localTokenPath } = await import("../server/local-token.mjs");
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-l1-"));
+  try {
+    ensureLocalToken(localTokenPath(home));
+    assert.equal(ownerProofFromEnv({ VIBESQUAD_HOME: home }), true, "control: the owner's shell has proof");
+    assert.equal(ownerProofFromEnv({ VIBESQUAD_HOME: home, VS_AGENT_ID: " ", PASEO_AGENT_ID: "rn-abcdef123456" }), false);
+    assert.throws(() => assertKillBackgroundOwner({ VS_AGENT_ID: " ", VS_AGENT_TOKEN: "t" }, () => true), /owner's per-run OK/);
+    assert.throws(() => assertKillBackgroundOwner({ VS_AGENT_ID: " ", PASEO_AGENT_ID: "rn-abcdef123456" }, () => true), /owner's per-run OK/);
+    assert.doesNotThrow(() => assertKillBackgroundOwner({ VS_AGENT_ID: " ", PASEO_AGENT_ID: "  " }, () => true), "all blank: the owner's shell");
+    assert.throws(() => assertOwnerShell("vs pair", { VS_AGENT_ID: " ", PASEO_AGENT_ID: "rn-abcdef123456" }), /never runs from an agent shell \(VS_AGENT_ID=rn-abcdef123456\)/);
+    const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
+    const verified = [];
+    await assert.rejects(assertRestartCaller(null, teams, { VS_AGENT_ID: " ", PASEO_AGENT_ID: "rn-abcdef123456", VS_AGENT_TOKEN: "tok" }, {
+      hasOwnerProof: () => true,
+      verify: async (c) => { verified.push(c.id); return { id: "rn-abcdef123456", role: "worker", team: "vibesquad", lane: "bug-chaser" }; },
+    }), /is a worker; restarting the runtime cuts every agent's turn/, "verified as the PASEO_AGENT_ID agent, not waved through as the owner");
+    assert.deepEqual(verified, ["rn-abcdef123456"]);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("R2 L2: the WMI child restores VIBESQUAD_PORT from --port, and D3's vs log/send run with restartRuntime's env", async () => {
+  const { applyLaunchEnv } = await import("../scripts/restart-runtime.mjs");
+  const env = {};
+  applyLaunchEnv(parseArgs(["--vs-home", "C:\\vsh", "--port", "4290"]), env);
+  assert.deepEqual(env, { VIBESQUAD_HOME: "C:\\vsh", VIBESQUAD_PORT: "4290" });
+  const bare = { VIBESQUAD_PORT: "4180" };
+  applyLaunchEnv(parseArgs([]), bare);
+  assert.deepEqual(bare, { VIBESQUAD_PORT: "4180" }, "no flags: env untouched");
+  const w = await world({ running: [0], envExtra: { VIBESQUAD_PORT: "4290" } });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    const at = new Date(Date.now() - 5 * 60000).toISOString();
+    writeFileSync(path.join(w.outDir, `restart-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: at, finishedAt: at, ok: false, deferred: { held: 1, heldAgents: ["rn-a"], running: 0, leads: [{ team: "efi", lane: "godot", leadId: "rn-lead-godot", heldAgents: ["rn-a"] }], unresolved: [] } }));
+    const envs = [];
+    const r = await w.run({}, [], { runVs: (args, env) => { envs.push(env); return { ok: true }; } });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.equal(envs.length, 2, "one log + one send");
+    assert.ok(envs.every((e) => e && e.VIBESQUAD_HOME === w.outDir && e.VIBESQUAD_PORT === "4290"), JSON.stringify(envs.map((e) => e && { h: e.VIBESQUAD_HOME, p: e.VIBESQUAD_PORT })));
+  } finally { await w.cleanup(); }
+});
+
 test("--kill-background needs the owner's per-run OK: an Overlord or any agent shell is refused; the owner's shell passes and overrides the drain guard", async () => {
   const { commandRestart, assertKillBackgroundOwner } = await import("../cli/vs.mjs");
   const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];

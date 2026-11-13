@@ -264,7 +264,7 @@ export function runVs(args, env = process.env) {
   return r.status === 0 ? { ok: true } : { ok: false, error: String(r.error?.message || r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
 }
 const loadCoord = () => import('../server/restart-coord.mjs');
-const defaultDeps = { coord: loadCoord, runVs: (args) => runVs(args, process.env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
+const defaultDeps = { coord: loadCoord, runVs: (args, env = process.env) => runVs(args, env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
 
 // ---- detection -----------------------------------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
@@ -419,9 +419,18 @@ async function doneBroadcast(d, outDir, result, step) {
   }
 }
 
+/** `vs restart` runs us via WMI, which drops its env: restore what it passed as flags (VIBESQUAD_HOME, R2 L2 VIBESQUAD_PORT). */
+export function applyLaunchEnv(opts, env = process.env) {
+  if (opts.vsHome) env.VIBESQUAD_HOME = opts.vsHome;
+  if (Number.isInteger(opts.port) && opts.port > 0) env.VIBESQUAD_PORT = String(opts.port);
+  return env;
+}
+
 // ---- the run -------------------------------------------------------------------------------------------------------
 export async function restartRuntime(opts, deps = {}, env = process.env, log = (line) => console.log(line)) {
-  const d = { ...defaultDeps, ...deps };
+  // R2 L2: D3's vs log/send run with restartRuntime's env (the WMI child's restored VIBESQUAD_HOME/PORT), not a bare process.env.
+  const injectedRunVs = deps.runVs ?? defaultDeps.runVs;
+  const d = { ...defaultDeps, ...deps, runVs: (args) => injectedRunVs(args, env) };
   opts = { resumeVerifySec: 90, ...opts };
   const outDir = opts.outDir ?? vsHome(env);
   const configDir = opts.configDir ?? desktopConfigDir(env);
@@ -709,7 +718,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   let opts;
   try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`restart-runtime: ${e.message}`); process.exit(2); }
-  if (opts.vsHome) process.env.VIBESQUAD_HOME = opts.vsHome; // `vs restart` runs us via WMI, which drops its env
+  applyLaunchEnv(opts, process.env); // `vs restart` runs us via WMI, which drops its env
   const log = (line) => { console.log(line); if (opts.log) { try { appendFileSync(opts.log, line + '\n'); } catch { /* console only */ } } };
   const r = await restartRuntime(opts, {}, process.env, log);
   if (r.dryRun) console.log(JSON.stringify(r.plan, null, 2));
