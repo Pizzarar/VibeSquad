@@ -79,7 +79,7 @@ export async function lastAssistantMessage(runner, id) {
 }
 
 /**
- * deps: rootDir, baseHome, sendMessage(id, text), listAgents() (live snapshots), getAgent(id), lastMessage(id),
+ * deps: rootDir, baseHome, sendMessage(id, text, opts?) (opts.steerOnly: resolves { delivered: false } when dropped), listAgents() (live snapshots), getAgent(id), lastMessage(id),
  * currentStatus(id) (the runner's status NOW, not the event's), log({teamId, laneId, agent, text}), getThresholds(agent).
  * Returns { observeWorker, evaluateWorker, endEpisode, findLead, marks }.
  *
@@ -196,11 +196,18 @@ export function createWorkerContextGuard(deps = {}) {
     if (used >= softTokens && !marks[worker.id]?.soft) {
       if (!(await runningNow(worker.id))) return { stage: "not-running", usedTokens: used }; // the event's turn is over (replay / race): no input
       setMark(worker.id, "soft", new Date().toISOString());
+      let sent;
       try {
-        await sendMessage(worker.id, WORKER_WRAP_NUDGE); // default activeTurnBehavior 'steer': joins the running turn
+        // steerOnly (idea-169): the runner joins the worker's open turn or drops the nudge; it can never start or resume one.
+        sent = await sendMessage(worker.id, WORKER_WRAP_NUDGE, { steerOnly: true });
       } catch (e) {
         setMark(worker.id, "soft", null); // not delivered: the next fresh usage event retries
         throw e;
+      }
+      if (sent?.delivered === false) {
+        setMark(worker.id, "soft", null); // the turn ended before the nudge landed: no input, no lead ping; the next fresh usage retries
+        episodes.delete(worker.id);
+        return { stage: "not-running", usedTokens: used, dropped: sent.reason ?? "dropped" };
       }
       episode.softFired = true;
       lead = await findLead(worker);

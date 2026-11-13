@@ -160,7 +160,11 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
       return {
         pid: child.pid, // the runner probes this tree for background work before an after-turn park
         ready, // a prompt-less resume reads `starting` until this settles (see CLAUDE_READY_SETTLE_MS)
-        send(text, { images = [] } = {}) {
+        // True while a send would merge into an open turn (none after an interrupt: that turn is ending).
+        steerable() { return pending > 0 && !interrupted && !stopped; },
+        // opts.steerOnly (idea-169): merge into the open turn or do nothing (returns false); never opens a turn of its own.
+        send(text, { images = [], steerOnly = false } = {}) {
+          if (steerOnly && !(pending > 0 && !interrupted && !stopped)) return false;
           // A send into an open, non-interrupted turn merges into it (the CLI emits ONE result for the merged turn), so
           // it must not open another slot. Only a fresh turn (none open) or one after an interrupt/cancel opens its own.
           if (interrupted || pending === 0) {
@@ -173,6 +177,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
             ? [...images.map((i) => ({ type: 'image', source: { type: 'base64', media_type: i.mimeType, data: i.data } })), { type: 'text', text }]
             : text;
           stdin({ type: 'user', message: { role: 'user', content } });
+          return true;
         },
         // Interrupts the current turn only; prompts already written to stdin still run (the ACP adapter drops its queue).
         cancel() {

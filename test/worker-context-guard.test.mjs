@@ -31,12 +31,14 @@ function makeRunner() {
   const timelines = new Map();
   const listeners = new Set();
   const failSendTo = new Set();
+  const dropSteerTo = new Set(); // the runner answers a steerOnly send with { delivered: false } (its turn ended first)
   return {
     agents,
     sent,
     cancelled,
     timelines,
     failSendTo,
+    dropSteerTo,
     subscribeEvents(l) {
       listeners.add(l);
       return () => listeners.delete(l);
@@ -50,9 +52,11 @@ function makeRunner() {
       if (labels) a.labels = { ...labels };
       if (name) a.title = name;
     },
-    async sendAgentPrompt(id, text) {
+    async sendAgentPrompt(id, text, opts = {}) {
       if (failSendTo.has(id)) throw new Error(`send to ${id} failed`);
-      sent.push({ id, text });
+      if (opts.steerOnly && dropSteerTo.has(id)) return { queued: false, delivered: false, reason: "idle" };
+      sent.push({ id, text, ...(opts.steerOnly ? { steerOnly: true } : {}) });
+      return opts.steerOnly ? { queued: false, delivered: true, steer: true } : undefined;
     },
     async createAgent() {
       throw new Error("the worker guard must never spawn");
@@ -490,4 +494,40 @@ test("a failed worker send is not marked (the next fresh usage event retries); a
   w.stop();
   assert.deepEqual(to(r, "rn-w").map((s) => s.text), [WORKER_WRAP_NUDGE]);
   assert.equal(to(r, "rn-lead").length, 0);
+});
+
+test("idea-169: the wrap-up goes out steer-only (it can never start a turn); lead pings stay plain sends that wake the lead", async () => {
+  const { rootDir } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-w", WORKER_HARD_DEFAULT + 1);
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w"), [{ id: "rn-w", text: WORKER_WRAP_NUDGE, steerOnly: true }]);
+  const pings = to(r, "rn-lead");
+  assert.equal(pings.length, 2, "soft + hard lead pings");
+  assert.ok(pings.every((p) => !p.steerOnly), "lead pings are plain sends");
+});
+
+test("idea-169: a wrap-up the runner drops (the turn ended first) pings no lead, leaves no mark, and the next fresh running usage retries", async () => {
+  const { rootDir, home } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  r.dropSteerTo.add("rn-w");
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-w", WORKER_SOFT_DEFAULT + 1);
+  await tick();
+  assert.deepEqual(r.sent, [], "dropped nudge: no input recorded, no lead ping");
+  const file = workerGuardMarksPath(home);
+  assert.equal(existsSync(file) ? JSON.parse(readFileSync(file, "utf8"))["rn-w"]?.soft : undefined, undefined, "soft mark rolled back");
+  assert.equal(metrics(home).filter((e) => /worker-context/.test(e.text)).length, 0, "no metric for a dropped nudge");
+  r.dropSteerTo.delete("rn-w");
+  r.usage("rn-w", WORKER_SOFT_DEFAULT + 2);
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w").map((s) => s.text), [WORKER_WRAP_NUDGE]);
+  assert.equal(to(r, "rn-lead").length, 1);
 });
