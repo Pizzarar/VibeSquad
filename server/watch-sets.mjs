@@ -194,7 +194,7 @@ export function classifyItem(item, set, ctx) {
     if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text };
     // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
     // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
-    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText) return { phase: o.status || "idle", state: "done", report: o.finalText };
+    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText && (o.activeAt ?? -Infinity) >= floor) return { phase: o.status || "idle", state: "done", report: o.finalText };
     if (o.archived) return { phase: "archived", state: "stalled", reason: "archived" };
     if (o.status === "closed") return { phase: "closed", state: "stalled", reason: o.lost || o.resumable ? "lost" : "exited" };
     if (o.status === "error") return { phase: "error", state: "stalled", reason: "error" };
@@ -474,7 +474,10 @@ export function createWatchEngine({
     if (o.status !== st) {
       o.status = st;
       o.statusSince = t;
-      if (st === "running" || st === "initializing") o.finalText = "";
+      if (st === "running" || st === "initializing") {
+        o.finalText = "";
+        o.activeAt = t; // a turn ran: only text from a turn after the set was created / the latest turn start may count as the report
+      }
     }
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
@@ -509,6 +512,7 @@ export function createWatchEngine({
       if (ev.kind === "turn_started" && ev.agentId) {
         const o = obsFor(String(ev.agentId));
         o.turnStartedAt = t;
+        o.activeAt = t;
         o.attention = false;
         o.finalText = "";
       }

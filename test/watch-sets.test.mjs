@@ -375,6 +375,58 @@ test("unit-watch-false-stall-2 A: idle after a turn with a final assistant messa
   }
 });
 
+test("unit-watch-false-stall-2 A (review H1): round 1's final text does not complete a set created after it, even when tick() runs before the re-prompt's turn_started", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    let text = "round 1 report";
+    const { engine, delivered } = engineFor(sb, { clock, lastMessage: async () => text });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    clock.t = T0 + 5 * MIN;
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+    await engine.tick(); // before the re-prompt's turn_started: the old text must not count
+    assert.equal(delivered.length, 0);
+    assert.equal(engine.get(id).items[0].state, "waiting");
+    clock.t += MIN;
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    text = "round 2 report";
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].text, /round 2 report/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test(
+  "unit-watch-false-stall-2 A (review H2): a user_message after the last assistant message makes the watch's final text empty (stale), not done",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    let entries = [{ item: { type: "assistant_message", text: "old report" } }, { item: { type: "user_message", text: "fix round" } }];
+    const h = await pluginHarness(sb, agents, { timelineFor: () => entries });
+    try {
+      h.watch.onRunnerEvent(agentEv("w-1", "running"));
+      await h.watch.tick();
+      assert.equal(h.watch.get(id).items[0].state, "waiting", "stale text before the user message is not a report");
+      entries = [{ item: { type: "user_message", text: "fix round" } }, { item: { type: "assistant_message", text: "new report" } }];
+      h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" }); // re-read
+      await h.watch.tick();
+      assert.equal(h.watch.get(id).items[0].state, "done");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
 test("unit-watch-false-stall-2 A: an idle worker with no final message still stalls idle-no-report", async () => {
   const sb = sandbox();
   try {
