@@ -1692,6 +1692,7 @@ test(
       ["fl-1", mk("fl-1", {}, { role: "former-lead" })],
       ["fb-1", mk("fb-1", {}, { role: "former-brainstorm" })],
       ["w-fail", mk("w-fail")],
+      ["w-noverdict", mk("w-noverdict")],
       ["w-unmerged", mk("w-unmerged")],
       ["w-unknown", mk("w-unknown")],
       ["w-grace", mk("w-grace")],
@@ -1712,7 +1713,7 @@ test(
       writeFileSync(
         join(vsHome, "teams", "vibesquad", "log.jsonl"),
         ["w-ok", "w-ok-other-lane", "w-unmerged", "w-unknown"].map((id) => line(id, "PASS", 60)).join("") +
-          line("w-fail", "FAIL: broke", 60) + line("w-grace", "PASS", 5) + line("w-running", "PASS", 60),
+          line("w-fail", "FAIL: broke", 60) + line("w-noverdict", "NO-VERDICT: reviewer wrote no verdict line", 60) + line("w-grace", "PASS", 5) + line("w-running", "PASS", 60),
         "utf8",
       );
       const dry = await h.sweepDoneWorkersReport({ now });
@@ -1723,7 +1724,7 @@ test(
       assert.deepEqual(dry.archive.map((i: any) => i.id).sort(), ["w-ok", "w-ok-other-lane", "w-ok-squad2"]);
       assert.deepEqual(dry.byLane, { vibesquad: { vibesquad: ["w-ok"], "bug-chaser": ["w-ok-other-lane"] }, squad2: { "squad2-lane": ["w-ok-squad2"] } });
       const ids = (r: string) => dry.kept[r].map((i: any) => i.id);
-      assert.deepEqual(ids("fail"), ["w-fail"]);
+      assert.deepEqual(ids("fail"), ["w-fail", "w-noverdict"], "NO-VERDICT is kept like FAIL (idea-177 M1)");
       assert.deepEqual(ids("unmerged"), ["w-unmerged"]);
       assert.deepEqual(ids("unknown-branch"), ["w-unknown"]);
       assert.deepEqual(ids("in-grace"), ["w-grace"]);

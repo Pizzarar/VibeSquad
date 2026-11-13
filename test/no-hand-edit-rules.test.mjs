@@ -18,10 +18,10 @@ const VS = join(ROOT, "cli/vs.mjs");
 export const HAND_EDIT = [
   /\b(?:fill|fill in|complete)\s+(?:in\s+)?the\s+judgment\b/i,
   /\b(?:write|put|add|type)\s+(?:your\s+)?judgment\s+(?:in|into|to)\s+the\s+(?:packet|handoff)\b/i,
-  /(?<!never\s)(?<!not\s)(?<!n't\s)(?<![-\w])(?:edit|open|modify|update)\s+(?:the\s+|your\s+)?(?:handoff\s+)?packet\b/i,
+  /(?<!never\s)(?<!not\s)(?<!n't\s)(?<!never\shand-)(?<!not\shand-)(?<!n't\shand-)\b(?:hand-)?(?:edit|open|modify|update)\s+(?:the\s+|your\s+)?(?:handoff\s+)?packet\b/i,
   /\bwrite\s+(?:your\s+)?packet\s+judgment\b/i,
   // negated forms ("never edit ~/.vibesquad", "never hand-edit files under ~/.vibesquad") are the rule itself, not a violation
-  /(?<!never\s)(?<!not\s)(?<!n't\s)(?<![-\w])(?:edit|open|modify|write\s+(?:to|into)|append\s+to)\s+(?:the\s+)?(?:files?\s+(?:under\s+|in\s+)?)?~\/\.vibesquad\b/i,
+  /(?<!never\s)(?<!not\s)(?<!n't\s)(?<!never\shand-)(?<!not\shand-)(?<!n't\shand-)\b(?:hand-)?(?:edit|open|modify|write\s+(?:to|into)|append\s+to)\s+(?:the\s+)?(?:files?\s+(?:under\s+|in\s+)?)?~\/\.vibesquad\b/i,
 ];
 export function findHandEdit(text) {
   const hits = [];
@@ -59,6 +59,8 @@ test("audit positive control: catches planted bad phrases, allows the vs verb ph
     "write your packet Judgment first",
     "Please edit the packet before handoff",
     "open ~/.vibesquad/teams/x/packet.md",
+    "hand-edit the packet before handoff",
+    "Then hand-edit ~/.vibesquad/teams/x/packet.md",
   ]) assert.ok(findHandEdit(s).length > 0, s);
   for (const s of [
     "run `vs handoff --judgment-file <file>` (or `--judgment -`); never edit ~/.vibesquad files by hand",
