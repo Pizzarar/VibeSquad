@@ -511,7 +511,7 @@ test("idea-169: the wrap-up goes out steer-only (it can never start a turn); lea
   assert.ok(pings.every((p) => !p.steerOnly), "lead pings are plain sends");
 });
 
-test("idea-169: a wrap-up the runner drops (the turn ended first) pings no lead, leaves no mark, and the next fresh running usage retries", async () => {
+test("idea-169: a dropped steer-only wrap-up still fires the soft rung: lead pinged (nudge not delivered), mark kept, no worker re-nudge", async () => {
   const { rootDir, home } = makeEnv();
   const r = makeRunner();
   r.agents.set("rn-lead", lead("rn-lead"));
@@ -520,14 +520,40 @@ test("idea-169: a wrap-up the runner drops (the turn ended first) pings no lead,
   const w = startTokenWatcher({ runner: r, rootDir });
   r.usage("rn-w", WORKER_SOFT_DEFAULT + 1);
   await tick();
-  assert.deepEqual(r.sent, [], "dropped nudge: no input recorded, no lead ping");
+  assert.deepEqual(to(r, "rn-w"), [], "dropped nudge: no input reached the worker");
+  const pings = to(r, "rn-lead");
+  assert.equal(pings.length, 1, "the lead still gets the soft ping");
+  assert.ok(!pings[0].steerOnly, "the lead ping is a plain send");
+  assert.match(pings[0].text, /W-rn-w \(rn-w\) at 150k: wrap-up nudge not delivered \(idle\); spawn a fresh worker from its final note/);
   const file = workerGuardMarksPath(home);
-  assert.equal(existsSync(file) ? JSON.parse(readFileSync(file, "utf8"))["rn-w"]?.soft : undefined, undefined, "soft mark rolled back");
-  assert.equal(metrics(home).filter((e) => /worker-context/.test(e.text)).length, 0, "no metric for a dropped nudge");
+  assert.ok(JSON.parse(readFileSync(file, "utf8"))["rn-w"]?.soft, "soft mark kept");
+  const m = metrics(home).filter((e) => /worker-context/.test(e.text));
+  assert.equal(m.length, 1);
+  assert.match(m[0].text, /worker-context soft rn-w 150k .* \(nudge dropped: idle\)/);
   r.dropSteerTo.delete("rn-w");
-  r.usage("rn-w", WORKER_SOFT_DEFAULT + 2);
+  r.usage("rn-w", WORKER_SOFT_DEFAULT + 2); // fresh usage below hard: the soft rung already fired, nothing repeats
   await tick();
   w.stop();
-  assert.deepEqual(to(r, "rn-w").map((s) => s.text), [WORKER_WRAP_NUDGE]);
-  assert.equal(to(r, "rn-lead").length, 1);
+  assert.deepEqual(to(r, "rn-w"), [], "no retry nudge to the worker");
+  assert.equal(to(r, "rn-lead").length, 1, "no second soft ping");
+});
+
+test("idea-169: soft nudge dropped, still running past hard in the same episode: the lead gets the hard ping too (ACP-style worker)", async () => {
+  const { rootDir } = makeEnv();
+  const r = makeRunner();
+  r.agents.set("rn-lead", lead("rn-lead"));
+  r.agents.set("rn-w", worker("rn-w"));
+  r.timelines.set("rn-w", ["still going"]);
+  r.dropSteerTo.add("rn-w");
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-w", WORKER_SOFT_DEFAULT + 1);
+  await tick();
+  r.usage("rn-w", WORKER_HARD_DEFAULT + 1);
+  await tick();
+  w.stop();
+  assert.deepEqual(to(r, "rn-w"), [], "the worker never got an input");
+  const pings = to(r, "rn-lead").map((s) => s.text);
+  assert.equal(pings.length, 2, "soft + hard");
+  assert.match(pings[0], /wrap-up nudge not delivered/);
+  assert.match(pings[1], /and still running: respawn fresh now/);
 });

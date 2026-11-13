@@ -204,15 +204,18 @@ export function createWorkerContextGuard(deps = {}) {
         setMark(worker.id, "soft", null); // not delivered: the next fresh usage event retries
         throw e;
       }
-      if (sent?.delivered === false) {
-        setMark(worker.id, "soft", null); // the turn ended before the nudge landed: no input, no lead ping; the next fresh usage retries
-        episodes.delete(worker.id);
-        return { stage: "not-running", usedTokens: used, dropped: sent.reason ?? "dropped" };
-      }
+      // A dropped nudge (no open turn to join, e.g. its turn just ended) still counts as the soft rung: the mark stays and the
+      // lead is pinged (that ping goes to the lead, it never wakes the worker), so the hard rung can follow in this episode.
+      const dropped = sent?.delivered === false ? String(sent.reason ?? "dropped") : null;
       episode.softFired = true;
       lead = await findLead(worker);
-      const pinged = await notifyLead(lead, `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrapping; spawn a fresh worker from its final note.`);
-      metric(worker, `worker-context soft ${worker.id} ${kTokens(used)} (soft ${kTokens(softTokens)}) lead=${lead?.id ?? "none"}${lead && !pinged ? " (ping failed)" : ""}`);
+      const pinged = await notifyLead(
+        lead,
+        dropped
+          ? `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrap-up nudge not delivered (${dropped}); spawn a fresh worker from its final note.`
+          : `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrapping; spawn a fresh worker from its final note.`,
+      );
+      metric(worker, `worker-context soft ${worker.id} ${kTokens(used)} (soft ${kTokens(softTokens)}) lead=${lead?.id ?? "none"}${dropped ? ` (nudge dropped: ${dropped})` : ""}${lead && !pinged ? " (ping failed)" : ""}`);
       fired.push("soft");
     }
 
