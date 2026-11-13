@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import {
   LESSONS_BEGIN,
   LESSONS_END,
+  STANDING_RULES,
   appendLesson,
   readLessons,
   renderLessonsDigest,
@@ -195,5 +196,20 @@ describe("lessons · docs/LESSONS.md catalog", () => {
     // BOM lesson
     assert.match(text, /BOM/i);
     assert.match(text, /Set-Content|writeFileSync/i);
+  });
+});
+
+describe("coordinated drain standing rule (PLAN_COORDINATED_DRAIN D0)", () => {
+  it("is a standing rule (injected into every role), <=240 chars, names the drain handshake and the owner gate", () => {
+    const rule = STANDING_RULES.find((r) => r.startsWith("Shared-machine actions"));
+    assert.ok(rule, "rule present");
+    assert.ok(rule.length <= 240, `${rule.length} chars`);
+    assert.match(rule, /vs restart, full-suite slot, runtime sync/);
+    assert.match(rule, /holders' leads to drain/);
+    assert.match(rule, /`drained`/);
+    assert.match(rule, /`<action>-done`/);
+    assert.match(rule, /No timer retries/);
+    assert.match(rule, /`--kill-background` only with the owner's per-run OK/);
+    assert.ok(renderLessonsDigest({ storePath: tempStore() }).includes(`- ${rule}`), "rendered into the injected digest");
   });
 });

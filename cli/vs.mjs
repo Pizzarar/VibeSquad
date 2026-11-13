@@ -51,6 +51,7 @@ import {
   resolveLeadWinner,
   whoCandidate,
 } from "../server/identity.mjs";
+import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
@@ -521,7 +522,7 @@ Usage:
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]   hand the lane's lead to a successor, or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy)
-  vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s; background work still running then defers the restart unless --kill-background); result in ~/.vibesquad/restart-<ts>.json
+  vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -665,8 +666,8 @@ function laneMembers(agents, team) {
 }
 
 // Runner agents live in the runner's own logs: shape them as agent rows.
-function listAgentsViaRunner() {
-  return listRunnerAgentsSync().map((a) => ({
+function listAgentsViaRunner(env = process.env) {
+  return listRunnerAgentsSync({ env }).map((a) => ({
     id: a.id,
     name: a.title,
     title: a.title,
@@ -2541,7 +2542,7 @@ function commandMcp(flags) {
  * the env's home (VIBESQUAD_HOME, else USERPROFILE/HOME + .vibesquad). The env is the only source: an empty env has none.
  */
 export function ownerProofFromEnv(env = process.env) {
-  if (String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim()) return false;
+  if (String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim()) return false;
   if (String(env.VS_AGENT_TOKEN ?? "").trim()) return false; // R1 M1: a leftover token with the id cleared is still an agent shell
   const base = String(env.VIBESQUAD_HOME || "").trim() || (env.USERPROFILE || env.HOME ? path.join(String(env.USERPROFILE || env.HOME), ".vibesquad") : "");
   if (!base) return false;
@@ -2562,7 +2563,7 @@ async function verifyAgentForRestart({ id, token }, env = process.env) {
  * inject the proofs.
  */
 export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = process.env, { hasOwnerProof = ownerProofFromEnv, verify = (c) => verifyAgentForRestart(c, env) } = {}) {
-  const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
+  const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
   if (!id || !isRunnerId(id)) {
     if (!hasOwnerProof(env)) throw new Error("vs restart: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Overlord may restart the runtime.");
     return;
@@ -2589,9 +2590,21 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
   }
 }
 
+/**
+ * --kill-background kills suites and builds other agents left running, so it needs the owner's per-run OK: only the
+ * owner's shell (owner proof, no agent identity) may pass it. The Overlord may restart, but not with it.
+ */
+export function assertKillBackgroundOwner(env = process.env, hasOwnerProof = ownerProofFromEnv) {
+  // R2 L1: trim each var before ||, so a blank VS_AGENT_ID (" ") cannot mask PASEO_AGENT_ID or VS_AGENT_TOKEN.
+  const agentShell = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN"].some((k) => String(env[k] ?? "").trim());
+  if (agentShell || !hasOwnerProof(env)) {
+    throw new Error("vs restart --kill-background: needs the owner's per-run OK; only the owner's shell may pass it (an Overlord may not). Ask the holders' leads to drain instead, or ask the owner to run it.");
+  }
+}
+
 /** X1b: an owner verb (pair, devices, open, archive --sweep, restart) never runs from an agent shell: an agent must not present the owner's local token. */
 export function assertOwnerShell(what, env = process.env) {
-  const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
+  const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
   if (id) throw new Error(`${what} is an owner verb; it never runs from an agent shell (VS_AGENT_ID=${id}). Ask the owner.`);
   if (String(env.VS_AGENT_TOKEN ?? "").trim()) throw new Error(`${what} is an owner verb; it never runs from an agent shell (VS_AGENT_TOKEN is set). Ask the owner.`);
 }
@@ -2615,12 +2628,24 @@ function assertSafeLaunchArg(a) {
  * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
  * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
  */
-export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify } = {}) {
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, now = Date.now } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
   if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  // D2 retry guard (docs/PLAN_COORDINATED_DRAIN.md): within 30 min of a deferral, every lead it named must have logged
+  // restart-feedback 'drained restart' first. --kill-background (owner only, above) is the owner's override.
+  if (!flags.dryRun && !flags.killBackground) {
+    // R2 M2: the runner's agent list (the `vs who lead` source) lets a drain by the lane's current lead count, and skips
+    // a lane with no live lead any more; read lazily, only when a named lead has not drained.
+    const g = drainGuard(vsHome, { now: now(), agents: () => listAgents(env) });
+    if (g.pending.length) throw new Error(drainGuardMessage(g, now()));
+    const skip = drainSkippedNote(g.skipped);
+    if (skip) process.stdout.write(`vs restart: drain guard ${skip}
+`);
+  }
   const logFile = path.join(vsHome, "logs", `restart-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
   const args = [script, "--log", logFile];
   if (env.VIBESQUAD_HOME) args.push("--vs-home", vsHome, "--home", path.join(vsHome, "runner"), "--out-dir", vsHome);

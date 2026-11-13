@@ -11,6 +11,7 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Stakes routing | "top model for crypto/auth", "tierA" | docs/PLAN_ROUTING_BY_STAKES.md:13; `server/stakes-ladder.mjs:8,11`; `--stakes` on `vs spawn` (`cli/vs.mjs:515`) | @per |
 | Release handoff to Release Desk | "release beta", "release stable" | R10 `server/profiles.mjs:41`; docs/PLAN_RELEASE_DESK.md:1 | @rele |
 | Worktree create | "work in a worktree for unit X" | `vs worktree create` (`cli/vs.mjs:2474`); `server/team-worktrees.mjs:125`; STANDING_RULES `server/lessons.mjs:159` | @bug |
+| Coordinated drain before restart / suite slot / runtime sync | "restart the runtime", "run the full suite", "sync the runtime" | STANDING_RULES `server/lessons.mjs:169`; `server/restart-coord.mjs`; `cli/vs.mjs:2630` (`commandRestart`); docs/PLAN_COORDINATED_DRAIN.md:1 | @per |
 | Worktree sweep | "clean up merged worktrees" | `vs worktree sweep` (`cli/vs.mjs:2486`); `server/team-worktrees.mjs:169` | @bug |
 | Inbox add | "queue that", "put it in the inbox" | `cli/vs.mjs:505` (`vs inbox add`); R11 `server/profiles.mjs:42` | @bug |
 | Inbox triage (merge/bounce/park) | "merge those cards", "bounce to @ui" | `cli/vs.mjs:507` (`vs inbox triage`); docs/PLAN_INBOX_SWEEP_1108.md:1 | @bug |
