@@ -90,7 +90,7 @@ function fakeRunner(turns, workerId) {
     },
     async createAgent({ config, prompt, labels }) {
       const id = `rn-dig-${agents.size}`;
-      agents.set(id, { id, title: config.title, cwd: config.cwd, provider: config.provider, status: 'idle', labels: { ...labels }, archivedAt: null, createdAt: new Date().toISOString() });
+      agents.set(id, { id, title: config.title, cwd: config.cwd, provider: config.provider, modeId: config.modeId, status: 'idle', labels: { ...labels }, archivedAt: null, createdAt: new Date().toISOString() });
       timelines.set(id, []);
       push(id, { type: 'user_message', text: prompt });
       void playTurn(id);
@@ -185,12 +185,14 @@ test('idea-218: primary EOF through its retries -> respawned ONCE on the failove
   assert.deepEqual(r.archived, [primary.id, alt.id], 'each archived exactly once, the primary before the alternate spawned');
 });
 
-test('idea-218: the alternate skips capped providers (claude capped -> Audit - DSF on opencode)', async () => {
+test('idea-218: the alternate skips capped providers; claude capped -> Mechanical - DSF (build), never plan-mode Audit - DSF', async () => {
   const r = await run([...EXHAUST, 'verdict'], 'rn-w-skip', { cappedProviders: ['claude'] });
   const ids = r.digestIds();
   assert.equal(ids.length, 2);
   const alt = r.agents.get(ids[1]);
-  assert.equal(alt.labels.profile, 'Audit - DSF');
+  // L1: the failover chain's opencode pick is Audit - DSF (plan mode: no tool execution, so no `vs log done --digest`).
+  assert.equal(alt.labels.profile, 'Mechanical - DSF', 'the executing same-model opencode profile');
+  assert.equal(alt.modeId, 'build', 'a mode that can run the vs command');
   assert.equal(alt.provider, 'opencode');
   assert.deepEqual(r.entries.map((e) => e.text), ['PASS: real verdict for rn-w-skip']);
   assert.deepEqual(r.archived, ids);
@@ -204,6 +206,17 @@ test('idea-218: the alternate also fails through its retries -> no third digest,
   assert.equal(r.entries.length, 1, 'one entry for the turn');
   assert.match(r.entries[0].text, /^UNVERIFIED \(digest failed\): PASS: built thing/);
   assert.deepEqual(r.archived, ids, 'each archived exactly once');
+});
+
+test('idea-218 L1: a plan/read-only pick is swapped for an executing worker profile on its provider, or skipped when it has none', async () => {
+  const { digestCanExecute, executingDigestProfileOn } = await import('../server/hooks/agent-duties.ts');
+  assert.equal(digestCanExecute({ modeId: 'plan' }), false);
+  assert.equal(digestCanExecute({ modeId: 'read-only' }), false);
+  assert.equal(digestCanExecute({ modeId: 'build' }), true);
+  assert.equal(digestCanExecute({ modeId: 'auto' }), true);
+  assert.equal(executingDigestProfileOn('opencode', 'deepseek/deepseek-flash', []).name, 'Mechanical - DSF', 'same model preferred over Work Order - DSP');
+  const planOnly = [{ name: 'Audit - CX', role: 'worker', provider: 'codex', model: 'gpt-x', modeId: 'read-only' }];
+  assert.equal(executingDigestProfileOn('codex', 'gpt-x', planOnly), null, 'a provider with only read-only profiles has no digest substitute');
 });
 
 test('M1: a second waitForFinish after a resend does not return on the previous turn (floor past the reported turn)', async () => {

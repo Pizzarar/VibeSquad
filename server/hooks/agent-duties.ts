@@ -87,6 +87,30 @@ export interface DigestSpawnConfig {
   featureValues?: Record<string, any>;
 }
 
+/** Profile modes that forbid tool execution (opencode/claude `plan`, codex `read-only`): a digest there can't run `vs log`. */
+const NON_EXECUTING_MODE = /^(plan|read-?only)$/i;
+
+/** idea-218 L1: can a digest on `p` execute its `vs log done --digest` command (its mode allows tool execution)? */
+export function digestCanExecute(p: { modeId?: string } | null | undefined): boolean {
+  return !!p && !NON_EXECUTING_MODE.test(String(p.modeId ?? "").trim());
+}
+
+/**
+ * An executing worker profile on provider family `family` (stored profiles first, then the default pack), preferring
+ * `model` (the read-only profile's own model): the digest substitute for a plan-mode failover pick. null if none.
+ */
+export function executingDigestProfileOn(family: string, model: string | undefined, stored: StoredProfile[] = loadStoredProfiles()): StoredProfile | null {
+  const seen = new Set<string>();
+  const pool: StoredProfile[] = [];
+  for (const p of [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])]) {
+    if (!p?.name || !p.provider || seen.has(p.name)) continue;
+    seen.add(p.name);
+    if (normalizeProviderFamily(p.provider) !== family || deriveRole(p.name, p.role) !== "worker" || !digestCanExecute(p)) continue;
+    pool.push(p);
+  }
+  return pool.find((p) => model && p.model === model) ?? pool[0] ?? null;
+}
+
 /** The digest create config for `p` (null: the built-in digest defaults), labelled `profile`. */
 export function digestSpawnConfig(p: StoredProfile | null, profile: string): DigestSpawnConfig {
   const provider = p ? `${p.provider}/${p.model}` : DIGEST_PROVIDER;
@@ -1564,17 +1588,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      */
     const alternateDigestProfile = (failedProviders: string[]): StoredProfile | null => {
       const failed = new Set(failedProviders.map((p) => normalizeProviderFamily(p)).filter(Boolean));
+      const skipped = new Set<string>(); // families with no profile that can run the digest's vs command
       const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
-      // Failed and capped families first: isProviderOverQuota reads the first entry that matches a family.
-      const usage: any[] = [
-        ...[...failed].map(exhausted),
-        ...Object.keys(readCappedProviderMap()).map(exhausted),
-        ...(typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : []),
-      ];
-      const fo = resolveProfileWithFailover(DIGEST_PROFILE, loadStoredProfiles(), usage);
-      const alt = fo.failedOver ? (fo.profile as StoredProfile | null) : null;
-      if (!alt?.provider || failed.has(normalizeProviderFamily(alt.provider))) return null;
-      return alt;
+      const stored = loadStoredProfiles();
+      const capped = Object.keys(readCappedProviderMap());
+      const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+      for (;;) {
+        // Failed, skipped and capped families first: isProviderOverQuota reads the first entry that matches a family.
+        const usage: any[] = [...[...failed, ...skipped].map(exhausted), ...capped.map(exhausted), ...quota];
+        const fo = resolveProfileWithFailover(DIGEST_PROFILE, stored, usage);
+        const alt = fo.failedOver ? (fo.profile as StoredProfile | null) : null;
+        const fam = normalizeProviderFamily(alt?.provider);
+        if (!alt?.provider || !fam || failed.has(fam) || skipped.has(fam)) return null;
+        // L1: a plan/read-only profile (Audit - DSF) can't execute `vs log done --digest`: use an executing worker profile
+        // on the same provider instead (same model first: Audit - DSF -> Mechanical - DSF), else try the next provider.
+        const runnable = digestCanExecute(alt) ? alt : executingDigestProfileOn(fam, alt.model, stored);
+        if (runnable) return runnable;
+        skipped.add(fam);
+      }
     };
 
     // ---- Hook 1: before agent.create ---------------------------------------
