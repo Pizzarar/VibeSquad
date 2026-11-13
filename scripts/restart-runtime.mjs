@@ -703,7 +703,14 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     };
     const serverT0 = d.now();
     const serverBootMs = opts.serverBootMs ?? bootMs;
-    const serverDead = () => spawnedServerPid != null && d.now() - serverT0 > 3000 && !d.pidAlive(spawnedServerPid);
+    // The spawned pid may be a launcher that hands off to the real server and exits: its exit alone is not death. Adopt whoever listens
+    // on the port as the server pid; with no listener and a dead launcher keep waiting (the handoff may still be booting) until the deadline.
+    const serverDead = () => {
+      if (spawnedServerPid == null || d.now() - serverT0 <= 3000 || d.pidAlive(spawnedServerPid)) return false;
+      const lp = d.listenerPid(det.port);
+      if (lp != null && lp !== spawnedServerPid && d.pidAlive(lp)) { step('server launcher exited, tracking listener', { launcher: spawnedServerPid, pid: lp }); spawnedServerPid = lp; }
+      return false;
+    };
     const sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
     if (sres !== true) { fail('server start', sres === 'died' ? `server process ${spawnedServerPid} died during start` : `not healthy after ${Math.round(serverBootMs / 1000)}s`); throw new Error('server not healthy'); }
     step('server healthy');
