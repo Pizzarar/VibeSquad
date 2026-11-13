@@ -221,7 +221,8 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         const senderId = isAgent ? caller.id : undefined;
         let activeTurnBehavior = b.activeTurnBehavior;
         if (isAgent && activeTurnBehavior === 'interrupt' && !agentMay(caller, 'cancel', target)) activeTurnBehavior = 'steer';
-        const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior, owner, senderId }); // over a turn cap it queues and answers at once
+        // steerOnly (idea-169): join the open turn or drop ({ delivered: false, reason }); never starts a turn. Any caller may ask: it is strictly weaker.
+        const pos = runner.send(id, b.text, { images: b.images, activeTurnBehavior, owner, senderId, ...(b.steerOnly === true ? { steerOnly: true } : {}) }); // over a turn cap it queues and answers at once
         if (xsquad) {
           // Audit: every cross-Squad input lands in the sender's team log. Never fails the delivered send.
           const to = target.meta?.team ?? target.meta?.labels?.team;

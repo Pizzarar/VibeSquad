@@ -79,7 +79,7 @@ export async function lastAssistantMessage(runner, id) {
 }
 
 /**
- * deps: rootDir, baseHome, sendMessage(id, text), listAgents() (live snapshots), getAgent(id), lastMessage(id),
+ * deps: rootDir, baseHome, sendMessage(id, text, opts?) (opts.steerOnly: resolves { delivered: false } when dropped), listAgents() (live snapshots), getAgent(id), lastMessage(id),
  * currentStatus(id) (the runner's status NOW, not the event's), log({teamId, laneId, agent, text}), getThresholds(agent).
  * Returns { observeWorker, evaluateWorker, endEpisode, findLead, marks }.
  *
@@ -196,16 +196,26 @@ export function createWorkerContextGuard(deps = {}) {
     if (used >= softTokens && !marks[worker.id]?.soft) {
       if (!(await runningNow(worker.id))) return { stage: "not-running", usedTokens: used }; // the event's turn is over (replay / race): no input
       setMark(worker.id, "soft", new Date().toISOString());
+      let sent;
       try {
-        await sendMessage(worker.id, WORKER_WRAP_NUDGE); // default activeTurnBehavior 'steer': joins the running turn
+        // steerOnly (idea-169): the runner joins the worker's open turn or drops the nudge; it can never start or resume one.
+        sent = await sendMessage(worker.id, WORKER_WRAP_NUDGE, { steerOnly: true });
       } catch (e) {
         setMark(worker.id, "soft", null); // not delivered: the next fresh usage event retries
         throw e;
       }
+      // A dropped nudge (no open turn to join, e.g. its turn just ended) still counts as the soft rung: the mark stays and the
+      // lead is pinged (that ping goes to the lead, it never wakes the worker), so the hard rung can follow in this episode.
+      const dropped = sent?.delivered === false ? String(sent.reason ?? "dropped") : null;
       episode.softFired = true;
       lead = await findLead(worker);
-      const pinged = await notifyLead(lead, `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrapping; spawn a fresh worker from its final note.`);
-      metric(worker, `worker-context soft ${worker.id} ${kTokens(used)} (soft ${kTokens(softTokens)}) lead=${lead?.id ?? "none"}${lead && !pinged ? " (ping failed)" : ""}`);
+      const pinged = await notifyLead(
+        lead,
+        dropped
+          ? `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrap-up nudge not delivered (${dropped}); spawn a fresh worker from its final note.`
+          : `${nameOf(worker)} (${worker.id}) at ${kTokens(used)}: wrapping; spawn a fresh worker from its final note.`,
+      );
+      metric(worker, `worker-context soft ${worker.id} ${kTokens(used)} (soft ${kTokens(softTokens)}) lead=${lead?.id ?? "none"}${dropped ? ` (nudge dropped: ${dropped})` : ""}${lead && !pinged ? " (ping failed)" : ""}`);
       fired.push("soft");
     }
 

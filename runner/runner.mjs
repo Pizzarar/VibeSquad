@@ -13,7 +13,7 @@ const META_FIELDS = ['squad', 'team', 'lane', 'role', 'ord', 'profile', 'title',
 
 // Child/provider noise that is not turn progress: it must not refresh `lastEvent` or clear `quiet` (only assistant
 // output, tool activity, status and the like count as a turn still making progress).
-const NON_PROGRESS_EVENTS = new Set(['stderr', 'raw', 'limit']);
+const NON_PROGRESS_EVENTS = new Set(['stderr', 'raw', 'limit', 'steer_dropped']);
 
 // Values that reach a CLI as an argument must never look like a flag.
 export function validateCreate({ model, cwd, meta = {} }) {
@@ -834,7 +834,7 @@ export class Runner {
       if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
       if (e.type === 'parked') parked = e;
       else if (e.type === 'park-drain-refused') refused = e;
-      else if (e.type === 'input') refused = null;
+      else if (e.type === 'input' && !e.steerOnly) refused = null; // a steer-only input joined a running turn: the notice still owes
       else if (e.type === 'exit') return null;
       else if (e.type === 'archive') archived = true;
       else if (e.type === 'unarchive') archived = false;
@@ -900,7 +900,7 @@ export class Runner {
       else if (e.type === 'status') { status = e.status; statusTs = e.ts ?? 0; if (e.status !== 'queued') cut = i; }
     });
     if (status !== 'queued' || archived) return null;
-    const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string');
+    const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string' && !e.steerOnly); // a steer-only input never starts a turn
     if (!inputs.length) return null;
     if (isRetiredMeta(meta)) return null; // retirePredecessors / confirmTakeover only relabel the role (never archive): a former-lead stays dead
     if (this.queueMaxAgeMs > 0 && Date.now() - statusTs > this.queueMaxAgeMs) return null; // stale: a days-old input must not run on a whim
@@ -1110,8 +1110,10 @@ export class Runner {
   // queue and may run over the turn cap (see _fits). opts.senderId: the verified agent that sent it (logged on the input
   // event; the HTTP layer sets it from the caller, never from the body). The log keeps the image count, never the base64 payload.
   // Returns { queued, ahead? }: over the family's turn cap the prompt is logged now and delivered FIFO when a slot frees.
+  // opts.steerOnly: see _sendSteerOnly (never starts, resumes or queues a turn; returns { queued: false, delivered, reason? }).
   send(id, text, opts = {}) {
     const senderId = typeof opts.senderId === 'string' && opts.senderId ? { senderId: opts.senderId } : {};
+    if (opts.steerOnly === true) return this._sendSteerOnly(id, text, opts, senderId);
     let live = this.live.get(id);
     if (live?.configStale && live.inflight === 0 && this._parkableNow(live)) { this.park(id); live = undefined; } // new model/mode/thinking: the next turn runs in a fresh process (one with background work keeps serving: never killed for a config change)
     // A lost agent (its process died in a runner restart) resumes in place on the next send, same id + session.
@@ -1154,6 +1156,34 @@ export class Runner {
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
     else this._admit(job);
     return this.queuePosition(id);
+  }
+
+  // A steer-only send (idea-169: guard/nudge inputs): it joins the agent's OPEN turn or is dropped. It never starts, resumes,
+  // queues or coalesces a turn, never parks for a config change and never interrupts. Dropped -> { queued: false, delivered:
+  // false, reason }: 'not-running' (no live process: parked, lost, exited), 'queued' (its next turn waits in the queue),
+  // 'idle' (no open turn), 'turn-ending' (the adapter has no turn left to join, e.g. after an interrupt). Joined -> { queued:
+  // false, delivered: true, steer: true }. An ACP adapter cannot inject into a running prompt: the steer rides along with the
+  // next real prompt if one is queued, else the adapter drops it when the turn ends (a `steer_dropped` event in the log).
+  _sendSteerOnly(id, text, opts, senderId) {
+    const drop = (reason) => ({ queued: false, delivered: false, reason });
+    const live = this.live.get(id);
+    if (!live && !this.store.exists(id)) throw new Error(`agent ${id} is not running`); // unknown id: same answer as a plain send
+    if (this.queue.some((j) => j.id === id)) return drop('queued');
+    if (!live?.handle) return drop('not-running');
+    if (!(live.inflight > 0)) return drop('idle');
+    if (typeof live.handle.steerable === 'function' && !live.handle.steerable()) return drop('turn-ending');
+    const images = (Array.isArray(opts.images) ? opts.images : []).filter((i) => i && typeof i.data === 'string' && typeof i.mimeType === 'string');
+    this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), steerOnly: true, ...senderId });
+    let joined;
+    try { joined = live.handle.send(text, { ...(images.length ? { images } : {}), steerOnly: true }); } catch (err) {
+      this.store.append(id, 'steer_dropped', { reason: 'send-failed', message: String(err?.message ?? err) });
+      return drop('send-failed');
+    }
+    if (joined === false) { // steerable() said yes in this same tick; kept as a backstop for adapters without it
+      this.store.append(id, 'steer_dropped', { reason: 'turn-ending' });
+      return drop('turn-ending');
+    }
+    return { queued: false, delivered: true, steer: true };
   }
 
   // Starts (or resumes) the job's agent and delivers its text, marking an owner job that begins a fresh turn over the

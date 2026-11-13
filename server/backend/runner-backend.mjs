@@ -791,7 +791,9 @@ export class RunnerBackend {
   /**
    * opts: { senderId (calling agent, for the retired-lead redirect), images: [{ data (base64), mimeType }], activeTurnBehavior:
    * 'steer' (default) | 'interrupt', owner (a human UI/`vs send` turn that jumps the queue), caller ({ id, token }: forwarded to
-   * the runner, which then sets owner/senderId from the verified caller and scopes the send; see X1a) }.
+   * the runner, which then sets owner/senderId from the verified caller and scopes the send; see X1a), steerOnly (idea-169: join
+   * the agent's open turn or drop it; never starts, resumes or revives a turn) }.
+   * Returns the runner's answer for a steerOnly send ({ delivered, reason? }), so the caller learns whether it was dropped.
    */
   async sendAgentPrompt(id, text, opts = {}) {
     const as = "caller" in opts ? { caller: opts.caller } : {};
@@ -809,6 +811,11 @@ export class RunnerBackend {
     if (opts.images?.length) body.images = opts.images;
     if (opts.activeTurnBehavior) body.activeTurnBehavior = opts.activeTurnBehavior;
     if (opts.owner) body.owner = true;
+    if (opts.steerOnly) {
+      body.steerOnly = true;
+      // No revive (an archived worker is not in a turn) and no retry: a steer-only input never brings an agent back.
+      return await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body, as);
+    }
     const post = () => this.rc.request("POST", `/agents/${encodeURIComponent(id)}/input`, body, as);
     // A worker closed by the done-report path (role=worker + vs.auto-archived) is archived but resumable: a follow-up brings it back
     // first, because the runner refuses to resume an archived agent. Retired leads / Buddies and manually archived agents are never revived.

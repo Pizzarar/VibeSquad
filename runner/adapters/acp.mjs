@@ -223,10 +223,24 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       });
 
       let running = false;
+      // A steer-only prompt (idea-169) never runs as a session/prompt of its own: ACP cannot inject into a running prompt,
+      // so leading steer-only items ride along with the next real prompt, and ones left with no real prompt behind them
+      // are dropped when the turn ends (running them would start a new turn).
+      const dropOrphanSteers = () => {
+        if (!queue.length || queue.some((q) => !q.steerOnly)) return;
+        for (const q of queue.splice(0)) emit('steer_dropped', { reason: 'turn-ended', chars: q.text.length });
+      };
+      // True while a send would join work already under way (a prompt in flight or a real one queued).
+      const steerable = () => !failed && !stopped && (promptInFlight || queue.some((q) => !q.steerOnly));
       async function pump() {
-        if (promptInFlight || !queue.length || stopped) return;
+        if (promptInFlight || stopped) return; // a steer queued behind the prompt in flight waits for it to end
+        dropOrphanSteers();
+        if (!queue.length) return;
         promptInFlight = true;
-        const next = queue.shift();
+        const steers = [];
+        while (queue[0]?.steerOnly) steers.push(queue.shift());
+        const real = queue.shift();
+        const next = steers.length ? { text: [...steers.map((q) => q.text), real.text].join('\n\n'), images: [...steers.flatMap((q) => q.images ?? []), ...(real.images ?? [])] } : real;
         let text = next.text;
         if (pendingSystem) { text = `${pendingSystem}\n\n${text}`; pendingSystem = ''; } // ACP has no system slot: lead the first turn with it
         if (!running) {
@@ -269,6 +283,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           emit('turn_done', done);
         } catch (e) { emit('error', { message: e.message }); }
         promptInFlight = false;
+        dropOrphanSteers(); // the prompt ended: a steer-only item with no real prompt behind it must not start the next one
         if (queue.length && !stopped) {
           pump();
         } else if (running) {
@@ -279,10 +294,15 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       return {
         pid: child.pid, // the runner probes this tree for background work before an after-turn park
         ready, // the session handshake: a prompt-less resume reads `starting` until it resolves
-        send(text, { images = [] } = {}) {
+        steerable,
+        // opts.steerOnly (idea-169): joins the running turn or is dropped (returns false now, or a steer_dropped event later);
+        // it never starts a session/prompt of its own.
+        send(text, { images = [], steerOnly = false } = {}) {
           if (failed) throw new Error(`agent session failed to start: ${failed.message}`);
-          queue.push({ text, images });
+          if (steerOnly && !steerable()) return false;
+          queue.push({ text, images, ...(steerOnly ? { steerOnly: true } : {}) });
           ready.then(pump, () => {});
+          return true;
         },
         // Cancel ends the current turn AND drops prompts queued behind it (a cancelled lane must not resume on stale asks).
         // Differs from the claude adapter, whose cancel only interrupts the current turn and lets later prompts run.

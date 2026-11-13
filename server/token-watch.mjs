@@ -95,7 +95,7 @@ export function startTokenWatcher({
     createWorkerContextGuard({
       rootDir,
       baseHome,
-      sendMessage: (id, text) => runner.sendAgentPrompt(id, text),
+      sendMessage: (id, text, opts) => runner.sendAgentPrompt(id, text, opts),
       listAgents: async () => [...live.values()],
       getAgent: async (id) => live.get(id) ?? (await runner.fetchAgent(id).catch(() => null))?.agent ?? null,
       lastMessage: (id) => lastAssistantMessage(runner, id),
