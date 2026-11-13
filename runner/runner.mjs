@@ -194,6 +194,16 @@ export const DEFAULT_TURN_CAPS = { claude: 12, gemini: 4, antigravity: 3, other:
 // owner turns per family at once, so an owner message to a busy Buddy starts within seconds instead of
 // waiting behind the worker backlog. The count is released as each over-cap owner turn ends.
 export const OWNER_OVER_CAP = 2;
+// idea-203: a worker digest (DIGEST_PROFILE + labels.digestFor, both protected meta an agent caller can't set) is a short
+// read-and-log turn the lead's verdict waits on. It is admitted ahead of non-owner, non-digest jobs, and over its family's
+// cap it may start within this many extra digest turns per family (a reserve separate from OWNER_OVER_CAP), so a digest
+// never waits behind a long worker backlog. 0 keeps the priority ordering but no reserve. Released as each such turn ends.
+export const DEFAULT_DIGEST_RESERVE = 1;
+export function digestReserveFromEnv(env = process.env) {
+  const raw = env.VS_RUNNER_DIGEST_RESERVE;
+  const n = Number(raw);
+  return raw !== undefined && raw !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_DIGEST_RESERVE;
+}
 export function turnCapsFromEnv(env = process.env) {
   const caps = { ...DEFAULT_TURN_CAPS };
   for (const f of Object.keys(caps)) {
@@ -238,6 +248,11 @@ export function quietFromEnv(env = process.env) {
 // idea-126: what a turn the runner going away cut (a `vs restart` whose idle wait timed out, a crash) is resumed with, so
 // the agent finishes its work instead of resuming to idle. Logged as an `input` tagged `resume: true` (not an owner line).
 export const CONTINUE_PROMPT = '[VibeSquad runtime] Your previous turn was interrupted by a runtime restart before it finished. Continue where you left off: check what was already done before redoing anything.';
+// A worker digest by its (protected) meta: the same test verifyAgent uses for the digest caller shape.
+export function isDigestMeta(meta) {
+  const { profile, labels } = identityOf(meta ?? {});
+  return profile === DIGEST_PROFILE && !!String(labels?.digestFor ?? '').trim();
+}
 export function providerFamily(provider) {
   const p = PROVIDER_ALIASES[provider] ?? provider;
   if (p === 'claude') return 'claude';
@@ -251,7 +266,7 @@ export class Runner {
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
   // hubLane: (team) -> the Squad's hub lane id (its Overlord's lane). Default: the lane whose id is the team id, the
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
-  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe(), hubLane = (team) => team }) {
+  constructor({ dir, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts') }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe = createBackgroundProbe(), hubLane = (team) => team, digestReserve = digestReserveFromEnv() }) {
     this.store = new LogStore(dir);
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
@@ -274,6 +289,8 @@ export class Runner {
     this.queue = []; // FIFO of jobs waiting for a turn slot or a live-process slot: { id, family, needsTurn, run, ahead }
     this.live = new Map(); // id -> { handle, status, ... } for agents running in THIS process only
     this.overCapOwner = new Map(); // family -> count of owner turns currently running OVER that family's turn cap (released on turn end)
+    this.digestReserve = digestReserve;
+    this.overCapDigest = new Map(); // family -> count of digest turns currently running over that family's turn cap (idea-203)
   }
 
   create({ provider, model, cwd, prompt, systemPrompt, meta = {} }) {
@@ -285,12 +302,12 @@ export class Runner {
     if (prompt) this.store.append(id, 'input', { text: prompt });
     // Over a cap the agent still exists (its log says queued, N ahead) and starts when its turn comes: never refused.
     const job = {
-      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [],
+      id, family: providerFamily(provider), needsTurn: !!prompt, kind: 'create', text: prompt, images: [], digest: isDigestMeta(meta),
       run: () => {
         this._makeRoom(id);
         const cur = this._fold(id)?.meta ?? meta; // a config change while this create sat queued must apply
         const entry = this._start(id, { provider, model: cur.model ?? model, cwd, meta: cur, systemPrompt });
-        if (job.text) { this._noteOwnerOverCap(job, entry); this._deliver(entry, job.text, job.images ?? []); } // job.text: a send may have coalesced into the queued create
+        if (job.text) { this._noteOverCap(job, entry); this._deliver(entry, job.text, job.images ?? []); } // job.text: a send may have coalesced into the queued create
       },
     };
     this._admit(job);
@@ -395,7 +412,7 @@ export class Runner {
           entry.turns++;
           entry.idleProgress = entry.progress;
           turnEnded = true;
-          this._releaseOverCap(entry, 1); // an owner turn that was running over the cap just ended
+          this._releaseOverCap(entry, 1); // an owner/digest turn that was running over the cap just ended
         }
       } else if (type === 'permission') { if (data.phase === 'request') entry.perms.add(data.id); else entry.perms.delete(data.id); }
       else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
@@ -415,7 +432,7 @@ export class Runner {
           if (entry.parked) return; // stopped on purpose; the log already says parked
           entry.status = 'exited';
           entry.inflight = 0;
-          this._releaseOverCap(entry, entry.ownerOverCap ?? 0); // any owner over-cap turns end with the process
+          this._releaseOverCap(entry, Infinity); // any owner/digest over-cap turns end with the process
           clearTimeout(entry.parkTimer);
           this._clearArchive(entry);
           this.store.append(id, 'exit', info);
@@ -516,15 +533,20 @@ export class Runner {
     if (changed) this._pump();
   }
 
-  // Releases up to `n` of an entry's owner over-cap turns from its family's over-cap budget. Idempotent: an entry
-  // with no over-cap turns (or a normal turn ending) releases nothing.
+  // Releases up to `n` of an entry's over-cap turns (digest reserve first, then owner) from its family's over-cap budgets.
+  // Idempotent: an entry with no over-cap turns (or a normal turn ending) releases nothing. n = Infinity releases all.
   _releaseOverCap(entry, n) {
-    const have = entry?.ownerOverCap ?? 0;
-    if (!entry || have <= 0 || !(n > 0)) return;
-    const take = Math.min(have, n);
-    entry.ownerOverCap = have - take;
+    if (!entry || !(n > 0)) return;
     const f = entry.family;
-    this.overCapOwner.set(f, Math.max(0, (this.overCapOwner.get(f) ?? 0) - take));
+    for (const [key, budget] of [['digestOverCap', this.overCapDigest], ['ownerOverCap', this.overCapOwner]]) {
+      const have = entry[key] ?? 0;
+      if (have <= 0) continue;
+      const take = Math.min(have, n);
+      entry[key] = have - take;
+      budget.set(f, Math.max(0, (budget.get(f) ?? 0) - take));
+      n -= take;
+      if (n <= 0) return;
+    }
   }
 
   _fits(job) {
@@ -532,35 +554,52 @@ export class Runner {
     if (job.needsTurn && !(entry?.inflight > 0)) {
       const cap = this.turnCaps[job.family] ?? this.turnCaps.other;
       const running = this._running(job.family);
-      // Over the cap only an OWNER job may start, and only within the +OWNER_OVER_CAP over-cap budget.
-      if (running >= cap && (!job.owner || (this.overCapOwner.get(job.family) ?? 0) >= OWNER_OVER_CAP)) return false;
+      // Over the cap only an OWNER job (within the +OWNER_OVER_CAP budget) or a DIGEST (within the +digestReserve
+      // budget) may start: the family never starts more than cap + OWNER_OVER_CAP + digestReserve turns at once.
+      if (running >= cap && !this._overCapKind(job)) return false;
     }
     return !!entry || this._makeRoom(job.id, { dryRun: true });
   }
 
+  // Which over-cap budget a job may start from when its family is at the cap: 'owner', 'digest' or null (none left / neither).
+  _overCapKind(job) {
+    if (job.owner && (this.overCapOwner.get(job.family) ?? 0) < OWNER_OVER_CAP) return 'owner';
+    if (job.digest && (this.overCapDigest.get(job.family) ?? 0) < this.digestReserve) return 'digest';
+    return null;
+  }
+
+  // Queue rank within a family: owner jobs first, then digests, then everything else (FIFO within each rank).
+  _rank(job) { return job.owner ? 0 : job.digest ? 1 : 2; }
+
   // Runs the job now when it fits and nothing of its family should run first; otherwise queues it and says so in the log.
-  // An owner job jumps non-owner jobs of its family (FIFO among owner jobs), so it can start over the cap immediately.
+  // An owner job jumps non-owner jobs of its family (FIFO among owner jobs), so it can start over the cap immediately;
+  // a digest likewise jumps every non-owner job of its family (idea-203).
   _admit(job) {
-    // A job that would run ahead of this one in the queue: any same-family job for a non-owner, but only a same-family
-    // OWNER job for an owner (owners run before workers, FIFO among themselves).
-    const familyQueued = this.queue.some((j) => j.family === job.family && (!job.owner || j.owner));
+    // A job that would run ahead of this one in the queue: a same-family job of the same or a higher rank.
+    const familyQueued = this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job));
     if (!familyQueued && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
     }
     this._enqueue(job);
+    if (job.digest) this._pump(); // only queued owner jobs (budget spent) may be ahead of it: its own reserve may still fit
   }
 
-  // Owner jobs sit ahead of non-owner jobs of the same family (FIFO within each group). Everything else appends FIFO.
+  // Owner jobs sit ahead of non-owner jobs of the same family (FIFO within each group). A digest sits after every queued
+  // owner/digest job of its family and ahead of the first plain job of ANY family, so it also wins a freed live-process
+  // slot (the maxLive ceiling is shared across families). Everything else appends FIFO.
   _enqueue(job) {
     job.ahead = -1;
+    let idx = -1;
     if (job.owner) {
-      const idx = this.queue.findIndex((j) => j.family === job.family && !j.owner);
-      if (idx === -1) this.queue.push(job);
-      else this.queue.splice(idx, 0, job);
-    } else {
-      this.queue.push(job);
+      idx = this.queue.findIndex((j) => j.family === job.family && !j.owner);
+    } else if (job.digest) {
+      let floor = 0;
+      this.queue.forEach((j, i) => { if (j.family === job.family && this._rank(j) <= 1) floor = i + 1; });
+      idx = this.queue.findIndex((j, i) => i >= floor && this._rank(j) === 2);
     }
+    if (idx === -1) this.queue.push(job);
+    else this.queue.splice(idx, 0, job);
     this._announceQueue();
   }
 
@@ -570,11 +609,14 @@ export class Runner {
     if (this._pumping) return;
     this._pumping = true;
     try {
-      const blocked = new Set();
+      // family -> highest rank that did not fit. An owner that did not fit (its over-cap budget is spent) still lets a
+      // digest try its own reserve; a digest or plain job that did not fit blocks every later non-owner job of its family.
+      const blocked = new Map();
       for (let i = 0; i < this.queue.length;) {
         const job = this.queue[i];
-        if (blocked.has(job.family)) { i++; continue; }
-        if (!this._fits(job)) { blocked.add(job.family); i++; continue; }
+        const b = blocked.get(job.family);
+        if (b !== undefined && (b > 0 || this._rank(job) === 0)) { i++; continue; }
+        if (!this._fits(job)) { blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
         this.queue.splice(i, 1);
         try { job.run(); } catch (err) { this._failJob(job, err); }
         i = 0; // running it may have changed what fits (a park, a new turn): rescan from the head
@@ -693,7 +735,7 @@ export class Runner {
   _stopKeepingSession(id, entry) {
     clearTimeout(entry.parkTimer);
     this._clearArchive(entry);
-    this._releaseOverCap(entry, entry.ownerOverCap ?? 0); // any owner over-cap turns end with the session stop
+    this._releaseOverCap(entry, Infinity); // any owner/digest over-cap turns end with the session stop
     if (!entry.handle || this.live.get(id) !== entry) return;
     if (entry.sessionId && this.adapters[entry.provider]?.canPark) {
       entry.parked = true;
@@ -839,9 +881,11 @@ export class Runner {
       plans.push({ id, plan });
     }
     // Owner inputs take the free slots first (they would have jumped the queue), then oldest first.
-    plans.sort((a, b) => (b.plan.owner ? 1 : 0) - (a.plan.owner ? 1 : 0) || a.plan.ts - b.plan.ts);
+    // Digests next (idea-203): they keep their queue priority across a runner restart.
+    const rank = (p) => (p.plan.owner ? 0 : isDigestMeta(p.plan.spec.meta) ? 1 : 2);
+    plans.sort((a, b) => rank(a) - rank(b) || a.plan.ts - b.plan.ts);
     for (const { id, plan } of plans) {
-      const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, text: plan.text, images: [], run: () => this._deliverJob(job) };
+      const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: plan.text, images: [], run: () => this._deliverJob(job) };
       this._admit(job);
     }
     return plans.map((p) => p.id);
@@ -928,7 +972,7 @@ export class Runner {
     e.parked = true; // onExit / late emits log nothing for this child
     clearTimeout(e.parkTimer);
     this._clearArchive(e);
-    this._releaseOverCap(e, e.ownerOverCap ?? 0);
+    this._releaseOverCap(e, Infinity);
     this.live.delete(id);
     try { e.handle?.kill(); } catch { /* already gone */ }
     if (retry && cont) { this._admit(this._continueJob(id, cont.spec, cont.text, cont.owner === true)); this._pump(); return { action: 'retried' }; }
@@ -1019,7 +1063,7 @@ export class Runner {
 
     this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
     const job = {
-      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, text: pending ? `${pending.text}\n\n${text}` : text, images,
+      id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: pending ? `${pending.text}\n\n${text}` : text, images,
       run: () => this._deliverJob(job),
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
@@ -1031,16 +1075,25 @@ export class Runner {
   // family cap as an over-cap owner turn (tracked for the +OWNER_OVER_CAP budget).
   _deliverJob(job) {
     const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec);
-    this._noteOwnerOverCap(job, entry);
+    this._noteOverCap(job, entry);
     this._deliver(entry, job.text, job.images ?? []);
   }
 
-  // An owner job that begins a fresh turn over the family cap is tracked against the +OWNER_OVER_CAP budget until that turn ends.
-  _noteOwnerOverCap(job, entry) {
-    if (job.owner && entry && !(entry.inflight > 0) && this._running(job.family) >= (this.turnCaps[job.family] ?? this.turnCaps.other)) {
-      entry.ownerOverCap = (entry.ownerOverCap ?? 0) + 1;
-      this.overCapOwner.set(job.family, (this.overCapOwner.get(job.family) ?? 0) + 1);
-    }
+  // An owner/digest job that begins a fresh turn over the family cap is tracked against its over-cap budget
+  // (+OWNER_OVER_CAP / +digestReserve) until that turn ends.
+  _noteOverCap(job, entry) {
+    if (!entry || entry.inflight > 0 || this._running(job.family) < (this.turnCaps[job.family] ?? this.turnCaps.other)) return;
+    const kind = this._overCapKind(job);
+    if (!kind) return;
+    const [key, budget] = kind === 'owner' ? ['ownerOverCap', this.overCapOwner] : ['digestOverCap', this.overCapDigest];
+    entry[key] = (entry[key] ?? 0) + 1;
+    budget.set(job.family, (budget.get(job.family) ?? 0) + 1);
+  }
+
+  // A send to a digest agent (a transient-error retry, a coalesced follow-up) keeps the digest's queue priority.
+  _isDigest(id, spec) {
+    if (spec?.meta) return isDigestMeta(spec.meta);
+    try { return isDigestMeta(this._fold(id)?.meta); } catch { return false; }
   }
 
   // Moves a queued job (that just became owner via coalesce) to the owner segment of its family's queue.
