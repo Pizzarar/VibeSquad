@@ -139,7 +139,7 @@ export function listWatches({ owner, team, all } = {}, { home } = {}) {
   const doc = readDoc(watchesPath({ home }));
   return doc.sets
     .filter((s) => (!owner || s.owner === owner) && (!team || s.team === team) && (all || isOpen(s)))
-    .map((s) => ({ ...structuredClone(s), status: s.firedAt ? "fired" : s.cancelledAt ? "cancelled" : "armed" }));
+    .map((s) => ({ ...structuredClone(s), status: s.cancelledAt ? "cancelled" : s.firedAt ? "fired" : "armed" }));
 }
 
 /**
@@ -154,8 +154,10 @@ export function cancelWatch(id, callerId, { home, now = Date.now(), allow } = {}
     if (typeof allow === "function" && !allow(set)) {
       return { ok: false, id, refused: true, error: `watch ${id} is owned by ${set.owner}: only its owner or the same-Squad Overlord may cancel it` };
     }
-    if (set.firedAt) return { ok: false, id, error: `watch ${id} already fired at ${set.firedAt}` };
     if (set.cancelledAt) return { ok: true, id, already: true };
+    // idea-219: a fired set whose ping was not sent yet (queued behind the owner's running turn) can still be disarmed: the
+    // ping is dropped. Only a ping already attempted (sent) makes the cancel too late.
+    if (set.firedAt && !(set.pings ?? []).some((p) => !p.attemptedAt)) return { ok: false, id, error: `watch ${id} already fired at ${set.firedAt}` };
     set.cancelledAt = iso(now);
     set.cancelledBy = String(callerId ?? "").trim() || "unknown";
     return { ok: true, id };
@@ -781,6 +783,7 @@ export function createWatchEngine({
       if (set.cancelledAt) continue; // the owner disarmed it: drop what was not sent yet
       for (const ping of set.pings ?? []) {
         if (ping.attemptedAt) continue;
+        if (isCancelled(pingKeyOf(set, ping))) break; // cancelled while an earlier offer awaited: the cache is stale
         const key = pingKeyOf(set, ping);
         if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue;
         lastOffer.set(key, t);
@@ -843,6 +846,13 @@ export function createWatchEngine({
     }
     cacheStamp = "";
     reload();
+  }
+
+  /** idea-219: true when the ping's set was cancelled (fresh read from disk). The plugin checks it right before the send. */
+  function isCancelled(key) {
+    cacheStamp = "";
+    const id = String(key).split("#")[0];
+    return Boolean(reload().sets.find((x) => x.id === id)?.cancelledAt);
   }
 
   /** Right before the send: from here on the ping is never sent again (at most once), even across a restart. */
@@ -911,6 +921,7 @@ export function createWatchEngine({
     onLogEntry,
     holdingSets,
     markAttempted,
+    isCancelled,
     markDelivered,
     markFailed,
     get: (id) => {

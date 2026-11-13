@@ -709,6 +709,38 @@ test("a cancelled set never fires and drops its unsent pings", async () => {
   }
 });
 
+test("idea-219: a set that fired, whose ping is still queued (unsent), can be cancelled: the ping is never delivered", async () => {
+  const sb = sandbox();
+  try {
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered } = engineFor(sb, { attempt: false, deliver: () => {} }); // owner busy: ping queued, not attempted
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-1", T0 + 1000));
+    await engine.tick();
+    const fired = engine.get(id);
+    assert.ok(fired.firedAt && fired.pings.length === 1 && !fired.pings[0].attemptedAt, "fired, ping pending");
+    const key = `${id}#${fired.pings[0].key}`;
+    assert.equal(engine.isCancelled(key), false);
+    assert.deepEqual(cancelWatch(id, "lead-1", { home: sb.home, now: T0 + 5 }), { ok: true, id }, "cancel accepted while the ping is unsent");
+    assert.equal(engine.isCancelled(key), true, "delivery recheck sees the cancel");
+    const b = engineFor(sb);
+    await b.engine.tick();
+    assert.equal(b.delivered.length, 0, "no delivery after cancel, also after a restart");
+    assert.equal(listWatches({ owner: "lead-1", all: true }, { home: sb.home })[0].status, "cancelled");
+    assert.equal(delivered.length, 0);
+    // Once the ping was attempted (sent), cancel is too late.
+    const { id: id2 } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-2" }] }, { home: sb.home, now: T0 });
+    const c = engineFor(sb);
+    c.engine.onRunnerEvent(agentEv("w-2", "idle"));
+    c.engine.onLogEntry("vibesquad", doneEntry("w-2", T0 + 1000));
+    await c.engine.tick();
+    assert.equal(c.delivered.length, 1);
+    assert.equal(cancelWatch(id2, "lead-1", { home: sb.home }).ok, false);
+  } finally {
+    sb.cleanup();
+  }
+});
+
 test("startup backfill: a report filed while the server was down still completes the set", async () => {
   const sb = sandbox();
   try {

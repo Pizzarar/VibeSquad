@@ -3488,6 +3488,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (!queue?.length) return;
         pendingWake.delete(leadId);
         tookQueue = true;
+        // idea-219: a ping whose set the owner cancelled while it waited here is dropped, never sent.
+        for (let i = queue.length - 1; i >= 0; i--) {
+          const k = watchKeyOf.get(queue[i]!);
+          if (k && watch?.isCancelled(k)) {
+            log(`watch ping ${k} dropped: set cancelled before delivery`);
+            queue.splice(i, 1);
+          }
+        }
+        if (!queue.length) return;
         // Watch pings go out whole; the plain log events keep the one-line "(+N more)" summary.
         const watchKeys = queue.map((e) => watchKeyOf.get(e)).filter((k): k is string => Boolean(k));
         const plain = queue.filter((e) => !watchKeyOf.has(e));
