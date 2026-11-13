@@ -704,12 +704,19 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     const serverT0 = d.now();
     const serverBootMs = opts.serverBootMs ?? bootMs;
     // The spawned pid may be a launcher that hands off to the real server and exits: its exit alone is not death. Adopt whoever listens
-    // on the port as the server pid; with no listener and a dead launcher keep waiting (the handoff may still be booting) until the deadline.
+    // on the port as the server pid (and rewrite server.pid). Before any listener was seen keep waiting (the handoff may still be booting)
+    // until the deadline; once one was adopted, its death with no live listener left is real death (fail fast).
+    let adoptedListener = false;
     const serverDead = () => {
       if (spawnedServerPid == null || d.now() - serverT0 <= 3000 || d.pidAlive(spawnedServerPid)) return false;
       const lp = d.listenerPid(det.port);
-      if (lp != null && lp !== spawnedServerPid && d.pidAlive(lp)) { step('server launcher exited, tracking listener', { launcher: spawnedServerPid, pid: lp }); spawnedServerPid = lp; }
-      return false;
+      if (lp != null && lp !== spawnedServerPid && d.pidAlive(lp)) {
+        step('server launcher exited, tracking listener', { launcher: spawnedServerPid, pid: lp });
+        spawnedServerPid = lp; adoptedListener = true;
+        try { writeFileSync(path.join(det.configDir, 'server.pid'), String(lp)); } catch { /* best effort, as at spawn */ }
+        return false;
+      }
+      return adoptedListener;
     };
     const sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
     if (sres !== true) { fail('server start', sres === 'died' ? `server process ${spawnedServerPid} died during start` : `not healthy after ${Math.round(serverBootMs / 1000)}s`); throw new Error('server not healthy'); }
