@@ -1196,3 +1196,23 @@ test("drain end to end: the restart's POST/DELETE against a real runner server s
     assert.equal((await httpCall(`http://127.0.0.1:${port}/health`, { headers: auth })).body.drain, null);
   } finally { runner.shutdown(); await close(srv); }
 });
+
+// idea-215: the restart script passes the runner's RAW /agents?full=1 records (identity under meta.labels). holderLeads must
+// normalise them (they used to read as label-less workers: "no live lead in vibesquad/vibesquad") and prefer the spawner.
+test("holderLeads: raw runner records resolve the lane lead; the holder's vs.parent lead wins; a dead parent falls back to team+lane", async () => {
+  const { holderLeads } = await import("../server/restart-coord.mjs");
+  const teams = [{ id: "vs", name: "VS", paths: ["vs"], lanes: [{ id: "vs", name: "VS" }, { id: "bug", name: "Bug" }] }];
+  const raw = (id, labels, over = {}) => ({ id, provider: "claude", status: "idle", cwd: "C:/wt/vs/unit-x", meta: { title: id, labels }, ...over });
+  const agents = [
+    raw("rn-hub", { team: "vs", lane: "vs", role: "lead" }),
+    raw("rn-bug", { team: "vs", lane: "bug", role: "lead" }),
+    raw("rn-w", { team: "vs", lane: "bug", role: "worker", "vs.parent": "rn-bug" }),
+    raw("rn-w2", { team: "vs", lane: "bug", role: "worker", "vs.parent": "rn-gone" }),
+  ];
+  const r = holderLeads(["rn-w", "rn-w2"], agents, teams);
+  assert.deepEqual(r.unresolved, []);
+  assert.deepEqual(r.leads.map((l) => [l.leadId, l.lane, l.heldAgents]), [["rn-bug", "bug", ["rn-w", "rn-w2"]]]);
+  // parent is a live lead of the holder's lane even if another lead would sort first
+  const two = [...agents, raw("rn-bug2", { team: "vs", lane: "bug", role: "lead" }, { createdAt: Date.now() + 1000 })];
+  assert.equal(holderLeads(["rn-w"], two, teams).leads[0].leadId, "rn-bug");
+});

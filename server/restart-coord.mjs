@@ -5,6 +5,7 @@
 // handshake rides the existing restart-feedback metric subtype (stored as type "metric", text "restart-feedback: ...").
 import fs from "node:fs";
 import path from "node:path";
+import { toAgent } from "./backend/runner-backend.mjs";
 import { loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 
 export const DRAIN_WINDOW_MS = 30 * 60000; // D2: a rerun this soon after a deferral needs every named lead's drain
@@ -18,8 +19,11 @@ const DRAINED_RE = /^restart-feedback:\s*drained restart\b/i;
  * (resolveAgentIdentity), the lane's lead candidates through whoCandidate, the winner through resolveLeadWinner.
  * Returns { leads: [{ team, lane, leadId, leadTitle, heldAgents }], unresolved: [{ agentId, reason }] }.
  */
-export function holderLeads(heldIds, agents, teams = loadTeamsRegistry()) {
-  const list = Array.isArray(agents) ? agents : [];
+export function holderLeads(heldIds, rawAgents, teams = loadTeamsRegistry()) {
+  // The restart script hands over the runner's raw GET /agents?full=1 records (identity under meta.labels, no top-level labels);
+  // whoCandidate / resolveAgentIdentity read the toAgent() shape. Fed raw, every lead read as a label-less worker and the
+  // holder fell back to its cwd's lane ("no live lead in vibesquad/vibesquad", idea-215). Normalise records that carry meta.
+  const list = (Array.isArray(rawAgents) ? rawAgents : []).map((a) => (a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a));
   const byId = new Map(list.map((a) => [a?.id, a]));
   const leads = new Map();
   const unresolved = [];
@@ -28,9 +32,16 @@ export function holderLeads(heldIds, agents, teams = loadTeamsRegistry()) {
     if (!a) { unresolved.push({ agentId: id, reason: "not in the runner's agent list" }); continue; }
     const who = resolveAgentIdentity(a, { teams, cwd: a.cwd });
     if (who.isOrphan || !who.teamId || !who.laneId) { unresolved.push({ agentId: id, reason: "no Squad/lane label" }); continue; }
-    const candidates = list.filter((x) => whoCandidate(x, { teams, wantTeamId: who.teamId, wantLane: who.laneId })?.role === "lead");
-    const { winner, conflict } = resolveLeadWinner(candidates);
-    if (conflict) { unresolved.push({ agentId: id, reason: `lead CONFLICT in ${who.teamId}/${who.laneId}` }); continue; }
+    // The holder's spawner (vs.parent) first: a live lead of the holder's lane is its owner by construction. Then the Squad/lane lookup.
+    let winner = null;
+    const parent = byId.get(String(a.labels?.["vs.parent"] ?? ""));
+    if (parent && whoCandidate(parent, { teams, wantTeamId: who.teamId, wantLane: who.laneId })?.role === "lead") winner = parent;
+    if (!winner) {
+      const candidates = list.filter((x) => whoCandidate(x, { teams, wantTeamId: who.teamId, wantLane: who.laneId })?.role === "lead");
+      const r = resolveLeadWinner(candidates);
+      if (r.conflict) { unresolved.push({ agentId: id, reason: `lead CONFLICT in ${who.teamId}/${who.laneId}` }); continue; }
+      winner = r.winner;
+    }
     if (!winner) { unresolved.push({ agentId: id, reason: `no live lead in ${who.teamId}/${who.laneId}` }); continue; }
     const key = winner.id;
     if (!leads.has(key)) leads.set(key, { team: who.teamId, lane: who.laneId, leadId: winner.id, leadTitle: String(winner.title ?? winner.name ?? "").split(" · ")[0].trim() || null, heldAgents: [] });
