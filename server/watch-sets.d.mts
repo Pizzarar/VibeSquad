@@ -112,6 +112,8 @@ export interface WatchEngine {
   onLogEntry(team: string, entry: { ts: string; agent: string; lane: string; type: string; text: string; refs: string[] }): string[];
   holdingSets(entry: any, setIds: string[]): Promise<WatchSet[]>;
   markAttempted(keys: string[], to: string): void;
+  /** idea-219: true when the ping's set was cancelled (fresh read). Checked right before a send. */
+  isCancelled(key: string): boolean;
   markDelivered(keys: string[], to: string): void;
   markFailed(keys: string[], error: string): void;
   get(id: string): WatchSet | null;
