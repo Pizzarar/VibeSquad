@@ -101,15 +101,15 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {} } = {}) {
+async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
   const outDir = path.join(tmp, "vs");
   mkdirSync(home, { recursive: true });
-  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [], spawnEnvs: [] };
+  const w = { tmp, home, configDir, outDir, calls: [], alive: new Set(), hardKills: [], spawned: [], markerSeenAtSpawn: [], pidSeq: 1000, shutdownAuth: [], serverInfoCalls: 0, allSrvs: [], runnerInfoCalls: 0, unwedgeBodies: [], spawnEnvs: [], vsCalls: [] };
   const agents = { current: [
-    { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" },
+    { id: "rn-old-lost", status: "lost" }, { id: "rn-busy", status: "running" }, { id: "rn-idle", status: "idle" }, ...extraAgents,
   ] };
   let runnerSrv = null;
   let runnerState = null;
@@ -173,6 +173,9 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
 
   w.lookups = [];
   const deps = {
+    // coordinated drain: the real helpers over a test teams registry; `vs` calls are recorded, never run
+    coord: async () => { const m = await import("../server/restart-coord.mjs"); return teams ? { ...m, holderLeads: (h, a) => m.holderLeads(h, a, teams) } : m; },
+    runVs: (args) => { w.vsCalls.push(args); return { ok: true }; },
     // fakes only: no test may reach the real reg.exe / where.exe / filesystem for the shell-env repair (Bug19 M2)
     regQuery: (key, name = "Path") => { w.lookups.push(`reg ${key} ${name}`); if (name !== "Path") throw new Error("no such value"); return { type: "REG_SZ", value: String.raw`C:\Windows\system32` }; },
     exists: (p) => { w.lookups.push(`exists ${p}`); return false; },
@@ -223,7 +226,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
   };
   const env = { ...process.env, VIBESQUAD_HOME: outDir, VIBESQUAD_DESKTOP_CONFIG_DIR: configDir, ...envExtra };
   w.opts = (extra = {}) => ({ ...parseArgs(["--stop-timeout", "2", "--wait-timeout", "5"]), home, port: serverPort, configDir, outDir, runtimeDir: tmp, node: process.execPath, ...extra });
-  w.run = (extra, logs = []) => restartRuntime(w.opts(extra), deps, env, (l) => logs.push(l));
+  w.run = (extra, logs = [], depsOver = {}) => restartRuntime(w.opts(extra), { ...deps, ...depsOver }, env, (l) => logs.push(l));
   w.cleanup = async () => { for (const s of [...w.allSrvs, serverSrv]) if (s?.listening) await close(s); rmSync(tmp, { recursive: true, force: true }); };
   w.runner = () => runnerState;
   return w;
@@ -404,7 +407,7 @@ test("vs restart: --timeout must be a positive integer; unsafe launch args rejec
     const out = [];
     const orig = process.stdout.write.bind(process.stdout);
     process.stdout.write = (c) => { out.push(String(c)); return true; };
-    try { return { code: await commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, env: {}, teams, ...owner, ...opts }), seen, out: out.join("") }; } finally { process.stdout.write = orig; }
+    try { return { code: await commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 4321; }, env: {}, teams, ...owner, drainGuard: () => ({ pending: [] }), ...opts }), seen, out: out.join("") }; } finally { process.stdout.write = orig; }
   };
   const ok = await run({ timeout: "90", noForce: true });
   assert.equal(ok.code, 0);
@@ -502,8 +505,9 @@ test("held background work outlasting the wait defers the restart: nothing stopp
   try {
     const r = await w.run({ waitTimeoutSec: 0.05 });
     assert.equal(r.ok, false);
-    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], running: 0 });
-    assert.ok(r.errors.some((e) => /deferred: 1 agent\(s\) still hold background work .*rn-suite.*--kill-background/.test(e)), JSON.stringify(r.errors));
+    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], running: 0, leads: [], unresolved: [{ agentId: "rn-suite", reason: "not in the runner's agent list" }] });
+    assert.ok(r.errors.some((e) => /deferred: 1 agent\(s\) still hold background work .*rn-suite.*No lead resolved for: rn-suite/.test(e)), JSON.stringify(r.errors));
+    assert.ok(!r.errors.some((e) => /rerun later|pass --kill-background/.test(e)), "the deferral never suggests a timer retry or --kill-background");
     assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");
     assert.deepEqual(w.hardKills, [], "nothing killed");
     assert.deepEqual(w.spawned, [], "nothing started");
@@ -694,4 +698,160 @@ test("shell-env repair: the restart only uses injected lookups; no deps means no
   // a missing dep is "unavailable", never the real reg.exe / where.exe / fs
   const out = repairShellEnv({ PATH: "C:\\keep" }, { platform: "win32" });
   assert.equal(out.PATH ?? out.Path, "C:\\keep");
+});
+
+// ---- coordinated drain (docs/PLAN_COORDINATED_DRAIN.md D1-D3) -------------------------------------------------------
+const EFI_TEAMS = [{ id: "efi", name: "EFI", lanes: [{ id: "godot" }, { id: "ui" }] }];
+const holderAgents = [
+  { id: "rn-suite", status: "idle", labels: { team: "efi", lane: "godot", role: "worker" } },
+  { id: "rn-suite2", status: "idle", labels: { team: "efi", lane: "godot", role: "worker" } },
+  { id: "rn-lead-godot", status: "idle", title: "★ God3 · Godot", labels: { team: "efi", lane: "godot", role: "lead", ord: "3" } },
+  { id: "rn-ui-worker", status: "idle", labels: { team: "efi", lane: "ui", role: "worker" } }, // lane ui has no lead
+];
+
+test("D1 deferral names each holder's lane lead (vs who lead resolution) with a ready-to-send drain ask; no timer-retry or --kill-background advice", async () => {
+  const w = await world({ running: [0], held: [["rn-suite", "rn-suite2", "rn-ui-worker", "rn-ghost"]], extraAgents: holderAgents, teams: EFI_TEAMS });
+  try {
+    const logs = [];
+    const r = await w.run({ waitTimeoutSec: 0.05 }, logs);
+    assert.equal(r.ok, false);
+    assert.equal(r.deferred.leads.length, 1, JSON.stringify(r.deferred));
+    const [l] = r.deferred.leads;
+    assert.deepEqual({ team: l.team, lane: l.lane, leadId: l.leadId, leadTitle: l.leadTitle, heldAgents: l.heldAgents }, { team: "efi", lane: "godot", leadId: "rn-lead-godot", leadTitle: "★ God3", heldAgents: ["rn-suite", "rn-suite2"] });
+    assert.match(l.ask, /drain/);
+    assert.match(l.ask, /vs log restart-feedback 'drained restart'/);
+    assert.match(l.ask, /restart-done/);
+    assert.ok(!/["`]/.test(l.ask), "the ask pastes into vs send \"...\" in any shell");
+    assert.deepEqual(r.deferred.unresolved, [{ agentId: "rn-ui-worker", reason: "no live lead in efi/ui" }, { agentId: "rn-ghost", reason: "not in the runner's agent list" }]);
+    const err = r.errors.find((e) => e.startsWith("deferred:"));
+    assert.match(err, /Ask these leads to drain and hold background suites: godot lead rn-lead-godot \(★ God3\) holds rn-suite, rn-suite2/);
+    assert.match(err, /No lead resolved for: rn-ui-worker \(no live lead in efi\/ui\); rn-ghost/);
+    assert.match(err, /Wait for each lead's vs log restart-feedback 'drained restart', then rerun vs restart/);
+    assert.match(err, /No timer retries; --kill-background needs the owner's per-run OK/);
+    assert.ok(!/rerun later|pass --kill-background/.test(err));
+    assert.ok(logs.some((x) => x.startsWith('drain ask -> vs send rn-lead-godot "Restart pending')), "stdout carries the ready-to-send ask");
+    assert.ok(logs.some((x) => /no lead resolved for rn-ui-worker/.test(x)));
+    const saved = JSON.parse(readFileSync(r.resultFile, "utf8"));
+    assert.deepEqual(saved.deferred.leads, r.deferred.leads, "restart-<ts>.json carries the leads + asks");
+    assert.deepEqual(w.vsCalls, [], "a deferral sends nothing on its own");
+    assert.equal(w.shutdownAuth.length, 0);
+  } finally { await w.cleanup(); }
+});
+
+test("D1: a lead lookup that fails still defers cleanly and names every holder as unresolved", async () => {
+  const w = await world({ running: [0], held: [["rn-suite"]], extraAgents: holderAgents, teams: EFI_TEAMS });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0.05 }, [], { coord: async () => { throw new Error("boom"); } });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.deferred.unresolved, [{ agentId: "rn-suite", reason: "lead lookup failed: boom" }]);
+    assert.ok(r.errors.some((e) => /ask the holders' leads to drain, wait for each 'drained', then rerun vs restart\. No timer retries; --kill-background needs the owner's per-run OK/.test(e)), JSON.stringify(r.errors));
+    assert.equal(w.shutdownAuth.length, 0);
+  } finally { await w.cleanup(); }
+});
+
+test("D2 guard: a rerun within 30 min of a deferral is refused, listing the pending leads, until each logged restart-feedback 'drained restart'", async () => {
+  const { commandRestart } = await import("../cli/vs.mjs");
+  const { drainGuard } = await import("../server/restart-coord.mjs");
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-drain-"));
+  const now = Date.parse("2026-11-12T10:00:00.000Z");
+  const iso = (msAgo) => new Date(now - msAgo).toISOString();
+  const lead = (leadId, lane, heldAgents) => ({ team: "efi", lane, leadId, leadTitle: null, heldAgents, ask: "x" });
+  const writeResult = (msAgo, body) => writeFileSync(path.join(home, `restart-${iso(msAgo).replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: iso(msAgo), finishedAt: iso(msAgo - 1000), dryRun: false, ok: false, errors: [], ...body }));
+  const logDrain = (agent, msAgo, text = "restart-feedback: drained restart") => {
+    mkdirSync(path.join(home, "teams", "efi"), { recursive: true });
+    writeFileSync(path.join(home, "teams", "efi", "log.jsonl"), JSON.stringify({ ts: iso(msAgo), agent, lane: "godot", type: "metric", text, refs: [] }) + "\n", { flag: "a" });
+  };
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }] }];
+  const run = async (flags = {}) => {
+    const seen = [];
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try { return { code: await commandRestart(flags, { spawnFn: (exe, args) => { seen.push(args); return 7; }, env: { VIBESQUAD_HOME: home }, teams, hasOwnerProof: () => true, now: () => now }), seen }; } finally { process.stdout.write = orig; }
+  };
+  try {
+    assert.deepEqual(drainGuard(home, { now }).pending, [], "no restart history: go");
+    writeResult(10 * 60000, { deferred: { held: 2, heldAgents: ["rn-a", "rn-b"], running: 0, leads: [lead("rn-lead-godot", "godot", ["rn-a"]), lead("rn-lead-ui", "ui", ["rn-b"])], unresolved: [] } });
+    await assert.rejects(run(), (e) => /refused: the last restart deferred 10 min ago/.test(e.message) && /godot lead rn-lead-godot \[holds rn-a\]; ui lead rn-lead-ui \[holds rn-b\]/.test(e.message) && /No timer retries/.test(e.message), "both leads pending");
+    logDrain("rn-lead-godot", 20 * 60000); // before the deferral: does not count
+    logDrain("rn-lead-godot", 5 * 60000, "restart-feedback: restart-done"); // not a drain
+    logDrain("rn-someone-else", 4 * 60000);
+    await assert.rejects(run(), /rn-lead-godot \[holds rn-a\]; ui lead rn-lead-ui/, "a stale drain, another text or another agent never counts");
+    logDrain("rn-lead-godot", 3 * 60000);
+    await assert.rejects(run(), (e) => !/rn-lead-godot/.test(e.message) && /ui lead rn-lead-ui \[holds rn-b\]/.test(e.message), "only the still-pending lead is listed");
+    logDrain("rn-lead-ui", 2 * 60000);
+    const ok = await run();
+    assert.equal(ok.code, 0, "every named lead drained: proceeds");
+    assert.equal(ok.seen.length, 1);
+    // the window: 30 min after the deferral the guard lapses (history, not a live ask)
+    rmSync(path.join(home, "teams"), { recursive: true, force: true });
+    assert.equal(drainGuard(home, { now }).pending.length, 2);
+    assert.deepEqual(drainGuard(home, { now: now + 21 * 60000 }).pending, [], "older than 30 min");
+    // a successful restart after the deferral settles it
+    writeResult(60000, { ok: true });
+    assert.deepEqual(drainGuard(home, { now }).pending, []);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("--kill-background needs the owner's per-run OK: an Overlord or any agent shell is refused; the owner's shell passes and overrides the drain guard", async () => {
+  const { commandRestart, assertKillBackgroundOwner } = await import("../cli/vs.mjs");
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
+  const pending = () => ({ pending: [{ team: "efi", lane: "godot", leadId: "rn-l", leadTitle: null, heldAgents: ["rn-a"] }], deferral: { finishedAt: new Date().toISOString() } });
+  const none = () => ({ pending: [] });
+  const run = async (flags, opts) => {
+    const orig = process.stdout.write.bind(process.stdout);
+    process.stdout.write = () => true;
+    try { return await commandRestart(flags, { spawnFn: () => 9, teams, ...opts }); } finally { process.stdout.write = orig; }
+  };
+  const overlord = { identity: { role: "lead", lane: "vibesquad", team: { id: "vibesquad" } }, env: { VS_AGENT_ID: "rn-abcdef123456" } };
+  assert.equal(await run({}, { ...overlord, hasOwnerProof: () => false, drainGuard: none }), 0, "the Overlord may restart");
+  await assert.rejects(run({ killBackground: true }, { ...overlord, hasOwnerProof: () => false, drainGuard: none }), /--kill-background: needs the owner's per-run OK; only the owner's shell may pass it \(an Overlord may not\)/);
+  await assert.rejects(run({ killBackground: true }, { ...overlord, hasOwnerProof: () => true, drainGuard: none }), /owner's per-run OK/, "an agent shell is never the owner, whatever the proof says");
+  assert.equal(await run({ killBackground: true }, { env: {}, hasOwnerProof: () => true, drainGuard: pending }), 0, "owner's shell: allowed, and it overrides a pending drain");
+  await assert.rejects(run({}, { env: {}, hasOwnerProof: () => true, drainGuard: pending }), /refused/, "without it the owner is guarded too");
+  assert.doesNotThrow(() => assertKillBackgroundOwner({}, () => true));
+  assert.throws(() => assertKillBackgroundOwner({}, () => false), /owner's per-run OK/);
+  assert.throws(() => assertKillBackgroundOwner({ VS_AGENT_TOKEN: "t" }, () => true), /owner's per-run OK/);
+});
+
+test("D3 done broadcast: a successful restart after a deferral logs restart-feedback 'restart-done' per asked lane and sends each asked lead; then nothing more", async () => {
+  const w = await world({ running: [0] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    const old = (min) => new Date(Date.now() - min * 60000).toISOString();
+    const put = (min, body) => writeFileSync(path.join(w.outDir, `restart-${old(min).replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: old(min), finishedAt: old(min), dryRun: false, ok: false, ...body }));
+    const L = (leadId, lane, held) => ({ team: "efi", lane, leadId, leadTitle: null, heldAgents: held, ask: "x" });
+    put(200, { ok: true });
+    put(150, { deferred: { held: 1, heldAgents: ["rn-z"], running: 0, leads: [L("rn-lead-old", "old", ["rn-z"])], unresolved: [] } }); // before a success: settled
+    put(100, { ok: true });
+    put(40, { deferred: { held: 1, heldAgents: ["rn-a"], running: 0, leads: [L("rn-lead-godot", "godot", ["rn-a"])], unresolved: [] } });
+    put(30, { errors: ["server start: not healthy"] }); // a failed non-deferred run keeps the asked leads holding
+    put(20, { deferred: { held: 2, heldAgents: ["rn-a", "rn-b"], running: 0, leads: [L("rn-lead-godot", "godot", ["rn-a"]), L("rn-lead-ui", "ui", ["rn-b"])], unresolved: [] } });
+    put(19, { dryRun: true, ok: true }); // a dry run is not a restart
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.doneBroadcast.leads, ["rn-lead-godot", "rn-lead-ui"], "every lead asked since the last successful restart, once each");
+    assert.deepEqual(w.vsCalls.filter((c) => c[0] === "log"), [["log", "restart-feedback", "restart-done", "--team", "efi", "--lane", "godot"], ["log", "restart-feedback", "restart-done", "--team", "efi", "--lane", "ui"]]);
+    const sends = w.vsCalls.filter((c) => c[0] === "send");
+    assert.deepEqual(sends.map((c) => c[1]), ["rn-lead-godot", "rn-lead-ui"]);
+    assert.ok(sends.every((c) => /^restart-done: the VS restart finished .*Lift your background-suite hold\.$/.test(c[2])), JSON.stringify(sends));
+    assert.ok(r.steps.some((s) => s.step === "done broadcast"));
+    assert.ok(r.doneBroadcast.sent.every((x) => x.ok) && r.doneBroadcast.logged.every((x) => x.ok));
+    w.vsCalls.length = 0;
+    const r2 = await w.run({});
+    assert.equal(r2.ok, true);
+    assert.equal(r2.doneBroadcast, undefined, "the next restart has nothing to announce");
+    assert.deepEqual(w.vsCalls, []);
+  } finally { await w.cleanup(); }
+});
+
+test("D3: a failed send is recorded, never turns a good restart into a failure", async () => {
+  const w = await world({ running: [0] });
+  try {
+    mkdirSync(w.outDir, { recursive: true });
+    const at = new Date(Date.now() - 5 * 60000).toISOString();
+    writeFileSync(path.join(w.outDir, `restart-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: at, finishedAt: at, ok: false, deferred: { held: 1, heldAgents: ["rn-a"], running: 0, leads: [{ team: "efi", lane: "godot", leadId: "rn-lead-godot", heldAgents: ["rn-a"] }], unresolved: [] } }));
+    const r = await w.run({}, [], { runVs: (args) => (args[0] === "send" ? { ok: false, error: "server busy" } : { ok: true }) });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(r.doneBroadcast.sent, [{ leadId: "rn-lead-godot", lane: "godot", ok: false, error: "server busy" }]);
+  } finally { await w.cleanup(); }
 });

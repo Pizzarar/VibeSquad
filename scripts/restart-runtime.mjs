@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Detached, one-shot restart of the VS runner + VS server (idea-78). Every agent, the Overlord included, runs ON the
-// runner, so whoever stops it cuts their own turn. This script has no repo imports (Node built-ins only) and is meant to
+// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins only (the coordinated-drain helpers,
+// server/restart-coord.mjs, load lazily on a deferral or after a success; a load failure only loses the lead names). It is meant to
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.
 //
@@ -15,6 +16,9 @@
 //   resumed agent leaves `starting` (retry once, then mark it failed) -> clear marker -> result file.
 // Background work (an idle agent whose park is held by a suite/build it left running: /health `held`) is never killed by
 // default. If it outlasts --wait-timeout the restart is deferred (nothing stopped, exit 4) unless --kill-background.
+// A deferral names each holder's lane lead (the `vs who lead` resolution) with a ready-to-send drain ask, in the result file
+// and the log; `vs restart` then refuses for 30 min until every named lead logged restart-feedback 'drained restart'; the
+// next successful restart logs restart-feedback 'restart-done' and sends it to every asked lead (docs/PLAN_COORDINATED_DRAIN.md).
 // Stop order: runner (POST /shutdown, token-authed, keeps agents resumable), then the server (Windows: taskkill /T /F, since
 // serve.mjs has no state to flush and a plain taskkill never stops headless node.exe; POSIX: SIGTERM then SIGKILL after
 // --stop-timeout), then a sweep for a runner the server's supervisor respawned in the gap. Runner force-kill only after
@@ -253,7 +257,14 @@ export function httpCall(url, { method = 'GET', headers = {}, timeoutMs = 5000, 
   });
 }
 
-const defaultDeps = { regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
+const VS_CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'cli', 'vs.mjs');
+/** One `vs` call as the owner's shell (agent identity stripped, X1b). Never throws: { ok } or { ok: false, error }. */
+export function runVs(args, env = process.env) {
+  const r = spawnSync(process.execPath, [VS_CLI, ...args], { env: stripAgentEnv(env), cwd: path.dirname(path.dirname(VS_CLI)), encoding: 'utf8', timeout: 60000, windowsHide: true });
+  return r.status === 0 ? { ok: true } : { ok: false, error: String(r.error?.message || r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
+}
+const loadCoord = () => import('../server/restart-coord.mjs');
+const defaultDeps = { coord: loadCoord, runVs: (args) => runVs(args, process.env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
 
 // ---- detection -----------------------------------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
@@ -386,6 +397,28 @@ async function verifyResumed(det, d, opts, result, step, fail) {
   else step('resumed agents started after retry', { count: retried.length });
 }
 
+/**
+ * D3 done broadcast: after a successful restart, every lead asked to drain by the deferrals since the last successful
+ * restart gets restart-feedback 'restart-done' in its lane log and a direct message, so it lifts the hold. Best effort:
+ * a failed log/send is recorded in result.doneBroadcast, never turns a good restart into a failure.
+ */
+async function doneBroadcast(d, outDir, result, step) {
+  try {
+    const coord = await d.coord();
+    const chain = coord.deferralChain(outDir, { now: d.now() });
+    if (!chain?.leads.length) return;
+    const text = coord.doneText(new Date(d.now()).toISOString());
+    const lanes = new Map(chain.leads.map((l) => [`${l.team}/${l.lane}`, l]));
+    const logged = [...lanes.values()].map((l) => ({ team: l.team, lane: l.lane, ...d.runVs(['log', 'restart-feedback', coord.DONE_TEXT, '--team', l.team, '--lane', l.lane]) }));
+    const sent = chain.leads.map((l) => ({ leadId: l.leadId, lane: l.lane, ...d.runVs(['send', l.leadId, text]) }));
+    result.doneBroadcast = { leads: chain.leads.map((l) => l.leadId), logged, sent };
+    step('done broadcast', result.doneBroadcast);
+  } catch (e) {
+    result.doneBroadcast = { error: e.message };
+    step('done broadcast failed', { error: e.message });
+  }
+}
+
 // ---- the run -------------------------------------------------------------------------------------------------------
 export async function restartRuntime(opts, deps = {}, env = process.env, log = (line) => console.log(line)) {
   const d = { ...defaultDeps, ...deps };
@@ -483,9 +516,24 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       }
       if (held > 0 && !opts.killBackground) {
         // Never kill a suite or build an agent left running (idea-88): defer, stop nothing, and say who holds it.
-        result.deferred = { held, heldAgents, running };
+        // Coordinated drain (PLAN_COORDINATED_DRAIN D1): name each holder's lane lead and a ready-to-send drain ask. Timer
+        // retries never drain anything; the holders' leads do (11-12: ~7 timed retries vs one coordinated round).
+        let leads = [];
+        let unresolved = [];
+        let coord = null;
+        try {
+          coord = await d.coord();
+          const agents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1', 30000)).body);
+          ({ leads, unresolved } = coord.holderLeads(heldAgents, agents));
+        } catch (e) { unresolved = heldAgents.map((id) => ({ agentId: id, reason: `lead lookup failed: ${e.message}` })); }
+        const at = new Date(d.now()).toISOString();
+        leads = leads.map((l) => ({ ...l, ask: coord ? coord.drainAskText(l, at) : null }));
+        result.deferred = { held, heldAgents, running, leads, unresolved };
         step('deferred: background work still running', result.deferred);
-        result.errors.push(`deferred: ${held} agent(s) still hold background work after ${opts.waitTimeoutSec}s (${heldAgents.join(', ') || 'ids unknown'}); rerun later or pass --kill-background`);
+        result.errors.push(coord ? coord.deferralMessage({ held, heldAgents, waitSec: opts.waitTimeoutSec, leads, unresolved })
+          : `deferred: ${held} agent(s) still hold background work after ${opts.waitTimeoutSec}s (${heldAgents.join(', ') || 'ids unknown'}); no lead resolved (${unresolved[0]?.reason ?? 'unknown'}): ask the holders' leads to drain, wait for each 'drained', then rerun vs restart. No timer retries; --kill-background needs the owner's per-run OK.`);
+        for (const l of leads) log(`drain ask -> vs send ${l.leadId} "${l.ask}"`);
+        for (const u of unresolved) log(`no lead resolved for ${u.agentId}: ${u.reason}`);
         throw new Error('abort');
       }
       if (running !== 0 || held > 0) {
@@ -640,6 +688,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       await verifyResumed(det, d, opts, result, step, fail);
     }
     result.ok = result.errors.length === 0;
+    if (result.ok) await doneBroadcast(d, outDir, result, step);
   } catch (e) {
     if (e.message !== 'abort' && !result.errors.length) fail('restart', e);
     result.ok = false;

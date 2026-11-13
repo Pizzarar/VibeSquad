@@ -51,6 +51,7 @@ import {
   resolveLeadWinner,
   whoCandidate,
 } from "../server/identity.mjs";
+import { drainGuard as restartDrainGuard, drainGuardMessage } from "../server/restart-coord.mjs";
 import { loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
@@ -521,7 +522,7 @@ Usage:
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]   hand the lane's lead to a successor, or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy)
-  vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s; background work still running then defers the restart unless --kill-background); result in ~/.vibesquad/restart-<ts>.json
+  vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -2589,6 +2590,17 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
   }
 }
 
+/**
+ * --kill-background kills suites and builds other agents left running, so it needs the owner's per-run OK: only the
+ * owner's shell (owner proof, no agent identity) may pass it. The Overlord may restart, but not with it.
+ */
+export function assertKillBackgroundOwner(env = process.env, hasOwnerProof = ownerProofFromEnv) {
+  const agentShell = Boolean(String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || env.VS_AGENT_TOKEN || "").trim());
+  if (agentShell || !hasOwnerProof(env)) {
+    throw new Error("vs restart --kill-background: needs the owner's per-run OK; only the owner's shell may pass it (an Overlord may not). Ask the holders' leads to drain instead, or ask the owner to run it.");
+  }
+}
+
 /** X1b: an owner verb (pair, devices, open, archive --sweep, restart) never runs from an agent shell: an agent must not present the owner's local token. */
 export function assertOwnerShell(what, env = process.env) {
   const id = String(env.VS_AGENT_ID || env.PASEO_AGENT_ID || "").trim();
@@ -2615,12 +2627,19 @@ function assertSafeLaunchArg(a) {
  * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
  * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
  */
-export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify } = {}) {
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, now = Date.now } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
   if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
   const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  // D2 retry guard (docs/PLAN_COORDINATED_DRAIN.md): within 30 min of a deferral, every lead it named must have logged
+  // restart-feedback 'drained restart' first. --kill-background (owner only, above) is the owner's override.
+  if (!flags.dryRun && !flags.killBackground) {
+    const g = drainGuard(vsHome, { now: now() });
+    if (g.pending.length) throw new Error(drainGuardMessage(g, now()));
+  }
   const logFile = path.join(vsHome, "logs", `restart-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
   const args = [script, "--log", logFile];
   if (env.VIBESQUAD_HOME) args.push("--vs-home", vsHome, "--home", path.join(vsHome, "runner"), "--out-dir", vsHome);
