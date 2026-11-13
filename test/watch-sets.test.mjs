@@ -427,6 +427,29 @@ test(
   }),
 );
 
+test("unit-watch-false-stall-2 A (review R2): turn started BEFORE the watch was added, ends after: final text is done", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    let text = "round 1 report";
+    const { engine, delivered } = engineFor(sb, { clock, lastMessage: async () => text });
+    engine.onRunnerEvent({ kind: "turn_started", agentId: "w-1" }); // T1
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    clock.t = T0 + 5 * MIN;
+    addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t }); // T2
+    clock.t += MIN; // T3
+    text = "PASS 0/0/0 final";
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.equal(delivered[0].pingKey, "done");
+    assert.match(delivered[0].text, /PASS 0\/0\/0 final/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
 test("unit-watch-false-stall-2 A: an idle worker with no final message still stalls idle-no-report", async () => {
   const sb = sandbox();
   try {

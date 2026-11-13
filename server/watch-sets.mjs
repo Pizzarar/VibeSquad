@@ -471,14 +471,16 @@ export function createWatchEngine({
     if (!a?.id) return;
     const o = obsFor(String(a.id));
     const st = String(a.status ?? "");
+    const wasBusy = o.status === "running" || o.status === "initializing";
+    const isBusy = st === "running" || st === "initializing";
     if (o.status !== st) {
       o.status = st;
       o.statusSince = t;
-      if (st === "running" || st === "initializing") {
-        o.finalText = "";
-        o.activeAt = t; // a turn ran: only text from a turn after the set was created / the latest turn start may count as the report
-      }
+      if (isBusy) o.finalText = "";
     }
+    // A turn is (or just was) running: only text from a turn active at/after the set's creation / latest turn start may count
+    // as the report. Covers a turn that began BEFORE `vs watch add` (status already running, no status change to catch).
+    if (isBusy || wasBusy) o.activeAt = t;
     o.lost = a.lost === true;
     o.resumable = a.resumable === true;
     o.archived = Boolean(a.archivedAt || a.archived);
@@ -519,6 +521,7 @@ export function createWatchEngine({
       if (ev.kind === "turn_ended" && ev.agentId) {
         const o = obsFor(String(ev.agentId));
         o.attention = false;
+        o.activeAt = t;
         o.finalChecked = 0; // re-read the final message on the next tick
       }
     } catch (e) {
