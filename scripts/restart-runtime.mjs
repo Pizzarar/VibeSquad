@@ -5,7 +5,7 @@
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.
 //
-//   node scripts/restart-runtime.mjs [--dry-run] [--wait-timeout <sec=600>] [--stop-timeout <sec=30>] [--no-wait]
+//   node scripts/restart-runtime.mjs [--dry-run] [--wait-timeout <sec=600>] [--stop-timeout <sec=30>] [--boot-timeout <sec=120>] [--no-wait]
 //        [--no-force] [--no-resume] [--resume-all-lost] [--resume-verify <sec=90>] [--kill-background] [--port <4180>]
 //        [--home <runner home>] [--runtime-dir <dir>] [--node <exe>] [--config-dir <desktop config dir>] [--out-dir <result dir>]
 //        [--log <file>] [--vs-home <dir>]
@@ -38,7 +38,7 @@ const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export function parseArgs(argv) {
-  const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90 };
+  const o = { dryRun: false, wait: true, force: true, resume: true, killBackground: false, waitTimeoutSec: 600, stopTimeoutSec: 30, resumeVerifySec: 90, bootTimeoutSec: Number(process.env.VS_RESTART_BOOT_TIMEOUT ?? 120) };
   const val = (i) => { if (i + 1 >= argv.length) throw new Error(`${argv[i]} needs a value`); return argv[i + 1]; };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -50,6 +50,7 @@ export function parseArgs(argv) {
     else if (a === '--kill-background') o.killBackground = true;
     else if (a === '--resume-verify') o.resumeVerifySec = Number(val(i++));
     else if (a === '--wait-timeout') o.waitTimeoutSec = Number(val(i++));
+    else if (a === '--boot-timeout') o.bootTimeoutSec = Number(val(i++));
     else if (a === '--stop-timeout') o.stopTimeoutSec = Number(val(i++));
     else if (a === '--port') o.port = Number(val(i++));
     else if (a === '--home') o.home = val(i++);
@@ -61,7 +62,7 @@ export function parseArgs(argv) {
     else if (a === '--vs-home') o.vsHome = val(i++);
     else throw new Error(`unknown flag ${a}`);
   }
-  for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
+  for (const k of ['waitTimeoutSec', 'stopTimeoutSec', 'resumeVerifySec', 'bootTimeoutSec']) if (!Number.isFinite(o[k]) || o[k] < 0) throw new Error(`bad ${k}`);
   return o;
 }
 
@@ -645,35 +646,60 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
 
     // 5. start the server (same launch as the desktop app); it boots the runner
     const healthy = async () => { for (const s of ['http', 'https']) { try { if ((await d.httpCall(`${s}://127.0.0.1:${det.port}/api/health`, { timeoutMs: 3000 })).status === 200) return true; } catch { /* next */ } } return false; };
+    let spawnedServerPid = null;
     if (await healthy()) step('server already up, not starting another', { port: det.port });
     else {
       const sl = det.serverLaunch;
       const pid = d.spawnDetached(sl.node, sl.args, { cwd: sl.cwd, env: { ...repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), ...sl.env }, logFile: sl.logFile }); // never as an agent (X1b)
       try { mkdirSync(det.configDir, { recursive: true }); writeFileSync(path.join(det.configDir, 'server.pid'), String(pid)); } catch { /* desktop pid file is best effort */ }
+      spawnedServerPid = pid;
       step('server started', { pid, cwd: sl.cwd, log: sl.logFile });
     }
-    const serverEnd = d.now() + 90000;
-    while (!(await healthy()) && d.now() < serverEnd) await d.sleep(500);
-    if (!(await healthy())) { fail('server start', 'not healthy after 90s'); throw new Error('server not healthy'); }
+    // Post-start waits poll with backoff up to --boot-timeout (VS_RESTART_BOOT_TIMEOUT, default 120s): a slow boot (the runner resumes
+    // the agents the restart cut; X1b waits 45s by design) is reported as "slow start (N s)", never failed. Fail only if the process
+    // died or the deadline passed. Exit codes unchanged (any fail -> the same nonzero as before).
+    const bootMs = opts.runnerBootMs ?? opts.bootTimeoutSec * 1000;
+    const bootWait = async (label, until, probe, isDead) => {
+      const t0 = d.now(); let delay = 500; let nextNote = 15000;
+      for (;;) {
+        const h = await probe(); if (h) return h;
+        if (isDead()) return 'died';
+        const el = d.now() - t0;
+        if (d.now() >= until) return null;
+        if (el >= nextNote) { step(`${label} slow start (${Math.round(el / 1000)} s)`, { seconds: Math.round(el / 1000) }); nextNote += 15000; }
+        await d.sleep(delay); delay = Math.min(Math.round(delay * 1.5), 5000);
+      }
+    };
+    const serverT0 = d.now();
+    const serverBootMs = opts.serverBootMs ?? bootMs;
+    const serverDead = () => spawnedServerPid != null && d.now() - serverT0 > 3000 && !d.pidAlive(spawnedServerPid);
+    const sres = await bootWait('server', serverT0 + serverBootMs, async () => ((await healthy()) ? true : null), serverDead);
+    if (sres !== true) { fail('server start', sres === 'died' ? `server process ${spawnedServerPid} died during start` : `not healthy after ${Math.round(serverBootMs / 1000)}s`); throw new Error('server not healthy'); }
     step('server healthy');
 
+    const oldRunnerPid = det.runner.pid;
     const fresh = async () => {
       const disc = readJson(path.join(det.home, 'runner.json'));
       let token = null;
       try { token = readFileSync(path.join(det.home, 'token'), 'utf8').trim(); } catch { /* not yet */ }
-      if (!disc?.port || !token || disc.pid === det.runner.pid) return null;
+      if (!disc?.port || !token || disc.pid === oldRunnerPid) return null; // compare with the pre-restart pid, not det.runner: a slow first /health must not hide the new runner from later polls
       det.runner = { ...det.runner, port: disc.port, pid: disc.pid, token };
       try { const h = await runnerCall(det, d, 'GET', '/health', 3000); return h.status === 200 ? h.body : null; } catch { return null; }
     };
-    let health = null;
-    for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
+    const runnerDead = () => det.runner.pid !== oldRunnerPid && det.runner.pid != null && !d.pidAlive(det.runner.pid);
+    const runnerT0 = d.now();
+    // Phase 1: give the server the usual 45s to boot the runner; only start one directly if no new runner appeared by then.
+    let health = await bootWait('runner', runnerT0 + Math.min(45000, bootMs), fresh, runnerDead);
     if (!health) {
-      const rl = det.runnerLaunch;
-      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), logFile: rl.logFile }); // never as an agent (X1b)
-      step('runner not booted by the server, started directly', { pid });
-      for (const end = d.now() + (opts.runnerBootMs ?? 45000); !health && d.now() < end;) { health = await fresh(); if (!health) await d.sleep(500); }
+      if (det.runner.pid === oldRunnerPid) {
+        const rl = det.runnerLaunch;
+        const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), logFile: rl.logFile }); // never as an agent (X1b)
+        step('runner not booted by the server, started directly', { pid });
+        health = await bootWait('runner', d.now() + bootMs, fresh, runnerDead);
+      } else health = await bootWait('runner', runnerT0 + bootMs, fresh, runnerDead); // a new runner is up and booting: wait out the full window
     }
-    if (!health) { fail('runner start', 'no healthy runner after start'); throw new Error('runner not healthy'); }
+    if (health === 'died') { fail('runner start', `runner process ${det.runner.pid} died during start`); throw new Error('runner not healthy'); }
+    if (!health) { fail('runner start', `no healthy runner after start (${Math.round(bootMs / 1000)}s)`); throw new Error('runner not healthy'); }
 
     // 6. verify
     result.newHash = health.hash ?? null;

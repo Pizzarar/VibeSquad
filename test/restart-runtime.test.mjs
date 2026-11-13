@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, restartRuntime } from "../scripts/restart-runtime.mjs";
+import { parseArgs, restartRuntime, httpCall } from "../scripts/restart-runtime.mjs";
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
@@ -973,4 +973,68 @@ test("D3: a failed send is recorded, never turns a good restart into a failure",
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     assert.deepEqual(r.doneBroadcast.sent, [{ leadId: "rn-lead-godot", lane: "godot", ok: false, error: "server busy" }]);
   } finally { await w.cleanup(); }
+});
+
+// ideas 199/200: the post-start health wait outlasts a slow boot (runner resumes the cut agents) on a fake clock, no real sleeps.
+function fakeClock() {
+  const c = { t: 1_000_000, sleeps: [] };
+  c.now = () => c.t;
+  c.sleep = async (ms) => { c.sleeps.push(ms); c.t += ms; await new Promise((r) => setImmediate(r)); };
+  return c;
+}
+/** httpCall that fails `matches` URLs until `delayMs` of fake time after the server was started (post-start window only). */
+const gated = (w, clock, delayMs, matches) => { let armed = null; return (url, o) => { if (armed == null && w.spawned.length) armed = clock.t; return matches(url) && armed != null && clock.t < armed + delayMs ? Promise.reject(new Error("ECONNREFUSED")) : httpCall(url, o); }; };
+const runnerHealth = (u) => u.endsWith("/health") && !u.includes("api/health");
+
+test("slow runner start (/health up only ~80s after start): reports slow start (N s), then succeeds", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const r = await w.run({}, [], { now: clock.now, sleep: clock.sleep, httpCall: gated(w, clock, 80_000, runnerHealth) });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const slow = r.steps.filter((s) => /^runner slow start \(\d+ s\)$/.test(s.step));
+    assert.ok(slow.length >= 1, "reported slow start while waiting");
+    assert.ok(Math.max(...clock.sleeps) <= 5000 && clock.sleeps.some((m) => m > 500), "polls with backoff, capped at 5s");
+  } finally { await w.cleanup(); }
+});
+
+test("runner never healthy: fails only after the --boot-timeout deadline, with the deadline in the message", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: clock.sleep, httpCall: gated(w, clock, Infinity, runnerHealth) });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => /runner start: no healthy runner after start \(120s\)/.test(e)), JSON.stringify(r.errors));
+    assert.ok(clock.t - t0 >= 120_000, "waited the full window before failing");
+  } finally { await w.cleanup(); }
+});
+
+test("runner process died during start: fails immediately, not after the deadline", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const r = await w.run({ bootTimeoutSec: 120 }, [], {
+      now: clock.now, sleep: async (ms) => { await clock.sleep(ms); if (clock.t > t0 + 5000 && w.runner()) w.alive.delete(w.runner().pid); },
+      httpCall: gated(w, clock, Infinity, runnerHealth),
+    });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => /runner start: runner process \d+ died during start/.test(e)), JSON.stringify(r.errors));
+    assert.ok(clock.t - t0 < 120_000, "did not wait out the deadline");
+  } finally { await w.cleanup(); }
+});
+
+test("slow server start: server /api/health polled with the same window, slow start reported, no 90s cliff", async () => {
+  const w = await world();
+  try {
+    const clock = fakeClock(); const t0 = clock.t;
+    const r = await w.run({}, [], { now: clock.now, sleep: clock.sleep, httpCall: gated(w, clock, 100_000, (u) => u.includes("api/health")) });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => /^server slow start \(\d+ s\)$/.test(s.step)));
+  } finally { await w.cleanup(); }
+});
+
+test("--boot-timeout / VS_RESTART_BOOT_TIMEOUT configure the window", () => {
+  assert.equal(parseArgs([]).bootTimeoutSec, 120);
+  assert.equal(parseArgs(["--boot-timeout", "200"]).bootTimeoutSec, 200);
+  assert.throws(() => parseArgs(["--boot-timeout", "-1"]), /bad bootTimeoutSec/);
 });
