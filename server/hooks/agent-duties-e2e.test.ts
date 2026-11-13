@@ -260,6 +260,7 @@ function harness(
     stop,
     archivedIds,
     scanLogs: (stop as any).scanLogs as (baseline?: boolean) => void,
+    sweepStaleDigests: (stop as any).sweepStaleDigests as (now?: number) => Promise<string[]>,
     sweepDoneWorkers: (stop as any).sweepDoneWorkers as (now?: number) => Promise<string[]>,
     sweepDoneWorkersReport: (stop as any).sweepDoneWorkersReport as (o?: { apply?: boolean; now?: number }) => Promise<any>,
     async beforeCreate(req: any) {
@@ -1709,6 +1710,52 @@ test(
     const logFile = join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl");
     const lines = readFileSync(logFile, "utf8");
     assert.ok(!lines.includes("digest failed"), "no UNVERIFIED (digest failed) entry for a merely queued digest");
+  }),
+);
+
+test(
+  "idea-189 review: the stale sweep skips a digest this process is still awaiting (round 2 of the re-wait); after the final round gives up the digest is archived once",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = {
+      id: "w-live",
+      title: "Bug1 · live",
+      cwd: CWD,
+      status: "idle",
+      provider: "antigravity-cli",
+      model: "gemini-4-argon",
+      labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "live" },
+    };
+    const agents = new Map<string, any>([["w-live", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-live", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    let calls = 0;
+    let sweptMidWait: string[] | null = null;
+    (h.paseo.agents as any).create = async (payload: any) => {
+      // an old (>15 min) queued digest, as the runner lists it
+      agents.set("dig-L", { id: "dig-L", ...payload, status: "queued", queued: { ahead: 3 }, archivedAt: null, createdAt: new Date(Date.now() - 20 * 60_000).toISOString() });
+      return {
+        id: "dig-L",
+        agent: { id: "dig-L" },
+        waitForFinish: async () => {
+          if (++calls === 2) sweptMidWait = await h.sweepStaleDigests(Date.now()); // sweep fires during round 2
+          return { status: "timeout" }; // never starts: all 3 rounds time out
+        },
+      };
+    };
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-L");
+      await wait(100);
+    } finally {
+      h.stop?.();
+    }
+    assert.equal(calls, 3, "three wait rounds");
+    assert.deepEqual(sweptMidWait, [], "the sweep skipped the digest with a live waiter");
+    assert.deepEqual(h.archivedIds, ["dig-L"], "archived once, by the waiter giving up");
+    const logFile = join(process.env.VIBESQUAD_HOME!, "teams", "vibesquad", "log.jsonl");
+    const lines = readFileSync(logFile, "utf8").split(/\r?\n/).filter((l) => l.includes("UNVERIFIED"));
+    assert.equal(lines.length, 1, "one fallback entry, from the waiter, not 'digest orphaned' from the sweep");
+    assert.ok(lines[0].includes("digest"), "fallback entry present");
+    assert.ok(!lines[0].includes("orphaned"));
   }),
 );
 
