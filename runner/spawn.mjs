@@ -68,3 +68,22 @@ export function killTree(child, { platform = process.platform, spawnImpl = spawn
   try { child.kill(); } catch { /* already gone */ }
   return true;
 }
+
+// Kill a process by pid AND its descendants (ideas 228 + 229): a held agent's background shell (bash run_godot.sh ->
+// timeout.exe -> Godot). Killing only the shell on Windows leaves its native children running, orphaned out of the agent's
+// tree where nothing counts or kills them. Windows: taskkill /pid <pid> /T /F (no shell, fixed args). POSIX: the process
+// group (a background shell is usually its leader), else the pid. Callers pass only pids a fresh probe saw under the agent.
+export function killPidTree(pid, { platform = process.platform, spawnImpl = spawn, killImpl = process.kill.bind(process) } = {}) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (platform === 'win32') {
+    try {
+      const k = spawnImpl('taskkill', ['/pid', String(pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' });
+      k.on?.('error', () => { try { killImpl(pid); } catch { /* gone */ } });
+      k.unref?.();
+      return true;
+    } catch { /* fall through */ }
+  }
+  try { killImpl(-pid, 'SIGKILL'); return true; } catch { /* not a group leader */ }
+  try { killImpl(pid, 'SIGKILL'); } catch { /* already gone */ }
+  return true;
+}

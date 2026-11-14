@@ -138,9 +138,12 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         let quiet = 0;
         for (const e of runner.live.values()) { if (e.inflight > 0) running += 1; if (e.quiet) quiet += 1; }
         // held: idle agents whose background work (a suite, a build) holds their park; running counts open turns only.
+        // Checked against reality first (ideas 228 + 229: a hold whose shells are all dead is dropped, not reported).
         const heldAgents = runner.heldIds?.() ?? [];
+        // heldWork: id -> the live shells each hold is on ({ pid, name, cmd }), so a deferral names what actually holds.
+        const heldWork = runner.heldWork?.() ?? {};
         // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, drain: runner.drainState?.() ?? null, pid: process.pid, hash });
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, pid: process.pid, hash });
       }
       if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
         // Restart drain (ideas 198 + 186), set/cleared by scripts/restart-runtime.mjs: POST { ttlMs, reason } starts or refreshes
@@ -247,6 +250,15 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
         const b = await readBody(req);
         return json(res, 200, { ok: true, ...runner.unwedge(id, { retry: b.retry === true, reason: typeof b.reason === 'string' ? b.reason.slice(0, 300) : '' }) });
+      }
+      if (parts[2] === 'stop-background' && req.method === 'POST') {
+        // Ideas 228 + 229: stop an idle agent's background work, each shell's whole tree (taskkill /T /F). Same scope as cancel.
+        if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
+        if (!scoped(res, caller, 'cancel', id)) return;
+        try {
+          const r = await runner.stopBackground(id, { by: isAgent ? caller.id : 'admin' });
+          return json(res, 200, { ok: true, stopped: r.stopped });
+        } catch (err) { return json(res, err.status ?? 500, { error: String(err.message ?? err) }); }
       }
       if (parts[2] === 'cancel' && req.method === 'POST') {
         if (!scoped(res, caller, 'cancel', id)) return;
