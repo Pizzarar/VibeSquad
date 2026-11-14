@@ -38,6 +38,7 @@ import {
   topicOf,
 } from "../identity.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
+import { tailLinesSync } from "../log-tail.mjs";
 import { writeBriefFile } from "../brief-write.mjs";
 import { defangPromptFences } from "../write-guards.mjs";
 import { detachLiveChildren } from "../detach-children.mjs";
@@ -701,7 +702,8 @@ const DIGEST_WAIT_ROUNDS = 3;
 /** A [done] entry naming `ref` written at or after `sinceMs` (1 s slack) in the last 200 lines of the team log. */
 function doneLoggedSince(team: string, ref: string, sinceMs: number): boolean {
   try {
-    const lines = fs.readFileSync(logPath(team), "utf8").split(/\r?\n/).slice(-200);
+    // Tail from EOF (unit-loop-stall): never read and split the whole multi-MB team log on the event loop.
+    const lines = tailLinesSync(logPath(team), 200);
     return lines.some((l) => {
       if (!l.trim()) return false;
       try {
@@ -2298,7 +2300,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
 
           st.mark("retire-predecessors");
-          if (team && lane) await refreshLaneWhosHere(paseo, lane);
+          // The runner facade's backend already refreshed Who's here on create (and refreshes again on any label move):
+          // only the Paseo-daemon path needs this read (unit-loop-stall: one full-roster read per spawn, not two).
+          if (team && lane && !(paseo as any)?.whosHereOnWrite) await refreshLaneWhosHere(paseo, lane);
           st.mark("refresh-whos-here");
 
           // WORKAROUND: a 30 s timer that redelivers a first prompt which never ran. The real fix is 867793b
@@ -3600,7 +3604,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const idx: DoneIndex = new Map();
       let text = "";
       try {
-        text = fs.readFileSync(logPath(team), "utf8");
+        text = await fs.promises.readFile(logPath(team), "utf8"); // whole history needed; async keeps the 6 MB read off the loop
       } catch {
         return idx;
       }

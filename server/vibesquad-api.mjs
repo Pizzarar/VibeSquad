@@ -1,6 +1,7 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
+import { tailLines } from "./log-tail.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readRunnerCwdSync } from "./backend/index.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
@@ -590,7 +591,8 @@ async function handleLog(req, res, opts = {}) {
       if (!TEAM_ID.test(team)) return sendJson(res, 400, { error: "bad team" });
       const file = join(teamDir(team), "log.jsonl");
       if (!existsSync(file)) return sendJson(res, 200, []);
-      const lines = readFileSync(file, "utf8").split(/\r?\n/).filter(Boolean).slice(-100);
+      // Tail from EOF, async (unit-loop-stall): the UI polls this, and reading the whole multi-MB log stalled the loop.
+      const lines = await tailLines(file, 100);
       const out = [];
       for (const l of lines) {
         try {
@@ -960,10 +962,7 @@ async function handleVsLog(req, res, opts = {}) {
       const baseHome = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
       const file = join(baseHome, "logs", `${team}--${lane}.jsonl`);
       if (!existsSync(file)) return sendJson(res, 200, { ok: true, entries: [] });
-      const entries = readFileSync(file, "utf8")
-        .split(/\r?\n/)
-        .filter(Boolean)
-        .slice(-100)
+      const entries = (await tailLines(file, 100))
         .map((l) => {
           try {
             return JSON.parse(l);

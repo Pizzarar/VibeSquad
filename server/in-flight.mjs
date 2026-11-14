@@ -1,25 +1,30 @@
 // Generated "In flight (live)" block for a Buddy boot prompt (docs/PLAN_SPAWN_HYGIENE.md block 5).
-import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { linesFromEndSync } from "./log-tail.mjs";
 import { BOOT_CONTEXT_BUDGET, MORE_WORKERS_HINT, bootRoster, fitRows } from "./boot-roster.mjs";
 
 /** Last `n` non-metric team-log entries for a lane, oldest first. Missing/garbled log gives []. */
 export function recentLaneLog({ teamId, laneId, n = 5, home }) {
   const base = home || process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
-  let lines = [];
-  try {
-    lines = readFileSync(join(base, "teams", String(teamId), "log.jsonl"), "utf8").split(/\r?\n/).filter(Boolean);
-  } catch {
-    return [];
-  }
   const want = String(laneId ?? "").trim().toLowerCase();
   const out = [];
-  for (let i = lines.length - 1; i >= 0 && out.length < n; i--) {
-    try {
-      const e = JSON.parse(lines[i]);
-      if (String(e.lane ?? "").toLowerCase() === want && e.type !== "metric") out.push(e);
-    } catch {}
+  if (!(n > 0)) return out;
+  // A plain lane id appears verbatim (any case) in the raw JSON of every line that can match: skip JSON.parse for the
+  // rest, so a lane with few entries does not parse the whole log (ids with JSON-escaped characters always parse).
+  const plain = /^[a-z0-9._-]+$/.test(want);
+  // Newest first from EOF (unit-loop-stall): stops reading once `n` lane entries are found, never the whole log.
+  try {
+    for (const line of linesFromEndSync(join(base, "teams", String(teamId), "log.jsonl"))) {
+      if (plain && !line.toLowerCase().includes(want)) continue;
+      try {
+        const e = JSON.parse(line);
+        if (String(e.lane ?? "").toLowerCase() === want && e.type !== "metric") out.push(e);
+      } catch {}
+      if (out.length >= n) break;
+    }
+  } catch {
+    return [];
   }
   return out.reverse();
 }

@@ -75,7 +75,7 @@ function createFakeRunnerServer() {
     async requireRunning() {},
     async request(method, route, body) {
       calls.push({ method, route, body });
-      if (method === "GET" && route === "/agents?full=1") {
+      if (method === "GET" && (route === "/agents?full=1" || route === "/agents?full=1&archived=0")) {
         return { ids: [...records.keys()], agents: [...records.values()] };
       }
       const mAgent = /^\/agents\/([^/]+)$/.exec(route);
@@ -168,7 +168,8 @@ test("vs ls lists live agents in the caller's lane via GET /agents?full=1", asyn
       profile: "Implement - Sonnet",
     },
   ]);
-  assert.deepEqual(srv.calls, [{ method: "GET", route: "/agents?full=1", body: undefined }]);
+  // unit-loop-stall: a live-only roster read asks the runner to leave archived records out (archived=0).
+  assert.deepEqual(srv.calls, [{ method: "GET", route: "/agents?full=1&archived=0", body: undefined }]);
 });
 
 test("vs inspect <id> fetches the full agent record via GET /agents/:id", async () => {
