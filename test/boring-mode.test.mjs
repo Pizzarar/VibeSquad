@@ -116,6 +116,7 @@ stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}
 stub(
   "pins.mjs",
   `export const isHubPin = (p) => Boolean(p.lane.hub); export const pinsForSquad = (v) => ({ pinned: v.pins, done: [] });
+export const isLive = (m) => Boolean(m) && !m.agent.archivedAt && m.agent.status !== "closed"; export const liveBuddyId = (p) => (isLive(p.brainstorm) ? p.brainstorm.agent.id : null);
 export const quickBugsChipState = (v) => v.bugs ?? { pin: null, leadRunning: false, needsYou: 0 }; export const perfectionPin = () => null;`,
 );
 stub(
@@ -134,7 +135,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStartBrainstorm } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -287,7 +288,44 @@ test("Overlord row with no Overlord offers Start Overlord; Bugs row without a pi
   assert.deepEqual(globalThis.__calls, [["onSpinUpOverlord", "vs"]]);
   byId(render(props(view)), "boring-core-bugs").props.onClick();
   await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(globalThis.__calls.slice(1), [["createQuickBugsPin", "vs"], ["onOpenPin", "bug"]]);
+  // Selecting Bugs with no lane only shows the empty card (emptyKind brainstorm); nothing is created or focused yet.
+  assert.deepEqual(globalThis.__calls.slice(1), []);
+});
+
+test("idea-246 (4): Bugs selected with no Bugs lane -> brainstorm empty card; CTA creates the lane then spins it up (spinUpPin, not focusPin)", async () => {
+  reset();
+  const noBug = squad({ team: { id: "efi", name: "Escape From Idle" }, bugs: { pin: null, leadRunning: false, needsYou: 0 } });
+  globalThis.__spinUpPin = (p) => { globalThis.__calls.push(["spinUpPin", p.lane.id]); return Promise.resolve("a"); };
+  byId(render(props(noBug)), "boring-core-bugs").props.onClick();
+  const t = render(props(noBug, { agents: new Map() }));
+  assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+  assert.equal(byId(t, "boring-empty-cta").props.disabled, false);
+  byId(t, "boring-empty-cta").props.onClick();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(globalThis.__calls, [["createQuickBugsPin", "efi"], ["spinUpPin", "bug"]]);
+  assert.equal(await boringStartBugs("efi", { create: () => Promise.reject(new Error("no lane")) }), "no lane");
+});
+
+test("idea-246 (2): picking Bugs with a dormant lane never focusPins; the empty card offers Start Brainstorm via spinUpPin", async () => {
+  reset();
+  const dormant = squad({ bugs: { pin: lanePin("bugs", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  byId(render(props(dormant)), "boring-core-bugs").props.onClick();
+  assert.deepEqual(globalThis.__calls, []);
+  const t = render(props(dormant));
+  assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+  globalThis.__spinUpPin = (p) => { globalThis.__calls.push(["spinUpPin", p.lane.id]); return Promise.resolve("a"); };
+  byId(t, "boring-empty-cta").props.onClick();
+  assert.deepEqual(globalThis.__calls, [["spinUpPin", "bugs"]]);
+});
+
+test("idea-246 (3): core.bugs.agentId ignores a closed Brainstorm / lead", () => {
+  const closed = (id) => mem(id, "closed");
+  const dead = squad({ bugs: { pin: lanePin("bugs", { brainstorm: closed("b"), lead: closed("l") }), leadRunning: false, needsYou: 0 } });
+  assert.equal(boringSidebarModel(dead, NOW).core.bugs.agentId, null);
+  const liveLead = squad({ bugs: { pin: lanePin("bugs", { brainstorm: closed("b"), lead: mem("l") }), leadRunning: false, needsYou: 0 } });
+  assert.equal(boringSidebarModel(liveLead, NOW).core.bugs.agentId, "l");
+  const live = squad({ bugs: { pin: lanePin("bugs", { brainstorm: mem("b"), lead: mem("l") }), leadRunning: false, needsYou: 0 } });
+  assert.equal(boringSidebarModel(live, NOW).core.bugs.agentId, "b");
 });
 
 test("Usage & Workflows and Project Overview swap the main pane", () => {

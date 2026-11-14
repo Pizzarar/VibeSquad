@@ -6,7 +6,7 @@ import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { openPinMember, spinUpPin } from "./pinFocus";
-import { isHubPin, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
+import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
 import { skyZonesFor } from "./skyZonesLogic";
@@ -75,7 +75,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     bugs: {
       label: "Bugs (@bug)",
       pin: bugs.pin,
-      agentId: bugs.pin?.brainstorm?.agent.id ?? bugs.pin?.lead?.agent.id ?? null,
+      agentId: bugs.pin ? liveBuddyId(bugs.pin) ?? (isLive(bugs.pin.lead) ? bugs.pin.lead.agent.id : null) : null,
       leadRunning: bugs.leadRunning,
       needsYou: bugs.needsYou,
       age: bugs.pin ? boringConversationAge(bugs.pin, now) : "",
@@ -107,6 +107,16 @@ export async function boringStartBrainstorm(pin: Pin, spinUp: (pin: Pin) => Prom
   try {
     await spinUp(pin);
     return null;
+  } catch (e) {
+    return (e as { message?: string } | null)?.message || String(e);
+  }
+}
+
+/** Bugs with no lane yet: create the Squad's Bugs team, then spawn its Brainstorm. Returns an error message or null. */
+export async function boringStartBugs(squadId: string, deps: { create?: (squadId: string) => Promise<Pin>; spinUp?: (pin: Pin) => Promise<unknown> } = {}): Promise<string | null> {
+  try {
+    const pin = await (deps.create ?? createQuickBugsPin)(squadId);
+    return await boringStartBrainstorm(pin, deps.spinUp);
   } catch (e) {
     return (e as { message?: string } | null)?.message || String(e);
   }
@@ -204,10 +214,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedLaneId("_bugs");
     setSelectedRole("brainstorm");
     setMode("chat");
-    if (core.bugs.pin) {
-      if (core.bugs.agentId) openAgent(core.bugs.agentId);
-      else void onOpenPin(core.bugs.pin);
-    } else if (view) void createQuickBugsPin(view.team.id).then((p) => void onOpenPin(p));
+    // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
+    if (core.bugs.pin && core.bugs.agentId) openAgent(core.bugs.agentId);
   };
 
   // Resolve the chat target.
@@ -218,6 +226,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     emptyKind = "overlord";
   } else if (selectedLaneId === "_riffbot") {
     agentId = zones.riffbot.member?.agent.id ?? null;
+  } else if (selectedLaneId === "_bugs" && !currentPin) {
+    emptyKind = "brainstorm"; // no Bugs lane yet: the card's CTA creates it, never the RiffBot / stale-active-agent fallback
   } else if (currentPin) {
     emptyKind = selectedRole;
     agentId = resolvePinChatAgentId(currentPin, selectedRole, activeAgentId, agents);
@@ -242,17 +252,20 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     </svg>
   );
 
-  const startBrainstorm = (pin: Pin) => {
-    const laneKey = `${pin.squad?.id}/${pin.lane.id}`;
+  const runStart = (laneKey: string, start: () => Promise<string | null>) => {
     setStartState({ laneKey, busy: true, error: null });
-    void boringStartBrainstorm(pin).then((error) => setStartState({ laneKey, busy: false, error }));
+    void start().then((error) => setStartState({ laneKey, busy: false, error }));
   };
+  const startBrainstorm = (pin: Pin) => runStart(`${pin.squad?.id}/${pin.lane.id}`, () => boringStartBrainstorm(pin));
+  const needsBugsLane = selectedLaneId === "_bugs" && !currentPin;
+  const startBugs = () => view && runStart("_bugs", () => boringStartBugs(view.team.id));
   const emptyCard = () => {
-    const startFor = currentPin ? startState?.laneKey === `${currentPin.squad?.id}/${currentPin.lane.id}` ? startState : null : null;
+    const startKey = currentPin ? `${currentPin.squad?.id}/${currentPin.lane.id}` : needsBugsLane ? "_bugs" : null;
+    const startFor = startKey && startState?.laneKey === startKey ? startState : null;
     const spec = {
       overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && onSpinUpOverlord(view), disabled: overlordBusy },
       riffbot: { text: "RiffBot is sleeping.", cta: "Start RiffBot", run: () => hubPin && onSpinUpPin(hubPin), disabled: !hubPin },
-      brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => currentPin && startBrainstorm(currentPin), disabled: !currentPin || Boolean(startFor?.busy) },
+      brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => (currentPin ? startBrainstorm(currentPin) : startBugs()), disabled: (!currentPin && !needsBugsLane) || Boolean(startFor?.busy) },
       lead: { text: "No Lead is running yet — ask Brainstorm to hand off a plan.", cta: "Switch to Brainstorm", run: () => setSelectedRole("brainstorm"), disabled: false },
     }[emptyKind];
     return (
