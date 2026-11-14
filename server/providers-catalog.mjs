@@ -4,6 +4,7 @@
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { readdir as readdirAsync, stat as statAsync } from "node:fs/promises";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
@@ -253,7 +254,10 @@ export async function getModes(provider, opts = {}) {
 // Per file we keep the byte offset already folded in and the per-bucket totals. A request stats the directory,
 // re-reads only files whose size/mtime moved (and only the new tail), and drops nothing it has already counted.
 const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, model, lane, role, prevCost, buckets, turns, tail, pass, handoff, title }
-export const clearUsageCache = () => usageFiles.clear();
+// heap-stall-1114: readHandoffs / readAutonomyEntries / readBootSizes re-read and JSON.parsed every vs log (~10 MB) three times per
+// /usage request. Each file's parsed lines are now kept slim and grown by the appended bytes only (see logLines).
+const logLineFiles = new Map(); // path -> { size, mtimeMs, offset, head, recs: [{ ts, lane, type, text, team, squad }] }
+export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); };
 let usageReadBytes = 0;
 export const usageStats = () => ({ files: usageFiles.size, readBytes: usageReadBytes });
 
@@ -459,6 +463,35 @@ function readTail(file, from, to) {
   } finally {
     closeSync(fd);
   }
+}
+
+const LOG_HEAD_BYTES = 64;
+/** Parsed lines of one append-only vs log, cached by (size, mtime) and extended from the last offset; a shrunk or replaced file
+ * (first bytes differ) is re-read whole. Unparsable lines and non-objects are dropped, as every reader did before. */
+function logLines(file) {
+  let st;
+  try { st = statSync(file); } catch { logLineFiles.delete(file); return []; }
+  let c = logLineFiles.get(file);
+  if (c && c.size === st.size && c.mtimeMs === st.mtimeMs) return c.recs;
+  const head = (n = LOG_HEAD_BYTES) => readTail(file, 0, Math.min(n, st.size)).toString("latin1");
+  if (c && (st.size < c.offset || head(c.head.length) !== c.head)) c = null;
+  if (!c) c = { size: 0, mtimeMs: 0, offset: 0, head: head(), recs: [] };
+  const buf = readTail(file, c.offset, st.size);
+  const lastNl = buf.lastIndexOf(10);
+  if (lastNl >= 0) {
+    for (const line of buf.subarray(0, lastNl).toString("utf8").split("\n")) {
+      if (!line.trim()) continue;
+      let e;
+      try { e = JSON.parse(line); } catch { continue; }
+      if (!e || typeof e !== "object") continue;
+      c.recs.push({ ts: e.ts, lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad });
+    }
+    c.offset += lastNl + 1; // a trailing partial line is re-read next time
+  }
+  c.size = st.size;
+  c.mtimeMs = st.mtimeMs;
+  logLineFiles.set(file, c);
+  return c.recs;
 }
 
 function refreshFile(file, stat) {
@@ -976,12 +1009,25 @@ function isImplementerWorker(a) {
 /** A run carrying a team may only implement units of that Squad's repo (lane ids can repeat across Squads); untagged on either side matches. */
 const sameSquad = (unit, agent) => !unit.squad || !agent.team || unit.squad === agent.team;
 
+/** Worker runs bucketed by worktree unit name and by lane, in agent order. heap-stall-1114: attributeImplementer() filtered all
+ * ~4k agent runs once per merged unit (~0.8 s of every /usage request); getUsage() now builds this once per request. */
+function indexWorkers(agents) {
+  const byUnit = new Map();
+  const byLane = new Map();
+  for (const a of agents) {
+    if (a.role !== "worker") continue;
+    getOrSet(byUnit, unitNameOfCwd(a.cwd), () => []).push(a);
+    getOrSet(byLane, a.lane, () => []).push(a);
+  }
+  return { byUnit, byLane };
+}
+
 /** Attribute a merged unit to the implementer worker: sanctuary worktree basename(cwd) === unit (case-insensitive), else the single worker in the lane created before mergedAt. */
-function attributeImplementer(unit, agents) {
+function attributeImplementer(unit, agents, index = indexWorkers(agents)) {
   const mergedAtMs = tsMs(unit.mergedAt);
   if (typeof unit.unit === "string" && unit.unit) {
     const want = unit.unit.toLowerCase();
-    const cwdMatches = agents.filter((a) => a.role === "worker" && unitNameOfCwd(a.cwd) === want && sameSquad(unit, a));
+    const cwdMatches = (index.byUnit.get(want) ?? []).filter((a) => sameSquad(unit, a));
     if (cwdMatches.length === 1) return cwdMatches[0];
     if (cwdMatches.length > 1) {
       const impls = cwdMatches.filter(isImplementerWorker);
@@ -996,7 +1042,7 @@ function attributeImplementer(unit, agents) {
     }
   }
   if (!unit.lane || mergedAtMs === null) return null;
-  const laneWorkers = agents.filter((a) => a.role === "worker" && a.lane === unit.lane && sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
+  const laneWorkers = (index.byLane.get(unit.lane) ?? []).filter((a) => sameSquad(unit, a) && a.createdAt !== null && a.createdAt <= mergedAtMs);
   if (laneWorkers.length === 1) return laneWorkers[0];
   const laneImpls = laneWorkers.filter(isImplementerWorker);
   return laneImpls.length === 1 ? laneImpls[0] : null;
@@ -1021,13 +1067,8 @@ function readHandoffs(home) {
   const seen = new Set();
   const out = [];
   for (const file of files) {
-    let text = "";
-    try { text = readFileSync(file, "utf8"); } catch { continue; }
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      let e;
-      try { e = JSON.parse(line); } catch { continue; }
-      if (e?.type !== "handoff") continue;
+    for (const e of logLines(file)) {
+      if (e.type !== "handoff") continue;
       const t = tsMs(e.ts);
       if (t === null) continue;
       const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
@@ -1166,13 +1207,8 @@ function readAutonomyEntries(home, laneTeams) {
   const seen = new Set();
   const out = [];
   for (const { file, squad } of files) {
-    let text = "";
-    try { text = readFileSync(file, "utf8"); } catch { continue; }
-    for (const line of text.split("\n")) {
-      if (!line.trim()) continue;
-      let e;
-      try { e = JSON.parse(line); } catch { continue; }
-      const t = tsMs(e?.ts);
+    for (const e of logLines(file)) {
+      const t = tsMs(e.ts);
       if (t === null) continue;
       const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
       const textStr = typeof e.text === "string" ? e.text : "";
@@ -1246,10 +1282,13 @@ function computeAutonomy(entries, mergedUnits) {
 function buildAutonomy({ entries, merged, agents, squads, squad }) {
   const inSquad = (s) => !squad || s === squad;
   const scoped = computeAutonomy(entries.filter((e) => inSquad(e.squad)), merged.filter((u) => inSquad(u.squad)));
+  // heap-stall-1114: bucket once (order kept) instead of re-filtering every entry / unit / agent run per Squad.
+  const group = (list) => { const m = new Map(); for (const x of list) getOrSet(m, x.squad, () => []).push(x); return m; };
+  const entriesBy = group(entries), mergedBy = group(merged), agentsBy = group(agents);
   const bySquad = squads.map((sq) => {
-    const mine = merged.filter((u) => u.squad === sq);
-    const a = computeAutonomy(entries.filter((e) => e.squad === sq), mine);
-    const mineAgents = agents.filter((x) => x.squad === sq);
+    const mine = mergedBy.get(sq) ?? [];
+    const a = computeAutonomy(entriesBy.get(sq) ?? [], mine);
+    const mineAgents = agentsBy.get(sq) ?? [];
     const costUsd = mineAgents.reduce((t, x) => t + x.costUsd, 0);
     const rounds = mine.reduce((t, u) => t + (u.reviewRounds ?? 0), 0);
     return {
@@ -2045,12 +2084,7 @@ export function readBootSizes(home, { since, until } = {}) {
   const seen = new Set();
   const hits = [];
   for (const file of files) {
-    let text = "";
-    try { text = readFileSync(file, "utf8"); } catch { continue; }
-    for (const line of text.split("\n")) {
-      if (!line.includes("boot-size")) continue;
-      let e;
-      try { e = JSON.parse(line); } catch { continue; }
+    for (const e of logLines(file)) {
       if (e.type !== "metric" || typeof e.text !== "string" || !e.text.startsWith("boot-size ")) continue;
       const t = tsMs(e.ts);
       if (t === null) continue;
@@ -2065,7 +2099,61 @@ export function readBootSizes(home, { since, until } = {}) {
   return foldBootSizes(hits);
 }
 
-export function getUsage({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now } = {}) {
+// heap-stall-1114: GET /usage ran getUsage() synchronously on the server's event loop: ~3 s per request warm, ~19 s for the first
+// one after a restart (it folds all ~4k agent logs, ~370 MB), and clients asked every few seconds, so the server sat blocked
+// (3-4 s loop drifts, 15 s at boot) and the owner's app dropped. The HTTP path now refreshes the per-file caches in slices (stats
+// on the threadpool, folds yield every USAGE_SLICE_MS), then runs the aggregate on warm caches; concurrent identical requests
+// share one computation.
+const USAGE_SLICE_MS = 10;
+const USAGE_STAT_BATCH = 64;
+const usageInflight = new Map(); // request key -> Promise<usage>
+const yieldLoop = () => new Promise((r) => setImmediate(r));
+
+/** The vs-log files the usage readers fold (teams/<t>/log.jsonl and logs/*.jsonl). */
+function vsLogFiles(dir) {
+  const files = [];
+  try { const teams = join(dir, "teams"); if (existsSync(teams)) for (const t of readdirSync(teams)) { const p = join(teams, t, "log.jsonl"); if (existsSync(p)) files.push(p); } } catch { /* none */ }
+  try { const logs = join(dir, "logs"); if (existsSync(logs)) for (const n of readdirSync(logs)) if (n.endsWith(".jsonl")) files.push(join(logs, n)); } catch { /* none */ }
+  return files;
+}
+
+/** Brings usageFiles (agent logs) and logLineFiles (vs logs) up to date without holding the loop; returns the agent files folded. */
+async function warmUsageCaches(home) {
+  const homeDir = home || vibesquadHome();
+  const warmed = new Set();
+  if (isForbiddenRealHome(homeDir)) return warmed;
+  const dir = join(homeDir, "runner", "agents");
+  let names = [];
+  try { names = (await readdirAsync(dir)).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  for (let i = 0; i < names.length; i += USAGE_STAT_BATCH) {
+    const files = names.slice(i, i + USAGE_STAT_BATCH).map((n) => join(dir, n));
+    const stats = await Promise.all(files.map((f) => statAsync(f).catch(() => null)));
+    let sliceStart = performance.now();
+    for (let k = 0; k < files.length; k++) {
+      const s = stats[k];
+      if (!s) continue;
+      const cur = usageFiles.get(files[k]);
+      // A concurrent warm already folded a newer state: an older stat must not read as a truncation (refreshFile would refold from 0).
+      if (cur && s.mtimeMs < cur.mtimeMs) { warmed.add(files[k]); continue; }
+      try { refreshFile(files[k], s); warmed.add(files[k]); } catch { /* unreadable now: getUsage retries it */ }
+      if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
+    }
+  }
+  for (const file of vsLogFiles(homeDir)) { logLines(file); await yieldLoop(); } // one file per slice (largest ~6 MB, cold once)
+  return warmed;
+}
+
+/** getUsage() for request paths: warm caches off the loop first, then one short synchronous aggregate. */
+export function getUsageAsync(opts = {}) {
+  const key = JSON.stringify([opts.home ?? null, opts.since ?? null, opts.until ?? null, opts.squad ?? null, !!opts.usageReview?.suppressSchedule]);
+  const hit = usageInflight.get(key);
+  if (hit) return hit;
+  const p = (async () => getUsage({ ...opts, warmed: await warmUsageCaches(opts.home) }))().finally(() => usageInflight.delete(key));
+  usageInflight.set(key, p);
+  return p;
+}
+
+export function getUsage({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed } = {}) {
   const homeDir = home || vibesquadHome();
   const squad = typeof squadOpt === "string" && squadOpt.trim() ? squadOpt.trim() : null; // usa-24: optional per-Squad filter
   const laneTeams = readLaneTeams(home);
@@ -2084,7 +2172,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
     const file = join(dir, n);
     seen.add(file);
     let st;
-    try { st = refreshFile(file, statSync(file)); } catch { continue; }
+    try { st = (warmed?.has(file) && usageFiles.get(file)) || refreshFile(file, statSync(file)); } catch { continue; } // warmed: getUsageAsync just folded it
     const agentSquad = st.team ?? laneTeams.get(st.lane) ?? null;
     allAgentSquads.push({ st, squad: agentSquad });
     if (squad && agentSquad !== squad) continue;
@@ -2150,9 +2238,10 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
 
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
   const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
+  const workerIndex = indexWorkers(agents);
   const merged = mergedRaw.map((u) => {
     const mergedAtMs = tsMs(u.mergedAt);
-    const implementer = attributeImplementer(u, agents);
+    const implementer = attributeImplementer(u, agents, workerIndex);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
     const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
@@ -2501,7 +2590,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
         let usage;
         if (body?.runNow === true && !usageReviewInFlight) {
           // Compute the usage snapshot with the scheduled check suppressed, so a manual Run-now is always recorded as manual.
-          usage = getUsage({ home, git: probeOpts.git, usageReview: { ...usageReview, suppressSchedule: true } });
+          usage = await getUsageAsync({ home, git: probeOpts.git, usageReview: { ...usageReview, suppressSchedule: true } });
           runUsageReview({ home, trigger: "manual", usage, runOpus: usageReview?.runOpus, runGemini: usageReview?.runGemini, now: usageReview?.now }).catch(() => {});
         }
         return sendJson(res, 200, { ok: true, usageReview: usageReviewState(home, usage, usageReview ?? {}) });
@@ -2512,7 +2601,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
       if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
       const format = url.searchParams.get("format") ?? "json";
       if (format !== "md" && format !== "json") return sendJson(res, 400, { error: `bad format "${format}"` });
-      const usage = getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview });
+      const usage = await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview });
       if (format === "json") return sendJson(res, 200, { ok: true, exportedAt: new Date().toISOString(), ...usage });
       return sendJson(res, 200, { ok: true, markdown: usageToMarkdown(usage) });
     }
@@ -2520,7 +2609,7 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
-    if (sub === "usage") return sendJson(res, 200, getUsage({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
+    if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     return sendJson(res, 500, { error: String(err?.message ?? err) });
