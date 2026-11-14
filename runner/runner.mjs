@@ -267,6 +267,10 @@ export function parkHoldPollFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_HOLD_POLL_MS);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_PARK_HOLD_POLL_MS;
 }
+// Held-park back-off (cpu-profile-1114 fix 1): each snapshot is a whole process-table query (Windows: a powershell CIM
+// spawn). A hold snapshots every parkHoldPollMs for its first parkHoldSlowAfterMs, then every parkHoldSlowPollMs (default
+// 4 x poll = 60 s); the poll ticks between are a pid liveness check only (Runner._heldTickCheap).
+export const DEFAULT_PARK_HOLD_SLOW_AFTER_MS = 60_000;
 // An archived agent that is mid-turn gets a cancel; if it has not stopped by then it is killed (session kept).
 export const DEFAULT_ARCHIVE_KILL_MS = 10_000;
 export function archiveKillFromEnv(env = process.env) {
@@ -303,7 +307,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv() }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv() }) {
     this.store = new LogStore(dir);
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
@@ -317,6 +321,8 @@ export class Runner {
     this.parkGraceMs = parkGraceMs;
     this.parkHoldMaxMs = parkHoldMaxMs;
     this.parkHoldPollMs = parkHoldPollMs;
+    this.parkHoldSlowAfterMs = parkHoldSlowAfterMs;
+    this.parkHoldSlowPollMs = Math.max(parkHoldPollMs, parkHoldSlowPollMs);
     this.bgProbe = bgProbe === undefined ? createBackgroundProbe() : bgProbe; // (pid) -> Promise<[{ pid, name, cmd }]>: background shells under an agent's CLI; null = no hold
     // (pid) -> bool: the held reality check (heldIds). Real pids only: a test that fakes the probe's pids fakes this too, or
     // gets no check (its fake pids are not real processes).
@@ -578,7 +584,7 @@ export class Runner {
   // A turn opened: what the last probe saw (and any hold) no longer applies; the turn's own idle re-checks.
   // heldWork: what the last hold held; cleared here because a turn that ran after the work started (self-woken or prompted)
   // already had the chance to read it, so no runtime wake is owed.
-  _turnStarted(e) { e.turnGen++; e.work = null; e.heldSince = null; e.heldWork = null; e.heldNow = null; }
+  _turnStarted(e) { e.turnGen++; e.work = null; e.heldSince = null; e.heldWork = null; e.heldNow = null; e.heldProbedAt = null; }
 
   // Background work is only possible after a turn ran in this process, and only checkable with a pid and the hold on.
   _mayHoldWork(e) { return this.parkHoldMaxMs > 0 && !!this.bgProbe && Number.isInteger(e.handle?.pid) && e.turnGen > 0; }
@@ -781,6 +787,7 @@ export class Runner {
   // Explicit stops (archive, shutdown, kill) still kill at once.
   _parkWhenClear(id, entry) {
     if (!this._mayHoldWork(entry)) { this.park(id); this._pump(); return; }
+    if (this._heldTickCheap(id, entry)) return;
     this._probeWork(id, entry).then((work) => {
       if (work === null || this._shutDown || this.live.get(id) !== entry || entry.perms.size > 0 || !this._parkable(entry)) return; // a turn started or the agent went: its own idle re-arms
       if (entry.progress !== entry.idleProgress) { // events since the idle with no new turn (the CLI reporting a finished task on its own)
@@ -813,6 +820,7 @@ export class Runner {
         entry.heldWork = work;
         this.store.append(id, 'park-held', { work, maxHoldMs: this.parkHoldMaxMs });
       }
+      entry.heldProbedAt = now; // the back-off's last snapshot (_heldTickCheap)
       entry.heldNow = work; // what holds it NOW (heldWork keeps what the hold started on, for the wake text): heldIds' reality check
       const heldMs = now - entry.heldSince;
       if (heldMs >= this.parkHoldMaxMs) {
@@ -824,6 +832,26 @@ export class Runner {
       entry.work = null; // the next check takes a fresh snapshot
       this._armPark(id, entry, Math.min(this.parkHoldPollMs, this.parkHoldMaxMs - heldMs));
     }).catch((err) => { try { this.store.append(id, 'error', { message: `park: ${err.message}` }); } catch { /* log gone */ } }); // never an unhandled rejection in the runner
+  }
+
+  // The held-park back-off (cpu-profile-1114 fix 1). A hold past its first parkHoldSlowAfterMs takes a fresh snapshot
+  // only every parkHoldSlowPollMs; the parkHoldPollMs ticks between check the pids of the shells the last snapshot saw
+  // (the same reality check heldIds runs). All dead: the hold drops at once (park-held-dead, then one grace, a fresh
+  // probe and the idea-112 wake or the park), so finished work is still noticed within one fast poll. Still alive:
+  // re-armed, no snapshot. Falls through to the full probe when a snapshot is due, the hold is at parkHoldMaxMs (the
+  // forced park kills what a FRESH snapshot sees), or the CLI emitted events while idle. The back-off resets with the hold:
+  // heldSince is per hold (cleared by a new turn, a clean probe, the reality check and stopBackground). No pid check
+  // (pidAlive null) or no known pid: the hold stands until the next snapshot. True when this tick needed no snapshot.
+  _heldTickCheap(id, entry) {
+    if (entry.heldSince === null || entry.heldSince === undefined || !Number.isFinite(entry.heldProbedAt)) return false;
+    if (entry.progress !== entry.idleProgress) return false;
+    const now = Date.now();
+    const heldMs = now - entry.heldSince;
+    const snapAt = entry.heldProbedAt + this.parkHoldSlowPollMs;
+    if (heldMs < this.parkHoldSlowAfterMs || heldMs >= this.parkHoldMaxMs || now >= snapAt) return false;
+    if (this._reconcileHeldEntry(id, entry)) return true; // its shells all died: dropped, the after-hold flow is armed
+    this._armPark(id, entry, Math.min(this.parkHoldPollMs, snapAt - now, this.parkHoldMaxMs - heldMs));
+    return true;
   }
 
   // idea-112: held background work exited, one more grace passed and no turn ran since (the CLI did not start one on its
@@ -1153,16 +1181,20 @@ export class Runner {
   // idea-112 wake (heldWork is kept) or the park. No pid known (or no liveness check): kept, the poll stays the authority.
   _reconcileHeld() {
     if (!this.pidAlive) return;
-    for (const [id, e] of this.live) {
-      if (e.heldSince === null || e.heldSince === undefined) continue;
-      const pids = (Array.isArray(e.heldNow) ? e.heldNow : Array.isArray(e.heldWork) ? e.heldWork : []).map((w) => w?.pid).filter((p) => Number.isInteger(p) && p > 0);
-      if (!pids.length || pids.some((p) => this.pidAlive(p))) continue;
-      e.heldSince = null;
-      e.heldNow = null;
-      e.work = []; // known clean: not "held until the first probe" either
-      try { this.store.append(id, 'park-held-dead', { pids }); } catch { /* log gone */ }
-      this._scheduleParkAfterTurn(id, e);
-    }
+    for (const [id, e] of this.live) this._reconcileHeldEntry(id, e);
+  }
+
+  // One entry's reality check; true when its hold was dropped.
+  _reconcileHeldEntry(id, e) {
+    if (!this.pidAlive || e.heldSince === null || e.heldSince === undefined) return false;
+    const pids = (Array.isArray(e.heldNow) ? e.heldNow : Array.isArray(e.heldWork) ? e.heldWork : []).map((w) => w?.pid).filter((p) => Number.isInteger(p) && p > 0);
+    if (!pids.length || pids.some((p) => this.pidAlive(p))) return false;
+    e.heldSince = null;
+    e.heldNow = null;
+    e.work = []; // known clean: not "held until the first probe" either
+    try { this.store.append(id, 'park-held-dead', { pids }); } catch { /* log gone */ }
+    this._scheduleParkAfterTurn(id, e);
+    return true;
   }
 
   // Stops an idle agent's background work (ideas 228 + 229): every shell a FRESH probe sees under its CLI is killed with
