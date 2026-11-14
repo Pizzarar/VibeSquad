@@ -495,8 +495,9 @@ if (isMain) {
       server.once("close", () => sup.stop());
     }
     // Before the audit seeding below, so a backfilled Perfection lane gets its schedule on this same start.
-    try { persistTemplateReconcile(rootDir); } catch (e) { console.warn("template reconcile failed:", e?.message ?? e); }
-    void sharedSchedules().then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
+    // Async (its teams.json lock wait must not block requests), so the seeding is chained after it.
+    const reconciled = persistTemplateReconcile(rootDir).catch((e) => console.warn("template reconcile failed:", e?.message ?? e));
+    void reconciled.then(() => sharedSchedules()).then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
     setImmediate(() => getStale({ rootDir }));
     let activeMuxes = [];

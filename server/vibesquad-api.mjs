@@ -18,7 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus } from "./first-run.mjs";
-import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry } from "./teams-file.mjs";
+import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
@@ -510,9 +510,9 @@ function handleTeams(req, res, rootDir) {
     res.statusCode = 405;
     return res.end();
   }
-  readBody(req).then((parsed) => {
+  readBody(req).then(async (parsed) => {
     try {
-      const result = writeTeamsRegistry(parsed, rootDir);
+      const result = await writeTeamsRegistryAsync(parsed, rootDir);
       if (result.status === 200) {
         seedHubBriefs(result.prevTeams, result.body.teams, rootDir);
       }

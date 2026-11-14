@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { freezeLaneCodes, isHubLane, seedStandingLane } from "./lane-pure.mjs";
-import { resolveTeamsFilePath, teamsRevision, vibesquadHome, writeTeamsRegistry } from "./teams-file.mjs";
+import { resolveTeamsFilePath, teamsRevision, vibesquadHome, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 
 // Template reconcile (G3): old Squads are diffed against what buildNewSquadTeamDef (src/newSquadDef.ts) makes today.
@@ -76,11 +76,12 @@ function logDriftMetric(team, text, home) {
   fs.appendFileSync(path.join(home, "logs", `${team.id}--${lane}.jsonl`), line, "utf8");
 }
 
-/** At server start: persist the additive reconcile once, then log a `template-drift` metric per Squad for what is left (only when that Squad's drift changed since last logged). Never writes teams.example.json. */
-export function persistTemplateReconcile(rootDir) {
+/** At server start: persist the additive reconcile once, then log a `template-drift` metric per Squad for what is left (only when that Squad's drift changed since last logged). Never writes teams.example.json.
+ * Async: it runs after listen(), so the teams.json lock wait must not block requests (idea-227). */
+export async function persistTemplateReconcile(rootDir) {
   const file = resolveTeamsFilePath(rootDir);
   if (path.basename(file) === "teams.example.json") return { changed: false, auto: [], logOnly: [] };
-  // Revision is taken with the read; writeTeamsRegistry re-checks it under its lock and answers 409 if teams.json moved meanwhile, so a concurrent edit is never overwritten (retry on the fresh file).
+  // Revision is taken with the read; writeTeamsRegistryAsync re-checks it under its lock and answers 409 if teams.json moved meanwhile, so a concurrent edit is never overwritten (retry on the fresh file).
   let r;
   let teams;
   let rec;
@@ -93,7 +94,7 @@ export function persistTemplateReconcile(rootDir) {
     rec = reconcileTemplate(teams);
     changed = rec.teams !== teams;
     if (!changed) break;
-    const w = writeTeamsRegistry({ ...r.data, teams: rec.teams, revision }, rootDir);
+    const w = await writeTeamsRegistryAsync({ ...r.data, teams: rec.teams, revision }, rootDir);
     if (w.status !== 409) break;
     changed = false;
     rec = { teams, auto: [], logOnly: [] };
