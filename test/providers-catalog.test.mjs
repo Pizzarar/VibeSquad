@@ -2537,3 +2537,87 @@ test('usa-29: autonomy.bySquad rows carry mergedInCoverage (= that squad planAut
   const scoped = getUsage({ home, git, laneCodes, squad: 'efi' });
   assert.equal(scoped.autonomy.planAutonomy.mergedUnits, scoped.autonomy.bySquad.find((r) => r.squad === 'efi').mergedInCoverage);
 });
+
+test('usa-29 fix1: real vs.route label format parses stakes; explicit stakes is never overwritten', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, labels, extra = []) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-opus-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', profile: 'Implement - Opus', labels } },
+    ...extra,
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const route = (s) => `stakes=${s} model=claude-opus-5-5 effort=high reason=auth refactor`;
+  mk('rn-r1', { 'vs.route': route('tierA-security') });
+  mk('rn-r2', { stakes: 'mechanical', 'vs.route': route('tierA-security') }); // explicit wins
+  mk('rn-r3', { 'vs.route': route('tierA-invariant') }, [{ ts: T0 + 500, type: 'meta', patch: { labels: { 'vs.route': route('tierA-security') } } }]); // later route does not overwrite
+  mk('rn-r4', { 'vs.route': 'tierA-security' }); // bare value still accepted
+  const u = getUsage({ home, git: noGit });
+  const stakesOf = (s) => u.byProfile.find((p) => p.stakes === s)?.runs ?? 0;
+  assert.equal(stakesOf('tierA-security'), 2, 'rn-r1 + rn-r4');
+  assert.equal(stakesOf('mechanical'), 1, 'explicit labels.stakes beats vs.route');
+  assert.equal(stakesOf('tierA-invariant'), 1, 'first route kept');
+  assert.equal(stakesOf('normal'), 0, 'no real route degrades to normal');
+});
+
+test('usa-29 fix1: a label-marked digest in the implementer worktree is not attributed as the implementer', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-digest', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-x', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { digestFor: 'rn-impl' } } },
+    { ts: T0 + 500, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  writeAgent(home, 'rn-impl', [
+    { ts: T0 + 1000, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-x', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 2000, type: 'turn_done', costUsd: 2 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-x' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  assert.equal(u.merged.units.find((x) => x.unit === 'unit-x').implementerAgentId, 'rn-impl');
+});
+
+test('usa-29 fix1: ledger persists implementerModel/stakes/reviewerFamily; folded units keep them; old lines still read', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const ledgerFile = path.join(home, 'runner', 'usage-ledger.jsonl');
+  fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+  const base = { kind: 'unit', lane: 'usage', reviewRounds: 1, costUsd: 2, inputTokens: 1, outputTokens: 1, turns: 1, locAdded: 1, locDeleted: 0, filesChanged: 1 };
+  fs.writeFileSync(ledgerFile, [
+    { ...base, sha: 'old1', unit: 'unit-old-new', ts: new Date(T0 - 5e6).toISOString(), workflowMode: 'claude-opus-5-5 · tierA-invariant -> claude-review', implementerModel: 'claude-opus-5-5', stakes: 'tierA-invariant', reviewerFamily: 'claude-review' },
+    { ...base, sha: 'old2', unit: 'unit-old-legacy', ts: new Date(T0 - 4e6).toISOString(), workflowMode: 'sonnet+gemini-review' }, // pre-fix1 line
+  ].map((r) => JSON.stringify(r) + '\n').join(''));
+  writeAgent(home, 'rn-live', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-live', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', stakes: 'mechanical' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-live' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const wf = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  const folded = wf['claude-opus-5-5 · tierA-invariant -> claude-review'];
+  assert.deepEqual([folded.implementerModel, folded.stakes, folded.reviewerFamily], ['claude-opus-5-5', 'tierA-invariant', 'claude-review']);
+  assert.equal(wf['sonnet+gemini-review'].units, 1, 'old ledger line still folds');
+  assert.equal(wf['sonnet+gemini-review'].implementerModel, null);
+  // live unit written to the ledger carries the new fields
+  const rec = readUsageLedger(home).find((r) => r.kind === 'unit' && r.unit === 'unit-live');
+  assert.deepEqual([rec.implementerModel, rec.stakes, rec.reviewerFamily], ['claude-sonnet-5-5', 'mechanical', 'gemini-review']);
+});

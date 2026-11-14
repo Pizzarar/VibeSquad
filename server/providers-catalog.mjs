@@ -411,8 +411,11 @@ function foldIdentity(st, m) {
   const team = m.team ?? m.labels?.team;
   if (typeof team === "string" && team) st.team = team;
   // usa-29: stakes (route label) + digest marker (identity.mjs isDigestAgent labels) ride the same meta.
-  const stakes = m.stakes ?? m.labels?.stakes ?? m.labels?.["vs.route"];
-  if (typeof stakes === "string" && stakes) st.stakes = normalizeStakes(stakes);
+  // vs.route is "stakes=<s> model=<m> effort=<e> reason=<r>" (agent-duties.ts); an explicit stakes/labels.stakes always wins.
+  const route = typeof m.labels?.["vs.route"] === "string" ? (/\bstakes=([A-Za-z0-9_-]+)/.exec(m.labels["vs.route"])?.[1] ?? m.labels["vs.route"]) : undefined;
+  const explicit = m.stakes ?? m.labels?.stakes;
+  if (typeof explicit === "string" && explicit) st.stakes = normalizeStakes(explicit);
+  else if (typeof route === "string" && route && st.stakes === undefined) st.stakes = normalizeStakes(route);
   if (m.role === "digest" || m.labels?.role === "digest" || m.labels?.digest || m.labels?.digestFor || m.labels?.digestTurn) st.digest = true;
 }
 
@@ -1105,6 +1108,7 @@ const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|
 /** True when a worker run is an implementer candidate rather than a digest/review/check/scout run in the same worktree. */
 function isImplementerWorker(a) {
   if (a.role !== "worker") return false;
+  if (a.jobKind !== undefined && a.jobKind !== "implementer") return false;
   if (a.roleOnly) return false;
   if (NON_IMPLEMENTER_PROFILE_RE.test(a.profile || "")) return false;
   if (REVIEWER_TITLE_RE.test(a.title || "") && !/\breview\s+fix/i.test(a.title || "")) return false;
@@ -1533,7 +1537,7 @@ function buildByWorkflow(merged, agentById) {
     const implementer = u.implementerAgentId ? agentById.get(u.implementerAgentId) : null;
     const workflowMode = u.workflowMode ?? classifyWorkflowMode(u, implementer);
     const g = getOrSet(groups, workflowMode, () => ({
-      workflowMode, implementerModel: implementer?.model ? baseModel(implementer.model) : null, stakes: implementer ? (implementer.stakes ?? "normal") : null, reviewerFamily: u.reviewerFamily ?? null,
+      workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
       units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
       fixAfterMergeCount: 0, knownCostUnits: 0,
@@ -1759,6 +1763,9 @@ function buildLedgerSnapshot(merged, rows) {
     ...(u.repo ? { repo: u.repo } : {}),
     implementerProfile: u.implementerProfile ?? null,
     implementerProvider: u.implementerProvider ?? null,
+    ...(u.implementerModel ? { implementerModel: u.implementerModel } : {}),
+    ...(u.stakes ? { stakes: u.stakes } : {}),
+    ...(u.reviewerFamily ? { reviewerFamily: u.reviewerFamily } : {}),
     workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
     reviewRounds: u.reviewRounds ?? 0,
     firstTryPass: (u.reviewRounds ?? 0) <= 1,
@@ -2458,6 +2465,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       ...u, mergedAtMs,
       implementerProfile: implementer ? implementer.profile : null,
       implementerProvider: implementer ? implementer.provider : null,
+      implementerModel: implementer?.model ? baseModel(implementer.model) : null,
+      stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
       costUsd: implementer ? implementer.costUsd : null,
       inputTokens: implementer ? implementer.inputTokens : 0,
@@ -2597,6 +2606,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
       lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
       fromLedger: true,
