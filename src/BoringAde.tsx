@@ -44,14 +44,16 @@ export function resolvePinChatAgentId(
   activeAgentId: string | null | undefined,
   agents: ReadonlyMap<string, { id: string; labels?: Record<string, string> | null }>,
 ): string | null {
-  const base = (role === "lead" ? pin.lead : pin.brainstorm)?.agent.id ?? null;
-  if (!activeAgentId || activeAgentId === base) return base;
+  const member = role === "lead" ? pin.lead : pin.brainstorm;
+  const rawBase = member?.agent.id ?? null;
+  const base = isLive(member) ? rawBase : null; // a closed Buddy is "no session": show the Start card, not its drawer
+  if (!activeAgentId || activeAgentId === rawBase) return base;
   const next = agents.get(activeAgentId);
   if (!next) return base;
   const labels = (next.labels ?? {}) as Record<string, string>;
   const laneOk = !pin.lane?.id || (labels.lane ?? "").toLowerCase() === String(pin.lane.id).toLowerCase();
   const roleOk = (labels.role ?? role) === role || (role === "brainstorm" && labels.role === "brainstorm");
-  const successor = labels["vs.restarted-from"] === base || (base !== null && !agents.has(base));
+  const successor = labels["vs.restarted-from"] === rawBase || (rawBase !== null && !agents.has(rawBase));
   return laneOk && roleOk && successor ? next.id : base;
 }
 
@@ -121,6 +123,8 @@ export async function boringStartBugs(squadId: string, deps: { create?: (squadId
     return (e as { message?: string } | null)?.message || String(e);
   }
 }
+
+const startInFlight = new Set<string>();
 
 export const BORING_OVERVIEW_LAYOUT_KEY = "vs.boringOverviewLayout";
 export type OverviewLayout = "cards" | "map";
@@ -252,15 +256,22 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     </svg>
   );
 
+  // One stable key per start: the Bugs lane may be created mid-flight (pin goes null -> set), which must not drop busy/error.
+  const startKeyFor = (pin: Pin | null) => (selectedLaneId === "_bugs" ? "_bugs" : pin ? `${pin.squad?.id}/${pin.lane.id}` : null);
   const runStart = (laneKey: string, start: () => Promise<string | null>) => {
+    const flightKey = `${view?.team.id}|${laneKey}`;
+    if (startInFlight.has(flightKey)) return; // synchronous double-click guard (state alone lags a render)
+    startInFlight.add(flightKey);
     setStartState({ laneKey, busy: true, error: null });
-    void start().then((error) => setStartState({ laneKey, busy: false, error }));
+    void start()
+      .then((error) => setStartState({ laneKey, busy: false, error }))
+      .finally(() => startInFlight.delete(flightKey));
   };
-  const startBrainstorm = (pin: Pin) => runStart(`${pin.squad?.id}/${pin.lane.id}`, () => boringStartBrainstorm(pin));
+  const startBrainstorm = (pin: Pin) => runStart(startKeyFor(pin) ?? "", () => boringStartBrainstorm(pin));
   const needsBugsLane = selectedLaneId === "_bugs" && !currentPin;
   const startBugs = () => view && runStart("_bugs", () => boringStartBugs(view.team.id));
   const emptyCard = () => {
-    const startKey = currentPin ? `${currentPin.squad?.id}/${currentPin.lane.id}` : needsBugsLane ? "_bugs" : null;
+    const startKey = startKeyFor(currentPin);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
     const spec = {
       overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && onSpinUpOverlord(view), disabled: overlordBusy },

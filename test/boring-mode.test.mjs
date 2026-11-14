@@ -647,3 +647,35 @@ test("Start Brainstorm failure is returned (shown in the empty card), never swal
   assert.match(ade, /data-testid="boring-start-error"/);
   assert.doesNotMatch(ade, /run: \(\) => currentPin && onOpenPin\(currentPin\)/);
 });
+
+test("idea-246 review: Bugs start keeps busy + error when the lane is created mid-flight; double click creates once", async () => {
+  reset();
+  const view0 = squad({ team: { id: "efi2", name: "E" }, bugs: { pin: null, leadRunning: false, needsYou: 0 } });
+  let rejectSpin;
+  globalThis.__spinUpPin = () => new Promise((_r, rej) => { rejectSpin = rej; });
+  byId(render(props(view0)), "boring-core-bugs").props.onClick();
+  const t0 = render(props(view0));
+  byId(t0, "boring-empty-cta").props.onClick();
+  byId(t0, "boring-empty-cta").props.onClick(); // double click
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(globalThis.__calls.filter((c) => c[0] === "createQuickBugsPin").length, 1);
+  // The lane now exists (pin set): key must not flip, busy stays.
+  const view1 = squad({ team: { id: "efi2", name: "E" }, bugs: { pin: lanePin("bugs", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  let t1 = render(props(view1));
+  assert.equal(byId(t1, "boring-empty-cta").props.disabled, true);
+  assert.match(JSON.stringify(byId(t1, "boring-empty-card").props.children), /Starting Brainstorm/);
+  rejectSpin(new Error("spawn boom"));
+  await new Promise((r) => setTimeout(r, 0));
+  t1 = render(props(view1));
+  assert.match(JSON.stringify(byId(t1, "boring-start-error").props.children), /spawn boom/);
+  assert.equal(byId(t1, "boring-empty-cta").props.disabled, false);
+});
+
+test("idea-246 review: a closed Buddy shows the Start card, not its drawer (resolvePinChatAgentId)", () => {
+  reset();
+  const view = squad({ pins: [lanePin("ade", { brainstorm: mem("ade-bs", "closed") })] });
+  byId(render(props(view)), "boring-conv-brainstorm-ade").props.onClick();
+  const t = render(props(view));
+  assert.ok(byId(t, "boring-empty-card"));
+  assert.equal(byType(t, "AgentDrawer"), null);
+});
