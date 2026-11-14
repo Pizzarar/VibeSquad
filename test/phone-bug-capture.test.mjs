@@ -206,9 +206,9 @@ describe("phone bug capture", () => {
 
   test("attach re-checks under the lock: a failed attach leaves no orphan file", async () => {
     const id = await park();
-    for (let i = 0; i < inbox.INBOX_MEDIA_MAX_PER_CARD; i++) inbox.attachInboxMedia({ cardId: id, mime: "image/png", bytes: PNG, baseHome: home });
+    for (let i = 0; i < inbox.INBOX_MEDIA_MAX_PER_CARD; i++) await inbox.attachInboxMedia({ cardId: id, mime: "image/png", bytes: PNG, baseHome: home });
     const before = readdirSync(join(home, "inbox-media", id)).sort();
-    assert.throws(() => inbox.attachInboxMedia({ cardId: id, mime: "image/png", bytes: PNG, baseHome: home }), /at most/);
+    await assert.rejects(() => inbox.attachInboxMedia({ cardId: id, mime: "image/png", bytes: PNG, baseHome: home }), /at most/);
     assert.deepEqual(readdirSync(join(home, "inbox-media", id)).sort(), before);
     // stale precheck: card flips to delivered between the read and the lock
     const id2 = await park();
@@ -216,7 +216,7 @@ describe("phone bug capture", () => {
     const c = orig.find((x) => x.id === id2);
     c.status = "archived";
     inbox.writeInboxCards(orig, home);
-    assert.throws(() => inbox.attachInboxMedia({ cardId: id2, mime: "image/png", bytes: PNG, baseHome: home }), /archived/);
+    await assert.rejects(() => inbox.attachInboxMedia({ cardId: id2, mime: "image/png", bytes: PNG, baseHome: home }), /archived/);
     assert.equal(existsSync(join(home, "inbox-media", id2)), false);
   });
 });

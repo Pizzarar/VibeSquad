@@ -894,7 +894,7 @@ async function watchTool(ctx, args = {}) {
     // X1 F6: same rule as `add`'s owner: only the set's owner, or the same-Squad Overlord for a set of its own Squad, may
     // cancel. Ids are listable (`watch list` with any owner), so the id alone must never be the capability.
     const allow = (set) => set.owner === callerId || (isOverlord && String(set.team ?? "") === team);
-    const out = await ws.cancelWatch(id, callerId, { allow });
+    const out = await (ws.cancelWatchAsync ?? ws.cancelWatch)(id, callerId, { allow }); // async: never blocks the server loop on the lock (idea-227)
     if (out?.refused) throw new Error(out.error);
     return out;
   }
@@ -922,7 +922,7 @@ async function watchTool(ctx, args = {}) {
   if (!items.length) throw new Error("a watch set needs at least one item (agents, --suite or --restart)");
   const stallMin = args.stallMin === undefined ? 15 : Number(args.stallMin);
   if (!Number.isFinite(stallMin) || stallMin <= 0) throw new Error("stallMin must be a positive number of minutes");
-  return ws.addWatch({ owner, team, lane, items, stallMin });
+  return (ws.addWatchAsync ?? ws.addWatch)({ owner, team, lane, items, stallMin });
 }
 
 /** POST /__vibesquad/brainstorm-restart as this caller (agent headers for an agent, never the owner's local token; X1b). */

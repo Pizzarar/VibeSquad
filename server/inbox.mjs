@@ -10,7 +10,7 @@ import { isHubLane } from "./lane-pure.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
-import { updateJsonFileSync } from "./file-lock.mjs";
+import { thenMaybe, updateJsonFile, updateJsonFileSync } from "./file-lock.mjs";
 
 const REPO_ROOT = resolve(import.meta.dirname, "..");
 
@@ -65,17 +65,20 @@ export function readInboxCards(baseHome) {
  * write in the server and the CLI funnels through this so a concurrent add/triage can never lose cards or mint a
  * duplicate idea-N id.
  */
+const cardsMutation = (mutate) => (data) => {
+  const cards = Array.isArray(data) ? data : Array.isArray(data?.cards) ? data.cards : [];
+  const out = mutate(cards);
+  return out === undefined ? cards : out;
+};
+
+/** Sync (blocks while waiting for the lock): the `vs` CLI and one-shot scripts. */
 function updateInboxCardsSync(baseHome, mutate, opts = {}) {
-  const file = getInboxPath(baseHome);
-  return updateJsonFileSync(
-    file,
-    (data) => {
-      const cards = Array.isArray(data) ? data : Array.isArray(data?.cards) ? data.cards : [];
-      const out = mutate(cards);
-      return out === undefined ? cards : out;
-    },
-    { fallback: [], ...opts },
-  );
+  return updateJsonFileSync(getInboxPath(baseHome), cardsMutation(mutate), { fallback: [], ...opts });
+}
+
+/** Async (never blocks the event loop while waiting, idea-227): every server request path. Resolves to the written cards. */
+function updateInboxCards(baseHome, mutate, opts = {}) {
+  return updateJsonFile(getInboxPath(baseHome), cardsMutation(mutate), { fallback: [], ...opts });
 }
 
 export function writeInboxCards(cards, baseHome) {
@@ -476,7 +479,17 @@ function assertKnownLane(laneId, teams) {
   throw new Error(`unknown lane "${raw}": not in the teams registry (cards on an unknown lane never reach a Buddy)`);
 }
 
+/** Park ideas as cards (sync lock; `vs inbox add` CLI). Server request paths use addInboxCardsAsync. */
 export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
+  return addInboxCardsWith(updateInboxCardsSync, body, rootDir);
+}
+
+/** addInboxCards for the server process: waits for the inbox lock without blocking the event loop. */
+export async function addInboxCardsAsync(body = {}, rootDir = REPO_ROOT) {
+  return addInboxCardsWith(updateInboxCards, body, rootDir);
+}
+
+function addInboxCardsWith(update, body, rootDir) {
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
 
@@ -496,7 +509,7 @@ export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
   const explicitLane = explicitLaneRaw ? assertKnownLane(explicitLaneRaw, teams) : "";
 
   let added = [];
-  const cards = updateInboxCardsSync(baseHome, (working) => {
+  const written = update(baseHome, (working) => {
     added = [];
     const now = new Date().toISOString();
 
@@ -533,13 +546,7 @@ export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
     return working;
   });
 
-  const summary = `parked ${added.length} ideas → Inbox`;
-  return {
-    ok: true,
-    added,
-    cards,
-    summary,
-  };
+  return thenMaybe(written, (cards) => ({ ok: true, added, cards, summary: `parked ${added.length} ideas → Inbox` }));
 }
 
 function toBulletLines(text) {
@@ -587,13 +594,23 @@ export function assertInboxTriageCaller(caller = {}, cardIds = [], baseHome) {
   }
 }
 
+/** Merge / bounce / update / archive / delete cards (sync lock; CLI fallback). Server request paths use triageInboxCardsAsync. */
 export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
+  return triageInboxCardsWith(updateInboxCardsSync, body, rootDir);
+}
+
+/** triageInboxCards for the server process: waits for the inbox lock without blocking the event loop. */
+export async function triageInboxCardsAsync(body = {}, rootDir = REPO_ROOT) {
+  return triageInboxCardsWith(updateInboxCards, body, rootDir);
+}
+
+function triageInboxCardsWith(update, body, rootDir) {
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
   const action = String(body.action || "").trim();
 
   let result = null;
-  const cards = updateInboxCardsSync(baseHome, (cards) => {
+  const written = update(baseHome, (cards) => {
     const now = new Date().toISOString();
 
     if (action === "merge") {
@@ -755,7 +772,7 @@ export function triageInboxCards(body = {}, rootDir = REPO_ROOT) {
     throw new Error(`Unknown triage action "${action}"`);
   });
 
-  return { ok: true, ...result, cards };
+  return thenMaybe(written, (cards) => ({ ok: true, ...result, cards }));
 }
 
 /** Cards being delivered right now: a double-click while the first send is in flight must not send twice. */
@@ -836,7 +853,7 @@ export async function sendInboxCard(body = {}, rootDir = REPO_ROOT) {
 
     const now = new Date().toISOString();
     let updated = card;
-    const written = updateInboxCardsSync(baseHome, (current) => {
+    const written = await updateInboxCards(baseHome, (current) => {
       const t = current.find((c) => c.id === cardId);
       if (!t) throw new Error(`Inbox card not found: ${cardId}`);
       t.deliveredTo = target.id;
@@ -892,7 +909,7 @@ export function getInboxMediaDir(baseHome) {
  * card's `attachments` and link the absolute path in the card text so workers/Buddies can read it.
  * body: { cardId, mime, bytes: Buffer, baseHome }.
  */
-export function attachInboxMedia(body = {}) {
+export async function attachInboxMedia(body = {}) {
   const baseHome = body.baseHome;
   const cardId = String(body.cardId || "");
   if (!/^idea-\d+$/.test(cardId)) throw new Error("invalid cardId");
@@ -917,7 +934,7 @@ export function attachInboxMedia(body = {}) {
   let updated = card;
   try {
     // Re-check under the lock: the card may have been delivered, archived, deleted or filled while we wrote.
-    updateInboxCardsSync(baseHome, (current) => {
+    await updateInboxCards(baseHome, (current) => {
       const t = current.find((c) => c.id === cardId);
       if (!t) throw new Error(`Inbox card not found: ${cardId}`);
       if (t.deliveredAt) throw new Error("card already delivered");

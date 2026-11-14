@@ -109,9 +109,9 @@ describe("E5 wiring: pairing and principal", () => {
   });
 
   test("attacker: a relayed request cannot claim loopback or local-owner trust, whatever socket or headers it fakes", async () => {
-    const victim = auth.redeemPairCode({ rawCode: auth.createPairCode(), ip: "100.64.0.9", name: "Victim phone" });
+    const victim = await auth.redeemPairCode({ rawCode: auth.createPairCode(), ip: "100.64.0.9", name: "Victim phone" });
     assert.equal(victim.state, "paired");
-    const other = auth.redeemPairCode({ rawCode: auth.createPairCode(), ip: "100.64.0.10", name: "Other phone" });
+    const other = await auth.redeemPairCode({ rawCode: auth.createPairCode(), ip: "100.64.0.10", name: "Other phone" });
     const fake = (deviceId) => {
       const req = tunnel.createSyntheticRequest({ method: "POST", path: "/__vibesquad/pair/start", headers: { cookie: `vs_device=${victim.token}`, "x-vibesquad-token": auth.getLocalToken(), "user-agent": "node" }, deviceId });
       req.headers.host = "127.0.0.1:4180";
@@ -285,7 +285,7 @@ describe("idea-180: a rotation inside one mtime tick is still noticed", () => {
 });
 
 describe("E5 wiring: opt-in and the T8 lock", () => {
-  test("off by default: no relay.endpoint, or a non-wss one, starts nothing; only a hand-edited wss endpoint does; HTTP settings patches never add one", () => {
+  test("off by default: no relay.endpoint, or a non-wss one, starts nothing; only a hand-edited wss endpoint does; HTTP settings patches never add one", async () => {
     assert.equal(wiring.startRelayFromSettings({ requestListener: listener, settings: {} }), null);
     assert.equal(wiring.startRelayFromSettings({ requestListener: listener, settings: { relay: { endpoint: "ws://relay.example/ws" } } }), null);
     assert.equal(wiring.startRelayFromSettings({ requestListener: listener, settings: { relay: { endpoint: "https://relay.example" } } }), null);

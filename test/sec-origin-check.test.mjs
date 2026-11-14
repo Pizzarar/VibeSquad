@@ -57,10 +57,10 @@ const meshReq = ({ url = "/__vibesquad/pair/start", method = "POST", token = nul
 });
 
 /** PC-minted pairing: returns the new device's vs_device token. */
-function pairFromPc(name) {
+async function pairFromPc(name) {
   const code = auth.createPairCode();
   const res = fakeRes();
-  auth.handlePairRedeem({ url: `/pair?code=${code}&name=${encodeURIComponent(name)}`, method: "GET", headers: { host: MESH_HOST }, socket: { remoteAddress: nextIp() }, on() {} }, res);
+  await auth.handlePairRedeem({ url: `/pair?code=${code}&name=${encodeURIComponent(name)}`, method: "GET", headers: { host: MESH_HOST }, socket: { remoteAddress: nextIp() }, on() {} }, res);
   assert.equal(res.statusCode, 302, res.body);
   const m = /vs_device=([^;]+)/.exec(String(res.headers["set-cookie"] ?? ""));
   assert.ok(m, "set-cookie carries the device token");
@@ -88,14 +88,14 @@ const https = (o) => call(httpsRequest, o);
 const http = (o) => call(request, o);
 
 let phone;
-before(() => {
-  phone = pairFromPc("Owner phone");
+before(async () => {
+  phone = await pairFromPc("Owner phone");
 });
 
 describe("cookieWriteRefusal: the decision table", () => {
   const refusal = (method, headers, encrypted = true) => auth.cookieWriteRefusal({ method, headers: { host: MESH_HOST, ...headers }, socket: { encrypted } });
 
-  test("safe methods never refuse, whatever the headers say (reads are not CSRF targets; SSE/WS upgrades are GETs)", () => {
+  test("safe methods never refuse, whatever the headers say (reads are not CSRF targets; SSE/WS upgrades are GETs)", async () => {
     for (const method of ["GET", "HEAD", "get"]) {
       assert.equal(refusal(method, { origin: "https://evil.example", "sec-fetch-site": "cross-site" }), null, method);
     }
@@ -104,7 +104,7 @@ describe("cookieWriteRefusal: the decision table", () => {
     assert.equal(refusal("OPTIONS", { origin: MESH_ORIGIN }), null);
   });
 
-  test("Origin present: only the listener's own scheme://Host passes (case-insensitive); null, foreign, or wrong scheme is refused", () => {
+  test("Origin present: only the listener's own scheme://Host passes (case-insensitive); null, foreign, or wrong scheme is refused", async () => {
     for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
       assert.equal(refusal(method, { origin: MESH_ORIGIN }), null, method);
       assert.equal(refusal(method, { origin: MESH_ORIGIN, "sec-fetch-site": "same-origin" }), null, method);
@@ -122,12 +122,12 @@ describe("cookieWriteRefusal: the decision table", () => {
     assert.equal(refusal("POST", { origin: MESH_ORIGIN, "sec-fetch-site": "cross-site" }), null);
   });
 
-  test("Origin present on the loopback (http) listener matches http://Host", () => {
+  test("Origin present on the loopback (http) listener matches http://Host", async () => {
     assert.equal(refusal("POST", { host: "127.0.0.1:4189", origin: "http://127.0.0.1:4189" }, false), null);
     assert.match(refusal("POST", { host: "127.0.0.1:4189", origin: "https://127.0.0.1:4189" }, false), /is not this host/);
   });
 
-  test("Origin absent: Sec-Fetch-Site absent / none / same-origin passes; cross-site and same-site are refused", () => {
+  test("Origin absent: Sec-Fetch-Site absent / none / same-origin passes; cross-site and same-site are refused", async () => {
     assert.equal(refusal("POST", {}), null, "neither header: non-browser client (desktop proxy on old WebKit, curl, tests)");
     assert.equal(refusal("POST", { "sec-fetch-site": "none" }), null);
     assert.equal(refusal("POST", { "sec-fetch-site": "same-origin" }), null, "desktop proxy -> remote host shape");
@@ -136,13 +136,13 @@ describe("cookieWriteRefusal: the decision table", () => {
     assert.match(refusal("POST", { "sec-fetch-site": "same-origin, cross-site" }), /without an Origin/, "a repeated header joins and fails");
   });
 
-  test("the Tauri WebView origins are not an exception: the APK writes from this host's own origin after the /__vibesquad/enter hop", () => {
+  test("the Tauri WebView origins are not an exception: the APK writes from this host's own origin after the /__vibesquad/enter hop", async () => {
     for (const origin of ["http://tauri.localhost", "https://tauri.localhost", "tauri://localhost"]) {
       assert.match(refusal("POST", { origin }), /is not this host/, origin);
     }
   });
 
-  test("ownOrigin is scheme + Host, or null without a Host header", () => {
+  test("ownOrigin is scheme + Host, or null without a Host header", async () => {
     assert.equal(auth.ownOrigin({ headers: { host: "Home-PC.test:4180" }, socket: { encrypted: true } }), "https://home-pc.test:4180");
     assert.equal(auth.ownOrigin({ headers: { host: "[fd00::7]:4180" }, socket: { encrypted: true } }), "https://[fd00::7]:4180");
     assert.equal(auth.ownOrigin({ headers: {}, socket: { encrypted: true } }), null);
@@ -151,7 +151,7 @@ describe("cookieWriteRefusal: the decision table", () => {
 });
 
 describe("authenticate() is the chokepoint", () => {
-  test("attacker: a valid cookie on a cross-site POST authenticates nothing, the reason is readable, and no device state is touched", () => {
+  test("attacker: a valid cookie on a cross-site POST authenticates nothing, the reason is readable, and no device state is touched", async () => {
     const before = auth.listDevices().find((d) => d.name === "Owner phone").lastSeenAt;
     const req = meshReq({ token: phone, headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site" } });
     assert.equal(auth.authenticate(req), null);
@@ -160,7 +160,7 @@ describe("authenticate() is the chokepoint", () => {
     assert.equal(auth.ownerProof(req), false, "ownerProof follows authenticate");
   });
 
-  test("Gemini R1 L1: the refusal is stateless, so nothing stale can leak into a later decision on the same request", () => {
+  test("Gemini R1 L1: the refusal is stateless, so nothing stale can leak into a later decision on the same request", async () => {
     const headers = { origin: "https://evil.example", "sec-fetch-site": "cross-site" };
     const req = meshReq({ token: phone, headers });
     assert.equal(auth.authenticate(req), null);
@@ -185,7 +185,7 @@ describe("authenticate() is the chokepoint", () => {
     assert.match(auth.originRefusal(local), /is not this host/);
   });
 
-  test("the same cookie on a same-origin POST, a GET, or a header-less POST authenticates", () => {
+  test("the same cookie on a same-origin POST, a GET, or a header-less POST authenticates", async () => {
     for (const req of [
       meshReq({ token: phone, headers: { origin: MESH_ORIGIN, "sec-fetch-site": "same-origin" } }),
       meshReq({ token: phone, method: "GET", headers: { origin: "https://evil.example", "sec-fetch-site": "cross-site" } }),
@@ -197,13 +197,13 @@ describe("authenticate() is the chokepoint", () => {
     }
   });
 
-  test("a request without the cookie records no refusal (it was never cookie-authenticated)", () => {
+  test("a request without the cookie records no refusal (it was never cookie-authenticated)", async () => {
     const req = meshReq({ headers: { origin: "https://evil.example" } });
     assert.equal(auth.authenticate(req), null);
     assert.equal(auth.originRefusal(req), null);
   });
 
-  test("E5 relay: a relayed request authenticates by channel identity; its Origin / Sec-Fetch-Site / cookie are ignored", () => {
+  test("E5 relay: a relayed request authenticates by channel identity; its Origin / Sec-Fetch-Site / cookie are ignored", async () => {
     const dev = auth.listDevices().find((d) => d.name === "Owner phone");
     const req = {
       url: "/__vibesquad/pair/start",
@@ -350,7 +350,7 @@ describe("loopback listener: the gate in vibesquad-api.mjs", () => {
     assert.equal(r.json().error, "forbidden");
   });
 
-  test("both listener gates route the refusal through the one helper (source check; behaviour is covered above)", () => {
+  test("both listener gates route the refusal through the one helper (source check; behaviour is covered above)", async () => {
     assert.ok(readFileSync(join(rootDir, "server/serve.mjs"), "utf8").includes("originRefusal(req) ? sendCrossSiteRefused(req, res) : sendUnpaired(req, res)"));
     assert.ok(readFileSync(join(rootDir, "server/vibesquad-api.mjs"), "utf8").includes("if (originRefusal(req)) return sendCrossSiteRefused(req, res);"));
     const authSrc = readFileSync(join(rootDir, "server/auth.mjs"), "utf8");

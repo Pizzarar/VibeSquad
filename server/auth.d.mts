@@ -65,7 +65,8 @@ export function hasLocalToken(req: IncomingMessage): boolean;
 export function isLocalOwner(req: IncomingMessage): boolean;
 export function handleLocalLogin(req: IncomingMessage, res: ServerResponse): void;
 export function trackSocket(deviceId: string, socket: Duplex): void;
-export function revokeDevice(id: string): boolean;
+export function revokeDevice(id: string, opts?: { timeoutMs?: number }): string[];
+export function revokeDeviceAsync(id: string, opts?: { timeoutMs?: number }): Promise<string[]>;
 export function htmlPage(title: string, message: string): string;
 export function sendUnpaired(req: IncomingMessage, res: ServerResponse): void;
 export const CROSS_SITE_ERROR: string;
@@ -75,7 +76,7 @@ export function originRefusal(req: IncomingMessage): string | null;
 export function sendCrossSiteRefused(req: IncomingMessage, res: ServerResponse): void;
 export function handleCaCrt(req: IncomingMessage, res: ServerResponse): void;
 export function handlePairStart(req: IncomingMessage, res: ServerResponse): Promise<void>;
-export function handlePairRedeem(req: IncomingMessage, res: ServerResponse): void;
+export function handlePairRedeem(req: IncomingMessage, res: ServerResponse): Promise<void>;
 export function handleDevices(req: IncomingMessage, res: ServerResponse): void;
 export function handleRevoke(
   req: IncomingMessage,

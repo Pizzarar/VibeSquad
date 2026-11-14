@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { pidAlive } from "../runner/lock.mjs";
-import { withFileLockSync } from "./file-lock.mjs";
+import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { isDigestAgent, isRetiredRole } from "./identity.mjs";
 
@@ -75,16 +75,28 @@ function readDoc(file) {
   return doc;
 }
 
-/** Locked read-modify-write; writes (atomically) only when fn changed the doc. Returns fn's value. */
+/** The locked body shared by mutateDoc / mutateDocAsync: read, fn, and an atomic write only when fn changed the doc. */
+const docMutation = (file, fn) => (lock) => {
+  const doc = readDoc(file);
+  const before = JSON.stringify(doc);
+  const out = fn(doc);
+  if (JSON.stringify(doc) !== before) {
+    lock.assertOwned(); // a reaped (stale) holder must not commit over a newer writer's file (idea-114 L4)
+    writeFileAtomic(file, JSON.stringify(doc, null, 2) + "\n");
+  }
+  return out;
+};
+
+/** Locked read-modify-write, sync (blocks while waiting): CLI / tests. Returns fn's value. */
 function mutateDoc(file, fn) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  return withFileLockSync(file, () => {
-    const doc = readDoc(file);
-    const before = JSON.stringify(doc);
-    const out = fn(doc);
-    if (JSON.stringify(doc) !== before) writeFileAtomic(file, JSON.stringify(doc, null, 2) + "\n");
-    return out;
-  });
+  return withFileLockSync(file, docMutation(file, fn));
+}
+
+/** mutateDoc for the server process: waits for the lock without blocking the event loop (idea-227). Resolves to fn's value. */
+function mutateDocAsync(file, fn) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  return withFileLock(file, docMutation(file, fn));
 }
 
 function prune(doc, now) {
@@ -107,8 +119,8 @@ function normalizeItem(raw) {
 // Registry API (W2's `vs watch` verb and MCP `watch` call these; auth is W2's job, W1 trusts its caller)
 // ---------------------------------------------------------------------------
 
-/** Register a watch set. `opts.home` / `opts.now` are for tests. Returns `{id}`. */
-export function addWatch({ owner, team, lane, items, stallMin = DEFAULT_STALL_MIN, escalateMin } = {}, { home, now = Date.now() } = {}) {
+/** Validate and build a new set (shared by addWatch / addWatchAsync). */
+function newWatchSet({ owner, team, lane, items, stallMin = DEFAULT_STALL_MIN, escalateMin } = {}, now) {
   const who = String(owner ?? "").trim();
   if (!who) throw new Error("addWatch: owner is required");
   if (!Array.isArray(items) || !items.length) throw new Error("addWatch: at least one item is required");
@@ -126,11 +138,25 @@ export function addWatch({ owner, team, lane, items, stallMin = DEFAULT_STALL_MI
     seen.add(k);
     norm.push({ ...it, state: "waiting", phase: "pending", since: at, phaseSince: at });
   }
-  const set = { id: `w-${randomBytes(4).toString("hex")}`, owner: who, team: String(team ?? "").trim(), lane: String(lane ?? "").trim(), createdAt: at, stallMin: sm, ...(em !== undefined ? { escalateMin: em } : {}), items: norm, pings: [] };
-  mutateDoc(watchesPath({ home }), (doc) => {
-    prune(doc, now);
-    doc.sets.push(set);
-  });
+  return { id: `w-${randomBytes(4).toString("hex")}`, owner: who, team: String(team ?? "").trim(), lane: String(lane ?? "").trim(), createdAt: at, stallMin: sm, ...(em !== undefined ? { escalateMin: em } : {}), items: norm, pings: [] };
+}
+
+const pushSet = (set, now) => (doc) => {
+  prune(doc, now);
+  doc.sets.push(set);
+};
+
+/** Register a watch set (sync; CLI / tests). `opts.home` / `opts.now` are for tests. Returns `{id}`. */
+export function addWatch(spec, { home, now = Date.now() } = {}) {
+  const set = newWatchSet(spec, now);
+  mutateDoc(watchesPath({ home }), pushSet(set, now));
+  return { id: set.id };
+}
+
+/** addWatch for the server process (MCP `watch`): never blocks the event loop on the lock. Resolves to `{id}`. */
+export async function addWatchAsync(spec, { home, now = Date.now() } = {}) {
+  const set = newWatchSet(spec, now);
+  await mutateDocAsync(watchesPath({ home }), pushSet(set, now));
   return { id: set.id };
 }
 
@@ -148,7 +174,16 @@ export function listWatches({ owner, team, all } = {}, { home } = {}) {
  * returns false the set is left untouched and `{ok:false, refused:true}` comes back. No predicate = the caller already authorized.
  */
 export function cancelWatch(id, callerId, { home, now = Date.now(), allow } = {}) {
-  return mutateDoc(watchesPath({ home }), (doc) => {
+  return mutateDoc(watchesPath({ home }), cancelSet(id, callerId, now, allow));
+}
+
+/** cancelWatch for the server process (MCP `watch`): never blocks the event loop on the lock. */
+export function cancelWatchAsync(id, callerId, { home, now = Date.now(), allow } = {}) {
+  return mutateDocAsync(watchesPath({ home }), cancelSet(id, callerId, now, allow));
+}
+
+function cancelSet(id, callerId, now, allow) {
+  return (doc) => {
     const set = doc.sets.find((s) => s.id === id);
     if (!set) return { ok: false, id, error: `no watch ${id}` };
     if (typeof allow === "function" && !allow(set)) {
@@ -161,7 +196,7 @@ export function cancelWatch(id, callerId, { home, now = Date.now(), allow } = {}
     set.cancelledAt = iso(now);
     set.cancelledBy = String(callerId ?? "").trim() || "unknown";
     return { ok: true, id };
-  });
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -724,7 +759,7 @@ export function createWatchEngine({
         for (const s of dry) stepSet(s, ctx);
         if (JSON.stringify(dry) !== before) {
           try {
-            mutateDoc(file, (doc) => {
+            await mutateDocAsync(file, (doc) => {
               for (const s of doc.sets) stepSet(s, ctx);
               prune(doc, ctx.now);
             });
@@ -754,7 +789,7 @@ export function createWatchEngine({
     for (const { set, item } of due) {
       let claimed = false;
       try {
-        mutateDoc(file, (doc) => {
+        await mutateDocAsync(file, (doc) => {
           const s = doc.sets.find((x) => x.id === set.id);
           const it = s?.items.find((x) => x.kind === item.kind && x.ref === item.ref);
           if (!s || !it || !isOpen(s) || it.nudgeSentAt) return;
@@ -793,8 +828,8 @@ export function createWatchEngine({
           // guarantee holds: attemptedAt is persisted BEFORE the spawn, so the ping is never offered (spawned) twice. At most
           // one Flash worker per set: any later over-long ping on the same set falls straight to the truncated raw fallback.
           if (!set.digestSpawnedAt) {
-            markDigestSpawned(set.id);
-            markAttempted([key], d.owner);
+            await markDigestSpawned(set.id);
+            await markAttempted([key], d.owner);
             let merged = false;
             try {
               merged = Boolean(await spawnDigest(d));
@@ -820,11 +855,12 @@ export function createWatchEngine({
     }
   }
 
-  function markPings(keys, fn) {
+  /** Resolves once the marks are on disk (or the write failed and was logged); never rejects. */
+  async function markPings(keys, fn) {
     const want = new Set(keys ?? []);
     if (!want.size) return;
     try {
-      mutateDoc(file, (doc) => {
+      await mutateDocAsync(file, (doc) => {
         for (const set of doc.sets) for (const ping of set.pings ?? []) if (want.has(pingKeyOf(set, ping))) fn(ping);
       });
     } catch (e) {
@@ -835,9 +871,9 @@ export function createWatchEngine({
   }
 
   /** W4: mark a set as having had its one Flash merge spawned, so later over-long pings on it fall back instead of spawning again. */
-  function markDigestSpawned(setId) {
+  async function markDigestSpawned(setId) {
     try {
-      mutateDoc(file, (doc) => {
+      await mutateDocAsync(file, (doc) => {
         const s = doc.sets.find((x) => x.id === setId);
         if (s && !s.digestSpawnedAt) s.digestSpawnedAt = iso(now());
       });

@@ -72,8 +72,8 @@ export function createRelayWiring({
   const callbacks = {
     // Same code path as GET /pair on the LAN: one-shot code, per-minter replacement, E4b pending for device-minted codes.
     // `ip` is a label only (the relay hides client IPs; the host-wide limit in the tunnel is the brute-force guard).
-    redeem: ({ code, label }) => {
-      const r = redeemPairCode({ rawCode: code, ip: "relay", name: (label || "Relay device").slice(0, 40) });
+    redeem: async ({ code, label }) => {
+      const r = await redeemPairCode({ rawCode: code, ip: "relay", name: (label || "Relay device").slice(0, 40) });
       if (r.state === "paired") return { deviceId: r.deviceId, token: r.token };
       if (r.state === "pending") return { deviceId: r.pendingId, token: r.token, pending: true };
       return null;

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { withFileLockSync } from "./file-lock.mjs";
+import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { isForbiddenRealHome, isForbiddenRepoTeams } from "./test-guard.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
@@ -96,14 +96,26 @@ export function validateTeamsBody(teams) {
 }
 
 /**
- * Shared locked + atomic + revision-checked writer for teams.json (used by both the server PUT/POST handler and `vs pin`).
- * Returns `{ status: 200 | 409, file, prevTeams, body }`.
+ * Shared locked + atomic + revision-checked writer for teams.json. Returns `{ status: 200 | 409, file, prevTeams, body }`.
+ * Sync (blocks while the lock is busy): `vs pin` and other one-shot callers. The server uses writeTeamsRegistryAsync.
  */
 export function writeTeamsRegistry(parsed, rootDir = REPO_ROOT) {
+  const { file, write } = teamsRegistryWrite(parsed, rootDir);
+  return withFileLockSync(file, write);
+}
+
+/** writeTeamsRegistry for the server process: waits for the lock without blocking the event loop (idea-227). */
+export async function writeTeamsRegistryAsync(parsed, rootDir = REPO_ROOT) {
+  const { file, write } = teamsRegistryWrite(parsed, rootDir);
+  return withFileLock(file, write);
+}
+
+/** Validates the body (throws) and returns the locked write for <teams.json>.lock. */
+function teamsRegistryWrite(parsed, rootDir) {
   const teams = Array.isArray(parsed) ? parsed : parsed?.teams;
   validateTeamsBody(teams);
   const file = resolveTeamsWritePath(rootDir);
-  return withFileLockSync(file, () => {
+  return { file, write: () => {
     const readPath = resolveTeamsFilePath(rootDir);
     const curRes = readJsonFileWithBom(readPath, {
       label: "teams.json",
@@ -168,6 +180,6 @@ export function writeTeamsRegistry(parsed, rootDir = REPO_ROOT) {
         leadHardCapTokens: next.leadHardCapTokens,
       },
     };
-  });
+  } };
 }
 

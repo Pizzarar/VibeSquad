@@ -22,17 +22,17 @@ const fakeRes = () => ({
   end(b) { this.body += b ?? ""; },
 });
 const fakeReq = (url, method = "GET", remote = "203.0.113.9") => ({ url, method, headers: {}, socket: { remoteAddress: remote } });
-const redeem = (qs, remote) => {
+const redeem = async (qs, remote) => {
   auth.resetPairRateLimitForTest();
   const code = auth.createPairCode();
   const res = fakeRes();
-  auth.handlePairRedeem(fakeReq(`/pair?code=${code}${qs}`, "GET", remote), res);
+  await auth.handlePairRedeem(fakeReq(`/pair?code=${code}${qs}`, "GET", remote), res);
   return res;
 };
 
 describe("redeem -> same-site enter hop", () => {
-  test("browser: 302 to /__vibesquad/enter with the Strict cookie, no token in the URL", () => {
-    const res = redeem("");
+  test("browser: 302 to /__vibesquad/enter with the Strict cookie, no token in the URL", async () => {
+    const res = await redeem("");
     assert.equal(res.statusCode, 302);
     assert.equal(res.headers.location, "/__vibesquad/enter");
     assert.match(res.headers["set-cookie"], /vs_device=[^;]+; HttpOnly; Secure; SameSite=Strict/);
@@ -43,8 +43,8 @@ describe("redeem -> same-site enter hop", () => {
     assert.match(page.body, /location\.replace\("\/"\)/);
   });
 
-  test("APK: 302 to enter?vs_app, page hops to same-site / (never back to the app origin)", () => {
-    const res = redeem(`&vs_app=${encodeURIComponent(APP)}`);
+  test("APK: 302 to enter?vs_app, page hops to same-site / (never back to the app origin)", async () => {
+    const res = await redeem(`&vs_app=${encodeURIComponent(APP)}`);
     assert.equal(res.statusCode, 302);
     assert.equal(res.headers.location, `/__vibesquad/enter?vs_app=${encodeURIComponent(APP)}`);
     const page = fakeRes();
@@ -55,8 +55,8 @@ describe("redeem -> same-site enter hop", () => {
     assert.doesNotMatch(page.body, /#paired|href="http/);
   });
 
-  test("a non-whitelisted vs_app never reaches the redirect or the page", () => {
-    const res = redeem(`&vs_app=${encodeURIComponent("https://evil.example")}`);
+  test("a non-whitelisted vs_app never reaches the redirect or the page", async () => {
+    const res = await redeem(`&vs_app=${encodeURIComponent("https://evil.example")}`);
     assert.equal(res.headers.location, "/__vibesquad/enter");
     const page = fakeRes();
     auth.handleEnter(fakeReq("/__vibesquad/enter?paired=1&vs_app=https%3A%2F%2Fevil.example"), page);
@@ -64,7 +64,7 @@ describe("redeem -> same-site enter hop", () => {
     assert.doesNotMatch(page.body, /evil/);
   });
 
-  test("HEAD sends headers and no body", () => {
+  test("HEAD sends headers and no body", async () => {
     const page = fakeRes();
     auth.handleEnter(fakeReq("/__vibesquad/enter", "HEAD"), page);
     assert.equal(page.statusCode, 200);
@@ -74,7 +74,7 @@ describe("redeem -> same-site enter hop", () => {
 });
 
 describe("dev middleware routes /__vibesquad/enter before the auth gate", () => {
-  test("unpaired GET gets the hop page, HEAD gets no body, POST is 405", () => {
+  test("unpaired GET gets the hop page, HEAD gets no body, POST is 405", async () => {
     const mw = api.createVibesquadMiddleware(process.cwd());
     const run = (method) => {
       const res = fakeRes();
@@ -114,7 +114,7 @@ describe("pairing URLs never have an empty host", () => {
 });
 
 describe("VsTrust.kt keeps the pairing cookie", () => {
-  test("accepts and flushes cookies at install and on a flush op, CA pin untouched", () => {
+  test("accepts and flushes cookies at install and on a flush op, CA pin untouched", async () => {
     const kt = readFileSync(new URL("../src-tauri/android/VsTrust.kt", import.meta.url), "utf8");
     assert.match(kt, /setAcceptCookie\(true\)/);
     assert.match(kt, /cm\.flush\(\)/);
@@ -126,24 +126,24 @@ describe("VsTrust.kt keeps the pairing cookie", () => {
 describe("A2e failure pages never send the WebView back to the app origin", () => {
   const apkReq = (url, host = "pc.example:4180") => ({ ...fakeReq(url), headers: { host } });
 
-  test("bad/expired code page (APK): no tauri.localhost link, no auto-refresh, deep link + Back, no token", () => {
+  test("bad/expired code page (APK): no tauri.localhost link, no auto-refresh, deep link + Back, no token", async () => {
     auth.resetPairRateLimitForTest();
     const res = fakeRes();
-    auth.handlePairRedeem(apkReq(`/pair?code=000000&vs_app=${encodeURIComponent(APP)}`), res);
+    await auth.handlePairRedeem(apkReq(`/pair?code=000000&vs_app=${encodeURIComponent(APP)}`), res);
     assert.equal(res.statusCode, 401);
     assert.doesNotMatch(res.body, /tauri\.localhost|http-equiv="refresh"|#failed/);
     assert.match(res.body, /href="vibesquad:\/\/pair\?host=pc\.example%3A4180"/);
     assert.match(res.body, /history\.back\(\)/);
   });
 
-  test("bad code page for a plain browser has no app recovery links", () => {
+  test("bad code page for a plain browser has no app recovery links", async () => {
     auth.resetPairRateLimitForTest();
     const res = fakeRes();
-    auth.handlePairRedeem(apkReq("/pair?code=000000"), res);
+    await auth.handlePairRedeem(apkReq("/pair?code=000000"), res);
     assert.doesNotMatch(res.body, /vibesquad:\/\/|history\.back/);
   });
 
-  test("unpaired page (APK): no tauri.localhost link, no auto-refresh, deep link + Back; API paths stay JSON", () => {
+  test("unpaired page (APK): no tauri.localhost link, no auto-refresh, deep link + Back; API paths stay JSON", async () => {
     const res = fakeRes();
     auth.sendUnpaired(apkReq(`/?vs_app=${encodeURIComponent(APP)}`), res);
     assert.equal(res.statusCode, 401);
@@ -154,7 +154,7 @@ describe("A2e failure pages never send the WebView back to the app origin", () =
     assert.match(api.body, /unpaired device/);
   });
 
-  test("auth status reports paired:false to an unpaired remote caller", () => {
+  test("auth status reports paired:false to an unpaired remote caller", async () => {
     const res = fakeRes();
     api.handleAuthStatus({ ...fakeReq("/api/auth/status"), headers: { host: "pc.example:4180" } }, res);
     assert.equal(JSON.parse(res.body).paired, false);

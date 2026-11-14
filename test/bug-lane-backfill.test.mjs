@@ -64,7 +64,7 @@ test("G3 matches the TS template: a fresh buildNewSquadTeamDef has no auto drift
   assert.deepEqual(viaMjs.lanes, viaTs.lanes, "TS withBugLane and the server reconcile seed identical lanes");
 });
 
-test("persist: first load writes once and logs leftover drift once; second load adds and logs nothing", (t) => {
+test("persist: first load writes once and logs leftover drift once; second load adds and logs nothing", async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), "vs-bug-backfill-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, "teams.json");
@@ -74,7 +74,7 @@ test("persist: first load writes once and logs leftover drift once; second load 
   process.env.VIBESQUAD_TEAMS_FILE = file;
   process.env.VIBESQUAD_HOME = dir;
   t.after(() => { for (const [k, v] of [["VIBESQUAD_TEAMS_FILE", prev.f], ["VIBESQUAD_HOME", prev.h]]) v === undefined ? delete process.env[k] : (process.env[k] = v); });
-  const first = persistTemplateReconcile(dir);
+  const first = await persistTemplateReconcile(dir);
   assert.equal(first.changed, true);
   assert.deepEqual([...new Set(first.auto.filter((a) => a.rule === "add-bug-lane").map((a) => a.team))], ["efi", "squadz-meet", "rosser", "bare"]);
   const once = readFileSync(file, "utf8");
@@ -83,7 +83,7 @@ test("persist: first load writes once and logs leftover drift once; second load 
   assert.equal(log.length, 1);
   assert.equal(log[0].type, "metric");
   assert.match(log[0].text, /^template-drift: bare .*no-hub-lane,no-paths/);
-  const second = persistTemplateReconcile(dir);
+  const second = await persistTemplateReconcile(dir);
   assert.equal(second.changed, false);
   assert.deepEqual(second.auto, []);
   assert.equal(readFileSync(file, "utf8"), once);
@@ -151,7 +151,7 @@ test("M1: unscoped @bug keeps resolving to vibesquad's bug-chaser with efi first
   assert.equal(findLaneInRegistry("@bug", teams, "vibesquad").lane.id, "bug-chaser");
 });
 
-test("M2: persist writes with the revision of its read, so a concurrent edit is a 409 retry, not an overwrite", (t) => {
+test("M2: persist writes with the revision of its read, so a concurrent edit is a 409 retry, not an overwrite", async (t) => {
   const dir = mkdtempSync(path.join(tmpdir(), "vs-bug-m2-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const file = path.join(dir, "teams.json");
@@ -162,6 +162,6 @@ test("M2: persist writes with the revision of its read, so a concurrent edit is 
   t.after(() => { for (const [k, v] of [["VIBESQUAD_TEAMS_FILE", prev.f], ["VIBESQUAD_HOME", prev.h]]) v === undefined ? delete process.env[k] : (process.env[k] = v); });
   const stale = writeTeamsRegistry({ teams: fixture(), revision: "stale" }, dir);
   assert.equal(stale.status, 409, "writer rejects a stale revision");
-  assert.equal(persistTemplateReconcile(dir).changed, true);
+  assert.equal((await persistTemplateReconcile(dir)).changed, true);
   assert.equal(readFileSync(file, "utf8").includes("bug-runner-2"), true);
 });

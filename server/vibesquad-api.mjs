@@ -18,7 +18,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus } from "./first-run.mjs";
-import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry } from "./teams-file.mjs";
+import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
@@ -51,6 +51,7 @@ import {
 } from "./brainstorm.mjs";
 import {
   addInboxCards,
+  addInboxCardsAsync,
   attachInboxMedia,
   INBOX_MEDIA_MAX_BYTES,
   getInboxPath,
@@ -62,6 +63,7 @@ import {
   assertInboxTriageRole,
   triageCardIds,
   triageInboxCards,
+  triageInboxCardsAsync,
   writeInboxCards,
 } from "./inbox.mjs";
 import {
@@ -510,9 +512,9 @@ function handleTeams(req, res, rootDir) {
     res.statusCode = 405;
     return res.end();
   }
-  readBody(req).then((parsed) => {
+  readBody(req).then(async (parsed) => {
     try {
-      const result = writeTeamsRegistry(parsed, rootDir);
+      const result = await writeTeamsRegistryAsync(parsed, rootDir);
       if (result.status === 200) {
         seedHubBriefs(result.prevTeams, result.body.teams, rootDir);
       }
@@ -1070,7 +1072,7 @@ async function handleInbox(req, res, rootDir) {
     }
     if (req.method === "POST") {
       const body = await readCleanBody(req);
-      const result = addInboxCards(body, rootDir);
+      const result = await addInboxCardsAsync(body, rootDir);
       return sendJson(res, 200, result);
     }
     res.statusCode = 405;
@@ -1095,7 +1097,7 @@ async function handleInboxTriage(req, res, rootDir) {
       if (String(body.action || "").trim() === "delete") throw forbidden("inbox delete is owner-only; archive it instead");
       assertInboxTriageCaller(caller, triageCardIds(body));
     }
-    const result = triageInboxCards(body, rootDir);
+    const result = await triageInboxCardsAsync(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
     return sendJson(res, e?.status === 403 ? 403 : e?.status === 404 ? 404 : 400, { ok: false, error: String(e?.message ?? e) });
@@ -1145,7 +1147,7 @@ async function handleInboxAttachment(req, res) {
     const mime = String(req.headers["content-type"] || "");
     const cardId = new URL(req.url, "http://x").searchParams.get("cardId") || "";
     const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
-    return sendJson(res, 200, attachInboxMedia({ cardId, mime, bytes }));
+    return sendJson(res, 200, await attachInboxMedia({ cardId, mime, bytes }));
   } catch (e) {
     return sendJson(res, e?.status === 413 ? 413 : 400, { ok: false, error: String(e?.message ?? e) });
   }

@@ -99,3 +99,6 @@ export function sendInboxCard(
   body: { cardId: string; baseHome?: string; agentClient?: any },
   rootDir?: string,
 ): Promise<{ ok: true; already: boolean; card: InboxCard; cards: InboxCard[]; agentId?: string; lane?: string }>;
+/** Server-process variants: wait for the inbox lock without blocking the event loop (idea-227). */
+export function addInboxCardsAsync(body: Parameters<typeof addInboxCards>[0], rootDir?: string): Promise<ReturnType<typeof addInboxCards>>;
+export function triageInboxCardsAsync(body: Parameters<typeof triageInboxCards>[0], rootDir?: string): Promise<ReturnType<typeof triageInboxCards>>;
