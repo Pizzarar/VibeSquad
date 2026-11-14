@@ -514,15 +514,28 @@ function handleTeams(req, res, rootDir) {
   }
   readBody(req).then(async (parsed) => {
     try {
-      const result = await writeTeamsRegistryAsync(parsed, rootDir);
-      if (result.status === 200) {
-        seedHubBriefs(result.prevTeams, result.body.teams, rootDir);
-      }
-      sendJson(res, result.status, result.body);
+      validateTeamsBody(Array.isArray(parsed) ? parsed : parsed?.teams); // the caller's fault: 400 with the reason
     } catch (e) {
       res.statusCode = 400;
-      res.end(String(e));
+      return res.end(String(e));
     }
+    let result;
+    try {
+      result = await writeTeamsRegistryAsync(parsed, rootDir);
+    } catch (e) {
+      // idea-232 L3 (X1 E4a R2 L3 parity): a lock timeout or write failure is a generic retryable 503. file-lock's
+      // message carries the lock path and holder pid, so the detail goes to the server log only.
+      console.warn(`[vibesquad] teams.json write failed: ${e?.message ?? e}`);
+      return sendJson(res, 503, { error: "teams registry busy or unwritable; retry", retryable: true });
+    }
+    if (result.status === 200) {
+      try {
+        seedHubBriefs(result.prevTeams, result.body.teams, rootDir);
+      } catch (e) {
+        console.warn(`[vibesquad] hub brief seed failed after a teams write: ${e?.message ?? e}`); // the write landed
+      }
+    }
+    sendJson(res, result.status, result.body);
   }, (e) => {
     res.statusCode = e?.status === 413 ? 413 : 400;
     res.end(String(e?.message ?? e));

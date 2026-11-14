@@ -510,18 +510,79 @@ describe("E4b MUST 7: X1 E4a R2 Lows", () => {
     const me = await pairFromPc("Revoker");
     writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
     const res = fakeRes();
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => warned.push(a.join(" "));
     try {
       await auth.handleRevoke(meshReq({ url: "/__vibesquad/devices/revoke", method: "POST", token: me, body: { id: byName("Victim").id } }), res, bodyOf);
     } finally {
+      console.warn = realWarn;
       rmSync(lock, { force: true });
     }
     assert.equal(res.statusCode, 503, res.body);
     assert.deepEqual(res.json(), { error: "device list busy or unreadable; retry", retryable: true });
     assert.ok(!res.body.includes(".lock") && !/pid/i.test(res.body) && !res.body.includes(home));
+    assert.ok(warned.some((w) => w.includes("Timed out") && w.includes(".lock")), `idea-232 L3: the detail is logged server-side only: ${warned}`);
     assert.ok(authAs(victim), "nothing was revoked");
     const bad = fakeRes();
     await auth.handleRevoke(meshReq({ url: "/__vibesquad/devices/revoke", method: "POST", token: me, body: {} }), bad, bodyOf);
     assert.equal(bad.statusCode, 400, "a bad body is still the caller's fault");
+  });
+
+  test("idea-232 L3: a teams PUT lock timeout is a generic retryable 503 with no path or pid; a bad body stays 400", async () => {
+    const teamsLock = join(home, "teams.json.lock");
+    writeFileSync(teamsLock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
+    const server = createServer(api.createVibesquadMiddleware(rootDir));
+    const port = await listen(server);
+    const warned = [];
+    const realWarn = console.warn;
+    console.warn = (...a) => warned.push(a.join(" "));
+    try {
+      const headers = { "x-vibesquad-token": auth.getLocalToken() };
+      const r = await httpCall({ port, path: "/api/teams", method: "PUT", headers, body: { teams: [] } });
+      assert.equal(r.status, 503, r.text);
+      assert.deepEqual(r.json(), { error: "teams registry busy or unwritable; retry", retryable: true });
+      assert.ok(!r.text.includes(".lock") && !/pid/i.test(r.text) && !r.text.includes(home), r.text);
+      assert.ok(warned.some((w) => w.includes("Timed out") && w.includes(".lock")), `the detail is logged server-side only: ${warned}`);
+      rmSync(teamsLock, { force: true });
+      const bad = await httpCall({ port, path: "/api/teams", method: "PUT", headers, body: { teams: "nope" } });
+      assert.equal(bad.status, 400, "a bad body is still the caller's fault");
+      assert.match(bad.text, /teams must be an array/);
+    } finally {
+      console.warn = realWarn;
+      rmSync(teamsLock, { force: true });
+      await close(server);
+    }
+  });
+
+  test("idea-232 L2: a corrupt devices.json cuts an open stream with no request in flight (the 1 s device watch)", async () => {
+    await pairFromPc("Idle streamer");
+    const dev = byName("Idle streamer");
+    const destroyed = [];
+    auth.trackSocket(dev.id, { destroy: () => destroyed.push(dev.id), once() {} });
+    const good = readFileSync(devicesFile, "utf8");
+    writeFileSync(devicesFile, "{ not json");
+    ageDevicesFile();
+    try {
+      const t0 = Date.now();
+      while (!destroyed.length && Date.now() - t0 < 3000) await new Promise((r) => setTimeout(r, 50));
+      assert.deepEqual(destroyed, [dev.id], "the watch dropped the stream without any request re-checking");
+      assert.equal(auth.hasDeviceSockets(dev.id), false);
+    } finally {
+      writeFileSync(devicesFile, good);
+      ageDevicesFile();
+    }
+  });
+
+  test("idea-232 L2: a devices.json that can't even be stat'ed fails closed (drops streams, never throws)", async () => {
+    // No portable way to make statSync throw (EACCES/ELOOP/ENAMETOOLONG) on every CI OS, so pin the shape: the stamp is
+    // taken inside loadDevices' fail-closed try, and the 1 s watch never lets a throw escape its timer.
+    const a = src("server/auth.mjs");
+    const load = a.slice(a.indexOf("function loadDevices("), a.indexOf("function writeDevicesFile("));
+    assert.ok(load.indexOf("try {") >= 0 && load.indexOf("try {") < load.indexOf("devicesFileStamp()"), "the stat is inside the try");
+    assert.ok(load.indexOf("dropDeviceSockets(id)") > load.indexOf("catch (e)"), "the catch drops every tracked socket");
+    const watch = a.slice(a.indexOf("function ensureDeviceWatch("), a.indexOf("export function trackSocket("));
+    assert.match(watch, /try \{\s*loadDevices\(\);[\s\S]*catch[\s\S]*dropDeviceSockets/, "the watch fails closed on any throw");
   });
 
   test("L4: writeDevicesFile asserts lock ownership right before the rename (shared file-lock primitive)", async () => {
