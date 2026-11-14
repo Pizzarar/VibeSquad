@@ -11,7 +11,7 @@ import { protectedMetaIn } from "../../runner/runner.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { pidAlive } from "../../runner/lock.mjs";
-import { refreshWhosHere } from "../whos-here.mjs";
+import { refreshWhosHere, whosHereKey } from "../whos-here.mjs";
 
 import { createRunnerHookHost } from "./runner-hooks.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
@@ -558,6 +558,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
     Object.defineProperty(this, "progressCache", { value: new Map() }); // rec.id -> { lastSeq, lastPromptAt, lastProgressAt }
+    Object.defineProperty(this, "rosterFlights", { value: new Map() }); // route -> { seq, p }: the roster read in flight (rosterGet)
     Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
   }
 
@@ -775,12 +776,13 @@ export class RunnerBackend {
   }
 
   async fetchAgents(opts = {}) {
-    const recs = await this.fetchAllRecs();
     const includeArchived = opts?.filter?.includeArchived;
+    const recs = await this.fetchAllRecs(undefined, { archived: !!includeArchived });
+    // Archived records are dropped before toAgent (most of a long-lived roster is archived; converting them all on every
+    // read was a hot spot on the server loop). Same result: toAgent's archivedAt is set exactly when rec.archivedAt is a number.
     const entries = recs
-      .filter(Boolean)
-      .map((r) => ({ agent: toAgent(r), project: null }))
-      .filter((e) => includeArchived || !e.agent.archivedAt);
+      .filter((r) => r && (includeArchived || !Number.isFinite(r.archivedAt)))
+      .map((r) => ({ agent: toAgent(r), project: null }));
     return { entries };
   }
 
@@ -889,10 +891,15 @@ export class RunnerBackend {
       const hit = protectedMetaIn(patch);
       if (hit) throw new RunnerHttpError(403, `an agent may not set ${hit.join(", ")} (admin only)`);
     }
-    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch, asCaller(opts));
     // role / lane changes (a Lead or Buddy retiring to former-*) change who is listed
-    if (patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined) {
-      await this.refreshLaneWhosHere((await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane);
+    const mayMove = patch.role !== undefined || patch.lane !== undefined || patch.labels?.role !== undefined;
+    // Callers often re-send the full label set with role/lane unchanged (a lead handoff re-points every open worker this
+    // way): only a write that changes what Who's here reads pays for the full-roster re-read (unit-loop-stall: repoint 41s).
+    const before = mayMove ? whosHereKey((await this.fetchAgent(id).catch(() => null))?.agent) : null;
+    await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/meta`, patch, asCaller(opts));
+    if (mayMove) {
+      const after = (await this.fetchAgent(id).catch(() => null))?.agent;
+      if (before === null || before !== whosHereKey(after)) await this.refreshLaneWhosHere(after?.labels?.lane);
     }
   }
 
@@ -1091,12 +1098,38 @@ export class RunnerBackend {
     return this.fetchAllRecs(this.live.archived);
   }
 
-  /** Every runner record in one call (GET /agents?full=1); a runner without it only answers { ids }, so fall back to one GET per id. */
-  async fetchAllRecs(skip = new Set()) {
-    const res = await this.rc.request("GET", "/agents?full=1");
-    if (Array.isArray(res.agents)) return res.agents.filter((r) => r && !skip.has(r.id)).map((r) => this.progressFor(r));
-    const recs = await Promise.all(res.ids.filter((id) => !skip.has(id)).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
-    return recs.filter(Boolean).map((r) => this.progressFor(r));
+  /**
+   * Every runner record in one call (GET /agents?full=1); a runner without it only answers { ids }, so fall back to one GET per id.
+   * archived: false asks the runner to leave archived records out (archived=0; an older runner ignores it and callers filter anyway).
+   * Records are shared by concurrent callers (see rosterGet): treat them as read-only.
+   */
+  async fetchAllRecs(skip = new Set(), { archived = true } = {}) {
+    const recs = await this.rosterGet(archived ? "/agents?full=1" : "/agents?full=1&archived=0");
+    return skip.size ? recs.filter((r) => !skip.has(r.id)) : recs;
+  }
+
+  /**
+   * One roster read in flight per route: callers that arrive while it runs share its parsed answer instead of each paying the
+   * runner's serialise + this loop's JSON.parse of the whole roster (a spawn reads it 4-6 times; many at once stalled the server
+   * loop for seconds, unit-loop-stall). A caller only joins a read that started after the last write through this client
+   * settled (rc.writeSeq), so a caller always sees its own create/archive/meta change. No caching once the read has answered.
+   */
+  rosterGet(route) {
+    const flights = this.rosterFlights;
+    const seq = this.rc.writeSeq;
+    const cur = flights.get(route);
+    if (cur && seq !== undefined && cur.seq === seq) return cur.p;
+    const p = (async () => {
+      const res = await this.rc.request("GET", route);
+      if (Array.isArray(res.agents)) return res.agents.filter(Boolean).map((r) => this.progressFor(r));
+      const recs = await Promise.all((res.ids ?? []).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
+      return recs.filter(Boolean).map((r) => this.progressFor(r));
+    })();
+    const flight = { seq, p };
+    flights.set(route, flight);
+    const done = () => { if (flights.get(route) === flight) flights.delete(route); };
+    p.then(done, done);
+    return p;
   }
 
   /**

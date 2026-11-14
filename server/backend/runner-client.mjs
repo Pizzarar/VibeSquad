@@ -92,6 +92,7 @@ export class RunnerClient {
     this.starting = null;
     this.caller = caller;
     this.env = env;
+    this.writeSeq = 0; // bumped when a non-GET request settles: a coalesced read started before a write must not answer a reader after it
   }
 
   /** Headers for a request: the explicit per-call caller, else this client's, else the process env. Admin = the bearer. */
@@ -119,6 +120,13 @@ export class RunnerClient {
   }
 
   async request(method, route, body, opts = {}) {
+    if (method !== "GET") {
+      try {
+        return await this._requestOnce(method, route, body, opts);
+      } finally {
+        this.writeSeq++;
+      }
+    }
     try {
       return await this._requestOnce(method, route, body, opts);
     } catch (err) {

@@ -3,7 +3,8 @@
 import { briefRootFor } from "./brief-path.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { bootRoster } from "./boot-roster.mjs";
+import { bootRoster, hasActiveTurn, laneOfAgent } from "./boot-roster.mjs";
+import { effectiveAgentRole, isDigestAgent, isLiveAgent, normalizeRoleLabel } from "./identity.mjs";
 import { writeBriefFile } from "./brief-write.mjs";
 
 export const WHOS_HERE_HEADING = "## Who's here";
@@ -18,6 +19,27 @@ export function whosHereBody(agents, laneId) {
     `- Lead: ${leads.length ? leads.join("; ") : "none"}`,
     `- Workers: ${workers.length}`,
   ].join("\n");
+}
+
+/**
+ * Everything about ONE agent that whosHereBody reads (bootRoster's per-agent predicates + the title). Two snapshots of an
+ * agent with the same key render the same Who's here, so a meta write that leaves it unchanged (a worker re-pointed to a
+ * new lead: vs.parent only) needs no roster re-read. null/undefined -> null (unknown: callers refresh).
+ */
+export function whosHereKey(agent) {
+  const a = agent?.agent ?? agent;
+  if (!a || typeof a !== "object") return null;
+  return JSON.stringify([
+    laneOfAgent(a),
+    isDigestAgent(a),
+    normalizeRoleLabel(a),
+    effectiveAgentRole(a),
+    isLiveAgent(a),
+    String(a.status ?? ""),
+    hasActiveTurn(a),
+    !!(a.archivedAt || a.archived || a.internal),
+    String(a.title || "").trim(),
+  ]);
 }
 
 /** Replace (or insert before `## Decided`) the Who's here section. Pure. */

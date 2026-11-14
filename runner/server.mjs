@@ -196,7 +196,13 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
           const nid = runner.create(b);
           return json(res, 201, { id: nid, ...runner.queuePosition(nid) }); // over a turn cap it queues and answers at once
         }
-        if (req.method === 'GET') return json(res, 200, url.searchParams.get('full') === '1' ? await runner.statusAllAsync() : { ids: runner.list() }); // async: yields between slices so a full scan never stalls POST /agents
+        if (req.method === 'GET') {
+          if (url.searchParams.get('full') !== '1') return json(res, 200, { ids: runner.list() });
+          const all = await runner.statusAllAsync(); // async: yields between slices so a full scan never stalls POST /agents
+          // archived=0: leave archived records out (most of a long-lived roster). Serialising them here and parsing them in the
+          // VS server on every roster read stalled the server's event loop (unit-loop-stall). `ids` stays complete.
+          return json(res, 200, url.searchParams.get('archived') === '0' ? { ids: all.ids, agents: all.agents.filter((a) => !a.archivedAt) } : all);
+        }
       }
       const id = parts[1];
       if (parts.length === 2 && req.method === 'GET') {
