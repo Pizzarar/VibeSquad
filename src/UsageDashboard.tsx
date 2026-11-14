@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
@@ -394,7 +394,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                   {data.autonomy.bySquad.map((r) => (
                     <tr key={r.squad} data-squad={r.squad}>
                       <td>{squadLabel(r.squad)}</td>
-                      <td className="num">{r.mergedUnits}</td>
+                      <td className="num">{r.mergedUnits}{(() => { const n = mergedCoverageNote(r); return n ? <span className="usage-incov small muted" title={n.title}> {n.text}</span> : null; })()}</td>
                       <td className="num">{r.ownerTouches}</td>
                       <td className="num">{r.unitsPerOwnerTouch === null ? "–" : r.unitsPerOwnerTouch.toFixed(1)}</td>
                       <td className="num">{r.longestUnassistedStreak}</td>
@@ -554,7 +554,9 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
               <table className="usage-table" data-testid="usage-profile-table">
                 <thead>
                   <tr>
-                    <th>Profile</th>
+                    <th title="Model x Stakes x Kind (v0.4); legacy profile name on older data">Model</th>
+                    <th>Stakes</th>
+                    <th>Kind</th>
                     <th>Provider</th>
                     <th className="num">Runs</th>
                     <th className="num">Turns/run</th>
@@ -568,8 +570,10 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 </thead>
                 <tbody>
                   {profiles.map((p) => (
-                    <tr key={p.key} data-profile={p.profile} data-role={p.role}>
-                      <td>{p.profile}</td>
+                    <tr key={p.key} data-profile={p.profile} data-role={p.role} data-model={p.model ?? undefined} data-stakes={p.stakes ?? undefined} data-kind={p.jobKind ?? undefined}>
+                      <td>{profileModelLabel(p)}</td>
+                      <td>{p.stakes ? <span className="usage-stakes" data-stakes={p.stakes}>{p.stakes}</span> : <span className="muted">–</span>}</td>
+                      <td className="muted">{profileKindLabel(p)}</td>
                       <td className="muted">{providerLabel(p.provider)}</td>
                       <td className="num">{p.runs}</td>
                       <td className="num">{p.avgTurnsPerRun.toFixed(1)}</td>
@@ -643,7 +647,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
         <Collapse id="workflows" testid="usage-workflows-collapse" summary={workflowSummary(data.savings, workflows.length)}>
         <section className="usage-workflows" data-testid="usage-workflows">
           <div className="usage-review-head">
-            <div className="usage-sub">Savings vs solo workflow &amp; A/B workflow era</div>
+            <div className="usage-sub">Savings vs solo workflow &amp; Model × Stakes → Reviewer pairs</div>
             <a className="usage-export" href={usageExportMdUrl(activeSquad)} download data-testid="usage-export-md">Export Benchmark (.md)</a>
           </div>
           {data.savings && (
@@ -677,7 +681,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
               <table className="usage-table" data-testid="usage-workflow-table">
                 <thead>
                   <tr>
-                    <th>Workflow</th>
+                    <th title="Implementer model · stakes -> reviewer family">Model × Stakes → Reviewer</th>
                     <th className="num">Units</th>
                     <th className="num">1st-try PASS %</th>
                     <th className="num">Avg rev rounds</th>
