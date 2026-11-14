@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { cohortValueText, COHORT_METRICS, deltaText, deltaTrend, floorSegments, lowCostCoverage, sortWorkflows, speedupText, tokText, usdText } from "../src/usageHelpers.ts";
-import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, successText, successTooltip, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
+import { bugInboxCards, inboxLaneBadge, isTriageCard, buildProfiles, profileModelLabel, profileKindLabel, mergedCoverageNote, buildRows, filterInbox, humanizeProfile, inboxBucket, inboxCounts, inboxFrom, laneSummary, profileSummary, workflowSummary, rolesSummary, efficiencySummary, usageOpenKey, dur, etaText, limitTooltip, providerLabel, successText, successTooltip, foldRoles, pctText, relTime, reviewBullets, sortProfiles, sortRows, splitBullets, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workIdlePct } from "../src/usageHelpers.ts";
 import { msText, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, usageExportMdUrl, usageUrl, validSquad, USAGE_SQUAD_KEY } from "../src/usageHelpers.ts";
 
 const st = (turns, costUsd, i, o) => ({ turns, costUsd, inputTokens: i, outputTokens: o, avgTokensPerTurn: turns ? Math.round((i + o) / turns) : 0 });
@@ -417,4 +417,30 @@ test("ready-time helpers", () => {
   assert.match(readyTimeSummary(null, null), /no data$/);
   assert.deepEqual(readyTimeTiles(rt, cp).map((x) => x.value), ["2.1s", "3.2s", "25%", "$0.25 vs $1.50"]);
   assert.ok(readyTimeTiles(null, null).every((x) => x.value === "—" && !/NaN/.test(x.sub)));
+});
+
+test("v0.4 buildProfiles keys by provider|model|stakes|jobKind and sorts implementers first", () => {
+  const base = { provider: "claude", role: "worker", runs: 1, turns: 4, avgTurnsPerRun: 4, passRate: 1, loopCount: 0, mergedUnits: 1, reviewRounds: 1, avgReviewRounds: 1, costPerMergedUnit: 2, fixAfterMergeCount: 0, fixAfterMergeRate: 0, avgUnitCycleMs: 1, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 1, idleMs: 1 };
+  const d = { limits: [], lanes: [], byRole: [], byProfile: [
+    { ...base, profile: "opus · high (reviewer)", role: "reviewer", model: "opus", stakes: "high", jobKind: "reviewer", mergedUnits: 5 },
+    { ...base, profile: "sonnet · low (implementer)", model: "sonnet", stakes: "low", jobKind: "implementer" },
+    { ...base, profile: "sonnet · low (implementer)", model: "sonnet", stakes: "high", jobKind: "implementer" },
+    { ...base, profile: "sonnet · low (implementer)", model: "sonnet", stakes: "low", jobKind: "implementer" },
+  ] };
+  const rows = buildProfiles(d);
+  assert.equal(rows.length, 3);
+  const s = sortProfiles(rows);
+  assert.equal(s[0].jobKind, "implementer");
+  assert.equal(s[2].jobKind, "reviewer");
+  assert.equal(profileModelLabel(s[0]), "sonnet");
+  assert.equal(profileKindLabel(s[2]), "reviewer");
+  assert.equal(rows.find((r) => r.stakes === "low").runs, 2);
+});
+
+test("mergedCoverageNote only when in-coverage differs from merged", () => {
+  assert.equal(mergedCoverageNote({ mergedUnits: 5 }), null);
+  assert.equal(mergedCoverageNote({ mergedUnits: 5, mergedInCoverage: 5 }), null);
+  const n = mergedCoverageNote({ mergedUnits: 5, mergedInCoverage: 3 });
+  assert.equal(n.text, "(in-cov 3)");
+  assert.match(n.title, /inside log coverage/);
 });

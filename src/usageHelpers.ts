@@ -72,6 +72,10 @@ export type ProfileRow = {
   provider: string;
   profile: string;
   role: string;
+  /** v0.4: model / stakes / jobKind (absent on older servers) */
+  model?: string;
+  stakes?: string;
+  jobKind?: string;
   runs: number;
   turns: number;
   avgTurnsPerRun: number;
@@ -117,7 +121,7 @@ export type UsageData = {
 /** usa-24 autonomy block (server/providers-catalog.mjs getUsage). Ratios are null when their denominator is 0. */
 export type SquadAutonomyRow = {
   squad: string; mergedUnits: number; turns: number; costUsd: number; firstTryPassRate: number | null; avgReviewRounds: number | null;
-  costPerUnit: number | null; ownerTouches: number; unitsPerOwnerTouch: number | null; longestUnassistedStreak: number; stalls: number; medianUnblockMs: number | null;
+  costPerUnit: number | null; /** merges inside log coverage (idea-192); ratios use this */ mergedInCoverage?: number; ownerTouches: number; unitsPerOwnerTouch: number | null; longestUnassistedStreak: number; stalls: number; medianUnblockMs: number | null;
 };
 export type Autonomy = {
   ownerTouches: { total: number; needsYou: number; you: number; xsquadInput: number; perMergedUnit: number | null; unitsPerOwnerTouch: number | null; perHandoff: number | null };
@@ -242,6 +246,9 @@ export type ProfileView = {
   profile: string;
   provider: string;
   role: string;
+  model: string | null;
+  stakes: string | null;
+  jobKind: string | null;
   runs: number;
   turns: number;
   avgTurnsPerRun: number;
@@ -292,10 +299,13 @@ export function buildProfiles(d: UsageData): ProfileView[] {
   for (const p of d.byProfile ?? []) {
     const total = (p.workingMs ?? 0) + (p.idleMs ?? 0);
     const view: ProfileView = {
-      key: `${p.provider}|${humanizeProfile(p.profile)}|${p.role}`,
+      key: p.model ? `${p.provider}|${p.model}|${p.stakes ?? ""}|${p.jobKind ?? ""}` : `${p.provider}|${humanizeProfile(p.profile)}|${p.role}`,
       profile: humanizeProfile(p.profile),
       provider: p.provider,
       role: p.role,
+      model: p.model ?? null,
+      stakes: p.stakes ?? null,
+      jobKind: p.jobKind ?? null,
       runs: p.runs ?? 0,
       turns: p.turns ?? 0,
       avgTurnsPerRun: p.avgTurnsPerRun ?? 0,
@@ -445,11 +455,26 @@ export function laneSummary(rows: { costUsd: number; merged: number; looped?: nu
   return `Lane breakdown · ${rows.length} lane${rows.length === 1 ? "" : "s"} · ${money(cost)} · ${merged} merged · ${loops} loop${loops === 1 ? "" : "s"}`;
 }
 
+function isImplementerView(p: Pick<ProfileView, "role" | "jobKind">): boolean {
+  return p.jobKind ? p.jobKind === "implementer" : IMPLEMENTER_ROLES.has((p.role || "").toLowerCase());
+}
+
+/** Model cell: the v0.4 model id, else the legacy profile name. */
+export const profileModelLabel = (p: Pick<ProfileView, "model" | "profile">): string => p.model || p.profile;
+/** Kind cell: v0.4 jobKind, else the legacy role. */
+export const profileKindLabel = (p: Pick<ProfileView, "jobKind" | "role">): string => p.jobKind || p.role || "–";
+
+/** Tooltip + text for the squad "Merged" cell; shows "(in-cov N)" only when coverage differs from the total (idea-192). */
+export function mergedCoverageNote(r: { mergedUnits: number; mergedInCoverage?: number }): { text: string; title: string } | null {
+  if (r.mergedInCoverage === undefined || r.mergedInCoverage === null || r.mergedInCoverage === r.mergedUnits) return null;
+  return { text: `(in-cov ${r.mergedInCoverage})`, title: "merges inside log coverage; ratios use this" };
+}
+
 /** Implementers first, then by merged units desc, then name. */
 export function sortProfiles(rows: ProfileView[]): ProfileView[] {
   return [...rows].sort((a, b) => {
-    const ai = IMPLEMENTER_ROLES.has((a.role || "").toLowerCase()) ? 0 : 1;
-    const bi = IMPLEMENTER_ROLES.has((b.role || "").toLowerCase()) ? 0 : 1;
+    const ai = isImplementerView(a) ? 0 : 1;
+    const bi = isImplementerView(b) ? 0 : 1;
     if (ai !== bi) return ai - bi;
     if (b.mergedUnits !== a.mergedUnits) return b.mergedUnits - a.mergedUnits;
     return a.profile.localeCompare(b.profile) || a.provider.localeCompare(b.provider);

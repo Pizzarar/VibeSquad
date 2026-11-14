@@ -4007,6 +4007,9 @@ html, body, #root { overflow-x: hidden; }
 .usage-th:hover, .usage-th:focus-visible { color: var(--cyan-t); }
 .usage-row-loop { background: var(--hot-pink-dim); }
 .usage-high { color: var(--pink-t); font-weight: 700; }
+.usage-stakes { display: inline-block; padding: 0 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; border: 1px solid var(--muted); border-radius: 999px; }
+.usage-stakes[data-stakes="high"], .usage-stakes[data-stakes="tierA"], .usage-stakes[data-stakes^="tierA"] { color: var(--pink-t); border-color: var(--pink-t); font-weight: 700; }
+.usage-incov { white-space: nowrap; cursor: help; }
 
 /* ---- usa-8 / usa-18: Usage Review controls + CRT mail terminal ---- */
 .usage-review-head {
