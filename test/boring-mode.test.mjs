@@ -112,7 +112,7 @@ stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
-stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")};`);
+stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a);`);
 stub(
   "pins.mjs",
   `export const isHubPin = (p) => Boolean(p.lane.hub); export const pinsForSquad = (v) => ({ pinned: v.pins, done: [] });
@@ -134,7 +134,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStartBrainstorm } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -272,8 +272,9 @@ test("Brainstorm pill opens the agent; with no session it starts one via onOpenP
   assert.deepEqual(globalThis.__calls, [["onOpenPin", "ade"]]);
   const t = render(props(v2));
   assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
+  globalThis.__spinUpPin = (p) => { globalThis.__calls.push(["spinUpPin", p.lane.id]); return Promise.resolve("a"); };
   byId(t, "boring-empty-cta").props.onClick();
-  assert.deepEqual(globalThis.__calls.at(-1), ["onOpenPin", "ade"]);
+  assert.deepEqual(globalThis.__calls.at(-1), ["spinUpPin", "ade"]);
 });
 
 test("Overlord row with no Overlord offers Start Overlord; Bugs row without a pin creates one", async () => {
@@ -592,4 +593,19 @@ test("B6 lane map layout: no flex-shrink clip, live workers only, grid, stretche
   assert.match(ade, /className="boring-map-grid"/);
   assert.match(css, /\.boring-map-node \{[^}]*white-space: nowrap/);
   assert.match(css, /\.boring-map-node \.boring-row-label \{[^}]*min-width: max-content/);
+});
+
+// idea-246: EFI's (non-VibeSquad Squad) Trinity "Bugs (@bug)" Start Brainstorm was a silent no-op (it called focusPin, which never spawns).
+const efiBugsPin = { squad: { id: "efi", quickLanes: { bugs: "bugs" } }, lane: { id: "bugs", name: "Bugs", standing: true }, brainstorm: null, lead: null, workers: [] };
+test("Start Brainstorm spawns through spinUpPin with the Squad's own lane (efi/bugs, not bug-chaser)", async () => {
+  const seen = [];
+  globalThis.__spinUpPin = (p) => { seen.push(`${p.squad.id}/${p.lane.id}`); return Promise.resolve("agent-1"); };
+  assert.equal(await boringStartBrainstorm(efiBugsPin), null);
+  assert.deepEqual(seen, ["efi/bugs"]);
+});
+test("Start Brainstorm failure is returned (shown in the empty card), never swallowed", async () => {
+  globalThis.__spinUpPin = () => Promise.reject(new Error("Quick start failed (503)"));
+  assert.equal(await boringStartBrainstorm(efiBugsPin), "Quick start failed (503)");
+  assert.match(ade, /data-testid="boring-start-error"/);
+  assert.doesNotMatch(ade, /run: \(\) => currentPin && onOpenPin\(currentPin\)/);
 });

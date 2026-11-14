@@ -5,7 +5,7 @@ import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { openPinMember } from "./pinFocus";
+import { openPinMember, spinUpPin } from "./pinFocus";
 import { isHubPin, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
@@ -99,6 +99,19 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   return { core, conversations };
 }
 
+/**
+ * "Start Brainstorm" must really spawn. `onOpenPin` is `focusPin`, which never auto-spawns a dormant pin (it only shows the
+ * Spin Up picker, which Boring Mode has no room for), so the CTA was a silent no-op (idea-246). Returns an error message, or null on success.
+ */
+export async function boringStartBrainstorm(pin: Pin, spinUp: (pin: Pin) => Promise<unknown> = spinUpPin): Promise<string | null> {
+  try {
+    await spinUp(pin);
+    return null;
+  } catch (e) {
+    return (e as { message?: string } | null)?.message || String(e);
+  }
+}
+
 export const BORING_OVERVIEW_LAYOUT_KEY = "vs.boringOverviewLayout";
 export type OverviewLayout = "cards" | "map";
 
@@ -137,6 +150,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [openIdleLanes, setOpenIdleLanes] = useState(false);
+  const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
   const [overviewLayout, setOverviewLayout] = useState<OverviewLayout>(() => {
     try { return localStorage.getItem(BORING_OVERVIEW_LAYOUT_KEY) === "map" ? "map" : "cards"; } catch { return "cards"; }
   });
@@ -228,11 +242,17 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     </svg>
   );
 
+  const startBrainstorm = (pin: Pin) => {
+    const laneKey = `${pin.squad?.id}/${pin.lane.id}`;
+    setStartState({ laneKey, busy: true, error: null });
+    void boringStartBrainstorm(pin).then((error) => setStartState({ laneKey, busy: false, error }));
+  };
   const emptyCard = () => {
+    const startFor = currentPin ? startState?.laneKey === `${currentPin.squad?.id}/${currentPin.lane.id}` ? startState : null : null;
     const spec = {
       overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && onSpinUpOverlord(view), disabled: overlordBusy },
       riffbot: { text: "RiffBot is sleeping.", cta: "Start RiffBot", run: () => hubPin && onSpinUpPin(hubPin), disabled: !hubPin },
-      brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: "Start Brainstorm", run: () => currentPin && onOpenPin(currentPin), disabled: !currentPin },
+      brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => currentPin && startBrainstorm(currentPin), disabled: !currentPin || Boolean(startFor?.busy) },
       lead: { text: "No Lead is running yet — ask Brainstorm to hand off a plan.", cta: "Switch to Brainstorm", run: () => setSelectedRole("brainstorm"), disabled: false },
     }[emptyKind];
     return (
@@ -242,6 +262,9 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         <button type="button" className="boring-primary-cta" data-testid="boring-empty-cta" disabled={spec.disabled} onClick={() => void spec.run()}>
           {spec.cta}
         </button>
+        {emptyKind === "brainstorm" && startFor?.error && (
+          <p className="boring-empty-error" role="alert" data-testid="boring-start-error">Could not start Brainstorm: {startFor.error}</p>
+        )}
       </div>
     );
   };
