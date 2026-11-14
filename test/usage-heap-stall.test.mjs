@@ -8,7 +8,7 @@ import { syncBuiltinESMExports } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { clearUsageCache, getUsage, getUsageAsync, readBootSizes, usageTestHooks } from '../server/providers-catalog.mjs';
+import { clearUsageCache, getUsage, getUsageAsync, readBootSizes, usageStats, usageTestHooks } from '../server/providers-catalog.mjs';
 
 const tmpDirs = [];
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-heapstall-')); tmpDirs.push(d); return d; };
@@ -577,4 +577,45 @@ test('heap-stall (d2): indexed attributeImplementer picks the same run as the ol
     }
   }
   assert.ok(attributed > 200, `${attributed} units attributed (cwd and lane-fallback paths both hit)`);
+});
+
+// ---------------------------------------------------------------- idea-240 lows
+
+test('idea-240 L2: a deleted vs log is dropped from the parse cache on the next warm', async () => {
+  const home = tmp();
+  const root = tmp();
+  const a = path.join(home, 'logs', 'sq-a--one.jsonl');
+  const b = path.join(home, 'logs', 'sq-a--two.jsonl');
+  fs.mkdirSync(path.dirname(a), { recursive: true });
+  const row = JSON.stringify({ ts: new Date(T0).toISOString(), lane: 'usage', type: 'note', text: 'x' }) + '\n';
+  fs.writeFileSync(a, row); fs.writeFileSync(b, row);
+  await withRoot(root, async () => {
+    clearUsageCache();
+    await getUsageAsync({ home, cacheMs: 0 });
+    assert.equal(usageStats().logFiles, 2);
+    fs.rmSync(b);
+    await getUsageAsync({ home, cacheMs: 0 });
+    assert.equal(usageStats().logFiles, 1, 'removed log forgotten');
+  });
+});
+
+test('idea-240 L3: result-cache TTL follows opts.now; clearUsageCache resets the HEAD-check cache', async () => {
+  const home = tmp();
+  const root = tmp();
+  const agentFile = path.join(home, 'runner', 'agents', 'rn-1.jsonl');
+  fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+  let seq = 0;
+  const ev = (e) => JSON.stringify({ seq: seq++, ...e }) + '\n';
+  fs.writeFileSync(agentFile, ev({ ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'worker' } }) + ev({ ts: T0 + 1, type: 'turn_done', costUsd: 1 }));
+  let t = T0;
+  const now = () => t;
+  await withRoot(root, async () => {
+    clearUsageCache();
+    assert.equal((await getUsageAsync({ home, now })).totals.turns, 1);
+    fs.appendFileSync(agentFile, ev({ ts: T0 + 5, type: 'turn_done', costUsd: 1 }));
+    t += 1_000;
+    assert.equal((await getUsageAsync({ home, now })).totals.turns, 1, 'injected clock inside TTL: cached');
+    t += 6_000;
+    assert.equal((await getUsageAsync({ home, now })).totals.turns, 2, 'injected clock past TTL: recomputed');
+  });
 });

@@ -5,7 +5,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { readdir as readdirAsync, stat as statAsync } from "node:fs/promises";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { ACP_PROVIDERS, PROVIDER_ALIASES } from "../runner/adapters/acp.mjs";
 import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
@@ -257,9 +257,9 @@ const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, mode
 // heap-stall-1114: readHandoffs / readAutonomyEntries / readBootSizes re-read and JSON.parsed every vs log (~10 MB) three times per
 // /usage request. Each file's parsed lines are now kept slim and grown by the appended bytes only (see logLines).
 const logLineFiles = new Map(); // path -> { size, mtimeMs, offset, head, recs: [{ ts, lane, type, text, team, squad }] }
-export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); squadReposCache = null; };
+export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); squadReposCache = null; repoHeadCheck.clear(); };
 let usageReadBytes = 0;
-export const usageStats = () => ({ files: usageFiles.size, readBytes: usageReadBytes });
+export const usageStats = () => ({ files: usageFiles.size, logFiles: logLineFiles.size, readBytes: usageReadBytes });
 
 /** YYYY-MM-DD for a ts, or null when it is not a valid date (never throws). */
 const dayOf = (ts) => {
@@ -858,7 +858,7 @@ function readSquadReposUncached(home) {
  * short HEAD-check TTL so a poll storm spawns at most one `git rev-parse` per repo per 15s. */
 function readPooledMergedUnits(home, laneOf, now = Date.now) {
   const out = [];
-  for (const r of readSquadRepos(home)) {
+  for (const r of readSquadRepos(home, now)) {
     const key = normRepoKey(r.root);
     const t = now();
     let hc = repoHeadCheck.get(key);
@@ -884,7 +884,7 @@ const gitAsyncIn = (root) => (args) => new Promise((ok, fail) => {
  * lapsed (the cold /usage call held the server loop ~7 s on them). This does the same work with async git, so the synchronous
  * pass right after finds every repo fresh and spawns nothing. Same cache entries, same failure results as the sync path. */
 async function warmPooledMergedUnits(home, now = Date.now) {
-  for (const r of readSquadRepos(home)) {
+  for (const r of readSquadRepos(home, now)) {
     const key = normRepoKey(r.root);
     const hc = repoHeadCheck.get(key);
     if (hc && now() - hc.at < HEAD_CHECK_TTL_MS) continue;
@@ -2234,7 +2234,11 @@ async function warmUsageCaches(home) {
       if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
     }
   }
-  for (const file of vsLogFiles(homeDir)) { while (!logLinesStep(file, LOG_WARM_SLICE_BYTES)) await yieldLoop(); await yieldLoop(); } // 6 MB cold = ~200 ms in one go
+  const logFiles = vsLogFiles(homeDir);
+  const liveLogs = new Set(logFiles);
+  const homePrefix = homeDir + sep;
+  for (const k of [...logLineFiles.keys()]) if (k.startsWith(homePrefix) && !liveLogs.has(k)) logLineFiles.delete(k); // log removed: forget it (as usageFiles does)
+  for (const file of logFiles) { while (!logLinesStep(file, LOG_WARM_SLICE_BYTES)) await yieldLoop(); await yieldLoop(); } // 6 MB cold = ~200 ms in one go
   return warmed;
 }
 
@@ -2263,7 +2267,8 @@ export function getUsageAsync(opts = {}) {
   const key = JSON.stringify([opts.home ?? null, opts.since ?? null, opts.until ?? null, opts.squad ?? null, !!opts.usageReview?.suppressSchedule]);
   const ttl = opts.git ? 0 : (opts.cacheMs ?? USAGE_RESULT_TTL_MS);
   const cached = usageResults.get(key);
-  if (ttl > 0 && cached && Date.now() - cached.at < ttl) {
+  const clock = opts.now ?? Date.now;
+  if (ttl > 0 && cached && clock() - cached.at < ttl) {
     return Promise.resolve({ ...cached.value, usageReview: usageReviewState(opts.home, cached.value, opts.usageReview ?? {}) });
   }
   const hit = usageInflight.get(key);
@@ -2272,7 +2277,7 @@ export function getUsageAsync(opts = {}) {
     const warmed = await warmUsageCaches(opts.home);
     if (!opts.git) await warmPooledMergedUnits(opts.home, opts.now); // an injected git (tests) keeps the sync single-repo path
     const value = await drainSliced(usageSteps({ ...opts, warmed }));
-    if (ttl > 0) usageResults.set(key, { at: Date.now(), value });
+    if (ttl > 0) usageResults.set(key, { at: clock(), value });
     return value;
   }).finally(() => usageInflight.delete(key));
   usageQueue = p.catch(() => {});

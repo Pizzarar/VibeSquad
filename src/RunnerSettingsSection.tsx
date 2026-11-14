@@ -15,10 +15,10 @@ export function RunnerSettingsSection() {
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (force = false) => {
     setErr("");
     try {
-      const [prov, set, use] = await Promise.all([listAvailableProviders(), loadRunnerSettings(), loadRunnerUsage()]);
+      const [prov, set, use] = await Promise.all([listAvailableProviders(), loadRunnerSettings(), loadRunnerUsage(force)]);
       setRows(sortProviders((prov.providers ?? []) as (CatalogProvider & { version?: string })[]));
       setDraft(set.runner.providers);
       setPath(set.path);
@@ -86,7 +86,7 @@ export function RunnerSettingsSection() {
         <button type="button" className="btn ok small" data-testid="runner-settings-save" disabled={busy} onClick={() => void save()}>
           {busy ? "Saving…" : "Save runner settings"}
         </button>
-        <button type="button" className="btn ghost small" onClick={() => void load()}>Reload</button>
+        <button type="button" className="btn ghost small" onClick={() => void load(true)}>Reload</button>
       </div>
       <div className="ts-team" data-testid="runner-usage" style={{ padding: "8px 10px" }}>
         <div className="field-label">RUNNER USAGE ({usage?.files ?? 0} agent logs · {usage?.totals.turns ?? 0} turns · ${(usage?.totals.costUsd ?? 0).toFixed(2)})</div>

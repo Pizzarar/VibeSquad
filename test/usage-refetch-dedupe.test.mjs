@@ -33,3 +33,11 @@ test("failures are not cached and clear the in-flight slot", async () => {
 test("loadRunnerUsage goes through the cached loader", () => {
   assert.match(readFileSync(new URL("../src/paseoProviders.ts", import.meta.url), "utf8"), /loadRunnerUsage[^\n]*=\s*cachedLoader\(/);
 });
+
+test("idea-241: explicit Reload forces a refetch, passive mount load does not", () => {
+  const src = readFileSync(new URL("../src/RunnerSettingsSection.tsx", import.meta.url), "utf8");
+  assert.match(src, /async \(force = false\)/);
+  assert.match(src, /loadRunnerUsage\(force\)/);
+  assert.match(src, /onClick=\{\(\) => void load\(true\)\}/);
+  assert.match(src, /useEffect\(\(\) => \{\s*void load\(\);/);
+});
