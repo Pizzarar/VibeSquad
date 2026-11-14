@@ -1,4 +1,5 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { loopLagStats } from "../runner/loop-lag.mjs";
 import { handleRunnerApi } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { tailLines } from "./log-tail.mjs";
@@ -466,6 +467,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
     lanEnabled: exposure.lanEnabled,
     exposedIps: exposure.exposedIps,
     // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
+    ...loopLagStats(),
     stale: isOwner(req) ? getStale({ rootDir }) : peekStale(),
     ...(warnings.length ? { configWarnings: warnings } : {}),
   };
