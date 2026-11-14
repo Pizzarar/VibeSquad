@@ -104,9 +104,10 @@ const rec = (name) => `(...a) => { globalThis.__calls.push(["${name}", ...a]); }
 writeFileSync(
   join(dir, "react-hooks.mjs"),
   `export * from ${JSON.stringify(reactUrl)};
-export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
+export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.i++; const prev = h.slots[k]; const same = prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, j) => Object.is(d, prev.deps[j])); if (same) return; if (prev && typeof prev.cleanup === "function") prev.cleanup(); const cleanup = fn(); h.slots[k] = { deps, cleanup }; }; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
-for (const n of ["AgentDrawer", "UsageDashboard", "IdeaInbox", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
+stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
+for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
@@ -301,17 +302,138 @@ test("Usage & Workflows and Project Overview swap the main pane", () => {
   assert.ok(byId(t, "boring-card-grid"));
   assert.equal(byId(t, "boring-lane-table"), null);
   assert.equal(walk(t, (n) => n.type === "table").length, 0);
-  for (const id of ["boring-card-overlord", "boring-card-riffbot", "boring-card-bugs", "boring-card-ade", "boring-card-per"]) assert.ok(byId(t, id), id);
-  const labels = (id) => walk(byId(t, id), (n) => n.type === "button").map((b) => b.props.children);
-  assert.deepEqual(labels("boring-card-ade"), ["Open Brainstorm", "Open Lead", "Check in"]);
-  assert.ok(byType(t, "IdeaInbox"));
-  assert.ok(byType(t, "TeamFeed"));
-  // Lead-less lane: Open Lead and Check in are disabled.
-  const per = walk(byId(t, "boring-card-per"), (n) => n.type === "button");
-  assert.deepEqual(per.map((b) => !!b.props.disabled), [false, true, true]);
+  for (const id of ["boring-card-overlord", "boring-card-riffbot", "boring-card-bugs", "boring-card-ade"]) assert.ok(byId(t, id), id);
+  // Idle lane is collapsed behind the toggle; default tab renders neither IdeaInbox nor TeamFeed.
+  assert.equal(byId(t, "boring-card-per"), null);
+  assert.equal(byType(t, "IdeaInbox"), null);
+  assert.equal(byType(t, "TeamFeed"), null);
   // No sky / tower / floor / art in Boring Mode.
   for (const name of ["SkyZones", "SquadFloor", "AngelBezel"]) assert.equal(byType(t, name), null, name);
   assert.equal(walk(t, (n) => /angel-bezel|angel-strip/.test(String(n.props?.className ?? ""))).length, 0);
+});
+
+const cardsOf = (t) => walk(t, (n) => /boring-lane-card/.test(String(n.props?.className ?? "")));
+const gotoOverview = (view) => {
+  byId(render(props(view)), "boring-project-overview-btn").props.onClick();
+  return render(props(view));
+};
+
+test("B5c: lane cards are one click target with zero buttons; clicking opens the lane Brainstorm", () => {
+  reset();
+  const view = squad();
+  const t = gotoOverview(view);
+  const cards = cardsOf(t);
+  assert.ok(cards.length >= 4);
+  for (const c of cards) {
+    assert.equal(walk(c, (n) => n.type === "button").length, 0);
+    assert.equal(c.props.role, "button");
+  }
+  assert.match(JSON.stringify(byId(t, "boring-card-ade").props.children), /Needs you/);
+  byId(t, "boring-card-ade").props.onClick();
+  assert.deepEqual(globalThis.__calls, [["openAgent", "ade-bs"]]);
+});
+
+test("B5c: Overview | Idea Inbox | Standup Feed tabs mount IdeaInbox / TeamFeed only when selected", () => {
+  reset();
+  globalThis.__inboxCards = [{}, {}, {}];
+  const view = squad();
+  let t = gotoOverview(view);
+  for (const id of ["boring-tab-overview", "boring-tab-inbox", "boring-tab-feed"]) assert.ok(byId(t, id), id);
+  assert.match(JSON.stringify(byId(t, "boring-tab-inbox").props.children), /Idea Inbox \(3\)/);
+  byId(t, "boring-tab-inbox").props.onClick();
+  t = render(props(view));
+  assert.ok(byType(t, "IdeaInbox"));
+  assert.equal(byType(t, "TeamFeed"), null);
+  assert.equal(byId(t, "boring-core-strip"), null);
+  byId(t, "boring-tab-feed").props.onClick();
+  t = render(props(view));
+  assert.ok(byType(t, "TeamFeed"));
+  assert.equal(byType(t, "IdeaInbox"), null);
+  byId(t, "boring-tab-overview").props.onClick();
+  t = render(props(view));
+  assert.equal(byType(t, "IdeaInbox"), null);
+  assert.equal(byType(t, "TeamFeed"), null);
+  delete globalThis.__inboxCards;
+});
+
+test("B5f: Idea Inbox and Standup Feed counts preload on BoringApp mount so first render of Overview has live counts with no tab click", async () => {
+  reset();
+  const realFetch = globalThis.fetch;
+  globalThis.__refreshInbox = () => { globalThis.__inboxCards = Array.from({ length: 234 }, (_, i) => ({ id: String(i) })); };
+  globalThis.fetch = (url) => {
+    assert.match(String(url), /\/__vibesquad\/log\?team=vibesquad/);
+    return Promise.resolve({ json: () => Promise.resolve(Array.from({ length: 100 }, (_, i) => ({ ts: String(i) }))) });
+  };
+  try {
+    const view = squad({ team: { id: "vibesquad", name: "VibeSquad" } });
+    const chat = render(props(view)); // mounts in mode === "chat"
+    assert.ok(byId(chat, "boring-chat-column"));
+    await new Promise((r) => setTimeout(r, 0));
+    byId(chat, "boring-project-overview-btn").props.onClick();
+    const t = render(props(view)); // very first Overview render, no tab click
+    assert.ok(byId(t, "boring-project-view"));
+    assert.match(JSON.stringify(byId(t, "boring-tab-inbox").props.children), /Idea Inbox \(234\)/);
+    assert.match(JSON.stringify(byId(t, "boring-tab-feed").props.children), /Standup Feed \(100\)/);
+  } finally {
+    delete globalThis.__inboxCards;
+    delete globalThis.__refreshInbox;
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("B5c: idle lanes collapse under boring-idle-lanes-toggle until clicked", () => {
+  reset();
+  const view = squad();
+  let t = gotoOverview(view);
+  const toggle = byId(t, "boring-idle-lanes-toggle");
+  assert.match(JSON.stringify(toggle.props.children), /Show 1 idle lanes/);
+  assert.equal(byId(t, "boring-card-per"), null);
+  toggle.props.onClick();
+  t = render(props(view));
+  assert.match(JSON.stringify(byId(t, "boring-idle-lanes-toggle").props.children), /Hide 1 idle lanes/);
+  const per = byId(t, "boring-card-per");
+  assert.ok(per);
+  assert.equal(walk(per, (n) => n.type === "button").length, 0);
+  globalThis.__calls = [];
+  per.props.onClick();
+  assert.deepEqual(globalThis.__calls, [["openAgent", "per-bs"]]);
+});
+
+test("B5b: topbar has no duplicate Settings / Switch to Psycho; exactly one switch button in the DOM", () => {
+  reset();
+  const t = render(props(squad()));
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-switch-vibespace-btn").length, 1);
+  const top = byId(t, "boring-topbar");
+  assert.equal(walk(top, (n) => /Settings|Switch to Psycho/.test(JSON.stringify(n.props?.children ?? ""))).length, 0);
+});
+
+test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek chat", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  for (const tok of ["bg", "panel", "panel-hi", "cyan", "violet", "hot-pink", "text", "muted", "line"]) assert.doesNotMatch(css, new RegExp(`(^|[;{\s])--${tok}:`, "m"), `--${tok} must not be overridden`);
+  assert.match(css, /--bg-elev: var\(--panel\)/);
+  assert.match(css, /--bg-card: var\(--panel\)/);
+  assert.match(css, /--bg-hover: var\(--panel-hi\)/);
+  assert.match(css, /--accent: var\(--cyan\)/);
+  assert.match(css, /--bevel: none; --bevel-in: none; --hard: none; --bayer: none/);
+  assert.match(css, /border-width: 0;\s+border-color: transparent/);
+  assert.match(css, /inset 3px 0 0 var\(--cyan\)/);
+  assert.match(css, /\.tl-note \{[^}]*border-radius: 14px/);
+  assert.match(css, /color-mix\(in srgb, var\(--violet\) 14%, var\(--panel\)\)/);
+  assert.match(css, /\.boring-card-grid \{ grid-template-columns: repeat\(auto-fill, minmax\(clamp\(320px, 22vw, 520px\)/);
+  assert.match(css, /\.usage-crt,[\s\S]*\.feed-entry[^{]*\{[^}]*border: none; border-radius: 14px/);
+  assert.match(css, /max-width: 1280px/);
+  assert.match(css, /max-width: 1600px; padding: 28px 40px/);
+  assert.match(css, /\.signal,[\s\S]*?border-radius: 50% !important/);
+  assert.match(css, /\.boring-lane-card \{[^}]*border-radius: 14px !important/);
+  assert.match(css, /\.drawer-head \.drawer-title \{ order: 1; flex: 1 0 100%/);
+  assert.match(css, /\.decision-card \.dc-summary,[\s\S]*?font-size: clamp\(14px, 0\.45vw \+ 12px, 18px\) !important; font-weight: 400/);
+  assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.role-tag,[\s\S]*?drawer-copy-cwd-btn[^{]*\{ display: none !important/);
+  assert.match(ade, /Standup Feed \(\$\{feedCount\}\)/);
+  assert.match(ade, /Idea Inbox \(\$\{inboxCount\}\)/);
+  assert.match(css, /\.boring-footer-btn\.on,\s*html\[data-vibe="boring"\] \.boring-core-row\.on,\s*html\[data-vibe="boring"\] \.boring-conv-row\.on \{[^}]*inset 3px 0 0 var\(--cyan\)/);
+  assert.match(css, /\.decision-card \{ border: 0 !important; border-radius: 14px !important; background: var\(--panel\)/);
+  assert.match(css, /\.usage-collapse,\s*html\[data-vibe="boring"\] \.usage-inbox-row \{ background: var\(--panel\) !important/);
+  assert.match(css, /\.usage-collapse-head \{ font-size: 13px; text-transform: none/);
 });
 
 test("BoringApp renders App's overlays as children", () => {
@@ -357,7 +479,7 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(css, /#475569 !important/);
   assert.match(css, /clamp\(14px, 0\.45vw \+ 12px, 18px\); line-height: 1\.55/);
   assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
-  assert.match(css, /--accent: #0f62fe/);
+  assert.match(css, /--accent: var\(--cyan\)/);
   assert.doesNotMatch(css, /@media/);
   assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
   assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none !important/);
