@@ -14,6 +14,16 @@ import { writeFileAtomic } from "./brief-write.mjs";
 
 export const FILE_LOCK_TIMEOUT_MS = 5000;
 export const FILE_LOCK_STALE_MS = 30000;
+/** error.code on a lock wait that timed out / a holder that lost its lock before committing (idea-235). */
+export const LOCK_TIMEOUT = "ELOCKTIMEOUT";
+export const LOCK_LOST = "ELOCKLOST";
+/**
+ * True for a failure the caller did not cause and should retry: a lock timeout or lost lock, or a Node fs/system error
+ * (has .syscall). Their messages carry the lock/file path and holder pid, so request handlers answer these with a
+ * generic 503 and log the detail server-side only (idea-232/idea-235).
+ */
+export const isFileLockError = (e) => e?.code === LOCK_TIMEOUT || e?.code === LOCK_LOST;
+export const isServerSideFsError = (e) => isFileLockError(e) || (typeof e?.code === "string" && typeof e?.syscall === "string");
 const POLL_MS = 10;
 const UNREADABLE_GRACE_MS = 1000; // an unreadable lock younger than this is mid-write, not stale
 const REAP_GUARD_STALE_MS = 2000;
@@ -92,7 +102,10 @@ function lockAttempt(targetPath, { timeoutMs, staleMs, alive, nonBlockingCreate 
   const token = randomBytes(8).toString("hex");
   let deadline = Date.now() + timeoutMs;
   let holderKey = null;
-  const timedOut = (info) => new Error(`Timed out after ${timeoutMs}ms waiting for lock ${lockFile} (held by pid ${info?.pid ?? "unknown"})`);
+  const timedOut = (info) =>
+    Object.assign(new Error(`Timed out after ${timeoutMs}ms waiting for lock ${lockFile} (held by pid ${info?.pid ?? "unknown"})`), {
+      code: LOCK_TIMEOUT,
+    });
 
   function poll() {
     try {
@@ -127,7 +140,11 @@ function lockAttempt(targetPath, { timeoutMs, staleMs, alive, nonBlockingCreate 
     file: lockFile,
     stillOwned,
     assertOwned() {
-      if (!stillOwned()) throw new Error(`lock lost: ${lockFile} is no longer held by this process (reaped as stale?); nothing written`);
+      if (!stillOwned()) {
+        throw Object.assign(new Error(`lock lost: ${lockFile} is no longer held by this process (reaped as stale?); nothing written`), {
+          code: LOCK_LOST,
+        });
+      }
     },
   };
   /** Remove the lock only if it is still this acquisition's (a reaped holder must not delete its successor's lock). */

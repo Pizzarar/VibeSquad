@@ -21,6 +21,7 @@ import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
+import { isServerSideFsError } from "./file-lock.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
@@ -1071,6 +1072,18 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
   }
 }
 
+/**
+ * idea-235 (idea-232 parity): an inbox lock timeout, lost lock or fs failure is the server's problem, not the caller's.
+ * file-lock / fs messages carry the lock path and holder pid, so answer a generic retryable 503 and log the detail only.
+ * Returns true when it sent the response.
+ */
+function sendInboxServerError(res, e, what) {
+  if (!isServerSideFsError(e)) return false;
+  console.warn(`[vibesquad] inbox ${what} failed: ${e?.message ?? e}`);
+  sendJson(res, 503, { ok: false, error: "inbox busy or unwritable; retry", retryable: true });
+  return true;
+}
+
 async function handleInbox(req, res, rootDir) {
   try {
     if (req.method === "GET") {
@@ -1093,6 +1106,7 @@ async function handleInbox(req, res, rootDir) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendInboxServerError(res, e, req.method === "GET" ? "list" : "add")) return;
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1115,6 +1129,7 @@ async function handleInboxTriage(req, res, rootDir) {
     const result = await triageInboxCardsAsync(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
+    if (sendInboxServerError(res, e, "triage")) return;
     return sendJson(res, e?.status === 403 ? 403 : e?.status === 404 ? 404 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1129,6 +1144,7 @@ async function handleInboxSend(req, res, rootDir) {
     const result = await sendInboxCard(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
+    if (sendInboxServerError(res, e, "send")) return;
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1164,6 +1180,7 @@ async function handleInboxAttachment(req, res) {
     const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
     return sendJson(res, 200, await attachInboxMedia({ cardId, mime, bytes }));
   } catch (e) {
+    if (sendInboxServerError(res, e, "attachment")) return;
     return sendJson(res, e?.status === 413 ? 413 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }

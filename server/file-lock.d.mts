@@ -1,5 +1,9 @@
 export const FILE_LOCK_TIMEOUT_MS: number;
 export const FILE_LOCK_STALE_MS: number;
+export const LOCK_TIMEOUT: "ELOCKTIMEOUT";
+export const LOCK_LOST: "ELOCKLOST";
+export function isFileLockError(e: unknown): boolean;
+export function isServerSideFsError(e: unknown): boolean;
 export interface FileLockOptions {
   timeoutMs?: number;
   staleMs?: number;
