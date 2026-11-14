@@ -1,4 +1,5 @@
 // Provider catalog wrappers. Everything reads /__vibesquad/providers* (server/providers-catalog.mjs); no daemon.
+import { cachedLoader } from "./cachedLoad";
 import type { CatalogMode, CatalogModel, CatalogProvider } from "./paseoProvidersLogic";
 
 export type ProvidersAvailable = { providers: CatalogProvider[] };
@@ -45,4 +46,5 @@ export interface RunnerUsage {
   byLane: (UsageTotals & { lane: string })[];
   byDay: (UsageTotals & { day: string })[];
 }
-export const loadRunnerUsage = () => catalogGet<RunnerUsage>("/usage");
+/** Shared by the sidebar poll, the runner-up refetch and the settings chip: one in-flight call, reused for 30s (idea-239). */
+export const loadRunnerUsage: (force?: boolean) => Promise<RunnerUsage> = cachedLoader(() => catalogGet<RunnerUsage>("/usage"), 30_000);
