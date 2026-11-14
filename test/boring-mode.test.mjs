@@ -108,6 +108,7 @@ export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.
 );
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
+stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
@@ -133,7 +134,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -485,7 +486,7 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none !important/);
   assert.match(css, /\.drawer-head \.drawer-title \{ font-size: clamp\(16px/);
   assert.match(css, /\.composer-row > \.btn:not\(\.ghost\):not\(\.warn\)/);
-  assert.match(css, /\.brainstorm-ctx-actions \{ display: none !important/);
+  assert.doesNotMatch(css, /not\(\.boring-details-open\) \.(drawer-actions|brainstorm-ctx-actions)/);
 });
 
 test("shouldShowFirstLaunchVibePicker: fresh installs only, never automation", async () => {
@@ -534,4 +535,61 @@ test("resolvePinChatAgentId prefers the successor opened after a restart/switch"
   const pin = { lane: { id: "bor" }, brainstorm: { agent: { id: "rn-old" } }, lead: null };
   assert.equal(resolvePinChatAgentId(pin, "brainstorm", "rn-new", agents), "rn-new");
   assert.equal(resolvePinChatAgentId(pin, "brainstorm", "rn-other", agents), "rn-old");
+});
+
+test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", () => {
+  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  const ade = readFileSync(new URL("../src/BoringAde.tsx", import.meta.url), "utf8");
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  // B6a
+  assert.match(css, /\.boring-chat-column:has\(\.right-dock\) \{ max-width: 100%; \}/);
+  assert.match(css, /\.right-dock-tab \{ border-radius: 10px !important/);
+  assert.match(ade, /boring-global-search-btn[\s\S]*openOverlay\("search"\)/);
+  assert.match(ade, /boring-shortcuts-btn[\s\S]*openOverlay\("shortcuts"\)/);
+  assert.match(ade, /active pinDecisions \/>/);
+  assert.match(ade, /\{banners\}/);
+  assert.match(app, /banners=\{topBanners\}/);
+  assert.match(app, /\{topBanners\}/);
+  // B6b
+  assert.match(ade, /data-testid="boring-project-tree"/);
+  assert.match(ade, /boring-project-header-\$\{v\.team\.id\}/);
+  assert.match(ade, /boring-core-group boring-trinity-card/);
+  assert.match(ade, /TRINITY · COMMAND/);
+  assert.match(ade, /data-testid="boring-lanes-label"/);
+  assert.doesNotMatch(ade, /<select/);
+  // B6c
+  assert.match(ade, /BORING_OVERVIEW_LAYOUT_KEY = "vs\.boringOverviewLayout"/);
+  assert.match(ade, /data-testid="boring-overview-layout-toggle"/);
+  assert.match(ade, /data-testid="boring-lane-map"/);
+  for (const id of ["core-overlord", "core-riffbot", "core-bugs"]) assert.ok(ade.includes(`boring-map-${id}`));
+  // B6d
+  assert.match(css, /--boring-sunset: linear-gradient\(100deg/);
+  assert.match(css, /--boring-wash: radial-gradient/);
+  assert.match(css, /\.boring-main \{ background: var\(--boring-wash\)/);
+  assert.match(ade, /className="boring-surreal-motif"/);
+});
+
+test("B6 review fixes: node state classes + distinct CSS, no double star", () => {
+  assert.equal(boringNodeStateClass("running", 0), "pulse");
+  assert.equal(boringNodeStateClass("idle", 2), "filled");
+  assert.equal(boringNodeStateClass("idle", 0), "hollow");
+  assert.equal(boringNodeStateClass("none", 0), "faint");
+  assert.equal(boringNodeStateClass(null), "faint");
+  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  assert.match(css, /\.boring-map-node\.filled \{/);
+  assert.match(css, /\.boring-map-node\.faint \{[^}]*dashed/);
+  assert.match(css, /\.boring-map-node\.hollow \{/);
+  assert.doesNotMatch(ade, /★ \{core\.overlord\.label\}/);
+});
+
+test("B6 lane map layout: no flex-shrink clip, live workers only, grid, stretched connectors", () => {
+  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  assert.match(css, /\.boring-lane-map \{[^}]*flex-shrink: 0/);
+  assert.match(css, /\.boring-map-grid \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(620px, 1fr\)\)/);
+  assert.match(css, /\.boring-map-lines \{ flex: 0 0 48px; width: 48px; height: auto; min-height: 0; contain: size; align-self: stretch/);
+  assert.match(css, /\.boring-map-children \{[^}]*justify-content: space-around/);
+  assert.match(ade, /filter\(\(w\) => w\.agent\.status === "running" \|\| mapAttn\(w\) > 0\)/);
+  assert.match(ade, /className="boring-map-grid"/);
+  assert.match(css, /\.boring-map-node \{[^}]*white-space: nowrap/);
+  assert.match(css, /\.boring-map-node \.boring-row-label \{[^}]*min-width: max-content/);
 });

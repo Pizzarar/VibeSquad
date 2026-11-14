@@ -1931,31 +1931,8 @@ export function App() {
     );
   }
 
-  if (vibe === "boring") {
-    return (
-      <BoringApp
-        views={sidebarViews}
-        view={view}
-        onSelectSquad={onTeam}
-        onOpenPin={onQuickStart}
-        onSpinUpPin={onSpinUpPin}
-        onSpinUpOverlord={onSpinUpOverlord}
-        overlordBusy={overlordBusy}
-        onAddBuddy={openAddBuddy}
-        onNewSquad={openNewSquad}
-        onSettings={openSettings}
-        onSuccessor={paneSuccessor}
-      >
-        {overlays}
-      </BoringApp>
-    );
-  }
-
-  return (
-    <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
-      style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
-    >
+  const topBanners = (
+    <>
       {exposedIps.length > 0 && !isRemote() && !isLanBannerDismissed(exposedIps, dismissedLanKey) && (
         <div className="exposed-network-banner" data-testid="exposed-network-banner" role="alert" style={{ gridColumn: "1 / -1", background: "#ff2a85", color: "#05060d", fontWeight: 800, padding: "6px 12px", textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
           <span title={`EXPOSED ON ${exposedIps.join(", ")}: LAN/meshnet access enabled`}>{`⚠ EXPOSED ON ${exposedIps.join(", ")} — LAN/meshnet access enabled`}</span>
@@ -2067,6 +2044,36 @@ export function App() {
         </div>
       )}
       <DaemonStatusBanner onOpenDiagnostics={() => setModal("diagnostics")} />
+    </>
+  );
+
+  if (vibe === "boring") {
+    return (
+      <BoringApp
+        views={sidebarViews}
+        view={view}
+        onSelectSquad={onTeam}
+        onOpenPin={onQuickStart}
+        onSpinUpPin={onSpinUpPin}
+        onSpinUpOverlord={onSpinUpOverlord}
+        overlordBusy={overlordBusy}
+        onAddBuddy={openAddBuddy}
+        onNewSquad={openNewSquad}
+        onSettings={openSettings}
+        onSuccessor={paneSuccessor}
+        banners={topBanners}
+      >
+        {overlays}
+      </BoringApp>
+    );
+  }
+
+  return (
+    <div
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
+      style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
+    >
+      {topBanners}
       {!focus && (
         <Sidebar
           views={sidebarViews}
