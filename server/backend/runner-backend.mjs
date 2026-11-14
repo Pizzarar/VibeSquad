@@ -702,18 +702,22 @@ export class RunnerBackend {
 
   /**
    * Keep the lane brief's "Who's here" current (spawn, archive, role/lane move, exit). Best effort.
-   * Coalesced per lane (unit-loop-stall): one refresh runs at a time; callers arriving meanwhile share ONE rerun that starts
-   * after it, so a burst of spawns/archives in a lane costs two full-roster reads, not one each, and every caller still
-   * gets a refresh that began after its own write.
+   * Coalesced per lane (unit-loop-stall): one refresh runs at a time. A caller arriving meanwhile joins it when no write
+   * through this client has settled since it started (rc.writeSeq, as rosterGet); otherwise all such callers share ONE
+   * rerun that starts after it. A burst of spawns/archives in a lane costs at most two full-roster reads, not one each,
+   * and every caller still gets a refresh that read the roster after its own write. No writeSeq: always the rerun.
    */
   refreshLaneWhosHere(lane) {
     if (!lane) return Promise.resolve();
     const flights = this.whosFlights;
     let f = flights.get(lane);
-    if (!f) flights.set(lane, (f = { running: null, queued: null }));
+    if (!f) flights.set(lane, (f = { running: null, queued: null, seq: undefined }));
+    const seq = this.rc.writeSeq;
+    if (f.running && !f.queued && seq !== undefined && f.seq === seq) return f.running;
     if (f.queued) return f.queued;
     const start = () => {
       f.queued = null;
+      f.seq = this.rc.writeSeq;
       const p = this.whosHereNow(lane).finally(() => {
         if (f.running === p) f.running = null;
         if (!f.running && !f.queued && flights.get(lane) === f) flights.delete(lane);

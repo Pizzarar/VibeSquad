@@ -120,6 +120,15 @@ test("refreshLaneWhosHere: a burst in one lane costs one run plus one shared rer
   assert.deepEqual(calls.filter(([l]) => l === 'own'), [['own', 1], ['own', 2]], 'the rerun saw the write made during the first run');
   assert.deepEqual(calls.filter(([l]) => l === 'other'), [['other', 2]]);
   assert.equal(b.whosFlights.size, 0, 'no flight state left behind');
+  // No write since the running refresh started: later callers join it (one GET, one whosHere), no serial rerun.
+  calls.length = 0;
+  const gets = c.gets;
+  const joined = [b.refreshLaneWhosHere('own'), b.refreshLaneWhosHere('own'), b.refreshLaneWhosHere('own')];
+  await new Promise((r) => setImmediate(r));
+  assert.equal(c.gets, gets + 1);
+  c.release();
+  await Promise.all(joined);
+  assert.deepEqual(calls, [['own', 2]]);
   // A refresh failure (whosHere throws) is swallowed and does not wedge the lane.
   const bad = backendFor(c, () => { throw new Error('disk'); });
   const p = bad.refreshLaneWhosHere('own');
