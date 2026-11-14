@@ -2282,6 +2282,13 @@ export function getUsageAsync(opts = {}) {
 
 export function getUsage(opts = {}) { return drainSync(usageSteps(opts)); }
 
+/** Test seam only (heap-stall-1114 regression tests, test/usage-heap-stall.test.mjs): the internals the /usage speedups rewrote. */
+export const usageTestHooks = {
+  computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
+  attributeImplementer,
+  usageSteps,
+};
+
 /** The /usage rollup as steps: `yield` marks a point where the async path may hand the loop back (no other effect). */
 function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed } = {}) {
   const homeDir = home || vibesquadHome();
