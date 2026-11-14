@@ -586,7 +586,7 @@ test("B6 lane map layout: no flex-shrink clip, live workers only, grid, stretche
   const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
   assert.match(css, /\.boring-lane-map \{[^}]*flex-shrink: 0/);
   assert.match(css, /\.boring-map-grid \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(460px, 1fr\)\)/);
-  assert.match(css, /\.boring-map-lines \{ flex: 0 0 48px; width: 48px; height: auto; align-self: stretch/);
+  assert.match(css, /\.boring-map-lines \{ flex: 0 0 48px; width: 48px; height: auto; min-height: 0; contain: size; align-self: stretch/);
   assert.match(css, /\.boring-map-children \{[^}]*justify-content: space-around/);
   assert.match(ade, /filter\(\(w\) => w\.agent\.status === "running" \|\| mapAttn\(w\) > 0\)/);
   assert.match(ade, /className="boring-map-grid"/);
