@@ -203,7 +203,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
 
   const badge = (n: number) => (n > 0 ? <span className="badge boring-badge">{n}</span> : null);
   const coreRow = (testid: string, label: string, status: string, needsYou: number, age: string, onClick: () => void, agentObj?: typeof agent) => (
-    <button key={testid} type="button" className={`boring-core-row ${selectedLaneId && testid.endsWith(selectedLaneId.slice(1)) ? "on" : ""}`} data-testid={testid} onClick={onClick}>
+    <button key={testid} type="button" className={`boring-core-row ${mode === "chat" && selectedLaneId && testid.endsWith(selectedLaneId.slice(1)) ? "on" : ""}`} data-testid={testid} onClick={onClick}>
       {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status}`} />}
       <span className="boring-row-label">{label}</span>
       <span className="boring-conv-age">{age}</span>
@@ -253,7 +253,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           ) : (
             <span className="boring-project-name">{view?.team.name ?? "No project"}</span>
           )}
-          <button type="button" className="boring-footer-btn" data-testid="boring-project-overview-btn" onClick={() => setMode("project")}>
+          <button type="button" className={`boring-footer-btn${mode === "project" ? " on" : ""}`} data-testid="boring-project-overview-btn" onClick={() => setMode("project")}>
             Project Overview
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-new-project-btn" onClick={onNewSquad}>
@@ -268,7 +268,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         <div className="boring-conv-list" data-testid="boring-conv-list">
           {conversations.length === 0 && <p className="boring-muted">No conversations yet.</p>}
           {conversations.map((c) => (
-            <div key={c.laneId} className={`boring-conv-row ${selectedLaneId === c.laneId ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
+            <div key={c.laneId} className={`boring-conv-row ${mode === "chat" && selectedLaneId === c.laneId ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
               <button type="button" className="boring-conv-title" onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>
                 <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
                 <span className="boring-row-label">{c.name}</span>
@@ -288,7 +288,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           ))}
         </div>
         <div className="boring-sidebar-footer" data-testid="boring-sidebar-footer">
-          <button type="button" className="boring-footer-btn" data-testid="boring-usage-btn" onClick={() => setMode("usage")}>
+          <button type="button" className={`boring-footer-btn${mode === "usage" ? " on" : ""}`} data-testid="boring-usage-btn" onClick={() => setMode("usage")}>
             📊 Usage & Workflows
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-settings-btn" onClick={onSettings}>
