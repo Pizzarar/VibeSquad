@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { AgentDrawer } from "./AgentDrawer";
-import { IdeaInbox, useInboxCards } from "./IdeaInbox";
+import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
@@ -124,6 +124,19 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [openIdleLanes, setOpenIdleLanes] = useState(false);
   const inboxCount = useInboxCards().length;
+  const [feedCount, setFeedCount] = useState<number>(() => (globalThis as { __feedCount?: number }).__feedCount ?? 0);
+  useEffect(() => {
+    if (mode !== "project") return;
+    void refreshInboxCards?.();
+    const teamId = view?.team.id;
+    if (!teamId || typeof fetch !== "function") return;
+    let live = true;
+    fetch(`/__vibesquad/log?team=${encodeURIComponent(teamId)}`)
+      .then((r) => r.json())
+      .then((rows: unknown) => { if (live && Array.isArray(rows)) setFeedCount(rows.length); })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [mode, view?.team.id]);
   const { agents } = usePaseo();
   const panes = usePanes();
   const activeAgentId = panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId;
@@ -224,6 +237,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const laneCard = (c: (typeof conversations)[number]) => (
     <div key={c.laneId} className="boring-card boring-lane-card" role="button" tabIndex={0} data-testid={`boring-card-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "brainstorm")} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickRole(c.pin, c.laneId, "brainstorm"); } }}>
       <div className="boring-card-head">
+        <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
         <span className="boring-row-label">{c.name}</span>
         <code className="boring-conv-code">{c.code}</code>
         <span className="boring-conv-age">{c.age}</span>
@@ -332,8 +346,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           <div className="boring-dashboard-wrap" data-testid="boring-project-view">
             <div className="boring-overview-tabs" data-testid="boring-overview-tabs">
               <button type="button" className={`boring-switch-pill ${overviewTab === "overview" ? "on" : ""}`} data-testid="boring-tab-overview" onClick={() => setOverviewTab("overview")}>Overview</button>
-              <button type="button" className={`boring-switch-pill ${overviewTab === "inbox" ? "on" : ""}`} data-testid="boring-tab-inbox" onClick={() => setOverviewTab("inbox")}>{inboxCount > 0 ? `Idea Inbox (${inboxCount})` : "Idea Inbox"}</button>
-              <button type="button" className={`boring-switch-pill ${overviewTab === "feed" ? "on" : ""}`} data-testid="boring-tab-feed" onClick={() => setOverviewTab("feed")}>Standup Feed</button>
+              <button type="button" className={`boring-switch-pill ${overviewTab === "inbox" ? "on" : ""}`} data-testid="boring-tab-inbox" onClick={() => setOverviewTab("inbox")}>{`Idea Inbox (${inboxCount})`}</button>
+              <button type="button" className={`boring-switch-pill ${overviewTab === "feed" ? "on" : ""}`} data-testid="boring-tab-feed" onClick={() => setOverviewTab("feed")}>{`Standup Feed (${feedCount})`}</button>
             </div>
             {overviewTab === "overview" && (
               <>

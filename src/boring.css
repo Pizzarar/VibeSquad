@@ -49,7 +49,7 @@ html[data-vibe="boring"] .team-emblem {
   border-style: solid;
   border-width: 0;
   border-color: transparent;
-  border-radius: var(--radius);
+  border-radius: var(--radius) !important;
   background-image: none;
 }
 html[data-vibe="boring"] .card,
@@ -388,9 +388,9 @@ html[data-vibe="boring"] .boring-conv-title,
 html[data-vibe="boring"] .boring-project-select,
 html[data-vibe="boring"] .boring-checkin-btn,
 html[data-vibe="boring"] .boring-switch-pill,
-html[data-vibe="boring"] .boring-role-pill { border: 0; background: transparent; border-radius: 10px; min-height: 40px; transition: background-color 120ms ease; }
+html[data-vibe="boring"] .boring-role-pill { border: 0; background: transparent; border-radius: 10px !important; min-height: 40px; transition: background-color 120ms ease; }
 html[data-vibe="boring"] .boring-switch-pill,
-html[data-vibe="boring"] .boring-role-pill { border-radius: 999px; background: var(--panel-hi); }
+html[data-vibe="boring"] .boring-role-pill { border-radius: 999px !important; background: var(--panel-hi); }
 html[data-vibe="boring"] .boring-footer-btn { color: var(--muted); }
 html[data-vibe="boring"] .boring-project-select { background: var(--panel-hi); }
 html[data-vibe="boring"] .boring-footer-btn:hover,
@@ -402,12 +402,12 @@ html[data-vibe="boring"] .boring-role-pill:hover { background: var(--panel-hi); 
 html[data-vibe="boring"] .boring-footer-btn.on,
 html[data-vibe="boring"] .boring-core-row.on,
 html[data-vibe="boring"] .boring-conv-row.on { background: var(--panel-hi); color: var(--text); border: 0; box-shadow: inset 3px 0 0 var(--cyan); }
-html[data-vibe="boring"] .boring-conv-row { border: 0; border-radius: 10px; padding: 0; }
+html[data-vibe="boring"] .boring-conv-row { border: 0; border-radius: 10px !important; padding: 0; }
 html[data-vibe="boring"] .boring-conv-row.on .boring-conv-title { background: transparent; }
 html[data-vibe="boring"] .boring-switch-pill.on { border: 0; box-shadow: none; background: color-mix(in srgb, var(--violet) 22%, var(--panel)); color: var(--text); }
 html[data-vibe="boring"] .boring-new-conv-btn,
-html[data-vibe="boring"] .boring-primary-cta { background: var(--cyan); border: 0; color: #0b0d12; border-radius: 10px; }
-html[data-vibe="boring"] .boring-badge { background: var(--amber); color: #0b0d12; border-radius: 999px; }
+html[data-vibe="boring"] .boring-primary-cta { background: var(--cyan); border: 0; color: #0b0d12; border-radius: 10px !important; }
+html[data-vibe="boring"] .boring-badge { background: var(--amber); color: #0b0d12; border-radius: 999px !important; }
 html[data-vibe="boring"] .boring-dot { background: var(--muted); }
 html[data-vibe="boring"] .boring-dot.running { background: var(--cyan); }
 html[data-vibe="boring"] .boring-sidebar-footer { border-top: 0; }
@@ -417,21 +417,21 @@ html[data-vibe="boring"] .boring-dashboard-wrap { padding: 24px 32px; gap: 24px;
 html[data-vibe="boring"] .boring-overview-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
 html[data-vibe="boring"] .boring-core-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
 html[data-vibe="boring"] .boring-card-grid { grid-template-columns: repeat(auto-fill, minmax(clamp(320px, 22vw, 520px), 1fr)); gap: 16px; }
-html[data-vibe="boring"] .boring-lane-card { background: var(--panel); border: 0; border-radius: 14px; cursor: pointer; transition: background-color 120ms ease; }
+html[data-vibe="boring"] .boring-lane-card { background: var(--panel); border: 0; border-radius: 14px !important; cursor: pointer; transition: background-color 120ms ease; }
 html[data-vibe="boring"] .boring-lane-card:hover,
 html[data-vibe="boring"] .boring-lane-card:focus-visible { background: var(--panel-hi); outline: none; }
 html[data-vibe="boring"] .boring-lane-card[aria-disabled="true"] { cursor: default; opacity: 0.6; }
 html[data-vibe="boring"] .boring-core-tile { padding: 16px; gap: 6px; }
 html[data-vibe="boring"] .boring-card { min-height: 88px; }
 html[data-vibe="boring"] .boring-idle-grid { margin-top: 0; }
-html[data-vibe="boring"] .boring-idle-toggle { align-self: flex-start; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; transition: background-color 120ms ease; }
+html[data-vibe="boring"] .boring-idle-toggle { align-self: flex-start; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 10px !important; background: transparent; color: var(--muted); font: inherit; cursor: pointer; transition: background-color 120ms ease; }
 html[data-vibe="boring"] .boring-idle-toggle:hover { background: var(--panel-hi); color: var(--text); }
-html[data-vibe="boring"] .boring-empty-card { background: var(--panel); border: 0; border-radius: 14px; }
+html[data-vibe="boring"] .boring-empty-card { background: var(--panel); border: 0; border-radius: 14px !important; }
 
 /* B5d: chat + usage. Tone steps instead of borders; hairline only on the composer top edge. */
 html[data-vibe="boring"] .boring-chat-column { max-width: clamp(780px, 62vw, 960px); }
 html[data-vibe="boring"] .boring-chat-column > .drawer,
-html[data-vibe="boring"] .drawer { border-left: 0; border-right: 0; border-radius: 0; background: var(--bg); }
+html[data-vibe="boring"] .drawer { border-left: 0; border-right: 0; border-radius: 0 !important; background: var(--bg); }
 html[data-vibe="boring"] .drawer-head { background: var(--bg) !important; border-bottom: 0; }
 html[data-vibe="boring"] .timeline,
 html[data-vibe="boring"] .drawer-shell > .timeline { background: var(--bg); }
@@ -440,14 +440,14 @@ html[data-vibe="boring"] .tl-assistant,
 html[data-vibe="boring"] .tl-tool,
 html[data-vibe="boring"] .tl-sub,
 html[data-vibe="boring"] .tl-todo,
-html[data-vibe="boring"] .tl-note { background: var(--panel); border: none; border-width: 0; border-radius: 14px; color: var(--text); }
+html[data-vibe="boring"] .tl-note { background: var(--panel); border: none; border-width: 0; border-radius: 14px !important; color: var(--text); }
 html[data-vibe="boring"] .tl-user,
 html[data-vibe="boring"] .tl-note.tl-user { background: color-mix(in srgb, var(--violet) 14%, var(--panel)); border-color: transparent; }
-html[data-vibe="boring"] .tl-note[data-testid="tl-empty-indicator"] { border: 0; border-radius: 14px; background: var(--panel); }
+html[data-vibe="boring"] .tl-note[data-testid="tl-empty-indicator"] { border: 0; border-radius: 14px !important; background: var(--panel); }
 html[data-vibe="boring"] .composer { background: var(--bg); border-top: 1px solid var(--border); padding: 16px 24px; }
 html[data-vibe="boring"] .composer textarea,
 html[data-vibe="boring"] .composer .composer-input,
-html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px; }
+html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px !important; }
 html[data-vibe="boring"] .composer .send,
 html[data-vibe="boring"] .composer button[type="submit"],
 html[data-vibe="boring"] .composer-send,
@@ -476,19 +476,19 @@ html[data-vibe="boring"] .idea-inbox,
 html[data-vibe="boring"] .team-feed,
 html[data-vibe="boring"] .usage-section,
 html[data-vibe="boring"] .usage-cohort-tile,
-html[data-vibe="boring"] .usage-saving-card { border: none; border-radius: 14px; background-color: var(--panel); }
+html[data-vibe="boring"] .usage-saving-card { border: none; border-radius: 14px !important; background-color: var(--panel); }
 html[data-vibe="boring"] .usage-crt-bar { border-bottom: 0; }
 html[data-vibe="boring"] .feed-entry { padding: 12px 16px; }
 html[data-vibe="boring"] .angel-boring-bar,
 html[data-vibe="boring"] .angel-boring-code,
-html[data-vibe="boring"] .angel-boring-btn { border: 0; border-radius: 10px; background: var(--panel-hi); }
-html[data-vibe="boring"] .angel-boring-bar { background: var(--panel); border-radius: 14px; }
+html[data-vibe="boring"] .angel-boring-btn { border: 0; border-radius: 10px !important; background: var(--panel-hi); }
+html[data-vibe="boring"] .angel-boring-bar { background: var(--panel); border-radius: 14px !important; }
 
 /* B5 polish: composer field, banners, timeline items, usage panels. */
-html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px; padding: 6px 8px 6px 14px; align-items: center; gap: 8px; }
+html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px !important; padding: 6px 8px 6px 14px; align-items: center; gap: 8px; }
 html[data-vibe="boring"] .composer textarea,
-html[data-vibe="boring"] .composer input:not([type="file"]) { background: transparent !important; border: 0 !important; box-shadow: none !important; outline: none !important; border-radius: 10px; }
-html[data-vibe="boring"] .composer-more-tab { border: 0 !important; border-radius: 10px; background: transparent; color: var(--muted); }
+html[data-vibe="boring"] .composer input:not([type="file"]) { background: transparent !important; border: 0 !important; box-shadow: none !important; outline: none !important; border-radius: 10px !important; }
+html[data-vibe="boring"] .composer-more-tab { border: 0 !important; border-radius: 10px !important; background: transparent; color: var(--muted); }
 html[data-vibe="boring"] .composer-more-tab:hover,
 html[data-vibe="boring"] .composer-more-tab:focus-visible,
 html[data-vibe="boring"] .composer-more-tab[aria-expanded="true"] { background: var(--panel); color: var(--text); }
@@ -532,3 +532,104 @@ html[data-vibe="boring"] .usage-collapse-head { font-size: 13px; text-transform:
 html[data-vibe="boring"] .decision-card { border: 0 !important; border-radius: 14px !important; background: var(--panel) !important; box-shadow: none !important; padding: 14px 16px; }
 html[data-vibe="boring"] .decision-card .btn { border: 0 !important; border-radius: 10px !important; background: var(--panel-hi) !important; color: var(--text) !important; box-shadow: none !important; }
 html[data-vibe="boring"] .decision-card .btn:hover { filter: brightness(1.08); }
+
+/* ===== B5f: 4K type scale, wide Overview, segmented tabs, round dots, calm chat header. ===== */
+html[data-vibe="boring"] .boring-card-line,
+html[data-vibe="boring"] .boring-conv-age,
+html[data-vibe="boring"] .boring-conv-code,
+html[data-vibe="boring"] .boring-muted,
+html[data-vibe="boring"] .boring-badge,
+html[data-vibe="boring"] .badge,
+html[data-vibe="boring"] .small,
+html[data-vibe="boring"] .tl-meta,
+html[data-vibe="boring"] .tl-time,
+html[data-vibe="boring"] .feed-meta,
+html[data-vibe="boring"] .inbox-meta,
+html[data-vibe="boring"] .usage-collapse-head,
+html[data-vibe="boring"] .btn,
+html[data-vibe="boring"] .btn.small { font-size: clamp(13px, 0.35vw + 11px, 16px) !important; }
+html[data-vibe="boring"] .boring-card-head .boring-row-label { font-size: clamp(16px, 0.45vw + 13px, 20px); font-weight: 600; }
+html[data-vibe="boring"] .boring-dashboard-wrap { max-width: 1600px; padding: 28px 40px; gap: 24px; }
+html[data-vibe="boring"] .boring-card-grid { grid-template-columns: repeat(auto-fill, minmax(clamp(380px, 24vw, 560px), 1fr)); gap: 20px; }
+html[data-vibe="boring"] .boring-core-strip { gap: 20px; }
+html[data-vibe="boring"] .boring-lane-card { padding: 20px 24px; gap: 10px; }
+html[data-vibe="boring"] .boring-core-tile { padding: 18px 22px; gap: 8px; }
+html[data-vibe="boring"] .boring-card { min-height: 104px; }
+html[data-vibe="boring"] .boring-chat-column { max-width: clamp(860px, 66vw, 1120px); }
+html[data-vibe="boring"] .boring-overview-tabs,
+html[data-vibe="boring"] .boring-topbar-switcher {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 4px;
+  background: var(--panel);
+  border-radius: 999px !important;
+  border: 0 !important;
+}
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill,
+html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill {
+  background: transparent !important;
+  color: var(--muted);
+  border-radius: 999px !important;
+  padding: 6px 16px;
+  min-height: 36px;
+  font-weight: 500;
+}
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill.on,
+html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill.on {
+  background: var(--panel-hi) !important;
+  color: var(--text) !important;
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 45%, transparent) !important;
+}
+html[data-vibe="boring"] .boring-dot,
+html[data-vibe="boring"] .signal,
+html[data-vibe="boring"] .status-dot,
+html[data-vibe="boring"] .conn,
+html[data-vibe="boring"] .sidebar-stale-dot {
+  display: inline-block;
+  width: 9px !important;
+  height: 9px !important;
+  border-radius: 50% !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  background-image: none !important;
+  image-rendering: auto !important;
+  animation: none !important;
+  flex: none;
+}
+html[data-vibe="boring"] .boring-dot,
+html[data-vibe="boring"] .signal,
+html[data-vibe="boring"] .signal.idle,
+html[data-vibe="boring"] .signal.closed { background: var(--muted) !important; }
+html[data-vibe="boring"] .boring-dot.running,
+html[data-vibe="boring"] .signal.running,
+html[data-vibe="boring"] .conn.connected { background: var(--cyan) !important; }
+html[data-vibe="boring"] .boring-dot.error,
+html[data-vibe="boring"] .signal.error,
+html[data-vibe="boring"] .signal.attn-error,
+html[data-vibe="boring"] .signal.attn-permission,
+html[data-vibe="boring"] .signal.attn-needs-you,
+html[data-vibe="boring"] .conn.disconnected { background: var(--amber) !important; }
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .role-tag,
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .prov-pill,
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .drawer-role-line .chip,
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) [data-testid="drawer-copy-id-btn"],
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) [data-testid="drawer-copy-cwd-btn"] { display: none !important; }
+html[data-vibe="boring"] .drawer-head .drawer-id {
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 6px 10px !important;
+}
+html[data-vibe="boring"] .drawer-head .drawer-title { order: 1; flex: 1 0 100%; display: flex; align-items: center; gap: 8px; }
+html[data-vibe="boring"] .drawer-head .drawer-meta-line { order: 2; width: auto; }
+html[data-vibe="boring"] .drawer-head .drawer-role-line { order: 3; width: auto; }
+html[data-vibe="boring"] .drawer-head .meter { order: 4; flex: 1 0 100%; }
+html[data-vibe="boring"] .decision-card,
+html[data-vibe="boring"] .decision-card .dc-summary,
+html[data-vibe="boring"] .decision-card .btn { font-size: clamp(14px, 0.45vw + 12px, 18px) !important; font-weight: 400 !important; line-height: 1.5 !important; }
+html[data-vibe="boring"] .decision-card { padding: 10px 14px; }
+html[data-vibe="boring"] .decision-card .dc-summary,
+html[data-vibe="boring"] .decision-card .dc-primary { font-weight: 500 !important; }

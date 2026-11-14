@@ -104,9 +104,9 @@ const rec = (name) => `(...a) => { globalThis.__calls.push(["${name}", ...a]); }
 writeFileSync(
   join(dir, "react-hooks.mjs"),
   `export * from ${JSON.stringify(reactUrl)};
-export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
+export const useEffect = () => {}; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
-stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
+stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => Promise.resolve([]); export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
@@ -397,6 +397,14 @@ test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek
   assert.match(css, /\.boring-card-grid \{ grid-template-columns: repeat\(auto-fill, minmax\(clamp\(320px, 22vw, 520px\)/);
   assert.match(css, /\.usage-crt,[\s\S]*\.feed-entry[^{]*\{[^}]*border: none; border-radius: 14px/);
   assert.match(css, /max-width: 1280px/);
+  assert.match(css, /max-width: 1600px; padding: 28px 40px/);
+  assert.match(css, /\.signal,[\s\S]*?border-radius: 50% !important/);
+  assert.match(css, /\.boring-lane-card \{[^}]*border-radius: 14px !important/);
+  assert.match(css, /\.drawer-head \.drawer-title \{ order: 1; flex: 1 0 100%/);
+  assert.match(css, /\.decision-card \.dc-summary,[\s\S]*?font-size: clamp\(14px, 0\.45vw \+ 12px, 18px\) !important; font-weight: 400/);
+  assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.role-tag,[\s\S]*?drawer-copy-cwd-btn[^{]*\{ display: none !important/);
+  assert.match(ade, /Standup Feed \(\$\{feedCount\}\)/);
+  assert.match(ade, /Idea Inbox \(\$\{inboxCount\}\)/);
   assert.match(css, /\.boring-footer-btn\.on,\s*html\[data-vibe="boring"\] \.boring-core-row\.on,\s*html\[data-vibe="boring"\] \.boring-conv-row\.on \{[^}]*inset 3px 0 0 var\(--cyan\)/);
   assert.match(css, /\.decision-card \{ border: 0 !important; border-radius: 14px !important; background: var\(--panel\)/);
   assert.match(css, /\.usage-collapse,\s*html\[data-vibe="boring"\] \.usage-inbox-row \{ background: var\(--panel\) !important/);
