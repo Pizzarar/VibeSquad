@@ -115,7 +115,7 @@ function teamsRegistryWrite(parsed, rootDir) {
   const teams = Array.isArray(parsed) ? parsed : parsed?.teams;
   validateTeamsBody(teams);
   const file = resolveTeamsWritePath(rootDir);
-  return { file, write: () => {
+  return { file, write: (lock) => {
     const readPath = resolveTeamsFilePath(rootDir);
     const curRes = readJsonFileWithBom(readPath, {
       label: "teams.json",
@@ -161,6 +161,9 @@ function teamsRegistryWrite(parsed, rootDir) {
     const tmp = `${file}.tmp-${process.pid}-${Date.now()}-${++teamsTmpSeq}`;
     try {
       fs.writeFileSync(tmp, JSON.stringify(next, null, 2) + "\n", "utf8");
+      // idea-234 (L4 parity with file-lock updateJsonFile): a holder reaped as stale must not rename its stale view over
+      // the newer writer's teams.json. Checked last, right before the rename; the catch below drops the temp file.
+      lock.assertOwned();
       fs.renameSync(tmp, file);
     } catch (e) {
       fs.rmSync(tmp, { force: true });
