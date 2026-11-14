@@ -8,7 +8,7 @@ export type ParseOpts = { backticked?: boolean };
 
 const PATH_CHARS = /^[\w.\-\/\x5c]+$/;
 const EXT = /\.[A-Za-z][A-Za-z0-9]{0,5}$/;
-const LINE_SUFFIX = /(?::|#L)(\d+)(?:-L?\d+)?$/;
+const LINE_SUFFIX = /(?::|#L)(\d+)(?:-L?\d+|:\d+)?$/; // :12  :12-20  :12:5 (col ignored)  #L12
 // A folder link needs a recognisable top-level dir; `and/or/` and `2026/11/` are prose.
 const KNOWN_TOP_DIRS = new Set([
   "src", "docs", "doc", "test", "tests", "scratch", "server", "scripts", "public", "cli", "plugin", "plugins",
@@ -157,4 +157,21 @@ export function localLinkTarget(href: string, cwd?: string): LocalLinkTarget {
   const wt = /\/worktrees\/([^/]+\/[^/]+\/.+)$/i.exec(p);
   const rel = wt ? normalizeRepoPath(`worktrees/${wt[1]}`) : null;
   return rel ? { path: rel, line: null, isDir: false } : miss(p);
+}
+
+/**
+ * Inline-code path that may be absolute (`C:\Users\x\repo\a.ts:42`, `/home/x/a.ts:3:7`): routed through the
+ * same localLinkTarget mapping as md links (cwd-relative or sanctuary worktree), else the repo-relative parser.
+ * Needs a file extension, so `C:\Windows` or `/usr/bin` stay plain code.
+ */
+export function parseInlineCodePath(raw: string, cwd?: string): FileTarget | null {
+  const s = raw.trim();
+  if (!/^(?:[A-Za-z]:[\x5c/]|\/(?!\/))/.test(s) || /\s/.test(s) || s.includes("://")) return parseFileToken(raw, { backticked: true });
+  let line: number | null = null;
+  let p = s;
+  const lm = LINE_SUFFIX.exec(p);
+  if (lm) { line = parseInt(lm[1], 10); p = p.slice(0, lm.index); }
+  if (!EXT.test(p.slice(Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")) + 1))) return null;
+  const t = localLinkTarget(p, cwd);
+  return t.path === null ? null : { path: t.path, line, isDir: false };
 }

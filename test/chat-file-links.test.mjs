@@ -103,7 +103,7 @@ test("@scope/pkg and plain slashed words are not links", () => {
 test("every chat path goes through parseFileToken; no raw openRightDockTab path", () => {
   const calls = timeline.match(/openRightDockTab\("Files"/g) ?? [];
   assert.equal(calls.length, 1, "only openFileTarget may open Files");
-  assert.match(timeline, /parseFileToken\(m\[7\], \{ backticked: true \}\)/);
+  assert.match(timeline, /parseInlineCodePath\(m\[7\]/);
   assert.match(timeline, /parseFileToken\(raw\)/);
   assert.match(timeline, /key: "barepath"/);
   assert.doesNotMatch(timeline, /clipboard\.writeText\(fp\)/);
@@ -208,4 +208,30 @@ test("localLinkTarget: %23/%3F survive in filenames, bad escapes and real ?# are
   assert.equal(localLinkTarget(`file:///${CWD}/docs/a%23b%3Fc.md`, CWD).path, "docs/a#b?c.md");
   assert.equal(localLinkTarget(`file:///${CWD}/docs/x.md#L3`, CWD).path, "docs/x.md");
   assert.equal(localLinkTarget(`file:///${CWD}/docs/%E0%A4%A.md`, CWD).path, null);
+});
+
+// ── inline-code absolute paths (idea-245) ───────────────────────────────────────
+import { parseInlineCodePath } from "../src/fileLinks.ts";
+const W = (s) => s.replaceAll("|", BS);
+const WCWD = W("C:|Users|Fugma|projects|VibeSquad");
+test("inline Windows abs path inside cwd + :line:col", () => {
+  assert.deepEqual(parseInlineCodePath(W(`${WCWD}|src|Timeline.tsx:42:7`), WCWD), { path: "src/Timeline.tsx", line: 42, isDir: false });
+});
+test("inline drive path with forward slashes, lowercase drive", () => {
+  assert.deepEqual(parseInlineCodePath("c:/users/fugma/projects/vibesquad/server/foo.mjs:12", WCWD), { path: "server/foo.mjs", line: 12, isDir: false });
+});
+test("inline sanctuary worktree path", () => {
+  const r = parseInlineCodePath(W("C:|Users|Fugma|AppData|Local|VibeSquad|worktrees|VibeSquad|unit-x|src|a.ts:3"), WCWD);
+  assert.deepEqual(r, { path: "worktrees/VibeSquad/unit-x/src/a.ts", line: 3, isDir: false });
+});
+test("inline POSIX abs path inside cwd", () => {
+  assert.deepEqual(parseInlineCodePath("/home/a/repo/server/foo.mjs:12", "/home/a/repo"), { path: "server/foo.mjs", line: 12, isDir: false });
+});
+test("inline repo-relative with :line:col still works", () => {
+  assert.deepEqual(parseInlineCodePath("server/foo.mjs:12:5", WCWD), { path: "server/foo.mjs", line: 12, isDir: false });
+});
+test("inline absolute negatives: no ext, outside workspace, UNC, URL, prose", () => {
+  for (const s of ["C:|Windows", "/usr/bin", "C:|Other|place|x.ts:1", "||host|share|a.ts", "https://a.com/x.ts", "const x = 1", "/foo bar/a.ts", "C:|Users|Fugma|projects|VibeSquad|..|x.ts"]) {
+    assert.equal(parseInlineCodePath(W(s), WCWD), null, s);
+  }
 });
