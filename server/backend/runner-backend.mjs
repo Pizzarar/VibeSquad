@@ -558,6 +558,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "rootDir", { value: rootDir });
     Object.defineProperty(this, "listeners", { value: new Set() });
     Object.defineProperty(this, "progressCache", { value: new Map() }); // rec.id -> { lastSeq, lastPromptAt, lastProgressAt }
+    Object.defineProperty(this, "whosFlights", { value: new Map() }); // lane -> { running, queued }: refreshLaneWhosHere coalescing
     Object.defineProperty(this, "rosterFlights", { value: new Map() }); // route -> { seq, p }: the roster read in flight (rosterGet)
     Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
   }
@@ -699,9 +700,32 @@ export class RunnerBackend {
     st.pending = null;
   }
 
-  /** Keep the lane brief's "Who's here" current, on spawn. Best effort. */
-  async refreshLaneWhosHere(lane) {
-    if (!lane) return;
+  /**
+   * Keep the lane brief's "Who's here" current (spawn, archive, role/lane move, exit). Best effort.
+   * Coalesced per lane (unit-loop-stall): one refresh runs at a time; callers arriving meanwhile share ONE rerun that starts
+   * after it, so a burst of spawns/archives in a lane costs two full-roster reads, not one each, and every caller still
+   * gets a refresh that began after its own write.
+   */
+  refreshLaneWhosHere(lane) {
+    if (!lane) return Promise.resolve();
+    const flights = this.whosFlights;
+    let f = flights.get(lane);
+    if (!f) flights.set(lane, (f = { running: null, queued: null }));
+    if (f.queued) return f.queued;
+    const start = () => {
+      f.queued = null;
+      const p = this.whosHereNow(lane).finally(() => {
+        if (f.running === p) f.running = null;
+        if (!f.running && !f.queued && flights.get(lane) === f) flights.delete(lane);
+      });
+      f.running = p;
+      return p;
+    };
+    if (f.running) return (f.queued = f.running.then(start, start));
+    return start();
+  }
+
+  async whosHereNow(lane) {
     try {
       const agents = await this.listAgents();
       this.whosHere({ laneId: lane, agents, rootDir: this.rootDir });

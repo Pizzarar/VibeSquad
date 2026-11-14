@@ -55,6 +55,9 @@ export function runnerPaseoFacade(backend, plugin, { pollMs = 1000 } = {}) {
   };
 
   return {
+    // RunnerBackend.createAgent / updateAgent / archiveAgent already refresh the lane's Who's here (coalesced per lane), so
+    // agent.created must not pay a second full-roster read per spawn (unit-loop-stall).
+    whosHereOnWrite: true,
     agents: {
       ref(id) {
         return {
