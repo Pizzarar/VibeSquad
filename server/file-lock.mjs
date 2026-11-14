@@ -166,24 +166,42 @@ export function withFileLockSync(targetPath, fn, opts) {
   }
 }
 
+/** Run fn under an owned attempt. A sync fn releases before returning; an async one when its promise settles. */
+function runHeld(attempt, fn) {
+  let out;
+  try {
+    out = fn(attempt.handle);
+  } catch (e) {
+    attempt.release();
+    throw e;
+  }
+  if (out && typeof out.then === "function") return Promise.resolve(out).finally(() => attempt.release());
+  attempt.release();
+  return out;
+}
+
 /**
  * Async withFileLockSync: same lock file, stale rules and timeout, but waits with setTimeout so the event loop keeps
- * running. Uncontended, fn starts synchronously within the call. fn may be async (the lock is held until it settles);
- * keep it short and sync where possible. Resolves to fn's value; rejects on timeout or when fn throws.
+ * running. Uncontended, the whole acquire + fn + release happens synchronously within the call (so two back-to-back
+ * unawaited calls never contend with each other). fn may be async (the lock is held until it settles); keep it short
+ * and sync where possible. Always returns a promise: fn's value; rejects on timeout or when fn throws.
  */
-export async function withFileLock(targetPath, fn, opts) {
-  const attempt = lockAttempt(targetPath, { ...lockOptions(opts), nonBlockingCreate: true });
-  for (let spins = 0; ; ) {
-    const r = attempt.poll();
-    if (r === "owned") break;
-    if (r === "retry" && ++spins <= MAX_IMMEDIATE_RETRIES) continue;
-    spins = 0;
-    await sleep(POLL_MS);
-  }
+export function withFileLock(targetPath, fn, opts) {
   try {
-    return await fn(attempt.handle);
-  } finally {
-    attempt.release();
+    const attempt = lockAttempt(targetPath, { ...lockOptions(opts), nonBlockingCreate: true });
+    let spins = 0;
+    const next = () => {
+      for (;;) {
+        const r = attempt.poll();
+        if (r === "owned") return runHeld(attempt, fn);
+        if (r === "retry" && ++spins <= MAX_IMMEDIATE_RETRIES) continue;
+        spins = 0;
+        return sleep(POLL_MS).then(next);
+      }
+    };
+    return Promise.resolve(next());
+  } catch (e) {
+    return Promise.reject(e);
   }
 }
 

@@ -3513,12 +3513,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const text = parts.join("\n\n");
         for (const k of watchKeys) watchSending.add(k);
         try {
-          if (watchKeys.length) watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
+          if (watchKeys.length) await watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
           await paseo.agents.ref(leadId).send(text);
-          if (watchKeys.length) watch?.markDelivered(watchKeys, leadId);
+          if (watchKeys.length) await watch?.markDelivered(watchKeys, leadId);
         } catch (e) {
           log(`wakeup send failed: ${e}`);
-          if (watchKeys.length) watch?.markFailed(watchKeys, String(e));
+          if (watchKeys.length) await watch?.markFailed(watchKeys, String(e));
         } finally {
           for (const k of watchKeys) watchSending.delete(k);
         }

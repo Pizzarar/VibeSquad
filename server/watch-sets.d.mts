@@ -80,8 +80,14 @@ export function addWatch(
   spec: { owner: string; team?: string; lane?: string; items: Array<{ kind: WatchKind; ref?: string }>; stallMin?: number; escalateMin?: number },
   opts?: { home?: string; now?: number },
 ): { id: string };
+/** addWatch for the server process: waits for the lock without blocking the event loop. */
+export function addWatchAsync(
+  spec: { owner: string; team?: string; lane?: string; items: Array<{ kind: WatchKind; ref?: string }>; stallMin?: number; escalateMin?: number },
+  opts?: { home?: string; now?: number },
+): Promise<{ id: string }>;
 export function listWatches(filter?: { owner?: string; team?: string; all?: boolean }, opts?: { home?: string }): Array<WatchSet & { status: "armed" | "fired" | "cancelled" }>;
-export function cancelWatch(id: string, callerId: string, opts?: { home?: string; now?: number }): { ok: boolean; id: string; error?: string; already?: boolean };
+export function cancelWatch(id: string, callerId: string, opts?: { home?: string; now?: number; allow?: (set: WatchSet) => boolean }): { ok: boolean; id: string; error?: string; already?: boolean; refused?: boolean };
+export function cancelWatchAsync(id: string, callerId: string, opts?: { home?: string; now?: number; allow?: (set: WatchSet) => boolean }): Promise<{ ok: boolean; id: string; error?: string; already?: boolean; refused?: boolean }>;
 
 export function classifyItem(item: WatchItem, set: WatchSet, ctx: any): { phase: string; phaseSince?: string; state: WatchItemState; reason?: string; report?: string };
 export function stepSet(set: WatchSet, ctx: any): WatchPing | null;
@@ -111,11 +117,12 @@ export interface WatchEngine {
   onRunnerEvent(ev: any): void;
   onLogEntry(team: string, entry: { ts: string; agent: string; lane: string; type: string; text: string; refs: string[] }): string[];
   holdingSets(entry: any, setIds: string[]): Promise<WatchSet[]>;
-  markAttempted(keys: string[], to: string): void;
+  /** Resolves once attemptedAt is on disk (await it before the send); never rejects. */
+  markAttempted(keys: string[], to: string): Promise<void>;
   /** idea-219: true when the ping's set was cancelled (fresh read). Checked right before a send. */
   isCancelled(key: string): boolean;
-  markDelivered(keys: string[], to: string): void;
-  markFailed(keys: string[], error: string): void;
+  markDelivered(keys: string[], to: string): Promise<void>;
+  markFailed(keys: string[], error: string): Promise<void>;
   get(id: string): WatchSet | null;
   list(): WatchSet[];
 }
