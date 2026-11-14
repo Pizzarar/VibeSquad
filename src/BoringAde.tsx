@@ -32,6 +32,27 @@ export function boringConversationAge(pin: Pick<Pin, "brainstorm" | "lead" | "wo
   return formatTimestamp(latest, "relative", now);
 }
 
+/**
+ * Which agent the chat shows for a pin role. Normally the pin's own member; but right after a Buddy restart / provider switch the
+ * drawer opens the successor (activeAgentId) before the pin re-resolves, and ignoring it snapped the chat back to the retired agent.
+ */
+export function resolvePinChatAgentId(
+  pin: Pick<Pin, "brainstorm" | "lead"> & { lane?: { id?: string } },
+  role: Role,
+  activeAgentId: string | null | undefined,
+  agents: ReadonlyMap<string, { id: string; labels?: Record<string, string> | null }>,
+): string | null {
+  const base = (role === "lead" ? pin.lead : pin.brainstorm)?.agent.id ?? null;
+  if (!activeAgentId || activeAgentId === base) return base;
+  const next = agents.get(activeAgentId);
+  if (!next) return base;
+  const labels = (next.labels ?? {}) as Record<string, string>;
+  const laneOk = !pin.lane?.id || (labels.lane ?? "").toLowerCase() === String(pin.lane.id).toLowerCase();
+  const roleOk = (labels.role ?? role) === role || (role === "brainstorm" && labels.role === "brainstorm");
+  const successor = labels["vs.restarted-from"] === base || (base !== null && !agents.has(base));
+  return laneOk && roleOk && successor ? next.id : base;
+}
+
 export function boringActiveRole(pin: Pick<Pin, "brainstorm" | "lead">, activeAgentId: string | null | undefined): Role {
   return activeAgentId && pin.lead?.agent.id === activeAgentId ? "lead" : "brainstorm";
 }
@@ -147,7 +168,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     agentId = zones.riffbot.member?.agent.id ?? null;
   } else if (currentPin) {
     emptyKind = selectedRole;
-    agentId = (selectedRole === "lead" ? currentPin.lead : currentPin.brainstorm)?.agent.id ?? null;
+    agentId = resolvePinChatAgentId(currentPin, selectedRole, activeAgentId, agents);
   } else {
     agentId = (activeAgentId && agents.get(activeAgentId) ? activeAgentId : null) ?? zones.riffbot.member?.agent.id ?? zones.overlord.member?.agent.id ?? null;
   }

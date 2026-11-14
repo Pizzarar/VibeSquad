@@ -273,3 +273,37 @@ test("AgentDrawer forwards stagedSwitch.model/modeId/thinkingOptionId through do
 
 // ─── 3. Right-Rail Active Buddy Card controls vs the remote proxy policy ───
 
+
+// ─── Snap-back regression (unit-bor-provider-model-snapback) ───
+test("runnerBridge overlay: stale SSE roster cannot resurrect a retired agent or undo a local pick", async () => {
+  const rb = await import("../src/runnerBridge.ts");
+  const mk = (id, extra = {}) => ({ id, provider: "claude", model: "old", currentModeId: "default", status: "idle", ...extra });
+  // upsertLocalAgent(created, oldId): the next tick still lists old (role brainstorm) and not created.
+  rb.noteLocalUpsert(mk("rn-new"), "rn-old");
+  let out = rb.overlayRoster([mk("rn-old", { labels: { role: "brainstorm" } })]);
+  assert.deepEqual(out.map((a) => a.id), ["rn-new"]);
+  // Once the stream has the new agent it is taken from the stream and no longer held locally.
+  out = rb.overlayRoster([mk("rn-new", { model: "streamed" })]);
+  assert.equal(out[0].model, "streamed");
+  // Optimistic model pick survives a stale tick, and clears once the stream agrees.
+  rb.setOptimisticConfig("rn-a", { model: "picked" });
+  assert.equal(rb.overlayRoster([mk("rn-a")])[0].model, "picked");
+  assert.equal(rb.overlayRoster([mk("rn-a", { model: "picked" })])[0].model, "picked");
+  assert.equal(rb.overlayRoster([mk("rn-a", { model: "later" })])[0].model, "later");
+  // Rollback drops the pin.
+  rb.setOptimisticConfig("rn-b", { model: "bad" });
+  rb.clearOptimisticConfig("rn-b", ["model"]);
+  assert.equal(rb.overlayRoster([mk("rn-b")])[0].model, "old");
+});
+
+test("snap-back source guards: optimistic helpers, staged map, offered models, prov-pill, visible errors", () => {
+  assert.match(drawerSrc, /applyConfigOptimistically\(agent, \{ model: modelId \}/);
+  assert.match(drawerSrc, /applyConfigOptimistically\(agent, \{ currentModeId: modeId \}/);
+  assert.match(drawerSrc, /applyConfigOptimistically\(agent, \{ thinkingOptionId: optionId \}/);
+  assert.match(drawerSrc, /"antigravity-cli": \["gemini-4-argon", "gemini-3\.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"\]/);
+  assert.match(drawerSrc, /if \(modelBusy\) return;/);
+  assert.match(drawerSrc, /\{effectiveProv\.symbol\} \{effectiveProv\.name\}/);
+  assert.doesNotMatch(drawerSrc, /\{prov\.symbol\} \{prov\.name\}/);
+  assert.match(drawerSrc, /\{modelError && <span className="small drawer-reload-error"[\s\S]*?<\/div>/);
+  assert.match(agentSrc, /export const stagedSwitchByAgent = new Map/);
+});

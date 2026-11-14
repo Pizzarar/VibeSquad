@@ -130,6 +130,79 @@ export function reduceRunnerRoster(roster: Map<string, PaseoAgent>, ev: RunnerSt
   return null;
 }
 
+// Local-first overlay. The store applies optimistic edits (upsertLocalAgent / removeLocalAgent / config picks) instantly, but the
+// bridge's private roster only learns about them from the stream, which can lag 1-4s behind on a stalled server. Without this
+// overlay the very next SSE tick re-applied the stale roster and snapped the UI back (retired buddy resurrected, old model shown).
+const LOCAL_TTL_MS = 30_000;
+const OPTIMISTIC_TTL_MS = 5_000;
+const retiredIds = new Map<string, number>();
+const localAgents = new Map<string, { agent: PaseoAgent; at: number }>();
+const optimisticConfig = new Map<string, { patch: Record<string, unknown>; until: number }>();
+
+/** A locally created/replaced agent: keep it in the view until the stream catches up, and never let `removeOldId` come back. */
+export function noteLocalUpsert(agent: PaseoAgent, removeOldId?: string): void {
+  if (!agent.id.startsWith("rn-")) return;
+  retiredIds.delete(agent.id);
+  localAgents.set(agent.id, { agent, at: Date.now() });
+  if (removeOldId) {
+    localAgents.delete(removeOldId);
+    optimisticConfig.delete(removeOldId);
+    retiredIds.set(removeOldId, Date.now());
+  }
+}
+
+export function noteLocalRemove(agentId: string): void {
+  localAgents.delete(agentId);
+  optimisticConfig.delete(agentId);
+  retiredIds.set(agentId, Date.now());
+}
+
+/** Pin freshly picked config fields (model / currentModeId / thinkingOptionId ...) against older stream ticks until the stream agrees. */
+export function setOptimisticConfig(agentId: string, patch: Record<string, unknown>, ttlMs = OPTIMISTIC_TTL_MS): void {
+  const prev = optimisticConfig.get(agentId);
+  optimisticConfig.set(agentId, { patch: { ...(prev?.patch ?? {}), ...patch }, until: Date.now() + ttlMs });
+}
+
+export function clearOptimisticConfig(agentId: string, keys?: string[]): void {
+  const cur = optimisticConfig.get(agentId);
+  if (!cur) return;
+  if (!keys) return void optimisticConfig.delete(agentId);
+  for (const k of keys) delete cur.patch[k];
+  if (!Object.keys(cur.patch).length) optimisticConfig.delete(agentId);
+}
+
+/** Roster as the stream sees it, corrected for local edits the stream has not confirmed yet. */
+export function overlayRoster(agents: PaseoAgent[], now = Date.now()): PaseoAgent[] {
+  for (const [id, at] of retiredIds) if (now - at > LOCAL_TTL_MS) retiredIds.delete(id);
+  const seen = new Set<string>();
+  const out: PaseoAgent[] = [];
+  for (const a of agents) {
+    seen.add(a.id);
+    if (retiredIds.has(a.id)) continue;
+    localAgents.delete(a.id); // the stream has it now
+    let next = a;
+    const opt = optimisticConfig.get(a.id);
+    if (opt) {
+      if (now > opt.until) optimisticConfig.delete(a.id);
+      else {
+        const patch: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(opt.patch)) {
+          if ((a as unknown as Record<string, unknown>)[k] === v) delete opt.patch[k]; // confirmed
+          else patch[k] = v;
+        }
+        if (!Object.keys(opt.patch).length) optimisticConfig.delete(a.id);
+        if (Object.keys(patch).length) next = { ...a, ...patch } as PaseoAgent;
+      }
+    }
+    out.push(next);
+  }
+  for (const [id, { agent, at }] of localAgents) {
+    if (now - at > LOCAL_TTL_MS) localAgents.delete(id);
+    else if (!seen.has(id) && !retiredIds.has(id)) out.push(agent);
+  }
+  return out;
+}
+
 /**
  * Mirror the runner roster into the store from the VS server's SSE stream (/__vibesquad/runner/events): no polling.
  * `apply` gets the full runner set on each change plus the ids a real archive event removed (agents that merely vanish from
@@ -220,7 +293,8 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
         const next = reduceRunnerRoster(roster, ev);
         if (!next) return;
         roster = next;
-        apply([...roster.values()], ev.kind === "remove" ? [ev.agentId] : []);
+        if (ev.kind === "remove") localAgents.delete(ev.agentId);
+        apply(overlayRoster([...roster.values()]),ev.kind === "remove" ? [ev.agentId] : []);
         if (ev.kind === "roster") notifyTimeline(undefined, true);
       };
       connect();

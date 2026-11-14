@@ -404,3 +404,12 @@ test("B4: picker header grows to fit the 22px title plus subtitle", () => {
   const fr = readFileSync(resolve(import.meta.dirname, "..", "src", "FirstRunModal.tsx"), "utf8");
   assert.match(fr, /height: "auto", minHeight: 0, padding: "14px 16px"/);
 });
+
+test("resolvePinChatAgentId prefers the successor opened after a restart/switch", async () => {
+  const { resolvePinChatAgentId } = await import("../src/BoringAde.tsx").catch(() => ({}));
+  if (!resolvePinChatAgentId) return; // tsx imports unavailable under plain node
+  const agents = new Map([["rn-new", { id: "rn-new", labels: { lane: "bor", role: "brainstorm", "vs.restarted-from": "rn-old" } }]]);
+  const pin = { lane: { id: "bor" }, brainstorm: { agent: { id: "rn-old" } }, lead: null };
+  assert.equal(resolvePinChatAgentId(pin, "brainstorm", "rn-new", agents), "rn-new");
+  assert.equal(resolvePinChatAgentId(pin, "brainstorm", "rn-other", agents), "rn-old");
+});

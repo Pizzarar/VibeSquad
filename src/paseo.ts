@@ -2,7 +2,8 @@
 import type { ActiveTurnBehavior, PaseoAgent, PaseoWorkspace } from "./agentTypes";
 import { applyLabelsOptimistic } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, markUnreadLocal, subscribeAttentionLocal } from "./attentionLocal";
-import { isRunnerId, runnerArchive, runnerCancel, runnerListArchived, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange } from "./runnerBridge";
+import { isRunnerId, runnerArchive, runnerCancel, runnerListArchived, runnerSend, runnerSpawn, runnerUpdate, runnerStatusLoaded, startRunnerBridge, onRunnerStatusChange, noteLocalUpsert, noteLocalRemove } from "./runnerBridge";
+export { setOptimisticConfig, clearOptimisticConfig } from "./runnerBridge";
 import { useSyncExternalStore } from "react";
 import { refreshTeams, retiredLeadTitle } from "./teams";
 import { normalizeProviderUsage, runnerUsageToQuota, type ProviderQuotaView } from "./antigravity";
@@ -82,6 +83,12 @@ function set(patch: Partial<State>) {
 }
 
 export function upsertLocalAgent(agent: PaseoAgent, removeOldId?: string) {
+  noteLocalUpsert(agent, removeOldId);
+  applyAgent(agent, removeOldId);
+}
+
+/** Store write without telling the runner bridge (the bridge's own roster mirror uses this). */
+function applyAgent(agent: PaseoAgent, removeOldId?: string) {
   const agents = new Map(state.agents);
   if (removeOldId) {
     pendingAgents.delete(removeOldId);
@@ -95,6 +102,7 @@ export function upsertLocalAgent(agent: PaseoAgent, removeOldId?: string) {
 
 export function removeLocalAgent(agentId: string) {
   if (!agentId) return;
+  noteLocalRemove(agentId);
   const agents = new Map(state.agents);
   const existing = agents.get(agentId);
   pendingAgents.delete(agentId);
@@ -435,7 +443,7 @@ if (!DEMO && typeof window !== "undefined") {
   startRunnerBridge(
     (agents, archivedIds) => {
       const live = new Set(agents.map((a) => a.id));
-      for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) upsertLocalAgent(a);
+      for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) applyAgent(a);
       for (const id of [...state.agents.keys()]) {
         if (!isRunnerId(id) || live.has(id)) continue;
         if (archivedIds.includes(id)) removeLocalAgent(id);

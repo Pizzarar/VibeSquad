@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "./agentTypes";
-import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent } from "./paseo";
+import { attachFiles, clearNeedsYou, markAgentRead, markAgentUnread, sendMessage, setNeedsYou, snoozeNeedsYou, stopAgent, updateAgent, upsertLocalAgent, setOptimisticConfig, clearOptimisticConfig } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { listProviderModels } from "./paseoProviders";
@@ -309,24 +309,42 @@ export function formatCostUsd(usd: number): string {
 export const CONFIG_NEXT_TURN = "Applies from the next turn.";
 export const configNote = (r: { busy: boolean } | void): string => (r && r.busy ? CONFIG_NEXT_TURN : "");
 
+// Optimistic: the store (and a short bridge-side pin, so stale SSE ticks cannot undo it) takes the pick immediately; a failed
+// runnerSetConfig rolls the previous value back. Without this a stalled server made every picker snap back while the call was in flight.
+async function applyConfigOptimistically(
+  agent: PaseoAgent,
+  patch: Partial<PaseoAgent>,
+  send: () => Promise<{ busy: boolean } | void>,
+): Promise<{ busy: boolean } | void> {
+  const prev: Record<string, unknown> = {};
+  for (const k of Object.keys(patch)) prev[k] = (agent as unknown as Record<string, unknown>)[k];
+  upsertLocalAgent({ ...agent, ...patch, updatedAt: new Date().toISOString() } as PaseoAgent);
+  if (DEMO) return;
+  setOptimisticConfig(agent.id, patch as Record<string, unknown>);
+  try {
+    return await send();
+  } catch (e) {
+    clearOptimisticConfig(agent.id, Object.keys(patch));
+    upsertLocalAgent({ ...agent, ...(prev as Partial<PaseoAgent>), updatedAt: new Date().toISOString() } as PaseoAgent);
+    throw e;
+  }
+}
+
 export async function setModeHelper(agent: PaseoAgent, modeId: string): Promise<{ busy: boolean } | void> {
-  if (DEMO) { upsertLocalAgent({ ...agent, currentModeId: modeId }); return; }
-  return runnerSetConfig(agent.id, { modeId });
+  return applyConfigOptimistically(agent, { currentModeId: modeId }, () => runnerSetConfig(agent.id, { modeId }));
 }
 
 export async function setModelHelper(agent: PaseoAgent, modelId: string): Promise<{ busy: boolean } | void> {
-  if (DEMO) { upsertLocalAgent({ ...agent, model: modelId }); return; }
-  return runnerSetConfig(agent.id, { model: modelId });
+  return applyConfigOptimistically(agent, { model: modelId }, () => runnerSetConfig(agent.id, { model: modelId }));
 }
 
 export async function setThinkingHelper(agent: PaseoAgent, optionId: string | null): Promise<{ busy: boolean } | void> {
-  if (DEMO) { upsertLocalAgent({ ...agent, thinkingOptionId: optionId }); return; }
-  return runnerSetConfig(agent.id, { thinkingOptionId: optionId });
+  return applyConfigOptimistically(agent, { thinkingOptionId: optionId }, () => runnerSetConfig(agent.id, { thinkingOptionId: optionId }));
 }
 
 export const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
   claude: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"],
-  "antigravity-cli": ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  "antigravity-cli": ["gemini-4-argon", "gemini-3.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"],
   antigravity: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
   gemini: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
   codex: ["gpt-5.4", "gpt-5.3-codex", "gpt-4o", "gpt-4o-mini"],
@@ -339,6 +357,7 @@ export function buildProviderModelOptions(
   provider: string,
   currentModel?: string | null,
   liveModels?: Array<{ id: string }>,
+  offeredModels?: ReadonlyArray<string | { id: string }> | null,
 ): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -355,6 +374,8 @@ export function buildProviderModelOptions(
       add(m?.id);
     }
   }
+  // Models the ACP session offered are the only ones runner.setConfig accepts, so they always make the list.
+  if (Array.isArray(offeredModels)) for (const m of offeredModels) add(typeof m === "string" ? m : m?.id);
   const normProvider = String(provider ?? "").trim();
   const hints =
     PROVIDER_MODEL_HINTS[normProvider] ??
@@ -688,6 +709,7 @@ export function DrawerHeader({
   );
   const modelSubmittedRef = useRef<string | null>(null);
   const [modelError, setModelError] = useState("");
+  const [modelBusy, setModelBusy] = useState(false);
   const [internalStagedSwitch, setInternalStagedSwitch] = useState<ProviderSwitchTarget | null>(null);
   const staged = stagedSwitch !== undefined ? stagedSwitch : internalStagedSwitch;
   const stageSwitch = (target: ProviderSwitchTarget | null) => {
@@ -705,11 +727,12 @@ export function DrawerHeader({
       stageSwitch({ ...staged, model: next });
       return;
     }
+    setModelBusy(true);
     setModelHelper(agent, next).then((r) => setReloadError(configNote(r))).catch((e) => {
       modelSubmittedRef.current = null;
       setModelValue(agent.model ?? "");
       setModelError(`Model change failed: ${e instanceof Error ? e.message : e}`);
-    });
+    }).finally(() => setModelBusy(false));
   };
   const [thinkingBusy, setThinkingBusy] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
@@ -721,9 +744,10 @@ export function DrawerHeader({
   const configMenuRef = useRef<HTMLDetailsElement>(null);
 
   useEffect(() => {
+    if (modelBusy) return; // an in-flight pick wins over stream ticks; the helper rolls back itself on failure
     setModelValue(agent.model ?? "");
     modelSubmittedRef.current = null;
-  }, [agent.model]);
+  }, [agent.model, modelBusy]);
 
   // The internal fallback staging state must not leak into the next agent when this drawer re-renders for a new id.
   useEffect(() => {
@@ -758,7 +782,12 @@ export function DrawerHeader({
     };
   }, [effectiveProvider, agent.id]);
 
-  const modelOptions = buildProviderModelOptions(effectiveProvider, modelValue || staged?.model || agent.model, liveModels);
+  const modelOptions = buildProviderModelOptions(
+    effectiveProvider,
+    modelValue || staged?.model || agent.model,
+    liveModels,
+    staged ? null : (agent as unknown as { offered?: { models?: Array<string | { id: string }> } }).offered?.models,
+  );
   const modelListId = `drawer-model-list-${agent.id}`;
 
   const agentLabels = (agent.labels ?? {}) as Record<string, string>;
@@ -1184,8 +1213,6 @@ export function DrawerHeader({
               Mark unread
             </button>
           )}
-          {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
-          {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
     </>
   );
   const extraActions = (
@@ -1199,8 +1226,8 @@ export function DrawerHeader({
   const secondaryPlumbing = (
     <>
           <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
-          <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
-            {prov.symbol} {prov.name}
+          <span className="prov-pill" style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}>
+            {effectiveProv.symbol} {effectiveProv.name}
           </span>
           {featureChips}
           <AgentActions agent={agent} archive />
@@ -1440,8 +1467,8 @@ export function DrawerHeader({
         <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
           <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
             <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
-            <span className="prov-pill" style={{ color: prov.color, borderColor: prov.color }}>
-              {prov.symbol} {prov.name}
+            <span className="prov-pill" style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}>
+              {effectiveProv.symbol} {effectiveProv.name}
             </span>
             {modeSelect}
             {thinkingSelect}
@@ -1455,6 +1482,8 @@ export function DrawerHeader({
             {providerSelect}
             {modelControl}
             {metaRest}
+            {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
+            {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
           </div>
           {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
         </div>
@@ -1524,6 +1553,8 @@ export function DrawerHeader({
       </div>
       <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
         {metaRest}
+        {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
+        {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
       </div>
       {agent.labels?.["vs.fresh-session"] === "brief" && (
         <div className="brainstorm-fresh-divider" role="separator">
