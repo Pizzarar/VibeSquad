@@ -110,6 +110,31 @@ test('stopBackground: refuses a running turn, an unknown agent; nothing to stop 
   h.runner.shutdown(); h2.runner.shutdown();
 });
 
+test('stopBackground (idea-231): a turn that starts while the probe runs -> nothing is killed, the new turn\'s work is not wiped', async () => {
+  const h = harness();
+  const id = h.create();
+  h.shells(id, [GODOT]);
+  h.endTurn(id);
+  await until(() => types(h.runner, id).includes('park-held'));
+  const NEW_SHELL = { pid: 31337, name: 'bash', cmd: 'npm test' }; // the new turn's own shell, seen by the stop's probe
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let probing = false;
+  h.runner.bgProbe = async () => { probing = true; await gate; return [GODOT, NEW_SHELL]; };
+  const stop = h.runner.stopBackground(id);
+  await until(() => probing);
+  h.runner.send(id, 'next task'); // a new turn starts mid-probe
+  const entry = h.runner.live.get(id);
+  entry.work = [NEW_SHELL]; // what the new turn holds
+  release();
+  await assert.rejects(stop, (e) => e.status === 409 && /started a turn/.test(e.message));
+  assert.deepEqual(h.treeKills, [], 'no shell in the snapshot is killed: it may be the new turn\'s');
+  assert.deepEqual(entry.work, [NEW_SHELL], 'the new turn\'s work is not wiped');
+  assert.ok(!types(h.runner, id).includes('bg-stopped'));
+  assert.equal(h.runner.status(id).status, 'running');
+  h.runner.shutdown();
+});
+
 // ---- (2) held checks reality ---------------------------------------------------------------------------------------
 
 test('a held entry whose shells are all dead is dropped when held is read (no waiting for the next poll), then the idea-112 wake runs', async () => {
