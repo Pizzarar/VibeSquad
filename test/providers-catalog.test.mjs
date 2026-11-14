@@ -1808,10 +1808,9 @@ test('usage: merged units pool across every Squad repo, tagged repo/squad, attri
     g(path.join(base, 'alpha'), 'commit', '-q', '-m', 'feat: late (@usa)');
     g(path.join(base, 'alpha'), 'checkout', '-q', 'main');
     g(path.join(base, 'alpha'), 'merge', '-q', '--no-ff', '-m', "Merge branch 'unit-late' (@usa)", 'unit-late');
-    clearUsageCache();
+    // (clearUsageCache() also drops the HEAD-check cache now, so the TTL window is exercised without it)
     assert.equal(getUsage({ home, now: () => t + 1000 }).merged.units.filter((x) => x.repo === 'alpha').length, 1, 'within TTL: no git re-run');
     t += 60_000;
-    clearUsageCache();
     assert.equal(getUsage({ home, now: () => t }).merged.units.filter((x) => x.repo === 'alpha').length, 2, 'after TTL: new HEAD picked up');
     // Remove the synthetic ledger record so subsequent tests using the same fake shas (m1..m3) don't fold 'deadbeef'.
     fs.rmSync(path.join(home, 'runner', 'usage-ledger.jsonl'), { force: true });
