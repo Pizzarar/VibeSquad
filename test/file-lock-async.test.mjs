@@ -162,10 +162,21 @@ test("a live-held lock times out (async) with the same error and is left alone",
 test("timeoutMs 0 is a single try: busy lock throws at once, free lock is taken", async (t) => {
   const f = path.join(tmp(t), "a.json");
   writeFileSync(`${f}.lock`, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
-  const t0 = Date.now();
-  assert.throws(() => withFileLockSync(f, () => 1, { timeoutMs: 0 }), /Timed out/);
-  await assert.rejects(withFileLock(f, () => 1, { timeoutMs: 0 }), /Timed out/);
-  assert.ok(Date.now() - t0 < 50, "no waiting");
+  // "No waiting" is asserted by counting sleeps (sync Atomics.wait, async setTimeout), not wall time: reading the
+  // freshly written lock file costs 5-15ms under Windows real-time AV scanning, so a stopwatch bound flakes.
+  let sleeps = 0;
+  const realWait = Atomics.wait;
+  const realSetTimeout = globalThis.setTimeout;
+  Atomics.wait = (...a) => { sleeps++; return realWait(...a); };
+  globalThis.setTimeout = (...a) => { sleeps++; return realSetTimeout(...a); };
+  try {
+    assert.throws(() => withFileLockSync(f, () => 1, { timeoutMs: 0 }), /Timed out/);
+    await assert.rejects(withFileLock(f, () => 1, { timeoutMs: 0 }), /Timed out/);
+  } finally {
+    Atomics.wait = realWait;
+    globalThis.setTimeout = realSetTimeout;
+  }
+  assert.equal(sleeps, 0, "no waiting");
   rmSync(`${f}.lock`);
   assert.equal(withFileLockSync(f, () => 2, { timeoutMs: 0 }), 2);
 });
