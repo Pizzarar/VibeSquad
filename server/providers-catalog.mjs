@@ -14,7 +14,7 @@ import { turnCapsFromEnv } from "../runner/runner.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
 import { resolveTeamsFilePath } from "./teams-file.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
-import { addInboxCards, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
+import { addInboxCardsAsync, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
@@ -1894,12 +1894,12 @@ const isOpenPerfectionCard = (c) =>
  * Best-effort: parse the review's actionable bullets and enqueue them into the perfection (Workflows) inbox, deduped
  * against open perfection cards (status parked or accepted) and across the opus/gemini sets. Returns the enqueued card ids (never throws).
  */
-function routeReviewToInbox(opusResult, geminiResult, dir) {
+async function routeReviewToInbox(opusResult, geminiResult, dir) {
   const sent = [];
   if (!dir || isForbiddenRealHome(dir)) return sent;
   const existing = readInboxCards(dir).filter(isOpenPerfectionCard);
   const seen = existing.map((c) => `${c.title || ""} ${c.text || ""}`).filter(Boolean);
-  const process = (result, source) => {
+  const process = async (result, source) => {
     if (!result?.ok || typeof result.text !== "string") return;
     const ideas = [];
     for (const bullet of parseReviewBullets(result.text)) {
@@ -1909,14 +1909,14 @@ function routeReviewToInbox(opusResult, geminiResult, dir) {
     }
     if (!ideas.length) return;
     try {
-      const res = addInboxCards({ ideas, laneId: "perfection", teamId: "vibesquad", source, baseHome: dir });
+      const res = await addInboxCardsAsync({ ideas, laneId: "perfection", teamId: "vibesquad", source, baseHome: dir });
       for (const c of res.added ?? []) sent.push(c.id);
     } catch (e) {
       console.error(`usage-review: failed to route ${source} bullets to perfection inbox: ${e?.message ?? e}`);
     }
   };
-  process(opusResult, "usage-review:opus");
-  process(geminiResult, "usage-review:gemini");
+  await process(opusResult, "usage-review:opus");
+  await process(geminiResult, "usage-review:gemini");
   return sent;
 }
 
@@ -1940,7 +1940,7 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
         geminiRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
       ]);
       const dir = home || vibesquadHome();
-      const sentCardIds = routeReviewToInbox(results[0], results[1], dir);
+      const sentCardIds = await routeReviewToInbox(results[0], results[1], dir);
       const record = {
         at: new Date(now()).toISOString(),
         trigger,
