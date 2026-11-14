@@ -160,7 +160,7 @@ export function localLinkTarget(href: string, cwd?: string): LocalLinkTarget {
 }
 
 /**
- * Inline-code path that may be absolute (`C:\Users\x\repo\a.ts:42`, `/home/x/a.ts:3:7`): routed through the
+ * Inline-code path that may be absolute (`C:\Users\you\repo\a.ts:42`, `/home/you/a.ts:3:7`): routed through the
  * same localLinkTarget mapping as md links (cwd-relative or sanctuary worktree), else the repo-relative parser.
  * Needs a file extension, so `C:\Windows` or `/usr/bin` stay plain code.
  */
