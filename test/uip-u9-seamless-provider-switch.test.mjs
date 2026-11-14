@@ -166,7 +166,7 @@ test("provider dropdown stages the switch instead of restarting immediately", ()
   // Effective provider drives the select value + colour and the model list while staged.
   assert.match(drawerSrc, /const effectiveProvider = staged \? staged\.provider : agent\.provider;/);
   assert.match(drawerSrc, /const effectiveProv = providerSpec\(effectiveProvider\);/);
-  assert.match(drawerSrc, /buildProviderModelOptions\(effectiveProvider, modelValue \|\| staged\?\.model \|\| agent\.model, liveModels\)/);
+  assert.match(drawerSrc, /buildProviderModelOptions\(\s*effectiveProvider,\s*modelValue \|\| staged\?\.model \|\| agent\.model,\s*liveModels,/);
   // The legacy 1-click ⇄ button still restarts immediately via switchToProvider.
   assert.match(drawerSrc, /await doRestart\("provider-switch", undefined, nextProfile\);/);
 });
@@ -174,8 +174,8 @@ test("provider dropdown stages the switch instead of restarting immediately", ()
 // ─── 5. seamless restart on sendWithBehavior ───
 
 test("sendWithBehavior switches and sends on the staged provider", () => {
-  assert.match(agentSrc, /const \[stagedSwitch, setStagedSwitch\] = useState<ProviderSwitchTarget \| null>\(null\);/);
-  assert.match(agentSrc, /useEffect\(\(\) => \{\s*setStagedSwitch\(null\);\s*\}, \[agent\.id\]\);/);
+  assert.match(agentSrc, /const \[stagedSwitch, setStagedSwitchState\] = useState<ProviderSwitchTarget \| null>\(\(\) => stagedSwitchByAgent\.get\(agent\.id\) \?\? null\);/);
+  assert.match(agentSrc, /useEffect\(\(\) => \{\s*setStagedSwitchState\(stagedSwitchByAgent\.get\(agent\.id\) \?\? null\);\s*\}, \[agent\.id\]\);/);
   // The queue branch must skip when a switch is staged.
   assert.match(agentSrc, /shouldQueueOnSend\(agent\.status, forceImmediate\) &&\s*!stagedSwitch &&/);
   // The staged-switch branch builds recent conversation context and hands the message to the new provider.

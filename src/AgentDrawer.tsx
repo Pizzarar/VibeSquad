@@ -140,6 +140,9 @@ export async function triggerBrainstormRestart(opts: {
 /** `chatOnly` (sky-gods zones): messages + composer only. The right dock (Changes/Files/Terminal) is never rendered, never read from or written to the shared `vs.right-dock.open` key, and `vs:open-right-dock` is ignored. */
 type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean; pinDecisions?: boolean };
 
+/** Provider switches staged but not yet sent, per agent id (survives AgentDrawer unmount/remount). */
+export const stagedSwitchByAgent = new Map<string, ProviderSwitchTarget>();
+
 export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false, pinDecisions = false }: DrawerProps) {
   useTeams();
   const labels = (agent.labels ?? {}) as Record<string, string>;
@@ -148,7 +151,13 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const predecessorId = restartedFrom && restartedFrom !== "start-brainstorm" ? restartedFrom : undefined;
   const switchLabel = `${prov.symbol} ${prov.name}${agent.model ? ` (${agent.model})` : ""}`;
   const { entries, error, hasMore, loadingMore, loadMore, loaded } = useTimeline(agent.id, agent.status, active, predecessorId, switchLabel);
-  const [stagedSwitch, setStagedSwitch] = useState<ProviderSwitchTarget | null>(null);
+  // Staged switches survive a drawer remount (Boring tab changes, re-keying) for the same agent: kept per agent id outside React state.
+  const [stagedSwitch, setStagedSwitchState] = useState<ProviderSwitchTarget | null>(() => stagedSwitchByAgent.get(agent.id) ?? null);
+  const setStagedSwitch = (t: ProviderSwitchTarget | null) => {
+    if (t) stagedSwitchByAgent.set(agent.id, t);
+    else stagedSwitchByAgent.delete(agent.id);
+    setStagedSwitchState(t);
+  };
   const [draft, setDraft, clearDraft] = useDraft(`${agent.id}:draft`);
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
@@ -223,7 +232,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
 
   // A staged (not-yet-committed) provider switch is specific to one agent: drop it when the drawer changes agent.
   useEffect(() => {
-    setStagedSwitch(null);
+    setStagedSwitchState(stagedSwitchByAgent.get(agent.id) ?? null);
   }, [agent.id]);
 
   useEffect(() => {
