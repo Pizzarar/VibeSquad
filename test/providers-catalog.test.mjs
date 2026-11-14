@@ -430,7 +430,11 @@ test('usage: limits treat a usedPct drop as a window reset, tolerate null resets
 const sec = (ms) => String(Math.round(ms / 1000));
 const v2Dir = (home) => { const d = path.join(home, 'runner', 'agents'); fs.mkdirSync(d, { recursive: true }); return d; };
 const writeAgent = (home, id, evs) => fs.writeFileSync(path.join(v2Dir(home), `${id}.jsonl`), evs.map((e, i) => ev({ seq: i, ...e })).join(''));
-const byProfileOf = (u, profile) => u.byProfile.find((p) => p.profile === profile);
+// usa-29: byProfile rows are keyed Model x Stakes x JobKind (legacy profile names are gone), so the old fixtures resolve a
+// legacy profile name to the (provider, jobKind) it implies.
+const legacyKind = (name) => (/review/i.test(name) ? 'reviewer' : /^Lead/i.test(name) ? 'lead' : /^Buddy/i.test(name) ? 'brainstorm' : 'implementer');
+const legacyProvider = (name) => (/gemini/i.test(name) ? 'antigravity-cli' : /dsp/i.test(name) ? 'opencode' : 'claude');
+const byProfileOf = (u, profile) => u.byProfile.find((p) => p.jobKind === legacyKind(profile) && p.provider === legacyProvider(profile)) ?? u.byProfile.find((p) => p.jobKind === legacyKind(profile));
 
 test('usage v2: byProfile compares Implement - Sonnet vs a Gemini implementer via cwd-basename attribution', () => {
   const home = tmp();
@@ -1229,12 +1233,12 @@ test('usa-10: workflowMode from [wf:] tag wins, else derived from provider/profi
   };
   const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
   const mode = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
-  assert.equal(mode['dsp+gemini-review']?.units, 1, 'DSP implementer derived dsp+gemini-review');
+  assert.equal(mode['deepseek/deepseek-v4-pro · normal -> gemini-review']?.units, 1, 'DSP implementer derived dsp+gemini-review');
   assert.equal(mode['sonnet']?.units, 1, '[wf:sonnet] tag kept as the mode');
   assert.equal(mode['gemini']?.units, 1, '[wf:gemini] tag kept as the mode');
   assert.equal(mode['unattributed']?.units, 1, 'unit without implementer or tag');
-  assert.equal(mode['dsp+gemini-review'].costPerUnit, 0, 'DSP cost unknown (no turn_done cost)');
-  assert.equal(mode['dsp+gemini-review'].costCoverage, 0, 'non-Claude cost marked unknown');
+  assert.equal(mode['deepseek/deepseek-v4-pro · normal -> gemini-review'].costPerUnit, 0, 'DSP cost unknown (no turn_done cost)');
+  assert.equal(mode['deepseek/deepseek-v4-pro · normal -> gemini-review'].costCoverage, 0, 'non-Claude cost marked unknown');
   assert.equal(mode['sonnet'].costCoverage, 1, 'Claude cost known');
 });
 
@@ -1789,8 +1793,7 @@ test('usage: merged units pool across every Squad repo, tagged repo/squad, attri
     assert.equal(a.costUsd, 1);
     assert.equal(b.costUsd, 3);
     assert.equal(a.reviewRounds, 1);
-    assert.equal(u.byProfile.find((p) => p.profile === 'Impl sq-a').mergedUnits, 1);
-    assert.equal(u.byProfile.find((p) => p.profile === 'Impl sq-b').mergedUnits, 1);
+    assert.equal(u.byProfile.find((p) => p.jobKind === 'implementer' && p.model === 'm').mergedUnits, 2);
     assert.ok(!u.merged.units.some((x) => x.repo === 'plain-dir-not-git'), 'non-git paths skipped silently');
     // ledger: new records carry squad/repo; an old record without them still loads and folds.
     const ledger = readUsageLedger(home);
@@ -1902,7 +1905,7 @@ test('usa-21 (idea-51): verdict parser accepts **PASS**, VERDICT: PASS, R2 PASS 
   mkReviewer('rn-prose-only', 'The test suite passes and all checks passed without errors.\nEverything passed.');
 
   const u = getUsage({ home, git: noGit });
-  const revProfile = u.byProfile.find((p) => p.profile === 'Review - Gemini');
+  const revProfile = byProfileOf(u, 'Review - Gemini');
   assert.equal(revProfile.runs, 9);
   assert.equal(revProfile.passCount, 4, 'exactly the 4 PASS variants count');
   assert.equal(revProfile.passRate, 0.444);
@@ -1981,7 +1984,8 @@ test('usa-21 (idea-39): sanctuary worktree attribution normalizes paths, disambi
   assert.equal(byUnit['unit-sanctuary-gemini'].reviewRounds, 2);
 
   assert.equal(byProfileOf(u, 'Implement - Sonnet').mergedUnits, 1);
-  assert.equal(byProfileOf(u, 'Implement - Sonnet').costPerMergedUnit, 1.55, 'total profile cost (1.25 + 0.30) / 1 merged unit');
+  assert.equal(byProfileOf(u, 'Implement - Sonnet').costPerMergedUnit, 1.25, 'usa-29: Sonnet-as-reviewer (ROLE: reviewer) is its own reviewer row, so the implementer row is only 1.25 / 1 merged unit');
+  assert.equal(u.byProfile.find((p) => p.model === 'claude-sonnet-5-5' && p.jobKind === 'reviewer').costUsd, 0.3);
   assert.equal(byProfileOf(u, 'Implement - Gemini (trial)').mergedUnits, 1);
   assert.equal(byProfileOf(u, 'Implement - Gemini (trial)').costPerMergedUnit, 0.45);
   assert.equal(byProfileOf(u, 'Work Order - DSP').mergedUnits, 1);
@@ -2175,7 +2179,7 @@ test('usa-24: autonomy.bySquad compares every Squad side by side, also when filt
     assert.deepEqual(rows.map((r) => r.squad), ['efi', 'vibesquad']);
     const { squad: _s, ...efi } = rows[0];
     assert.deepEqual(efi, {
-      mergedUnits: 2, turns: 1, costUsd: 2, firstTryPassRate: 1, avgReviewRounds: 1, costPerUnit: 1,
+      mergedUnits: 2, turns: 1, costUsd: 2, firstTryPassRate: 1, avgReviewRounds: 1, costPerUnit: 1, mergedInCoverage: 2,
       ownerTouches: 3, unitsPerOwnerTouch: 0.67, longestUnassistedStreak: 1, stalls: 1, medianUnblockMs: 50000,
     });
     assert.equal(rows[1].mergedUnits, 1);
@@ -2399,4 +2403,221 @@ test('usa-28: merges older than the squad log coverage are not unassisted-streak
   assert.equal(s.ownerTouches.perMergedUnit, null);
   assert.equal(s.ownerTouches.unitsPerOwnerTouch, null);
   assert.deepEqual(s.unassistedStreak, { current: 0, longest: 0 });
+});
+
+// ---------------------------------------------------------------- usa-29: v0.4 telemetry (Model x Stakes x JobKind)
+test('usa-29: jobKind + stakes fold onto agents; byProfile collapses legacy profiles into Model x Stakes x Kind rows', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, meta) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', ...meta } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  // different legacy profiles on the same model/stakes/kind collapse into ONE row
+  mk('rn-i1', { profile: 'Implement - Sonnet' });
+  mk('rn-i2', { profile: 'Work Order - Sonnet' });
+  mk('rn-i3', { profile: 'Implement - Sonnet', stakes: 'tierA-security' });
+  mk('rn-i4', { profile: 'Implement - Sonnet', labels: { 'vs.route': 'mechanical' } });
+  mk('rn-i5', { profile: 'Implement - Sonnet', labels: { stakes: 'bogus' } }); // unknown stakes -> normal
+  mk('rn-rev', { profile: 'Review - Gemini' });
+  mk('rn-ro', { profile: 'Implement - Sonnet', title: 'Usa1 · re-review' });
+  mk('rn-dig', { profile: 'Pre-check - Flash' });
+  mk('rn-dig2', { profile: 'Implement - Sonnet', labels: { digestFor: 'rn-i1' } });
+  mk('rn-scout', { profile: 'Scout - Haiku' });
+  mk('rn-lead', { role: 'lead', profile: 'Lead - Claude' });
+  mk('rn-fbuddy', { role: 'former-brainstorm', profile: 'Buddy' });
+  const u = getUsage({ home, git: noGit });
+  const row = (model, stakes, kind) => u.byProfile.find((p) => p.model === model && p.stakes === stakes && p.jobKind === kind);
+  const impl = row('claude-sonnet-5-5', 'normal', 'implementer');
+  assert.equal(impl.runs, 3, 'rn-i1, rn-i2 and rn-i5 collapse (profile name not in the key; bogus stakes -> normal)');
+  assert.equal(impl.profile, 'claude-sonnet-5-5 · normal (implementer)');
+  assert.equal(row('claude-sonnet-5-5', 'tierA-security', 'implementer').runs, 1);
+  assert.equal(row('claude-sonnet-5-5', 'mechanical', 'implementer').runs, 1, 'vs.route label folds stakes');
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'reviewer').runs, 2, 'Review profile + re-review title');
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'digest').runs, 2, 'Pre-check profile + digestFor label');
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'scout').runs, 1);
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'lead').runs, 1);
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'brainstorm').runs, 1, 'former-brainstorm keeps its kind');
+  assert.equal(u.byProfile.length, 8);
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'reviewer').successBasis, 'reviewer-pass-lines');
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'lead').successBasis, 'no-signal');
+  assert.equal(row('claude-sonnet-5-5', 'normal', 'digest').successBasis, 'no-signal');
+});
+
+test('usa-29: byProfile folds the effort suffix of a model', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  for (const [id, model] of [['rn-a', 'gemini-4-argon'], ['rn-b', 'gemini-4-argon-medium']]) {
+    writeAgent(home, id, [
+      { ts: T0, type: 'created', provider: 'antigravity-cli', model, cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
+      { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+    ]);
+  }
+  const u = getUsage({ home, git: noGit });
+  assert.equal(u.byProfile.length, 1);
+  assert.equal(u.byProfile[0].model, 'gemini-4-argon');
+  assert.equal(u.byProfile[0].runs, 2);
+});
+
+test('usa-29: floor loopAndAbandonedCostUsd counts only implementer jobs (digests, scouts, reviewers excluded)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, meta, cost, turns = 1) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', ...meta } },
+    ...Array.from({ length: turns }, () => ({ ts: T0 + 1000, type: 'turn_done', costUsd: cost })),
+  ]);
+  mk('rn-abandoned', { profile: 'Implement - Sonnet' }, 5);
+  mk('rn-digest', { profile: 'Pre-check - Flash' }, 7);
+  mk('rn-scout', { profile: 'Scout - Haiku' }, 11);
+  mk('rn-review', { profile: 'Review - Gemini' }, 13);
+  mk('rn-digest-loop', { profile: 'Pre-check - Flash' }, 1, LOOP_TURN_THRESHOLD + 1);
+  const u = getUsage({ home, git: noGit });
+  assert.equal(u.floor.loopAndAbandonedCostUsd, 5, 'only the never-merged implementer is abandoned-worker waste');
+});
+
+test('usa-29: byWorkflow derives implModel · stakes -> reviewerFamily pairs; [wf:] tag still wins; no implementer = unattributed', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-impl-a', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-opus-5-5', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Opus', stakes: 'tierA-invariant' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-rev-a', [
+    { ts: T0 + 2000, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Review - Sonnet' } },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  writeAgent(home, 'rn-impl-b', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon-medium', cwd: '/worktrees/unit-b', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Gemini' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-impl-c', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-c', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm4\n';
+    if (args[0] === 'log') return [
+      L('m4', 'm3 b4', sec(T0 + 400000), "Merge branch 'unit-d' (@usa)"),
+      L('b4', 'm3', sec(T0 + 390000), 'feat (@usa)'),
+      L('m3', 'm2 b3', sec(T0 + 300000), "Merge branch 'unit-c' (@usa) [wf:sonnet]"),
+      L('b3', 'm2', sec(T0 + 290000), 'feat (@usa)'),
+      L('m2', 'm1 b2', sec(T0 + 200000), "Merge branch 'unit-b' (@usa)"),
+      L('b2', 'm1', sec(T0 + 190000), 'feat (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-a' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa) review r1'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const wf = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  const a = wf['claude-opus-5-5 · tierA-invariant -> claude-review'];
+  assert.ok(a, 'reviewer family from the Sonnet reviewer run in the same worktree');
+  assert.deepEqual([a.implementerModel, a.stakes, a.reviewerFamily, a.units], ['claude-opus-5-5', 'tierA-invariant', 'claude-review', 1]);
+  const b = wf['gemini-4-argon · normal -> gemini-review'];
+  assert.ok(b, 'effort suffix stripped; default reviewer family gemini-review');
+  assert.equal(b.implementerModel, 'gemini-4-argon');
+  assert.equal(wf['sonnet'].units, 1, '[wf:sonnet] override kept');
+  assert.equal(wf['unattributed'].units, 1);
+  assert.equal(wf['unattributed'].implementerModel, null);
+  assert.equal(u.merged.units.find((x) => x.unit === 'unit-a').reviewerFamily, 'claude-review');
+});
+
+test('usa-29: autonomy.bySquad rows carry mergedInCoverage (= that squad planAutonomy.mergedUnits)', () => {
+  const { home, git, laneCodes } = setupAutonomyHome();
+  const u = getUsage({ home, git, laneCodes });
+  for (const r of u.autonomy.bySquad) assert.equal(typeof r.mergedInCoverage, 'number', r.squad);
+  const efi = u.autonomy.bySquad.find((r) => r.squad === 'efi');
+  assert.equal(efi.mergedInCoverage, 2);
+  const scoped = getUsage({ home, git, laneCodes, squad: 'efi' });
+  assert.equal(scoped.autonomy.planAutonomy.mergedUnits, scoped.autonomy.bySquad.find((r) => r.squad === 'efi').mergedInCoverage);
+});
+
+test('usa-29 fix1: real vs.route label format parses stakes; explicit stakes is never overwritten', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, labels, extra = []) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-opus-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', profile: 'Implement - Opus', labels } },
+    ...extra,
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const route = (s) => `stakes=${s} model=claude-opus-5-5 effort=high reason=auth refactor`;
+  mk('rn-r1', { 'vs.route': route('tierA-security') });
+  mk('rn-r2', { stakes: 'mechanical', 'vs.route': route('tierA-security') }); // explicit wins
+  mk('rn-r3', { 'vs.route': route('tierA-invariant') }, [{ ts: T0 + 500, type: 'meta', patch: { labels: { 'vs.route': route('tierA-security') } } }]); // later route does not overwrite
+  mk('rn-r4', { 'vs.route': 'tierA-security' }); // bare value still accepted
+  const u = getUsage({ home, git: noGit });
+  const stakesOf = (s) => u.byProfile.find((p) => p.stakes === s)?.runs ?? 0;
+  assert.equal(stakesOf('tierA-security'), 2, 'rn-r1 + rn-r4');
+  assert.equal(stakesOf('mechanical'), 1, 'explicit labels.stakes beats vs.route');
+  assert.equal(stakesOf('tierA-invariant'), 1, 'first route kept');
+  assert.equal(stakesOf('normal'), 0, 'no real route degrades to normal');
+});
+
+test('usa-29 fix1: a label-marked digest in the implementer worktree is not attributed as the implementer', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-digest', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-x', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { digestFor: 'rn-impl' } } },
+    { ts: T0 + 500, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  writeAgent(home, 'rn-impl', [
+    { ts: T0 + 1000, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-x', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 2000, type: 'turn_done', costUsd: 2 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-x' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  assert.equal(u.merged.units.find((x) => x.unit === 'unit-x').implementerAgentId, 'rn-impl');
+});
+
+test('usa-29 fix1: ledger persists implementerModel/stakes/reviewerFamily; folded units keep them; old lines still read', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const ledgerFile = path.join(home, 'runner', 'usage-ledger.jsonl');
+  fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
+  const base = { kind: 'unit', lane: 'usage', reviewRounds: 1, costUsd: 2, inputTokens: 1, outputTokens: 1, turns: 1, locAdded: 1, locDeleted: 0, filesChanged: 1 };
+  fs.writeFileSync(ledgerFile, [
+    { ...base, sha: 'old1', unit: 'unit-old-new', ts: new Date(T0 - 5e6).toISOString(), workflowMode: 'claude-opus-5-5 · tierA-invariant -> claude-review', implementerModel: 'claude-opus-5-5', stakes: 'tierA-invariant', reviewerFamily: 'claude-review' },
+    { ...base, sha: 'old2', unit: 'unit-old-legacy', ts: new Date(T0 - 4e6).toISOString(), workflowMode: 'sonnet+gemini-review' }, // pre-fix1 line
+  ].map((r) => JSON.stringify(r) + '\n').join(''));
+  writeAgent(home, 'rn-live', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-live', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', stakes: 'mechanical' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-live' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const wf = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  const folded = wf['claude-opus-5-5 · tierA-invariant -> claude-review'];
+  assert.deepEqual([folded.implementerModel, folded.stakes, folded.reviewerFamily], ['claude-opus-5-5', 'tierA-invariant', 'claude-review']);
+  assert.equal(wf['sonnet+gemini-review'].units, 1, 'old ledger line still folds');
+  assert.equal(wf['sonnet+gemini-review'].implementerModel, null);
+  // live unit written to the ledger carries the new fields
+  const rec = readUsageLedger(home).find((r) => r.kind === 'unit' && r.unit === 'unit-live');
+  assert.deepEqual([rec.implementerModel, rec.stakes, rec.reviewerFamily], ['claude-sonnet-5-5', 'mechanical', 'gemini-review']);
 });

@@ -14,6 +14,7 @@ import { killTree, resolveExecutable, spawnNoShell } from "../runner/spawn.mjs";
 import { turnCapsFromEnv } from "../runner/runner.mjs";
 import { DEFAULT_PACK_PROFILES, getProfilesPath, normalizeProfile } from "./profiles.mjs";
 import { resolveTeamsFilePath } from "./teams-file.mjs";
+import { normalizeStakes } from "./stakes-ladder.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { addInboxCardsAsync, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
@@ -409,6 +410,42 @@ function foldIdentity(st, m) {
   if (rawProfile) st.profile = PROFILE_NAME_BY_ID.get(rawProfile) ?? rawProfile;
   const team = m.team ?? m.labels?.team;
   if (typeof team === "string" && team) st.team = team;
+  // usa-29: stakes (route label) + digest marker (identity.mjs isDigestAgent labels) ride the same meta.
+  // vs.route is "stakes=<s> model=<m> effort=<e> reason=<r>" (agent-duties.ts); an explicit stakes/labels.stakes always wins.
+  const route = typeof m.labels?.["vs.route"] === "string" ? (/\bstakes=([A-Za-z0-9_-]+)/.exec(m.labels["vs.route"])?.[1] ?? m.labels["vs.route"]) : undefined;
+  const explicit = m.stakes ?? m.labels?.stakes;
+  if (typeof explicit === "string" && explicit) st.stakes = normalizeStakes(explicit);
+  else if (typeof route === "string" && route && st.stakes === undefined) st.stakes = normalizeStakes(route);
+  if (m.role === "digest" || m.labels?.role === "digest" || m.labels?.digest || m.labels?.digestFor || m.labels?.digestTurn) st.digest = true;
+}
+
+const DIGEST_PROFILE_RE = /^Pre-check\b/i;
+const REVIEWER_PROFILE_RE = /^(?:Review|Check|Audit)\b/i;
+const SCOUT_PROFILE_RE = /^(?:Scout|Art Director|Planner|Spec)\b/i;
+const JOBKIND_REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
+
+/** usa-29: strip the trailing effort suffix so "gemini-4-argon-medium" and "gemini-4-argon" are one model row. */
+const baseModel = (m) => String(m || "unknown").replace(/-(?:low|medium|high|xhigh|max)$/i, "");
+
+/**
+ * usa-29 jobKind (implementer|reviewer|digest|scout|lead|brainstorm), derived in this order:
+ *   role brainstorm|lead            -> "brainstorm" | "lead"
+ *   digest marker (role/labels)     -> "digest";  profile "Pre-check ..." -> "digest"
+ *   profile Review|Check|Audit, a READ-ONLY reviewer prompt (roleOnly), or a re-review/reviewer title -> "reviewer"
+ *   profile Scout|Art Director|Planner|Spec                                                          -> "scout"
+ *   role worker, anything else                                                                       -> "implementer"
+ *   no/unknown role, anything else                                                                   -> "scout" (never implementer waste)
+ */
+function classifyJobKind(st) {
+  const role = (st.role || "unknown").replace(/^former-/, ""); // retired roles ("former-lead") keep their kind
+  if (role === "brainstorm" || role === "lead") return role;
+  const profile = st.profile || "";
+  if (st.digest || role === "digest" || DIGEST_PROFILE_RE.test(profile)) return "digest";
+  if (REVIEWER_PROFILE_RE.test(profile) || st.roleOnly) return "reviewer";
+  const title = st.title || "";
+  if (JOBKIND_REVIEWER_TITLE_RE.test(title) && !/\breview\s+fix/i.test(title)) return "reviewer";
+  if (SCOUT_PROFILE_RE.test(profile)) return "scout";
+  return role === "worker" ? "implementer" : "scout";
 }
 
 /** Incrementally track the first and last non-empty (non-warning) lines of the current assistant message. */
@@ -942,6 +979,8 @@ function agentV2(st, agentId) {
     team: st.team ?? null,
     title: st.title ?? "",
     roleOnly: !!st.roleOnly,
+    stakes: normalizeStakes(st.stakes),
+    jobKind: classifyJobKind(st),
     cwd: st.cwd,
     createdAt: st.createdAt ?? st.firstTs ?? null,
     firstTs: st.firstTs ?? null,
@@ -1069,6 +1108,7 @@ const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|
 /** True when a worker run is an implementer candidate rather than a digest/review/check/scout run in the same worktree. */
 function isImplementerWorker(a) {
   if (a.role !== "worker") return false;
+  if (a.jobKind !== undefined && a.jobKind !== "implementer") return false;
   if (a.roleOnly) return false;
   if (NON_IMPLEMENTER_PROFILE_RE.test(a.profile || "")) return false;
   if (REVIEWER_TITLE_RE.test(a.title || "") && !/\breview\s+fix/i.test(a.title || "")) return false;
@@ -1385,6 +1425,7 @@ function* buildAutonomySteps({ entries, merged, agents, squads, squad }) {
       firstTryPassRate: mine.length ? Math.round((mine.filter((u) => (u.reviewRounds ?? 0) <= 1).length / mine.length) * 1000) / 1000 : null,
       avgReviewRounds: mine.length ? Math.round((rounds / mine.length) * 100) / 100 : null,
       costPerUnit: mine.length ? costUsd / mine.length : null,
+      mergedInCoverage: a.planAutonomy.mergedUnits, // idea-192
       ownerTouches: a.ownerTouches.total, unitsPerOwnerTouch: a.ownerTouches.unitsPerOwnerTouch,
       longestUnassistedStreak: a.unassistedStreak.longest, stalls: a.stalls.total, medianUnblockMs: a.stalls.medianUnblockMs,
     });
@@ -1461,18 +1502,32 @@ function providerFamily(provider) {
   return p || null;
 }
 
+/** Reviewer family for a merged unit: the reviewer run(s) in the unit's worktree (else the lane's cwd-less reviewer runs created between
+ * the implementer and the merge) -> `${providerFamily}-review`. No reviewer found: "gemini-review" when the unit was reviewed
+ * (reviewRounds > 0) or the implementer is known (Review-Gemini is the default loop), else "no-review". */
+function attributeReviewerFamily(unit, implementer, index) {
+  const mergedAtMs = tsMs(unit.mergedAt);
+  const isRev = (a) => a.jobKind === "reviewer" && sameSquad(unit, a);
+  let revs = typeof unit.unit === "string" && unit.unit ? (index?.byUnit.get(unit.unit.toLowerCase()) ?? []).filter(isRev) : [];
+  if (!revs.length && unit.lane && mergedAtMs !== null && implementer) {
+    revs = (index?.byLane.get(unit.lane) ?? []).filter((a) => isRev(a) && !unitNameOfCwd(a.cwd) && a.createdAt !== null && a.createdAt >= (implementer.createdAt ?? 0) && a.createdAt <= mergedAtMs);
+  }
+  if (revs.length) {
+    const rev = revs.slice().sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0))[0];
+    const fam = providerFamily(rev.provider);
+    if (fam) return `${fam}-review`;
+  }
+  return (unit.reviewRounds ?? 0) > 0 || implementer ? "gemini-review" : "no-review";
+}
+
 /** workflowMode: explicit `[wf:<mode>]` tag wins (pilot uses [wf:sonnet]/[wf:dsp]/[wf:gemini], keep the tag value),
- * else derived from the implementer's provider/profile (the current default review loop is Review-Gemini, hence
- * "sonnet+gemini-review" / "dsp+gemini-review"; a Gemini implementer is "gemini-full"; other Claude = "claude-only"). */
-function classifyWorkflowMode(unit, implementer) {
+ * else (usa-29) derived dynamically as `${implModel} · ${stakes} -> ${reviewerFamily}` from the attributed implementer
+ * (no implementer = "unattributed"). */
+function classifyWorkflowMode(unit, implementer, reviewerFamily = "gemini-review") {
   const m = WF_TAG_RE.exec(unit?.subject ?? "");
   if (m) return m[1].trim().toLowerCase() || "unattributed";
-  const fam = providerFamily(implementer?.provider);
-  const profile = String(implementer?.profile ?? "").toLowerCase();
-  if (fam === "gemini") return "gemini-full";
-  if (fam === "claude") return profile.includes("sonnet") ? "sonnet+gemini-review" : "claude-only";
-  if (fam === "dsp") return "dsp+gemini-review";
-  return "unattributed";
+  if (!implementer) return "unattributed";
+  return `${implementer.model ? baseModel(implementer.model) : (providerFamily(implementer.provider) || "unknown")} · ${implementer.stakes ?? "normal"} -> ${reviewerFamily}`;
 }
 
 /** A/B workflow rollup. Cost/tokens per unit come from the attributed implementer (one worker ≈ one unit). */
@@ -1482,7 +1537,8 @@ function buildByWorkflow(merged, agentById) {
     const implementer = u.implementerAgentId ? agentById.get(u.implementerAgentId) : null;
     const workflowMode = u.workflowMode ?? classifyWorkflowMode(u, implementer);
     const g = getOrSet(groups, workflowMode, () => ({
-      workflowMode, units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
+      workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
+      units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
       fixAfterMergeCount: 0, knownCostUnits: 0,
     }));
@@ -1503,6 +1559,7 @@ function buildByWorkflow(merged, agentById) {
     const totalLoc = g.locAdded + g.locDeleted;
     return {
       workflowMode: g.workflowMode,
+      implementerModel: g.implementerModel, stakes: g.stakes, reviewerFamily: g.reviewerFamily,
       units: g.units,
       firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
       avgReviewRounds: g.units ? Math.round((g.reviewRoundsSum / g.units) * 100) / 100 : 0,
@@ -1622,8 +1679,8 @@ function buildFloor(merged, agents, totals) {
   let loopAbandoned = 0, restart = 0;
   const firstCoord = new Set();
   for (const a of agents) {
-    if (a.loop) { loopAbandoned += a.costUsd; continue; }
-    if (a.role === "worker" && a.turns > 0 && !a.pass && !implementerIds.has(a.agentId)) { loopAbandoned += a.costUsd; continue; }
+    if (a.jobKind === "implementer" && a.loop) { loopAbandoned += a.costUsd; continue; } // usa-29: digests/scouts/reviewers are not abandoned-worker waste
+    if (a.jobKind === "implementer" && a.role === "worker" && a.turns > 0 && !a.pass && !implementerIds.has(a.agentId)) { loopAbandoned += a.costUsd; continue; }
     if (a.handoff) { restart += a.costUsd; continue; }
     if (COORDINATION_ROLES.has(a.role) && (a.turns > 0 || a.costUsd > 0)) {
       const key = `${a.lane}|${a.role}`;
@@ -1706,6 +1763,9 @@ function buildLedgerSnapshot(merged, rows) {
     ...(u.repo ? { repo: u.repo } : {}),
     implementerProfile: u.implementerProfile ?? null,
     implementerProvider: u.implementerProvider ?? null,
+    ...(u.implementerModel ? { implementerModel: u.implementerModel } : {}),
+    ...(u.stakes ? { stakes: u.stakes } : {}),
+    ...(u.reviewerFamily ? { reviewerFamily: u.reviewerFamily } : {}),
     workflowMode: u.workflowMode ?? classifyWorkflowMode(u, null),
     reviewRounds: u.reviewRounds ?? 0,
     firstTryPass: (u.reviewRounds ?? 0) <= 1,
@@ -2393,6 +2453,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
     const implementer = attributeImplementer(u, agents, workerIndex);
+    const reviewerFamily = attributeReviewerFamily(u, implementer, workerIndex);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
     const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
@@ -2404,12 +2465,15 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       ...u, mergedAtMs,
       implementerProfile: implementer ? implementer.profile : null,
       implementerProvider: implementer ? implementer.provider : null,
+      implementerModel: implementer?.model ? baseModel(implementer.model) : null,
+      stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
       costUsd: implementer ? implementer.costUsd : null,
       inputTokens: implementer ? implementer.inputTokens : 0,
       outputTokens: implementer ? implementer.outputTokens : 0,
       turns: implementer ? implementer.turns : 0,
-      workflowMode: classifyWorkflowMode(u, implementer),
+      reviewerFamily,
+      workflowMode: classifyWorkflowMode(u, implementer, reviewerFamily),
       unitCycleMs, fixAfterMerge,
     };
   }
@@ -2420,17 +2484,17 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // (vs.handoff-from only marks a carrier, nothing records acceptance or plan completion), so they report null / no-signal.
   const roleSuccess = (g) => {
     const rate = (n, d) => Math.round((n / d) * 1000) / 1000;
-    if (g.role === "lead" || g.role === "brainstorm") return { successRate: null, successBasis: "no-signal" };
-    if (g.role === "worker" && /review/i.test(g.profile || "")) return g.runs ? { successRate: rate(g.passCount, g.runs), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
-    if (g.role === "worker") return g.mergedUnits ? { successRate: rate(g.firstTryCount, g.mergedUnits), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
+    if (g.jobKind === "reviewer") return g.runs ? { successRate: rate(g.passCount, g.runs), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
+    if (g.jobKind === "implementer") return g.mergedUnits ? { successRate: rate(g.firstTryCount, g.mergedUnits), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
     return { successRate: null, successBasis: "no-signal" };
   };
 
   // byProfile: group agents by (provider, profile, role); fold in attributed merged units.
+  // usa-29: keyed by (provider, model, stakes, jobKind); the legacy profile name is NOT in the key (old profiles -> Model x Stakes x Kind rows).
+  const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const key = `${a.provider}|${a.profile}|${a.role}`;
-    const g = getOrSet(profileMap, key, () => ({ provider: a.provider, profile: a.profile, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -2447,7 +2511,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (!u.implementerAgentId) continue;
     const a = agentById.get(u.implementerAgentId);
     if (!a) continue;
-    const g = profileMap.get(`${a.provider}|${a.profile}|${a.role}`);
+    const g = profileMap.get(profileKey(a));
     if (!g) continue;
     g.mergedUnits += 1;
     if (u.reviewRounds <= 1) g.firstTryCount += 1;
@@ -2456,7 +2520,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
   }
   const byProfile = [...profileMap.values()].map((g) => ({
-    provider: g.provider, profile: g.profile, role: g.role,
+    provider: g.provider, model: g.model, stakes: g.stakes, jobKind: g.jobKind, profile: g.profile, role: g.role,
     runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
     inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
     workingMs: g.workingMs, idleMs: g.idleMs,
@@ -2542,6 +2606,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       locAdded: r.locAdded ?? 0, locDeleted: r.locDeleted ?? 0, filesChanged: r.filesChanged ?? 0,
       lane: r.lane ?? null, squad: r.squad ?? null, repo: r.repo ?? null,
       implementerProfile: r.implementerProfile ?? null, implementerProvider: r.implementerProvider ?? null, implementerAgentId: null,
+      implementerModel: r.implementerModel ?? null, stakes: r.stakes ?? null, reviewerFamily: r.reviewerFamily ?? null,
       costUsd: r.costUsd ?? null, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, turns: r.turns ?? 0,
       workflowMode: r.workflowMode ?? "unattributed", unitCycleMs: r.cycleMs ?? null, fixAfterMerge: !!r.fixedAfterMerge,
       fromLedger: true,
