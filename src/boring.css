@@ -1,29 +1,19 @@
 /* Boring Mode (@bor B1): corporate ADE skin. Standalone: every rule is scoped under html[data-vibe="boring"],
    so data-vibe="fun" (the default) applies nothing. Never edit styles.css for this; it lives here. */
 
+/* B5a: native Midnight Mall (dark) / Pastel Morning (light) tokens flow through from styles.css; only aliases + flattening here. */
 html[data-vibe="boring"],
-html[data-vibe="boring"][data-theme="dark"] {
-  --bg: #0b0d12; --bg-elev: #11151e; --bg-card: #181e2b; --bg-hover: #222a3a;
-  --border: #2e384d; --border-strong: #455370;
-  --text: #eef1f7; --text-dim: #9ba6b8; --accent: #2563eb; --radius: 4px;
-  /* remap the Hypnospace tokens so every existing rule inherits the corporate palette */
-  --navy: #0f1115; --well: #0b0d11; --panel: #161920; --panel-hi: #1e222b; --panel-alt: #1e222b;
-  --line: #262b36; --slate: #262b36; --marble: #e6e8ee; --muted: #9aa2b2;
-  --cyan: #4c8dff; --cyan-t: #4c8dff; --cyan-fill: #4c8dff; --violet: #4c8dff; --hot-pink: #4c8dff;
-  --on-cyan-fill: #ffffff; --on-pastel: #ffffff;
-  --panel-grad: #161920; --titlebar: #161920; --tb-1: #161920; --tb-2: #161920; --tb-3: #161920;
-  --bevel: none; --bevel-in: none; --hard: none; --bayer: none;
-}
-
+html[data-vibe="boring"][data-theme="dark"],
 html[data-vibe="boring"][data-theme="light"] {
-  --bg: #f1f5f9; --bg-elev: #f8fafc; --bg-card: #ffffff; --bg-hover: #e2e8f0;
-  --border: #cbd5e1; --border-strong: #94a3b8;
-  --text: #0f172a; --text-dim: #475569; --accent: #0f62fe; --radius: 4px;
-  --navy: #f8f9fb; --well: #eef1f6; --panel: #ffffff; --panel-hi: #eef1f6; --panel-alt: #eef1f6;
-  --line: #d8dee9; --slate: #d8dee9; --marble: #181b20; --muted: #5a6372;
-  --cyan: #2563eb; --cyan-t: #2563eb; --cyan-fill: #2563eb; --violet: #2563eb; --hot-pink: #2563eb;
-  --on-cyan-fill: #ffffff; --on-pastel: #ffffff;
-  --panel-grad: #ffffff; --titlebar: #ffffff; --tb-1: #ffffff; --tb-2: #ffffff; --tb-3: #ffffff;
+  --bg-elev: var(--panel);
+  --bg-card: var(--panel);
+  --bg-hover: var(--panel-hi);
+  --border: color-mix(in srgb, var(--line) 45%, transparent);
+  --border-strong: color-mix(in srgb, var(--line) 70%, transparent);
+  --accent: var(--cyan);
+  --text-dim: var(--muted);
+  --text-muted: var(--muted);
+  --radius: 14px;
   --bevel: none; --bevel-in: none; --hard: none; --bayer: none;
 }
 
@@ -57,8 +47,8 @@ html[data-vibe="boring"] .team-emblem {
   filter: none !important;
   backdrop-filter: none !important;
   border-style: solid;
-  border-width: 1px;
-  border-color: var(--border);
+  border-width: 0;
+  border-color: transparent;
   border-radius: var(--radius);
   background-image: none;
 }
@@ -71,12 +61,12 @@ html[data-vibe="boring"] .drawer { background-color: var(--bg-card); }
 html[data-vibe="boring"] .toolbar,
 html[data-vibe="boring"] .pin-rail { background-color: var(--bg-elev); }
 html[data-vibe="boring"] .btn { background-color: var(--bg-elev); color: var(--text); font-family: var(--sans); }
-html[data-vibe="boring"] .btn:hover:not(:disabled) { background-color: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .btn:hover:not(:disabled) { background-color: var(--bg-hover); }
 html[data-vibe="boring"] .btn.confirm.armed { animation: none; }
 html[data-vibe="boring"] .badge,
 html[data-vibe="boring"] .pill,
 html[data-vibe="boring"] .chip { background-color: var(--bg-hover); color: var(--text-dim); border-radius: 999px; font-family: var(--sans); }
-html[data-vibe="boring"] .pin-tile:hover { background-color: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .pin-tile:hover { background-color: var(--bg-hover); }
 
 /* No CRT, scanlines, clouds or spray-paint decoration. */
 html[data-vibe="boring"] .crt-scanlines,
@@ -386,3 +376,109 @@ html[data-vibe="boring"] .composer button[type="submit"],
 html[data-vibe="boring"] .composer-send,
 html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--accent) !important; background-color: var(--accent) !important; background-image: none !important; border: 1px solid var(--accent) !important; border-image: none !important; color: #ffffff !important; opacity: 1 !important; font-weight: 600 !important; min-height: 40px !important; padding: 0 18px !important; border-radius: 6px !important; }
 html[data-vibe="boring"] .boring-app { width: calc(100vw / var(--vs-ui-scale, 1)); height: calc(100vh / var(--vs-ui-scale, 1)); height: calc(100dvh / var(--vs-ui-scale, 1)); }
+
+/* ===== B5: sleek pass. Borderless tone-stepped surfaces; radius 14 (cards) / 10 (controls) / 999 (pills); one --cyan accent. ===== */
+html[data-vibe="boring"] .boring-sidebar { background: var(--panel); border-right: 1px solid var(--border); gap: 4px; }
+html[data-vibe="boring"] .boring-topbar { background: var(--bg); border-bottom: 0; }
+
+/* B5b: quiet borderless list rows; active = fill + inset cyan indicator. */
+html[data-vibe="boring"] .boring-footer-btn,
+html[data-vibe="boring"] .boring-core-row,
+html[data-vibe="boring"] .boring-conv-title,
+html[data-vibe="boring"] .boring-project-select,
+html[data-vibe="boring"] .boring-checkin-btn,
+html[data-vibe="boring"] .boring-switch-pill,
+html[data-vibe="boring"] .boring-role-pill { border: 0; background: transparent; border-radius: 10px; min-height: 40px; transition: background-color 120ms ease; }
+html[data-vibe="boring"] .boring-switch-pill,
+html[data-vibe="boring"] .boring-role-pill { border-radius: 999px; background: var(--panel-hi); }
+html[data-vibe="boring"] .boring-footer-btn { color: var(--muted); }
+html[data-vibe="boring"] .boring-project-select { background: var(--panel-hi); }
+html[data-vibe="boring"] .boring-footer-btn:hover,
+html[data-vibe="boring"] .boring-core-row:hover,
+html[data-vibe="boring"] .boring-conv-title:hover,
+html[data-vibe="boring"] .boring-checkin-btn:hover,
+html[data-vibe="boring"] .boring-switch-pill:hover,
+html[data-vibe="boring"] .boring-role-pill:hover { background: var(--panel-hi); color: var(--text); }
+html[data-vibe="boring"] .boring-core-row.on,
+html[data-vibe="boring"] .boring-conv-row.on { background: var(--panel-hi); border: 0; box-shadow: inset 3px 0 0 var(--cyan); }
+html[data-vibe="boring"] .boring-conv-row { border: 0; border-radius: 10px; padding: 0; }
+html[data-vibe="boring"] .boring-conv-row.on .boring-conv-title { background: transparent; }
+html[data-vibe="boring"] .boring-switch-pill.on { border: 0; box-shadow: none; background: color-mix(in srgb, var(--violet) 22%, var(--panel)); color: var(--text); }
+html[data-vibe="boring"] .boring-new-conv-btn,
+html[data-vibe="boring"] .boring-primary-cta { background: var(--cyan); border: 0; color: #0b0d12; border-radius: 10px; }
+html[data-vibe="boring"] .boring-badge { background: var(--amber); color: #0b0d12; border-radius: 999px; }
+html[data-vibe="boring"] .boring-dot { background: var(--muted); }
+html[data-vibe="boring"] .boring-dot.running { background: var(--cyan); }
+html[data-vibe="boring"] .boring-sidebar-footer { border-top: 0; }
+
+/* B5c: Overview tabs, core strip, lane cards (one click target, no buttons inside), idle disclosure. */
+html[data-vibe="boring"] .boring-dashboard-wrap { padding: 24px 32px; gap: 24px; width: 100%; max-width: 1280px; margin: 0 auto; }
+html[data-vibe="boring"] .boring-overview-tabs { display: flex; flex-wrap: wrap; gap: 8px; }
+html[data-vibe="boring"] .boring-core-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+html[data-vibe="boring"] .boring-card-grid { grid-template-columns: repeat(auto-fill, minmax(clamp(320px, 22vw, 520px), 1fr)); gap: 16px; }
+html[data-vibe="boring"] .boring-lane-card { background: var(--panel); border: 0; border-radius: 14px; cursor: pointer; transition: background-color 120ms ease; }
+html[data-vibe="boring"] .boring-lane-card:hover,
+html[data-vibe="boring"] .boring-lane-card:focus-visible { background: var(--panel-hi); outline: none; }
+html[data-vibe="boring"] .boring-lane-card[aria-disabled="true"] { cursor: default; opacity: 0.6; }
+html[data-vibe="boring"] .boring-core-tile { padding: 16px; gap: 6px; }
+html[data-vibe="boring"] .boring-card { min-height: 88px; }
+html[data-vibe="boring"] .boring-idle-grid { margin-top: 0; }
+html[data-vibe="boring"] .boring-idle-toggle { align-self: flex-start; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 10px; background: transparent; color: var(--muted); font: inherit; cursor: pointer; transition: background-color 120ms ease; }
+html[data-vibe="boring"] .boring-idle-toggle:hover { background: var(--panel-hi); color: var(--text); }
+html[data-vibe="boring"] .boring-empty-card { background: var(--panel); border: 0; border-radius: 14px; }
+
+/* B5d: chat + usage. Tone steps instead of borders; hairline only on the composer top edge. */
+html[data-vibe="boring"] .boring-chat-column { max-width: clamp(780px, 62vw, 960px); }
+html[data-vibe="boring"] .boring-chat-column > .drawer,
+html[data-vibe="boring"] .drawer { border-left: 0; border-right: 0; border-radius: 0; background: var(--bg); }
+html[data-vibe="boring"] .drawer-head { background: var(--bg) !important; border-bottom: 0; }
+html[data-vibe="boring"] .timeline,
+html[data-vibe="boring"] .drawer-shell > .timeline { background: var(--bg); }
+html[data-vibe="boring"] .tl-user,
+html[data-vibe="boring"] .tl-assistant,
+html[data-vibe="boring"] .tl-tool,
+html[data-vibe="boring"] .tl-sub,
+html[data-vibe="boring"] .tl-todo,
+html[data-vibe="boring"] .tl-note { background: var(--panel); border: none; border-width: 0; border-radius: 14px; color: var(--text); }
+html[data-vibe="boring"] .tl-user,
+html[data-vibe="boring"] .tl-note.tl-user { background: color-mix(in srgb, var(--violet) 14%, var(--panel)); border-color: transparent; }
+html[data-vibe="boring"] .tl-note[data-testid="tl-empty-indicator"] { border: 0; border-radius: 14px; background: var(--panel); }
+html[data-vibe="boring"] .composer { background: var(--bg); border-top: 1px solid var(--border); padding: 16px 24px; }
+html[data-vibe="boring"] .composer textarea,
+html[data-vibe="boring"] .composer .composer-input,
+html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0; border-radius: 14px; }
+html[data-vibe="boring"] .composer .send,
+html[data-vibe="boring"] .composer button[type="submit"],
+html[data-vibe="boring"] .composer-send,
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--cyan) !important; background-color: var(--cyan) !important; background-image: none !important; border: 0 !important; border-radius: 10px !important; color: #0b0d12 !important; }
+html[data-vibe="boring"] .composer .send:disabled,
+html[data-vibe="boring"] .composer button[type="submit"]:disabled,
+html[data-vibe="boring"] .composer-send:disabled { background: var(--panel-hi) !important; background-color: var(--panel-hi) !important; color: var(--muted) !important; opacity: 1 !important; }
+html[data-vibe="boring"] .drawer-head select,
+html[data-vibe="boring"] .drawer-head .chip,
+html[data-vibe="boring"] .drawer-head button,
+html[data-vibe="boring"] .drawer-provider-select,
+html[data-vibe="boring"] .drawer-mode-select,
+html[data-vibe="boring"] .drawer-thinking-select,
+html[data-vibe="boring"] .drawer-model-input,
+html[data-vibe="boring"] .drawer-head .role-tag,
+html[data-vibe="boring"] .drawer-head .prov-pill,
+html[data-vibe="boring"] .drawer-head .prov-badge,
+html[data-vibe="boring"] .brainstorm-ctx-bar { border: 0 !important; border-radius: 10px !important; background: var(--panel-hi) !important; }
+html[data-vibe="boring"] .brainstorm-ctx-track { border: 0; background: var(--panel-hi); }
+html[data-vibe="boring"] .brainstorm-ctx-fill { background: var(--cyan) !important; }
+html[data-vibe="boring"] .btn.ok { background: var(--cyan) !important; border: 0 !important; border-radius: 10px !important; color: #0b0d12 !important; }
+html[data-vibe="boring"] .usage-crt,
+html[data-vibe="boring"] .inbox-card,
+html[data-vibe="boring"] .feed-entry,
+html[data-vibe="boring"] .idea-inbox,
+html[data-vibe="boring"] .team-feed,
+html[data-vibe="boring"] .usage-section,
+html[data-vibe="boring"] .usage-cohort-tile,
+html[data-vibe="boring"] .usage-saving-card { border: none; border-radius: 14px; background-color: var(--panel); }
+html[data-vibe="boring"] .usage-crt-bar { border-bottom: 0; }
+html[data-vibe="boring"] .feed-entry { padding: 12px 16px; }
+html[data-vibe="boring"] .angel-boring-bar,
+html[data-vibe="boring"] .angel-boring-code,
+html[data-vibe="boring"] .angel-boring-btn { border: 0; border-radius: 10px; background: var(--panel-hi); }
+html[data-vibe="boring"] .angel-boring-bar { background: var(--panel); border-radius: 14px; }
