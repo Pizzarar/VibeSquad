@@ -104,9 +104,9 @@ const rec = (name) => `(...a) => { globalThis.__calls.push(["${name}", ...a]); }
 writeFileSync(
   join(dir, "react-hooks.mjs"),
   `export * from ${JSON.stringify(reactUrl)};
-export const useEffect = () => {}; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
+export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.i++; const prev = h.slots[k]; const same = prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, j) => Object.is(d, prev.deps[j])); if (same) return; if (prev && typeof prev.cleanup === "function") prev.cleanup(); const cleanup = fn(); h.slots[k] = { deps, cleanup }; }; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
-stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => Promise.resolve([]); export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
+stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
@@ -354,6 +354,31 @@ test("B5c: Overview | Idea Inbox | Standup Feed tabs mount IdeaInbox / TeamFeed 
   assert.equal(byType(t, "IdeaInbox"), null);
   assert.equal(byType(t, "TeamFeed"), null);
   delete globalThis.__inboxCards;
+});
+
+test("B5f: Idea Inbox and Standup Feed counts preload on BoringApp mount so first render of Overview has live counts with no tab click", async () => {
+  reset();
+  const realFetch = globalThis.fetch;
+  globalThis.__refreshInbox = () => { globalThis.__inboxCards = Array.from({ length: 234 }, (_, i) => ({ id: String(i) })); };
+  globalThis.fetch = (url) => {
+    assert.match(String(url), /\/__vibesquad\/log\?team=vibesquad/);
+    return Promise.resolve({ json: () => Promise.resolve(Array.from({ length: 100 }, (_, i) => ({ ts: String(i) }))) });
+  };
+  try {
+    const view = squad({ team: { id: "vibesquad", name: "VibeSquad" } });
+    const chat = render(props(view)); // mounts in mode === "chat"
+    assert.ok(byId(chat, "boring-chat-column"));
+    await new Promise((r) => setTimeout(r, 0));
+    byId(chat, "boring-project-overview-btn").props.onClick();
+    const t = render(props(view)); // very first Overview render, no tab click
+    assert.ok(byId(t, "boring-project-view"));
+    assert.match(JSON.stringify(byId(t, "boring-tab-inbox").props.children), /Idea Inbox \(234\)/);
+    assert.match(JSON.stringify(byId(t, "boring-tab-feed").props.children), /Standup Feed \(100\)/);
+  } finally {
+    delete globalThis.__inboxCards;
+    delete globalThis.__refreshInbox;
+    globalThis.fetch = realFetch;
+  }
 });
 
 test("B5c: idle lanes collapse under boring-idle-lanes-toggle until clicked", () => {

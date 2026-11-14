@@ -126,7 +126,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const inboxCount = useInboxCards().length;
   const [feedCount, setFeedCount] = useState<number>(() => (globalThis as { __feedCount?: number }).__feedCount ?? 0);
   useEffect(() => {
-    if (mode !== "project") return;
+    if (mode !== "chat" && mode !== "project") return;
     void refreshInboxCards?.();
     const teamId = view?.team.id;
     if (!teamId || typeof fetch !== "function") return;
