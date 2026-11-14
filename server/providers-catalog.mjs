@@ -257,7 +257,7 @@ const usageFiles = new Map(); // path -> { size, mtimeMs, offset, provider, mode
 // heap-stall-1114: readHandoffs / readAutonomyEntries / readBootSizes re-read and JSON.parsed every vs log (~10 MB) three times per
 // /usage request. Each file's parsed lines are now kept slim and grown by the appended bytes only (see logLines).
 const logLineFiles = new Map(); // path -> { size, mtimeMs, offset, head, recs: [{ ts, lane, type, text, team, squad }] }
-export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); };
+export const clearUsageCache = () => { usageFiles.clear(); logLineFiles.clear(); usageResults.clear(); squadReposCache = null; };
 let usageReadBytes = 0;
 export const usageStats = () => ({ files: usageFiles.size, readBytes: usageReadBytes });
 
@@ -468,7 +468,7 @@ function readTail(file, from, to) {
 const LOG_HEAD_BYTES = 64;
 /** Parsed lines of one append-only vs log, cached by (size, mtime) and extended from the last offset; a shrunk or replaced file
  * (first bytes differ) is re-read whole. Unparsable lines and non-objects are dropped, as every reader did before. */
-function logLines(file) {
+function logLines(file, maxBytes = Infinity) {
   let st;
   try { st = statSync(file); } catch { logLineFiles.delete(file); return []; }
   let c = logLineFiles.get(file);
@@ -476,22 +476,32 @@ function logLines(file) {
   const head = (n = LOG_HEAD_BYTES) => readTail(file, 0, Math.min(n, st.size)).toString("latin1");
   if (c && (st.size < c.offset || head(c.head.length) !== c.head)) c = null;
   if (!c) c = { size: 0, mtimeMs: 0, offset: 0, head: head(), recs: [] };
-  const buf = readTail(file, c.offset, st.size);
-  const lastNl = buf.lastIndexOf(10);
+  const end = st.size - c.offset > maxBytes ? c.offset + maxBytes : st.size;
+  let partial = end < st.size;
+  let buf = readTail(file, c.offset, end);
+  let lastNl = buf.lastIndexOf(10);
+  if (partial && lastNl < 0) { partial = false; buf = readTail(file, c.offset, st.size); lastNl = buf.lastIndexOf(10); } // one line > maxBytes
   if (lastNl >= 0) {
     for (const line of buf.subarray(0, lastNl).toString("utf8").split("\n")) {
       if (!line.trim()) continue;
       let e;
       try { e = JSON.parse(line); } catch { continue; }
       if (!e || typeof e !== "object") continue;
-      c.recs.push({ ts: e.ts, lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad });
+      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad }); // t = tsMs(ts), parsed once
     }
     c.offset += lastNl + 1; // a trailing partial line is re-read next time
   }
-  c.size = st.size;
+  // A bounded read leaves size/mtime unmatched, so the next call continues from offset.
+  c.size = partial ? -1 : st.size;
   c.mtimeMs = st.mtimeMs;
   logLineFiles.set(file, c);
   return c.recs;
+}
+/** True once logLines(file) is caught up (the warm loop calls this, yielding between 1 MB slices). */
+function logLinesStep(file, maxBytes) {
+  logLines(file, maxBytes);
+  const c = logLineFiles.get(file);
+  return !c || c.size !== -1;
 }
 
 function refreshFile(file, stat) {
@@ -700,21 +710,36 @@ export function readMergedUnits(git = defaultGit) {
   const cached = mergedCache.get(git);
   if (cached && cached.head === head) return cached.units;
   let raw = "";
-  try { raw = git(["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"]); } catch { return []; }
+  try { raw = git(MERGED_LOG_ARGS); } catch { return []; }
+  // Companion LOC pass (usa-10): merge first-parent diffs, keyed by sha. Optional: a git that only answers
+  // `rev-parse`/`log` (older fixtures) yields an empty map and units keep locAdded=0.
+  let numstatRaw = "";
+  try { numstatRaw = git(NUMSTAT_LOG_ARGS); } catch { /* LOC is best-effort */ }
+  const units = buildMergedUnits(head, raw, numstatRaw);
+  mergedCache.set(git, { head, units });
+  return units;
+}
+
+const MERGED_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--format=%H%x1f%P%x1f%ct%x1f%s"];
+const NUMSTAT_LOG_ARGS = ["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat", "--format=%H"];
+
+/** readMergedUnits() minus the git calls: HEAD sha + the two `git log` outputs -> units. */
+function buildMergedUnits(head, raw, numstatRaw) { return drainSync(mergedUnitsSteps(head, raw, numstatRaw)); }
+function* mergedUnitsSteps(head, raw, numstatRaw) {
   const commits = new Map();
   for (const line of raw.split("\n")) {
     const [sha, parents, ct, subject = ""] = line.split("\x1f");
     if (sha) commits.set(sha, { sha, parents: (parents ?? "").trim().split(/\s+/).filter(Boolean), ct, subject });
   }
-  // Companion LOC pass (usa-10): merge first-parent diffs, keyed by sha. Optional: a git that only answers
-  // `rev-parse`/`log` (older fixtures) yields an empty map and units keep locAdded=0.
-  let numstat = new Map();
-  try { numstat = parseNumstat(git(["log", `-${MAX_COMMITS}`, "--first-parent", "--numstat", "--format=%H"])); } catch { /* LOC is best-effort */ }
+  yield;
+  const numstat = parseNumstat(numstatRaw);
+  yield;
   const mainline = new Set();
   for (let c = commits.get(head); c && !mainline.has(c.sha); c = commits.get(c.parents[0])) mainline.add(c.sha);
   const units = [];
   for (const c of commits.values()) {
     if (c.parents.length < 2) continue;
+    if (units.length % 300 === 299) yield;
     const side = [];
     const seen = new Set();
     const stack = [c.parents[1]];
@@ -745,7 +770,6 @@ export function readMergedUnits(git = defaultGit) {
     const loc = numstat.get(c.sha) ?? { locAdded: 0, locDeleted: 0, filesChanged: 0 };
     units.push({ sha: c.sha, unit: branch, code, reviewRounds: rounds, mergedAt: Number.isFinite(Number(c.ct)) ? new Date(Number(c.ct) * 1000).toISOString() : null, firstBranchCtMs: firstCt === null ? null : firstCt * 1000, subject: c.subject, locAdded: loc.locAdded, locDeleted: loc.locDeleted, filesChanged: loc.filesChanged });
   }
-  mergedCache.set(git, { head, units });
   return units;
 }
 
@@ -778,7 +802,21 @@ function repoToplevel(dir) {
 }
 
 /** Distinct git repos the Squads work in: [{ root, name, teams: [teamId], laneTeam: Map<laneId, teamId> }]. gitRepoRoot() is always first. */
-function readSquadRepos(home) {
+const SQUAD_REPOS_TTL_MS = 15_000;
+let squadReposCache = null; // { key, at, repos }
+function readSquadRepos(home, now = Date.now) {
+  const root = gitRepoRoot();
+  const own = home ? join(home, "teams.json") : null;
+  let sig = "";
+  try { const file = own && !isForbiddenRealHome(home) && existsSync(own) ? own : resolveTeamsFilePath(root); const st = statSync(file); sig = `${file}|${st.size}|${st.mtimeMs}`; } catch { /* no teams.json */ }
+  const key = `${home ?? ""}\u0000${root}\u0000${sig}`;
+  const t = now();
+  if (squadReposCache && squadReposCache.key === key && t - squadReposCache.at < SQUAD_REPOS_TTL_MS) return squadReposCache.repos;
+  const repos = readSquadReposUncached(home);
+  squadReposCache = { key, at: t, repos };
+  return repos;
+}
+function readSquadReposUncached(home) {
   const primary = repoToplevel(gitRepoRoot()) ?? gitRepoRoot();
   const repos = new Map();
   const add = (root, teamId, laneId) => {
@@ -836,6 +874,37 @@ function readPooledMergedUnits(home, laneOf, now = Date.now) {
     }
   }
   return out;
+}
+
+const gitAsyncIn = (root) => (args) => new Promise((ok, fail) => {
+  execFile("git", args, { cwd: root, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, out) => (err ? fail(err) : ok(out)));
+});
+
+/** heap-stall-1114: readPooledMergedUnits() runs up to 3 execFileSync git calls per Squad repo whenever the HEAD-check TTL has
+ * lapsed (the cold /usage call held the server loop ~7 s on them). This does the same work with async git, so the synchronous
+ * pass right after finds every repo fresh and spawns nothing. Same cache entries, same failure results as the sync path. */
+async function warmPooledMergedUnits(home, now = Date.now) {
+  for (const r of readSquadRepos(home)) {
+    const key = normRepoKey(r.root);
+    const hc = repoHeadCheck.get(key);
+    if (hc && now() - hc.at < HEAD_CHECK_TTL_MS) continue;
+    let git = repoGitFns.get(key);
+    if (!git) { git = gitIn(r.root); repoGitFns.set(key, git); }
+    const gitA = gitAsyncIn(r.root);
+    let units = [];
+    try {
+      const head = (await gitA(["rev-parse", "HEAD"])).trim();
+      const cached = mergedCache.get(git);
+      if (cached && cached.head === head) units = cached.units;
+      else {
+        const raw = await gitA(MERGED_LOG_ARGS);
+        const numstatRaw = await gitA(NUMSTAT_LOG_ARGS).catch(() => "");
+        units = await drainSliced(mergedUnitsSteps(head, raw, numstatRaw));
+        mergedCache.set(git, { head, units });
+      }
+    } catch { /* rev-parse/log failed: the sync path would cache [] for the TTL too */ }
+    repoHeadCheck.set(key, { at: now(), units });
+  }
 }
 
 /** lowercase lane code or id -> lane id, from <home>/teams.json lanes[]. */
@@ -1069,7 +1138,7 @@ function readHandoffs(home) {
   for (const file of files) {
     for (const e of logLines(file)) {
       if (e.type !== "handoff") continue;
-      const t = tsMs(e.ts);
+      const t = e.t;
       if (t === null) continue;
       const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
       const key = `${lane}\u0000${t}\u0000${String(e.text ?? "").slice(0, 60)}`;
@@ -1192,7 +1261,8 @@ const XSQUAD_INPUT_RE = /\bxsquad input\b/i;
 
 /** Log entries { ts, lane, type, text, squad } from <home>/logs and <home>/teams/<t>/log.jsonl, deduped like readUsageLogSignals.
  * teams/<t>/log.jsonl is read first so its dir name wins as the Squad; logs/<squad>--<lane>.jsonl falls back to its prefix. */
-function readAutonomyEntries(home, laneTeams) {
+function readAutonomyEntries(home, laneTeams) { return drainSync(autonomyEntriesSteps(home, laneTeams)); }
+function* autonomyEntriesSteps(home, laneTeams) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return [];
   const files = [];
@@ -1206,9 +1276,11 @@ function readAutonomyEntries(home, laneTeams) {
   } catch { /* none */ }
   const seen = new Set();
   const out = [];
+  let n = 0;
   for (const { file, squad } of files) {
     for (const e of logLines(file)) {
-      const t = tsMs(e.ts);
+      if (++n % USAGE_STEP_EVERY === 0) yield;
+      const t = e.t;
       if (t === null) continue;
       const lane = typeof e.lane === "string" && e.lane ? e.lane : "";
       const textStr = typeof e.text === "string" ? e.text : "";
@@ -1225,9 +1297,15 @@ function readAutonomyEntries(home, laneTeams) {
 const pctile = (sorted, p) => (sorted.length ? sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)] : null);
 const ratio2 = (n, d) => (d ? Math.round((n / d) * 100) / 100 : null);
 const isFailDone = (e) => e.type === "done" && /\bFAIL\b/i.test(e.text);
+/** Index of the first value > x in an ascending number array (arr.length when none). */
+function firstAfter(arr, x) {
+  let lo = 0, hi = arr.length;
+  while (lo < hi) { const mid = (lo + hi) >>> 1; if (arr[mid] > x) hi = mid; else lo = mid + 1; }
+  return lo;
+}
 
 /** Autonomy KPIs for one scope: entries (sorted by ts) and merged units ({ lane, mergedAtMs }) already filtered to the Squad. */
-function computeAutonomy(entries, mergedUnits) {
+function* autonomySteps(entries, mergedUnits) {
   const touches = entries.filter((e) => e.type === "needs-you" || e.type === "you" || (e.type === "decision" && XSQUAD_INPUT_RE.test(e.text)));
   const needsYou = touches.filter((e) => e.type === "needs-you").length;
   const you = touches.filter((e) => e.type === "you").length;
@@ -1236,31 +1314,41 @@ function computeAutonomy(entries, mergedUnits) {
   // before its logs begin) has unknown assistance: counting it as "unassisted" made the streak equal every merge.
   const coverageStart = entries.length ? entries[0].ts : Infinity;
   const merges = mergedUnits.filter((u) => u.mergedAtMs !== null && u.mergedAtMs !== undefined && u.mergedAtMs >= coverageStart).sort((a, b) => a.mergedAtMs - b.mergedAtMs);
+  // heap-stall-1114: the streak and unblock scans were O(merges x touches) and O(stalls x entries) (~0.35 s per /usage); they
+  // now binary-search ascending ts lists (entries and merges are ts-sorted, so the first hit after a ts is the same one).
   // streak: a merge is unassisted when no owner touch landed since the previous merge
+  yield;
+  const touchTs = touches.map((e) => e.ts);
   let current = 0, longest = 0, prev = -Infinity;
   for (const m of merges) {
-    if (touches.some((e) => e.ts > prev && e.ts <= m.mergedAtMs)) current = 0;
+    const i = firstAfter(touchTs, prev);
+    if (i < touchTs.length && touchTs[i] <= m.mergedAtMs) current = 0;
     else current += 1;
     longest = Math.max(longest, current);
     prev = m.mergedAtMs;
   }
+  yield;
   // stalls + time-to-unblock
   const stalls = entries.filter((e) => e.type === "blocker" || isFailDone(e));
+  const resolveTsByLane = new Map(); // lane -> ts of `decision` / `done` PASS entries, ascending
+  const mergeTsByLane = new Map(); // lane -> mergedAtMs, ascending
+  for (const e of entries) if (e.type === "decision" || (e.type === "done" && /\bPASS\b/i.test(e.text) && !/\bFAIL\b/i.test(e.text))) getOrSet(resolveTsByLane, e.lane, () => []).push(e.ts);
+  for (const m of merges) getOrSet(mergeTsByLane, m.lane, () => []).push(m.mergedAtMs);
+  yield;
   const unblock = [];
   for (const s of entries.filter((e) => e.type === "blocker" || e.type === "needs-you" || isFailDone(e))) {
     let best = null;
-    for (const e of entries) {
-      if (e.ts <= s.ts || e.lane !== s.lane) continue;
-      if (e.type === "decision" || (e.type === "done" && /\bPASS\b/i.test(e.text) && !/\bFAIL\b/i.test(e.text))) { best = e.ts; break; }
-    }
-    for (const m of merges) if (m.lane === s.lane && m.mergedAtMs > s.ts) { if (best === null || m.mergedAtMs < best) best = m.mergedAtMs; break; }
+    const rts = resolveTsByLane.get(s.lane);
+    if (rts) { const i = firstAfter(rts, s.ts); if (i < rts.length) best = rts[i]; }
+    const mts = mergeTsByLane.get(s.lane);
+    if (mts) { const i = firstAfter(mts, s.ts); if (i < mts.length && (best === null || mts[i] < best)) best = mts[i]; }
     if (best !== null) unblock.push(best - s.ts);
   }
   unblock.sort((a, b) => a - b);
   const handoffsByLane = new Map();
   for (const h of handoffEntries) getOrSet(handoffsByLane, h.lane, () => []).push(h.ts);
   const cycles = [];
-  for (const [lane, hts] of handoffsByLane) cycles.push(...planCycles(hts, merges.filter((m) => m.lane === lane).map((m) => m.mergedAtMs)));
+  for (const [lane, hts] of handoffsByLane) cycles.push(...planCycles(hts, mergeTsByLane.get(lane) ?? []));
   return {
     ownerTouches: {
       total: touches.length, needsYou, you, xsquadInput: touches.length - needsYou - you,
@@ -1279,27 +1367,28 @@ function computeAutonomy(entries, mergedUnits) {
 }
 
 /** Autonomy block + per-Squad comparison rows. `merged` (UNFILTERED) carry { squad, lane, mergedAtMs, reviewRounds }; `agents` carry { squad, turns, costUsd }. */
-function buildAutonomy({ entries, merged, agents, squads, squad }) {
+function* buildAutonomySteps({ entries, merged, agents, squads, squad }) {
   const inSquad = (s) => !squad || s === squad;
-  const scoped = computeAutonomy(entries.filter((e) => inSquad(e.squad)), merged.filter((u) => inSquad(u.squad)));
+  const scoped = yield* autonomySteps(entries.filter((e) => inSquad(e.squad)), merged.filter((u) => inSquad(u.squad)));
   // heap-stall-1114: bucket once (order kept) instead of re-filtering every entry / unit / agent run per Squad.
   const group = (list) => { const m = new Map(); for (const x of list) getOrSet(m, x.squad, () => []).push(x); return m; };
   const entriesBy = group(entries), mergedBy = group(merged), agentsBy = group(agents);
-  const bySquad = squads.map((sq) => {
+  const bySquad = [];
+  for (const sq of squads) {
     const mine = mergedBy.get(sq) ?? [];
-    const a = computeAutonomy(entriesBy.get(sq) ?? [], mine);
+    const a = yield* autonomySteps(entriesBy.get(sq) ?? [], mine);
     const mineAgents = agentsBy.get(sq) ?? [];
     const costUsd = mineAgents.reduce((t, x) => t + x.costUsd, 0);
     const rounds = mine.reduce((t, u) => t + (u.reviewRounds ?? 0), 0);
-    return {
+    bySquad.push({
       squad: sq, mergedUnits: mine.length, turns: mineAgents.reduce((t, x) => t + x.turns, 0), costUsd,
       firstTryPassRate: mine.length ? Math.round((mine.filter((u) => (u.reviewRounds ?? 0) <= 1).length / mine.length) * 1000) / 1000 : null,
       avgReviewRounds: mine.length ? Math.round((rounds / mine.length) * 100) / 100 : null,
       costPerUnit: mine.length ? costUsd / mine.length : null,
       ownerTouches: a.ownerTouches.total, unitsPerOwnerTouch: a.ownerTouches.unitsPerOwnerTouch,
       longestUnassistedStreak: a.unassistedStreak.longest, stalls: a.stalls.total, medianUnblockMs: a.stalls.medianUnblockMs,
-    };
-  });
+    });
+  }
   return { ...scoped, bySquad };
 }
 
@@ -2054,10 +2143,11 @@ function maybeScheduleUsageReview(usage, home, opts = {}) {
 /** usa-22: fold `boot-size` metrics (vs logs, deduped like readUsageLogSignals) into avg/p90 chars + estTok per role/provider/lane.
  * Entries without a breakdown (pre usa-22: `role chars`) count as total-only under provider "unknown". Never throws. */
 const BOOT_PARTS = ["sys", "plugin", "artifact", "brief", "first"];
+const bootKv = (text) => Object.fromEntries([...String(text ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
 export function foldBootSizes(entries) {
   const groups = new Map();
   for (const e of entries) {
-    const kv = Object.fromEntries([...String(e.text ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
+    const kv = e.kv ?? bootKv(e.text); // readBootSizes passes the parse memoised on the cached log record
     const total = Number(kv.total ?? kv.chars);
     if (!Number.isFinite(total)) continue;
     const key = `${kv.role || "unknown"}|${kv.provider || "unknown"}|${kv.lane || e.lane || "-"}`;
@@ -2075,7 +2165,8 @@ export function foldBootSizes(entries) {
   })).sort((a, b) => b.avgChars - a.avgChars || a.role.localeCompare(b.role) || a.provider.localeCompare(b.provider) || a.lane.localeCompare(b.lane));
 }
 
-export function readBootSizes(home, { since, until } = {}) {
+export function readBootSizes(home, range = {}) { return drainSync(bootSizesSteps(home, range)); }
+function* bootSizesSteps(home, { since, until } = {}) {
   const dir = home || vibesquadHome();
   if (isForbiddenRealHome(dir)) return [];
   const files = [];
@@ -2083,17 +2174,19 @@ export function readBootSizes(home, { since, until } = {}) {
   try { const teams = join(dir, "teams"); if (existsSync(teams)) for (const t of readdirSync(teams)) { const p = join(teams, t, "log.jsonl"); if (existsSync(p)) files.push(p); } } catch { /* none */ }
   const seen = new Set();
   const hits = [];
+  let n = 0;
   for (const file of files) {
     for (const e of logLines(file)) {
+      if (++n % USAGE_STEP_EVERY === 0) yield;
       if (e.type !== "metric" || typeof e.text !== "string" || !e.text.startsWith("boot-size ")) continue;
-      const t = tsMs(e.ts);
+      const t = e.t;
       if (t === null) continue;
       const day = new Date(t).toISOString().slice(0, 10);
       if ((since && day < since) || (until && day > until)) continue;
       const key = `${e.lane ?? ""}|${t}|${e.text.slice(0, 60)}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      hits.push({ lane: typeof e.lane === "string" ? e.lane : "", text: e.text });
+      hits.push({ lane: typeof e.lane === "string" ? e.lane : "", text: e.text, kv: (e.kv ??= bootKv(e.text)) });
     }
   }
   return foldBootSizes(hits);
@@ -2106,6 +2199,8 @@ export function readBootSizes(home, { since, until } = {}) {
 // share one computation.
 const USAGE_SLICE_MS = 10;
 const USAGE_STAT_BATCH = 64;
+const USAGE_STEP_EVERY = 500;
+const LOG_WARM_SLICE_BYTES = 512 * 1024; // records/agent logs between yield points inside a step loop
 const usageInflight = new Map(); // request key -> Promise<usage>
 const yieldLoop = () => new Promise((r) => setImmediate(r));
 
@@ -2139,21 +2234,56 @@ async function warmUsageCaches(home) {
       if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
     }
   }
-  for (const file of vsLogFiles(homeDir)) { logLines(file); await yieldLoop(); } // one file per slice (largest ~6 MB, cold once)
+  for (const file of vsLogFiles(homeDir)) { while (!logLinesStep(file, LOG_WARM_SLICE_BYTES)) await yieldLoop(); await yieldLoop(); } // 6 MB cold = ~200 ms in one go
   return warmed;
 }
 
-/** getUsage() for request paths: warm caches off the loop first, then one short synchronous aggregate. */
+/** Drives a usage step generator to completion in one go (the synchronous getUsage() contract). */
+function drainSync(it) {
+  for (;;) { const r = it.next(); if (r.done) return r.value; }
+}
+/** Drives a usage step generator, yielding the event loop once a slice has run USAGE_SLICE_MS. */
+async function drainSliced(it) {
+  let sliceStart = performance.now();
+  for (;;) {
+    const r = it.next();
+    if (r.done) return r.value;
+    if (performance.now() - sliceStart > USAGE_SLICE_MS) { await yieldLoop(); sliceStart = performance.now(); }
+  }
+}
+
+// Results per request key are reused for USAGE_RESULT_TTL_MS (a reconnect burst asks for the same rollup several times); the
+// usageReview block is re-read on a hit. Bypassed when git is injected (tests) or cacheMs: 0; clearUsageCache() drops it.
+const USAGE_RESULT_TTL_MS = 5_000;
+const usageResults = new Map(); // request key -> { at, value }
+let usageQueue = Promise.resolve(); // one computation at a time: the sliced steps share the module caches
+
+/** getUsage() for request paths: warm caches off the loop, then the aggregate in slices. Same result as getUsage(opts). */
 export function getUsageAsync(opts = {}) {
   const key = JSON.stringify([opts.home ?? null, opts.since ?? null, opts.until ?? null, opts.squad ?? null, !!opts.usageReview?.suppressSchedule]);
+  const ttl = opts.git ? 0 : (opts.cacheMs ?? USAGE_RESULT_TTL_MS);
+  const cached = usageResults.get(key);
+  if (ttl > 0 && cached && Date.now() - cached.at < ttl) {
+    return Promise.resolve({ ...cached.value, usageReview: usageReviewState(opts.home, cached.value, opts.usageReview ?? {}) });
+  }
   const hit = usageInflight.get(key);
   if (hit) return hit;
-  const p = (async () => getUsage({ ...opts, warmed: await warmUsageCaches(opts.home) }))().finally(() => usageInflight.delete(key));
+  const p = usageQueue.then(async () => {
+    const warmed = await warmUsageCaches(opts.home);
+    if (!opts.git) await warmPooledMergedUnits(opts.home, opts.now); // an injected git (tests) keeps the sync single-repo path
+    const value = await drainSliced(usageSteps({ ...opts, warmed }));
+    if (ttl > 0) usageResults.set(key, { at: Date.now(), value });
+    return value;
+  }).finally(() => usageInflight.delete(key));
+  usageQueue = p.catch(() => {});
   usageInflight.set(key, p);
   return p;
 }
 
-export function getUsage({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed } = {}) {
+export function getUsage(opts = {}) { return drainSync(usageSteps(opts)); }
+
+/** The /usage rollup as steps: `yield` marks a point where the async path may hand the loop back (no other effect). */
+function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed } = {}) {
   const homeDir = home || vibesquadHome();
   const squad = typeof squadOpt === "string" && squadOpt.trim() ? squadOpt.trim() : null; // usa-24: optional per-Squad filter
   const laneTeams = readLaneTeams(home);
@@ -2168,7 +2298,9 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
   const allAgentSquads = []; // unfiltered { st, squad } for the autonomy bySquad comparison
   let names = [];
   if (!isForbiddenRealHome(homeDir)) try { names = readdirSync(dir).filter((n) => n.endsWith(".jsonl")); } catch { /* no runner yet */ }
+  let step = 0;
   for (const n of names) {
+    if (++step % USAGE_STEP_EVERY === 0) yield;
     const file = join(dir, n);
     seen.add(file);
     let st;
@@ -2229,6 +2361,7 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
   const codes = laneCodes ? new Map(Object.entries(laneCodes).map(([k, v]) => [k.toLowerCase(), v])) : readLaneCodes(home);
   const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
+  yield;
   const mergedRawAll = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now);
   const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
   const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
@@ -2239,7 +2372,13 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
   // ---- v2: per-agent summaries, implementer attribution, unit cycles, fix-after-merge (usa-5)
   const agents = agentStates.map(({ st, agentId }) => agentV2(st, agentId));
   const workerIndex = indexWorkers(agents);
-  const merged = mergedRaw.map((u) => {
+  yield;
+  const merged = [];
+  for (const u of mergedRaw) {
+    if (merged.length % 200 === 199) yield;
+    merged.push(mergedUnitV2(u));
+  }
+  function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
     const implementer = attributeImplementer(u, agents, workerIndex);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
@@ -2261,7 +2400,8 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
       workflowMode: classifyWorkflowMode(u, implementer),
       unitCycleMs, fixAfterMerge,
     };
-  });
+  }
+  yield;
 
   // Role-specific success (passRate is reviewer-style PASS lines, so 0% for everyone else). implementer = first-try review PASS
   // of its merged units; reviewer = PASS-line rate; lead (plan done) and Buddy (handoff accepted) leave no reliable log signal
@@ -2290,9 +2430,10 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
     if (a.loop) g.loopCount += 1;
     g.errorCount += a.errors ?? 0;
   }
+  const agentById = new Map(agents.map((a) => [a.agentId, a])); // agentId = log file name, unique
   for (const u of merged) {
     if (!u.implementerAgentId) continue;
-    const a = agents.find((x) => x.agentId === u.implementerAgentId);
+    const a = agentById.get(u.implementerAgentId);
     if (!a) continue;
     const g = profileMap.get(`${a.provider}|${a.profile}|${a.role}`);
     if (!g) continue;
@@ -2371,9 +2512,10 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
     .slice(0, 10)
     .map((a) => ({ agentId: a.agentId, profile: a.profile, provider: a.provider, role: a.role, lane: a.lane, message: a.lastError ?? "", errors: a.errors }));
 
+  yield;
   // ---- usa-10: durable ledger sync + fold archived entries (units/days absent from raw), then benchmark rollups.
-  const agentById = new Map(agents.map((a) => [a.agentId, a]));
   if (!squad) syncUsageLedger(homeDir, buildLedgerSnapshot(merged, rows), now); // a filtered view would archive partial data
+  yield;
   const ledger = readUsageLedger(homeDir);
   const rawShas = new Set(merged.map((u) => u.sha));
   const rawDays = new Set(rows.map((r) => r.day));
@@ -2410,15 +2552,23 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
   const savings = buildSavings(merged, totalsFinal, lanes, agents);
   const cohorts = buildCohorts(merged);
   const floor = buildFloor(merged, agents, totalsFinal);
+  yield;
 
   // ---- usa-24: Squad filter + autonomy scorecard (bySquad always compares every Squad, unfiltered)
-  const entries = readAutonomyEntries(home, laneTeams);
+  const entries = yield* autonomyEntriesSteps(home, laneTeams);
+  yield;
   const squads = [...new Set([...laneTeams.values(), ...entries.map((e) => e.squad), ...allAgentSquads.map((a) => a.squad), ...mergedRawAll.map(unitSquad)].filter(Boolean))].sort();
-  const autonomy = buildAutonomy({
+  const autonomy = yield* buildAutonomySteps({
     entries, squads, squad,
     merged: mergedRawAll.map((u) => ({ squad: unitSquad(u), lane: u.lane, mergedAtMs: tsMs(u.mergedAt), reviewRounds: u.reviewRounds })),
     agents: allAgentSquads.map(({ st, squad: sq }) => { const a = agentV2(st, ""); return { squad: sq, turns: a.turns, costUsd: a.costUsd }; }),
   });
+  yield;
+  const spawnStorms = computeSpawnStorms(agents);
+  const readyTime = buildReadyTime(agents);
+  yield;
+  const bootSize = yield* bootSizesSteps(home, { since, until });
+  yield;
 
   const result = {
     squad, squads, autonomy,
@@ -2446,10 +2596,10 @@ export function getUsage({ home, since, until, git, laneCodes, usageReview, squa
     merged: { units: merged, perLane },
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
-    spawnStorms: computeSpawnStorms(agents),
-    readyTime: buildReadyTime(agents),
+    spawnStorms,
+    readyTime,
     compaction: buildCompaction(agents, floor),
-    bootSize: readBootSizes(home, { since, until }),
+    bootSize,
     recentErrors,
     byWorkflow,
     savings,
