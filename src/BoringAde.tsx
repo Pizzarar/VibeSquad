@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AgentDrawer } from "./AgentDrawer";
+import { openOverlay } from "./CommandPalette";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
@@ -98,6 +99,17 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   return { core, conversations };
 }
 
+export const BORING_OVERVIEW_LAYOUT_KEY = "vs.boringOverviewLayout";
+export type OverviewLayout = "cards" | "map";
+
+/** B6c: lane-map node state: pulse = working, filled = needs-you, hollow = idle, faint = none. */
+export function boringNodeStateClass(status: string | null | undefined, needsYou = 0): "pulse" | "filled" | "hollow" | "faint" {
+  if (status === "running") return "pulse";
+  if (needsYou > 0) return "filled";
+  if (status && status !== "none" && status !== "closed") return "hollow";
+  return "faint";
+}
+
 type Props = {
   views: TeamView[];
   view: TeamView | undefined;
@@ -112,17 +124,26 @@ type Props = {
   onSuccessor: (agentId: string) => void;
   /** App's banners, modals and overlays, so they stay mounted in Boring Mode. */
   children?: ReactNode;
+  /** Top-level health/update banners, rendered above the topbar. */
+  banners?: ReactNode;
 };
 
 const toVibespace = () => setPref("app.vibe", "fun");
 
-export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children }: Props) {
+export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
   const [mode, setMode] = useState<Mode>("chat");
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [openIdleLanes, setOpenIdleLanes] = useState(false);
+  const [overviewLayout, setOverviewLayout] = useState<OverviewLayout>(() => {
+    try { return localStorage.getItem(BORING_OVERVIEW_LAYOUT_KEY) === "map" ? "map" : "cards"; } catch { return "cards"; }
+  });
+  const pickOverviewLayout = (next: OverviewLayout) => {
+    setOverviewLayout(next);
+    try { localStorage.setItem(BORING_OVERVIEW_LAYOUT_KEY, next); } catch { /* ignore */ }
+  };
   const inboxCount = useInboxCards().length;
   const [feedCount, setFeedCount] = useState<number>(() => (globalThis as { __feedCount?: number }).__feedCount ?? 0);
   useEffect(() => {
@@ -197,6 +218,16 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     : selectedLaneId === "_overlord" ? "Overlord" : selectedLaneId === "_riffbot" ? "RiffBot" : selectedLaneId === "_bugs" ? "Bugs (@bug)"
     : currentConv?.name ?? "Conversation";
 
+  const surrealMotif = (
+    <svg className="boring-surreal-motif" aria-hidden="true" viewBox="0 0 200 80" preserveAspectRatio="xMidYMid slice">
+      <circle cx="100" cy="46" r="26" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <ellipse cx="100" cy="46" rx="14" ry="8" fill="none" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="100" cy="46" r="3.5" fill="currentColor" />
+      <line x1="0" y1="58" x2="200" y2="58" stroke="currentColor" strokeWidth="1" />
+      <line x1="30" y1="66" x2="170" y2="66" stroke="currentColor" strokeWidth="0.8" />
+    </svg>
+  );
+
   const emptyCard = () => {
     const spec = {
       overlord: { text: "No Overlord is running for this project yet.", cta: "Start Overlord", run: () => view && onSpinUpOverlord(view), disabled: overlordBusy },
@@ -206,6 +237,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     }[emptyKind];
     return (
       <div className="boring-empty-card" data-testid="boring-empty-card">
+        {surrealMotif}
         <p>{spec.text}</p>
         <button type="button" className="boring-primary-cta" data-testid="boring-empty-cta" disabled={spec.disabled} onClick={() => void spec.run()}>
           {spec.cta}
@@ -249,6 +281,45 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const isActiveLane = (c: (typeof conversations)[number]) => c.needsYou > 0 || c.brainstormStatus === "running" || c.leadStatus === "running";
   const activeLanes = conversations.filter(isActiveLane);
   const idleLanes = conversations.filter((c) => !isActiveLane(c));
+  const mapAttn = (m: { attention?: { tone?: string } | null } | null | undefined) => (m?.attention && m.attention.tone !== "finished" ? 1 : 0);
+  const laneMap = (
+    <div className="boring-lane-map" data-testid="boring-lane-map">
+      {surrealMotif}
+      <div className="boring-map-hubs">
+        <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.overlord.status, core.overlord.needsYou)}`} data-testid="boring-map-core-overlord" onClick={() => (core.overlord.agentId ? pickCore("_overlord", core.overlord.agentId) : view && onSpinUpOverlord(view))}>★ {core.overlord.label}</button>
+        <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.riffbot.status, core.riffbot.needsYou)}`} data-testid="boring-map-core-riffbot" onClick={() => (core.riffbot.agentId ? pickCore("_riffbot", core.riffbot.agentId) : hubPin && onSpinUpPin(hubPin))}>{core.riffbot.label}</button>
+        <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.bugs.leadRunning ? "running" : "none", core.bugs.needsYou)}`} data-testid="boring-map-core-bugs" onClick={pickBugs}>{core.bugs.label}</button>
+      </div>
+      <svg className="boring-map-svg" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 100 10"><line x1="20" y1="0" x2="50" y2="10" /><line x1="50" y1="0" x2="50" y2="10" /><line x1="80" y1="0" x2="50" y2="10" /></svg>
+      {conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
+      {conversations.map((c) => {
+        const workers = c.pin.workers ?? [];
+        return (
+          <div key={c.laneId} className="boring-map-cluster" data-testid={`boring-map-cluster-${c.laneId}`}>
+            <button type="button" className={`boring-map-node boring-map-lane ${boringNodeStateClass(c.running > 0 ? "running" : c.brainstormStatus, c.needsYou)}`} data-testid={`boring-map-lane-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>
+              <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
+              <span className="boring-row-label">{c.name}</span>
+              <code className="boring-conv-code">{c.code}</code>
+              <span className="boring-conv-age">{c.age}</span>
+              {c.needsYou > 0 && <span className="badge boring-badge">Needs you · {c.needsYou}</span>}
+            </button>
+            <svg className="boring-map-lines" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 20 100">
+              {Array.from({ length: 2 + workers.length }, (_, i) => (
+                <path key={i} d={`M0 50 C10 50 10 ${(100 * (i + 0.5)) / (2 + workers.length)} 20 ${(100 * (i + 0.5)) / (2 + workers.length)}`} />
+              ))}
+            </svg>
+            <div className="boring-map-children">
+              <button type="button" className={`boring-map-node boring-map-agent ${boringNodeStateClass(c.brainstormStatus, mapAttn(c.pin.brainstorm))}`} data-testid={`boring-map-bs-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>{`💬 Brainstorm · ${c.brainstormStatus ?? "none"}`}</button>
+              <button type="button" className={`boring-map-node boring-map-agent ${boringNodeStateClass(c.leadStatus, mapAttn(c.pin.lead))}`} data-testid={`boring-map-lead-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "lead")}>{`★ Lead · ${c.leadStatus ?? "none"}`}</button>
+              {workers.map((w) => (
+                <button key={w.agent.id} type="button" className={`boring-map-node boring-map-agent boring-map-worker ${boringNodeStateClass(w.agent.status, mapAttn(w))}`} data-testid={`boring-map-worker-${w.agent.id}`} onClick={() => { setSelectedLaneId(c.laneId); setMode("chat"); openAgent(w.agent.id); }}>{`⚙ ${w.agent.title ?? w.agent.id.slice(0, 8)} · ${w.agent.status}`}</button>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
   const memberAgent = (id: string | null) => (id ? agents.get(id) : undefined);
 
   return (
@@ -258,15 +329,20 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           + New Conversation
         </button>
         <div className="boring-project-header">
-          {views.length > 1 ? (
-            <select className="boring-project-select" data-testid="boring-project-select" aria-label="Project" value={view?.team.id ?? ""} onChange={(e) => onSelectSquad(e.target.value)}>
-              {views.map((v) => (
-                <option key={v.team.id} value={v.team.id}>{v.team.name}</option>
-              ))}
-            </select>
-          ) : (
-            <span className="boring-project-name">{view?.team.name ?? "No project"}</span>
-          )}
+          <div className="boring-project-tree" data-testid="boring-project-tree">
+            {(views.length > 0 ? views : view ? [view] : []).map((v) => {
+              const active = v.team.id === view?.team.id;
+              return (
+                <button key={v.team.id} type="button" className={"boring-project-row" + (active ? " on" : "")} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={active} onClick={() => onSelectSquad(v.team.id)}>
+                  <span className="boring-chevron">{active ? "▾" : "▸"}</span>
+                  <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"}`} />
+                  <span className="boring-project-name">{v.team.name}</span>
+                  {(v.needsYou ?? 0) > 0 && <span className="badge boring-badge">{v.needsYou}</span>}
+                </button>
+              );
+            })}
+            {views.length === 0 && !view && <span className="boring-project-name">No project</span>}
+          </div>
           <button type="button" className={`boring-footer-btn${mode === "project" ? " on" : ""}`} data-testid="boring-project-overview-btn" onClick={() => setMode("project")}>
             Project Overview
           </button>
@@ -274,12 +350,14 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             + New Project
           </button>
         </div>
-        <div className="boring-core-group" data-testid="boring-core-group">
+        <div className="boring-core-group boring-trinity-card" data-testid="boring-core-group">
+          <div className="boring-section-label" data-testid="boring-trinity-label">TRINITY · COMMAND</div>
           {coreRow("boring-core-overlord", core.overlord.label, core.overlord.status, core.overlord.needsYou, core.overlord.age, () => pickCore("_overlord", core.overlord.agentId), memberAgent(core.overlord.agentId))}
           {coreRow("boring-core-riffbot", core.riffbot.label, core.riffbot.status, core.riffbot.needsYou, core.riffbot.age, () => pickCore("_riffbot", core.riffbot.agentId), memberAgent(core.riffbot.agentId))}
           {coreRow("boring-core-bugs", core.bugs.label, core.bugs.leadRunning ? "running" : "none", core.bugs.needsYou, core.bugs.age, pickBugs, memberAgent(core.bugs.agentId))}
         </div>
         <div className="boring-conv-list" data-testid="boring-conv-list">
+          <div className="boring-section-label" data-testid="boring-lanes-label">LANES</div>
           {conversations.length === 0 && <p className="boring-muted">No conversations yet.</p>}
           {conversations.map((c) => (
             <div key={c.laneId} className={`boring-conv-row ${mode === "chat" && selectedLaneId === c.laneId ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
@@ -314,6 +392,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         </div>
       </aside>
       <main className="boring-main" data-testid="boring-main">
+        {banners}
         <header className="boring-topbar" data-testid="boring-topbar">
           <div className="boring-topbar-title">{view?.team.name ?? "No project"} › {viewTitle}</div>
           {mode === "chat" && inLane && (
@@ -330,6 +409,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             </div>
           )}
           <div className="boring-topbar-actions">
+            <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>🔍</button>
+            <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>?</button>
             {mode === "chat" && agent && (
               <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
@@ -344,12 +425,21 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {mode === "project" && (
           <div className="boring-dashboard-wrap" data-testid="boring-project-view">
+            <div className="boring-overview-bar">
             <div className="boring-overview-tabs" data-testid="boring-overview-tabs">
               <button type="button" className={`boring-switch-pill ${overviewTab === "overview" ? "on" : ""}`} data-testid="boring-tab-overview" onClick={() => setOverviewTab("overview")}>Overview</button>
               <button type="button" className={`boring-switch-pill ${overviewTab === "inbox" ? "on" : ""}`} data-testid="boring-tab-inbox" onClick={() => setOverviewTab("inbox")}>{`Idea Inbox (${inboxCount})`}</button>
               <button type="button" className={`boring-switch-pill ${overviewTab === "feed" ? "on" : ""}`} data-testid="boring-tab-feed" onClick={() => setOverviewTab("feed")}>{`Standup Feed (${feedCount})`}</button>
             </div>
             {overviewTab === "overview" && (
+              <div className="boring-overview-tabs boring-layout-toggle" data-testid="boring-overview-layout-toggle">
+                <button type="button" className={`boring-switch-pill ${overviewLayout === "cards" ? "on" : ""}`} data-testid="boring-layout-cards" onClick={() => pickOverviewLayout("cards")}>Cards</button>
+                <button type="button" className={`boring-switch-pill ${overviewLayout === "map" ? "on" : ""}`} data-testid="boring-layout-map" onClick={() => pickOverviewLayout("map")}>Map</button>
+              </div>
+            )}
+            </div>
+            {overviewTab === "overview" && overviewLayout === "map" && laneMap}
+            {overviewTab === "overview" && overviewLayout === "cards" && (
               <>
                 <div className="boring-core-strip" data-testid="boring-core-strip">
                   {coreTile("overlord", core.overlord.label, core.overlord.status, core.overlord.age, core.overlord.needsYou, core.overlord.agentId ? null : "Start", () => (core.overlord.agentId ? pickCore("_overlord", core.overlord.agentId) : view && onSpinUpOverlord(view)), !core.overlord.agentId && overlordBusy)}
@@ -376,7 +466,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active /> : emptyCard()}
+            {agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
           </div>
         )}
       </main>
