@@ -418,7 +418,12 @@ function ensureDeviceWatch() {
       deviceWatch = null;
       return;
     }
-    loadDevices(); // reloads on an external change and drops the sockets of devices that are gone
+    try {
+      loadDevices(); // reloads on an external change and drops the sockets of devices that are gone
+    } catch {
+      // idea-232 L2: loadDevices fails closed by itself; anything else that throws here still cuts every stream.
+      for (const id of [...wsByDevice.keys()]) dropDeviceSockets(id);
+    }
   }, DEVICE_WATCH_MS);
   deviceWatch.unref?.();
 }
@@ -458,10 +463,13 @@ function adoptDevices(fresh, stamp) {
 
 /** The current list, re-read when another process changed the file. Null when the file can't be read (callers fail closed). */
 function loadDevices() {
-  const stamp = devicesFileStamp();
-  if (devices && stamp === devicesStamp) return devices;
+  let stamp;
   let fresh;
   try {
+    // idea-232 L2: the stat is inside the try too. A stat that throws (EACCES, ELOOP...) is "unreadable", not an escape
+    // past the fail-closed path (from the 1 s watch timer that throw would also have been an uncaught exception).
+    stamp = devicesFileStamp();
+    if (devices && stamp === devicesStamp) return devices;
     fresh = readDevicesFromDisk();
   } catch (e) {
     devicesReadError = e;
@@ -1661,8 +1669,10 @@ export async function handleRevoke(req, res, readBody) {
   let removed;
   try {
     removed = await revokeDeviceAsync(id, { timeoutMs: REQUEST_LOCK_MS });
-  } catch {
-    // X1 E4a R2 L3: a lock timeout or unreadable file is a retryable 503, never the lock path or holder pid.
+  } catch (e) {
+    // X1 E4a R2 L3: a lock timeout or unreadable file is a retryable 503, never the lock path or holder pid. idea-232:
+    // the detail goes to the server log only.
+    console.warn(`[vibesquad] device revoke failed: ${e?.message ?? e}`);
     return sendJson(res, 503, { error: "device list busy or unreadable; retry", retryable: true });
   }
   if (!removed.length) return sendJson(res, 404, { error: "no such device" });
