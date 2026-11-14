@@ -9,10 +9,7 @@ import fs from "node:fs";
 
 const CHUNK = 64 * 1024;
 
-function decodeLine(buf) {
-  const end = buf.length && buf[buf.length - 1] === 0x0d ? buf.length - 1 : buf.length;
-  return end ? buf.toString("utf8", 0, end) : "";
-}
+const trimCr = (l) => (l.endsWith("\r") ? l.slice(0, -1) : l);
 
 /** Shared backwards splitter: feed chunks newest-first, get complete lines newest-first. */
 function splitter() {
@@ -20,19 +17,24 @@ function splitter() {
   return {
     *push(chunk) {
       const buf = carry.length ? Buffer.concat([chunk, carry]) : chunk;
-      let end = buf.length;
-      for (let i = buf.length - 1; i >= 0; i--) {
-        if (buf[i] !== 0x0a) continue;
-        const line = decodeLine(buf.subarray(i + 1, end));
-        if (line) yield line;
-        end = i;
+      // Everything after the first "\n" is whole lines (it ends where a line ends: EOF or the carry's "\n"), so it decodes
+      // as one string; the bytes before it belong to a line that starts in an earlier chunk.
+      const first = buf.indexOf(0x0a);
+      if (first < 0) {
+        carry = Buffer.from(buf);
+        return;
       }
-      carry = Buffer.from(buf.subarray(0, end));
+      const lines = buf.toString("utf8", first + 1).split("\n");
+      carry = Buffer.from(buf.subarray(0, first));
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const l = trimCr(lines[i]);
+        if (l) yield l;
+      }
     },
     *finish() {
-      const line = decodeLine(carry);
+      const l = trimCr(carry.toString("utf8"));
       carry = Buffer.alloc(0);
-      if (line) yield line;
+      if (l) yield l;
     },
   };
 }

@@ -10,9 +10,13 @@ export function recentLaneLog({ teamId, laneId, n = 5, home }) {
   const want = String(laneId ?? "").trim().toLowerCase();
   const out = [];
   if (!(n > 0)) return out;
+  // A plain lane id appears verbatim (any case) in the raw JSON of every line that can match: skip JSON.parse for the
+  // rest, so a lane with few entries does not parse the whole log (ids with JSON-escaped characters always parse).
+  const plain = /^[a-z0-9._-]+$/.test(want);
   // Newest first from EOF (unit-loop-stall): stops reading once `n` lane entries are found, never the whole log.
   try {
     for (const line of linesFromEndSync(join(base, "teams", String(teamId), "log.jsonl"))) {
+      if (plain && !line.toLowerCase().includes(want)) continue;
       try {
         const e = JSON.parse(line);
         if (String(e.lane ?? "").toLowerCase() === want && e.type !== "metric") out.push(e);
