@@ -227,7 +227,7 @@ export function pruneExpiredCapsFile(path, now = Date.now()) {
       const current = hasWrapper ? doc.capped : doc;
       const live = Object.fromEntries(Object.entries(current).filter(([, v]) => !isCapExpired(v, now)));
       return { ...(hasWrapper ? doc : {}), capped: live };
-    }, { fallback: { capped: {} } });
+    }, { fallback: { capped: {} }, timeoutMs: 0 });
   } catch {
     /* best effort: leave file as it was */
   }
