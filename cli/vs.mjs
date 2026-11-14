@@ -2631,7 +2631,26 @@ function assertSafeLaunchArg(a) {
  * (Win32_Process.Create: parented to the WMI service, hidden, and it does NOT inherit our env, so the relevant
  * VIBESQUAD_* values are passed as flags); elsewhere a detached child.
  */
-export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, now = Date.now } = {}) {
+/**
+ * The runner's held list as the drain guard's truth (ideas 228 + 229): GET /health { heldAgents, heldWork }, already checked
+ * against live pids by the runner. Null when the runner is unreachable or predates heldAgents (the guard then keeps the
+ * self-report rule). Agent shells send their own headers, never the admin bearer (authHeadersFor).
+ */
+async function heldViaRunner(env = process.env, { timeoutMs = 5000 } = {}) {
+  try {
+    const { readDiscovery, runnerHome, authHeadersFor, agentCallerFromEnv } = await import("../server/backend/runner-client.mjs");
+    const disc = readDiscovery(runnerHome(env));
+    if (!disc) return null;
+    const r = await fetch(`http://127.0.0.1:${disc.port}/health`, { headers: authHeadersFor(agentCallerFromEnv(env), disc.token), signal: AbortSignal.timeout(timeoutMs) });
+    if (!r.ok) return null;
+    const h = await r.json();
+    return Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
   if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
@@ -2643,7 +2662,10 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
   if (!flags.dryRun && !flags.killBackground) {
     // R2 M2: the runner's agent list (the `vs who lead` source) lets a drain by the lane's current lead count, and skips
     // a lane with no live lead any more; read lazily, only when a named lead has not drained.
-    const g = drainGuard(vsHome, { now: now(), agents: () => listAgents(env) });
+    // Ideas 228 + 229: the runner's held list (pid-checked) is the truth; a 'drained' log alone does not settle a lead.
+    let held = null;
+    try { held = await heldList(env); } catch { held = null; }
+    const g = drainGuard(vsHome, { now: now(), agents: () => listAgents(env), held });
     if (g.pending.length) throw new Error(drainGuardMessage(g, now()));
     const skip = drainSkippedNote(g.skipped);
     if (skip) process.stdout.write(`vs restart: drain guard ${skip}

@@ -140,20 +140,34 @@ function currentLaneLeads(agents, teams, team, lane) {
  * a drain by the lane's CURRENT live lead counts too (R2 M2: the named lead handed off or retired), and a lane with no
  * live lead any more is skipped (returned in `skipped`). Without an agent list (or an empty one) only the named lead
  * counts and nothing is skipped (fail closed). `agents` may be a thunk, called only when a named lead is still undrained.
- * Returns { pending: [lead...], skipped: [lead...], deferral, since }.
+ *
+ * Ideas 228 + 229: a lead's 'drained restart' is a self-report, not the truth. With `held` (the runner's /health held list,
+ * checked against live pids: an id array, { ids, work } or a thunk returning either), the runner decides: a named lead
+ * whose held agents the runner no longer holds is done whether or not it logged a drain (returned in `cleared`), and one
+ * whose agents are still held stays pending even after logging 'drained' (`stillHeld`, `drainedButHeld`, `heldWork`).
+ * Without a held list (runner down, older runner, a throwing thunk) the self-report rule above stands (fail closed).
+ * Returns { pending: [lead...], skipped: [lead...], cleared: [lead...], deferral, since }.
  */
-export function drainGuard(vsHome, { now = Date.now(), agents = null, teams = null } = {}) {
+export function drainGuard(vsHome, { now = Date.now(), agents = null, teams = null, held = null } = {}) {
   const chain = deferralChain(vsHome, { now, maxAgeMs: DRAIN_WINDOW_MS });
-  if (!chain) return { pending: [], skipped: [], deferral: null };
+  if (!chain) return { pending: [], skipped: [], cleared: [], deferral: null };
   const since = chain.latest.finishedAt ?? chain.latest.startedAt;
   const need = chain.latestLeads;
   const drained = drainedLeadIds(vsHome, need.map((l) => l.team), since);
+  const truth = heldTruth(held);
   let list;
   let reg = null;
   const pending = [];
   const skipped = [];
+  const cleared = [];
   for (const l of need) {
-    if (drained.has(l.leadId)) continue;
+    let still = null; // with the runner's held list: what of this lead's still holds (a drained log never settles that)
+    if (truth) {
+      const stillHeld = (l.heldAgents ?? []).filter((id) => truth.ids.has(id));
+      if (!stillHeld.length) { cleared.push(l); continue; } // the runner holds none of them: nothing left to drain
+      still = { stillHeld, heldWork: Object.fromEntries(stillHeld.filter((id) => truth.work[id]?.length).map((id) => [id, truth.work[id]])) };
+    }
+    if (!still && drained.has(l.leadId)) continue;
     if (list === undefined) {
       let got = null;
       try { got = typeof agents === "function" ? agents() : agents; } catch { got = null; }
@@ -163,13 +177,22 @@ export function drainGuard(vsHome, { now = Date.now(), agents = null, teams = nu
     if (list) {
       const cur = currentLaneLeads(list, reg, l.team, l.lane);
       if (cur.none) { skipped.push(l); continue; }
-      if (cur.ids.some((id) => drained.has(id))) continue;
-      pending.push({ ...l, currentLeadIds: cur.ids.filter((id) => id !== l.leadId) });
+      if (!still && cur.ids.some((id) => drained.has(id))) continue;
+      pending.push({ ...l, currentLeadIds: cur.ids.filter((id) => id !== l.leadId), ...(still ? { ...still, drainedButHeld: drained.has(l.leadId) || cur.ids.some((id) => drained.has(id)) } : {}) });
       continue;
     }
-    pending.push(l);
+    pending.push(still ? { ...l, ...still, drainedButHeld: drained.has(l.leadId) } : l);
   }
-  return { pending, skipped, deferral: chain.latest, since };
+  return { pending, skipped, cleared, deferral: chain.latest, since };
+}
+
+/** The runner's held list in one shape ({ ids: Set, work: { id: [{ pid, cmd }] } }), or null when unknown. */
+function heldTruth(held) {
+  let got = held;
+  try { if (typeof got === "function") got = got(); } catch { return null; }
+  if (Array.isArray(got)) return { ids: new Set(got.map(String)), work: {} };
+  if (got && typeof got === "object" && Array.isArray(got.ids)) return { ids: new Set(got.ids.map(String)), work: got.work && typeof got.work === "object" ? got.work : {} };
+  return null;
 }
 
 /** One line for the lanes the guard skipped because they have no live lead any more ('' when none). */
@@ -180,10 +203,21 @@ export function drainSkippedNote(skipped) {
 
 export function drainGuardMessage({ pending, skipped = [], deferral }, now = Date.now()) {
   const ago = Math.max(0, Math.round((now - (Date.parse(deferral?.finishedAt ?? deferral?.startedAt ?? "") || now)) / 60000));
-  const who = pending.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""}${l.currentLeadIds?.length ? ` (now ${l.currentLeadIds.join(", ")})` : ""} [holds ${l.heldAgents.join(", ")}]`).join("; ");
+  const plain = pending.filter((l) => !l.stillHeld);
+  const held = pending.filter((l) => l.stillHeld);
+  const who = plain.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""}${l.currentLeadIds?.length ? ` (now ${l.currentLeadIds.join(", ")})` : ""} [holds ${l.heldAgents.join(", ")}]`).join("; ");
   const skip = drainSkippedNote(skipped);
-  return `vs restart: refused: the last restart deferred ${ago} min ago on background work, and these leads have not logged vs log restart-feedback '${DRAINED_TEXT}' yet: ${who}. ` +
-    `Ask each to drain and hold background suites (ready-to-send asks: ${deferral?.file ?? "the restart-<ts>.json"} deferred.leads[].ask), wait for every 'drained', then rerun vs restart. ` +
+  return `vs restart: refused: the last restart deferred ${ago} min ago on background work` +
+    (plain.length ? `, and these leads have not logged vs log restart-feedback '${DRAINED_TEXT}' yet: ${who}. ` +
+      `Ask each to drain and hold background suites (ready-to-send asks: ${deferral?.file ?? "the restart-<ts>.json"} deferred.leads[].ask), wait for every 'drained', then rerun vs restart. ` : ". ") +
+    (held.length ? `The runner still holds background work for: ${held.map(stillHeldLine).join("; ")}. ` +
+      `A 'drained' log is not enough while the runner holds it: wait for the work to finish, or have it stopped (runner POST /agents/<id>/stop-background kills each shell's whole tree), then rerun vs restart. ` : "") +
     (skip ? `${skip[0].toUpperCase()}${skip.slice(1)} ` : "") +
     `No timer retries; --kill-background needs the owner's per-run OK.`;
+}
+
+function stillHeldLine(l) {
+  const work = (id) => (l.heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${String(w.cmd ?? w.name ?? "").trim().slice(-80)}`).join(", ");
+  const ids = l.stillHeld.map((id) => (work(id) ? `${id} (${work(id)})` : id)).join(", ");
+  return `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} ${l.drainedButHeld ? `logged '${DRAINED_TEXT}' but the runner still holds` : "has not drained; the runner still holds"} ${ids}`;
 }
