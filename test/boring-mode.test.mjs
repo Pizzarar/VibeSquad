@@ -397,6 +397,10 @@ test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek
   assert.match(css, /\.boring-card-grid \{ grid-template-columns: repeat\(auto-fill, minmax\(clamp\(320px, 22vw, 520px\)/);
   assert.match(css, /\.usage-crt,[\s\S]*\.feed-entry[^{]*\{[^}]*border: none; border-radius: 14px/);
   assert.match(css, /max-width: 1280px/);
+  assert.match(css, /\.boring-footer-btn\.on,\s*html\[data-vibe="boring"\] \.boring-core-row\.on,\s*html\[data-vibe="boring"\] \.boring-conv-row\.on \{[^}]*inset 3px 0 0 var\(--cyan\)/);
+  assert.match(css, /\.decision-card \{ border: 0 !important; border-radius: 14px !important; background: var\(--panel\)/);
+  assert.match(css, /\.usage-collapse,\s*html\[data-vibe="boring"\] \.usage-inbox-row \{ background: var\(--panel\) !important/);
+  assert.match(css, /\.usage-collapse-head \{ font-size: 13px; text-transform: none/);
 });
 
 test("BoringApp renders App's overlays as children", () => {
