@@ -292,8 +292,9 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       </div>
       <svg className="boring-map-svg" aria-hidden="true" preserveAspectRatio="none" viewBox="0 0 100 10"><line x1="20" y1="0" x2="50" y2="10" /><line x1="50" y1="0" x2="50" y2="10" /><line x1="80" y1="0" x2="50" y2="10" /></svg>
       {conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
+      <div className="boring-map-grid">
       {conversations.map((c) => {
-        const workers = c.pin.workers ?? [];
+        const workers = (c.pin.workers ?? []).filter((w) => w.agent.status === "running" || mapAttn(w) > 0);
         return (
           <div key={c.laneId} className="boring-map-cluster" data-testid={`boring-map-cluster-${c.laneId}`}>
             <button type="button" className={`boring-map-node boring-map-lane ${boringNodeStateClass(c.running > 0 ? "running" : c.brainstormStatus, c.needsYou)}`} data-testid={`boring-map-lane-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>
@@ -318,6 +319,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           </div>
         );
       })}
+      </div>
     </div>
   );
   const memberAgent = (id: string | null) => (id ? agents.get(id) : undefined);
