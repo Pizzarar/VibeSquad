@@ -5,6 +5,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { startLoopLagMonitor } from "../runner/loop-lag.mjs";
 import { sharedSchedules } from "./schedules.mjs";
 import { loadTeamsRegistry } from "./identity.mjs";
 import { extname, join, normalize, resolve, sep } from "node:path";
@@ -485,6 +486,7 @@ if (isMain) {
   }
   getLocalToken();
   installUncaughtGuard();
+  startLoopLagMonitor("server");
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });

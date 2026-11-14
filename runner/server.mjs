@@ -8,6 +8,7 @@
 //          against runner memory (GET /verify-agent tells the VS server who is calling); scoped per route (see agentMay).
 //          A request that carries `x-vs-agent-id` without a matching token is 403 whatever else it carries.
 // Discovery for VS: <home>/runner.json = { port, pid, startedAt }.
+import { startLoopLagMonitor, loopLagStats } from './loop-lag.mjs';
 import http from 'node:http';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { appendFileSync, chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -143,7 +144,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         // heldWork: id -> the live shells each hold is on ({ pid, name, cmd }), so a deferral names what actually holds.
         const heldWork = runner.heldWork?.() ?? {};
         // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, pid: process.pid, hash });
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
       }
       if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
         // Restart drain (ideas 198 + 186), set/cleared by scripts/restart-runtime.mjs: POST { ttlMs, reason } starts or refreshes
@@ -378,6 +379,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
   try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
+  startLoopLagMonitor('runner');
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     const port = server.address().port;
     writeDiscovery(home, { port, token });
