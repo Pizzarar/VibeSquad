@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
-import { withFileLockSync } from "./file-lock.mjs";
+import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
 import { qrSvg } from "./qr.mjs";
@@ -354,11 +354,13 @@ export function caFingerprint() {
 
 let devices; // [{ id, name, createdAt, lastSeenAt, tokenHash, mintedByDeviceId }]: in-memory mirror of devices.json
 let lastPersist = 0;
-// X1 E4a R2 L1: request-path callers (last-seen persist, pair redeem/approve, UI revoke) wait at most this long for
-// <devices.json>.lock, so a stalled CLI holder can't freeze the event loop for the CLI's own 5 s budget.
+// X1 E4a R2 L1: request-path callers (pair redeem/approve, UI revoke) wait at most this long for <devices.json>.lock, so
+// a stalled CLI holder can't hold a request for the CLI's own 5 s budget. idea-227: they wait on the async lock, so the
+// event loop keeps running meanwhile; the last-seen persist (inside the sync authenticate) only ever tries once.
 const REQUEST_LOCK_MS = 200;
 // devices.json is also written by other processes (`vs devices revoke` over SSH, E4a). Two rules keep that safe:
-//  1. One locked writer: every change goes through mutateDevices(), which re-reads the file under <devices.json>.lock
+//  1. One locked writer: every change goes through mutateDevices() (mutateDevicesAsync on request paths, idea-227),
+//     which re-reads the file under <devices.json>.lock
 //     (server/file-lock.mjs, the same primitive the CLI uses through this module), edits, and writes atomically. A
 //     revoke and a pairing can't undo each other.
 //  2. The mirror is trusted only while the file's path + mtime + size match what was last read or written; a changed
@@ -492,18 +494,31 @@ function writeDevicesFile(list, lock = null) {
  * file exists but can't be read, or when the lock can't be taken (5 s for the CLI; request paths pass REQUEST_LOCK_MS).
  */
 function mutateDevices(mutate, { timeoutMs } = {}) {
-  const lockOpts = timeoutMs === undefined ? {} : { timeoutMs };
-  return withFileLockSync(devicesFile(), (lock) => {
-    const list = readDevicesFromDisk();
-    const out = mutate(list);
-    writeDevicesFile(list, lock);
-    adoptDevices(list, devicesFileStamp());
-    lastPersist = Date.now();
-    return out;
-  }, lockOpts);
+  return withFileLockSync(devicesFile(), (lock) => devicesMutation(mutate, lock), devicesLockOpts(timeoutMs));
 }
 
-/** Writes the in-memory lastSeenAt times onto the file (every 60 s; never resurrects a device another process removed). */
+/** mutateDevices for request paths (idea-227): same lock, body and timeout, but waits without blocking the event loop. */
+function mutateDevicesAsync(mutate, { timeoutMs } = {}) {
+  return withFileLock(devicesFile(), (lock) => devicesMutation(mutate, lock), devicesLockOpts(timeoutMs));
+}
+
+const devicesLockOpts = (timeoutMs) => (timeoutMs === undefined ? {} : { timeoutMs });
+
+/** The locked body shared by mutateDevices / mutateDevicesAsync: re-read from disk, mutate, atomic write, adopt. */
+function devicesMutation(mutate, lock) {
+  const list = readDevicesFromDisk();
+  const out = mutate(list);
+  writeDevicesFile(list, lock);
+  adoptDevices(list, devicesFileStamp());
+  lastPersist = Date.now();
+  return out;
+}
+
+/**
+ * Writes the in-memory lastSeenAt times onto the file (every 60 s; never resurrects a device another process removed).
+ * Runs inside the sync authenticate(), so it takes the lock only when it is free right now (timeoutMs: 0, never waits);
+ * a busy lock throws and the caller retries in a minute.
+ */
 function persistLastSeen() {
   const mem = devices;
   if (!mem) return;
@@ -514,7 +529,7 @@ function persistLastSeen() {
         if (m?.lastSeenAt && String(m.lastSeenAt) > String(d.lastSeenAt ?? "")) d.lastSeenAt = m.lastSeenAt;
       }
     },
-    { timeoutMs: REQUEST_LOCK_MS },
+    { timeoutMs: 0 },
   );
 }
 
@@ -973,15 +988,24 @@ function deviceNameFromUa(ua = "") {
  * The CLI keeps the lock's 5 s default; HTTP handlers pass { timeoutMs: REQUEST_LOCK_MS }.
  */
 export function revokeDevice(id, { timeoutMs } = {}) {
-  const removed = mutateDevices(
-    (list) => {
-      if (!list.some((d) => d.id === id)) return [];
-      const gone = new Set(cascadeIds(list, id));
-      for (let i = list.length - 1; i >= 0; i--) if (gone.has(list[i].id)) list.splice(i, 1);
-      return [...gone];
-    },
-    { timeoutMs },
-  );
+  return afterRevoke(mutateDevices(cascadeRemoval(id), { timeoutMs }));
+}
+
+/** revokeDevice for the HTTP handler (idea-227): waits for the lock without blocking the event loop. */
+export async function revokeDeviceAsync(id, { timeoutMs } = {}) {
+  return afterRevoke(await mutateDevicesAsync(cascadeRemoval(id), { timeoutMs }));
+}
+
+/** The locked part of a revoke: drop `id` and its whole mintedByDeviceId cascade; returns the removed ids. */
+const cascadeRemoval = (id) => (list) => {
+  if (!list.some((d) => d.id === id)) return [];
+  const gone = new Set(cascadeIds(list, id));
+  for (let i = list.length - 1; i >= 0; i--) if (gone.has(list[i].id)) list.splice(i, 1);
+  return [...gone];
+};
+
+/** After the write: cut the removed devices' live sockets and the tickets they minted. Returns `removed`. */
+function afterRevoke(removed) {
   for (const rid of removed) {
     dropDeviceSockets(rid);
     discardPendingMintedBy(rid); // tickets the revoked device minted die with it
@@ -1358,7 +1382,7 @@ export async function handlePairStart(req, res) {
   });
 }
 
-export function handlePairRedeem(req, res) {
+export async function handlePairRedeem(req, res) {
   if (req.method !== "GET") {
     res.statusCode = 405;
     return res.end();
@@ -1385,7 +1409,7 @@ export function handlePairRedeem(req, res) {
     return sendHtml(res, 400, "No pairing code", "Scan the QR code on your PC (it opens an https:// link with the code).");
   }
   const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
-  const r = redeemPairCode({ rawCode, ip, name });
+  const r = await redeemPairCode({ rawCode, ip, name });
   if (r.state === "invalid") {
     return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.", null, apkRecoveryHtml(req));
   }
@@ -1424,8 +1448,10 @@ function waitingScript(href) {
  * pending ticket (device-minted: state "pending", nothing written until the minter approves). Shared by the HTTP /pair
  * route and, later, the E5 relay redeem. `token` is the value the new device must present as vs_device.
  * States: paired | pending | invalid (bad/used/expired code; a failure is recorded for `ip`) | busy (lock/unreadable).
+ * Async (idea-227): the code is spent synchronously, before the only await (the devices.json lock wait), so two redeems
+ * of one code can never both pass; only the write waits, without blocking the event loop.
  */
-export function redeemPairCode({ rawCode, ip = "unknown", name = "Device" }) {
+export async function redeemPairCode({ rawCode, ip = "unknown", name = "Device" }) {
   const code = /^\d{3}[-\s]?\d{3}$/.test(rawCode) ? rawCode.replace(/[-\s]/g, "") : rawCode;
   const entry = codes.get(code) ?? codes.get(rawCode);
   codes.delete(code); // one-shot, even when expired
@@ -1450,7 +1476,7 @@ export function redeemPairCode({ rawCode, ip = "unknown", name = "Device" }) {
     return { state: "pending", token, pendingId: id, mintedByDeviceId: minter.id, mintedByName: minter.name };
   }
   try {
-    mutateDevices((list) => list.push({ id, name, createdAt: now, lastSeenAt: now, tokenHash, mintedByDeviceId: null }), { timeoutMs: REQUEST_LOCK_MS });
+    await mutateDevicesAsync((list) => list.push({ id, name, createdAt: now, lastSeenAt: now, tokenHash, mintedByDeviceId: null }), { timeoutMs: REQUEST_LOCK_MS });
   } catch {
     return { state: "busy" };
   }
@@ -1462,6 +1488,10 @@ export function redeemPairCode({ rawCode, ip = "unknown", name = "Device" }) {
  * pending, now approved (in devices.json), or gone (denied / expired / minter revoked). Reveals nothing else.
  */
 const deniedTokenHashes = new Set(); // token hashes the minter denied, so the waiting page can say so (bounded; cleared past 64)
+// idea-227: tickets whose approval is writing to devices.json right now. The approve waits on the async lock, so without
+// this a second approve (or a deny) of the same ticket could run in that gap and push the device twice. While a ticket is
+// here every other decision on it gets the same 404 a decided ticket gets; a failed write (503) frees it for the retry.
+const approvingIds = new Set();
 export function handlePairStatus(req, res) {
   if (req.method !== "GET") {
     res.statusCode = 405;
@@ -1505,7 +1535,7 @@ export async function handlePairApprove(req, res, readBody) {
   }
   const pendingId = typeof body?.pendingId === "string" ? body.pendingId : "";
   sweepPending();
-  const p = pendingDevices.get(pendingId);
+  const p = approvingIds.has(pendingId) ? null : pendingDevices.get(pendingId);
   if (!p) return sendJson(res, 404, { error: "no such pending device (expired or already decided)" });
   if (p.mintedBy !== dev.id) return sendJson(res, 403, { error: "only the device that minted this code can decide it" });
   if (body?.approve !== true) {
@@ -1517,8 +1547,9 @@ export async function handlePairApprove(req, res, readBody) {
   }
   // Gemini E4b L1: the ticket is removed only once the device is on disk (or the minter is gone), so a 200 ms lock
   // timeout (503, retryable) leaves the ticket for the phone's retry instead of turning it into a 404 / "gone".
+  approvingIds.add(pendingId); // claimed synchronously, before the lock wait
   try {
-    mutateDevices(
+    await mutateDevicesAsync(
       (list) => {
         if (!list.some((d) => d.id === dev.id)) throw new Error("minter is no longer paired");
         list.push({ id: p.id, name: p.name, createdAt: p.createdAt, lastSeenAt: p.createdAt, tokenHash: p.tokenHash, mintedByDeviceId: dev.id });
@@ -1531,6 +1562,8 @@ export async function handlePairApprove(req, res, readBody) {
       return sendJson(res, 403, { error: "this device is no longer paired" });
     }
     return sendJson(res, 503, { error: "device list busy or unreadable; retry", retryable: true });
+  } finally {
+    approvingIds.delete(pendingId);
   }
   pendingDevices.delete(pendingId);
   await auditPairDecision({ approved: true, pending: p, minter: dev });
@@ -1627,7 +1660,7 @@ export async function handleRevoke(req, res, readBody) {
   if (typeof id !== "string") return sendJson(res, 400, { error: "id required" });
   let removed;
   try {
-    removed = revokeDevice(id, { timeoutMs: REQUEST_LOCK_MS });
+    removed = await revokeDeviceAsync(id, { timeoutMs: REQUEST_LOCK_MS });
   } catch {
     // X1 E4a R2 L3: a lock timeout or unreadable file is a retryable 503, never the lock path or holder pid.
     return sendJson(res, 503, { error: "device list busy or unreadable; retry", retryable: true });

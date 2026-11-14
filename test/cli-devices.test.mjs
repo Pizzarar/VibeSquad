@@ -59,11 +59,11 @@ function fakeRes() {
 }
 
 /** Pairs a device through the real redeem handler; returns the vs_device token the phone would hold. */
-function pairDevice(name, ip) {
+async function pairDevice(name, ip) {
   auth.resetPairRateLimitForTest();
   const code = auth.createPairCode();
   const res = fakeRes();
-  auth.handlePairRedeem({ url: `/pair?code=${code}&name=${encodeURIComponent(name)}`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: ip }, on() {} }, res);
+  await auth.handlePairRedeem({ url: `/pair?code=${code}&name=${encodeURIComponent(name)}`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: ip }, on() {} }, res);
   assert.equal(res.statusCode, 302, res.body);
   const m = /vs_device=([^;]+)/.exec(String(res.headers["set-cookie"]));
   assert.ok(m, "set-cookie carries the device token");
@@ -80,13 +80,13 @@ const ageDevicesFile = () => {
 };
 
 describe("vs devices list", () => {
-  test("empty, then lists paired devices without token hashes", () => {
+  test("empty, then lists paired devices without token hashes", async () => {
     let r = vs(["devices", "list"]);
     assert.equal(r.status, 0, r.err);
     assert.match(r.out, /No paired devices/);
 
-    const phoneToken = pairDevice("Owner phone", "100.64.0.9");
-    pairDevice("Work PC", "100.64.0.10");
+    const phoneToken = await pairDevice("Owner phone", "100.64.0.9");
+    await pairDevice("Work PC", "100.64.0.10");
     const hashes = readDevicesJson().map((d) => d.tokenHash);
     assert.equal(hashes.length, 2);
     assert.ok(hashes.every((h) => /^[0-9a-f]{64}$/.test(h)));
@@ -109,11 +109,11 @@ describe("vs devices list", () => {
 });
 
 describe("vs devices revoke runs in another process and the server notices", () => {
-  test("revoke <id>: the phone's next request is refused; the other device stays; its live sockets drop", () => {
+  test("revoke <id>: the phone's next request is refused; the other device stays; its live sockets drop", async () => {
     const list = auth.listDevices();
     const phone = list.find((d) => d.name === "Owner phone");
     const pc = list.find((d) => d.name === "Work PC");
-    const phoneToken = pairDevice("Owner phone 2", "100.64.0.11"); // a third device the server has in memory
+    const phoneToken = await pairDevice("Owner phone 2", "100.64.0.11"); // a third device the server has in memory
     const phone2 = auth.listDevices().find((d) => d.name === "Owner phone 2");
     const destroyed = [];
     const sock = { destroy: () => destroyed.push(phone.id), once() {} };
@@ -136,8 +136,8 @@ describe("vs devices revoke runs in another process and the server notices", () 
     assert.ok(auth.listDevices().some((d) => d.id === phone2.id));
   });
 
-  test("a revoked token is refused by authenticate() even when the cookie is still presented", () => {
-    const token = pairDevice("Lost phone", "100.64.0.12");
+  test("a revoked token is refused by authenticate() even when the cookie is still presented", async () => {
+    const token = await pairDevice("Lost phone", "100.64.0.12");
     const lost = auth.listDevices().find((d) => d.name === "Lost phone");
     assert.equal(authAs(token)?.id, lost.id);
     ageDevicesFile();
@@ -146,21 +146,21 @@ describe("vs devices revoke runs in another process and the server notices", () 
     assert.equal(authAs(token), null, "refused on the next request, no server restart");
   });
 
-  test("a server-side save after an external revoke does not resurrect the revoked device", () => {
-    const token = pairDevice("Resurrect me", "100.64.0.13");
+  test("a server-side save after an external revoke does not resurrect the revoked device", async () => {
+    const token = await pairDevice("Resurrect me", "100.64.0.13");
     const victim = auth.listDevices().find((d) => d.name === "Resurrect me");
     assert.ok(authAs(token));
     ageDevicesFile();
     assert.equal(vs(["devices", "revoke", victim.id]).status, 0);
     // Pair a new device in-process: that pushes onto the in-memory list and saves. The external removal must win.
-    const newToken = pairDevice("Newest", "100.64.0.14");
+    const newToken = await pairDevice("Newest", "100.64.0.14");
     assert.ok(!readDevicesJson().some((d) => d.id === victim.id), "still gone on disk after the server's own write");
     assert.equal(authAs(token), null);
     assert.ok(authAs(newToken), "the server's own addition survived the merge");
   });
 
-  test("revoke --all empties devices.json and every token is refused", () => {
-    const tokens = auth.listDevices().length ? [pairDevice("A", "100.64.0.20"), pairDevice("B", "100.64.0.21")] : [];
+  test("revoke --all empties devices.json and every token is refused", async () => {
+    const tokens = auth.listDevices().length ? [await pairDevice("A", "100.64.0.20"), await pairDevice("B", "100.64.0.21")] : [];
     assert.ok(tokens.every((t) => authAs(t)));
     ageDevicesFile();
     const r = vs(["devices", "revoke", "--all"]);
@@ -172,8 +172,8 @@ describe("vs devices revoke runs in another process and the server notices", () 
     assert.match(vs(["devices", "revoke", "--all"]).out, /No paired devices/);
   });
 
-  test("bad ids and bad usage fail without touching the file", () => {
-    pairDevice("Keep", "100.64.0.30");
+  test("bad ids and bad usage fail without touching the file", async () => {
+    await pairDevice("Keep", "100.64.0.30");
     const before = readFileSync(devicesFile, "utf8");
     let r = vs(["devices", "revoke", "nope-nope-nope"]);
     assert.equal(r.status, 1);
@@ -190,7 +190,7 @@ describe("vs devices revoke runs in another process and the server notices", () 
 });
 
 describe("vs pair (headless)", () => {
-  test("needs the local token file, never a network route", () => {
+  test("needs the local token file, never a network route", async () => {
     const r = vs(["pair"], { VIBESQUAD_HOME: mkdtempSync(join(tmpdir(), "vs-cli-pair-empty-")), VIBESQUAD_PORT: "1" });
     assert.equal(r.status, 1);
     assert.match(r.err, /no local token/);
@@ -225,7 +225,7 @@ describe("vs pair (headless)", () => {
       const code = /Pairing code:\s+(\d{3}) (\d{3})/.exec(r.out);
       const res = fakeRes();
       // (no resetPairRateLimitForTest here: it would also clear the minted code; the IP below is fresh)
-      auth.handlePairRedeem({ url: `/pair?code=${code[1]}${code[2]}`, method: "GET", headers: { host: "home-pc.test:4180" }, socket: { remoteAddress: "100.64.0.40" }, on() {} }, res);
+      await auth.handlePairRedeem({ url: `/pair?code=${code[1]}${code[2]}`, method: "GET", headers: { host: "home-pc.test:4180" }, socket: { remoteAddress: "100.64.0.40" }, on() {} }, res);
       assert.equal(res.statusCode, 302, "the CLI's code redeems on the server");
     } finally {
       await new Promise((ok) => server.close(ok));
@@ -234,7 +234,7 @@ describe("vs pair (headless)", () => {
     }
   });
 
-  test("formatPairOutput is plain text with no SVG and no hashes beyond the CA fingerprint", () => {
+  test("formatPairOutput is plain text with no SVG and no hashes beyond the CA fingerprint", async () => {
     const text = cli.formatPairOutput({ code: "123456", pairUrl: "https://pc:4180/pair?code=123456", caFingerprint: { full: "AA:BB" }, hostId: "h".repeat(22), expiresAt: Date.now() + 1000 }, "QR\n");
     assert.match(text, /Pairing code:\s+123 456/);
     assert.match(text, /Host id:\s+h{22}/);
@@ -248,7 +248,7 @@ describe("X1 R1 H1: an external revoke cuts a device's live SSE stream, not only
     process.env.VIBESQUAD_MESHNET_IP = "100.64.0.7";
     const { createMeshnetMux } = await import("../server/serve.mjs");
     const { request: httpsRequest } = await import("node:https");
-    const token = pairDevice("Streaming phone", "100.64.0.50");
+    const token = await pairDevice("Streaming phone", "100.64.0.50");
     const dev = auth.listDevices().find((d) => d.name === "Streaming phone");
     const { mux } = createMeshnetMux({ port: 4180, meshnetHost: "", meshnetIp: "100.64.0.7", tls: auth.getTls() });
     await new Promise((ok) => mux.listen(0, "127.0.0.1", ok));
@@ -286,8 +286,8 @@ describe("X1 R1 H1: an external revoke cuts a device's live SSE stream, not only
 });
 
 describe("X1 R1 M1: devices.json has one locked writer (server/file-lock.mjs withFileLockSync)", () => {
-  test("a held <devices.json>.lock makes `vs devices revoke` wait and fail without writing; a dead holder is reaped", () => {
-    const token = pairDevice("Locked out", "100.64.0.60");
+  test("a held <devices.json>.lock makes `vs devices revoke` wait and fail without writing; a dead holder is reaped", async () => {
+    const token = await pairDevice("Locked out", "100.64.0.60");
     const victim = auth.listDevices().find((d) => d.name === "Locked out");
     const lock = `${devicesFile}.lock`;
     const before = readFileSync(devicesFile, "utf8");
@@ -310,7 +310,7 @@ describe("X1 R1 M1: devices.json has one locked writer (server/file-lock.mjs wit
     assert.ok(!existsSync(lock), "the CLI released the lock it took over");
   });
 
-  test("the server's own writes take the same lock (a pairing is refused, not lost, while another writer holds it)", () => {
+  test("the server's own writes take the same lock (a pairing is refused, not lost, while another writer holds it)", async () => {
     const lock = `${devicesFile}.lock`;
     const before = readFileSync(devicesFile, "utf8");
     writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
@@ -318,7 +318,7 @@ describe("X1 R1 M1: devices.json has one locked writer (server/file-lock.mjs wit
       auth.resetPairRateLimitForTest();
       const code = auth.createPairCode();
       const res = fakeRes();
-      auth.handlePairRedeem({ url: `/pair?code=${code}&name=Blocked`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: "100.64.0.61" }, on() {} }, res);
+      await auth.handlePairRedeem({ url: `/pair?code=${code}&name=Blocked`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: "100.64.0.61" }, on() {} }, res);
       assert.equal(res.statusCode, 503, res.body);
       assert.equal(res.headers["set-cookie"], undefined, "no device cookie without a recorded device");
       assert.equal(readFileSync(devicesFile, "utf8"), before);
@@ -330,8 +330,8 @@ describe("X1 R1 M1: devices.json has one locked writer (server/file-lock.mjs wit
 });
 
 describe("X1 R1 M2: an unreadable devices.json fails closed and is never written over", () => {
-  test("malformed file: auth refused, list throws, GET 503, pair redeem 503 with the file untouched; recovers once readable", () => {
-    const token = pairDevice("Survivor", "100.64.0.70");
+  test("malformed file: auth refused, list throws, GET 503, pair redeem 503 with the file untouched; recovers once readable", async () => {
+    const token = await pairDevice("Survivor", "100.64.0.70");
     assert.ok(authAs(token));
     const good = readFileSync(devicesFile, "utf8");
     ageDevicesFile();
@@ -344,7 +344,7 @@ describe("X1 R1 M2: an unreadable devices.json fails closed and is never written
     auth.resetPairRateLimitForTest();
     const code = auth.createPairCode();
     const res = fakeRes();
-    auth.handlePairRedeem({ url: `/pair?code=${code}&name=Intruder`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: "100.64.0.71" }, on() {} }, res);
+    await auth.handlePairRedeem({ url: `/pair?code=${code}&name=Intruder`, method: "GET", headers: { host: "100.64.0.7:4180" }, socket: { remoteAddress: "100.64.0.71" }, on() {} }, res);
     assert.equal(res.statusCode, 503, res.body);
     assert.equal(readFileSync(devicesFile, "utf8"), "{ not json", "a pairing never overwrites an unreadable list");
     assert.equal(vs(["devices", "revoke", "--all"]).status, 1, "the CLI refuses too");

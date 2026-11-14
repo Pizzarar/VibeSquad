@@ -77,17 +77,17 @@ const authAs = (token) => auth.authenticate({ headers: { cookie: `vs_device=${to
 const byName = (name) => auth.listDevices().find((d) => d.name === name);
 
 /** Redeems `code` as a new device; returns the response and the vs_device token it was handed (if any). */
-function redeem(code, name, ip = nextIp()) {
+async function redeem(code, name, ip = nextIp()) {
   const res = fakeRes();
-  auth.handlePairRedeem(meshReq({ url: `/pair?code=${code}&name=${encodeURIComponent(name)}`, ip }), res);
+  await auth.handlePairRedeem(meshReq({ url: `/pair?code=${code}&name=${encodeURIComponent(name)}`, ip }), res);
   const m = /vs_device=([^;]+)/.exec(String(res.headers["set-cookie"] ?? ""));
   return { res, token: m ? m[1] : null };
 }
 
 /** PC-minted pairing (the desktop dialog / `vs pair` path): immediate. */
-function pairFromPc(name) {
+async function pairFromPc(name) {
   const code = auth.createPairCode();
-  const { res, token } = redeem(code, name);
+  const { res, token } = await redeem(code, name);
   assert.equal(res.statusCode, 302, res.body);
   assert.ok(token);
   return token;
@@ -121,7 +121,7 @@ function statusOf(token) {
 /** Phone-minted pairing end to end: mint on `minterToken`, redeem, approve on the minter. Returns the new device's token. */
 async function mintAndApprove(minterToken, name) {
   const { data } = await mint(minterToken);
-  const { res, token } = redeem(data.code, name);
+  const { res, token } = await redeem(data.code, name);
   assert.equal(res.statusCode, 200, "pending, not paired");
   const { data: p } = await pendingFor(minterToken);
   const ticket = p.pending.find((x) => x.name === name);
@@ -154,9 +154,9 @@ const close = (server) => new Promise((ok) => server.close(ok));
 
 describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for that phone's Approve", () => {
   test("mint -> redeem lands in pending: the token authenticates nothing, nothing is written, only the minter can decide", async () => {
-    const phoneToken = pairFromPc("Owner phone");
+    const phoneToken = await pairFromPc("Owner phone");
     const phone = byName("Owner phone");
-    const tablet = pairFromPc("Tablet"); // attacker: another paired device that did not mint
+    const tablet = await pairFromPc("Tablet"); // attacker: another paired device that did not mint
     const { res: startRes, data: start } = await mint(phoneToken);
     assert.equal(startRes.statusCode, 200, startRes.body);
     assert.match(start.code, /^\d{6}$/);
@@ -166,7 +166,7 @@ describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for th
     assert.ok(start.qrSvg.includes("<svg"));
 
     const before = readFileSync(devicesFile, "utf8");
-    const { res, token } = redeem(start.code, "Work PC", "100.64.0.99");
+    const { res, token } = await redeem(start.code, "Work PC", "100.64.0.99");
     assert.equal(res.statusCode, 200, "a waiting page, not the 302 that grants entry");
     assert.match(res.body, /Waiting for approval/);
     assert.match(res.body, /Owner phone/, "names the phone that must approve");
@@ -212,9 +212,9 @@ describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for th
   });
 
   test("deny: the ticket is discarded, the token stays dead, the waiting page learns 'denied'", async () => {
-    const phoneToken = pairFromPc("Phone D");
+    const phoneToken = await pairFromPc("Phone D");
     const { data: start } = await mint(phoneToken);
-    const { token } = redeem(start.code, "Shoulder surfer");
+    const { token } = await redeem(start.code, "Shoulder surfer");
     const { data: p } = await pendingFor(phoneToken);
     const d = await decide(phoneToken, p.pending[0].pendingId, false);
     assert.equal(d.res.statusCode, 200);
@@ -226,9 +226,9 @@ describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for th
   });
 
   test("attacker: an expired pending entry can't be approved and its token is dead", async () => {
-    const phoneToken = pairFromPc("Phone E");
+    const phoneToken = await pairFromPc("Phone E");
     const { data: start } = await mint(phoneToken);
-    const { token } = redeem(start.code, "Slow device");
+    const { token } = await redeem(start.code, "Slow device");
     const { data: p } = await pendingFor(phoneToken);
     const id = p.pending[0].pendingId;
     auth.expirePendingForTest();
@@ -240,29 +240,29 @@ describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for th
   });
 
   test("revoking the minter kills its pending ticket and its unredeemed codes", async () => {
-    const phoneToken = pairFromPc("Phone R");
+    const phoneToken = await pairFromPc("Phone R");
     const phone = byName("Phone R");
     const { data: a } = await mint(phoneToken);
-    const { token } = redeem(a.code, "Pending child");
+    const { token } = await redeem(a.code, "Pending child");
     const { data: b } = await mint(phoneToken); // minted after the redeem: the cap (X1 L2) replaces only *live* codes
     assert.equal(auth.pendingCountForTest(), 1);
     assert.deepEqual(auth.revokeDevice(phone.id), [phone.id]);
     assert.equal(auth.pendingCountForTest(), 0, "the ticket died with the minter");
     assert.equal(authAs(token), null);
-    const late = redeem(b.code, "Late child");
+    const late = await redeem(b.code, "Late child");
     assert.equal(late.res.statusCode, 401, "a dead minter's code is invalid");
     assert.equal(late.token, null);
   });
 
-  test("a PC/CLI-minted code still pairs at once (302) with mintedByDeviceId null", () => {
-    const token = pairFromPc("Desk browser");
+  test("a PC/CLI-minted code still pairs at once (302) with mintedByDeviceId null", async () => {
+    const token = await pairFromPc("Desk browser");
     const d = readDevicesJson().find((x) => x.name === "Desk browser");
     assert.equal(d.mintedByDeviceId, null);
     assert.ok(authAs(token));
     assert.equal(statusOf(token), "approved");
   });
 
-  test("/pair/status is public on both listeners but cookie-scoped: no cookie says nothing", () => {
+  test("/pair/status is public on both listeners but cookie-scoped: no cookie says nothing", async () => {
     const res = fakeRes();
     auth.handlePairStatus(meshReq({ url: "/pair/status" }), res);
     assert.deepEqual(res.json(), { state: "gone" });
@@ -275,13 +275,13 @@ describe("E4b MUST 1 + 2: a paired phone mints; the redeemed device waits for th
 
 describe("E4b MUST 3: mintedByDeviceId cascade revoke", () => {
   test("revoking the root removes 3 levels in one locked write; an unrelated device survives", async () => {
-    const rootToken = pairFromPc("Root phone");
+    const rootToken = await pairFromPc("Root phone");
     const root = byName("Root phone");
     const childToken = await mintAndApprove(rootToken, "Child PC");
     const child = byName("Child PC");
     const grandToken = await mintAndApprove(childToken, "Grandchild tablet");
     const grand = byName("Grandchild tablet");
-    const other = pairFromPc("Independent");
+    const other = await pairFromPc("Independent");
     assert.equal(child.mintedByDeviceId, root.id);
     assert.equal(grand.mintedByDeviceId, child.id);
     assert.deepEqual(auth.cascadeIds(auth.listDevices(), root.id).sort(), [root.id, child.id, grand.id].sort());
@@ -299,7 +299,7 @@ describe("E4b MUST 3: mintedByDeviceId cascade revoke", () => {
     assert.match(fn, /cascadeIds\(list, id\)/);
   });
 
-  test("cascadeIds is pure and cycle-safe; revoking a leaf touches only the leaf", () => {
+  test("cascadeIds is pure and cycle-safe; revoking a leaf touches only the leaf", async () => {
     const list = [
       { id: "a", mintedByDeviceId: "c" },
       { id: "b", mintedByDeviceId: "a" },
@@ -312,11 +312,11 @@ describe("E4b MUST 3: mintedByDeviceId cascade revoke", () => {
   });
 
   test("UI revoke (POST /__vibesquad/devices/revoke) reports the cascade; `vs devices revoke` prints it", async () => {
-    const rootToken = pairFromPc("Root 2");
+    const rootToken = await pairFromPc("Root 2");
     const root = byName("Root 2");
     const childToken = await mintAndApprove(rootToken, "Child 2");
     const grandToken = await mintAndApprove(childToken, "Grandchild 2");
-    const viewer = pairFromPc("Viewer");
+    const viewer = await pairFromPc("Viewer");
     const res = fakeRes();
     await auth.handleRevoke(meshReq({ url: "/__vibesquad/devices/revoke", method: "POST", token: viewer, body: { id: byName("Child 2").id } }), res, bodyOf);
     assert.equal(res.statusCode, 200, res.body);
@@ -354,7 +354,7 @@ describe("E4b MUST 4 (Hub5) + X1 M3: pair/start and the device list need the loc
   });
 
   test("attacker: the device list without the token is refused by the handler and the router", async () => {
-    pairFromPc("Listed");
+    await pairFromPc("Listed");
     const res = fakeRes();
     auth.handleDevices(localReq({ url: "/__vibesquad/devices" }), res);
     assert.equal(res.statusCode, 403, res.body);
@@ -430,7 +430,7 @@ describe("E4b MUST 5 (X1 L3): `vs pair` makes the listener prove the local token
     }
   });
 
-  test("the proof route is loopback-only, rejects bad nonces, and is a keyed HMAC over nonce + port", () => {
+  test("the proof route is loopback-only, rejects bad nonces, and is a keyed HMAC over nonce + port", async () => {
     let res = fakeRes();
     auth.handleLocalProof(meshReq({ url: "/__vibesquad/local-proof?c=" + "a".repeat(32) }), res);
     assert.equal(res.statusCode, 403);
@@ -455,7 +455,7 @@ describe("E4b MUST 5 (X1 L3): `vs pair` makes the listener prove the local token
 });
 
 describe("E4b MUST 6: the E5 host keypair is a home secret", () => {
-  test("HOME_SECRET_FILES lists host-keypair.json (POSIX 0600 at startup)", () => {
+  test("HOME_SECRET_FILES lists host-keypair.json (POSIX 0600 at startup)", async () => {
     assert.ok(auth.HOME_SECRET_FILES.includes("host-keypair.json"));
     const chmods = [];
     auth.lockDownVibesquadHome({ home: "/h/.vibesquad", platform: "linux", lock: () => {}, mkdir: () => {}, exists: () => true, chmod: (f, m) => chmods.push([f.replace(/\\/g, "/"), m]) });
@@ -466,12 +466,12 @@ describe("E4b MUST 6: the E5 host keypair is a home secret", () => {
 describe("E4b MUST 7: X1 E4a R2 Lows", () => {
   const lock = `${devicesFile}.lock`;
 
-  test("L1: a request-path write gives up on a held lock in ~200 ms (the CLI keeps 5 s)", () => {
+  test("L1: a request-path write gives up on a held lock in ~200 ms (the CLI keeps 5 s)", async () => {
     const code = auth.createPairCode();
     writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
     const t0 = Date.now();
     try {
-      const { res } = redeem(code, "Blocked");
+      const { res } = await redeem(code, "Blocked");
       assert.equal(res.statusCode, 503, res.body);
     } finally {
       rmSync(lock, { force: true });
@@ -480,13 +480,13 @@ describe("E4b MUST 7: X1 E4a R2 Lows", () => {
     assert.ok(took < 1500, `pair redeem waited ${took} ms; request paths must use the 200 ms budget`);
     const a = src("server/auth.mjs");
     assert.match(a, /const REQUEST_LOCK_MS = 200;/);
-    assert.match(a.slice(a.indexOf("function persistLastSeen("), a.indexOf("export function resetDevicesForTest(")), /timeoutMs: REQUEST_LOCK_MS/);
+    assert.match(a.slice(a.indexOf("function persistLastSeen("), a.indexOf("export function resetDevicesForTest(")), /timeoutMs: 0 }/, "idea-227: last-seen runs inside the sync authenticate(), so it tries the lock once and never waits");
     const vs = src("cli/vs.mjs");
     assert.match(vs, /auth\.revokeDevice\(matches\[0\]\.id\)/, "the CLI passes no timeout: file-lock's 5 s default");
   });
 
-  test("L2: an unreadable devices.json destroys every tracked live socket (fail closed covers open streams)", () => {
-    const token = pairFromPc("Streamer");
+  test("L2: an unreadable devices.json destroys every tracked live socket (fail closed covers open streams)", async () => {
+    const token = await pairFromPc("Streamer");
     const dev = byName("Streamer");
     const destroyed = [];
     auth.trackSocket(dev.id, { destroy: () => destroyed.push(dev.id), once() {} });
@@ -506,8 +506,8 @@ describe("E4b MUST 7: X1 E4a R2 Lows", () => {
   });
 
   test("L3: a lock timeout on UI revoke is a generic retryable 503 with no path or pid", async () => {
-    const victim = pairFromPc("Victim");
-    const me = pairFromPc("Revoker");
+    const victim = await pairFromPc("Victim");
+    const me = await pairFromPc("Revoker");
     writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
     const res = fakeRes();
     try {
@@ -524,18 +524,21 @@ describe("E4b MUST 7: X1 E4a R2 Lows", () => {
     assert.equal(bad.statusCode, 400, "a bad body is still the caller's fault");
   });
 
-  test("L4: writeDevicesFile asserts lock ownership right before the rename (shared file-lock primitive)", () => {
+  test("L4: writeDevicesFile asserts lock ownership right before the rename (shared file-lock primitive)", async () => {
     const a = src("server/auth.mjs");
     const fn = a.slice(a.indexOf("function writeDevicesFile("), a.indexOf("function mutateDevices("));
     assert.ok(fn.indexOf("lock?.assertOwned()") > 0 && fn.indexOf("lock?.assertOwned()") < fn.indexOf("renameSync(tmp, devicesFile())"));
-    assert.match(a, /withFileLockSync\(devicesFile\(\), \(lock\) =>/);
+    assert.match(a, /withFileLockSync\(devicesFile\(\), \(lock\) => devicesMutation\(mutate, lock\)/);
+    assert.match(a, /withFileLock\(devicesFile\(\), \(lock\) => devicesMutation\(mutate, lock\)/, "the async request-path writer shares the same body");
+    const body = a.slice(a.indexOf("function devicesMutation("), a.indexOf("function devicesMutation(") + 400);
+    assert.match(body, /writeDevicesFile\(list, lock\)/, "the shared body hands the lock to writeDevicesFile");
     const fl = src("server/file-lock.mjs");
     assert.ok(fl.indexOf("lock.assertOwned()") < fl.indexOf("writeFileAtomic(targetPath"), "updateJsonFileSync (teams-file, inbox) checks too");
   });
 });
 
 describe("E4b MUST 8: the phone ⋯ sheet (PhonePairSheet) lists, warns on cascade, approves", () => {
-  test("descendantsOf / cascadeWarning over mintedByDeviceId (3 levels, cycle-safe)", () => {
+  test("descendantsOf / cascadeWarning over mintedByDeviceId (3 levels, cycle-safe)", async () => {
     const devices = [
       { id: "root", name: "Phone", mintedByDeviceId: null },
       { id: "c1", name: "Work PC", mintedByDeviceId: "root" },
@@ -559,7 +562,7 @@ describe("E4b MUST 8: the phone ⋯ sheet (PhonePairSheet) lists, warns on casca
     assert.equal(logic.mintedByLabel(devices, { id: "z", name: "Z", mintedByDeviceId: "gone" }), "a revoked device");
   });
 
-  test("App mounts the sheet through PhoneCockpit's pairSlot; the sheet hits the E4b routes and shows a cascade confirm", () => {
+  test("App mounts the sheet through PhoneCockpit's pairSlot; the sheet hits the E4b routes and shows a cascade confirm", async () => {
     const app = src("src/App.tsx");
     const gate = app.indexOf("if (phoneShell)");
     assert.ok(app.indexOf("pairSlot={<PhonePairSheet />}") > gate);
@@ -583,16 +586,16 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
   const lock = `${devicesFile}.lock`;
 
   test("X1-L2: one live code per minter; a new mint replaces the previous one (phone and PC alike)", async () => {
-    const phoneToken = pairFromPc("Capped phone");
+    const phoneToken = await pairFromPc("Capped phone");
     const phone = byName("Capped phone");
     const { data: first } = await mint(phoneToken);
     const { data: second } = await mint(phoneToken);
     assert.notEqual(first.code, second.code);
     assert.equal(auth.liveCodeCountForTest(phone.id), 1, "only the newest code is live");
-    const dead = redeem(first.code, "Old QR");
+    const dead = await redeem(first.code, "Old QR");
     assert.equal(dead.res.statusCode, 401, "the replaced code is invalid");
     assert.equal(dead.token, null);
-    const live = redeem(second.code, "New QR");
+    const live = await redeem(second.code, "New QR");
     assert.equal(live.res.statusCode, 200, "the newest code still lands in pending");
     assert.equal(auth.pendingCountForTest(), 1);
     const { data: p } = await pendingFor(phoneToken);
@@ -601,21 +604,21 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
     const a = auth.createPairCode();
     const b = auth.createPairCode();
     assert.equal(auth.liveCodeCountForTest(null), 1);
-    assert.equal(redeem(a, "Stale PC code").res.statusCode, 401);
-    assert.equal(redeem(b, "Fresh PC code").res.statusCode, 302);
+    assert.equal((await redeem(a, "Stale PC code")).res.statusCode, 401);
+    assert.equal((await redeem(b, "Fresh PC code")).res.statusCode, 302);
     // a phone's mint never touches the PC's live code and vice versa
     const pc = auth.createPairCode();
     await mint(phoneToken);
     assert.equal(auth.liveCodeCountForTest(null), 1);
     assert.equal(auth.liveCodeCountForTest(phone.id), 1);
-    assert.equal(redeem(pc, "PC code survives").res.statusCode, 302);
+    assert.equal((await redeem(pc, "PC code survives")).res.statusCode, 302);
   });
 
   test("X1-L3: approve and deny write a vs log audit entry (needs-you on approve) with names, IP and ids, never a token or code", async () => {
-    const phoneToken = pairFromPc("Auditor phone");
+    const phoneToken = await pairFromPc("Auditor phone");
     const phone = byName("Auditor phone");
     const { data: start } = await mint(phoneToken);
-    const { token } = redeem(start.code, "Audited PC", "100.64.0.77");
+    const { token } = await redeem(start.code, "Audited PC", "100.64.0.77");
     const { data: p } = await pendingFor(phoneToken);
     const ok = await decide(phoneToken, p.pending[0].pendingId, true);
     assert.equal(ok.res.statusCode, 200, ok.res.body);
@@ -634,7 +637,7 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
     assert.ok(!raw.includes(token) && !raw.includes(start.code) && !raw.includes(hash), "no token, hash or code in the log");
     // deny is audited as a metric
     const { data: s2 } = await mint(phoneToken);
-    redeem(s2.code, "Denied PC", "100.64.0.78");
+    await redeem(s2.code, "Denied PC", "100.64.0.78");
     const { data: p2 } = await pendingFor(phoneToken);
     await decide(phoneToken, p2.pending[0].pendingId, false);
     const after = readFileSync(laneLog, "utf8");
@@ -645,12 +648,12 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
   });
 
   test("X1-L1: an already-paired device opening a device-minted link keeps its cookie; the code stays live", async () => {
-    const ownerToken = pairFromPc("Owner phone L1");
+    const ownerToken = await pairFromPc("Owner phone L1");
     const owner = byName("Owner phone L1");
-    const p1 = pairFromPc("Paired not owner");
+    const p1 = await pairFromPc("Paired not owner");
     const { data: start } = await mint(p1); // attacker: P1 sends the owner this link
     const res = fakeRes();
-    auth.handlePairRedeem(meshReq({ url: `/pair?code=${start.code}`, token: ownerToken, ip: "100.64.0.80" }), res);
+    await auth.handlePairRedeem(meshReq({ url: `/pair?code=${start.code}`, token: ownerToken, ip: "100.64.0.80" }), res);
     assert.equal(res.statusCode, 200);
     assert.match(res.body, /Already paired/);
     assert.match(res.body, /\/__vibesquad\/enter/);
@@ -658,16 +661,16 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
     assert.equal(authAs(ownerToken)?.id, owner.id, "still the owner's own device");
     assert.equal(auth.pendingCountForTest(), 0, "no ticket was created for the owner");
     assert.equal(auth.liveCodeCountForTest(byName("Paired not owner").id), 1, "the code was not spent");
-    const fresh = redeem(start.code, "Intended device", "100.64.0.81");
+    const fresh = await redeem(start.code, "Intended device", "100.64.0.81");
     assert.equal(fresh.res.statusCode, 200, "the device it was meant for still lands in pending");
     const { data: p } = await pendingFor(p1);
     await decide(p1, p.pending[0].pendingId, false);
     // a stale cookie (revoked device) does not count as paired: the link redeems normally
-    const stale = pairFromPc("Stale cookie");
+    const stale = await pairFromPc("Stale cookie");
     auth.revokeDevice(byName("Stale cookie").id);
     const { data: s2 } = await mint(p1);
     const r2 = fakeRes();
-    auth.handlePairRedeem(meshReq({ url: `/pair?code=${s2.code}`, token: stale, ip: "100.64.0.82" }), r2);
+    await auth.handlePairRedeem(meshReq({ url: `/pair?code=${s2.code}`, token: stale, ip: "100.64.0.82" }), r2);
     assert.equal(r2.statusCode, 200);
     assert.match(r2.body, /Waiting for approval/);
     const { data: p3 } = await pendingFor(p1);
@@ -675,13 +678,13 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
   });
 
   test("X1-L5: the PC owner (local token) mints no-approval codes even with a vs_device cookie; a remote paired browser gets the approve UI", async () => {
-    const browser = pairFromPc("PC browser");
+    const browser = await pairFromPc("PC browser");
     let res = fakeRes();
     await auth.handlePairStart(localReq({ url: "/__vibesquad/pair/start", method: "POST", withToken: true, headers: { cookie: `vs_device=${browser}` } }), res);
     assert.equal(res.statusCode, 200, res.body);
     assert.equal(res.json().requiresApproval, false, "local owner wins over the cookie");
     assert.equal(res.json().mintedByDeviceId, null);
-    assert.equal(redeem(res.json().code, "Immediate").res.statusCode, 302);
+    assert.equal((await redeem(res.json().code, "Immediate")).res.statusCode, 302);
     res = fakeRes(); // the same cookie from a remote listener (a work PC browser paired over https) still needs approval
     await auth.handlePairStart(meshReq({ url: "/__vibesquad/pair/start", method: "POST", token: browser }), res);
     assert.equal(res.json().requiresApproval, true);
@@ -693,9 +696,9 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
   });
 
   test("Gemini-L1: a 503 lock timeout on approve keeps the ticket, so the retry succeeds", async () => {
-    const phoneToken = pairFromPc("Retry phone");
+    const phoneToken = await pairFromPc("Retry phone");
     const { data: start } = await mint(phoneToken);
-    const { token } = redeem(start.code, "Retry PC");
+    const { token } = await redeem(start.code, "Retry PC");
     const { data: p } = await pendingFor(phoneToken);
     const id = p.pending[0].pendingId;
     writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
@@ -716,11 +719,38 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
     assert.equal(auth.pendingCountForTest(), 0);
   });
 
+  test("idea-227: approve waits on the lock without blocking; a second decision in that gap is a 404, the device lands once", async () => {
+    const phoneToken = await pairFromPc("Double-tap phone");
+    const { data: start } = await mint(phoneToken);
+    const { token } = await redeem(start.code, "Double-tap PC");
+    const { data: p } = await pendingFor(phoneToken);
+    const id = p.pending[0].pendingId;
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, startedAt: Date.now() }));
+    let first;
+    try {
+      first = decide(phoneToken, id, true); // waits on the held lock (200 ms budget)
+      let ticked = false;
+      await new Promise((ok) => setTimeout(() => ((ticked = true), ok()), 20));
+      assert.ok(ticked, "the event loop ran while the approve waited");
+      const second = await decide(phoneToken, id, true);
+      assert.equal(second.res.statusCode, 404, "the in-flight ticket is claimed");
+      const deny = await decide(phoneToken, id, false);
+      assert.equal(deny.res.statusCode, 404, "a deny can't race the in-flight approve either");
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    const r = await first;
+    assert.equal(r.res.statusCode, 200, r.res.body);
+    assert.ok(authAs(token));
+    assert.equal(readDevicesJson().filter((d) => d.name === "Double-tap PC").length, 1, "written exactly once");
+    assert.equal(auth.pendingCountForTest(), 0);
+  });
+
   test("Gemini-L2: an out-of-process `vs devices revoke` of the minter discards its pending ticket on reload", async () => {
-    const phoneToken = pairFromPc("CLI-revoked phone");
+    const phoneToken = await pairFromPc("CLI-revoked phone");
     const phone = byName("CLI-revoked phone");
     const { data: start } = await mint(phoneToken);
-    const { token } = redeem(start.code, "Orphan ticket");
+    const { token } = await redeem(start.code, "Orphan ticket");
     assert.equal(auth.pendingCountForTest(), 1);
     ageDevicesFile();
     const r = spawnSync(process.execPath, [VS, "devices", "revoke", phone.id], { encoding: "utf8", env: { ...process.env, PASEO_AGENT_ID: "", VS_AGENT_ID: "", VS_AGENT_TOKEN: "" }, windowsHide: true, timeout: 60_000 });
@@ -735,11 +765,11 @@ describe("E4b review fix round (Review-Gemini R1 L1/L2, X1 walk L1/L2/L3/L5)", (
 
 describe("E4b X1 R2 L1: pending, approve and revoke self-gate against agent-header callers (defence in depth, like pair/start and devices)", () => {
   test("a valid paired cookie plus x-vs-agent-id is refused by each handler itself, and nothing changes", async () => {
-    const phoneToken = pairFromPc("Agent-proof phone");
-    const victim = pairFromPc("Agent-proof victim");
+    const phoneToken = await pairFromPc("Agent-proof phone");
+    const victim = await pairFromPc("Agent-proof victim");
     const victimId = byName("Agent-proof victim").id;
     const { data: start } = await mint(phoneToken);
-    const { token } = redeem(start.code, "Agent-proof pending");
+    const { token } = await redeem(start.code, "Agent-proof pending");
     const { data: p } = await pendingFor(phoneToken);
     const id = p.pending[0].pendingId;
     const agent = { "x-vs-agent-id": "rn-deadbeefdeadbeef", "x-vs-agent-token": "nope" };

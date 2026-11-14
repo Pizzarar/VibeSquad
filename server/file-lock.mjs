@@ -151,7 +151,9 @@ const lockOptions = ({ timeoutMs = FILE_LOCK_TIMEOUT_MS, staleMs = FILE_LOCK_STA
  * it re-reads the lock file and throws when it no longer holds this acquisition's { pid, token }.
  */
 export function withFileLockSync(targetPath, fn, opts) {
-  const attempt = lockAttempt(targetPath, { ...lockOptions(opts), nonBlockingCreate: false });
+  const o = lockOptions(opts);
+  // timeoutMs: 0 is one try that never sleeps: also skip tryCreateLock's sync delete-pending retry.
+  const attempt = lockAttempt(targetPath, { ...o, nonBlockingCreate: o.timeoutMs === 0 });
   for (let spins = 0; ; ) {
     const r = attempt.poll();
     if (r === "owned") break;

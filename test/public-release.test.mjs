@@ -49,7 +49,7 @@ function fakeReq({ url = "/", method = "GET", headers = {}, local = false, remot
 }
 
 describe("repo hygiene", () => {
-  test("no personal identifiers in tracked or untracked-unignored files", () => {
+  test("no personal identifiers in tracked or untracked-unignored files", async () => {
     const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
       .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|lanes\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
@@ -72,7 +72,7 @@ describe("repo hygiene", () => {
     assert.deepEqual(hits, []);
   });
 
-  test("zero hardcoded personal paths in tracked src/, server/, and cli/", () => {
+  test("zero hardcoded personal paths in tracked src/, server/, and cli/", async () => {
     const files = execFileSync("git", ["ls-files", "src/", "server/", "cli/"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
       .filter(Boolean);
@@ -95,12 +95,12 @@ describe("repo hygiene", () => {
 
 describe("third-party licenses", () => {
   const text = readFileSync(join(rootDir, "public", "THIRD-PARTY-LICENSES.txt"), "utf8").replace(/\r\n/g, "\n");
-  test("credits Paseo under Apache-2.0 without listing a Paseo package", () => {
+  test("credits Paseo under Apache-2.0 without listing a Paseo package", async () => {
     assert.match(text, /Paseo[^\n]*Apache-2\.0/);
     assert.ok(text.includes("Copyright (c) 2025-present Mohamed Boudra"));
     assert.doesNotMatch(text, /@getpaseo\/(client|protocol)@/);
   });
-  test("embeds the full Apache License 2.0 text", () => {
+  test("embeds the full Apache License 2.0 text", async () => {
     assert.ok(text.includes("Apache License\n                           Version 2.0, January 2004"));
     assert.ok(text.includes("END OF TERMS AND CONDITIONS"));
     assert.ok(text.includes("MIT License"));
@@ -113,11 +113,11 @@ describe("pairing in an isolated home", () => {
     assert.match(svg, /<svg/);
   });
 
-  test("code is created, redeemed once, and yields a SameSite=Strict cookie that authenticates", () => {
+  test("code is created, redeemed once, and yields a SameSite=Strict cookie that authenticates", async () => {
     auth.resetPairRateLimitForTest();
     const code = auth.createPairCode();
     const res = fakeRes();
-    auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}` }), res);
+    await auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}` }), res);
     assert.equal(res.statusCode, 302);
     const cookie = res.headers["set-cookie"];
     assert.match(cookie, /SameSite=Strict/);
@@ -125,28 +125,28 @@ describe("pairing in an isolated home", () => {
     assert.ok(auth.authenticate(fakeReq({ headers: { cookie: token } })));
     assert.equal(auth.authenticate(fakeReq({ headers: { cookie: "vs_device=wrong" } })), null);
     const again = fakeRes();
-    auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}` }), again);
+    await auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}` }), again);
     assert.equal(again.statusCode, 401);
   });
 
-  test("/pair is rate limited to 5 attempts per minute per IP", () => {
+  test("/pair is rate limited to 5 attempts per minute per IP", async () => {
     auth.resetPairRateLimitForTest();
     const codes = [];
     for (let i = 0; i < 6; i++) {
       const res = fakeRes();
-      auth.handlePairRedeem(fakeReq({ url: "/pair?code=000000", remote: "198.51.100.7" }), res);
+      await auth.handlePairRedeem(fakeReq({ url: "/pair?code=000000", remote: "198.51.100.7" }), res);
       codes.push(res.statusCode);
     }
     assert.deepEqual(codes.slice(0, 5), [401, 401, 401, 401, 401]);
     assert.equal(codes[5], 429);
   });
 
-  test("failed attempts from other IPs don't wipe active codes", () => {
+  test("failed attempts from other IPs don't wipe active codes", async () => {
     auth.resetPairRateLimitForTest();
     const code = auth.createPairCode();
-    for (let i = 0; i < 5; i++) auth.handlePairRedeem(fakeReq({ url: "/pair?code=999999", remote: `198.51.100.${i + 10}` }), fakeRes());
+    for (let i = 0; i < 5; i++) await auth.handlePairRedeem(fakeReq({ url: "/pair?code=999999", remote: `198.51.100.${i + 10}` }), fakeRes());
     const res = fakeRes();
-    auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}`, remote: "198.51.100.99" }), res);
+    await auth.handlePairRedeem(fakeReq({ url: `/pair?code=${code}`, remote: "198.51.100.99" }), res);
     assert.equal(res.statusCode, 302);
   });
 });
@@ -154,7 +154,7 @@ describe("pairing in an isolated home", () => {
 describe("request guard", () => {
   const mw = api.createVibesquadMiddleware(rootDir);
 
-  test("non-loopback callers without a token get 401 on API routes", () => {
+  test("non-loopback callers without a token get 401 on API routes", async () => {
     for (const url of ["/__vibesquad/inbox", "/__vibesquad/log?team=x", "/__vibesquad/handoff", "/api/teams", "/__vibesquad/vs-log?team=x"]) {
       const res = fakeRes();
       mw(fakeReq({ url, method: url.endsWith("handoff") ? "POST" : "GET" }), res, () => assert.fail("fell through"));
@@ -162,7 +162,7 @@ describe("request guard", () => {
     }
   });
 
-  test("unauthenticated health is minimal", () => {
+  test("unauthenticated health is minimal", async () => {
     const res = fakeRes();
     mw(fakeReq({ url: "/__vibesquad/health" }), res, () => {});
     const body = JSON.parse(res.body);
@@ -251,7 +251,7 @@ describe("request guard", () => {
     });
   });
 
-  test("sanitizeBody-equivalent: internal keys never reach the handoff helpers", () => {
+  test("sanitizeBody-equivalent: internal keys never reach the handoff helpers", async () => {
     assert.ok(api.sanitizeBody);
     const clean = api.sanitizeBody({ baseHome: "x", oldLead: {}, oldAgent: {}, agentClient: {}, execSpawn: 1, teamsFilePath: "y", profilesPath: "z", team: "t" });
     assert.deepEqual(clean, { team: "t" });
@@ -259,7 +259,7 @@ describe("request guard", () => {
 });
 
 describe("local origin helper", () => {
-  test("tauri origins count as loopback", () => {
+  test("tauri origins count as loopback", async () => {
     for (const o of ["tauri://localhost", "http://tauri.localhost", "https://tauri.localhost", "http://[::1]:4180"]) assert.ok(auth.isLoopbackOrigin(o), o);
     assert.equal(auth.isLoopbackOrigin("http://evil.example"), false);
     assert.equal(auth.isLoopbackOrigin("http://127.0.0.1.evil.example"), false);
@@ -268,7 +268,7 @@ describe("local origin helper", () => {
 
 describe("push subscription SSRF", () => {
   const keys = { p256dh: "BPubKey", auth: "authSecret" };
-  test("rejects non-https and private endpoints", () => {
+  test("rejects non-https and private endpoints", async () => {
     for (const endpoint of [
       "http://push.example.com/abc",
       "https://127.0.0.1/abc",
@@ -283,7 +283,7 @@ describe("push subscription SSRF", () => {
       assert.throws(() => savePushSubscription({ endpoint, keys }), /public https|valid URL/, endpoint);
     }
   });
-  test("accepts a public https endpoint", () => {
+  test("accepts a public https endpoint", async () => {
     const r = savePushSubscription({ endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys });
     assert.equal(r.ok, true);
   });
@@ -341,7 +341,7 @@ describe("needs-you rename", () => {
   const legacyUser = "au" + "b";
   const legacyNeeds = "needs-" + legacyUser;
 
-  test("git grep -iw for the legacy owner name has 0 hits", () => {
+  test("git grep -iw for the legacy owner name has 0 hits", async () => {
     let out = "";
     try {
       // The owner's name is legitimately used as the author persona across the public guide and

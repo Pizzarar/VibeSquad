@@ -42,7 +42,7 @@ function call(port, path, headers = {}) {
 }
 
 describe("S2 fix 4: HTML responses can't be framed", () => {
-  test("setNoFraming sets XFO and merges frame-ancestors into an existing CSP", () => {
+  test("setNoFraming sets XFO and merges frame-ancestors into an existing CSP", async () => {
     const a = fakeRes();
     auth.setNoFraming(a);
     assert.equal(a.headers["x-frame-options"], "DENY");
@@ -69,51 +69,51 @@ describe("S2 fix 4: HTML responses can't be framed", () => {
     }
     auth.resetPairRateLimitForTest();
     const res = fakeRes();
-    auth.handlePairRedeem(fakeReq("/pair?code=111111", "203.0.113.50"), res);
+    await auth.handlePairRedeem(fakeReq("/pair?code=111111", "203.0.113.50"), res);
     assert.equal(res.statusCode, 401);
     assert.equal(res.headers["x-frame-options"], "DENY");
   });
 });
 
 describe("S2 fix 5: pairing failures are per IP and the code stays out of plain-HTTP redirects", () => {
-  test("one IP's failures lock out that IP only; another IP's code still works", () => {
+  test("one IP's failures lock out that IP only; another IP's code still works", async () => {
     auth.resetPairRateLimitForTest();
     const code = auth.createPairCode();
     const statuses = [];
     for (let i = 0; i < 6; i++) {
       const res = fakeRes();
-      auth.handlePairRedeem(fakeReq("/pair?code=999999", "198.51.100.7"), res);
+      await auth.handlePairRedeem(fakeReq("/pair?code=999999", "198.51.100.7"), res);
       statuses.push(res.statusCode);
     }
     assert.deepEqual(statuses, [401, 401, 401, 401, 401, 429]);
     const ok = fakeRes();
-    auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.8"), ok);
+    await auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.8"), ok);
     assert.equal(ok.statusCode, 302, "another IP's live code survives");
   });
 
-  test("a locked-out IP can't redeem even a valid code until the backoff ends", () => {
+  test("a locked-out IP can't redeem even a valid code until the backoff ends", async () => {
     auth.resetPairRateLimitForTest();
-    for (let i = 0; i < 5; i++) auth.handlePairRedeem(fakeReq("/pair?code=999999", "198.51.100.9"), fakeRes());
+    for (let i = 0; i < 5; i++) await auth.handlePairRedeem(fakeReq("/pair?code=999999", "198.51.100.9"), fakeRes());
     const code = auth.createPairCode();
     const res = fakeRes();
-    auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "::ffff:198.51.100.9"), res);
+    await auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "::ffff:198.51.100.9"), res);
     assert.equal(res.statusCode, 429);
     assert.ok(Number(res.headers["retry-after"]) >= 60);
     const other = fakeRes();
-    auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.10"), other);
+    await auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.10"), other);
     assert.equal(other.statusCode, 302, "the locked IP's attempt didn't consume the code");
   });
 
-  test("a codeless /pair is a 400 and doesn't count as a failure", () => {
+  test("a codeless /pair is a 400 and doesn't count as a failure", async () => {
     auth.resetPairRateLimitForTest();
     for (let i = 0; i < 4; i++) {
       const res = fakeRes();
-      auth.handlePairRedeem(fakeReq("/pair", "198.51.100.11"), res);
+      await auth.handlePairRedeem(fakeReq("/pair", "198.51.100.11"), res);
       assert.equal(res.statusCode, 400);
     }
     const code = auth.createPairCode();
     const res = fakeRes();
-    auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.11"), res);
+    await auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.11"), res);
     assert.equal(res.statusCode, 302);
   });
 
@@ -130,19 +130,19 @@ describe("S2 fix 5: pairing failures are per IP and the code stays out of plain-
       await new Promise((ok) => mux.close(ok));
     }
     const res = fakeRes();
-    auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.12"), res);
+    await auth.handlePairRedeem(fakeReq(`/pair?code=${code}`, "198.51.100.12"), res);
     assert.equal(res.statusCode, 401, "a code seen over cleartext can't be redeemed");
   });
 });
 
 describe("S2 fix 6: ~/.vibesquad is locked down at startup regardless of LAN", () => {
-  test("Windows: icacls lockdown on the home dir", () => {
+  test("Windows: icacls lockdown on the home dir", async () => {
     const locked = [];
     auth.lockDownVibesquadHome({ home: "C:\\vs-home", platform: "win32", lock: (d) => locked.push(d), mkdir: () => {}, chmod: () => assert.fail("no chmod on Windows") });
     assert.deepEqual(locked, ["C:\\vs-home"]);
   });
 
-  test("POSIX: 0700 home and 0600 secret files that exist", () => {
+  test("POSIX: 0700 home and 0600 secret files that exist", async () => {
     const chmods = [];
     auth.lockDownVibesquadHome({
       home: "/h/.vibesquad",
