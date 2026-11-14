@@ -1213,6 +1213,8 @@ export function DrawerHeader({
               Mark unread
             </button>
           )}
+          {compact && modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
+          {compact && reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
     </>
   );
   const extraActions = (
@@ -1553,8 +1555,6 @@ export function DrawerHeader({
       </div>
       <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
         {metaRest}
-        {modelError && <span className="small drawer-reload-error" role="alert" style={{ color: "var(--bad, #e5484d)" }}>{modelError}</span>}
-        {reloadError && <span className="small muted drawer-reload-error">{reloadError}</span>}
       </div>
       {agent.labels?.["vs.fresh-session"] === "brief" && (
         <div className="brainstorm-fresh-divider" role="separator">
