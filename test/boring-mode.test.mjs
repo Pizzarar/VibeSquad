@@ -134,7 +134,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -567,4 +567,17 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.match(css, /--boring-wash: radial-gradient/);
   assert.match(css, /\.boring-main \{ background: var\(--boring-wash\)/);
   assert.match(ade, /className="boring-surreal-motif"/);
+});
+
+test("B6 review fixes: node state classes + distinct CSS, no double star", () => {
+  assert.equal(boringNodeStateClass("running", 0), "pulse");
+  assert.equal(boringNodeStateClass("idle", 2), "filled");
+  assert.equal(boringNodeStateClass("idle", 0), "hollow");
+  assert.equal(boringNodeStateClass("none", 0), "faint");
+  assert.equal(boringNodeStateClass(null), "faint");
+  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  assert.match(css, /\.boring-map-node\.filled \{/);
+  assert.match(css, /\.boring-map-node\.faint \{[^}]*dashed/);
+  assert.match(css, /\.boring-map-node\.hollow \{/);
+  assert.doesNotMatch(ade, /★ \{core\.overlord\.label\}/);
 });

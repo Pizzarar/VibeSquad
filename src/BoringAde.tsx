@@ -286,7 +286,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     <div className="boring-lane-map" data-testid="boring-lane-map">
       {surrealMotif}
       <div className="boring-map-hubs">
-        <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.overlord.status, core.overlord.needsYou)}`} data-testid="boring-map-core-overlord" onClick={() => (core.overlord.agentId ? pickCore("_overlord", core.overlord.agentId) : view && onSpinUpOverlord(view))}>★ {core.overlord.label}</button>
+        <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.overlord.status, core.overlord.needsYou)}`} data-testid="boring-map-core-overlord" onClick={() => (core.overlord.agentId ? pickCore("_overlord", core.overlord.agentId) : view && onSpinUpOverlord(view))}>{core.overlord.label}</button>
         <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.riffbot.status, core.riffbot.needsYou)}`} data-testid="boring-map-core-riffbot" onClick={() => (core.riffbot.agentId ? pickCore("_riffbot", core.riffbot.agentId) : hubPin && onSpinUpPin(hubPin))}>{core.riffbot.label}</button>
         <button type="button" className={`boring-map-node boring-map-core ${boringNodeStateClass(core.bugs.leadRunning ? "running" : "none", core.bugs.needsYou)}`} data-testid="boring-map-core-bugs" onClick={pickBugs}>{core.bugs.label}</button>
       </div>

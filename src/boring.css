@@ -676,6 +676,9 @@ html[data-vibe="boring"] .boring-map-node { display: inline-flex; align-items: c
 html[data-vibe="boring"] .boring-map-lane { align-self: center; border-color: var(--cyan); }
 html[data-vibe="boring"] .boring-map-agent { border-color: var(--purple, var(--tb-2)); }
 html[data-vibe="boring"] .boring-map-core { border-color: var(--coral); }
+html[data-vibe="boring"] .boring-map-node.filled { background: color-mix(in srgb, var(--amber) 16%, var(--panel-hi)); border-color: color-mix(in srgb, var(--amber) 65%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 22%, transparent) !important; }
+html[data-vibe="boring"] .boring-map-node.hollow { background: transparent; }
+html[data-vibe="boring"] .boring-map-node.faint { opacity: 0.52; border-style: dashed; }
 html[data-vibe="boring"] .boring-map-node.pulse { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cyan) 28%, transparent) !important; }
 html[data-vibe="boring"] .boring-map-worker { font-size: 0.9em; padding: 6px 12px; }
 
