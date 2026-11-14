@@ -213,6 +213,7 @@ html[data-vibe="boring"] .boring-card-head { display: flex; align-items: center;
 html[data-vibe="boring"] .boring-card-line { color: var(--text-dim); font-size: 12px; }
 html[data-vibe="boring"] .boring-empty-card { margin: auto; max-width: 440px; padding: 24px; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px; }
 html[data-vibe="boring"] .boring-empty-card .boring-primary-cta { min-height: 48px; padding: 12px 24px; }
+html[data-vibe="boring"] .boring-empty-card .boring-empty-error { margin: 0; color: var(--danger, #e5484d); font-size: 13px; }
 
 /* Usage & Workflows: flat corporate cards, no CRT bevel, scanlines or glow. */
 html[data-vibe="boring"] .usage-limits,
