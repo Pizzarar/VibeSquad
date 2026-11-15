@@ -467,10 +467,14 @@ export function listInboxCards(filter = {}, rootDir = REPO_ROOT) {
  * fallback lanes (lane-pure.mjs: the server resolves those without a registry entry) stay valid as typed; with no
  * registry loaded there is nothing to check against.
  */
-function assertKnownLane(laneId, teams) {
+function assertKnownLane(laneId, teams, scopeTeamId = "") {
   const raw = String(laneId ?? "").trim().replace(/^@+/, "");
   if (!raw) return "";
-  const hit = findLaneInRegistry(raw, teams);
+  const hit = findLaneInRegistry(raw, teams, scopeTeamId);
+  // idea-176: a scoped (agent) add resolves the lane in its own Squad first; a lane only another Squad has is a 403.
+  if (hit && scopeTeamId && !sameTeamId(hit.team.id, scopeTeamId)) {
+    throw Object.assign(new Error(`lane "${raw}" belongs to Squad "${hit.team.id}", not "${scopeTeamId}": an agent parks ideas in its own Squad only`), { status: 403 });
+  }
   if (hit) return String(hit.lane.id);
   const lower = raw.toLowerCase();
   if (lower === "_unassigned" || !teams.length) return raw;
@@ -479,17 +483,25 @@ function assertKnownLane(laneId, teams) {
   throw new Error(`unknown lane "${raw}": not in the teams registry (cards on an unknown lane never reach a Buddy)`);
 }
 
+const sameTeamId = (a, b) => String(a ?? "").trim().toLowerCase() === String(b ?? "").trim().toLowerCase();
+
 /** Park ideas as cards (sync lock; `vs inbox add` CLI). Server request paths use addInboxCardsAsync. */
-export function addInboxCards(body = {}, rootDir = REPO_ROOT) {
-  return addInboxCardsWith(updateInboxCardsSync, body, rootDir);
+export function addInboxCards(body = {}, rootDir = REPO_ROOT, scope = {}) {
+  return addInboxCardsWith(updateInboxCardsSync, body, rootDir, scope);
 }
 
-/** addInboxCards for the server process: waits for the inbox lock without blocking the event loop. */
-export async function addInboxCardsAsync(body = {}, rootDir = REPO_ROOT) {
-  return addInboxCardsWith(updateInboxCards, body, rootDir);
+/**
+ * addInboxCards for the server process: waits for the inbox lock without blocking the event loop.
+ * `scope.teamId` (idea-176; never from the body: the server passes the verified agent's Squad) pins every card to that
+ * Squad: the body's teamId must be it, an explicit/default lane must be one of its lanes (403 otherwise), and a card the
+ * domain sorter would route to another Squad stays in this one (its default lane, else `_unassigned` = its Overlord).
+ */
+export async function addInboxCardsAsync(body = {}, rootDir = REPO_ROOT, scope = {}) {
+  return addInboxCardsWith(updateInboxCards, body, rootDir, scope);
 }
 
-function addInboxCardsWith(update, body, rootDir) {
+function addInboxCardsWith(update, body, rootDir, scope = {}) {
+  const scopeTeam = String(scope?.teamId ?? "").trim();
   const baseHome = body.baseHome;
   const teams = loadTeamsForInbox(rootDir);
 
@@ -503,10 +515,15 @@ function addInboxCardsWith(update, body, rootDir) {
   }
 
   const explicitLaneRaw = typeof body.laneId === "string" && body.laneId.trim() ? body.laneId.trim() : "";
-  const defaultLane = typeof body.defaultLaneId === "string" && body.defaultLaneId.trim() ? body.defaultLaneId.trim() : "";
-  const explicitTeam = typeof body.teamId === "string" && body.teamId.trim() ? body.teamId.trim() : "";
+  const defaultLaneRaw = typeof body.defaultLaneId === "string" && body.defaultLaneId.trim() ? body.defaultLaneId.trim() : "";
+  const bodyTeam = typeof body.teamId === "string" && body.teamId.trim() ? body.teamId.trim() : "";
+  if (scopeTeam && bodyTeam && !sameTeamId(bodyTeam, scopeTeam)) {
+    throw Object.assign(new Error(`teamId "${bodyTeam}" is not your Squad "${scopeTeam}": an agent parks ideas in its own Squad only`), { status: 403 });
+  }
+  const explicitTeam = scopeTeam || bodyTeam;
   const source = typeof body.source === "string" && body.source.trim() ? body.source.trim() : "ui";
-  const explicitLane = explicitLaneRaw ? assertKnownLane(explicitLaneRaw, teams) : "";
+  const explicitLane = explicitLaneRaw ? assertKnownLane(explicitLaneRaw, teams, scopeTeam) : "";
+  const defaultLane = scopeTeam && defaultLaneRaw ? assertKnownLane(defaultLaneRaw, teams, scopeTeam) : defaultLaneRaw;
 
   let added = [];
   const written = update(baseHome, (working) => {
@@ -515,12 +532,18 @@ function addInboxCardsWith(update, body, rootDir) {
 
     for (const ideaText of rawIdeas) {
       const sorted = sortIdeaCard(ideaText, working, teams);
-      const finalLane = explicitLane || (sorted.matchedDomain ? sorted.laneId : defaultLane || sorted.laneId);
-      const finalTeam = explicitLane
+      let finalLane = explicitLane || (sorted.matchedDomain ? sorted.laneId : defaultLane || sorted.laneId);
+      let finalTeam = explicitLane
         ? explicitTeam || teamIdForLane(finalLane, ideaText, teams)
         : sorted.matchedDomain
           ? sorted.teamId
           : explicitTeam || teamIdForLane(finalLane, ideaText, teams);
+      if (scopeTeam) {
+        // idea-176: the sorter's guess may name another Squad; an agent's card never leaves its own.
+        const sortedOwn = sameTeamId(sorted.teamId, scopeTeam);
+        if (!explicitLane) finalLane = sorted.matchedDomain && sortedOwn ? sorted.laneId : defaultLane || (sortedOwn ? sorted.laneId : "_unassigned");
+        finalTeam = scopeTeam;
+      }
 
       const card = {
         id: nextCardId(working),

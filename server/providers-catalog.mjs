@@ -114,8 +114,10 @@ function readRawSettings(home) {
 /** Like readRawSettings but refuses (throws) when the file exists and is unreadable, so a save never clobbers it. */
 function readRawSettingsForSave(home) {
   const res = readJsonFileWithBom(settingsPath(home), { label: "~/.vibesquad/settings.json", fallback: {}, recordWarning: false, rewriteBom: false });
-  if (res.exists && !res.ok) throw new Error(`refusing to save: settings.json exists but is not valid JSON (${res.error}). Fix or remove it first.`);
-  if (res.exists && !(res.data && typeof res.data === "object" && !Array.isArray(res.data))) throw new Error("refusing to save: settings.json is not a JSON object");
+  // SETTINGS_UNREADABLE (user-settings.mjs parity): an owner-fixable 409 whose message is ours and path-free (res.error has no path).
+  const refuse = (msg) => Object.assign(new Error(msg), { code: "SETTINGS_UNREADABLE", status: 409 });
+  if (res.exists && !res.ok) throw refuse(`refusing to save: settings.json exists but is not valid JSON (${res.error}). Fix or remove it first.`);
+  if (res.exists && !(res.data && typeof res.data === "object" && !Array.isArray(res.data))) throw refuse("refusing to save: settings.json is not a JSON object");
   return res.data && typeof res.data === "object" ? res.data : {};
 }
 
@@ -2839,6 +2841,11 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
-    return sendJson(res, 500, { error: String(err?.message ?? err) });
+    // idea-242 L1: an fs fault (settings write/rename, usage scan) names the host path; it goes to the server log only.
+    // Our own path-free refusals (SETTINGS_UNREADABLE) and body errors (413 / bad JSON) keep their message.
+    if (err?.code === "SETTINGS_UNREADABLE") return sendJson(res, 409, { error: String(err.message) });
+    if (err?.status === 413 || err instanceof SyntaxError) return sendJson(res, err?.status === 413 ? 413 : 400, { error: String(err?.message ?? err) });
+    console.warn(`[vibesquad] providers ${req.method} ${String(req.url ?? "").split("?")[0]} failed: ${err?.message ?? err}`);
+    return sendJson(res, 500, { error: "providers request failed; see the server log" });
   }
 }

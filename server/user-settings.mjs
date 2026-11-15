@@ -3,7 +3,7 @@
 // The legacy names are assembled at runtime so the old literal never appears in tracked files.
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export const LEGACY_USER_TYPE = "au" + "b";
 export const LEGACY_NEEDS_LABEL = "needs-" + LEGACY_USER_TYPE;
@@ -88,9 +88,12 @@ export function readJsonFileWithBom(
   try {
     raw = readFileSync(target, "utf8");
   } catch (err) {
-    const msg = String(err?.message ?? err);
+    // idea-242 L1: Node's fs message names the path ("EACCES: ..., open '<path>'") and `error` reaches API answers
+    // (teams GET, settings parseError, refused saves), so it carries the code only; `detail` keeps it for server logs.
+    const detail = String(err?.message ?? err);
+    const msg = `${err?.code || "read error"}: could not read ${label || basename(target)}`;
     if (recordWarning) recordConfigWarning(target, label || target, msg);
-    return { ok: false, exists: true, data: fallback, value: fallback, error: msg, hadBom: false };
+    return { ok: false, exists: true, data: fallback, value: fallback, error: msg, detail, hadBom: false };
   }
   const hadBom = raw.charCodeAt(0) === 0xfeff;
   const cleaned = stripBom(raw);

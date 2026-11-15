@@ -266,6 +266,59 @@ test("X1c: /inbox/triage: worker delete 403; Squad lead archive 200; other-Squad
   assert.equal((await call("header", "POST", "/__vibesquad/inbox/triage", { action: "delete", cardId: "idea-2" })).status, 200);
 });
 
+test("idea-176: /log, /vs-log and /inbox bind an agent's writes to its own Squad (caller.team); the owner may still write any Squad", async () => {
+  const logLines = (team, lane) => {
+    const f = path.join(HOME, "logs", `${team}--${lane}.jsonl`);
+    return existsSync(f) ? readFileSync(f, "utf8").split(/\r?\n/).filter(Boolean).map((l) => JSON.parse(l)) : [];
+  };
+  const has = (team, lane, marker) => logLines(team, lane).some((l) => l.text === marker);
+  // Another Squad's lead cannot write into this Squad's log, on either route.
+  const xv = await call(ids.othLead, "POST", "/__vibesquad/vs-log", { team: "sq", lane: "art", type: "decision", text: "x176-vs" });
+  assert.equal(xv.status, 403, JSON.stringify(xv.body));
+  assert.equal(has("sq", "art", "x176-vs"), false, "nothing written to the other Squad's log");
+  const xvTeamId = await call(ids.othLead, "POST", "/__vibesquad/vs-log", { teamId: "sq", laneId: "art", type: "decision", text: "x176-vs2" });
+  assert.equal(xvTeamId.status, 403, "teamId spelling too");
+  assert.equal(has("sq", "art", "x176-vs2"), false);
+  const xl = await call(ids.othLead, "POST", "/__vibesquad/log", { team: "sq", lane: "art", type: "decision", text: "x176-log" });
+  assert.equal(xl.status, 403, JSON.stringify(xl.body));
+  assert.equal(has("sq", "art", "x176-log"), false);
+  // The Overlord's one cross-Squad grant is runner input to another Squad's live lead (crossSquadInput); never its log.
+  assert.equal((await call(ids.overlord, "POST", "/__vibesquad/vs-log", { team: "oth", lane: "oth-main", type: "decision", text: "x176-ov" })).status, 403);
+  assert.equal(has("oth", "oth-main", "x176-ov"), false);
+  assert.equal((await call(ids.overlord, "POST", "/__vibesquad/log", { team: "oth", lane: "oth-main", type: "decision", text: "x176-ov2" })).status, 403);
+  // A body with no team lands in the caller's Squad (not the "vibesquad" default).
+  const own = await call(ids.othLead, "POST", "/__vibesquad/vs-log", { lane: "oth-main", type: "decision", text: "x176-own" });
+  assert.equal(own.status, 200, JSON.stringify(own.body));
+  assert.equal(has("oth", "oth-main", "x176-own"), true);
+  assert.equal(has("vibesquad", "oth-main", "x176-own"), false);
+  assert.equal(own.body.path, undefined, "the POST answer carries no host path");
+  const ownCase = await call(ids.lead, "POST", "/__vibesquad/vs-log", { team: "SQ", lane: "art", type: "decision", text: "x176-case" });
+  assert.equal(ownCase.status, 200, "same Squad, any case");
+  // Inbox: another Squad's teamId or lane is refused; a card with no lane stays in the caller's Squad.
+  seedCards();
+  const xi = await call(ids.othLead, "POST", "/__vibesquad/inbox", { text: "x176 card", teamId: "sq", laneId: "art" });
+  assert.equal(xi.status, 403, JSON.stringify(xi.body));
+  const xiLane = await call(ids.othLead, "POST", "/__vibesquad/inbox", { text: "x176 card lane", laneId: "art" });
+  assert.equal(xiLane.status, 403, `a lane of another Squad: ${JSON.stringify(xiLane.body)}`);
+  const xiDefault = await call(ids.othLead, "POST", "/__vibesquad/inbox", { text: "x176 card default", defaultLaneId: "art" });
+  assert.equal(xiDefault.status, 403, `a default lane of another Squad: ${JSON.stringify(xiDefault.body)}`);
+  const free = await call(ids.othLead, "POST", "/__vibesquad/inbox", { text: "the escape from idle combat loot balance feels off" });
+  assert.equal(free.status, 200, JSON.stringify(free.body));
+  assert.ok(free.body.added.every((c) => c.teamId === "oth"), `domain sorting never routes an agent's card to another Squad: ${JSON.stringify(free.body.added)}`);
+  assert.ok(free.body.added.every((c) => c.laneId === "_unassigned" || ["oth", "oth-main"].includes(c.laneId)), JSON.stringify(free.body.added));
+  const mine = await call(ids.worker, "POST", "/__vibesquad/inbox", { text: "x176 worker idea", laneId: "art" });
+  assert.equal(mine.status, 200, JSON.stringify(mine.body));
+  assert.equal(mine.body.added[0].teamId, "sq");
+  assert.equal(mine.body.added[0].laneId, "art");
+  // The owner (app / shell) keeps writing any Squad.
+  assert.equal((await call("header", "POST", "/__vibesquad/vs-log", { team: "oth", lane: "oth-main", type: "decision", text: "x176-owner" })).status, 200);
+  assert.equal(has("oth", "oth-main", "x176-owner"), true);
+  assert.equal((await call("cookie", "POST", "/__vibesquad/log", { team: "oth", lane: "oth-main", type: "you", text: "x176-owner-ui" })).status, 200);
+  const ownerCard = await call("header", "POST", "/__vibesquad/inbox", { text: "x176 owner card", teamId: "sq", laneId: "art" });
+  assert.equal(ownerCard.status, 200);
+  assert.equal(ownerCard.body.added[0].teamId, "sq");
+});
+
 test("X1c: /brainstorm-summary: worker 403; that lane's Buddy 200; its lead 200; the Overlord 200; another lane's lead 403; other Squad 403", async () => {
   const post = (who, over = {}) => call(who, "POST", "/__vibesquad/brainstorm-summary", { lane: "art", teamId: "sq", content: "brief", ...over });
   assert.equal((await post(ids.worker)).status, 403);

@@ -388,6 +388,21 @@ function assertAgentOnLane(caller, { teamId, lane }, rootDir, roles, what) {
   return "lane";
 }
 
+/**
+ * idea-176: an agent's /log, /vs-log and /inbox write is bound to its own Squad (caller.team). The body's team, when given,
+ * must be that Squad (any case); a missing one becomes the caller's. No grant widens this: the Overlord's one cross-Squad
+ * grant is runner input to another Squad's live lead (runner/runner.mjs crossSquadInput), never a log or inbox write here.
+ * The owner (caller null: app, phone, owner shell) keeps the body's team. Returns the team to write, or `bodyTeam` as given.
+ */
+function bindAgentTeam(caller, bodyTeam, what) {
+  if (!caller) return bodyTeam;
+  const own = String(caller.team ?? "").trim();
+  if (!own) throw forbidden(`${what}: ${caller.id} has no Squad; an agent writes only its own Squad's ${what}`);
+  const want = String(bodyTeam ?? "").trim();
+  if (want && !sameId(want, own)) throw forbidden(`${what}: ${caller.id} is in Squad "${own}", not "${want}"; an agent writes only its own Squad's ${what}`);
+  return own;
+}
+
 /** X1c: an agent's `callerId` must be the verified id (missing → filled in); never another agent's. */
 function bindCallerId(caller, body, what) {
   if (!caller) return body;
@@ -509,7 +524,9 @@ function handleTeams(req, res, rootDir) {
       // hostId rides on the envelope only (never inside the lane/agent records; Overlord decision, E4a).
       return sendJson(res, 200, { ...r.data, revision: teamsRevision(file), hostId: getHostId() });
     }
-    return sendJson(res, 500, { error: r.error || "Failed to read teams.json" });
+    // idea-242 L1: the read/parse detail (Node's fs message names the path) goes to the server log only.
+    console.warn(`[vibesquad] GET teams: ${file}: ${r.detail || r.error || "no registry data"}`);
+    return sendJson(res, 500, { error: "teams.json is unreadable or invalid; see the server log" });
   }
   if (req.method !== "POST" && req.method !== "PUT") {
     res.statusCode = 405;
@@ -596,6 +613,12 @@ async function handleSettings(req, res) {
    } catch (e) {
     // A refused save (unreadable settings.json) is a conflict the owner must fix; anything else is a server fault.
     const status = e?.code === "SETTINGS_UNREADABLE" ? 409 : e?.status === 413 ? 413 : 500;
+    // idea-242 L1: a 500 is an fs fault whose message names the path (rename/write of settings.json): log it, answer generic.
+    // The 409/413 messages are ours and path-free (readJsonFileWithBom's `error` carries no path).
+    if (status === 500) {
+      console.warn(`[vibesquad] settings save failed: ${e?.message ?? e}`);
+      return sendJson(res, 500, { ok: false, error: "settings save failed; see the server log" });
+    }
     return sendJson(res, status, { ok: false, error: String(e?.message ?? e) });
    }
   }
@@ -620,14 +643,15 @@ async function handleLog(req, res, opts = {}) {
       return sendJson(res, 200, out);
     }
     if (req.method === "POST") {
-      const { team, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readCleanBody(req);
+      const { team: bodyTeam, type = "you", text, refs, agent = loadUserSettings().userName, lane = "" } = await readCleanBody(req);
+      // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
+      const caller = agentCaller(req);
+      const team = bindAgentTeam(caller, bodyTeam, "log"); // idea-176
       if (!TEAM_ID.test(String(team))) return sendJson(res, 400, { error: "bad team" });
       if (!LOG_TYPES.has(type) || !UI_LOG_TYPES.has(type)) return sendJson(res, 400, { error: `type ${type} not allowed from the UI` });
       const t = String(text ?? "").trim();
       if (!t) return sendJson(res, 400, { error: "empty text" });
       if (t.length > 240) return sendJson(res, 400, { error: `text is ${t.length} chars, limit 240` });
-      // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
-      const caller = agentCaller(req);
       const who = caller ? agentLogFields(caller, { type, refs }) : { agent: String(agent), type, refs: Array.isArray(refs) ? refs.map(String) : [] };
       const { entry } = appendVsLogEntry({
         teamId: String(team),
@@ -993,14 +1017,14 @@ async function handleVsLog(req, res, opts = {}) {
     }
     if (req.method === "POST") {
       const body = await readCleanBody(req);
-      const teamId = body.teamId || body.team || "vibesquad";
+      // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
+      const caller = agentCaller(req);
+      const teamId = (caller ? bindAgentTeam(caller, body.teamId || body.team, "vs-log") : body.teamId || body.team) || "vibesquad"; // idea-176
       const laneId = body.laneId || body.lane || teamId;
       if (!TEAM_ID.test(String(teamId)) || !TEAM_ID.test(String(laneId))) return sendJson(res, 400, { ok: false, error: "bad team/lane" });
       const type = body.type || "metric";
       const text = String(body.text ?? "").trim();
       if (!text) return sendJson(res, 400, { ok: false, error: "empty text" });
-      // X1c: a verified agent is attributed by the server (never the body), with the worker/digest/lead rules.
-      const caller = agentCaller(req);
       const who = caller ? agentLogFields(caller, { type, refs: body.refs }) : { agent: body.agent || body.agentId || loadUserSettings().userName, type, refs: body.refs };
       const resEntry = appendVsLogEntry({
         teamId,
@@ -1010,7 +1034,7 @@ async function handleVsLog(req, res, opts = {}) {
         text: await verbatimDigestText(caller, who.type, text, opts.backend),
         refs: who.refs,
       });
-      return sendJson(res, 200, { ok: true, entry: resEntry.entry, path: resEntry.path });
+      return sendJson(res, 200, { ok: true, entry: resEntry.entry }); // idea-242 L1: no host log path in the answer
     }
     res.statusCode = 405;
     res.end();
@@ -1100,14 +1124,17 @@ async function handleInbox(req, res, rootDir) {
     }
     if (req.method === "POST") {
       const body = await readCleanBody(req);
-      const result = await addInboxCardsAsync(body, rootDir);
+      // idea-176: a verified agent parks ideas in its own Squad only (body team checked, lanes resolved in that Squad).
+      const caller = agentCaller(req);
+      const scope = caller ? { teamId: bindAgentTeam(caller, body.teamId, "inbox") } : {};
+      const result = await addInboxCardsAsync(body, rootDir, scope);
       return sendJson(res, 200, result);
     }
     res.statusCode = 405;
     res.end();
   } catch (e) {
     if (sendInboxServerError(res, e, req.method === "GET" ? "list" : "add")) return;
-    return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
+    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
@@ -1760,7 +1787,8 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
       case "/__vibesquad/settings":
         return handleSettings(req, res).catch((e) => {
-          if (!res.headersSent) sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+          console.warn(`[vibesquad] settings request failed: ${e?.message ?? e}`); // idea-242 L1: detail to the log only
+          if (!res.headersSent) sendJson(res, 500, { ok: false, error: "settings request failed; see the server log" });
         });
       case "/__vibesquad/log":
         return handleLog(req, res, opts);
