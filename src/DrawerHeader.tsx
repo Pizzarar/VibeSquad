@@ -1170,7 +1170,7 @@ export function DrawerHeader({
             title="Search transcript, jump between prompts, filter the timeline"
             onClick={() => window.dispatchEvent(new CustomEvent("vs:timeline-search", { detail: { agentId: agent.id } }))}
           >
-            🔍 Search
+            <span className="emoji-glyph">🔍 </span>Search
           </button>
           <button
             data-testid="drawer-reload-agent-btn"
@@ -1200,7 +1200,7 @@ export function DrawerHeader({
               title="Mark this chat read and clear attention"
               onClick={() => void markAgentRead(agent)}
             >
-              ✓ Mark read
+              <span className="emoji-glyph">✓ </span>Mark read
             </button>
           ) : (
             <button
@@ -1278,7 +1278,7 @@ export function DrawerHeader({
                 }
                 title="Hand off to a fresh Buddy from the brief"
               >
-                {restarting ? "⇄…" : "⇄ Handoff"}
+                {restarting ? "⇄…" : <><span className="emoji-glyph">⇄ </span>Handoff</>}
               </button>
               <button
                 className="btn ghost small btn-brainstorm-summary"
@@ -1286,7 +1286,7 @@ export function DrawerHeader({
                 onClick={toggleSummary}
                 title={`Preview docs/brainstorm/${laneId}.md`}
               >
-                📄 Summary
+                <span className="emoji-glyph">📄 </span>Summary
               </button>
               <button
                 className={`btn ghost small btn-brainstorm-inbox ${inboxPopoverOpen ? "on" : ""}`}
@@ -1295,7 +1295,7 @@ export function DrawerHeader({
                 title="Dump 1 or multiple newline-separated ideas straight into the Idea Inbox (0 tokens)"
                 data-testid="brainstorm-park-inbox-btn"
               >
-                📥 Inbox
+                <span className="emoji-glyph">📥 </span>Inbox
               </button>
             </div>
           </div>

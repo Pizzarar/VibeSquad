@@ -732,7 +732,7 @@ export function Composer({
             data-testid="composer-interrupt-btn"
             onClick={onInterrupt}
           >
-            ⚡ Interrupt &amp; send
+            <span className="emoji-glyph">⚡ </span>Interrupt &amp; send
           </button>
         )}
       </div>

@@ -1140,7 +1140,7 @@ function PinnedTodo({ entry }: { entry: Entry }) {
       style={{ background: "var(--bg, #1e1e1e)", borderBottom: "1px solid var(--line)", padding: "4px 8px", cursor: "pointer" }}
       onClick={() => setOpen((v) => !v)}
     >
-      {open ? "▾" : "▸"} 📋 Plan / Tasks ({done}/{total})
+      {open ? "▾" : "▸"} <span className="emoji-glyph">📋 </span>Plan / Tasks ({done}/{total})
       {open && (
         <div style={{ marginTop: 4, fontSize: "0.9em" }}>
           {items.map((t, i) => (

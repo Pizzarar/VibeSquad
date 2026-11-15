@@ -61,7 +61,7 @@ export const DEMO_AGY_HUNG = "demo-art-g";
 
 const CAST: Spec[] = [
   { id: DEMO_LEAD_ID, who: "gemini", title: "★ VIBESQUAD ord1", status: "running", labels: vs({ role: "lead", "vs.parent": "demo-old-2", "paseo.parent-agent-id": "demo-old-2" }), used: 134_000, ago: 0 },
-  { id: "demo-bs-vs", who: "claude", title: "BRAINSTORM · neon-noir cast", labels: vs({ role: "brainstorm" }), used: (typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("bsUsed"))) || 62_000, ago: 12 },
+  { id: "demo-bs-vs", who: "claude", title: "Brainstorm · neon-noir cast", labels: vs({ role: "brainstorm" }), used: (typeof location === "undefined" ? 0 : Number(new URLSearchParams(location.search).get("bsUsed"))) || 62_000, ago: 12 },
   { id: "demo-old-1", who: "claude", title: "(old) ★ LEAD · VIBESQUAD v0", status: "closed", labels: vs({ role: "old-lead" }), used: 128_000, ago: 300 },
   { id: "demo-old-2", who: "gemini", title: "(old) ★ LEAD · VIBESQUAD art round A", status: "closed", labels: vs({ role: "old-lead" }), used: 131_000, ago: 140 },
   { id: "demo-art-o", who: "claude", title: "Art Painter - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "vs.parent": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },
@@ -90,8 +90,8 @@ const CAST: Spec[] = [
   // Other teams, so the sidebar has several bosses.
   { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-you": "merge", "needs-you-reason": "approve the save-format merge" }, used: 97_000, cwd: EFI },
   { id: "demo-lead-efi-dup", who: "sonnet", title: "★ MAIN GAME ord74", labels: { team: "efi", lane: "main-game", role: "lead", ord: "74" }, used: 90_000, cwd: EFI, ago: 30 },
-  { id: "demo-bs-efi-1", who: "claude", title: "BRAINSTORM · MAIN GAME · OpenRouter pipeline critique", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "OpenRouter pipeline critique" }, cwd: EFI, ago: 20 },
-  { id: "demo-bs-efi-2", who: "gemini", title: "BRAINSTORM · MAIN GAME · site polish", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "site polish" }, cwd: EFI, ago: 40 },
+  { id: "demo-bs-efi-1", who: "claude", title: "Brainstorm · Main game · OpenRouter pipeline critique", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "OpenRouter pipeline critique" }, cwd: EFI, ago: 20 },
+  { id: "demo-bs-efi-2", who: "gemini", title: "Brainstorm · Main game · site polish", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "site polish" }, cwd: EFI, ago: 40 },
   { id: "demo-lead-ui", who: "deepseek", title: "★ UI LAB ord3", labels: { team: "efi", lane: "ui-lab", role: "lead", ord: "3" }, used: 45_000, cwd: EFI },
   { id: "demo-lead-pl", who: "codex", title: "★ LEAD · Plugins", labels: { team: "plugins", lead: "plugins", role: "lead" }, used: 30_000, extra: { requiresAttention: true, attentionReason: "finished" }, cwd: "/path/to/paseo-agent-board" },
   { id: "demo-lead-site", who: "sonnet", title: "★ LEAD · Site polish", labels: { team: "site", lead: "site-polish", role: "lead" }, used: 12_000, cwd: "/path/to/example-site" },
@@ -127,7 +127,7 @@ const CROWD_KINDS: [Spec["who"], string][] = [["claude", "Implement"], ["gemini"
 export function demoCrowd(): Spec[] {
   const out: Spec[] = [];
   for (const c of DEMO_CROWD_LANES) {
-    if (c.buddy) out.push({ id: `demo-crowd-${c.lane}-bs`, who: "claude", title: `BRAINSTORM · ${c.lane}`, status: "running", labels: vs({ role: "brainstorm", lane: c.lane }), ago: 2 });
+    if (c.buddy) out.push({ id: `demo-crowd-${c.lane}-bs`, who: "claude", title: `Brainstorm · ${c.lane}`, status: "running", labels: vs({ role: "brainstorm", lane: c.lane }), ago: 2 });
     for (let i = 0; i < c.workers; i++) {
       const [who, kind] = CROWD_KINDS[i % CROWD_KINDS.length];
       const needs: Record<string, string> = i % 5 === 3 ? { "needs-you": "pick", "needs-you-reason": "pick option A or B" } : {};

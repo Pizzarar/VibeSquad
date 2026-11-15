@@ -875,3 +875,45 @@ html[data-vibe="boring"] .usage-inbox-accept { background: var(--accent) !import
 
 /* D1: the context strip is a quiet row on the canvas, not a mauve slab (beats the old B5 --panel-hi rule). */
 html[data-vibe="boring"] .brainstorm-ctx-bar { background: transparent !important; border: 0 !important; border-bottom: 1px solid var(--border) !important; border-radius: 0 !important; }
+
+/* ===== D1 fix round: single-primary buttons, column alignment, sidebar weights, glyph cleanup ===== */
+.normal-only { display: none; }
+html[data-vibe="boring"] .normal-only { display: inline; }
+html[data-vibe="boring"] .emoji-glyph { display: none; }
+
+/* Header utility buttons are secondary; only [Allow] and Send are filled accents. */
+html[data-vibe="boring"] .drawer-head [data-testid="mark-read"],
+html[data-vibe="boring"] .drawer-head .btn-brainstorm-restart,
+html[data-vibe="boring"] .drawer-head .btn.ok,
+html[data-vibe="boring"] .drawer-head .btn.on {
+  background: var(--surface-2) !important; background-image: none !important; color: var(--text-1) !important;
+  border: 1px solid var(--border-strong) !important; font-weight: 500;
+}
+
+/* Plan / Tasks bar and permission card sit on the centred conversation column. */
+html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent !important; border-bottom: 1px solid var(--border) !important; color: var(--text-2); font-size: var(--t-small); }
+html[data-vibe="boring"] .perm-card { width: 100%; max-width: var(--measure-prose); margin-inline: auto; box-sizing: border-box; }
+
+/* Sidebar: default text-2/400, selected text-1/500; row pitch exactly --row-h. */
+html[data-vibe="boring"] .boring-project-name { font-weight: 500; }
+html[data-vibe="boring"] .boring-row-label { font-weight: 400; color: var(--text-2); }
+html[data-vibe="boring"] .boring-core-row.on .boring-row-label,
+html[data-vibe="boring"] .boring-conv-row.on .boring-row-label,
+html[data-vibe="boring"] .boring-project-row.on .boring-project-name { font-weight: 500; color: var(--text-1); }
+html[data-vibe="boring"] .boring-core-group,
+html[data-vibe="boring"] .boring-conv-list { gap: 0; }
+html[data-vibe="boring"] .boring-conv-row { padding: 0; }
+html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge { color: #ffffff; }
+
+/* Light permission card: amber, not beige-pink. */
+html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00 !important; }
+
+/* Context meter: neutral until it is genuinely high. */
+html[data-vibe="boring"] .brainstorm-ctx-fill,
+html[data-vibe="boring"] .brainstorm-ctx-fill.tone-amber { background: var(--border-strong) !important; }
+html[data-vibe="boring"] .brainstorm-ctx-fill.tone-red { background: var(--st-err) !important; }
+html[data-vibe="boring"] .meter .meter-fill { background: var(--border-strong) !important; background-image: none !important; }
+html[data-vibe="boring"] .meter.warn .meter-fill { background: var(--st-attn) !important; }
+html[data-vibe="boring"] .meter.alert .meter-fill { background: var(--st-err) !important; }
+html[data-vibe="boring"] .meter .meter-readout { color: var(--text-3) !important; font-family: var(--sans) !important; }
