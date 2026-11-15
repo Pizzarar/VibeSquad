@@ -42,7 +42,7 @@ export function WorkingChip({ members, subs }: { members: Member[]; subs: number
         disabled={!first}
         onClick={() => first && openAgent(first.agent.id)}
       >
-        ⚡ {n} working
+        <span className="emoji-glyph">⚡ </span><span className="normal-only" style={{ display: "none", color: "var(--st-run)" }}>● </span>{n} working
       </button>
       <WorkingBar members={members} subs={subs} />
     </>

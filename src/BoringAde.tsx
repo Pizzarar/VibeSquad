@@ -72,8 +72,8 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
   });
   const core = {
-    overlord: zoneRow("★ Overlord", zones.overlord),
-    riffbot: zoneRow("RiffBot", zones.riffbot),
+    overlord: zoneRow("Project Lead · Overlord", zones.overlord),
+    riffbot: zoneRow("Project Brainstorm · RiffBot", zones.riffbot),
     bugs: {
       label: "Bugs (@bug)",
       pin: bugs.pin,
@@ -128,6 +128,18 @@ const startInFlight = new Set<string>();
 
 export const BORING_OVERVIEW_LAYOUT_KEY = "vs.boringOverviewLayout";
 export type OverviewLayout = "cards" | "map";
+
+/** D1 (UX_REVIEW 1.5): one glyph vocabulary from status + attention tone: run, attn, err, stalled, idle, done. */
+export type BoringStateGlyph = "run" | "attn" | "err" | "stalled" | "idle" | "done";
+export function boringStateGlyph(status: string | null | undefined, tone?: string | null): BoringStateGlyph {
+  if (tone === "error" || status === "error") return "err";
+  if (tone === "permission" || tone === "needs-you") return "attn";
+  if (status === "stalled") return "stalled";
+  if (status === "running") return "run";
+  if (tone === "finished") return "done";
+  return "idle";
+}
+const glyphCls = (status: string | null | undefined, tone?: string | null) => `st-${boringStateGlyph(status, tone)}`;
 
 /** B6c: lane-map node state: pulse = working, filled = needs-you, hollow = idle, faint = none. */
 export function boringNodeStateClass(status: string | null | undefined, needsYou = 0): "pulse" | "filled" | "hollow" | "faint" {
@@ -242,7 +254,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
 
   const viewTitle =
-    mode === "usage" ? "Usage & Workflows" : mode === "project" ? "Project Overview"
+    mode === "usage" ? "Usage & workflows" : mode === "project" ? "Project overview"
     : selectedLaneId === "_overlord" ? "Overlord" : selectedLaneId === "_riffbot" ? "RiffBot" : selectedLaneId === "_bugs" ? "Bugs (@bug)"
     : currentConv?.name ?? "Conversation";
 
@@ -296,7 +308,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const badge = (n: number) => (n > 0 ? <span className="badge boring-badge">{n}</span> : null);
   const coreRow = (testid: string, label: string, status: string, needsYou: number, age: string, onClick: () => void, agentObj?: typeof agent) => (
     <button key={testid} type="button" className={`boring-core-row ${mode === "chat" && selectedLaneId && testid.endsWith(selectedLaneId.slice(1)) ? "on" : ""}`} data-testid={testid} onClick={onClick}>
-      {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status}`} />}
+      {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status} ${glyphCls(status, needsYou > 0 ? "needs-you" : null)}`} />}
       <span className="boring-row-label">{label}</span>
       <span className="boring-conv-age">{age}</span>
       {badge(needsYou)}
@@ -305,7 +317,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const coreTile = (key: string, label: string, status: string, age: string, needsYou: number, startLabel: string | null, onClick: () => void, disabled = false) => (
     <div key={key} className="boring-lane-card boring-core-tile" role="button" tabIndex={disabled ? -1 : 0} aria-disabled={disabled || undefined} data-testid={`boring-card-${key}`} onClick={() => !disabled && onClick()} onKeyDown={(e) => { if (!disabled && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); onClick(); } }}>
       <div className="boring-card-head">
-        <span className={`boring-dot ${status}`} />
+        <span className={`boring-dot ${status} ${glyphCls(status, needsYou > 0 ? "needs-you" : null)}`} />
         <span className="boring-row-label">{label}</span>
         <span className="boring-conv-age">{age}</span>
         {needsYou > 0 && <span className="badge boring-badge">Needs you · {needsYou}</span>}
@@ -316,7 +328,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const laneCard = (c: (typeof conversations)[number]) => (
     <div key={c.laneId} className="boring-card boring-lane-card" role="button" tabIndex={0} data-testid={`boring-card-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "brainstorm")} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pickRole(c.pin, c.laneId, "brainstorm"); } }}>
       <div className="boring-card-head">
-        <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
+        <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus} ${glyphCls(c.running > 0 ? "running" : c.brainstormStatus, c.needsYou > 0 ? "needs-you" : null)}`} />
         <span className="boring-row-label">{c.name}</span>
         <code className="boring-conv-code">{c.code}</code>
         <span className="boring-conv-age">{c.age}</span>
@@ -345,7 +357,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         return (
           <div key={c.laneId} className="boring-map-cluster" data-testid={`boring-map-cluster-${c.laneId}`}>
             <button type="button" className={`boring-map-node boring-map-lane ${boringNodeStateClass(c.running > 0 ? "running" : c.brainstormStatus, c.needsYou)}`} data-testid={`boring-map-lane-${c.laneId}`} onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>
-              <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
+              <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus} ${glyphCls(c.running > 0 ? "running" : c.brainstormStatus, c.needsYou > 0 ? "needs-you" : null)}`} />
               <span className="boring-row-label">{c.name}</span>
               <code className="boring-conv-code">{c.code}</code>
               <span className="boring-conv-age">{c.age}</span>
@@ -375,7 +387,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     <div className="boring-app" data-testid="boring-app">
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <button type="button" className="boring-new-conv-btn" data-testid="boring-new-conv-btn" onClick={onAddBuddy}>
-          + New Conversation
+          + New lane
         </button>
         <div className="boring-project-header">
           <div className="boring-project-tree" data-testid="boring-project-tree">
@@ -384,7 +396,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
               return (
                 <button key={v.team.id} type="button" className={"boring-project-row" + (active ? " on" : "")} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={active} onClick={() => onSelectSquad(v.team.id)}>
                   <span className="boring-chevron">{active ? "▾" : "▸"}</span>
-                  <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"}`} />
+                  <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", (v.needsYou ?? 0) > 0 ? "needs-you" : null)}`} />
                   <span className="boring-project-name">{v.team.name}</span>
                   {(v.needsYou ?? 0) > 0 && <span className="badge boring-badge">{v.needsYou}</span>}
                 </button>
@@ -393,25 +405,25 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {views.length === 0 && !view && <span className="boring-project-name">No project</span>}
           </div>
           <button type="button" className={`boring-footer-btn${mode === "project" ? " on" : ""}`} data-testid="boring-project-overview-btn" onClick={() => setMode("project")}>
-            Project Overview
+            Overview
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-new-project-btn" onClick={onNewSquad}>
-            + New Project
+            + New project
           </button>
         </div>
         <div className="boring-core-group boring-trinity-card" data-testid="boring-core-group">
-          <div className="boring-section-label" data-testid="boring-trinity-label">TRINITY · COMMAND</div>
+          <div className="boring-section-label" data-testid="boring-trinity-label">Project desk</div>
           {coreRow("boring-core-overlord", core.overlord.label, core.overlord.status, core.overlord.needsYou, core.overlord.age, () => pickCore("_overlord", core.overlord.agentId), memberAgent(core.overlord.agentId))}
           {coreRow("boring-core-riffbot", core.riffbot.label, core.riffbot.status, core.riffbot.needsYou, core.riffbot.age, () => pickCore("_riffbot", core.riffbot.agentId), memberAgent(core.riffbot.agentId))}
           {coreRow("boring-core-bugs", core.bugs.label, core.bugs.leadRunning ? "running" : "none", core.bugs.needsYou, core.bugs.age, pickBugs, memberAgent(core.bugs.agentId))}
         </div>
         <div className="boring-conv-list" data-testid="boring-conv-list">
-          <div className="boring-section-label" data-testid="boring-lanes-label">LANES</div>
-          {conversations.length === 0 && <p className="boring-muted">No conversations yet.</p>}
+          <div className="boring-section-label" data-testid="boring-lanes-label">Lanes</div>
+          {conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
           {conversations.map((c) => (
             <div key={c.laneId} className={`boring-conv-row ${mode === "chat" && selectedLaneId === c.laneId ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
               <button type="button" className="boring-conv-title" onClick={() => pickRole(c.pin, c.laneId, "brainstorm")}>
-                <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus}`} />
+                <span className={`boring-dot ${c.running > 0 ? "running" : c.brainstormStatus} ${glyphCls(c.running > 0 ? "running" : c.brainstormStatus, c.needsYou > 0 ? "needs-you" : null)}`} />
                 <span className="boring-row-label">{c.name}</span>
                 <code className="boring-conv-code">{c.code}</code>
                 <span className="boring-conv-age">{c.age}</span>
@@ -430,13 +442,13 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         </div>
         <div className="boring-sidebar-footer" data-testid="boring-sidebar-footer">
           <button type="button" className={`boring-footer-btn${mode === "usage" ? " on" : ""}`} data-testid="boring-usage-btn" onClick={() => setMode("usage")}>
-            📊 Usage & Workflows
+            Usage & workflows
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-settings-btn" onClick={onSettings}>
-            ⚙ Settings
+            Settings
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-switch-vibespace-btn" onClick={toVibespace}>
-            ✦ Switch to Psycho
+            Switch to Psycho
           </button>
         </div>
       </aside>
@@ -458,8 +470,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             </div>
           )}
           <div className="boring-topbar-actions">
-            <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>🔍</button>
-            <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>?</button>
+            <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
+            <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
             {mode === "chat" && agent && (
               <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
