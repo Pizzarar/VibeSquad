@@ -16,21 +16,22 @@ const ROOT = tmp("vs-echo-root-");
 process.env.VIBESQUAD_HOME = HOME;
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 delete process.env.VIBESQUAD_TEAMS_FILE;
-for (const k of ["VS_AGENT_ID", "VS_AGENT_TOKEN", "PASEO_AGENT_ID"]) delete process.env[k];
+for (const k of ["VS_AGENT_ID", "VS_AGENT_TOKEN", "PASEO_AGENT_ID", "VIBESQUAD_PROFILES_PATH"]) delete process.env[k];
 writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Squad", paths: [], lanes: [{ id: "sq", hub: true }] }] }), "utf8");
 
 const { readJsonFileWithBom } = await import("../server/user-settings.mjs");
-const { getLocalToken } = await import("../server/auth.mjs");
+const { AGENT_ID_HEADER, AGENT_TOKEN_HEADER, callerFromRequest, getLocalToken } = await import("../server/auth.mjs");
 const { createVibesquadMiddleware } = await import("../server/vibesquad-api.mjs");
 const { handleProvidersApi } = await import("../server/providers-catalog.mjs");
 
 // ---- fs fault injection (live ESM bindings: syncBuiltinESMExports updates `import { readFileSync } from "node:fs"`) ----
-const real = { readFileSync: fs.readFileSync, renameSync: fs.renameSync };
+const real = { readFileSync: fs.readFileSync, renameSync: fs.renameSync, writeFileSync: fs.writeFileSync, mkdirSync: fs.mkdirSync };
+const SYSCALL = { renameSync: "rename", mkdirSync: "mkdir" };
 const nodeError = (code, syscall, p) => Object.assign(new Error(`${code}: operation failed, ${syscall} '${p}'`), { code, syscall, path: p });
 function failFs(name, match, code = "EACCES") {
   fs[name] = function (...args) {
     const hit = args.slice(0, 2).find((a) => typeof a === "string" && match(a)); // rename(src, dest): either side
-    if (hit) throw nodeError(code, name === "renameSync" ? "rename" : "open", hit);
+    if (hit) throw nodeError(code, SYSCALL[name] ?? "open", hit);
     return real[name].apply(this, args);
   };
   syncBuiltinESMExports();
@@ -124,4 +125,50 @@ test("idea-242 L1 (providers-catalog re-audit): POST /providers/settings never e
   assert.equal(failed.status, 500, failed.text);
   assert.equal(provLeaks(failed.text), false, failed.text);
   assert.ok(warnings.some((w) => w.includes(path.basename(home))), `server log has the detail: ${JSON.stringify(warnings)}`);
+});
+
+// ---- idea-249: the catch-all sweep. A handler's own validation text still reaches the caller; an fs fault never does. ----
+
+test("idea-249: POST /brainstorm-summary with an unwritable brief folder answers a generic 500 with no host path; the detail is logged", async () => {
+  failFs("mkdirSync", (p) => p.startsWith(ROOT) && p.includes("brainstorm"));
+  const r = await owner("POST", "/__vibesquad/brainstorm-summary", { lane: "sq", teamId: "sq", content: "a short brief" });
+  assert.equal(r.status, 500, r.text);
+  assert.equal(leaks(r.text), false, r.text);
+  assert.equal(JSON.parse(r.text).ok, false);
+  assert.ok(warnings.some((w) => leaks(w)), `server log has the detail: ${JSON.stringify(warnings)}`);
+  restoreFs();
+  // A caller's own mistake keeps its specific 400 text.
+  const big = await owner("POST", "/__vibesquad/brainstorm-summary", { lane: "sq", teamId: "sq", content: "x".repeat(20_000) });
+  assert.equal(big.status, 400, big.text);
+  assert.match(JSON.parse(big.text).error, /20000 chars/);
+});
+
+test("idea-249: GET /push/vapid-public-key with an unwritable vapid.json answers a generic 500 with no host path", async () => {
+  failFs("writeFileSync", (p) => p.startsWith(HOME) && p.endsWith("vapid.json"));
+  const r = await owner("GET", "/__vibesquad/push/vapid-public-key");
+  assert.equal(r.status, 500, r.text);
+  assert.equal(leaks(r.text), false, r.text);
+  assert.ok(warnings.some((w) => leaks(w)), `server log has the detail: ${JSON.stringify(warnings)}`);
+});
+
+test("idea-249: POST /profiles with an unwritable profiles.json answers a generic 500 with no host path (was a 400 echoing it)", async () => {
+  const hit = (p) => p.startsWith(HOME) && p.includes("profiles.json");
+  failFs("renameSync", hit, "EPERM");
+  failFs("writeFileSync", hit, "EPERM");
+  const r = await owner("POST", "/__vibesquad/profiles", { profiles: [{ name: "echo-probe", provider: "claude", model: "x" }] });
+  assert.equal(r.status, 500, r.text);
+  assert.equal(leaks(r.text), false, r.text);
+  assert.ok(warnings.some((w) => leaks(w)), `server log has the detail: ${JSON.stringify(warnings)}`);
+});
+
+test("idea-249: a failed runner agent check is a 503 that names no host path; the detail is logged", async () => {
+  const where = path.join(ROOT, "runner", "token");
+  const req = { headers: { [AGENT_ID_HEADER]: "probe-agent", [AGENT_TOKEN_HEADER]: "t0k" }, socket: {} };
+  const verifyAgent = async () => { throw nodeError("ENOENT", "open", where); };
+  const c = await callerFromRequest(req, { verifyAgent });
+  assert.equal(c.kind, "denied");
+  assert.equal(c.status, 503);
+  assert.equal(leaks(c.error), false, c.error);
+  assert.match(c.error, /could not verify the agent caller/);
+  assert.ok(warnings.some((w) => leaks(w)), `server log has the detail: ${JSON.stringify(warnings)}`);
 });

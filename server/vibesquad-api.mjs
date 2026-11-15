@@ -666,6 +666,7 @@ async function handleLog(req, res, opts = {}) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "log")) return; // idea-249: an fs fault names the host path; log it, answer generic
     sendJson(res, e?.status === 403 ? 403 : 400, { error: String(e?.message ?? e) });
   }
 }
@@ -934,7 +935,9 @@ async function handleHandoff(req, res, rootDir) {
       .then(
         () => ({ done: true }),
         (err) => {
-          lastHandoffError = String(err?.message ?? err);
+          // idea-249: execFile's message is "Command failed: <node path> <cli path> handoff" plus stderr: log it, keep the exit only.
+          console.warn(`[vibesquad] vs handoff failed: ${err?.message ?? err}`);
+          lastHandoffError = `vs handoff ${err?.killed ? "timed out" : `exited ${err?.code ?? "with an error"}`}; see the server log`;
           return { done: true, error: lastHandoffError };
         },
       )
@@ -953,7 +956,8 @@ async function handleHandoff(req, res, rootDir) {
     if (outcome.error) return sendJson(res, 500, { error: outcome.error });
     sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: true });
   } catch (e) {
-    sendJson(res, e?.status === 403 ? 403 : 500, { error: String(e?.message ?? e) });
+    if (e?.status === 403) return sendJson(res, 403, { error: String(e.message) });
+    sendServerError(res, e, "handoff"); // idea-249: a 500 here is a server fault; its message may name a host path
   }
 }
 
@@ -990,6 +994,7 @@ async function handleBrainstormSummary(req, res, rootDir) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "brainstorm-summary")) return; // idea-249: an fs fault names the host path; log it, answer generic
     sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1039,6 +1044,7 @@ async function handleVsLog(req, res, opts = {}) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "vs-log")) return; // idea-249: an fs fault names the host path; log it, answer generic
     sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1067,6 +1073,7 @@ async function handleBrainstormRestart(req, res, rootDir) {
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
     return sendJson(res, result?.ok === false ? 503 : 200, result);
   } catch (e) {
+    if (sendServerFsError(res, e, "buddy restart")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1092,21 +1099,27 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
     const status = result?.status || (result?.accepted ? 202 : 200);
     return sendJson(res, status, result);
   } catch (e) {
+    if (sendServerFsError(res, e, "lead-handoff")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 
 /**
- * idea-235 (idea-232 parity): an inbox lock timeout, lost lock or fs failure is the server's problem, not the caller's.
- * file-lock / fs messages carry the lock path and holder pid, so answer a generic retryable 503 and log the detail only.
- * Returns true when it sent the response.
+ * idea-235 (idea-232 parity) / idea-249: a server-side fault is the server's problem, not the caller's. Node's fs messages
+ * (and file-lock's) carry the host path and holder pid, so the detail goes to the server log and the caller gets a generic
+ * answer. sendServerError always sends; sendServerFsError sends only for an fs/lock fault (isServerSideFsError) and leaves
+ * the handler's own path-free validation text (a 400/403/404 about the caller's input) to the caller. Both return true when
+ * they sent the response.
  */
-function sendInboxServerError(res, e, what) {
-  if (!isServerSideFsError(e)) return false;
-  console.warn(`[vibesquad] inbox ${what} failed: ${e?.message ?? e}`);
-  sendJson(res, 503, { ok: false, error: "inbox busy or unwritable; retry", retryable: true });
+function sendServerError(res, e, what, { status = 500, error = `${what} failed; see the server log`, retryable = false } = {}) {
+  console.warn(`[vibesquad] ${what} failed: ${e?.message ?? e}`);
+  if (!res.headersSent) sendJson(res, status, { ok: false, error, ...(retryable ? { retryable: true } : {}) });
   return true;
 }
+function sendServerFsError(res, e, what, opts) {
+  return isServerSideFsError(e) ? sendServerError(res, e, what, opts) : false;
+}
+const INBOX_BUSY = { status: 503, error: "inbox busy or unwritable; retry", retryable: true };
 
 async function handleInbox(req, res, rootDir) {
   try {
@@ -1133,7 +1146,7 @@ async function handleInbox(req, res, rootDir) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
-    if (sendInboxServerError(res, e, req.method === "GET" ? "list" : "add")) return;
+    if (sendServerFsError(res, e, `inbox ${req.method === "GET" ? "list" : "add"}`, INBOX_BUSY)) return;
     return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1156,7 +1169,7 @@ async function handleInboxTriage(req, res, rootDir) {
     const result = await triageInboxCardsAsync(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
-    if (sendInboxServerError(res, e, "triage")) return;
+    if (sendServerFsError(res, e, "inbox triage", INBOX_BUSY)) return;
     return sendJson(res, e?.status === 403 ? 403 : e?.status === 404 ? 404 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1171,7 +1184,7 @@ async function handleInboxSend(req, res, rootDir) {
     const result = await sendInboxCard(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
-    if (sendInboxServerError(res, e, "send")) return;
+    if (sendServerFsError(res, e, "inbox send", INBOX_BUSY)) return;
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1207,7 +1220,7 @@ async function handleInboxAttachment(req, res) {
     const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
     return sendJson(res, 200, await attachInboxMedia({ cardId, mime, bytes }));
   } catch (e) {
-    if (sendInboxServerError(res, e, "attachment")) return;
+    if (sendServerFsError(res, e, "inbox attachment", INBOX_BUSY)) return;
     return sendJson(res, e?.status === 413 ? 413 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1222,7 +1235,7 @@ function handlePushVapidPublicKey(req, res) {
     const subs = readPushSubscriptions();
     return sendJson(res, 200, { ok: true, publicKey: vapid.publicKey, subCount: subs.length });
   } catch (e) {
-    return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+    return sendServerError(res, e, "push vapid key"); // idea-249
   }
 }
 
@@ -1236,6 +1249,7 @@ async function handlePushSubscribe(req, res) {
     const result = savePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
+    if (sendServerFsError(res, e, "push subscribe")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1250,6 +1264,7 @@ async function handlePushUnsubscribe(req, res) {
     const result = removePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
+    if (sendServerFsError(res, e, "push unsubscribe")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1285,7 +1300,7 @@ async function handlePushTest(req, res) {
     const result = await sendTestPush(body);
     return sendJson(res, 200, result);
   } catch (e) {
-    return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+    return sendServerError(res, e, "push test"); // idea-249
   }
 }
 
@@ -1325,6 +1340,7 @@ async function handleProfiles(req, res) {
     res.statusCode = 405;
     return res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "profiles")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1387,6 +1403,7 @@ async function handleProfilesImport(req, res) {
       warningsByProfile: imported.warningsByProfile,
     });
   } catch (e) {
+    if (sendServerFsError(res, e, "profiles import")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1409,6 +1426,7 @@ function handleProfilesDiff(req, res) {
       warningsByProfile,
     });
   } catch (e) {
+    if (sendServerFsError(res, e, "profiles diff")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1697,6 +1715,7 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
     }
     return sendJson(res, 200, { ok: true, scripts: pkgScripts });
   } catch (e) {
+    if (sendServerFsError(res, e, "scripts")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1730,7 +1749,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (isApi && hasAgentHeaders(req)) {
       return callerFromRequest(req, { verifyAgent }).then(
         (caller) => gated(req, res, next, path, isApi, caller),
-        (e) => sendJson(res, 500, { error: String(e?.message ?? e) }),
+        (e) => sendServerError(res, e, "agent caller check"), // idea-249
       );
     }
     return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : { kind: ownerProof(req) ? "owner" : "unknown" });
@@ -1784,7 +1803,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleTeams(req, res, rootDir);
       case "/__vibesquad/first-run/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
+        return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendServerError(res, e, "first-run status")); // idea-249
       case "/__vibesquad/settings":
         return handleSettings(req, res).catch((e) => {
           console.warn(`[vibesquad] settings request failed: ${e?.message ?? e}`); // idea-242 L1: detail to the log only
@@ -1803,10 +1822,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleVsLog(req, res, opts);
       case "/__vibesquad/unstick": // owner-only: POST is gated above (isOwner for every non-GET)
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
-        return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendServerError(res, e, "unstick")); // idea-249
       case "/__vibesquad/restart-runner": // owner-only (same guard as Unstick): park live turns cleanly, then restart the runner
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
-        return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendServerError(res, e, "restart-runner")); // idea-249
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":
@@ -1866,7 +1885,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)
           .then((body) => sendJson(res, 200, { ok: true, results: removeTeamWorktrees(body?.worktrees) }))
-          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+          .catch((e) => sendServerFsError(res, e, "remove-team-worktrees") || sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       default:
         return next?.();
     }
