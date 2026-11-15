@@ -136,7 +136,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -344,12 +344,11 @@ test("Usage & Workflows and Project Overview swap the main pane", () => {
   byId(t, "boring-project-overview-btn").props.onClick();
   t = render(props(view));
   assert.ok(byId(t, "boring-project-view"));
-  assert.ok(byId(t, "boring-card-grid"));
-  assert.equal(byId(t, "boring-lane-table"), null);
-  assert.equal(walk(t, (n) => n.type === "table").length, 0);
-  for (const id of ["boring-card-overlord", "boring-card-riffbot", "boring-card-bugs", "boring-card-ade"]) assert.ok(byId(t, id), id);
-  // Idle lane is collapsed behind the toggle; default tab renders neither IdeaInbox nor TeamFeed.
-  assert.equal(byId(t, "boring-card-per"), null);
+  assert.ok(byId(t, "boring-lane-table"));
+  for (const id of ["_overlord", "_riffbot", "_bugs", "ade", "per"]) assert.ok(byId(t, `boring-lane-row-${id}`), id);
+  assert.equal(byId(t, "boring-card-grid"), null);
+  assert.equal(byId(t, "boring-lane-map"), null);
+  // Default tab renders neither IdeaInbox nor TeamFeed.
   assert.equal(byType(t, "IdeaInbox"), null);
   assert.equal(byType(t, "TeamFeed"), null);
   // No sky / tower / floor / art in Boring Mode.
@@ -363,19 +362,30 @@ const gotoOverview = (view) => {
   return render(props(view));
 };
 
-test("B5c: lane cards are one click target with zero buttons; clicking opens the lane Brainstorm", () => {
+test("D2 S9: lane table rows are urgency-sorted (needs you first) and cells open the member", () => {
   reset();
   const view = squad();
   const t = gotoOverview(view);
-  const cards = cardsOf(t);
-  assert.ok(cards.length >= 4);
-  for (const c of cards) {
-    assert.equal(walk(c, (n) => n.type === "button").length, 0);
-    assert.equal(c.props.role, "button");
-  }
-  assert.match(JSON.stringify(byId(t, "boring-card-ade").props.children), /Needs you/);
-  byId(t, "boring-card-ade").props.onClick();
+  const rows = walk(t, (n) => /^boring-lane-row-/.test(String(n.props?.["data-testid"] ?? ""))).map((n) => n.props["data-testid"]);
+  assert.equal(rows[0], "boring-lane-row-ade");
+  assert.deepEqual(rows.slice(-3), ["boring-lane-row-_overlord", "boring-lane-row-_riffbot", "boring-lane-row-_bugs"]);
+  const row = byId(t, "boring-lane-row-ade");
+  assert.match(JSON.stringify(row.props.className), /attn/);
+  assert.match(JSON.stringify(row.props.children), /Needs you/);
+  const cell = walk(row, (n) => n.type === "button")[0];
+  globalThis.__calls = [];
+  cell.props.onClick();
   assert.deepEqual(globalThis.__calls, [["openAgent", "ade-bs"]]);
+});
+
+test("D2 S9: boringLaneTableRows sorts needs-you > running > recent and joins last event from the log feed", () => {
+  const model = boringSidebarModel(squad());
+  const rows = boringLaneTableRows(model, [{ lane: "@ade", text: "shipped it", ts: "2026-01-02" }, { lane: "ade", text: "older", ts: "2026-01-01" }]);
+  assert.equal(rows[0].laneId, "ade");
+  assert.equal(rows.find((r) => r.laneId === "ade").lastEvent, "shipped it");
+  assert.equal(rows.find((r) => r.laneId === "per").lastEvent, "");
+  assert.deepEqual(rows.filter((r) => r.kind === "desk").map((r) => r.laneId), ["_overlord", "_riffbot", "_bugs"]);
+  for (let i = 1; i < rows.filter((r) => r.kind === "lane").length; i++) assert.ok(rows[i - 1].needsYou >= rows[i].needsYou);
 });
 
 test("B5c: Overview | Idea Inbox | Standup Feed tabs mount IdeaInbox / TeamFeed only when selected", () => {
@@ -411,8 +421,8 @@ test("B5f: Idea Inbox and Standup Feed counts preload on BoringApp mount so firs
   };
   try {
     const view = squad({ team: { id: "vibesquad", name: "VibeSquad" } });
-    const chat = render(props(view)); // mounts in mode === "chat"
-    assert.ok(byId(chat, "boring-chat-column"));
+    const chat = render(props(view)); // mounts on the Overview
+    assert.ok(byId(chat, "boring-project-view"));
     await new Promise((r) => setTimeout(r, 0));
     byId(chat, "boring-project-overview-btn").props.onClick();
     const t = render(props(view)); // very first Overview render, no tab click
@@ -426,23 +436,6 @@ test("B5f: Idea Inbox and Standup Feed counts preload on BoringApp mount so firs
   }
 });
 
-test("B5c: idle lanes collapse under boring-idle-lanes-toggle until clicked", () => {
-  reset();
-  const view = squad();
-  let t = gotoOverview(view);
-  const toggle = byId(t, "boring-idle-lanes-toggle");
-  assert.match(JSON.stringify(toggle.props.children), /Show 1 idle lanes/);
-  assert.equal(byId(t, "boring-card-per"), null);
-  toggle.props.onClick();
-  t = render(props(view));
-  assert.match(JSON.stringify(byId(t, "boring-idle-lanes-toggle").props.children), /Hide 1 idle lanes/);
-  const per = byId(t, "boring-card-per");
-  assert.ok(per);
-  assert.equal(walk(per, (n) => n.type === "button").length, 0);
-  globalThis.__calls = [];
-  per.props.onClick();
-  assert.deepEqual(globalThis.__calls, [["openAgent", "per-bs"]]);
-});
 
 test("B5b: topbar has no duplicate Settings / Switch to Psycho; exactly one switch button in the DOM", () => {
   reset();
@@ -602,39 +595,20 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.match(ade, /data-testid="boring-lanes-label"/);
   assert.doesNotMatch(ade, /<select/);
   // B6c
-  assert.match(ade, /BORING_OVERVIEW_LAYOUT_KEY = "vs\.boringOverviewLayout"/);
-  assert.match(ade, /data-testid="boring-overview-layout-toggle"/);
-  assert.match(ade, /data-testid="boring-lane-map"/);
-  for (const id of ["core-overlord", "core-riffbot", "core-bugs"]) assert.ok(ade.includes(`boring-map-${id}`));
+  assert.doesNotMatch(ade, /BORING_OVERVIEW_LAYOUT_KEY|boring-lane-map|boring-layout-/);
+  assert.match(ade, /data-testid="boring-lane-table"/);
   // B6d
   assert.doesNotMatch(css, /--boring-sunset|--boring-wash|radial-gradient/);
   assert.match(css, /\.boring-main \{ background: var\(--surface-0\)/);
   assert.match(ade, /className="boring-surreal-motif"/);
 });
 
-test("B6 review fixes: node state classes + distinct CSS, no double star", () => {
-  assert.equal(boringNodeStateClass("running", 0), "pulse");
-  assert.equal(boringNodeStateClass("idle", 2), "filled");
-  assert.equal(boringNodeStateClass("idle", 0), "hollow");
-  assert.equal(boringNodeStateClass("none", 0), "faint");
-  assert.equal(boringNodeStateClass(null), "faint");
+test("D2: Overview lane table CSS is scoped to Normal mode; map CSS is gone", () => {
   const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
-  assert.match(css, /\.boring-map-node\.filled \{/);
-  assert.match(css, /\.boring-map-node\.faint \{[^}]*dashed/);
-  assert.match(css, /\.boring-map-node\.hollow \{/);
+  assert.match(css, /html\[data-vibe="boring"\] \.boring-lane-table \{/);
+  assert.match(css, /\.boring-lane-row\.attn \{/);
+  assert.doesNotMatch(css, /boring-map-|boring-lane-map/);
   assert.doesNotMatch(ade, /★ \{core\.overlord\.label\}/);
-});
-
-test("B6 lane map layout: no flex-shrink clip, live workers only, grid, stretched connectors", () => {
-  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
-  assert.match(css, /\.boring-lane-map \{[^}]*flex-shrink: 0/);
-  assert.match(css, /\.boring-map-grid \{ display: grid; grid-template-columns: repeat\(auto-fill, minmax\(620px, 1fr\)\)/);
-  assert.match(css, /\.boring-map-lines \{ flex: 0 0 48px; width: 48px; height: auto; min-height: 0; contain: size; align-self: stretch/);
-  assert.match(css, /\.boring-map-children \{[^}]*justify-content: space-around/);
-  assert.match(ade, /filter\(\(w\) => w\.agent\.status === "running" \|\| mapAttn\(w\) > 0\)/);
-  assert.match(ade, /className="boring-map-grid"/);
-  assert.match(css, /\.boring-map-node \{[^}]*white-space: nowrap/);
-  assert.match(css, /\.boring-map-node \.boring-row-label \{[^}]*min-width: max-content/);
 });
 
 // idea-246: EFI's (non-VibeSquad Squad) Trinity "Bugs (@bug)" Start Brainstorm was a silent no-op (it called focusPin, which never spawns).

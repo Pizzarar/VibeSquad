@@ -658,32 +658,9 @@ html[data-vibe="boring"] .boring-section-label { padding: 4px 10px; font-size: 0
 
 /* B6c: overview Cards | Map */
 html[data-vibe="boring"] .boring-overview-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
-html[data-vibe="boring"] .boring-layout-toggle { margin-left: auto; }
-html[data-vibe="boring"] .boring-lane-map { position: relative; display: flex; flex-direction: column; gap: 16px; padding: 20px; border-radius: 14px; background: var(--panel); overflow: hidden; flex-shrink: 0; }
-html[data-vibe="boring"] .boring-lane-map > * { position: relative; z-index: 1; }
-html[data-vibe="boring"] .boring-lane-map > .boring-surreal-motif { position: absolute; z-index: 0; }
-html[data-vibe="boring"] .boring-map-hubs { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
-html[data-vibe="boring"] .boring-map-svg { width: 100%; height: 28px; }
-html[data-vibe="boring"] .boring-map-svg line,
-html[data-vibe="boring"] .boring-map-lines path { stroke: color-mix(in srgb, var(--tb-2) 55%, transparent); stroke-width: 1; fill: none; vector-effect: non-scaling-stroke; }
-html[data-vibe="boring"] .boring-map-cluster { display: flex; align-items: stretch; gap: 0; }
-html[data-vibe="boring"] .boring-map-lines { flex: 0 0 48px; width: 48px; height: auto; min-height: 0; contain: size; align-self: stretch; }
-html[data-vibe="boring"] .boring-map-children { display: flex; flex-direction: column; justify-content: space-around; gap: 8px; }
-html[data-vibe="boring"] .boring-map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(620px, 1fr)); gap: 20px 36px; align-items: start; }
-html[data-vibe="boring"] .boring-map-node { display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; border-radius: 999px !important; white-space: nowrap; border: 1.5px solid var(--cyan); background: transparent; color: var(--text); font: inherit; cursor: pointer; }
-html[data-vibe="boring"] .boring-map-node .boring-row-label { flex: 0 1 auto; min-width: max-content; overflow: visible; }
-html[data-vibe="boring"] .boring-map-lane { align-self: center; border-color: var(--cyan); }
-html[data-vibe="boring"] .boring-map-agent { border-color: var(--purple, var(--tb-2)); }
-html[data-vibe="boring"] .boring-map-core { border-color: var(--coral); }
-html[data-vibe="boring"] .boring-map-node.filled { background: color-mix(in srgb, var(--amber) 16%, var(--panel-hi)); border-color: color-mix(in srgb, var(--amber) 65%, var(--line)); box-shadow: 0 0 0 2px color-mix(in srgb, var(--amber) 22%, transparent) !important; }
-html[data-vibe="boring"] .boring-map-node.hollow { background: transparent; }
-html[data-vibe="boring"] .boring-map-node.faint { opacity: 0.52; border-style: dashed; }
-html[data-vibe="boring"] .boring-map-node.pulse { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cyan) 28%, transparent) !important; }
-html[data-vibe="boring"] .boring-map-worker { font-size: 0.9em; padding: 6px 12px; }
 
 /* B6d: calm surreal horizon/eye motif */
 html[data-vibe="boring"] .boring-surreal-motif { color: color-mix(in srgb, var(--tb-2) 40%, transparent); opacity: 0.35; pointer-events: none; width: 100%; max-width: 360px; height: auto; }
-html[data-vibe="boring"] .boring-lane-map > .boring-surreal-motif { right: 12px; bottom: 8px; width: 320px; left: auto; top: auto; }
 
 /* ===== D1 (@desk, docs/UX_REVIEW.md 1.1-1.9): tokens, flat canvas, measure, row density, glyphs, permission card.
    Implemented Normal Mode Corporate ADE layout — Thanks to Antigravity by Google DeepMind. ===== */
@@ -815,8 +792,7 @@ html[data-vibe="boring"] .tl-sub,
 html[data-vibe="boring"] .tl-todo,
 html[data-vibe="boring"] .tl-note { background: var(--surface-1) !important; border-radius: 8px !important; }
 html[data-vibe="boring"] .boring-lane-card,
-html[data-vibe="boring"] .boring-empty-card,
-html[data-vibe="boring"] .boring-lane-map { background: var(--surface-1); border-radius: 8px !important; }
+html[data-vibe="boring"] .boring-empty-card { background: var(--surface-1); border-radius: 8px !important; }
 html[data-vibe="boring"] .boring-lane-card:hover { background: var(--surface-3) !important; }
 html[data-vibe="boring"] .composer-row,
 html[data-vibe="boring"] .composer textarea { background: var(--surface-sunken); border-radius: 8px !important; }
@@ -964,3 +940,14 @@ html[data-vibe="boring"] .boring-worker-row .boring-row-label { flex: 1; min-wid
 html[data-vibe="boring"] .boring-worker-idle { min-height: 24px; padding: 2px 8px; font-size: var(--t-small); }
 html[data-vibe="boring"] .boring-worker-tab { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html[data-vibe="boring"] .boring-project-block { display: flex; flex-direction: column; gap: 2px; }
+
+/* ===== D2 (@desk, UX_REVIEW S9): dense urgency-sorted lane table. Implemented Normal Mode UX redesign — Thanks to Antigravity by Google DeepMind. ===== */
+html[data-vibe="boring"] .boring-lane-table { width: 100%; border-collapse: collapse; font-size: var(--t-body, 14px); }
+html[data-vibe="boring"] .boring-lane-table th { text-align: left; padding: 6px 12px; font-size: var(--t-small, 12px); font-weight: 600; color: var(--text-muted, var(--muted)); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--bg, var(--panel)); }
+html[data-vibe="boring"] .boring-lane-table td { padding: 0; height: 36px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+html[data-vibe="boring"] .boring-lane-table td.boring-conv-age, html[data-vibe="boring"] .boring-lane-table td.boring-lane-event { padding: 0 12px; }
+html[data-vibe="boring"] .boring-lane-event { color: var(--text-muted, var(--muted)); max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-lane-cell { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 12px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; border-radius: 0 !important; }
+html[data-vibe="boring"] .boring-lane-row:hover { background: var(--panel-hi); }
+html[data-vibe="boring"] .boring-lane-row.attn { box-shadow: inset 3px 0 0 var(--amber); }
+html[data-vibe="boring"] .boring-lane-row.desk { opacity: 0.9; }
