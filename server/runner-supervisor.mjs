@@ -38,15 +38,19 @@ const restarts = new WeakMap(); // owner -> in-flight restart promise
 /**
  * Single-flight per owner: run `fn` once. A concurrent caller (a supervisor/forced restart and an Unstick hung-runner
  * restart) gets the same in-flight promise instead of starting a second run, so a restart can never kill the freshly
- * started runner or spawn a duplicate.
+ * started runner or spawn a duplicate. While it runs, `owner.rc.restarting` holds the promise: the in-process RunnerClient
+ * holds new calls (and retries a read the kill reset) until the new runner is up, instead of failing with ECONNRESET.
  */
 export function oncePerOwner(owner, fn) {
   const inflight = restarts.get(owner);
   if (inflight) return inflight;
+  const rc = owner?.rc;
   const p = Promise.resolve().then(fn).finally(() => {
     if (restarts.get(owner) === p) restarts.delete(owner);
+    if (rc && rc.restarting === p) rc.restarting = null;
   });
   restarts.set(owner, p);
+  if (rc) rc.restarting = p;
   return p;
 }
 
