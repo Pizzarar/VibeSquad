@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { Runner, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent } from './runner.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
-import { acquireRunnerLock, releaseLock } from './lock.mjs';
+import { acquireRunnerLock, holdsLock, publishedPid, readLock, releaseLock } from './lock.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image attachments
@@ -374,44 +374,71 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const dir = arg('dir', path.join(home, 'agents'));
   mkdirSync(home, { recursive: true });
   const lockFile = path.join(home, 'runner.lock');
+  // Boot-phase timing (ms), logged once as {boot: ...}: the P0 11-15 boot took ~3.5 min live but 8.2s offline, so the next
+  // restart's runner.log has to say which phase was slow.
+  const boot = {};
+  let mark = Date.now();
+  const phase = (name) => { const t = Date.now(); boot[name] = t - mark; mark = t; };
   // One runner per home: if a live runner already owns the lock, leave its discovery files alone and exit 0.
   const lock = await acquireRunnerLock(home, { isHealthy: () => holderHealthy(home) });
+  phase('lock');
   if (!lock.owned) {
     console.log(JSON.stringify({ alreadyRunning: lock.holder, home }));
     process.exit(0);
   }
+  // Who we are in runner.lock ({ pid, startedAt }). Another runner may take the lock from us (it judged us wedged): from then
+  // on runner.json, drain.json and the queue belong to it, so this runner admits nothing, never publishes, and exits.
+  const me = readLock(lockFile) ?? { pid: process.pid };
+  const holding = () => holdsLock(lockFile, me);
   // Kill what a previous, hard-killed runner left behind (image name + start time must match), then start a fresh ledger.
   try {
     const swept = sweepOrphans(home);
     if (swept.killed.length || swept.skipped.length) console.log(JSON.stringify({ orphanSweep: swept }));
   } catch (err) { console.error('orphan sweep failed', err); }
+  phase('sweepOrphans');
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
   const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
-  try { const back = runner.recoverQueued(); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
+  phase('init');
+  try { const back = runner.recoverQueued({ shouldAdmit: holding }); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
+  phase('fold');
   startLoopLagMonitor('runner');
+  let stopping = false;
+  const lockLost = (where) => {
+    if (stopping) return;
+    console.log(JSON.stringify({ lockLost: where, me, holder: readLock(lockFile), home }));
+    stop({ keepResumable: true });
+  };
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
+    phase('listen');
+    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) } }));
+    if (!holding()) return lockLost('boot');
     const port = server.address().port;
     writeDiscovery(home, { port, token });
     console.log(JSON.stringify({ listening: port, dir, home }));
   });
-  let stopping = false;
+  const lockCheckMs = Number(process.env.VS_RUNNER_LOCK_CHECK_MS) > 0 ? Number(process.env.VS_RUNNER_LOCK_CHECK_MS) : 5000;
+  const lockCheck = setInterval(() => { if (!holding()) lockLost('check'); }, lockCheckMs);
+  lockCheck.unref();
+  // Leave the lock holder's files alone: runner.json only when it names us, drain.json and runner.lock only while we hold it.
+  const leave = (opts) => {
+    const held = holding();
+    try { runner.shutdown({ ...opts, keepDrainFile: !held }); } catch (err) { console.error('runner shutdown failed', err); } // later calls are no-ops
+    if (publishedPid(home) === process.pid) { try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ } }
+    if (held) { try { releaseLock(lockFile); } catch { /* ignore */ } }
+  };
   const stop = (opts) => {
     if (stopping) return;
     stopping = true;
-    runner.shutdown(opts?.keepResumable ? { keepResumable: true } : undefined); // later runner.shutdown() calls (the 'exit' handler) are no-ops
-    try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ }
-    try { releaseLock(lockFile); } catch { /* ignore */ }
+    clearInterval(lockCheck);
+    leave(opts?.keepResumable ? { keepResumable: true } : {});
     server.close();
     setTimeout(() => process.exit(0), 300).unref();
   };
   // Every way out kills the agents' process trees (claude.exe + its MCP sidecars). 'exit' covers process.exit and
   // a crash; shutdown() is idempotent. A hard kill (taskkill /F, power loss) cannot run any of this.
-  process.on('exit', () => {
-    try { runner.shutdown(); } catch { /* ignore */ }
-    try { releaseLock(lockFile); } catch { /* ignore */ }
-  });
+  process.on('exit', () => leave({}));
   process.on('SIGINT', () => stop());
   process.on('SIGTERM', () => stop());
   process.on('SIGBREAK', () => stop());

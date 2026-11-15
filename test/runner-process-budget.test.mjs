@@ -175,6 +175,8 @@ test('Runner.shutdown kills the whole process tree (agent + its sidecars)', asyn
 
 test('runner/server.mjs runs shutdown on exit and on every stop signal', () => {
   const src = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'runner', 'server.mjs'), 'utf8');
-  assert.match(src, /process\.on\('exit', \(\) => \{[^}]*runner\.shutdown\(\)/s);
+  // exit -> leave(), which shuts the runner down (and leaves a newer lock holder's files alone, P0 11-15).
+  assert.match(src, /process\.on\('exit', \(\) => leave\(/);
+  assert.match(src, /const leave = (?:[^\n]*\n){0,3}[^\n]*runner\.shutdown\(/);
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP', 'uncaughtException']) assert.ok(src.includes(`'${sig}'`), sig);
 });
