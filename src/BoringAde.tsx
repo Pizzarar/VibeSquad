@@ -172,6 +172,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     status: z.member?.agent.status ?? "none",
     needsYou: z.member?.attention && z.member.attention.tone !== "finished" ? 1 : 0,
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
+    updatedAt: z.member?.agent.updatedAt ?? null,
   });
   // A feature lane whose id is the project id duplicates the hub: fold its members into the Desk instead of a second row.
   const deskPins = (view ? pinsForSquad(view).pinned : []).filter((p) => !isHubPin(p) && p.lane.id === view?.team.id);
@@ -274,6 +275,7 @@ export type LaneTableRow = {
   age: string;
   sortAge: number;
 };
+const zones0 = (model: ReturnType<typeof boringSidebarModel>, k: "overlord" | "riffbot") => (model.core[k].updatedAt ? ({ agent: { updatedAt: model.core[k].updatedAt } } as unknown as Pin["lead"]) : null);
 const timeOf = (iso?: string | null) => { const t = Date.parse(iso ?? ""); return Number.isNaN(t) ? 0 : t; };
 /** S9: one dense row per lane, urgency-sorted (needs you › running › most recent). The Project desk rows follow the lanes. */
 export function boringLaneTableRows(
@@ -303,14 +305,14 @@ export function boringLaneTableRows(
   // R2.6: the hub is ONE Desk row (Lead = Overlord, Brainstorm = RiffBot), then Bugs.
   const deskRow: LaneTableRow = {
     key: "_desk", kind: "desk", laneId: "_desk", label: "Desk", code: "", brainstorm: riffbot.status, lead: overlord.status,
-    workers: workerSummary(model.core.deskWorkers), needsYou: model.hubNeedsYou, running: [overlord.status, riffbot.status].filter((x) => x === "running").length,
-    lastEvent: "", age: overlord.age || riffbot.age, sortAge: 0,
+    workers: workerSummary(model.core.deskWorkers), needsYou: model.hubNeedsYou, running: [overlord.status, riffbot.status].filter((x) => x === "running").length + model.core.deskWorkers.filter((w) => w.agent.status === "running").length,
+    lastEvent: "", age: boringConversationAge({ brainstorm: zones0(model, "riffbot"), lead: zones0(model, "overlord"), workers: model.core.deskWorkers }) || overlord.age || riffbot.age, sortAge: 0,
   };
   const bugsRow: LaneTableRow = {
     key: "_bugs", kind: "desk", laneId: "_bugs", label: bugs.label, code: "", brainstorm: "—", lead: bugs.leadRunning ? "running" : "none",
     workers: workerSummary(bugs.pin?.workers ?? []), needsYou: bugs.needsYou, running: bugs.leadRunning ? 1 : 0, lastEvent: "", age: bugs.age, sortAge: 0,
   };
-  return [...lanes, deskRow, bugsRow];
+  return [deskRow, bugsRow, ...lanes];
 }
 
 type Props = {
@@ -341,7 +343,6 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
   const [deskOpen, setDeskOpen] = useState<Record<string, boolean>>({});
-  const [deskWorkersOpen, setDeskWorkersOpen] = useState<Record<string, boolean>>({});
   const [idleWorkersOpen, setIdleWorkersOpen] = useState<Record<string, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
@@ -422,7 +423,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setProjectOpen((o) => ({ ...o, [tid]: true }));
     if (s.laneId === "_overlord" || s.laneId === "_riffbot" || s.laneId === "_desk") {
       setDeskOpen((o) => ({ ...o, [tid]: true }));
-      if (s.role === "worker") setDeskWorkersOpen((o) => ({ ...o, [tid]: true }));
+      if (s.role === "worker") {
+        const w = boringSidebarModel(v).core.deskWorkers.find((x) => x.agent.id === id);
+        if (w && !boringWorkerIsLive(w)) setIdleWorkersOpen((o) => ({ ...o, [`${tid}/_desk`]: true }));
+      }
       return;
     }
     const key = `${tid}/${s.laneId}`;
@@ -575,15 +579,32 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
     </button>
   );
+  /** Workers of a lane or the Desk: live + attention rows inline, idle ones folded into "▸ N idle" (collapsed fold carries the worst-state badge). */
+  const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], key: string, listId: string, idleId: string) => {
+    const live = workers.filter(boringWorkerIsLive);
+    const idle = workers.filter((w) => !boringWorkerIsLive(w));
+    const idleOpen = Boolean(idleWorkersOpen[key]);
+    return (
+      <div className="boring-worker-list" data-testid={listId}>
+        {live.map((w) => workerRow(v, pin, laneId, w))}
+        {idle.length > 0 && (
+          <>
+            <button type="button" className="boring-idle-toggle boring-worker-idle" data-testid={idleId} aria-expanded={idleOpen} onClick={() => setIdleWorkersOpen((o) => ({ ...o, [key]: !idleOpen }))}>
+              <span className="boring-idle-chev" aria-hidden="true">{idleOpen ? "▾" : "▸"}</span>{idle.length} idle
+              {!idleOpen && badge(idle.filter(workerNeedsYou).length, idle.some(memberErr))}
+            </button>
+            {idleOpen && idle.map((w) => workerRow(v, pin, laneId, w))}
+          </>
+        )}
+      </div>
+    );
+  };
   /** One lane shape for Bugs and every feature lane: chevron column, dot, name, collapsed badge; workers under the chevron. */
   const laneRow = (v: TeamView, c: { laneId: string; name: string; code: string; pin: Pin | null; status: string; needsYou: number; err: boolean; age: string; titleTestId?: string; onOpen: () => void }) => {
     const key = `${v.team.id}/${c.laneId}`;
     const isSel = sel.teamId === v.team.id && sel.laneId === c.laneId;
     const open = laneOpen[key] ?? isSel;
     const workers = c.pin?.workers ?? [];
-    const live = workers.filter(boringWorkerIsLive);
-    const idle = workers.filter((w) => !boringWorkerIsLive(w));
-    const idleOpen = Boolean(idleWorkersOpen[key]);
     return (
       <div key={c.laneId} className={`boring-conv-row ${isOn(v, `lane:${c.laneId}`) ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
         <div className="boring-conv-line">
@@ -598,19 +619,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {!open && badge(c.needsYou, c.err)}
           </button>
         </div>
-        {open && c.pin && workers.length > 0 && (
-          <div className="boring-worker-list" data-testid={`boring-workers-${c.laneId}`}>
-            {live.map((w) => workerRow(v, c.pin!, c.laneId, w))}
-            {idle.length > 0 && (
-              <>
-                <button type="button" className="boring-idle-toggle boring-worker-idle" data-testid={`boring-workers-idle-${c.laneId}`} aria-expanded={idleOpen} onClick={() => setIdleWorkersOpen((o) => ({ ...o, [key]: !idleOpen }))}>
-                  <span className="boring-idle-chev" aria-hidden="true">{idleOpen ? "▾" : "▸"}</span>{idle.length} idle
-                </button>
-                {idleOpen && idle.map((w) => workerRow(v, c.pin!, c.laneId, w))}
-              </>
-            )}
-          </div>
-        )}
+        {open && c.pin && workers.length > 0 && workerList(v, c.pin, c.laneId, workers, key, `boring-workers-${c.laneId}`, `boring-workers-idle-${c.laneId}`)}
       </div>
     );
   };
@@ -631,16 +640,17 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const inDesk = sel.teamId === v.team.id && (sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk");
     const open = deskOpen[key] ?? inDesk;
     const hw = m.core.deskWorkers;
-    const hwOpen = deskWorkersOpen[key] ?? (inDesk && sel.role === "worker");
     const deskRunning = m.core.overlord.status === "running" || m.core.riffbot.status === "running" ? "running" : "idle";
+    const liveNames = [m.core.overlord.agentId && m.core.overlord.status !== "none" ? "Overlord" : null, m.core.riffbot.agentId && m.core.riffbot.status !== "none" ? "RiffBot" : null].filter(Boolean).join(" · ");
+    const deskGlyph = m.deskErr ? "error" : m.hubNeedsYou > 0 ? "needs-you" : null;
     return (
       <div key="desk" className="boring-desk-block" data-testid={suffix(v, "boring-desk")}>
         <div className="boring-conv-line">
           {chevronCol(open, () => setDeskOpen((o) => ({ ...o, [key]: !open })), "Desk", suffix(v, "boring-desk-toggle"))}
           <button type="button" className="boring-core-row boring-desk-row" aria-expanded={open} data-testid={suffix(v, "boring-desk-row")} onClick={() => setDeskOpen((o) => ({ ...o, [key]: !open }))}>
-            <span className={`boring-dot ${deskRunning} ${glyphCls(deskRunning, m.hubNeedsYou > 0 ? "needs-you" : null)}`} />
+            <span className={`boring-dot ${deskRunning} ${glyphCls(deskRunning, deskGlyph)}`} />
             <span className="boring-row-label">Desk</span>
-            <span className="boring-desk-sub">Overlord · RiffBot</span>
+            {liveNames && <span className="boring-desk-sub">{liveNames}</span>}
             {!open && badge(m.hubNeedsYou, m.deskErr)}
           </button>
         </div>
@@ -648,15 +658,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           <div className="boring-desk-children">
             {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId))}
             {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
-            {hw.length > 0 && hubPinV && (
-              <div className="boring-conv-line boring-desk-workers">
-                {chevronCol(hwOpen, () => setDeskWorkersOpen((o) => ({ ...o, [key]: !hwOpen })), "hub workers")}
-                <button type="button" className="boring-idle-toggle boring-worker-idle" data-testid={suffix(v, "boring-desk-workers-toggle")} aria-expanded={hwOpen} onClick={() => setDeskWorkersOpen((o) => ({ ...o, [key]: !hwOpen }))}>
-                  {hw.length} {hw.length === 1 ? "worker" : "workers"}
-                </button>
-              </div>
-            )}
-            {hwOpen && hubPinV && hw.length > 0 && <div className="boring-worker-list" data-testid={suffix(v, "boring-desk-workers")}>{hw.map((w) => workerRow(v, hubPinV, "_desk", w))}</div>}
+            {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, `${v.team.id}/_desk`, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-idle"))}
           </div>
         )}
       </div>

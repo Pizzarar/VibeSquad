@@ -376,8 +376,7 @@ test("D2 S9: lane table rows are urgency-sorted (needs you first) and cells open
   const view = squad();
   const t = gotoOverview(view);
   const rows = walk(t, (n) => /^boring-lane-row-/.test(String(n.props?.["data-testid"] ?? ""))).map((n) => n.props["data-testid"]);
-  assert.equal(rows[0], "boring-lane-row-ade");
-  assert.deepEqual(rows.slice(-2), ["boring-lane-row-_desk", "boring-lane-row-_bugs"]);
+  assert.deepEqual(rows.slice(0, 3), ["boring-lane-row-_desk", "boring-lane-row-_bugs", "boring-lane-row-ade"]); // R2 fix2 N2: tree order
   const row = byId(t, "boring-lane-row-ade");
   assert.match(JSON.stringify(row.props.className), /attn/);
   assert.match(JSON.stringify(row.props.children), /Needs you/);
@@ -390,7 +389,8 @@ test("D2 S9: lane table rows are urgency-sorted (needs you first) and cells open
 test("D2 S9: boringLaneTableRows sorts needs-you > running > recent and joins last event from the log feed", () => {
   const model = boringSidebarModel(squad());
   const rows = boringLaneTableRows(model, [{ lane: "@ade", text: "shipped it", ts: "2026-01-02" }, { lane: "ade", text: "older", ts: "2026-01-01" }]);
-  assert.equal(rows[0].laneId, "ade");
+  assert.deepEqual(rows.slice(0, 2).map((r) => r.laneId), ["_desk", "_bugs"]); // R2 fix 2 N2: table order matches the tree
+  assert.equal(rows[2].laneId, "ade");
   assert.equal(rows.find((r) => r.laneId === "ade").lastEvent, "shipped it");
   assert.equal(rows.find((r) => r.laneId === "per").lastEvent, "");
   assert.deepEqual(rows.filter((r) => r.kind === "desk").map((r) => r.laneId), ["_desk", "_bugs"]);
@@ -398,7 +398,8 @@ test("D2 S9: boringLaneTableRows sorts needs-you > running > recent and joins la
   assert.equal(desk.label, "Desk");
   assert.equal(desk.lead, "running"); // Overlord
   assert.equal(desk.brainstorm, "idle"); // RiffBot
-  for (let i = 1; i < rows.filter((r) => r.kind === "lane").length; i++) assert.ok(rows[i - 1].needsYou >= rows[i].needsYou);
+  const lanesOnly = rows.filter((r) => r.kind === "lane");
+  for (let i = 1; i < lanesOnly.length; i++) assert.ok(lanesOnly[i - 1].needsYou >= lanesOnly[i].needsYou);
 });
 
 test("B5c: Overview | Idea Inbox | Standup Feed tabs mount IdeaInbox / TeamFeed only when selected", () => {
@@ -1060,7 +1061,8 @@ test("R2.5: every row has the fixed 16px chevron column; hub workers hang off th
   reset();
   const view = squad({ zones: { hub: { lane: { id: "hub" }, workers: [wk("hw", "running")] }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) } });
   const t = withDesk(view);
-  assert.ok(byId(t, "boring-desk-workers-toggle"));
+  assert.ok(byId(t, "boring-desk-workers")); // live hub worker renders inline, no "N workers" fold
+  assert.equal(byId(t, "boring-desk-workers-toggle"), null);
   assert.deepEqual(boringSelectionForAgent(view, "hw"), { laneId: "_desk", role: "worker" });
   const cols = walk(t, (n) => /boring-chevron-btn/.test(String(n.props?.className ?? "")));
   assert.ok(cols.length >= 6); // project, desk, overlord, riffbot, hub workers, bugs, lanes
@@ -1142,4 +1144,56 @@ test("R2: sidebar Search opens the Command Palette (Ctrl+K); idle toggle sits on
   assert.doesNotMatch(css, /\[data-theme="light"\] \.boring-badge\.err/);
   assert.match(css, /\.boring-idle-toggle \.boring-idle-chev \{ flex: 0 0 16px; width: 16px/);
   assert.match(css, /\.boring-worker-row \{ padding-left: 20px;/);
+});
+
+// ---- R2 fix round 2: Desk workers render like lane workers; Desk row/table honest -----------------------------
+const hubView = (hubWorkers, extra = {}) => squad({ zones: { hub: { lane: { id: "hub" }, workers: hubWorkers }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")), ...extra } });
+
+test("R2 fix2 M1: Desk shows live + attention workers inline and folds only idle ones into '▸ N idle'", () => {
+  reset();
+  const hw = [wk("r1", "running"), wk("a1", "idle", "permission"), ...Array.from({ length: 18 }, (_, i) => wk(`i${i}`, "idle"))];
+  const t = withDesk(hubView(hw));
+  assert.ok(byId(t, "boring-worker-r1") && byId(t, "boring-worker-a1"), "live + attention inline");
+  assert.equal(byId(t, "boring-worker-i0"), null, "idle workers folded");
+  const fold = byId(t, "boring-desk-workers-idle");
+  assert.ok(fold);
+  assert.match(JSON.stringify(fold.props.children), /18/);
+  assert.equal(fold.props.className.includes("boring-idle-toggle"), true);
+  assert.equal(byId(t, "boring-desk-workers-toggle"), null);
+});
+
+test("R2 fix2 M1: idle fold expands to its workers; hub workers reuse the lane worker rows", () => {
+  reset();
+  const view = hubView([wk("r1", "running"), wk("i0", "idle"), wk("i1", "idle")]);
+  let t = withDesk(view);
+  const fold = byId(t, "boring-desk-workers-idle");
+  assert.equal(fold.props["aria-expanded"], false);
+  fold.props.onClick();
+  t = render(props(view));
+  assert.ok(byId(t, "boring-worker-i0") && byId(t, "boring-worker-i1"));
+  assert.equal(byId(t, "boring-desk-workers-idle").props["aria-expanded"], true);
+});
+
+test("R2 fix2 L1/N2: Overview Desk row counts folded running workers and their age", () => {
+  reset();
+  const base = boringLaneTableRows(boringSidebarModel(hubView([])), [])[0];
+  const withW = boringLaneTableRows(boringSidebarModel(hubView([wk("hw", "running")])), [])[0];
+  assert.equal(withW.laneId, "_desk");
+  assert.equal(withW.running, base.running + 1);
+  const newer = boringSidebarModel(hubView([{ agent: { id: "n", status: "idle", title: "N", updatedAt: new Date(NOW - 60000).toISOString() }, attention: null }]));
+  assert.notEqual(boringLaneTableRows(newer, [])[0].age, "");
+});
+
+test("R2 fix2 N3/N4: Desk sub-label lists only who is live; hidden when neither; dot tinted worst-state", () => {
+  reset();
+  const both = withDesk(hubView([]));
+  assert.match(JSON.stringify(byId(both, "boring-desk-row").props.children), /Overlord · RiffBot/);
+  const none = withDesk(squad({ zones: { hub: { lane: { id: "hub" }, workers: [] }, riffbot: zone(null), overlord: zone(null) } }));
+  assert.doesNotMatch(JSON.stringify(byId(none, "boring-desk-row").props.children), /Overlord|RiffBot/);
+  const one = withDesk(squad({ zones: { hub: { lane: { id: "hub" }, workers: [] }, riffbot: zone(null), overlord: zone(mem("ov")) } }));
+  const txt = JSON.stringify(byId(one, "boring-desk-row").props.children);
+  assert.match(txt, /Overlord/);
+  assert.doesNotMatch(txt, /RiffBot/);
+  const err = withDesk(hubView([], { overlord: zone(mem("ov", "error")) }));
+  assert.match(JSON.stringify(byId(err, "boring-desk-row").props.children), /st-err/);
 });
