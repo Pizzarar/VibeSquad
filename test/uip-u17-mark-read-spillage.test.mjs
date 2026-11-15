@@ -140,7 +140,7 @@ describe("U17: DrawerHeader first-class Mark read / Mark unread toggle & More bu
     assert.match(primary, /className="btn ok small"/);
     assert.match(primary, /title="Mark this chat read and clear attention"/);
     assert.match(primary, /onClick=\{\(\) => void markAgentRead\(agent\)\}/);
-    assert.match(primary, /✓ Mark read/);
+    assert.match(primary, /<span className="emoji-glyph">✓ <\/span>Mark read/); // glyph wrapped for Normal mode; Psycho text unchanged
     assert.match(primary, /data-testid="mark-unread"/);
     assert.match(primary, /className="btn ghost small"/);
     assert.match(primary, /title="Put this chat back in the team's needs-you list"/);

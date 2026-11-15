@@ -877,8 +877,8 @@ html[data-vibe="boring"] .usage-inbox-accept { background: var(--accent) !import
 html[data-vibe="boring"] .brainstorm-ctx-bar { background: transparent !important; border: 0 !important; border-bottom: 1px solid var(--border) !important; border-radius: 0 !important; }
 
 /* ===== D1 fix round: single-primary buttons, column alignment, sidebar weights, glyph cleanup ===== */
-.normal-only { display: none; }
-html[data-vibe="boring"] .normal-only { display: inline; }
+/* .normal-only elements carry inline display:none so Psycho never needs an unscoped rule here */
+html[data-vibe="boring"] .normal-only { display: inline !important; }
 html[data-vibe="boring"] .emoji-glyph { display: none; }
 
 /* Header utility buttons are secondary; only [Allow] and Send are filled accents. */

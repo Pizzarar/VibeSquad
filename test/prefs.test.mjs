@@ -49,10 +49,12 @@ test('app.vibe pref UI copy says Psycho/Normal and no pref copy says Hypnospace'
 
 test('boring.css is imported after styles.css and every rule is scoped to html[data-vibe="boring"]', () => {
   assert.match(read('../src/main.tsx'), /import "\.\/styles\.css";\s*\nimport "\.\/boring\.css";/);
-  const css = read('../src/boring.css').replace(/\/\*[\s\S]*?\*\//g, '');
+  const css = read('../src/boring.css').replace(/\/\*[\s\S]*?\*\//g, '')
+    // boring-prefixed keyframes are namespaced (cannot collide with Psycho); drop their bodies
+    .replace(/@keyframes boring-[\w-]+\s*\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '');
   const selectors = css
     .split('}')
-    .map((b) => b.split('{')[0])
+    .map((b) => b.replace(/@media[^{]*\{/g, '').split('{')[0]) // @media wrappers are fine; the rules inside must still be scoped
     .flatMap((s) => s.split(','))
     .map((s) => s.trim())
     .filter(Boolean);
