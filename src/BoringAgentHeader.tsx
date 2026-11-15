@@ -120,6 +120,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
 
   const ctxPct = p.isBs ? p.bsPct : p.budget && p.budget > 0 ? Math.min(100, (p.used / p.budget) * 100) : null;
   const showMeter = ctxPct != null && ctxPct >= BORING_CTX_WARN_PCT;
+  const canHandoff = !agent.archivedAt && ((kind === "lead" && !!p.onSuccessor) || p.isBs);
   const strip = boringHeaderStrip({
     status: agent.status,
     updatedAt: agent.updatedAt,
@@ -127,6 +128,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     ctxPct,
     planHandedOff: p.planHandedOff,
     nowMs: now,
+    meterShown: showMeter,
+    canHandoff,
   });
   const hungText = hung ? `Tool "${hung.name}" running ${humanAge(hung.ageSeconds)}` : "";
   const stripItems = strip.map((s) => (s.kind === "stalled" ? { ...s, text: hung && p.active ? hungText : s.text.replace(/^Stalled: no update for /, "No update for ") } : s));
@@ -146,7 +149,6 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   };
   const running = agent.status === "running" && !agent.archivedAt;
   const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
-  const canHandoff = !agent.archivedAt && ((kind === "lead" && !!p.onSuccessor) || p.isBs);
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
   const showNeedsYou = needsYouFlagged || isMarkedUnread(agent.id) || flagOpen;

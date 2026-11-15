@@ -14,6 +14,9 @@ export function boringHeaderStrip(input: {
   ctxPct: number | null;
   planHandedOff: boolean;
   nowMs: number;
+  /** R2.6: the header already shows the ctx meter; the strip then repeats context only when it carries the Hand off action. */
+  meterShown?: boolean;
+  canHandoff?: boolean;
 }): BoringStripReason[] {
   const out: BoringStripReason[] = [];
   const updated = Date.parse(input.updatedAt ?? "");
@@ -22,6 +25,6 @@ export function boringHeaderStrip(input: {
     if (idle >= BORING_STALL_SECONDS) out.push({ kind: "stalled", text: `Stalled: no update for ${idle >= 120 ? `${Math.round(idle / 60)}m` : `${idle}s`}` });
   }
   if (input.planHandedOff) out.push({ kind: "handoff", text: "Handoff due: plan handed to Lead" });
-  if (input.ctxPct != null && input.ctxPct >= BORING_CTX_WARN_PCT) out.push({ kind: "context", text: `Context ${Math.round(input.ctxPct)}% full` });
+  if (input.ctxPct != null && input.ctxPct >= BORING_CTX_WARN_PCT && (!input.meterShown || input.canHandoff)) out.push({ kind: "context", text: `Context ${Math.round(input.ctxPct)}% full` });
   return out;
 }
