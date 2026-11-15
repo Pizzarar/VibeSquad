@@ -972,3 +972,57 @@ html[data-vibe="boring"] .boring-topbar-switcher { flex: 1 1 0; min-width: 0; fl
 html[data-vibe="boring"] .boring-topbar-switcher > * { flex: 0 0 auto; }
 html[data-vibe="boring"] .boring-topbar-actions { flex: 0 0 auto; flex-wrap: nowrap; }
 html[data-vibe="boring"] .boring-topbar-title { flex: 0 0 auto; }
+
+/* ===== D3a (@desk, UX_REVIEW 2.6): BoringAgentHeader ===== */
+html[data-vibe="boring"] .boring-agent-header { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 14px; background: var(--surface-1); border-bottom: 1px solid var(--border); position: relative; flex: 0 0 auto; }
+html[data-vibe="boring"] .boring-agent-glyph { flex: 0 0 auto; width: 14px; text-align: center; font: 600 14px/1 var(--font-sans, inherit); color: var(--text-3); background: none; border-radius: 0; }
+html[data-vibe="boring"] .boring-agent-glyph.st-run { color: var(--st-run); }
+html[data-vibe="boring"] .boring-agent-glyph.st-attn, html[data-vibe="boring"] .boring-agent-glyph.st-stalled { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-agent-glyph.st-err { color: var(--st-err); }
+html[data-vibe="boring"] .boring-agent-glyph.st-done { color: var(--st-done); }
+html[data-vibe="boring"] .boring-agent-name { font-size: 15px; font-weight: 600; color: var(--text-1); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-agent-role { font-size: var(--t-ui); color: var(--text-3); white-space: nowrap; }
+html[data-vibe="boring"] .boring-agent-spacer { flex: 1 1 0; }
+html[data-vibe="boring"] .boring-hdr-btn { background: transparent !important; background-image: none !important; border: 1px solid var(--border) !important; color: var(--text-1) !important; border-radius: 6px !important; min-height: 28px; padding: 0 10px; font-size: var(--t-ui); font-weight: 500; box-shadow: none !important; text-shadow: none !important; cursor: pointer; }
+html[data-vibe="boring"] .boring-hdr-btn:hover:not(:disabled), html[data-vibe="boring"] .boring-hdr-btn.on { background: var(--surface-3) !important; }
+html[data-vibe="boring"] .boring-hdr-stop { color: var(--st-err) !important; border-color: var(--st-err) !important; }
+html[data-vibe="boring"] .boring-hdr-more { font-size: 18px; line-height: 1; padding: 0 10px; }
+html[data-vibe="boring"] .boring-ctx-meter { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-ui); color: var(--st-attn); }
+html[data-vibe="boring"] .boring-ctx-meter-pct { font-variant-numeric: tabular-nums; }
+html[data-vibe="boring"] .boring-ctx-meter.crit { color: var(--st-err); }
+html[data-vibe="boring"] .boring-ctx-meter-track { width: 64px; height: 6px; border-radius: 3px; background: var(--surface-3); overflow: hidden; }
+html[data-vibe="boring"] .boring-ctx-meter-track > i { display: block; height: 100%; background: currentColor; }
+html[data-vibe="boring"] .boring-agent-menu-wrap { position: relative; flex: 0 0 auto; }
+html[data-vibe="boring"] .boring-agent-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 60; min-width: 230px; display: flex; flex-direction: column; padding: 4px; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 8px; box-shadow: 0 8px 24px #0006; }
+html[data-vibe="boring"] .boring-agent-menu > button { background: transparent !important; background-image: none !important; border: 0 !important; color: var(--text-1) !important; text-align: left; padding: 6px 10px; border-radius: 6px !important; font-size: var(--t-ui); cursor: pointer; box-shadow: none !important; }
+html[data-vibe="boring"] .boring-agent-menu > button:hover:not(:disabled) { background: var(--surface-3) !important; }
+html[data-vibe="boring"] .boring-agent-menu > button:disabled { opacity: 0.5; }
+html[data-vibe="boring"] .boring-agent-menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+html[data-vibe="boring"] .boring-agent-menu-meta { padding: 4px 10px; font-size: 12px; color: var(--text-3); }
+html[data-vibe="boring"] .boring-agent-menu-archive { padding: 4px 6px; }
+html[data-vibe="boring"] .boring-status-strip { display: flex; align-items: center; gap: 8px; height: 32px; margin: 0; border-radius: 0; padding: 0 16px; flex: 0 0 auto; background: color-mix(in srgb, var(--st-attn) 10%, var(--surface-1)); border-bottom: 1px solid color-mix(in srgb, var(--st-attn) 30%, transparent); font-size: var(--t-ui); color: var(--text-1); }
+html[data-vibe="boring"] .boring-strip-item { display: inline-flex; align-items: center; gap: 8px; color: var(--text-1); }
+html[data-vibe="boring"] .boring-strip-glyph, html[data-vibe="boring"] .boring-strip-sep { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-strip-btn { background: transparent !important; background-image: none !important; border: 1px solid var(--border-strong) !important; color: var(--text-1) !important; height: 24px; padding: 0 8px; border-radius: 6px !important; font: 500 12px/16px var(--font-sans, inherit); cursor: pointer; box-shadow: none !important; }
+html[data-vibe="boring"] .boring-strip-btn:hover:not(:disabled) { background: var(--surface-3) !important; }
+html[data-vibe="boring"] .boring-needs-you-wrap .you-flag, html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-needs-you-wrap .you-flag { display: flex !important; }
+html[data-vibe="boring"] .boring-agent-panel { padding: 8px 14px; background: var(--surface-1); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+html[data-vibe="boring"] .boring-agent-panel-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
+html[data-vibe="boring"] .boring-agent-panel textarea { width: 100%; background: var(--surface-sunken); color: var(--text-1); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: inherit; }
+html[data-vibe="boring"] .boring-agent-menu-archive .btn { background: transparent !important; background-image: none !important; border: 1px solid var(--border) !important; color: var(--st-err) !important; border-radius: 6px !important; width: 100%; text-align: left; }
+
+/* D3a fix round: restored config/session controls inside the ⋯ menu + bars under the header */
+html[data-vibe="boring"] .boring-agent-menu { max-height: min(78vh, 720px); overflow-y: auto; min-width: 280px; }
+html[data-vibe="boring"] .boring-agent-menu-section { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; }
+html[data-vibe="boring"] .boring-agent-menu-title { font: 500 11px/16px var(--font-sans, inherit); text-transform: none; letter-spacing: 0; color: var(--text-3); }
+html[data-vibe="boring"] .boring-cfg-row { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; font-size: var(--t-ui); color: var(--text-2); }
+html[data-vibe="boring"] .boring-cfg-row select,
+html[data-vibe="boring"] .boring-cfg-row input { width: 100% !important; height: 26px !important; font-size: 12px !important; background: var(--surface-1) !important; color: var(--text-1) !important; border: 1px solid var(--border) !important; border-radius: 6px; padding: 2px 6px; min-width: 0; }
+html[data-vibe="boring"] .boring-cfg-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+html[data-vibe="boring"] .boring-agent-menu .labels.boring-agent-labels { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 10px; border: 0; }
+html[data-vibe="boring"] .boring-agent-menu > div[style] { padding: 2px 10px; }
+html[data-vibe="boring"] .strip-staged { color: var(--st-attn); }
+html[data-vibe="boring"] .strip-error { color: var(--st-bad, #e5484d); }
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-agent-menu .drawer-labels-list { display: flex !important; }
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-agent-menu [data-testid="drawer-fork-btn"],
+html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-agent-menu [data-testid="drawer-export-btn"] { display: inline-flex !important; }

@@ -190,7 +190,7 @@ test('toAgent exposes currentModeId alongside modeId (the pickers read currentMo
 });
 
 test('DrawerHeader pickers call the runner config route and say "Applies from the next turn." only when busy', async () => {
-  const src = readFileSync(path.join(ROOT, 'src', 'DrawerHeader.tsx'), 'utf8');
+  const src = readFileSync(path.join(ROOT, 'src', 'DrawerHeader.tsx'), 'utf8') + readFileSync(path.join(ROOT, 'src', 'useAgentConfig.tsx'), 'utf8');
   assert.doesNotMatch(src, /not supported on runner agents yet/);
   assert.match(src, /setModeHelper[\s\S]{0,200}runnerSetConfig\(agent\.id, \{ modeId \}\)/);
   assert.match(src, /setModelHelper[\s\S]{0,200}runnerSetConfig\(agent\.id, \{ model: modelId \}\)/);
@@ -236,6 +236,7 @@ test('fix1.1 claude agents carry the 6 permission modes + effort levels; UI help
   const g = toAgent({ id: 'rn-2', provider: 'opencode', cwd: '.', meta: {}, status: 'idle' });
   assert.deepEqual(g.availableModes, [], 'no modes known before the first session: no Claude fallback');
   const src = readFileSync(path.join(ROOT, 'src', 'DrawerHeader.tsx'), 'utf8');
+  const hookSrc = readFileSync(path.join(ROOT, 'src', 'useAgentConfig.tsx'), 'utf8');
   const s = src.indexOf('export const FALLBACK_MODES');
   const e = src.indexOf('export function nextModeInCycle');
   const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(stripTypeScriptTypes(src.slice(s, e)))}`);
@@ -244,7 +245,7 @@ test('fix1.1 claude agents carry the 6 permission modes + effort levels; UI help
   assert.deepEqual(mod.thinkingLevelsFor(g, false), []);
   assert.deepEqual(mod.thinkingLevelsFor(a, false), ['low', 'medium', 'high', 'xhigh', 'max']);
   assert.doesNotMatch(src, /availableModes\?\.length\) \? agent\.availableModes : FALLBACK_MODES/);
-  assert.match(src, /thinkingSelect = !thinkingLevels\.length \? null/);
+  assert.match(hookSrc, /thinkingSelect = !thinkingLevels\.length \? null/);
 });
 
 test('fix1.2 readRunnerAgentSync reports the effective (meta) model and offered modes', async () => {

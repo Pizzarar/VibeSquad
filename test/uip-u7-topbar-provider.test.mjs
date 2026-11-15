@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const src = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
+const src = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8") + readFileSync(new URL("../src/useAgentConfig.tsx", import.meta.url), "utf8");
 const pin = readFileSync(new URL("../src/PinRail.tsx", import.meta.url), "utf8");
 
 test("provider dropdown offers the four canonical providers", () => {

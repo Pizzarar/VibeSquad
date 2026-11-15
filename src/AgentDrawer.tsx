@@ -36,6 +36,8 @@ import { useTimeline, Timeline, TimelineErrorBoundary, stripBootPreamble } from 
 import { PermissionCard } from "./PermissionCard";
 import { Composer, formatBtwPrompt, shouldQueueOnSend } from "./Composer";
 import { composeMessage, setAgentCwd, stageFiles, useAttachments } from "./attachments";
+import { BoringAgentHeader } from "./BoringAgentHeader";
+import { useVibe } from "./AngelBezel";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers } from "./WorkingBar";
 import { RightDock } from "./RightDock";
@@ -183,6 +185,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   const [paneDrop, setPaneDrop] = useState(false);
   setAgentCwd(agent.id, agent.cwd);
 
+  const vibe = useVibe();
   const isBs = isBrainstormAgent(agent);
   const isTopicBs = isTopicBrainstorm(agent);
   const { team, laneId: resolvedLaneId } = teamForAgent(agent);
@@ -544,6 +547,49 @@ ${draft}`);
           Drop to attach
         </div>
       )}
+      {vibe === "boring" && !chatOnly ? (
+        <BoringAgentHeader
+          agent={agent}
+          agentType={agentType}
+          used={used}
+          budget={budget}
+          isBs={isBs}
+          bsPct={bsPct}
+          warnTokens={warnTokens}
+          bsUsedTokens={bsUsedTokens}
+          restarting={restarting}
+          planHandedOff={planHandedOff}
+          doRestart={doRestart}
+          onSuccessor={onSuccessor}
+          toggleSummary={toggleSummary}
+          summaryOpen={summaryOpen}
+          setInboxPopoverOpen={setInboxPopoverOpen}
+          inboxPopoverOpen={inboxPopoverOpen}
+          inboxDumpText={inboxDumpText}
+          setInboxDumpText={setInboxDumpText}
+          inboxParking={inboxParking}
+          inboxToast={inboxToast}
+          parkToInbox={parkToInbox}
+          summaryText={summaryText}
+          setSummaryText={setSummaryText}
+          summaryPath={summaryPath}
+          summaryLoading={summaryLoading}
+          summarySaving={summarySaving}
+          saveSummary={saveSummary}
+          laneId={laneId}
+          att={att}
+          dockOpen={dockOpen}
+          onToggleDock={() => setDockOpen((v) => !v)}
+          onClose={onClose}
+          entries={entries}
+          active={active}
+          stagedSwitch={stagedSwitch}
+          onStageSwitch={setStagedSwitch}
+          restartedFrom={restartedFrom}
+          feedbackDismissed={feedbackDismissed}
+          onFeedback={onFeedback}
+        />
+      ) : (
       <DrawerHeader
         agent={agent}
         agentType={agentType}
@@ -598,6 +644,7 @@ ${draft}`);
         onToggleDock={() => !chatOnly && setDockOpen((v) => !v)}
         chatOnly={chatOnly}
       />
+      )}
 
       {agent.pendingPermissions?.map((p) => (
         <PermissionCard

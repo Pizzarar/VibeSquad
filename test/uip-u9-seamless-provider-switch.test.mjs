@@ -11,7 +11,7 @@ import { performBrainstormRestart, resetBrainstormRestartState } from "../server
 import { seedDefaultPack } from "../server/profiles.mjs";
 import { matchesFilter } from "../src/timelineFilter.ts";
 
-const drawerSrc = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
+const drawerSrc = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8") + readFileSync(new URL("../src/useAgentConfig.tsx", import.meta.url), "utf8");
 const agentSrc = readFileSync(new URL("../src/AgentDrawer.tsx", import.meta.url), "utf8");
 const timelineSrc = readFileSync(new URL("../src/Timeline.tsx", import.meta.url), "utf8");
 

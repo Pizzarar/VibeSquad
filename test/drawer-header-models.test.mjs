@@ -11,7 +11,7 @@ const ROOT = resolve(__dirname, "..");
 async function loadDrawerModelHelpers() {
   const drawerSrc = readFileSync(resolve(ROOT, "src", "DrawerHeader.tsx"), "utf8");
   const startIdx = drawerSrc.indexOf("export const PROVIDER_MODEL_HINTS");
-  const endIdx = drawerSrc.indexOf("const providerModelsCache");
+  const endIdx = drawerSrc.indexOf("export const providerModelsCache");
   assert.ok(startIdx >= 0 && endIdx > startIdx, "Could not locate PROVIDER_MODEL_HINTS and buildProviderModelOptions in DrawerHeader.tsx");
   const tsSnippet = drawerSrc.slice(startIdx, endIdx);
   const jsSnippet = stripTypeScriptTypes(tsSnippet);
@@ -74,7 +74,8 @@ test("3. buildProviderModelOptions merges and deduplicates currentModel, liveMod
 });
 
 test("4. DrawerHeader renders drawer-model-select, fetches listProviderModels, and avoids static global drawer-model-list id", async () => {
-  const { drawerSrc } = await loadDrawerModelHelpers();
+  const { drawerSrc: headerSrc } = await loadDrawerModelHelpers();
+  const drawerSrc = headerSrc + readFileSync(resolve(ROOT, "src", "useAgentConfig.tsx"), "utf8"); // the model controls now live in the shared hook
 
   assert.match(drawerSrc, /data-testid="drawer-model-select"/, "Should render <select data-testid=\"drawer-model-select\">");
   assert.match(drawerSrc, /data-testid="drawer-model-input"/, "Should support custom model input mode");

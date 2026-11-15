@@ -198,7 +198,7 @@ test("5. spawnEnvFor injects CLAUDE_CODE_ENTRYPOINT=Paseo for Claude provider wh
 });
 
 test("6. oppositeProviderTarget and switch buttons in DrawerHeader.tsx and HandoffModal.tsx", async () => {
-  const drawerSrc = readFileSync(resolve(ROOT, "src", "DrawerHeader.tsx"), "utf8");
+  const drawerSrc = readFileSync(resolve(ROOT, "src", "DrawerHeader.tsx"), "utf8") + readFileSync(resolve(ROOT, "src", "useAgentConfig.tsx"), "utf8");
   const handoffSrc = readFileSync(resolve(ROOT, "src", "HandoffModal.tsx"), "utf8");
 
   assert.match(drawerSrc, /data-testid="drawer-switch-provider-btn"/);
