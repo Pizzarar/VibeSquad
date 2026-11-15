@@ -136,7 +136,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -182,6 +182,9 @@ const props = (view, extra = {}) => ({
   ...extra,
 });
 const render = (p) => ((hs.i = 0), BoringApp(p));
+const laneBtn = (t, lane) => walk(byId(t, `boring-conv-${lane}`), (n) => n.props?.className === "boring-conv-title")[0];
+// Header tabs replace the old sidebar role pills: select the lane first, then pick the member tab.
+const pickTab = (view, lane, tab) => { laneBtn(render(props(view)), lane).props.onClick(); byId(render(props(view)), `boring-top-${tab}`).props.onClick(); };
 
 test("boringConversationAge: newest updatedAt across brainstorm, lead and workers; empty when none", () => {
   assert.equal(boringConversationAge({ brainstorm: mem("a", "idle", ago(30)), lead: mem("b", "idle", ago(10)), workers: [mem("w", "idle", ago(60))] }, NOW), "10m");
@@ -228,9 +231,10 @@ test("boringSidebarModel: a Squad with no pins has no conversations", () => {
 test("BoringApp sidebar: CTA, core rows, conversation pills and bottom dock are present", () => {
   reset();
   const t = render(props(squad()));
-  for (const id of ["boring-sidebar", "boring-new-conv-btn", "boring-core-overlord", "boring-core-riffbot", "boring-core-bugs", "boring-conv-ade", "boring-conv-brainstorm-ade", "boring-conv-lead-ade", "boring-conv-per", "boring-conv-lead-per", "boring-usage-btn", "boring-settings-btn", "boring-switch-vibespace-btn", "boring-new-project-btn", "boring-project-overview-btn"]) {
+  for (const id of ["boring-sidebar", "boring-new-conv-btn", "boring-core-overlord", "boring-core-riffbot", "boring-core-bugs", "boring-conv-ade", "boring-conv-per", "boring-usage-btn", "boring-settings-btn", "boring-switch-vibespace-btn", "boring-new-project-btn", "boring-project-overview-btn"]) {
     assert.ok(byId(t, id), id);
   }
+  for (const gone of ["boring-conv-brainstorm-ade", "boring-conv-lead-ade", "boring-conv-lead-per"]) assert.equal(byId(t, gone), null, `${gone} (role pills moved to header tabs)`);
   byId(t, "boring-new-conv-btn").props.onClick();
   byId(t, "boring-settings-btn").props.onClick();
   assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["onAddBuddy", "onSettings"]);
@@ -245,7 +249,7 @@ test("Switch to Psycho sets app.vibe back to fun", () => {
 test("Lead pill: no lead running shows the empty card; running lead renders AgentDrawer and enables Check in", () => {
   reset();
   const view = squad();
-  byId(render(props(view)), "boring-conv-lead-per").props.onClick();
+  pickTab(view, "per", "lead");
   let t = render(props(view));
   assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Lead is running yet/);
   assert.equal(byType(t, "AgentDrawer"), null);
@@ -253,8 +257,8 @@ test("Lead pill: no lead running shows the empty card; running lead renders Agen
 
   reset();
   globalThis.__agents.set("ade-ld", { id: "ade-ld" });
-  byId(render(props(view)), "boring-conv-lead-ade").props.onClick();
-  assert.deepEqual(globalThis.__calls.map(([n, pin, id]) => [n, pin.lane.id, id]), [["openPinMember", "ade", "ade-ld"]]);
+  pickTab(view, "ade", "lead");
+  assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openPinMember").map(([n, pin, id]) => [n, pin.lane.id, id]), [["openPinMember", "ade", "ade-ld"]]);
   t = render(props(view));
   assert.equal(byType(t, "AgentDrawer").props.agent.id, "ade-ld");
   assert.equal(byId(t, "boring-empty-card"), null);
@@ -266,12 +270,12 @@ test("Lead pill: no lead running shows the empty card; running lead renders Agen
 
 test("Brainstorm pill opens the agent; with no session it starts one via onOpenPin", () => {
   reset();
-  byId(render(props(squad())), "boring-conv-brainstorm-ade").props.onClick();
-  assert.deepEqual(globalThis.__calls, [["openAgent", "ade-bs"]]);
+  pickTab(squad(), "ade", "brainstorm");
+  assert.deepEqual(globalThis.__calls, [["openAgent", "ade-bs"], ["openAgent", "ade-bs"]]);
   reset();
   const v2 = squad({ pins: [lanePin("ade", { brainstorm: null })] });
-  byId(render(props(v2)), "boring-conv-brainstorm-ade").props.onClick();
-  assert.deepEqual(globalThis.__calls, [["onOpenPin", "ade"]]);
+  pickTab(v2, "ade", "brainstorm");
+  assert.deepEqual(globalThis.__calls, [["onOpenPin", "ade"], ["onOpenPin", "ade"]]);
   const t = render(props(v2));
   assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Brainstorm session/);
   globalThis.__spinUpPin = (p) => { globalThis.__calls.push(["spinUpPin", p.lane.id]); return Promise.resolve("a"); };
@@ -674,7 +678,7 @@ test("idea-246 review: Bugs start keeps busy + error when the lane is created mi
 test("idea-246 review: a closed Buddy shows the Start card, not its drawer (resolvePinChatAgentId)", () => {
   reset();
   const view = squad({ pins: [lanePin("ade", { brainstorm: mem("ade-bs", "closed") })] });
-  byId(render(props(view)), "boring-conv-brainstorm-ade").props.onClick();
+  laneBtn(render(props(view)), "ade").props.onClick();
   const t = render(props(view));
   assert.ok(byId(t, "boring-empty-card"));
   assert.equal(byType(t, "AgentDrawer"), null);
@@ -816,4 +820,86 @@ test("D2 2.2 BoringApp mounts NEEDS YOU at the top of the sidebar; selection der
   const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
   assert.ok(ade.indexOf("<BoringInbox") > ade.indexOf('data-testid="boring-new-conv-btn"'));
   assert.ok(ade.indexOf("<BoringInbox") < ade.indexOf('data-testid="boring-project-tree"'));
+});
+
+// ---- D2 2.3-2.5: breadcrumb, selection from the active agent, workers in the tree, header tabs ---------------
+const wk = (id, status = "idle", tone = null, title = id.toUpperCase()) => ({ agent: { id, status, title, updatedAt: ago(4) }, attention: tone ? { tone } : null });
+
+test("D2 breadcrumb: Project › Lane › Agent from selection, never the 'Conversation' fallback", () => {
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "chat", laneLabel: "UI Lab", agentLabel: "Lead" }), [{ key: "project", label: "VibeSquad" }, { key: "lane", label: "UI Lab" }, { key: "agent", label: "Lead" }]);
+  assert.deepEqual(boringBreadcrumb({ project: "VibeSquad", mode: "project", laneLabel: "UI Lab", agentLabel: "Lead" }).map((c) => c.label), ["VibeSquad", "Overview"]);
+  assert.deepEqual(boringBreadcrumb({ project: "", mode: "chat", laneLabel: null, agentLabel: null }).map((c) => c.label), ["No project"]);
+  assert.ok(!readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8").includes('"Conversation"'));
+});
+
+test("D2 boringLaneLabel keeps known acronyms upper-case", () => {
+  assert.equal(boringLaneLabel("Ui Lab"), "UI Lab");
+  assert.equal(boringLaneLabel("Ade Bezel Api"), "ADE Bezel API");
+  assert.equal(boringLaneLabel("Perfection"), "Perfection");
+  assert.equal(boringLaneLabel("Guide"), "Guide"); // word boundaries only, no substring hits
+});
+
+test("D2 boringSelectionForAgent: hub agents, bugs lane, lane roles and workers", () => {
+  const v = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1")] }), lanePin("per")] });
+  assert.deepEqual(boringSelectionForAgent(v, "ov"), { laneId: "_overlord", role: "lead" });
+  assert.deepEqual(boringSelectionForAgent(v, "rb"), { laneId: "_riffbot", role: "brainstorm" });
+  assert.deepEqual(boringSelectionForAgent(v, "bug-bs"), { laneId: "_bugs", role: "brainstorm" });
+  assert.deepEqual(boringSelectionForAgent(v, "ade-ld"), { laneId: "ade", role: "lead" });
+  assert.deepEqual(boringSelectionForAgent(v, "w1"), { laneId: "ade", role: "worker" });
+  assert.equal(boringSelectionForAgent(v, "nope"), null);
+});
+
+test("D2 boringLaneTarget: most urgent member, else Brainstorm", () => {
+  assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs"), lead: mem("ld", "running"), workers: [] }), { role: "brainstorm", agentId: "bs" });
+  assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs"), lead: mem("ld", "idle", ago(1), { tone: "needs-you" }), workers: [wk("w", "running", "error")] }), { role: "lead", agentId: "ld" });
+  assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs"), lead: null, workers: [wk("w", "idle", "permission")] }), { role: "worker", agentId: "w" });
+  assert.deepEqual(boringLaneTarget({ brainstorm: null, lead: null, workers: [] }), { role: "brainstorm", agentId: null });
+  assert.equal(boringWorkerIsLive(wk("a", "idle", "finished")), false);
+  assert.equal(boringWorkerIsLive(wk("a", "running")), true);
+});
+
+test("D2 BoringApp: clicking a lane opens its most urgent member and the breadcrumb follows the selection", () => {
+  reset();
+  const view = squad({ pins: [lanePin("ade", { lead: mem("ade-ld", "idle", ago(1), { tone: "needs-you" }), workers: [wk("w1", "running")] }), lanePin("per")] });
+  laneBtn(render(props(view)), "ade").props.onClick();
+  assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["openPinMember"]);
+  const t = render(props(view));
+  assert.equal(byId(t, "boring-crumb-project").props.children, "VibeSquad");
+  assert.equal(byId(t, "boring-crumb-lane").props.children, "Lane ADE");
+  assert.equal(byId(t, "boring-crumb-agent").props.children, "Lead");
+  // Header tabs: Brainstorm, Lead and the live worker; the lane's sidebar row no longer has role pills.
+  assert.ok(byId(t, "boring-top-brainstorm") && byId(t, "boring-top-lead") && byId(t, "boring-top-worker-w1"));
+  byId(t, "boring-top-worker-w1").props.onClick();
+  assert.deepEqual(globalThis.__calls.at(-1), ["openAgent", "w1"]);
+  globalThis.__agents.set("w1", { id: "w1", title: "W1" });
+  const t2 = render(props(view));
+  assert.equal(byType(t2, "AgentDrawer").props.agent.id, "w1");
+  assert.equal(byId(t2, "boring-crumb-agent").props.children, "W1");
+});
+
+test("D2 BoringApp: a lane expands to live workers with idle ones collapsed to '▸ N idle'; other projects can stay expanded", () => {
+  reset();
+  const ws = [wk("w1", "running"), wk("w2", "idle"), wk("w3", "idle")];
+  const view = squad({ pins: [lanePin("ade", { workers: ws }), lanePin("per")] });
+  let t = render(props(view));
+  assert.equal(byId(t, "boring-workers-ade"), null); // collapsed until toggled
+  byId(t, "boring-conv-toggle-ade").props.onClick();
+  t = render(props(view));
+  assert.ok(byId(t, "boring-worker-w1"));
+  assert.equal(byId(t, "boring-worker-w2"), null);
+  assert.match(JSON.stringify(byId(t, "boring-workers-idle-ade").props.children), /2/);
+  assert.match(JSON.stringify(byId(t, "boring-workers-idle-ade").props.children), /idle/);
+  byId(t, "boring-workers-idle-ade").props.onClick();
+  t = render(props(view));
+  assert.ok(byId(t, "boring-worker-w2") && byId(t, "boring-worker-w3"));
+  // Multiple expanded projects: switching away keeps the first one open with its lanes inline.
+  reset();
+  const other = { ...squad(), team: { id: "efi", name: "EFI" }, pins: [lanePin("arc")] };
+  const switched = [];
+  const p2 = (v) => props(v, { views: [squad(), other], onSelectSquad: (id) => switched.push(id) });
+  byId(render(p2(squad())), "boring-project-header-efi").props.onClick();
+  assert.deepEqual(switched, ["efi"]);
+  const t3 = render(p2(other));
+  assert.equal(byId(t3, "boring-project-header-vs").props["aria-expanded"], true);
+  assert.ok(byId(t3, "boring-project-lanes-vs") && byId(t3, "boring-conv-ade"));
 });
