@@ -65,6 +65,7 @@ export type BoringAgentHeaderProps = {
   onFeedback: (verdict: "good" | "lost") => Promise<void>;
 };
 
+const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s);
 const GLYPH_CHAR: Record<string, string> = { run: "●", idle: "○", attn: "!", stalled: "◌", err: "✕", done: "✓" };
 
 function humanAge(sec: number): string {
@@ -144,7 +145,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     }
   };
   const running = agent.status === "running" && !agent.archivedAt;
-  const roleLine = [AGENT_TYPE_LABEL[p.agentType], labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
+  const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
   const canHandoff = !agent.archivedAt && ((kind === "lead" && !!p.onSuccessor) || p.isBs);
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
@@ -196,7 +197,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
             type="button"
             className={`boring-hdr-btn${p.dockOpen ? " on" : ""}`}
             data-testid="boring-dock-toggle"
-            title={p.dockOpen ? "Close side dock" : "Open: Changes / Files / Terminal / Scripts"}
+            title={p.dockOpen ? "Close context panel" : "Open context panel: Workers / Changes / Plan / Feed / Files / Terminal"}
             onClick={p.onToggleDock}
           >
             Dock {p.dockOpen ? "▶" : "◀"}
