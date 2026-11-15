@@ -543,6 +543,8 @@ export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId }
   );
 }
 
+const boringNow = () => typeof document !== "undefined" && document.documentElement.getAttribute("data-vibe") === "boring";
+
 // Normal mode (html[data-vibe=boring]) gets the outcome-first tool rows; Psycho rendering is untouched.
 function useBoringTimeline(): boolean {
   const read = () => typeof document !== "undefined" && document.documentElement.getAttribute("data-vibe") === "boring";
@@ -599,13 +601,13 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
     const output = d.output ?? d.stdout ?? d.stderr ?? it.output ?? "";
     return (
       <div data-testid="tl-tool-detail" className="tl-tool-detail">
-        {d.command && <div><b>Command:</b> <code>{d.command}</code></div>}
+        {d.command && <div><b className="tl-detail-label">Command:</b> <code>{d.command}</code></div>}
         {d.cwd && <div><b>cwd:</b> <code>{d.cwd}</code></div>}
         {d.exitCode != null && (
           <div>
             <span
-              className="tl-exit-badge"
-              style={{ background: d.exitCode === 0 ? "var(--mint-fill)" : "var(--pink-fill)", color: "var(--bg)", padding: "1px 6px", borderRadius: 3 }}
+              className={`tl-exit-badge ${d.exitCode === 0 ? "ok" : "err"}`}
+              style={boringNow() ? undefined : { background: d.exitCode === 0 ? "var(--mint-fill)" : "var(--pink-fill)", color: "var(--bg)", padding: "1px 6px", borderRadius: 3 }}
             >
               exit {d.exitCode}
             </span>
@@ -907,8 +909,8 @@ export function TimelineItem({
               <span className="bt-glyph" aria-hidden="true">{KIND_GLYPH[kind]}</span>
               <span className="tool-name">{it.name}</span>
               <span className="bt-target" title={toolTarget(it, d)}>{formatToolError(toolTarget(it, d)).slice(0, 160)}</span>
-              {stats && (stats.add > 0 || stats.del > 0) && <span className="bt-diff"><span className="bt-add">+{stats.add}</span> <span className="bt-del">−{stats.del}</span></span>}
-              {ms != null && <span className="bt-dur">{formatDuration(ms)}</span>}
+              <span className="bt-diff">{stats && (stats.add > 0 || stats.del > 0) && <><span className="bt-add">+{stats.add}</span> <span className="bt-del">−{stats.del}</span></>}</span>
+              <span className="bt-dur">{ms != null ? formatDuration(ms) : ""}</span>
               <span className="bt-status" aria-label={failed ? "failed" : running ? "running" : "ok"}>{failed ? "✕" : running ? <span className="bt-spin" /> : "✓"}</span>
             </div>
             {failed && errText && <div className="bt-error">{errText}</div>}
@@ -1272,7 +1274,12 @@ function ToolRunRow({
       >
         <span aria-hidden="true" style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
         {boring ? (
-          <span className="boring-toolgroup-summary" data-testid="boring-toolgroup-summary">{summarizeTools(run.entries.map((x) => x.item))}</span>
+          <span className="boring-toolgroup-summary" data-testid="boring-toolgroup-summary">
+            {run.entries.some((x) => isFailedTool(x.item, x.item?.detail ?? {})) ? null : <span className="bt-sum-ok" aria-label="all ok">✓ </span>}
+            {summarizeTools(run.entries.map((x) => x.item)).split(" · ").map((seg, i) => (
+              <Fragment key={i}>{i > 0 && " · "}{/ failed$/.test(seg) ? <span className="bt-sum-err">{seg}</span> : seg}</Fragment>
+            ))}
+          </span>
         ) : (
           <>
             <span className="tool-name">{run.count} tool calls</span>

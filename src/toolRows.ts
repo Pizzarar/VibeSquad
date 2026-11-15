@@ -9,7 +9,7 @@ export type ToolKind = "shell" | "edit" | "read" | "search" | "web" | "agent" | 
 export function toolKind(it: any, d: any = it?.detail ?? {}): ToolKind {
   const name = String(it?.name ?? "").toLowerCase();
   if (d?.type === "shell" || name === "bash" || name === "powershell" || name === "run_command") return "shell";
-  if (d?.type === "sub_agent" || name === "task" || name === "agent") return "agent";
+  if (d?.type === "sub_agent" || name === "task" || name === "agent" || /^(create_agent|spawn_worker|send_agent_prompt)$/.test(name)) return "agent";
   if (/(^|_)(edit|write|multiedit|notebookedit|apply_patch|patch)/.test(name) || d?.unifiedDiff || d?.diff || d?.oldString != null || d?.newString != null) return "edit";
   if (/read|view|cat/.test(name)) return "read";
   if (/grep|glob|search|find|ls$/.test(name)) return "search";
