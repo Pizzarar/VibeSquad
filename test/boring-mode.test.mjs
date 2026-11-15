@@ -17,6 +17,8 @@ const stub = (name, body) => writeFileSync(join(dir, name), `import React from $
 globalThis.__opened = [];
 globalThis.__toasts = [];
 stub("PinIdeas.mjs", "export const showPinToast = (m) => globalThis.__toasts.push(m);");
+writeFileSync(join(dir, "teams.mjs"), `export const isHubLane = (team, lane) => lane.hub === true || (!team.lanes.some((l) => l.hub === true) && lane.id === team.id);`);
+writeFileSync(join(dir, "boringLocation.mjs"), transformSync("boringLocation.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringLocation.ts"), "utf8"), { lang: "ts" }).code.replace("./teams.ts", "./teams.mjs"));
 stub("pinFocus.mjs", "export const openPinMember = (pin, id) => globalThis.__opened.push([pin.lane.id, id]);");
 stub("SkyZones.mjs", `export const FaceStage = () => React.createElement("i", { "data-stub": "face" });\nexport const useSkyBezel = () => ({ frameStyle: null });`);
 stub("skyZonesLogic.mjs", "export const angelCssScale = () => 4; export const cloudStripStyle = () => undefined; export const faceBg = () => null; export const SKY_CLOUDS_URL = () => '';");
@@ -128,7 +130,7 @@ stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; expor
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
 stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
-stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; };`);
+stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
 const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace(/from "react"/, `from "./react-hooks.mjs"`)
@@ -743,8 +745,16 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
 const tsx = (file) => transformSync(file, readFileSync(resolve(import.meta.dirname, "..", "src", file), "utf8"), { lang: file.endsWith("x") ? "tsx" : "ts", jsx: { runtime: "classic" } }).code;
-writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = () => false; export const clearUnreadLocal = () => {}; export const dismissLocal = () => {}; export const snoozeLocal = () => {};`);
-writeFileSync(join(dir, "attentionItems.mjs"), tsx("attentionItems.ts").replace(/from "\.\/attentionLocal\.ts"/, `from "./attentionLocal.mjs"`));
+writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = () => false; export const isLocallyHidden = () => false; export const clearUnreadLocal = () => {}; export const dismissLocal = () => {}; export const snoozeLocal = () => {};`);
+writeFileSync(join(dir, "boringHeaderStripStub.mjs"), tsx("boringHeaderStrip.ts"));
+// isHubLane stub: the real one pulls in React via teams.ts (same rule, covered by teams tests).
+writeFileSync(join(dir, "identity.mjs"), tsx("identity.ts").replace("\"../teams.example.json\"", JSON.stringify(pathToFileURL(resolve(import.meta.dirname, "..", "teams.example.json")).href)));
+writeFileSync(
+  join(dir, "attentionItems.mjs"),
+  tsx("attentionItems.ts")
+    .replace(/from "\.\/attentionLocal\.ts"/, `from "./attentionLocal.mjs"`)
+    .replace(/from "\.\/boringHeaderStrip\.ts"/, `from "./boringHeaderStripStub.mjs"`)
+);
 globalThis.__resp = [];
 globalThis.__cleared = [];
 stub("paseoInbox.mjs", `export const bumpAgents = () => {}; export const clearAgentAttention = (id) => { globalThis.__cleared.push(["attention", id]); return Promise.resolve(); }; export const clearNeedsYou = (a) => { globalThis.__cleared.push(["needs-you", a.id]); return Promise.resolve(); }; export const snoozeNeedsYou = () => Promise.resolve();`);
@@ -757,7 +767,7 @@ writeFileSync(
     .replace(/from "\.\/paseo"/, `from "./paseoInbox.mjs"`)
     .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`),
 );
-const { BoringInbox, needsYouRows, recentDone, needsYouReason, openNeedsYouRow } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
+const { BoringInbox, needsYouRows, doneRecently, recentDone, needsYouReason, openNeedsYouRow } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
 
 const ag = (id, over = {}) => ({ id, title: id.toUpperCase(), status: "idle", updatedAt: ago(10), labels: {}, pendingPermissions: [], ...over });
 const att = (id, tone, reason, over = {}) => ({ agent: ag(id, over.agent), kind: over.kind ?? "worker", laneId: over.laneId ?? "ade", attention: { tone, reason } });
@@ -795,10 +805,10 @@ test("D2 2.2 BoringInbox: labelled NEEDS YOU (never Inbox), inline Allow/Deny on
   const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [A, B], now: NOW, logs: [] }));
   assert.match(html, /Needs you/);
   assert.doesNotMatch(html, /Inbox/);
-  assert.match(html, /Recent done \(0\)/);
-  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 5);
+  assert.match(html, /Done recently \(1\)/); // the finished agent, not counted as needing you
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 4); // finished moved to Done recently
   assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow").length, 1); // the question permission has no inline buttons
-  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss").length, 3); // pick, error, finished
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss").length, 2); // hover-menu Dismiss: pick, error (permissions are answered, finished is in Done recently)
   walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow")[0].props.onClick();
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(globalThis.__resp[0], ["perm", "req1", { behavior: "allow" }]);
@@ -1196,4 +1206,111 @@ test("R2 fix2 N3/N4: Desk sub-label lists only who is live; hidden when neither;
   assert.doesNotMatch(txt, /RiffBot/);
   const err = withDesk(hubView([], { overlord: zone(mem("ov", "error")) }));
   assert.match(JSON.stringify(byId(err, "boring-desk-row").props.children), /st-err/);
+});
+
+// ---- Desk R2 Unit 2: Needs you = 2-line rows, cap 5 + more, Done recently, hub "Desk", clean titles -------
+const manyView = (n) =>
+  ({ team: { id: "vs", name: "VibeSquad", lanes: [{ id: "ade", name: "ADE" }, { id: "vs", name: "vs", hub: true }] }, members: Array.from({ length: n }, (_, i) => att(`p${i}`, "needs-you", `pick ${i}`, { agent: { updatedAt: ago(20 + i) } })), needsYou: n, running: 0 });
+const testids = (t, id) => walk(t, (n) => n.props?.["data-testid"] === id);
+
+test("Desk R2 Needs you: the count equals the rows; cap 5 with a '+ N more' toggle", () => {
+  reset();
+  const v = manyView(8);
+  const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
+  assert.equal(testids(t, "boring-needs-you-item").length, 5);
+  assert.equal(testids(t, "boring-needs-you-count")[0].props.children, 8);
+  assert.match(renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs: [] })), /\+ 3 more/);
+  const few = (hs.i = 0, BoringInbox({ views: [manyView(4)], now: NOW, logs: [] }));
+  assert.equal(testids(few, "boring-needs-you-item").length, 4);
+  assert.equal(testids(few, "boring-needs-you-more").length, 0);
+  assert.equal(testids(few, "boring-needs-you-count")[0].props.children, 4);
+});
+
+test("Desk R2 Needs you: finished lists under Done recently (count == rows), not under Needs you", () => {
+  reset();
+  const v = teamOf("vs", "VibeSquad", [att("fin", "finished", "all done"), att("ask", "needs-you", "pick")]);
+  const logs = [{ teamId: "vs", project: "VibeSquad", entries: [{ ts: ago(5), type: "done", text: "shipped D1", agent: "x", lane: "ade" }] }];
+  const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs }));
+  assert.deepEqual(testids(t, "boring-needs-you-item").map((n) => n.props["data-kind"]), ["label"]);
+  assert.equal(testids(t, "boring-needs-you-count")[0].props.children, 1);
+  const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs }));
+  assert.match(html, /Done recently \(2\)/); // the finished agent + the logged done entry
+});
+
+test("Desk R2 Needs you: buttons only on quick permissions; every row has the hover menu with Snooze", () => {
+  reset();
+  const t = (hs.i = 0, BoringInbox({ views: [A, B], now: NOW, logs: [] }));
+  assert.equal(testids(t, "boring-needs-allow").length, 1);
+  assert.equal(testids(t, "boring-needs-snooze").length, 4);
+  for (const id of ["perm", "q", "ask", "err"]) assert.equal(testids(t, `boring-needs-menu-${id}`).length, 1);
+  assert.equal(walk(t, (n) => n.props?.className === "boring-needs-btn").length, 0); // no inline Dismiss button any more
+});
+
+test("Desk R2 Needs you: hub-lane items read 'Desk'; real legacy lead titles are named from labels (formatDisplayTitle) or cleanTitle", () => {
+  reset();
+  const lead = (id, title, laneId, labels) => att(id, "needs-you", "why", { kind: "lead", laneId, agent: { title, labels } });
+  const v = {
+    team: { id: "vs", name: "VibeSquad", lanes: [{ id: "vs", name: "vs", hub: true }, { id: "main-game", name: "Main Game" }, { id: "plugins", name: "Plugins" }] },
+    members: [
+      lead("o", "Lead · ord75", "vs", { role: "lead", ord: "75" }),
+      lead("m", "★ MAIN GAME ord75", "main-game", { role: "lead", lane: "main-game", ord: "75" }), // demo.tsx:91, legacyTitleFor format
+      lead("p", "★ LEAD · Plugins", "plugins", { role: "lead", lead: "plugins" }), // demo.tsx:96
+    ],
+    needsYou: 3, running: 0,
+  };
+  const who = Object.fromEntries(needsYouRows([v], NOW).map((r) => [r.item.id, r.who]));
+  assert.equal(who.o, "Overlord");
+  assert.equal(who.p, "Plugins");
+  assert.doesNotMatch(who.m, /ord75|MAIN GAME|★/);
+  assert.match(who.m, /75$/);
+  assert.equal(needsYouRows([v], NOW).find((r) => r.item.id === "o").lane, "Desk");
+  const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
+  assert.ok(testids(t, "boring-needs-where").some((n) => /Desk/.test([].concat(n.props.children).join(""))));
+});
+
+test("Desk R2 Needs you: a running agent with no update for 90s+ is listed as stalled", () => {
+  reset();
+  const quiet = att("slow", "x", "x", { agent: { status: "running", updatedAt: ago(5) } });
+  quiet.attention = null;
+  const fresh = att("busy", "x", "x", { agent: { status: "running", updatedAt: new Date(NOW - 20_000).toISOString() } });
+  fresh.attention = null;
+  const v = teamOf("vs", "VibeSquad", [quiet, fresh]);
+  const rows = needsYouRows([v], NOW);
+  assert.deepEqual(rows.map((r) => [r.item.id, r.item.kind]), [["slow", "stalled"]]);
+  assert.match(rows[0].item.reason, /Stalled: no update for 5m/);
+});
+
+test("Desk R2 sidebar worker rows show the attention reason + tint; container dots take the worst state", () => {
+  const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
+  assert.match(ade, /boring-worker-why/);
+  assert.match(ade, /needs-err/);
+  assert.match(ade, /glyphCls\(c\.status, c\.err \? "error"/);
+  assert.match(ade, /m\.projectErr \? "error"/);
+});
+
+test("Desk R2 r2: location resolver: Desk for laneId==team.id (any case), no laneId and hub lanes; other lanes get a pretty label", () => {
+  reset();
+  const v = {
+    team: { id: "vibesquad", name: "VibeSquad", lanes: [{ id: "riffbot", name: "RiffBot", hub: true }, { id: "ui-bois", name: "ui bois" }] },
+    lanes: [{ lane: { id: "wiki", name: "wiki" } }],
+    members: [
+      att("a", "needs-you", "x", { laneId: "vibesquad" }),
+      att("b", "needs-you", "x", { laneId: "VibeSquad" }),
+      att("c", "needs-you", "x", { laneId: "" }),
+      att("d", "needs-you", "x", { laneId: "riffbot" }),
+      att("e", "needs-you", "x", { laneId: "ui-bois" }),
+      att("f", "needs-you", "x", { laneId: "wiki" }),
+    ],
+    needsYou: 6, running: 0,
+  };
+  const lane = Object.fromEntries(needsYouRows([v], NOW).map((r) => [r.item.id, r.lane]));
+  assert.deepEqual(lane, { a: "Desk", b: "Desk", c: "Desk", d: "Desk", e: "UI bois", f: "wiki" });
+  assert.equal(needsYouRows([{ ...v, team: { ...v.team, lanes: [{ id: "ui-bois", name: "Ui Lab" }] }, members: [att("g", "needs-you", "x", { laneId: "ui-bois" })] }], NOW)[0].lane, "UI Lab");
+});
+
+test("Desk R2 r2: Done recently log entries read Desk for the hub lane / project-named lane", () => {
+  const v = { team: { id: "vibesquad", name: "VibeSquad", lanes: [{ id: "ui-bois", name: "Ui Bois" }] }, lanes: [], members: [] };
+  const e = (lane) => ({ ts: ago(14), type: "done", text: "PASS step4", agent: "x", lane });
+  const rows = doneRecently([], [{ teamId: "vibesquad", project: "VibeSquad", entries: [e("vibesquad"), e(undefined), e("ui-bois")] }], 8, NOW, [v]);
+  assert.deepEqual(rows.map((r) => r.where).sort(), ["VibeSquad › Desk", "VibeSquad › Desk", "VibeSquad › UI Bois"]);
 });

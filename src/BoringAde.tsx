@@ -7,6 +7,7 @@ import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { openPinMember, spinUpPin } from "./pinFocus";
+import { boringLaneLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
@@ -91,11 +92,7 @@ export function boringAgentLanding(views: TeamView[], agentId: string | null | u
   return known(agentId) ? { view: null, sel: null, mode: "chat" } : null;
 }
 
-const ACRONYMS = new Set(["ui", "ux", "ade", "api", "cli", "ci", "cd", "qa", "ai", "mcp", "sdk", "url", "db", "css", "html", "id", "pr", "vs", "ide", "os", "tts", "gpu", "cpu", "efi"]);
-/** Normal-mode lane name: keeps known acronyms upper-case ("Ui Lab" → "UI Lab"). */
-export function boringLaneLabel(name: string | null | undefined): string {
-  return String(name ?? "").replace(/[A-Za-z]+/g, (w) => (ACRONYMS.has(w.toLowerCase()) && (w === w.toLowerCase() || w === w[0].toUpperCase() + w.slice(1).toLowerCase()) ? w.toUpperCase() : w));
-}
+export { boringLaneLabel };
 
 const URGENCY: Record<string, number> = { permission: 0, "needs-you": 1, error: 2 };
 const urgencyOf = (m: { attention?: { tone?: string } | null } | null | undefined) => (m?.attention?.tone != null && m.attention.tone in URGENCY ? URGENCY[m.attention.tone] : null);
@@ -161,6 +158,8 @@ const workerNeedsYou = (m: { attention?: { tone?: string } | null } | null | und
 
 type MemberLike = { agent: { status?: string }; attention?: { tone?: string } | null } | null | undefined;
 const memberErr = (m: MemberLike) => Boolean(m) && boringStateGlyph(m!.agent.status, m!.attention?.tone) === "err";
+/** Sidebar worker row classes: selected, plus a red tint when it errored or amber when it needs you. */
+const workerRowCls = (on: boolean, w: MemberLike) => ["boring-worker-row", on && "on", memberErr(w) ? "needs-err" : workerNeedsYou(w) && "needs-attn"].filter(Boolean).join(" ");
 const pinErr = (p: Pick<Pin, "brainstorm" | "lead" | "workers"> | null | undefined) => Boolean(p) && [p!.brainstorm, p!.lead, ...(p!.workers ?? [])].some(memberErr);
 
 export function boringSidebarModel(view: TeamView | undefined, now = Date.now()) {
@@ -573,10 +572,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     );
   const suffix = (v: TeamView, base: string) => (v.team.id === activeTeamId ? base : `${base}-${v.team.id}`);
   const workerRow = (v: TeamView, pin: Pin, laneId: string, w: Pin["workers"][number]) => (
-    <button key={w.agent.id} type="button" className={`boring-worker-row${isOn(v, `worker:${w.agent.id}`) ? " on" : ""}`} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
+    <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
       <span className={`boring-dot ${w.agent.status} ${glyphCls(w.agent.status, w.attention?.tone)}`} />
       <span className="boring-row-label">{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
+      {workerNeedsYou(w) && w.attention?.reason && <span className="boring-worker-why" data-testid={`boring-worker-why-${w.agent.id}`} title={w.attention.reason}>{w.attention.reason}</span>}
     </button>
   );
   /** Workers of a lane or the Desk: live + attention rows inline, idle ones folded into "▸ N idle" (collapsed fold carries the worst-state badge). */
@@ -612,7 +612,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {workers.length === 0 ? "" : open ? "▾" : "▸"}
           </button>
           <button type="button" className="boring-conv-title" data-testid={c.titleTestId} onClick={c.onOpen}>
-            <span className={`boring-dot ${c.status} ${glyphCls(c.status, c.needsYou > 0 ? "needs-you" : null)}`} />
+            <span className={`boring-dot ${c.status} ${glyphCls(c.status, c.err ? "error" : c.needsYou > 0 ? "needs-you" : null)}`} />
             <span className="boring-row-label">{c.name}</span>
             {c.code && <code className="boring-conv-code">{c.code}</code>}
             <span className="boring-conv-age">{c.age}</span>
@@ -695,7 +695,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                 <div className="boring-conv-line boring-project-line">
                   {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
                   <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
-                    <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", (v.needsYou ?? 0) > 0 ? "needs-you" : null)}`} />
+                    <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
                     <span className="boring-project-name">{v.team.name}</span>
                     {!open && badge(m.totalNeedsYou, m.projectErr)}
                   </button>

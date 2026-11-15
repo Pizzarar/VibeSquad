@@ -1,12 +1,13 @@
 // The "everything that needs you" list behind a team's pink badge: which rows exist, and which
 // clear/snooze call each kind maps to. Pure (deps injected) so tests drive it with fixtures.
 import type { PaseoAgent } from "./agentTypes";
-import { isMarkedUnread } from "./attentionLocal.ts";
+import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
+import { BORING_STALL_SECONDS } from "./boringHeaderStrip.ts";
 import type { Member } from "./teams.ts";
 
 export const LATER_MS = 2 * 3_600_000;
 
-export type ItemKind = "permission" | "label" | "unread" | "error" | "finished";
+export type ItemKind = "permission" | "label" | "unread" | "error" | "stalled" | "finished";
 
 export type AttentionItem = {
   id: string;
@@ -42,16 +43,38 @@ export function kindOfAttention(m: Pick<Member, "agent" | "attention">): ItemKin
   return att.tone === "error" ? "error" : "finished";
 }
 
-const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, error: 3, finished: 4 };
+const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, error: 3, stalled: 4, finished: 5 };
 
-export function attentionItems(members: Member[]): AttentionItem[] {
+/** Dismissing a stall hides it only until the agent shows new activity (its updatedAt moves). */
+export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}`;
+
+/** A running agent with nothing pending and no update for BORING_STALL_SECONDS: "Stalled: no update for 5m", else null. */
+export function stalledReason(a: PaseoAgent, now: number): string | null {
+  if (a.status !== "running" || a.pendingPermissions?.length) return null;
+  const updated = Date.parse(a.updatedAt ?? "");
+  if (Number.isNaN(updated)) return null;
+  const idle = Math.max(0, Math.floor((now - updated) / 1000));
+  if (idle < BORING_STALL_SECONDS) return null;
+  return `Stalled: no update for ${idle >= 120 ? `${Math.round(idle / 60)}m` : `${idle}s`}`;
+}
+
+/**
+ * Everything that needs the owner. Pass `now` to also list running agents that went quiet as `stalled`
+ * (opt-in: badges and the other queues keep counting only what Paseo/labels flag).
+ */
+export function attentionItems(members: Member[], now?: number): AttentionItem[] {
   const out: AttentionItem[] = [];
   for (const m of members) {
     // Retired leads and archived/closed agents never need you (same rule as the badge counts).
     if (m.kind === "old-lead" || m.agent.archivedAt || m.agent.status === "closed") continue;
-    const kind = kindOfAttention(m);
+    let kind = kindOfAttention(m);
+    let reason = m.attention?.reason ?? "";
+    if (!kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, stalledSignature(m.agent), now)) {
+      const stalled = stalledReason(m.agent, now);
+      if (stalled) (kind = "stalled"), (reason = stalled);
+    }
     if (!kind) continue;
-    const item: AttentionItem = { id: m.agent.id, agent: m.agent, who: whoOf(m.agent), reason: m.attention!.reason, kind };
+    const item: AttentionItem = { id: m.agent.id, agent: m.agent, who: whoOf(m.agent), reason, kind };
     if (kind === "permission") {
       const p = m.agent.pendingPermissions?.[0] as { id?: string; kind?: string } | undefined;
       if (p?.id && p.kind !== "question" && p.kind !== "plan") item.quickPermission = { requestId: p.id };
@@ -99,6 +122,9 @@ export async function clearItem(item: AttentionItem, d: AttentionDeps): Promise<
       return d.clearNeedsYou(item.agent);
     case "unread":
       d.clearUnreadLocal(item.id);
+      return d.refresh();
+    case "stalled":
+      d.dismissLocal(item.id, stalledSignature(item.agent));
       return d.refresh();
     case "error":
     case "finished":

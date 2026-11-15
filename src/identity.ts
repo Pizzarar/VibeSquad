@@ -598,6 +598,7 @@ export function formatDisplayTitle({
   job = "",
   title = "",
   hub = false,
+  star = true,
 }: {
   role?: string;
   laneName?: string;
@@ -609,6 +610,8 @@ export function formatDisplayTitle({
   title?: string;
   /** The agent is on the Squad's hub lane (isHubLane): a topic-less brainstorm reads "RiffBot", a lead reads "Overlord". */
   hub?: boolean;
+  /** false: a non-hub lead's name omits the leading star marker. */
+  star?: boolean;
 } = {}): string {
   const laneUpper = String(laneName || laneId || "AGENT").trim().toUpperCase();
   const c = cleanLaneCode(code) || laneCodeCandidates({ id: laneId, name: laneName || laneId })[0] || laneUpper;
@@ -620,7 +623,8 @@ export function formatDisplayTitle({
 
   if (r === "lead") {
     if (hub) return cleanJob ? `Overlord · ${cleanJob}` : "Overlord";
-    return cleanJob ? `★ ${c}${ordClean} · ${cleanJob}` : `★ ${c}${ordClean}`;
+    const mark = star ? "★ " : "";
+    return cleanJob ? `${mark}${c}${ordClean} · ${cleanJob}` : `${mark}${c}${ordClean}`;
   }
   if (r === "former-lead" || r === "old-lead" || r === "retired") {
     if (hub) return cleanJob ? `(old) Overlord · ${cleanJob}` : "(old) Overlord";
