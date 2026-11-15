@@ -12,6 +12,13 @@ import { AGENT_TYPE_LABEL, kindOf } from "./teams";
 import type { AgentType } from "./teams";
 import { providerSpec } from "./pixel";
 import { boringStateGlyph } from "./BoringAde";
+import { AttachFiles, HardeningBar, NeedsYouControls, SessionActions, formatCostUsd, type ProviderSwitchTarget } from "./DrawerHeader";
+import { useAgentConfig } from "./useAgentConfig";
+import { FeaturesMenu } from "./FeaturesMenu";
+import { SandboxView } from "./SandboxView";
+import { auditAntigravityAgent } from "./antigravity";
+import { openBriefEditor } from "./pinActions";
+import type { Entry } from "./Timeline";
 import { BORING_CTX_WARN_PCT, boringHeaderStrip } from "./boringHeaderStrip";
 
 export type BoringAgentHeaderProps = {
@@ -49,6 +56,13 @@ export type BoringAgentHeaderProps = {
   onToggleDock: () => void;
   onClose: () => void;
   chatOnly?: boolean;
+  entries: Entry[];
+  active: boolean;
+  stagedSwitch?: ProviderSwitchTarget | null;
+  onStageSwitch?: (target: ProviderSwitchTarget | null) => void;
+  restartedFrom: string;
+  feedbackDismissed: boolean;
+  onFeedback: (verdict: "good" | "lost") => Promise<void>;
 };
 
 export function BoringAgentHeader(p: BoringAgentHeaderProps) {
@@ -58,6 +72,9 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const [reloadBusy, setReloadBusy] = useState(false);
   const [copied, setCopied] = useState("");
   const menuRef = useRef<HTMLDivElement>(null);
+  // Same provider/model/mode/thinking state + Shift+Tab mode cycling as Psycho DrawerHeader (shared hook).
+  const cfg = useAgentConfig({ agent, active: p.active, isBs: p.isBs, onSuccessor: p.onSuccessor, doRestart: p.doRestart, stagedSwitch: p.stagedSwitch, onStageSwitch: p.onStageSwitch });
+  const attachBlocked = !!auditAntigravityAgent(agent, p.entries).a5ReadBlocked;
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const kind = kindOf(agent);
   const prov = providerSpec(agent.provider);
@@ -103,6 +120,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const roleLine = [AGENT_TYPE_LABEL[p.agentType], labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
   const canHandoff = !agent.archivedAt && ((kind === "lead" && !!p.onSuccessor) || p.isBs);
   const close = () => setMenuOpen(false);
+  const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
+  const showNeedsYou = needsYouFlagged || isMarkedUnread(agent.id);
   const copy = (what: string, text: string) => {
     navigator.clipboard?.writeText(text).catch(() => {});
     setCopied(what);
@@ -137,6 +156,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
               className="boring-hdr-btn"
               data-testid="boring-interrupt-btn"
               title="Interrupt the current turn; the agent stays available"
+              // No bare-interrupt route exists yet: Interrupt and Stop both call stopAgent (known gap, kept as-is).
               onClick={() => void stopAgent(agent.id).catch(() => {})}
             >
               Interrupt
@@ -225,6 +245,31 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
                 </>
               )}
               <div className="boring-agent-menu-sep" role="separator" />
+              <div className="boring-agent-menu-section" data-testid="boring-config-section" role="group" aria-label="Model and mode">
+                <div className="boring-agent-menu-title muted">Model &amp; mode</div>
+                <label className="boring-cfg-row"><span>Provider</span>{cfg.providerSelect}</label>
+                <label className="boring-cfg-row"><span>Model</span>{cfg.modelControl}</label>
+                {cfg.modeSelect && <label className="boring-cfg-row"><span>Mode</span>{cfg.modeSelect}</label>}
+                {cfg.thinkingSelect && <label className="boring-cfg-row"><span>Thinking</span>{cfg.thinkingSelect}</label>}
+                {cfg.providerSwitchBtn}
+                <div className="boring-cfg-chips">
+                  <FeaturesMenu agent={agent} />
+                  <SandboxView agent={agent} />
+                  {typeof cost === "number" && cost >= 0 && (
+                    <span data-testid="drawer-cost-readout" className="chip">{formatCostUsd(cost)}</span>
+                  )}
+                </div>
+                <div className="muted small">Shift+Tab cycles the permission mode.</div>
+              </div>
+              <div className="boring-agent-menu-sep" role="separator" />
+              <SessionActions agent={agent} entries={p.entries} />
+              <div className="labels drawer-labels-list boring-agent-labels">
+                {Object.entries(labels).map(([k, v]) => (
+                  <span key={k} className="chip">{k}={v}</span>
+                ))}
+              </div>
+              {(attachBlocked || menuOpen) ? <AttachFiles agent={agent} entries={p.entries} /> : null}
+              <div className="boring-agent-menu-sep" role="separator" />
               <button type="button" role="menuitem" data-testid="drawer-copy-id-btn" onClick={() => copy("id", agent.id)}>
                 {copied === "id" ? "✓ ID copied" : `Copy ID (${agent.id.slice(0, 8)})`}
               </button>
@@ -287,6 +332,35 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
           )}
         </div>
       )}
+      {cfg.staged && (
+        <div className="boring-status-strip" data-testid="boring-staged-switch" role="status">
+          <span className="boring-strip-item strip-staged">Switching to {cfg.effectiveProv.name} on your next message</span>
+        </div>
+      )}
+      {(cfg.modelError || cfg.reloadError) && (
+        <div className="boring-status-strip" role="alert">
+          <span className="boring-strip-item strip-error">{cfg.modelError || cfg.reloadError}</span>
+        </div>
+      )}
+      {!p.chatOnly && labels["vs.fresh-session"] === "brief" && (
+        <div className="brainstorm-fresh-divider" role="separator">
+          ── Fresh session · from brief
+          <button className="btn ghost small" aria-label="Edit brief" onClick={() => openBriefEditor({ laneId: p.laneId })}>⋯</button>
+          ──
+        </div>
+      )}
+      {p.restartedFrom && !p.feedbackDismissed && labels["vs.fresh-session"] !== "brief" && (
+        <div className="brainstorm-feedback-bar" role="status">
+          <span>Fresh start from <code>docs/brainstorm/{p.laneId}.md</code> · Did the restart lose something?</span>
+          <div className="brainstorm-feedback-actions">
+            <button className="btn ghost small" onClick={() => void p.onFeedback("good")}>👍 Nothing lost</button>
+            <button className="btn ghost small" onClick={() => void p.onFeedback("lost")}>⚠ Lost context</button>
+          </div>
+        </div>
+      )}
+      {p.att && p.att.tone !== "needs-you" && p.att.tone !== "finished" && <div className={`banner ${p.att.tone}`}>{p.att.reason}</div>}
+      {showNeedsYou ? <NeedsYouControls agent={agent} /> : null}
+      {p.active && <HardeningBar agent={agent} entries={p.entries} />}
       {strip.length > 0 && (
         <div className="boring-status-strip" data-testid="boring-status-strip" role="status">
           {strip.map((s) => (

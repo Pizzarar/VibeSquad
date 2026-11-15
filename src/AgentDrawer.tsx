@@ -581,6 +581,13 @@ ${draft}`);
           dockOpen={dockOpen}
           onToggleDock={() => setDockOpen((v) => !v)}
           onClose={onClose}
+          entries={entries}
+          active={active}
+          stagedSwitch={stagedSwitch}
+          onStageSwitch={setStagedSwitch}
+          restartedFrom={restartedFrom}
+          feedbackDismissed={feedbackDismissed}
+          onFeedback={onFeedback}
         />
       ) : (
       <DrawerHeader

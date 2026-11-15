@@ -21,7 +21,7 @@ test("New Agent dirs prefer team paths and skip the runtime dir", () => {
 });
 
 test("model change failure reverts and shows an error", () => {
-  const s = src("DrawerHeader.tsx");
+  const s = (src("DrawerHeader.tsx") + src("useAgentConfig.tsx"));
   assert.match(s, /setModelValue\(agent\.model \?\? ""\)/);
   assert.match(s, /Model change failed/);
   assert.doesNotMatch(s, /setModelHelper\(agent, next\)\.catch\(\(\) => \{\}\)/);

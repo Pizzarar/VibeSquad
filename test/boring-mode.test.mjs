@@ -960,3 +960,39 @@ test("D3a: boring.css section is appended, scoped, and never accent-fills the he
   assert.ok(!/\.boring-agent-menu[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
   assert.ok(!/\.boring-hdr-btn[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
 });
+
+// ---- D3a fix round: no feature loss in Normal (config hook + testid parity) -----------------------------------
+test("D3a fix: provider/model/mode/thinking + Shift+Tab live in ONE shared hook used by both headers", () => {
+  const hook = d3src("useAgentConfig.tsx");
+  const psycho = d3src("DrawerHeader.tsx");
+  const normal = d3src("BoringAgentHeader.tsx");
+  assert.match(hook, /e\.shiftKey && e\.key === "Tab"/);
+  assert.match(hook, /nextModeInCycle\(modes, currentMode\)/);
+  assert.match(hook, /stageSwitch\(\{ \.\.\.staged, modeId: next \}\)/);
+  assert.match(hook, /resolveProviderSwitchTarget/);
+  assert.ok(!psycho.includes("e.shiftKey && e.key === \"Tab\""), "no duplicate Shift+Tab logic in DrawerHeader");
+  assert.match(psycho, /useAgentConfig\(\{/);
+  assert.match(normal, /useAgentConfig\(\{/);
+  assert.match(normal, /cfg\.providerSelect/);
+  assert.match(normal, /cfg\.modelControl/);
+  assert.match(normal, /cfg\.modeSelect/);
+  assert.match(normal, /cfg\.thinkingSelect/);
+  // staged switch + active flag are threaded through from AgentDrawer to the Normal header
+  assert.match(d3src("AgentDrawer.tsx"), /<BoringAgentHeader[\s\S]*?stagedSwitch=\{stagedSwitch\}[\s\S]*?active=\{active\}/);
+});
+
+test("D3a fix: every testid DrawerHeader exposed is present in the Normal path (or knowingly dropped)", () => {
+  const ids = [...new Set([...d3src("DrawerHeader.tsx").matchAll(/data-testid="([^"]+)"/g)].map((m) => m[1]))];
+  const normalPath = ["BoringAgentHeader.tsx", "useAgentConfig.tsx", "FeaturesMenu.tsx", "SandboxView.tsx"].map(d3src).join("\n") + d3src("DrawerHeader.tsx");
+  // Pin-focus compact bar / rail card only exist in the Psycho layout; Normal replaces the brainstorm ctx bar with boring-ctx-meter + menu items.
+  const dropped = new Set(["drawer-head-compact", "drawer-config-menu", "drawer-config-menu-btn", "drawer-more-toggle", "pin-rail-buddy-tools", "sky-zones", "brainstorm-ctx-bar"]);
+  const psy = d3src("DrawerHeader.tsx");
+  const sessionActionsSrc = psy.slice(psy.indexOf("export function SessionActions"), psy.indexOf("export function DrawerHeader("));
+  const hdr = d3src("BoringAgentHeader.tsx") + d3src("useAgentConfig.tsx") + sessionActionsSrc; // SessionActions is rendered by the Normal header
+  const missing = ids.filter((id) => !dropped.has(id) && !hdr.includes(`data-testid="${id}"`));
+  assert.deepEqual(missing, []);
+  assert.ok(normalPath.length > 0);
+  // Bars/session actions are the existing components, not reimplementations.
+  const normal = d3src("BoringAgentHeader.tsx");
+  for (const c of ["NeedsYouControls", "HardeningBar", "SessionActions", "AttachFiles"]) assert.match(normal, new RegExp(`<${c} `));
+});

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const src = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8");
+const src = readFileSync(new URL("../src/DrawerHeader.tsx", import.meta.url), "utf8") + readFileSync(new URL("../src/useAgentConfig.tsx", import.meta.url), "utf8");
 
 test("compact header requires a focused agent so Spin Up never portals drawer-head-compact", () => {
   assert.match(src, /const compact = !!pinFocus && shownHere && inLane/);

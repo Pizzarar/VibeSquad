@@ -36,7 +36,7 @@ test("runnerUsageToQuota maps byProvider spend to chip rows", () => {
 });
 
 test("DrawerHeader: fork / switch / resume / reload go through the runner, mode+model+thinking fail loudly", () => {
-  const s = src("DrawerHeader.tsx");
+  const s = (src("DrawerHeader.tsx") + src("useAgentConfig.tsx"));
   assert.doesNotMatch(s, /daemonClient/);
   assert.match(s, /runnerSpawn\(/);
   assert.match(s, /runnerUnarchive\(agent\.id\)/);
@@ -95,7 +95,7 @@ test("header usage chip reads runner usage and usage refetches on runner connect
 });
 
 test("resume uses the resume route (unarchive only restores the record)", () => {
-  const d = src("DrawerHeader.tsx");
+  const d = (src("DrawerHeader.tsx") + src("useAgentConfig.tsx"));
   assert.match(d, /await runnerResume\(agent\.id\)/);
   assert.match(d, /if \(agent\.archivedAt\) await runnerUnarchive\(agent\.id\)/);
   assert.match(d, /can't be resumed/);
@@ -110,8 +110,8 @@ test("pin previews, predecessor stitch and archived list work without the Paseo 
 });
 
 test("spawned agents are upserted before their tab opens; InlineEdit watch stops itself; dead helpers gone", () => {
-  assert.match(src("DrawerHeader.tsx"), /if \(forked\) upsertLocalAgent\(forked\);\n\s*if \(id\) openAgentInTab\(id\)/);
-  assert.match(src("DrawerHeader.tsx"), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab\(newId\)/);
+  assert.match((src("DrawerHeader.tsx") + src("useAgentConfig.tsx")), /if \(forked\) upsertLocalAgent\(forked\);\n\s*if \(id\) openAgentInTab\(id\)/);
+  assert.match((src("DrawerHeader.tsx") + src("useAgentConfig.tsx")), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab\(newId\)/);
   assert.match(src("AgentDrawer.tsx"), /if \(spawned\) upsertLocalAgent\(spawned\);\n\s*if \(newId\) openAgentInTab/);
   const ie = src("InlineEdit.tsx");
   assert.match(ie, /cur\.id !== id \|\| cur\.phase === "error"\) return;/); // a dismissed / failed session ignores the watch
