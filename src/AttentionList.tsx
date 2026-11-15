@@ -36,6 +36,7 @@ const KIND_LABEL: Record<AttentionItem["kind"], string> = {
   label: "NEEDS YOU",
   unread: "UNREAD",
   error: "ERROR",
+  stalled: "STALLED",
   finished: "FINISHED",
 };
 

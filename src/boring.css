@@ -1161,3 +1161,37 @@ html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][dat
 /* R2 fix2: Desk block/row hooks get real rules (block stacks its line + children; row keeps its label/sub/badge on one line). */
 html[data-vibe="boring"] .boring-desk-block { display: flex; flex-direction: column; gap: 1px; }
 html[data-vibe="boring"] .boring-desk-row { display: flex; align-items: center; gap: 8px; text-align: left; }
+
+/* Desk R2 Unit 2: Needs you = 2-line rows, hover menu, Done recently (src/BoringInbox.tsx); worker reason tint (src/BoringAde.tsx). */
+html[data-vibe="boring"] .boring-needs-item { position: relative; }
+html[data-vibe="boring"] .boring-needs-item.attn-stalled { background: var(--st-attn-bg); border-left-color: var(--st-attn); }
+html[data-vibe="boring"] .boring-needs-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+html[data-vibe="boring"] .boring-needs-line .boring-needs-open { flex: 1; min-width: 0; }
+html[data-vibe="boring"] .boring-needs-actions { flex: none; }
+html[data-vibe="boring"] .boring-needs-why { display: flex; align-items: baseline; gap: 8px; min-width: 0; padding-left: 14px; }
+html[data-vibe="boring"] .boring-needs-reason { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-needs-why .boring-needs-where { flex: 0 1 45%; min-width: 0; text-align: right; }
+html[data-vibe="boring"] .boring-needs-menu-wrap { position: relative; flex: none; }
+html[data-vibe="boring"] .boring-needs-more { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--text-3); font: inherit; line-height: 1; cursor: pointer; opacity: 0; }
+html[data-vibe="boring"] .boring-needs-item:hover .boring-needs-more,
+html[data-vibe="boring"] .boring-done-row:hover .boring-needs-more,
+html[data-vibe="boring"] .boring-needs-menu-wrap:focus-within .boring-needs-more { opacity: 1; }
+html[data-vibe="boring"] .boring-needs-more:hover { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-needs-menu { display: none; position: absolute; top: 100%; right: 0; z-index: 20; min-width: 120px; padding: 4px; flex-direction: column; gap: 2px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--surface-1); box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25); }
+html[data-vibe="boring"] .boring-needs-menu-wrap:hover .boring-needs-menu,
+html[data-vibe="boring"] .boring-needs-menu-wrap:focus-within .boring-needs-menu { display: flex; }
+html[data-vibe="boring"] .boring-needs-menu-item { min-height: 28px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--text-1); font: inherit; font-size: var(--t-small); text-align: left; cursor: pointer; }
+html[data-vibe="boring"] .boring-needs-menu-item:hover:not(:disabled) { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-needs-menu-item:disabled { opacity: 0.5; cursor: default; }
+html[data-vibe="boring"] .boring-done-row { grid-template-columns: 1fr auto; }
+html[data-vibe="boring"] .boring-done-row > .boring-dot, html[data-vibe="boring"] .boring-done-row > .boring-done-text { grid-column: 1; }
+html[data-vibe="boring"] .boring-done-row .boring-done-open { grid-column: 1; min-width: 0; }
+html[data-vibe="boring"] .boring-done-row .boring-needs-where { grid-column: 1 / -1; }
+html[data-vibe="boring"] .boring-done-row .boring-done-open .boring-done-text { flex: 1; min-width: 0; color: var(--text-2); }
+html[data-vibe="boring"] .boring-worker-row { flex-wrap: wrap; }
+html[data-vibe="boring"] .boring-worker-row.needs-attn { background: var(--st-attn-bg); }
+html[data-vibe="boring"] .boring-worker-row.needs-err { background: var(--st-err-bg); }
+html[data-vibe="boring"] .boring-worker-why { flex: 1 0 100%; padding-left: 14px; font-size: var(--t-caption); line-height: var(--lh-caption); color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+html[data-vibe="boring"] .boring-worker-row.needs-err .boring-worker-why { color: var(--st-err); }
+html[data-vibe="boring"] .boring-worker-row.needs-attn .boring-worker-why { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-needs-item > .boring-needs-actions { padding: 3px 0 2px 14px; }

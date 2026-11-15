@@ -128,7 +128,7 @@ stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; expor
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
 stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
-stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; };`);
+stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; }; export const cleanTitle = (t) => { let s = String(t ?? "untitled").trim(); const l = s.toLowerCase(); if (l.startsWith("★ lead · ")) s = s.slice(9).trim(); else if (l.startsWith("brainstorm · ")) s = s.slice(13).trim(); return s; };`);
 const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
   .replace(/from "react"/, `from "./react-hooks.mjs"`)
@@ -743,8 +743,18 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
 const tsx = (file) => transformSync(file, readFileSync(resolve(import.meta.dirname, "..", "src", file), "utf8"), { lang: file.endsWith("x") ? "tsx" : "ts", jsx: { runtime: "classic" } }).code;
-writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = () => false; export const clearUnreadLocal = () => {}; export const dismissLocal = () => {}; export const snoozeLocal = () => {};`);
-writeFileSync(join(dir, "attentionItems.mjs"), tsx("attentionItems.ts").replace(/from "\.\/attentionLocal\.ts"/, `from "./attentionLocal.mjs"`));
+writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = () => false; export const isLocallyHidden = () => false; export const clearUnreadLocal = () => {}; export const dismissLocal = () => {}; export const snoozeLocal = () => {};`);
+writeFileSync(join(dir, "boringHeaderStripStub.mjs"), tsx("boringHeaderStrip.ts"));
+// Display-title stubs: the real isHubLane / formatDisplayTitle pull in teams.example.json + React; test/attention-items.test.mjs covers the real ones.
+writeFileSync(join(dir, "identityStub.mjs"), `export const formatDisplayTitle = ({ role, hub, ord, laneName }) => role === "lead" ? (hub ? "Overlord" : "★ " + String(laneName ?? "").toUpperCase() + ord) : "x";`);
+writeFileSync(join(dir, "teams.mjs"), `export const isHubLane = (team, lane) => lane.hub === true || (!team.lanes.some((l) => l.hub === true) && lane.id === team.id);`);
+writeFileSync(
+  join(dir, "attentionItems.mjs"),
+  tsx("attentionItems.ts")
+    .replace(/from "\.\/attentionLocal\.ts"/, `from "./attentionLocal.mjs"`)
+    .replace(/from "\.\/boringHeaderStrip\.ts"/, `from "./boringHeaderStripStub.mjs"`)
+    .replace(/from "\.\/identity\.ts"/, `from "./identityStub.mjs"`),
+);
 globalThis.__resp = [];
 globalThis.__cleared = [];
 stub("paseoInbox.mjs", `export const bumpAgents = () => {}; export const clearAgentAttention = (id) => { globalThis.__cleared.push(["attention", id]); return Promise.resolve(); }; export const clearNeedsYou = (a) => { globalThis.__cleared.push(["needs-you", a.id]); return Promise.resolve(); }; export const snoozeNeedsYou = () => Promise.resolve();`);
@@ -795,10 +805,10 @@ test("D2 2.2 BoringInbox: labelled NEEDS YOU (never Inbox), inline Allow/Deny on
   const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [A, B], now: NOW, logs: [] }));
   assert.match(html, /Needs you/);
   assert.doesNotMatch(html, /Inbox/);
-  assert.match(html, /Recent done \(0\)/);
-  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 5);
+  assert.match(html, /Done recently \(1\)/); // the finished agent, not counted as needing you
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 4); // finished moved to Done recently
   assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow").length, 1); // the question permission has no inline buttons
-  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss").length, 3); // pick, error, finished
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss").length, 2); // hover-menu Dismiss: pick, error (permissions are answered, finished is in Done recently)
   walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow")[0].props.onClick();
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(globalThis.__resp[0], ["perm", "req1", { behavior: "allow" }]);
@@ -1196,4 +1206,75 @@ test("R2 fix2 N3/N4: Desk sub-label lists only who is live; hidden when neither;
   assert.doesNotMatch(txt, /RiffBot/);
   const err = withDesk(hubView([], { overlord: zone(mem("ov", "error")) }));
   assert.match(JSON.stringify(byId(err, "boring-desk-row").props.children), /st-err/);
+});
+
+// ---- Desk R2 Unit 2: Needs you = 2-line rows, cap 5 + more, Done recently, hub "Desk", clean titles -------
+const manyView = (n) =>
+  ({ team: { id: "vs", name: "VibeSquad", lanes: [{ id: "ade", name: "ADE" }, { id: "vs", name: "vs", hub: true }] }, members: Array.from({ length: n }, (_, i) => att(`p${i}`, "needs-you", `pick ${i}`, { agent: { updatedAt: ago(20 + i) } })), needsYou: n, running: 0 });
+const testids = (t, id) => walk(t, (n) => n.props?.["data-testid"] === id);
+
+test("Desk R2 Needs you: the count equals the rows; cap 5 with a '+ N more' toggle", () => {
+  reset();
+  const v = manyView(8);
+  const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
+  assert.equal(testids(t, "boring-needs-you-item").length, 5);
+  assert.equal(testids(t, "boring-needs-you-count")[0].props.children, 8);
+  assert.match(renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs: [] })), /\+ 3 more/);
+  const few = (hs.i = 0, BoringInbox({ views: [manyView(4)], now: NOW, logs: [] }));
+  assert.equal(testids(few, "boring-needs-you-item").length, 4);
+  assert.equal(testids(few, "boring-needs-you-more").length, 0);
+  assert.equal(testids(few, "boring-needs-you-count")[0].props.children, 4);
+});
+
+test("Desk R2 Needs you: finished lists under Done recently (count == rows), not under Needs you", () => {
+  reset();
+  const v = teamOf("vs", "VibeSquad", [att("fin", "finished", "all done"), att("ask", "needs-you", "pick")]);
+  const logs = [{ teamId: "vs", project: "VibeSquad", entries: [{ ts: ago(5), type: "done", text: "shipped D1", agent: "x", lane: "ade" }] }];
+  const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs }));
+  assert.deepEqual(testids(t, "boring-needs-you-item").map((n) => n.props["data-kind"]), ["label"]);
+  assert.equal(testids(t, "boring-needs-you-count")[0].props.children, 1);
+  const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs }));
+  assert.match(html, /Done recently \(2\)/); // the finished agent + the logged done entry
+});
+
+test("Desk R2 Needs you: buttons only on quick permissions; every row has the hover menu with Snooze", () => {
+  reset();
+  const t = (hs.i = 0, BoringInbox({ views: [A, B], now: NOW, logs: [] }));
+  assert.equal(testids(t, "boring-needs-allow").length, 1);
+  assert.equal(testids(t, "boring-needs-snooze").length, 4);
+  for (const id of ["perm", "q", "ask", "err"]) assert.equal(testids(t, `boring-needs-menu-${id}`).length, 1);
+  assert.equal(walk(t, (n) => n.props?.className === "boring-needs-btn").length, 0); // no inline Dismiss button any more
+});
+
+test("Desk R2 Needs you: hub-lane items read 'Desk'; legacy 'Lead · ord75' titles are cleaned", () => {
+  reset();
+  const v = { team: { id: "vs", name: "VibeSquad", lanes: [{ id: "vs", name: "vs", hub: true }, { id: "ade", name: "ADE" }] }, members: [att("o", "needs-you", "approve", { laneId: "vs", agent: { title: "Lead · ord75" } }), att("w", "needs-you", "pick", { laneId: "ade", agent: { title: "★ Lead · ord12" } })], needsYou: 2, running: 0 };
+  const rows = needsYouRows([v], NOW);
+  const hub = rows.find((r) => r.item.id === "o");
+  assert.equal(hub.lane, "Desk");
+  assert.equal(hub.who, "Overlord");
+  assert.equal(rows.find((r) => r.item.id === "w").lane, "ADE");
+  assert.doesNotMatch(rows.find((r) => r.item.id === "w").who, /ord12|Lead ·/);
+  const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
+  assert.ok(testids(t, "boring-needs-where").some((n) => /Desk/.test([].concat(n.props.children).join(""))));
+});
+
+test("Desk R2 Needs you: a running agent with no update for 90s+ is listed as stalled", () => {
+  reset();
+  const quiet = att("slow", "x", "x", { agent: { status: "running", updatedAt: ago(5) } });
+  quiet.attention = null;
+  const fresh = att("busy", "x", "x", { agent: { status: "running", updatedAt: new Date(NOW - 20_000).toISOString() } });
+  fresh.attention = null;
+  const v = teamOf("vs", "VibeSquad", [quiet, fresh]);
+  const rows = needsYouRows([v], NOW);
+  assert.deepEqual(rows.map((r) => [r.item.id, r.item.kind]), [["slow", "stalled"]]);
+  assert.match(rows[0].item.reason, /Stalled: no update for 5m/);
+});
+
+test("Desk R2 sidebar worker rows show the attention reason + tint; container dots take the worst state", () => {
+  const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
+  assert.match(ade, /boring-worker-why/);
+  assert.match(ade, /needs-err/);
+  assert.match(ade, /glyphCls\(c\.status, c\.err \? "error"/);
+  assert.match(ade, /m\.projectErr \? "error"/);
 });
