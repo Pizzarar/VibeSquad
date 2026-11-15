@@ -53,12 +53,12 @@ const KIND_RANK: Record<AttentionItem["kind"], number> = { permission: 0, label:
 
 /**
  * What the row calls the agent. Leads and Buddies are named from their resolved labels with formatDisplayTitle (hub lead = "Overlord",
- * hub Buddy = "RiffBot", "★ MAIN GAME ord75" = lane code + ord); anything without the labels falls back to cleanTitle ("★ LEAD · Plugins" = "Plugins").
+ * hub Buddy = "RiffBot", other leads = lane code + ord with no star); anything without the labels falls back to cleanTitle.
  */
 export function needsYouTitle(item: Pick<AttentionItem, "who">, member: Pick<Member, "kind" | "agent">, lane: { laneName?: string; laneId?: string; hub?: boolean }): string {
   const l = (member.agent.labels ?? {}) as Record<string, string>;
   const fallback = cleanTitle(item.who);
-  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, ord: l.ord, job: l.job }).replace(/^★s*/, "");
+  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, ord: l.ord, job: l.job, star: false });
   if (member.kind === "brainstorm" && lane.hub && !l.topic?.trim()) return formatDisplayTitle({ role: "brainstorm", ...lane });
   return fallback;
 }
