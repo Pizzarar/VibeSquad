@@ -2,6 +2,7 @@
 // from another process (an agent sidecar or a CLI with its own RunnerClient): a reader arriving after such a write could join
 // a read that started before it and answer stale. The runner now reports its own settled-write count, so a joiner checks it.
 // Real runner HTTP server (createServer) over a fake Runner; client B is the "other process" stand-in.
+import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

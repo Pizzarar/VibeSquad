@@ -6,6 +6,7 @@
 //      `vs restart` must defer instead of killing it; the server's boot baseline must replay events that landed while
 //      no server was running (a worker's turn_ended in the restart gap went undigested and unwoken).
 // Fake adapters / stub processes and temp homes only: nothing here touches a real runner, server or ~/.vibesquad.
+import "./helpers/clean-env.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";

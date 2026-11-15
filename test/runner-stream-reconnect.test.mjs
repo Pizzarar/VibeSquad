@@ -1,5 +1,6 @@
 // The server's runner /events tail must follow the runner across a restart on a new port, and must notice a stream that goes
 // silent (heartbeats stop) without ever erroring, otherwise live chat updates stop until the VS server restarts.
+import "./helpers/clean-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
