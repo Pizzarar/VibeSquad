@@ -15,14 +15,24 @@ export function holdsLock(file, me) {
   return !!info && info.pid === me?.pid && info.startedAt === me?.startedAt;
 }
 
-/** The pid <home>/runner.json names (the runner that has published its port), or null. */
-export function publishedPid(home) {
+/** <home>/runner.json ({ port, pid, startedAt, lockStartedAt }) as published by a listening runner, or null. */
+export function readPublished(home) {
   try {
-    const pid = JSON.parse(readFileSync(path.join(home, 'runner.json'), 'utf8'))?.pid;
-    return Number.isInteger(pid) ? pid : null;
+    const info = JSON.parse(readFileSync(path.join(home, 'runner.json'), 'utf8'));
+    return info && typeof info === 'object' && Number.isInteger(info.pid) ? info : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * True when runner.json was published by the runner.lock holder `holder` ({ pid, startedAt }): same pid AND the lock's
+ * startedAt (runner.json `lockStartedAt`). A pid alone is not enough: a runner that died hard leaves runner.json behind, and
+ * once the OS reuses its pid for a new, still-booting runner the stale file would read as that runner's (review H1, P0 11-15).
+ */
+export function publishedBy(home, holder) {
+  const pub = readPublished(home);
+  return !!pub && !!holder && pub.pid === holder.pid && pub.lockStartedAt === holder.startedAt;
 }
 
 /**
@@ -31,7 +41,7 @@ export function publishedPid(home) {
  */
 export function bootingHolder(home, { alive = pidAlive, now = Date.now(), bootMaxMs = RUNNER_BOOT_MAX_MS } = {}) {
   const info = readLock(path.join(home, 'runner.lock'));
-  if (!info || !alive(info.pid) || publishedPid(home) === info.pid) return null;
+  if (!info || !alive(info.pid) || publishedBy(home, info)) return null;
   return now - (info.startedAt ?? 0) < bootMaxMs ? info : null;
 }
 // A steal guard (<lock>.steal) older than this is an orphan from a holder that died mid-steal. Its critical section takes
@@ -157,19 +167,25 @@ function stealStaleLock(file, seen, { pid, alive, onSteal, guardStaleMs }) {
  * Runner lock: exclusive for the runner's lifetime. `isHealthy()` says whether the holder answers /health.
  * Returns { owned: true } if we hold it now, else { owned: false, holder } when a live runner owns the home.
  */
-export async function acquireRunnerLock(home, { isHealthy, alive = pidAlive, bootGraceMs = STALE_START_LOCK_MS } = {}) {
+export async function acquireRunnerLock(home, { isHealthy, alive = pidAlive, bootGraceMs = STALE_START_LOCK_MS, guardStaleMs = STEAL_GUARD_STALE_MS } = {}) {
   const file = path.join(home, 'runner.lock');
   for (let attempt = 0; attempt < 5; attempt++) {
     if (tryCreateLock(file)) return { owned: true, file };
     const info = readLock(file);
+    let mtimeAge;
+    try { mtimeAge = Date.now() - statSync(file).mtimeMs; } catch { continue; } // vanished: retry the create
+    // Created (O_EXCL) but not yet written: another runner is between open and write. Never remove it (review H2).
+    if (!info && mtimeAge < 1000) return { owned: false, holder: null };
     if (info && info.pid !== process.pid && alive(info.pid)) {
       const age = Date.now() - (info.startedAt ?? 0);
-      // Unpublished (no runner.json naming it): still folding its roster before listen(), so it keeps the lock for up to
-      // RUNNER_BOOT_MAX_MS. Published: the short grace, then /health decides.
-      const booting = publishedPid(home) === info.pid ? age < bootGraceMs : age < RUNNER_BOOT_MAX_MS;
+      // Unpublished (runner.json was not written by this holder): still folding its roster before listen(), so it keeps the
+      // lock for up to RUNNER_BOOT_MAX_MS. Published: the short grace, then /health decides.
+      const booting = publishedBy(home, info) ? age < bootGraceMs : age < RUNNER_BOOT_MAX_MS;
       if (booting || (await isHealthy?.())) return { owned: false, holder: info.pid };
     }
-    rmSync(file, { force: true }); // dead holder or live-but-unresponsive: take over
+    // Dead holder or live-but-unresponsive: take over, under the .steal guard and only if the lock still names the holder we
+    // judged (a faster stealer may have replaced it while we awaited /health; its lock is then re-judged, never removed).
+    if (!stealStaleLock(file, info, { pid: process.pid, alive, guardStaleMs })) return { owned: false, holder: readLock(file)?.pid ?? null };
   }
-  return { owned: false, holder: readLock(file)?.pid };
+  return { owned: false, holder: readLock(file)?.pid ?? null };
 }

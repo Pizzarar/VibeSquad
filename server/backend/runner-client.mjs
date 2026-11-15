@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isForbiddenRealHome } from "../test-guard.mjs";
-import { RUNNER_BOOT_MAX_MS, acquireStartLock, bootingHolder, pidAlive, publishedPid, releaseLock } from "../../runner/lock.mjs";
+import { RUNNER_BOOT_MAX_MS, acquireStartLock, bootingHolder, pidAlive, readPublished, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
 
@@ -321,7 +321,11 @@ export class RunnerClient {
   bootingPid({ alive = pidAlive, now = Date.now() } = {}) {
     const c = this.ownedChild;
     if (c) {
-      if (alive(c.pid) && publishedPid(this.home) !== c.pid && now - c.spawnedAt < RUNNER_BOOT_MAX_MS) return c.pid;
+      // Published = a runner.json naming the child AND written after we spawned it: a stale runner.json whose pid the OS
+      // reused for this child must not read as published (review H1).
+      const pub = readPublished(this.home);
+      const published = !!pub && pub.pid === c.pid && (pub.startedAt ?? 0) >= c.spawnedAt;
+      if (alive(c.pid) && !published && now - c.spawnedAt < RUNNER_BOOT_MAX_MS) return c.pid;
       this.ownedChild = null; // exited, published, or wedged past the boot cap
     }
     return bootingHolder(this.home, { alive, now })?.pid ?? null;
@@ -384,7 +388,9 @@ export class RunnerClient {
       } finally {
         releaseLock(lockFile);
       }
-    })().finally(() => {
+    })().then(() => {
+      this.ownedChild = null; // a runner answers /health: nothing of ours is booting any more (review M1a)
+    }).finally(() => {
       this.starting = null;
     });
     return this.starting;

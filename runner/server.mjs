@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { Runner, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent } from './runner.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
-import { acquireRunnerLock, holdsLock, publishedPid, readLock, releaseLock } from './lock.mjs';
+import { acquireRunnerLock, holdsLock, readLock, readPublished, releaseLock } from './lock.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
 export const MAX_INPUT_BYTES = 24 * 1024 * 1024; // /input carries base64 image attachments
@@ -360,13 +360,34 @@ export function teamLogWriter(vsHome) {
   };
 }
 
-export function writeDiscovery(home, { port, token }) {
+// lockStartedAt = the startedAt of the runner.lock this runner holds: it ties runner.json to that exact holder, so a stale
+// runner.json whose pid the OS reused never reads as the new holder's (lock.mjs publishedBy).
+export function writeDiscovery(home, { port, token, lockStartedAt }) {
   mkdirSync(home, { recursive: true });
   const tokenFile = path.join(home, 'token');
   writeFileSync(tokenFile, token, { mode: 0o600 });
   try { chmodSync(tokenFile, 0o600); } catch { /* win32: ACL inherited from the user profile dir */ }
-  writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ port, pid: process.pid, startedAt: Date.now() }));
+  writeFileSync(path.join(home, 'runner.json'), JSON.stringify({ port, pid: process.pid, startedAt: Date.now(), lockStartedAt }));
 }
+
+/**
+ * The listen callback: publish runner.json only while this runner still holds runner.lock (`me`). A runner robbed during its
+ * boot calls onLost('boot') and publishes nothing, so the holder's runner.json is never overwritten. True if published.
+ */
+export function publishIfHolding(home, { port, token, me, onLost }) {
+  if (!holdsLock(path.join(home, 'runner.lock'), me)) {
+    onLost?.('boot');
+    return false;
+  }
+  writeDiscovery(home, { port, token, lockStartedAt: me?.startedAt });
+  return true;
+}
+
+/** runner.json was written by this process under the lock `me` (pid + lockStartedAt). */
+export const publishedByMe = (home, me) => {
+  const pub = readPublished(home);
+  return !!pub && pub.pid === process.pid && pub.lockStartedAt === me?.startedAt;
+};
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const arg = (n, d) => { const i = process.argv.indexOf(`--${n}`); return i > 0 ? process.argv[i + 1] : d; };
@@ -413,19 +434,19 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     phase('listen');
     console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) } }));
-    if (!holding()) return lockLost('boot');
     const port = server.address().port;
-    writeDiscovery(home, { port, token });
+    if (!publishIfHolding(home, { port, token, me, onLost: lockLost })) return;
     console.log(JSON.stringify({ listening: port, dir, home }));
   });
   const lockCheckMs = Number(process.env.VS_RUNNER_LOCK_CHECK_MS) > 0 ? Number(process.env.VS_RUNNER_LOCK_CHECK_MS) : 5000;
   const lockCheck = setInterval(() => { if (!holding()) lockLost('check'); }, lockCheckMs);
   lockCheck.unref();
-  // Leave the lock holder's files alone: runner.json only when it names us, drain.json and runner.lock only while we hold it.
+  // Leave the lock holder's files alone: runner.json, drain.json and runner.lock are touched only while we hold the lock, and
+  // runner.json only when it is ours (pid + lockStartedAt). A robbed runner never deletes: the new holder may be publishing.
   const leave = (opts) => {
     const held = holding();
     try { runner.shutdown({ ...opts, keepDrainFile: !held }); } catch (err) { console.error('runner shutdown failed', err); } // later calls are no-ops
-    if (publishedPid(home) === process.pid) { try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ } }
+    if (held && publishedByMe(home, me)) { try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ } }
     if (held) { try { releaseLock(lockFile); } catch { /* ignore */ } }
   };
   const stop = (opts) => {
