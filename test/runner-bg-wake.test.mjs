@@ -4,6 +4,7 @@
 // nobody) and rn-44a6519ff6db (antigravity-cli / ACP: turns are client-initiated, nothing ever starts one). These run the
 // REAL adapters against fake CLIs, through the Runner, and fold the log with the server's reduceTurn, which is what wakes
 // the lead (turn_ended).
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

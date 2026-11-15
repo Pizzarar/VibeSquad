@@ -1,4 +1,5 @@
 // Timeline emits (what makes the browser refetch) must never wait behind roster fetches on the serialized live chain.
+import "./helpers/clean-env.mjs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";

@@ -211,7 +211,7 @@ test("localLinkTarget: %23/%3F survive in filenames, bad escapes and real ?# are
 });
 
 // ── inline-code absolute paths (idea-245) ───────────────────────────────────────
-import { parseInlineCodePath } from "../src/fileLinks.ts";
+import { parseInlineCodePath, isAbsInlinePath } from "../src/fileLinks.ts";
 const W = (s) => s.replaceAll("|", BS);
 const WCWD = W("C:|Users|dev|projects|Repo");
 test("inline Windows abs path inside cwd + :line:col", () => {
@@ -229,6 +229,13 @@ test("inline POSIX abs path inside cwd", () => {
 });
 test("inline repo-relative with :line:col still works", () => {
   assert.deepEqual(parseInlineCodePath("server/foo.mjs:12:5", WCWD), { path: "server/foo.mjs", line: 12, isDir: false });
+});
+test("idea-247: a root-level absolute path resolves as the repo-root file, not a bare-name lookup", () => {
+  assert.deepEqual(parseInlineCodePath(W(`${WCWD}|README.md`), WCWD), { path: "README.md", line: null, isDir: false });
+  assert.deepEqual(parseInlineCodePath("/home/a/repo/README.md:3", "/home/a/repo"), { path: "README.md", line: 3, isDir: false });
+  for (const s of [W(`${WCWD}|README.md`), "/home/a/repo/README.md", "c:/x/README.md"]) assert.equal(isAbsInlinePath(s), true, s);
+  for (const s of ["README.md", "src/a.ts", "./README.md"]) assert.equal(isAbsInlinePath(s), false, s);
+  assert.ok(timeline.includes("!isAbsInlinePath(m[7])"), "Timeline skips the bare-name lookup for absolute tokens");
 });
 test("inline absolute negatives: no ext, outside workspace, UNC, URL, prose", () => {
   for (const s of ["C:|Windows", "/usr/bin", "C:|Other|place|x.ts:1", "||host|share|a.ts", "https://a.com/x.ts", "const x = 1", "/foo bar/a.ts", "C:|Users|dev|projects|Repo|..|x.ts"]) {

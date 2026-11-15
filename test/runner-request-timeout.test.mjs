@@ -1,5 +1,6 @@
 // RunnerClient.request must never hang: a hung runner times out, a dead/moved one drops the stale conn, and an idempotent GET
 // retries once against the re-discovered port.
+import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";

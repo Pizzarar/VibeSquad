@@ -1,6 +1,7 @@
 // RR1: the supervisor restarts a runner whose reported code hash differs from the runtime runner/ dir, once it has no
 // running turns. An unknown running count is never treated as zero, and each distinct disk hash is restarted at most once.
 // Pure function + injected-timer tests; nothing here touches a real runner process.
+import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

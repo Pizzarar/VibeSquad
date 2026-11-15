@@ -1,5 +1,6 @@
 // Roster seed after a runner restart: one cheap summary call (GET /agents?full=1), and a failed/slow seed on an open stream
 // is retried until it lands instead of leaving the "Runner disconnected" pill up for good. Temp homes / mocks only.
+import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';

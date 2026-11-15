@@ -1,5 +1,6 @@
 // The shared runner backend is built once and outlives env changes. A test (or anything) that sets a temp VIBESQUAD_HOME
 // after the first use must never reach the real ~/.vibesquad/runner: the client resolves its home per call.
+import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";

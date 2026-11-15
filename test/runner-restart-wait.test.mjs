@@ -2,6 +2,7 @@
 // hard-kills the runner (taskkill /F, deliberate: agents stay resumable) with VS server requests in flight, so runner stop()
 // never runs. The in-process RunnerClient must wait (bounded) for the owner's restart instead of failing: a read that the
 // kill reset retries on the new runner, a call made mid-restart goes to the new runner, and a reset write is never resent.
+import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";

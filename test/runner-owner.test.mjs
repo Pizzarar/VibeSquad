@@ -1,5 +1,6 @@
 // Single owner: only the VS server's supervisor starts the runner; MCP / API / CLI paths only connect (RUNNER_DOWN).
 // Temp runner home only; everything started here is killed in after().
+import "./helpers/clean-env.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";

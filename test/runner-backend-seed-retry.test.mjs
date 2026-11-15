@@ -1,5 +1,6 @@
 // Per-listener seed retry: a listener whose first listAgents() fails keeps retrying (backoff) until it gets roster + connected,
 // and stops when the listener leaves or the stream generation changes. Mocks only.
+import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';

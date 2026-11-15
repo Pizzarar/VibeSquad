@@ -1,6 +1,7 @@
 // idea-169 (follow-up of idea-162, 47f3310): runner.send(id, text, { steerOnly: true }) joins the agent's OPEN turn or is
 // dropped. It never starts, resumes, queues or coalesces a turn, so a guard/nudge input can never wake an idle agent.
 // Default send behavior is unchanged (last block).
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

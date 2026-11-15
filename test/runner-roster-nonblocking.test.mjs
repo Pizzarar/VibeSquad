@@ -1,4 +1,5 @@
 // A full-roster status scan (GET /agents?full=1) must not block POST /agents: the scan yields between slices.
+import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';

@@ -1,5 +1,6 @@
 // N4: live model / mode / thinking change on a runner agent. The change is a `meta` patch in the agent log; the NEXT
 // process start (process per turn) reads it. A running turn keeps the settings it started with.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

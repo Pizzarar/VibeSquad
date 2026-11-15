@@ -1,5 +1,6 @@
 // A queued (turn-cap) input survives a runner restart: the queue is in memory, so boot re-enqueues agents whose log ends
 // in `queued` with an unstarted input; it runs once, and a send to such an agent is never "not running"/lost.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

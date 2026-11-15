@@ -1,6 +1,7 @@
 // PLAN_X1_IDENTITY X1a guard tests ("403 on spoof"): the per-agent token the runner mints, the admin/agent split on the
 // runner API, the scope rules for agent callers, and "the token never lands on disk or in a log".
 // Fake adapters, in-process runner + HTTP server on an ephemeral port, temp dirs only: nothing touches ~/.vibesquad.
+import "./helpers/clean-env.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";

@@ -1,4 +1,5 @@
 // One runner per home: 8 separate processes call startOwned at once -> exactly 1 runner. Temp home only, never ~/.vibesquad.
+import "./helpers/clean-env.mjs";
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, execFile } from "node:child_process";

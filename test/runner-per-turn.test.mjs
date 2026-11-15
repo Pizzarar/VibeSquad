@@ -1,5 +1,6 @@
 // Process per turn (R4): idle agents are parked right after their turn, the cap counts RUNNING TURNS per provider
 // family, and over the cap a send/create is queued (FIFO, with `ahead`), never refused.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
