@@ -25,7 +25,7 @@ export async function postLog(team: string, entry: { type: "you" | "handoff"; te
   return body as FeedEntry;
 }
 
-async function fetchLog(team: string): Promise<FeedEntry[]> {
+export async function fetchLog(team: string): Promise<FeedEntry[]> {
   if (DEMO) return demoLog();
   const res = await fetch(`/__vibesquad/log?team=${encodeURIComponent(team)}`);
   if (!res.ok) throw new Error(`log fetch failed (${res.status})`);

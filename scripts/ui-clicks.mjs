@@ -55,9 +55,13 @@ const RAIL_SURFACES = [
 
 // Boring Mode (data-vibe=boring) replaces the whole desktop shell, so the fun-mode routes above do not exist there: use its own entry points.
 const boringClick = async (p, id) => { await p.locator(tidq(id)).first().click({ timeout: 4000 }); await sleep(600); };
+// D2: the lane row's role pills moved to the header tabs; select the lane (its title button), then pick the tab.
+const boringLaneTab = async (p, tab) => { await p.locator(`${tidq("boring-conv-vibesquad")} .boring-conv-title`).first().click({ timeout: 4000 }); await sleep(600); await boringClick(p, tab); };
 const BORING_SURFACES = [
   { id: "boring-home", setup: async () => {} },
-  ...[["boring-overview", "boring-project-overview-btn"], ["boring-overlord", "boring-core-overlord"], ["boring-riffbot", "boring-core-riffbot"], ["boring-bugs", "boring-core-bugs"], ["boring-lead", "boring-conv-lead-vibesquad"], ["boring-brainstorm", "boring-conv-brainstorm-vibesquad"], ["boring-usage", "boring-usage-btn"], ["boring-settings", "boring-settings-btn"]].map(([id, t]) => ({ id, setup: (p) => boringClick(p, t) })),
+  { id: "boring-lead", setup: (p) => boringLaneTab(p, "boring-top-lead") },
+  { id: "boring-brainstorm", setup: (p) => boringLaneTab(p, "boring-top-brainstorm") },
+  ...[["boring-overview", "boring-project-overview-btn"], ["boring-overlord", "boring-core-overlord"], ["boring-riffbot", "boring-core-riffbot"], ["boring-bugs", "boring-core-bugs"], ["boring-usage", "boring-usage-btn"], ["boring-settings", "boring-settings-btn"]].map(([id, t]) => ({ id, setup: (p) => boringClick(p, t) })),
 ];
 
 // Surfaces whose setup deliberately leaves a non-modal layer open: that layer (only) may cover the page controls behind it.
