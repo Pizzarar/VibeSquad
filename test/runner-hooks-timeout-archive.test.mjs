@@ -1,4 +1,5 @@
 // idea-189: a digest created with autoArchive must NOT be archived when its waitForFinish merely times out (still queued/running).
+import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { runnerPaseoFacade } from '../server/backend/runner-hooks.mjs';

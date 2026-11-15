@@ -1,6 +1,7 @@
 // tryCreateLock retry budget: a Windows delete-pending EPERM/EACCES (the directory entry is gone but the
 // name is not yet reclaimable) is retried for ~LOCK_CREATE_RETRY_BUDGET_MS (100ms), not the old ~30ms, then
 // gives up (rethrows) instead of hanging. The fs ops are injected so the failure mode is deterministic.
+import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, openSync, rmSync } from "node:fs";

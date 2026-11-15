@@ -2,6 +2,7 @@
 // powershell CIM query). A hold polls at parkHoldPollMs for its first minute, then takes a snapshot only every
 // parkHoldSlowPollMs; the ticks between are a cheap pid liveness check of the shells the last snapshot saw, so a finished
 // suite still drops the hold (and wakes the agent, idea-112) within one fast poll. Fake clock (node:test mock timers).
+import "./helpers/clean-env.mjs";
 import test, { after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

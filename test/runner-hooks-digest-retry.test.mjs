@@ -1,6 +1,7 @@
 // idea-207 H1/H2/M1: a digest whose turn dies on a transient EOF gets the A4 retry and logs ONE real verdict; UNVERIFIED only once
 // retries are exhausted; the digest is archived exactly once, after the retry loop. Drives the REAL runner-hooks facade
 // (waitForFinish over a fake runner timeline) and the real plugin hooks, so neither the wait nor the archive is mocked away.
+import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, appendFileSync } from 'node:fs';

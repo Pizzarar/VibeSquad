@@ -1,3 +1,4 @@
+import "./helpers/clean-env.mjs";
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
 

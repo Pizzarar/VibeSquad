@@ -1,6 +1,7 @@
 // Restart drain (ideas 198 + 186): while `vs restart` waits for the runner to go idle, NEW background work is refused
 // (runner-side park hold refusal for every provider + a claude PreToolUse hook), work that predates the drain keeps holding,
 // the drain expires on its own and never survives a runner start, and only the admin token can set or clear it.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';

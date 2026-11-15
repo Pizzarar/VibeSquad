@@ -1,5 +1,6 @@
 // Orphan sweep: a hard-killed runner's ledger (children.json) is swept at next boot, but only for pids whose
 // image name AND creation time still match the record.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';

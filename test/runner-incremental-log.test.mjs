@@ -1,4 +1,5 @@
 // R2: per-agent log index + incremental status fold. Temp homes only.
+import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeFs from 'node:fs';

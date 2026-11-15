@@ -1,5 +1,6 @@
 // idea-203: worker digests are admitted ahead of plain queued turns and may start over their family's turn cap within a
 // small reserve (+digestReserve per family), never beyond it. Hermetic: temp log dirs, a controlled in-process adapter.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';

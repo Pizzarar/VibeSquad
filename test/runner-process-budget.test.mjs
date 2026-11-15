@@ -1,4 +1,5 @@
 // Agent process budget: live-agent cap, parking idle agents, resume on the next prompt, tree cleanup on shutdown.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

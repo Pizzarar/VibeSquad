@@ -3,6 +3,7 @@
 //       turn); idle resets inflight to 0. cancel/error/exit paths must not leak a slot either.
 //   Q3: a running turn with no log events for VS_RUNNER_QUIET_MS is flagged quiet and stops counting toward its family
 //       cap (queue advances), but its process keeps running and its next event counts it again.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';

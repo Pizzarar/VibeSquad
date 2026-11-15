@@ -1,6 +1,7 @@
 // idea-89: the after-turn park must not kill background work an agent left running (Claude Code run_in_background Bash:
 // a full test suite, a build). park() kills the whole process tree, so it is held while a shell lives under the CLI and
 // happens once it exits; a max-hold bound turns a long hold into a logged forced park. Explicit stops still kill.
+import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
