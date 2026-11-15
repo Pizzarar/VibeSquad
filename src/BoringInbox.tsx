@@ -26,6 +26,23 @@ const deps: AttentionDeps = {
 export type NeedsYouRow = { item: AttentionItem; member: Member; view: TeamView; teamId: string; project: string; lane: string; age: string; since: number };
 type DoneLog = { teamId: string; project: string; entries: FeedEntry[] };
 
+/** What the row says: for a permission, the tool and its command ("Bash: rg --stats"); otherwise the attention reason. */
+export function needsYouReason(item: Pick<AttentionItem, "kind" | "reason" | "agent">): string {
+  if (item.kind !== "permission") return item.reason;
+  const p = item.agent.pendingPermissions?.[0] as { name?: string; title?: string; input?: Record<string, unknown>; detail?: Record<string, unknown> } | undefined;
+  if (!p) return item.reason;
+  const tool = p.name ?? p.title;
+  const arg = [p.input?.command, p.detail?.command, p.input?.file_path, p.input?.path, p.input?.pattern].find((v): v is string => typeof v === "string" && v.length > 0);
+  if (!tool) return item.reason;
+  return arg ? `${tool}: ${arg}` : tool;
+}
+
+/** Opening a row: an `unread` row is read once opened (same as SquadQueue). */
+export function openNeedsYouRow(row: NeedsYouRow, onOpen: (row: NeedsYouRow) => void, clearUnread: (id: string) => void = deps.clearUnreadLocal): void {
+  if (row.item.kind === "unread") clearUnread(row.item.id);
+  onOpen(row);
+}
+
 export const NEEDS_YOU_VISIBLE = 6;
 export const RECENT_DONE_VISIBLE = 8;
 const KIND_RANK: Record<AttentionItem["kind"], number> = { permission: 0, label: 1, unread: 1, error: 2, finished: 3 };
@@ -81,13 +98,13 @@ export function BoringInbox({ views, onOpen, now = Date.now(), logs: injected }:
   return (
     <section className="boring-needs-you" data-testid="boring-needs-you" aria-label="Needs you">
       <div className="boring-section-label boring-needs-head">
-        <span>NEEDS YOU</span>
+        <span>Needs you</span>
         {counted > 0 && <span className="badge boring-badge" data-testid="boring-needs-you-count">{counted}</span>}
         <kbd className="boring-kbd" title="Open the top NEEDS YOU agent">Ctrl+J</kbd>
       </div>
       {err && <div className="boring-needs-err" role="alert">{err}</div>}
       {rows.length === 0 ? (
-        <p className="boring-muted" data-testid="boring-needs-you-empty">Nobody needs you.</p>
+        <p className="boring-muted" data-testid="boring-needs-you-empty">All clear. Nobody needs you.</p>
       ) : (
         <ul className="boring-needs-rows">
           {shown.map((r) => {
@@ -95,12 +112,12 @@ export function BoringInbox({ views, onOpen, now = Date.now(), logs: injected }:
             const dis = busy === item.id;
             return (
               <li key={item.id} className={`boring-needs-item attn-${item.kind}`} data-testid="boring-needs-you-item" data-kind={item.kind}>
-                <button type="button" className="boring-needs-open" data-testid={`boring-needs-open-${item.id}`} title={item.reason} onClick={() => onOpen(r)}>
+                <button type="button" className="boring-needs-open" data-testid={`boring-needs-open-${item.id}`} title={needsYouReason(item)} onClick={() => openNeedsYouRow(r, onOpen)}>
                   <span className={`boring-dot st-${item.kind === "error" ? "err" : item.kind === "finished" ? "done" : "attn"}`} />
                   <span className="boring-needs-who">{item.who}</span>
                   <span className="boring-conv-age">{r.age}</span>
                 </button>
-                <div className="boring-needs-why" title={item.reason}>{item.reason}</div>
+                <div className="boring-needs-why" title={needsYouReason(item)}>{needsYouReason(item)}</div>
                 <div className="boring-needs-where">{r.project} › {r.lane}</div>
                 <div className="boring-needs-actions">
                   {item.kind === "permission" && item.quickPermission && (

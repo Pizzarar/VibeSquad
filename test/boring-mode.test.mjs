@@ -136,7 +136,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringAgentLanding, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -699,14 +699,14 @@ test("D2 2.1 boringSidebarModel: hub-lane needsYou and lane-worker alerts are co
   const v = squad({
     pins: [lanePin("ade", { workers: [worker, calm], needsYou: 1 }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })],
     zones: { hub: { lane: { id: "hub" }, needsYou: 2 }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) },
-    needsYou: 3,
+    needsYou: 4, // hub 2 + ade 1 + the hidden Bugs lane's 1
   });
   const m = boringSidebarModel(v, NOW);
   assert.equal(m.hubNeedsYou, 2);
   assert.equal(m.conversations[0].workerNeedsYou, 1); // finished worker does not count
-  assert.equal(m.totalNeedsYou, 3);
-  // Without view.needsYou the total is still hub + lanes, never the lanes alone.
-  assert.equal(boringSidebarModel({ ...v, needsYou: 0 }, NOW).totalNeedsYou, 3);
+  assert.equal(m.totalNeedsYou, 4);
+  // Without view.needsYou the total is still hub + lanes + the hidden Bugs lane (D2 M1), never the lanes alone.
+  assert.equal(boringSidebarModel({ ...v, needsYou: 0 }, NOW).totalNeedsYou, 2 + 1 + m.core.bugs.needsYou);
 });
 
 test("D2 2.1 BoringApp: Project desk label and Overview button carry the hub / total badges", () => {
@@ -715,7 +715,8 @@ test("D2 2.1 BoringApp: Project desk label and Overview button carry the hub / t
   const t = render(props(v));
   const label = JSON.stringify(byId(t, "boring-trinity-label").props.children);
   assert.match(label, /"children":2/);
-  assert.match(JSON.stringify(byId(t, "boring-project-overview-btn").props.children), /"children":5/);
+  // Painter 5: counts live on collapsed containers only, so the Overview row carries no badge.
+  assert.doesNotMatch(JSON.stringify(byId(t, "boring-project-overview-btn").props.children), /"children":5/);
 });
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
@@ -734,7 +735,7 @@ writeFileSync(
     .replace(/from "\.\/paseo"/, `from "./paseoInbox.mjs"`)
     .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`),
 );
-const { BoringInbox, needsYouRows, recentDone } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
+const { BoringInbox, needsYouRows, recentDone, needsYouReason, openNeedsYouRow } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
 
 const ag = (id, over = {}) => ({ id, title: id.toUpperCase(), status: "idle", updatedAt: ago(10), labels: {}, pendingPermissions: [], ...over });
 const att = (id, tone, reason, over = {}) => ({ agent: ag(id, over.agent), kind: over.kind ?? "worker", laneId: over.laneId ?? "ade", attention: { tone, reason } });
@@ -770,7 +771,7 @@ test("D2 2.2 BoringInbox: labelled NEEDS YOU (never Inbox), inline Allow/Deny on
   const opened = [];
   const t = (hs.i = 0, BoringInbox({ views: [A, B], now: NOW, logs: [{ teamId: "vs", project: "VibeSquad", entries: [{ ts: ago(5), type: "done", text: "shipped D1", agent: "x", lane: "ade" }] }], onOpen: (r) => opened.push(r.item.id) }));
   const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [A, B], now: NOW, logs: [] }));
-  assert.match(html, /NEEDS YOU/);
+  assert.match(html, /Needs you/);
   assert.doesNotMatch(html, /Inbox/);
   assert.match(html, /Recent done \(0\)/);
   assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 5);
@@ -876,4 +877,41 @@ test("D2 BoringApp: a lane expands to live workers with idle ones collapsed to '
   const t3 = render(p2(other));
   assert.equal(byId(t3, "boring-project-header-vs").props["aria-expanded"], true);
   assert.ok(byId(t3, "boring-project-lanes-vs") && byId(t3, "boring-conv-ade"));
+});
+
+// ---- D2 fix round: M2 deep links, L1 unread-on-open, permission reason, M1 no double count ------------------
+test("D2 M2 boringAgentLanding: an agent outside every pinned lane (hub worker) still lands in chat; unknown agents do not", () => {
+  const v = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1")] })] });
+  assert.equal(boringAgentLanding([v], "ade-ld", () => true).mode, "chat");
+  assert.deepEqual(boringAgentLanding([v], "ade-ld", () => true).sel, { laneId: "ade", role: "lead" });
+  const loose = boringAgentLanding([v], "hub-worker", (id) => id === "hub-worker");
+  assert.equal(loose.mode, "chat");
+  assert.equal(loose.sel, null);
+  assert.equal(boringAgentLanding([v], "ghost", () => false), null);
+  assert.equal(boringAgentLanding([v], null, () => true), null);
+});
+
+test("D2 L1 openNeedsYouRow: opening an unread row clears the local unread flag, other kinds do not", () => {
+  const cleared = [];
+  const opened = [];
+  openNeedsYouRow({ item: { id: "u", kind: "unread" } }, (r) => opened.push(r.item.id), (id) => cleared.push(id));
+  openNeedsYouRow({ item: { id: "p", kind: "permission" } }, (r) => opened.push(r.item.id), (id) => cleared.push(id));
+  assert.deepEqual(cleared, ["u"]);
+  assert.deepEqual(opened, ["u", "p"]);
+});
+
+test("D2 needsYouReason: a permission row names the tool and command", () => {
+  const agent = { pendingPermissions: [{ id: "r", name: "Bash", input: { command: "rg --stats" } }] };
+  assert.equal(needsYouReason({ kind: "permission", reason: "1 permission request(s)", agent }), "Bash: rg --stats");
+  assert.equal(needsYouReason({ kind: "permission", reason: "1 permission request(s)", agent: { pendingPermissions: [] } }), "1 permission request(s)");
+  assert.equal(needsYouReason({ kind: "error", reason: "build failed", agent }), "build failed");
+});
+
+test("D2 M1 boringSidebarModel: the Bugs lane is counted once, in core.bugs, never also as a lane", () => {
+  const v = squad({ pins: [lanePin("ade"), lanePin("per")] });
+  const m = boringSidebarModel(v);
+  const bugsLane = m.core.bugs.pin?.lane.id;
+  assert.ok(!m.conversations.some((c) => c.laneId === bugsLane));
+  const rows = boringLaneTableRows(m, []);
+  assert.equal(rows.filter((r) => r.laneId === "_bugs").length + rows.filter((r) => r.laneId === bugsLane).length, bugsLane ? 1 : 1);
 });

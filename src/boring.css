@@ -743,7 +743,7 @@ html[data-vibe="boring"] .perm-preview-cmd,
 html[data-vibe="boring"] .perm-preview-diff { font-family: var(--mono); font-size: var(--t-mono); line-height: var(--lh-mono); }
 html[data-vibe="boring"] .drawer-head .drawer-title { font-size: var(--t-title) !important; line-height: var(--lh-title); }
 html[data-vibe="boring"] .boring-badge { font-size: var(--t-caption); line-height: 16px; color: var(--on-accent); background: var(--st-attn); }
-html[data-vibe="boring"] .boring-kbd { font: 500 var(--t-caption)/var(--lh-caption) var(--sans); color: var(--text-3); padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 4px; margin-left: 6px; }
+html[data-vibe="boring"] .boring-kbd { text-transform: none; letter-spacing: 0; font: 500 var(--t-caption)/var(--lh-caption) var(--sans); color: var(--text-3); padding: 0 4px; border: 1px solid var(--border-strong); border-radius: 4px; margin-left: 6px; }
 
 /* 1.3 / 1.9 measure + density. Column 880 centred; prose 760; composer on the same column. */
 html[data-vibe="boring"] .boring-chat-column,
@@ -880,7 +880,7 @@ html[data-vibe="boring"] .boring-core-group,
 html[data-vibe="boring"] .boring-conv-list { gap: 0; }
 html[data-vibe="boring"] .boring-conv-row { padding: 0; }
 html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
-html[data-vibe="boring"][data-theme="light"] .boring-badge { color: #ffffff; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge { background: #8a5700; color: #ffffff; }
 
 /* Light permission card: amber, not beige-pink. */
 html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00 !important; }
@@ -896,7 +896,7 @@ html[data-vibe="boring"] .meter .meter-readout { color: var(--text-3) !important
 
 /* D2 2.2: NEEDS YOU strip + Recent done (src/BoringInbox.tsx). */
 html[data-vibe="boring"] .boring-needs-you { display: flex; flex-direction: column; gap: 2px; padding: 4px 0 8px; border-bottom: 1px solid var(--border); }
-html[data-vibe="boring"] .boring-needs-head { display: flex; align-items: center; gap: 6px; letter-spacing: 0.06em; text-transform: uppercase; font-weight: 700; color: var(--st-attn); }
+html[data-vibe="boring"] .boring-needs-head { display: flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 700; color: var(--st-attn); }
 html[data-vibe="boring"] .boring-needs-head .boring-kbd { margin-left: auto; }
 html[data-vibe="boring"] .boring-needs-rows,
 html[data-vibe="boring"] .boring-done-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -913,8 +913,9 @@ html[data-vibe="boring"] .boring-needs-actions:empty { display: none; }
 html[data-vibe="boring"] .boring-needs-btn { min-height: 24px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 6px !important; background: var(--surface-2); color: var(--text-1); font: inherit; font-size: var(--t-small); cursor: pointer; }
 html[data-vibe="boring"] .boring-needs-btn:hover:not(:disabled) { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-needs-btn:disabled { opacity: 0.5; cursor: default; }
-html[data-vibe="boring"] .boring-needs-btn.ok { border-color: var(--st-ok); color: var(--st-ok); }
-html[data-vibe="boring"] .boring-needs-btn.bad { border-color: var(--st-err); color: var(--st-err); }
+html[data-vibe="boring"] .boring-needs-btn.ok { background: var(--accent); border-color: var(--accent); color: #fff; }
+html[data-vibe="boring"] .boring-needs-btn.ok:hover:not(:disabled) { background: var(--accent); filter: brightness(1.1); }
+html[data-vibe="boring"] .boring-needs-btn.bad { border-color: var(--border-strong); color: var(--text-1); }
 html[data-vibe="boring"] .boring-needs-err { padding: 4px 8px; font-size: var(--t-small); color: var(--st-err); }
 html[data-vibe="boring"] .boring-recent-done .boring-idle-toggle { min-height: 28px; padding: 4px 8px; font-size: var(--t-small); }
 html[data-vibe="boring"] .boring-done-row { display: grid; grid-template-columns: auto 1fr; column-gap: 6px; padding: 2px 8px; }
@@ -924,30 +925,44 @@ html[data-vibe="boring"] .boring-done-row .boring-needs-where { grid-column: 2; 
 html[data-vibe="boring"] .boring-breadcrumb { display: flex; align-items: center; gap: 2px; }
 html[data-vibe="boring"] .boring-crumb-seg { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
 html[data-vibe="boring"] .boring-crumb-sep { color: var(--text-3); padding: 0 4px; }
-html[data-vibe="boring"] .boring-crumb-btn { border: 0; background: transparent; color: var(--text-2); font: inherit; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
+html[data-vibe="boring"] .boring-crumb-btn { font-weight: 500; border: 0; background: transparent; color: var(--text-2); font: inherit; padding: 2px 6px; border-radius: 6px; cursor: pointer; }
 html[data-vibe="boring"] .boring-crumb-btn:hover { background: var(--surface-3); color: var(--text-1); }
 html[data-vibe="boring"] .boring-crumb-cur { color: var(--text-1); padding: 2px 6px; }
 html[data-vibe="boring"] .boring-conv-line { display: flex; align-items: center; min-width: 0; }
-html[data-vibe="boring"] .boring-conv-line .boring-conv-title { flex: 1 1 auto; min-width: 0; }
-html[data-vibe="boring"] .boring-chevron-btn { flex: 0 0 20px; width: 20px; height: var(--row-h); border: 0; background: transparent; color: var(--text-3); font: inherit; font-size: var(--t-small); cursor: pointer; padding: 0; }
+html[data-vibe="boring"] .boring-conv-line .boring-conv-title { flex: 1 1 auto; min-width: 0; padding-left: 4px; }
+html[data-vibe="boring"] .boring-chevron-btn { flex: 0 0 16px; width: 16px; text-align: center; height: var(--row-h); border: 0; background: transparent; color: var(--text-2); font: inherit; font-size: var(--t-small); cursor: pointer; padding: 0; }
 html[data-vibe="boring"] .boring-chevron-btn:disabled { cursor: default; }
 html[data-vibe="boring"] .boring-project-lanes { padding-left: 14px; display: flex; flex-direction: column; gap: 2px; }
-html[data-vibe="boring"] .boring-worker-list { display: flex; flex-direction: column; gap: 1px; padding: 0 0 4px 26px; }
-html[data-vibe="boring"] .boring-worker-row { display: flex; align-items: center; gap: 6px; min-height: 28px; padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: var(--t-small); text-align: left; cursor: pointer; }
+html[data-vibe="boring"] .boring-worker-list { display: flex; flex-direction: column; gap: 1px; padding: 0 0 4px 28px; }
+html[data-vibe="boring"] .boring-worker-row { display: flex; align-items: center; gap: 6px; min-height: var(--row-h); padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--text-2); font: inherit; font-size: var(--t-small); text-align: left; cursor: pointer; }
 html[data-vibe="boring"] .boring-worker-row:hover { background: var(--surface-3); color: var(--text-1); }
-html[data-vibe="boring"] .boring-worker-row.on { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-worker-row.on { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); color: var(--text-1); }
+html[data-vibe="boring"] .boring-worker-row .boring-row-label { color: var(--text-2); }
+html[data-vibe="boring"] .boring-worker-row.on .boring-row-label { font-weight: 500; color: var(--text-1); }
+/* The active lane highlight belongs to its own line, not the workers under it. */
+html[data-vibe="boring"] .boring-conv-row.on { background: transparent; box-shadow: none; }
+html[data-vibe="boring"] .boring-conv-row.on:not(:has(.boring-worker-row.on)) > .boring-conv-line { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); border-radius: 6px; }
+html[data-vibe="boring"] .boring-conv-row.on > .boring-conv-line .boring-conv-title { background: transparent; }
+html[data-vibe="boring"] .boring-conv-row.on .boring-worker-row .boring-row-label { font-weight: 400; color: var(--text-2); }
+html[data-vibe="boring"] .boring-conv-row.on .boring-worker-row.on .boring-row-label { font-weight: 500; color: var(--text-1); }
 html[data-vibe="boring"] .boring-worker-row .boring-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-small); font-weight: 400; }
 html[data-vibe="boring"] .boring-worker-idle { min-height: 24px; padding: 2px 8px; font-size: var(--t-small); }
-html[data-vibe="boring"] .boring-worker-tab { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-worker-tab { max-width: 200px; }
+html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 28px; border-radius: 999px !important; }
+html[data-vibe="boring"] .boring-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-tab-more { color: var(--text-3); font-size: var(--t-small); white-space: nowrap; padding: 0 6px; }
 html[data-vibe="boring"] .boring-project-block { display: flex; flex-direction: column; gap: 2px; }
 
 /* ===== D2 (@desk, UX_REVIEW S9): dense urgency-sorted lane table. Implemented Normal Mode UX redesign — Thanks to Antigravity by Google DeepMind. ===== */
-html[data-vibe="boring"] .boring-lane-table { width: 100%; border-collapse: collapse; font-size: var(--t-body, 14px); }
-html[data-vibe="boring"] .boring-lane-table th { text-align: left; padding: 6px 12px; font-size: var(--t-small, 12px); font-weight: 600; color: var(--text-muted, var(--muted)); text-transform: uppercase; letter-spacing: 0.06em; border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--bg, var(--panel)); }
-html[data-vibe="boring"] .boring-lane-table td { padding: 0; height: 36px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+html[data-vibe="boring"] .boring-lane-table { width: 100%; border-collapse: collapse; font-size: var(--t-ui, 13px); color: var(--text-2); }
+html[data-vibe="boring"] .boring-lane-table th { text-align: left; padding: 6px 12px; font-size: var(--t-small, 12px); font-weight: 600; color: var(--text-3); text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--bg, var(--panel)); }
+html[data-vibe="boring"] .boring-lane-table td { padding: 0; height: var(--row-h); border-bottom: 1px solid var(--border); vertical-align: middle; }
 html[data-vibe="boring"] .boring-lane-table td.boring-conv-age, html[data-vibe="boring"] .boring-lane-table td.boring-lane-event { padding: 0 12px; }
 html[data-vibe="boring"] .boring-lane-event { color: var(--text-muted, var(--muted)); max-width: 40ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-html[data-vibe="boring"] .boring-lane-cell { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 12px; border: 0; background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; border-radius: 0 !important; }
+html[data-vibe="boring"] .boring-lane-cell { display: flex; align-items: center; gap: 8px; width: 100%; height: var(--row-h); padding: 0 12px; border: 0; background: transparent; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; border-radius: 0 !important; }
+html[data-vibe="boring"] .boring-lane-cell .boring-row-label { flex: 0 1 auto; }
+html[data-vibe="boring"] .boring-lane-name { color: var(--text-1) !important; font-weight: 500 !important; }
+html[data-vibe="boring"] .boring-lane-code { font-family: var(--mono); font-size: var(--t-caption); color: var(--text-3); background: transparent; }
 html[data-vibe="boring"] .boring-lane-row:hover { background: var(--panel-hi); }
 html[data-vibe="boring"] .boring-lane-row.attn { box-shadow: inset 3px 0 0 var(--amber); }
 html[data-vibe="boring"] .boring-lane-row.desk { opacity: 0.9; }
