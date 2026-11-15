@@ -198,7 +198,7 @@ Ctrl+J, Ctrl+K and focus have no affordance in Normal. Show `Ctrl+J` on the Inbo
 │ ▸ Site                   │ [ Message Lead ★ord9…               ] Send ▾ │                          │
 │ ─────────── ⚙ ◐ ✦ ────── │                                              │                          │
 └──────────────────────────┴──────────────────────────────────────────────┴──────────────────────────┘
-  320px                      1fr, text measure 760px                         380px (collapsible)
+  340px                      1fr, conversation ≤880px centred (prose 760)    460px (collapsible)
 ```
 
 **Key state: a worker is waiting for approval** (Inbox row selected or Ctrl+J):
@@ -307,7 +307,7 @@ Use the existing `--sp-1…--sp-6` (4, 8, 12, 16, 24, 32), plus 48.
 | 48 | empty-state padding |
 
 Fixed heights: topbar/header 48, tabs 36, sidebar and table rows 32 (40 under `pointer: coarse`), status strip 32, composer min 56, max 40vh.
-Column widths: left 320 (resizable 280–400), right 380 (collapsible; auto-collapses under 1600 viewport), centre `1fr` with the content measure at 760.
+Column widths: left 340 (resizable 280–420), right 460 (collapsible; auto-collapses under a 1600 viewport), centre `1fr` with the conversation column capped at 880 and centred (prose measure 760; code, diffs and tool rows may use the full 880).
 
 ### 4.3 Navigation structure
 
@@ -344,7 +344,7 @@ Right: lane context: Workers · Changes · Plan · Feed (each collapsible; remem
 
 ### 4.4 Message and output layout
 
-- **Measure:** content max-width 760px (~72ch at 15px), left-aligned inside the centre column with 32px side padding. Header, status strip and composer align to the same left edge.
+- **Measure:** the conversation column is capped at 880px and centred in the centre column. Prose inside it is capped at 760px (~72ch at 15px); code, diffs and tool rows may use the full 880. The composer uses the same column.
 - **Turns, not bubbles.** Each turn starts with a 12px-caption line: `You · 1h` or `Lead ★ord9 · gemini-4 · 1h`. Turns are 24px apart.
   - **Your messages:** `--surface-2` background, 12px/16px padding, radius 8, a 2px `--accent` left rule. Full measure, not right-aligned, so long prompts read the same as replies.
   - **Agent messages:** no background, `--t-body` on the canvas. This is the calmest state, because it's most of the text.
@@ -458,7 +458,10 @@ Effort: **XS** <2h · **S** ≈½ day · **M** 1–2 days · **L** 3–5 days. E
 | 3.3 | Optional 2-pane split of the centre column (Direction C as a toggle), using `panes.ts` | `src/BoringAde.tsx`, `src/panes.ts` | M |
 | 3.4 | Extend `docs/ADE_JOB_WALK.md` with Normal-mode rows for jobs 2–4 (e.g. "permission from a hub worker in another project → answered in ≤1 click") | `docs/ADE_JOB_WALK.md` | S |
 
-### Decisions needed from the owner
-1. **The single name for a lane in the UI:** "Lane" (recommended: it's the code word and already a heading in Normal) or "Team" (per `NAMING.md`). "Conversation" should go either way.
-2. **Inline approval from the Inbox:** allow it for plain Bash/Edit permissions, or always open the agent first? I recommend inline for `quickPermission` only (no questions or plans), since `attentionItems` already makes that distinction.
-3. **Whether Overlord, RiffBot and Bugs keep their persona names in Normal.** I recommend keeping them as subtitles under role names ("Project Brainstorm · RiffBot").
+### Decisions (owner, 2026-11-15)
+1. **A lane is called "Lane"** everywhere in the Normal UI. "Conversation" and "Team" go.
+2. **Inline approval from the Inbox: yes**, for `quickPermission` items only (plain Bash/Edit). Questions and plans always open the agent.
+3. **Persona names stay as subtitles** under role names ("Project Brainstorm · RiffBot", "Project Lead · Overlord").
+
+### Wireframes
+A rough box wireframe of Direction A (three artboards: main screen, a worker waiting for approval, project overview) is in a private Design canvas: https://claude.ai/artifact/SW3YoM1ayEsdah5v56eXef. It is drawn at 60% of a 3200×1800 window, so proportions are real; it only shows layout and relative sizes, not visual detail.
