@@ -1091,7 +1091,7 @@ html[data-vibe="boring"] .boring-ctx-feed-text { color: var(--text-1); line-heig
 /* D3c fix round: composer aligns with the conversation column; header Dock hidden while the panel is open; Changes tab rhythm */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) > .composer { padding-right: calc(16px + 460px); }
 html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { padding-right: calc(16px + 36px); }
-html[data-vibe="boring"] .boring-hdr-btn[data-testid="boring-dock-toggle"].on { display: none; }
+html[data-vibe="boring"] .boring-hdr-btn[data-testid="boring-dock-toggle"] { display: none; }
 html[data-vibe="boring"] .boring-ctx-rail-btn { background: var(--surface-2); border-color: var(--border-strong, var(--border)); color: var(--text-2); }
 html[data-vibe="boring"] .boring-ctx-body > .changes-panel { padding: 16px; box-sizing: border-box; overflow-x: hidden; gap: 24px; font-size: 13px; min-width: 0; }
 html[data-vibe="boring"] .boring-ctx-body .changes-file-list { gap: 0; }
@@ -1137,3 +1137,23 @@ html[data-vibe="boring"] .boring-worker-list > .boring-idle-toggle { display: in
 html[data-vibe="boring"] .boring-idle-toggle .boring-idle-chev { flex: 0 0 16px; width: 16px; text-align: center; }
 html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: var(--on-accent); }
 html[data-vibe="boring"][data-theme="light"] .boring-badge { color: #ffffff !important; }
+
+/* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
+/* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"]) > .composer { --d4-panel-w: 460px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { --d4-panel-w: 36px; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer { position: relative; border-top-color: transparent; background-color: transparent; background-image: linear-gradient(to right, var(--bg) calc(100% - var(--d4-panel-w)), var(--panel) calc(100% - var(--d4-panel-w))); }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::before { content: ""; position: absolute; top: -1px; left: 0; right: var(--d4-panel-w); border-top: 1px solid var(--border); pointer-events: none; }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel) > .composer::after { content: ""; position: absolute; top: -1px; bottom: 0; right: var(--d4-panel-w); border-left: 1px solid var(--border); pointer-events: none; }
+html[data-vibe="boring"] .boring-ctx-tabs { min-height: 36px; box-sizing: border-box; padding: 0 8px; gap: 2px; align-items: stretch; }
+html[data-vibe="boring"] .boring-ctx-tab { height: 36px; border-radius: 0; padding: 0 10px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+html[data-vibe="boring"] .boring-ctx-tab.on { background: transparent; border-bottom-color: var(--accent); }
+html[data-vibe="boring"] .boring-ctx-collapse { align-self: center; }
+html[data-vibe="boring"] .boring-ctx-idle-toggle { align-self: flex-start; background: transparent; border: 0; padding: 6px 8px; cursor: pointer; font: 400 12px/16px var(--font-sans, inherit); color: var(--text-3); }
+html[data-vibe="boring"] .boring-ctx-idle-toggle:hover { color: var(--text-1); }
+html[data-vibe="boring"] .boring-ctx-worker.idle { opacity: 0.75; }
+html[data-vibe="boring"] .boring-ctx-rail-btn { position: relative; padding-top: 28px; }
+html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); writing-mode: horizontal-tb; min-width: 18px; height: 18px; box-sizing: border-box; padding: 0 5px; border-radius: 9px; font: 600 11px/18px var(--font-sans, inherit); text-align: center; color: #ffffff; background: var(--st-attn); }
+html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
+/* Plan tab open: the in-timeline pinned todo bar duplicates it. */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
