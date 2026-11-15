@@ -951,3 +951,9 @@ html[data-vibe="boring"] .boring-lane-cell { display: flex; align-items: center;
 html[data-vibe="boring"] .boring-lane-row:hover { background: var(--panel-hi); }
 html[data-vibe="boring"] .boring-lane-row.attn { box-shadow: inset 3px 0 0 var(--amber); }
 html[data-vibe="boring"] .boring-lane-row.desk { opacity: 0.9; }
+/* D2: header worker tabs stay on one scrollable row; actions never wrap under them. */
+html[data-vibe="boring"] .boring-topbar { flex-wrap: nowrap; }
+html[data-vibe="boring"] .boring-topbar-switcher { flex: 1 1 0; min-width: 0; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: thin; border-radius: 8px !important; }
+html[data-vibe="boring"] .boring-topbar-switcher > * { flex: 0 0 auto; }
+html[data-vibe="boring"] .boring-topbar-actions { flex: 0 0 auto; flex-wrap: nowrap; }
+html[data-vibe="boring"] .boring-topbar-title { flex: 0 0 auto; }
