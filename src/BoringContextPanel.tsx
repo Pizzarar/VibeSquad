@@ -8,7 +8,7 @@ import { demoLog, type FeedEntry } from "./demo";
 import { DEMO } from "./demoFlag";
 import { openAgent } from "./panes";
 import { usePaseo } from "./paseo";
-import { resolve } from "./teams";
+import { resolve, type Member } from "./teams";
 import { findPinnedTodo, type Entry } from "./Timeline";
 import { Ago } from "./ui";
 import { isLive } from "./pins";
@@ -59,16 +59,39 @@ function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
     () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
     [agents, laneId],
   );
+  const [showIdle, setShowIdle] = useState(false);
   const live = members.filter(boringWorkerIsLive);
-  const idle = members.length - live.length;
+  const idleMembers = members.filter((m) => !boringWorkerIsLive(m));
+  const idle = idleMembers.length;
+  const idleToggle = idle > 0 && (
+    <button type="button" className="boring-ctx-idle-toggle" data-testid="boring-ctx-idle-toggle" aria-expanded={showIdle} onClick={() => setShowIdle((v) => !v)}>
+      {showIdle ? "▾" : "▸"} {idle} idle worker{idle === 1 ? "" : "s"}
+    </button>
+  );
+  const idleList = showIdle && idleMembers.map((m) => renderWorker(m, agent, true));
   if (live.length === 0)
-    return <div className="boring-ctx-empty" data-testid="boring-ctx-workers-empty">No live workers in this lane{idle > 0 ? ` · ${idle} idle` : ""}.</div>;
+    return (
+      <div className="boring-ctx-list" data-testid="boring-ctx-workers">
+        <div className="boring-ctx-empty" data-testid="boring-ctx-workers-empty">No live workers in this lane.</div>
+        {idleToggle}
+        {idleList}
+      </div>
+    );
   return (
     <div className="boring-ctx-list" data-testid="boring-ctx-workers">
-      {live.map((m) => {
+      {live.map((m) => renderWorker(m, agent, false))}
+      {idleToggle}
+      {idleList}
+    </div>
+  );
+}
+
+function renderWorker(m: Member, agent: PaseoAgent, idle: boolean) {
+  {
+    {
         const glyph = boringStateGlyph(m.agent.status, m.attention?.tone);
         return (
-          <button type="button" key={m.agent.id} className={`boring-ctx-worker${m.agent.id === agent.id ? " current" : ""}`} data-testid={`boring-ctx-worker-${m.agent.id}`} onClick={() => openAgent(m.agent.id)}>
+          <button type="button" key={m.agent.id} className={`boring-ctx-worker${m.agent.id === agent.id ? " current" : ""}${idle ? " idle" : ""}`} data-testid={`boring-ctx-worker-${m.agent.id}`} onClick={() => openAgent(m.agent.id)}>
             <span className={`boring-dot st-${glyph}`} aria-hidden />
             <span className="boring-ctx-worker-name">{m.agent.title ?? m.agent.id.slice(0, 8)}</span>
             <span className="boring-ctx-worker-age muted"><Ago iso={m.agent.updatedAt} /></span>
@@ -77,10 +100,8 @@ function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
             )}
           </button>
         );
-      })}
-      {idle > 0 && <div className="boring-ctx-foot muted">{idle} idle worker{idle === 1 ? "" : "s"} hidden</div>}
-    </div>
-  );
+    }
+  }
 }
 
 function PlanTab({ entries }: { entries: Entry[] }) {
@@ -156,14 +177,31 @@ export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: 
     return () => window.removeEventListener("vs:open-right-dock", onOpen);
   }, []);
 
+  const { agents } = usePaseo();
+  const badge = useMemo(() => {
+    if (open) return null; // badge only renders on the collapsed rail
+    let err = 0, attn = 0;
+    for (const m of resolve(agents)) {
+      if (m.kind !== "worker" || !isLive(m) || (m.laneId ?? "").toLowerCase() !== laneId.toLowerCase()) continue;
+      const g = boringStateGlyph(m.agent.status, m.attention?.tone);
+      if (g === "err") err++;
+      else if (g === "attn") attn++;
+    }
+    const n = err + attn;
+    return n > 0 ? { tone: err > 0 ? "err" : "attn", n } : null;
+  }, [agents, laneId, open]);
+
   if (!open)
     return (
       <aside className="boring-context-panel collapsed" data-testid="boring-context-panel" data-open="false">
-        <button type="button" className="boring-ctx-rail-btn" data-testid="boring-context-toggle" aria-expanded={false} title="Open context panel" onClick={toggle}>◀ Context</button>
+        <button type="button" className="boring-ctx-rail-btn" data-testid="boring-context-toggle" aria-expanded={false} title="Open context panel" onClick={toggle}>
+          {badge && <span className={`boring-ctx-rail-badge st-${badge.tone}`} data-testid="boring-ctx-rail-badge" aria-label={`${badge.n} need attention`}>{badge.n}</span>}
+          ◀ Context
+        </button>
       </aside>
     );
   return (
-    <aside className="boring-context-panel" data-testid="boring-context-panel" data-open="true" style={{ width: CONTEXT_PANEL_WIDTH }}>
+    <aside className="boring-context-panel" data-testid="boring-context-panel" data-open="true" data-tab={tab} style={{ width: CONTEXT_PANEL_WIDTH }}>
       <div className="boring-ctx-tabs" role="tablist">
         {CONTEXT_TABS.map((t) => (
           <button key={t} type="button" role="tab" aria-selected={tab === t} className={`boring-ctx-tab${tab === t ? " on" : ""}`} data-testid={`boring-context-tab-${t.toLowerCase()}`} onClick={() => setTab(t)}>{t}</button>
