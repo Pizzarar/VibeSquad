@@ -1051,11 +1051,14 @@ export class Runner {
   // Runner boot: re-enqueues every agent that was queued (turn cap) when the previous runner went away, in their original
   // order (oldest unstarted input first; owner jobs still jump non-owner ones). Idempotent: the job's start logs a
   // non-queued status, which moves the log's cut past the input, so a second boot never replays it. Returns the ids re-enqueued.
-  recoverQueued() {
+  // `shouldAdmit()` is asked once, after the fold pass (the slow part of a boot): false (this runner lost runner.lock while it
+  // folded, P0 11-15) admits nothing, so two runners never start the same queued turn.
+  recoverQueued({ shouldAdmit } = {}) {
     const plans = [];
     this._foldsWarm = false;
     for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
     this._foldsWarm = true;
+    if (shouldAdmit && !shouldAdmit()) return [];
     this.mintBootTokens(); // from the same pass: every agent that may still act verifies from the first request after a restart
     for (const id of this.store.ids()) {
       let plan = null;
@@ -1595,13 +1598,18 @@ export class Runner {
   // keepResumable (the restart script's POST /shutdown): NO exit event, so the next runner can resume every agent. An idle agent
   // with a session is parked (logged); a mid-turn/starting one is stopped with entry.parked=true and its log left as-is, so it
   // reads "lost" afterwards and POST /agents/:id/resume brings it back from its last session id.
-  shutdown({ keepResumable = false } = {}) {
+  // keepDrainFile: this runner no longer holds runner.lock, so drain.json belongs to the holder: end only this runner's drain.
+  shutdown({ keepResumable = false, keepDrainFile = false } = {}) {
     if (this._shutDown) return;
     this._shutDown = true;
     this._pollAgy?.shutdown();
     this.closeRosterWatch();
     clearInterval(this._quietSweep);
-    this.clearDrain(); // the drain ends with this runner (its timer and the hook's file)
+    if (keepDrainFile) {
+      clearTimeout(this._drainTimer);
+      this._drainTimer = null;
+      this._drain = null;
+    } else this.clearDrain(); // the drain ends with this runner (its timer and the hook's file)
     const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
     this.queue.length = 0;
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isForbiddenRealHome } from "../test-guard.mjs";
-import { acquireStartLock, releaseLock } from "../../runner/lock.mjs";
+import { RUNNER_BOOT_MAX_MS, acquireStartLock, bootingHolder, pidAlive, readPublished, releaseLock } from "../../runner/lock.mjs";
 
 const RUNNER_ENTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "runner", "server.mjs");
 
@@ -90,6 +90,7 @@ export class RunnerClient {
     this.startTimeoutMs = startTimeoutMs;
     this.conn = null; // { port, token }
     this.starting = null;
+    this.ownedChild = null; // { pid, spawnedAt }: the last runner this client spawned (startOwned), until it publishes or exits
     this.caller = caller;
     this.env = env;
     this.writeSeq = 0; // bumped when a non-GET request settles: a coalesced read started before a write must not answer a reader after it
@@ -312,10 +313,42 @@ export class RunnerClient {
    * OWNER ONLY (the VS server's runner supervisor, server/runner-supervisor.mjs): attach to a live runner, else start one
    * detached (so a VS restart never kills agents). Every other caller uses requireRunning().
    */
+  /**
+   * The pid of a runner that is still booting (alive, runner.json does not name it yet, younger than RUNNER_BOOT_MAX_MS):
+   * the child this client spawned, or any live runner.lock holder. Never spawn next to one (P0 11-15: a boot that outlived
+   * the 8s start wait was respawned every ~40s and 5 runners listened at once). Null when nothing is booting.
+   */
+  bootingPid({ alive = pidAlive, now = Date.now() } = {}) {
+    const c = this.ownedChild;
+    if (c) {
+      // Published = a runner.json naming the child AND written after we spawned it: a stale runner.json whose pid the OS
+      // reused for this child must not read as published (review H1).
+      const pub = readPublished(this.home);
+      const published = !!pub && pub.pid === c.pid && (pub.startedAt ?? 0) >= c.spawnedAt;
+      if (alive(c.pid) && !published && now - c.spawnedAt < RUNNER_BOOT_MAX_MS) return c.pid;
+      this.ownedChild = null; // exited, published, or wedged past the boot cap
+    }
+    return bootingHolder(this.home, { alive, now })?.pid ?? null;
+  }
+
+  /** Wait up to startTimeoutMs for a booting runner to answer /health; throws "runner still booting" (never spawns). */
+  async _awaitBooting(pid) {
+    const deadline = Date.now() + this.startTimeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.healthy()) return;
+      if (this.bootingPid() !== pid) break; // exited or published meanwhile: let the caller re-judge on its next tick
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (await this.healthy()) return;
+    throw new Error(`runner still booting (pid ${pid})`);
+  }
+
   startOwned() {
     this.starting ??= (async () => {
       if (isForbiddenRealHome(this.home)) throw new Error("refusing to start a runner in the real home under a test runner");
       if (await this.healthy()) return;
+      const booting = this.bootingPid();
+      if (booting) return this._awaitBooting(booting);
       fs.mkdirSync(this.home, { recursive: true });
       // Cross-process start lock: concurrent callers (other VS processes, CLI one-liners) wait for the one that holds it
       // instead of each spawning a runner. A crashed holder's lock goes stale after STALE_START_LOCK_MS.
@@ -328,6 +361,8 @@ export class RunnerClient {
       }
       try {
         if (await this.healthy()) return; // someone finished starting it while we waited
+        const bootingNow = this.bootingPid(); // another process spawned one while we waited for the start lock
+        if (bootingNow) throw new Error(`runner still booting (pid ${bootingNow})`);
         // Detached + own log + unref: a short-lived CLI one-liner must be able to exit without taking the runner
         // (and every agent under it) with it. stdio goes to a file, never a pipe the parent has to keep open.
         const log = fs.openSync(path.join(this.home, "runner.log"), "a");
@@ -343,6 +378,7 @@ export class RunnerClient {
           fs.closeSync(log);
         }
         child.unref?.();
+        if (Number.isInteger(child.pid)) this.ownedChild = { pid: child.pid, spawnedAt: Date.now() };
         const startDeadline = Date.now() + this.startTimeoutMs;
         while (Date.now() < startDeadline) {
           if (await this.healthy()) return;
@@ -352,7 +388,9 @@ export class RunnerClient {
       } finally {
         releaseLock(lockFile);
       }
-    })().finally(() => {
+    })().then(() => {
+      this.ownedChild = null; // a runner answers /health: nothing of ours is booting any more (review M1a)
+    }).finally(() => {
       this.starting = null;
     });
     return this.starting;

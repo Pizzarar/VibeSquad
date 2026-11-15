@@ -4,6 +4,46 @@ import { closeSync, existsSync, openSync, readFileSync, rmSync, statSync, writeS
 import path from 'node:path';
 
 export const STALE_START_LOCK_MS = 15000;
+// How long a live runner.lock holder that has not published runner.json yet counts as booting. A boot folds every agent log
+// before it listens (4590 logs / 401MB took ~8s on 11-15, longer on a cold or busy disk), so the 15s grace above is far too
+// short to judge it: stealing from a booting runner is how 5 runners came to listen at once (P0 11-15).
+export const RUNNER_BOOT_MAX_MS = 180_000;
+
+/** True when `file` names exactly `me` ({ pid, startedAt }): the same pid with another startedAt is a different lock. */
+export function holdsLock(file, me) {
+  const info = readLock(file);
+  return !!info && info.pid === me?.pid && info.startedAt === me?.startedAt;
+}
+
+/** <home>/runner.json ({ port, pid, startedAt, lockStartedAt }) as published by a listening runner, or null. */
+export function readPublished(home) {
+  try {
+    const info = JSON.parse(readFileSync(path.join(home, 'runner.json'), 'utf8'));
+    return info && typeof info === 'object' && Number.isInteger(info.pid) ? info : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when runner.json was published by the runner.lock holder `holder` ({ pid, startedAt }): same pid AND the lock's
+ * startedAt (runner.json `lockStartedAt`). A pid alone is not enough: a runner that died hard leaves runner.json behind, and
+ * once the OS reuses its pid for a new, still-booting runner the stale file would read as that runner's (review H1, P0 11-15).
+ */
+export function publishedBy(home, holder) {
+  const pub = readPublished(home);
+  return !!pub && !!holder && pub.pid === holder.pid && pub.lockStartedAt === holder.startedAt;
+}
+
+/**
+ * A runner.lock holder that is alive but has not published runner.json yet: it is still booting (folding the roster) and
+ * must not be stolen from or doubled, until RUNNER_BOOT_MAX_MS after it took the lock (then it is wedged).
+ */
+export function bootingHolder(home, { alive = pidAlive, now = Date.now(), bootMaxMs = RUNNER_BOOT_MAX_MS } = {}) {
+  const info = readLock(path.join(home, 'runner.lock'));
+  if (!info || !alive(info.pid) || publishedBy(home, info)) return null;
+  return now - (info.startedAt ?? 0) < bootMaxMs ? info : null;
+}
 // A steal guard (<lock>.steal) older than this is an orphan from a holder that died mid-steal. Its critical section takes
 // milliseconds, so a long timeout only delays recovery; a short one would let two stealers in at once.
 export const STEAL_GUARD_STALE_MS = 10000;
@@ -127,16 +167,25 @@ function stealStaleLock(file, seen, { pid, alive, onSteal, guardStaleMs }) {
  * Runner lock: exclusive for the runner's lifetime. `isHealthy()` says whether the holder answers /health.
  * Returns { owned: true } if we hold it now, else { owned: false, holder } when a live runner owns the home.
  */
-export async function acquireRunnerLock(home, { isHealthy, alive = pidAlive, bootGraceMs = STALE_START_LOCK_MS } = {}) {
+export async function acquireRunnerLock(home, { isHealthy, alive = pidAlive, bootGraceMs = STALE_START_LOCK_MS, guardStaleMs = STEAL_GUARD_STALE_MS } = {}) {
   const file = path.join(home, 'runner.lock');
   for (let attempt = 0; attempt < 5; attempt++) {
     if (tryCreateLock(file)) return { owned: true, file };
     const info = readLock(file);
+    let mtimeAge;
+    try { mtimeAge = Date.now() - statSync(file).mtimeMs; } catch { continue; } // vanished: retry the create
+    // Created (O_EXCL) but not yet written: another runner is between open and write. Never remove it (review H2).
+    if (!info && mtimeAge < 1000) return { owned: false, holder: null };
     if (info && info.pid !== process.pid && alive(info.pid)) {
-      const booting = Date.now() - (info.startedAt ?? 0) < bootGraceMs;
+      const age = Date.now() - (info.startedAt ?? 0);
+      // Unpublished (runner.json was not written by this holder): still folding its roster before listen(), so it keeps the
+      // lock for up to RUNNER_BOOT_MAX_MS. Published: the short grace, then /health decides.
+      const booting = publishedBy(home, info) ? age < bootGraceMs : age < RUNNER_BOOT_MAX_MS;
       if (booting || (await isHealthy?.())) return { owned: false, holder: info.pid };
     }
-    rmSync(file, { force: true }); // dead holder or live-but-unresponsive: take over
+    // Dead holder or live-but-unresponsive: take over, under the .steal guard and only if the lock still names the holder we
+    // judged (a faster stealer may have replaced it while we awaited /health; its lock is then re-judged, never removed).
+    if (!stealStaleLock(file, info, { pid: process.pid, alive, guardStaleMs })) return { owned: false, holder: readLock(file)?.pid ?? null };
   }
-  return { owned: false, holder: readLock(file)?.pid };
+  return { owned: false, holder: readLock(file)?.pid ?? null };
 }
