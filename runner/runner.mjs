@@ -251,6 +251,11 @@ export function drainNoticeText(drain, work) {
   const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
   return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped when your turn ended: the runtime was draining for a restart (${drain.reason || 'vs restart'}), which refuses new background work. Rerun it now if it is still needed.`;
 }
+// idea-230: what an agent reads at the start of its next input after someone stopped its background work (vs stop --background).
+export function bgStopNoticeText(work) {
+  const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped on purpose (vs stop --background, e.g. to free the runtime for a restart); it did not finish and has no output to read. Rerun it only if it is still needed.`;
+}
 // idea-112: what a held agent reads when the background work it ended its turn on has exited and nothing woke it (ACP has
 // no agent-initiated turn; a Claude CLI that self-started one never reaches this). The work runs `2>&1 | tail`-style, so
 // the agent is told to read its output, not to rerun it.
@@ -511,6 +516,7 @@ export class Runner {
         if (entry.quiet) entry.quiet = false; // a real event ends a quiet turn's quiet period: it counts again
       }
       let turnEnded = false;
+      let permResolved = false;
       if (type === 'status') {
         entry.status = data.status;
         if (data.status === 'idle' || data.status === 'running') entry.lastActive = Date.now();
@@ -528,11 +534,14 @@ export class Runner {
           turnEnded = true;
           this._releaseOverCap(entry, 1); // an owner/digest turn that was running over the cap just ended
         }
-      } else if (type === 'permission') { if (data.phase === 'request') entry.perms.add(data.id); else entry.perms.delete(data.id); }
+      } else if (type === 'permission') { if (data.phase === 'request') entry.perms.add(data.id); else { entry.perms.delete(data.id); permResolved = entry.perms.size === 0; } }
       else if (type === 'session' && data.sessionId) entry.sessionId = data.sessionId;
       else if (type === 'limit') { try { this.limits.record({ ...data, agentId: id }); } catch { /* limits are best-effort */ } }
       else if (type === 'turn_done' && (PROVIDER_ALIASES[provider] ?? provider) === 'antigravity-cli') this._pollAgy?.(id);
       this.store.append(id, type === 'status' ? 'status' : type, data);
+      // idea-230: _armPark's timer skips an agent with a pending permission and never re-arms; a permission that resolves while
+      // the agent is idle (no turn left to end and re-arm) would leave it unparked forever, so re-arm when the last one clears.
+      if (permResolved && !turnEnded && entry.inflight === 0 && entry.turns >= 1 && this._parkable(entry)) this._scheduleParkAfterTurn(id, entry);
       if (turnEnded) { // after the idle is logged, so a queued follow-up for this same agent logs its running after it
         if (entry.archiveWhenIdle) this._stopKeepingSession(id, entry); // archived mid-turn: stop now (any prompts still queued in the child are moot)
         else this._scheduleParkAfterTurn(id, entry);
@@ -922,6 +931,7 @@ export class Runner {
     const events = this.store.read(id);
     let parked = null;
     let archived = false;
+    let stopped = null; // a bg-stopped no input has seen yet (idea-230): the next send tells the agent
     let refused = null; // a park-drain-refused no input has seen yet: the next send tells the agent (survives a runner restart)
     // Fold later meta patches (labels, permissionMode, ...) the same way the summary does, so a resume uses the current meta.
     const meta = { ...(events[0]?.meta ?? {}) };
@@ -929,7 +939,8 @@ export class Runner {
       if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
       if (e.type === 'parked') parked = e;
       else if (e.type === 'park-drain-refused') refused = e;
-      else if (e.type === 'input' && !e.steerOnly) refused = null; // a steer-only input joined a running turn: the notice still owes
+      else if (e.type === 'bg-stopped') stopped = e;
+      else if (e.type === 'input' && !e.steerOnly) { refused = null; stopped = null; } // a steer-only input joined a running turn: the notice still owes
       else if (e.type === 'exit') return null;
       else if (e.type === 'archive') archived = true;
       else if (e.type === 'unarchive') archived = false;
@@ -937,7 +948,7 @@ export class Runner {
     }
     if (archived || !parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
     const c = events[0];
-    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}) };
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}), ...(stopped?.work?.length ? { bgStopNotice: bgStopNoticeText(stopped.work) } : {}) };
   }
 
   // Whether a closed agent can come back in place (same id + session). Mirrors the resume endpoint's 409 condition
@@ -1229,7 +1240,10 @@ export class Runner {
     entry.heldNow = null;
     entry.heldWork = null; // no "your work finished" wake for work that was stopped
     entry.work = []; // just killed: not held (the after-turn park still probes fresh; a tree still dying re-holds, and the reality check drops it once dead)
-    if (list.length) { try { this.store.append(id, 'bg-stopped', { work: list, ...(by ? { by } : {}) }); } catch { /* log gone */ } }
+    if (list.length) {
+      try { this.store.append(id, 'bg-stopped', { work: list, ...(by ? { by } : {}) }); } catch { /* log gone */ }
+      entry.bgStopNotice = bgStopNoticeText(list); // idea-230: if it stays live, its next send carries the notice (parked: folded from the log)
+    }
     if (this._parkable(entry)) this._scheduleParkAfterTurn(id, entry);
     return { stopped: list };
   }
@@ -1307,8 +1321,11 @@ export class Runner {
     }
 
     if (spec?.drainNotice) this.store.append(id, 'drain-notice', { text: spec.drainNotice });
+    const bgStopNotice = spec?.bgStopNotice ?? live?.bgStopNotice ?? null; // idea-230: a live idle agent carries it on its entry, a parked one folds it from the log
+    if (live) live.bgStopNotice = null;
+    if (bgStopNotice) this.store.append(id, 'bg-stop-notice', { text: bgStopNotice });
     this.store.append(id, 'input', { text, ...(images.length ? { images: images.length } : {}), ...(owner ? { owner: true } : {}), ...senderId });
-    const lead = [spec?.drainNotice, pending?.text].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
+    const lead = [spec?.drainNotice, bgStopNotice, pending?.text].filter(Boolean); // a drain refusal notice, then inputs that never ran, then this text
     const job = {
       id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
       run: () => this._deliverJob(job),

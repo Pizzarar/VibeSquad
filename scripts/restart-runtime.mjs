@@ -542,6 +542,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       let running = det.runner.health.running;
       let heldAgents = det.runner.health.heldAgents ?? [];
       let held = det.runner.health.held ?? heldAgents.length;
+      let heldWork = det.runner.health.heldWork ?? {};
       step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
       while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
@@ -550,6 +551,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
           running = h.running ?? running;
           heldAgents = h.heldAgents ?? [];
           held = h.held ?? heldAgents.length;
+          heldWork = h.heldWork ?? {};
         } catch { running = 0; held = 0; break; } // runner died on its own
       }
       if (held > 0 && !opts.killBackground) {
@@ -565,10 +567,11 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
           ({ leads, unresolved } = coord.holderLeads(heldAgents, agents));
         } catch (e) { unresolved = heldAgents.map((id) => ({ agentId: id, reason: `lead lookup failed: ${e.message}` })); }
         const at = new Date(d.now()).toISOString();
+        leads = leads.map((l) => ({ ...l, heldWork: Object.fromEntries(l.heldAgents.filter((id) => heldWork[id]?.length).map((id) => [id, heldWork[id]])) })); // idea-230: what holds it, in the ask and the record
         leads = leads.map((l) => ({ ...l, ask: coord ? coord.drainAskText(l, at) : null }));
-        result.deferred = { held, heldAgents, running, leads, unresolved };
+        result.deferred = { held, heldAgents, heldWork, running, leads, unresolved };
         step('deferred: background work still running', result.deferred);
-        result.errors.push(coord ? coord.deferralMessage({ held, heldAgents, waitSec: opts.waitTimeoutSec, leads, unresolved })
+        result.errors.push(coord ? coord.deferralMessage({ held, heldAgents, waitSec: opts.waitTimeoutSec, leads, unresolved, heldWork })
           : `deferred: ${held} agent(s) still hold background work after ${opts.waitTimeoutSec}s (${heldAgents.join(', ') || 'ids unknown'}); no lead resolved (${unresolved[0]?.reason ?? 'unknown'}): ask the holders' leads to drain, wait for each 'drained', then rerun vs restart. No timer retries; --kill-background needs the owner's per-run OK.`);
         for (const l of leads) log(`drain ask -> vs send ${l.leadId} "${l.ask}"`);
         for (const u of unresolved) log(`no lead resolved for ${u.agentId}: ${u.reason}`);

@@ -518,7 +518,7 @@ test("held background work outlasting the wait defers the restart: nothing stopp
   try {
     const r = await w.run({ waitTimeoutSec: 0.05 });
     assert.equal(r.ok, false);
-    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], running: 0, leads: [], unresolved: [{ agentId: "rn-suite", reason: "not in the runner's agent list" }] });
+    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], heldWork: {}, running: 0, leads: [], unresolved: [{ agentId: "rn-suite", reason: "not in the runner's agent list" }] });
     assert.ok(r.errors.some((e) => /deferred: 1 agent\(s\) still hold background work .*rn-suite.*No lead resolved for: rn-suite/.test(e)), JSON.stringify(r.errors));
     assert.ok(!r.errors.some((e) => /rerun later|pass --kill-background/.test(e)), "the deferral never suggests a timer retry or --kill-background");
     assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");

@@ -913,6 +913,12 @@ export class RunnerBackend {
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/cancel`, {}, asCaller(opts));
   }
 
+  /** idea-230: kill an idle agent's held background shells (runner POST stop-background); { stopped: [{pid,name,cmd}] }. */
+  async stopBackground(id, opts = {}) {
+    const r = await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/stop-background`, {}, asCaller(opts));
+    return { stopped: Array.isArray(r?.stopped) ? r.stopped : [] };
+  }
+
   async archiveAgent(id, opts = {}) {
     const lane = (await this.fetchAgent(id).catch(() => null))?.agent.labels?.lane;
     await this.rc.request("POST", `/agents/${encodeURIComponent(id)}/archive`, {}, asCaller(opts));

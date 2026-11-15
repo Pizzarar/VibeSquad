@@ -488,6 +488,10 @@ async function statusTool(ctx, args = {}) {
 async function cancelTool(ctx, args = {}) {
   const id = need(args, "id", "agentId");
   await verifyCaller(ctx); // X1b: the runner then scopes the cancel to the verified caller
+  if (args.background === true) { // idea-230: stop an idle agent's held background shells (runner POST /agents/<id>/stop-background), not its turn
+    const r = await ctx.withBackend({ id }, (b) => b.stopBackground(id));
+    return { id, stoppedBackground: r?.stopped ?? [] };
+  }
   await ctx.withBackend({ id }, (b) => b.cancelAgent(id));
   return { id, cancelled: true };
 }
@@ -977,7 +981,7 @@ export const VS_TOOLS = {
     run: watchTool,
   },
   list: { description: "Agents in your lane.", inputSchema: obj({}), run: listTool },
-  cancel: { description: "Interrupt an agent's current turn.", inputSchema: obj({ id: S }, ["id"]), run: cancelTool },
+  cancel: { description: "Interrupt an agent's current turn; background:true instead stops an idle agent's held background shells (process trees).", inputSchema: obj({ id: S, background: { type: "boolean" } }, ["id"]), run: cancelTool },
 };
 
 /** Paseo-name aliases for prompts written against the Paseo MCP. Every hit is logged as a metric. */
