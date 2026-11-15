@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import type { PaseoAgent } from "./agentTypes";
-import { archiveAgent, markAgentRead, markAgentUnread, stopAgent } from "./paseo";
+import { archiveAgent, markAgentRead, markAgentUnread, sendMessage, stopAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
 import { runnerReloadTimeline } from "./runnerBridge";
 import { AgentTitleEdit } from "./QuickWinsUi";
-import { shouldComposerSubmit } from "./IdeaInbox";
+import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { ConfirmButton, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL } from "./userName";
 import { AGENT_TYPE_LABEL, kindOf } from "./teams";
@@ -16,7 +16,7 @@ import { AttachFiles, HardeningBar, NeedsYouControls, SessionActions, formatCost
 import { useAgentConfig } from "./useAgentConfig";
 import { FeaturesMenu } from "./FeaturesMenu";
 import { SandboxView } from "./SandboxView";
-import { auditAntigravityAgent } from "./antigravity";
+import { CANCEL_AND_RESUME_PROMPT, auditAntigravityAgent } from "./antigravity";
 import { openBriefEditor } from "./pinActions";
 import type { Entry } from "./Timeline";
 import { BORING_CTX_WARN_PCT, boringHeaderStrip } from "./boringHeaderStrip";
@@ -65,21 +65,33 @@ export type BoringAgentHeaderProps = {
   onFeedback: (verdict: "good" | "lost") => Promise<void>;
 };
 
+const GLYPH_CHAR: Record<string, string> = { run: "●", idle: "○", attn: "!", stalled: "◌", err: "✕", done: "✓" };
+
+function humanAge(sec: number): string {
+  if (sec < 120) return `${sec}s`;
+  if (sec < 7200) return `${Math.round(sec / 60)}m`;
+  return `${Math.round(sec / 3600)}h`;
+}
+
 export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const { agent } = p;
   const now = useTick();
   const [menuOpen, setMenuOpen] = useState(false);
   const [reloadBusy, setReloadBusy] = useState(false);
   const [copied, setCopied] = useState("");
+  const [flagOpen, setFlagOpen] = useState(false);
+  const [resumeBusy, setResumeBusy] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   // Same provider/model/mode/thinking state + Shift+Tab mode cycling as Psycho DrawerHeader (shared hook).
   const cfg = useAgentConfig({ agent, active: p.active, isBs: p.isBs, onSuccessor: p.onSuccessor, doRestart: p.doRestart, stagedSwitch: p.stagedSwitch, onStageSwitch: p.onStageSwitch });
-  const attachBlocked = !!auditAntigravityAgent(agent, p.entries).a5ReadBlocked;
+  const audit = auditAntigravityAgent(agent, p.entries);
+  const attachBlocked = !!audit.a5ReadBlocked;
+  const hung = audit.a3HungTool;
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const kind = kindOf(agent);
   const prov = providerSpec(agent.provider);
 
-  useEffect(() => setMenuOpen(false), [agent.id]);
+  useEffect(() => { setMenuOpen(false); setFlagOpen(false); }, [agent.id]);
   useEffect(() => {
     if (!menuOpen) return;
     const onDown = (e: PointerEvent) => {
@@ -115,13 +127,28 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     planHandedOff: p.planHandedOff,
     nowMs: now,
   });
-  const glyph = boringStateGlyph(strip.some((s) => s.kind === "stalled") ? "stalled" : agent.status, p.att?.tone);
+  const hungText = hung ? `Tool "${hung.name}" running ${humanAge(hung.ageSeconds)}` : "";
+  const stripItems = strip.map((s) => (s.kind === "stalled" ? { ...s, text: hung && p.active ? hungText : s.text.replace(/^Stalled: no update for /, "No update for ") } : s));
+  if (hung && p.active && !stripItems.some((s) => s.kind === "stalled")) stripItems.unshift({ kind: "stalled", text: hungText });
+  const glyph = boringStateGlyph(stripItems.some((s) => s.kind === "stalled") ? "stalled" : agent.status, p.att?.tone);
+  const cancelResume = async () => {
+    if (!hung) return;
+    setResumeBusy(true);
+    try {
+      await stopAgent(agent.id);
+      await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(hung.name), undefined, { activeTurnBehavior: "interrupt" });
+    } catch (e) {
+      alert(`Cancel & resume failed: ${e}`);
+    } finally {
+      setResumeBusy(false);
+    }
+  };
   const running = agent.status === "running" && !agent.archivedAt;
   const roleLine = [AGENT_TYPE_LABEL[p.agentType], labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
   const canHandoff = !agent.archivedAt && ((kind === "lead" && !!p.onSuccessor) || p.isBs);
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
-  const showNeedsYou = needsYouFlagged || isMarkedUnread(agent.id);
+  const showNeedsYou = needsYouFlagged || isMarkedUnread(agent.id) || flagOpen;
   const copy = (what: string, text: string) => {
     navigator.clipboard?.writeText(text).catch(() => {});
     setCopied(what);
@@ -131,7 +158,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   return (
     <>
       <header className="boring-agent-header" data-testid="boring-agent-header" data-glyph={glyph}>
-        <span className={`boring-agent-glyph st-${glyph}`} data-testid="boring-agent-glyph" title={p.att?.reason ?? agent.status} />
+        <span className={`boring-agent-glyph st-${glyph}`} data-testid="boring-agent-glyph" title={p.att?.reason ?? agent.status} aria-label={glyph}>{GLYPH_CHAR[glyph] ?? "○"}</span>
         <span className="boring-agent-name" data-testid="boring-agent-name">
           <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
         </span>
@@ -199,6 +226,9 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
                   Mark unread
                 </button>
               )}
+              <button type="button" role="menuitem" data-testid="boring-flag-btn" title="Flag this chat as needing you" onClick={() => { setFlagOpen((v) => !v); close(); }}>
+                {flagOpen ? "Hide flag bar" : "Flag needs you…"}
+              </button>
               <button type="button" role="menuitem" data-testid="drawer-search-btn" title="Search transcript, jump between prompts, filter the timeline" onClick={() => { window.dispatchEvent(new CustomEvent("vs:timeline-search", { detail: { agentId: agent.id } })); close(); }}>
                 Search transcript
               </button>
@@ -212,7 +242,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
                   close();
                   if (DEMO) return;
                   setReloadBusy(true);
-                  try { runnerReloadTimeline(agent.id); } finally { setReloadBusy(false); }
+                  cfg.setReloadError("");
+                  try { runnerReloadTimeline(agent.id); } catch (e) { cfg.setReloadError(String(e)); } finally { setReloadBusy(false); }
                 }}
               >
                 Reload session
@@ -328,7 +359,18 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
           {p.summaryLoading ? (
             <div className="muted small">Loading summary…</div>
           ) : (
-            <textarea rows={6} value={p.summaryText} onChange={(e) => p.setSummaryText(e.target.value)} placeholder="# Brainstorm Summary (Decided / Open / In flight)" />
+            <textarea
+              rows={6}
+              value={p.summaryText}
+              onChange={(e) => p.setSummaryText(e.target.value)}
+              placeholder="# Brainstorm Summary (Decided / Open / In flight)"
+              onKeyDown={(e) => {
+                if ((e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter") && !isImeComposing(e) && (e.ctrlKey || e.metaKey) && !p.summarySaving && !p.summaryLoading) {
+                  e.preventDefault();
+                  void p.saveSummary();
+                }
+              }}
+            />
           )}
         </div>
       )}
@@ -359,12 +401,35 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
         </div>
       )}
       {p.att && p.att.tone !== "needs-you" && p.att.tone !== "finished" && <div className={`banner ${p.att.tone}`}>{p.att.reason}</div>}
-      {showNeedsYou ? <NeedsYouControls agent={agent} /> : null}
-      {p.active && <HardeningBar agent={agent} entries={p.entries} />}
-      {strip.length > 0 && (
+      {showNeedsYou ? <div className="boring-needs-you-wrap"><NeedsYouControls agent={agent} /></div> : null}
+      {p.active && <HardeningBar agent={agent} entries={p.entries} hideHungTool />}
+      {stripItems.length > 0 && (
         <div className="boring-status-strip" data-testid="boring-status-strip" role="status">
-          {strip.map((s) => (
-            <span key={s.kind} className={`boring-strip-item strip-${s.kind}`} data-strip={s.kind}>{s.text}</span>
+          {stripItems.map((s, i) => (
+            <span key={s.kind} className={`boring-strip-item strip-${s.kind}`} data-strip={s.kind}>
+              {i > 0 && <span className="boring-strip-sep" aria-hidden="true">·</span>}
+              {s.kind === "stalled" && <span className="boring-strip-glyph" aria-hidden="true">◌</span>}
+              {s.text}
+              {s.kind === "stalled" && hung && p.active && (
+                <button type="button" className="boring-strip-btn" data-testid="boring-strip-resume" disabled={resumeBusy} onClick={() => void cancelResume()}>
+                  {resumeBusy ? "…" : "Cancel & resume"}
+                </button>
+              )}
+              {s.kind === "context" && canHandoff && (
+                <button
+                  type="button"
+                  className="boring-strip-btn"
+                  data-testid="boring-strip-handoff"
+                  disabled={p.restarting}
+                  onClick={() => {
+                    if (p.isBs) void p.doRestart(p.planHandedOff ? "handoff" : p.bsUsedTokens >= p.warnTokens ? "warn-80k" : "manual");
+                    else p.onSuccessor?.();
+                  }}
+                >
+                  Hand off ▸
+                </button>
+              )}
+            </span>
           ))}
         </div>
       )}

@@ -137,7 +137,7 @@ function HardeningBanner(props: {
   );
 }
 
-export function HardeningBar({ agent, entries }: { agent: PaseoAgent; entries: Entry[] }) {
+export function HardeningBar({ agent, entries, hideHungTool }: { agent: PaseoAgent; entries: Entry[]; hideHungTool?: boolean }) {
   useTick();
   const a = auditAntigravityAgent(agent, entries);
   const nudge = (text: string) => () => sendMessage(agent.id, text);
@@ -164,7 +164,7 @@ export function HardeningBar({ agent, entries }: { agent: PaseoAgent; entries: E
           onAction={nudge(PROMISED_RUN_NUDGE_PROMPT)}
         />
       )}
-      {a.a3HungTool && (
+      {a.a3HungTool && !hideHungTool && (
         <HardeningBanner
           tone={a.a3HungTool.severity === "critical" ? "hot" : "warn"}
           text={`Tool "${a.a3HungTool.name}" running for ${a.a3HungTool.ageSeconds}s`}
