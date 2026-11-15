@@ -218,7 +218,7 @@ function teamByPath(cwd) {
 // Identity
 // ---------------------------------------------------------------------------
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const flags = { _: [], ref: [] };
   const valued = new Set([
     "reason",
@@ -287,6 +287,7 @@ function parseArgs(argv) {
     "dryRun",
     "noForce",
     "killBackground",
+    "background",
     "force",
     "print",
     "stdin",
@@ -531,7 +532,7 @@ Usage:
   vs logs <agent> [--limit <N>]   agent timeline entries
   vs inspect <agent>   full agent record
   vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]   merge gate: exit 0 only if the reviewer's own FIRST line is "PASS H/M/L <hash>" and <hash> prefixes git rev-parse <branch>; else non-zero (1 FAIL, 2 no verdict line, 3 hash mismatch/stale review, 4 not a reviewer, 5 branch unresolved)
-  vs stop <agent>   interrupt an agent's current turn
+  vs stop <agent> [--background]   interrupt an agent's current turn; --background instead stops an IDLE agent's held background shells (whole process trees; it gets a notice on its next input)
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
@@ -1996,6 +1997,8 @@ export async function runAgentVerb(verb, flags, ctx) {
     } else if (flags.watchAction === "cancel") {
       args.id = String(flags._[0] ?? "").trim();
     }
+  } else if (verb === "stop") {
+    args = { id, ...(flags.background ? { background: true } : {}) };
   } else if (verb === "send") {
     args = { id, text: flags._.slice(1).join(" ") };
   } else if (verb === "ls") {

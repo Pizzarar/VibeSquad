@@ -53,9 +53,16 @@ export function holderLeads(heldIds, rawAgents, teams = loadTeamsRegistry()) {
 
 /** The ask a restarter sends a holder lead (no double quotes or backticks: it pastes into `vs send <id> "..."` in any shell). */
 export function drainAskText(lead, at) {
-  return `Restart pending (vs restart deferred ${at ?? "just now"}): ${lead.heldAgents.join(", ")} in your lane hold background work. ` +
-    `Please drain: let running suites finish, hold new background suites, then run: vs log restart-feedback '${DRAINED_TEXT}'. ` +
+  const holders = lead.heldAgents.map((id) => { const w = workLine(lead.heldWork, id); return w ? `${id} (${w})` : id; }).join(", ");
+  return `Restart pending (vs restart deferred ${at ?? "just now"}): ${holders} in your lane hold background work. ` +
+    `Please drain: let running suites finish, or stop what is not needed with vs stop <agent> --background (e.g. ${lead.heldAgents.map((id) => `vs stop ${id} --background`).join("; ")}; idle agents only, kills each shell's whole tree), hold new background suites, then run: vs log restart-feedback '${DRAINED_TEXT}'. ` +
     `You will get '${DONE_TEXT}' after the restart; lift the hold then.`;
+}
+
+/** "pid 4242: bash tools/run_suite.sh ..." for one agent's held shells (the runner's /health heldWork), "" when unknown. */
+function workLine(heldWork, id) {
+  const clean = (t) => String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$'-]+/g, " ").trim().slice(-80); // no quote, backtick or newline: it pastes into vs send "..."
+  return (heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${clean(w.cmd ?? w.name)}`).join(", ");
 }
 
 export function doneText(at) {
@@ -63,11 +70,13 @@ export function doneText(at) {
 }
 
 /** The deferral's error line: who to ask, what to wait for, no timer retries, the owner gate. */
-export function deferralMessage({ held, heldAgents, waitSec, leads, unresolved }) {
-  const ask = leads.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} holds ${l.heldAgents.join(", ")}`);
+export function deferralMessage({ held, heldAgents, waitSec, leads, unresolved, heldWork }) {
+  const hw = (l) => l.heldWork ?? heldWork;
+  const ask = leads.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} holds ${l.heldAgents.map((id) => { const w = workLine(hw(l), id); return w ? `${id} (${w})` : id; }).join(", ")}`);
   const miss = unresolved.map((u) => `${u.agentId} (${u.reason})`);
   return `deferred: ${held} agent(s) still hold background work after ${waitSec}s (${heldAgents.join(", ") || "ids unknown"}). ` +
     (ask.length ? `Ask these leads to drain and hold background suites: ${ask.join("; ")}. ` : "") +
+    (heldAgents.length ? `Idle holders can be stopped with ${heldAgents.map((id) => `vs stop ${id} --background`).join("; ")} (kills each shell's whole tree). ` : "") +
     (miss.length ? `No lead resolved for: ${miss.join("; ")}; find who owns it. ` : "") +
     `Wait for each lead's vs log restart-feedback '${DRAINED_TEXT}', then rerun vs restart (it refuses until they have); after it succeeds the leads get '${DONE_TEXT}' to lift the hold. ` +
     `No timer retries; --kill-background needs the owner's per-run OK.`;
