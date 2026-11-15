@@ -470,8 +470,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             </div>
           )}
           <div className="boring-topbar-actions">
-            <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search transcripts (Ctrl+K)" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search <kbd className="boring-kbd">Ctrl+K</kbd></button>
-            <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (Ctrl+J jumps to what needs you)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">Ctrl+J</kbd></button>
+            <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
+            <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
             {mode === "chat" && agent && (
               <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
                 {detailsOpen ? "▾ Details" : "⋯ Details"}

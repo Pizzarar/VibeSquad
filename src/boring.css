@@ -872,3 +872,6 @@ html[data-vibe="boring"] .usage-ready-pill,
 html[data-vibe="boring"] .usage-export { background: var(--surface-2) !important; }
 html[data-vibe="boring"] .usage-review-run,
 html[data-vibe="boring"] .usage-inbox-accept { background: var(--accent) !important; color: var(--on-accent) !important; }
+
+/* D1: the context strip is a quiet row on the canvas, not a mauve slab (beats the old B5 --panel-hi rule). */
+html[data-vibe="boring"] .brainstorm-ctx-bar { background: transparent !important; border: 0 !important; border-bottom: 1px solid var(--border) !important; border-radius: 0 !important; }

@@ -702,7 +702,7 @@ test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid
   }
   const src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const ade = src("BoringAde.tsx");
-  for (const text of ["+ New lane", "Project Brainstorm · RiffBot", "Project Lead · Overlord", "Ctrl+K", "Ctrl+J", ">Project desk<"]) assert.ok(ade.includes(text), text);
+  for (const text of ["+ New lane", "Project Brainstorm · RiffBot", "Project Lead · Overlord", ">Project desk<"]) assert.ok(ade.includes(text), text);
   for (const gone of ["New Conversation", "TRINITY", "📊", "🔍"]) assert.ok(!ade.includes(gone), gone);
   for (const id of ["boring-new-conv-btn", "boring-core-group", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
   for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(id), id);
