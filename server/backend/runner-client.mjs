@@ -120,6 +120,19 @@ export class RunnerClient {
     return authHeadersFor(caller, this.conn?.token);
   }
 
+  /**
+   * The runner's settled-write count right now, { boot, seq }, counting writes from every client process (idea-233 d).
+   * undefined when the runner predates GET /write-seq or does not answer: callers then fall back to writeSeq alone.
+   */
+  async runnerWriteSeq() {
+    try {
+      const r = await this.request("GET", "/write-seq");
+      return typeof r?.boot === "string" && Number.isInteger(r.seq) ? { boot: r.boot, seq: r.seq } : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** GET /verify-agent as `caller` ({ id, token }): the runner's verified record, or a 403 RunnerHttpError. */
   verifyAgent(caller) {
     return this.request("GET", "/verify-agent", undefined, { caller });
