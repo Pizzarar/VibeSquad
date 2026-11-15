@@ -21,6 +21,7 @@ import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
 import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isAbsInlinePath, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, parseInlineCodePath, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
+import { TOOL_OUTPUT_FOLD_LINES, diffStats, foldLines, formatDuration, summarizeTools, toolDurationMs, toolKind, toolTarget } from "./toolRows";
 import { groupToolRuns, isFailedTool, isRunExpanded, isSubAgentTool, toggleRunExpanded, toolRunToggleKey, type ToolRunGroup } from "./toolRuns";
 import { getPanes } from "./panes";
 import { recoveredBlips } from "./transientBlip";
@@ -542,6 +543,42 @@ export function MarkdownRenderer({ text, agentId, doc = false, messageLegacyId }
   );
 }
 
+const boringNow = () => typeof document !== "undefined" && document.documentElement.getAttribute("data-vibe") === "boring";
+
+// Normal mode (html[data-vibe=boring]) gets the outcome-first tool rows; Psycho rendering is untouched.
+function useBoringTimeline(): boolean {
+  const read = () => typeof document !== "undefined" && document.documentElement.getAttribute("data-vibe") === "boring";
+  const [b, setB] = useState(read);
+  useEffect(() => {
+    const update = () => setB(read());
+    update();
+    const mo = new MutationObserver(update);
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-vibe"] });
+    return () => mo.disconnect();
+  }, []);
+  return b;
+}
+
+const KIND_GLYPH: Record<string, string> = { shell: "$", edit: "±", read: "≡", search: "⌕", web: "↗", agent: "◈", other: "•" };
+
+/** Tool output that folds at 12 lines behind a "Show N more lines" toggle (Normal mode only). */
+function FoldedPre({ text, style }: { text: string; style?: React.CSSProperties }) {
+  const boring = useBoringTimeline();
+  const [all, setAll] = useState(false);
+  if (!boring) return <pre className="tl-tool-output" style={style}>{text}</pre>;
+  const { head, hidden } = foldLines(text, TOOL_OUTPUT_FOLD_LINES);
+  return (
+    <>
+      <pre className="tl-tool-output boring-tool-output" style={style}>{all || !hidden ? text : head}</pre>
+      {hidden > 0 && (
+        <button type="button" className="boring-tool-fold" data-testid="boring-tool-fold" onClick={(ev) => { ev.stopPropagation(); setAll((v) => !v); }}>
+          {all ? "Show fewer lines" : `Show all ${TOOL_OUTPUT_FOLD_LINES + hidden} lines`}
+        </button>
+      )}
+    </>
+  );
+}
+
 // ─── Unified diff view ────────────────────────────────────────────────────────
 
 function DiffView({ diff }: { diff: string }) {
@@ -564,20 +601,20 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
     const output = d.output ?? d.stdout ?? d.stderr ?? it.output ?? "";
     return (
       <div data-testid="tl-tool-detail" className="tl-tool-detail">
-        {d.command && <div><b>Command:</b> <code>{d.command}</code></div>}
+        {d.command && <div><b className="tl-detail-label">Command:</b> <code>{d.command}</code></div>}
         {d.cwd && <div><b>cwd:</b> <code>{d.cwd}</code></div>}
         {d.exitCode != null && (
           <div>
             <span
-              className="tl-exit-badge"
-              style={{ background: d.exitCode === 0 ? "var(--mint-fill)" : "var(--pink-fill)", color: "var(--bg)", padding: "1px 6px", borderRadius: 3 }}
+              className={`tl-exit-badge ${d.exitCode === 0 ? "ok" : "err"}`}
+              style={boringNow() ? undefined : { background: d.exitCode === 0 ? "var(--mint-fill)" : "var(--pink-fill)", color: "var(--bg)", padding: "1px 6px", borderRadius: 3 }}
             >
               exit {d.exitCode}
             </span>
           </div>
         )}
         {output && (
-          <pre className="tl-tool-output" style={{ maxHeight: 240, overflow: "auto" }}>{String(output)}</pre>
+          <FoldedPre text={String(output)} style={{ maxHeight: 240, overflow: "auto" }} />
         )}
         {it.error && <div className="tl-tool-error" style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
       </div>
@@ -735,6 +772,7 @@ export function TimelineItem({
   const [expandedState, setExpanded] = useState<boolean | null>(null);
   const expanded = expandedState ?? false;
   const [collapseTools] = usePref("chat.collapseToolCalls");
+  const boring = useBoringTimeline();
   if (!it || typeof it !== "object") return null;
 
   if (isCompaction(it) || (it.type === "notification" && typeof it.message === "string" && it.message.includes("compacted"))) {
@@ -855,6 +893,31 @@ export function TimelineItem({
       }
 
       const open = expandedState ?? toolStartsExpanded(failed, collapseTools);
+      if (boring) {
+        const kind = toolKind(it, d);
+        const stats = kind === "edit" ? diffStats(d) : null;
+        const ms = toolDurationMs(it, d);
+        const running = !failed && it.status != null && !["completed", "done", "success", ""].includes(String(it.status).trim());
+        return (
+          <div
+            data-testid="tl-tool-row"
+            className={`tl tl-tool ${it.status ?? ""}${failed ? " failed" : ""}`}
+            onClick={() => setExpanded(!open)}
+          >
+            <div className="boring-toolrow" data-testid="boring-toolrow" data-kind={kind} data-state={failed ? "failed" : running ? "running" : "ok"}>
+              <span className="bt-chev" aria-hidden="true">{open ? "▾" : "▸"}</span>
+              <span className="bt-glyph" aria-hidden="true">{KIND_GLYPH[kind]}</span>
+              <span className="tool-name">{it.name}</span>
+              <span className="bt-target" title={toolTarget(it, d)}>{formatToolError(toolTarget(it, d)).slice(0, 160)}</span>
+              <span className="bt-diff">{stats && (stats.add > 0 || stats.del > 0) && <><span className="bt-add">+{stats.add}</span> <span className="bt-del">−{stats.del}</span></>}</span>
+              <span className="bt-dur">{ms != null ? formatDuration(ms) : ""}</span>
+              <span className="bt-status" aria-label={failed ? "failed" : running ? "running" : "ok"}>{failed ? "✕" : running ? <span className="bt-spin" /> : "✓"}</span>
+            </div>
+            {failed && errText && <div className="bt-error">{errText}</div>}
+            {open && <ToolDetail it={it} d={d} />}
+          </div>
+        );
+      }
       const rawSummary =
         d.type === "shell" ? d.command : d.filePath ?? d.query ?? d.url ?? d.label ?? d.text ?? "";
       const summaryStr = formatToolError(rawSummary).slice(0, 160);
@@ -1190,6 +1253,7 @@ function ToolRunRow({
     }
   }, [pendingJumpSeq, run]);
   const firstSeq = run.entries[0]?.seqStart ?? run.startIndex;
+  const boring = useBoringTimeline();
   return (
     <>
       {!expanded && <i hidden data-tl-seq={firstSeq} />}
@@ -1209,8 +1273,19 @@ function ToolRunRow({
         }}
       >
         <span aria-hidden="true" style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
-        <span className="tool-name">{run.count} tool calls</span>
-        {run.truncatedNames && <span className="muted"> · {run.truncatedNames}</span>}
+        {boring ? (
+          <span className="boring-toolgroup-summary" data-testid="boring-toolgroup-summary">
+            {run.entries.some((x) => isFailedTool(x.item, x.item?.detail ?? {})) ? null : <span className="bt-sum-ok" aria-label="all ok">✓ </span>}
+            {summarizeTools(run.entries.map((x) => x.item)).split(" · ").map((seg, i) => (
+              <Fragment key={i}>{i > 0 && " · "}{/ failed$/.test(seg) ? <span className="bt-sum-err">{seg}</span> : seg}</Fragment>
+            ))}
+          </span>
+        ) : (
+          <>
+            <span className="tool-name">{run.count} tool calls</span>
+            {run.truncatedNames && <span className="muted"> · {run.truncatedNames}</span>}
+          </>
+        )}
       </div>
       {expanded &&
         run.entries.map((entry, k) => {
