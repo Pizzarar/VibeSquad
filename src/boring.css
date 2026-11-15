@@ -1056,4 +1056,3 @@ html[data-vibe="boring"] .boring-ctx-feed-head { display: flex; gap: 8px; justif
 html[data-vibe="boring"] .boring-ctx-feed-type { font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-ctx-feed-row.t-blocker .boring-ctx-feed-type, html[data-vibe="boring"] .boring-ctx-feed-row.t-needs-you .boring-ctx-feed-type { color: var(--st-attn); }
 html[data-vibe="boring"] .boring-ctx-feed-text { color: var(--text-1); line-height: 1.45; margin-top: 2px; overflow-wrap: anywhere; }
-@media (max-width: 1599px) { html[data-vibe="boring"] .boring-context-panel:not(.collapsed) { max-width: 46vw; } }
