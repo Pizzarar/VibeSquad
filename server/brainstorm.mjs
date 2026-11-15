@@ -672,8 +672,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
             return null;
           });
           if (refreshFailure) {
-            const msg = refreshFailure?.message ?? String(refreshFailure);
-            console.warn(`[vibesquad] reopen ${existing.id} failed: ${msg}; not replacing`);
+            console.warn(`[vibesquad] reopen ${existing.id} failed: ${refreshFailure?.message ?? refreshFailure}; not replacing`);
+            // idea-249: a runner/daemon answer (it has a status, e.g. 503 AGENT_CAP) or a plain Error's text is shown; a system
+            // error (fs/IPC, it has a `code`) names host paths, so it stays in the server log.
+            const shown = Number.isInteger(refreshFailure?.status) || (refreshFailure?.constructor === Error && refreshFailure.code === undefined);
+            const msg = shown ? String(refreshFailure.message) : "the runner call failed (see the server log)";
             return { ok: false, spawned: false, reason: "reopen-failed", error: `Could not reopen ${existing.title || existing.id}: ${msg}. Try again in a moment.`, existingAgentId: existing.id, laneId, teamId };
           }
           // A backend may hand back the agent still closed without throwing.

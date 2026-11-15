@@ -1177,7 +1177,11 @@ export function createLeadHandoffCoordinator(deps = {}) {
       await setLabels(rec.oldLeadId, mergedOldLabels, rec.oldTitle);
     } catch (err) {
       // Nothing was mutated: the takeover stays pending and a retry can confirm it.
-      return { confirmed: false, error: `could not retire the old lead: ${err?.message ?? err}`, successorId: id };
+      // idea-249: a runner answer (it has a status) or a plain Error's text is shown; a system error (fs/IPC, it has a
+      // `code`) names host paths: server log only. The HTTP answer also passes redactHostPaths for a non-owner caller.
+      console.warn(`[vibesquad] lead-handoff confirm ${id}: could not retire ${rec.oldLeadId}: ${err?.message ?? err}`);
+      const why = Number.isInteger(err?.status) || (err?.constructor === Error && err.code === undefined) ? String(err.message) : "see the server log";
+      return { confirmed: false, error: `could not retire the old lead: ${why}`, successorId: id };
     }
     pendingTakeover.delete(id);
     confirmedTakeovers.add(id);

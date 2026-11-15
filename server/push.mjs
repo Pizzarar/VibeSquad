@@ -363,7 +363,10 @@ export async function broadcastWebPush(payloadObj) {
         sent += 1;
       } catch (err) {
         failed += 1;
-        errors.push(String(err?.message ?? err));
+        // idea-249 L1: our relay answer ("Push relay HTTP 410") is shown; a raw fetch/crypto error goes to the server log only.
+        const msg = String(err?.message ?? err);
+        if (!/^Push relay HTTP \d+$/.test(msg)) console.warn(`[vibesquad] push send failed: ${msg}`);
+        errors.push(/^Push relay HTTP \d+$/.test(msg) ? msg : "push send failed; see the server log");
       }
     }),
   );

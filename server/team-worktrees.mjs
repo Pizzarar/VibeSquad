@@ -13,7 +13,14 @@ export function defaultGit(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000 }).trim();
 }
 
-const gitError = (e) => String(e?.stderr || e?.message || e).trim().split(/\r?\n/)[0];
+// idea-249 L1: git's stderr quotes host paths ('C:\\...\\wt' contains modified files) and execFileSync's message is the
+// whole command line: the full text goes to the server log, the reason keeps git's first stderr line with paths masked.
+const QUOTED_HOST_PATH = /'(?:[A-Za-z]:[\\/]|\/|\\\\)[^']*'/g;
+const gitError = (e) => {
+  const first = String(e?.stderr ?? "").trim().split(/\r?\n/)[0];
+  console.warn(`[vibesquad] git failed: ${String(e?.stderr || e?.message || e).trim()}`);
+  return first ? first.replace(QUOTED_HOST_PATH, "'<path>'") : `git failed${Number.isInteger(e?.status) ? ` (exit ${e.status})` : ""}; see the server log`;
+};
 
 /**
  * Remove each worktree and its branch. `items` are { path, branch? } from the confirm dialog.

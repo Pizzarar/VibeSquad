@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { findBuiltApk } from "./android-apk-paths.mjs";
 import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, extname, join, resolve, sep } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
@@ -666,6 +666,7 @@ async function handleLog(req, res, opts = {}) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "log")) return; // idea-249: an fs fault names the host path; log it, answer generic
     sendJson(res, e?.status === 403 ? 403 : 400, { error: String(e?.message ?? e) });
   }
 }
@@ -903,7 +904,7 @@ async function handleHandoff(req, res, rootDir) {
     if (!TEAM_ID.test(team) || !TEAM_ID.test(lane)) return sendJson(res, 400, { error: "bad team/lane" });
     const packet = join(teamDir(team), `packet-${lane}.md`);
     if (req.method === "GET") {
-      return sendJson(res, 200, {
+      return sendFor(req, res, 200, { // idea-249 M1: the packet path is the owner's HandoffModal only
         exists: existsSync(packet),
         path: packet,
         running: handoffRunning,
@@ -926,7 +927,7 @@ async function handleHandoff(req, res, rootDir) {
       }
     }
     const cli = join(rootDir, "cli", "vs.mjs");
-    if (!existsSync(cli)) return sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: false, note: "cli/vs.mjs not found" });
+    if (!existsSync(cli)) return sendFor(req, res, 200, { exists: existsSync(packet), path: packet, ran: false, note: "cli/vs.mjs not found" });
     if (handoffRunning) return sendJson(res, 429, { error: "a handoff is already running; try again when it finishes" });
     handoffRunning = true;
     lastHandoffError = null;
@@ -934,7 +935,9 @@ async function handleHandoff(req, res, rootDir) {
       .then(
         () => ({ done: true }),
         (err) => {
-          lastHandoffError = String(err?.message ?? err);
+          // idea-249: execFile's message is "Command failed: <node path> <cli path> handoff" plus stderr: log it, keep the exit only.
+          console.warn(`[vibesquad] vs handoff failed: ${err?.message ?? err}`);
+          lastHandoffError = `vs handoff ${err?.killed ? "timed out" : `exited ${err?.code ?? "with an error"}`}; see the server log`;
           return { done: true, error: lastHandoffError };
         },
       )
@@ -949,11 +952,11 @@ async function handleHandoff(req, res, rootDir) {
       }),
     ]);
     clearTimeout(timer);
-    if (!outcome.done) return sendJson(res, 202, { exists: existsSync(packet), path: packet, accepted: true, running: true });
+    if (!outcome.done) return sendFor(req, res, 202, { exists: existsSync(packet), path: packet, accepted: true, running: true });
     if (outcome.error) return sendJson(res, 500, { error: outcome.error });
-    sendJson(res, 200, { exists: existsSync(packet), path: packet, ran: true });
+    sendFor(req, res, 200, { exists: existsSync(packet), path: packet, ran: true });
   } catch (e) {
-    sendJson(res, e?.status === 403 ? 403 : 500, { error: String(e?.message ?? e) });
+    sendCaughtError(req, res, e, "handoff"); // idea-249 L2: a 403 or a bad/oversized body keeps its status; the rest is generic
   }
 }
 
@@ -965,7 +968,8 @@ async function handleBrainstormSummary(req, res, rootDir) {
       const teamId = q.get("teamId") || q.get("team") || "";
       const s = readBrainstormSummary(lane, rootDir, { teamId });
       // cwd: the folder a never-spawned lane (a Squad hub with no agents yet) starts in; null when the registry names none that exists.
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content), cwd: laneWorkingDir(teamId, s.laneId, rootDir) });
+      // idea-249 M2: the lane cwd is a host path: the owner's UI only (s.path is repo-relative and stays).
+      return sendFor(req, res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content), cwd: laneWorkingDir(teamId, s.laneId, rootDir) }, rootDir);
     }
     if (req.method === "POST" || req.method === "PUT") {
       const body = await readCleanBody(req);
@@ -985,11 +989,12 @@ async function handleBrainstormSummary(req, res, rootDir) {
         if (body.revision !== revision) return sendJson(res, 409, { ok: false, error: "brief changed", content: cur.content, revision });
       }
       const s = writeBrainstormSummary(lane, content, rootDir, { teamId });
-      return sendJson(res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content), ...(s.fallback ? { fallback: true } : {}) });
+      return sendFor(req, res, 200, { ok: true, laneId: s.laneId, path: s.path, content: s.content, revision: contentRevision(s.content), ...(s.fallback ? { fallback: true } : {}) }, rootDir);
     }
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "brainstorm-summary")) return; // idea-249: an fs fault names the host path; log it, answer generic
     sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1039,6 +1044,7 @@ async function handleVsLog(req, res, opts = {}) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "vs-log")) return; // idea-249: an fs fault names the host path; log it, answer generic
     sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1065,9 +1071,9 @@ async function handleBrainstormRestart(req, res, rootDir) {
     }
     const result = await performBrainstormRestart(body, rootDir);
     // ok:false (e.g. agent-list-unavailable) must not look like success to the UI.
-    return sendJson(res, result?.ok === false ? 503 : 200, result);
+    return sendFor(req, res, result?.ok === false ? 503 : 200, result, rootDir); // idea-249 M3: no host path to an agent
   } catch (e) {
-    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
+    return sendCaughtError(req, res, e, "buddy restart", { fallback: 400, rootDir }); // idea-249 M3/L2
   }
 }
 
@@ -1090,22 +1096,94 @@ async function handleLeadHandoff(req, res, rootDir, actionOverride) {
       rootDir,
     );
     const status = result?.status || (result?.accepted ? 202 : 200);
-    return sendJson(res, status, result);
+    return sendFor(req, res, status, result, rootDir); // idea-249 M3: packetPath, the successor's cwd/prompt: owner only
   } catch (e) {
-    return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
+    return sendCaughtError(req, res, e, "lead-handoff", { fallback: 400, rootDir }); // idea-249 M3/L2: a 409 floor refusal stays 409
   }
 }
 
 /**
- * idea-235 (idea-232 parity): an inbox lock timeout, lost lock or fs failure is the server's problem, not the caller's.
- * file-lock / fs messages carry the lock path and holder pid, so answer a generic retryable 503 and log the detail only.
- * Returns true when it sent the response.
+ * idea-235 (idea-232 parity) / idea-249: a server-side fault is the server's problem, not the caller's. Node's fs messages
+ * (and file-lock's) carry the host path and holder pid, so the detail goes to the server log and the caller gets a generic
+ * answer. sendServerError always sends; sendServerFsError sends only for an fs/lock fault (isServerSideFsError) and leaves
+ * the handler's own path-free validation text (a 400/403/404 about the caller's input) to the caller. Both return true when
+ * they sent the response.
  */
-function sendInboxServerError(res, e, what) {
-  if (!isServerSideFsError(e)) return false;
-  console.warn(`[vibesquad] inbox ${what} failed: ${e?.message ?? e}`);
-  sendJson(res, 503, { ok: false, error: "inbox busy or unwritable; retry", retryable: true });
+function sendServerError(res, e, what, { status = 500, error = `${what} failed; see the server log`, retryable = false } = {}) {
+  console.warn(`[vibesquad] ${what} failed: ${e?.message ?? e}`);
+  if (!res.headersSent) sendJson(res, status, { ok: false, error, ...(retryable ? { retryable: true } : {}) });
   return true;
+}
+function sendServerFsError(res, e, what, opts) {
+  return isServerSideFsError(e) ? sendServerError(res, e, what, opts) : false;
+}
+const INBOX_BUSY = { status: 503, error: "inbox busy or unwritable; retry", retryable: true };
+
+/**
+ * idea-249 (fix round): a handler's catch-all that keeps the status of the caller's own mistake. An fs/lock fault is a
+ * generic 500 (sendServerError). An error that carries a 4xx status (403 forbidden, 404, 409 refusal, 413 body, a runner's
+ * 4xx answer) or a bad JSON body (SyntaxError → 400) keeps its status and text; a plain Error of ours keeps its text at
+ * `fallback` when that is a 4xx (the handler's validation). Anything else (system, programming, 5xx runner error) is logged
+ * and answered generically. A non-owner caller's text still passes redactHostPaths.
+ */
+function sendCaughtError(req, res, e, what, { fallback = 500, rootDir = REPO_ROOT } = {}) {
+  if (isServerSideFsError(e)) return sendServerError(res, e, what);
+  const st = Number(e?.status);
+  const ours = e?.constructor === Error && e.code === undefined;
+  const status = st >= 400 && st < 500 ? st : e instanceof SyntaxError ? 400 : ours && fallback < 500 ? fallback : 0;
+  if (!status) return sendServerError(res, e, what, st >= 500 && st < 600 ? { status: st } : undefined);
+  if (!res.headersSent) sendFor(req, res, status, { ok: false, error: String(e?.message ?? e) }, rootDir);
+  return true;
+}
+
+// ---- idea-249 (fix round): a non-owner caller (agent, read-only device) never gets a host path ----
+/** The owner (app, phone, owner shell) per the resolved caller; an agent, a read-only device or an unresolved request is not. */
+const ownerRequest = (req) => callerOf(req)?.kind === "owner";
+/** Fields that hold a host path (or text built around one): dropped for a non-owner when the value names one. */
+const HOST_PATH_KEYS = new Set(["path", "cwd", "packetPath", "fullPath", "snapshot", "prompt", "initialPrompt"]);
+/** Fields that hold error text: cut before the host path for a non-owner, so the reason's head survives. */
+const ERROR_TEXT_KEYS = new Set(["error", "errors", "reason", "note"]);
+const DRIVE_OR_UNC = /(^|[^A-Za-z0-9])([A-Za-z]:[\\/]|\\\\[^\\\s])/;
+const slashLower = (p) => String(p ?? "").replaceAll("\\", "/").toLowerCase();
+const hostRoots = (rootDir) =>
+  [...new Set([homedir(), tmpdir(), rootDir, REPO_ROOT, process.env.VIBESQUAD_HOME].filter(Boolean).map((r) => slashLower(r).replace(/\/+$/, "")))].filter((r) => r.length > 3);
+/** Index of the first host path in `text` (a drive/UNC path, or one under home, tmp, the repo root or VIBESQUAD_HOME), else -1. */
+function hostPathIndex(text, roots) {
+  const t = String(text ?? "");
+  const m = DRIVE_OR_UNC.exec(t);
+  const low = slashLower(t);
+  const hits = [m ? m.index + m[1].length : -1, ...roots.map((r) => low.indexOf(r))].filter((i) => i >= 0);
+  return hits.length ? Math.min(...hits) : -1;
+}
+function redactErrorText(text, roots) {
+  const t = String(text);
+  const at = hostPathIndex(t, roots);
+  if (at < 0) return t;
+  const head = t.slice(0, at);
+  const cut = head.lastIndexOf(": ");
+  return `${cut > 0 ? head.slice(0, cut) : "request failed"} (detail names a host path; see the server log)`;
+}
+const isPlainObject = (v) => v !== null && typeof v === "object" && [Object.prototype, null].includes(Object.getPrototypeOf(v));
+/**
+ * A copy of `value` fit for a non-owner caller: at any depth, a HOST_PATH_KEYS string that is absolute or names a host path
+ * is dropped, and ERROR_TEXT_KEYS text is cut before its host path. Other fields (brief content, ids, repo-relative paths)
+ * are kept as they are; the input is not mutated.
+ */
+export function redactHostPaths(value, rootDir = REPO_ROOT, roots = hostRoots(rootDir)) {
+  if (Array.isArray(value)) return value.map((v) => redactHostPaths(v, rootDir, roots));
+  if (!isPlainObject(value)) return value;
+  const out = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string" && HOST_PATH_KEYS.has(k) && (isAbsolute(v) || hostPathIndex(v, roots) >= 0)) continue;
+    if (ERROR_TEXT_KEYS.has(k) && typeof v === "string") out[k] = redactErrorText(v, roots);
+    else if (ERROR_TEXT_KEYS.has(k) && Array.isArray(v)) out[k] = v.map((x) => (typeof x === "string" ? redactErrorText(x, roots) : redactHostPaths(x, rootDir, roots)));
+    else out[k] = redactHostPaths(v, rootDir, roots);
+  }
+  return out;
+}
+/** sendJson that keeps host-path fields for the owner only (idea-249: settings path, packet path, lane cwd are owner UI). */
+function sendFor(req, res, status, data, rootDir = REPO_ROOT) {
+  return sendJson(res, status, ownerRequest(req) ? data : redactHostPaths(data, rootDir));
 }
 
 async function handleInbox(req, res, rootDir) {
@@ -1133,7 +1211,7 @@ async function handleInbox(req, res, rootDir) {
     res.statusCode = 405;
     res.end();
   } catch (e) {
-    if (sendInboxServerError(res, e, req.method === "GET" ? "list" : "add")) return;
+    if (sendServerFsError(res, e, `inbox ${req.method === "GET" ? "list" : "add"}`, INBOX_BUSY)) return;
     return sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1156,7 +1234,7 @@ async function handleInboxTriage(req, res, rootDir) {
     const result = await triageInboxCardsAsync(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
-    if (sendInboxServerError(res, e, "triage")) return;
+    if (sendServerFsError(res, e, "inbox triage", INBOX_BUSY)) return;
     return sendJson(res, e?.status === 403 ? 403 : e?.status === 404 ? 404 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1171,7 +1249,7 @@ async function handleInboxSend(req, res, rootDir) {
     const result = await sendInboxCard(body, rootDir);
     return sendJson(res, 200, result);
   } catch (e) {
-    if (sendInboxServerError(res, e, "send")) return;
+    if (sendServerFsError(res, e, "inbox send", INBOX_BUSY)) return;
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1207,7 +1285,7 @@ async function handleInboxAttachment(req, res) {
     const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
     return sendJson(res, 200, await attachInboxMedia({ cardId, mime, bytes }));
   } catch (e) {
-    if (sendInboxServerError(res, e, "attachment")) return;
+    if (sendServerFsError(res, e, "inbox attachment", INBOX_BUSY)) return;
     return sendJson(res, e?.status === 413 ? 413 : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1222,7 +1300,7 @@ function handlePushVapidPublicKey(req, res) {
     const subs = readPushSubscriptions();
     return sendJson(res, 200, { ok: true, publicKey: vapid.publicKey, subCount: subs.length });
   } catch (e) {
-    return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+    return sendServerError(res, e, "push vapid key"); // idea-249
   }
 }
 
@@ -1236,6 +1314,7 @@ async function handlePushSubscribe(req, res) {
     const result = savePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
+    if (sendServerFsError(res, e, "push subscribe")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1250,6 +1329,7 @@ async function handlePushUnsubscribe(req, res) {
     const result = removePushSubscription(body);
     return sendJson(res, 200, result);
   } catch (e) {
+    if (sendServerFsError(res, e, "push unsubscribe")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1285,7 +1365,7 @@ async function handlePushTest(req, res) {
     const result = await sendTestPush(body);
     return sendJson(res, 200, result);
   } catch (e) {
-    return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
+    return sendCaughtError(req, res, e, "push test"); // idea-249 L2
   }
 }
 
@@ -1298,7 +1378,7 @@ async function handleProfiles(req, res) {
       for (const d of diff) {
         if (d.warnings?.length) warningsByProfile[d.name] = d.warnings;
       }
-      return sendJson(res, 200, {
+      return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         exists: state.exists,
         needsSetup: state.needsSetup,
@@ -1316,7 +1396,7 @@ async function handleProfiles(req, res) {
       const body = await readCleanBody(req);
       const saved = saveProfiles(body);
       syncProfilesToPaseo(saved.profiles);
-      return sendJson(res, 200, {
+      return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         path: saved.path,
         profiles: saved.profiles,
@@ -1325,6 +1405,7 @@ async function handleProfiles(req, res) {
     res.statusCode = 405;
     return res.end();
   } catch (e) {
+    if (sendServerFsError(res, e, "profiles")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1339,7 +1420,7 @@ async function handleProfilesImport(req, res) {
     if (body.mode === "default") {
       const seeded = seedDefaultPack();
       syncProfilesToPaseo(seeded.profiles);
-      return sendJson(res, 200, {
+      return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         mode: "default",
         path: seeded.path,
@@ -1370,7 +1451,7 @@ async function handleProfilesImport(req, res) {
     }
     if (!finalProfiles.length) {
       const seeded = seedDefaultPack();
-      return sendJson(res, 200, {
+      return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
         ok: true,
         mode: "default",
         path: seeded.path,
@@ -1379,7 +1460,7 @@ async function handleProfilesImport(req, res) {
       });
     }
     const saved = saveProfiles({ profiles: finalProfiles });
-    return sendJson(res, 200, {
+    return sendFor(req, res, 200, { // idea-249 M2: the profiles path is the owner's settings screen only
       ok: true,
       mode: "paseo",
       path: saved.path,
@@ -1387,6 +1468,7 @@ async function handleProfilesImport(req, res) {
       warningsByProfile: imported.warningsByProfile,
     });
   } catch (e) {
+    if (sendServerFsError(res, e, "profiles import")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1409,6 +1491,7 @@ function handleProfilesDiff(req, res) {
       warningsByProfile,
     });
   } catch (e) {
+    if (sendServerFsError(res, e, "profiles diff")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1697,6 +1780,7 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
     }
     return sendJson(res, 200, { ok: true, scripts: pkgScripts });
   } catch (e) {
+    if (sendServerFsError(res, e, "scripts")) return; // idea-249: an fs fault names the host path; log it, answer generic
     return sendJson(res, 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
@@ -1730,7 +1814,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (isApi && hasAgentHeaders(req)) {
       return callerFromRequest(req, { verifyAgent }).then(
         (caller) => gated(req, res, next, path, isApi, caller),
-        (e) => sendJson(res, 500, { error: String(e?.message ?? e) }),
+        (e) => sendServerError(res, e, "agent caller check"), // idea-249
       );
     }
     return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : { kind: ownerProof(req) ? "owner" : "unknown" });
@@ -1784,7 +1868,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleTeams(req, res, rootDir);
       case "/__vibesquad/first-run/status":
         if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
-        return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendJson(res, 500, { error: String(e?.message ?? e) }));
+        return cachedRead(() => inspectFirstRunStatus(opts.firstRun)).then((st) => sendJson(res, 200, st), (e) => sendServerError(res, e, "first-run status")); // idea-249
       case "/__vibesquad/settings":
         return handleSettings(req, res).catch((e) => {
           console.warn(`[vibesquad] settings request failed: ${e?.message ?? e}`); // idea-242 L1: detail to the log only
@@ -1803,10 +1887,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         return handleVsLog(req, res, opts);
       case "/__vibesquad/unstick": // owner-only: POST is gated above (isOwner for every non-GET)
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
-        return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return readBody(req).then((body) => unstick({ confirmRestart: body?.confirmRestart === true })).then((r) => sendJson(res, 200, r), (e) => sendCaughtError(req, res, e, "unstick")); // idea-249 L2: a bad body stays 400
       case "/__vibesquad/restart-runner": // owner-only (same guard as Unstick): park live turns cleanly, then restart the runner
         if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
-        return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }));
+        return forceRestartRunner().then((r) => sendJson(res, 200, r), (e) => sendServerError(res, e, "restart-runner")); // idea-249
       case "/__vibesquad/brainstorm-restart":
         return handleBrainstormRestart(req, res, rootDir);
       case "/__vibesquad/lead-handoff":
@@ -1866,7 +1950,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
         return readBody(req)
           .then((body) => sendJson(res, 200, { ok: true, results: removeTeamWorktrees(body?.worktrees) }))
-          .catch((e) => sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
+          .catch((e) => sendServerFsError(res, e, "remove-team-worktrees") || sendJson(res, 400, { ok: false, error: String(e?.message ?? e) }));
       default:
         return next?.();
     }

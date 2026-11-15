@@ -877,7 +877,9 @@ async function resolveCaller(req, verifyAgent) {
     who = await verifyAgent({ id, token });
   } catch (e) {
     if (e?.status === 403) return denied(403, bad);
-    return denied(503, `could not verify the agent caller: ${e?.message ?? e}`);
+    // idea-249: the runner/fs error can name a host path (token file, runner address): log it, answer path-free.
+    console.warn(`[vibesquad] agent check for ${id} failed: ${e?.message ?? e}`);
+    return denied(503, "could not verify the agent caller (runner unreachable or failing); see the server log");
   }
   if (!who || typeof who !== "object" || who.id !== id) return denied(403, bad);
   const caller = { kind: "agent", ...who, id };
