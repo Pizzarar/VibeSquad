@@ -702,7 +702,7 @@ test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid
   }
   const src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const ade = src("BoringAde.tsx");
-  for (const text of ["+ New lane", "Project Brainstorm · RiffBot", "Project Lead · Overlord", ">Project desk<"]) assert.ok(ade.includes(text), text);
+  for (const text of ["+ New lane", "Project Brainstorm · RiffBot", "Project Lead · Overlord", "Project desk</span>"]) assert.ok(ade.includes(text), text);
   for (const gone of ["New Conversation", "TRINITY", "📊", "🔍"]) assert.ok(!ade.includes(gone), gone);
   for (const id of ["boring-new-conv-btn", "boring-core-group", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
   for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(id), id);
@@ -711,4 +711,30 @@ test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid
   for (const c of ["perm-card", "perm-allow\"", "perm-allow-secondary", "perm-deny"]) assert.ok(perm.includes(c), c);
   assert.ok(perm.includes('data-testid="perm-deny-btn"'));
   assert.ok(src("UsageDashboard.tsx").includes('usePref("app.vibe")'));
+});
+
+// ---- D2 2.1: hub-lane and worker alerts reach the sidebar totals --------------------------------------------
+test("D2 2.1 boringSidebarModel: hub-lane needsYou and lane-worker alerts are counted and match the project badge", () => {
+  const worker = mem("w1", "running", ago(2), { tone: "permission" });
+  const calm = mem("w2", "idle", ago(2), { tone: "finished" });
+  const v = squad({
+    pins: [lanePin("ade", { workers: [worker, calm], needsYou: 1 }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })],
+    zones: { hub: { lane: { id: "hub" }, needsYou: 2 }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) },
+    needsYou: 3,
+  });
+  const m = boringSidebarModel(v, NOW);
+  assert.equal(m.hubNeedsYou, 2);
+  assert.equal(m.conversations[0].workerNeedsYou, 1); // finished worker does not count
+  assert.equal(m.totalNeedsYou, 3);
+  // Without view.needsYou the total is still hub + lanes, never the lanes alone.
+  assert.equal(boringSidebarModel({ ...v, needsYou: 0 }, NOW).totalNeedsYou, 3);
+});
+
+test("D2 2.1 BoringApp: Project desk label and Overview button carry the hub / total badges", () => {
+  reset();
+  const v = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 2 }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) }, needsYou: 5 });
+  const t = render(props(v));
+  const label = JSON.stringify(byId(t, "boring-trinity-label").props.children);
+  assert.match(label, /"children":2/);
+  assert.match(JSON.stringify(byId(t, "boring-project-overview-btn").props.children), /"children":5/);
 });

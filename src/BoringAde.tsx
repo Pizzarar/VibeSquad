@@ -61,6 +61,8 @@ export function boringActiveRole(pin: Pick<Pin, "brainstorm" | "lead">, activeAg
   return activeAgentId && pin.lead?.agent.id === activeAgentId ? "lead" : "brainstorm";
 }
 
+const workerNeedsYou = (m: { attention?: { tone?: string } | null } | null | undefined) => Boolean(m?.attention && m.attention.tone !== "finished");
+
 export function boringSidebarModel(view: TeamView | undefined, now = Date.now()) {
   const zones = skyZonesFor(view);
   const bugs = quickBugsChipState(view);
@@ -83,6 +85,8 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
       age: bugs.pin ? boringConversationAge(bugs.pin, now) : "",
     },
   };
+  // 2.1: the hub lane (RiffBot/Overlord plus anything else parked in it) and every lane worker count, so these totals match the project badge.
+  const hubNeedsYou = zones.hub?.needsYou ?? 0;
   const conversations = (view ? pinsForSquad(view).pinned : [])
     .filter((p) => !isHubPin(p))
     .map((pin) => ({
@@ -95,10 +99,14 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
       leadId: pin.lead?.agent.id ?? null,
       leadStatus: pin.lead?.agent.status ?? "none",
       needsYou: pin.needsYou,
+      workerNeedsYou: (pin.workers ?? []).filter(workerNeedsYou).length,
       running: pin.running,
       age: boringConversationAge(pin, now),
     }));
-  return { core, conversations };
+  const laneTotal = conversations.reduce((n, c) => n + c.needsYou, 0);
+  // The project badge (view.needsYou) counts every member; fall back to hub + lanes when a view doesn't carry it.
+  const totalNeedsYou = Math.max(view?.needsYou ?? 0, hubNeedsYou + laneTotal);
+  return { core, conversations, hubNeedsYou, totalNeedsYou };
 }
 
 /**
@@ -202,7 +210,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const panes = usePanes();
   const activeAgentId = panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId;
   const model = boringSidebarModel(view);
-  const { core, conversations } = model;
+  const { core, conversations, hubNeedsYou, totalNeedsYou } = model;
   const zones = skyZonesFor(view);
   const hubPin = zones.hub;
 
@@ -405,14 +413,14 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {views.length === 0 && !view && <span className="boring-project-name">No project</span>}
           </div>
           <button type="button" className={`boring-footer-btn${mode === "project" ? " on" : ""}`} data-testid="boring-project-overview-btn" onClick={() => setMode("project")}>
-            Overview
+            Overview{badge(totalNeedsYou)}
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-new-project-btn" onClick={onNewSquad}>
             + New project
           </button>
         </div>
         <div className="boring-core-group boring-trinity-card" data-testid="boring-core-group">
-          <div className="boring-section-label" data-testid="boring-trinity-label">Project desk</div>
+          <div className="boring-section-label" data-testid="boring-trinity-label"><span>Project desk</span>{badge(hubNeedsYou)}</div>
           {coreRow("boring-core-overlord", core.overlord.label, core.overlord.status, core.overlord.needsYou, core.overlord.age, () => pickCore("_overlord", core.overlord.agentId), memberAgent(core.overlord.agentId))}
           {coreRow("boring-core-riffbot", core.riffbot.label, core.riffbot.status, core.riffbot.needsYou, core.riffbot.age, () => pickCore("_riffbot", core.riffbot.agentId), memberAgent(core.riffbot.agentId))}
           {coreRow("boring-core-bugs", core.bugs.label, core.bugs.leadRunning ? "running" : "none", core.bugs.needsYou, core.bugs.age, pickBugs, memberAgent(core.bugs.agentId))}
