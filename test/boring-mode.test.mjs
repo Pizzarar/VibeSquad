@@ -107,7 +107,7 @@ writeFileSync(
 export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.i++; const prev = h.slots[k]; const same = prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, j) => Object.is(d, prev.deps[j])); if (same) return; if (prev && typeof prev.cleanup === "function") prev.cleanup(); const cleanup = fn(); h.slots[k] = { deps, cleanup }; }; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
-for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }`);
+for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
@@ -127,6 +127,7 @@ export const formatTimestamp = (iso, _f, now) => (iso ? Math.round((now - Date.p
 stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; export const VibePickerCards = () => null; export const FirstLaunchVibePicker = () => null; export const shouldShowFirstLaunchVibePicker = () => false;`);
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
+stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
 stub("ui.mjs", `export const StatusDot = function StatusDot() { return null; };`);
 const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtime: "classic" } })
   .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
@@ -737,4 +738,82 @@ test("D2 2.1 BoringApp: Project desk label and Overview button carry the hub / t
   const label = JSON.stringify(byId(t, "boring-trinity-label").props.children);
   assert.match(label, /"children":2/);
   assert.match(JSON.stringify(byId(t, "boring-project-overview-btn").props.children), /"children":5/);
+});
+
+// ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
+const tsx = (file) => transformSync(file, readFileSync(resolve(import.meta.dirname, "..", "src", file), "utf8"), { lang: file.endsWith("x") ? "tsx" : "ts", jsx: { runtime: "classic" } }).code;
+writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = () => false; export const clearUnreadLocal = () => {}; export const dismissLocal = () => {}; export const snoozeLocal = () => {};`);
+writeFileSync(join(dir, "attentionItems.mjs"), tsx("attentionItems.ts").replace(/from "\.\/attentionLocal\.ts"/, `from "./attentionLocal.mjs"`));
+globalThis.__resp = [];
+globalThis.__cleared = [];
+stub("paseoInbox.mjs", `export const bumpAgents = () => {}; export const clearAgentAttention = (id) => { globalThis.__cleared.push(["attention", id]); return Promise.resolve(); }; export const clearNeedsYou = (a) => { globalThis.__cleared.push(["needs-you", a.id]); return Promise.resolve(); }; export const snoozeNeedsYou = () => Promise.resolve();`);
+stub("PermissionCard.mjs", `export const respondToPermission = (...a) => { globalThis.__resp.push(a); return Promise.resolve(); };`);
+writeFileSync(
+  join(dir, "RealInbox.mjs"),
+  tsx("BoringInbox.tsx")
+    .replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
+    .replace(/from "react"/, `from "./react-hooks.mjs"`)
+    .replace(/from "\.\/paseo"/, `from "./paseoInbox.mjs"`)
+    .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`),
+);
+const { BoringInbox, needsYouRows, recentDone } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
+
+const ag = (id, over = {}) => ({ id, title: id.toUpperCase(), status: "idle", updatedAt: ago(10), labels: {}, pendingPermissions: [], ...over });
+const att = (id, tone, reason, over = {}) => ({ agent: ag(id, over.agent), kind: over.kind ?? "worker", laneId: over.laneId ?? "ade", attention: { tone, reason } });
+const teamOf = (id, name, members) => ({ team: { id, name, lanes: [{ id: "ade", name: "ADE" }] }, members, needsYou: members.length, running: 0 });
+const A = teamOf("vs", "VibeSquad", [
+  att("fin", "finished", "all done"),
+  att("err", "error", "build failed"),
+  att("ask", "needs-you", "pick a or b", { agent: { updatedAt: ago(30) } }),
+  att("perm", "permission", "run npm test", { agent: { pendingPermissions: [{ id: "req1", kind: "tool" }] } }),
+]);
+const B = teamOf("efi", "EFI", [att("q", "permission", "which plan?", { agent: { pendingPermissions: [{ id: "req2", kind: "question" }] }, laneId: "ade" })]);
+
+test("D2 2.2 needsYouRows: permission › pick › error › finished across projects, with project › lane and age", () => {
+  const rows = needsYouRows([A, B], NOW);
+  assert.deepEqual(rows.map((r) => r.item.id), ["perm", "q", "ask", "err", "fin"]);
+  assert.equal(rows[0].project, "VibeSquad");
+  assert.equal(rows[0].lane, "ADE");
+  assert.equal(rows[0].age, "10m");
+  assert.equal(rows[1].teamId, "efi");
+});
+
+test("D2 2.2 recentDone: only done entries, newest first across Squads, limited", () => {
+  const e = (ts, type, text) => ({ ts, type, text, agent: "x", lane: "ade" });
+  const out = recentDone([{ teamId: "vs", project: "VibeSquad", entries: [e("2026-11-11T10:00:00Z", "done", "a"), e("2026-11-11T11:00:00Z", "decision", "no")] }, { teamId: "efi", project: "EFI", entries: [e("2026-11-11T10:30:00Z", "done", "b")] }], 5);
+  assert.deepEqual(out.map((d) => d.entry.text), ["b", "a"]);
+  assert.equal(recentDone([{ teamId: "vs", project: "V", entries: [e("2026-11-11T10:00:00Z", "done", "a"), e("2026-11-11T10:01:00Z", "done", "b")] }], 1).length, 1);
+});
+
+test("D2 2.2 BoringInbox: labelled NEEDS YOU (never Inbox), inline Allow/Deny only for quick permissions, Dismiss for the rest", async () => {
+  reset();
+  globalThis.__resp = [];
+  globalThis.__cleared = [];
+  const opened = [];
+  const t = (hs.i = 0, BoringInbox({ views: [A, B], now: NOW, logs: [{ teamId: "vs", project: "VibeSquad", entries: [{ ts: ago(5), type: "done", text: "shipped D1", agent: "x", lane: "ade" }] }], onOpen: (r) => opened.push(r.item.id) }));
+  const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [A, B], now: NOW, logs: [] }));
+  assert.match(html, /NEEDS YOU/);
+  assert.doesNotMatch(html, /Inbox/);
+  assert.match(html, /Recent done \(0\)/);
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 5);
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow").length, 1); // the question permission has no inline buttons
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss").length, 3); // pick, error, finished
+  walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow")[0].props.onClick();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(globalThis.__resp[0], ["perm", "req1", { behavior: "allow" }]);
+  walk(t, (n) => n.props?.["data-testid"] === "boring-needs-deny")[0].props.onClick();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(globalThis.__resp[1], ["perm", "req1", { behavior: "deny" }]);
+  const dismiss = walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss");
+  dismiss[0].props.onClick(); // the "ask" pick: label item
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(globalThis.__cleared[0], ["needs-you", "ask"]);
+  walk(t, (n) => n.props?.["data-testid"] === "boring-needs-open-perm")[0].props.onClick();
+  assert.deepEqual(opened, ["perm"]);
+});
+
+test("D2 2.2 BoringApp mounts NEEDS YOU at the top of the sidebar; selection derives from the agent; no new CSS outside boring scope", () => {
+  const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
+  assert.ok(ade.indexOf("<BoringInbox") > ade.indexOf('data-testid="boring-new-conv-btn"'));
+  assert.ok(ade.indexOf("<BoringInbox") < ade.indexOf('data-testid="boring-project-tree"'));
 });

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AgentDrawer } from "./AgentDrawer";
+import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 import { openAgent, usePanes } from "./panes";
@@ -55,6 +56,27 @@ export function resolvePinChatAgentId(
   const roleOk = (labels.role ?? role) === role || (role === "brainstorm" && labels.role === "brainstorm");
   const successor = labels["vs.restarted-from"] === rawBase || (rawBase !== null && !agents.has(rawBase));
   return laneOk && roleOk && successor ? next.id : base;
+}
+
+/** Which sidebar entry owns an agent: the hub desk rows, the Bugs lane, or a feature lane (with the role it plays there). */
+export function boringSelectionForAgent(view: TeamView | undefined, agentId: string | null | undefined): { laneId: string; role: Role | "worker" } | null {
+  if (!view || !agentId) return null;
+  const zones = skyZonesFor(view);
+  if (zones.overlord.member?.agent.id === agentId || zones.overlord.agentId === agentId) return { laneId: "_overlord", role: "lead" };
+  if (zones.riffbot.member?.agent.id === agentId || zones.riffbot.agentId === agentId) return { laneId: "_riffbot", role: "brainstorm" };
+  const bugsPin = quickBugsChipState(view).pin;
+  const roleIn = (pin: Pin): Role | "worker" | null =>
+    pin.brainstorm?.agent.id === agentId ? "brainstorm" : pin.lead?.agent.id === agentId ? "lead" : (pin.workers ?? []).some((w) => w.agent.id === agentId) ? "worker" : null;
+  if (bugsPin) {
+    const r = roleIn(bugsPin);
+    if (r) return { laneId: "_bugs", role: r };
+  }
+  for (const pin of pinsForSquad(view).pinned) {
+    if (isHubPin(pin)) continue;
+    const r = roleIn(pin);
+    if (r) return { laneId: pin.lane.id, role: r };
+  }
+  return null;
 }
 
 export function boringActiveRole(pin: Pick<Pin, "brainstorm" | "lead">, activeAgentId: string | null | undefined): Role {
@@ -229,6 +251,14 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     } else if (m) openAgent(m.agent.id);
     else void onOpenPin(pin);
   };
+  const openNeedsYou = (row: NeedsYouRow) => {
+    if (row.teamId !== view?.team.id) onSelectSquad(row.teamId);
+    const sel = boringSelectionForAgent(row.view, row.item.id);
+    setSelectedLaneId(sel?.laneId ?? null);
+    if (sel && sel.role !== "worker") setSelectedRole(sel.role);
+    setMode("chat");
+    openAgent(row.item.id);
+  };
   const pickCore = (laneId: "_overlord" | "_riffbot", agentId: string | null) => {
     setSelectedLaneId(laneId);
     setMode("chat");
@@ -397,6 +427,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         <button type="button" className="boring-new-conv-btn" data-testid="boring-new-conv-btn" onClick={onAddBuddy}>
           + New lane
         </button>
+        <BoringInbox views={views.length > 0 ? views : view ? [view] : []} onOpen={openNeedsYou} />
         <div className="boring-project-header">
           <div className="boring-project-tree" data-testid="boring-project-tree">
             {(views.length > 0 ? views : view ? [view] : []).map((v) => {
