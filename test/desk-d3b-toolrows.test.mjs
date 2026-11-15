@@ -60,5 +60,5 @@ test("Timeline wires Normal-only rendering with the required test ids", () => {
   const src = fs.readFileSync(path.join(root, "src/Timeline.tsx"), "utf8");
   for (const id of ["boring-toolgroup-summary", "boring-toolrow", "tl-tool-run", "tl-tool-row", "tl-tool-detail"]) assert.ok(src.includes(`"${id}"`), id);
   assert.match(src, /if \(boring\) \{\s*const kind = toolKind/);
-  assert.match(src, /Show \$\{hidden\} more lines/);
+  assert.match(src, /Show all \$\{TOOL_OUTPUT_FOLD_LINES \+ hidden\} lines/);
 });

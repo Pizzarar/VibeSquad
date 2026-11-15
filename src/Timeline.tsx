@@ -572,7 +572,7 @@ function FoldedPre({ text, style }: { text: string; style?: React.CSSProperties 
       <pre className="tl-tool-output boring-tool-output" style={style}>{all || !hidden ? text : head}</pre>
       {hidden > 0 && (
         <button type="button" className="boring-tool-fold" data-testid="boring-tool-fold" onClick={(ev) => { ev.stopPropagation(); setAll((v) => !v); }}>
-          {all ? "Show fewer lines" : `Show ${hidden} more lines`}
+          {all ? "Show fewer lines" : `Show all ${TOOL_OUTPUT_FOLD_LINES + hidden} lines`}
         </button>
       )}
     </>

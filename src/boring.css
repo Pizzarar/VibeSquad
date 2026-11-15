@@ -980,7 +980,7 @@ html[data-vibe="boring"] .tl-tool-detail { padding: 8px 12px 12px 28px; }
 html[data-vibe="boring"] .tl-tool-detail .tl-detail-label { font-weight: 400; font-size: var(--t-caption, 11px); color: var(--text-3); }
 html[data-vibe="boring"] .tl-exit-badge { display: inline-block; background: var(--st-err-bg); color: var(--st-err); border: 1px solid color-mix(in srgb, var(--st-err) 40%, transparent); border-radius: 4px; padding: 0 6px; font: 12px/18px var(--mono); }
 html[data-vibe="boring"] .tl-exit-badge.ok { background: color-mix(in srgb, var(--st-ok) 10%, transparent); color: var(--st-ok); border-color: color-mix(in srgb, var(--st-ok) 40%, transparent); }
-html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) { background: transparent !important; min-height: 32px; margin: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; border-radius: 6px !important; }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) { background: transparent !important; min-height: 32px; margin-block: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; border-radius: 6px !important; }
 html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) > .boring-toolrow { min-height: 32px; }
 html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow):hover { background: var(--surface-3, var(--panel-hi)) !important; }
 /* ===== D2 (@desk, UX_REVIEW S9): dense urgency-sorted lane table. Implemented Normal Mode UX redesign — Thanks to Antigravity by Google DeepMind. ===== */
