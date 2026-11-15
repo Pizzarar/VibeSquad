@@ -320,7 +320,7 @@ export class Runner {
     this._rosterWatch = null;
     this._rosterWatchFailed = false;
     this._foldClean = new Set();
-    this.store.onAppend((id) => this._foldClean.delete(id));
+    this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
     this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
