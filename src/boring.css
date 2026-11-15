@@ -953,6 +953,36 @@ html[data-vibe="boring"] .boring-tab-label { min-width: 0; overflow: hidden; tex
 html[data-vibe="boring"] .boring-tab-more { color: var(--text-3); font-size: var(--t-small); white-space: nowrap; padding: 0 6px; }
 html[data-vibe="boring"] .boring-project-block { display: flex; flex-direction: column; gap: 2px; }
 
+/* ===== D3b (@desk, UX_REVIEW 2.7): tool-call rows ===== */
+html[data-vibe="boring"] .boring-toolgroup-summary { font-size: 13px; line-height: 20px; color: var(--text-2); font-variant-numeric: tabular-nums; }
+html[data-vibe="boring"] .boring-toolgroup-summary .bt-sum-ok { color: var(--st-ok); font-weight: 700; }
+html[data-vibe="boring"] .boring-toolgroup-summary .bt-sum-err { color: var(--st-err); font-weight: 600; }
+html[data-vibe="boring"] .boring-toolrow { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--t-ui, 13px); }
+html[data-vibe="boring"] .boring-toolrow .bt-chev { flex: 0 0 auto; color: var(--text-2); font-size: 12px; width: 12px; text-align: center; }
+html[data-vibe="boring"] .boring-toolrow .bt-glyph { flex: 0 0 auto; width: 16px; height: 16px; line-height: 16px; text-align: center; font-family: var(--mono); font-size: 12px; color: var(--text-2); border: 1px solid var(--border); border-radius: 4px; }
+html[data-vibe="boring"] .boring-toolrow .tool-name { flex: 0 0 auto; color: var(--text-1, var(--text)); font-weight: 500; }
+html[data-vibe="boring"] .boring-toolrow .bt-target { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--t-small, 12px); color: var(--text-2); }
+html[data-vibe="boring"] .boring-toolrow .bt-diff { min-width: 64px; text-align: right; }
+html[data-vibe="boring"] .boring-toolrow .bt-dur { min-width: 44px; text-align: right; }
+html[data-vibe="boring"] .boring-toolrow .bt-diff, html[data-vibe="boring"] .boring-toolrow .bt-dur { flex: 0 0 auto; font-family: var(--mono); font-size: var(--t-caption, 11px); color: var(--text-3); }
+html[data-vibe="boring"] .boring-toolrow .bt-add { color: var(--st-ok); }
+html[data-vibe="boring"] .boring-toolrow .bt-del { color: var(--st-err); }
+html[data-vibe="boring"] .boring-toolrow .bt-status { flex: 0 0 auto; width: 16px; text-align: center; font-weight: 700; color: var(--st-ok); }
+html[data-vibe="boring"] .boring-toolrow[data-state="failed"] .bt-status { color: var(--st-err); }
+html[data-vibe="boring"] .boring-toolrow[data-state="running"] .bt-status { color: var(--st-run); }
+html[data-vibe="boring"] .tl-tool.failed { border-left: 3px solid var(--st-err) !important; }
+html[data-vibe="boring"] .bt-error { margin: 4px 0 0 24px; font-family: var(--mono); font-size: var(--t-small, 12px); color: var(--st-err); }
+html[data-vibe="boring"] .bt-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-strong, var(--border)); border-top-color: var(--st-run); border-radius: 50%; animation: boring-run-pulse 2s ease-in-out infinite; }
+html[data-vibe="boring"] .boring-tool-output { font-family: var(--mono); font-size: var(--t-small, 12px); }
+html[data-vibe="boring"] .boring-tool-fold { margin: 4px 0 0; padding: 2px 8px; font-size: var(--t-small, 12px); color: var(--text-2); background: transparent; border: 1px solid var(--border); border-radius: 6px; cursor: pointer; }
+html[data-vibe="boring"] .boring-tool-fold:hover { background: var(--panel-hi); }
+html[data-vibe="boring"] .tl-tool-detail { padding: 8px 12px 12px 28px; }
+html[data-vibe="boring"] .tl-tool-detail .tl-detail-label { font-weight: 400; font-size: var(--t-caption, 11px); color: var(--text-3); }
+html[data-vibe="boring"] .tl-exit-badge { display: inline-block; background: var(--st-err-bg); color: var(--st-err); border: 1px solid color-mix(in srgb, var(--st-err) 40%, transparent); border-radius: 4px; padding: 0 6px; font: 12px/18px var(--mono); }
+html[data-vibe="boring"] .tl-exit-badge.ok { background: color-mix(in srgb, var(--st-ok) 10%, transparent); color: var(--st-ok); border-color: color-mix(in srgb, var(--st-ok) 40%, transparent); }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) { background: transparent !important; min-height: 32px; margin-block: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; border-radius: 6px !important; }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) > .boring-toolrow { min-height: 32px; }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow):hover { background: var(--surface-3, var(--panel-hi)) !important; }
 /* ===== D2 (@desk, UX_REVIEW S9): dense urgency-sorted lane table. Implemented Normal Mode UX redesign — Thanks to Antigravity by Google DeepMind. ===== */
 html[data-vibe="boring"] .boring-lane-table { width: 100%; border-collapse: collapse; font-size: var(--t-ui, 13px); color: var(--text-2); }
 html[data-vibe="boring"] .boring-lane-table th { text-align: left; padding: 6px 12px; font-size: var(--t-small, 12px); font-weight: 600; color: var(--text-3); text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--bg, var(--panel)); }
