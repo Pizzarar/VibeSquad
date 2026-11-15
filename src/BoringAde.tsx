@@ -192,9 +192,6 @@ export async function boringStartBugs(squadId: string, deps: { create?: (squadId
 
 const startInFlight = new Set<string>();
 
-export const BORING_OVERVIEW_LAYOUT_KEY = "vs.boringOverviewLayout";
-export type OverviewLayout = "cards" | "map";
-
 /** D1 (UX_REVIEW 1.5): one glyph vocabulary from status + attention tone: run, attn, err, stalled, idle, done. */
 export type BoringStateGlyph = "run" | "attn" | "err" | "stalled" | "idle" | "done";
 export function boringStateGlyph(status: string | null | undefined, tone?: string | null): BoringStateGlyph {
@@ -207,12 +204,55 @@ export function boringStateGlyph(status: string | null | undefined, tone?: strin
 }
 const glyphCls = (status: string | null | undefined, tone?: string | null) => `st-${boringStateGlyph(status, tone)}`;
 
-/** B6c: lane-map node state: pulse = working, filled = needs-you, hollow = idle, faint = none. */
-export function boringNodeStateClass(status: string | null | undefined, needsYou = 0): "pulse" | "filled" | "hollow" | "faint" {
-  if (status === "running") return "pulse";
-  if (needsYou > 0) return "filled";
-  if (status && status !== "none" && status !== "closed") return "hollow";
-  return "faint";
+
+export type LaneTableRow = {
+  key: string;
+  kind: "lane" | "desk";
+  laneId: string;
+  label: string;
+  code: string;
+  brainstorm: string;
+  lead: string;
+  workers: string;
+  needsYou: number;
+  running: number;
+  lastEvent: string;
+  age: string;
+  sortAge: number;
+};
+const timeOf = (iso?: string | null) => { const t = Date.parse(iso ?? ""); return Number.isNaN(t) ? 0 : t; };
+/** S9: one dense row per lane, urgency-sorted (needs you › running › most recent). The Project desk rows follow the lanes. */
+export function boringLaneTableRows(
+  model: ReturnType<typeof boringSidebarModel>,
+  feed: { lane: string; text: string; ts: string; type?: string }[] = [],
+): LaneTableRow[] {
+  const lastFor = (c: { laneId: string; code: string }) => {
+    const ids = new Set([c.laneId.toLowerCase(), c.code.replace(/^@/, "").toLowerCase()]);
+    const hit = feed.filter((e) => ids.has(String(e.lane ?? "").replace(/^@/, "").toLowerCase())).sort((a, b) => b.ts.localeCompare(a.ts))[0];
+    return hit ? hit.text : "";
+  };
+  const lanes: LaneTableRow[] = model.conversations.map((c) => {
+    const live = (c.pin.workers ?? []).filter(boringWorkerIsLive).length;
+    const total = (c.pin.workers ?? []).length;
+    return {
+      key: c.laneId, kind: "lane", laneId: c.laneId, label: c.name, code: c.code,
+      brainstorm: c.brainstormStatus, lead: c.leadStatus,
+      workers: total === 0 ? "—" : `${live} live${total > live ? ` · ${total - live} idle` : ""}`,
+      needsYou: c.needsYou, running: c.running, lastEvent: lastFor(c), age: c.age,
+      sortAge: Math.max(timeOf(c.pin.brainstorm?.agent.updatedAt), timeOf(c.pin.lead?.agent.updatedAt), ...(c.pin.workers ?? []).map((w) => timeOf(w.agent.updatedAt))),
+    };
+  });
+  lanes.sort((a, b) => b.needsYou - a.needsYou || b.running - a.running || b.sortAge - a.sortAge);
+  const desk = (id: "_overlord" | "_riffbot" | "_bugs", label: string, status: string, needsYou: number, age: string): LaneTableRow => ({
+    key: id, kind: "desk", laneId: id, label, code: "", brainstorm: id === "_riffbot" || id === "_bugs" ? status : "—", lead: id === "_overlord" ? status : "—",
+    workers: "—", needsYou, running: status === "running" ? 1 : 0, lastEvent: "", age, sortAge: 0,
+  });
+  return [
+    ...lanes,
+    desk("_overlord", model.core.overlord.label, model.core.overlord.status, model.core.overlord.needsYou, model.core.overlord.age),
+    desk("_riffbot", model.core.riffbot.label, model.core.riffbot.status, model.core.riffbot.needsYou, model.core.riffbot.age),
+    desk("_bugs", model.core.bugs.label, model.core.bugs.leadRunning ? "running" : "none", model.core.bugs.needsYou, model.core.bugs.age),
+  ];
 }
 
 type Props = {
