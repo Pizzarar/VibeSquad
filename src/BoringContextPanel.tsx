@@ -11,6 +11,7 @@ import { usePaseo } from "./paseo";
 import { resolve } from "./teams";
 import { findPinnedTodo, type Entry } from "./Timeline";
 import { Ago } from "./ui";
+import { isLive } from "./pins";
 import type { OpenRightDockDetail } from "./RightDock";
 
 /** Normal-mode single right panel (UX_REVIEW 2.8, PLAN refinement 3): replaces AgentDrawer's inner RightDock. */
@@ -55,7 +56,7 @@ const TAB_FOR_DOCK: Partial<Record<string, ContextTab>> = { Changes: "Changes", 
 function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
   const { agents } = usePaseo();
   const members = useMemo(
-    () => resolve(agents).filter((m) => m.kind === "worker" && !m.agent.archivedAt && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
+    () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
     [agents, laneId],
   );
   const live = members.filter(boringWorkerIsLive);
@@ -70,7 +71,10 @@ function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
           <button type="button" key={m.agent.id} className={`boring-ctx-worker${m.agent.id === agent.id ? " current" : ""}`} data-testid={`boring-ctx-worker-${m.agent.id}`} onClick={() => openAgent(m.agent.id)}>
             <span className={`boring-dot st-${glyph}`} aria-hidden />
             <span className="boring-ctx-worker-name">{m.agent.title ?? m.agent.id.slice(0, 8)}</span>
-            <span className="boring-ctx-worker-meta muted">{m.attention?.reason ?? m.agent.status} · <Ago iso={m.agent.updatedAt} /></span>
+            <span className="boring-ctx-worker-age muted"><Ago iso={m.agent.updatedAt} /></span>
+            {(m.attention?.reason || m.agent.status === "error") && (
+              <span className="boring-ctx-worker-meta" title={m.attention?.reason ?? m.agent.status}>{m.attention?.reason ?? m.agent.status}</span>
+            )}
           </button>
         );
       })}
