@@ -19,7 +19,7 @@ import { parseCommitToken } from "./commitLinks";
 import { openRightDockTab } from "./RightDock";
 import { perfEndPainted, perfSendEvent } from "./perf";
 import { TIMELINE_FILTERS, adjacentPrompt, entryIndexForSeq, filterEntries, coalesceReplies, hasMoreOf, joinPages, markTurnBoundary, matchesFilter, localPrompts, localSearch, mergeLiveItem, maxEntrySeq, syncNeeded, latestReasoningIndex, reasoningText, sortedHits, stepIndex, type SearchLocation, type TimelineFilter, type TimelinePrompt } from "./timelineFilter";
-import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, parseInlineCodePath, subscribeBareNames } from "./fileLinks";
+import { BARE_NAME_RE, BARE_PATH_RE, bareNamesVersion, isAbsInlinePath, isLocalHref, localLinkTarget, lookupBareName, parseFileToken, parseInlineCodePath, subscribeBareNames } from "./fileLinks";
 import { toolStartsExpanded, usePref } from "./prefs";
 import { groupToolRuns, isFailedTool, isRunExpanded, isSubAgentTool, toggleRunExpanded, toolRunToggleKey, type ToolRunGroup } from "./toolRuns";
 import { getPanes } from "./panes";
@@ -300,7 +300,7 @@ function renderInline(text: string, agentId?: string): React.ReactNode[] {
     } else if (m[6] !== undefined) {
       // inline code
       let tgt = parseInlineCodePath(m[7], agentId ? getAgentCwd(agentId) : undefined);
-      if (tgt && !tgt.isDir && !tgt.path.includes("/") && agentId) {
+      if (tgt && !tgt.isDir && !tgt.path.includes("/") && agentId && !isAbsInlinePath(m[7])) {
         const hit = lookupBareName(agentId, tgt.path);
         tgt = hit ? { ...tgt, path: hit } : null;
       }

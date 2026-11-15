@@ -159,6 +159,10 @@ export function localLinkTarget(href: string, cwd?: string): LocalLinkTarget {
   return rel ? { path: rel, line: null, isDir: false } : miss(p);
 }
 
+const ABS_INLINE = /^(?:[A-Za-z]:[\x5c/]|\/(?!\/))/;
+/** True when an inline-code token is an absolute path: its parsed target is already repo-root-resolved, never a bare name to look up. */
+export const isAbsInlinePath = (raw: string): boolean => ABS_INLINE.test(raw.trim());
+
 /**
  * Inline-code path that may be absolute (`C:\Users\you\repo\a.ts:42`, `/home/you/a.ts:3:7`): routed through the
  * same localLinkTarget mapping as md links (cwd-relative or sanctuary worktree), else the repo-relative parser.
@@ -166,7 +170,7 @@ export function localLinkTarget(href: string, cwd?: string): LocalLinkTarget {
  */
 export function parseInlineCodePath(raw: string, cwd?: string): FileTarget | null {
   const s = raw.trim();
-  if (!/^(?:[A-Za-z]:[\x5c/]|\/(?!\/))/.test(s) || /\s/.test(s) || s.includes("://")) return parseFileToken(raw, { backticked: true });
+  if (!ABS_INLINE.test(s) || /\s/.test(s) || s.includes("://")) return parseFileToken(raw, { backticked: true });
   let line: number | null = null;
   let p = s;
   const lm = LINE_SUFFIX.exec(p);
