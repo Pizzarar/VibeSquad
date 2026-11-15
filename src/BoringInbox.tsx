@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
-import { answerItem, attentionItems, clearItem, formatAge, itemSince, laterItem, legacyLeadTitle, type AttentionDeps, type AttentionItem } from "./attentionItems";
+import { answerItem, attentionItems, clearItem, formatAge, itemSince, laterItem, type AttentionDeps, type AttentionItem } from "./attentionItems";
 import { clearUnreadLocal, dismissLocal, snoozeLocal } from "./attentionLocal";
 import type { FeedEntry } from "./demo";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
 import { respondToPermission } from "./PermissionCard";
+import { formatDisplayTitle } from "./identity";
 import { boringLocationLane } from "./boringLocation";
 import type { Member, TeamView } from "./teams";
 import { cleanTitle } from "./ui";
@@ -50,6 +51,18 @@ export const NEEDS_YOU_VISIBLE = 5;
 export const RECENT_DONE_VISIBLE = 8;
 const KIND_RANK: Record<AttentionItem["kind"], number> = { permission: 0, label: 1, unread: 1, error: 2, stalled: 3, finished: 4 };
 
+/**
+ * What the row calls the agent. Leads and Buddies are named from their resolved labels with formatDisplayTitle (hub lead = "Overlord",
+ * hub Buddy = "RiffBot", "★ MAIN GAME ord75" = lane code + ord); anything without the labels falls back to cleanTitle ("★ LEAD · Plugins" = "Plugins").
+ */
+export function needsYouTitle(item: Pick<AttentionItem, "who">, member: Pick<Member, "kind" | "agent">, lane: { laneName?: string; laneId?: string; hub?: boolean }): string {
+  const l = (member.agent.labels ?? {}) as Record<string, string>;
+  const fallback = cleanTitle(item.who);
+  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, ord: l.ord, job: l.job }).replace(/^★s*/, "");
+  if (member.kind === "brainstorm" && lane.hub && !l.topic?.trim()) return formatDisplayTitle({ role: "brainstorm", ...lane });
+  return fallback;
+}
+
 /** Cross-project queue: permission › question/pick (needs-you label, marked unread) › error › stalled › finished; oldest first within a rank. */
 export function needsYouRows(views: TeamView[], now = Date.now()): NeedsYouRow[] {
   const rows: NeedsYouRow[] = [];
@@ -62,7 +75,7 @@ export function needsYouRows(views: TeamView[], now = Date.now()): NeedsYouRow[]
       const lane = boringLocationLane(view.team, member.laneId, view.lanes?.map((l) => l.lane));
       const hub = lane === "Desk";
       const since = itemSince(item);
-      const who = legacyLeadTitle(cleanTitle(item.who), { laneName: laneDef?.name, laneId: member.laneId ?? undefined, hub });
+      const who = needsYouTitle(item, member, { laneName: laneDef?.name, laneId: member.laneId ?? undefined, hub });
       rows.push({ item, member, view, teamId: view.team.id, project: view.team.name, lane, age: formatAge(since, now), since: since ?? Infinity, who });
     }
   }
@@ -85,7 +98,14 @@ export function doneRecently(finished: NeedsYouRow[], logs: DoneLog[], limit = R
   return [...fromAgents, ...fromLog].sort((a, b) => b.ts - a.ts).slice(0, limit);
 }
 
-export function BoringInbox({ views, onOpen, now = Date.now(), logs: injected }: { views: TeamView[]; onOpen: (row: NeedsYouRow) => void; now?: number; logs?: DoneLog[] }) {
+export function BoringInbox({ views, onOpen, now: nowProp, logs: injected }: { views: TeamView[]; onOpen: (row: NeedsYouRow) => void; now?: number; logs?: DoneLog[] }) {
+  const [tick, setTick] = useState(() => Date.now());
+  useEffect(() => {
+    if (nowProp !== undefined) return;
+    const t = setInterval(() => setTick(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, [nowProp]);
+  const now = nowProp ?? tick;
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);

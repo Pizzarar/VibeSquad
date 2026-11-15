@@ -3,7 +3,6 @@
 import type { PaseoAgent } from "./agentTypes";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
 import { BORING_STALL_SECONDS } from "./boringHeaderStrip.ts";
-import { formatDisplayTitle } from "./identity.ts";
 import type { Member } from "./teams.ts";
 
 export const LATER_MS = 2 * 3_600_000;
@@ -46,6 +45,9 @@ export function kindOfAttention(m: Pick<Member, "agent" | "attention">): ItemKin
 
 const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, error: 3, stalled: 4, finished: 5 };
 
+/** Dismissing a stall hides it only until the agent shows new activity (its updatedAt moves). */
+export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}`;
+
 /** A running agent with nothing pending and no update for BORING_STALL_SECONDS: "Stalled: no update for 5m", else null. */
 export function stalledReason(a: PaseoAgent, now: number): string | null {
   if (a.status !== "running" || a.pendingPermissions?.length) return null;
@@ -67,7 +69,7 @@ export function attentionItems(members: Member[], now?: number): AttentionItem[]
     if (m.kind === "old-lead" || m.agent.archivedAt || m.agent.status === "closed") continue;
     let kind = kindOfAttention(m);
     let reason = m.attention?.reason ?? "";
-    if (!kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, "stalled", now)) {
+    if (!kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, stalledSignature(m.agent), now)) {
       const stalled = stalledReason(m.agent, now);
       if (stalled) (kind = "stalled"), (reason = stalled);
     }
@@ -80,13 +82,6 @@ export function attentionItems(members: Member[], now?: number): AttentionItem[]
     out.push(item);
   }
   return out.sort((a, b) => ORDER[a.kind] - ORDER[b.kind]);
-}
-
-/** Legacy v1 lead titles ("Lead · ord75", "★ lead · ord75") read as the current name: "Overlord" on the hub, else the lane code + ord. */
-export function legacyLeadTitle(who: string, lane: { laneName?: string; laneId?: string; hub?: boolean }): string {
-  const m = /^(?:(?:★\s*)?(?:lead\s*·\s*)?|★\s*[^·]+?\s+)ord(\d+)\s*(?:·\s*(.+))?$/i.exec(who.trim());
-  if (!m) return who;
-  return formatDisplayTitle({ role: "lead", laneName: lane.laneName, laneId: lane.laneId, ord: m[1], job: m[2], hub: lane.hub }).replace(/^★\s*/, "");
 }
 
 /** When this item started needing the owner: the `needs-you-at` stamp (label items), else the agent's last update. */
@@ -129,7 +124,7 @@ export async function clearItem(item: AttentionItem, d: AttentionDeps): Promise<
       d.clearUnreadLocal(item.id);
       return d.refresh();
     case "stalled":
-      d.dismissLocal(item.id, "stalled");
+      d.dismissLocal(item.id, stalledSignature(item.agent));
       return d.refresh();
     case "error":
     case "finished":

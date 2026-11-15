@@ -695,7 +695,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                 <div className="boring-conv-line boring-project-line">
                   {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
                   <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
-                    <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : (v.needsYou ?? 0) > 0 ? "needs-you" : null)}`} />
+                    <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
                     <span className="boring-project-name">{v.team.name}</span>
                     {!open && badge(m.totalNeedsYou, m.projectErr)}
                   </button>

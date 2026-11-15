@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attentionItems, clearItem, legacyLeadTitle, stalledReason } from "../src/attentionItems.ts";
+import { attentionItems, clearItem, stalledReason } from "../src/attentionItems.ts";
 import { attentionOf } from "../src/teams.ts";
 import { dismissLocal, resetAttentionLocal } from "../src/attentionLocal.ts";
 
@@ -28,19 +28,15 @@ test("stalled: a pending permission or an existing attention wins; dismissing hi
   const [item] = attentionItems([quiet], NOW);
   const calls = [];
   await clearItem(item, { dismissLocal: (...a) => (calls.push(a), dismissLocal(...a)), refresh: () => {} });
-  assert.deepEqual(calls, [["slow", "stalled"]]);
+  assert.deepEqual(calls, [["slow", `stalled:${ago(300)}`]]);
   assert.equal(attentionItems([quiet], NOW).length, 0);
 });
 
-test("legacy lead titles are cleaned with formatDisplayTitle: Overlord on the hub, lane code + ord elsewhere", () => {
-  assert.equal(legacyLeadTitle("Lead · ord75", { hub: true }), "Overlord");
-  assert.equal(legacyLeadTitle("★ Lead · ord75 · review", { hub: true }), "Overlord · review");
-  assert.doesNotMatch(legacyLeadTitle("Lead · ord12", { laneName: "ADE", laneId: "ade" }), /ord|Lead ·|★/);
-  assert.equal(legacyLeadTitle("Fix the login bug", { hub: true }), "Fix the login bug");
-});
-
-test("legacy v1 lead titles with a lane name ('★ MAIN GAME ord75') are cleaned too; plain titles are not", () => {
-  assert.equal(legacyLeadTitle("★ MAIN GAME ord75", { hub: true }), "Overlord");
-  assert.doesNotMatch(legacyLeadTitle("★ UI BOIS ord9", { laneName: "UI Bois", laneId: "ui-bois" }), /ord9 |★|BOIS ord/);
-  assert.equal(legacyLeadTitle("Fix ord3 parser", { hub: true }), "Fix ord3 parser");
+test("stalled dismiss is keyed to activity: new activity then a fresh stall shows again", async () => {
+  resetAttentionLocal();
+  const quiet = (updatedAt) => member(agent("slow", { status: "running", updatedAt }));
+  const [item] = attentionItems([quiet(ago(300))], NOW);
+  await clearItem(item, { dismissLocal, refresh: () => {} });
+  assert.equal(attentionItems([quiet(ago(300))], NOW).length, 0); // same stall stays dismissed
+  assert.equal(attentionItems([quiet(ago(200))], NOW + 1000).length, 1); // it moved, then stalled again
 });

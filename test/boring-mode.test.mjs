@@ -747,14 +747,13 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
 const tsx = (file) => transformSync(file, readFileSync(resolve(import.meta.dirname, "..", "src", file), "utf8"), { lang: file.endsWith("x") ? "tsx" : "ts", jsx: { runtime: "classic" } }).code;
 writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = () => false; export const isLocallyHidden = () => false; export const clearUnreadLocal = () => {}; export const dismissLocal = () => {}; export const snoozeLocal = () => {};`);
 writeFileSync(join(dir, "boringHeaderStripStub.mjs"), tsx("boringHeaderStrip.ts"));
-// Display-title stubs: the real isHubLane / formatDisplayTitle pull in teams.example.json + React; test/attention-items.test.mjs covers the real ones.
-writeFileSync(join(dir, "identityStub.mjs"), `export const formatDisplayTitle = ({ role, hub, ord, laneName }) => role === "lead" ? (hub ? "Overlord" : "★ " + String(laneName ?? "").toUpperCase() + ord) : "x";`);
+// isHubLane stub: the real one pulls in React via teams.ts (same rule, covered by teams tests).
+writeFileSync(join(dir, "identity.mjs"), tsx("identity.ts").replace("\"../teams.example.json\"", JSON.stringify(pathToFileURL(resolve(import.meta.dirname, "..", "teams.example.json")).href)));
 writeFileSync(
   join(dir, "attentionItems.mjs"),
   tsx("attentionItems.ts")
     .replace(/from "\.\/attentionLocal\.ts"/, `from "./attentionLocal.mjs"`)
     .replace(/from "\.\/boringHeaderStrip\.ts"/, `from "./boringHeaderStripStub.mjs"`)
-    .replace(/from "\.\/identity\.ts"/, `from "./identityStub.mjs"`),
 );
 globalThis.__resp = [];
 globalThis.__cleared = [];
@@ -1247,15 +1246,24 @@ test("Desk R2 Needs you: buttons only on quick permissions; every row has the ho
   assert.equal(walk(t, (n) => n.props?.className === "boring-needs-btn").length, 0); // no inline Dismiss button any more
 });
 
-test("Desk R2 Needs you: hub-lane items read 'Desk'; legacy 'Lead · ord75' titles are cleaned", () => {
+test("Desk R2 Needs you: hub-lane items read 'Desk'; real legacy lead titles are named from labels (formatDisplayTitle) or cleanTitle", () => {
   reset();
-  const v = { team: { id: "vs", name: "VibeSquad", lanes: [{ id: "vs", name: "vs", hub: true }, { id: "ade", name: "ADE" }] }, members: [att("o", "needs-you", "approve", { laneId: "vs", agent: { title: "Lead · ord75" } }), att("w", "needs-you", "pick", { laneId: "ade", agent: { title: "★ Lead · ord12" } })], needsYou: 2, running: 0 };
-  const rows = needsYouRows([v], NOW);
-  const hub = rows.find((r) => r.item.id === "o");
-  assert.equal(hub.lane, "Desk");
-  assert.equal(hub.who, "Overlord");
-  assert.equal(rows.find((r) => r.item.id === "w").lane, "ADE");
-  assert.doesNotMatch(rows.find((r) => r.item.id === "w").who, /ord12|Lead ·/);
+  const lead = (id, title, laneId, labels) => att(id, "needs-you", "why", { kind: "lead", laneId, agent: { title, labels } });
+  const v = {
+    team: { id: "vs", name: "VibeSquad", lanes: [{ id: "vs", name: "vs", hub: true }, { id: "main-game", name: "Main Game" }, { id: "plugins", name: "Plugins" }] },
+    members: [
+      lead("o", "Lead · ord75", "vs", { role: "lead", ord: "75" }),
+      lead("m", "★ MAIN GAME ord75", "main-game", { role: "lead", lane: "main-game", ord: "75" }), // demo.tsx:91, legacyTitleFor format
+      lead("p", "★ LEAD · Plugins", "plugins", { role: "lead", lead: "plugins" }), // demo.tsx:96
+    ],
+    needsYou: 3, running: 0,
+  };
+  const who = Object.fromEntries(needsYouRows([v], NOW).map((r) => [r.item.id, r.who]));
+  assert.equal(who.o, "Overlord");
+  assert.equal(who.p, "Plugins");
+  assert.doesNotMatch(who.m, /ord75|MAIN GAME|★/);
+  assert.match(who.m, /75$/);
+  assert.equal(needsYouRows([v], NOW).find((r) => r.item.id === "o").lane, "Desk");
   const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
   assert.ok(testids(t, "boring-needs-where").some((n) => /Desk/.test([].concat(n.props.children).join(""))));
 });
