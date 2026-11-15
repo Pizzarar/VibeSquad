@@ -37,6 +37,16 @@ export function isTurnProgressEvent(e) {
   return !NON_PROGRESS_LOG_EVENTS.has(e.type);
 }
 
+/**
+ * Did a roster read that saw the runner at `read` ({ boot, seq }, reported with the roster) cover every write the runner had
+ * settled at `now` (a GET /write-seq probe taken after the reader arrived)? No probe answer (an older runner, or it did not
+ * answer): yes, as before idea-233 (d). A read without a stamp, or from another runner boot, is not trusted against a probe.
+ */
+export function rosterCovers(read, now) {
+  if (!now) return true;
+  return !!read && read.boot === now.boot && read.seq >= now.seq;
+}
+
 /** Roster work on the serialized live chain waits at most this long on the runner; a timeout takes the same path as a failed fetch. */
 const ROSTER_FETCH_MS = 8000;
 const SEED_RETRY_BASE_MS = 1000;
@@ -559,7 +569,8 @@ export class RunnerBackend {
     Object.defineProperty(this, "listeners", { value: new Set() });
     Object.defineProperty(this, "progressCache", { value: new Map() }); // rec.id -> { lastSeq, lastPromptAt, lastProgressAt }
     Object.defineProperty(this, "whosFlights", { value: new Map() }); // lane -> { running, queued }: refreshLaneWhosHere coalescing
-    Object.defineProperty(this, "rosterFlights", { value: new Map() }); // route -> { seq, p }: the roster read in flight (rosterGet)
+    Object.defineProperty(this, "rosterFlights", { value: new Map() }); // route -> { seq, p, runnerSeq }: the roster read in flight (rosterGet)
+    Object.defineProperty(this, "rosterSeqOf", { value: new WeakMap() }); // roster recs / listAgents() result -> the runner { boot, seq } its read saw
     Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
   }
 
@@ -706,32 +717,42 @@ export class RunnerBackend {
    * through this client has settled since it started (rc.writeSeq, as rosterGet); otherwise all such callers share ONE
    * rerun that starts after it. A burst of spawns/archives in a lane costs at most two full-roster reads, not one each,
    * and every caller still gets a refresh that read the roster after its own write. No writeSeq: always the rerun.
+   * A write from another process (idea-233 d) never touches rc.writeSeq: a joiner also probes the runner's own count and,
+   * if the running refresh's roster read predates it, takes the rerun instead (`join: false`).
    */
-  refreshLaneWhosHere(lane) {
+  refreshLaneWhosHere(lane, { join = true } = {}) {
     if (!lane) return Promise.resolve();
     const flights = this.whosFlights;
     let f = flights.get(lane);
-    if (!f) flights.set(lane, (f = { running: null, queued: null, seq: undefined }));
+    if (!f) flights.set(lane, (f = { running: null, queued: null, seq: undefined, run: null }));
     const seq = this.rc.writeSeq;
-    if (f.running && !f.queued && seq !== undefined && f.seq === seq) return f.running;
+    if (join && f.running && !f.queued && seq !== undefined && f.seq === seq) {
+      const probe = this.rc.runnerWriteSeq?.();
+      if (!probe) return f.running;
+      const { running, run } = f;
+      return Promise.all([running, probe]).then(([, now]) => (rosterCovers(run.runnerSeq, now) ? undefined : this.refreshLaneWhosHere(lane, { join: false })));
+    }
     if (f.queued) return f.queued;
     const start = () => {
       f.queued = null;
       f.seq = this.rc.writeSeq;
-      const p = this.whosHereNow(lane).finally(() => {
+      const run = { runnerSeq: undefined }; // the runner stamp of the roster read this refresh used
+      const p = this.whosHereNow(lane, run).finally(() => {
         if (f.running === p) f.running = null;
         if (!f.running && !f.queued && flights.get(lane) === f) flights.delete(lane);
       });
       f.running = p;
+      f.run = run;
       return p;
     };
     if (f.running) return (f.queued = f.running.then(start, start));
     return start();
   }
 
-  async whosHereNow(lane) {
+  async whosHereNow(lane, run) {
     try {
       const agents = await this.listAgents();
+      if (run) run.runnerSeq = this.rosterSeqOf.get(agents);
       this.whosHere({ laneId: lane, agents, rootDir: this.rootDir });
     } catch {
       /* the brief is cosmetic: never fail a spawn over it */
@@ -811,11 +832,14 @@ export class RunnerBackend {
     const entries = recs
       .filter((r) => r && (includeArchived || !Number.isFinite(r.archivedAt)))
       .map((r) => ({ agent: toAgent(r), project: null }));
-    return { entries };
+    return { entries, writeSeq: this.rosterSeqOf.get(recs) };
   }
 
   async listAgents(opts) {
-    return (await this.fetchAgents(opts)).entries.map((e) => e.agent);
+    const { entries, writeSeq } = await this.fetchAgents(opts);
+    const agents = entries.map((e) => e.agent);
+    if (writeSeq) this.rosterSeqOf.set(agents, writeSeq);
+    return agents;
   }
 
   /**
@@ -1141,23 +1165,54 @@ export class RunnerBackend {
    * runner's serialise + this loop's JSON.parse of the whole roster (a spawn reads it 4-6 times; many at once stalled the server
    * loop for seconds, unit-loop-stall). A caller only joins a read that started after the last write through this client
    * settled (rc.writeSeq), so a caller always sees its own create/archive/meta change. No caching once the read has answered.
+   * Writes from other processes (an agent sidecar, a CLI: idea-233 d) never touch rc.writeSeq, so a joiner also probes the
+   * runner's own settled-write count (GET /write-seq, tiny) and keeps the shared answer only if that read's stamp covers it
+   * (rosterCovers); otherwise it takes a newer read. The answer's runner stamp is kept in rosterSeqOf.
    */
   rosterGet(route) {
-    const flights = this.rosterFlights;
     const seq = this.rc.writeSeq;
-    const cur = flights.get(route);
-    if (cur && seq !== undefined && cur.seq === seq) return cur.p;
-    const p = (async () => {
+    const cur = this.rosterFlights.get(route);
+    if (cur && seq !== undefined && cur.seq === seq) {
+      const probe = this.rc.runnerWriteSeq?.();
+      return probe ? this.joinRosterRead(route, cur, probe) : cur.p;
+    }
+    return this.rosterRead(route);
+  }
+
+  /** Keep `cur`'s answer only if it covers the runner's writes at `probe`; else a newer flight that does, else a fresh read. */
+  async joinRosterRead(route, cur, probe) {
+    const [recs, now] = await Promise.all([cur.p, probe]);
+    if (rosterCovers(cur.runnerSeq, now)) return recs;
+    const next = this.rosterFlights.get(route);
+    if (next && next !== cur) {
+      const again = await next.p.catch(() => null);
+      if (again && rosterCovers(next.runnerSeq, now)) return again;
+    }
+    return this.rosterRead(route);
+  }
+
+  /** Start a roster read and publish it as the in-flight read for `route`. */
+  rosterRead(route) {
+    const flights = this.rosterFlights;
+    const flight = { seq: this.rc.writeSeq, p: null, runnerSeq: undefined };
+    flight.p = (async () => {
       const res = await this.rc.request("GET", route);
-      if (Array.isArray(res.agents)) return res.agents.filter(Boolean).map((r) => this.progressFor(r));
-      const recs = await Promise.all((res.ids ?? []).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
-      return recs.filter(Boolean).map((r) => this.progressFor(r));
+      let recs;
+      if (Array.isArray(res.agents)) recs = res.agents.filter(Boolean).map((r) => this.progressFor(r));
+      else {
+        const one = await Promise.all((res.ids ?? []).map((id) => this.rc.request("GET", `/agents/${encodeURIComponent(id)}`).catch(() => null)));
+        recs = one.filter(Boolean).map((r) => this.progressFor(r));
+      }
+      if (res.writeSeq) {
+        flight.runnerSeq = res.writeSeq;
+        this.rosterSeqOf.set(recs, res.writeSeq);
+      }
+      return recs;
     })();
-    const flight = { seq, p };
     flights.set(route, flight);
     const done = () => { if (flights.get(route) === flight) flights.delete(route); };
-    p.then(done, done);
-    return p;
+    flight.p.then(done, done);
+    return flight.p;
   }
 
   /**

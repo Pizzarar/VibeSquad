@@ -79,7 +79,7 @@ export class RunnerClient {
    * an agent's MCP sidecar sends its own token, the VS server sends the admin bearer); null = always the admin bearer;
    * { id, token } = always that agent. A per-request `opts.caller` (the VS server forwarding a verified agent, X1c) wins.
    */
-  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000, queueMs = 10 * 60_000, probeTimeoutMs = 2000, caller, env = process.env } = {}) {
+  constructor({ home, fetchImpl = fetch, spawnImpl = spawn, startTimeoutMs = 8000, requestTimeoutMs = 15000, queueMs = 10 * 60_000, probeTimeoutMs = 2000, restartWaitMs = 15000, caller, env = process.env } = {}) {
     this.queueMs = queueMs; // the runner's slot-queue wait: create/input may legitimately take this long
     this.probeTimeoutMs = probeTimeoutMs;
     this.requestTimeoutMs = requestTimeoutMs;
@@ -93,12 +93,44 @@ export class RunnerClient {
     this.caller = caller;
     this.env = env;
     this.writeSeq = 0; // bumped when a non-GET request settles: a coalesced read started before a write must not answer a reader after it
+    // The owner's in-flight runner restart (set by runner-supervisor oncePerOwner, in-process only). Calls wait for it, capped
+    // at restartWaitMs, rather than hit a runner that is being hard-killed (idea-233 c).
+    this.restarting = null;
+    this.restartWaitMs = restartWaitMs;
+  }
+
+  /** Wait (capped, never throws) for an in-flight owner restart. True if there was one: discovery may name a new runner. */
+  async _awaitRestart() {
+    const p = this.restarting;
+    if (!p) return false;
+    let timer;
+    const cap = new Promise((r) => { timer = setTimeout(r, this.restartWaitMs); });
+    try {
+      await Promise.race([Promise.resolve(p).catch(() => {}), cap]);
+    } finally {
+      clearTimeout(timer);
+    }
+    this.conn = null; // re-read discovery on the next call
+    return true;
   }
 
   /** Headers for a request: the explicit per-call caller, else this client's, else the process env. Admin = the bearer. */
   authHeaders(opts = {}) {
     const caller = "caller" in opts ? opts.caller : this.caller !== undefined ? this.caller : agentCallerFromEnv(this.env);
     return authHeadersFor(caller, this.conn?.token);
+  }
+
+  /**
+   * The runner's settled-write count right now, { boot, seq }, counting writes from every client process (idea-233 d).
+   * undefined when the runner predates GET /write-seq or does not answer: callers then fall back to writeSeq alone.
+   */
+  async runnerWriteSeq() {
+    try {
+      const r = await this.request("GET", "/write-seq");
+      return typeof r?.boot === "string" && Number.isInteger(r.seq) ? { boot: r.boot, seq: r.seq } : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /** GET /verify-agent as `caller` ({ id, token }): the runner's verified record, or a 403 RunnerHttpError. */
@@ -120,6 +152,9 @@ export class RunnerClient {
   }
 
   async request(method, route, body, opts = {}) {
+    // healthy() skips the wait: startOwned probes health from inside the restart and must not wait on itself.
+    const waitRestart = opts.restartWait !== false;
+    if (waitRestart) await this._awaitRestart(); // never send to a runner the owner is replacing
     if (method !== "GET") {
       try {
         return await this._requestOnce(method, route, body, opts);
@@ -131,6 +166,8 @@ export class RunnerClient {
       return await this._requestOnce(method, route, body, opts);
     } catch (err) {
       if (!err?.transport || method !== "GET") throw err;
+      // The owner's hard-kill restart reset it (writes are never resent: the old runner may have taken them): wait for it first.
+      if (waitRestart) await this._awaitRestart();
       // Idempotent read: one retry, but only if re-discovery found a different runner (a timeout on the same port would just hang again).
       const next = readDiscovery(this.home);
       if (!next || next.port === err.port) throw err;
@@ -257,7 +294,7 @@ export class RunnerClient {
     this.conn = readDiscovery(this.home);
     if (!this.conn) return false;
     try {
-      await this.request("GET", "/health");
+      await this.request("GET", "/health", undefined, { restartWait: false });
       return true;
     } catch (e) {
       if (e?.status === 403) throw e; // an incomplete or wrong agent identity is a refusal, not a runner that is down

@@ -1,6 +1,6 @@
 // Agent supervisor: one child per agent, one JSONL log per agent, no pollers.
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, statSync, watch as fsWatch, writeFileSync } from 'node:fs';
 import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './adapters/claude.mjs';
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
@@ -313,6 +313,14 @@ export class Runner {
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
     this.hubLane = hubLane;
     this.folds = new Map(); // id -> log-derived status (no liveness), valid while the log file's size + mtime are unchanged
+    // Roster scans (statusAll*, laneHasLiveLead) skip the per-log stat for ids in _foldClean (idea-233: ~4133 stats a pass).
+    // An id is clean only while a watch on the agents dir is up and no change was seen since its fold was stat-validated;
+    // every append through this store, a watch event for its file, a nameless event (overflow) or a watch error drops it.
+    this.rosterWatchFactory = (dir, onChange) => fsWatch(dir, { persistent: false }, onChange);
+    this._rosterWatch = null;
+    this._rosterWatchFailed = false;
+    this._foldClean = new Set();
+    this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
     this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
@@ -473,7 +481,7 @@ export class Runner {
     if (!lane) return false;
     for (const id of this.store.ids()) {
       let f = null;
-      try { f = this._fold(id); } catch { continue; }
+      try { f = this._foldScan(id); } catch { continue; }
       if (!f?.created || f.exit || f.archivedAt || isRetiredMeta(f.meta)) continue;
       const t = identityOf(f.meta);
       if (t.role === 'lead' && t.lane === lane && (t.team ?? null) === (team ?? null)) return true;
@@ -1444,8 +1452,8 @@ export class Runner {
   }
 
   // Reads only this agent's log (lazy: no other file is touched).
-  status(id) {
-    const f = this._fold(id);
+  status(id, { scan = false } = {}) {
+    const f = scan ? this._foldScan(id) : this._fold(id);
     if (!f) return null;
     let status = f.status;
     if (f.exit) status = 'exited';
@@ -1459,7 +1467,7 @@ export class Runner {
     const out = [];
     for (const id of this.store.ids()) {
       let s = null;
-      try { s = this.status(id); } catch { /* unreadable log: left out, like a failed per-id GET */ }
+      try { s = this.status(id, { scan: true }); } catch { /* unreadable log: left out, like a failed per-id GET */ }
       if (s) out.push(s);
     }
     return out;
@@ -1478,7 +1486,7 @@ export class Runner {
       const visit = (id) => {
         seen.add(id);
         let s = null;
-        try { s = this.status(id); } catch { /* unreadable log: left out, like a failed per-id GET */ }
+        try { s = this.status(id, { scan: true }); } catch { /* unreadable log: left out, like a failed per-id GET */ }
         if (s) agents.push(s);
       };
       for (const id of this.store.ids()) {
@@ -1492,13 +1500,50 @@ export class Runner {
     return this._scan;
   }
 
+  // Roster-scan fold: the cached fold without a stat while the agents-dir watch vouches the log is unchanged, else _fold.
+  _foldScan(id) {
+    if (this._foldClean.has(id) && this._rosterWatch) { const f = this.folds.get(id); if (f) return f; }
+    this._ensureRosterWatch();
+    return this._fold(id);
+  }
+
+  // Starts the agents-dir watch once. The watch must be up BEFORE a fold is stat-validated for that fold to count as clean.
+  // No watch (unsupported fs, a throwing factory) or a failed one: every scan stats, as before.
+  _ensureRosterWatch() {
+    if (this._rosterWatch || this._rosterWatchFailed) return;
+    let w;
+    try {
+      w = this.rosterWatchFactory(this.store.dir, (_event, name) => {
+        const file = name == null ? '' : String(name);
+        if (!file) { this._foldClean.clear(); return; } // overflow / unknown file: trust nothing
+        if (file.endsWith('.jsonl')) this._foldClean.delete(file.slice(0, -6));
+      });
+    } catch { this._rosterWatchFailed = true; return; }
+    if (!w) { this._rosterWatchFailed = true; return; }
+    w.on?.('error', () => { this.closeRosterWatch(); this._rosterWatchFailed = true; });
+    this._rosterWatch = w;
+  }
+
+  // Stops the agents-dir watch and forgets every clean mark (the next scan stats; a later scan may watch again).
+  closeRosterWatch() {
+    const w = this._rosterWatch;
+    this._rosterWatch = null;
+    this._rosterWatchFailed = false;
+    this._foldClean.clear();
+    try { w?.close(); } catch { /* already closed */ }
+  }
+
   // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.
   _fold(id) {
     let stamp = null;
     let size = 0;
-    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; } catch { this.folds.delete(id); return null; }
+    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; }
+    // Clean = validated by this stat while the watch is up. Synchronous from the stat to the mark: a change after the stat
+    // reaches the watch callback later and unmarks it.
+    const watched = !!this._rosterWatch;
+    this._foldClean.delete(id);
     let st = this.folds.get(id);
-    if (st?.stamp === stamp) return st;
+    if (st?.stamp === stamp) { if (watched) this._foldClean.add(id); return st; }
     if (!st || size < st.offset) st = { created: null, last: null, status: 'unknown', usage: null, perms: new Map(), meta: null, archivedAt: null, exit: null, offset: 0 };
     const { events, end } = this.store.readFrom(id, st.offset);
     for (const e of events) {
@@ -1520,6 +1565,7 @@ export class Runner {
     st.stamp = stamp;
     if (!st.created) { this.folds.delete(id); return null; }
     this.folds.set(id, st);
+    if (watched) this._foldClean.add(id);
     st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
     return st;
   }
@@ -1536,6 +1582,7 @@ export class Runner {
     if (this._shutDown) return;
     this._shutDown = true;
     this._pollAgy?.shutdown();
+    this.closeRosterWatch();
     clearInterval(this._quietSweep);
     this.clearDrain(); // the drain ends with this runner (its timer and the hook's file)
     const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them

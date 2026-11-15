@@ -43,6 +43,9 @@ export class LogStore {
     this.idx = new Map(); // id -> { size, count, offs: [byte offset of event 0, STEP, 2*STEP...] }
     this.listeners = new Set(); // fn(id, ev) per append; see onAppend
     this.secrets = null; // () -> iterable of strings never to be written (see redactSecrets); set by the Runner
+    // Internal per-append hook, fn(id), set by the Runner (fold-cache invalidation). Kept out of `listeners`: those are the
+    // live-tail subscribers (SSE), and their count is what tells whether anyone is still tailing.
+    this.onWrite = null;
     this.fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -109,6 +112,7 @@ export class LogStore {
     cur.count++;
     cur.size = before + Buffer.byteLength(line);
     this.idx.set(id, cur);
+    try { this.onWrite?.(id); } catch { /* a bad hook must not break logging */ }
     for (const fn of [...this.listeners]) { try { fn(id, ev); } catch { /* a bad listener must not break logging */ } }
     return ev;
   }

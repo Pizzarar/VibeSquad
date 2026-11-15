@@ -124,7 +124,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
     return false;
   };
 
-  return http.createServer(async (req, res) => {
+  // Settled non-GET requests since this runner booted, from ANY client process (idea-233 d). The VS server's roster-read
+  // coalescing checks it before a reader joins a read already in flight: a write another process (an agent sidecar, a CLI)
+  // made after that read started must not be answered from it. `boot` tells a restarted runner's count from the old one's.
+  const writes = { boot: randomBytes(6).toString('hex'), seq: 0 };
+  const handle = async (req, res) => {
     try {
       const caller = resolveCaller(req);
       if (caller.deny) return json(res, caller.deny, { error: caller.error });
@@ -146,6 +150,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
         return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
       }
+      if (req.method === 'GET' && parts[0] === 'write-seq' && parts.length === 1) return json(res, 200, { boot: writes.boot, seq: writes.seq });
       if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
         // Restart drain (ideas 198 + 186), set/cleared by scripts/restart-runtime.mjs: POST { ttlMs, reason } starts or refreshes
         // it, DELETE ends it. Admin bearer only and only with a token configured (like /shutdown): an agent token never sets it.
@@ -202,10 +207,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         }
         if (req.method === 'GET') {
           if (url.searchParams.get('full') !== '1') return json(res, 200, { ids: runner.list() });
+          const writeSeq = { boot: writes.boot, seq: writes.seq }; // taken before the scan: every write it counts is in the answer
           const all = await runner.statusAllAsync(); // async: yields between slices so a full scan never stalls POST /agents
           // archived=0: leave archived records out (most of a long-lived roster). Serialising them here and parsing them in the
           // VS server on every roster read stalled the server's event loop (unit-loop-stall). `ids` stays complete.
-          return json(res, 200, url.searchParams.get('archived') === '0' ? { ids: all.ids, agents: all.agents.filter((a) => !a.archivedAt) } : all);
+          return json(res, 200, url.searchParams.get('archived') === '0' ? { ids: all.ids, agents: all.agents.filter((a) => !a.archivedAt), writeSeq } : { ...all, writeSeq });
         }
       }
       const id = parts[1];
@@ -295,6 +301,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
     } catch (err) {
       return json(res, err.status ?? 400, { error: err.message });
     }
+  };
+  return http.createServer(async (req, res) => {
+    if (req.method === 'GET' || req.method === 'HEAD') return handle(req, res);
+    // Bumped once the handler is done (its change is applied and answered), before this loop serves another request.
+    try { await handle(req, res); } finally { writes.seq += 1; }
   });
 }
 
