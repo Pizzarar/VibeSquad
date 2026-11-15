@@ -1,0 +1,299 @@
+import { useEffect, useRef, useState } from "react";
+import type { PaseoAgent } from "./agentTypes";
+import { archiveAgent, markAgentRead, markAgentUnread, stopAgent } from "./paseo";
+import { DEMO } from "./demoFlag";
+import { isLocallyHidden, isMarkedUnread } from "./attentionLocal";
+import { runnerReloadTimeline } from "./runnerBridge";
+import { AgentTitleEdit } from "./QuickWinsUi";
+import { shouldComposerSubmit } from "./IdeaInbox";
+import { ConfirmButton, ago, shortPath, useTick } from "./ui";
+import { LEGACY_NEEDS_LABEL } from "./userName";
+import { AGENT_TYPE_LABEL, kindOf } from "./teams";
+import type { AgentType } from "./teams";
+import { providerSpec } from "./pixel";
+import { boringStateGlyph } from "./BoringAde";
+import { BORING_CTX_WARN_PCT, boringHeaderStrip } from "./boringHeaderStrip";
+
+export type BoringAgentHeaderProps = {
+  agent: PaseoAgent;
+  agentType: AgentType;
+  used: number;
+  budget: number | undefined;
+  entriesCount?: number;
+  isBs: boolean;
+  bsPct: number;
+  warnTokens: number;
+  bsUsedTokens: number;
+  restarting: boolean;
+  planHandedOff: boolean;
+  doRestart: (reason: string) => Promise<unknown>;
+  onSuccessor?: () => void;
+  toggleSummary: () => void;
+  summaryOpen: boolean;
+  setInboxPopoverOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  inboxPopoverOpen: boolean;
+  inboxDumpText: string;
+  setInboxDumpText: (v: string) => void;
+  inboxParking: boolean;
+  inboxToast: string;
+  parkToInbox: (text: string, fromComposer: boolean) => void;
+  summaryText: string;
+  setSummaryText: (v: string) => void;
+  summaryPath: string;
+  summaryLoading: boolean;
+  summarySaving: boolean;
+  saveSummary: () => Promise<void>;
+  laneId: string;
+  att: { tone: string; reason: string } | null;
+  dockOpen: boolean;
+  onToggleDock: () => void;
+  onClose: () => void;
+  chatOnly?: boolean;
+};
+
+export function BoringAgentHeader(p: BoringAgentHeaderProps) {
+  const { agent } = p;
+  const now = useTick();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [reloadBusy, setReloadBusy] = useState(false);
+  const [copied, setCopied] = useState("");
+  const menuRef = useRef<HTMLDivElement>(null);
+  const labels = (agent.labels ?? {}) as Record<string, string>;
+  const kind = kindOf(agent);
+  const prov = providerSpec(agent.provider);
+
+  useEffect(() => setMenuOpen(false), [agent.id]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (menuRef.current && e.target instanceof Node && !menuRef.current.contains(e.target)) setMenuOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("keydown", onKey, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }, [menuOpen]);
+
+  const needsYouFlagged =
+    (!!labels["needs-you"] && labels["needs-you"] !== "cleared") ||
+    (!!labels[LEGACY_NEEDS_LABEL] && labels[LEGACY_NEEDS_LABEL] !== "cleared");
+  const isUnreadOrAttention =
+    isMarkedUnread(agent.id) ||
+    needsYouFlagged ||
+    Boolean(p.att && p.att.tone !== "finished") ||
+    Boolean(agent.requiresAttention && !isLocallyHidden(agent.id, agent.attentionReason ?? "attention"));
+
+  const ctxPct = p.isBs ? p.bsPct : p.budget && p.budget > 0 ? Math.min(100, (p.used / p.budget) * 100) : null;
+  const showMeter = ctxPct != null && ctxPct >= BORING_CTX_WARN_PCT;
+  const strip = boringHeaderStrip({
+    status: agent.status,
+    updatedAt: agent.updatedAt,
+    hasPendingPermission: (agent.pendingPermissions?.length ?? 0) > 0,
+    ctxPct,
+    planHandedOff: p.planHandedOff,
+    nowMs: now,
+  });
+  const glyph = boringStateGlyph(strip.some((s) => s.kind === "stalled") ? "stalled" : agent.status, p.att?.tone);
+  const running = agent.status === "running" && !agent.archivedAt;
+  const roleLine = [AGENT_TYPE_LABEL[p.agentType], labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
+  const canHandoff = !agent.archivedAt && ((kind === "lead" && !!p.onSuccessor) || p.isBs);
+  const close = () => setMenuOpen(false);
+  const copy = (what: string, text: string) => {
+    navigator.clipboard?.writeText(text).catch(() => {});
+    setCopied(what);
+    setTimeout(() => setCopied(""), 1200);
+  };
+
+  return (
+    <>
+      <header className="boring-agent-header" data-testid="boring-agent-header" data-glyph={glyph}>
+        <span className={`boring-agent-glyph st-${glyph}`} data-testid="boring-agent-glyph" title={p.att?.reason ?? agent.status} />
+        <span className="boring-agent-name" data-testid="boring-agent-name">
+          <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+        </span>
+        <span className="boring-agent-role muted" data-testid="boring-agent-role" title={`${prov.name}${agent.model ? ` · ${agent.model}` : ""}`}>
+          {roleLine}
+        </span>
+        {showMeter && (
+          <span
+            className={`boring-ctx-meter${ctxPct! >= 90 ? " crit" : ""}`}
+            data-testid="boring-ctx-meter"
+            title={`Context ${Math.round(ctxPct!)}% used`}
+          >
+            <span className="boring-ctx-meter-track"><i style={{ width: `${Math.min(100, ctxPct!)}%` }} /></span>
+            <span className="boring-ctx-meter-pct">{Math.round(ctxPct!)}%</span>
+          </span>
+        )}
+        <span className="boring-agent-spacer" />
+        {running && (
+          <>
+            <button
+              type="button"
+              className="boring-hdr-btn"
+              data-testid="boring-interrupt-btn"
+              title="Interrupt the current turn; the agent stays available"
+              onClick={() => void stopAgent(agent.id).catch(() => {})}
+            >
+              Interrupt
+            </button>
+            <ConfirmButton label="Stop" armedLabel="Tap to stop" busyLabel="Stopping…" tone="danger" className="boring-hdr-btn boring-hdr-stop" onConfirm={() => stopAgent(agent.id)} />
+          </>
+        )}
+        {!p.chatOnly && (
+          <button
+            type="button"
+            className={`boring-hdr-btn${p.dockOpen ? " on" : ""}`}
+            data-testid="boring-dock-toggle"
+            title={p.dockOpen ? "Close side dock" : "Open: Changes / Files / Terminal / Scripts"}
+            onClick={p.onToggleDock}
+          >
+            Dock {p.dockOpen ? "▶" : "◀"}
+          </button>
+        )}
+        <div className="boring-agent-menu-wrap" ref={menuRef}>
+          <button
+            type="button"
+            className={`boring-hdr-btn boring-hdr-more${menuOpen ? " on" : ""}`}
+            data-testid="boring-agent-menu-btn"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            aria-label="More actions"
+            title="More actions"
+            onClick={() => setMenuOpen((v) => !v)}
+          >
+            ⋯
+          </button>
+          {menuOpen && (
+            <div className="boring-agent-menu" role="menu" data-testid="boring-agent-menu">
+              {isUnreadOrAttention ? (
+                <button type="button" role="menuitem" data-testid="mark-read" title="Mark this chat read and clear attention" onClick={() => { void markAgentRead(agent); close(); }}>
+                  Mark read
+                </button>
+              ) : (
+                <button type="button" role="menuitem" data-testid="mark-unread" title="Put this chat back in the team's needs-you list" onClick={() => { void markAgentUnread(agent); close(); }}>
+                  Mark unread
+                </button>
+              )}
+              <button type="button" role="menuitem" data-testid="drawer-search-btn" title="Search transcript, jump between prompts, filter the timeline" onClick={() => { window.dispatchEvent(new CustomEvent("vs:timeline-search", { detail: { agentId: agent.id } })); close(); }}>
+                Search transcript
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="drawer-reload-agent-btn"
+                title="Reload / refresh agent session"
+                disabled={reloadBusy}
+                onClick={() => {
+                  close();
+                  if (DEMO) return;
+                  setReloadBusy(true);
+                  try { runnerReloadTimeline(agent.id); } finally { setReloadBusy(false); }
+                }}
+              >
+                Reload session
+              </button>
+              {canHandoff && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="boring-handoff-btn"
+                  className="btn-brainstorm-restart"
+                  disabled={p.restarting}
+                  title={p.isBs ? "Hand off to a fresh Buddy from the brief" : "Initiate Handoff / Spawn Successor"}
+                  onClick={() => {
+                    close();
+                    if (p.isBs) void p.doRestart(p.planHandedOff ? "handoff" : p.bsUsedTokens >= p.warnTokens ? "warn-80k" : "manual");
+                    else p.onSuccessor?.();
+                  }}
+                >
+                  {p.restarting ? "Handing off…" : p.isBs ? "Handoff to fresh Buddy" : "Spawn successor"}
+                </button>
+              )}
+              {p.isBs && (
+                <>
+                  <button type="button" role="menuitem" data-testid="boring-summary-btn" onClick={() => { p.toggleSummary(); close(); }}>
+                    {p.summaryOpen ? "Hide summary" : "Summary"}
+                  </button>
+                  <button type="button" role="menuitem" data-testid="brainstorm-park-inbox-btn" title="Dump ideas straight into the Idea Inbox (0 tokens)" onClick={() => { p.setInboxPopoverOpen((v) => !v); close(); }}>
+                    Park in Inbox
+                  </button>
+                </>
+              )}
+              <div className="boring-agent-menu-sep" role="separator" />
+              <button type="button" role="menuitem" data-testid="drawer-copy-id-btn" onClick={() => copy("id", agent.id)}>
+                {copied === "id" ? "✓ ID copied" : `Copy ID (${agent.id.slice(0, 8)})`}
+              </button>
+              <button type="button" role="menuitem" data-testid="drawer-copy-cwd-btn" title={agent.cwd} onClick={() => copy("cwd", agent.cwd)}>
+                {copied === "cwd" ? "✓ Path copied" : `Copy path (${shortPath(agent.cwd)})`}
+              </button>
+              <div className="boring-agent-menu-meta muted">{prov.name}{agent.model ? ` · ${agent.model}` : ""} · {ago(agent.updatedAt)}</div>
+              {!running && !agent.archivedAt && (
+                <div className="boring-agent-menu-archive" role="none">
+                  <ConfirmButton label="Archive" armedLabel="Tap to archive" busyLabel="Archiving…" tone="warn" onConfirm={async () => void (await archiveAgent(agent.id))} />
+                </div>
+              )}
+              {!p.chatOnly && (
+                <button type="button" role="menuitem" data-testid="boring-close-btn" onClick={() => { close(); p.onClose(); }}>
+                  Close chat
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </header>
+      {p.isBs && p.inboxPopoverOpen && (
+        <div className="boring-agent-panel" data-testid="brainstorm-inbox-popover">
+          <div className="boring-agent-panel-head">
+            <span className="muted small">One idea per line → Idea Inbox (0 tokens)</span>
+            <button type="button" className="boring-hdr-btn" disabled={p.inboxParking || !p.inboxDumpText.trim()} onClick={() => void p.parkToInbox(p.inboxDumpText, false)}>
+              {p.inboxParking ? "Parking…" : "Park in Inbox"}
+            </button>
+          </div>
+          <textarea
+            rows={3}
+            value={p.inboxDumpText}
+            onChange={(e) => p.setInboxDumpText(e.target.value)}
+            placeholder="One idea per line (Enter to park · Shift+Enter for newline)"
+            onKeyDown={(e) => {
+              if (shouldComposerSubmit(e) && p.inboxDumpText.trim()) {
+                e.preventDefault();
+                void p.parkToInbox(p.inboxDumpText, false);
+              }
+            }}
+          />
+        </div>
+      )}
+      {p.isBs && p.inboxToast && (
+        <div className="boring-agent-panel" role="status" data-testid="brainstorm-inbox-toast">{p.inboxToast}</div>
+      )}
+      {p.isBs && p.summaryOpen && (
+        <div className="boring-agent-panel" data-testid="boring-summary-panel">
+          <div className="boring-agent-panel-head">
+            <code>{p.summaryPath || `docs/brainstorm/${p.laneId}.md`}</code>
+            <span className="muted small">{p.summaryText.length} / 20000 chars</span>
+            <button type="button" className="boring-hdr-btn" disabled={p.summarySaving || p.summaryLoading} onClick={() => void p.saveSummary()}>
+              {p.summarySaving ? "Saving…" : "Save summary"}
+            </button>
+          </div>
+          {p.summaryLoading ? (
+            <div className="muted small">Loading summary…</div>
+          ) : (
+            <textarea rows={6} value={p.summaryText} onChange={(e) => p.setSummaryText(e.target.value)} placeholder="# Brainstorm Summary (Decided / Open / In flight)" />
+          )}
+        </div>
+      )}
+      {strip.length > 0 && (
+        <div className="boring-status-strip" data-testid="boring-status-strip" role="status">
+          {strip.map((s) => (
+            <span key={s.kind} className={`boring-strip-item strip-${s.kind}`} data-strip={s.kind}>{s.text}</span>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}

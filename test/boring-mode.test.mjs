@@ -915,3 +915,48 @@ test("D2 M1 boringSidebarModel: the Bugs lane is counted once, in core.bugs, nev
   const rows = boringLaneTableRows(m, []);
   assert.equal(rows.filter((r) => r.laneId === "_bugs").length + rows.filter((r) => r.laneId === bugsLane).length, bugsLane ? 1 : 1);
 });
+
+// ---- D3a (UX_REVIEW 2.6): BoringAgentHeader ----------------------------------------------------------------
+const d3src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
+const stripCode = transformSync("boringHeaderStrip.ts", d3src("boringHeaderStrip.ts"), { lang: "ts" }).code;
+writeFileSync(join(dir, "boringHeaderStrip.mjs"), stripCode);
+const { boringHeaderStrip, BORING_CTX_WARN_PCT, BORING_STALL_SECONDS } = await import(pathToFileURL(join(dir, "boringHeaderStrip.mjs")).href);
+
+test("D3a boringHeaderStrip: stalled / handoff due / context >=72% are the only strip conditions", () => {
+  const now = Date.parse("2026-01-01T00:10:00Z");
+  const base = { status: "running", updatedAt: "2026-01-01T00:09:59Z", hasPendingPermission: false, ctxPct: 10, planHandedOff: false, nowMs: now };
+  assert.deepEqual(boringHeaderStrip(base), []);
+  assert.equal(BORING_CTX_WARN_PCT, 72);
+  assert.deepEqual(boringHeaderStrip({ ...base, ctxPct: 71.9 }), []);
+  assert.deepEqual(boringHeaderStrip({ ...base, ctxPct: 72 }).map((s) => s.kind), ["context"]);
+  assert.deepEqual(boringHeaderStrip({ ...base, planHandedOff: true }).map((s) => s.kind), ["handoff"]);
+  const old = new Date(now - (BORING_STALL_SECONDS + 5) * 1000).toISOString();
+  assert.deepEqual(boringHeaderStrip({ ...base, updatedAt: old }).map((s) => s.kind), ["stalled"]);
+  assert.deepEqual(boringHeaderStrip({ ...base, updatedAt: old, hasPendingPermission: true }), []);
+  assert.deepEqual(boringHeaderStrip({ ...base, status: "idle", updatedAt: old }), []);
+  assert.deepEqual(boringHeaderStrip({ ...base, updatedAt: old, planHandedOff: true, ctxPct: 90 }).map((s) => s.kind), ["stalled", "handoff", "context"]);
+});
+
+test("D3a: AgentDrawer mounts BoringAgentHeader in boring INSTEAD of DrawerHeader; fun keeps DrawerHeader; testids kept", () => {
+  const drawer = d3src("AgentDrawer.tsx");
+  assert.match(drawer, /vibe === "boring" && !chatOnly \? \(\s*<BoringAgentHeader/);
+  assert.match(drawer, /\) : \(\s*<DrawerHeader\s+agent=\{agent\}/);
+  const hdr = d3src("BoringAgentHeader.tsx");
+  for (const id of ["boring-agent-header", "boring-status-strip", "mark-read", "mark-unread", "drawer-search-btn", "drawer-reload-agent-btn", "drawer-copy-id-btn", "drawer-copy-cwd-btn", "brainstorm-park-inbox-btn", "boring-interrupt-btn", "boring-agent-menu-btn"])
+    assert.ok(hdr.includes(`data-testid="${id}"`), id);
+  // Every action reuses an existing handler: no fetch/new endpoints in the header.
+  assert.ok(!/fetch\(/.test(hdr));
+  for (const h of ["markAgentRead", "markAgentUnread", "stopAgent", "runnerReloadTimeline", "doRestart", "onSuccessor"]) assert.ok(hdr.includes(h), h);
+  // Mark read / Handoff are plain menu items: never the accent-filled .btn.ok.
+  assert.ok(!/className="btn ok/.test(hdr) && !/btn-ok|\bok\b.*accent/.test(hdr));
+});
+
+test("D3a: boring.css section is appended, scoped, and never accent-fills the header actions", () => {
+  const css = d3src("boring.css");
+  const i = css.indexOf("/* ===== D3a (@desk, UX_REVIEW 2.6): BoringAgentHeader ===== */");
+  assert.ok(i > 0 && css.indexOf("/* ===== D3", i + 10) === -1, "section present and last");
+  const sect = css.slice(i);
+  for (const line of sect.split("\n").filter((l) => /^[.a-z@]/.test(l))) if (!line.startsWith("@media")) assert.ok(line.startsWith('html[data-vibe="boring"]'), line.slice(0, 60));
+  assert.ok(!/\.boring-agent-menu[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
+  assert.ok(!/\.boring-hdr-btn[^{]*\{[^}]*background:\s*var\(--accent\)/.test(sect));
+});
