@@ -75,7 +75,8 @@ export function boringSelectionForAgent(view: TeamView | undefined, agentId: str
   for (const pin of pinsForSquad(view).pinned) {
     if (isHubPin(pin)) continue;
     const r = roleIn(pin);
-    if (r) return { laneId: pin.lane.id, role: r };
+    // A lane named after the project (id === team id) is the Desk's own: its members show as Desk rows, not a second "VibeSquad" lane.
+    if (r) return pin.lane.id === view.team.id ? { laneId: "_desk", role: "worker" } : { laneId: pin.lane.id, role: r };
   }
   return null;
 }
@@ -172,8 +173,14 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     needsYou: z.member?.attention && z.member.attention.tone !== "finished" ? 1 : 0,
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
   });
+  // A feature lane whose id is the project id duplicates the hub: fold its members into the Desk instead of a second row.
+  const deskPins = (view ? pinsForSquad(view).pinned : []).filter((p) => !isHubPin(p) && p.lane.id === view?.team.id);
+  const deskWorkers: Pin["workers"] = [];
+  for (const m of [...(zones.hub?.workers ?? []), ...deskPins.flatMap((p) => [p.lead, p.brainstorm, ...(p.workers ?? [])])]) {
+    if (m && !deskWorkers.some((x) => x.agent.id === m.agent.id) && m.agent.id !== zones.overlord.member?.agent.id && m.agent.id !== zones.riffbot.member?.agent.id) deskWorkers.push(m);
+  }
   const core = {
-    deskWorkers: zones.hub?.workers ?? [],
+    deskWorkers,
     overlord: zoneRow("Lead · Overlord", zones.overlord),
     riffbot: zoneRow("Brainstorm · RiffBot", zones.riffbot),
     bugs: {
@@ -187,9 +194,9 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     },
   };
   // 2.1: the hub lane (RiffBot/Overlord plus anything else parked in it) and every lane worker count, so these totals match the project badge.
-  const hubNeedsYou = zones.hub?.needsYou ?? 0;
+  const hubNeedsYou = (zones.hub?.needsYou ?? 0) + deskPins.reduce((n, p) => n + p.needsYou, 0);
   const conversations = (view ? pinsForSquad(view).pinned : [])
-    .filter((p) => !isHubPin(p) && p.lane.id !== bugs.pin?.lane.id) // the Bugs lane has its own desk row: never count it twice
+    .filter((p) => !isHubPin(p) && p.lane.id !== view?.team.id && p.lane.id !== bugs.pin?.lane.id) // the Bugs lane has its own desk row: never count it twice
     .map((pin) => ({
       laneId: pin.lane.id,
       name: boringLaneLabel(pin.lane.name),
@@ -209,7 +216,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   // The project badge (view.needsYou) counts every member; fall back to hub + lanes when a view doesn't carry it.
   const totalNeedsYou = Math.max(view?.needsYou ?? 0, hubNeedsYou + laneTotal + core.bugs.needsYou);
   // Worst state per container (R2.5): red if anything inside errored, else amber. Only collapsed containers show a badge.
-  const deskErr = pinErr(zones.hub) || memberErr(zones.overlord.member) || memberErr(zones.riffbot.member);
+  const deskErr = pinErr(zones.hub) || deskPins.some(pinErr) || memberErr(zones.overlord.member) || memberErr(zones.riffbot.member);
   const projectErr = deskErr || core.bugs.err || conversations.some((c) => c.err);
   return { core, conversations, hubNeedsYou, totalNeedsYou, deskErr, projectErr };
 }
@@ -300,7 +307,7 @@ export function boringLaneTableRows(
     lastEvent: "", age: overlord.age || riffbot.age, sortAge: 0,
   };
   const bugsRow: LaneTableRow = {
-    key: "_bugs", kind: "desk", laneId: "_bugs", label: bugs.label, code: "", brainstorm: bugs.leadRunning ? "running" : "none", lead: "—",
+    key: "_bugs", kind: "desk", laneId: "_bugs", label: bugs.label, code: "", brainstorm: "—", lead: bugs.leadRunning ? "running" : "none",
     workers: workerSummary(bugs.pin?.workers ?? []), needsYou: bugs.needsYou, running: bugs.leadRunning ? 1 : 0, lastEvent: "", age: bugs.age, sortAge: 0,
   };
   return [...lanes, deskRow, bugsRow];
@@ -367,6 +374,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       setSelectedLaneId(land.sel.laneId);
       if (land.sel.role === "worker") setSelectedWorkerId(activeAgentId);
       else { setSelectedRole(land.sel.role); setSelectedWorkerId(null); }
+      revealAgent(land.view, land.sel, activeAgentId);
     }
     setMode(land.mode);
   }, [activeAgentId]);
@@ -407,11 +415,32 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     } else if (m) openAgent(m.agent.id);
     else void onOpenPin(pin);
   };
+  /** Open every parent of a jumped-to agent (project, Desk / lane, idle bucket): an explicit collapse never hides the selected row. */
+  const revealAgent = (v: TeamView, s: { laneId: string; role: Role | "worker" } | null, id: string) => {
+    if (!s) return;
+    const tid = v.team.id;
+    setProjectOpen((o) => ({ ...o, [tid]: true }));
+    if (s.laneId === "_overlord" || s.laneId === "_riffbot" || s.laneId === "_desk") {
+      setDeskOpen((o) => ({ ...o, [tid]: true }));
+      if (s.role === "worker") setDeskWorkersOpen((o) => ({ ...o, [tid]: true }));
+      return;
+    }
+    const key = `${tid}/${s.laneId}`;
+    setLaneOpen((o) => ({ ...o, [key]: true }));
+    if (s.role === "worker") {
+      const m = boringSidebarModel(v);
+      const pin = s.laneId === "_bugs" ? m.core.bugs.pin : m.conversations.find((c) => c.laneId === s.laneId)?.pin;
+      const w = (pin?.workers ?? []).find((x) => x.agent.id === id);
+      if (w && !boringWorkerIsLive(w)) setIdleWorkersOpen((o) => ({ ...o, [key]: true }));
+    }
+  };
   const openNeedsYou = (row: NeedsYouRow) => {
     if (row.teamId !== view?.team.id) onSelectSquad(row.teamId);
     const sel = boringSelectionForAgent(row.view, row.item.id);
     setSelectedLaneId(sel?.laneId ?? null);
     if (sel && sel.role !== "worker") setSelectedRole(sel.role);
+    setSelectedWorkerId(sel?.role === "worker" ? row.item.id : null);
+    revealAgent(row.view, sel, row.item.id);
     setMode("chat");
     openAgent(row.item.id);
   };
@@ -422,13 +451,13 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setMode("chat");
     if (agentId) openAgent(agentId);
   };
-  const pickBugs = () => {
+  const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs) => {
     setSelectedLaneId("_bugs");
     setSelectedRole("brainstorm");
     setSelectedWorkerId(null);
     setMode("chat");
     // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
-    if (core.bugs.pin && core.bugs.agentId) openAgent(core.bugs.agentId);
+    if (b.pin && b.agentId) openAgent(b.agentId);
   };
 
   // Resolve the chat target.
@@ -575,7 +604,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {idle.length > 0 && (
               <>
                 <button type="button" className="boring-idle-toggle boring-worker-idle" data-testid={`boring-workers-idle-${c.laneId}`} aria-expanded={idleOpen} onClick={() => setIdleWorkersOpen((o) => ({ ...o, [key]: !idleOpen }))}>
-                  {idleOpen ? "▾" : "▸"} {idle.length} idle
+                  <span className="boring-idle-chev" aria-hidden="true">{idleOpen ? "▾" : "▸"}</span>{idle.length} idle
                 </button>
                 {idleOpen && idle.map((w) => workerRow(v, c.pin!, c.laneId, w))}
               </>
@@ -592,7 +621,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status} ${glyphCls(status, needsYou > 0 ? "needs-you" : null)}`} />}
         <span className="boring-row-label">{label}</span>
         <span className="boring-conv-age">{age}</span>
-        {badge(needsYou)}
+        {badge(needsYou, memberErr(agentObj ? { agent: agentObj } : null))}
       </button>
     </div>
   );
@@ -635,7 +664,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   };
   const bugsRow = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
     const b = m.core.bugs;
-    const openBugs = () => { if (v.team.id !== activeTeamId) onSelectSquad(v.team.id); pickBugs(); };
+    const openBugs = () => { if (v.team.id !== activeTeamId) onSelectSquad(v.team.id); pickBugs(b); };
     return laneRow(v, { laneId: "_bugs", name: b.label, code: "", pin: b.pin, status: b.pin?.running ? "running" : b.pin?.brainstorm?.agent.status ?? "none", needsYou: b.needsYou, err: b.err, age: b.age, titleTestId: suffix(v, "boring-core-bugs"), onOpen: openBugs });
   };
 
@@ -644,7 +673,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <div className="boring-sidebar-head" data-testid="boring-sidebar-head">
           <span className="boring-sidebar-title" data-testid="boring-sidebar-title">{view?.team.name ?? "No project"}</span>
-          <button type="button" className="boring-search-trigger" data-testid="boring-sidebar-search-btn" title="Search all transcripts" aria-label="Search (Ctrl+K)" onClick={() => openOverlay("search")}>
+          <button type="button" className="boring-search-trigger" data-testid="boring-sidebar-search-btn" title="Command palette (Ctrl+K)" aria-label="Search: open command palette (Ctrl+K)" onClick={() => openOverlay("palette")}>
             <span aria-hidden="true">⌕</span><span>Search</span><kbd className="boring-kbd">Ctrl+K</kbd>
           </button>
         </div>
@@ -665,7 +694,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                   <button type="button" className={"boring-project-row" + (isOn(v, "project") ? " on" : "")} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
                     <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", (v.needsYou ?? 0) > 0 ? "needs-you" : null)}`} />
                     <span className="boring-project-name">{v.team.name}</span>
-                    {!open && badge(v.needsYou ?? 0, m.projectErr)}
+                    {!open && badge(m.totalNeedsYou, m.projectErr)}
                   </button>
                   {active && (
                     <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>

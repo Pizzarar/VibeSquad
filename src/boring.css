@@ -1130,8 +1130,10 @@ html[data-vibe="boring"] .boring-conv-line .boring-core-row { flex: 1 1 auto; mi
 html[data-vibe="boring"] .boring-core-row.on { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
 html[data-vibe="boring"] .boring-desk-sub { margin-left: auto; font-size: var(--t-caption); color: var(--text-3); white-space: nowrap; }
 html[data-vibe="boring"] .boring-conv-row.on:not(:has(.boring-worker-row.on)) > .boring-conv-line { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); border-radius: 6px; }
-html[data-vibe="boring"] .boring-worker-list { padding-left: 16px; }
-html[data-vibe="boring"] .boring-worker-row { padding-left: 4px; }
+html[data-vibe="boring"] .boring-worker-list { padding-left: 16px; } /* children of the lane: same 16px level step as the Desk members */
+html[data-vibe="boring"] .boring-worker-row { padding-left: 20px; } /* 16px chevron slot + 4px, so the worker dot sits one level right of the lane dot */
 html[data-vibe="boring"] .boring-desk-workers .boring-idle-toggle { min-height: 24px; padding-left: 4px; }
+html[data-vibe="boring"] .boring-worker-list > .boring-idle-toggle { display: inline-flex; align-items: center; gap: 0; min-height: 24px; padding: 2px 8px 2px 0; }
+html[data-vibe="boring"] .boring-idle-toggle .boring-idle-chev { flex: 0 0 16px; width: 16px; text-align: center; }
 html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: var(--on-accent); }
-html[data-vibe="boring"][data-theme="light"] .boring-badge.err { background: var(--st-err); color: #ffffff; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge { color: #ffffff !important; }

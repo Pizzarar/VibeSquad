@@ -1075,3 +1075,71 @@ test("R2.6 boringHeaderStrip: the Context strip item is dropped when the meter s
   assert.deepEqual(boringHeaderStrip({ ...base, meterShown: true, canHandoff: true }).map((s) => s.kind), ["context"]);
   assert.deepEqual(boringHeaderStrip(base).map((s) => s.kind), ["context"]);
 });
+
+// ---- R2 fix round: reveal on jump, Bugs closure, hub folded into Desk, palette trigger, light badge --------
+test("R2 M1: Needs-you jump selects the worker and re-opens collapsed project / lane / idle bucket", () => {
+  reset();
+  const view = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1", "idle")] }), lanePin("per")] });
+  globalThis.__agents = new Map([["w1", { id: "w1", title: "Worker One" }]]);
+  let t = render(props(view));
+  byId(t, "boring-conv-toggle-ade").props.onClick(); // expand then collapse again => explicit false
+  byId(render(props(view)), "boring-conv-toggle-ade").props.onClick();
+  byId(render(props(view)), "boring-project-toggle-vs").props.onClick(); // explicit project collapse
+  t = render(props(view));
+  assert.equal(byId(t, "boring-project-lanes-vs"), null);
+  byType(t, "BoringInbox").props.onOpen({ teamId: "vs", view, item: { id: "w1" } });
+  t = render(props(view));
+  assert.ok(byId(t, "boring-project-lanes-vs"), "project re-opened");
+  assert.ok(byId(t, "boring-workers-ade"), "lane re-opened");
+  const on = onRows(t);
+  assert.equal(on.length, 1);
+  assert.match(String(on[0].props.className), /boring-worker-row/); // idle worker revealed in the idle bucket
+  assert.match(JSON.stringify(byId(t, "boring-crumb-agent").props.children), /Worker One/);
+  assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "w1"));
+});
+
+test("R2 M1: Needs-you jump to a hub worker re-opens the collapsed Desk and its workers", () => {
+  reset();
+  const view = squad({ zones: { hub: { lane: { id: "hub" }, workers: [wk("hw", "running")] }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) } });
+  globalThis.__agents = new Map([["hw", { id: "hw", title: "Hub Worker" }]]);
+  byType(render(props(view)), "BoringInbox").props.onOpen({ teamId: "vs", view, item: { id: "hw" } });
+  const t = render(props(view));
+  assert.ok(byId(t, "boring-desk-workers"));
+  assert.match(String(onRows(t)[0].props.className), /boring-worker-row/);
+});
+
+test("R2 M2: Bugs under a non-active expanded project opens THAT project's Bugs agent", () => {
+  reset();
+  const a = squad();
+  const b = { ...squad(), team: { id: "efi", name: "EFI" }, bugs: { pin: lanePin("bugE", { brainstorm: mem("efi-bug-bs") }), leadRunning: false, needsYou: 0 } };
+  const p = props(a, { views: [a, b], onSelectSquad: (id) => globalThis.__calls.push(["select", id]) });
+  byId(render(p), "boring-project-toggle-efi").props.onClick();
+  byId(render(p), "boring-core-bugs-efi").props.onClick();
+  assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "select" || c[0] === "openAgent"), [["select", "efi"], ["openAgent", "efi-bug-bs"]]);
+});
+
+test("R2: a lane named after the project folds into the Desk (no second VibeSquad lane); Bugs table row keeps Lead in Lead", () => {
+  reset();
+  const dup = lanePin("vs", { lead: mem("vs-ld", "running"), workers: [wk("vw", "running")] });
+  const view = squad({ pins: [dup, lanePin("ade")] });
+  const m = boringSidebarModel(view);
+  assert.deepEqual(m.conversations.map((c) => c.laneId), ["ade"]);
+  assert.deepEqual(m.core.deskWorkers.map((w) => w.agent.id).sort(), ["vs-bs", "vs-ld", "vw"]);
+  assert.deepEqual(boringSelectionForAgent(view, "vw"), { laneId: "_desk", role: "worker" });
+  const bugs = boringLaneTableRows(m, []).find((r) => r.key === "_bugs");
+  assert.deepEqual([bugs.brainstorm, bugs.lead], ["—", "running"]);
+});
+
+test("R2: sidebar Search opens the Command Palette (Ctrl+K); idle toggle sits on the chevron column; light badge text is white", () => {
+  reset();
+  const t = render(props(squad()));
+  const b = byId(t, "boring-sidebar-search-btn");
+  assert.match(b.props.title, /Command palette \(Ctrl\+K\)/);
+  b.props.onClick();
+  assert.deepEqual(globalThis.__calls.at(-1), ["openOverlay", "palette"]);
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(css, /\[data-theme="light"\] \.boring-badge \{ color: #ffffff !important; \}/);
+  assert.doesNotMatch(css, /\[data-theme="light"\] \.boring-badge\.err/);
+  assert.match(css, /\.boring-idle-toggle \.boring-idle-chev \{ flex: 0 0 16px; width: 16px/);
+  assert.match(css, /\.boring-worker-row \{ padding-left: 20px;/);
+});
