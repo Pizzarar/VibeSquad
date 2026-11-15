@@ -136,7 +136,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringAgentLanding, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringAgentLanding, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringActiveSelection, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -184,6 +184,12 @@ const props = (view, extra = {}) => ({
 const render = (p) => ((hs.i = 0), BoringApp(p));
 const laneBtn = (t, lane) => walk(byId(t, `boring-conv-${lane}`), (n) => n.props?.className === "boring-conv-title")[0];
 // Header tabs replace the old sidebar role pills: select the lane first, then pick the member tab.
+// R2.1: the Desk is one collapsed row; its Lead · Overlord / Brainstorm · RiffBot rows appear once it is expanded.
+const withDesk = (view) => {
+  let t = render(props(view));
+  if (!byId(t, "boring-core-overlord")) { byId(t, "boring-desk-toggle").props.onClick(); t = render(props(view)); }
+  return t;
+};
 const pickTab = (view, lane, tab) => { laneBtn(render(props(view)), lane).props.onClick(); byId(render(props(view)), `boring-top-${tab}`).props.onClick(); };
 
 test("boringConversationAge: newest updatedAt across brainstorm, lead and workers; empty when none", () => {
@@ -202,13 +208,13 @@ test("boringActiveRole: lead only when the active agent is the pin's lead", () =
 
 test("boringSidebarModel: core triad and conversations (hub excluded) with @code, age and ids", () => {
   const m = boringSidebarModel(squad(), NOW);
-  assert.equal(m.core.overlord.label, "Project Lead · Overlord");
+  assert.equal(m.core.overlord.label, "Lead · Overlord");
   assert.equal(m.core.overlord.status, "running");
   assert.equal(m.core.overlord.needsYou, 1);
   assert.equal(m.core.overlord.age, "120m");
-  assert.equal(m.core.riffbot.label, "Project Brainstorm · RiffBot");
+  assert.equal(m.core.riffbot.label, "Brainstorm · RiffBot");
   assert.equal(m.core.riffbot.needsYou, 0);
-  assert.equal(m.core.bugs.label, "Bugs (@bug)");
+  assert.equal(m.core.bugs.label, "Bugs"); // R2.2: no "(@bug)" suffix
   assert.equal(m.core.bugs.agentId, "bug-bs");
   assert.equal(m.core.bugs.needsYou, 1);
   assert.deepEqual(m.conversations.map((c) => c.laneId), ["ade", "per"]);
@@ -230,10 +236,12 @@ test("boringSidebarModel: a Squad with no pins has no conversations", () => {
 
 test("BoringApp sidebar: CTA, core rows, conversation pills and bottom dock are present", () => {
   reset();
-  const t = render(props(squad()));
-  for (const id of ["boring-sidebar", "boring-new-conv-btn", "boring-core-overlord", "boring-core-riffbot", "boring-core-bugs", "boring-conv-ade", "boring-conv-per", "boring-usage-btn", "boring-settings-btn", "boring-switch-vibespace-btn", "boring-new-project-btn", "boring-project-overview-btn"]) {
+  const t = withDesk(squad());
+  // R2.3: the standalone Overview button is gone (the project row opens it); Search lives in the sidebar header.
+  for (const id of ["boring-sidebar", "boring-new-conv-btn", "boring-sidebar-search-btn", "boring-core-overlord", "boring-core-riffbot", "boring-core-bugs", "boring-conv-ade", "boring-conv-per", "boring-usage-btn", "boring-settings-btn", "boring-switch-vibespace-btn", "boring-new-project-btn"]) {
     assert.ok(byId(t, id), id);
   }
+  assert.equal(byId(t, "boring-project-overview-btn"), null);
   for (const gone of ["boring-conv-brainstorm-ade", "boring-conv-lead-ade", "boring-conv-lead-per"]) assert.equal(byId(t, gone), null, `${gone} (role pills moved to header tabs)`);
   byId(t, "boring-new-conv-btn").props.onClick();
   byId(t, "boring-settings-btn").props.onClick();
@@ -286,7 +294,7 @@ test("Brainstorm pill opens the agent; with no session it starts one via onOpenP
 test("Overlord row with no Overlord offers Start Overlord; Bugs row without a pin creates one", async () => {
   reset();
   const view = squad({ zones: { hub: { lane: { id: "hub" } }, riffbot: zone(null), overlord: zone(null) }, bugs: { pin: null, leadRunning: false, needsYou: 0 } });
-  byId(render(props(view)), "boring-core-overlord").props.onClick();
+  byId(withDesk(view), "boring-core-overlord").props.onClick();
   const t = render(props(view));
   assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Overlord is running/);
   byId(t, "boring-empty-cta").props.onClick();
@@ -341,11 +349,12 @@ test("Usage & Workflows and Project Overview swap the main pane", () => {
   assert.ok(byId(t, "boring-usage-view"));
   assert.ok(byType(t, "UsageDashboard"));
   assert.equal(byId(t, "boring-chat-column"), null);
-  byId(t, "boring-project-overview-btn").props.onClick();
+  byId(t, "boring-project-header-vs").props.onClick();
   t = render(props(view));
   assert.ok(byId(t, "boring-project-view"));
   assert.ok(byId(t, "boring-lane-table"));
-  for (const id of ["_overlord", "_riffbot", "_bugs", "ade", "per"]) assert.ok(byId(t, `boring-lane-row-${id}`), id);
+  for (const id of ["_desk", "_bugs", "ade", "per"]) assert.ok(byId(t, `boring-lane-row-${id}`), id);
+  for (const gone of ["_overlord", "_riffbot"]) assert.equal(byId(t, `boring-lane-row-${gone}`), null, `${gone} merged into the single Desk row`);
   assert.equal(byId(t, "boring-card-grid"), null);
   assert.equal(byId(t, "boring-lane-map"), null);
   // Default tab renders neither IdeaInbox nor TeamFeed.
@@ -358,7 +367,7 @@ test("Usage & Workflows and Project Overview swap the main pane", () => {
 
 const cardsOf = (t) => walk(t, (n) => /boring-lane-card/.test(String(n.props?.className ?? "")));
 const gotoOverview = (view) => {
-  byId(render(props(view)), "boring-project-overview-btn").props.onClick();
+  byId(render(props(view)), "boring-project-header-vs").props.onClick();
   return render(props(view));
 };
 
@@ -368,7 +377,7 @@ test("D2 S9: lane table rows are urgency-sorted (needs you first) and cells open
   const t = gotoOverview(view);
   const rows = walk(t, (n) => /^boring-lane-row-/.test(String(n.props?.["data-testid"] ?? ""))).map((n) => n.props["data-testid"]);
   assert.equal(rows[0], "boring-lane-row-ade");
-  assert.deepEqual(rows.slice(-3), ["boring-lane-row-_overlord", "boring-lane-row-_riffbot", "boring-lane-row-_bugs"]);
+  assert.deepEqual(rows.slice(-2), ["boring-lane-row-_desk", "boring-lane-row-_bugs"]);
   const row = byId(t, "boring-lane-row-ade");
   assert.match(JSON.stringify(row.props.className), /attn/);
   assert.match(JSON.stringify(row.props.children), /Needs you/);
@@ -384,7 +393,11 @@ test("D2 S9: boringLaneTableRows sorts needs-you > running > recent and joins la
   assert.equal(rows[0].laneId, "ade");
   assert.equal(rows.find((r) => r.laneId === "ade").lastEvent, "shipped it");
   assert.equal(rows.find((r) => r.laneId === "per").lastEvent, "");
-  assert.deepEqual(rows.filter((r) => r.kind === "desk").map((r) => r.laneId), ["_overlord", "_riffbot", "_bugs"]);
+  assert.deepEqual(rows.filter((r) => r.kind === "desk").map((r) => r.laneId), ["_desk", "_bugs"]);
+  const desk = rows.find((r) => r.laneId === "_desk");
+  assert.equal(desk.label, "Desk");
+  assert.equal(desk.lead, "running"); // Overlord
+  assert.equal(desk.brainstorm, "idle"); // RiffBot
   for (let i = 1; i < rows.filter((r) => r.kind === "lane").length; i++) assert.ok(rows[i - 1].needsYou >= rows[i].needsYou);
 });
 
@@ -424,7 +437,7 @@ test("B5f: Idea Inbox and Standup Feed counts preload on BoringApp mount so firs
     const chat = render(props(view)); // mounts on the Overview
     assert.ok(byId(chat, "boring-project-view"));
     await new Promise((r) => setTimeout(r, 0));
-    byId(chat, "boring-project-overview-btn").props.onClick();
+    byId(chat, "boring-project-header-vibesquad").props.onClick();
     const t = render(props(view)); // very first Overview render, no tab click
     assert.ok(byId(t, "boring-project-view"));
     assert.match(JSON.stringify(byId(t, "boring-tab-inbox").props.children), /Idea Inbox \(234\)/);
@@ -589,10 +602,10 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   // B6b
   assert.match(ade, /data-testid="boring-project-tree"/);
   assert.match(ade, /boring-project-header-\$\{v\.team\.id\}/);
-  assert.match(ade, /boring-core-group boring-trinity-card/);
-  assert.match(ade, />Project desk</);
+  // R2.1: one tree shape; the detached bottom Project desk / Lanes sections are gone.
+  assert.match(ade, /boring-desk-block/);
+  assert.doesNotMatch(ade, /boring-core-group|boring-conv-list|boring-lanes-label|boring-project-overview-btn|>Project desk</);
   assert.doesNotMatch(ade, /TRINITY/);
-  assert.match(ade, /data-testid="boring-lanes-label"/);
   assert.doesNotMatch(ade, /<select/);
   // B6c
   assert.doesNotMatch(ade, /BORING_OVERVIEW_LAYOUT_KEY|boring-lane-map|boring-layout-/);
@@ -681,9 +694,9 @@ test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid
   }
   const src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const ade = src("BoringAde.tsx");
-  for (const text of ["+ New lane", "Project Brainstorm · RiffBot", "Project Lead · Overlord", "Project desk</span>"]) assert.ok(ade.includes(text), text);
+  for (const text of ["+ New lane", "Brainstorm · RiffBot", "Lead · Overlord", ">Desk<"]) assert.ok(ade.includes(text), text);
   for (const gone of ["New Conversation", "TRINITY", "📊", "🔍"]) assert.ok(!ade.includes(gone), gone);
-  for (const id of ["boring-new-conv-btn", "boring-core-group", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
+  for (const id of ["boring-new-conv-btn", "boring-sidebar-search-btn", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
   for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(id), id);
   assert.ok(ade.includes("boring-conv-${c.laneId}"));
   const perm = src("PermissionCard.tsx");
@@ -709,14 +722,22 @@ test("D2 2.1 boringSidebarModel: hub-lane needsYou and lane-worker alerts are co
   assert.equal(boringSidebarModel({ ...v, needsYou: 0 }, NOW).totalNeedsYou, 2 + 1 + m.core.bugs.needsYou);
 });
 
-test("D2 2.1 BoringApp: Project desk label and Overview button carry the hub / total badges", () => {
+test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted by worst state", () => {
   reset();
   const v = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 2 }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) }, needsYou: 5 });
-  const t = render(props(v));
-  const label = JSON.stringify(byId(t, "boring-trinity-label").props.children);
-  assert.match(label, /"children":2/);
-  // Painter 5: counts live on collapsed containers only, so the Overview row carries no badge.
-  assert.doesNotMatch(JSON.stringify(byId(t, "boring-project-overview-btn").props.children), /"children":5/);
+  let t = render(props(v));
+  // Collapsed Desk carries the hub count; the expanded project row carries none.
+  assert.match(JSON.stringify(byId(t, "boring-desk-row").props.children), /"children":2/);
+  assert.doesNotMatch(JSON.stringify(byId(t, "boring-project-header-vs").props.children), /"children":5/);
+  byId(t, "boring-desk-toggle").props.onClick();
+  t = render(props(v));
+  assert.doesNotMatch(JSON.stringify(byId(t, "boring-desk-row").props.children), /badge/);
+  // Worst state: an errored member turns the collapsed container red (err), otherwise amber.
+  reset();
+  const bad = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 1 }, riffbot: zone(mem("rb", "idle", ago(2), { tone: "error" })), overlord: zone(mem("ov")) } });
+  assert.equal(boringSidebarModel(bad, NOW).deskErr, true);
+  assert.match(JSON.stringify(byId(render(props(bad)), "boring-desk-row").props.children), /boring-badge err/);
+  assert.match(JSON.stringify(byId(render(props(v)), "boring-desk-row").props.children), /boring-badge"/);
 });
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
@@ -793,7 +814,7 @@ test("D2 2.2 BoringInbox: labelled NEEDS YOU (never Inbox), inline Allow/Deny on
 
 test("D2 2.2 BoringApp mounts NEEDS YOU at the top of the sidebar; selection derives from the agent; no new CSS outside boring scope", () => {
   const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
-  assert.ok(ade.indexOf("<BoringInbox") > ade.indexOf('data-testid="boring-new-conv-btn"'));
+  assert.ok(ade.indexOf("<BoringInbox") > ade.indexOf('data-testid="boring-sidebar-search-btn"'));
   assert.ok(ade.indexOf("<BoringInbox") < ade.indexOf('data-testid="boring-project-tree"'));
 });
 
@@ -872,6 +893,7 @@ test("D2 BoringApp: a lane expands to live workers with idle ones collapsed to '
   const other = { ...squad(), team: { id: "efi", name: "EFI" }, pins: [lanePin("arc")] };
   const switched = [];
   const p2 = (v) => props(v, { views: [squad(), other], onSelectSquad: (id) => switched.push(id) });
+  // R2.2: the name opens that project's Overview (switching Squad); only the chevron toggles expansion.
   byId(render(p2(squad())), "boring-project-header-efi").props.onClick();
   assert.deepEqual(switched, ["efi"]);
   const t3 = render(p2(other));
@@ -995,4 +1017,61 @@ test("D3a fix: every testid DrawerHeader exposed is present in the Normal path (
   // Bars/session actions are the existing components, not reimplementations.
   const normal = d3src("BoringAgentHeader.tsx");
   for (const c of ["NeedsYouControls", "HardeningBar", "SessionActions", "AttachFiles"]) assert.match(normal, new RegExp(`<${c} `));
+});
+
+// ---- R2.1: one derived selection feeds the sidebar `.on` row and the breadcrumb ---------------------------
+const onRows = (t) => walk(t, (n) => /(^|\s)on(\s|$)/.test(String(n.props?.className ?? "")) && /boring-(project-row|core-row|conv-row|worker-row)/.test(String(n.props?.className ?? "")));
+
+test("R2.1 boringActiveSelection: follows the agent on screen across projects; worker is the last crumb", () => {
+  const a = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1")] }), lanePin("per")] });
+  const other = { ...squad(), team: { id: "efi", name: "EFI" }, pins: [lanePin("arc", { workers: [wk("e1", "running", null, "Fixer")] })], zones: { hub: { lane: { id: "hub" } }, riffbot: zone(mem("rb2")), overlord: zone(mem("ov2")) }, bugs: { pin: null, leadRunning: false, needsYou: 0 } };
+  const base = { mode: "chat", views: [a, other], teamId: "vs", agentId: null, laneId: null, role: "brainstorm", workerId: null };
+  assert.equal(boringActiveSelection({ ...base, mode: "project" }).rowKey, "vs|project");
+  assert.equal(boringActiveSelection({ ...base, mode: "usage" }).rowKey, null);
+  const w = boringActiveSelection({ ...base, agentId: "w1", agentTitle: "W1", laneId: "ade", workerId: "w1" });
+  assert.deepEqual([w.rowKey, w.agentLabel, w.role], ["vs|worker:w1", "W1", "worker"]);
+  // Ctrl+J into another project while state still points at the old one: the agent wins (team, lane, role).
+  const j = boringActiveSelection({ ...base, agentId: "e1", agentTitle: "Fixer", laneId: "ade" });
+  assert.deepEqual([j.teamId, j.laneId, j.rowKey, j.agentLabel], ["efi", "arc", "efi|worker:e1", "Fixer"]);
+  assert.equal(boringActiveSelection({ ...base, agentId: "ov", laneId: "x" }).rowKey, "vs|desk:lead");
+  assert.equal(boringActiveSelection({ ...base, agentId: "ade-ld" }).agentLabel, "Lead");
+  // No agent on screen (Start card): lane state is the fallback.
+  assert.equal(boringActiveSelection({ ...base, laneId: "_bugs" }).rowKey, "vs|lane:_bugs");
+});
+
+test("R2.1 sidebar: exactly one row is .on and the breadcrumb agrees (Overview, worker, project switch)", () => {
+  reset();
+  const view = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1", "running")] }), lanePin("per")] });
+  globalThis.__agents = new Map([["w1", { id: "w1", title: "Worker One" }]]);
+  let t = render(props(view));
+  assert.equal(onRows(t).length, 1); // Overview: the project row
+  assert.match(JSON.stringify(byId(t, "boring-crumb-lane").props.children), /Overview/);
+  byId(t, "boring-conv-toggle-ade").props.onClick();
+  byId(render(props(view)), "boring-worker-w1").props.onClick();
+  t = render(props(view));
+  const on = onRows(t);
+  assert.equal(on.length, 1);
+  assert.match(String(on[0].props.className), /boring-worker-row/);
+  assert.match(JSON.stringify(byId(t, "boring-crumb-agent").props.children), /Worker One/);
+  assert.doesNotMatch(JSON.stringify(byId(t, "boring-breadcrumb")), /Brainstorm/);
+});
+
+test("R2.5: every row has the fixed 16px chevron column; hub workers hang off the Desk", () => {
+  reset();
+  const view = squad({ zones: { hub: { lane: { id: "hub" }, workers: [wk("hw", "running")] }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) } });
+  const t = withDesk(view);
+  assert.ok(byId(t, "boring-desk-workers-toggle"));
+  assert.deepEqual(boringSelectionForAgent(view, "hw"), { laneId: "_desk", role: "worker" });
+  const cols = walk(t, (n) => /boring-chevron-btn/.test(String(n.props?.className ?? "")));
+  assert.ok(cols.length >= 6); // project, desk, overlord, riffbot, hub workers, bugs, lanes
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(css, /\.boring-chevron-btn \{ flex: 0 0 16px; width: 16px; min-width: 16px/);
+  assert.match(css, /\.boring-badge\.err \{ background: var\(--st-err\)/);
+});
+
+test("R2.6 boringHeaderStrip: the Context strip item is dropped when the meter shows, unless Hand off is available", () => {
+  const base = { status: "idle", updatedAt: null, hasPendingPermission: false, ctxPct: 80, planHandedOff: false, nowMs: NOW };
+  assert.deepEqual(boringHeaderStrip({ ...base, meterShown: true }), []);
+  assert.deepEqual(boringHeaderStrip({ ...base, meterShown: true, canHandoff: true }).map((s) => s.kind), ["context"]);
+  assert.deepEqual(boringHeaderStrip(base).map((s) => s.kind), ["context"]);
 });

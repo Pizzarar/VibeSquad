@@ -1103,3 +1103,35 @@ html[data-vibe="boring"] .boring-ctx-body .changes-file-header .btn.bad:hover, h
 html[data-vibe="boring"] .boring-ctx-body .changes-commit-box { display: flex; flex-wrap: nowrap; gap: 8px; width: 100%; box-sizing: border-box; }
 html[data-vibe="boring"] .boring-ctx-body .changes-commit-msg { flex: 1 1 0; min-width: 0; width: auto; box-sizing: border-box; }
 html[data-vibe="boring"] .boring-ctx-body .changes-commit-box .btn { flex: 0 0 auto; }
+
+/* ===== R2 sidebar (@desk unit-desk-r2-sidebar): one tree shape, search header, Projects heading, 16px chevron column ===== */
+html[data-vibe="boring"] .boring-sidebar-head { display: flex; flex-direction: column; gap: 8px; padding: 2px 0 4px; }
+html[data-vibe="boring"] .boring-sidebar-title { font-size: var(--t-body); font-weight: 600; color: var(--text-1); padding: 0 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-search-trigger { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--row-h); padding: 4px 12px; border: 1px solid var(--border); border-radius: 6px !important; background: var(--surface-2, var(--panel)); color: var(--text-2); font: inherit; font-size: var(--t-small); cursor: pointer; text-align: left; }
+html[data-vibe="boring"] .boring-search-trigger:hover { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-search-trigger .boring-kbd { margin-left: auto; }
+html[data-vibe="boring"] .boring-section-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 4px 0 10px; }
+html[data-vibe="boring"] .boring-section-head .boring-section-label { padding: 0; }
+html[data-vibe="boring"] .boring-icon-btn { width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px !important; background: transparent; color: var(--text-2); font: inherit; font-size: var(--t-body); line-height: 1; cursor: pointer; }
+html[data-vibe="boring"] .boring-icon-btn:hover, html[data-vibe="boring"] .boring-icon-btn:focus-visible { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-project-line { gap: 0; }
+html[data-vibe="boring"] .boring-project-line .boring-project-row { flex: 1 1 auto; min-width: 0; padding-left: 4px; }
+html[data-vibe="boring"] .boring-project-line .boring-project-row.on { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-vibe="boring"] .boring-lane-add { flex: 0 0 auto; margin-left: 4px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px !important; background: transparent; color: var(--text-2); font: inherit; font-size: var(--t-caption); cursor: pointer; opacity: 0; }
+html[data-vibe="boring"] .boring-project-line:hover .boring-lane-add, html[data-vibe="boring"] .boring-lane-add:focus-visible, html[data-vibe="boring"] .boring-project-row.on + .boring-lane-add { opacity: 1; }
+html[data-vibe="boring"] .boring-lane-add:hover { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-overview-add { margin-left: auto; opacity: 1; min-height: 32px; font-size: var(--t-small); }
+html[data-vibe="boring"] .boring-overview-bar { display: flex; align-items: center; gap: 12px; }
+html[data-vibe="boring"] .boring-chevron-btn { flex: 0 0 16px; width: 16px; min-width: 16px; padding: 0; }
+html[data-vibe="boring"] .boring-chevron-spacer { display: inline-block; cursor: default; }
+html[data-vibe="boring"] .boring-project-lanes { padding-left: 16px; }
+html[data-vibe="boring"] .boring-desk-children { padding-left: 16px; display: flex; flex-direction: column; gap: 1px; }
+html[data-vibe="boring"] .boring-conv-line .boring-core-row { flex: 1 1 auto; min-width: 0; padding-left: 4px; }
+html[data-vibe="boring"] .boring-core-row.on { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
+html[data-vibe="boring"] .boring-desk-sub { margin-left: auto; font-size: var(--t-caption); color: var(--text-3); white-space: nowrap; }
+html[data-vibe="boring"] .boring-conv-row.on:not(:has(.boring-worker-row.on)) > .boring-conv-line { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); border-radius: 6px; }
+html[data-vibe="boring"] .boring-worker-list { padding-left: 16px; }
+html[data-vibe="boring"] .boring-worker-row { padding-left: 4px; }
+html[data-vibe="boring"] .boring-desk-workers .boring-idle-toggle { min-height: 24px; padding-left: 4px; }
+html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: var(--on-accent); }
+html[data-vibe="boring"][data-theme="light"] .boring-badge.err { background: var(--st-err); color: #ffffff; }
