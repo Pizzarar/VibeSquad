@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { toAgent } from "./backend/runner-backend.mjs";
+import { linesFromEndSync } from "./log-tail.mjs";
 import { loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 
 export const DRAIN_WINDOW_MS = 30 * 60000; // D2: a rerun this soon after a deferral needs every named lead's drain
@@ -104,19 +105,28 @@ export function deferralChain(dir, { now = Date.now(), maxAgeMs = DONE_CHAIN_MAX
   return { latest, since: chain[chain.length - 1].startedAt, leads: [...leads.values()], latestLeads: latest.deferred.leads ?? [] };
 }
 
-/** Lead ids that logged `restart-feedback: drained restart` at or after `since`, from each team's log.jsonl under vsHome. */
+/** Team-log lines are appended with a ts taken just before the append, so writers can land a little out of order. */
+export const DRAIN_LOG_SLACK_MS = 5 * 60000;
+
+/**
+ * Lead ids that logged `restart-feedback: drained restart` at or after `since`, from each team's log.jsonl under vsHome.
+ * Reads each log from the end (idea-233): once a line is stamped more than DRAIN_LOG_SLACK_MS before `since`, every
+ * older line is too (the log is append-only), so reading stops there instead of parsing the whole multi-MB log.
+ */
 export function drainedLeadIds(vsHome, teamIds, since) {
   const sinceMs = Date.parse(since ?? "") || 0;
+  const stopMs = sinceMs - DRAIN_LOG_SLACK_MS;
   const out = new Set();
   for (const team of new Set(teamIds)) {
-    let raw = "";
-    try { raw = fs.readFileSync(path.join(vsHome, "teams", String(team), "log.jsonl"), "utf8"); } catch { continue; }
-    for (const line of raw.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let e;
-      try { e = JSON.parse(line.replace(/^﻿/, "")); } catch { continue; }
-      if (e?.type === "metric" && DRAINED_RE.test(String(e.text ?? "")) && (Date.parse(e.ts ?? "") || 0) >= sinceMs) out.add(String(e.agent ?? ""));
-    }
+    try {
+      for (const line of linesFromEndSync(path.join(vsHome, "teams", String(team), "log.jsonl"))) {
+        let e;
+        try { e = JSON.parse(line.replace(/^﻿/, "")); } catch { continue; }
+        const ts = Date.parse(e?.ts ?? "");
+        if (ts < stopMs) break; // NaN (no/garbled ts) never stops the scan
+        if (e?.type === "metric" && ts >= sinceMs && DRAINED_RE.test(String(e.text ?? ""))) out.add(String(e.agent ?? ""));
+      }
+    } catch { continue; } // no log for this Squad
   }
   return out;
 }
