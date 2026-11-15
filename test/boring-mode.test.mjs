@@ -135,7 +135,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringConversationAge, boringActiveRole, boringSidebarModel, boringNodeStateClass, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -198,11 +198,11 @@ test("boringActiveRole: lead only when the active agent is the pin's lead", () =
 
 test("boringSidebarModel: core triad and conversations (hub excluded) with @code, age and ids", () => {
   const m = boringSidebarModel(squad(), NOW);
-  assert.equal(m.core.overlord.label, "★ Overlord");
+  assert.equal(m.core.overlord.label, "Project Lead · Overlord");
   assert.equal(m.core.overlord.status, "running");
   assert.equal(m.core.overlord.needsYou, 1);
   assert.equal(m.core.overlord.age, "120m");
-  assert.equal(m.core.riffbot.label, "RiffBot");
+  assert.equal(m.core.riffbot.label, "Project Brainstorm · RiffBot");
   assert.equal(m.core.riffbot.needsYou, 0);
   assert.equal(m.core.bugs.label, "Bugs (@bug)");
   assert.equal(m.core.bugs.agentId, "bug-bs");
@@ -453,7 +453,7 @@ test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek
   assert.match(css, /--bg-elev: var\(--panel\)/);
   assert.match(css, /--bg-card: var\(--panel\)/);
   assert.match(css, /--bg-hover: var\(--panel-hi\)/);
-  assert.match(css, /--accent: var\(--cyan\)/);
+  assert.match(css, /--accent: #9b72e8/);
   assert.match(css, /--bevel: none; --bevel-in: none; --hard: none; --bayer: none/);
   assert.match(css, /border-width: 0;\s+border-color: transparent/);
   assert.match(css, /inset 3px 0 0 var\(--cyan\)/);
@@ -466,7 +466,7 @@ test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek
   assert.match(css, /\.signal,[\s\S]*?border-radius: 50% !important/);
   assert.match(css, /\.boring-lane-card \{[^}]*border-radius: 14px !important/);
   assert.match(css, /\.drawer-head \.drawer-title \{ order: 1; flex: 1 0 100%/);
-  assert.match(css, /\.decision-card \.dc-summary,[\s\S]*?font-size: clamp\(14px, 0\.45vw \+ 12px, 18px\) !important; font-weight: 400/);
+  assert.match(css, /\.decision-card \.dc-summary,[\s\S]*?font-size: var\(--t-ui\) !important; font-weight: 400/);
   assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.role-tag,[\s\S]*?drawer-copy-cwd-btn[^{]*\{ display: none !important/);
   assert.match(ade, /Standup Feed \(\$\{feedCount\}\)/);
   assert.match(ade, /Idea Inbox \(\$\{inboxCount\}\)/);
@@ -491,7 +491,6 @@ test("B2r boring.css: system fonts, full-height chat geometry, lane-only role pi
   assert.match(css, /\.boring-conv-row:not\(\.on\) \.boring-role-pills \{ display: none/);
   assert.match(css, /\.boring-card-grid \{[^}]*repeat\(auto-fit, minmax\(clamp\(/);
   assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.successor-bar/);
-  assert.ok(!/min-height: 32px/.test(css));
 });
 
 test("B2r: Details toggle lives in the topbar (not the sidebar) and the chat column carries boring-details-open", () => {
@@ -503,7 +502,7 @@ test("B2r: Details toggle lives in the topbar (not the sidebar) and the chat col
 test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => {
   const read = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const fr = read("FirstRunModal.tsx"), app = read("App.tsx"), css = read("boring.css");
-  assert.match(ade, /✦ Switch to Psycho/);
+  assert.match(ade, /Switch to Psycho/);
   assert.doesNotMatch(ade + fr + app, /Switch to Vibespace|Hypnospace/);
   assert.match(app, /data-testid="toolbar-vibe-toggle"\s+title="Switch to Normal mode"/);
   assert.match(app, /Normal mode\n/);
@@ -517,13 +516,13 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.ok((app.match(/\{overlays\}/g) ?? []).length >= 2);
   assert.match(css, /\.composer \.send,[\s\S]*background: var\(--accent\) !important/);
   assert.match(css, /#475569 !important/);
-  assert.match(css, /clamp\(14px, 0\.45vw \+ 12px, 18px\); line-height: 1\.55/);
+  assert.match(css, /--t-body: 15px; --lh-body: 24px/);
   assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
   assert.match(css, /--accent: var\(--cyan\)/);
-  assert.doesNotMatch(css, /@media/);
+  assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replace("@media (prefers-reduced-motion: reduce)", ""), /@media/);
   assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
   assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none !important/);
-  assert.match(css, /\.drawer-head \.drawer-title \{ font-size: clamp\(16px/);
+  assert.match(css, /\.drawer-head \.drawer-title \{ font-size: var\(--t-title\) !important/);
   assert.match(css, /\.composer-row > \.btn:not\(\.ghost\):not\(\.warn\)/);
   assert.doesNotMatch(css, /not\(\.boring-details-open\) \.(drawer-actions|brainstorm-ctx-actions)/);
 });
@@ -593,7 +592,8 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.match(ade, /data-testid="boring-project-tree"/);
   assert.match(ade, /boring-project-header-\$\{v\.team\.id\}/);
   assert.match(ade, /boring-core-group boring-trinity-card/);
-  assert.match(ade, /TRINITY · COMMAND/);
+  assert.match(ade, />Project desk</);
+  assert.doesNotMatch(ade, /TRINITY/);
   assert.match(ade, /data-testid="boring-lanes-label"/);
   assert.doesNotMatch(ade, /<select/);
   // B6c
@@ -602,9 +602,8 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.match(ade, /data-testid="boring-lane-map"/);
   for (const id of ["core-overlord", "core-riffbot", "core-bugs"]) assert.ok(ade.includes(`boring-map-${id}`));
   // B6d
-  assert.match(css, /--boring-sunset: linear-gradient\(100deg/);
-  assert.match(css, /--boring-wash: radial-gradient/);
-  assert.match(css, /\.boring-main \{ background: var\(--boring-wash\)/);
+  assert.doesNotMatch(css, /--boring-sunset|--boring-wash|radial-gradient/);
+  assert.match(css, /\.boring-main \{ background: var\(--surface-0\)/);
   assert.match(ade, /className="boring-surreal-motif"/);
 });
 
@@ -678,4 +677,38 @@ test("idea-246 review: a closed Buddy shows the Start card, not its drawer (reso
   const t = render(props(view));
   assert.ok(byId(t, "boring-empty-card"));
   assert.equal(byType(t, "AgentDrawer"), null);
+});
+
+
+test("D1: type + colour tokens, no vw type, flat canvas, measure and row density", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  for (const [t, v] of [["caption", "11px"], ["small", "12px"], ["ui", "13px"], ["body", "15px"], ["mono", "13px"], ["title", "17px"], ["page", "20px"]]) assert.ok(css.includes(`--t-${t}: ${v}`), t);
+  assert.ok(!css.includes("font-size: clamp("), "no clamp()/vw font sizes");
+  for (const t of ["--surface-0", "--surface-1", "--surface-2", "--surface-3", "--surface-sunken", "--border-strong", "--text-1", "--text-2", "--text-3", "--focus", "--st-run", "--st-attn", "--st-err", "--st-done", "--st-ok"]) assert.ok(css.includes(t + ":"), t);
+  assert.ok(css.includes("--surface-0: #f6f4f9; --surface-1: #ffffff"), "neutral light surfaces");
+  assert.ok(css.includes("--measure-col: 880px") && css.includes("--measure-prose: 760px"));
+  assert.ok(css.includes("--row-h: 32px"));
+  assert.ok(css.includes("@media (pointer: coarse) { html[data-vibe=\"boring\"] { --row-h: 40px; } }"));
+  assert.ok(/\.boring-app::before \{[^}]*height: 2px; background: var\(--titlebar\)/.test(css));
+  assert.ok(!/--boring-sunset|--boring-wash/.test(css));
+  for (const g of ["run", "attn", "err", "stalled", "idle", "done"]) assert.ok(css.includes(`.boring-dot.st-${g}`), g);
+  assert.ok(css.includes('.perm-card .btn.perm-deny::after { content: "…"'));
+  assert.ok(css.includes(".perm-deny-msg { order: 9; flex: 1 1 100%"));
+});
+
+test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid", () => {
+  for (const [status, tone, want] of [["running", null, "run"], ["idle", "permission", "attn"], ["idle", "needs-you", "attn"], ["running", "error", "err"], ["error", null, "err"], ["stalled", null, "stalled"], ["idle", "finished", "done"], ["idle", null, "idle"], ["none", null, "idle"]]) {
+    assert.equal(boringStateGlyph(status, tone), want, `${status}/${tone}`);
+  }
+  const src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
+  const ade = src("BoringAde.tsx");
+  for (const text of ["+ New lane", "Project Brainstorm · RiffBot", "Project Lead · Overlord", "Ctrl+K", "Ctrl+J", ">Project desk<"]) assert.ok(ade.includes(text), text);
+  for (const gone of ["New Conversation", "TRINITY", "📊", "🔍"]) assert.ok(!ade.includes(gone), gone);
+  for (const id of ["boring-new-conv-btn", "boring-core-group", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
+  for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(id), id);
+  assert.ok(ade.includes("boring-conv-${c.laneId}"));
+  const perm = src("PermissionCard.tsx");
+  for (const c of ["perm-card", "perm-allow\"", "perm-allow-secondary", "perm-deny"]) assert.ok(perm.includes(c), c);
+  assert.ok(perm.includes('data-testid="perm-deny-btn"'));
+  assert.ok(src("UsageDashboard.tsx").includes('usePref("app.vibe")'));
 });

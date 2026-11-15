@@ -230,7 +230,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
   };
 
   return (
-    <div className="perm NeedsYouHighlight" style={{ flexDirection: "column", alignItems: "stretch" }}>
+    <div className="perm NeedsYouHighlight perm-card" data-testid="perm-card" style={{ flexDirection: "column", alignItems: "stretch" }}>
       <div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
           <div style={{ minWidth: 0, flex: 1 }}>
@@ -591,14 +591,14 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
             </button>
           ))}
           {!p.actions?.length && (
-            <button className="btn ok" disabled={submitting} onClick={() => void doRespond(p.id, { behavior: "allow" })}>
+            <button className="btn ok perm-allow" data-testid="perm-allow-btn" disabled={submitting} onClick={() => void doRespond(p.id, { behavior: "allow" })}>
               Allow
             </button>
           )}
           {suggestions.map((s: any, i: number) => (
             <button
               key={i}
-              className="btn ok"
+              className="btn ok perm-allow-secondary"
               data-testid="perm-allow-suggestion"
               data-scope={suggestionScope(s)}
               disabled={submitting}
@@ -609,7 +609,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           ))}
           {(p.name ?? p.title) && (
             <button
-              className="btn ghost"
+              className="btn ghost perm-allow-secondary"
               data-testid="perm-allow-session"
               disabled={submitting}
               onClick={handleAllowSession}
@@ -617,7 +617,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               Allow for session
             </button>
           )}
-          <button className="btn bad" data-testid="perm-deny-btn" disabled={submitting} onClick={handleDeny}>
+          <button className="btn bad perm-deny" data-testid="perm-deny-btn" disabled={submitting} onClick={handleDeny}>
             Deny
           </button>
           <input

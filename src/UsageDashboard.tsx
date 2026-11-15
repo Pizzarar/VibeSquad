@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
+import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
 import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
@@ -48,6 +49,8 @@ type TriageCrtProps = {
 
 /** CRT mail terminal: perfection / inbox triage cards and usage-review bullets with 1-click Accept / Reject. */
 function TriageCrt({ now, review, running, status, error, onInterval, onRun }: TriageCrtProps) {
+  const [vibe] = usePref("app.vibe");
+  const plain = vibe === "boring"; // D1 copy pass: Normal mode drops the MAIL:// / [ALL] terminal flavour
   const all = useInboxCards();
   const cards = useMemo(() => bugInboxCards(all), [all]);
   const [filter, setFilter] = useState<InboxFilter>("all");
@@ -71,7 +74,7 @@ function TriageCrt({ now, review, running, status, error, onInterval, onRun }: T
   return (
     <section className="usage-crt" data-testid="usage-review">
       <div className="usage-crt-bar">
-        <span className="usage-crt-title">MAIL://BUG-AND-PERFECTION</span>
+        <span className="usage-crt-title">{plain ? "Bug and perfection inbox" : "MAIL://BUG-AND-PERFECTION"}</span>
         {review && (
           <div className="usage-review-controls">
             <select className="usage-review-select" value={review.interval} onChange={(e) => onInterval(e.target.value)} aria-label="Usage review interval">
@@ -96,7 +99,7 @@ function TriageCrt({ now, review, running, status, error, onInterval, onRun }: T
               data-filter={f.key}
               onClick={() => setFilter(f.key)}
             >
-              [{f.label}] <span className="usage-inbox-count">{counts[f.key]}</span>
+              {plain ? f.label : `[${f.label}]`} <span className="usage-inbox-count">{counts[f.key]}</span>
             </button>
           ))}
         </div>
