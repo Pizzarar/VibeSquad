@@ -7,6 +7,7 @@ import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { openPinMember, spinUpPin } from "./pinFocus";
+import { boringLaneLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
@@ -91,11 +92,7 @@ export function boringAgentLanding(views: TeamView[], agentId: string | null | u
   return known(agentId) ? { view: null, sel: null, mode: "chat" } : null;
 }
 
-const ACRONYMS = new Set(["ui", "ux", "ade", "api", "cli", "ci", "cd", "qa", "ai", "mcp", "sdk", "url", "db", "css", "html", "id", "pr", "vs", "ide", "os", "tts", "gpu", "cpu", "efi"]);
-/** Normal-mode lane name: keeps known acronyms upper-case ("Ui Lab" → "UI Lab"). */
-export function boringLaneLabel(name: string | null | undefined): string {
-  return String(name ?? "").replace(/[A-Za-z]+/g, (w) => (ACRONYMS.has(w.toLowerCase()) && (w === w.toLowerCase() || w === w[0].toUpperCase() + w.slice(1).toLowerCase()) ? w.toUpperCase() : w));
-}
+export { boringLaneLabel };
 
 const URGENCY: Record<string, number> = { permission: 0, "needs-you": 1, error: 2 };
 const urgencyOf = (m: { attention?: { tone?: string } | null } | null | undefined) => (m?.attention?.tone != null && m.attention.tone in URGENCY ? URGENCY[m.attention.tone] : null);

@@ -4,7 +4,8 @@ import { clearUnreadLocal, dismissLocal, snoozeLocal } from "./attentionLocal";
 import type { FeedEntry } from "./demo";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
 import { respondToPermission } from "./PermissionCard";
-import { isHubLane, type Member, type TeamView } from "./teams";
+import { boringLocationLane } from "./boringLocation";
+import type { Member, TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 import { fetchLog } from "./TeamFeed";
 
@@ -35,6 +36,7 @@ export function needsYouReason(item: Pick<AttentionItem, "kind" | "reason" | "ag
   const tool = p.name ?? p.title;
   const arg = [p.input?.command, p.detail?.command, p.input?.file_path, p.input?.path, p.input?.pattern].find((v): v is string => typeof v === "string" && v.length > 0);
   if (!tool) return item.reason;
+  if (!arg && typeof p.title === "string" && p.title.startsWith(tool)) return p.title;
   return arg ? `${tool}: ${arg}` : tool;
 }
 
@@ -57,8 +59,8 @@ export function needsYouRows(views: TeamView[], now = Date.now()): NeedsYouRow[]
       const member = byId.get(item.id);
       if (!member) continue;
       const laneDef = view.team.lanes.find((l) => l.id === member.laneId);
-      const hub = laneDef ? isHubLane(view.team, laneDef) : !member.laneId;
-      const lane = hub ? "Desk" : laneDef?.name ?? member.laneId ?? "Desk";
+      const lane = boringLocationLane(view.team, member.laneId, view.lanes?.map((l) => l.lane));
+      const hub = lane === "Desk";
       const since = itemSince(item);
       const who = legacyLeadTitle(cleanTitle(item.who), { laneName: laneDef?.name, laneId: member.laneId ?? undefined, hub });
       rows.push({ item, member, view, teamId: view.team.id, project: view.team.name, lane, age: formatAge(since, now), since: since ?? Infinity, who });
@@ -77,9 +79,9 @@ export function recentDone(logs: DoneLog[], limit = 12): DoneRow[] {
 
 type DoneItem = { key: string; text: string; where: string; age: string; ts: number; row?: NeedsYouRow };
 /** Done recently: agents that finished and wait to be read, plus the newest `done` log entries; newest first, capped. */
-export function doneRecently(finished: NeedsYouRow[], logs: DoneLog[], limit = RECENT_DONE_VISIBLE, now = Date.now()): DoneItem[] {
+export function doneRecently(finished: NeedsYouRow[], logs: DoneLog[], limit = RECENT_DONE_VISIBLE, now = Date.now(), views: TeamView[] = []): DoneItem[] {
   const fromAgents: DoneItem[] = finished.map((r) => ({ key: `fin|${r.item.id}`, text: needsYouReason(r.item), where: `${r.project} › ${r.lane}`, age: r.age, ts: Number.isFinite(r.since) ? r.since : 0, row: r }));
-  const fromLog: DoneItem[] = recentDone(logs, limit).map((d) => ({ key: `${d.teamId}|${d.entry.ts}|${d.entry.agent}`, text: d.entry.text, where: `${d.project}${d.entry.lane ? ` › ${d.entry.lane}` : ""}`, age: formatAge(Date.parse(d.entry.ts), now), ts: Date.parse(d.entry.ts) || 0 }));
+  const fromLog: DoneItem[] = recentDone(logs, limit).map((d) => ({ key: `${d.teamId}|${d.entry.ts}|${d.entry.agent}`, text: d.entry.text, where: `${d.project} › ${boringLocationLane(views.find((v) => v.team.id === d.teamId)?.team ?? { id: d.teamId, lanes: [] }, d.entry.lane, views.find((v) => v.team.id === d.teamId)?.lanes?.map((l) => l.lane))}`, age: formatAge(Date.parse(d.entry.ts), now), ts: Date.parse(d.entry.ts) || 0 }));
   return [...fromAgents, ...fromLog].sort((a, b) => b.ts - a.ts).slice(0, limit);
 }
 
@@ -103,7 +105,7 @@ export function BoringInbox({ views, onOpen, now = Date.now(), logs: injected }:
   const rows = all.filter((r) => r.item.kind !== "finished");
   const finished = all.filter((r) => r.item.kind === "finished");
   const shown = showAll ? rows : rows.slice(0, NEEDS_YOU_VISIBLE);
-  const done = doneRecently(finished, injected ?? fetched, RECENT_DONE_VISIBLE, now);
+  const done = doneRecently(finished, injected ?? fetched, RECENT_DONE_VISIBLE, now, views);
   const run = (id: string, fn: () => Promise<void>) => {
     setBusy(id);
     setErr(null);
@@ -189,8 +191,7 @@ export function BoringInbox({ views, onOpen, now = Date.now(), logs: injected }:
                 </li>
               ) : (
                 <li key={d.key} className="boring-done-row" data-testid="boring-recent-done-item" title={d.text}>
-                  <span className="boring-dot st-done" />
-                  <span className="boring-done-text">{d.text}</span>
+                  <div className="boring-needs-line"><span className="boring-dot st-done" /><span className="boring-done-text">{d.text}</span></div>
                   <span className="boring-needs-where">{d.where} · {d.age}</span>
                 </li>
               ),

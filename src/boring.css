@@ -1195,3 +1195,9 @@ html[data-vibe="boring"] .boring-worker-why { flex: 1 0 100%; padding-left: 14px
 html[data-vibe="boring"] .boring-worker-row.needs-err .boring-worker-why { color: var(--st-err); }
 html[data-vibe="boring"] .boring-worker-row.needs-attn .boring-worker-why { color: var(--st-attn); }
 html[data-vibe="boring"] .boring-needs-item > .boring-needs-actions { padding: 3px 0 2px 14px; }
+
+/* Desk R2 Unit 2 round 2: location never truncated by a long reason; Done recently log row keeps its dot inline. */
+html[data-vibe="boring"] .boring-needs-reason { flex: 1 1 0; }
+html[data-vibe="boring"] .boring-needs-why .boring-needs-where { flex: 0 0 auto; max-width: 55%; }
+html[data-vibe="boring"] .boring-done-row > .boring-needs-line { grid-column: 1; }
+html[data-vibe="boring"] .boring-done-row > .boring-needs-line .boring-done-text { flex: 1; min-width: 0; }

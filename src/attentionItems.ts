@@ -84,7 +84,7 @@ export function attentionItems(members: Member[], now?: number): AttentionItem[]
 
 /** Legacy v1 lead titles ("Lead · ord75", "★ lead · ord75") read as the current name: "Overlord" on the hub, else the lane code + ord. */
 export function legacyLeadTitle(who: string, lane: { laneName?: string; laneId?: string; hub?: boolean }): string {
-  const m = /^(?:★\s*)?(?:lead\s*·\s*)?ord(\d+)\s*(?:·\s*(.+))?$/i.exec(who.trim());
+  const m = /^(?:(?:★\s*)?(?:lead\s*·\s*)?|★\s*[^·]+?\s+)ord(\d+)\s*(?:·\s*(.+))?$/i.exec(who.trim());
   if (!m) return who;
   return formatDisplayTitle({ role: "lead", laneName: lane.laneName, laneId: lane.laneId, ord: m[1], job: m[2], hub: lane.hub }).replace(/^★\s*/, "");
 }

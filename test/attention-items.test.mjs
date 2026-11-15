@@ -38,3 +38,9 @@ test("legacy lead titles are cleaned with formatDisplayTitle: Overlord on the hu
   assert.doesNotMatch(legacyLeadTitle("Lead · ord12", { laneName: "ADE", laneId: "ade" }), /ord|Lead ·|★/);
   assert.equal(legacyLeadTitle("Fix the login bug", { hub: true }), "Fix the login bug");
 });
+
+test("legacy v1 lead titles with a lane name ('★ MAIN GAME ord75') are cleaned too; plain titles are not", () => {
+  assert.equal(legacyLeadTitle("★ MAIN GAME ord75", { hub: true }), "Overlord");
+  assert.doesNotMatch(legacyLeadTitle("★ UI BOIS ord9", { laneName: "UI Bois", laneId: "ui-bois" }), /ord9 |★|BOIS ord/);
+  assert.equal(legacyLeadTitle("Fix ord3 parser", { hub: true }), "Fix ord3 parser");
+});

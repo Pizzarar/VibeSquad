@@ -17,6 +17,8 @@ const stub = (name, body) => writeFileSync(join(dir, name), `import React from $
 globalThis.__opened = [];
 globalThis.__toasts = [];
 stub("PinIdeas.mjs", "export const showPinToast = (m) => globalThis.__toasts.push(m);");
+writeFileSync(join(dir, "teams.mjs"), `export const isHubLane = (team, lane) => lane.hub === true || (!team.lanes.some((l) => l.hub === true) && lane.id === team.id);`);
+writeFileSync(join(dir, "boringLocation.mjs"), transformSync("boringLocation.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringLocation.ts"), "utf8"), { lang: "ts" }).code.replace("./teams.ts", "./teams.mjs"));
 stub("pinFocus.mjs", "export const openPinMember = (pin, id) => globalThis.__opened.push([pin.lane.id, id]);");
 stub("SkyZones.mjs", `export const FaceStage = () => React.createElement("i", { "data-stub": "face" });\nexport const useSkyBezel = () => ({ frameStyle: null });`);
 stub("skyZonesLogic.mjs", "export const angelCssScale = () => 4; export const cloudStripStyle = () => undefined; export const faceBg = () => null; export const SKY_CLOUDS_URL = () => '';");
@@ -747,7 +749,6 @@ writeFileSync(join(dir, "attentionLocal.mjs"), `export const isMarkedUnread = ()
 writeFileSync(join(dir, "boringHeaderStripStub.mjs"), tsx("boringHeaderStrip.ts"));
 // Display-title stubs: the real isHubLane / formatDisplayTitle pull in teams.example.json + React; test/attention-items.test.mjs covers the real ones.
 writeFileSync(join(dir, "identityStub.mjs"), `export const formatDisplayTitle = ({ role, hub, ord, laneName }) => role === "lead" ? (hub ? "Overlord" : "★ " + String(laneName ?? "").toUpperCase() + ord) : "x";`);
-writeFileSync(join(dir, "teams.mjs"), `export const isHubLane = (team, lane) => lane.hub === true || (!team.lanes.some((l) => l.hub === true) && lane.id === team.id);`);
 writeFileSync(
   join(dir, "attentionItems.mjs"),
   tsx("attentionItems.ts")
@@ -767,7 +768,7 @@ writeFileSync(
     .replace(/from "\.\/paseo"/, `from "./paseoInbox.mjs"`)
     .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`),
 );
-const { BoringInbox, needsYouRows, recentDone, needsYouReason, openNeedsYouRow } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
+const { BoringInbox, needsYouRows, doneRecently, recentDone, needsYouReason, openNeedsYouRow } = await import(pathToFileURL(join(dir, "RealInbox.mjs")).href);
 
 const ag = (id, over = {}) => ({ id, title: id.toUpperCase(), status: "idle", updatedAt: ago(10), labels: {}, pendingPermissions: [], ...over });
 const att = (id, tone, reason, over = {}) => ({ agent: ag(id, over.agent), kind: over.kind ?? "worker", laneId: over.laneId ?? "ade", attention: { tone, reason } });
@@ -1277,4 +1278,31 @@ test("Desk R2 sidebar worker rows show the attention reason + tint; container do
   assert.match(ade, /needs-err/);
   assert.match(ade, /glyphCls\(c\.status, c\.err \? "error"/);
   assert.match(ade, /m\.projectErr \? "error"/);
+});
+
+test("Desk R2 r2: location resolver: Desk for laneId==team.id (any case), no laneId and hub lanes; other lanes get a pretty label", () => {
+  reset();
+  const v = {
+    team: { id: "vibesquad", name: "VibeSquad", lanes: [{ id: "riffbot", name: "RiffBot", hub: true }, { id: "ui-bois", name: "ui bois" }] },
+    lanes: [{ lane: { id: "wiki", name: "wiki" } }],
+    members: [
+      att("a", "needs-you", "x", { laneId: "vibesquad" }),
+      att("b", "needs-you", "x", { laneId: "VibeSquad" }),
+      att("c", "needs-you", "x", { laneId: "" }),
+      att("d", "needs-you", "x", { laneId: "riffbot" }),
+      att("e", "needs-you", "x", { laneId: "ui-bois" }),
+      att("f", "needs-you", "x", { laneId: "wiki" }),
+    ],
+    needsYou: 6, running: 0,
+  };
+  const lane = Object.fromEntries(needsYouRows([v], NOW).map((r) => [r.item.id, r.lane]));
+  assert.deepEqual(lane, { a: "Desk", b: "Desk", c: "Desk", d: "Desk", e: "UI bois", f: "wiki" });
+  assert.equal(needsYouRows([{ ...v, team: { ...v.team, lanes: [{ id: "ui-bois", name: "Ui Lab" }] }, members: [att("g", "needs-you", "x", { laneId: "ui-bois" })] }], NOW)[0].lane, "UI Lab");
+});
+
+test("Desk R2 r2: Done recently log entries read Desk for the hub lane / project-named lane", () => {
+  const v = { team: { id: "vibesquad", name: "VibeSquad", lanes: [{ id: "ui-bois", name: "Ui Bois" }] }, lanes: [], members: [] };
+  const e = (lane) => ({ ts: ago(14), type: "done", text: "PASS step4", agent: "x", lane });
+  const rows = doneRecently([], [{ teamId: "vibesquad", project: "VibeSquad", entries: [e("vibesquad"), e(undefined), e("ui-bois")] }], 8, NOW, [v]);
+  assert.deepEqual(rows.map((r) => r.where).sort(), ["VibeSquad › Desk", "VibeSquad › Desk", "VibeSquad › UI Bois"]);
 });
