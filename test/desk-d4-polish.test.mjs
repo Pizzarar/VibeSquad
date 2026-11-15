@@ -18,7 +18,9 @@ test("D4: idle workers disclosure expands and lists idle workers", () => {
 });
 
 test("D4: collapsed rail shows worst-state badge (err else attn) with count", () => {
-  assert.match(panel, /err > 0 \? \{ tone: "err", n: err \} : attn > 0 \? \{ tone: "attn", n: attn \}/);
+  assert.match(panel, /const n = err \+ attn;/);
+  assert.match(panel, /tone: err > 0 \? "err" : "attn", n/);
+  assert.match(css, /\.boring-hdr-btn\[data-testid="boring-dock-toggle"\] \{ display: none; \}/);
   assert.match(panel, /data-testid="boring-ctx-rail-badge"/);
   assert.match(d4, /\.boring-ctx-rail-badge\.st-err \{ background: var\(--st-err\)/);
   assert.match(d4, /\.boring-ctx-rail-badge \{[^}]*background: var\(--st-attn\)/);

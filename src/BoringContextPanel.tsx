@@ -179,6 +179,7 @@ export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: 
 
   const { agents } = usePaseo();
   const badge = useMemo(() => {
+    if (open) return null; // badge only renders on the collapsed rail
     let err = 0, attn = 0;
     for (const m of resolve(agents)) {
       if (m.kind !== "worker" || !isLive(m) || (m.laneId ?? "").toLowerCase() !== laneId.toLowerCase()) continue;
@@ -186,8 +187,9 @@ export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: 
       if (g === "err") err++;
       else if (g === "attn") attn++;
     }
-    return err > 0 ? { tone: "err", n: err } : attn > 0 ? { tone: "attn", n: attn } : null;
-  }, [agents, laneId]);
+    const n = err + attn;
+    return n > 0 ? { tone: err > 0 ? "err" : "attn", n } : null;
+  }, [agents, laneId, open]);
 
   if (!open)
     return (

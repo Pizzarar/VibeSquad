@@ -1091,7 +1091,7 @@ html[data-vibe="boring"] .boring-ctx-feed-text { color: var(--text-1); line-heig
 /* D3c fix round: composer aligns with the conversation column; header Dock hidden while the panel is open; Changes tab rhythm */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) > .composer { padding-right: calc(16px + 460px); }
 html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { padding-right: calc(16px + 36px); }
-html[data-vibe="boring"] .boring-hdr-btn[data-testid="boring-dock-toggle"].on { display: none; }
+html[data-vibe="boring"] .boring-hdr-btn[data-testid="boring-dock-toggle"] { display: none; }
 html[data-vibe="boring"] .boring-ctx-rail-btn { background: var(--surface-2); border-color: var(--border-strong, var(--border)); color: var(--text-2); }
 html[data-vibe="boring"] .boring-ctx-body > .changes-panel { padding: 16px; box-sizing: border-box; overflow-x: hidden; gap: 24px; font-size: 13px; min-width: 0; }
 html[data-vibe="boring"] .boring-ctx-body .changes-file-list { gap: 0; }
