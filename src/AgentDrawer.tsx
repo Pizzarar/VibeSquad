@@ -41,6 +41,7 @@ import { useVibe } from "./AngelBezel";
 import { DrawerHeader, normalizeProviderId, type ProviderSwitchTarget } from "./DrawerHeader";
 import { useWorkingMembers } from "./WorkingBar";
 import { RightDock } from "./RightDock";
+import { BoringContextPanel, useContextPanel } from "./BoringContextPanel";
 
 export { localImageSrc } from "./Timeline";
 export type { Entry } from "./Timeline";
@@ -186,6 +187,7 @@ export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccess
   setAgentCwd(agent.id, agent.cwd);
 
   const vibe = useVibe();
+  const [ctxPanelOpen, toggleCtxPanel] = useContextPanel();
   const isBs = isBrainstormAgent(agent);
   const isTopicBs = isTopicBrainstorm(agent);
   const { team, laneId: resolvedLaneId } = teamForAgent(agent);
@@ -578,8 +580,8 @@ ${draft}`);
           saveSummary={saveSummary}
           laneId={laneId}
           att={att}
-          dockOpen={dockOpen}
-          onToggleDock={() => setDockOpen((v) => !v)}
+          dockOpen={ctxPanelOpen}
+          onToggleDock={toggleCtxPanel}
           onClose={onClose}
           entries={entries}
           active={active}
@@ -674,7 +676,12 @@ ${draft}`);
             onParkText={(txt) => void parkToInbox(txt, false)}
           />
         </TimelineErrorBoundary>
-        {dockOpen && !chatOnly && (
+        {vibe === "boring" && !chatOnly && (
+          <TimelineErrorBoundary fallbackLabel="context panel">
+            <BoringContextPanel key={agent.id} agent={agent} entries={entries} teamId={teamId} laneId={laneId} />
+          </TimelineErrorBoundary>
+        )}
+        {vibe !== "boring" && dockOpen && !chatOnly && (
           <TimelineErrorBoundary fallbackLabel="dock">
             <RightDock key={agent.id} agent={agent} />
           </TimelineErrorBoundary>

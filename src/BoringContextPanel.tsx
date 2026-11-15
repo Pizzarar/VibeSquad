@@ -1,0 +1,183 @@
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import type { PaseoAgent } from "./agentTypes";
+import { ChangesPanel } from "./ChangesPanel";
+import { FilesPanel } from "./FilesPanel";
+import { TerminalPanel } from "./TerminalPanel";
+import { boringStateGlyph, boringWorkerIsLive } from "./BoringAde";
+import { demoLog, type FeedEntry } from "./demo";
+import { DEMO } from "./demoFlag";
+import { openAgent } from "./panes";
+import { usePaseo } from "./paseo";
+import { resolve } from "./teams";
+import { findPinnedTodo, type Entry } from "./Timeline";
+import { Ago } from "./ui";
+import { isLive } from "./pins";
+import type { OpenRightDockDetail } from "./RightDock";
+
+/** Normal-mode single right panel (UX_REVIEW 2.8, PLAN refinement 3): replaces AgentDrawer's inner RightDock. */
+export type ContextTab = "Workers" | "Changes" | "Plan" | "Feed" | "Files" | "Terminal";
+export const CONTEXT_TABS: ContextTab[] = ["Workers", "Changes", "Plan", "Feed", "Files", "Terminal"];
+export const CONTEXT_PANEL_WIDTH = 460;
+export const CONTEXT_PANEL_MIN_VIEWPORT = 1600;
+export const CONTEXT_OPEN_KEY = "vs.context-panel.open"; // "1" | "0"; absent = follow the viewport
+export const CONTEXT_TAB_KEY = "vs.context-panel.tab";
+
+/** Explicit user choice wins when it opens/closes; otherwise open only on wide viewports. */
+export function contextPanelOpen(pref: string | null | undefined, viewportWidth: number): boolean {
+  const wide = viewportWidth >= CONTEXT_PANEL_MIN_VIEWPORT;
+  if (pref === "0") return false;
+  if (pref === "1") return true;
+  return wide;
+}
+
+const listeners = new Set<() => void>();
+const readPref = () => {
+  try { return localStorage.getItem(CONTEXT_OPEN_KEY); } catch { return null; }
+};
+const subscribe = (cb: () => void) => {
+  listeners.add(cb);
+  window.addEventListener("resize", cb);
+  return () => { listeners.delete(cb); window.removeEventListener("resize", cb); };
+};
+const snapshot = () => contextPanelOpen(readPref(), window.innerWidth);
+
+export function setContextPanelOpen(open: boolean) {
+  try { localStorage.setItem(CONTEXT_OPEN_KEY, open ? "1" : "0"); } catch {}
+  listeners.forEach((l) => l());
+}
+
+export function useContextPanel(): [boolean, () => void] {
+  const open = useSyncExternalStore(subscribe, snapshot, () => false);
+  return [open, () => setContextPanelOpen(!open)];
+}
+
+const TAB_FOR_DOCK: Partial<Record<string, ContextTab>> = { Changes: "Changes", Files: "Files", Terminal: "Terminal" };
+
+function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
+  const { agents } = usePaseo();
+  const members = useMemo(
+    () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
+    [agents, laneId],
+  );
+  const live = members.filter(boringWorkerIsLive);
+  const idle = members.length - live.length;
+  if (live.length === 0)
+    return <div className="boring-ctx-empty" data-testid="boring-ctx-workers-empty">No live workers in this lane{idle > 0 ? ` · ${idle} idle` : ""}.</div>;
+  return (
+    <div className="boring-ctx-list" data-testid="boring-ctx-workers">
+      {live.map((m) => {
+        const glyph = boringStateGlyph(m.agent.status, m.attention?.tone);
+        return (
+          <button type="button" key={m.agent.id} className={`boring-ctx-worker${m.agent.id === agent.id ? " current" : ""}`} data-testid={`boring-ctx-worker-${m.agent.id}`} onClick={() => openAgent(m.agent.id)}>
+            <span className={`boring-dot st-${glyph}`} aria-hidden />
+            <span className="boring-ctx-worker-name">{m.agent.title ?? m.agent.id.slice(0, 8)}</span>
+            <span className="boring-ctx-worker-age muted"><Ago iso={m.agent.updatedAt} /></span>
+            {(m.attention?.reason || m.agent.status === "error") && (
+              <span className="boring-ctx-worker-meta" title={m.attention?.reason ?? m.agent.status}>{m.attention?.reason ?? m.agent.status}</span>
+            )}
+          </button>
+        );
+      })}
+      {idle > 0 && <div className="boring-ctx-foot muted">{idle} idle worker{idle === 1 ? "" : "s"} hidden</div>}
+    </div>
+  );
+}
+
+function PlanTab({ entries }: { entries: Entry[] }) {
+  const todo = findPinnedTodo(entries);
+  const items: any[] = todo && Array.isArray(todo.item.items) ? todo.item.items : [];
+  if (items.length === 0) return <div className="boring-ctx-empty" data-testid="boring-ctx-plan-empty">No plan yet. A task list appears here once the agent writes one.</div>;
+  const done = items.filter((t) => t.completed || t.status === "completed").length;
+  return (
+    <div className="boring-ctx-list" data-testid="boring-ctx-plan">
+      <div className="boring-ctx-foot muted">{done}/{items.length} done</div>
+      {items.map((t, i) => {
+        const state = t.completed || t.status === "completed" ? "done" : t.status === "in_progress" ? "doing" : "todo";
+        return (
+          <div key={i} className={`boring-ctx-plan-row ${state}`}>
+            <span className="boring-ctx-plan-mark" aria-hidden>{state === "done" ? "✓" : state === "doing" ? "◐" : "○"}</span>
+            <span>{t.text}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function FeedTab({ teamId, laneId }: { teamId: string; laneId: string }) {
+  const [entries, setEntries] = useState<FeedEntry[]>([]);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let dead = false;
+    const load = () => {
+      const p = DEMO ? Promise.resolve(demoLog()) : fetch(`/__vibesquad/log?team=${encodeURIComponent(teamId)}`).then((r) => (r.ok ? (r.json() as Promise<FeedEntry[]>) : Promise.reject(new Error(`log fetch failed (${r.status})`))));
+      p.then((e) => { if (!dead) { setEntries(e); setError(""); } }).catch((e) => !dead && setError(String(e)));
+    };
+    load();
+    if (DEMO) return () => { dead = true; };
+    const t = setInterval(() => document.hidden || load(), 10_000);
+    return () => { dead = true; clearInterval(t); };
+  }, [teamId]);
+  const rows = entries.filter((e) => !e.lane || e.lane.toLowerCase() === laneId.toLowerCase()).sort((a, b) => b.ts.localeCompare(a.ts)).slice(0, 40);
+  if (error) return <div className="boring-ctx-empty" role="alert">{error}</div>;
+  if (rows.length === 0) return <div className="boring-ctx-empty" data-testid="boring-ctx-feed-empty">No log events for this lane yet.</div>;
+  return (
+    <div className="boring-ctx-list" data-testid="boring-ctx-feed">
+      {rows.map((e, i) => (
+        <div key={`${e.ts}-${i}`} className={`boring-ctx-feed-row t-${e.type}`}>
+          <div className="boring-ctx-feed-head"><span className="boring-ctx-feed-type">{e.type}</span><span className="muted">{e.agent} · <Ago iso={e.ts} /></span></div>
+          <div className="boring-ctx-feed-text">{e.text}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: PaseoAgent; entries: Entry[]; teamId: string; laneId: string }) {
+  const [open, toggle] = useContextPanel();
+  const [tab, setTab] = useState<ContextTab>(() => {
+    const t = (() => { try { return localStorage.getItem(CONTEXT_TAB_KEY); } catch { return null; } })();
+    return (CONTEXT_TABS as string[]).includes(t ?? "") ? (t as ContextTab) : "Workers";
+  });
+  const [target, setTarget] = useState<{ file: string | null; line: number | null; nonce: number }>({ file: null, line: null, nonce: 0 });
+  useEffect(() => { try { localStorage.setItem(CONTEXT_TAB_KEY, tab); } catch {} }, [tab]);
+  // openRightDockTab() (file links, Open in Changes, quick open) lands here in Normal mode.
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const d = (e as CustomEvent<OpenRightDockDetail>).detail;
+      if (!d) return;
+      const next = TAB_FOR_DOCK[d.tab];
+      if (!next) return;
+      setContextPanelOpen(true);
+      setTab(next);
+      if (d.filePath !== undefined) setTarget({ file: d.filePath, line: d.line ?? null, nonce: d.nonce ?? 0 });
+    };
+    window.addEventListener("vs:open-right-dock", onOpen);
+    return () => window.removeEventListener("vs:open-right-dock", onOpen);
+  }, []);
+
+  if (!open)
+    return (
+      <aside className="boring-context-panel collapsed" data-testid="boring-context-panel" data-open="false">
+        <button type="button" className="boring-ctx-rail-btn" data-testid="boring-context-toggle" aria-expanded={false} title="Open context panel" onClick={toggle}>◀ Context</button>
+      </aside>
+    );
+  return (
+    <aside className="boring-context-panel" data-testid="boring-context-panel" data-open="true" style={{ width: CONTEXT_PANEL_WIDTH }}>
+      <div className="boring-ctx-tabs" role="tablist">
+        {CONTEXT_TABS.map((t) => (
+          <button key={t} type="button" role="tab" aria-selected={tab === t} className={`boring-ctx-tab${tab === t ? " on" : ""}`} data-testid={`boring-context-tab-${t.toLowerCase()}`} onClick={() => setTab(t)}>{t}</button>
+        ))}
+        <button type="button" className="boring-ctx-collapse" data-testid="boring-context-toggle" aria-expanded title="Collapse context panel" onClick={toggle}>▶</button>
+      </div>
+      <div className="boring-ctx-body" data-testid="boring-context-body">
+        {tab === "Workers" && <WorkersTab agent={agent} laneId={laneId} />}
+        {tab === "Changes" && <ChangesPanel agent={agent} />}
+        {tab === "Plan" && <PlanTab entries={entries} />}
+        {tab === "Feed" && <FeedTab teamId={teamId} laneId={laneId} />}
+        {tab === "Files" && <FilesPanel agent={agent} targetFile={target.file} targetLine={target.line} targetNonce={target.nonce} />}
+        {tab === "Terminal" && <TerminalPanel agent={agent} />}
+      </div>
+    </aside>
+  );
+}

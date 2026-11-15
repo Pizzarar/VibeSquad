@@ -1056,3 +1056,50 @@ html[data-vibe="boring"] .strip-error { color: var(--st-bad, #e5484d); }
 html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-agent-menu .drawer-labels-list { display: flex !important; }
 html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-agent-menu [data-testid="drawer-fork-btn"],
 html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .boring-agent-menu [data-testid="drawer-export-btn"] { display: inline-flex !important; }
+
+/* --- D3c: single Normal-mode right context panel (UX_REVIEW 2.8). Replaces the inner RightDock. --- */
+html[data-vibe="boring"] .boring-chat-column:has(.boring-context-panel) { max-width: 100%; }
+html[data-vibe="boring"] .boring-context-panel { flex: 0 0 auto; display: flex; flex-direction: column; min-height: 0; background: var(--panel); border-left: 1px solid var(--border); border-radius: 0; }
+html[data-vibe="boring"] .boring-context-panel.collapsed { width: 36px; align-items: center; padding-top: 10px; }
+html[data-vibe="boring"] .boring-ctx-rail-btn { writing-mode: vertical-rl; background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--text-1); font-size: var(--t-ui); padding: 10px 4px; cursor: pointer; }
+html[data-vibe="boring"] .boring-ctx-rail-btn:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-ctx-tabs { display: flex; align-items: center; gap: 2px; padding: 6px; border-bottom: 1px solid var(--border); }
+html[data-vibe="boring"] .boring-ctx-tab { background: transparent; border: 0; border-radius: 8px; color: var(--text-2, var(--text-3)); font-size: var(--t-ui); padding: 6px 9px; cursor: pointer; white-space: nowrap; }
+html[data-vibe="boring"] .boring-ctx-tab:hover { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-ctx-tab.on { background: var(--panel-hi, var(--surface-3)); color: var(--text-1); font-weight: 600; }
+html[data-vibe="boring"] .boring-ctx-collapse { margin-left: auto; background: transparent; border: 1px solid var(--border); border-radius: 6px; color: var(--text-1); width: 28px; min-height: 28px; cursor: pointer; }
+html[data-vibe="boring"] .boring-ctx-collapse:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-ctx-body { flex: 1 1 0; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+html[data-vibe="boring"] .boring-ctx-body > .right-dock-body, html[data-vibe="boring"] .boring-ctx-body > * { min-height: 0; }
+html[data-vibe="boring"] .boring-ctx-list { display: flex; flex-direction: column; gap: 0; padding: 8px; }
+html[data-vibe="boring"] .boring-ctx-empty { padding: 20px 16px; color: var(--text-3); font-size: var(--t-ui); line-height: 1.5; }
+html[data-vibe="boring"] .boring-ctx-foot { padding: 6px 8px; font-size: var(--t-ui); }
+html[data-vibe="boring"] .boring-ctx-worker { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: center; gap: 0 8px; text-align: left; background: transparent; border: 0; border-radius: 8px; padding: 6px 12px; min-height: 32px; color: var(--text-1); cursor: pointer; font: 400 13px/20px var(--font-sans, inherit); }
+html[data-vibe="boring"] .boring-ctx-worker:hover, html[data-vibe="boring"] .boring-ctx-worker.current { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-ctx-worker-name { font-weight: 500; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html[data-vibe="boring"] .boring-ctx-worker-age { font: 400 11px/16px var(--font-sans, inherit); color: var(--text-3); white-space: nowrap; }
+html[data-vibe="boring"] .boring-ctx-worker-meta { grid-column: 2 / -1; font: 400 12px/16px var(--font-sans, inherit); color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; padding-bottom: 2px; }
+html[data-vibe="boring"] .boring-ctx-plan-row { display: flex; gap: 8px; padding: 6px 8px; font-size: var(--t-ui); color: var(--text-1); line-height: 1.4; }
+html[data-vibe="boring"] .boring-ctx-plan-row.done { color: var(--text-3); }
+html[data-vibe="boring"] .boring-ctx-plan-row.doing .boring-ctx-plan-mark { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-ctx-feed-row { padding: 8px; border-bottom: 1px solid var(--border); font-size: var(--t-ui); }
+html[data-vibe="boring"] .boring-ctx-feed-head { display: flex; gap: 8px; justify-content: space-between; color: var(--text-3); }
+html[data-vibe="boring"] .boring-ctx-feed-type { font-weight: 600; color: var(--text-1); }
+html[data-vibe="boring"] .boring-ctx-feed-row.t-blocker .boring-ctx-feed-type, html[data-vibe="boring"] .boring-ctx-feed-row.t-needs-you .boring-ctx-feed-type { color: var(--st-attn); }
+html[data-vibe="boring"] .boring-ctx-feed-text { color: var(--text-1); line-height: 1.45; margin-top: 2px; overflow-wrap: anywhere; }
+
+/* D3c fix round: composer aligns with the conversation column; header Dock hidden while the panel is open; Changes tab rhythm */
+html[data-vibe="boring"] .drawer:has(.boring-context-panel:not(.collapsed)) > .composer { padding-right: calc(16px + 460px); }
+html[data-vibe="boring"] .drawer:has(.boring-context-panel.collapsed) > .composer { padding-right: calc(16px + 36px); }
+html[data-vibe="boring"] .boring-hdr-btn[data-testid="boring-dock-toggle"].on { display: none; }
+html[data-vibe="boring"] .boring-ctx-rail-btn { background: var(--surface-2); border-color: var(--border-strong, var(--border)); color: var(--text-2); }
+html[data-vibe="boring"] .boring-ctx-body > .changes-panel { padding: 16px; box-sizing: border-box; overflow-x: hidden; gap: 24px; font-size: 13px; min-width: 0; }
+html[data-vibe="boring"] .boring-ctx-body .changes-file-list { gap: 0; }
+html[data-vibe="boring"] .boring-ctx-body .changes-file-header { min-height: 32px; padding: 4px 8px; gap: 8px; box-sizing: border-box; }
+html[data-vibe="boring"] .boring-ctx-body .changes-file-path { font: 400 13px/20px var(--font-mono, ui-monospace, monospace); }
+html[data-vibe="boring"] .boring-ctx-body .changes-file-header .btn { font: 500 12px/16px var(--font-sans, inherit); color: var(--text-2); background: transparent; border: 1px solid var(--border); padding: 2px 8px; }
+html[data-vibe="boring"] .boring-ctx-body .changes-file-header .btn.bad { color: var(--text-2); }
+html[data-vibe="boring"] .boring-ctx-body .changes-file-header .btn.bad:hover, html[data-vibe="boring"] .boring-ctx-body .changes-file-header .btn.bad:focus-visible { color: var(--st-err); }
+html[data-vibe="boring"] .boring-ctx-body .changes-commit-box { display: flex; flex-wrap: nowrap; gap: 8px; width: 100%; box-sizing: border-box; }
+html[data-vibe="boring"] .boring-ctx-body .changes-commit-msg { flex: 1 1 0; min-width: 0; width: auto; box-sizing: border-box; }
+html[data-vibe="boring"] .boring-ctx-body .changes-commit-box .btn { flex: 0 0 auto; }
