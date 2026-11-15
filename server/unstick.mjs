@@ -125,7 +125,9 @@ export async function unstick({
     procs = list();
     if (!Array.isArray(procs) || !procs.some((p) => p.pid === selfPid)) throw new Error("listing does not contain this server");
   } catch (e) {
-    return { ok: false, error: `process list failed: ${String(e?.message ?? e)}`, killed: [] };
+    // idea-249 L1: the spawn/PowerShell error can name host paths: server log only.
+    console.warn(`[vibesquad] unstick: process list failed: ${e?.message ?? e}`);
+    return { ok: false, error: "process list failed; see the server log", killed: [] };
   }
   const disc = readDiscovery(rHome);
   const runnerPid = disc?.pid;

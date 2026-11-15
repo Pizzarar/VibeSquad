@@ -1,6 +1,7 @@
 export function createVibesquadMiddleware(rootDir?: string): (req: any, res: any, next?: (err?: unknown) => void) => void;
 export function handleHealth(req: any, res: any, rootDir?: string): void;
 export function isGatedRead(path: string, url?: string): boolean;
+export function redactHostPaths<T>(value: T, rootDir?: string, roots?: string[]): T;
 export function isUncLikePath(p: unknown): boolean;
 export function handleAuthStatus(req: any, res: any, rootDir?: string): void;
 export function handleDesktopInstaller(req: any, res: any, rootDir?: string): void;

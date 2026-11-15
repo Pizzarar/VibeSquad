@@ -17,11 +17,13 @@ process.env.VIBESQUAD_HOME = HOME;
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 delete process.env.VIBESQUAD_TEAMS_FILE;
 for (const k of ["VS_AGENT_ID", "VS_AGENT_TOKEN", "PASEO_AGENT_ID", "VIBESQUAD_PROFILES_PATH"]) delete process.env[k];
-writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Squad", paths: [], lanes: [{ id: "sq", hub: true }] }] }), "utf8");
+writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Squad", paths: [], lanes: [{ id: "sq", hub: true }, { id: "cw", path: ROOT }] }] }), "utf8");
 
 const { readJsonFileWithBom } = await import("../server/user-settings.mjs");
 const { AGENT_ID_HEADER, AGENT_TOKEN_HEADER, callerFromRequest, getLocalToken } = await import("../server/auth.mjs");
-const { createVibesquadMiddleware } = await import("../server/vibesquad-api.mjs");
+const { createVibesquadMiddleware, redactHostPaths } = await import("../server/vibesquad-api.mjs");
+const { performBrainstormRestart, resetBrainstormRestartState } = await import("../server/brainstorm.mjs");
+const { removeTeamWorktrees } = await import("../server/team-worktrees.mjs");
 const { handleProvidersApi } = await import("../server/providers-catalog.mjs");
 
 // ---- fs fault injection (live ESM bindings: syncBuiltinESMExports updates `import { readFileSync } from "node:fs"`) ----
@@ -53,6 +55,21 @@ const api = createVibesquadMiddleware(ROOT);
 const srv = http.createServer((req, res) => api(req, res, () => { res.statusCode = 404; res.end("no"); }));
 const port = await new Promise((r) => srv.listen(0, "127.0.0.1", () => r(srv.address().port)));
 after(() => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); }));
+// The same API with a fake runner check: any agent id is a live Overlord (hub lead) of Squad "sq".
+const agentApi = createVibesquadMiddleware(ROOT, { verifyAgent: async ({ id }) => ({ id, team: "sq", lane: "sq", role: "lead", overlord: true }) });
+const agentSrv = http.createServer((req, res) => agentApi(req, res, () => { res.statusCode = 404; res.end("no"); }));
+const agentPort = await new Promise((r) => agentSrv.listen(0, "127.0.0.1", () => r(agentSrv.address().port)));
+after(() => new Promise((r) => { agentSrv.closeAllConnections?.(); agentSrv.close(() => r()); }));
+/** who: "owner" (local token), "read-only" (no token: a trusted local caller without owner proof), "agent" (verified agent headers). */
+async function as(who, method, route, body, { raw } = {}) {
+  const headers = who === "owner" ? { "x-vibesquad-token": getLocalToken() } : who === "agent" ? { [AGENT_ID_HEADER]: "probe-lead", [AGENT_TOKEN_HEADER]: "t0k" } : {};
+  const payload = raw !== undefined ? raw : body !== undefined ? JSON.stringify(body) : undefined;
+  if (payload !== undefined) headers["content-type"] = "application/json";
+  const r = await fetch(`http://127.0.0.1:${who === "agent" ? agentPort : port}${route}`, { method, headers, body: payload });
+  const text = await r.text();
+  let json = null; try { json = JSON.parse(text); } catch {}
+  return { status: r.status, text, json };
+}
 async function owner(method, route, body) {
   const r = await fetch(`http://127.0.0.1:${port}${route}`, {
     method,
@@ -171,4 +188,115 @@ test("idea-249: a failed runner agent check is a 503 that names no host path; th
   assert.equal(leaks(c.error), false, c.error);
   assert.match(c.error, /could not verify the agent caller/);
   assert.ok(warnings.some((w) => leaks(w)), `server log has the detail: ${JSON.stringify(warnings)}`);
+});
+
+// ---- idea-249 fix round (Bug23 review of fea3906): a non-owner caller (agent, read-only) never gets a host path; the owner
+// keeps the path fields its UI shows. Statuses of the caller's own mistakes (400/403/404/409/413) survive the catch-alls. ----
+
+test("idea-249 M1: GET /handoff names the packet path to the owner only (read-only and agent callers get none)", async () => {
+  const route = "/__vibesquad/handoff?team=sq&lane=sq";
+  const own = await as("owner", "GET", route);
+  assert.equal(own.status, 200, own.text);
+  assert.ok(leaks(own.json.path), "the owner's HandoffModal keeps the packet path");
+  for (const who of ["read-only", "agent"]) {
+    const r = await as(who, "GET", route);
+    assert.equal(r.status, 200, `${who}: ${r.text}`);
+    assert.equal(r.json.path, undefined, `${who}: ${r.text}`);
+    assert.equal(leaks(r.text), false, `${who}: ${r.text}`);
+    assert.equal(typeof r.json.exists, "boolean");
+  }
+});
+
+test("idea-249 M1: POST /handoff as the Squad's Overlord answers without the packet path", async () => {
+  const r = await as("agent", "POST", "/__vibesquad/handoff", { team: "sq", lane: "sq" });
+  assert.equal(r.status, 200, r.text); // ROOT has no cli/vs.mjs: ran:false, nothing spawned
+  assert.equal(r.json.ran, false);
+  assert.equal(r.json.path, undefined, r.text);
+  assert.equal(leaks(r.text), false, r.text);
+});
+
+test("idea-249 M2: GET /profiles and GET /brainstorm-summary keep host paths (profiles path, lane cwd) for the owner only", async () => {
+  const own = await as("owner", "GET", "/__vibesquad/profiles");
+  assert.equal(own.status, 200, own.text);
+  assert.ok(leaks(own.json.path), "the owner's settings screen keeps the profiles path");
+  const ro = await as("read-only", "GET", "/__vibesquad/profiles");
+  assert.equal(ro.status, 200, ro.text);
+  assert.equal(ro.json.path, undefined, ro.text);
+  assert.equal(leaks(ro.text), false, ro.text);
+  const brief = "/__vibesquad/brainstorm-summary?lane=cw&teamId=sq";
+  const ownBrief = await as("owner", "GET", brief);
+  assert.equal(ownBrief.status, 200, ownBrief.text);
+  assert.ok(leaks(ownBrief.json.cwd), `owner keeps the lane cwd: ${ownBrief.text}`);
+  for (const who of ["read-only", "agent"]) {
+    const r = await as(who, "GET", brief);
+    assert.equal(r.status, 200, `${who}: ${r.text}`);
+    assert.equal(leaks(r.text), false, `${who}: ${r.text}`);
+    assert.equal(r.json.path, ownBrief.json.path, "the repo-relative brief path stays");
+  }
+});
+
+test("idea-249 M3: redactHostPaths drops host-path fields and path-bearing error text at any depth; relative paths and content stay", () => {
+  const home = os.homedir();
+  const result = {
+    ok: true,
+    packetPath: path.join(HOME, "teams", "sq", "packet-sq.md"),
+    prompt: `read the handoff packet at ${path.join(HOME, "teams", "sq", "packet-sq.md")}`,
+    summaryPath: "docs/brainstorm/sq.md",
+    content: "brief text may quote anything",
+    successor: { id: "rn-2", cwd: ROOT, labels: { lane: "sq" } },
+    spawnConfig: { cwd: path.join(home, "projects", "x"), provider: "claude" },
+    refs: ["rn-1"],
+    error: `could not retire the old lead: EPERM, open '${path.join(HOME, "runner", "agents.json")}'`,
+  };
+  const out = redactHostPaths(result, ROOT);
+  assert.equal(leaks(JSON.stringify(out)), false, JSON.stringify(out));
+  assert.equal(JSON.stringify(out).includes(JSON.stringify(home).slice(1, -1)), false, "no home dir");
+  assert.equal(out.summaryPath, "docs/brainstorm/sq.md");
+  assert.equal(out.content, result.content);
+  assert.equal(out.successor.id, "rn-2");
+  assert.equal(out.spawnConfig.provider, "claude");
+  assert.match(out.error, /could not retire the old lead/);
+  assert.equal(result.successor.cwd, ROOT, "the input is not mutated");
+});
+
+test("idea-249 M3: a Buddy reopen that fails with a non-runner error reports no raw message (a runner's own answer stays)", async () => {
+  const bs = { id: "rn-1", title: "BRAINSTORM", status: "closed", updatedAt: "2026-11-02T04:00:00Z", labels: { team: "sq", lane: "sq", role: "brainstorm" } };
+  const client = (refreshError) => ({
+    isConnected: () => true,
+    fetchAgents: async () => ({ entries: [{ agent: { ...bs } }], pageInfo: { hasMore: false, nextCursor: null } }),
+    fetchAgent: async () => ({ agent: { ...bs } }),
+    updateAgent: async () => {},
+    refreshAgent: async () => { throw refreshError; },
+    createAgent: async () => { throw new Error("must not spawn"); },
+  });
+  resetBrainstormRestartState();
+  const r = await performBrainstormRestart({ reason: "start-brainstorm", teamId: "sq", laneId: "sq", agentClient: client(nodeError("EPIPE", "write", path.join(HOME, "runner", "ipc"))) }, ROOT);
+  assert.equal(r.ok, false, JSON.stringify(r));
+  assert.equal(r.reason, "reopen-failed");
+  assert.match(r.error, /Could not reopen/);
+  assert.equal(leaks(r.error), false, r.error);
+  assert.ok(warnings.some((w) => leaks(w)), `server log has the detail: ${JSON.stringify(warnings)}`);
+});
+
+test("idea-249 L1: a failed git step in remove-team-worktrees names no host path in its reason", () => {
+  const wt = path.join(ROOT, "wt-probe");
+  fs.mkdirSync(wt, { recursive: true });
+  const git = (args) => {
+    if (args[0] === "rev-parse") return args[1] === "--git-dir" ? path.join(ROOT, ".git", "worktrees", "wt-probe") : path.join(ROOT, ".git");
+    if (args[0] === "worktree") throw Object.assign(new Error(`Command failed: git worktree remove ${wt}`), { stderr: `fatal: '${wt}' contains modified or untracked files, use --force to delete it\n` });
+    return "";
+  };
+  const [r] = removeTeamWorktrees([{ path: wt, branch: "unit-x" }], { git });
+  assert.equal(r.worktree, "kept");
+  assert.match(r.reason, /contains modified or untracked files/);
+  assert.equal(leaks(r.reason), false, r.reason);
+});
+
+test("idea-249 L2: the catch-alls keep a bad body's 400 and an oversized body's 413 (/handoff, /push/test)", async () => {
+  for (const route of ["/__vibesquad/handoff", "/__vibesquad/push/test"]) {
+    const bad = await as("owner", "POST", route, undefined, { raw: "{not json" });
+    assert.equal(bad.status, 400, `${route}: ${bad.text}`);
+    const big = await as("owner", "POST", route, undefined, { raw: JSON.stringify({ pad: "x".repeat(2_000_000) }) });
+    assert.equal(big.status, 413, `${route}: ${big.text}`);
+  }
 });
