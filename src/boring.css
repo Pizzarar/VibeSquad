@@ -1157,3 +1157,7 @@ html[data-vibe="boring"] .boring-ctx-rail-badge { position: absolute; top: 4px; 
 html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-err); }
 /* Plan tab open: the in-timeline pinned todo bar duplicates it. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
+
+/* R2 fix2: Desk block/row hooks get real rules (block stacks its line + children; row keeps its label/sub/badge on one line). */
+html[data-vibe="boring"] .boring-desk-block { display: flex; flex-direction: column; gap: 1px; }
+html[data-vibe="boring"] .boring-desk-row { display: flex; align-items: center; gap: 8px; text-align: left; }
