@@ -599,6 +599,7 @@ export function formatDisplayTitle({
   title = "",
   hub = false,
   star = true,
+  readable = false,
 }: {
   role?: string;
   laneName?: string;
@@ -612,6 +613,8 @@ export function formatDisplayTitle({
   hub?: boolean;
   /** false: a non-hub lead's name omits the leading star marker. */
   star?: boolean;
+  /** true: a non-hub lead reads "<Lane name> · Lead N" (Needs you, tabs) instead of the code form. */
+  readable?: boolean;
 } = {}): string {
   const laneUpper = String(laneName || laneId || "AGENT").trim().toUpperCase();
   const c = cleanLaneCode(code) || laneCodeCandidates({ id: laneId, name: laneName || laneId })[0] || laneUpper;
@@ -623,6 +626,10 @@ export function formatDisplayTitle({
 
   if (r === "lead") {
     if (hub) return cleanJob ? `Overlord · ${cleanJob}` : "Overlord";
+    if (readable) {
+      const lane = String(laneName || laneId || "").trim().replace(/[-_]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+      return `${lane ? `${lane} · ` : ""}Lead ${ordClean}`;
+    }
     const mark = star ? "★ " : "";
     return cleanJob ? `${mark}${c}${ordClean} · ${cleanJob}` : `${mark}${c}${ordClean}`;
   }

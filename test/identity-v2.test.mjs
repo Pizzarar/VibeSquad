@@ -708,3 +708,10 @@ test("formatDisplayTitle: every role, with and without an objective", () => {
   // Retired brainstorms keep their title.
   assert.equal(formatDisplayTitle({ ...base, role: "former-brainstorm", title: "Hub Buddy" }), "Hub Buddy");
 });
+
+test("R3.4: readable lead title is '<Lane> · Lead N' (hub stays Overlord)", async () => {
+  const { formatDisplayTitle } = await import("../src/identity.ts");
+  assert.equal(formatDisplayTitle({ role: "lead", laneName: "Main Game", ord: "75", star: false, readable: true }), "Main Game · Lead 75");
+  assert.equal(formatDisplayTitle({ role: "lead", laneId: "main-game", ord: "ord75", readable: true }), "Main Game · Lead 75");
+  assert.equal(formatDisplayTitle({ role: "lead", hub: true, readable: true }), "Overlord");
+});

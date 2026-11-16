@@ -47,6 +47,10 @@ export function openNeedsYouRow(row: NeedsYouRow, onOpen: (row: NeedsYouRow) => 
   onOpen(row);
 }
 
+/** R3.7: one count style across the list: "8 more", "Done recently · 4". */
+export const moreLabel = (n: number) => `${n} more`;
+export const doneLabel = (n: number) => `Done recently · ${n}`;
+
 export const NEEDS_YOU_VISIBLE = 5;
 export const RECENT_DONE_VISIBLE = 8;
 const KIND_RANK: Record<AttentionItem["kind"], number> = { permission: 0, label: 1, unread: 1, error: 2, stalled: 3, finished: 4 };
@@ -58,7 +62,7 @@ const KIND_RANK: Record<AttentionItem["kind"], number> = { permission: 0, label:
 export function needsYouTitle(item: Pick<AttentionItem, "who">, member: Pick<Member, "kind" | "agent">, lane: { laneName?: string; laneId?: string; hub?: boolean }): string {
   const l = (member.agent.labels ?? {}) as Record<string, string>;
   const fallback = cleanTitle(item.who);
-  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, ord: l.ord, job: l.job, star: false });
+  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, ord: l.ord, job: l.job, star: false, readable: true });
   if (member.kind === "brainstorm" && lane.hub && !l.topic?.trim()) return formatDisplayTitle({ role: "brainstorm", ...lane });
   return fallback;
 }
@@ -169,13 +173,13 @@ export function BoringInbox({ views, onOpen, now: nowProp, logs: injected }: { v
                   <button type="button" className="boring-needs-open" data-testid={`boring-needs-open-${item.id}`} title={`${r.who}: ${needsYouReason(item)}`} onClick={() => openNeedsYouRow(r, onOpen)}>
                     <span className={`boring-dot st-${item.kind === "error" ? "err" : item.kind === "stalled" ? "stalled" : "attn"}`} />
                     <span className="boring-needs-who">{r.who}</span>
+                    <span className="boring-needs-where boring-needs-where-inline" data-testid="boring-needs-where">{r.project} › {r.lane}</span>
                     <span className="boring-conv-age">{r.age}</span>
                   </button>
                   {menu(r)}
                 </div>
                 <div className="boring-needs-why" title={`${needsYouReason(item)} · ${r.project} › ${r.lane}`}>
                   <span className="boring-needs-reason">{needsYouReason(item)}</span>
-                  <span className="boring-needs-where" data-testid="boring-needs-where">{r.project} › {r.lane}</span>
                 </div>
                   {quick && (
                     <span className="boring-needs-actions">
@@ -190,12 +194,12 @@ export function BoringInbox({ views, onOpen, now: nowProp, logs: injected }: { v
       )}
       {rows.length > NEEDS_YOU_VISIBLE && (
         <button type="button" className="boring-idle-toggle" data-testid="boring-needs-you-more" aria-expanded={showAll} onClick={() => setShowAll((v) => !v)}>
-          {showAll ? "▾ Show fewer" : `▸ + ${rows.length - NEEDS_YOU_VISIBLE} more`}
+          {showAll ? "▾ Show fewer" : `▸ ${moreLabel(rows.length - NEEDS_YOU_VISIBLE)}`}
         </button>
       )}
       <div className="boring-recent-done" data-testid="boring-recent-done">
         <button type="button" className="boring-idle-toggle" data-testid="boring-recent-done-toggle" aria-expanded={doneOpen} onClick={() => setDoneOpen((v) => !v)}>
-          {doneOpen ? "▾" : "▸"} Done recently ({done.length})
+          {doneOpen ? "▾" : "▸"} {doneLabel(done.length)}
         </button>
         {doneOpen && (
           <ul className="boring-done-rows">
