@@ -172,7 +172,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
 
   return (
     <>
-      <header className="boring-agent-header" data-testid="boring-agent-header" data-glyph={glyph}>
+      <header className="boring-agent-header" data-testid="boring-agent-header" data-agent-id={agent.id} data-glyph={glyph}>
         <span className={`boring-agent-glyph st-${glyph}`} data-testid="boring-agent-glyph" title={p.att?.reason ?? agent.status} aria-label={glyph}>{GLYPH_CHAR[glyph] ?? "○"}</span>
         <span className="boring-agent-name" data-testid="boring-agent-name">
           <AgentTitleEdit agent={agent}>{readableLeadTitle(agent) ?? agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
