@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { answerItem, attentionItems, clearItem, formatAge, itemSince, laterItem, type AttentionDeps, type AttentionItem } from "./attentionItems";
-import { toolRunningSecondsAt } from "./openTools";
 import { clearUnreadLocal, dismissLocal, snoozeLocal } from "./attentionLocal";
 import type { FeedEntry } from "./demo";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
@@ -74,7 +73,7 @@ export function needsYouRows(views: TeamView[], now = Date.now()): NeedsYouRow[]
   const rows: NeedsYouRow[] = [];
   for (const view of views) {
     const byId = new Map(view.members.map((m) => [m.agent.id, m]));
-    for (const item of attentionItems(view.members, now, toolRunningSecondsAt(now))) {
+    for (const item of attentionItems(view.members, now)) {
       const member = byId.get(item.id);
       if (!member) continue;
       const laneDef = view.team.lanes.find((l) => l.id === member.laneId);

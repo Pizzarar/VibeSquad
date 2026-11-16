@@ -97,6 +97,30 @@ test("1. Needs-you header count = items shown + 'N more'", guard("inv1", async (
   assert.equal(shown + moreN, count, `header says ${count}, list shows ${shown} + ${moreN} more`);
   if (more) { await page.locator(tid("boring-needs-you-more")).click(); await sleep(300); }
   assert.equal(await page.locator(tid("boring-needs-you-item")).count(), count, "expanded list length");
+  // R5-2: the tab title carries the same number as the Needs-you heading.
+  const titleN = await page.evaluate(() => Number(/^\((\d+)\+?\)/.exec(document.title)?.[1] ?? 0));
+  assert.equal(titleN, count, `title "${await page.title()}" vs Needs you ${count}`);
+}));
+
+// Playwright's clock must be installed before the page creates its timers: load with it, then jump past the stall threshold.
+const loadClocked = async () => {
+  await page.clock.install({ time: Date.now() });
+  await load();
+};
+
+test("1b. Tab title count == Needs-you count, also after the clock passes the stall threshold", guard("inv1b", async () => {
+  await loadClocked();
+  const read = () => page.evaluate(() => ({
+    count: Number(document.querySelector('[data-testid="boring-needs-you-count"]')?.textContent?.trim() ?? 0),
+    title: Number(/^\((\d+)\+?\)/.exec(document.title)?.[1] ?? 0),
+  }));
+  const t0 = await read();
+  assert.equal(t0.title, t0.count, `t0: ${JSON.stringify(t0)}`);
+  await page.clock.fastForward(66 * 60_000);
+  await sleep(600);
+  const t1 = await read();
+  assert.ok(t1.count > t0.count, `stalled agents join the count after 66m: ${JSON.stringify([t0, t1])}`);
+  assert.equal(t1.title, t1.count, `+66m: ${JSON.stringify(t1)}`);
 }));
 
 test("2. All projects collapsed: project badges sum to the Needs-you count", guard("inv2", async () => {
@@ -198,34 +222,42 @@ test("8. A Needs-you reason shows at least 40 characters before truncating", gua
   assert.deepEqual(bad, [], `truncated below 40 chars: ${JSON.stringify(bad)}`);
 }));
 
-test("9. The Needs-you count and badges don't change when you open and close an agent", guard("inv9", async () => {
-  await load();
+test("9. The Needs-you count and badges don't change when you open and close an agent (also after the clock passes 66m)", guard("inv9", async () => {
+  await loadClocked();
   const snap = () => page.evaluate(() => ({
     count: document.querySelector('[data-testid="boring-needs-you-count"]')?.textContent?.trim() ?? null,
     badges: [...document.querySelectorAll(".boring-badge")].map((b) => b.textContent?.trim()),
   }));
-  const before = await snap();
   // Expand "N more" so every Needs-you row (not just the first 5) is opened and closed.
   const expand = async () => { const more = page.locator('[data-testid="boring-needs-you-more"][aria-expanded="false"]'); if (await more.count()) { await more.first().click(); await sleep(200); } };
-  await expand();
-  const n = await page.locator('[data-testid^="boring-needs-open-"]').count();
-  assert.ok(n > 0, "demo should list Needs-you rows");
+  const pass = async (label) => {
+    const before = await snap();
+    await expand();
+    const n = await page.locator('[data-testid^="boring-needs-open-"]').count();
+    assert.ok(n > 0, `${label}: demo should list Needs-you rows`);
+    const bad = [];
+    for (let i = 0; i < n; i++) {
+      await expand();
+      await page.locator('[data-testid^="boring-needs-open-"]').nth(i).click();
+      await sleep(700);
+      await page.locator('[data-testid="boring-project-header-vibesquad"]').click(); // back to the Overview
+      await sleep(700);
+      const after = await snap();
+      // The Needs-you count must not move. Badges are compared by the count only: opening an agent expands its project/lane (collapsed-only
+      // badges legitimately swap) and the Overview shows that project's table, so per-badge equality is not a stable contract (see R4-1 report).
+      if (after.count !== before.count) bad.push(`${label} row ${i}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+    }
+    assert.deepEqual(bad, [], bad.join("\n"));
+  };
   // R4-1: stalled is back in the count; the demo has a quiet agent with no tool (listed) and a quiet agent whose server-reported tool is in
   // flight while its timeline also shows one (not listed, before or after it is opened): the case that used to flip the count.
+  await expand();
   const texts = await page.locator('[data-testid^="boring-needs-open-"]').allTextContents();
   assert.ok(texts.some((t) => t.startsWith("Mechanical - rename sweep")), `the quiet no-tool agent is listed as stalled: ${JSON.stringify(texts)}`);
   assert.ok(!texts.some((t) => t.startsWith("Art Director")), `the quiet agent with a tool in flight is not listed: ${JSON.stringify(texts)}`);
-  const bad = [];
-  for (let i = 0; i < n; i++) {
-    await expand();
-    await page.locator('[data-testid^="boring-needs-open-"]').nth(i).click();
-    await sleep(700);
-    await page.locator('[data-testid="boring-project-header-vibesquad"]').click(); // back to the Overview
-    await sleep(700);
-    const after = await snap();
-    // The Needs-you count must not move. Badges are compared by the count only: opening an agent expands its project/lane (collapsed-only
-    // badges legitimately swap) and the Overview shows that project's table, so per-badge equality is not a stable contract (see R4-1 report).
-    if (after.count !== before.count) bad.push(`row ${i}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
-  }
-  assert.deepEqual(bad, [], bad.join("\n"));
+  await pass("t0");
+  // R5-3: every demo agent carries openToolSince, so the count stays put at +66m too (no per-tab timeline hint).
+  await page.clock.fastForward(66 * 60_000);
+  await sleep(600);
+  await pass("+66m");
 }));
