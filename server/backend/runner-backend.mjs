@@ -1,12 +1,13 @@
 // RunnerBackend: the AgentBackend seam over the VS agent runner's HTTP API (docs/PLAN_OWN_DAEMON.md Block 3).
 // squad/team/lane/role/ord/profile are first-class fields on the runner record; this class maps them (and the
 // runner's event log) back into the agent shapes callers read.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProfiles, profileMcpExtras } from "../profiles.mjs";
-import { RunnerClient, RunnerHttpError, runnerHome } from "./runner-client.mjs";
+import { RunnerClient, RunnerHttpError, readDiscovery, runnerHome } from "./runner-client.mjs";
 import { protectedMetaIn } from "../../runner/runner.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
@@ -15,6 +16,7 @@ import { applyToolEvent, oldestOpenTool, clearsOpenTools } from "../../runner/op
 import { refreshWhosHere, whosHereKey } from "../whos-here.mjs";
 
 import { createRunnerHookHost } from "./runner-hooks.mjs";
+import { indexedFold, indexedFoldSync } from "./roster-index.mjs";
 import { PROVIDER_ALIASES } from "../../runner/adapters/acp.mjs";
 import { CLAUDE_PERMISSION_MODES as CLAUDE_MODE_IDS, CLAUDE_EFFORTS } from "../../runner/adapters/claude.mjs";
 
@@ -200,71 +202,111 @@ export async function readRunnerAgent(id, { env = process.env, home, liveness } 
   return f.finish(h, env, liveness);
 }
 
+/**
+ * One agent log's fold state, plain data plus two Maps (perms, tools) so it can be saved in the roster index
+ * (roster-index.mjs) and resumed at a byte offset: feedFoldLine() each line in log order, finishFold() for the snapshot.
+ * Only what finishFold reads is kept from events (timestamps, the created event's provider/model/cwd, the usage numbers).
+ */
+export function newFoldState() {
+  return {
+    created: null, // { provider, model, cwd, ts }
+    status: "unknown",
+    exited: false,
+    archivedAt: null,
+    hasLast: false,
+    lastTs: undefined,
+    lastLiveTs: undefined, // last event that proves a child ran: meta/archive appends happen on lost agents too
+    lastPromptTs: undefined, // last input/created event (the "most recent prompt/created" clock for staleness)
+    lastProgressTs: undefined, // last turn-progress event (output/tool/status running|idle/usage/…)
+    usage: null,
+    queued: null, // last `queued` status event's ahead count (waiting for a turn slot), like the async status record
+    perms: new Map(),
+    meta: {},
+    offered: null,
+    sessionId: null,
+    tools: new Map(), // R4-1: open tool calls, same reducer as the runner's own fold
+  };
+}
+
+const USAGE_KEYS = ["contextTokens", "contextMax", "inputTokens", "outputTokens", "costUsd"]; // all usageFields() reads
+
+export function feedFoldLine(st, line) {
+  if (!line) return;
+  let e;
+  try { e = JSON.parse(line); } catch { return; }
+  st.hasLast = true;
+  st.lastTs = e?.ts;
+  applyToolEvent(st.tools, e);
+  if (e.type !== "meta" && e.type !== "archive") st.lastLiveTs = e.ts;
+  if (e.type === "input" || e.type === "created") st.lastPromptTs = e.ts;
+  if (isTurnProgressEvent(e)) st.lastProgressTs = e.ts;
+  if (e.type === "created") { st.created = { provider: e.provider, model: e.model, cwd: e.cwd, ts: e.ts }; Object.assign(st.meta, e.meta); }
+  else if (e.type === "meta") Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
+  else if (e.type === "session") {
+    if (e.sessionId) st.sessionId = e.sessionId;
+    if (Array.isArray(e.modes)) st.offered = { modes: e.modes, models: e.models ?? [] };
+  }
+  else if (e.type === "status") { st.status = e.status; st.queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
+  else if (e.type === "exit") st.exited = true;
+  else if (e.type === "archive") st.archivedAt = e.ts;
+  else if (e.type === "unarchive") st.archivedAt = null;
+  else if (e.type === "usage") { const u = {}; for (const k of USAGE_KEYS) if (k in e) u[k] = e[k]; st.usage = u; }
+  else if (e.type === "permission") { if (e.phase === "request") st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
+}
+
+/** JSON-safe copy of a fold state (Maps as entry lists, insertion order kept) and back. */
+export const saveFoldState = (st) => ({ ...st, perms: [...st.perms], tools: [...st.tools] });
+export const loadFoldState = (j) => ({ ...newFoldState(), ...j, perms: new Map(j.perms ?? []), tools: new Map(j.tools ?? []) });
+
+/** The toAgent() snapshot of a fold state (null without a created event). */
+export function finishFold(id, st, home, env, liveness) {
+  if (!st.created) return null;
+  let status = st.status;
+  // The log's last status is not liveness (runner/runner.mjs summary: "log says running but no child in this process").
+  // A non-parked agent whose last event predates the running runner's start, or whose runner is dead, has no child: lost.
+  if (!st.exited && status !== "parked") {
+    const rl = liveness === undefined ? runnerLiveness(home ?? runnerHome(env)) : liveness;
+    if (rl && (!rl.alive || (st.lastLiveTs ?? 0) < rl.startedAt)) status = "lost";
+  }
+  // A lost (restarted) agent is resumable in place only when it has a saved session and never exited/archived:
+  // the same predicate the runner's resume endpoint (409) applies (_lostSpec/_parkedSpec). Every adapter canPark today.
+  const resumable =
+    status === "lost" &&
+    !st.archivedAt &&
+    typeof st.sessionId === "string" &&
+    st.sessionId !== "" &&
+    !st.sessionId.startsWith("-");
+  const { created, meta } = st;
+  return toAgent({
+    id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(st.offered ? { offered: st.offered } : {}),
+    status: st.exited ? "exited" : status, createdAt: created.ts, updatedAt: st.hasLast ? st.lastTs : undefined, archivedAt: st.archivedAt,
+    lastPromptAt: st.lastPromptTs ?? null, lastProgressAt: st.lastProgressTs ?? null,
+    usage: st.usage, pendingPermissions: [...st.perms.values()], resumable, openTool: oldestOpenTool(st.tools),
+    ...(status === "queued" && !st.exited && st.queued ? { queued: st.queued } : {}),
+  });
+}
+
 /** Incremental fold of one agent log: feed() each line, then finish() for the toAgent() snapshot (null without a created event). */
 function foldRunnerLog(id) {
-  let created = null;
-  let status = "unknown";
-  let exited = false;
-  let archivedAt = null;
-  let last = null;
-  let lastLive = null; // last event that proves a child ran: meta/archive appends happen on lost agents too
-  let lastPrompt = null; // last input/created event (the "most recent prompt/created" clock for staleness)
-  let lastProgress = null; // last turn-progress event (output/tool/status running|idle/usage/…)
-  let usage = null;
-  let queued = null; // last `queued` status event's ahead count (waiting for a turn slot), like the async status record
-  const perms = new Map();
-  const meta = {};
-  let offered = null;
-  let sessionId = null;
-  const tools = new Map(); // R4-1: open tool calls, same reducer as the runner's own fold
-  const feed = (line) => {
-    if (!line) return;
-    let e;
-    try { e = JSON.parse(line); } catch { return; }
-    last = e;
-    applyToolEvent(tools, e);
-    if (e.type !== "meta" && e.type !== "archive") lastLive = e;
-    if (e.type === "input" || e.type === "created") lastPrompt = e;
-    if (isTurnProgressEvent(e)) lastProgress = e;
-    if (e.type === "created") { created = e; Object.assign(meta, e.meta); }
-    else if (e.type === "meta") Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-    else if (e.type === "session") {
-      if (e.sessionId) sessionId = e.sessionId;
-      if (Array.isArray(e.modes)) offered = { modes: e.modes, models: e.models ?? [] };
-    }
-    else if (e.type === "status") { status = e.status; queued = e.status === "queued" && Number.isInteger(e.ahead) ? { ahead: e.ahead } : null; }
-    else if (e.type === "exit") exited = true;
-    else if (e.type === "archive") archivedAt = e.ts;
-    else if (e.type === "unarchive") archivedAt = null;
-    else if (e.type === "usage") usage = e;
-    else if (e.type === "permission") { if (e.phase === "request") perms.set(e.id, { id: e.id, toolName: e.toolName }); else perms.delete(e.id); }
-  };
-  const finish = (home, env, liveness) => {
-    if (!created) return null;
-    // The log's last status is not liveness (runner/runner.mjs summary: "log says running but no child in this process").
-    // A non-parked agent whose last event predates the running runner's start, or whose runner is dead, has no child: lost.
-    if (!exited && status !== "parked") {
-      const rl = liveness === undefined ? runnerLiveness(home ?? runnerHome(env)) : liveness;
-      if (rl && (!rl.alive || (lastLive?.ts ?? 0) < rl.startedAt)) status = "lost";
-    }
-    // A lost (restarted) agent is resumable in place only when it has a saved session and never exited/archived:
-    // the same predicate the runner's resume endpoint (409) applies (_lostSpec/_parkedSpec). Every adapter canPark today.
-    const resumable =
-      status === "lost" &&
-      !archivedAt &&
-      typeof sessionId === "string" &&
-      sessionId !== "" &&
-      !sessionId.startsWith("-");
-    return toAgent({
-      id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
-      status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
-      lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
-      usage, pendingPermissions: [...perms.values()], resumable, openTool: oldestOpenTool(tools),
-      ...(status === "queued" && !exited && queued ? { queued } : {}),
-    });
-  };
-  return { feed, finish };
+  const st = newFoldState();
+  return { feed: (line) => feedFoldLine(st, line), finish: (home, env, liveness) => finishFold(id, st, home, env, liveness) };
 }
+
+/** The roster index's fold: the same reducer, plus a version that changes whenever the reducer's source does. */
+let foldVersion;
+export const ROSTER_FOLD = {
+  init: newFoldState,
+  feed: feedFoldLine,
+  save: saveFoldState,
+  load: loadFoldState,
+  get version() {
+    if (foldVersion) return foldVersion;
+    let tools = "";
+    try { tools = fs.readFileSync(path.join(REPO_ROOT, "runner", "open-tools.mjs"), "utf8"); } catch { tools = String(Math.random()); } // unreadable: never trust an old index
+    foldVersion = createHash("sha1").update([newFoldState, feedFoldLine, saveFoldState, loadFoldState, isTurnProgressEvent].map(String).join("|") + tools + JSON.stringify([...NON_PROGRESS_LOG_EVENTS])).digest("hex").slice(0, 16);
+    return foldVersion;
+  },
+};
 
 /** The created event is the log's first line: read just that (never the whole log) for a cheap id -> cwd. */
 function parseCreatedCwd(head) {
@@ -300,21 +342,57 @@ export async function readRunnerCwd(id, { env = process.env, home } = {}) {
   return (await readRunnerAgent(id, { env, home }))?.cwd ?? null;
 }
 
-/** Every runner agent on this machine (sync, log-derived). Empty when no runner dir exists. */
-export function listRunnerAgentsSync({ env = process.env } = {}) {
-  const home = runnerHome(env);
+/** Ids of the agent logs in a runner home, or null when it has no agents dir. */
+function runnerLogIds(home) {
   let names;
   try {
     names = fs.readdirSync(path.join(home, "agents"));
   } catch {
-    return [];
+    return null;
   }
-  const liveness = runnerLiveness(home); // once for the whole list, not per agent
-  return names.filter((f) => f.endsWith(".jsonl")).map((f) => readRunnerAgentSync(f.slice(0, -6), { env, home, liveness })).filter(Boolean);
+  return names.filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -6)).filter((id) => isRunnerId(id) && /^[A-Za-z0-9_-]{1,64}$/.test(id));
 }
 
-/** listRunnerAgentsSync without blocking the event loop: async reads, small batches, a yield between them. */
-export async function listRunnerAgents({ env = process.env, batch = 8 } = {}) {
+/**
+ * Every runner agent on this machine (sync, log-derived). Empty when no runner dir exists. Folds only the bytes appended since
+ * the last read (roster-index.mjs): the full re-fold of every log on each call was 7-11s of CPU live (unit-roster-no-refold).
+ */
+export function listRunnerAgentsSync({ env = process.env } = {}) {
+  const home = runnerHome(env);
+  const ids = runnerLogIds(home);
+  if (!ids) return [];
+  const liveness = runnerLiveness(home); // once for the whole list, not per agent
+  return indexedFoldSync(home, ids, ROSTER_FOLD).map(({ id, state }) => finishFold(id, state, home, env, liveness)).filter(Boolean);
+}
+
+/**
+ * The CLI's roster (vs who / whoami / handoff): the live runner's own folded records (GET /agents?full=1, sent as this process's
+ * caller: an agent shell's token, else the owner's bearer), else listRunnerAgentsSync when the runner is down, still booting
+ * (no runner.json naming it yet), hung past timeoutMs, or refuses. Same snapshot shape either way (toAgent).
+ */
+export async function listRunnerAgentsLive({ env = process.env, timeoutMs = 8000, client } = {}) {
+  const home = runnerHome(env);
+  if (client || readDiscovery(home)) {
+    try {
+      const rc = client ?? new RunnerClient({ home, env, requestTimeoutMs: timeoutMs, restartWaitMs: 0 });
+      const res = await rc.request("GET", "/agents?full=1");
+      if (Array.isArray(res?.agents)) return res.agents.filter(Boolean).map(toAgent);
+    } catch { /* down, booting, hung or refused: fold the logs */ }
+  }
+  return listRunnerAgentsSync({ env });
+}
+
+/** The pre-index listRunnerAgentsSync: every log folded from byte 0. The parity reference for the index (tests, bench). */
+export function foldAllRunnerAgentsSync({ env = process.env } = {}) {
+  const home = runnerHome(env);
+  const ids = runnerLogIds(home);
+  if (!ids) return [];
+  const liveness = runnerLiveness(home);
+  return ids.map((id) => readRunnerAgentSync(id, { env, home, liveness })).filter(Boolean);
+}
+
+/** listRunnerAgentsSync without blocking the event loop: same index, and the scan yields to the loop between slices. */
+export async function listRunnerAgents({ env = process.env } = {}) {
   const home = runnerHome(env);
   let names;
   try {
@@ -323,12 +401,14 @@ export async function listRunnerAgents({ env = process.env, batch = 8 } = {}) {
     return [];
   }
   const liveness = runnerLiveness(home);
-  const ids = names.filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -6));
+  const ids = names.filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -6)).filter((id) => isRunnerId(id) && /^[A-Za-z0-9_-]{1,64}$/.test(id));
+  const folded = await indexedFold(home, ids, ROSTER_FOLD);
   const out = [];
-  for (let i = 0; i < ids.length; i += batch) {
-    const got = await Promise.all(ids.slice(i, i + batch).map((id) => readRunnerAgent(id, { env, home, liveness })));
-    for (const a of got) if (a) out.push(a);
-    await yieldLoop();
+  let t0 = performance.now();
+  for (const { id, state } of folded) { // toAgent() of every log is its own block on a big roster: yield every 8ms of it
+    const a = finishFold(id, state, home, env, liveness);
+    if (a) out.push(a);
+    if (performance.now() - t0 >= 8) { await yieldLoop(); t0 = performance.now(); }
   }
   return out;
 }

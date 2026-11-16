@@ -30,7 +30,7 @@ import {
   triageInboxCards,
 } from "../server/inbox.mjs";
 import { createAgentClient, readBrainstormSummary, writeBrainstormSummary } from "../server/brainstorm.mjs";
-import { getBackend, isRunnerId, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
+import { getBackend, isRunnerId, listRunnerAgentsLive, listRunnerAgentsSync, readRunnerAgentSync, sharedRunnerBackend } from "../server/backend/index.mjs";
 import { agentCallerOf, callTool, createContext, hasOwnerProof, lastAssistantText, postToVsServer, verifyCaller } from "../server/mcp/tools.mjs";
 import { evaluateVerdictGate } from "../server/verdict.mjs";
 import { bestOverlap, newPinBrief, slugLaneId, takenLaneIds, uniqueLaneId } from "../server/pin-ideas.mjs";
@@ -669,7 +669,11 @@ function laneMembers(agents, team) {
 
 // Runner agents live in the runner's own logs: shape them as agent rows.
 function listAgentsViaRunner(env = process.env) {
-  return listRunnerAgentsSync({ env }).map((a) => ({
+  return listRunnerAgentsSync({ env }).map(agentRow);
+}
+
+function agentRow(a) {
+  return {
     id: a.id,
     name: a.title,
     title: a.title,
@@ -689,11 +693,14 @@ function listAgentsViaRunner(env = process.env) {
     lost: a.lost === true,
     createdAt: a.createdAt ?? null,
     updatedAt: a.updatedAt ?? null,
-  }));
+  };
 }
 
-function collectAgents() {
-  return { agents: listAgentsViaRunner(), source: "runner" };
+// The live runner already holds every agent folded: ask it (the caller's agent token, or the owner's bearer) instead of
+// re-folding every log here. Runner down, booting or refusing: the log fold, which only parses bytes appended since the last
+// read (roster-index.mjs). unit-roster-no-refold: the per-call full fold was 7-11s of CPU and slowed the runner's own boot.
+async function collectAgents(env = process.env) {
+  return { agents: (await listRunnerAgentsLive({ env })).map(agentRow), source: "runner" };
 }
 
 function resolveCallerUsage(identity) {
@@ -874,10 +881,10 @@ export function readJudgmentInput(flags, io = {}) {
   return null;
 }
 
-function commandHandoff(flags) {
+async function commandHandoff(flags) {
   const judgment = readJudgmentInput(flags); // validate before any write
   const identity = resolveIdentity(flags);
-  const { agents, source } = collectAgents();
+  const { agents, source } = await collectAgents();
   const packet = buildHandoffPacket(identity, agents, source, judgment);
 
   fs.mkdirSync(identity.teamDir, { recursive: true });
@@ -1135,7 +1142,7 @@ async function commandWho(flags) {
   const wantLane = (hubLane ? String(hubLane.id) : identity.lane).toLowerCase();
   const squadWide = target === "all" && !(typeof explicitLane === "string" && explicitLane.trim());
 
-  const { agents } = collectAgents();
+  const { agents } = await collectAgents();
   const rawMatched = [];
   // Removed teams (Remove team in the UI) are hidden; a leftover agent labelled with one is not listed.
   const removedLanes = new Set((identity.team.lanes ?? []).filter((l) => l.state === "removed").map((l) => String(l.id).toLowerCase()));
@@ -1294,7 +1301,7 @@ async function commandWhoami(flags) {
   const roleOverride = pick("role", "VS_ROLE");
   const ordOverride = pick("ord", "VS_ORD");
 
-  const { agents } = collectAgents();
+  const { agents } = await collectAgents();
   const agentsById = new Map(agents.map((a) => [a.id, a]));
 
   const resolved = resolveAgentIdentity(

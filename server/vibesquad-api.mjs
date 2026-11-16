@@ -5,6 +5,8 @@ import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { tailLines } from "./log-tail.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
 import { sharedRunnerBackend, isRunnerId, listRunnerAgents, readRunnerCwd, readRunnerCwdSync } from "./backend/index.mjs";
+import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
+import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
 import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
@@ -728,23 +730,42 @@ async function resolveShellCwd(cwd, rootDir, opts) {
   return roots.some((r) => insideDir(real, r)) ? real : null;
 }
 
-// Runner roster for the sync root getters below. Parsing every agent log is hundreds of ms of CPU: it runs async in the
-// background (listRunnerAgents yields between batches), and callers read the last completed scan. One scan feeds navRoots and
-// liveRunnerAgents. A fresh request always starts its own scan (a scan already in flight listed the dir before the new agent
-// existed); the newest-started scan to finish wins, and a reset invalidates every scan still in flight.
+// Runner roster for the sync root getters below. Callers read the last completed scan; one scan feeds navRoots and
+// liveRunnerAgents. unit-roster-no-refold: at most ONE scan runs at a time and later callers share it. A fresh request (a 403
+// retry: a scan already in flight listed the dir before the new agent existed) gets one follow-up scan after the current one,
+// shared by every fresh caller that arrived meanwhile. A scan asks the live runner (it holds every agent folded); while the runner
+// is booting it folds nothing (that fold competed with the runner's own boot fold) and the last roster stands; only with the
+// runner down does it fold the logs, and then only the bytes appended since the last read (roster-index.mjs).
 let runnerRoster = { at: 0, agents: [] };
 let rosterInflight = null;
-let rosterScanSeq = 0;
-let rosterApplied = 0;
+let rosterFollowUp = null;
 let rosterEpoch = 0;
+const rosterDeps = { runner: () => sharedRunnerBackend(), home: () => runnerHome(), discovery: readDiscovery, booting: (home) => bootingHolder(home), fold: () => listRunnerAgents() };
+let rosterScans = { runner: 0, fold: 0, skippedBooting: 0 };
+/** The runner's roster, null while it boots (keep the last one), else the index fold. */
+async function scanRunnerRoster() {
+  const home = rosterDeps.home();
+  if (rosterDeps.discovery(home)) {
+    try {
+      const agents = await rosterDeps.runner().listAgents();
+      rosterScans.runner++;
+      return agents;
+    } catch { /* stale runner.json (a new runner is booting), hung or refused: judged below */ }
+  }
+  if (rosterDeps.booting(home)) { rosterScans.skippedBooting++; return null; }
+  rosterScans.fold++;
+  return rosterDeps.fold();
+}
 function refreshRunnerRoster(fresh = false) {
-  if (rosterInflight && !fresh) return rosterInflight;
+  if (rosterInflight && fresh) {
+    rosterFollowUp ??= rosterInflight.then(() => { rosterFollowUp = null; return refreshRunnerRoster(); });
+    return rosterFollowUp;
+  }
+  if (rosterInflight) return rosterInflight;
   const epoch = rosterEpoch;
-  const seq = ++rosterScanSeq;
-  const p = listRunnerAgents()
+  const p = scanRunnerRoster()
     .then((agents) => {
-      if (epoch !== rosterEpoch || seq < rosterApplied) return;
-      rosterApplied = seq;
+      if (epoch !== rosterEpoch || !agents) return;
       runnerRoster = { at: Date.now(), agents: agents.filter((a) => !a.archivedAt) };
       navRootsCache.clear();
     })
@@ -758,7 +779,7 @@ function runnerRosterNow(now = Date.now()) {
   if (now - runnerRoster.at >= 30_000) refreshRunnerRoster();
   return runnerRoster.agents;
 }
-export const _runnerRosterReady = () => refreshRunnerRoster();
+export const _runnerRosterReady = (fresh = false) => refreshRunnerRoster(fresh);
 
 // Quick open / find in files call per keystroke: reuse the roots for 30s. getter(true) (a 403 miss, file-search.mjs) awaits a
 // brand-new scan, so a worktree created a moment ago is allowed on the retry.
@@ -788,7 +809,10 @@ export const _liveRunnerAgentsForTest = (now) => liveRunnerAgents(now);
 function liveRunnerAgents(now = Date.now()) {
   return runnerRosterNow(now);
 }
-export const _resetLaneAgentsCache = () => { rosterEpoch++; rosterInflight = null; rosterApplied = 0; runnerRoster = { at: 0, agents: [] }; navRootsCache.clear(); };
+export const _resetLaneAgentsCache = () => { rosterEpoch++; rosterInflight = null; rosterFollowUp = null; rosterScans = { runner: 0, fold: 0, skippedBooting: 0 }; runnerRoster = { at: 0, agents: [] }; navRootsCache.clear(); };
+/** Test seam: override how a roster scan reaches the runner / judges boot / folds (unset keys keep production), and its counters. */
+export const _rosterDepsForTest = (over = {}) => { const prev = { ...rosterDeps }; Object.assign(rosterDeps, over); return () => Object.assign(rosterDeps, prev); };
+export const _rosterScansForTest = () => ({ ...rosterScans });
 
 export function laneWorktreeCandidates(cwd, roots, { sanctuary = resolveManagedWorktreeRoot(), agents } = {}) {
   const out = [];
