@@ -19,10 +19,10 @@ const TEAM = (id, name, lanes) => ({ id, name, color: "#6cc0f5", leadFlagTokens:
 const REGISTRY = { ...E.TEAMS_REGISTRY, revision: "normal-invariants", teams: [...E.TEAMS_REGISTRY.teams, TEAM("efi", "Escape From Idle", [{ id: "main-game", name: "Main game", paths: ["EFI"] }, { id: "ui-lab", name: "UI Lab", paths: ["EFI"] }])] };
 const PROJECT_NAME = Object.fromEntries(REGISTRY.teams.map((t) => [t.id, t.name]));
 
-// agent title -> project name, read from the demo cast itself (src/demo.tsx): `team: "x"` on the line, or the vs() helper = vibesquad.
+// agent id -> project name, read from the demo cast itself (src/demo.tsx): `team: "x"` on the line, or the vs() helper = vibesquad.
 const DEMO_TEAM = {};
 for (const line of fs.readFileSync(path.join(E.REPO_ROOT, "src", "demo.tsx"), "utf8").split("\n")) {
-  const title = /\btitle: "([^"]+)"/.exec(line)?.[1];
+  const title = /\bid: "(demo-[\w-]+)"/.exec(line)?.[1];
   if (!title) continue;
   const team = /\bteam: "(\w+)"/.exec(line)?.[1] ?? (/\bvs\(/.test(line) ? "vibesquad" : null);
   if (team) DEMO_TEAM[title] = PROJECT_NAME[team] ?? team;
@@ -74,8 +74,8 @@ const crumb = () => page.evaluate(() => {
   const t = (k) => document.querySelector(`[data-testid="boring-crumb-${k}"]`)?.textContent?.trim() ?? null;
   return { project: t("project"), lane: t("lane"), agent: t("agent") };
 });
-/** The agent whose chat is open: the header's name (trimmed), mapped to its project via the demo cast. */
-const openAgent = () => page.evaluate(() => document.querySelector('[data-testid="boring-agent-name"]')?.textContent?.trim() ?? null);
+/** The agent whose chat is open: the header data-agent-id (stable; titles change), mapped to its project via the demo cast. */
+const openAgent = () => page.evaluate(() => document.querySelector('[data-testid="boring-agent-header"]')?.getAttribute("data-agent-id") ?? null);
 const footerY = () => page.evaluate(() => Math.round(document.querySelector('[data-testid="boring-sidebar-footer"]').getBoundingClientRect().top));
 
 /** The states of invariants 3, 4, 6, 7. Each returns after the UI has settled. */
