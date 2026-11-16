@@ -1222,3 +1222,5 @@ html[data-vibe="boring"] .boring-needs-item { container-type: inline-size; }
 /* Container-width switch without an at-rule (every rule stays column-0 + scoped): (100cqw - 300px) * 1000 clamps to 0 at <=300px and to full width above it. */
 html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { display: inline-block; vertical-align: bottom; text-indent: 0.3em; overflow: hidden; white-space: nowrap; max-width: clamp(0px, calc((100cqw - 300px) * 1000), 100cqw); }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: clamp(45cqw, calc(65cqw - (100cqw - 300px) * 1000), 65cqw); }
+/* R6-3: the Needs-you reason wraps to 2 lines (full text stays in the tooltip). */
+html[data-vibe="boring"] .boring-needs-reason { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }

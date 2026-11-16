@@ -92,7 +92,7 @@ const CAST: Spec[] = [
   { id: "demo-prov-opencode", who: "opencode", title: "Implement - OpenCode · hooks", status: "running", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 52_000, ago: 2 },
   { id: "demo-prov-aider", who: "aider", title: "Implement - Aider · generic", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 18_000, ago: 7 },
   // Other teams, so the sidebar has several bosses.
-  { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-you": "merge", "needs-you-reason": "approve the save-format merge" }, used: 97_000, cwd: EFI },
+  { id: "demo-lead-efi", who: "claude", title: "★ MAIN GAME ord75", status: "running", labels: { team: "efi", lane: "main-game", role: "lead", ord: "75", "needs-you": "merge", "needs-you-reason": "Lead at 150k+ tokens: wrap up and hand off at a good stopping point, then approve the save-format merge" }, used: 97_000, cwd: EFI },
   { id: "demo-lead-efi-dup", who: "sonnet", title: "★ MAIN GAME ord74", labels: { team: "efi", lane: "main-game", role: "lead", ord: "74" }, used: 90_000, cwd: EFI, ago: 30 },
   { id: "demo-bs-efi-1", who: "claude", title: "Brainstorm · Main game · OpenRouter pipeline critique", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "OpenRouter pipeline critique" }, cwd: EFI, ago: 20 },
   { id: "demo-bs-efi-2", who: "gemini", title: "Brainstorm · Main game · site polish", labels: { team: "efi", lane: "main-game", role: "brainstorm", topic: "site polish" }, cwd: EFI, ago: 40 },

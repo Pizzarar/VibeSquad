@@ -30,6 +30,12 @@ const deps: AttentionDeps = {
 export type NeedsYouRow = { item: AttentionItem; member: Member; view: TeamView; teamId: string; project: string; lane: string; age: string; since: number; who: string };
 type DoneLog = { teamId: string; project: string; entries: FeedEntry[] };
 
+/** R6-3: "<Lane> · Lead 17" repeats the lane that line 1 already shows; keep only the role part. */
+export function roleOnlyWho(who: string, lane: string): string {
+  const p = `${lane} · `;
+  return lane && who.startsWith(p) && who.length > p.length ? who.slice(p.length) : who;
+}
+
 /** What the row says: for a permission, the tool and its command ("Bash: rg --stats"); otherwise the attention reason. */
 export function needsYouReason(item: Pick<AttentionItem, "kind" | "reason" | "agent">): string {
   if (item.kind !== "permission") return item.kind === "error" ? condenseReason(item.reason) : item.reason;
@@ -167,7 +173,7 @@ export function BoringInbox({ views, onOpen, now, logs: injected }: { views: Tea
                 <div className="boring-needs-line">
                   <button type="button" className="boring-needs-open" data-testid={`boring-needs-open-${item.id}`} title={`${r.who}: ${needsYouReason(item)}`} onClick={() => openNeedsYouRow(r, onOpen)}>
                     <span className={`boring-dot st-${item.kind === "error" ? "err" : item.kind === "stalled" ? "stalled" : "attn"}`} />
-                    <span className="boring-needs-who">{r.who}</span>
+                    <span className="boring-needs-who">{roleOnlyWho(r.who, r.lane)}</span>
                     <span className="boring-needs-where boring-needs-where-inline" data-testid="boring-needs-where">{r.lane}<span className="boring-needs-proj"> · {r.project}</span></span>
                     <span className="boring-conv-age">{r.age}</span>
                   </button>
