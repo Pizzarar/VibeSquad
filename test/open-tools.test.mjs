@@ -83,6 +83,15 @@ test("reducer: tool timeout only from a positive finite number; oldest skips ent
   for (const t of [0, -1, "600000", NaN, Infinity, null]) assert.equal(toolTimeoutMs({ input: { timeout: t } }), null, String(t));
   const open = fold([{ type: "tool", phase: "call", id: "nots", name: "A" }, call("b", 7)]);
   assert.equal(oldestOpenTool(open).id, "b");
+  // change detection follows the published oldest (timestamp-less calls skipped), not the first map key
+  const m = new Map();
+  assert.equal(applyToolEvent(m, { type: "tool", phase: "call", id: "nots", name: "A" }), false, "a timestamp-less call publishes nothing");
+  assert.equal(applyToolEvent(m, call("b", 7)), true, "b opening behind 'nots' changes the published oldest");
+  assert.equal(applyToolEvent(m, call("c", 8)), false);
+  assert.equal(applyToolEvent(m, { type: "tool", phase: "result", id: "b" }), true, "b closing moves the oldest to c");
+  assert.equal(applyToolEvent(m, { type: "tool", phase: "result", id: "c" }), true, "c closing leaves only 'nots': nothing published");
+  assert.equal(oldestOpenTool(m), null);
+  assert.equal(applyToolEvent(m, { type: "turn_done" }), false, "clearing only 'nots' changes nothing published");
 });
 
 // ---- payload: toAgent + sync fold -----------------------------------------------------------------------------------------------
@@ -181,14 +190,15 @@ test("live: a known agent's tool events go out as `tools` deltas only when the o
   L.feed({ type: "tool", phase: "call", id: "b", name: "Read", seq: 3, ts: 2000 });
   L.feed({ type: "tool", phase: "result", id: "a", seq: 4, ts: 3000 });
   L.feed({ type: "tool", phase: "result", id: "b", seq: 5, ts: 4000 });
-  await until(() => L.tools().length === 3);
+  await until(() => L.tools().length === 4);
   await settle();
   assert.deepEqual(L.tools().map(({ kind, agentId, openToolSince, openToolName, openToolTimeoutMs }) => ({ kind, agentId, openToolSince, openToolName, openToolTimeoutMs })), [
+    { kind: "tools", agentId: "rn-1", openToolSince: null, openToolName: null, openToolTimeoutMs: null }, // the turn_done clears what clients may hold
     { kind: "tools", agentId: "rn-1", openToolSince: 1000, openToolName: "Bash", openToolTimeoutMs: 60000 },
     { kind: "tools", agentId: "rn-1", openToolSince: 2000, openToolName: "Read", openToolTimeoutMs: null },
     { kind: "tools", agentId: "rn-1", openToolSince: null, openToolName: null, openToolTimeoutMs: null },
   ]);
-  assert.equal(L.tools()[0].updatedAt, new Date(1000).toISOString(), "delta carries the event time as updatedAt");
+  assert.equal(L.tools()[1].updatedAt, new Date(1000).toISOString(), "delta carries the event time as updatedAt");
   assert.equal(L.fetches(), 0, "known agents need no fetch per tool event");
   L.off();
 });
@@ -201,10 +211,54 @@ test("live: an agent first seen mid-turn reads the runner's fold; a clearing eve
   assert.equal(L.tools()[0].openToolSince, 500, "unknown agent: the runner's authoritative fold, not a guess from one event");
   assert.equal(L.fetches(), 1);
   L.feed({ type: "error", seq: 2, ts: 1100 });
-  L.feed({ type: "tool", phase: "call", id: "c", name: "Edit", seq: 3, ts: 1200 });
   await until(() => L.tools().length === 2);
-  assert.equal(L.tools()[1].openToolName, "Edit");
+  assert.deepEqual(pick(L.tools()[1]), { openToolSince: null, openToolName: null, openToolTimeoutMs: null }, "a non-roster clearing event on an unknown agent clears the client's openToolSince");
+  L.feed({ type: "tool", phase: "call", id: "c", name: "Edit", seq: 3, ts: 1200 });
+  await until(() => L.tools().length === 3);
+  assert.equal(L.tools()[2].openToolName, "Edit");
   assert.equal(L.fetches(), 1, "known from the error on: no more fetches");
+  L.off();
+});
+
+test("live: every non-roster clearing event (turn_done / error / cancel / parked) on an unknown agent emits a clearing delta", async () => {
+  for (const type of ["turn_done", "error", "cancel", "parked"]) {
+    const L = liveBackend();
+    await until(() => L.evs.some((e) => e.kind === "connected"));
+    L.feed({ type, seq: 1, ts: 50 });
+    await until(() => L.tools().length === 1);
+    assert.deepEqual(pick(L.tools()[0]), { openToolSince: null, openToolName: null, openToolTimeoutMs: null }, type);
+    L.feed({ type, seq: 2, ts: 60 }); // known and already empty: no repeat
+    await settle();
+    assert.equal(L.tools().length, 1, `${type}: no repeat delta`);
+    L.off();
+  }
+});
+
+test("live: a roster upsert's openTool fields follow the event-stream fold, never a newer fetch or a stale live.known", async () => {
+  let fail = false;
+  // the fetch is AHEAD of the stream: a newer turn with a newer open tool
+  const L = liveBackend(() => { if (fail) throw new Error("runner hiccup"); return { status: "running", openToolSince: 9999, openToolName: "Newer", openToolTimeoutMs: null }; });
+  await until(() => L.evs.some((e) => e.kind === "connected"));
+  L.backend.live.hwm = new Map(); // lifecycle mode: live.known is kept, and the fetch-failure fallback is used
+  const upserts = () => L.evs.filter((e) => e.kind === "agent");
+  L.feed({ type: "turn_done", seq: 1, ts: 10 });
+  L.feed({ type: "tool", phase: "call", id: "a", name: "Bash", seq: 2, ts: 1000 });
+  L.feed({ type: "usage", seq: 3, ts: 1100 });
+  await until(() => upserts().length === 1);
+  assert.deepEqual(pick(upserts()[0].agent), { openToolSince: 1000, openToolName: "Bash", openToolTimeoutMs: null }, "running: the tracked oldest, not the fetch's");
+  L.feed({ type: "tool", phase: "result", id: "a", seq: 4, ts: 1200 });
+  await until(() => L.tools().length === 3);
+  assert.equal(L.backend.live.known.get("rn-1").openToolSince, null, "a tools delta updates live.known");
+  fail = true;
+  L.feed({ type: "usage", seq: 5, ts: 1300 }); // fetch fails: snapshotFor -> live.known
+  await until(() => upserts().length === 2);
+  assert.equal(upserts()[1].agent.openToolSince, null, "the fallback snapshot does not resurrect the closed tool");
+  fail = false;
+  L.feed({ type: "tool", phase: "call", id: "b", name: "Read", seq: 6, ts: 1400 });
+  L.feed({ type: "status", status: "idle", seq: 7, ts: 1500 }); // the fetch still says running with an open tool
+  await until(() => upserts().some((e) => e.agent.status === "idle"));
+  const idle = upserts().find((e) => e.agent.status === "idle").agent;
+  assert.deepEqual(pick(idle), { openToolSince: null, openToolName: null, openToolTimeoutMs: null }, "not running: never an open tool");
   L.off();
 });
 
@@ -213,11 +267,11 @@ test("live: a known open set that a roster event clears (idle) emits no delta (t
   await until(() => L.evs.some((e) => e.kind === "connected"));
   L.feed({ type: "turn_done", seq: 1, ts: 1 });
   L.feed({ type: "tool", phase: "call", id: "a", name: "Bash", seq: 2, ts: 2 });
-  await until(() => L.tools().length === 1);
+  await until(() => L.tools().length === 2);
   L.feed({ type: "status", status: "idle", seq: 3, ts: 3 });
   await until(() => L.evs.some((e) => e.kind === "agent" && e.agent.status === "idle"));
   await settle();
-  assert.equal(L.tools().length, 1, "no extra tools delta for a roster event");
+  assert.equal(L.tools().length, 2, "no extra tools delta for a roster event");
   assert.equal(L.evs.filter((e) => e.kind === "agent").at(-1).agent.openToolSince, null, "the upsert says no tool");
   assert.ok(L.backend.live.tools.has("rn-1"));
   L.feed({ type: "archive", seq: 4, ts: 4 });
@@ -243,9 +297,9 @@ test("live replay (catch-up hwm): a replayed seq is handled once, so tool calls 
   for (const e of evs) L.feed(e); // replayed after a reconnect
   L.feed({ type: "tool", phase: "result", id: "a", seq: 4, ts: 300 });
   L.feed({ type: "tool", phase: "result", id: "a", seq: 4, ts: 300 }); // dup
-  await until(() => L.tools().length >= 2);
+  await until(() => L.tools().length >= 3);
   await settle();
-  assert.deepEqual(L.tools().map((e) => e.openToolSince), [100, 200]);
+  assert.deepEqual(L.tools().map((e) => e.openToolSince), [null, 100, 200]);
   assert.equal(L.backend.live.tools.get("rn-1").size, 1);
   // non-lifecycle mode: a stream close drops every tracker (the gap's events are gone)
   L.backend.live.hwm = null;

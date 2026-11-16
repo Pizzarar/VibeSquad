@@ -76,8 +76,8 @@ const mins = (s: number) => (s >= 120 ? `${Math.round(s / 60)}m` : `${s}s`);
  */
 export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: number | null): string | null {
   const updated = Date.parse(a.updatedAt ?? "");
-  if (Number.isNaN(updated)) return null;
-  const idle = Math.max(0, Math.floor((now - updated) / 1000));
+  // A missing / invalid updatedAt only rules out the "quiet" branch (idle 0); the tool-ceiling branch does not read it.
+  const idle = Number.isNaN(updated) ? 0 : Math.max(0, Math.floor((now - updated) / 1000));
   const tool = openToolOf(a, now, toolRunningSeconds);
   const stall = boringNeedsYouStall({
     status: a.status,

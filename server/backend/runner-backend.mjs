@@ -1429,7 +1429,11 @@ export class RunnerBackend {
     }
     const to = viewStatus(t);
     const { queued: _fetchedQueue, ...agentNoQueue } = agent; // the event stream, not the (possibly newer) fetch, decides the queued label
-    const shown = { ...agentNoQueue, status: to, ...(t.queued ? { queued: t.queued } : {}) };
+    // The open-tool fields follow the event-stream fold at e.seq too, never a (possibly newer) fetch or a stale live.known:
+    // not running = no open tool; a known open set = its oldest; unknown (mid-turn at boot) = the runner's own fold (the fetch).
+    const tracked = this.live.tools.get(id);
+    const toolFields = to !== "running" ? openToolFields(null) : tracked ? openToolFields(oldestOpenTool(tracked)) : null;
+    const shown = { ...agentNoQueue, status: to, ...(t.queued ? { queued: t.queued } : {}), ...(toolFields ?? {}) };
     this.emitEvent({ kind: "agent", agent: shown });
     if (e.type === "created") this.emitEvent({ kind: "created", agentId: id, agent: shown });
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
@@ -1442,7 +1446,8 @@ export class RunnerBackend {
    * R4-1 live path for the open-tool fields. Tool events are not roster events (no fetch, no `agent` upsert: those would wake
    * every agent-upsert consumer on each tool call), so a change of the oldest open call goes out as a small delta:
    *   { kind: 'tools', agentId, openToolSince, openToolName, openToolTimeoutMs, updatedAt }
-   * Roster events (status / exit / archive / ...) need none: their fetched snapshot carries the runner fold's own fields.
+   * Roster events (status / exit / archive / ...) need none: their `agent` upsert carries the fields, taken from this same fold
+   * (handleLogEvent's `shown`), and a non-roster clearing event on a not-yet-known agent emits a clearing delta.
    * live.tools: agentId -> Map (the runner fold's reducer, fed the same ordered events) once the agent's open set is KNOWN, i.e.
    * after its created event or any event that clears every call (turn end, idle, error, cancel, restart). Until then (an agent
    * mid-turn at server boot or after a non-replayed reconnect) a tool event reads the runner's authoritative fold instead.
@@ -1453,8 +1458,12 @@ export class RunnerBackend {
     const tools = this.live.tools;
     if (e.type === "archive" || e.type === "exit") { tools.delete(id); return; }
     let open = tools.get(id);
-    if (!open && clearsOpenTools(e)) tools.set(id, (open = new Map()));
-    else if (open) {
+    if (!open && clearsOpenTools(e)) {
+      tools.set(id, (open = new Map()));
+      // Clients may hold this agent's openToolSince from the seed / a fetch fallback; a roster event's upsert clears it, any
+      // other clearing event (turn_done / error / cancel / parked) must say so itself.
+      if (!ROSTER_EVENTS.has(e.type)) return this.emitTools(id, e, openToolFields(null));
+    } else if (open) {
       if (!applyToolEvent(open, e) || ROSTER_EVENTS.has(e.type)) return;
       return this.emitTools(id, e, openToolFields(oldestOpenTool(open)));
     }
@@ -1466,6 +1475,8 @@ export class RunnerBackend {
   }
 
   emitTools(id, e, fields) {
+    const known = this.live.known.get(id); // keep the fetch-failure fallback (snapshotFor) from resurrecting a closed tool
+    if (known) this.live.known.set(id, { ...known, ...fields });
     this.emitEvent({ kind: "tools", agentId: id, ...fields, ...(Number.isFinite(e.ts) ? { updatedAt: iso(e.ts) } : {}) });
   }
 

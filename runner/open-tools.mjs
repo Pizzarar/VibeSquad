@@ -27,18 +27,13 @@ export function clearsOpenTools(e) {
   return CLEAR_ALL.has(e.type);
 }
 
-const firstKey = (open) => {
-  for (const k of open.keys()) return k;
-  return undefined;
-};
-
 /**
- * Apply one runner log event to `open`. Returns true when the oldest open call changed (opened, closed, or cleared), which is
- * exactly when the published `openToolSince` / `openToolName` change.
+ * Apply one runner log event to `open`. Returns true when the oldest open call WITH a timestamp (oldestOpenTool) changed (opened,
+ * closed, or cleared), which is exactly when the published `openToolSince` / `openToolName` change.
  */
 export function applyToolEvent(open, e) {
   if (!e || typeof e !== "object") return false;
-  const before = firstKey(open);
+  const before = oldestOpenTool(open)?.id; // the published oldest (timestamp-less calls are skipped), not just the first key
   if (clearsOpenTools(e)) open.clear();
   else if (e.type === "tool" && e.id != null) {
     const id = String(e.id);
@@ -48,7 +43,7 @@ export function applyToolEvent(open, e) {
       open.set(id, { since: Number.isFinite(e.ts) ? e.ts : null, name: typeof e.name === "string" && e.name ? e.name : "tool", timeoutMs: toolTimeoutMs(e) });
     }
   }
-  return firstKey(open) !== before;
+  return oldestOpenTool(open)?.id !== before;
 }
 
 /** The oldest open call ({ id, since, name, timeoutMs }) or null. */

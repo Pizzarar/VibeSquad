@@ -146,6 +146,11 @@ test("R4-1 rule: quiet >= 10m with no open tool, OR open tool >= ceiling (its ow
   // not running / pending permission: never stalled, tool or not
   assert.equal(stalledReason(run({ status: "idle", openToolSince: NOW - 90 * MIN * 1000 }), NOW), null);
   assert.equal(stalledReason(run({ pendingPermissions: [{ id: "r" }], openToolSince: NOW - 90 * MIN * 1000 }), NOW), null);
+  // a missing / invalid updatedAt never hides the tool-ceiling reason (that branch does not read it); it only rules out "quiet"
+  for (const updatedAt of [undefined, "", "not-a-date"]) {
+    assert.equal(stalledReason(agent("a", { status: "running", updatedAt, openToolSince: NOW - 61 * MIN * 1000, openToolName: "Bash" }), NOW), "Tool Bash running 61m", String(updatedAt));
+    assert.equal(stalledReason(agent("a", { status: "running", updatedAt, openToolSince: null }), NOW), null, `no quiet stall without a time: ${updatedAt}`);
+  }
   // the item reason and the count follow the same rule
   const hung = member(run({ openToolSince: NOW - 61 * MIN * 1000, openToolName: "Bash" }));
   assert.deepEqual(attentionItems([hung], NOW).map((i) => [i.kind, i.reason]), [["stalled", "Tool Bash running 61m"]]);
