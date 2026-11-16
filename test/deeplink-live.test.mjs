@@ -6,9 +6,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 
-// R5-1 (docs/UX_REVIEW_R5.md): a ?agent= deep link must land on its agent on the live runner, where the stream opens
-// before the first roster snapshot. Real src/paseo.ts + src/runnerBridge.ts + src/panes.ts (not ?demo); EventSource,
-// fetch, location and localStorage are faked. The snapshot (with the linked agent) arrives ~1s after the stream opens.
+// R5-1 (docs/UX_REVIEW_R5.md) + R6-1 (docs/UX_REVIEW_R6.md): a ?agent= deep link must land on its agent on the live
+// runner, where the stream opens before the first roster snapshot. Real src/paseo.ts + src/runnerBridge.ts +
+// src/panes.ts + src/pinFocus.ts (its tryRestore startup subscriber; not ?demo); EventSource, fetch, location and
+// localStorage are faked. The snapshot arrives ~1s after the stream opens and, like the real squad's, is large with the
+// linked agent sorting LAST: a 2-agent roster with it first passed while the real squad (520 agents) failed, twice.
 const SRC_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "src");
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -23,6 +25,9 @@ registerHooks({
   },
 });
 function stubFor(specifier) {
+  // pinFocus.ts imports these .tsx modules; tryRestore only reads derived().views (no saved pin here).
+  if (specifier === "./PinGrid") return "export async function openPin() { return null; }";
+  if (specifier === "./ui") return "export const derived = () => ({ views: [] }); export const subscribeTree = () => () => {};";
   if (specifier === "./demo") return "export const demoAgents = () => new Map(); export const demoArchived = () => new Map(); export const demoProviderUsage = () => ({}); export const demoWorkspaces = () => new Map();";
   return "export {};";
 }
@@ -58,6 +63,10 @@ globalThis.setInterval = (...a) => {
 
 const paseo = await import("../src/paseo.ts");
 const panes = await import("../src/panes.ts");
+await import("../src/pinFocus.ts"); // subscribes tryRestore to the store at load, as in the app
+const notifies = [];
+paseo.subscribePaseo(() => notifies.push(paseo.getPaseoState().agents.size));
+const ROSTER_SIZE = 50;
 
 /** useRestorePrune (src/QuickWinsUi.tsx) without React: once rosterLoaded, prune restored tabs against the roster. */
 function watchRestorePrune() {
@@ -80,7 +89,7 @@ function watchRestorePrune() {
 
 const agent = (id, extra = {}) => ({ id, provider: "claude", status: "idle", title: id, labels: {}, cwd: "/x", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), ...extra });
 
-test("R5-1: a deep link to an agent that arrives 1s after connect lands on that agent", async () => {
+test("R5-1/R6-1: a deep link to an agent that sorts last in a 50-agent snapshot 1s after connect lands on that agent", async () => {
   // App's startup deep-link effect (src/App.tsx) opens ?agent= before the runner stream is up.
   panes.openAgent(new URLSearchParams(location.search).get("agent"));
   const pruned = watchRestorePrune();
@@ -97,16 +106,32 @@ test("R5-1: a deep link to an agent that arrives 1s after connect lands on that 
   assert.equal(panes.getPanes().leftActiveId, "rn-deep");
 
   await new Promise((r) => setTimeout(r, 1000));
-  streams[0].msg({ kind: "roster", agents: [agent("rn-deep"), agent("rn-other")] });
+  const others = Array.from({ length: ROSTER_SIZE - 2 }, (_, i) => agent(`rn-a${String(i).padStart(3, "0")}`));
+  notifies.length = 0;
+  streams[0].msg({ kind: "roster", agents: [...others, agent("rn-other"), agent("rn-deep")] });
+  assert.deepEqual(notifies, [ROSTER_SIZE], "R6-1: the snapshot lands as one store update with every agent in it");
   await frame();
   const st = paseo.getPaseoState();
   assert.equal(st.rosterLoaded, true, "loaded once the first snapshot is applied");
+  assert.equal(st.agents.size, ROSTER_SIZE);
   assert.ok(st.agents.has("rn-deep"));
+  assert.ok(panes.getPanes().leftTabs.includes("rn-deep"), "R6-1: tryRestore did not closeTab the late-sorting link as stale");
   assert.equal(pruned.length, 1, "prune ran once, after the snapshot");
   assert.ok(pruned[0].includes("rn-deep"), "and saw the linked agent");
   const p = panes.getPanes();
   assert.equal(p.leftActiveId, "rn-deep", "landed on the deep-linked agent");
   assert.deepEqual(p.leftTabs, ["rn-deep"], "the gone restored tab was pruned, the linked one kept");
+
+  // Incremental deltas still work: one changed agent → one update; a removal archives it.
+  notifies.length = 0;
+  streams[0].msg({ kind: "agent", agent: agent("rn-a000", { status: "running" }) });
+  assert.equal(paseo.getPaseoState().agents.get("rn-a000").status, "running", "a delta upserts its agent");
+  assert.equal(notifies.length, 1, "one notify per delta");
+  streams[0].msg({ kind: "remove", agentId: "rn-a001" });
+  const after = paseo.getPaseoState();
+  assert.equal(after.agents.has("rn-a001"), false, "a remove drops it from the live map");
+  assert.equal(after.archivedAgents.get("rn-a001")?.status, "closed", "and archives it");
+  assert.equal(panes.getPanes().leftActiveId, "rn-deep", "still on the linked agent");
 });
 
 test("R5-1: the prune never drops the URL tab, even when its agent is not in the roster yet", () => {
