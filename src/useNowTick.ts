@@ -27,6 +27,9 @@ function subscribe(cb: () => void): () => void {
 
 const getSnapshot = () => current;
 
+/** The same shared `now` outside React (shortcut handlers): the count and Ctrl+J read one clock. */
+export const nowTickValue = (): number => current;
+
 export function useNowTick(): number {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }

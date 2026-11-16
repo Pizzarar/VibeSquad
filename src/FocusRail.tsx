@@ -19,6 +19,7 @@ import { setFocus, setSheet, useAgentPane } from "./panes";
 import { exitSquadsHome } from "./pinFocus";
 import { setFullView } from "./PinGrid";
 import { useUserName, needsYouBadge } from "./userName";
+import { isRetiredAgent } from "./identity";
 import { Avatar, TeamEmblem, providerSpec } from "./pixel";
 
 // Focus rail (docs/design/FOCUS_CHAT.md): an interrupt queue and a switchboard, not a roster.
@@ -34,7 +35,7 @@ let ac: { members: Member[] | null; list: Member[]; ids: Set<string> } = { membe
 export function railAlerts() {
   const { members } = derived();
   if (ac.members !== members) {
-    const list = members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead" && !m.agent.archivedAt).sort(alertOrder);
+    const list = members.filter((m) => m.attention && m.attention.tone !== "finished" && m.kind !== "old-lead" && !m.agent.archivedAt && !isRetiredAgent(m.agent)).sort(alertOrder);
     ac = { members, list, ids: new Set(list.map((m) => m.agent.id)) };
   }
   return ac;

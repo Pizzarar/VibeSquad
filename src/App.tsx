@@ -54,6 +54,8 @@ import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
 import { FocusRail, railAlerts } from "./FocusRail";
+import { topNeedsYouId } from "./needsYouTop";
+import { nowTickValue } from "./useNowTick";
 import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
@@ -1358,11 +1360,13 @@ function onShortcut(e: KeyboardEvent) {
 }
 
 function openTopNeedsYou() {
-  const top = railAlerts().list[0];
-  if (!top) return;
+  // Normal: row 0 of the SAME list that renders boring-needs-you-count (R6-2); empty = no-op. Psycho: the rail list.
+  const boring = document.documentElement.getAttribute("data-vibe") === "boring";
+  const id = boring ? topNeedsYouId(derived().views, nowTickValue()) : railAlerts().list[0]?.agent.id;
+  if (!id) return;
   // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
-  const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: top.agent.id }, cancelable: true }));
-  if (!handled) openAgent(top.agent.id);
+  const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: id }, cancelable: true }));
+  if (!handled) openAgent(id);
 }
 
 const LICENSES_FALLBACK =

@@ -169,3 +169,20 @@ test("R4-1/R5-3: the server field is the only source (no timeline hint); absent 
   assert.equal(openToolOf(quiet({}), NOW), null);
 });
 
+
+// ---- R6-2: Ctrl+J and the Needs-you count share one list; a closed/retired agent appears nowhere -------------------------------
+test("R6-2: Ctrl+J reads the Needs-you list (not the rail); railAlerts and the header drop retired agents", async () => {
+  const { readFileSync } = await import("node:fs");
+  const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
+  const app = read("../src/App.tsx");
+  assert.match(app, /topNeedsYouId\(derived\(\)\.views, nowTickValue\(\)\)/);
+  assert.match(app, /vs:boring-open-agent/);
+  const top = read("../src/needsYouTop.ts");
+  assert.match(top, /needsYouRows\(views, now\)\.filter\(\(r\) => r\.item\.kind !== "finished"\)/);
+  assert.match(read("../src/FocusRail.tsx"), /!m\.agent\.archivedAt && !isRetiredAgent\(m\.agent\)/);
+  assert.match(read("../src/BoringAgentHeader.tsx"), /showNeedsYou = !isRetiredAgent\(agent\)/);
+  // attentionItems already drops closed/archived, so a closed lead with a needs-you label never reaches the list or the count.
+  resetAttentionLocal();
+  const closed = member(agent("c", { status: "closed", labels: { "needs-you": "pick" } }));
+  assert.deepEqual(attentionItems([closed], NOW), []);
+});

@@ -9,7 +9,7 @@ import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { ConfirmButton, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL } from "./userName";
 import { AGENT_TYPE_LABEL, TEAMS, isHubLaneId, kindOf } from "./teams";
-import { findLaneInRegistry, formatDisplayTitle } from "./identity";
+import { findLaneInRegistry, formatDisplayTitle, isRetiredAgent } from "./identity";
 import type { AgentType } from "./teams";
 import { laneCode, laneDisplayName } from "./boringLocation";
 import { providerSpec } from "./pixel";
@@ -174,7 +174,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
   const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? headerLaneCode(labels.lane) : ""].filter(Boolean).join(" · ");
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
-  const showNeedsYou = needsYouFlagged || isMarkedUnread(agent.id) || flagOpen;
+  // R6-2: a closed/retired agent shows no Needs-you banner (it cannot be acted on).
+  const showNeedsYou = !isRetiredAgent(agent) && (needsYouFlagged || isMarkedUnread(agent.id) || flagOpen);
   const copy = (what: string, text: string) => {
     navigator.clipboard?.writeText(text).catch(() => {});
     setCopied(what);
