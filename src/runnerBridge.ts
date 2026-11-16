@@ -216,11 +216,11 @@ export function overlayRoster(agents: PaseoAgent[], now = Date.now()): PaseoAgen
 /**
  * Mirror the runner roster into the store from the VS server's SSE stream (/__vibesquad/runner/events): no polling.
  * `apply` gets the full runner set on each change plus the ids a real archive event removed (agents that merely vanish from
- * a roster are dropped without being archived); `onConnection` reports the stream
+ * a roster are dropped without being archived) and whether this tick is a full roster snapshot; `onConnection` reports the stream
  * itself, which is what makes state.conn "connected" without the Paseo websocket. EventSource reconnects on its own and
  * every reconnect starts with a fresh roster, which also tells open timelines to refetch.
  */
-export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: string[]) => void, onConnection?: (connected: boolean) => void): void {
+export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: string[], snapshot: boolean) => void, onConnection?: (connected: boolean) => void): void {
   fetchRunnerStatus()
     .then((s) => {
       resolveStatusLoaded();
@@ -304,7 +304,7 @@ export function startRunnerBridge(apply: (agents: PaseoAgent[], archivedIds: str
         if (!next) return;
         roster = next;
         if (ev.kind === "remove") localAgents.delete(ev.agentId);
-        apply(overlayRoster([...roster.values()]),ev.kind === "remove" ? [ev.agentId] : []);
+        apply(overlayRoster([...roster.values()]), ev.kind === "remove" ? [ev.agentId] : [], ev.kind === "roster");
         if (ev.kind === "roster") notifyTimeline(undefined, true);
       };
       connect();

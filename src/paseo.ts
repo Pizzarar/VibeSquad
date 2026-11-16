@@ -441,7 +441,7 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
 if (!DEMO && typeof window !== "undefined") {
   onRunnerStatusChange(() => set({}));
   startRunnerBridge(
-    (agents, archivedIds) => {
+    (agents, archivedIds, snapshot) => {
       const live = new Set(agents.map((a) => a.id));
       for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) applyAgent(a);
       for (const id of [...state.agents.keys()]) {
@@ -449,13 +449,16 @@ if (!DEMO && typeof window !== "undefined") {
         if (archivedIds.includes(id)) removeLocalAgent(id);
         else dropLocalAgent(id);
       }
+      // R5-1: the roster counts as loaded once the first agent snapshot is applied, not when the stream opens (the open
+      // comes first, and the restore prune would see an empty map and drop a deep-linked tab).
+      if (snapshot && !state.rosterLoaded) set({ rosterLoaded: true });
     },
     (up) => {
       set({
         runnerConn: up ? "up" : "down",
         conn: up ? "connected" : "disconnected",
         status: up ? "connected" : "disconnected",
-        ...(up ? { error: undefined, rosterLoaded: true } : {}),
+        ...(up ? { error: undefined } : {}),
       });
       if (up) {
         void refetchProviderUsage();

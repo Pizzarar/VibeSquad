@@ -1781,7 +1781,8 @@ export function App() {
   const skyReq = useSkyRequest(); // a rail click on RiffBot / Overlord remounts the TVs with that bot's chat open
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
-  const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
+  // R5-4: Normal has no squad grid or Start fresh view; its Overview is "home", every agent on screen names itself.
+  const urlAgentId = vibe === "boring" ? urlAgentFor({ activeAgentId, onGrid: pinsHome, startFresh: false }) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);

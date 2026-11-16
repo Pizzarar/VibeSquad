@@ -1,7 +1,7 @@
 import { useSyncExternalStore } from "react";
 import { popClosed, pushClosed } from "./sessionLifecycle.ts";
 import { pruneView } from "./quickwins.ts";
-import { getRestoreLastView } from "./prefs.ts";
+import { getPref, getRestoreLastView } from "./prefs.ts";
 import { perfStart } from "./perf.ts";
 
 // Open agent tabs, the optional 2-pane split and focus mode, outside React state. Rows, cards and
@@ -41,6 +41,9 @@ const activeKey = (p: Pane) => (p === "left" ? "leftActiveId" : "rightActiveId")
 
 // Most recently viewed first. Drives eviction only; render order comes from `mounted`.
 let recent: string[] = [];
+// R5-1: the tabs load() took from storage. Only these are pruned once the roster arrives: never the ?agent= deep link
+// (its agent can arrive after the restore prune runs) and never a tab opened since.
+let restoredIds = new Set<string>();
 
 function load(): PanesState {
   let saved: Partial<PanesState> = {};
@@ -67,8 +70,13 @@ function load(): PanesState {
     closedTabs: [],
   };
   if (!s.split) s = { ...s, leftTabs: [...leftTabs, ...rightTabs], rightTabs: [], rightActiveId: null, activePane: "left" };
+  const url = typeof location !== "undefined" ? new URLSearchParams(location.search) : null;
   // Old deep links (?agent=) open as a tab.
-  const linked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("agent") : null;
+  const linked = url?.get("agent") || null;
+  restoredIds = new Set([...s.leftTabs, ...s.rightTabs].filter((id) => id !== linked));
+  // R5-4: in Normal an explicit ?team= with no ?agent= beats the saved pane: the tabs stay, none is shown, so that
+  // project's Overview opens instead of the last agent from another project.
+  if (!linked && url?.get("team") && getPref("app.vibe") === "boring") s = { ...s, leftActiveId: null, rightActiveId: null };
   if (linked) s = place(s, linked, s.activePane, false);
   return settle(s, [s.leftActiveId, s.rightActiveId]);
 }
@@ -153,7 +161,9 @@ function commit(next: PanesState, touched: (string | null)[] = []) {
 /** After a restore, drop tabs whose agent is gone or archived so no pane sits on a ghost. */
 export function pruneRestoredTabs(live: (id: string) => boolean) {
   const { leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane } = state;
-  const p = pruneView({ leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane }, live);
+  const pruned = pruneView({ leftTabs, rightTabs, leftActiveId, rightActiveId, split, activePane }, (id) => !restoredIds.has(id) || live(id));
+  // Nothing shown (R5-4: ?team= beat the saved pane) stays nothing shown: pruning never promotes a leftover tab.
+  const p = leftActiveId || rightActiveId ? pruned : { ...pruned, leftActiveId: null, rightActiveId: null };
   if (sameIds(p.leftTabs, leftTabs) && sameIds(p.rightTabs, rightTabs)) return;
   commit({ ...state, ...p }, [p.leftActiveId, p.rightActiveId]);
 }

@@ -51,6 +51,8 @@ const deepLinked = typeof location !== "undefined" && new URLSearchParams(locati
 // The ?agent= the page was opened with. App's URL sync pushes ?agent=<active tab> before the daemon connects, so
 // tryRestore must not re-read location.search or it mistakes the restored tab for a deep link.
 const initialUrlAgent = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("agent");
+// R5-4: an explicit ?team= (no ?agent=) beats a saved pin of another squad.
+const initialUrlTeam = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("team");
 const startOnSquadsHome = !deepLinked && typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "squads";
 const startHome = startsOnGrid({
   deepLinked,
@@ -271,6 +273,11 @@ export function exitSquadsHome() {
   set({ focus: null, home: true, squadsHome: false, homeActive: getPanes().leftActiveId });
 }
 
+/** Normal mode shows an agent: it is never "home", even when the open came with a project switch (exitSquadsHome). */
+export function leaveHome() {
+  if (state.home) set({ home: false, homeActive: null, squadsHome: false });
+}
+
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {
   if (state.focus || state.home) set({ focus: null, home: false, homeActive: null, squadsHome: false });
@@ -310,7 +317,8 @@ function tryRestore() {
   restored = true;
   if (state.focus) return;
   if (state.home && state.squadsHome) return; // ?view=squads in the URL wins over the saved pin
-  const saved = loadSavedFocus(store);
+  const savedFocus = loadSavedFocus(store);
+  const saved = savedFocus && initialUrlTeam && !initialUrlAgent && savedFocus.squadId !== initialUrlTeam ? null : savedFocus;
   const urlAgent = initialUrlAgent;
   const urlAgentRow = urlAgent ? ps.agents.get(urlAgent) : undefined;
   const urlLive = !!urlAgent && isLiveUrlAgent(urlAgentRow, isRetiredAgent(urlAgentRow));

@@ -8,7 +8,7 @@ import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { openPinMember, spinUpPin } from "./pinFocus";
+import { leaveHome, openPinMember, spinUpPin, usePinsHome } from "./pinFocus";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
@@ -394,6 +394,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const activeAgentId = panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId;
   const allViews = views.length > 0 ? views : view ? [view] : [];
   // S8: the active agent owns the sidebar selection + breadcrumb. Keyed on the agent only, so switching project never snaps back.
+  // R5-1: also when it becomes landable: a deep-linked agent can reach the roster after the first render.
+  const activeLandable = !!boringAgentLanding(allViews, activeAgentId, (id) => agents.has(id));
   useEffect(() => {
     const land = boringAgentLanding(allViews, activeAgentId, (id) => agents.has(id));
     if (!land || !activeAgentId) return;
@@ -405,7 +407,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       revealAgent(land.view, land.sel, activeAgentId);
     }
     setMode(land.mode);
-  }, [activeAgentId]);
+  }, [activeAgentId, activeLandable]);
   const activeTeamId = view?.team.id ?? "";
   // ONE `now` for the sidebar badges and the Needs-you list (R3 L1): both must cross the 600s stall boundary together.
   const [now, setNow] = useState(() => Date.now());
@@ -520,6 +522,13 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     agentId = (activeAgentId && agents.get(activeAgentId) ? activeAgentId : null) ?? zones.riffbot.member?.agent.id ?? zones.overlord.member?.agent.id ?? null;
   }
   const agent = agentId ? agents.get(agentId) : undefined;
+  // R5-4: an agent on screen is never "home" (onSelectSquad → exitSquadsHome marks it), so App's URL sync keeps ?agent=
+  // after every open: restore, deep link or click.
+  const pinsHome = usePinsHome();
+  const showingAgent = mode === "chat" && !!agent;
+  useEffect(() => {
+    if (showingAgent && pinsHome) leaveHome();
+  }, [showingAgent, pinsHome]);
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
   const liveWorkers = (currentPin?.workers ?? []).filter(boringWorkerIsLive);
