@@ -40,21 +40,21 @@ function makeTempEnv() {
   };
 }
 
-test("1. Golden fixture round-trips all 19 profiles with every Paseo field identical", () => {
+test("1. Golden fixture round-trips all 20 profiles with every Paseo field identical", () => {
   const env = makeTempEnv();
   try {
     const rawFixture = JSON.parse(readFileSync(FIXTURE_PATH, "utf8"));
-    assert.equal(rawFixture.profiles.length, 19);
+    assert.equal(rawFixture.profiles.length, 20);
 
     const imported = importPaseoProfiles(rawFixture.profiles, {
       profilesPath: env.profilesPath,
       write: true,
     });
-    assert.equal(imported.profiles.length, 19);
+    assert.equal(imported.profiles.length, 20);
     assert.equal(imported.hasWarnings, false);
 
     const disk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
-    assert.equal(disk.profiles.length, 19);
+    assert.equal(disk.profiles.length, 20);
 
     for (let i = 0; i < rawFixture.profiles.length; i++) {
       const expected = rawFixture.profiles[i];
@@ -70,7 +70,7 @@ test("1. Golden fixture round-trips all 19 profiles with every Paseo field ident
   }
 });
 
-test("2. Fresh install with empty Paseo seeds 19-profile default pack with 0 EFI/ord38/C:\\ leaks and warns on project-specific notes", () => {
+test("2. Fresh install with empty Paseo seeds 20-profile default pack with 0 EFI/ord38/C:\\ leaks and warns on project-specific notes", () => {
   const env = makeTempEnv();
   try {
     const loaded = loadProfiles(env.profilesPath, {
@@ -80,7 +80,7 @@ test("2. Fresh install with empty Paseo seeds 19-profile default pack with 0 EFI
     assert.equal(loaded.exists, true);
     assert.equal(loaded.seeded, true);
     assert.equal(loaded.needsSetup, false);
-    assert.equal(loaded.profiles.length, 19);
+    assert.equal(loaded.profiles.length, 20);
 
     const forbidden = /[A-Za-z]:\\/i;
     for (const p of loaded.profiles) {
@@ -160,7 +160,7 @@ test("3. Spawning each role (lead, brainstorm, worker, restart, topic) matches P
       console.log("---");
     }
 
-    // Verify all 19 profiles match Paseo's provider/model/modeId/thinkingOptionId/featureValues
+    // Verify all 20 profiles match Paseo's provider/model/modeId/thinkingOptionId/featureValues
     for (const paseoProf of rawFixture.profiles) {
       const vsSpawn = toPaseoSpawnConfig(paseoProf.name, {}, profiles);
       assert.equal(vsSpawn.provider, paseoProf.provider);
@@ -412,7 +412,7 @@ test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging miss
     assert.equal(unimported.seeded, false);
     assert.equal(unimported.source, "paseo-unimported");
 
-    // Default / autoImportPaseo: true imports Paseo profiles + merges missing 19 default pack profiles and persists
+    // Default / autoImportPaseo: true imports Paseo profiles + merges missing 20 default pack profiles and persists
     const imported = loadProfiles(env.profilesPath, {
       paseoConfigPath: env.paseoConfigPath,
       autoImportPaseo: true,
@@ -421,7 +421,7 @@ test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging miss
     assert.equal(imported.needsSetup, false);
     assert.equal(imported.seeded, true);
     assert.equal(imported.source, "paseo-imported");
-    assert.equal(imported.profiles.length, 20);
+    assert.equal(imported.profiles.length, 21);
     assert.equal(imported.profiles[0].name, "Custom Paseo Worker");
 
     // When profiles.json already exists on disk and a new profile appears in Paseo config, loadProfiles appends & persists it
@@ -457,7 +457,7 @@ test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging miss
       paseoConfigPath: env.paseoConfigPath,
       autoImportPaseo: true,
     });
-    assert.equal(notResurrected.profiles.length, 20);
+    assert.equal(notResurrected.profiles.length, 21);
     assert.equal(notResurrected.profiles.some((p) => p.name === "Second Paseo Agent"), false);
 
     const reloaded = loadProfiles(env.profilesPath, {
@@ -465,10 +465,10 @@ test("7. R5: loadProfiles auto-imports Paseo profiles on first run (merging miss
       mergePaseoIntoExisting: true,
     });
     assert.equal(reloaded.source, "vibesquad");
-    assert.equal(reloaded.profiles.length, 21);
+    assert.equal(reloaded.profiles.length, 22);
     assert.ok(reloaded.profiles.some((p) => p.name === "Second Paseo Agent"));
     const onDisk = JSON.parse(readFileSync(env.profilesPath, "utf8"));
-    assert.equal(onDisk.profiles.length, 21);
+    assert.equal(onDisk.profiles.length, 22);
   } finally {
     env.cleanup();
   }
@@ -511,7 +511,7 @@ test("7c. every reviewer/checker profile note carries the cause-vs-symptom gate,
     mkdirSync(join(env.dir, ".paseo"), { recursive: true });
     writeFileSync(env.paseoConfigPath, JSON.stringify({ daemon: { agentProfiles: [] } }), "utf8");
     const synced = syncProfilesToPaseo(DEFAULT_PACK_PROFILES, env.paseoConfigPath);
-    assert.equal(synced.agentProfiles.length, 19);
+    assert.equal(synced.agentProfiles.length, 20);
     for (const name of gated) {
       assert.ok(synced.agentProfiles.find((p) => p.name === name)?.notes.includes(question), `${name} synced with gate`);
     }
@@ -520,7 +520,7 @@ test("7c. every reviewer/checker profile note carries the cause-vs-symptom gate,
   }
 });
 
-test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles matching DEFAULT_PACK_PROFILES and TeamSettingsModal renders visible profile roster", async () => {
+test("8. DEFAULT_PROFILES in src/profiles.ts has all 20 default pack profiles matching DEFAULT_PACK_PROFILES and TeamSettingsModal renders visible profile roster", async () => {
   const { stripTypeScriptTypes } = await import("node:module");
   const tsPath = resolve(import.meta.dirname, "..", "src", "profiles.ts");
   const tsRaw = readFileSync(tsPath, "utf8");
@@ -533,8 +533,8 @@ test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles ma
     .replace(/^export\s+/gm, "");
   const evaluated = new Function(`${jsSlice}\nreturn { DEFAULT_PROFILES, LEGACY_PROFILE_ALIASES };`)();
 
-  assert.equal(evaluated.DEFAULT_PROFILES.length, 19);
-  assert.equal(DEFAULT_PACK_PROFILES.length, 19);
+  assert.equal(evaluated.DEFAULT_PROFILES.length, 20);
+  assert.equal(DEFAULT_PACK_PROFILES.length, 20);
 
   for (let i = 0; i < DEFAULT_PACK_PROFILES.length; i++) {
     const serverProf = DEFAULT_PACK_PROFILES[i];
@@ -562,8 +562,43 @@ test("8. DEFAULT_PROFILES in src/profiles.ts has all 19 default pack profiles ma
 
   const modalSrc = readFileSync(resolve(import.meta.dirname, "..", "src", "TeamSettingsModal.tsx"), "utf8");
   assert.ok(modalSrc.includes('data-testid="settings-profile-roster"'), "Missing settings-profile-roster in TeamSettingsModal.tsx");
-  assert.ok(modalSrc.includes("Seed Default Pack (19)"), "Missing Seed Default Pack (19) button in TeamSettingsModal.tsx");
+  assert.ok(modalSrc.includes("Seed Default Pack (20)"), "Missing Seed Default Pack (20) button in TeamSettingsModal.tsx");
   assert.ok(modalSrc.includes("+ New Profile"), "Missing + New Profile button in TeamSettingsModal.tsx");
+});
+
+test("UX Reviewer - Opus: profile wired (vision+code+playwright, no edit-source), routing text names it, Art Director unchanged", async () => {
+  const { UX_REVIEWER_NOTE_BODY, ART_DIRECTOR_NOTE_BODY, LEAD_NOTE_BODY } = await import("../server/profiles.mjs");
+  const ux = DEFAULT_PACK_PROFILES.find((p) => p.name === "UX Reviewer - Opus");
+  assert.ok(ux, "profile present");
+  assert.deepEqual([ux.provider, ux.model, ux.role], ["claude", "claude-opus-5-5", "worker"]);
+  assert.deepEqual(ux.mcpExtras, ["playwright"]);
+  assert.ok(ux.notes.includes(UX_REVIEWER_NOTE_BODY));
+  assert.ok(UX_REVIEWER_NOTE_BODY.includes("Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots"));
+  assert.ok(UX_REVIEWER_NOTE_BODY.includes("PASS only if no critical or major finding is open"));
+  assert.equal(new Set(DEFAULT_PACK_PROFILES.map((p) => p.id)).size, DEFAULT_PACK_PROFILES.length, "profile ids unique");
+  assert.ok(LEAD_NOTE_BODY.includes("Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other). Normal-mode UI phases"));
+  assert.ok(LEAD_NOTE_BODY.includes("also go to UX Reviewer - Opus"));
+  assert.ok(ART_DIRECTOR_NOTE_BODY.startsWith("Art Director in the standard Painter + Director artwork loop"));
+  assert.ok(!ART_DIRECTOR_NOTE_BODY.includes("UX"));
+});
+
+test("findProfile resolves a newly shipped built-in from the default pack when an existing profiles.json lacks it (M1)", () => {
+  const stored = DEFAULT_PACK_PROFILES.filter((p) => p.name !== "UX Reviewer - Opus");
+  assert.equal(stored.some((p) => p.name === "UX Reviewer - Opus"), false);
+  const found = findProfile("UX Reviewer - Opus", stored);
+  assert.equal(found?.name, "UX Reviewer - Opus");
+  assert.equal(found.model, "claude-opus-5-5");
+  assert.equal(findProfile("ux reviewer - opus", stored)?.name, "UX Reviewer - Opus");
+  assert.equal(findProfile("No Such Profile", stored), null);
+  // a stored (owner-edited) copy still wins over the default
+  const edited = [...stored, { ...DEFAULT_PACK_PROFILES.find((p) => p.name === "UX Reviewer - Opus"), model: "custom-model" }];
+  assert.equal(findProfile("UX Reviewer - Opus", edited).model, "custom-model");
+});
+
+test("defaultBriefFor gives UX Reviewer the review brief, so hydration keeps it (L1)", () => {
+  const src = readFileSync(resolve(import.meta.dirname, "..", "src", "profiles.ts"), "utf8");
+  const line = src.split(/\r?\n/).find((l) => l.includes("return REVIEW_BRIEF") && l.includes("test(name)"));
+  assert.ok(line && line.includes("UX Reviewer"), line);
 });
 
 // Root cause: stored built-in notes that still equal an older default must follow default changes.

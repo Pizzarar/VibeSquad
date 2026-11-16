@@ -127,7 +127,7 @@ test('K4: Playwright is opt-in via the vs.mcp label and is pre-allowed', (t) => 
 
 test('K4: profiles opt into playwright by mcpExtras field (stored value wins, default pack is the fallback)', async () => {
   const { profileMcpExtras, DEFAULT_PACK_PROFILES } = await import('../server/profiles.mjs');
-  for (const n of ['Review - Gemini', 'Review - Sonnet', 'Implement - Sonnet', 'Implement - Opus', 'Art Director - Gemini', 'Art Painter - Opus']) assert.deepEqual(profileMcpExtras(n), ['playwright'], n);
+  for (const n of ['Review - Gemini', 'Review - Sonnet', 'Implement - Sonnet', 'Implement - Opus', 'Art Director - Gemini', 'Art Painter - Opus', 'UX Reviewer - Opus']) assert.deepEqual(profileMcpExtras(n), ['playwright'], n);
   assert.deepEqual(profileMcpExtras('Lead - Claude'), []);
   assert.deepEqual(profileMcpExtras('Review - Sonnet', [{ name: 'Review - Sonnet', mcpExtras: [] }]), []);
   assert.ok(DEFAULT_PACK_PROFILES.length > 0);

@@ -47,7 +47,7 @@ test("1. Prompt layers and default profiles include Buddy mascot and spin-up-a-b
 
   // DEFAULT_PROFILES in server/profiles.mjs
   assert.equal(Array.isArray(DEFAULT_PROFILES), true);
-  assert.equal(DEFAULT_PROFILES.length, 19);
+  assert.equal(DEFAULT_PROFILES.length, 20);
   assert.equal(DEFAULT_PROFILES, DEFAULT_PACK_PROFILES);
 
   const forbidden = /[A-Za-z]:\\/i;

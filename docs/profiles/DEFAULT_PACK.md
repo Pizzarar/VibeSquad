@@ -1,6 +1,6 @@
-# VibeSquad Default Profile Pack (19 Profiles)
+# VibeSquad Default Profile Pack (20 Profiles)
 
-VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`server/profiles.mjs` and `src/profiles.ts`). Every default profile note is project-agnostic (zero repo-specific paths or project names).
+VibeSquad owns its portable 20-profile store in `~/.vibesquad/profiles.json` (`server/profiles.mjs` and `src/profiles.ts`). Every default profile note is project-agnostic (zero repo-specific paths or project names).
 
 ## Shared Note Prefix & Guardrails
 
@@ -33,3 +33,5 @@ VibeSquad owns its portable 19-profile store in `~/.vibesquad/profiles.json` (`s
   - Write JSON files with `node` (e.g. `fs.writeFileSync(..., 'utf8')`), never PowerShell `Set-Content` (which writes a UTF-8 BOM that breaks JSON parsers).
 - **Art Painter + Art Director Loop (`Art Painter - Opus`, `Art Director - Gemini`)**:
   - Standard for all artwork (sprites, icons, emblems, and UI screens). `Art Painter - Opus` (`agent_profile_mvwjrb2k_enr1rgj8hg5`) edits code/assets using curated palettes, renders a 4x gallery PNG (or UI screenshot), and sends the image path to `Art Director - Gemini` (`agent_profile_mvso6xcl_hk9afi1fz2r`). The Director never opens the source code, judges only the image and brief against standing visual gates, and returns numbered PASS/FAIL fixes (max 4 rounds).
+- **UX Reviewer (`UX Reviewer - Opus`, `agent_profile_muxrvw01_ux0reviewer`)**:
+  - Claude Opus with vision, code reading and the Playwright MCP browser; never edits source (writes only `docs/UX_REVIEW_R<n>.md` and its screenshots). Judges Normal-mode UX flows after merges; the Art Director stays art-only. Leads route Normal-mode UI phases (`src/Boring*.tsx`, `src/boring*.ts`, `src/boring.css`, `src/Timeline.tsx`, `src/PermissionCard.tsx`, `src/BoringContextPanel.tsx`) to it; a standing rule gates the phase on no critical/major finding open (see `STANDING_RULES`). Spec: `docs/UX_REVIEW_PROCESS.md` §3.

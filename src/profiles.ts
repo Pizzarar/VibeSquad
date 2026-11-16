@@ -52,7 +52,7 @@ const ART_BRIEF = BRIEF("Art direction: palette, references, screenshots at 1440
 export function defaultBriefFor(name: string, role: Role): string {
   if (role === "lead") return LEAD_BRIEF;
   if (role === "brainstorm") return BRAINSTORM_BRIEF;
-  if (/^Review\b|^Check\b/i.test(name)) return REVIEW_BRIEF;
+  if (/^Review\b|^Check\b|^UX Reviewer\b/i.test(name)) return REVIEW_BRIEF;
   if (/^Art\b/i.test(name)) return ART_BRIEF;
   if (/^Spec\b/i.test(name)) return BRIEF("Output: a spec doc, no code.");
   if (/^Planner\b/i.test(name)) return BRIEF("Output: unit split with file scopes and done-checks.");
@@ -94,7 +94,7 @@ const LEAD_NOTE_BODY = [
   "Blocked on an owner decision → flag it (`vs log needs-you \"<reason>\"`; workers put it in the final message) and keep working on anything that doesn't depend on it. Don't wait in chat.",
   "Context management: at ~150k stop dispatching and write a handoff at the next good stopping point; VS auto-hands off at 250k, hard cap 300k. At handoff, delete your heartbeat; the new lead archives the old one once takeover is confirmed. Heartbeats aren't needed while a `vs watch` is armed.",
   "Never read sweeps, long logs or raw worker output yourself. Send them to Audit - DSF, Scout - Flash or Pre-check - Flash and read only the result.",
-  "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF. Art work → Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other).",
+  "Routing: ambiguous work → Implement - Sonnet. Tier A invariant work → Implement - Opus. Clear file scope → Planner - Sonnet + Work Order - DSP. One-file or mechanical → Mechanical - DSF. Art work → Art Painter - Opus + Art Director - Gemini duet (spawning one starts the other). Normal-mode UI phases (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) also go to UX Reviewer - Opus at phase end, and are not done while it has a critical or major finding open.",
   "Every spawn states `stakes=`: tierA-security for auth/crypto/relay/remote-proxy, tierA-invariant for state machines/locks/data migrations, mechanical for renames/copy/docs; otherwise normal.",
   "Review: Claude work → Review - Gemini (Tier A waits if Gemini is capped; Tier B falls back to Review - Sonnet unless Sonnet wrote it). Gemini work → Review - Sonnet. DeepSeek work → Review - Gemini; if capped, Check - Haiku, then Review - Sonnet only on a Haiku FAIL or doubt.",
   "Durable lane state & failover: keep `docs/lanes/<lane>/SPEC.md` and `TASKS.json` current (`vs spec @<lane>`, `vs task @<lane> list|add|done`), record root-cause lessons via `vs lesson add`, and check/set provider quota caps with `vs cap list|set|clear` (automatic failover routes Claude → Gemini → DeepSeek).",
@@ -128,6 +128,16 @@ const ART_DIRECTOR_NOTE_BODY = [
   "Return numbered checks, each PASS or FAIL with a concrete visual fix, against standing gates: (1) silhouette reads clearly at target size, (2) held props/tools are clearly visible against the jacket/background behind them (no colour clashing), (3) pose and grip look natural, (4) no gross or ambiguous shapes (e.g. hair or hats that read as dripping blobs), and (5) the brief's no-copy gate. End every round with a plain `PASS` or the numbered list of fixes for the Painter.",
   "AI-generated art (e.g. PixelLab) may ship once the lead and owner approve it. When the plan says a source is style reference only, redraw it rather than shipping it.",
   "New visual work adds light surrealism in the Hypnospace vibe (see docs/lanes/art-direction/SPEC.md), but chrome readability is still the gate.",
+].join("\n");
+
+const UX_REVIEWER_NOTE_BODY = [
+  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots.",
+  "1. Read the job list (docs/UX_REVIEW.md §1.3) and the previous round's doc. Do NOT read the unit's plan until after your first pass.",
+  "2. Run the app with ?demo at 3200x1800 (the owner's 4K at 120%), then 1920x1080, dark and light. Drive the standard sequences: open project A then B; Ctrl+J into another project; open a Needs-you item; deep-link ?agent=; expand two projects; open a worker; 10+ alerts. Screenshot each.",
+  "3. Check the invariants: counts agree everywhere they're shown; exactly one selected row; breadcrumb = selected row = open agent; expanded projects share one shape; no agent listed more than twice on screen; nothing that explains WHY is truncated.",
+  "4. Only after you see a symptom, read code to name the cause (file:line).",
+  "5. Report: status table vs the previous round, then findings ranked critical/major/minor, each with job hurt, evidence, fix, files, effort. Question the spec when the spec is the problem. Put owner decisions in an \"Owner decisions\" section with a recommendation; never decide them.",
+  "Verdict line: PASS only if no critical or major finding is open for the area under review. Findings go to the owning lane as inbox cards. Art Director stays for pixel art and art-heavy screens; you judge UX flows.",
 ].join("\n");
 
 const note = (body: string) => `${SHARED_NOTE_PREFIX}\n\n${body}`;
@@ -410,6 +420,19 @@ export const DEFAULT_PROFILES: Profile[] = [
       'Escalation only. Use when DeepSeek Flash output passes procedural checks but fails on reasoning, trade-off judgment or long-horizon synthesis. Also for architectural "which variant ships and why" calls, genuine plan → act → verify loops, and second opinions on an audit the lead doubts. Not for routine inventory or summaries, anything Flash hasn\'t tried first, or high-frequency steps. Never a merge gate.',
     ),
     brief: defaultBriefFor("Senior Reasoning - DSP", "worker"),
+  },
+  {
+    id: "agent_profile_muxrvw01_ux0reviewer",
+    name: "UX Reviewer - Opus",
+    role: "worker",
+    icon: "search",
+    color: "emerald",
+    provider: "claude",
+    model: "claude-opus-5-5",
+    modeId: "auto",
+    thinkingOptionId: "medium",
+    notes: note(UX_REVIEWER_NOTE_BODY),
+    brief: REVIEW_BRIEF,
   },
 ];
 

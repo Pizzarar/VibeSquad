@@ -123,6 +123,17 @@ test("digestVerdictText: a reviewer with no verdict line logs NO-VERDICT; a non-
   assert.ok(!isReviewerAgent({ title: "Implement unit", labels: { profile: "Implement - Sonnet" } }));
 });
 
+test("UX Reviewer is not an H/M/L code reviewer: digest 'done' is not rewritten to NO-VERDICT and the gate says not-a-reviewer", () => {
+  for (const agent of [{ labels: { profile: "UX Reviewer - Opus" } }, { title: "UX Reviewer · R3", labels: {} }, { title: "UX review R3", labels: {} }]) {
+    assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
+  }
+  const d = digestVerdictText({ workerText: "PASS (no critical or major open)", digestText: "PASS: round 3 clean", reviewer: isReviewerAgent({ labels: { profile: "UX Reviewer - Opus" } }) });
+  assert.ok(!d.noVerdict);
+  assert.ok(!d.text.startsWith("NO-VERDICT"), d.text);
+  const g = evaluateVerdictGate({ agent: { labels: { profile: "UX Reviewer - Opus" } }, lastMessage: "PASS", tip: "abcdef1" });
+  assert.equal(g.exitCode ?? g.code, GATE_EXIT.notReviewer);
+});
+
 test("/vs-log: a digest's done entry is rewritten in code from the worker's own message (FAIL kept over a PASS digest, NO-VERDICT, passthrough)", async () => {
   const failing = await worker("FAIL 1/0/1 3528a4c lock not released\nH1: watch-sets.mjs:88", { profile: "Review - Gemini" });
   const e1 = await digestLog(digestFor(failing), "PASS: review approved");

@@ -422,7 +422,7 @@ function foldIdentity(st, m) {
 }
 
 const DIGEST_PROFILE_RE = /^Pre-check\b/i;
-const REVIEWER_PROFILE_RE = /^(?:Review|Check|Audit)\b/i;
+const REVIEWER_PROFILE_RE = /^(?:Review|Check|Audit|UX Reviewer)\b/i;
 const SCOUT_PROFILE_RE = /^(?:Scout|Art Director|Planner|Spec)\b/i;
 const JOBKIND_REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
 
@@ -433,7 +433,7 @@ const baseModel = (m) => String(m || "unknown").replace(/-(?:low|medium|high|xhi
  * usa-29 jobKind (implementer|reviewer|digest|scout|lead|brainstorm), derived in this order:
  *   role brainstorm|lead            -> "brainstorm" | "lead"
  *   digest marker (role/labels)     -> "digest";  profile "Pre-check ..." -> "digest"
- *   profile Review|Check|Audit, a READ-ONLY reviewer prompt (roleOnly), or a re-review/reviewer title -> "reviewer"
+ *   profile Review|Check|Audit|UX Reviewer, a READ-ONLY reviewer prompt (roleOnly), or a re-review/reviewer title -> "reviewer"
  *   profile Scout|Art Director|Planner|Spec                                                          -> "scout"
  *   role worker, anything else                                                                       -> "implementer"
  *   no/unknown role, anything else                                                                   -> "scout" (never implementer waste)
@@ -1104,7 +1104,7 @@ const unitNameOfCwd = (cwd) => {
   return name;
 };
 
-const NON_IMPLEMENTER_PROFILE_RE = /^(?:Review|Pre-check|Check|Audit|Scout|Art Director|Planner|Spec)\b/i;
+const NON_IMPLEMENTER_PROFILE_RE = /^(?:Review|Pre-check|Check|Audit|Scout|Art Director|UX Reviewer|Planner|Spec)\b/i;
 const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
 
 /** True when a worker run is an implementer candidate rather than a digest/review/check/scout run in the same worktree. */

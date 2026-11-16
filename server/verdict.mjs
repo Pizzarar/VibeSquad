@@ -8,6 +8,7 @@ export const VERDICT_LINE_RE = /^(PASS|FAIL) \d+\/\d+\/\d+ [0-9a-f]{7,40}/m;
 /** The strict parse of one line (the gate reads only the reviewer's first line). */
 const LINE_PARSE_RE = /^(PASS|FAIL) (\d+)\/(\d+)\/(\d+) ([0-9a-f]{7,40})(?![0-9A-Za-z])/;
 const NON_IMPLEMENTER_REVIEW_PROFILE_RE = /^Review\b/i;
+const UX_REVIEWER_RE = /\bUX Review(?:er)?\b/i;
 const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s-])review(?:\s|$)/i;
 
 /** The full verdict line (byte-for-byte, minus a trailing \r) of the first `PASS|FAIL H/M/L <hash>` line in `text`, or null. */
@@ -36,8 +37,11 @@ export function firstLine(text) {
 export function isReviewerAgent(agent) {
   const labels = agent?.labels ?? {};
   const profile = String(labels.profile ?? agent?.profile ?? "").trim();
-  if (NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(profile)) return true;
   const title = String(agent?.title ?? "").trim();
+  // UX Reviewer is not a code reviewer: its verdict is a plain PASS/FAIL line in docs/UX_REVIEW_R<n>.md (no H/M/L <hash>),
+  // so it is excluded here; its digest is not rewritten to NO-VERDICT and `vs verdict` says "not a reviewer".
+  if (UX_REVIEWER_RE.test(profile) || UX_REVIEWER_RE.test(title)) return false;
+  if (NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(profile)) return true;
   if (/\breview\s+fix/i.test(title)) return false; // an implementer fixing review findings
   return NON_IMPLEMENTER_REVIEW_PROFILE_RE.test(title) || REVIEWER_TITLE_RE.test(title);
 }
