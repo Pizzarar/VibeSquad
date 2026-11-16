@@ -23,7 +23,7 @@ import { mergeTeams } from "./teamsMerge.ts";
 export type LaneKind = "bug" | "audit";
 // A lane is a pinned Team in the UI. Pin fields (state, doneAt, order, lastProfile) live in src/pins.ts
 // and round-trip through saveTeams untouched; lanes without `state` count as pinned.
-export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean; bug?: boolean; kind?: LaneKind; hidden?: boolean } & PinFields;
+export type LaneDef = { id: string; name: string; code?: string; paths?: string[]; aliases?: string[]; hub?: boolean; bug?: boolean; kind?: LaneKind; hidden?: boolean; /** derived from live members, not registered */ dynamic?: boolean; /** Buddy topic of a dynamic lane: a secondary label, never the lane name */ topic?: string } & PinFields;
 /** The Squad's hub lane (RiffBot's). Explicit `hub: true` wins; with no flagged lane, the lane whose id is the Squad id. */
 export function isHubLane(team: Pick<TeamDef, "id" | "lanes">, lane: Pick<LaneDef, "id" | "hub">): boolean {
   if (lane.hub === true) return true;
@@ -988,6 +988,8 @@ export function buildTeamViews(members: Member[]): TeamView[] {
         dynamicLanes.push({
           id: lid,
           name: deriveDynamicLaneName(team, lid, laneMembers),
+          dynamic: true,
+          topic: laneMembers.filter((m) => m.kind === "brainstorm").map(topicOfBrainstorm).find(Boolean) || undefined,
         });
       }
       const laneDefs: LaneDef[] = [

@@ -9,7 +9,7 @@ import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { openPinMember, spinUpPin } from "./pinFocus";
-import { boringLaneLabel } from "./boringLocation";
+import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
@@ -222,8 +222,9 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     .filter((p) => !isHubPin(p) && p.lane.id !== view?.team.id && p.lane.id !== bugs.pin?.lane.id) // the Bugs lane has its own desk row: never count it twice
     .map((pin) => ({
       laneId: pin.lane.id,
-      name: boringLaneLabel(pin.lane.name),
-      code: pin.lane.code ? `@${pin.lane.code}` : `@${pin.lane.id.replace(/-.*/, "").slice(0, 4)}`,
+      name: laneDisplayName(view!.team, pin.lane.id, [pin.lane]),
+      code: laneCode({ lanes: [...(view!.team.lanes ?? []), ...(pin.lane.dynamic ? [] : [pin.lane])] }, pin.lane.id),
+      topicLabel: laneTopicLabel(laneDisplayName(view!.team, pin.lane.id, [pin.lane]), pin.lane.topic),
       pin,
       brainstormId: pin.brainstorm?.agent.id ?? null,
       brainstormStatus: pin.brainstorm?.agent.status ?? "none",
@@ -287,6 +288,7 @@ export type LaneTableRow = {
   kind: "lane" | "desk";
   laneId: string;
   label: string;
+  topicLabel?: string;
   code: string;
   brainstorm: string;
   lead: string;
@@ -315,7 +317,7 @@ export function boringLaneTableRows(
   };
   const lanes: LaneTableRow[] = model.conversations.map((c) => {
     return {
-      key: c.laneId, kind: "lane", laneId: c.laneId, label: c.name, code: c.code,
+      key: c.laneId, kind: "lane", laneId: c.laneId, label: c.name, topicLabel: c.topicLabel, code: c.code,
       brainstorm: c.brainstormStatus, lead: c.leadStatus,
       workers: workerSummary(c.pin.workers ?? []),
       needsYou: c.needsYou, running: c.running, lastEvent: lastFor(c), age: c.age,
@@ -613,7 +615,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     );
   };
   /** One lane shape for Bugs and every feature lane: chevron column, dot, name, collapsed badge; workers under the chevron. */
-  const laneRow = (v: TeamView, c: { laneId: string; name: string; code: string; pin: Pin | null; status: string; needsYou: number; err: boolean; age: string; titleTestId?: string; onOpen: () => void }) => {
+  const laneRow = (v: TeamView, c: { laneId: string; name: string; topicLabel?: string; code: string; pin: Pin | null; status: string; needsYou: number; err: boolean; age: string; titleTestId?: string; onOpen: () => void }) => {
     const key = `${v.team.id}/${c.laneId}`;
     const isSel = sel.teamId === v.team.id && sel.laneId === c.laneId;
     const open = laneOpen[key] ?? isSel;
@@ -624,7 +626,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           <button type="button" className="boring-chevron-btn" data-testid={`boring-conv-toggle-${c.laneId}`} aria-expanded={open} aria-label={open ? "Collapse workers" : "Expand workers"} disabled={workers.length === 0} onClick={() => setLaneOpen((o) => ({ ...o, [key]: !open }))}>
             {workers.length === 0 ? "" : open ? "▾" : "▸"}
           </button>
-          <button type="button" className="boring-conv-title" data-testid={c.titleTestId} onClick={c.onOpen}>
+          <button type="button" className="boring-conv-title" data-testid={c.titleTestId} title={c.topicLabel || undefined} onClick={c.onOpen}>
             <span className={`boring-dot ${c.status} ${glyphCls(c.status, c.err ? "error" : c.needsYou > 0 ? "needs-you" : null)}`} />
             <span className="boring-row-label">{c.name}</span>
             {c.code && <code className="boring-conv-code">{c.code}</code>}
@@ -720,7 +722,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                   <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
                     {deskBlock(v, m)}
                     {bugsRow(v, m)}
-                    {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
+                    {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
                     {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
                   </div>
                 )}
@@ -824,7 +826,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                       <tr key={r.key} className={`boring-lane-row${r.needsYou > 0 ? " attn" : ""}${r.kind === "desk" ? " desk" : ""}`} data-testid={`boring-lane-row-${r.laneId}`}>
                         <td><button type="button" className="boring-lane-cell" onClick={() => go("brainstorm")}>
                           <span className={`boring-dot ${r.running > 0 ? "running" : r.brainstorm} ${glyphCls(r.running > 0 ? "running" : r.brainstorm, r.needsYou > 0 ? "needs-you" : null)}`} />
-                          <span className="boring-row-label boring-lane-name">{r.label}</span>{r.code && <code className="boring-lane-code">{r.code}</code>}
+                          <span className="boring-row-label boring-lane-name" title={r.topicLabel || undefined}>{r.label}</span>{r.code && <code className="boring-lane-code">{r.code}</code>}
                           {r.needsYou > 0 && <span className="badge boring-badge">Needs you · {r.needsYou}</span>}
                         </button></td>
                         <td><button type="button" className="boring-lane-cell" onClick={() => go("brainstorm")}>{stat(r.brainstorm)}</button></td>
