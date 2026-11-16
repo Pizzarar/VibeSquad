@@ -154,6 +154,20 @@ export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId
   return { teamId, mode: "chat", laneId, role, workerId, agentLabel, rowKey };
 }
 
+/** R3.5: the sidebar header carries the fixed app name, never the current project (the breadcrumb owns that). */
+export const APP_NAME = "VibeSquad";
+/** R3.1: folded-away workers as "N running · M idle" (zero parts omitted); null when nothing is folded. */
+export function boringWorkerFold(rest: { agent: { status?: string; archivedAt?: string | null } }[]): string | null {
+  if (rest.length === 0) return null;
+  const running = rest.filter((w) => boringWorkerIsLive(w as never)).length;
+  return [running > 0 && `${running} running`, rest.length - running > 0 && `${rest.length - running} idle`].filter(Boolean).join(" · ");
+}
+/** R3.1: open the right panel on its Workers tab. A not-yet-mounted panel reads the localStorage prefs; a mounted one hears the event. */
+export function openWorkersTab() {
+  try { localStorage.setItem("vs.context-panel.tab", "Workers"); localStorage.setItem("vs.context-panel.open", "1"); } catch {}
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("vs:open-context-tab", { detail: { tab: "Workers" } }));
+}
+
 const workerNeedsYou = (m: { attention?: { tone?: string } | null } | null | undefined) => Boolean(m?.attention && m.attention.tone !== "finished");
 
 type MemberLike = { agent: { status?: string }; attention?: { tone?: string } | null } | null | undefined;
@@ -342,7 +356,6 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
   const [deskOpen, setDeskOpen] = useState<Record<string, boolean>>({});
-  const [idleWorkersOpen, setIdleWorkersOpen] = useState<Record<string, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
@@ -415,27 +428,17 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     } else if (m) openAgent(m.agent.id);
     else void onOpenPin(pin);
   };
-  /** Open every parent of a jumped-to agent (project, Desk / lane, idle bucket): an explicit collapse never hides the selected row. */
+  /** Open every parent of a jumped-to agent (project, Desk / lane): an explicit collapse never hides the selected row. */
   const revealAgent = (v: TeamView, s: { laneId: string; role: Role | "worker" } | null, id: string) => {
     if (!s) return;
     const tid = v.team.id;
     setProjectOpen((o) => ({ ...o, [tid]: true }));
     if (s.laneId === "_overlord" || s.laneId === "_riffbot" || s.laneId === "_desk") {
       setDeskOpen((o) => ({ ...o, [tid]: true }));
-      if (s.role === "worker") {
-        const w = boringSidebarModel(v).core.deskWorkers.find((x) => x.agent.id === id);
-        if (w && !boringWorkerIsLive(w)) setIdleWorkersOpen((o) => ({ ...o, [`${tid}/_desk`]: true }));
-      }
       return;
     }
     const key = `${tid}/${s.laneId}`;
     setLaneOpen((o) => ({ ...o, [key]: true }));
-    if (s.role === "worker") {
-      const m = boringSidebarModel(v);
-      const pin = s.laneId === "_bugs" ? m.core.bugs.pin : m.conversations.find((c) => c.laneId === s.laneId)?.pin;
-      const w = (pin?.workers ?? []).find((x) => x.agent.id === id);
-      if (w && !boringWorkerIsLive(w)) setIdleWorkersOpen((o) => ({ ...o, [key]: true }));
-    }
   };
   const openNeedsYou = (row: NeedsYouRow) => {
     if (row.teamId !== view?.team.id) onSelectSquad(row.teamId);
@@ -576,25 +579,20 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       <span className={`boring-dot ${w.agent.status} ${glyphCls(w.agent.status, w.attention?.tone)}`} />
       <span className="boring-row-label">{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
-      {workerNeedsYou(w) && w.attention?.reason && <span className="boring-worker-why" data-testid={`boring-worker-why-${w.agent.id}`} title={w.attention.reason}>{w.attention.reason}</span>}
     </button>
   );
-  /** Workers of a lane or the Desk: live + attention rows inline, idle ones folded into "▸ N idle" (collapsed fold carries the worst-state badge). */
-  const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], key: string, listId: string, idleId: string) => {
-    const live = workers.filter(boringWorkerIsLive);
-    const idle = workers.filter((w) => !boringWorkerIsLive(w));
-    const idleOpen = Boolean(idleWorkersOpen[key]);
+  /** R3.1: under Desk / a lane the tree shows only the on-screen worker and workers that need you (one line, no reason); the rest folds into "▸ N running · M idle", which opens the right panel's Workers tab. */
+  const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], listId: string, foldId: string, onScreen: boolean, open: () => void) => {
+    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || workerNeedsYou(w) || memberErr(w));
+    const rest = workers.filter((w) => !shown.includes(w));
+    const fold = boringWorkerFold(rest);
     return (
       <div className="boring-worker-list" data-testid={listId}>
-        {live.map((w) => workerRow(v, pin, laneId, w))}
-        {idle.length > 0 && (
-          <>
-            <button type="button" className="boring-idle-toggle boring-worker-idle" data-testid={idleId} aria-expanded={idleOpen} onClick={() => setIdleWorkersOpen((o) => ({ ...o, [key]: !idleOpen }))}>
-              <span className="boring-idle-chev" aria-hidden="true">{idleOpen ? "▾" : "▸"}</span>{idle.length} idle
-              {!idleOpen && badge(idle.filter(workerNeedsYou).length, idle.some(memberErr))}
-            </button>
-            {idleOpen && idle.map((w) => workerRow(v, pin, laneId, w))}
-          </>
+        {shown.map((w) => workerRow(v, pin, laneId, w))}
+        {fold && (
+          <button type="button" className="boring-idle-toggle boring-worker-idle boring-worker-fold" data-testid={foldId} title="Open the Workers tab" onClick={() => { if (!onScreen) open(); openWorkersTab(); }}>
+            <span className="boring-idle-chev" aria-hidden="true">▸</span>{fold}
+          </button>
         )}
       </div>
     );
@@ -619,7 +617,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {!open && badge(c.needsYou, c.err)}
           </button>
         </div>
-        {open && c.pin && workers.length > 0 && workerList(v, c.pin, c.laneId, workers, key, `boring-workers-${c.laneId}`, `boring-workers-idle-${c.laneId}`)}
+        {open && c.pin && workers.length > 0 && workerList(v, c.pin, c.laneId, workers, `boring-workers-${c.laneId}`, `boring-workers-fold-${c.laneId}`, isSel, c.onOpen)}
       </div>
     );
   };
@@ -658,7 +656,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           <div className="boring-desk-children">
             {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId))}
             {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
-            {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, `${v.team.id}/_desk`, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-idle"))}
+            {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
           </div>
         )}
       </div>
@@ -674,7 +672,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     <div className="boring-app" data-testid="boring-app">
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <div className="boring-sidebar-head" data-testid="boring-sidebar-head">
-          <span className="boring-sidebar-title" data-testid="boring-sidebar-title">{view?.team.name ?? "No project"}</span>
+          <span className="boring-sidebar-title" data-testid="boring-sidebar-title">{APP_NAME}</span>
           <button type="button" className="boring-search-trigger" data-testid="boring-sidebar-search-btn" title="Command palette (Ctrl+K)" aria-label="Search: open command palette (Ctrl+K)" onClick={() => openOverlay("palette")}>
             <span aria-hidden="true">⌕</span><span>Search</span><kbd className="boring-kbd">Ctrl+K</kbd>
           </button>

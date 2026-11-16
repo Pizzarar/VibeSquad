@@ -173,8 +173,16 @@ export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: 
       setTab(next);
       if (d.filePath !== undefined) setTarget({ file: d.filePath, line: d.line ?? null, nonce: d.nonce ?? 0 });
     };
+    // R3.1: the sidebar's "▸ N running · M idle" fold opens the Workers tab.
+    const onTab = (e: Event) => {
+      const t = (e as CustomEvent<{ tab?: string }>).detail?.tab;
+      if (!(CONTEXT_TABS as string[]).includes(t ?? "")) return;
+      setContextPanelOpen(true);
+      setTab(t as ContextTab);
+    };
     window.addEventListener("vs:open-right-dock", onOpen);
-    return () => window.removeEventListener("vs:open-right-dock", onOpen);
+    window.addEventListener("vs:open-context-tab", onTab);
+    return () => { window.removeEventListener("vs:open-right-dock", onOpen); window.removeEventListener("vs:open-context-tab", onTab); };
   }, []);
 
   const { agents } = usePaseo();

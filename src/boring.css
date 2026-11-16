@@ -1201,3 +1201,9 @@ html[data-vibe="boring"] .boring-needs-reason { flex: 1 1 0; }
 html[data-vibe="boring"] .boring-needs-why .boring-needs-where { flex: 0 0 auto; max-width: 55%; }
 html[data-vibe="boring"] .boring-done-row > .boring-needs-line { grid-column: 1; }
 html[data-vibe="boring"] .boring-done-row > .boring-needs-line .boring-done-text { flex: 1; min-width: 0; }
+
+/* Desk R3 Unit A: tree shows lead / brainstorm / on-screen / alerting only (one line, reason lives in Needs you); the rest folds; footer pinned. */
+html[data-vibe="boring"] .boring-worker-fold { color: var(--text-3); }
+html[data-vibe="boring"] .boring-worker-fold:hover { color: var(--text-1); }
+html[data-vibe="boring"] .boring-project-tree { flex: 1 1 auto; min-height: 120px; overflow-y: auto; }
+html[data-vibe="boring"] .boring-sidebar-footer { flex: none; margin-top: auto; }
