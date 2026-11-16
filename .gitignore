@@ -21,3 +21,6 @@ docs/PLAN_*
 docs/FEATURE_COMPLETE.md
 docs/UPSTREAM_ISSUES.md
 build-stamp.json
+
+# raw live data dumps from reviewers (personal paths)
+artifacts/**/data/
