@@ -1,15 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attentionItems, clearItem, needsYouCount, stalledCount, stalledReason } from "../src/attentionItems.ts";
+import { STALLED_IN_NEEDS_YOU, attentionItems, clearItem, needsYouCount, stalledCount, stalledReason } from "../src/attentionItems.ts";
 import { attentionOf } from "../src/teams.ts";
 import { dismissLocal, resetAttentionLocal } from "../src/attentionLocal.ts";
+
+// R4-1 interim: while STALLED_IN_NEEDS_YOU is false these stall-in-count tests are inert; the follow-up flips the switch and they run again.
+const stallTest = STALLED_IN_NEEDS_YOU ? test : (name, fn) => test(name, { skip: "R4-1 interim: stalled is out of Needs you" }, fn);
+
+test("R4-1 interim: a quiet running agent is NOT in Needs you (list, count, stalledCount); a real attention reason still is", () => {
+  resetAttentionLocal();
+  const quiet = member(agent("slow", { status: "running", updatedAt: ago(3000) }));
+  const perm = member(agent("p", { status: "running", updatedAt: ago(3000), pendingPermissions: [{ id: "r", kind: "tool" }] }));
+  if (!STALLED_IN_NEEDS_YOU) {
+    assert.deepEqual(attentionItems([quiet], NOW), []);
+    assert.equal(needsYouCount([quiet], NOW), 0);
+    assert.equal(stalledCount([quiet], NOW), 0);
+  }
+  assert.deepEqual(attentionItems([quiet, perm], NOW).map((i) => [i.id, i.kind]), [["p", "permission"]]);
+  assert.equal(stalledReason(quiet.agent, NOW) !== null, true); // helper itself is intact
+});
 
 const NOW = Date.parse("2026-11-15T12:00:00Z");
 const ago = (s) => new Date(NOW - s * 1000).toISOString();
 const agent = (id, extra = {}) => ({ id, title: `Agent ${id}`, status: "idle", labels: {}, ...extra });
 const member = (a) => ({ agent: a, kind: "worker", attention: attentionOf(a) });
 
-test("stalled is an attention kind: a quiet running agent lists as stalled, only when `now` is passed", () => {
+stallTest("stalled is an attention kind: a quiet running agent lists as stalled, only when `now` is passed", () => {
   resetAttentionLocal();
   const quiet = member(agent("slow", { status: "running", updatedAt: ago(700) }));
   const busy = member(agent("busy", { status: "running", updatedAt: ago(20) }));
@@ -19,7 +35,7 @@ test("stalled is an attention kind: a quiet running agent lists as stalled, only
   assert.equal(items[0].reason, "Stalled: no update for 12m");
 });
 
-test("stalled: a pending permission or an existing attention wins; dismissing hides it", async () => {
+stallTest("stalled: a pending permission or an existing attention wins; dismissing hides it", async () => {
   resetAttentionLocal();
   const perm = member(agent("p", { status: "running", updatedAt: ago(600), pendingPermissions: [{ id: "r", kind: "tool" }] }));
   assert.equal(attentionItems([perm], NOW)[0].kind, "permission");
@@ -32,7 +48,7 @@ test("stalled: a pending permission or an existing attention wins; dismissing hi
   assert.equal(attentionItems([quiet], NOW).length, 0);
 });
 
-test("stalled dismiss is keyed to activity: new activity then a fresh stall shows again", async () => {
+stallTest("stalled dismiss is keyed to activity: new activity then a fresh stall shows again", async () => {
   resetAttentionLocal();
   const quiet = (updatedAt) => member(agent("slow", { status: "running", updatedAt }));
   const [item] = attentionItems([quiet(ago(700))], NOW);
@@ -41,7 +57,7 @@ test("stalled dismiss is keyed to activity: new activity then a fresh stall show
   assert.equal(attentionItems([quiet(ago(650))], NOW + 1000).length, 1); // it moved, then stalled again
 });
 
-test("R3.2: stalled needs ~10 min quiet AND no tool in flight; below that it is out of list and count", () => {
+stallTest("R3.2: stalled needs ~10 min quiet AND no tool in flight; below that it is out of list and count", () => {
   resetAttentionLocal();
   const at = (s) => member(agent("q", { status: "running", updatedAt: ago(s) }));
   assert.equal(attentionItems([at(599)], NOW).length, 0);
@@ -63,7 +79,7 @@ test("R3.2: needsYouCount == the counted rows (finished excluded) and matches th
   assert.equal(needsYouCount(all, NOW), needsYouCount([a], NOW) + needsYouCount([b, c], NOW));
 });
 
-test("R3.2 parity: with everything collapsed, sum of per-container badges == Needs-you count (busy fixture, >10-min stalled agent)", () => {
+stallTest("R3.2 parity: with everything collapsed, sum of per-container badges == Needs-you count (busy fixture, >10-min stalled agent)", () => {
   resetAttentionLocal();
   const perm = (id) => member(agent(id, { status: "idle", requiresAttention: true, attentionReason: "permission", pendingPermissions: [{ id: "r", kind: "tool" }] }));
   const fin = member(agent("fin", { status: "idle", requiresAttention: true, attentionReason: "finished" }));
@@ -78,7 +94,7 @@ test("R3.2 parity: with everything collapsed, sum of per-container badges == Nee
   assert.equal(sum, 4); // 3 permissions + 1 stalled; finished, <10m and tool-in-flight agents are not counted
 });
 
-test("R3-2: an open tool_call (from timeline entries) keeps a quiet agent out of Needs you; once the result lands it is stalled", async () => {
+stallTest("R3-2: an open tool_call (from timeline entries) keeps a quiet agent out of Needs you; once the result lands it is stalled", async () => {
   const { noteOpenTools, openToolSeconds, toolRunningSecondsAt, clearOpenTools } = await import("../src/openTools.ts");
   resetAttentionLocal();
   clearOpenTools();
@@ -98,7 +114,7 @@ test("R3-2: an open tool_call (from timeline entries) keeps a quiet agent out of
   clearOpenTools();
 });
 
-test("R3 L1: one shared `now` gives badge sum == list count at the 600s boundary; BoringInbox owns no tick", async () => {
+stallTest("R3 L1: one shared `now` gives badge sum == list count at the 600s boundary; BoringInbox owns no tick", async () => {
   const { readFileSync } = await import("node:fs");
   resetAttentionLocal();
   const a = member(agent("a", { status: "running", updatedAt: ago(599) }));

@@ -48,6 +48,13 @@ const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, er
 /** Dismissing a stall hides it only until the agent shows new activity (its updatedAt moves). */
 export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}`;
 
+/**
+ * R4-1 interim switch (docs/UX_REVIEW_R4.md): stalled agents are NOT in the Needs-you list, count or badges until the server reports
+ * openToolSince (tool-in-flight is client-only today, so the count flickered when an agent was opened). The follow-up unit flips this
+ * to true; the 90s `st-stalled` glyph in the tree/Workers tab is unaffected. stalledCount() is 0 while this is false.
+ */
+export const STALLED_IN_NEEDS_YOU = false;
+
 /** A running agent with nothing pending and no update for BORING_NEEDS_YOU_STALL_SECONDS (10m) and no tool call in flight: "Stalled: no update for 10m", else null. */
 export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: number | null): string | null {
   const updated = Date.parse(a.updatedAt ?? "");
@@ -68,7 +75,7 @@ export function attentionItems(members: Member[], now?: number, toolRunningSecon
     if (m.kind === "old-lead" || m.agent.archivedAt || m.agent.status === "closed") continue;
     let kind = kindOfAttention(m);
     let reason = m.attention?.reason ?? "";
-    if (!kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, stalledSignature(m.agent), now)) {
+    if (STALLED_IN_NEEDS_YOU && !kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, stalledSignature(m.agent), now)) {
       const stalled = stalledReason(m.agent, now, toolRunningSeconds?.(m.agent));
       if (stalled) (kind = "stalled"), (reason = stalled);
     }
