@@ -22,11 +22,11 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureDist } from "../scripts/ui-overlap/env.mjs";
 
 const require2 = createRequire(import.meta.url);
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -134,26 +134,6 @@ function resetErrors() {
   consoleErrors.length = 0;
 }
 
-/** Build `dist/` once (only when `dist/index.html` is absent) so the smoke test has a static bundle. */
-async function ensureDist() {
-  const distIndex = path.join(REPO_ROOT, "dist", "index.html");
-  if (fs.existsSync(distIndex)) return;
-  const viteBin = path.join(REPO_ROOT, "node_modules", "vite", "bin", "vite.js");
-  await new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, [viteBin, "build"], {
-      cwd: REPO_ROOT,
-      stdio: ["ignore", "ignore", "pipe"],
-    });
-    let buildErr = "";
-    child.stderr?.on("data", (d) => (buildErr += String(d)));
-    child.on("error", rejectPromise);
-    child.on("exit", (code) => {
-      if (code === 0) resolvePromise();
-      else rejectPromise(new Error(`vite build failed:\n${buildErr.slice(0, 4000)}`));
-    });
-  });
-}
-
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 before(async () => {
   pw = resolvePlaywright();
@@ -176,7 +156,7 @@ before(async () => {
   // Serve the prebuilt `dist/` bundle with a tiny node:http static server on an ephemeral
   // 127.0.0.1 port. This sidesteps Vite's slow optimizeDeps pre-bundle (which stalled
   // domcontentloaded) and is immune to port 5211 collisions. We build `dist/` once only if
-  // `dist/index.html` is missing. Playwright still mocks /api/teams and /__vibesquad/*.
+  // `dist/index.html` is missing, or stale (a source newer than it). Playwright still mocks /api/teams and /__vibesquad/*.
   await ensureDist();
   const distDir = path.join(REPO_ROOT, "dist");
   const MIME = {

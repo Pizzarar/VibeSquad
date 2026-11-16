@@ -54,10 +54,49 @@ export function findBrowser() {
   ].filter(Boolean).find((p) => { try { return fs.existsSync(p); } catch { return false; } }) ?? null;
 }
 
-/** Build dist/ when missing (or when UI_OVERLAP_REBUILD=1) so the guard sees this worktree's CSS. */
+/** Newest mtime (ms) among the given files and, for directories, every file beneath them. 0 when none exist. */
+export function newestMtime(paths) {
+  let newest = 0;
+  const stack = [...paths];
+  while (stack.length) {
+    const p = stack.pop();
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    if (st.isDirectory()) {
+      let entries;
+      try { entries = fs.readdirSync(p); } catch { continue; }
+      for (const e of entries) stack.push(path.join(p, e));
+    } else if (st.mtimeMs > newest) {
+      newest = st.mtimeMs;
+    }
+  }
+  return newest;
+}
+
+/** vite.config.* files at the repo root (vite.config.ts / .js / .mts / .mjs / .cjs). */
+function viteConfigPaths(repoRoot) {
+  let entries;
+  try { entries = fs.readdirSync(repoRoot); } catch { return []; }
+  return entries.filter((e) => /^vite\.config\./.test(e)).map((e) => path.join(repoRoot, e));
+}
+
+/**
+ * Whether dist/ needs a (re)build: missing dist/index.html, an explicit UI_OVERLAP_REBUILD=1,
+ * or any source (src/ tree, index.html, vite.config.*) newer than dist/index.html.
+ */
+export function distNeedsBuild({ repoRoot = REPO_ROOT, override = process.env.UI_OVERLAP_REBUILD } = {}) {
+  const distIndex = path.join(repoRoot, "dist", "index.html");
+  if (!fs.existsSync(distIndex)) return true;
+  if (override === "1") return true;
+  const sourceMtime = newestMtime([path.join(repoRoot, "index.html"), path.join(repoRoot, "src"), ...viteConfigPaths(repoRoot)]);
+  let distMtime = 0;
+  try { distMtime = fs.statSync(distIndex).mtimeMs; } catch {}
+  return sourceMtime > distMtime;
+}
+
+/** Build dist/ when missing, stale (a source newer than dist/index.html), or forced (UI_OVERLAP_REBUILD=1). */
 export async function ensureDist() {
-  const distIndex = path.join(REPO_ROOT, "dist", "index.html");
-  if (fs.existsSync(distIndex) && process.env.UI_OVERLAP_REBUILD !== "1") return;
+  if (!distNeedsBuild()) return;
   const viteBin = path.join(REPO_ROOT, "node_modules", "vite", "bin", "vite.js");
   await new Promise((res, rej) => {
     const child = spawn(process.execPath, [viteBin, "build"], { cwd: REPO_ROOT, stdio: ["ignore", "ignore", "pipe"] });
