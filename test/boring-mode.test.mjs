@@ -112,7 +112,8 @@ export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.
 // BoringApp now owns a 30s `now` tick (R3 L1); the useEffect stub really runs it, so unref it or node never exits.
 const realSetInterval = globalThis.setInterval;
 globalThis.setInterval = (...a) => { const t = realSetInterval(...a); t?.unref?.(); return t; };
-stub("openTools.mjs", `export const toolRunningSecondsAt = () => () => null;`);
+stub("demo.mjs", "export const demoLog = () => [];");
+stub("demoFlag.mjs", "export const DEMO = false;");
 stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length;`);
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));

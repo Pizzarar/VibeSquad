@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AgentDrawer } from "./AgentDrawer";
 import { stalledCount } from "./attentionItems";
-import { toolRunningSecondsAt } from "./openTools";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
+import { demoLog } from "./demo";
+import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
 import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
@@ -189,13 +190,12 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   // hidden lanes); the pin's own slots are only the fallback for a pin whose lane isn't in view.lanes. Same members => badge sum == list count.
   const pinMembers = (p: Pin | null | undefined): Member[] =>
     p ? view?.lanes?.find((l) => l.lane.id === p.lane.id)?.members ?? [p.brainstorm, p.lead, ...(p.workers ?? []), ...(p.topicBrainstorms ?? [])].filter((m): m is Member => !!m) : [];
-  const toolSecs = toolRunningSecondsAt(now);
-  const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now, toolSecs);
+  const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now);
   const zoneRow = (label: string, z: typeof zones.overlord) => ({
     label,
     agentId: z.agentId,
     status: z.member?.agent.status ?? "none",
-    needsYou: z.member ? (z.member.attention && z.member.attention.tone !== "finished" ? 1 : 0) + stalledCount([z.member], now, toolSecs) : 0,
+    needsYou: z.member ? (z.member.attention && z.member.attention.tone !== "finished" ? 1 : 0) + stalledCount([z.member], now) : 0,
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
     updatedAt: z.member?.agent.updatedAt ?? null,
   });
@@ -215,7 +215,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
       err: pinErr(bugs.pin),
       agentId: bugs.pin ? liveBuddyId(bugs.pin) ?? (isLive(bugs.pin.lead) ? bugs.pin.lead.agent.id : null) : null,
       leadRunning: bugs.leadRunning,
-      needsYou: bugs.needsYou + stalledCount(pinMembers(bugs.pin), now, toolSecs),
+      needsYou: bugs.needsYou + stalledCount(pinMembers(bugs.pin), now),
       age: bugs.pin ? boringConversationAge(bugs.pin, now) : "",
     },
   };
@@ -382,6 +382,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     void refreshInboxCards?.();
     const teamId = view?.team.id;
     if (!teamId || typeof fetch !== "function") return;
+    // ?demo is a fixed cast: never read the real squad log (its verdict lines would show up as lane "Last event").
+    if (DEMO) { const rows = demoLog(); setFeedCount(rows.length); setFeedRows(rows as typeof feedRows); return; }
     let live = true;
     fetch(`/__vibesquad/log?team=${encodeURIComponent(teamId)}`)
       .then((r) => r.json())
