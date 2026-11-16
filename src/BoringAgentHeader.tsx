@@ -144,8 +144,8 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     meterShown: showMeter,
     canHandoff,
   });
-  // R5-5: same open-tool source + ceiling rule as Needs you (the timeline audit is only the hint for payloads without openToolSince).
-  const openTool = openToolOf(agent, now, hung?.ageSeconds ?? null);
+  // R5-5: same open-tool source + ceiling rule as Needs you.
+  const openTool = openToolOf(agent, now);
   const toolStall = boringNeedsYouStall({
     status: agent.status,
     hasPendingPermission: (agent.pendingPermissions?.length ?? 0) > 0,
