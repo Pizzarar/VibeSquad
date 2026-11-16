@@ -322,7 +322,9 @@ let restored = typeof location === "undefined";
 function tryRestore() {
   if (restored) return;
   const ps = getPaseoState();
-  if (ps.conn !== "connected" || ps.agents.size === 0) return;
+  // R6-1: wait for the whole first roster snapshot, not "connected with one agent": the stream opens before the
+  // snapshot, and a partial map makes a late-sorting ?agent= look stale (closeTab → Overview).
+  if (!ps.rosterLoaded) return;
   restored = true;
   if (state.focus) return;
   if (state.home && state.squadsHome) return; // ?view=squads in the URL wins over the saved pin

@@ -119,13 +119,33 @@ export function removeLocalAgent(agentId: string) {
   listeners.forEach((l) => l());
 }
 
-/** Forget an agent without archiving it (it vanished from a roster; only a real archive event archives). */
-function dropLocalAgent(agentId: string) {
-  if (!state.agents.has(agentId) && !pendingAgents.has(agentId)) return;
-  const agents = new Map(state.agents);
-  pendingAgents.delete(agentId);
-  agents.delete(agentId);
-  state = { ...state, agents };
+/**
+ * R6-1: mirror one runner roster event into the store as ONE update and one notify. A snapshot of ~520 agents used to
+ * land one applyAgent (and one listener pass) per agent, so a startup subscriber (pinFocus tryRestore) saw a roster of
+ * one agent and closed a deep-linked tab as stale. Changed agents are upserted; runner agents missing from the event
+ * are archived when the event says so, else forgotten (only a real archive event archives). The first snapshot also
+ * sets rosterLoaded in the same update, so `rosterLoaded` always means "the whole first snapshot is in the map".
+ */
+function applyRoster(list: PaseoAgent[], archivedIds: string[], snapshot: boolean) {
+  const live = new Set(list.map((a) => a.id));
+  let agents: Map<string, PaseoAgent> | null = null;
+  let archivedAgents: Map<string, PaseoAgent> | null = null;
+  for (const a of list) {
+    if (sameAgent(state.agents.get(a.id), a)) continue;
+    pendingAgents.delete(a.id);
+    (agents ??= new Map(state.agents)).set(a.id, a);
+  }
+  for (const [id, existing] of state.agents) {
+    if (!isRunnerId(id) || live.has(id)) continue;
+    pendingAgents.delete(id);
+    (agents ??= new Map(state.agents)).delete(id);
+    if (!archivedIds.includes(id)) continue;
+    noteLocalRemove(id);
+    (archivedAgents ??= new Map(state.archivedAgents)).set(id, { ...existing, status: "closed", archivedAt: new Date().toISOString() } as PaseoAgent);
+  }
+  const loaded = snapshot && !state.rosterLoaded;
+  if (!agents && !archivedAgents && !loaded) return;
+  state = { ...state, ...(agents ? { agents } : {}), ...(archivedAgents ? { archivedAgents } : {}), ...(loaded ? { rosterLoaded: true } : {}) };
   listeners.forEach((l) => l());
 }
 
@@ -441,18 +461,9 @@ export async function attachFiles(cwd: string, files: string[]): Promise<string[
 if (!DEMO && typeof window !== "undefined") {
   onRunnerStatusChange(() => set({}));
   startRunnerBridge(
-    (agents, archivedIds, snapshot) => {
-      const live = new Set(agents.map((a) => a.id));
-      for (const a of agents) if (!sameAgent(state.agents.get(a.id), a)) applyAgent(a);
-      for (const id of [...state.agents.keys()]) {
-        if (!isRunnerId(id) || live.has(id)) continue;
-        if (archivedIds.includes(id)) removeLocalAgent(id);
-        else dropLocalAgent(id);
-      }
-      // R5-1: the roster counts as loaded once the first agent snapshot is applied, not when the stream opens (the open
-      // comes first, and the restore prune would see an empty map and drop a deep-linked tab).
-      if (snapshot && !state.rosterLoaded) set({ rosterLoaded: true });
-    },
+    // R5-1/R6-1: the roster counts as loaded once the whole first snapshot is applied (one update, see applyRoster),
+    // not when the stream opens: the open comes first, and startup restores would see a partial map.
+    applyRoster,
     (up) => {
       set({
         runnerConn: up ? "up" : "down",
