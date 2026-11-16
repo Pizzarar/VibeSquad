@@ -80,31 +80,135 @@ function viteConfigPaths(repoRoot) {
   return entries.filter((e) => /^vite\.config\./.test(e)).map((e) => path.join(repoRoot, e));
 }
 
-/**
- * Whether dist/ needs a (re)build: missing dist/index.html, an explicit UI_OVERLAP_REBUILD=1,
- * or any source (src/ tree, index.html, vite.config.*) newer than dist/index.html.
- */
-export function distNeedsBuild({ repoRoot = REPO_ROOT, override = process.env.UI_OVERLAP_REBUILD } = {}) {
-  const distIndex = path.join(repoRoot, "dist", "index.html");
-  if (!fs.existsSync(distIndex)) return true;
-  if (override === "1") return true;
-  const sourceMtime = newestMtime([path.join(repoRoot, "index.html"), path.join(repoRoot, "src"), ...viteConfigPaths(repoRoot)]);
-  let distMtime = 0;
-  try { distMtime = fs.statSync(distIndex).mtimeMs; } catch {}
-  return sourceMtime > distMtime;
+// ── dist build coordination ──────────────────────────────────────────────────
+const PROCESS_START = Date.now();
+const LOCK_POLL_MS = 250;
+const LOCK_WAIT_MS = 5 * 60 * 1000;   // cap on waiting for a build to finish
+const LOCK_STALE_MS = 10 * 60 * 1000; // a lock older than this (or a dead holder) is reclaimed
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const lockPath = (repoRoot) => path.join(repoRoot, ".dist-build.lock");
+const stampPath = (repoRoot) => path.join(repoRoot, "dist", ".build-stamp");
+
+/** Newest mtime among the UI sources (src/ tree, index.html, vite.config.*). */
+function sourceMtime(repoRoot) {
+  return newestMtime([path.join(repoRoot, "index.html"), path.join(repoRoot, "src"), ...viteConfigPaths(repoRoot)]);
 }
 
-/** Build dist/ when missing, stale (a source newer than dist/index.html), or forced (UI_OVERLAP_REBUILD=1). */
-export async function ensureDist() {
-  if (!distNeedsBuild()) return;
-  const viteBin = path.join(REPO_ROOT, "node_modules", "vite", "bin", "vite.js");
+function readLock(repoRoot) {
+  try { return JSON.parse(fs.readFileSync(lockPath(repoRoot), "utf8")); } catch { return null; }
+}
+
+function readStamp(repoRoot) {
+  try { return JSON.parse(fs.readFileSync(stampPath(repoRoot), "utf8")); } catch { return null; }
+}
+
+function writeStamp(repoRoot, srcMtime) {
+  fs.mkdirSync(path.dirname(stampPath(repoRoot)), { recursive: true });
+  fs.writeFileSync(stampPath(repoRoot), JSON.stringify({ srcMtime, builtAt: Date.now(), pid: process.pid }));
+}
+
+function processAlive(pid) {
+  if (!Number.isInteger(pid)) return false;
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === "EPERM"; }
+}
+
+function isLockStale(lock, now = Date.now()) {
+  if (!lock) return false;
+  if (Number.isInteger(lock.pid) && !processAlive(lock.pid)) return true;
+  return now - (lock.startedAt ?? 0) > LOCK_STALE_MS;
+}
+
+/** Atomically create the lock (wx = fail if it exists). Returns false when another process holds it. */
+function acquireLock(repoRoot) {
+  let fd;
+  try {
+    fd = fs.openSync(lockPath(repoRoot), "wx");
+  } catch (e) {
+    if (e.code === "EEXIST") return false;
+    throw e;
+  }
+  try {
+    fs.writeSync(fd, JSON.stringify({ pid: process.pid, startedAt: Date.now() }));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return true;
+}
+
+/** Re-read before deleting: only remove a lock this process still owns, never a successor's. */
+function releaseLock(repoRoot) {
+  const lock = readLock(repoRoot);
+  if (lock && lock.pid === process.pid) {
+    try { fs.rmSync(lockPath(repoRoot), { force: true }); } catch {}
+  }
+}
+
+/** Wait until the lock is gone (or reclaim a stale one). Throws after the shared deadline. */
+async function waitForLock(repoRoot, { deadline, pollMs = LOCK_POLL_MS }) {
+  for (;;) {
+    const lock = readLock(repoRoot);
+    if (!lock) return;
+    if (isLockStale(lock)) {
+      // Re-read before reclaiming: a live holder may have replaced the lock we just saw.
+      const re = readLock(repoRoot);
+      if (re && re.pid === lock.pid && re.startedAt === lock.startedAt && isLockStale(re)) {
+        try { fs.rmSync(lockPath(repoRoot), { force: true }); } catch {}
+        return;
+      }
+    }
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for dist build lock: ${lockPath(repoRoot)}`);
+    await sleep(pollMs);
+  }
+}
+
+/**
+ * Whether dist/ needs a (re)build: missing dist/index.html or stamp, a forced rebuild honoured only
+ * when the last build predates this run (runStart), or any source newer than the stamped source mtime.
+ */
+export function distNeedsBuild({ repoRoot = REPO_ROOT, override = process.env.UI_OVERLAP_REBUILD, runStart = PROCESS_START } = {}) {
+  const distIndex = path.join(repoRoot, "dist", "index.html");
+  const stamp = readStamp(repoRoot);
+  if (!fs.existsSync(distIndex) || !stamp) return true;
+  if (override === "1" && (stamp.builtAt ?? 0) < runStart) return true;
+  return sourceMtime(repoRoot) > (stamp.srcMtime ?? 0);
+}
+
+async function runViteBuild(repoRoot) {
+  const viteBin = path.join(repoRoot, "node_modules", "vite", "bin", "vite.js");
   await new Promise((res, rej) => {
-    const child = spawn(process.execPath, [viteBin, "build"], { cwd: REPO_ROOT, stdio: ["ignore", "ignore", "pipe"] });
+    const child = spawn(process.execPath, [viteBin, "build"], { cwd: repoRoot, stdio: ["ignore", "ignore", "pipe"] });
     let err = "";
     child.stderr?.on("data", (d) => (err += String(d)));
     child.on("error", rej);
     child.on("exit", (code) => (code === 0 ? res() : rej(new Error(`vite build failed:\n${err.slice(0, 3000)}`))));
   });
+}
+
+/**
+ * Ensure dist/ is built and current, coordinating across processes with a lock file:
+ *  1. wait for any in-flight build (or reclaim a stale lock: dead pid / older than 10 min);
+ *  2. re-check freshness, then build under the lock only if still needed;
+ *  3. write dist/.build-stamp (the source mtime it built from) so waiters see a completed build.
+ * UI_OVERLAP_REBUILD=1 forces at most one rebuild per run: it is honoured only when the existing
+ * stamp is older than this process's start (PROCESS_START), so parallel test processes share one rebuild.
+ */
+export async function ensureDist({ repoRoot = REPO_ROOT, override = process.env.UI_OVERLAP_REBUILD, build = runViteBuild, runStart = PROCESS_START, lockWaitMs = LOCK_WAIT_MS, pollMs = LOCK_POLL_MS } = {}) {
+  const deadline = Date.now() + lockWaitMs;
+  for (;;) {
+    await waitForLock(repoRoot, { deadline, pollMs });
+    if (!distNeedsBuild({ repoRoot, override, runStart })) return;
+    if (!acquireLock(repoRoot)) continue; // lost the race: wait for the winner, then re-check
+    try {
+      if (!distNeedsBuild({ repoRoot, override, runStart })) return; // another process built while we waited
+      const builtSrcMtime = sourceMtime(repoRoot);
+      await build(repoRoot);
+      writeStamp(repoRoot, builtSrcMtime);
+      return;
+    } finally {
+      releaseLock(repoRoot);
+    }
+  }
 }
 
 const MIME = {
