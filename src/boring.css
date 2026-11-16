@@ -1219,8 +1219,6 @@ html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 45%; 
 
 /* Desk R5-6: at narrow widths line 1 drops the project (lane only; the project is on the badge and in the row title) so the agent name stays readable. */
 html[data-vibe="boring"] .boring-needs-item { container-type: inline-size; }
- /* indented at-rule: the D3a section scan only allows media rules at column 0 */
- @container (max-width: 300px) {
-  html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { display: none; }
-  html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 65%; }
-}
+/* Container-width switch without an at-rule (every rule stays column-0 + scoped): (100cqw - 300px) * 1000 clamps to 0 at <=300px and to full width above it. */
+html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { display: inline-block; vertical-align: bottom; text-indent: 0.3em; overflow: hidden; white-space: nowrap; max-width: clamp(0px, calc((100cqw - 300px) * 1000), 100cqw); }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: clamp(45cqw, calc(65cqw - (100cqw - 300px) * 1000), 65cqw); }

@@ -48,7 +48,8 @@ test("laneTopicLabel: topic is a secondary label only", () => {
 
 test("R4-3: Needs-you line 1 puts the lane first so end-ellipsis cuts the project", () => {
   const inbox = read("BoringInbox.tsx");
-  assert.match(inbox, /\{r\.lane\} · \{r\.project\}<\/span>/);
+  // the project sits in a nested span (R5-6 hides it at narrow widths); the lane stays first and outside it
+  assert.match(inbox, /\{r\.lane\}(<span[^>]*>)? · \{r\.project\}<\/span>/);
   assert.doesNotMatch(inbox, /\{r\.project\} › \{r\.lane\}<\/span>/);
 });
 
