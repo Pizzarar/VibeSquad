@@ -2445,6 +2445,21 @@ test('usa-29: jobKind + stakes fold onto agents; byProfile collapses legacy prof
   assert.equal(row('claude-sonnet-5-5', 'normal', 'digest').successBasis, 'no-signal');
 });
 
+test('UX Reviewer profile classifies as reviewer regardless of title (not scout) and is a non-implementer', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  const mk = (id, meta) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-opus-5-5', cwd: '/w/' + id, meta: { lane: 'usage', role: 'worker', profile: 'UX Reviewer - Opus', ...meta } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  mk('rn-ux1', { title: 'UX Reviewer · phase 1' });
+  mk('rn-ux2', { title: 'UX pass · phase 1' });
+  const u = getUsage({ home, git: noGit });
+  const rows = u.byProfile.filter((p) => p.model === 'claude-opus-5-5');
+  assert.deepEqual(rows.map((p) => [p.jobKind, p.runs]), [['reviewer', 2]], 'both titles land in one reviewer row');
+});
+
 test('usa-29: byProfile folds the effort suffix of a model', () => {
   const home = tmp();
   clearUsageCache();

@@ -1026,6 +1026,17 @@ export function diffProfiles(vsProfiles = [], paseoProfiles = []) {
 }
 
 export function findProfile(nameOrRole, profilesInput) {
+  const found = findStoredProfile(nameOrRole, profilesInput);
+  if (found) return found;
+  // An existing ~/.vibesquad/profiles.json predates newly shipped built-ins: resolve those from the default pack
+  // (read-only, so a profile the owner deleted is not resurrected on disk).
+  const rawKey = String(nameOrRole ?? "").trim();
+  const resolved = LEGACY_PROFILE_ALIASES[rawKey] || rawKey;
+  const def = DEFAULT_PACK_PROFILES.find((d) => d.name.toLowerCase() === resolved.toLowerCase() || (d.id && d.id === rawKey));
+  return def ? normalizeProfile(def) : null;
+}
+
+function findStoredProfile(nameOrRole, profilesInput) {
   const profiles = Array.isArray(profilesInput) && profilesInput.length
     ? profilesInput
     : loadProfiles(undefined, { autoSeed: false }).profiles;

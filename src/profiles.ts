@@ -52,7 +52,7 @@ const ART_BRIEF = BRIEF("Art direction: palette, references, screenshots at 1440
 export function defaultBriefFor(name: string, role: Role): string {
   if (role === "lead") return LEAD_BRIEF;
   if (role === "brainstorm") return BRAINSTORM_BRIEF;
-  if (/^Review\b|^Check\b/i.test(name)) return REVIEW_BRIEF;
+  if (/^Review\b|^Check\b|^UX Reviewer\b/i.test(name)) return REVIEW_BRIEF;
   if (/^Art\b/i.test(name)) return ART_BRIEF;
   if (/^Spec\b/i.test(name)) return BRIEF("Output: a spec doc, no code.");
   if (/^Planner\b/i.test(name)) return BRIEF("Output: unit split with file scopes and done-checks.");

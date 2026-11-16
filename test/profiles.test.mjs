@@ -582,6 +582,25 @@ test("UX Reviewer - Opus: profile wired (vision+code+playwright, no edit-source)
   assert.ok(!ART_DIRECTOR_NOTE_BODY.includes("UX"));
 });
 
+test("findProfile resolves a newly shipped built-in from the default pack when an existing profiles.json lacks it (M1)", () => {
+  const stored = DEFAULT_PACK_PROFILES.filter((p) => p.name !== "UX Reviewer - Opus");
+  assert.equal(stored.some((p) => p.name === "UX Reviewer - Opus"), false);
+  const found = findProfile("UX Reviewer - Opus", stored);
+  assert.equal(found?.name, "UX Reviewer - Opus");
+  assert.equal(found.model, "claude-opus-5-5");
+  assert.equal(findProfile("ux reviewer - opus", stored)?.name, "UX Reviewer - Opus");
+  assert.equal(findProfile("No Such Profile", stored), null);
+  // a stored (owner-edited) copy still wins over the default
+  const edited = [...stored, { ...DEFAULT_PACK_PROFILES.find((p) => p.name === "UX Reviewer - Opus"), model: "custom-model" }];
+  assert.equal(findProfile("UX Reviewer - Opus", edited).model, "custom-model");
+});
+
+test("defaultBriefFor gives UX Reviewer the review brief, so hydration keeps it (L1)", () => {
+  const src = readFileSync(resolve(import.meta.dirname, "..", "src", "profiles.ts"), "utf8");
+  const line = src.split(/\r?\n/).find((l) => l.includes("return REVIEW_BRIEF") && l.includes("test(name)"));
+  assert.ok(line && line.includes("UX Reviewer"), line);
+});
+
 // Root cause: stored built-in notes that still equal an older default must follow default changes.
 import { DEFAULT_PACK_PROFILES as PACK, isKnownDefaultNote, loadProfiles as loadProfilesDirect } from "../server/profiles.mjs";
 
