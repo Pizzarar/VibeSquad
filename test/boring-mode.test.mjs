@@ -108,6 +108,7 @@ writeFileSync(
   `export * from ${JSON.stringify(reactUrl)};
 export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.i++; const prev = h.slots[k]; const same = prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, j) => Object.is(d, prev.deps[j])); if (same) return; if (prev && typeof prev.cleanup === "function") prev.cleanup(); const cleanup = fn(); h.slots[k] = { deps, cleanup }; }; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
+stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length;`);
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
@@ -136,6 +137,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "react"/, `from "./react-hooks.mjs"`)
   .replace(/from "\.\/skyZonesLogic"/, `from "./skyZonesBoring"`)
   .replace(/from "\.\/pinFocus"/,`from "./pinFocusBoring"`)
+  .replace(/from "\.\/attentionItems"/, `from "./attentionItemsBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
 const { BoringApp, boringAgentLanding, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringActiveSelection, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
@@ -725,6 +727,22 @@ test("D2 2.1 boringSidebarModel: hub-lane needsYou and lane-worker alerts are co
   assert.equal(boringSidebarModel({ ...v, needsYou: 0 }, NOW).totalNeedsYou, 2 + 1 + m.core.bugs.needsYou);
 });
 
+test("R3.2 parity: stalled agents add to hub, lane and bugs badges, and the collapsed project badge is their exact sum", () => {
+  const stalled = (id) => ({ ...mem(id, "running", ago(30)), stalled: true });
+  const v = squad({
+    pins: [lanePin("ade", { workers: [stalled("w1")], needsYou: 1 }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })],
+    zones: { hub: { lane: { id: "hub" }, needsYou: 2, workers: [stalled("hw")], lead: stalled("hl") }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) },
+    bugs: { pin: lanePin("bug", { workers: [stalled("bw")] }), leadRunning: false, needsYou: 1 },
+    needsYou: 4, // view.needsYou never counts stalled items: the badge must not fall back to it
+  });
+  const m = boringSidebarModel(v, NOW);
+  assert.equal(m.hubNeedsYou, 2 + 2);
+  assert.equal(m.conversations[0].needsYou, 1 + 1);
+  assert.equal(m.core.bugs.needsYou, 1 + 1);
+  assert.equal(m.totalNeedsYou, m.hubNeedsYou + m.conversations.reduce((n, c) => n + c.needsYou, 0) + m.core.bugs.needsYou);
+  assert.equal(m.totalNeedsYou, 8);
+});
+
 test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted by worst state", () => {
   reset();
   const v = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 2 }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) }, needsYou: 5 });
@@ -1248,6 +1266,20 @@ test("Desk R2 Needs you: the count equals the rows; cap 5 with a '+ N more' togg
   assert.equal(testids(few, "boring-needs-you-item").length, 4);
   assert.equal(testids(few, "boring-needs-you-more").length, 0);
   assert.equal(testids(few, "boring-needs-you-count")[0].props.children, 4);
+});
+
+test("R3.7 Needs you expanded (showAll) hides Done recently; collapsing brings it back", () => {
+  reset();
+  const v = manyView(8);
+  const render = () => ((hs.i = 0), BoringInbox({ views: [v], now: NOW, logs: [] }));
+  let t = render();
+  assert.equal(testids(t, "boring-recent-done").length, 1);
+  testids(t, "boring-needs-you-more")[0].props.onClick();
+  t = render();
+  assert.equal(testids(t, "boring-needs-you-item").length, 8);
+  assert.equal(testids(t, "boring-recent-done").length, 0);
+  testids(t, "boring-needs-you-more")[0].props.onClick();
+  assert.equal(testids(render(), "boring-recent-done").length, 1);
 });
 
 test("Desk R2 Needs you: finished lists under Done recently (count == rows), not under Needs you", () => {
