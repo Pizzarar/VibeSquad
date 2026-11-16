@@ -216,3 +216,20 @@ test("R5-4 wiring: App's Normal URL reads BoringApp's shown agent; pinFocus rest
   assert.doesNotMatch(ade, /leaveHome/, "no one-way home flag: the URL follows the screen");
   assert.match(read("pinFocus.ts"), /savedFocusForUrl\(savedFocus, \{ team: initialUrlTeam, agent: initialUrlAgent, normal: getPref\("app\.vibe"\) === "boring" \}\)/);
 });
+
+test("R7-1: a deep link waiting on the roster shows 'Opening agent…', not the default Overview", () => {
+  assert.equal(logic.boringDeepLinkPending({ rosterLoaded: false, activeAgentId: "rn-deep" }), true);
+  assert.equal(logic.boringDeepLinkPending({ rosterLoaded: true, activeAgentId: "rn-deep" }), false, "roster in: normal behaviour (also when the agent does not exist: no permanent spinner)");
+  assert.equal(logic.boringDeepLinkPending({ rosterLoaded: false, activeAgentId: null }), false, "no ?agent=: Overview as before");
+  const src = fs.readFileSync(resolve(SRC_DIR, "BoringAde.tsx"), "utf8");
+  assert.match(src, /data-testid="boring-opening"/);
+  assert.match(src, /\{!opening && mode === "project"/, "Overview is not rendered while opening");
+  assert.match(src, /\{!opening && mode === "chat"/);
+  assert.match(src, /\{!opening && mode === "usage"/);
+});
+
+test("R7-1 M1: the opening crumb is neutral, not a project name", () => {
+  const src = fs.readFileSync(resolve(SRC_DIR, "BoringAde.tsx"), "utf8");
+  assert.match(src, /opening \? \[\{ key: "project" as const, label: "Opening…" \}\]/);
+  assert.doesNotMatch(src, /opening \? \[\{ key: "project" as const, label: "VibeSquad"/);
+});

@@ -197,3 +197,6 @@ export function startsOnGrid(a: { deepLinked: boolean; viewSquads: boolean; rest
   if (a.deepLinked) return false;
   return !(a.restoreLastView && a.savedLeftTab);
 }
+
+/** R7-1 (Normal): while the first roster snapshot is not in, an active ?agent= tab is still opening: the main pane shows a neutral placeholder, not the default project's Overview. Once rosterLoaded flips (agent landable or not) normal behaviour resumes. */
+export const boringDeepLinkPending = (a: { rosterLoaded: boolean; activeAgentId: string | null }): boolean => !a.rosterLoaded && !!a.activeAgentId;

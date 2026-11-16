@@ -11,7 +11,7 @@ import { openAgent, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { openPinMember, setBoringShownAgent, spinUpPin } from "./pinFocus";
-import { boringUrlAgent } from "./pinFocusLogic";
+import { boringDeepLinkPending, boringUrlAgent } from "./pinFocusLogic";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
 import { formatTimestamp, setPref } from "./prefs";
@@ -547,7 +547,9 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
     sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk" ? "Desk" : sel.laneId === "_bugs" ? "Bugs" : selModel.conversations.find((c) => c.laneId === sel.laneId)?.name ?? null;
-  const crumbs = boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
+  // R7-1: a deep link waiting on the roster shows a bare breadcrumb + "Opening agent…", never the default project's Overview.
+  const opening = boringDeepLinkPending({ rosterLoaded: !!rosterLoaded, activeAgentId });
+  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
   const onCrumb = (key: Crumb["key"]) => {
     if (key === "project") setMode("project");
     else if (key === "lane" && mode === "chat") {
@@ -823,12 +825,15 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             )}
           </div>
         </header>
-        {mode === "usage" && (
+        {opening && (
+          <div className="boring-opening" data-testid="boring-opening" role="status">Opening agent…</div>
+        )}
+        {!opening && mode === "usage" && (
           <div className="boring-dashboard-wrap" data-testid="boring-usage-view">
             <UsageDashboard perfection={{ pin: perfectionPin(views), onOpen: (p) => { setMode("chat"); setSelectedLaneId(p.lane.id); return onOpenPin(p); } }} />
           </div>
         )}
-        {mode === "project" && (
+        {!opening && mode === "project" && (
           <div className="boring-dashboard-wrap" data-testid="boring-project-view">
             <div className="boring-overview-bar">
             <div className="boring-overview-tabs" data-testid="boring-overview-tabs">
@@ -877,7 +882,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {overviewTab === "feed" && view && <TeamFeed team={view.team} />}
           </div>
         )}
-        {mode === "chat" && (
+        {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
             {agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
           </div>
