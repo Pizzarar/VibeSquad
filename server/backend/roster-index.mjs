@@ -12,6 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pidAlive } from "../../runner/lock.mjs";
+import { isForbiddenRealHome } from "../test-guard.mjs";
 
 export const INDEX_FILE = "roster-index.json";
 export const INDEX_LOCK = "roster-index.lock";
@@ -151,6 +152,8 @@ function* scan(home, ids, fold) {
   let index;
   let stats;
   let locked = false;
+  // A test that forgot its temp home never writes the index (or its lock) into the real ~/.vibesquad/runner: it folds in memory.
+  const persist = !isForbiddenRealHome(home);
   for (;;) {
     index = readIndex(file, version);
     stats = new Map();
@@ -162,7 +165,7 @@ function* scan(home, ids, fold) {
       const e = index.get(id);
       if (!(e && e.size === st.size && e.mtimeMs === st.mtimeMs)) pending += Math.max(0, st.size - (e && st.size >= e.offset ? e.offset : 0));
     }
-    if (pending <= BUILD_LOCK_BYTES || Date.now() >= deadline) break;
+    if (!persist || pending <= BUILD_LOCK_BYTES || Date.now() >= deadline) break;
     if (tryLock(lockFile)) { locked = true; break; }
     // Another process is building: wait for it to finish, then re-read its index (most of the backlog is gone).
     while (lockBusy(lockFile) && Date.now() < deadline) yield { sleep: 100 };
@@ -191,7 +194,7 @@ function* scan(home, ids, fold) {
       out.push({ id, state });
       if (++n % YIELD_AGENTS === 0) yield "agents";
     }
-    if (changed) writeIndexAtomic(file, JSON.stringify({ v: INDEX_VERSION, fold: version, entries: next }));
+    if (changed && persist) writeIndexAtomic(file, JSON.stringify({ v: INDEX_VERSION, fold: version, entries: next }));
     return out;
   } finally {
     if (locked) try { fs.rmSync(lockFile, { force: true }); } catch { /* ignore */ }

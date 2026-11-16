@@ -779,7 +779,7 @@ function runnerRosterNow(now = Date.now()) {
   if (now - runnerRoster.at >= 30_000) refreshRunnerRoster();
   return runnerRoster.agents;
 }
-export const _runnerRosterReady = () => refreshRunnerRoster();
+export const _runnerRosterReady = (fresh = false) => refreshRunnerRoster(fresh);
 
 // Quick open / find in files call per keystroke: reuse the roots for 30s. getter(true) (a 403 miss, file-search.mjs) awaits a
 // brand-new scan, so a worktree created a moment ago is allowed on the retry.

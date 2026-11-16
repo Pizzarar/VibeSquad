@@ -116,8 +116,7 @@ async function bootWithConcurrentWho(n) {
 const teamsFile = path.join(vsHome, "teams.json");
 if (!existsSync(teamsFile)) {
   mkdirSync(vsHome, { recursive: true });
-  writeFileSync(teamsFile, JSON.stringify({ teams: [{ id: "vibesquad", name: "VibeSquad", paths: [], lanes: ["vibesquad", "bug-chaser", "desk", "usage", "wiki", "ui-bois"].map((id) => ({ id, name: id })) }] }) + "
-");
+  writeFileSync(teamsFile, JSON.stringify({ teams: [{ id: "vibesquad", name: "VibeSquad", paths: [], lanes: ["vibesquad", "bug-chaser", "desk", "usage", "wiki", "ui-bois"].map((id) => ({ id, name: id })) }] }) + "\n");
 }
 if (!existsSync(agentsDir)) {
   const t0 = performance.now();
