@@ -54,7 +54,7 @@ test("useDraft persists composer drafts per agent in localStorage", () => {
 test("popstate applies Squads Home both ways and the saved pin never beats ?view=squads", () => {
   const app = src("src/App.tsx");
   assert.match(app, /act === "squads-home"\) enterSquadsHome\(\);\s+else exitSquadsHome\(\)/);
-  assert.match(src("src/pinFocus.ts"), /state\.home && state\.squadsHome\) return;[^\n]*\n\s+const saved = loadSavedFocus/);
+  assert.match(src("src/pinFocus.ts"), /state\.home && state\.squadsHome\) return;[^\n]*\n\s+const saved(?:Focus)? = loadSavedFocus/);
 });
 
 test("popAction: Back from a chat returns to the squad page; view=squads goes to Squads Home", async () => {
