@@ -30,20 +30,44 @@ export function clearsOpenTools(e) {
 /**
  * Apply one runner log event to `open`. Returns true when the oldest open call WITH a timestamp (oldestOpenTool) changed (opened,
  * closed, or cleared), which is exactly when the published `openToolSince` / `openToolName` change.
+ *
+ * Hot path: every fold (the runner's boot pass over every log, vs who, the backend's live path) calls this on EVERY event, ~1.4M at
+ * boot on a live home (Bug24). So it allocates nothing, returns before touching `open` for the ~70% of events that are neither tool
+ * events nor turn edges, and derives "did the oldest change" from the single entry that moved instead of comparing two full
+ * oldestOpenTool() walks: a new call goes LAST (insertion order), so it becomes the oldest only when no older call has a timestamp;
+ * a closed call changes the oldest only when it WAS the oldest; a clear changes it only when there was one.
  */
 export function applyToolEvent(open, e) {
   if (!e || typeof e !== "object") return false;
-  const before = oldestOpenTool(open)?.id; // the published oldest (timestamp-less calls are skipped), not just the first key
-  if (clearsOpenTools(e)) open.clear();
-  else if (e.type === "tool" && e.id != null) {
-    const id = String(e.id);
-    const done = e.phase === "result" || e.isError === true || TERMINAL.has(String(e.status ?? ""));
-    if (done) open.delete(id);
-    else if (e.phase === "call" && !open.has(id) && open.size < MAX_OPEN_TOOLS) {
-      open.set(id, { since: Number.isFinite(e.ts) ? e.ts : null, name: typeof e.name === "string" && e.name ? e.name : "tool", timeoutMs: toolTimeoutMs(e) });
-    }
+  if (e.type !== "tool") {
+    if (open.size === 0 || !clearsOpenTools(e)) return false;
+    const had = oldestOpenId(open) !== null;
+    open.clear();
+    return had;
   }
-  return oldestOpenTool(open)?.id !== before;
+  if (e.id == null) return false;
+  const id = String(e.id);
+  const done = e.phase === "result" || e.isError === true || TERMINAL.has(String(e.status ?? ""));
+  if (done) {
+    if (!open.has(id)) return false;
+    const wasOldest = oldestOpenId(open) === id;
+    open.delete(id);
+    return wasOldest;
+  }
+  if (e.phase !== "call" || open.has(id) || open.size >= MAX_OPEN_TOOLS) return false;
+  const since = Number.isFinite(e.ts) ? e.ts : null;
+  const becomesOldest = since !== null && oldestOpenId(open) === null;
+  open.set(id, { since, name: typeof e.name === "string" && e.name ? e.name : "tool", timeoutMs: toolTimeoutMs(e) });
+  return becomesOldest;
+}
+
+/**
+ * Id of the oldest open call with a timestamp, or null. Allocation-free; stops at the first timestamped entry, so it only walks past
+ * timestamp-less calls (rare: every runner-written event carries ts), never more than MAX_OPEN_TOOLS.
+ */
+function oldestOpenId(open) {
+  for (const [id, t] of open) if (Number.isFinite(t.since)) return id;
+  return null;
 }
 
 /** The oldest open call ({ id, since, name, timeoutMs }) or null. */
