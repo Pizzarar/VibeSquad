@@ -189,6 +189,55 @@ test("readIndex retries a transient EBUSY/EPERM instead of dropping the warm ind
   assert.deepEqual(byId(got), byId(foldAllRunnerAgentsSync({ env: h.env })));
 });
 
+test("async scan: index I/O through fs.promises (never the sync calls), warm per-line index kept, a cut index refolded", async (t) => {
+  const h = mkHome("vs-rnr-aio-");
+  const past = new Date(Date.now() - 60_000);
+  for (let i = 0; i < 30; i++) {
+    const f = path.join(h.dir, `rn-${i}.jsonl`);
+    fs.writeFileSync(f, created(`rn-${i}`) + line(1, "status", { status: i % 2 ? "idle" : "running" }));
+    fs.utimesSync(f, past, past); // outside the racy window: a warm read opens no log
+  }
+  parity(h, "cold");
+  const idx = path.join(h.rhome, INDEX_FILE);
+  const text = fs.readFileSync(idx, "utf8");
+  assert.equal(text.split("\n").length, 30 + 2, "one entry per line between the header and the closing line");
+  assert.deepEqual(Object.keys(JSON.parse(text).entries).length, 30, "still one JSON value");
+  const want = byId(foldAllRunnerAgentsSync({ env: h.env }));
+  let syncIdx = 0;
+  let logOpens = 0;
+  for (const m of ["readFileSync", "writeFileSync", "renameSync"]) {
+    const real = fs[m];
+    t.mock.method(fs, m, function (p, ...rest) {
+      if (String(p).startsWith(idx)) syncIdx++;
+      return real.call(this, p, ...rest);
+    });
+  }
+  const realOpen = fs.openSync;
+  t.mock.method(fs, "openSync", function (p, ...rest) {
+    if (String(p).endsWith(".jsonl")) logOpens++;
+    return realOpen.call(this, p, ...rest);
+  });
+  process.env.VIBESQUAD_HOME = h.vsHome;
+  try {
+    assert.deepEqual(byId(await listRunnerAgents()), want, "warm");
+    assert.equal(logOpens, 0, "warm per-line index kept: no log re-folded");
+    fs.appendFileSync(path.join(h.dir, "rn-3.jsonl"), line(2, "exit"));
+    assert.deepEqual(byId(await listRunnerAgents()), byId(foldAllRunnerAgentsSync({ env: h.env })), "append");
+    // Cut before the closing line (a torn write by a foreign writer): dropped, every log refolded, same answer.
+    fs.writeFileSync(idx, fs.readFileSync(idx, "utf8").split("\n").slice(0, -1).join("\n"));
+    syncIdx -= 2; // the two test-side calls above (foldAllRunnerAgentsSync never touches the index)
+    logOpens = 0;
+    const got = byId(await listRunnerAgents());
+    assert.equal(logOpens, 30, "cut index dropped: every log refolded");
+    assert.deepEqual(got, byId(foldAllRunnerAgentsSync({ env: h.env })), "cut index");
+  } finally {
+    delete process.env.VIBESQUAD_HOME;
+    t.mock.restoreAll();
+  }
+  assert.equal(syncIdx, 0, "the async scan never read, wrote or renamed the index with sync calls");
+  assert.equal(JSON.parse(fs.readFileSync(idx, "utf8")).v, 2, "rewritten whole after the cut");
+});
+
 // ---- build lock recovery (Tier A review H2) ----
 
 function bigBacklog(h) {

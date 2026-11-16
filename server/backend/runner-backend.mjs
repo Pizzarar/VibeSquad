@@ -402,7 +402,15 @@ export async function listRunnerAgents({ env = process.env } = {}) {
   }
   const liveness = runnerLiveness(home);
   const ids = names.filter((f) => f.endsWith(".jsonl")).map((f) => f.slice(0, -6)).filter((id) => isRunnerId(id) && /^[A-Za-z0-9_-]{1,64}$/.test(id));
-  return (await indexedFold(home, ids, ROSTER_FOLD)).map(({ id, state }) => finishFold(id, state, home, env, liveness)).filter(Boolean);
+  const folded = await indexedFold(home, ids, ROSTER_FOLD);
+  const out = [];
+  let t0 = performance.now();
+  for (const { id, state } of folded) { // toAgent() of every log is its own block on a big roster: yield every 8ms of it
+    const a = finishFold(id, state, home, env, liveness);
+    if (a) out.push(a);
+    if (performance.now() - t0 >= 8) { await yieldLoop(); t0 = performance.now(); }
+  }
+  return out;
 }
 
 /** Runner JSONL events -> timeline entries ({ item, timestamp, seqStart, seqEnd }) as the timeline UI expects. */
