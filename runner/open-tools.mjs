@@ -57,8 +57,24 @@ export function applyToolEvent(open, e) {
   if (e.phase !== "call" || open.has(id) || open.size >= MAX_OPEN_TOOLS) return false;
   const since = Number.isFinite(e.ts) ? e.ts : null;
   const becomesOldest = since !== null && oldestOpenId(open) === null;
-  open.set(id, { since, name: typeof e.name === "string" && e.name ? e.name : "tool", timeoutMs: toolTimeoutMs(e) });
+  open.set(id, { since, name: openToolLabel(e), timeoutMs: toolTimeoutMs(e) });
   return becomesOldest;
+}
+
+const MAX_TOOL_LABEL = 24;
+const FIRST_WORD = /\S+/;
+
+/**
+ * Short published tool name for one CALL event (R5-5). Claude's `name` is already a tool name ("Bash"); ACP/Gemini's `name` is the
+ * call title, i.e. the whole command text (a multi-line script). Prefer the ACP `kind` ("execute", "read"), else the first word of
+ * `name`, single-line, capped. Runs once per call event, never on results/updates/turn edges.
+ */
+function openToolLabel(e) {
+  const k = e.kind;
+  if (typeof k === "string") { const m = FIRST_WORD.exec(k.length > 64 ? k.slice(0, 64) : k); if (m) return m[0].slice(0, MAX_TOOL_LABEL); }
+  const n = e.name;
+  if (typeof n === "string") { const m = FIRST_WORD.exec(n.length > 256 ? n.slice(0, 256) : n); if (m) return m[0].slice(0, MAX_TOOL_LABEL); }
+  return "tool";
 }
 
 /**

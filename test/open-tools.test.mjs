@@ -35,6 +35,20 @@ test("reducer: a call opens, its claude result closes; oldest is the first still
   assert.equal(applyToolEvent(open, { type: "tool", phase: "result", id: "zzz" }), false, "a stray result is a no-op");
 });
 
+test("reducer: published tool name is normalised once per call (R5-5)", () => {
+  const nameOf = (extra) => oldestOpenTool(fold([{ type: "tool", phase: "call", id: "n", ts: 1, ...extra }])).name;
+  assert.equal(nameOf({ name: "Bash" }), "Bash", "claude name unchanged");
+  assert.equal(nameOf({ name: "mcp__vs__send" }), "mcp__vs__send");
+  const script = "Get-ChildItem -Recurse C:\\x |\n  ForEach-Object {\n    $_.Name\n  }\n" + "# pad\n".repeat(20);
+  assert.equal(nameOf({ name: script }), "Get-ChildItem", "multi-line script -> first word");
+  assert.equal(nameOf({ name: "  \n  powershell -Command foo" }), "powershell", "leading whitespace skipped");
+  assert.equal(nameOf({ name: script, kind: "execute" }), "execute", "ACP kind preferred");
+  assert.equal(nameOf({ name: "x".repeat(100) }).length, 24, "capped");
+  assert.equal(nameOf({ name: "" }), "tool");
+  assert.equal(nameOf({ name: "  \n ", kind: "" }), "tool");
+  assert.equal(nameOf({}), "tool");
+});
+
 test("reducer: ACP update closes only on a terminal status; isError closes; unnamed call reads 'tool'", () => {
   const open = fold([{ type: "tool", phase: "call", id: "x", ts: 5, name: "" }, { type: "tool", phase: "update", id: "x", status: "in_progress" }]);
   assert.deepEqual(oldestOpenTool(open), { id: "x", since: 5, name: "tool", timeoutMs: null });
