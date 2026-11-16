@@ -1216,3 +1216,11 @@ html[data-vibe="boring"] .boring-needs-why .boring-needs-reason { flex: 1 1 100%
 /* Desk R4 (R4-2/R4-3/R4-5): Needs-you line 1 reads "Lane · Project"; the end-ellipsis now cuts the project, never the lane. */
 html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { flex: 1 1 0; min-width: 4ch; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 45%; }
+
+/* Desk R5-6: at narrow widths line 1 drops the project (lane only; the project is on the badge and in the row title) so the agent name stays readable. */
+html[data-vibe="boring"] .boring-needs-item { container-type: inline-size; }
+ /* indented at-rule: the D3a section scan only allows media rules at column 0 */
+ @container (max-width: 340px) {
+  html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { display: none; }
+  html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 65%; }
+}

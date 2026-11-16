@@ -21,7 +21,8 @@ import { SandboxView } from "./SandboxView";
 import { CANCEL_AND_RESUME_PROMPT, auditAntigravityAgent } from "./antigravity";
 import { openBriefEditor } from "./pinActions";
 import type { Entry } from "./Timeline";
-import { BORING_CTX_WARN_PCT, boringHeaderStrip } from "./boringHeaderStrip";
+import { BORING_CTX_WARN_PCT, boringHeaderStrip, boringNeedsYouStall, shortToolName } from "./boringHeaderStrip";
+import { openToolOf } from "./attentionItems";
 
 export type BoringAgentHeaderProps = {
   agent: PaseoAgent;
@@ -149,16 +150,26 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     meterShown: showMeter,
     canHandoff,
   });
-  const hungText = hung ? `Tool "${hung.name}" running ${humanAge(hung.ageSeconds)}` : "";
-  const stripItems = strip.map((s) => (s.kind === "stalled" ? { ...s, text: hung && p.active ? hungText : s.text.replace(/^Stalled: no update for /, "No update for ") } : s));
-  if (hung && p.active && !stripItems.some((s) => s.kind === "stalled")) stripItems.unshift({ kind: "stalled", text: hungText });
+  // R5-5: same open-tool source + ceiling rule as Needs you (the timeline audit is only the hint for payloads without openToolSince).
+  const openTool = openToolOf(agent, now, hung?.ageSeconds ?? null);
+  const toolStall = boringNeedsYouStall({
+    status: agent.status,
+    hasPendingPermission: (agent.pendingPermissions?.length ?? 0) > 0,
+    idleSeconds: 0,
+    toolRunningSeconds: openTool?.seconds ?? null,
+    toolCeilingSeconds: openTool?.timeoutMs != null ? openTool.timeoutMs / 1000 : null,
+  });
+  const hungTool = toolStall?.kind === "tool" ? { name: shortToolName(openTool?.name ?? hung?.name) || "tool", ageSeconds: toolStall.toolSeconds } : null;
+  const hungText = hungTool ? `Tool "${hungTool.name}" running ${humanAge(hungTool.ageSeconds)}` : "";
+  const stripItems = strip.map((s) => (s.kind === "stalled" ? { ...s, text: hungTool && p.active ? hungText : s.text.replace(/^Stalled: no update for /, "No update for ") } : s));
+  if (hungTool && p.active && !stripItems.some((s) => s.kind === "stalled")) stripItems.unshift({ kind: "stalled", text: hungText });
   const glyph = boringStateGlyph(stripItems.some((s) => s.kind === "stalled") ? "stalled" : agent.status, p.att?.tone);
   const cancelResume = async () => {
-    if (!hung) return;
+    if (!hungTool) return;
     setResumeBusy(true);
     try {
       await stopAgent(agent.id);
-      await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(hung.name), undefined, { activeTurnBehavior: "interrupt" });
+      await sendMessage(agent.id, CANCEL_AND_RESUME_PROMPT(hungTool.name), undefined, { activeTurnBehavior: "interrupt" });
     } catch (e) {
       alert(`Cancel & resume failed: ${e}`);
     } finally {
@@ -431,7 +442,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
               {i > 0 && <span className="boring-strip-sep" aria-hidden="true">·</span>}
               {s.kind === "stalled" && <span className="boring-strip-glyph" aria-hidden="true">◌</span>}
               {s.text}
-              {s.kind === "stalled" && hung && p.active && (
+              {s.kind === "stalled" && hungTool && p.active && (
                 <button type="button" className="boring-strip-btn" data-testid="boring-strip-resume" disabled={resumeBusy} onClick={() => void cancelResume()}>
                   {resumeBusy ? "…" : "Cancel & resume"}
                 </button>

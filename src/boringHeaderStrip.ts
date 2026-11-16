@@ -10,13 +10,22 @@ export const BORING_NEEDS_YOU_STALL_SECONDS = 600;
 /** R4-1: an open tool call with no timeout of its own counts as hung after this long (its own timeout, when it has one, replaces it). */
 export const BORING_TOOL_CEILING_SECONDS = 3600;
 
+/** R5-5: grace over a tool's own timeout before it counts as hung, so a Bash about to self-timeout isn't flagged first. */
+export const BORING_TOOL_GRACE_SECONDS = 60;
+
+/** R5-5: one display cap for tool names (Gemini publishes a whole script as the name): first word of the command, ~24 chars. */
+export function shortToolName(name: string | null | undefined): string {
+  const first = (name ?? "").trim().split(/\s+/)[0] ?? "";
+  return first.length > 24 ? `${first.slice(0, 23)}…` : first;
+}
+
 export type BoringNeedsYouStall = { kind: "quiet"; idleSeconds: number } | { kind: "tool"; toolSeconds: number };
 
 /**
  * Pure R4-1 rule (docs/UX_REVIEW_R4.md option a), the ONE stall rule for Needs you, its count and every badge:
  *   stalled = running, no pending permission, AND either
  *     quiet: no update for BORING_NEEDS_YOU_STALL_SECONDS (10m) and no tool call in flight, or
- *     tool:  the oldest open tool call has run for >= its ceiling (`toolCeilingSeconds`, else BORING_TOOL_CEILING_SECONDS = 60m).
+ *     tool:  the oldest open tool call has run for >= its ceiling (the tool's own timeout + 60s grace, else BORING_TOOL_CEILING_SECONDS = 60m).
  * `toolRunningSeconds` = age of the oldest open tool call (null/undefined = none in flight).
  */
 export function boringNeedsYouStall(input: {
@@ -29,7 +38,7 @@ export function boringNeedsYouStall(input: {
   if (input.status !== "running" || input.hasPendingPermission) return null;
   if (input.toolRunningSeconds != null) {
     const c = input.toolCeilingSeconds;
-    const ceiling = c != null && Number.isFinite(c) && c > 0 ? c : BORING_TOOL_CEILING_SECONDS;
+    const ceiling = c != null && Number.isFinite(c) && c > 0 ? c + BORING_TOOL_GRACE_SECONDS : BORING_TOOL_CEILING_SECONDS;
     return input.toolRunningSeconds >= ceiling ? { kind: "tool", toolSeconds: input.toolRunningSeconds } : null;
   }
   return input.idleSeconds >= BORING_NEEDS_YOU_STALL_SECONDS ? { kind: "quiet", idleSeconds: input.idleSeconds } : null;
