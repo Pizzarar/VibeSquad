@@ -91,7 +91,7 @@ import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, sky
 import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
@@ -1781,7 +1781,9 @@ export function App() {
   const skyReq = useSkyRequest(); // a rail click on RiffBot / Overlord remounts the TVs with that bot's chat open
   const hidePanes = pinLayout && pinsHome && !pinFocused;
   const withPanes = (hasTabs || focus) && !pinFocused && !hidePanes;
-  const urlAgentId = urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
+  // R5-4: Normal's ?agent= is the agent BoringApp has on screen (none on Overview / usage); the active tab only until it reports.
+  const boringShown = useBoringShownAgent();
+  const urlAgentId = vibe === "boring" ? (boringShown === undefined ? activeAgentId : boringShown) : urlAgentFor({ activeAgentId, onGrid: hidePanes, startFresh: pinFocused && !drawerOpen });
   useEffect(() => {
     const next = serializeUrlState({ team: activeTeamId || null, agent: urlAgentId, squadsHome: pinLayout && pinsHome && squadsHome }, location.search);
     if (next !== (location.search || "")) history.pushState(null, "", `${location.pathname}${next}${location.hash}`);

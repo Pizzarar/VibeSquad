@@ -10,8 +10,8 @@ import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./pa
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
 import { focusDrawerOpen } from "./ctxMenuLogic";
-import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
-import { getRestoreLastView } from "./prefs";
+import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, savedFocusForUrl, startsOnGrid } from "./pinFocusLogic";
+import { getPref, getRestoreLastView } from "./prefs";
 import { dormantBuddyId, hubPinForSquad, isHubPin, liveBuddyId, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived, subscribeTree } from "./ui";
@@ -51,6 +51,8 @@ const deepLinked = typeof location !== "undefined" && new URLSearchParams(locati
 // The ?agent= the page was opened with. App's URL sync pushes ?agent=<active tab> before the daemon connects, so
 // tryRestore must not re-read location.search or it mistakes the restored tab for a deep link.
 const initialUrlAgent = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("agent");
+// R5-4: an explicit ?team= (no ?agent=) beats a saved pin of another squad.
+const initialUrlTeam = typeof location === "undefined" ? null : new URLSearchParams(location.search).get("team");
 const startOnSquadsHome = !deepLinked && typeof location !== "undefined" && new URLSearchParams(location.search).get("view") === "squads";
 const startHome = startsOnGrid({
   deepLinked,
@@ -271,6 +273,20 @@ export function exitSquadsHome() {
   set({ focus: null, home: true, squadsHome: false, homeActive: getPanes().leftActiveId });
 }
 
+// R5-4: the agent Normal has on screen (undefined while BoringApp is not mounted). App's URL sync names it as ?agent=.
+let boringShown: string | null | undefined;
+const boringShownSubs = new Set<() => void>();
+export function setBoringShownAgent(id: string | null | undefined) {
+  if (id === boringShown) return;
+  boringShown = id;
+  for (const f of boringShownSubs) f();
+}
+const subscribeBoringShown = (f: () => void) => {
+  boringShownSubs.add(f);
+  return () => void boringShownSubs.delete(f);
+};
+export const useBoringShownAgent = () => useSyncExternalStore(subscribeBoringShown, () => boringShown, () => undefined);
+
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {
   if (state.focus || state.home) set({ focus: null, home: false, homeActive: null, squadsHome: false });
@@ -310,7 +326,8 @@ function tryRestore() {
   restored = true;
   if (state.focus) return;
   if (state.home && state.squadsHome) return; // ?view=squads in the URL wins over the saved pin
-  const saved = loadSavedFocus(store);
+  const savedFocus = loadSavedFocus(store);
+  const saved = savedFocusForUrl(savedFocus, { team: initialUrlTeam, agent: initialUrlAgent, normal: getPref("app.vibe") === "boring" });
   const urlAgent = initialUrlAgent;
   const urlAgentRow = urlAgent ? ps.agents.get(urlAgent) : undefined;
   const urlLive = !!urlAgent && isLiveUrlAgent(urlAgentRow, isRetiredAgent(urlAgentRow));

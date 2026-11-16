@@ -115,6 +115,18 @@ export const isLiveUrlAgent = (agent: { archivedAt?: unknown } | undefined, reti
 export const urlAgentFor = (a: { activeAgentId: string | null; onGrid: boolean; startFresh: boolean }): string | null =>
   a.onGrid || a.startFresh ? null : a.activeAgentId;
 
+/**
+ * R5-4 (Normal): the ?agent= is the agent on screen (Overview, usage or an empty card: none), never the pane's active
+ * tab. Until the roster is in, or while that tab is still landing (mode not switched yet), the active tab stands in
+ * so a deep link is not stripped from the URL before it opens.
+ */
+export const boringUrlAgent = (a: { rosterLoaded: boolean; landingPending: boolean; activeAgentId: string | null; shownAgentId: string | null }): string | null =>
+  !a.rosterLoaded || a.landingPending ? a.activeAgentId : a.shownAgentId;
+
+/** R5-4: the saved pin restore yields to an explicit ?team= with no ?agent=: always in Normal (that project's Overview), and in Psycho when it names another squad. */
+export const savedFocusForUrl = <T extends { squadId: string }>(saved: T | null, url: { team: string | null; agent: string | null; normal: boolean }): T | null =>
+  saved && url.team && !url.agent && (url.normal || saved.squadId !== url.team) ? null : saved;
+
 export type RestorePlan =
   | { kind: "none" }
   /** The URL names an agent that is gone and nothing else is saved: land on the grid, never an empty rail. */
