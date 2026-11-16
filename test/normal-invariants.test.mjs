@@ -123,6 +123,20 @@ test("1b. Tab title count == Needs-you count, also after the clock passes the st
   assert.equal(t1.title, t1.count, `+66m: ${JSON.stringify(t1)}`);
 }));
 
+test("1c. Title count == Needs-you count at off-tick offsets across the stall line (one shared now tick)", guard("inv1c", async () => {
+  await loadClocked();
+  const read = () => page.evaluate(() => ({
+    count: Number(document.querySelector('[data-testid="boring-needs-you-count"]')?.textContent?.trim() ?? 0),
+    title: Number(/^\((\d+)\+?\)/.exec(document.title)?.[1] ?? 0),
+  }));
+  for (const ms of [9 * 60_000 + 45_000, 30_000, 10_000 + 15_000]) {
+    await page.clock.fastForward(ms);
+    await sleep(400);
+    const t = await read();
+    assert.equal(t.title, t.count, `after +${ms}ms: ${JSON.stringify(t)}`);
+  }
+}));
+
 test("2. All projects collapsed: project badges sum to the Needs-you count", guard("inv2", async () => {
   await load();
   const count = Number(await page.locator(tid("boring-needs-you-count")).innerText());
