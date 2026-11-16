@@ -11,6 +11,7 @@ import { protectedMetaIn } from "../../runner/runner.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 import { joinTarget, joinInto, canExtendThought } from "../reply-coalesce.mjs";
 import { pidAlive } from "../../runner/lock.mjs";
+import { applyToolEvent, oldestOpenTool, clearsOpenTools } from "../../runner/open-tools.mjs";
 import { refreshWhosHere, whosHereKey } from "../whos-here.mjs";
 
 import { createRunnerHookHost } from "./runner-hooks.mjs";
@@ -128,9 +129,22 @@ export function toAgent(rec) {
     ...(rec.lastPromptAt != null ? { lastPromptAt: iso(rec.lastPromptAt) } : {}),
     ...(rec.lastProgressAt != null ? { lastProgressAt: iso(rec.lastProgressAt) } : {}),
     archivedAt: iso(rec.archivedAt),
+    ...openToolFields(STATUS[rec.status] === "running" ? rec.openTool : null),
     workspaceId: null,
     backend: "runner",
   };
+}
+
+/**
+ * R4-1 payload contract (agent summary, every roster / agent upsert / `tools` delta): the oldest tool call still in flight.
+ *   openToolSince: number | null       epoch ms the call opened (null = no tool in flight)
+ *   openToolName: string | null        the tool's name ("Bash", an ACP title)
+ *   openToolTimeoutMs: number | null   the tool's own timeout when its call carried one
+ * Always present (null when none), so a client can tell "server says no tool" from "old server, field unknown".
+ */
+export function openToolFields(t) {
+  const ok = t && Number.isFinite(t.since);
+  return { openToolSince: ok ? t.since : null, openToolName: ok ? t.name ?? "tool" : null, openToolTimeoutMs: ok && Number.isFinite(t.timeoutMs) ? t.timeoutMs : null };
 }
 
 /**
@@ -202,11 +216,13 @@ function foldRunnerLog(id) {
   const meta = {};
   let offered = null;
   let sessionId = null;
+  const tools = new Map(); // R4-1: open tool calls, same reducer as the runner's own fold
   const feed = (line) => {
     if (!line) return;
     let e;
     try { e = JSON.parse(line); } catch { return; }
     last = e;
+    applyToolEvent(tools, e);
     if (e.type !== "meta" && e.type !== "archive") lastLive = e;
     if (e.type === "input" || e.type === "created") lastPrompt = e;
     if (isTurnProgressEvent(e)) lastProgress = e;
@@ -243,7 +259,7 @@ function foldRunnerLog(id) {
       id, provider: created.provider, model: meta.model ?? created.model, cwd: created.cwd, meta, ...(offered ? { offered } : {}),
       status: exited ? "exited" : status, createdAt: created.ts, updatedAt: last?.ts, archivedAt,
       lastPromptAt: lastPrompt?.ts ?? null, lastProgressAt: lastProgress?.ts ?? null,
-      usage, pendingPermissions: [...perms.values()], resumable,
+      usage, pendingPermissions: [...perms.values()], resumable, openTool: oldestOpenTool(tools),
       ...(status === "queued" && !exited && queued ? { queued } : {}),
     });
   };
@@ -571,7 +587,7 @@ export class RunnerBackend {
     Object.defineProperty(this, "whosFlights", { value: new Map() }); // lane -> { running, queued }: refreshLaneWhosHere coalescing
     Object.defineProperty(this, "rosterFlights", { value: new Map() }); // route -> { seq, p, runnerSeq }: the roster read in flight (rosterGet)
     Object.defineProperty(this, "rosterSeqOf", { value: new WeakMap() }); // roster recs / listAgents() result -> the runner { boot, seq } its read saw
-    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet() } });
+    Object.defineProperty(this, "live", { value: { stream: null, chain: Promise.resolve(), turn: new Map(), gen: 0, retry: { timer: null, n: 0 }, seedTimers: new Map(), seeded: new Set(), hwm: null, known: new Map(), archived: new Set(), emitted: new WeakSet(), tools: new Map() } });
   }
 
   async connect() {
@@ -1043,6 +1059,7 @@ export class RunnerBackend {
         this.live.seeded.clear();
         this.live.gen++; // work already queued on the chain belongs to the closed stream: drop its results
         this.live.turn.clear();
+        this.live.tools.clear();
       }
     };
   }
@@ -1120,6 +1137,8 @@ export class RunnerBackend {
       return this.scheduleSeedRetry(gen);
     }
     this.live.retry.n = 0;
+    // R4-1: without lifecycle replay the events of the gap are gone, so every open-tool tracker is unknown again (see trackTools).
+    if (!this.live.hwm) this.live.tools.clear();
     // Lifecycle mode keeps turn state purely from the events it has consumed (baseline scan + replay): never re-seeded from tail-of-log status.
     if (!this.live.hwm) {
       const next = new Map();
@@ -1239,6 +1258,7 @@ export class RunnerBackend {
     this.live.turn = turn;
     this.live.archived = archived;
     this.live.known = new Map();
+    this.live.tools = new Map(); // history is never replayed: every agent's open-tool tracker starts unknown
     const seen = typeof this.rc?.home === "string" ? readSeen(this.rc.home) : null;
     const cutoff = seen && seen.aliveAt <= now && now - seen.aliveAt <= maxGapMs ? seen.ts : null;
     this.live.seenTs = cutoff ?? 0;
@@ -1360,6 +1380,7 @@ export class RunnerBackend {
       }
       return;
     }
+    await this.trackTools(id, e, gen);
     if (!ROSTER_EVENTS.has(e.type)) {
       if (t0) reduceTurn(t0, e); // input / error / cancel only move turn state
       return;
@@ -1415,6 +1436,37 @@ export class RunnerBackend {
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, agent: shown, request: { id: e.id, toolName: e.toolName } }); // snapshot lets watch-sets see an already auto-resolved request (ACP) is not pending
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
+  }
+
+  /**
+   * R4-1 live path for the open-tool fields. Tool events are not roster events (no fetch, no `agent` upsert: those would wake
+   * every agent-upsert consumer on each tool call), so a change of the oldest open call goes out as a small delta:
+   *   { kind: 'tools', agentId, openToolSince, openToolName, openToolTimeoutMs, updatedAt }
+   * Roster events (status / exit / archive / ...) need none: their fetched snapshot carries the runner fold's own fields.
+   * live.tools: agentId -> Map (the runner fold's reducer, fed the same ordered events) once the agent's open set is KNOWN, i.e.
+   * after its created event or any event that clears every call (turn end, idle, error, cancel, restart). Until then (an agent
+   * mid-turn at server boot or after a non-replayed reconnect) a tool event reads the runner's authoritative fold instead.
+   * Replay never double-counts: handleLogEvent's hwm gate hands each seq here at most once, and the reducer is idempotent per
+   * call id anyway. Archive / exit drop the agent's entry, so archived agents leave nothing behind.
+   */
+  async trackTools(id, e, gen) {
+    const tools = this.live.tools;
+    if (e.type === "archive" || e.type === "exit") { tools.delete(id); return; }
+    let open = tools.get(id);
+    if (!open && clearsOpenTools(e)) tools.set(id, (open = new Map()));
+    else if (open) {
+      if (!applyToolEvent(open, e) || ROSTER_EVENTS.has(e.type)) return;
+      return this.emitTools(id, e, openToolFields(oldestOpenTool(open)));
+    }
+    if (open || e.type !== "tool") return;
+    let agent;
+    try { agent = (await bounded(this.fetchAgent(id))).agent; } catch { return; } // the next roster event resyncs
+    if (gen !== this.live.gen) return;
+    this.emitTools(id, e, { openToolSince: agent.openToolSince ?? null, openToolName: agent.openToolName ?? null, openToolTimeoutMs: agent.openToolTimeoutMs ?? null });
+  }
+
+  emitTools(id, e, fields) {
+    this.emitEvent({ kind: "tools", agentId: id, ...fields, ...(Number.isFinite(e.ts) ? { updatedAt: iso(e.ts) } : {}) });
   }
 
   /** Best available snapshot when the roster fetch failed: last known, else the log itself, else one built from the created event (cached). */
