@@ -2,7 +2,7 @@
 // clear/snooze call each kind maps to. Pure (deps injected) so tests drive it with fixtures.
 import type { PaseoAgent } from "./agentTypes";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
-import { boringNeedsYouStall, shortToolName } from "./boringHeaderStrip.ts";
+import { boringNeedsYouStall, formatToolMinutes, shortToolName } from "./boringHeaderStrip.ts";
 import type { Member } from "./teams.ts";
 
 export const LATER_MS = 2 * 3_600_000;
@@ -87,7 +87,7 @@ export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: n
     toolCeilingSeconds: tool?.timeoutMs != null ? tool.timeoutMs / 1000 : null,
   });
   if (!stall) return null;
-  if (stall.kind === "tool") return `Tool ${tool?.name ? `${shortToolName(tool.name)} ` : ""}running ${Math.max(1, Math.floor(stall.toolSeconds / 60))}m`;
+  if (stall.kind === "tool") return `Tool ${tool?.name ? `${shortToolName(tool.name)} ` : ""}running ${formatToolMinutes(stall.toolSeconds)}`;
   return `Stalled: no update for ${mins(stall.idleSeconds)}`;
 }
 

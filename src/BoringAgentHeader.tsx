@@ -21,7 +21,7 @@ import { SandboxView } from "./SandboxView";
 import { CANCEL_AND_RESUME_PROMPT, auditAntigravityAgent } from "./antigravity";
 import { openBriefEditor } from "./pinActions";
 import type { Entry } from "./Timeline";
-import { BORING_CTX_WARN_PCT, boringHeaderStrip, boringNeedsYouStall, shortToolName } from "./boringHeaderStrip";
+import { BORING_CTX_WARN_PCT, boringHeaderStrip, boringNeedsYouStall, formatToolMinutes, shortToolName } from "./boringHeaderStrip";
 import { openToolOf } from "./attentionItems";
 
 export type BoringAgentHeaderProps = {
@@ -70,12 +70,6 @@ export type BoringAgentHeaderProps = {
 
 const sentenceCase = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : s);
 const GLYPH_CHAR: Record<string, string> = { run: "●", idle: "○", attn: "!", stalled: "◌", err: "✕", done: "✓" };
-
-function humanAge(sec: number): string {
-  if (sec < 120) return `${sec}s`;
-  if (sec < 7200) return `${Math.round(sec / 60)}m`;
-  return `${Math.round(sec / 3600)}h`;
-}
 
 /** R3.4: a lead's header/tab reads "Main Game · Lead 75" (formatDisplayTitle readable) from its labels, never from title text; null for anything else. */
 export function readableLeadTitle(a: PaseoAgent): string | null {
@@ -160,7 +154,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     toolCeilingSeconds: openTool?.timeoutMs != null ? openTool.timeoutMs / 1000 : null,
   });
   const hungTool = toolStall?.kind === "tool" ? { name: shortToolName(openTool?.name ?? hung?.name) || "tool", ageSeconds: toolStall.toolSeconds } : null;
-  const hungText = hungTool ? `Tool "${hungTool.name}" running ${humanAge(hungTool.ageSeconds)}` : "";
+  const hungText = hungTool ? `Tool "${hungTool.name}" running ${formatToolMinutes(hungTool.ageSeconds)}` : "";
   const stripItems = strip.map((s) => (s.kind === "stalled" ? { ...s, text: hungTool && p.active ? hungText : s.text.replace(/^Stalled: no update for /, "No update for ") } : s));
   if (hungTool && p.active && !stripItems.some((s) => s.kind === "stalled")) stripItems.unshift({ kind: "stalled", text: hungText });
   const glyph = boringStateGlyph(stripItems.some((s) => s.kind === "stalled") ? "stalled" : agent.status, p.att?.tone);

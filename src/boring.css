@@ -1220,7 +1220,7 @@ html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 45%; 
 /* Desk R5-6: at narrow widths line 1 drops the project (lane only; the project is on the badge and in the row title) so the agent name stays readable. */
 html[data-vibe="boring"] .boring-needs-item { container-type: inline-size; }
  /* indented at-rule: the D3a section scan only allows media rules at column 0 */
- @container (max-width: 340px) {
+ @container (max-width: 300px) {
   html[data-vibe="boring"] .boring-needs-open .boring-needs-proj { display: none; }
   html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 65%; }
 }

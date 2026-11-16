@@ -19,6 +19,11 @@ export function shortToolName(name: string | null | undefined): string {
   return first.length > 24 ? `${first.slice(0, 23)}…` : first;
 }
 
+/** R5-5: one format for a hung tool's running time (header strip + Needs-you reason): whole minutes, at least 1. */
+export function formatToolMinutes(seconds: number): string {
+  return `${Math.max(1, Math.floor(seconds / 60))}m`;
+}
+
 export type BoringNeedsYouStall = { kind: "quiet"; idleSeconds: number } | { kind: "tool"; toolSeconds: number };
 
 /**
