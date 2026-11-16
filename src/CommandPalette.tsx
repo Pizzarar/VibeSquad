@@ -413,7 +413,7 @@ export type PaletteActions = {
   needsYou?: () => void;
 };
 
-type Overlay = "search" | "shortcuts" | "quickOpen" | "findInFiles";
+type Overlay = "palette" | "search" | "shortcuts" | "quickOpen" | "findInFiles";
 export const openOverlay = (which: Overlay) => window.dispatchEvent(new CustomEvent("vs:open-overlay", { detail: which }));
 
 /** Keymap commands this host doesn't run (focus-scoped ones such as block 4's inline edit) go out as this event. */
