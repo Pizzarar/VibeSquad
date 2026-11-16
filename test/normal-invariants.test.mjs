@@ -275,3 +275,11 @@ test("9. The Needs-you count and badges don't change when you open and close an 
   await sleep(600);
   await pass("+66m");
 }));
+
+test("10. (R6-2) Ctrl+J opens Needs-you row 0, the same list the count renders", guard("inv10", async () => {
+  await load();
+  const row0 = await page.locator(tid("boring-needs-you-item")).first().locator('[data-testid^="boring-needs-open-"]').getAttribute("data-testid");
+  await page.keyboard.press("Control+J");
+  await sleep(900);
+  assert.equal(await openAgent(), row0.replace("boring-needs-open-", ""), "Ctrl+J target must be Needs-you row 0");
+}));
