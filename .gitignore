@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-remote/
+.dist-build.lock
 src-tauri/target/
 src-tauri/gen/
 .agents/
