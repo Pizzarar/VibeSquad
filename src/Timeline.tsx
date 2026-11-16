@@ -29,6 +29,7 @@ import { SubagentList } from "./SubagentList";
 import { Spinner, Stamp, TimelineSkeleton, useDelayedBusy } from "./QuickWinsUi";
 import { MermaidView } from "./MermaidView";
 import { noteTimelineOffers, useLooksDoneId } from "./PinGrid";
+import { noteOpenTools } from "./openTools.ts";
 import { refreshDismissedCards } from "./pinActions";
 import { SpinOffCard, SendToCard, findPinForAgent, showPinToast, useSendTo } from "./PinIdeas";
 import { LooksDoneCard } from "./PinDone";
@@ -1016,6 +1017,7 @@ export function useTimeline(agentId: string, status: string, active = true, pred
   }, [predecessor, entries]);
 
   useEffect(() => {
+    if (agentId) noteOpenTools(agentId, entries); // feeds the Needs-you stall rule (open tool call = not stalled)
     if (agentId && entries.length) {
       noteTimelineOffers(agentId, entries);
       noteAgentSeq(agentId, maxEntrySeq(entries));

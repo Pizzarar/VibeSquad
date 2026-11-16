@@ -77,3 +77,40 @@ test("R3.2 parity: with everything collapsed, sum of per-container badges == Nee
   assert.equal(sum, needsYouCount(projects.flat(), NOW, tool));
   assert.equal(sum, 4); // 3 permissions + 1 stalled; finished, <10m and tool-in-flight agents are not counted
 });
+
+test("R3-2: an open tool_call (from timeline entries) keeps a quiet agent out of Needs you; once the result lands it is stalled", async () => {
+  const { noteOpenTools, openToolSeconds, toolRunningSecondsAt, clearOpenTools } = await import("../src/openTools.ts");
+  resetAttentionLocal();
+  clearOpenTools();
+  const quiet = member(agent("tooly", { status: "running", updatedAt: ago(700) }));
+  noteOpenTools("tooly", [{ item: { type: "tool_call", status: "running", name: "Bash" }, timestamp: ago(690) }, { item: { type: "assistant_message" }, timestamp: ago(800) }]);
+  assert.equal(openToolSeconds("tooly", NOW), 690);
+  const cb = toolRunningSecondsAt(NOW);
+  assert.equal(needsYouCount([quiet], NOW, cb), 0);
+  assert.equal(stalledCount([quiet], NOW, cb), 0);
+  assert.deepEqual(attentionItems([quiet], NOW, cb), []);
+  noteOpenTools("tooly", [{ item: { type: "tool_call", status: "completed", name: "Bash" }, timestamp: ago(690) }]);
+  assert.equal(openToolSeconds("tooly", NOW), null);
+  assert.equal(needsYouCount([quiet], NOW, cb), 1);
+  assert.equal(stalledCount([quiet], NOW, cb), 1);
+  // never loaded timeline: plain 10-minute rule
+  assert.equal(needsYouCount([member(agent("unseen", { status: "running", updatedAt: ago(700) }))], NOW, cb), 1);
+  clearOpenTools();
+});
+
+test("R3 L1: one shared `now` gives badge sum == list count at the 600s boundary; BoringInbox owns no tick", async () => {
+  const { readFileSync } = await import("node:fs");
+  resetAttentionLocal();
+  const a = member(agent("a", { status: "running", updatedAt: ago(599) }));
+  const b = member(agent("b", { status: "running", updatedAt: ago(10) }));
+  for (const [now, want] of [[NOW, 0], [NOW + 1000, 1]]) {
+    const list = needsYouCount([a, b], now);
+    const badges = stalledCount([a], now) + stalledCount([b], now); // per-container badges at the SAME now
+    assert.equal(list, want);
+    assert.equal(badges, list);
+  }
+  const inbox = readFileSync(new URL("../src/BoringInbox.tsx", import.meta.url), "utf8");
+  assert.ok(!/setInterval/.test(inbox), "BoringInbox must take `now` from BoringApp");
+  const ade = readFileSync(new URL("../src/BoringAde.tsx", import.meta.url), "utf8");
+  assert.ok(/<BoringInbox[\s\S]*?now=\{now\}/.test(ade));
+});
