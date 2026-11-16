@@ -242,6 +242,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
   w.run = (extra, logs = [], depsOver = {}) => restartRuntime(w.opts(extra), { ...deps, ...depsOver }, env, (l) => logs.push(l));
   w.cleanup = async () => { for (const s of [...w.allSrvs, serverSrv]) if (s?.listening) await close(s); rmSync(tmp, { recursive: true, force: true }); };
   w.runner = () => runnerState;
+  w.startRunner = startRunner;
   return w;
 }
 
@@ -1106,6 +1107,92 @@ test("direct-started runner that dies before writing runner.json fails fast (its
     assert.equal(r.ok, false);
     assert.ok(r.errors.some((e) => /runner start: runner process 987654 died during start/.test(e)), JSON.stringify(r.errors));
     assert.ok(clock.t - t0 < 120_000, "did not wait out the deadline");
+  } finally { await w.cleanup(); }
+});
+
+// ---- Bug24 (11-16): a runner.lock holder that is still folding its roster is waited on, never doubled ----
+/**
+ * Server start that (like serve.mjs's supervisor) launches a runner which takes runner.lock at once and publishes runner.json
+ * only after `publishAfterMs` of fake time (Infinity: never). `holderAlive: false` leaves a dead holder's lock behind instead.
+ */
+function lockedBoot(w, clock, { publishAfterMs = Infinity, holderAlive = true, holderDiesAtMs = Infinity } = {}) {
+  const b = { holderPid: null, lockAt: null, published: false };
+  const spawnDetached = (cmd, args, o) => {
+    if (!args.some((a) => /serve\.mjs/.test(a))) return w.deps.spawnDetached(cmd, args, o); // a direct runner start
+    const pid = w.deps.spawnDetached(cmd, args, o); // serverBootsRunner:false, so this only starts the stub server
+    b.holderPid = w.pidSeq + 1; b.lockAt = clock.t; // the next startRunner() gets this pid
+    writeFileSync(path.join(w.home, "runner.lock"), JSON.stringify({ pid: b.holderPid, startedAt: b.lockAt }));
+    if (holderAlive) w.alive.add(b.holderPid);
+    return pid;
+  };
+  const sleep = async (ms) => {
+    await clock.sleep(ms);
+    if (b.lockAt == null) return;
+    if (!b.published && w.alive.has(b.holderPid) && clock.t >= b.lockAt + holderDiesAtMs) { w.alive.delete(b.holderPid); rmSync(path.join(w.home, "runner.lock"), { force: true }); }
+    if (!b.published && w.alive.has(b.holderPid) && clock.t >= b.lockAt + publishAfterMs) {
+      b.published = true;
+      const st = await w.startRunner("new-hash");
+      assert.equal(st.pid, b.holderPid, "fake holder pid is the runner's");
+      writeFileSync(path.join(w.home, "runner.json"), JSON.stringify({ ...JSON.parse(readFileSync(path.join(w.home, "runner.json"), "utf8")), lockStartedAt: b.lockAt }));
+    }
+  };
+  return { b, spawnDetached, sleep };
+}
+
+test("Bug24: a booting runner.lock holder (120.7s fold) is waited on with progress, no second runner is started, and the slow boot is a success", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const clock = fakeClock();
+    const lb = lockedBoot(w, clock, { publishAfterMs: 120_700 });
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: lb.sleep, spawnDetached: lb.spawnDetached });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(w.spawned, ["server"], "no direct runner start while the holder boots");
+    assert.equal(r.newHash, "new-hash");
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.includes("runner booting, not starting another"), names.join(" | "));
+    assert.ok(!names.includes("runner not booted by the server, started directly"));
+    assert.ok(names.some((n) => new RegExp(`^runner booting \\(pid ${lb.b.holderPid}, \\d+s\\)$`).test(n)), "progress names the holder pid and its boot age");
+    assert.ok(names.some((n) => /^runner booting \(pid \d+, 1[0-9]{2}s\)$/.test(n)), "progress kept past 100s");
+  } finally { await w.cleanup(); }
+});
+
+test("Bug24: a dead runner.lock holder does not block: one direct runner start, success", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const clock = fakeClock();
+    const lb = lockedBoot(w, clock, { holderAlive: false });
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: lb.sleep, spawnDetached: lb.spawnDetached });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(w.spawned, ["server", "runner"], "started directly exactly once");
+    assert.ok(!r.steps.some((s) => s.step === "runner booting, not starting another"));
+  } finally { await w.cleanup(); }
+});
+
+test("Bug24: a holder that exits mid-boot without publishing: then exactly one direct start, success", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const clock = fakeClock();
+    const lb = lockedBoot(w, clock, { holderDiesAtMs: 70_000 });
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: lb.sleep, spawnDetached: lb.spawnDetached });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(w.spawned, ["server", "runner"]);
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.indexOf("runner boot holder exited before publishing") < names.indexOf("runner not booted by the server, started directly"), names.join(" | "));
+  } finally { await w.cleanup(); }
+});
+
+test("Bug24: a holder that never publishes is never doubled; the failure names the holder and its state, after the boot max", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const clock = fakeClock();
+    const lb = lockedBoot(w, clock, { publishAfterMs: Infinity });
+    const r = await w.run({ bootTimeoutSec: 120 }, [], { now: clock.now, sleep: lb.sleep, spawnDetached: lb.spawnDetached });
+    assert.equal(r.ok, false);
+    assert.deepEqual(w.spawned, ["server"], "never a second runner next to a live holder");
+    assert.ok(clock.t - lb.b.lockAt >= 180_000, "waited the holder's full boot max");
+    const err = r.errors.find((e) => e.startsWith("runner start:"));
+    assert.match(err, new RegExp(`runner\\.lock holder pid ${lb.b.holderPid} is alive \\(\\d+s\\) but not healthy: has not published runner\\.json after 180s \\(wedged\\)`));
+    assert.deepEqual({ pid: r.runnerHolder.pid, published: r.runnerHolder.published, healthy: r.runnerHolder.healthy }, { pid: lb.b.holderPid, published: false, healthy: false });
   } finally { await w.cleanup(); }
 });
 
