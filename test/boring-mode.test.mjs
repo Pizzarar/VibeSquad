@@ -884,7 +884,7 @@ test("D2 BoringApp: clicking a lane opens its most urgent member and the breadcr
   assert.equal(byId(t2, "boring-crumb-agent").props.children, "W1");
 });
 
-test("D2 BoringApp: a lane expands to live workers with idle ones collapsed to '▸ N idle'; other projects can stay expanded", () => {
+test("D2 BoringApp: a lane expands to a one-line '▸ N running · M idle' fold (R3.1); other projects can stay expanded", () => {
   reset();
   const ws = [wk("w1", "running"), wk("w2", "idle"), wk("w3", "idle")];
   const view = squad({ pins: [lanePin("ade", { workers: ws }), lanePin("per")] });
@@ -892,13 +892,9 @@ test("D2 BoringApp: a lane expands to live workers with idle ones collapsed to '
   assert.equal(byId(t, "boring-workers-ade"), null); // collapsed until toggled
   byId(t, "boring-conv-toggle-ade").props.onClick();
   t = render(props(view));
-  assert.ok(byId(t, "boring-worker-w1"));
+  assert.equal(byId(t, "boring-worker-w1"), null);
   assert.equal(byId(t, "boring-worker-w2"), null);
-  assert.match(JSON.stringify(byId(t, "boring-workers-idle-ade").props.children), /2/);
-  assert.match(JSON.stringify(byId(t, "boring-workers-idle-ade").props.children), /idle/);
-  byId(t, "boring-workers-idle-ade").props.onClick();
-  t = render(props(view));
-  assert.ok(byId(t, "boring-worker-w2") && byId(t, "boring-worker-w3"));
+  assert.equal(JSON.stringify(byId(t, "boring-workers-fold-ade").props.children).includes("1 running · 2 idle"), true);
   // Multiple expanded projects: switching away keeps the first one open with its lanes inline.
   reset();
   const other = { ...squad(), team: { id: "efi", name: "EFI" }, pins: [lanePin("arc")] };
@@ -1058,7 +1054,8 @@ test("R2.1 sidebar: exactly one row is .on and the breadcrumb agrees (Overview, 
   assert.equal(onRows(t).length, 1); // Overview: the project row
   assert.match(JSON.stringify(byId(t, "boring-crumb-lane").props.children), /Overview/);
   byId(t, "boring-conv-toggle-ade").props.onClick();
-  byId(render(props(view)), "boring-worker-w1").props.onClick();
+  laneBtn(render(props(view)), "ade").props.onClick();
+  byId(render(props(view)), "boring-top-worker-w1").props.onClick();
   t = render(props(view));
   const on = onRows(t);
   assert.equal(on.length, 1);
@@ -1071,7 +1068,7 @@ test("R2.5: every row has the fixed 16px chevron column; hub workers hang off th
   reset();
   const view = squad({ zones: { hub: { lane: { id: "hub" }, workers: [wk("hw", "running")] }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) } });
   const t = withDesk(view);
-  assert.ok(byId(t, "boring-desk-workers")); // live hub worker renders inline, no "N workers" fold
+  assert.ok(byId(t, "boring-desk-workers")); // hub workers hang off the Desk (folded to one line, R3.1)
   assert.equal(byId(t, "boring-desk-workers-toggle"), null);
   assert.deepEqual(boringSelectionForAgent(view, "hw"), { laneId: "_desk", role: "worker" });
   const cols = walk(t, (n) => /boring-chevron-btn/.test(String(n.props?.className ?? "")));
@@ -1159,29 +1156,56 @@ test("R2: sidebar Search opens the Command Palette (Ctrl+K); idle toggle sits on
 // ---- R2 fix round 2: Desk workers render like lane workers; Desk row/table honest -----------------------------
 const hubView = (hubWorkers, extra = {}) => squad({ zones: { hub: { lane: { id: "hub" }, workers: hubWorkers }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")), ...extra } });
 
-test("R2 fix2 M1: Desk shows live + attention workers inline and folds only idle ones into '▸ N idle'", () => {
+test("R3.1: Desk lists only lead / brainstorm / alerting workers; running + idle fold into one row", () => {
   reset();
   const hw = [wk("r1", "running"), wk("a1", "idle", "permission"), ...Array.from({ length: 18 }, (_, i) => wk(`i${i}`, "idle"))];
   const t = withDesk(hubView(hw));
-  assert.ok(byId(t, "boring-worker-r1") && byId(t, "boring-worker-a1"), "live + attention inline");
+  assert.ok(byId(t, "boring-core-overlord") && byId(t, "boring-core-riffbot"));
+  assert.ok(byId(t, "boring-worker-a1"), "alerting worker inline");
+  assert.equal(byId(t, "boring-worker-r1"), null, "running worker folded");
   assert.equal(byId(t, "boring-worker-i0"), null, "idle workers folded");
-  const fold = byId(t, "boring-desk-workers-idle");
-  assert.ok(fold);
-  assert.match(JSON.stringify(fold.props.children), /18/);
+  assert.equal(walk(byId(t, "boring-desk-workers"), (n) => /boring-worker-row/.test(String(n.props?.className ?? ""))).length, 1);
+  assert.equal(byId(t, "boring-worker-why-a1"), null, "no reason text in the tree");
+  const fold = byId(t, "boring-desk-workers-fold");
+  assert.match(JSON.stringify(fold.props.children), /1 running · 18 idle/);
   assert.equal(fold.props.className.includes("boring-idle-toggle"), true);
-  assert.equal(byId(t, "boring-desk-workers-toggle"), null);
 });
 
-test("R2 fix2 M1: idle fold expands to its workers; hub workers reuse the lane worker rows", () => {
+test("R3.1: the fold opens the Workers tab (does not expand inline); the on-screen worker stays listed", () => {
   reset();
-  const view = hubView([wk("r1", "running"), wk("i0", "idle"), wk("i1", "idle")]);
-  let t = withDesk(view);
-  const fold = byId(t, "boring-desk-workers-idle");
-  assert.equal(fold.props["aria-expanded"], false);
-  fold.props.onClick();
-  t = render(props(view));
-  assert.ok(byId(t, "boring-worker-i0") && byId(t, "boring-worker-i1"));
-  assert.equal(byId(t, "boring-desk-workers-idle").props["aria-expanded"], true);
+  const store = {};
+  const events = [];
+  globalThis.localStorage = { setItem: (k, v) => { store[k] = v; }, getItem: (k) => store[k] ?? null };
+  globalThis.window = { dispatchEvent: (e) => events.push(e), addEventListener() {}, removeEventListener() {} };
+  globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+  try {
+    const view = hubView([wk("r1", "running"), wk("i0", "idle")]);
+    let t = withDesk(view);
+    byId(t, "boring-desk-workers-fold").props.onClick();
+    assert.equal(store["vs.context-panel.tab"], "Workers");
+    assert.equal(store["vs.context-panel.open"], "1");
+    assert.deepEqual(events.map((e) => [e.type, e.detail.tab]), [["vs:open-context-tab", "Workers"]]);
+    t = render(props(view));
+    assert.equal(byId(t, "boring-worker-r1"), null, "no inline expansion");
+    // Ctrl+J / needs-you jump into a folded worker: its row shows as the on-screen agent.
+    globalThis.__agents = new Map([["r1", { id: "r1", title: "R1" }]]);
+    byType(render(props(view)), "BoringInbox").props.onOpen({ teamId: "vs", view, item: { id: "r1" } });
+    t = render(props(view));
+    assert.ok(byId(t, "boring-worker-r1"));
+    assert.match(String(onRows(t)[0].props.className), /boring-worker-row/);
+    assert.match(JSON.stringify(byId(t, "boring-desk-workers-fold").props.children), /1 idle/);
+  } finally {
+    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+  }
+});
+
+test("R3.5 / R3.6: sidebar header shows the fixed app name; footer pins to the bottom of the column", () => {
+  reset();
+  const t = render(props(squad({ team: { id: "x", name: "Main Game Project" } })));
+  assert.equal(byId(t, "boring-sidebar-title").props.children, "VibeSquad");
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.match(css, /\.boring-sidebar-footer \{ flex: none; margin-top: auto; \}/);
+  assert.match(css, /\.boring-project-tree \{ flex: 1 1 auto; min-height: 120px; overflow-y: auto; \}/);
 });
 
 test("R2 fix2 L1/N2: Overview Desk row counts folded running workers and their age", () => {
@@ -1280,9 +1304,9 @@ test("Desk R2 Needs you: a running agent with no update for 90s+ is listed as st
   assert.match(rows[0].item.reason, /Stalled: no update for 5m/);
 });
 
-test("Desk R2 sidebar worker rows show the attention reason + tint; container dots take the worst state", () => {
+test("Desk R2 sidebar worker rows keep the attention tint (R3.1: no reason text); container dots take the worst state", () => {
   const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
-  assert.match(ade, /boring-worker-why/);
+  assert.doesNotMatch(ade, /className="boring-worker-why"/); // R3.1: reason lives in Needs you only
   assert.match(ade, /needs-err/);
   assert.match(ade, /glyphCls\(c\.status, c\.err \? "error"/);
   assert.match(ade, /m\.projectErr \? "error"/);
