@@ -13,7 +13,8 @@
 // Steps (each logged with a timestamp, all recorded in ~/.vibesquad/restart-<ts>.json):
 //   lock -> detect -> marker (server.restarting, refreshed) -> drain (runner refuses new background work, TTL) ->
 //   wait runner running:0 + held:0 -> stop runner -> stop server ->
-//   start server (it boots the runner; fallback: start the runner directly) -> verify -> resume lost agents -> check each
+//   start server (it boots the runner; a live runner.lock holder still booting is waited on up to RUNNER_BOOT_MAX_MS; fallback,
+//   only with no live holder: start the runner directly) -> verify -> resume lost agents -> check each
 //   resumed agent leaves `starting` (retry once, then mark it failed) -> clear drain (if that runner is still up) -> clear marker ->
 //   result file.
 // Background work (an idle agent whose park is held by a suite/build it left running: /health `held`) is never killed by
@@ -281,7 +282,9 @@ export function runVs(args, env = process.env) {
   return r.status === 0 ? { ok: true } : { ok: false, error: String(r.error?.message || r.stderr || r.stdout || `exit ${r.status}`).trim().slice(0, 300) };
 }
 const loadCoord = () => import('../server/restart-coord.mjs');
-const defaultDeps = { coord: loadCoord, runVs: (args, env = process.env) => runVs(args, env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
+// runner.lock helpers (bootingHolder/readLock/RUNNER_BOOT_MAX_MS, idea-260), lazy like coord: the static imports stay Node built-ins.
+const loadLock = () => import('../runner/lock.mjs');
+const defaultDeps = { coord: loadCoord, lock: loadLock, runVs: (args, env = process.env) => runVs(args, env), regQuery: regQueryPath, exists: existsSync, which: whereGit, sleep, now: () => Date.now(), pidAlive, procInfo, listenerPid, termGracefully, killHard, spawnDetached, httpCall, serverStopMode: IS_WIN ? 'tree-kill' : 'graceful' };
 
 // ---- detection -----------------------------------------------------------------------------------------------------
 function readJson(file) { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } }
@@ -693,14 +696,15 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // the agents the restart cut; X1b waits 45s by design) is reported as "slow start (N s)", never failed. Fail only if the process
     // died or the deadline passed. Exit codes unchanged (any fail -> the same nonzero as before).
     const bootMs = opts.runnerBootMs ?? bootDefault(String(opts.bootTimeoutSec ?? '')) * 1000; // restartRuntime may be called without parseArgs: never NaN
-    const bootWait = async (label, until, probe, isDead) => {
+    const slowNote = (label) => (el) => [`${label} slow start (${Math.round(el / 1000)} s)`, { seconds: Math.round(el / 1000) }];
+    const bootWait = async (label, until, probe, isDead, note = slowNote(label)) => {
       const t0 = d.now(); let delay = 500; let nextNote = 15000;
       for (;;) {
         const h = await probe(); if (h) return h;
         if (isDead()) return 'died';
         const el = d.now() - t0;
         if (d.now() >= until) return null;
-        if (el >= nextNote) { step(`${label} slow start (${Math.round(el / 1000)} s)`, { seconds: Math.round(el / 1000) }); nextNote += 15000; }
+        if (el >= nextNote) { step(...note(el)); nextNote += 15000; }
         await d.sleep(delay); delay = Math.min(Math.round(delay * 1.5), 5000);
       }
     };
@@ -744,20 +748,64 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       try { const h = await runnerCall(det, d, 'GET', '/health', 3000); return h.status === 200 ? h.body : null; } catch { return null; }
     };
     const runnerDead = () => (seenPid != null && !d.pidAlive(seenPid)) || (seenPid == null && directPid != null && d.now() - directAt > 3000 && !d.pidAlive(directPid)); // direct-spawn pid counts until runner.json shows up
+    // Bug24 (11-16): a server-booted runner took runner.lock and folded the roster for 120s before it published runner.json; the
+    // old flat 45s grace then started a second runner, which died on alreadyRunning, and the restart failed while the first came
+    // up healthy. A live runner.lock holder that has not published yet is booting (runner/lock.mjs bootingHolder, idea-260):
+    // wait it out up to RUNNER_BOOT_MAX_MS from its lock time, never start another; start one directly only with no live holder.
+    let lockLib = null;
+    try { lockLib = await d.lock(); } catch (e) { step('runner lock helpers unavailable', { error: e.message, note: 'no booting-holder check: direct start after the grace window' }); }
+    const runnerLockFile = path.join(det.home, 'runner.lock');
+    const bootMaxMs = lockLib?.RUNNER_BOOT_MAX_MS ?? 0;
+    const booting = () => (lockLib ? lockLib.bootingHolder(det.home, { alive: d.pidAlive, now: d.now() }) : null);
+    const liveHolder = () => { const h = lockLib?.readLock(runnerLockFile); return h && Number.isInteger(h.pid) && d.pidAlive(h.pid) ? h : null; };
+    const secsSince = (t) => Math.max(0, Math.round((d.now() - (t ?? d.now())) / 1000));
+    const runnerNote = (el) => {
+      const b = booting();
+      return b ? [`runner booting (pid ${b.pid}, ${secsSince(b.startedAt)}s)`, { pid: b.pid, seconds: secsSince(b.startedAt) }] : slowNote('runner')(el);
+    };
     const runnerT0 = d.now();
-    // Phase 1: give the server the usual 45s to boot the runner; only start one directly if no new runner appeared by then.
-    let health = await bootWait('runner', runnerT0 + Math.min(45000, bootMs), fresh, runnerDead);
-    if (!health) {
-      if (seenPid == null) {
-        const rl = det.runnerLaunch;
-        const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), logFile: rl.logFile }); // never as an agent (X1b)
-        directPid = pid; directAt = d.now();
-        step('runner not booted by the server, started directly', { pid });
-        health = await bootWait('runner', d.now() + bootMs, fresh, runnerDead);
-      } else health = await bootWait('runner', runnerT0 + bootMs, fresh, runnerDead); // a new runner is up and booting: wait out the full window
+    const hardEnd = runnerT0 + bootMaxMs + bootMs; // every holder wait is bounded by its own boot max; this caps a chain of them
+    // Phase 1: give the server the usual 45s to boot the runner and publish runner.json.
+    let health = await bootWait('runner', runnerT0 + Math.min(45000, bootMs), fresh, runnerDead, runnerNote);
+    const waitedOn = new Set();
+    // Phase 2 (nothing published yet): wait on a booting holder, else start one directly (once), else stop and report.
+    while ((!health || health === 'died') && seenPid == null) {
+      const b = booting();
+      const key = b && `${b.pid}:${b.startedAt}`;
+      if (b && !waitedOn.has(key)) {
+        if (d.now() >= hardEnd) break; // a chain of holders past the cap: report it below
+        waitedOn.add(key);
+        step('runner booting, not starting another', { pid: b.pid, seconds: secsSince(b.startedAt), maxSec: Math.round(bootMaxMs / 1000) });
+        // Dead = the holder exited before publishing (re-judged next turn) or the runner it published died.
+        health = await bootWait('runner', Math.min((b.startedAt ?? d.now()) + bootMaxMs, hardEnd), fresh, () => (seenPid != null && !d.pidAlive(seenPid)) || (seenPid == null && !d.pidAlive(b.pid)), runnerNote);
+        if (health === 'died' && seenPid == null) step('runner boot holder exited before publishing', { pid: b.pid });
+        continue;
+      }
+      if (directPid != null || liveHolder()) break; // started one already, or a live holder past its boot max: never double it
+      const rl = det.runnerLaunch;
+      const pid = d.spawnDetached(rl.node, rl.args, { cwd: rl.cwd, env: repairShellEnv(stripAgentEnv(env), { regQuery: d.regQuery, exists: d.exists, which: d.which, log }), logFile: rl.logFile }); // never as an agent (X1b)
+      directPid = pid; directAt = d.now();
+      step('runner not booted by the server, started directly', { pid });
+      health = await bootWait('runner', d.now() + bootMs, fresh, runnerDead, runnerNote);
     }
-    if (health === 'died') { fail('runner start', `runner process ${seenPid ?? directPid} died during start`); throw new Error('runner not healthy'); }
-    if (!health) { fail('runner start', `no healthy runner after start (${Math.round(bootMs / 1000)}s)`); throw new Error('runner not healthy'); }
+    if (!health && seenPid != null) health = await bootWait('runner', Math.max(runnerT0 + bootMs, d.now() + 15000), fresh, runnerDead, runnerNote); // a new runner published and is booting: wait out the full window
+    if (!health || health === 'died') {
+      // Report the real state, not a blanket failure: a runner that is healthy now (e.g. ours died on alreadyRunning because the
+      // server's runner held the lock) is a success.
+      const last = await fresh();
+      if (last) { step('runner healthy on final check', { pid: seenPid }); health = last; }
+    }
+    if (!health || health === 'died') {
+      const h = liveHolder();
+      const pub = lockLib && h ? lockLib.publishedBy(det.home, h) : false;
+      if (h) {
+        const state = pub ? 'published runner.json but /health does not answer' : (booting() ? 'still booting' : `has not published runner.json after ${Math.round(bootMaxMs / 1000)}s (wedged)`);
+        result.runnerHolder = { pid: h.pid, ageSec: secsSince(h.startedAt), published: pub, healthy: false, directPid };
+        fail('runner start', `runner.lock holder pid ${h.pid} is alive (${secsSince(h.startedAt)}s) but not healthy: ${state}${directPid != null && directPid !== h.pid ? `; direct start pid ${directPid} ${d.pidAlive(directPid) ? 'alive' : 'exited'}` : ''}`);
+      } else if (health === 'died') fail('runner start', `runner process ${seenPid ?? directPid} died during start`);
+      else fail('runner start', `no healthy runner after start (${Math.round(bootMs / 1000)}s)`);
+      throw new Error('runner not healthy');
+    }
 
     // 6. verify
     result.newHash = health.hash ?? null;
