@@ -8,8 +8,10 @@ import { AgentTitleEdit } from "./QuickWinsUi";
 import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { ConfirmButton, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL } from "./userName";
-import { AGENT_TYPE_LABEL, kindOf } from "./teams";
+import { AGENT_TYPE_LABEL, TEAMS, isHubLaneId, kindOf } from "./teams";
+import { findLaneInRegistry, formatDisplayTitle } from "./identity";
 import type { AgentType } from "./teams";
+import { boringLaneLabel } from "./boringLocation";
 import { providerSpec } from "./pixel";
 import { boringStateGlyph } from "./BoringAde";
 import { AttachFiles, HardeningBar, NeedsYouControls, SessionActions, formatCostUsd, type ProviderSwitchTarget } from "./DrawerHeader";
@@ -72,6 +74,16 @@ function humanAge(sec: number): string {
   if (sec < 120) return `${sec}s`;
   if (sec < 7200) return `${Math.round(sec / 60)}m`;
   return `${Math.round(sec / 3600)}h`;
+}
+
+/** R3.4: a lead's header/tab reads "Main Game · Lead 75" (formatDisplayTitle readable) from its labels, never from title text; null for anything else. */
+export function readableLeadTitle(a: PaseoAgent): string | null {
+  if (kindOf(a) !== "lead") return null;
+  const l = (a.labels ?? {}) as Record<string, string>;
+  const laneKey = (l.lane ?? l.lead ?? "").trim();
+  if (!l.ord || !laneKey) return null;
+  const found = findLaneInRegistry(laneKey, TEAMS);
+  return formatDisplayTitle({ role: "lead", laneName: boringLaneLabel(found?.lane.name ?? laneKey), laneId: found?.lane.id ?? laneKey, ord: l.ord, hub: isHubLaneId(laneKey), readable: true });
 }
 
 export function BoringAgentHeader(p: BoringAgentHeaderProps) {
@@ -163,7 +175,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
       <header className="boring-agent-header" data-testid="boring-agent-header" data-glyph={glyph}>
         <span className={`boring-agent-glyph st-${glyph}`} data-testid="boring-agent-glyph" title={p.att?.reason ?? agent.status} aria-label={glyph}>{GLYPH_CHAR[glyph] ?? "○"}</span>
         <span className="boring-agent-name" data-testid="boring-agent-name">
-          <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+          <AgentTitleEdit agent={agent}>{readableLeadTitle(agent) ?? agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
         </span>
         <span className="boring-agent-role muted" data-testid="boring-agent-role" title={`${prov.name}${agent.model ? ` · ${agent.model}` : ""}`}>
           {roleLine}

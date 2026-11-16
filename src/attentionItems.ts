@@ -48,7 +48,7 @@ const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, er
 /** Dismissing a stall hides it only until the agent shows new activity (its updatedAt moves). */
 export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}`;
 
-/** A running agent with nothing pending and no update for BORING_STALL_SECONDS: "Stalled: no update for 5m", else null. */
+/** A running agent with nothing pending and no update for BORING_NEEDS_YOU_STALL_SECONDS (10m) and no tool call in flight: "Stalled: no update for 10m", else null. */
 export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: number | null): string | null {
   const updated = Date.parse(a.updatedAt ?? "");
   if (Number.isNaN(updated)) return null;
@@ -118,6 +118,13 @@ export const countedItems = (items: AttentionItem[]) => items.filter((i) => i.ki
  */
 export const needsYouCount = (members: Member[], now?: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): number =>
   countedItems(attentionItems(members, now, toolRunningSeconds)).length;
+
+/**
+ * Stalled items alone (R3.2). Pin/lane `needsYou` fields count labelled/permission/error items without `now`; a stalled agent is never
+ * among those (stalled needs no existing attention), so `pin.needsYou + stalledCount(members, now) == needsYouCount(members, now)`.
+ */
+export const stalledCount = (members: Member[], now: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): number =>
+  attentionItems(members, now, toolRunningSeconds).filter((i) => i.kind === "stalled").length;
 
 const signatureOf = (a: PaseoAgent, kind: ItemKind) =>
   kind === "error" && a.status === "error" ? (a.lastError ?? "error") : (a.attentionReason ?? "attention");
