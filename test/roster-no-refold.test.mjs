@@ -13,6 +13,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { syncBuiltinESMExports } from "node:module";
 import { foldAllRunnerAgentsSync, listRunnerAgentsSync, listRunnerAgents } from "../server/backend/runner-backend.mjs";
 import { INDEX_FILE, INDEX_LOCK, BUILD_LOCK_BYTES, writeIndexAtomic } from "../server/backend/roster-index.mjs";
 import { createServer } from "../runner/server.mjs";
@@ -107,6 +108,160 @@ test("index parity: appends, rewrite, shrink, and a last line without its newlin
   parity(h, "index from another fold version");
 });
 
+// R2 (Tier A review H1/M2): same-size rewrites, same-mtime same-size rewrites, and a created-meta rewrite that keeps the bytes the
+// old 64-byte probes looked at. Each of these returned the stale pre-rewrite state on 2f11bd85.
+const midRewrite = (s, from, to) => { assert.ok(s.includes(from) && from.length === to.length); return s.replace(from, to); };
+const statOf = (f) => fs.statSync(f);
+const rewriteBody = (id) => created(id) + line(1, "status", { status: "running" }) + line(2, "usage", { contextTokens: 11111 }) + line(3, "session", { sessionId: "s-1" });
+
+test("index parity: same-size rewrite (mtime changed) re-folds", () => {
+  const h = mkHome("vs-rnr-same-");
+  const f = path.join(h.dir, "rn-s.jsonl");
+  const body = rewriteBody("rn-s");
+  fs.writeFileSync(f, body);
+  parity(h, "cold");
+  const before = statOf(f);
+  fs.writeFileSync(f, midRewrite(body, "\"running\"", "\"parked\" "));
+  fs.utimesSync(f, before.atime, new Date(before.mtimeMs + 5000));
+  assert.equal(statOf(f).size, before.size);
+  parity(h, "same-size rewrite of a middle line");
+});
+
+test("index parity: same-mtime same-size rewrite inside the racy window re-folds", () => {
+  const h = mkHome("vs-rnr-racy-");
+  const f = path.join(h.dir, "rn-r.jsonl");
+  const body = rewriteBody("rn-r");
+  fs.writeFileSync(f, body);
+  const sec = Math.floor(Date.now() / 1000); // whole seconds: utimes round-trips them exactly
+  fs.utimesSync(f, sec, sec);
+  parity(h, "cold");
+  const before = statOf(f);
+  fs.writeFileSync(f, midRewrite(body, "\"running\"", "\"parked\" "));
+  fs.utimesSync(f, sec, sec); // same size AND same mtime as the index entry
+  assert.equal(statOf(f).size, before.size);
+  assert.equal(statOf(f).mtimeMs, before.mtimeMs);
+  parity(h, "same-stat rewrite");
+});
+
+test("index parity: created.meta rewrite with unchanged tail lines (and an append) re-folds", () => {
+  const h = mkHome("vs-rnr-meta-");
+  const f = path.join(h.dir, "rn-m.jsonl");
+  const body = created("rn-m", "l1", "worker", { profile: "aaaa" }) + line(1, "status", { status: "running" }) + line(2, "status", { status: "idle" });
+  fs.writeFileSync(f, body);
+  parity(h, "cold");
+  const old = statOf(f);
+  // Same length, changed only past byte 64 inside the created line; the bytes before the old offset are unchanged; then an append.
+  const next = midRewrite(body, "\"aaaa\"", "\"bbbb\"");
+  assert.equal(next.slice(0, 64), body.slice(0, 64));
+  assert.equal(next.slice(-64), body.slice(-64));
+  fs.writeFileSync(f, next + line(3, "session", { sessionId: "s-9" }));
+  assert.ok(statOf(f).size > old.size);
+  parity(h, "created.meta rewrite + append");
+  assert.equal(listRunnerAgentsSync({ env: h.env })[0].labels.profile, "bbbb");
+});
+
+test("readIndex retries a transient EBUSY/EPERM instead of dropping the warm index", (t) => {
+  const h = mkHome("vs-rnr-ridx-");
+  const past = new Date(Date.now() - 60_000);
+  for (let i = 0; i < 5; i++) {
+    const f = path.join(h.dir, `rn-${i}.jsonl`);
+    fs.writeFileSync(f, created(`rn-${i}`) + line(1, "status", { status: "idle" }));
+    fs.utimesSync(f, past, past); // outside the racy window: a warm read opens no log
+  }
+  parity(h, "cold");
+  const idx = path.join(h.rhome, INDEX_FILE);
+  let fails = 2;
+  const realRead = fs.readFileSync;
+  t.mock.method(fs, "readFileSync", function (p, ...rest) {
+    if (p === idx && fails > 0) { fails--; const e = new Error("busy"); e.code = fails ? "EBUSY" : "EPERM"; throw e; }
+    return realRead.call(this, p, ...rest);
+  });
+  let logOpens = 0;
+  const realOpen = fs.openSync;
+  t.mock.method(fs, "openSync", function (p, ...rest) {
+    if (String(p).endsWith(".jsonl")) logOpens++;
+    return realOpen.call(this, p, ...rest);
+  });
+  let got;
+  try { got = listRunnerAgentsSync({ env: h.env }); } finally { t.mock.restoreAll(); }
+  assert.equal(fails, 0, "the index read failed twice");
+  assert.equal(logOpens, 0, "warm index kept: no log re-folded");
+  assert.deepEqual(byId(got), byId(foldAllRunnerAgentsSync({ env: h.env })));
+});
+
+// ---- build lock recovery (Tier A review H2) ----
+
+function bigBacklog(h) {
+  const pad = "x".repeat(900);
+  const big = [created("rn-big")];
+  for (let s = 1, n = 0; n < BUILD_LOCK_BYTES + (1 << 20); s++) { const l = line(s, "output", { text: pad }); big.push(l); n += l.length; }
+  fs.writeFileSync(path.join(h.dir, "rn-big.jsonl"), big.join(""));
+}
+const DEAD_PID = 0x7ffffff0;
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what}: still waiting after ${ms}ms`)), ms).unref())]);
+
+test("build lock: a dead holder's lock is taken over and removed", () => {
+  const h = mkHome("vs-rnr-lkdead-");
+  bigBacklog(h);
+  const lock = path.join(h.rhome, INDEX_LOCK);
+  fs.writeFileSync(lock, JSON.stringify({ pid: DEAD_PID, startedAt: Date.now() }));
+  const t0 = Date.now();
+  parity(h, "built past a dead holder");
+  assert.ok(Date.now() - t0 < 30_000);
+  assert.equal(fs.existsSync(lock), false, "our lock released, the dead one gone");
+});
+
+for (const [name, content, ageMs] of [["an empty (past the grace)", "", 5000], ["a corrupt JSON (past the grace)", "{\"pid\":12", 5000], ["an empty and fresh (its holder is mid-write)", "", 0]]) {
+  test(`build lock: ${name} lock is not busy forever`, async () => {
+    const h = mkHome("vs-rnr-lkbad-");
+    bigBacklog(h);
+    process.env.VIBESQUAD_HOME = h.vsHome;
+    const lock = path.join(h.rhome, INDEX_LOCK);
+    fs.writeFileSync(lock, content);
+    if (ageMs) { const t = new Date(Date.now() - ageMs); fs.utimesSync(lock, t, t); }
+    try {
+      const got = await withTimeout(listRunnerAgents(), 15_000, "scan behind a bad lock");
+      assert.deepEqual(byId(got), byId(foldAllRunnerAgentsSync({ env: h.env })));
+    } finally {
+      delete process.env.VIBESQUAD_HOME;
+    }
+    assert.equal(fs.existsSync(lock), false);
+  });
+}
+
+test("build lock: EPERM on create (Windows delete-pending) never steals or deletes a live holder's lock", async (t) => {
+  const h = mkHome("vs-rnr-lkeperm-");
+  bigBacklog(h);
+  const lock = path.join(h.rhome, INDEX_LOCK);
+  const holder = JSON.stringify({ pid: process.pid, startedAt: Date.now(), token: "someone-else" });
+  fs.writeFileSync(lock, holder);
+  const realOpen = fs.openSync;
+  t.mock.method(fs, "openSync", function (p, flags, ...rest) {
+    if (String(p) === lock && String(flags).includes("x")) { const e = new Error("delete pending"); e.code = "EPERM"; throw e; }
+    return realOpen.call(this, p, flags, ...rest);
+  });
+  syncBuiltinESMExports(); // runner/lock.mjs imports openSync by name
+  process.env.VIBESQUAD_HOME = h.vsHome;
+  let done = false;
+  const p = listRunnerAgents().finally(() => { done = true; });
+  try {
+    await new Promise((r) => setTimeout(r, 600));
+    assert.equal(done, false, "waits for the live holder instead of building beside it");
+    assert.equal(fs.readFileSync(lock, "utf8"), holder, "the holder's lock is untouched");
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    fs.rmSync(lock); // the holder finishes
+    const got = await withTimeout(p, 30_000, "scan after the holder released");
+    assert.deepEqual(byId(got), byId(foldAllRunnerAgentsSync({ env: h.env })));
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    delete process.env.VIBESQUAD_HOME;
+    await p.catch(() => {});
+  }
+  assert.equal(fs.existsSync(lock), false);
+});
+
 test("index parity: the async server scan (listRunnerAgents) uses the same index", async () => {
   const h = mkHome("vs-rnr-async-");
   for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(h.dir, `rn-${i}.jsonl`), created(`rn-${i}`) + line(1, "status", { status: i % 2 ? "idle" : "running" }));
@@ -178,7 +333,7 @@ for (let r = 0; r < Number(rounds); r++) {
   const want = JSON.stringify(sort(m.foldAllRunnerAgentsSync({ env })));
   if (got !== want) { console.error("MISMATCH round " + r); process.exit(2); }
   const idx = readIndex();
-  if (idx.v !== 1 || typeof idx.fold !== "string" || !idx.entries || typeof idx.entries !== "object") { console.error("BAD INDEX"); process.exit(3); }
+  if (idx.v !== 2 || typeof idx.fold !== "string" || !idx.entries || typeof idx.entries !== "object") { console.error("BAD INDEX"); process.exit(3); }
 }
 console.log("ok");
 `;

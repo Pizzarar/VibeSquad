@@ -2,22 +2,38 @@
 // Every `vs who` used to fold ALL agent logs from byte 0 (444MB live, 7-11s of CPU per call); with the runner down or booting
 // (when the CLI cannot ask it) a roster read now folds only the bytes appended since the last read.
 //
-// One entry per agent: { size, mtimeMs, offset, head, tail, state }. `offset` is the end of the last complete line folded into
-// `state` (the fold's serialised state, ROSTER_FOLD in runner-backend.mjs). Logs are append-only; an entry is trusted only while
-// the file's first bytes (`head`) and the bytes just before `offset` (`tail`) are unchanged and it has not shrunk, else that log
-// is folded from 0 again. An unchanged size + mtime skips the file entirely. The file is replaced atomically (tmp + rename), so
-// a reader never sees half of it; concurrent writers are last-writer-wins, each with a complete, consistent snapshot.
-// A large backlog (a cold index) is built by one process at a time (roster-index.lock): the others wait for it and then read
-// its result, so N concurrent `vs who` calls during a runner boot no longer fold every log N times next to the runner's own fold.
+// One entry per agent: { size, mtimeMs, statAt, offset, firstEnd, headLen, head, tail, state }. `offset` is the end of the last
+// complete line folded into `state` (the fold's serialised state, ROSTER_FOLD in runner-backend.mjs); `statAt` is when
+// size/mtimeMs were read. Logs are append-only, so an entry is resumed at `offset` only when (Tier A review R2, H1):
+//   - the log GREW past the entry's size (an append), or kept the same size AND mtime and the entry is not racy (below). A
+//     same-size log with another mtime, or a shrunk one, is folded from 0 again: a same-size rewrite reads 0 new bytes, so no
+//     probe can be trusted to catch it;
+//   - and `head` (sha256 of bytes 0..headLen: the whole first, `created` line and at least HEAD_MIN bytes) and `tail` (the PROBE
+//     bytes just before `offset`) still match, so a rewrite of created.meta or of the last folded lines refolds.
+// Racy entries (git's "racily clean" rule): an mtime within RACY_MS of the entry's statAt cannot prove the file was not rewritten
+// again in the same timestamp tick (same size, same mtime), so such an entry is folded from 0 instead of trusted. That is cheap:
+// the index is read only while the runner is down or booting, when logs are quiet, and an entry stops being racy once a later
+// scan records it. Not detected, by design: a same-size rewrite whose mtime is then set back (utimes) outside the racy window,
+// and an append that also rewrites lines strictly between the head and the tail probe; runner logs see neither.
+// The file is replaced atomically (tmp + rename), so a reader never sees half of it; concurrent writers are last-writer-wins,
+// each with a complete, consistent snapshot.
+// A large backlog (a cold index) is built by one process at a time (roster-index.lock, runner/lock.mjs primitives): the others
+// wait for it and then read its result, so N concurrent `vs who` calls during a runner boot no longer fold every log N times next
+// to the runner's own fold.
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { pidAlive } from "../../runner/lock.mjs";
+import { acquireStartLock, pidAlive, readLock } from "../../runner/lock.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
 
 export const INDEX_FILE = "roster-index.json";
 export const INDEX_LOCK = "roster-index.lock";
-const INDEX_VERSION = 1;
-const PROBE = 64; // head / pre-offset bytes that pin an entry to the same file
+const INDEX_VERSION = 2; // v2: statAt + hashed head through the created line + 512-byte tail (v1 entries are dropped)
+const PROBE = 512; // bytes just before `offset` that pin an entry to the same file
+const HEAD_MIN = 4096; // the head hash covers at least this much, or the whole first line if longer ...
+const HEAD_MAX = 1 << 20; // ... but never more than 1MB per check
+const RACY_MS = 3000; // an mtime this close to the stat that recorded it proves nothing (coarse FS clocks tick in 2s)
+const LOCK_GRACE_MS = 1000; // an empty / torn lock younger than this is mid-write (acquireStartLock's own grace)
 const CHUNK = 4 << 20;
 export const BUILD_LOCK_BYTES = 8 << 20; // a backlog above this is built under the lock
 const LOCK_STALE_MS = 120_000;
@@ -27,11 +43,21 @@ const YIELD_AGENTS = 64;
 
 const b64 = (buf) => buf.toString("base64");
 
-function readIndex(file, version) {
+const TRANSIENT = ["EPERM", "EACCES", "EBUSY"]; // win32: the file is mid-rename by another writer
+
+/** The index entries, or an empty map. A transient win32 read error is retried, not taken as "no index" (review R2, M1). */
+function readIndex(file, version, { sleep = sleepSync } = {}) {
+  let text;
+  for (let i = 0; ; i++) {
+    try { text = fs.readFileSync(file, "utf8"); break; } catch (e) {
+      if (i >= 5 || !TRANSIENT.includes(e?.code)) return new Map(); // missing, or still locked: start over
+      sleep(10 * (i + 1));
+    }
+  }
   try {
-    const j = JSON.parse(fs.readFileSync(file, "utf8"));
+    const j = JSON.parse(text);
     if (j?.v === INDEX_VERSION && j.fold === version && j.entries && typeof j.entries === "object") return new Map(Object.entries(j.entries));
-  } catch { /* missing, torn by an older writer, or another version: start over */ }
+  } catch { /* torn by an older writer: start over */ }
   return new Map();
 }
 
@@ -42,7 +68,7 @@ export function writeIndexAtomic(file, data, { sleep = sleepSync } = {}) {
     fs.writeFileSync(tmp, data);
     for (let i = 0; ; i++) {
       try { fs.renameSync(tmp, file); return true; } catch (e) {
-        if (i >= 5 || !["EPERM", "EACCES", "EBUSY"].includes(e?.code)) throw e;
+        if (i >= 5 || !TRANSIENT.includes(e?.code)) throw e;
         sleep(10 * (i + 1));
       }
     }
@@ -55,23 +81,40 @@ export function writeIndexAtomic(file, data, { sleep = sleepSync } = {}) {
 const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(sleepBuf, 0, 0, ms);
 
-/** A live, fresh holder owns the lock (a dead pid or an old lock is stale: the next builder takes it over). */
+/**
+ * The build lock is runner/lock.mjs's start lock: O_EXCL create retried through Windows delete-pending EPERM/EACCES (an existing
+ * lock is never taken for "cannot lock"), a stale holder removed only under the .steal guard and only if it still is the holder
+ * judged stale. Busy = a live holder younger than LOCK_STALE_MS, or an empty / torn lock younger than LOCK_GRACE_MS (its holder
+ * is between create and write). A dead pid, an old lock, or an empty / corrupt one past the grace is stale: the next builder
+ * takes it over (review R2, H2).
+ */
 function lockBusy(file) {
-  try {
-    const j = JSON.parse(fs.readFileSync(file, "utf8"));
-    return pidAlive(j.pid) && Date.now() - (j.at ?? 0) < LOCK_STALE_MS;
-  } catch (e) {
-    return e?.code !== "ENOENT"; // torn mid-write by its holder: busy; gone: free
+  let age;
+  try { age = Date.now() - fs.statSync(file).mtimeMs; } catch { return false; } // gone (or going: delete-pending)
+  const info = readLock(file);
+  if (!info) return age < LOCK_GRACE_MS;
+  return pidAlive(info.pid) && age < LOCK_STALE_MS;
+}
+/** "owned" (we created it, tagged `token`), "busy" (another builder holds it) or "none" (cannot lock at all: build without it). */
+function tryLock(file, token) {
+  try { return acquireStartLock(file, { staleMs: LOCK_STALE_MS, body: { token } }) ? "owned" : "busy"; } catch {
+    return "none"; // read-only dir, or a create that kept failing: never touch a lock we did not create
   }
 }
-function tryLock(file) {
-  const take = () => { fs.writeFileSync(file, JSON.stringify({ pid: process.pid, at: Date.now() }), { flag: "wx" }); return true; };
-  try { return take(); } catch (e) {
-    if (e?.code !== "EEXIST") return true; // cannot lock at all (read-only dir): build without it
-  }
-  if (lockBusy(file)) return false;
-  try { fs.rmSync(file, { force: true }); } catch { /* ignore */ }
-  try { return take(); } catch { return false; }
+/** Remove the lock only while it is still the one we created (a builder judged stale may have lost it to a stealer). */
+function unlock(file, token) {
+  try { if (readLock(file)?.token === token) fs.rmSync(file, { force: true }); } catch { /* ignore */ }
+}
+
+const sha = (buf) => createHash("sha256").update(buf).digest("base64");
+/** An entry whose mtime was within RACY_MS of the stat that recorded it (see the header). */
+const racy = (e) => !(typeof e.statAt === "number" && e.mtimeMs < e.statAt - RACY_MS);
+/** Where a fold of (entry, stat) may resume if its probes match: e.offset, or 0 for a full fold (see the header). */
+function resumeAt(e, st) {
+  if (!e || !(e.offset > 0) || typeof e.size !== "number" || e.size < e.offset) return 0;
+  if (st.size > e.size) return e.offset;
+  if (st.size === e.size && st.mtimeMs === e.mtimeMs && !racy(e)) return e.offset;
+  return 0;
 }
 
 function preadExact(fd, pos, len) {
@@ -89,22 +132,24 @@ function preadExact(fd, pos, len) {
  * The fold of one log from (entry, stat): yields "tick" every YIELD_LINES lines. Returns { entry, result } where result is the
  * state to finish (it includes a trailing line without its newline, as a full read of the file would) and entry the new index entry.
  */
-function* foldOne(file, st, entry, fold) {
+function* foldOne(file, st, statAt, entry, fold) {
   const size = st.size;
   let fd;
   try { fd = fs.openSync(file, "r"); } catch { return null; }
   try {
     let state = null;
     let offset = 0;
-    if (entry && size >= entry.offset && entry.size !== undefined) {
-      const head = preadExact(fd, 0, Math.min(PROBE, entry.offset));
-      const tailLen = Math.min(PROBE, entry.offset);
-      const tail = preadExact(fd, entry.offset - tailLen, tailLen);
-      if (head && tail && b64(head) === entry.head && b64(tail) === entry.tail) {
-        try { state = fold.load(entry.state); offset = entry.offset; } catch { state = null; }
+    let firstEnd = 0; // end of the first complete line (the created event): the head hash covers it
+    const resume = resumeAt(entry, st);
+    if (resume > 0 && entry.headLen > 0 && entry.headLen <= resume) {
+      const head = preadExact(fd, 0, entry.headLen);
+      const tailLen = Math.min(PROBE, resume);
+      const tail = preadExact(fd, resume - tailLen, tailLen);
+      if (head && tail && sha(head) === entry.head && b64(tail) === entry.tail) {
+        try { state = fold.load(entry.state); offset = resume; firstEnd = entry.firstEnd; } catch { state = null; }
       }
     }
-    if (!state) { state = fold.init(); offset = 0; }
+    if (!state) { state = fold.init(); offset = 0; firstEnd = 0; }
     let pos = offset;
     let carry = null;
     let lines = 0;
@@ -119,6 +164,7 @@ function* foldOne(file, st, entry, fold) {
       while ((nl = data.indexOf(10, from)) !== -1) {
         fold.feed(state, data.toString("utf8", from, nl));
         offset += nl - from + 1;
+        if (!firstEnd) firstEnd = offset;
         from = nl + 1;
         if (++lines % YIELD_LINES === 0) yield "tick";
       }
@@ -130,9 +176,14 @@ function* foldOne(file, st, entry, fold) {
     const saved = fold.save(state);
     if (carry?.length) { result = fold.load(structuredClone(saved)); fold.feed(result, carry.toString("utf8")); }
     const tailLen = Math.min(PROBE, offset);
-    const head = offset ? preadExact(fd, 0, Math.min(PROBE, offset)) : Buffer.alloc(0);
-    const tail = offset ? preadExact(fd, offset - tailLen, tailLen) : Buffer.alloc(0);
-    return { entry: { size, mtimeMs: st.mtimeMs, offset, head: b64(head ?? Buffer.alloc(0)), tail: b64(tail ?? Buffer.alloc(0)), state: saved }, result };
+    const headLen = Math.min(offset, HEAD_MAX, Math.max(firstEnd, HEAD_MIN));
+    const head = headLen ? preadExact(fd, 0, headLen) : null;
+    const tail = tailLen ? preadExact(fd, offset - tailLen, tailLen) : null;
+    const pinned = !!(head && tail); // no probes (offset 0, or shrunk under us): headLen 0, never resumed
+    return {
+      entry: { size, mtimeMs: st.mtimeMs, statAt, offset, firstEnd, headLen: pinned ? headLen : 0, head: pinned ? sha(head) : "", tail: pinned ? b64(tail) : "", state: saved },
+      result,
+    };
   } finally {
     try { fs.closeSync(fd); } catch { /* ignore */ }
   }
@@ -149,6 +200,7 @@ function* scan(home, ids, fold) {
   const version = fold.version;
   const dir = path.join(home, "agents");
   const deadline = Date.now() + LOCK_WAIT_MS;
+  const token = randomUUID(); // names our lock: unlock() never removes one we did not create
   let index;
   let stats;
   let locked = false;
@@ -160,15 +212,18 @@ function* scan(home, ids, fold) {
     let pending = 0;
     for (const id of ids) {
       let st;
+      const at = Date.now(); // taken before the stat, so an mtime written meanwhile still counts as racy
       try { st = fs.statSync(path.join(dir, `${id}.jsonl`)); } catch { continue; }
-      stats.set(id, st);
-      const e = index.get(id);
-      if (!(e && e.size === st.size && e.mtimeMs === st.mtimeMs)) pending += Math.max(0, st.size - (e && st.size >= e.offset ? e.offset : 0));
+      stats.set(id, { st, at });
+      pending += Math.max(0, st.size - resumeAt(index.get(id), st));
     }
     if (!persist || pending <= BUILD_LOCK_BYTES || Date.now() >= deadline) break;
-    if (tryLock(lockFile)) { locked = true; break; }
-    // Another process is building: wait for it to finish, then re-read its index (most of the backlog is gone).
-    while (lockBusy(lockFile) && Date.now() < deadline) yield { sleep: 100 };
+    const got = tryLock(lockFile, token);
+    if (got === "none") break;
+    if (got === "owned") { locked = true; break; }
+    // Another process is building: wait for it to finish, then re-read its index (most of the backlog is gone). Pause at least
+    // once even if the lock already reads free: a steal can lose to another stealer, and this must not spin.
+    do yield { sleep: 100 }; while (lockBusy(lockFile) && Date.now() < deadline);
   }
   try {
     const out = [];
@@ -176,16 +231,18 @@ function* scan(home, ids, fold) {
     let changed = index.size !== stats.size;
     let n = 0;
     for (const id of ids) {
-      const st = stats.get(id);
-      if (!st) continue;
+      const s = stats.get(id);
+      if (!s) continue;
+      const { st, at } = s;
       const e = index.get(id);
       let entry = e;
       let state;
-      if (e && e.size === st.size && e.mtimeMs === st.mtimeMs && e.offset === st.size) {
+      // Unchanged and fully folded (resumeAt rules out a racy entry): nothing to read.
+      if (e && e.offset === st.size && resumeAt(e, st) === st.size) {
         try { state = fold.load(e.state); } catch { state = null; }
       }
       if (!state) {
-        const r = yield* foldOne(path.join(dir, `${id}.jsonl`), st, e, fold);
+        const r = yield* foldOne(path.join(dir, `${id}.jsonl`), st, at, e, fold);
         if (!r) { changed = true; continue; }
         ({ entry, result: state } = r);
         changed = true;
@@ -197,7 +254,7 @@ function* scan(home, ids, fold) {
     if (changed && persist) writeIndexAtomic(file, JSON.stringify({ v: INDEX_VERSION, fold: version, entries: next }));
     return out;
   } finally {
-    if (locked) try { fs.rmSync(lockFile, { force: true }); } catch { /* ignore */ }
+    if (locked) unlock(lockFile, token);
   }
 }
 
