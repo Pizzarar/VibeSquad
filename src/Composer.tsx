@@ -25,6 +25,12 @@ import {
   resolveMentionEntries,
   type MentionEntry,
 } from "./projectContext";
+import { readableLeadTitle } from "./BoringAgentHeader";
+
+/** R4-7: in Normal mode the placeholder names the agent as the header does ("Main Game · Lead 75"), not the raw title. */
+const composerTargetName = (agent: PaseoAgent): string =>
+  (typeof document !== "undefined" && document.documentElement.getAttribute("data-vibe") === "boring" ? readableLeadTitle(agent) : null) ?? agent.title ?? "agent";
+
 
 // ── Pure helpers (mirrored in test/ade-batch-f.test.mjs) ──────────────────────
 
@@ -662,7 +668,7 @@ export function Composer({
         <textarea
           ref={taRef}
           value={draft}
-          placeholder={`Message ${agent.title ?? "agent"}… (${sendKey === "ctrl-enter" ? "Ctrl+Enter to send, Ctrl+Shift+Enter to interrupt" : "Enter to send, Ctrl+Enter to interrupt"})`}
+          placeholder={`Message ${composerTargetName(agent)}… (${sendKey === "ctrl-enter" ? "Ctrl+Enter to send, Ctrl+Shift+Enter to interrupt" : "Enter to send, Ctrl+Enter to interrupt"})`}
           onChange={(e) => {
             setDismissed(false);
             setSel(0);

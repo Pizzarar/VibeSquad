@@ -96,6 +96,9 @@ export function boringAgentLanding(views: TeamView[], agentId: string | null | u
 
 export { boringLaneLabel };
 
+/** Ctrl+J (App) asks the Normal-mode shell to open an agent like a Needs-you click; preventDefault()ed = handled. */
+export const BORING_OPEN_AGENT_EVENT = "vs:boring-open-agent";
+
 const URGENCY: Record<string, number> = { permission: 0, "needs-you": 1, error: 2 };
 const urgencyOf = (m: { attention?: { tone?: string } | null } | null | undefined) => (m?.attention?.tone != null && m.attention.tone in URGENCY ? URGENCY[m.attention.tone] : null);
 /** A worker is shown live in the sidebar while it runs or needs you; everything else collapses into "N idle". */
@@ -306,7 +309,8 @@ export function boringLaneTableRows(
 ): LaneTableRow[] {
   const lastFor = (c: { laneId: string; code: string }) => {
     const ids = new Set([c.laneId.toLowerCase(), c.code.replace(/^@/, "").toLowerCase()]);
-    const hit = feed.filter((e) => ids.has(String(e.lane ?? "").replace(/^@/, "").toLowerCase())).sort((a, b) => b.ts.localeCompare(a.ts))[0];
+    // R4: internal telemetry (log type "metric": hook-timing, mcp-alias, brief-orphan-conflict) is not what the lane did.
+    const hit = feed.filter((e) => e.type !== "metric" && ids.has(String(e.lane ?? "").replace(/^@/, "").toLowerCase())).sort((a, b) => b.ts.localeCompare(a.ts))[0];
     return hit ? hit.text : "";
   };
   const workerSummary = (ws: { agent: { status?: string }; attention?: { tone?: string } | null }[]) => {
@@ -455,16 +459,30 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const key = `${tid}/${s.laneId}`;
     setLaneOpen((o) => ({ ...o, [key]: true }));
   };
-  const openNeedsYou = (row: NeedsYouRow) => {
-    if (row.teamId !== view?.team.id) onSelectSquad(row.teamId);
-    const sel = boringSelectionForAgent(row.view, row.item.id);
+  const openAgentIn = (v: TeamView, agentId: string) => {
+    if (v.team.id !== view?.team.id) onSelectSquad(v.team.id);
+    const sel = boringSelectionForAgent(v, agentId);
     setSelectedLaneId(sel?.laneId ?? null);
     if (sel && sel.role !== "worker") setSelectedRole(sel.role);
-    setSelectedWorkerId(sel?.role === "worker" ? row.item.id : null);
-    revealAgent(row.view, sel, row.item.id);
+    setSelectedWorkerId(sel?.role === "worker" ? agentId : null);
+    revealAgent(v, sel, agentId);
     setMode("chat");
-    openAgent(row.item.id);
+    openAgent(agentId);
   };
+  const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
+  // R4-6: Ctrl+J opens the top Needs-you agent through this same path (so ?agent= and reload keep your place).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ agentId?: string }>).detail?.agentId;
+      const v = id ? allViews.find((x) => boringSelectionForAgent(x, id)) : undefined;
+      if (!id || !v) return;
+      e.preventDefault();
+      openAgentIn(v, id);
+    };
+    window.addEventListener(BORING_OPEN_AGENT_EVENT, onOpen);
+    return () => window.removeEventListener(BORING_OPEN_AGENT_EVENT, onOpen);
+  });
   const pickCore = (laneId: "_overlord" | "_riffbot", agentId: string | null, teamId?: string) => {
     if (teamId && teamId !== view?.team.id) onSelectSquad(teamId);
     setSelectedLaneId(laneId);
