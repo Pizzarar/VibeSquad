@@ -142,3 +142,52 @@ test("R5-4: in Normal an explicit ?team= with no ?agent= beats the saved pane, a
   globalThis.location = { search: "?team=efi&agent=rn-deep", pathname: "/", hash: "" };
   assert.ok((await import("../src/panes.ts?r54-link")).getPanes().leftTabs.includes("rn-deep"));
 });
+
+// R5-4 review (M1/M2/L1): Normal's ?agent= is the agent on screen, and an explicit ?team= lands on that project's Overview.
+const logic = await import("../src/pinFocusLogic.ts");
+
+test("R5-4 M1: every way back to Overview / usage drops ?agent= (mode leaves chat; the pane tab stays)", () => {
+  // Agent on screen, then the active project's row / project crumb / drawer close / usage: mode !== "chat".
+  const on = { rosterLoaded: true, landingPending: false, activeAgentId: "rn-lead" };
+  assert.equal(logic.boringUrlAgent({ ...on, shownAgentId: "rn-lead" }), "rn-lead");
+  assert.equal(logic.boringUrlAgent({ ...on, shownAgentId: null }), null, "Overview keeps team= only, though the tab is still active");
+  // Re-opening the same agent from its row names it again.
+  assert.equal(logic.boringUrlAgent({ ...on, shownAgentId: "rn-lead" }), "rn-lead");
+});
+
+test("R5-4 L1: the URL names the agent shown, not the pane's active tab", () => {
+  const shown = (activeAgentId, shownAgentId) => logic.boringUrlAgent({ rosterLoaded: true, landingPending: false, activeAgentId, shownAgentId });
+  assert.equal(shown("rn-old-tab", "rn-lane-buddy"), "rn-lane-buddy", "resolvePinChatAgentId picked the lane's Buddy");
+  assert.equal(shown(null, "rn-riffbot"), "rn-riffbot", "hub fallback with no tab");
+  assert.equal(shown("rn-old-tab", null), null, "an empty lane card shows no agent");
+});
+
+test("R5-4: a deep link keeps ?agent= before the roster and while its landing is pending (no strip-then-restore)", () => {
+  assert.equal(logic.boringUrlAgent({ rosterLoaded: false, landingPending: false, activeAgentId: "rn-deep", shownAgentId: null }), "rn-deep");
+  assert.equal(logic.boringUrlAgent({ rosterLoaded: true, landingPending: true, activeAgentId: "rn-deep", shownAgentId: null }), "rn-deep");
+  assert.equal(logic.boringUrlAgent({ rosterLoaded: false, landingPending: false, activeAgentId: null, shownAgentId: null }), null, "?team= alone stays agent-less");
+});
+
+test("R5-4 M2: an explicit ?team= with no ?agent= drops the saved pin in Normal, even for the same squad", () => {
+  const saved = { squadId: "efi", laneId: "art" };
+  const pick = (url) => logic.savedFocusForUrl(saved, url);
+  assert.equal(pick({ team: "efi", agent: null, normal: true }), null, "Normal: same squad → that project's Overview");
+  assert.equal(pick({ team: "other", agent: null, normal: true }), null);
+  assert.equal(pick({ team: "efi", agent: "rn-deep", normal: true }), saved, "?agent= still plans the restore");
+  assert.equal(pick({ team: null, agent: null, normal: true }), saved, "a bare reload restores the pin");
+  // Psycho unchanged: its URL always carries team=, so only another squad's pin yields.
+  assert.equal(pick({ team: "efi", agent: null, normal: false }), saved);
+  assert.equal(pick({ team: "other", agent: null, normal: false }), null);
+  assert.equal(logic.savedFocusForUrl(null, { team: "efi", agent: null, normal: true }), null);
+});
+
+test("R5-4 wiring: App's Normal URL reads BoringApp's shown agent; pinFocus restore goes through savedFocusForUrl", () => {
+  const read = (f) => fs.readFileSync(resolve(SRC_DIR, f), "utf8");
+  const app = read("App.tsx");
+  assert.match(app, /vibe === "boring" \? \(boringShown === undefined \? activeAgentId : boringShown\)/);
+  const ade = read("BoringAde.tsx");
+  assert.match(ade, /shownAgentId: mode === "chat" && agent \? agent\.id : null/);
+  assert.match(ade, /setBoringShownAgent\(urlAgent\)/);
+  assert.doesNotMatch(ade, /leaveHome/, "no one-way home flag: the URL follows the screen");
+  assert.match(read("pinFocus.ts"), /savedFocusForUrl\(savedFocus, \{ team: initialUrlTeam, agent: initialUrlAgent, normal: getPref\("app\.vibe"\) === "boring" \}\)/);
+});

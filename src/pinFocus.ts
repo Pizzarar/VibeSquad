@@ -10,8 +10,8 @@ import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./pa
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
 import { focusDrawerOpen } from "./ctxMenuLogic";
-import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, startsOnGrid } from "./pinFocusLogic";
-import { getRestoreLastView } from "./prefs";
+import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, savedFocusForUrl, startsOnGrid } from "./pinFocusLogic";
+import { getPref, getRestoreLastView } from "./prefs";
 import { dormantBuddyId, hubPinForSquad, isHubPin, liveBuddyId, pinsForSquad, type Pin } from "./pins";
 import { subscribeTeams } from "./teams";
 import { derived, subscribeTree } from "./ui";
@@ -273,10 +273,19 @@ export function exitSquadsHome() {
   set({ focus: null, home: true, squadsHome: false, homeActive: getPanes().leftActiveId });
 }
 
-/** Normal mode shows an agent: it is never "home", even when the open came with a project switch (exitSquadsHome). */
-export function leaveHome() {
-  if (state.home) set({ home: false, homeActive: null, squadsHome: false });
+// R5-4: the agent Normal has on screen (undefined while BoringApp is not mounted). App's URL sync names it as ?agent=.
+let boringShown: string | null | undefined;
+const boringShownSubs = new Set<() => void>();
+export function setBoringShownAgent(id: string | null | undefined) {
+  if (id === boringShown) return;
+  boringShown = id;
+  for (const f of boringShownSubs) f();
 }
+const subscribeBoringShown = (f: () => void) => {
+  boringShownSubs.add(f);
+  return () => void boringShownSubs.delete(f);
+};
+export const useBoringShownAgent = () => useSyncExternalStore(subscribeBoringShown, () => boringShown, () => undefined);
 
 /** Leave the pinned layout entirely (FULL, focus mode): the panes show as usual again. */
 export function clearPinFocus() {
@@ -318,7 +327,7 @@ function tryRestore() {
   if (state.focus) return;
   if (state.home && state.squadsHome) return; // ?view=squads in the URL wins over the saved pin
   const savedFocus = loadSavedFocus(store);
-  const saved = savedFocus && initialUrlTeam && !initialUrlAgent && savedFocus.squadId !== initialUrlTeam ? null : savedFocus;
+  const saved = savedFocusForUrl(savedFocus, { team: initialUrlTeam, agent: initialUrlAgent, normal: getPref("app.vibe") === "boring" });
   const urlAgent = initialUrlAgent;
   const urlAgentRow = urlAgent ? ps.agents.get(urlAgent) : undefined;
   const urlLive = !!urlAgent && isLiveUrlAgent(urlAgentRow, isRetiredAgent(urlAgentRow));
