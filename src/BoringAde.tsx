@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AgentDrawer } from "./AgentDrawer";
 import { stalledCount } from "./attentionItems";
+import { toolRunningSecondsAt } from "./openTools";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
@@ -181,13 +182,17 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   const zones = skyZonesFor(view);
   const bugs = quickBugsChipState(view);
   // R3.2: every badge = its pin's needsYou + stalled agents at `now`, so the sum equals needsYouCount (the Needs-you heading).
-  const pinMembers = (p: Pin | null | undefined): Member[] => (p ? [p.brainstorm, p.lead, ...(p.workers ?? []), ...(p.topicBrainstorms ?? [])].filter((m): m is Member => !!m) : []);
-  const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now);
+  // L2: pins.ts counts needsYou over ALL of the lane's members, so stalled members come from the same list (duplicate leads, duplicate Buddies,
+  // hidden lanes); the pin's own slots are only the fallback for a pin whose lane isn't in view.lanes. Same members => badge sum == list count.
+  const pinMembers = (p: Pin | null | undefined): Member[] =>
+    p ? view?.lanes?.find((l) => l.lane.id === p.lane.id)?.members ?? [p.brainstorm, p.lead, ...(p.workers ?? []), ...(p.topicBrainstorms ?? [])].filter((m): m is Member => !!m) : [];
+  const toolSecs = toolRunningSecondsAt(now);
+  const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now, toolSecs);
   const zoneRow = (label: string, z: typeof zones.overlord) => ({
     label,
     agentId: z.agentId,
     status: z.member?.agent.status ?? "none",
-    needsYou: z.member ? (z.member.attention && z.member.attention.tone !== "finished" ? 1 : 0) + stalledCount([z.member], now) : 0,
+    needsYou: z.member ? (z.member.attention && z.member.attention.tone !== "finished" ? 1 : 0) + stalledCount([z.member], now, toolSecs) : 0,
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
     updatedAt: z.member?.agent.updatedAt ?? null,
   });
@@ -207,7 +212,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
       err: pinErr(bugs.pin),
       agentId: bugs.pin ? liveBuddyId(bugs.pin) ?? (isLive(bugs.pin.lead) ? bugs.pin.lead.agent.id : null) : null,
       leadRunning: bugs.leadRunning,
-      needsYou: bugs.needsYou + stalledCount(pinMembers(bugs.pin), now),
+      needsYou: bugs.needsYou + stalledCount(pinMembers(bugs.pin), now, toolSecs),
       age: bugs.pin ? boringConversationAge(bugs.pin, now) : "",
     },
   };
@@ -396,7 +401,13 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setMode(land.mode);
   }, [activeAgentId]);
   const activeTeamId = view?.team.id ?? "";
-  const model = boringSidebarModel(view);
+  // ONE `now` for the sidebar badges and the Needs-you list (R3 L1): both must cross the 600s stall boundary together.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
+  const model = boringSidebarModel(view, now);
   const laneRows = boringLaneTableRows(model, feedRows);
   const hasEvents = laneRows.some((r) => r.lastEvent);
   const { core, conversations, hubNeedsYou, totalNeedsYou } = model;
@@ -498,7 +509,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
 
   const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, agentTitle: agent?.title, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
-  const selModel = selView === view ? model : boringSidebarModel(selView);
+  const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
     sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk" ? "Desk" : sel.laneId === "_bugs" ? "Bugs" : selModel.conversations.find((c) => c.laneId === sel.laneId)?.name ?? null;
   const crumbs = boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
@@ -681,7 +692,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             <span aria-hidden="true">⌕</span><span>Search</span><kbd className="boring-kbd">Ctrl+K</kbd>
           </button>
         </div>
-        <BoringInbox views={views.length > 0 ? views : view ? [view] : []} onOpen={openNeedsYou} />
+        <BoringInbox views={views.length > 0 ? views : view ? [view] : []} onOpen={openNeedsYou} now={now} />
         <div className="boring-section-head" data-testid="boring-projects-head">
           <span className="boring-section-label">Projects</span>
           <button type="button" className="boring-icon-btn" data-testid="boring-new-project-btn" title="New project" aria-label="New project" onClick={onNewSquad}>+</button>
@@ -690,7 +701,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           {allViews.map((v) => {
             const active = v.team.id === activeTeamId;
             const open = projectIsOpen(v.team.id);
-            const m = active ? model : boringSidebarModel(v);
+            const m = active ? model : boringSidebarModel(v, now);
             const projectRowCls = isOn(v, "project") ? "boring-project-row on" : "boring-project-row";
             return (
               <div key={v.team.id} className="boring-project-block">
