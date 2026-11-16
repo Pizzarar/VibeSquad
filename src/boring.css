@@ -1207,3 +1207,8 @@ html[data-vibe="boring"] .boring-worker-fold { color: var(--text-3); }
 html[data-vibe="boring"] .boring-worker-fold:hover { color: var(--text-1); }
 html[data-vibe="boring"] .boring-project-tree { flex: 1 1 auto; min-height: 120px; overflow-y: auto; }
 html[data-vibe="boring"] .boring-sidebar-footer { flex: none; margin-top: auto; }
+
+/* R3.3: Needs-you line 1 = name, location (muted), age; line 2 = the full-width reason. */
+html[data-vibe="boring"] .boring-needs-open .boring-needs-who { flex: 0 1 auto; max-width: 55%; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: var(--t-small); color: var(--text-3, var(--text-2)); text-align: left; }
+html[data-vibe="boring"] .boring-needs-why .boring-needs-reason { flex: 1 1 100%; }

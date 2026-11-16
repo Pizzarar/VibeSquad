@@ -4,6 +4,19 @@ export const BORING_CTX_WARN_PCT = 72;
 /** A running agent with no update for this long counts as stalled in the Normal status strip. */
 export const BORING_STALL_SECONDS = 90;
 
+/** R3.2: Needs you lists a quiet agent as stalled only after this long (the header strip keeps the shorter 90s hint). */
+export const BORING_NEEDS_YOU_STALL_SECONDS = 600;
+
+/**
+ * Pure R3.2 rule: stalled for Needs you = running, no pending permission, no update for ~10 min, and no tool call in flight
+ * (`toolRunningSeconds` is the running-tool age the header strip already derives; null/undefined = none running).
+ */
+export function boringNeedsYouStalled(input: { status?: string | null; hasPendingPermission: boolean; idleSeconds: number; toolRunningSeconds?: number | null }): boolean {
+  if (input.status !== "running" || input.hasPendingPermission) return false;
+  if (input.toolRunningSeconds != null) return false;
+  return input.idleSeconds >= BORING_NEEDS_YOU_STALL_SECONDS;
+}
+
 export type BoringStripReason = { kind: "stalled" | "handoff" | "context"; text: string };
 
 /** Pure: which conditions put the 32px strip under the header. Order = urgency. */

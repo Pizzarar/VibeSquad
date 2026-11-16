@@ -805,7 +805,7 @@ test("D2 2.2 BoringInbox: labelled NEEDS YOU (never Inbox), inline Allow/Deny on
   const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [A, B], now: NOW, logs: [] }));
   assert.match(html, /Needs you/);
   assert.doesNotMatch(html, /Inbox/);
-  assert.match(html, /Done recently \(1\)/); // the finished agent, not counted as needing you
+  assert.match(html, /Done recently · 1/); // the finished agent, not counted as needing you
   assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-you-item").length, 4); // finished moved to Done recently
   assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-allow").length, 1); // the question permission has no inline buttons
   assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-needs-dismiss").length, 2); // hover-menu Dismiss: pick, error (permissions are answered, finished is in Done recently)
@@ -1243,7 +1243,7 @@ test("Desk R2 Needs you: the count equals the rows; cap 5 with a '+ N more' togg
   const t = (hs.i = 0, BoringInbox({ views: [v], now: NOW, logs: [] }));
   assert.equal(testids(t, "boring-needs-you-item").length, 5);
   assert.equal(testids(t, "boring-needs-you-count")[0].props.children, 8);
-  assert.match(renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs: [] })), /\+ 3 more/);
+  assert.match(renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs: [] })), /▸ 3 more/);
   const few = (hs.i = 0, BoringInbox({ views: [manyView(4)], now: NOW, logs: [] }));
   assert.equal(testids(few, "boring-needs-you-item").length, 4);
   assert.equal(testids(few, "boring-needs-you-more").length, 0);
@@ -1258,7 +1258,7 @@ test("Desk R2 Needs you: finished lists under Done recently (count == rows), not
   assert.deepEqual(testids(t, "boring-needs-you-item").map((n) => n.props["data-kind"]), ["label"]);
   assert.equal(testids(t, "boring-needs-you-count")[0].props.children, 1);
   const html = renderToStaticMarkup(React.createElement(BoringInbox, { views: [v], now: NOW, logs }));
-  assert.match(html, /Done recently \(2\)/); // the finished agent + the logged done entry
+  assert.match(html, /Done recently · 2/); // the finished agent + the logged done entry
 });
 
 test("Desk R2 Needs you: buttons only on quick permissions; every row has the hover menu with Snooze", () => {
@@ -1292,16 +1292,18 @@ test("Desk R2 Needs you: hub-lane items read 'Desk'; real legacy lead titles are
   assert.ok(testids(t, "boring-needs-where").some((n) => /Desk/.test([].concat(n.props.children).join(""))));
 });
 
-test("Desk R2 Needs you: a running agent with no update for 90s+ is listed as stalled", () => {
+test("Desk R2 Needs you: a running agent with no update for 10m+ (and no tool in flight) is listed as stalled", () => {
   reset();
-  const quiet = att("slow", "x", "x", { agent: { status: "running", updatedAt: ago(5) } });
+  const quiet = att("slow", "x", "x", { agent: { status: "running", updatedAt: ago(12) } });
   quiet.attention = null;
   const fresh = att("busy", "x", "x", { agent: { status: "running", updatedAt: new Date(NOW - 20_000).toISOString() } });
   fresh.attention = null;
-  const v = teamOf("vs", "VibeSquad", [quiet, fresh]);
+  const nine = att("nine", "x", "x", { agent: { status: "running", updatedAt: ago(9) } });
+  nine.attention = null; // R3.2: 9 min is below the threshold, so not listed
+  const v = teamOf("vs", "VibeSquad", [quiet, fresh, nine]);
   const rows = needsYouRows([v], NOW);
   assert.deepEqual(rows.map((r) => [r.item.id, r.item.kind]), [["slow", "stalled"]]);
-  assert.match(rows[0].item.reason, /Stalled: no update for 5m/);
+  assert.match(rows[0].item.reason, /Stalled: no update for 12m/);
 });
 
 test("Desk R2 sidebar worker rows keep the attention tint (R3.1: no reason text); container dots take the worst state", () => {
@@ -1337,4 +1339,11 @@ test("Desk R2 r2: Done recently log entries read Desk for the hub lane / project
   const e = (lane) => ({ ts: ago(14), type: "done", text: "PASS step4", agent: "x", lane });
   const rows = doneRecently([], [{ teamId: "vibesquad", project: "VibeSquad", entries: [e("vibesquad"), e(undefined), e("ui-bois")] }], 8, NOW, [v]);
   assert.deepEqual(rows.map((r) => r.where).sort(), ["VibeSquad › Desk", "VibeSquad › Desk", "VibeSquad › UI Bois"]);
+});
+
+test("R3.7: one count style: '8 more' and 'Done recently · 4'", async () => {
+  const src = readFileSync(new URL("../src/BoringInbox.tsx", import.meta.url), "utf8");
+  assert.match(src, /`\$\{n\} more`/);
+  assert.match(src, /`Done recently · \$\{n\}`/);
+  assert.doesNotMatch(src, /\+ \$\{rows/);
 });

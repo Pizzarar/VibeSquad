@@ -2,7 +2,7 @@
 // clear/snooze call each kind maps to. Pure (deps injected) so tests drive it with fixtures.
 import type { PaseoAgent } from "./agentTypes";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
-import { BORING_STALL_SECONDS } from "./boringHeaderStrip.ts";
+import { boringNeedsYouStalled } from "./boringHeaderStrip.ts";
 import type { Member } from "./teams.ts";
 
 export const LATER_MS = 2 * 3_600_000;
@@ -49,12 +49,11 @@ const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, er
 export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}`;
 
 /** A running agent with nothing pending and no update for BORING_STALL_SECONDS: "Stalled: no update for 5m", else null. */
-export function stalledReason(a: PaseoAgent, now: number): string | null {
-  if (a.status !== "running" || a.pendingPermissions?.length) return null;
+export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: number | null): string | null {
   const updated = Date.parse(a.updatedAt ?? "");
   if (Number.isNaN(updated)) return null;
   const idle = Math.max(0, Math.floor((now - updated) / 1000));
-  if (idle < BORING_STALL_SECONDS) return null;
+  if (!boringNeedsYouStalled({ status: a.status, hasPendingPermission: !!a.pendingPermissions?.length, idleSeconds: idle, toolRunningSeconds })) return null;
   return `Stalled: no update for ${idle >= 120 ? `${Math.round(idle / 60)}m` : `${idle}s`}`;
 }
 
@@ -62,7 +61,7 @@ export function stalledReason(a: PaseoAgent, now: number): string | null {
  * Everything that needs the owner. Pass `now` to also list running agents that went quiet as `stalled`
  * (opt-in: badges and the other queues keep counting only what Paseo/labels flag).
  */
-export function attentionItems(members: Member[], now?: number): AttentionItem[] {
+export function attentionItems(members: Member[], now?: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): AttentionItem[] {
   const out: AttentionItem[] = [];
   for (const m of members) {
     // Retired leads and archived/closed agents never need you (same rule as the badge counts).
@@ -70,7 +69,7 @@ export function attentionItems(members: Member[], now?: number): AttentionItem[]
     let kind = kindOfAttention(m);
     let reason = m.attention?.reason ?? "";
     if (!kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, stalledSignature(m.agent), now)) {
-      const stalled = stalledReason(m.agent, now);
+      const stalled = stalledReason(m.agent, now, toolRunningSeconds?.(m.agent));
       if (stalled) (kind = "stalled"), (reason = stalled);
     }
     if (!kind) continue;
@@ -112,6 +111,13 @@ export function squadQueue(members: Member[]): AttentionItem[] {
 
 /** Items the badge counts (finished ones are listed but not counted). */
 export const countedItems = (items: AttentionItem[]) => items.filter((i) => i.kind !== "finished");
+
+/**
+ * R3.2: THE Needs-you count (list rows, sidebar badges). One source so the heading never differs from the badges' sum:
+ * counted kinds only (finished excluded), stalled only past the 10-minute / no-tool-in-flight rule.
+ */
+export const needsYouCount = (members: Member[], now?: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): number =>
+  countedItems(attentionItems(members, now, toolRunningSeconds)).length;
 
 const signatureOf = (a: PaseoAgent, kind: ItemKind) =>
   kind === "error" && a.status === "error" ? (a.lastError ?? "error") : (a.attentionReason ?? "attention");
