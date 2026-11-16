@@ -168,7 +168,7 @@ export function BoringInbox({ views, onOpen, now, logs: injected }: { views: Tea
                   <button type="button" className="boring-needs-open" data-testid={`boring-needs-open-${item.id}`} title={`${r.who}: ${needsYouReason(item)}`} onClick={() => openNeedsYouRow(r, onOpen)}>
                     <span className={`boring-dot st-${item.kind === "error" ? "err" : item.kind === "stalled" ? "stalled" : "attn"}`} />
                     <span className="boring-needs-who">{r.who}</span>
-                    <span className="boring-needs-where boring-needs-where-inline" data-testid="boring-needs-where">{r.lane} · {r.project}</span>
+                    <span className="boring-needs-where boring-needs-where-inline" data-testid="boring-needs-where">{r.lane}<span className="boring-needs-proj"> · {r.project}</span></span>
                     <span className="boring-conv-age">{r.age}</span>
                   </button>
                   {menu(r)}

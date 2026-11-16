@@ -135,8 +135,11 @@ test("R4-1 rule: quiet >= 10m with no open tool, OR open tool >= ceiling (its ow
   assert.equal(stalledReason(run({ openToolSince: NOW - 60 * MIN * 1000, openToolName: "Bash", openToolTimeoutMs: null }), NOW), "Tool Bash running 60m");
   assert.equal(stalledReason(run({ openToolSince: NOW - 75 * MIN * 1000, openToolName: "Task", openToolTimeoutMs: null }), NOW), "Tool Task running 75m");
   // the tool's own timeout replaces the 60m ceiling
-  assert.equal(stalledReason(run({ openToolSince: NOW - 2 * MIN * 1000, openToolName: "Bash", openToolTimeoutMs: 120000 }), NOW), "Tool Bash running 2m");
-  assert.equal(stalledReason(run({ openToolSince: NOW - 119 * 1000, openToolName: "Bash", openToolTimeoutMs: 120000 }), NOW), null);
+  // R5-5: + 60s grace over the tool's own timeout (120s -> 180s)
+  assert.equal(stalledReason(run({ openToolSince: NOW - 3 * MIN * 1000, openToolName: "Bash", openToolTimeoutMs: 120000 }), NOW), "Tool Bash running 3m");
+  assert.equal(stalledReason(run({ openToolSince: NOW - 179 * 1000, openToolName: "Bash", openToolTimeoutMs: 120000 }), NOW), null);
+  // R5-5: a whole script as the tool name shows as its first word, capped
+  assert.equal(stalledReason(run({ openToolSince: NOW - 70 * MIN * 1000, openToolName: "$iso = Join-Path $env:TEMP x git status", openToolTimeoutMs: null }), NOW), "Tool $iso running 70m");
   // the ceiling case fires even with a fresh updatedAt (a hung tool whose agent keeps streaming usage)
   assert.equal(stalledReason(agent("a", { status: "running", updatedAt: ago(5), openToolSince: NOW - 61 * MIN * 1000, openToolName: "Bash" }), NOW), "Tool Bash running 61m");
   // server says no tool: the 10m quiet rule
