@@ -8,6 +8,7 @@ import { LimitStore, createAgyUsagePoller } from './limits.mjs';
 import { createBackgroundProbe } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
+import { applyToolEvent, oldestOpenTool } from './open-tools.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -1479,7 +1480,9 @@ export class Runner {
     if (f.exit) status = 'exited';
     else if (!this.live.has(id) && status !== 'parked' && !this.queue.some((j) => j.id === id)) status = 'lost'; // log says running but no child in this process
     const { queued, ...rec } = f.rec;
-    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()] };
+    // R4-1: a tool can only be in flight in a running agent with a child; a lost/exited/parked log that ended mid-call has none.
+    const openTool = status === 'running' ? rec.openTool ?? null : null;
+    return { ...rec, ...(status === 'queued' && queued ? { queued } : {}), status, resumable: this._resumable(f), pendingPermissions: [...f.perms.values()], openTool };
   }
 
   // Every agent's status in one call (roster seed): one pass over the logs, then served from the fold cache.
@@ -1564,11 +1567,12 @@ export class Runner {
     this._foldClean.delete(id);
     let st = this.folds.get(id);
     if (st?.stamp === stamp) { if (watched) this._foldClean.add(id); return st; }
-    if (!st || size < st.offset) st = { created: null, last: null, status: 'unknown', usage: null, perms: new Map(), meta: null, archivedAt: null, exit: null, offset: 0 };
+    if (!st || size < st.offset) st = { created: null, last: null, status: 'unknown', usage: null, perms: new Map(), tools: new Map(), meta: null, archivedAt: null, exit: null, offset: 0 };
     const { events, end } = this.store.readFrom(id, st.offset);
     for (const e of events) {
       if (!st.created) { st.created = e; st.meta = { ...e.meta }; }
       st.last = e;
+      applyToolEvent(st.tools, e); // R4-1: oldest open tool call (byte-offset fold: each event is applied exactly once)
       if (e.type === 'status') { st.status = e.status; st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined; }
       else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
       else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
@@ -1586,7 +1590,7 @@ export class Runner {
     if (!st.created) { this.folds.delete(id); return null; }
     this.folds.set(id, st);
     if (watched) this._foldClean.add(id);
-    st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}) };
+    st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}), openTool: oldestOpenTool(st.tools) };
     return st;
   }
 

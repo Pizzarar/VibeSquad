@@ -1,6 +1,7 @@
-// Shared per-agent "oldest open tool call" store (UX_REVIEW R3-2). No server/agent field exposes a running tool, so the only
-// source is timeline events: useTimeline calls noteOpenTools() as entries change, and the Needs-you stall rule asks
-// openToolSeconds(). Agents whose timeline was never loaded this session have no data here, so they keep the plain 10-minute rule.
+// Per-agent "oldest open tool call" HINT from timeline events (UX_REVIEW R3-2). R4-1: the runner backend now reports the authoritative
+// openToolSince / openToolName / openToolTimeoutMs on the agent payload, and attentionItems.openToolOf() prefers those; this store is only
+// the fallback for agents whose payload has no such field (older server, other backends). useTimeline calls noteOpenTools() as entries
+// change; agents whose timeline was never loaded this session have no data here.
 // Import-free so node tests can drive it.
 
 const OPEN_STATUSES = new Set(["running", "in_progress", "pending"]);

@@ -2,7 +2,7 @@
 // clear/snooze call each kind maps to. Pure (deps injected) so tests drive it with fixtures.
 import type { PaseoAgent } from "./agentTypes";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
-import { boringNeedsYouStalled } from "./boringHeaderStrip.ts";
+import { boringNeedsYouStall } from "./boringHeaderStrip.ts";
 import type { Member } from "./teams.ts";
 
 export const LATER_MS = 2 * 3_600_000;
@@ -49,19 +49,46 @@ const ORDER: Record<ItemKind, number> = { permission: 0, label: 1, unread: 2, er
 export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}`;
 
 /**
- * R4-1 interim switch (docs/UX_REVIEW_R4.md): stalled agents are NOT in the Needs-you list, count or badges until the server reports
- * openToolSince (tool-in-flight is client-only today, so the count flickered when an agent was opened). The follow-up unit flips this
- * to true; the 90s `st-stalled` glyph in the tree/Workers tab is unaffected. stalledCount() is 0 while this is false.
+ * R4-1 switch (docs/UX_REVIEW_R4.md): stalled agents count in the Needs-you list, count and badges. The interim unit held this at false
+ * while tool-in-flight was client-only (the count flickered when an agent was opened); the server now reports the oldest open tool call
+ * on the agent payload (openToolSince / openToolName / openToolTimeoutMs), so every client reads the same answer. The 90s `st-stalled`
+ * glyph in the tree/Workers tab is unaffected.
  */
-export const STALLED_IN_NEEDS_YOU = false;
+export const STALLED_IN_NEEDS_YOU = true;
 
-/** A running agent with nothing pending and no update for BORING_NEEDS_YOU_STALL_SECONDS (10m) and no tool call in flight: "Stalled: no update for 10m", else null. */
+/** The oldest open tool call as this client knows it: server fields first, else the timeline hint (seconds only), else null. */
+export function openToolOf(a: PaseoAgent, now: number, hintSeconds?: number | null): { seconds: number; name: string | null; timeoutMs: number | null } | null {
+  // Server field present (number or null): authoritative. undefined = an older server / another backend: fall back to the hint.
+  if (a.openToolSince !== undefined) {
+    if (a.openToolSince === null || !Number.isFinite(a.openToolSince)) return null;
+    const timeoutMs = a.openToolTimeoutMs != null && Number.isFinite(a.openToolTimeoutMs) && a.openToolTimeoutMs > 0 ? a.openToolTimeoutMs : null;
+    return { seconds: Math.max(0, Math.floor((now - a.openToolSince) / 1000)), name: a.openToolName || null, timeoutMs };
+  }
+  return hintSeconds != null ? { seconds: hintSeconds, name: null, timeoutMs: null } : null;
+}
+
+const mins = (s: number) => (s >= 120 ? `${Math.round(s / 60)}m` : `${s}s`);
+
+/**
+ * The R4-1 stall rule (boringNeedsYouStall) on one agent, or null: running with nothing pending AND either no update for 10m with no tool
+ * in flight ("Stalled: no update for 12m"), or its oldest open tool call past its ceiling, the tool's own timeout else 60m
+ * ("Tool Bash running 61m"). `toolRunningSeconds` is only the client hint for agents whose payload has no openToolSince field.
+ */
 export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: number | null): string | null {
   const updated = Date.parse(a.updatedAt ?? "");
-  if (Number.isNaN(updated)) return null;
-  const idle = Math.max(0, Math.floor((now - updated) / 1000));
-  if (!boringNeedsYouStalled({ status: a.status, hasPendingPermission: !!a.pendingPermissions?.length, idleSeconds: idle, toolRunningSeconds })) return null;
-  return `Stalled: no update for ${idle >= 120 ? `${Math.round(idle / 60)}m` : `${idle}s`}`;
+  // A missing / invalid updatedAt only rules out the "quiet" branch (idle 0); the tool-ceiling branch does not read it.
+  const idle = Number.isNaN(updated) ? 0 : Math.max(0, Math.floor((now - updated) / 1000));
+  const tool = openToolOf(a, now, toolRunningSeconds);
+  const stall = boringNeedsYouStall({
+    status: a.status,
+    hasPendingPermission: !!a.pendingPermissions?.length,
+    idleSeconds: idle,
+    toolRunningSeconds: tool?.seconds ?? null,
+    toolCeilingSeconds: tool?.timeoutMs != null ? tool.timeoutMs / 1000 : null,
+  });
+  if (!stall) return null;
+  if (stall.kind === "tool") return `Tool ${tool?.name ? `${tool.name} ` : ""}running ${Math.max(1, Math.floor(stall.toolSeconds / 60))}m`;
+  return `Stalled: no update for ${mins(stall.idleSeconds)}`;
 }
 
 /**

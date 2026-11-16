@@ -1,31 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { STALLED_IN_NEEDS_YOU, attentionItems, clearItem, needsYouCount, stalledCount, stalledReason } from "../src/attentionItems.ts";
+import { STALLED_IN_NEEDS_YOU, attentionItems, openToolOf, clearItem, needsYouCount, stalledCount, stalledReason } from "../src/attentionItems.ts";
 import { attentionOf } from "../src/teams.ts";
 import { dismissLocal, resetAttentionLocal } from "../src/attentionLocal.ts";
-
-// R4-1 interim: while STALLED_IN_NEEDS_YOU is false these stall-in-count tests are inert; the follow-up flips the switch and they run again.
-const stallTest = STALLED_IN_NEEDS_YOU ? test : (name, fn) => test(name, { skip: "R4-1 interim: stalled is out of Needs you" }, fn);
-
-test("R4-1 interim: a quiet running agent is NOT in Needs you (list, count, stalledCount); a real attention reason still is", () => {
-  resetAttentionLocal();
-  const quiet = member(agent("slow", { status: "running", updatedAt: ago(3000) }));
-  const perm = member(agent("p", { status: "running", updatedAt: ago(3000), pendingPermissions: [{ id: "r", kind: "tool" }] }));
-  if (!STALLED_IN_NEEDS_YOU) {
-    assert.deepEqual(attentionItems([quiet], NOW), []);
-    assert.equal(needsYouCount([quiet], NOW), 0);
-    assert.equal(stalledCount([quiet], NOW), 0);
-  }
-  assert.deepEqual(attentionItems([quiet, perm], NOW).map((i) => [i.id, i.kind]), [["p", "permission"]]);
-  assert.equal(stalledReason(quiet.agent, NOW) !== null, true); // helper itself is intact
-});
 
 const NOW = Date.parse("2026-11-15T12:00:00Z");
 const ago = (s) => new Date(NOW - s * 1000).toISOString();
 const agent = (id, extra = {}) => ({ id, title: `Agent ${id}`, status: "idle", labels: {}, ...extra });
 const member = (a) => ({ agent: a, kind: "worker", attention: attentionOf(a) });
 
-stallTest("stalled is an attention kind: a quiet running agent lists as stalled, only when `now` is passed", () => {
+test("stalled is an attention kind: a quiet running agent lists as stalled, only when `now` is passed", () => {
   resetAttentionLocal();
   const quiet = member(agent("slow", { status: "running", updatedAt: ago(700) }));
   const busy = member(agent("busy", { status: "running", updatedAt: ago(20) }));
@@ -35,7 +19,7 @@ stallTest("stalled is an attention kind: a quiet running agent lists as stalled,
   assert.equal(items[0].reason, "Stalled: no update for 12m");
 });
 
-stallTest("stalled: a pending permission or an existing attention wins; dismissing hides it", async () => {
+test("stalled: a pending permission or an existing attention wins; dismissing hides it", async () => {
   resetAttentionLocal();
   const perm = member(agent("p", { status: "running", updatedAt: ago(600), pendingPermissions: [{ id: "r", kind: "tool" }] }));
   assert.equal(attentionItems([perm], NOW)[0].kind, "permission");
@@ -48,7 +32,7 @@ stallTest("stalled: a pending permission or an existing attention wins; dismissi
   assert.equal(attentionItems([quiet], NOW).length, 0);
 });
 
-stallTest("stalled dismiss is keyed to activity: new activity then a fresh stall shows again", async () => {
+test("stalled dismiss is keyed to activity: new activity then a fresh stall shows again", async () => {
   resetAttentionLocal();
   const quiet = (updatedAt) => member(agent("slow", { status: "running", updatedAt }));
   const [item] = attentionItems([quiet(ago(700))], NOW);
@@ -57,7 +41,7 @@ stallTest("stalled dismiss is keyed to activity: new activity then a fresh stall
   assert.equal(attentionItems([quiet(ago(650))], NOW + 1000).length, 1); // it moved, then stalled again
 });
 
-stallTest("R3.2: stalled needs ~10 min quiet AND no tool in flight; below that it is out of list and count", () => {
+test("R3.2: stalled needs ~10 min quiet AND no tool in flight; below that it is out of list and count", () => {
   resetAttentionLocal();
   const at = (s) => member(agent("q", { status: "running", updatedAt: ago(s) }));
   assert.equal(attentionItems([at(599)], NOW).length, 0);
@@ -79,7 +63,7 @@ test("R3.2: needsYouCount == the counted rows (finished excluded) and matches th
   assert.equal(needsYouCount(all, NOW), needsYouCount([a], NOW) + needsYouCount([b, c], NOW));
 });
 
-stallTest("R3.2 parity: with everything collapsed, sum of per-container badges == Needs-you count (busy fixture, >10-min stalled agent)", () => {
+test("R3.2 parity: with everything collapsed, sum of per-container badges == Needs-you count (busy fixture, >10-min stalled agent)", () => {
   resetAttentionLocal();
   const perm = (id) => member(agent(id, { status: "idle", requiresAttention: true, attentionReason: "permission", pendingPermissions: [{ id: "r", kind: "tool" }] }));
   const fin = member(agent("fin", { status: "idle", requiresAttention: true, attentionReason: "finished" }));
@@ -94,7 +78,7 @@ stallTest("R3.2 parity: with everything collapsed, sum of per-container badges =
   assert.equal(sum, 4); // 3 permissions + 1 stalled; finished, <10m and tool-in-flight agents are not counted
 });
 
-stallTest("R3-2: an open tool_call (from timeline entries) keeps a quiet agent out of Needs you; once the result lands it is stalled", async () => {
+test("R3-2: an open tool_call (from timeline entries) keeps a quiet agent out of Needs you; once the result lands it is stalled", async () => {
   const { noteOpenTools, openToolSeconds, toolRunningSecondsAt, clearOpenTools } = await import("../src/openTools.ts");
   resetAttentionLocal();
   clearOpenTools();
@@ -114,7 +98,7 @@ stallTest("R3-2: an open tool_call (from timeline entries) keeps a quiet agent o
   clearOpenTools();
 });
 
-stallTest("R3 L1: one shared `now` gives badge sum == list count at the 600s boundary; BoringInbox owns no tick", async () => {
+test("R3 L1: one shared `now` gives badge sum == list count at the 600s boundary; BoringInbox owns no tick", async () => {
   const { readFileSync } = await import("node:fs");
   resetAttentionLocal();
   const a = member(agent("a", { status: "running", updatedAt: ago(599) }));
@@ -130,3 +114,62 @@ stallTest("R3 L1: one shared `now` gives badge sum == list count at the 600s bou
   const ade = readFileSync(new URL("../src/BoringAde.tsx", import.meta.url), "utf8");
   assert.ok(/<BoringInbox[\s\S]*?now=\{now\}/.test(ade));
 });
+
+// ---- R4-1 option (a): the server's openToolSince / openToolName / openToolTimeoutMs drive the one stall rule ---------------------
+
+const MIN = 60;
+test("R4-1: the switch is on: stalled is back in the Needs-you list, count and stalledCount", () => {
+  resetAttentionLocal();
+  assert.equal(STALLED_IN_NEEDS_YOU, true);
+  const quiet = member(agent("slow", { status: "running", updatedAt: ago(11 * MIN), openToolSince: null }));
+  assert.deepEqual(attentionItems([quiet], NOW).map((i) => [i.id, i.kind, i.reason]), [["slow", "stalled", "Stalled: no update for 11m"]]);
+  assert.equal(needsYouCount([quiet], NOW), 1);
+  assert.equal(stalledCount([quiet], NOW), 1);
+});
+
+test("R4-1 rule: quiet >= 10m with no open tool, OR open tool >= ceiling (its own timeout, else 60m); reason names the tool", () => {
+  resetAttentionLocal();
+  const run = (extra) => agent("a", { status: "running", updatedAt: ago(30 * MIN), ...extra });
+  // open tool under the 60m default ceiling: not stalled however quiet
+  assert.equal(stalledReason(run({ openToolSince: NOW - 59 * MIN * 1000, openToolName: "Bash", openToolTimeoutMs: null }), NOW), null);
+  // at / past the default ceiling
+  assert.equal(stalledReason(run({ openToolSince: NOW - 60 * MIN * 1000, openToolName: "Bash", openToolTimeoutMs: null }), NOW), "Tool Bash running 60m");
+  assert.equal(stalledReason(run({ openToolSince: NOW - 75 * MIN * 1000, openToolName: "Task", openToolTimeoutMs: null }), NOW), "Tool Task running 75m");
+  // the tool's own timeout replaces the 60m ceiling
+  assert.equal(stalledReason(run({ openToolSince: NOW - 2 * MIN * 1000, openToolName: "Bash", openToolTimeoutMs: 120000 }), NOW), "Tool Bash running 2m");
+  assert.equal(stalledReason(run({ openToolSince: NOW - 119 * 1000, openToolName: "Bash", openToolTimeoutMs: 120000 }), NOW), null);
+  // the ceiling case fires even with a fresh updatedAt (a hung tool whose agent keeps streaming usage)
+  assert.equal(stalledReason(agent("a", { status: "running", updatedAt: ago(5), openToolSince: NOW - 61 * MIN * 1000, openToolName: "Bash" }), NOW), "Tool Bash running 61m");
+  // server says no tool: the 10m quiet rule
+  assert.equal(stalledReason(run({ openToolSince: null }), NOW), "Stalled: no update for 30m");
+  assert.equal(stalledReason(agent("a", { status: "running", updatedAt: ago(9 * MIN), openToolSince: null }), NOW), null);
+  // not running / pending permission: never stalled, tool or not
+  assert.equal(stalledReason(run({ status: "idle", openToolSince: NOW - 90 * MIN * 1000 }), NOW), null);
+  assert.equal(stalledReason(run({ pendingPermissions: [{ id: "r" }], openToolSince: NOW - 90 * MIN * 1000 }), NOW), null);
+  // a missing / invalid updatedAt never hides the tool-ceiling reason (that branch does not read it); it only rules out "quiet"
+  for (const updatedAt of [undefined, "", "not-a-date"]) {
+    assert.equal(stalledReason(agent("a", { status: "running", updatedAt, openToolSince: NOW - 61 * MIN * 1000, openToolName: "Bash" }), NOW), "Tool Bash running 61m", String(updatedAt));
+    assert.equal(stalledReason(agent("a", { status: "running", updatedAt, openToolSince: null }), NOW), null, `no quiet stall without a time: ${updatedAt}`);
+  }
+  // the item reason and the count follow the same rule
+  const hung = member(run({ openToolSince: NOW - 61 * MIN * 1000, openToolName: "Bash" }));
+  assert.deepEqual(attentionItems([hung], NOW).map((i) => [i.kind, i.reason]), [["stalled", "Tool Bash running 61m"]]);
+  assert.equal(needsYouCount([hung], NOW), 1);
+});
+
+test("R4-1: server field wins over the timeline hint; the hint is only a fallback when the field is absent", () => {
+  resetAttentionLocal();
+  const quiet = (extra) => agent("q", { status: "running", updatedAt: ago(20 * MIN), ...extra });
+  const hintOpen = () => 30; // the client timeline thinks a tool opened 30s ago
+  // field present (null = server says none): the hint can't hide the stall, so opening the agent (loading its timeline) can't change the count
+  assert.equal(stalledReason(quiet({ openToolSince: null }), NOW, 30), "Stalled: no update for 20m");
+  assert.equal(needsYouCount([member(quiet({ openToolSince: null }))], NOW, hintOpen), 1);
+  assert.equal(needsYouCount([member(quiet({ openToolSince: null }))], NOW), 1);
+  // field absent (older server / other backend): the hint keeps a quiet agent out until its own ceiling
+  assert.equal(stalledReason(quiet({}), NOW, 30), null);
+  assert.equal(stalledReason(quiet({}), NOW, 3600), "Tool running 60m");
+  assert.equal(stalledReason(quiet({}), NOW), "Stalled: no update for 20m");
+  assert.deepEqual(openToolOf(quiet({ openToolSince: NOW - 5000, openToolName: "Read", openToolTimeoutMs: 0 }), NOW), { seconds: 5, name: "Read", timeoutMs: null });
+  assert.equal(openToolOf(quiet({}), NOW), null);
+});
+

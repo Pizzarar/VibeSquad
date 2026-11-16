@@ -83,6 +83,15 @@ export type PaseoAgent = {
   };
   lastUsage?: AgentUsage;
   lastError?: string;
+  /**
+   * R4-1 (runner backend): the oldest tool call still in flight. Epoch ms it opened, or null when none; absent (undefined) on servers /
+   * backends that don't report it, where the client falls back to the timeline hint (openTools.ts).
+   */
+  openToolSince?: number | null;
+  /** R4-1: that call's tool name ("Bash", an ACP title), null when none. */
+  openToolName?: string | null;
+  /** R4-1: that call's own timeout in ms when it carried one (Bash `timeout`), else null. */
+  openToolTimeoutMs?: number | null;
   title: string | null;
   labels: Record<string, string>;
   requiresAttention?: boolean;
