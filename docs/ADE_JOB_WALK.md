@@ -1,6 +1,6 @@
 # ADE job walk: acceptance test
 
-A repeatable, read-only walk through 64+ everyday dev tasks (41 job tasks + v2 "feels like an app" basics from row 42) in the live VibeSquad UI. It is the acceptance test for every ADE batch. Re-run it after each batch, record the score, and update the "Result" column.
+A repeatable, read-only walk through 78 everyday dev tasks (41 job tasks + v2 "feels like an app" basics from row 42) in the live VibeSquad UI. It is the acceptance test for every ADE batch. Re-run it after each batch, record the score, and update the "Result" column.
 
 **Baseline (2026-11-01, v0.1.1, 1600×1000):** **21 / 41** completable in-app. Only 3 are clean; 20 are impossible.
 Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap IDs below (B1–B7 and section names) refer to it.
@@ -8,15 +8,20 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 ## How to re-run
 
 1. Make sure the app is up: `curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4180/` should return `200`.
-2. Use the Playwright MCP tools (`mcp__playwright__browser_*`; load them via ToolSearch). Navigate to `http://127.0.0.1:4180/` and resize to **1600×1000** unless the task says otherwise.
-3. **Safety: the owner's real team is live.** Never send prompts, spawn, stop, archive, rename, approve or deny, hand off, or save team settings. Open menus and modals, then close them with ✕, Cancel or Escape. If a task needs a mutation to finish, verify the control exists and is wired (grep `src/`), then stop. Score that as **control-present**, which counts as passing. If the batch under test adds a mutating feature, test it on a throwaway agent you spawn yourself in a scratch lane, then archive that agent.
+2. Use the Playwright MCP tools (`mcp__playwright__browser_*`; load them via ToolSearch). Navigate to `http://127.0.0.1:4180/` and resize to **1600×1000** unless the task says otherwise. **UX rows (75+) use the run matrix below instead.**
+
+**Fresh-eyes rule (UX_REVIEW_PROCESS §3D).** The walker does NOT read the batch's plan, brief or diff before the walk. Work from this doc and the running app only. Read code or the plan afterwards, and only to name the cause of a symptom you already saw. Any prompt or profile that launches a walk must say this.
+
+**Run matrix for UX rows (75+):** 3200×1800 (the owner's 4K at 120%) and 1920×1080, each in dark and light, so 4 runs. Use `?demo` (20+ agents, 3 projects, permissions, errors, stalls). Record a result per cell. A row passes only if all 4 cells pass.
+3. **Safety: the owner's real team is live.** Never send prompts, spawn, stop, archive, rename, approve or deny, hand off, or save team settings. Open menus and modals, then close them with ✕, Cancel or Escape. If a task needs a mutation to finish, verify the control exists and is wired (grep `src/`), then stop. Score that as **control-present**. For rows 1-74 it still counts toward the score; for UX rows (75+) it never counts (see the scoring rule in step 4). If the batch under test adds a mutating feature, test it on a throwaway agent you spawn yourself in a scratch lane, then archive that agent.
 4. For each task: follow the steps, take a screenshot to `scratch/shots/job-walk/<date>/NN-<slug>.png`, and record one of these results:
    - **clean**: the PASS criterion is met with no friction.
    - **painful**: it can be done in-app, but it's awkward, hidden or buggy.
    - **control-present**: the control exists, but the action is a mutation that wasn't executed.
+   - **UX rows (75+) pass only when the walker actually completes the job** and records the click count and the result (what the walker saw, with the screenshot). "Control exists" or "control-present" is a FAIL on these rows. A row with no click count recorded is a FAIL.
    - **impossible**: you must leave VibeSquad (Paseo app, terminal, editor) or it can't be done at all.
 5. If the UI looks like a feature is missing, grep `src/` before marking it impossible. A feature that exists but can't be found is **painful**, with a note saying it can't be discovered.
-6. **Score** = (clean + painful + control-present) / total rows (41 before v2; 64+ from v2). Report it as `N/M (clean C, painful P, control-present K, impossible I)` with a diff against the previous run.
+6. **Score** = (clean + painful + control-present) / total rows (41 before v2; 64+ from v2) for rows 1-74. UX rows 75+ are scored separately as `passed/total` and only a recorded, completed job counts (no control-present, no painful). Report it as `N/M (clean C, painful P, control-present K, impossible I)` with a diff against the previous run.
 7. Update this file's Result column and the run log at the bottom, and commit.
 
 ## Tasks
@@ -97,6 +102,10 @@ Source audit: `docs/audits/basics-gap-2026-11.md` (local, gitignored). The gap I
 | 72 | Open project rules | Open an agent; RightDock → Project | The repo's rules files (CLAUDE.md / AGENTS.md / GEMINI.md, lane brief) are listed with which providers read each, and open in one click | clean (11-02) | Daily driver · Context |
 | 73 | Edit AGENTS.md from the panel | Project tab → Create AGENTS.md (if missing) or click it → edit in Files → Save | The file opens in the Files editor and a save reports success or a readable error | control-present (11-02) | Daily driver · Context |
 | 74 | @ a folder and the agent sees it | In a composer type `@docs`, pick 📁 `@docs/`, send to a Claude and a Gemini agent (throwaways) | Both agents can name files in the folder; Gemini gets a "Folder: …" line, Claude resolves `@dir/` itself | clean (11-02) | Daily driver · Context |
+| 75 | Permission in another project, answered from anywhere | `?demo`; open project A; a permission is pending in project B. Without opening B first, answer it (use a demo/throwaway permission; never answer the owner's real ones) | Answered in ≤1 click from anywhere; record the click count and the result | — | UX_REVIEW §1.3 job 3 |
+| 76 | Every lit badge explains itself | Collapse all projects; for each lit badge (project, Needs you, alerts), find why it is lit | Reason known in ≤1 click per badge; badge count = items listed; record clicks per badge | — | UX_REVIEW §1.3 job 2 |
+| 77 | Find a stuck worker and its reason | With a stalled worker in `?demo`, find which worker is stuck and why | Worker and reason found without opening unrelated agents; reason text isn't truncated; record clicks | — | UX_REVIEW §1.3 job 2 |
+| 78 | Ctrl+J shows where you are | Press Ctrl+J into an item in a different project | Sidebar selected row (exactly one) and breadcrumb both show the item's project and agent; record what each shows | — | UX_REVIEW R2-2 |
 
 \* For tasks 15 and 32 the control exists, so they score as passing, but they still fail their full PASS criterion (B4, B3). Re-mark them **clean** only when the criterion is fully met.
 
