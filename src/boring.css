@@ -1212,3 +1212,7 @@ html[data-vibe="boring"] .boring-sidebar-footer { flex: none; margin-top: auto; 
 html[data-vibe="boring"] .boring-needs-open .boring-needs-who { flex: 0 1 auto; max-width: 55%; }
 html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: var(--t-small); color: var(--text-3, var(--text-2)); text-align: left; }
 html[data-vibe="boring"] .boring-needs-why .boring-needs-reason { flex: 1 1 100%; }
+
+/* Desk R4 (R4-2/R4-3/R4-5): Needs-you line 1 reads "Lane · Project"; the end-ellipsis now cuts the project, never the lane. */
+html[data-vibe="boring"] .boring-needs-open .boring-needs-where-inline { flex: 1 1 0; min-width: 4ch; }
+html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: 45%; }

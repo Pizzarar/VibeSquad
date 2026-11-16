@@ -11,7 +11,7 @@ import { LEGACY_NEEDS_LABEL } from "./userName";
 import { AGENT_TYPE_LABEL, TEAMS, isHubLaneId, kindOf } from "./teams";
 import { findLaneInRegistry, formatDisplayTitle } from "./identity";
 import type { AgentType } from "./teams";
-import { boringLaneLabel } from "./boringLocation";
+import { laneCode, laneDisplayName } from "./boringLocation";
 import { providerSpec } from "./pixel";
 import { boringStateGlyph } from "./BoringAde";
 import { AttachFiles, HardeningBar, NeedsYouControls, SessionActions, formatCostUsd, type ProviderSwitchTarget } from "./DrawerHeader";
@@ -83,7 +83,13 @@ export function readableLeadTitle(a: PaseoAgent): string | null {
   const laneKey = (l.lane ?? l.lead ?? "").trim();
   if (!l.ord || !laneKey) return null;
   const found = findLaneInRegistry(laneKey, TEAMS);
-  return formatDisplayTitle({ role: "lead", laneName: boringLaneLabel(found?.lane.name ?? laneKey), laneId: found?.lane.id ?? laneKey, ord: l.ord, hub: isHubLaneId(laneKey), readable: true });
+  return formatDisplayTitle({ role: "lead", laneName: found ? laneDisplayName(found.team, found.lane.id) : laneDisplayName({ id: "", lanes: [] }, laneKey), laneId: found?.lane.id ?? laneKey, ord: l.ord, hub: isHubLaneId(laneKey), readable: true });
+}
+
+/** The header's lane code comes from the same helper as the tree (R4-2). */
+function headerLaneCode(laneKey: string): string {
+  const found = findLaneInRegistry(laneKey, TEAMS);
+  return found ? laneCode(found.team, found.lane.id) : `@${laneKey.replace(/^@/, "")}`;
 }
 
 export function BoringAgentHeader(p: BoringAgentHeaderProps) {
@@ -160,7 +166,7 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
     }
   };
   const running = agent.status === "running" && !agent.archivedAt;
-  const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? `@${labels.lane}` : ""].filter(Boolean).join(" · ");
+  const roleLine = [sentenceCase(AGENT_TYPE_LABEL[p.agentType]), labels.lane ? headerLaneCode(labels.lane) : ""].filter(Boolean).join(" · ");
   const close = () => setMenuOpen(false);
   const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
   const showNeedsYou = needsYouFlagged || isMarkedUnread(agent.id) || flagOpen;

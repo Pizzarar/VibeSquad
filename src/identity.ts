@@ -627,7 +627,9 @@ export function formatDisplayTitle({
   if (r === "lead") {
     if (hub) return cleanJob ? `Overlord · ${cleanJob}` : "Overlord";
     if (readable) {
-      const lane = String(laneName || laneId || "").trim().replace(/[-_]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+      // R4-2: a given laneName is already the one lane display name (laneDisplayName): keep its casing. Only a raw id is humanized.
+      const given = String(laneName || "").trim();
+      const lane = given || String(laneId || "").trim().replace(/[-_]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
       return `${lane ? `${lane} · ` : ""}Lead ${ordClean}`;
     }
     const mark = star ? "★ " : "";
