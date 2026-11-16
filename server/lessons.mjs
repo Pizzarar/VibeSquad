@@ -167,7 +167,7 @@ export const STANDING_RULES = [
   "Merge only on the reviewer's own first-line verdict PASS|FAIL H/M/L <tip-hash>, never a digest summary; the hash must match the branch tip.",
   "Never hand-edit files under ~/.vibesquad (handoff packets, teams, logs, marks); use the vs verb (vs handoff --judgment-file/--judgment -, vs log, vs inbox, vs task).",
   "Shared-machine actions (vs restart, full-suite slot, runtime sync): ask the holders' leads to drain, wait for each `drained`, act, then log `<action>-done`. No timer retries; `--kill-background` only with the owner's per-run OK.",
-  "A plan phase touching Normal-mode UI (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) isn't done while UX Reviewer - Opus has a critical or major finding open for its area, unless Aub overrides; a lane Buddy's own look check doesn't count; findings go to the owning lane as inbox cards.",
+  "A plan phase touching Normal-mode UI (src/Boring*.tsx, src/boring*.ts, src/boring.css, src/Timeline.tsx, src/PermissionCard.tsx, src/BoringContextPanel.tsx) isn't done while UX Reviewer - Opus has a critical or major finding open for its area, unless the owner overrides; a lane Buddy's own look check doesn't count; findings go to the owning lane as inbox cards.",
 ];
 
 /**

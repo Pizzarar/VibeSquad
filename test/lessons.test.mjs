@@ -206,7 +206,7 @@ describe("UX Reviewer phase gate standing rule (UX_REVIEW_PROCESS 3B)", () => {
     for (const f of ["src/Boring*.tsx", "src/boring*.ts", "src/boring.css", "src/Timeline.tsx", "src/PermissionCard.tsx", "src/BoringContextPanel.tsx"]) assert.ok(rule.includes(f), f);
     assert.match(rule, /UX Reviewer - Opus/);
     assert.match(rule, /critical or major finding open/);
-    assert.match(rule, /unless Aub overrides/);
+    assert.match(rule, /unless the owner overrides/);
     assert.match(rule, /Buddy's own look check doesn't count/);
     assert.match(rule, /inbox cards/);
     assert.ok(renderLessonsDigest({ storePath: tempStore() }).includes(`- ${rule}`), "rendered into the injected digest");
