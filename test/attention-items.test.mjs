@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { attentionItems, clearItem, needsYouCount, stalledReason } from "../src/attentionItems.ts";
+import { attentionItems, clearItem, needsYouCount, stalledCount, stalledReason } from "../src/attentionItems.ts";
 import { attentionOf } from "../src/teams.ts";
 import { dismissLocal, resetAttentionLocal } from "../src/attentionLocal.ts";
 
@@ -61,4 +61,19 @@ test("R3.2: needsYouCount == the counted rows (finished excluded) and matches th
   const all = [a, b, c];
   assert.equal(needsYouCount(all, NOW), attentionItems(all, NOW).filter((i) => i.kind !== "finished").length);
   assert.equal(needsYouCount(all, NOW), needsYouCount([a], NOW) + needsYouCount([b, c], NOW));
+});
+
+test("R3.2 parity: with everything collapsed, sum of per-container badges == Needs-you count (busy fixture, >10-min stalled agent)", () => {
+  resetAttentionLocal();
+  const perm = (id) => member(agent(id, { status: "idle", requiresAttention: true, attentionReason: "permission", pendingPermissions: [{ id: "r", kind: "tool" }] }));
+  const fin = member(agent("fin", { status: "idle", requiresAttention: true, attentionReason: "finished" }));
+  const stalled = member(agent("st", { status: "running", updatedAt: ago(1500) }));
+  const brief = member(agent("brief", { status: "running", updatedAt: ago(300) })); // quiet < 10 min: not stalled
+  const toolBusy = member(agent("tb", { status: "running", updatedAt: ago(4000) }));
+  const projects = [[perm("p1"), stalled, fin], [perm("p2"), brief], [toolBusy, perm("p3")]];
+  const tool = (a) => (a.id === "tb" ? 120 : null);
+  const badge = (ms) => needsYouCount(ms, undefined, tool) + stalledCount(ms, NOW, tool); // pin.needsYou-style base + stalled delta
+  const sum = projects.reduce((n, ms) => n + badge(ms), 0);
+  assert.equal(sum, needsYouCount(projects.flat(), NOW, tool));
+  assert.equal(sum, 4); // 3 permissions + 1 stalled; finished, <10m and tool-in-flight agents are not counted
 });

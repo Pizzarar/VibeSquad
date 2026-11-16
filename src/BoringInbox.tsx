@@ -197,7 +197,7 @@ export function BoringInbox({ views, onOpen, now: nowProp, logs: injected }: { v
           {showAll ? "▾ Show fewer" : `▸ ${moreLabel(rows.length - NEEDS_YOU_VISIBLE)}`}
         </button>
       )}
-      <div className="boring-recent-done" data-testid="boring-recent-done">
+      {!showAll && <div className="boring-recent-done" data-testid="boring-recent-done">
         <button type="button" className="boring-idle-toggle" data-testid="boring-recent-done-toggle" aria-expanded={doneOpen} onClick={() => setDoneOpen((v) => !v)}>
           {doneOpen ? "▾" : "▸"} {doneLabel(done.length)}
         </button>
@@ -223,7 +223,7 @@ export function BoringInbox({ views, onOpen, now: nowProp, logs: injected }: { v
             {done.length === 0 && <li className="boring-muted">No finished work logged yet.</li>}
           </ul>
         )}
-      </div>
+      </div>}
     </section>
   );
 }

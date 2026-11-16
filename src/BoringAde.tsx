@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { AgentDrawer } from "./AgentDrawer";
+import { stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
@@ -12,7 +13,7 @@ import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsCh
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
 import { skyZonesFor } from "./skyZonesLogic";
-import type { TeamView } from "./teams";
+import type { Member, TeamView } from "./teams";
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { StatusDot } from "./ui";
@@ -179,11 +180,14 @@ const pinErr = (p: Pick<Pin, "brainstorm" | "lead" | "workers"> | null | undefin
 export function boringSidebarModel(view: TeamView | undefined, now = Date.now()) {
   const zones = skyZonesFor(view);
   const bugs = quickBugsChipState(view);
+  // R3.2: every badge = its pin's needsYou + stalled agents at `now`, so the sum equals needsYouCount (the Needs-you heading).
+  const pinMembers = (p: Pin | null | undefined): Member[] => (p ? [p.brainstorm, p.lead, ...(p.workers ?? []), ...(p.topicBrainstorms ?? [])].filter((m): m is Member => !!m) : []);
+  const pinNeeds = (p: Pin | null | undefined) => (p?.needsYou ?? 0) + stalledCount(pinMembers(p), now);
   const zoneRow = (label: string, z: typeof zones.overlord) => ({
     label,
     agentId: z.agentId,
     status: z.member?.agent.status ?? "none",
-    needsYou: z.member?.attention && z.member.attention.tone !== "finished" ? 1 : 0,
+    needsYou: z.member ? (z.member.attention && z.member.attention.tone !== "finished" ? 1 : 0) + stalledCount([z.member], now) : 0,
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
     updatedAt: z.member?.agent.updatedAt ?? null,
   });
@@ -203,12 +207,12 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
       err: pinErr(bugs.pin),
       agentId: bugs.pin ? liveBuddyId(bugs.pin) ?? (isLive(bugs.pin.lead) ? bugs.pin.lead.agent.id : null) : null,
       leadRunning: bugs.leadRunning,
-      needsYou: bugs.needsYou,
+      needsYou: bugs.needsYou + stalledCount(pinMembers(bugs.pin), now),
       age: bugs.pin ? boringConversationAge(bugs.pin, now) : "",
     },
   };
   // 2.1: the hub lane (RiffBot/Overlord plus anything else parked in it) and every lane worker count, so these totals match the project badge.
-  const hubNeedsYou = (zones.hub?.needsYou ?? 0) + deskPins.reduce((n, p) => n + p.needsYou, 0);
+  const hubNeedsYou = pinNeeds(zones.hub) + deskPins.reduce((n, p) => n + pinNeeds(p), 0);
   const conversations = (view ? pinsForSquad(view).pinned : [])
     .filter((p) => !isHubPin(p) && p.lane.id !== view?.team.id && p.lane.id !== bugs.pin?.lane.id) // the Bugs lane has its own desk row: never count it twice
     .map((pin) => ({
@@ -220,15 +224,15 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
       brainstormStatus: pin.brainstorm?.agent.status ?? "none",
       leadId: pin.lead?.agent.id ?? null,
       leadStatus: pin.lead?.agent.status ?? "none",
-      needsYou: pin.needsYou,
+      needsYou: pinNeeds(pin),
       err: pinErr(pin),
       workerNeedsYou: (pin.workers ?? []).filter(workerNeedsYou).length,
       running: pin.running,
       age: boringConversationAge(pin, now),
     }));
   const laneTotal = conversations.reduce((n, c) => n + c.needsYou, 0);
-  // The project badge (view.needsYou) counts every member; fall back to hub + lanes when a view doesn't carry it.
-  const totalNeedsYou = Math.max(view?.needsYou ?? 0, hubNeedsYou + laneTotal + core.bugs.needsYou);
+  // The project badge is the sum of its rows' counts (no view.needsYou max: that never counts stalled items), so collapsed badges add up to the Needs-you count.
+  const totalNeedsYou = hubNeedsYou + laneTotal + core.bugs.needsYou;
   // Worst state per container (R2.5): red if anything inside errored, else amber. Only collapsed containers show a badge.
   const deskErr = pinErr(zones.hub) || deskPins.some(pinErr) || memberErr(zones.overlord.member) || memberErr(zones.riffbot.member);
   const projectErr = deskErr || core.bugs.err || conversations.some((c) => c.err);
