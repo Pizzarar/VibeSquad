@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
 import { stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
@@ -416,11 +417,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   }, [activeAgentId, activeLandable]);
   const activeTeamId = view?.team.id ?? "";
   // ONE `now` for the sidebar badges and the Needs-you list (R3 L1): both must cross the 600s stall boundary together.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, []);
+  const now = useNowTick();
   const model = boringSidebarModel(view, now);
   const laneRows = boringLaneTableRows(model, feedRows);
   const hasEvents = laneRows.some((r) => r.lastEvent);

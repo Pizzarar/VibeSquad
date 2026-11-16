@@ -6,6 +6,7 @@ import { exitSquadsHome, getPinFocus } from "./pinFocus";
 import { planAgentRename, renameDraftFor } from "./renameAgent";
 import { UNASSIGNED, saveTeams, type Member, type TeamDef } from "./teams";
 import { needsYouTotal } from "./attentionItems";
+import { useNowTick } from "./useNowTick";
 import {
   BASE_TITLE,
   BUSY_DELAY_MS,
@@ -66,11 +67,7 @@ function paintFavicon(count: number) {
 /** "(3) VibeSquad" in the tab title and a dot on the favicon while anything needs you. */
 export function useAttentionTitle(views: ReadonlyArray<{ members: Member[] }>) {
   // R5-2: the same number as the Needs-you heading (needsYouTotal, stalled agents included), re-evaluated on the same 30s cadence as the sidebar's `now`.
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 30_000);
-    return () => clearInterval(t);
-  }, []);
+  const now = useNowTick();
   const count = needsYouTotal(views, now);
   useEffect(() => {
     document.title = tabTitle(count);
