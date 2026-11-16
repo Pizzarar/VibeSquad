@@ -7,15 +7,36 @@ export const BORING_STALL_SECONDS = 90;
 /** R3.2: Needs you lists a quiet agent as stalled only after this long (the header strip keeps the shorter 90s hint). */
 export const BORING_NEEDS_YOU_STALL_SECONDS = 600;
 
+/** R4-1: an open tool call with no timeout of its own counts as hung after this long (its own timeout, when it has one, replaces it). */
+export const BORING_TOOL_CEILING_SECONDS = 3600;
+
+export type BoringNeedsYouStall = { kind: "quiet"; idleSeconds: number } | { kind: "tool"; toolSeconds: number };
+
 /**
- * Pure R3.2 rule: stalled for Needs you = running, no pending permission, no update for ~10 min, and no tool call in flight
- * (`toolRunningSeconds` is the running-tool age the header strip already derives; null/undefined = none running).
+ * Pure R4-1 rule (docs/UX_REVIEW_R4.md option a), the ONE stall rule for Needs you, its count and every badge:
+ *   stalled = running, no pending permission, AND either
+ *     quiet: no update for BORING_NEEDS_YOU_STALL_SECONDS (10m) and no tool call in flight, or
+ *     tool:  the oldest open tool call has run for >= its ceiling (`toolCeilingSeconds`, else BORING_TOOL_CEILING_SECONDS = 60m).
+ * `toolRunningSeconds` = age of the oldest open tool call (null/undefined = none in flight).
  */
-export function boringNeedsYouStalled(input: { status?: string | null; hasPendingPermission: boolean; idleSeconds: number; toolRunningSeconds?: number | null }): boolean {
-  if (input.status !== "running" || input.hasPendingPermission) return false;
-  if (input.toolRunningSeconds != null) return false;
-  return input.idleSeconds >= BORING_NEEDS_YOU_STALL_SECONDS;
+export function boringNeedsYouStall(input: {
+  status?: string | null;
+  hasPendingPermission: boolean;
+  idleSeconds: number;
+  toolRunningSeconds?: number | null;
+  toolCeilingSeconds?: number | null;
+}): BoringNeedsYouStall | null {
+  if (input.status !== "running" || input.hasPendingPermission) return null;
+  if (input.toolRunningSeconds != null) {
+    const c = input.toolCeilingSeconds;
+    const ceiling = c != null && Number.isFinite(c) && c > 0 ? c : BORING_TOOL_CEILING_SECONDS;
+    return input.toolRunningSeconds >= ceiling ? { kind: "tool", toolSeconds: input.toolRunningSeconds } : null;
+  }
+  return input.idleSeconds >= BORING_NEEDS_YOU_STALL_SECONDS ? { kind: "quiet", idleSeconds: input.idleSeconds } : null;
 }
+
+/** Boolean form of boringNeedsYouStall. */
+export const boringNeedsYouStalled = (input: Parameters<typeof boringNeedsYouStall>[0]): boolean => boringNeedsYouStall(input) !== null;
 
 export type BoringStripReason = { kind: "stalled" | "handoff" | "context"; text: string };
 

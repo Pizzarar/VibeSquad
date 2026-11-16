@@ -65,10 +65,10 @@ const CAST: Spec[] = [
   { id: "demo-old-1", who: "claude", title: "(old) ★ LEAD · VIBESQUAD v0", status: "closed", labels: vs({ role: "old-lead" }), used: 128_000, ago: 300 },
   { id: "demo-old-2", who: "gemini", title: "(old) ★ LEAD · VIBESQUAD art round A", status: "closed", labels: vs({ role: "old-lead" }), used: 131_000, ago: 140 },
   { id: "demo-art-o", who: "claude", title: "Art Painter - Opus · neon-noir", status: "running", labels: vs({ role: "worker", task: "art", job: "neon-noir", profile: "opus", "vs.parent": DEMO_LEAD_ID }), used: 88_000, cwd: WT + "vibesquad-neon-opus", ago: 0 },
-  { id: "demo-art-g", who: "gemini", title: "Art Director - Gemini · neon-noir", status: "running", labels: vs({ role: "worker", job: "art", "vs.parent": DEMO_LEAD_ID }), used: 41_000, cwd: WT + "vibesquad-neon-gemini", ago: 4 },
+  { id: "demo-art-g", who: "gemini", title: "Art Director - Gemini · neon-noir", status: "running", labels: vs({ role: "worker", job: "art", "vs.parent": DEMO_LEAD_ID }), used: 41_000, cwd: WT + "vibesquad-neon-gemini", ago: 12, extra: { openToolSince: Date.now() - 7 * 60_000, openToolName: "run_command", openToolTimeoutMs: null } }, // R4-1: quiet 12m but the server reports a tool in flight (under the 60m ceiling): not stalled, before or after its timeline loads
   { id: "demo-impl-1", who: "deepseek", title: "Implement - drawer crash", status: "running", labels: vs({ role: "worker", "vs.parent": DEMO_LEAD_ID }), used: 245_000, ago: 2 },
   { id: "demo-impl-2", who: "claude", title: "Implement - team actions", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-art-o" }), used: 37_000, ago: 4 },
-  { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-impl-2" }), used: 21_000, ago: 6 },
+  { id: "demo-mech", who: "codex", title: "Mechanical - rename sweep", status: "running", labels: vs({ role: "worker", "vs.parent": "demo-impl-2" }), used: 21_000, ago: 14, extra: { openToolSince: null, openToolName: null, openToolTimeoutMs: null } }, // R4-1: quiet 14m, server says no tool: stalled in Needs you
   { id: "demo-rev", who: "sonnet", title: "Review - Sonnet · drawer", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B", "vs.parent": DEMO_LEAD_ID }), used: 74_000, ago: 9 },
   {
     id: "demo-aud", who: "gemini", title: "Audit - token scout", labels: vs({ role: "worker" }), used: 186_000, ago: 5,

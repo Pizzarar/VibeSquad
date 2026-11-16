@@ -205,10 +205,19 @@ test("9. The Needs-you count and badges don't change when you open and close an 
     badges: [...document.querySelectorAll(".boring-badge")].map((b) => b.textContent?.trim()),
   }));
   const before = await snap();
+  // Expand "N more" so every Needs-you row (not just the first 5) is opened and closed.
+  const expand = async () => { const more = page.locator('[data-testid="boring-needs-you-more"][aria-expanded="false"]'); if (await more.count()) { await more.first().click(); await sleep(200); } };
+  await expand();
   const n = await page.locator('[data-testid^="boring-needs-open-"]').count();
   assert.ok(n > 0, "demo should list Needs-you rows");
+  // R4-1: stalled is back in the count; the demo has a quiet agent with no tool (listed) and a quiet agent whose server-reported tool is in
+  // flight while its timeline also shows one (not listed, before or after it is opened): the case that used to flip the count.
+  const texts = await page.locator('[data-testid^="boring-needs-open-"]').allTextContents();
+  assert.ok(texts.some((t) => t.startsWith("Mechanical - rename sweep")), `the quiet no-tool agent is listed as stalled: ${JSON.stringify(texts)}`);
+  assert.ok(!texts.some((t) => t.startsWith("Art Director")), `the quiet agent with a tool in flight is not listed: ${JSON.stringify(texts)}`);
   const bad = [];
   for (let i = 0; i < n; i++) {
+    await expand();
     await page.locator('[data-testid^="boring-needs-open-"]').nth(i).click();
     await sleep(700);
     await page.locator('[data-testid="boring-project-header-vibesquad"]').click(); // back to the Overview

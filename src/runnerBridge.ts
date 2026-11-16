@@ -108,6 +108,8 @@ export const runnerFetchTimeline = (id: string, opts: { limit?: number; cursor?:
 export type RunnerStreamEvent =
   | { kind: "roster"; agents: PaseoAgent[] }
   | { kind: "agent"; agent: PaseoAgent }
+  /** R4-1: the agent's oldest open tool call changed (tool events are not roster events, so no full upsert). */
+  | { kind: "tools"; agentId: string; openToolSince: number | null; openToolName: string | null; openToolTimeoutMs: number | null; updatedAt?: string }
   | { kind: "remove"; agentId: string }
   | { kind: "status"; agentId: string; from: string; to: string }
   | { kind: "timeline"; agentId: string; seq: number; type: string }
@@ -122,6 +124,14 @@ const WATCHDOG_MS = 40000;
 export function reduceRunnerRoster(roster: Map<string, PaseoAgent>, ev: RunnerStreamEvent): Map<string, PaseoAgent> | null {
   if (ev.kind === "roster") return new Map(ev.agents.map((a) => [a.id, a]));
   if (ev.kind === "agent") return new Map(roster).set(ev.agent.id, ev.agent);
+  if (ev.kind === "tools") {
+    const a = roster.get(ev.agentId);
+    if (!a) return null;
+    const next: PaseoAgent = { ...a, openToolSince: ev.openToolSince ?? null, openToolName: ev.openToolName ?? null, openToolTimeoutMs: ev.openToolTimeoutMs ?? null };
+    // A tool event is activity: move updatedAt forward (never back, so a late delta can't undo a newer upsert).
+    if (ev.updatedAt && !(Date.parse(ev.updatedAt) <= Date.parse(a.updatedAt ?? ""))) next.updatedAt = ev.updatedAt;
+    return new Map(roster).set(ev.agentId, next);
+  }
   if (ev.kind === "remove" && roster.has(ev.agentId)) {
     const next = new Map(roster);
     next.delete(ev.agentId);
