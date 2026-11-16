@@ -48,6 +48,10 @@ function agent(s: Spec): PaseoAgent {
     lastUsage: s.used ? { contextWindowUsedTokens: s.used, contextWindowMaxTokens: 1_000_000 } : undefined,
     pendingPermissions: [],
     requiresAttention: false,
+    // R5-3: every fixture carries the server field (null = no tool in flight), like the runner; `extra` overrides it.
+    openToolSince: null,
+    openToolName: null,
+    openToolTimeoutMs: null,
     ...s.extra,
   } as unknown as PaseoAgent;
 }

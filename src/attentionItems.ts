@@ -56,15 +56,11 @@ export const stalledSignature = (a: PaseoAgent) => `stalled:${a.updatedAt ?? ""}
  */
 export const STALLED_IN_NEEDS_YOU = true;
 
-/** The oldest open tool call as this client knows it: server fields first, else the timeline hint (seconds only), else null. */
-export function openToolOf(a: PaseoAgent, now: number, hintSeconds?: number | null): { seconds: number; name: string | null; timeoutMs: number | null } | null {
-  // Server field present (number or null): authoritative. undefined = an older server / another backend: fall back to the hint.
-  if (a.openToolSince !== undefined) {
-    if (a.openToolSince === null || !Number.isFinite(a.openToolSince)) return null;
-    const timeoutMs = a.openToolTimeoutMs != null && Number.isFinite(a.openToolTimeoutMs) && a.openToolTimeoutMs > 0 ? a.openToolTimeoutMs : null;
-    return { seconds: Math.max(0, Math.floor((now - a.openToolSince) / 1000)), name: a.openToolName || null, timeoutMs };
-  }
-  return hintSeconds != null ? { seconds: hintSeconds, name: null, timeoutMs: null } : null;
+/** The oldest open tool call, from the server fields on the agent payload (the runner is the only backend); absent/null = none in flight. */
+export function openToolOf(a: PaseoAgent, now: number): { seconds: number; name: string | null; timeoutMs: number | null } | null {
+  if (a.openToolSince == null || !Number.isFinite(a.openToolSince)) return null;
+  const timeoutMs = a.openToolTimeoutMs != null && Number.isFinite(a.openToolTimeoutMs) && a.openToolTimeoutMs > 0 ? a.openToolTimeoutMs : null;
+  return { seconds: Math.max(0, Math.floor((now - a.openToolSince) / 1000)), name: a.openToolName || null, timeoutMs };
 }
 
 const mins = (s: number) => (s >= 120 ? `${Math.round(s / 60)}m` : `${s}s`);
@@ -72,13 +68,13 @@ const mins = (s: number) => (s >= 120 ? `${Math.round(s / 60)}m` : `${s}s`);
 /**
  * The R4-1 stall rule (boringNeedsYouStall) on one agent, or null: running with nothing pending AND either no update for 10m with no tool
  * in flight ("Stalled: no update for 12m"), or its oldest open tool call past its ceiling, the tool's own timeout else 60m
- * ("Tool Bash running 61m"). `toolRunningSeconds` is only the client hint for agents whose payload has no openToolSince field.
+ * ("Tool Bash running 61m").
  */
-export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: number | null): string | null {
+export function stalledReason(a: PaseoAgent, now: number): string | null {
   const updated = Date.parse(a.updatedAt ?? "");
   // A missing / invalid updatedAt only rules out the "quiet" branch (idle 0); the tool-ceiling branch does not read it.
   const idle = Number.isNaN(updated) ? 0 : Math.max(0, Math.floor((now - updated) / 1000));
-  const tool = openToolOf(a, now, toolRunningSeconds);
+  const tool = openToolOf(a, now);
   const stall = boringNeedsYouStall({
     status: a.status,
     hasPendingPermission: !!a.pendingPermissions?.length,
@@ -95,7 +91,7 @@ export function stalledReason(a: PaseoAgent, now: number, toolRunningSeconds?: n
  * Everything that needs the owner. Pass `now` to also list running agents that went quiet as `stalled`
  * (opt-in: badges and the other queues keep counting only what Paseo/labels flag).
  */
-export function attentionItems(members: Member[], now?: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): AttentionItem[] {
+export function attentionItems(members: Member[], now?: number): AttentionItem[] {
   const out: AttentionItem[] = [];
   for (const m of members) {
     // Retired leads and archived/closed agents never need you (same rule as the badge counts).
@@ -103,7 +99,7 @@ export function attentionItems(members: Member[], now?: number, toolRunningSecon
     let kind = kindOfAttention(m);
     let reason = m.attention?.reason ?? "";
     if (STALLED_IN_NEEDS_YOU && !kind && now !== undefined && !m.attention && !isLocallyHidden(m.agent.id, stalledSignature(m.agent), now)) {
-      const stalled = stalledReason(m.agent, now, toolRunningSeconds?.(m.agent));
+      const stalled = stalledReason(m.agent, now);
       if (stalled) (kind = "stalled"), (reason = stalled);
     }
     if (!kind) continue;
@@ -150,15 +146,21 @@ export const countedItems = (items: AttentionItem[]) => items.filter((i) => i.ki
  * R3.2: THE Needs-you count (list rows, sidebar badges). One source so the heading never differs from the badges' sum:
  * counted kinds only (finished excluded), stalled only past the 10-minute / no-tool-in-flight rule.
  */
-export const needsYouCount = (members: Member[], now?: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): number =>
-  countedItems(attentionItems(members, now, toolRunningSeconds)).length;
+export const needsYouCount = (members: Member[], now?: number): number => countedItems(attentionItems(members, now)).length;
+
+/**
+ * R5-2: THE squad-wide Needs-you number: the sum of needsYouCount over every project view. The Needs-you heading count, the tab title and
+ * the favicon dot all read this with the same `now`, so they cannot disagree (stalled agents included).
+ */
+export const needsYouTotal = (views: ReadonlyArray<{ members: Member[] }>, now: number): number =>
+  views.reduce((n, v) => n + needsYouCount(v.members, now), 0);
 
 /**
  * Stalled items alone (R3.2). Pin/lane `needsYou` fields count labelled/permission/error items without `now`; a stalled agent is never
  * among those (stalled needs no existing attention), so `pin.needsYou + stalledCount(members, now) == needsYouCount(members, now)`.
  */
-export const stalledCount = (members: Member[], now: number, toolRunningSeconds?: (a: PaseoAgent) => number | null | undefined): number =>
-  attentionItems(members, now, toolRunningSeconds).filter((i) => i.kind === "stalled").length;
+export const stalledCount = (members: Member[], now: number): number =>
+  attentionItems(members, now).filter((i) => i.kind === "stalled").length;
 
 const signatureOf = (a: PaseoAgent, kind: ItemKind) =>
   kind === "error" && a.status === "error" ? (a.lastError ?? "error") : (a.attentionReason ?? "attention");
