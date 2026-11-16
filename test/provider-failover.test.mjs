@@ -148,8 +148,8 @@ test("3. resolveProfileWithFailover auto-switches Claude <-> Gemini when usage >
   assert.equal(stuckRes.profile.provider, "opencode");
 });
 
-test("4. toPaseoSpawnConfig with usageProviders fails over automatically and preserves 19 default profiles + aliases", () => {
-  assert.equal(DEFAULT_PACK_PROFILES.length, 19);
+test("4. toPaseoSpawnConfig with usageProviders fails over automatically and preserves 20 default profiles + aliases", () => {
+  assert.equal(DEFAULT_PACK_PROFILES.length, 20);
   assert.equal(LEGACY_PROFILE_ALIASES["Builder - Gemini"], "Lead - Gemini");
   assert.equal(LEGACY_PROFILE_ALIASES["Reviewer - Gemini"], "Review - Gemini");
   assert.equal(findProfile("Builder - Gemini", DEFAULT_PACK_PROFILES)?.name, "Lead - Gemini");

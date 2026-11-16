@@ -423,7 +423,7 @@ function foldIdentity(st, m) {
 
 const DIGEST_PROFILE_RE = /^Pre-check\b/i;
 const REVIEWER_PROFILE_RE = /^(?:Review|Check|Audit)\b/i;
-const SCOUT_PROFILE_RE = /^(?:Scout|Art Director|Planner|Spec)\b/i;
+const SCOUT_PROFILE_RE = /^(?:Scout|Art Director|UX Reviewer|Planner|Spec)\b/i;
 const JOBKIND_REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s])review(?:\s|$)/i;
 
 /** usa-29: strip the trailing effort suffix so "gemini-4-argon-medium" and "gemini-4-argon" are one model row. */

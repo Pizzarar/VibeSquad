@@ -104,7 +104,7 @@ export function ProfileImportModal({ onClose }: { onClose: () => void }) {
             Later
           </button>
           <button type="button" className="btn ok" disabled={busy} data-testid="profiles-seed-default-btn" onClick={onSeedDefault}>
-            {busy ? "Seeding…" : "Seed Default Pack (19)"}
+            {busy ? "Seeding…" : "Seed Default Pack (20)"}
           </button>
         </>
       }
@@ -601,7 +601,7 @@ export function TeamSettingsModal({
               data-testid="settings-seed-default-pack-btn"
               onClick={() => void onSeedDefaultPackInSettings()}
             >
-              Seed Default Pack (19)
+              Seed Default Pack (20)
             </button>
             <button
               type="button"

@@ -199,6 +199,20 @@ describe("lessons · docs/LESSONS.md catalog", () => {
   });
 });
 
+describe("UX Reviewer phase gate standing rule (UX_REVIEW_PROCESS 3B)", () => {
+  it("is a standing rule naming the Normal-mode UI files, the gate, the owner override and the inbox routing", () => {
+    const rule = STANDING_RULES.find((r) => r.startsWith("A plan phase touching Normal-mode UI"));
+    assert.ok(rule, "rule present");
+    for (const f of ["src/Boring*.tsx", "src/boring*.ts", "src/boring.css", "src/Timeline.tsx", "src/PermissionCard.tsx", "src/BoringContextPanel.tsx"]) assert.ok(rule.includes(f), f);
+    assert.match(rule, /UX Reviewer - Opus/);
+    assert.match(rule, /critical or major finding open/);
+    assert.match(rule, /unless Aub overrides/);
+    assert.match(rule, /Buddy's own look check doesn't count/);
+    assert.match(rule, /inbox cards/);
+    assert.ok(renderLessonsDigest({ storePath: tempStore() }).includes(`- ${rule}`), "rendered into the injected digest");
+  });
+});
+
 describe("coordinated drain standing rule (PLAN_COORDINATED_DRAIN D0)", () => {
   it("is a standing rule (injected into every role), <=240 chars, names the drain handshake and the owner gate", () => {
     const rule = STANDING_RULES.find((r) => r.startsWith("Shared-machine actions"));

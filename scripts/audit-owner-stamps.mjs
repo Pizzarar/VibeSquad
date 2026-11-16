@@ -171,7 +171,7 @@ export function handoffBucket(runs, { since, until } = {}) {
 
 // (4) fixers passed around. Only implementers count: runner profile/labels first, text as fallback.
 // Non-implementer profiles (reviewers, digests, art duet, leads) and non-implementing jobs are excluded.
-export const NON_IMPL_PROFILE = /^(Review|Pre-check|Art Painter|Art Director|Lead)\b/i;
+export const NON_IMPL_PROFILE = /^(Review|Pre-check|Art Painter|Art Director|UX Reviewer|Lead)\b/i;
 export const NON_IMPL_JOB = /\b(re-?review|review|verify|triage|scout|pre-?check|smoke|digest|audit|baseline|probe|painter|director)\b/i;
 export const NON_IMPL_TEXT = /^(You are a digest agent|TASK:\s*review|Read-only|READ-ONLY)|ROLE:\s*review/i;
 export function isImplementer(run) {
