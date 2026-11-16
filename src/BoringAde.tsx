@@ -549,7 +549,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk" ? "Desk" : sel.laneId === "_bugs" ? "Bugs" : selModel.conversations.find((c) => c.laneId === sel.laneId)?.name ?? null;
   // R7-1: a deep link waiting on the roster shows a bare breadcrumb + "Opening agent…", never the default project's Overview.
   const opening = boringDeepLinkPending({ rosterLoaded: !!rosterLoaded, activeAgentId });
-  const crumbs = opening ? [{ key: "project" as const, label: "VibeSquad" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
+  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
   const onCrumb = (key: Crumb["key"]) => {
     if (key === "project") setMode("project");
     else if (key === "lane" && mode === "chat") {

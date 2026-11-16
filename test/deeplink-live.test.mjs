@@ -227,3 +227,9 @@ test("R7-1: a deep link waiting on the roster shows 'Opening agent…', not the 
   assert.match(src, /\{!opening && mode === "chat"/);
   assert.match(src, /\{!opening && mode === "usage"/);
 });
+
+test("R7-1 M1: the opening crumb is neutral, not a project name", () => {
+  const src = fs.readFileSync(resolve(SRC_DIR, "BoringAde.tsx"), "utf8");
+  assert.match(src, /opening \? \[\{ key: "project" as const, label: "Opening…" \}\]/);
+  assert.doesNotMatch(src, /opening \? \[\{ key: "project" as const, label: "VibeSquad"/);
+});
