@@ -51,3 +51,21 @@ test("R4-3: Needs-you line 1 puts the lane first so end-ellipsis cuts the projec
   assert.match(inbox, /\{r\.lane\} · \{r\.project\}<\/span>/);
   assert.doesNotMatch(inbox, /\{r\.project\} › \{r\.lane\}<\/span>/);
 });
+
+test("L1: the readable lead title's lane part === laneDisplayName (dynamic and registered lanes), hub stays Overlord", async () => {
+  const { formatDisplayTitle } = await import("../src/identity.ts");
+  const title = (team, key, hub = false) => formatDisplayTitle({ role: "lead", laneName: laneDisplayName(team, key), laneId: key, ord: "75", hub, readable: true });
+  const laneOf = (t) => t.replace(/ · Lead \d+$/, "");
+  // dynamic lane (?demo main-game): not registered, name humanized from the id
+  assert.equal(laneOf(title(efi, "main-game")), laneDisplayName(efi, "main-game"));
+  assert.equal(title(efi, "main-game"), "Main Game · Lead 75");
+  // registered lane keeps its registered casing (no re-title-casing)
+  const reg = { id: "efi", lanes: [{ id: "main-game", name: "Main game" }] };
+  assert.equal(laneDisplayName(reg, "main-game"), "Main game");
+  assert.equal(laneOf(title(reg, "main-game")), laneDisplayName(reg, "main-game"));
+  assert.equal(title(reg, "main-game"), "Main game · Lead 75");
+  assert.equal(title(vs, "hub", true), "Overlord");
+  assert.equal(title(vs, "desk"), "Desk lane · Lead 75");
+  // the header resolves its lane name through laneDisplayName
+  assert.match(read("BoringAgentHeader.tsx"), /laneName: found \? laneDisplayName\(/);
+});
