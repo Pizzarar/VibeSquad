@@ -1329,7 +1329,7 @@ test("Desk R2 Needs you: hub-lane items read 'Desk'; real legacy lead titles are
   assert.ok(testids(t, "boring-needs-where").some((n) => /Desk/.test([].concat(n.props.children).join(""))));
 });
 
-test("Desk R2 Needs you: a running agent with no update for 10m+ (and no tool in flight) is listed as stalled", () => {
+test("Desk R2 Needs you: R4-1 interim: a running agent with no update for 10m+ is NOT listed (stalled is out of Needs you until openToolSince)", () => {
   reset();
   const quiet = att("slow", "x", "x", { agent: { status: "running", updatedAt: ago(12) } });
   quiet.attention = null;
@@ -1339,8 +1339,7 @@ test("Desk R2 Needs you: a running agent with no update for 10m+ (and no tool in
   nine.attention = null; // R3.2: 9 min is below the threshold, so not listed
   const v = teamOf("vs", "VibeSquad", [quiet, fresh, nine]);
   const rows = needsYouRows([v], NOW);
-  assert.deepEqual(rows.map((r) => [r.item.id, r.item.kind]), [["slow", "stalled"]]);
-  assert.match(rows[0].item.reason, /Stalled: no update for 12m/);
+  assert.deepEqual(rows.map((r) => [r.item.id, r.item.kind]), []);
 });
 
 test("Desk R2 sidebar worker rows keep the attention tint (R3.1: no reason text); container dots take the worst state", () => {
