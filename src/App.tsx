@@ -1359,7 +1359,10 @@ function onShortcut(e: KeyboardEvent) {
 
 function openTopNeedsYou() {
   const top = railAlerts().list[0];
-  if (top) openAgent(top.agent.id);
+  if (!top) return;
+  // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
+  const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: top.agent.id }, cancelable: true }));
+  if (!handled) openAgent(top.agent.id);
 }
 
 const LICENSES_FALLBACK =

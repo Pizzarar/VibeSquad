@@ -6,6 +6,7 @@ import type { FeedEntry } from "./demo";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
 import { respondToPermission } from "./PermissionCard";
 import { formatDisplayTitle } from "./identity";
+import { condenseReason } from "./condenseReason";
 import { boringLaneLabel, boringLocationLane } from "./boringLocation";
 import type { Member, TeamView } from "./teams";
 import { cleanTitle } from "./ui";
@@ -32,7 +33,7 @@ type DoneLog = { teamId: string; project: string; entries: FeedEntry[] };
 
 /** What the row says: for a permission, the tool and its command ("Bash: rg --stats"); otherwise the attention reason. */
 export function needsYouReason(item: Pick<AttentionItem, "kind" | "reason" | "agent">): string {
-  if (item.kind !== "permission") return item.reason;
+  if (item.kind !== "permission") return item.kind === "error" ? condenseReason(item.reason) : item.reason;
   const p = item.agent.pendingPermissions?.[0] as { name?: string; title?: string; input?: Record<string, unknown>; detail?: Record<string, unknown> } | undefined;
   if (!p) return item.reason;
   const tool = p.name ?? p.title;

@@ -11,6 +11,7 @@ import { usePaseo } from "./paseo";
 import { resolve, type Member } from "./teams";
 import { findPinnedTodo, type Entry } from "./Timeline";
 import { Ago } from "./ui";
+import { condenseReason } from "./condenseReason";
 import { isLive } from "./pins";
 import type { OpenRightDockDetail } from "./RightDock";
 
@@ -96,7 +97,7 @@ function renderWorker(m: Member, agent: PaseoAgent, idle: boolean) {
             <span className="boring-ctx-worker-name">{m.agent.title ?? m.agent.id.slice(0, 8)}</span>
             <span className="boring-ctx-worker-age muted"><Ago iso={m.agent.updatedAt} /></span>
             {(m.attention?.reason || m.agent.status === "error") && (
-              <span className="boring-ctx-worker-meta" title={m.attention?.reason ?? m.agent.status}>{m.attention?.reason ?? m.agent.status}</span>
+              <span className="boring-ctx-worker-meta" title={m.attention?.reason ?? m.agent.status}>{condenseReason(m.attention?.reason ?? m.agent.status)}</span>
             )}
           </button>
         );

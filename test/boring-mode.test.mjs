@@ -19,6 +19,7 @@ globalThis.__toasts = [];
 stub("PinIdeas.mjs", "export const showPinToast = (m) => globalThis.__toasts.push(m);");
 writeFileSync(join(dir, "teams.mjs"), `export const isHubLane = (team, lane) => lane.hub === true || (!team.lanes.some((l) => l.hub === true) && lane.id === team.id);`);
 writeFileSync(join(dir, "boringLocation.mjs"), transformSync("boringLocation.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringLocation.ts"), "utf8"), { lang: "ts" }).code.replace("./teams.ts", "./teams.mjs"));
+writeFileSync(join(dir, "condenseReason.mjs"), transformSync("condenseReason.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "condenseReason.ts"), "utf8"), { lang: "ts" }).code);
 stub("pinFocus.mjs", "export const openPinMember = (pin, id) => globalThis.__opened.push([pin.lane.id, id]);");
 stub("SkyZones.mjs", `export const FaceStage = () => React.createElement("i", { "data-stub": "face" });\nexport const useSkyBezel = () => ({ frameStyle: null });`);
 stub("skyZonesLogic.mjs", "export const angelCssScale = () => 4; export const cloudStripStyle = () => undefined; export const faceBg = () => null; export const SKY_CLOUDS_URL = () => '';");
@@ -1382,4 +1383,14 @@ test("R3.7: one count style: '8 more' and 'Done recently · 4'", async () => {
   assert.match(src, /`\$\{n\} more`/);
   assert.match(src, /`Done recently · \$\{n\}`/);
   assert.doesNotMatch(src, /\+ \$\{rows/);
+});
+
+test("R4-6/R4-7: Ctrl+J routes through BoringAde; composer placeholder uses the readable title; Last event skips metric", () => {
+  const rd = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
+  const app = rd("App.tsx"), ade = rd("BoringAde.tsx"), comp = rd("Composer.tsx");
+  assert.match(app, /vs:boring-open-agent/);
+  assert.match(ade, /BORING_OPEN_AGENT_EVENT/);
+  assert.match(ade, /const openNeedsYou = \(row: NeedsYouRow\) => openAgentIn\(/);
+  assert.match(comp, /placeholder=\{`Message \$\{composerTargetName\(agent\)\}/);
+  assert.match(ade, /e\.type !== "metric"/);
 });

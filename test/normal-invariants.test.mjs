@@ -197,3 +197,24 @@ test("8. A Needs-you reason shows at least 40 characters before truncating", gua
   const bad = rows.filter((r) => r.truncated && r.visibleChars < 40);
   assert.deepEqual(bad, [], `truncated below 40 chars: ${JSON.stringify(bad)}`);
 }));
+
+test("9. The Needs-you count and badges don't change when you open and close an agent", { skip: "known failure R4-1: openTools is client-only" }, guard("inv9", async () => {
+  await load();
+  const snap = () => page.evaluate(() => ({
+    count: document.querySelector('[data-testid="boring-needs-you-count"]')?.textContent?.trim() ?? null,
+    badges: [...document.querySelectorAll(".boring-badge")].map((b) => b.textContent?.trim()),
+  }));
+  const before = await snap();
+  const n = await page.locator('[data-testid^="boring-needs-open-"]').count();
+  assert.ok(n > 0, "demo should list Needs-you rows");
+  const bad = [];
+  for (let i = 0; i < n; i++) {
+    await page.locator('[data-testid^="boring-needs-open-"]').nth(i).click();
+    await sleep(700);
+    await page.locator('[data-testid="boring-project-header-vibesquad"]').click(); // back to the Overview
+    await sleep(700);
+    const after = await snap();
+    if (JSON.stringify(after) !== JSON.stringify(before)) bad.push(`row ${i}: ${JSON.stringify(before)} -> ${JSON.stringify(after)}`);
+  }
+  assert.deepEqual(bad, [], bad.join("\n"));
+}));
