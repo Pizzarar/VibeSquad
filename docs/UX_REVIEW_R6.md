@@ -56,7 +56,7 @@ Evidence is in `artifacts/ux-desk-r6/` (numbers below refer to these files). The
 - **Job hurt:** 3. Ctrl+J is the keyboard "take me to what needs me".
 - **Evidence (`34`, real squad, 4K dark):**
   - Needs you: "All clear. Nobody needs you.", title "VibeSquad".
-  - Ctrl+J opens **UI Screens · Lead 7** (`rn-19b72362b3c4`) with a "NEEDS AUB · Lead at 150k+ tokens…" banner.
+  - Ctrl+J opens **UI Screens · Lead 7** (`rn-19b72362b3c4`) with a "NEEDS YOU (owner) · Lead at 150k+ tokens…" banner.
   - The breadcrumb is just "Escape From Idle", and no tree row is selected.
   - `vs status rn-19b72362b3c4` reports `status: "closed"`. It's a former lead whose last message says its token is invalid after the restart.
   - So three surfaces disagree: the list (0), the jump (1) and the banner.
