@@ -11,6 +11,7 @@ import { LEGACY_NEEDS_LABEL } from "./userName";
 import { AGENT_TYPE_LABEL, TEAMS, isHubLaneId, kindOf } from "./teams";
 import { findLaneInRegistry, formatDisplayTitle } from "./identity";
 import type { AgentType } from "./teams";
+import { boringLaneLabel } from "./boringLocation";
 import { providerSpec } from "./pixel";
 import { boringStateGlyph } from "./BoringAde";
 import { AttachFiles, HardeningBar, NeedsYouControls, SessionActions, formatCostUsd, type ProviderSwitchTarget } from "./DrawerHeader";
@@ -82,7 +83,7 @@ export function readableLeadTitle(a: PaseoAgent): string | null {
   const laneKey = (l.lane ?? l.lead ?? "").trim();
   if (!l.ord || !laneKey) return null;
   const found = findLaneInRegistry(laneKey, TEAMS);
-  return formatDisplayTitle({ role: "lead", laneName: found?.lane.name ?? laneKey, laneId: found?.lane.id ?? laneKey, ord: l.ord, hub: isHubLaneId(laneKey), readable: true });
+  return formatDisplayTitle({ role: "lead", laneName: boringLaneLabel(found?.lane.name ?? laneKey), laneId: found?.lane.id ?? laneKey, ord: l.ord, hub: isHubLaneId(laneKey), readable: true });
 }
 
 export function BoringAgentHeader(p: BoringAgentHeaderProps) {

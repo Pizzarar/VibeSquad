@@ -1268,6 +1268,20 @@ test("Desk R2 Needs you: the count equals the rows; cap 5 with a '+ N more' togg
   assert.equal(testids(few, "boring-needs-you-count")[0].props.children, 4);
 });
 
+test("R3.7 Needs you expanded (showAll) hides Done recently; collapsing brings it back", () => {
+  reset();
+  const v = manyView(8);
+  const render = () => ((hs.i = 0), BoringInbox({ views: [v], now: NOW, logs: [] }));
+  let t = render();
+  assert.equal(testids(t, "boring-recent-done").length, 1);
+  testids(t, "boring-needs-you-more")[0].props.onClick();
+  t = render();
+  assert.equal(testids(t, "boring-needs-you-item").length, 8);
+  assert.equal(testids(t, "boring-recent-done").length, 0);
+  testids(t, "boring-needs-you-more")[0].props.onClick();
+  assert.equal(testids(render(), "boring-recent-done").length, 1);
+});
+
 test("Desk R2 Needs you: finished lists under Done recently (count == rows), not under Needs you", () => {
   reset();
   const v = teamOf("vs", "VibeSquad", [att("fin", "finished", "all done"), att("ask", "needs-you", "pick")]);

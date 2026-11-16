@@ -5,7 +5,7 @@ import type { FeedEntry } from "./demo";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
 import { respondToPermission } from "./PermissionCard";
 import { formatDisplayTitle } from "./identity";
-import { boringLocationLane } from "./boringLocation";
+import { boringLaneLabel, boringLocationLane } from "./boringLocation";
 import type { Member, TeamView } from "./teams";
 import { cleanTitle } from "./ui";
 import { fetchLog } from "./TeamFeed";
@@ -62,7 +62,7 @@ const KIND_RANK: Record<AttentionItem["kind"], number> = { permission: 0, label:
 export function needsYouTitle(item: Pick<AttentionItem, "who">, member: Pick<Member, "kind" | "agent">, lane: { laneName?: string; laneId?: string; hub?: boolean }): string {
   const l = (member.agent.labels ?? {}) as Record<string, string>;
   const fallback = cleanTitle(item.who);
-  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, ord: l.ord, job: l.job, star: false, readable: true });
+  if (member.kind === "lead" && (l.ord || lane.hub)) return formatDisplayTitle({ role: "lead", ...lane, laneName: lane.laneName ? boringLaneLabel(lane.laneName) : lane.laneName, ord: l.ord, job: l.job, star: false, readable: true });
   if (member.kind === "brainstorm" && lane.hub && !l.topic?.trim()) return formatDisplayTitle({ role: "brainstorm", ...lane });
   return fallback;
 }
