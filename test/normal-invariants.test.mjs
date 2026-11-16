@@ -39,7 +39,7 @@ before(async () => {
   ({ server, baseUrl } = await E.serveDist());
   browser = await pw.chromium.launch({ executablePath: exe, headless: true });
   ctx = await browser.newContext({ viewport: { width: 3200, height: 1800 } });
-  await ctx.addInitScript(`try { localStorage.setItem("vs.prefs.v1", JSON.stringify({ "app.vibe": "boring" })); localStorage.setItem("vs.vibePicked", "1"); } catch {}`);
+  await ctx.addInitScript(`try { localStorage.clear(); sessionStorage.clear(); localStorage.setItem("vs.prefs.v1", JSON.stringify({ "app.vibe": "boring" })); localStorage.setItem("vs.vibePicked", "1"); } catch {}`);
   await E.installRoutes(ctx);
   await ctx.route("**/api/teams", (r) => (r.request().method() === "GET" ? r.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(REGISTRY) }) : r.fallback()));
   page = await ctx.newPage();
@@ -84,7 +84,7 @@ const STATES = [
   { id: "lane-click", go: async () => { await load(); await page.locator(tid("boring-conv-main-game")).locator(".boring-conv-title").click(); await sleep(800); } },
   { id: "ctrl-j", go: async () => { await load(); await page.keyboard.press("Control+J"); await sleep(900); } },
   { id: "needs-you-click", go: async () => { await load(); await page.locator('[data-testid^="boring-needs-open-"]').nth(2).click(); await sleep(900); } },
-  { id: "deep-link-agent", go: () => load("&agent=demo-lead-efi") },
+  { id: "deep-link-agent", go: () => load("&agent=demo-art-o") },
 ];
 
 test("1. Needs-you header count = items shown + 'N more'", guard("inv1", async () => {
@@ -92,14 +92,14 @@ test("1. Needs-you header count = items shown + 'N more'", guard("inv1", async (
   const count = Number(await page.locator(tid("boring-needs-you-count")).innerText());
   const shown = await page.locator(tid("boring-needs-you-item")).count();
   const more = await page.locator(tid("boring-needs-you-more")).count();
-  const moreN = more ? Number(/\+\s*(\d+)\s+more/.exec(await page.locator(tid("boring-needs-you-more")).innerText())?.[1] ?? NaN) : 0;
+  const moreN = more ? Number(/\+?\s*(\d+)\s+more/.exec(await page.locator(tid("boring-needs-you-more")).innerText())?.[1] ?? NaN) : 0;
   assert.ok(count > 0, "demo should have Needs-you items");
   assert.equal(shown + moreN, count, `header says ${count}, list shows ${shown} + ${moreN} more`);
   if (more) { await page.locator(tid("boring-needs-you-more")).click(); await sleep(300); }
   assert.equal(await page.locator(tid("boring-needs-you-item")).count(), count, "expanded list length");
 }));
 
-test("2. All projects collapsed: project badges sum to the Needs-you count", { skip: "known failure idea-pending: project badges count 4 (VibeSquad 3 + Escape From Idle 1) but Needs-you lists 13; sidebar model undercounts (src/BoringAde.tsx boringSidebarModel totalNeedsYou)" }, guard("inv2", async () => {
+test("2. All projects collapsed: project badges sum to the Needs-you count", guard("inv2", async () => {
   await load();
   const count = Number(await page.locator(tid("boring-needs-you-count")).innerText());
   for (const t of REGISTRY.teams) {
@@ -123,11 +123,16 @@ test("3. Exactly one selected sidebar row in every state", guard("inv3", async (
 
 test("4. Breadcrumb project = selected row project = open agent project", guard("inv4", async () => {
   const bad = [];
+  await load();
+  let prev = await openAgent();
   for (const s of STATES.filter((x) => x.id !== "initial")) {
     await s.go();
     const c = await crumb();
     const rows = (await selectedRows()).filter((r) => r.visible);
     const name = await openAgent();
+    // Every transition must actually change the open agent, or it proves nothing.
+    if (name === prev) bad.push(`${s.id}: open agent did not change (still ${JSON.stringify(name)})`);
+    prev = name;
     const agentProject = name ? DEMO_TEAM[name] ?? `?${name}` : null;
     const rowProject = rows[0]?.project ?? null;
     const ok = name && c.project && c.project === rowProject && c.project === agentProject;
@@ -153,7 +158,7 @@ test("5. Two expanded projects have the same child structure", guard("inv5", asy
   for (const s of shapes.slice(1)) assert.deepEqual(nonLane(s), nonLane(shapes[0]), `non-lane children differ: ${JSON.stringify(shapes)}`);
 }));
 
-test("6. No agent title appears more than twice in the visible viewport", { skip: "known failure idea-pending: after Ctrl+J the opened agent title shows 5x in view (Needs-you row, sidebar worker row, breadcrumb, agent header, context panel)" }, guard("inv6", async () => {
+test("6. No agent title appears more than twice in the visible viewport", { skip: "known failure idea-271: after Ctrl+J the opened agent title shows 5x in view (Needs-you row, sidebar worker row, breadcrumb, agent header, context panel); also 3-4x on deep link" }, guard("inv6", async () => {
   const bad = [];
   for (const s of STATES) {
     await s.go();
@@ -175,7 +180,7 @@ test("6. No agent title appears more than twice in the visible viewport", { skip
   assert.deepEqual(bad, [], bad.join("\n"));
 }));
 
-test("7. Sidebar footer y is the same in every state", { skip: "known failure idea-pending: sidebar footer is not anchored; its y moves 753 -> 1523 when the Desk expands (Ctrl+J / Needs-you click)" }, guard("inv7", async () => {
+test("7. Sidebar footer y is the same in every state", guard("inv7", async () => {
   const ys = {};
   for (const s of STATES) { await s.go(); ys[s.id] = await footerY(); }
   assert.equal(new Set(Object.values(ys)).size, 1, `footer top by state: ${JSON.stringify(ys)}`);
