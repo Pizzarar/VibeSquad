@@ -5,6 +5,7 @@ import os from "node:os";
 import { effectiveAgentRole, findLaneInRegistry, formatDisplayTitle, isHiddenLane, isHubLane, isLiveAgent, isRetiredAgent, laneCodeFor, loadTeamsRegistry, resolveWorktreeRootPath, topicOf } from "./identity.mjs";
 import { assertBuddyRestartAllowed } from "./buddy-restart-auth.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
+import { roleSpawnConfig } from "./spawn-route.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
@@ -767,8 +768,27 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
       reason === "provider-switch" && requestedProfile
         ? requestedProfile
         : String(requestedProfile || oldLabels.profile || laneLastProfile || fallbackProfileName).trim();
-    let profile = findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
-    if (profile && !body.forceProvider) {
+    // P5c (idea-77): a role-name label ("brainstorm", from a role-name spawn) with no stored profile of that name respawns
+    // from the role route (provider list skipping caps, tier rung model + effort), as the spawn hook routes it.
+    const roleCfg = profiles.some((p) => String(p?.name ?? "").toLowerCase() === desiredProfileKey.toLowerCase())
+      ? null
+      : roleSpawnConfig(desiredProfileKey, {
+          profiles,
+          usageList: body.forceProvider
+            ? []
+            : [
+                ...(Array.isArray(body.usageProviders) ? body.usageProviders : []),
+                ...Object.keys(
+                  readCappedProviders({
+                    useDiskCaps: true,
+                    ...(body.cappedProviders !== undefined ? { cappedProviders: body.cappedProviders } : {}),
+                    ...(body.cappedProvidersPath ? { cappedProvidersPath: body.cappedProvidersPath } : {}),
+                  }),
+                ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+              ],
+        });
+    let profile = roleCfg ? roleCfg.profile : findProfileOrFallback(desiredProfileKey, fallbackProfileName, profiles);
+    if (profile && !roleCfg && !body.forceProvider) {
       const cappedMap = readCappedProviders({
         useDiskCaps: true,
         ...(body.cappedProviders !== undefined ? { cappedProviders: body.cappedProviders } : {}),
@@ -789,7 +809,9 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
       }
     }
 
-    const spawnCfg = profile
+    const spawnCfg = roleCfg
+      ? roleCfg.spawnCfg
+      : profile
       ? toPaseoSpawnConfig(profile)
       : {
           provider: rawOldProvider.includes("/") ? rawOldProvider.split("/")[0] : rawOldProvider,

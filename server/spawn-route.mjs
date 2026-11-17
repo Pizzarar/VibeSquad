@@ -13,7 +13,7 @@ import { buildRolesFromProfiles } from "./profiles-v2.mjs";
 import { legacyProfileRole } from "./profiles.mjs";
 import { QUOTA_FAILOVER_THRESHOLD, isProviderOverQuota } from "./provider-failover.mjs";
 import { ROLE_TABLE, lookupRole, resolveRoute, routeProviderFamily } from "./role-route.mjs";
-import { loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
+import { loadStakesLadder, loadTierLadder, normalizeStakes, stakesTier } from "./stakes-ladder.mjs";
 
 /** Labels every routed spawn is stamped with (plus `profile` = the role or old profile name, and `wf`). */
 export const ROUTE_STAMP_LABELS = Object.freeze(["provider", "model", "tier", "stakes"]);
@@ -29,6 +29,16 @@ export function liveRoles(profiles) {
 export function roleNameHit(hint, roles = ROLE_TABLE) {
   const found = lookupRole(hint, { roles });
   return found && !found.legacy ? { key: found.key, role: found.role } : null;
+}
+
+/**
+ * The `profile` label a role-name spawn carries: the role's name ("Implement", "Work Order"), unless that name is itself
+ * an old alias (bare "Lead" / "Brainstorm" = "Lead - Claude" / "Brainstorm - Claude" until P5f): then the role key
+ * ("lead"), so enforceProfileAfterSpawn, respawns and digests read the label back as the same role, never the old name.
+ */
+export function roleProfileLabel(key, roles = ROLE_TABLE) {
+  const name = String(roles?.[key]?.name ?? "").trim();
+  return name && roleNameHit(name, roles)?.key === key ? name : key;
 }
 
 /** Lifecycle role (lead | brainstorm | worker) for a role key: drives the hook's lead/Buddy handling. */
@@ -71,7 +81,7 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
   const def = found.role;
   const mode = def.modes?.[route.provider] ?? {};
   const profile = {
-    name: def.name,
+    name: roleProfileLabel(found.key, table),
     role: lifecycleRoleOf(found.key),
     roleKey: found.key,
     provider: route.provider,
@@ -91,23 +101,35 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
  * resolveRoute for an old profile name/alias (or null when it is not one): the tier/role stamp + `legacy-name`, and
  * whether a caller model on a capped family was dropped. Never decides the old name's routing (today's walk does).
  */
-export function legacyRouteMeta(name, { stakes, caps = [], explicitModel } = {}) {
+export function legacyRouteMeta(name, { stakes, caps = [], explicitModel, stakesLadder } = {}) {
   if (!legacyProfileRole(name)) return null;
-  const route = resolveRoute({ role: name, stakes, caps });
+  // The hook applies the user's stakes-ladder.json override on top of the landed profile: the replay must too.
+  const sl = stakesLadder ?? loadStakesLadder();
+  const route = resolveRoute({ role: name, stakes, caps, stakesLadder: sl });
   if (!route) return null;
   const exModel = String(explicitModel ?? "").trim();
-  const probe = exModel ? resolveRoute({ role: name, stakes, caps, explicit: { model: exModel } }) : null;
+  const probe = exModel ? resolveRoute({ role: name, stakes, caps, stakesLadder: sl, explicit: { model: exModel } }) : null;
   return { route, explicitCapped: Boolean(probe?.reasons?.includes("explicit-capped")) };
 }
 
 /**
- * Shadow check for an old name: the provider family today's walk landed on vs the one resolveRoute's replay picks.
- * Differs only when the owner's stored profiles diverge from the P5a golden file (custom order/providers). "" = agree.
+ * Shadow check for an old name: what today's walk landed on vs what resolveRoute's replay picks (provider family, and
+ * model/effort unless the caller's own value was kept). Differs only when the owner's stored profiles diverge from the
+ * P5a golden file (edited model, custom order/providers). "" = agree, else e.g. "provider:opencode!=claude,model:a!=b".
  */
-export function legacyShadowMismatch(meta, landedProvider) {
-  const want = routeProviderFamily(meta?.route?.provider);
-  const got = routeProviderFamily(landedProvider);
-  return want && got && want !== got ? `${got}!=${want}` : "";
+export function legacyShadowMismatch(meta, landed, { skipModel = false, skipEffort = false } = {}) {
+  const r = meta?.route;
+  if (!r) return "";
+  const got = typeof landed === "string" ? { provider: landed } : (landed ?? {});
+  const out = [];
+  const want = routeProviderFamily(r.provider);
+  const have = routeProviderFamily(got.provider);
+  if (want && have && want !== have) out.push(`provider:${have}!=${want}`);
+  if (typeof landed !== "string") {
+    if (!skipModel && r.model && got.model && r.model !== got.model) out.push(`model:${got.model}!=${r.model}`);
+    if (!skipEffort && r.effort && got.effort && r.effort !== got.effort) out.push(`effort:${got.effort}!=${r.effort}`);
+  }
+  return out.join(",");
 }
 
 /** Tier stamp for any spawn: stakes force top/cheap, else the role (or old name's role) default; "" when unknown. */
@@ -124,14 +146,17 @@ export function routeRoleKeyOf(name) {
 
 /**
  * The `route:` metric body. Starts with today's fields (stakes/model/effort/reason, same order and values), then
- * `+legacy-name` on the reason when the caller named an old profile/alias (P5f watches it fall to 0), then tier + role.
+ * `+legacy-name` on the reason when the caller named an old profile/alias (P5f watches it fall to 0), then tier + role,
+ * `explicit-capped=dropped` when a caller model on a capped family was dropped, and `shadow=<diff>` when resolveRoute's
+ * replay of an old name disagrees with today's walk (legacyShadowMismatch).
  */
-export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false }) {
+export function routeMetricText({ stakes, model, effort, reason, legacyName = false, tier, role, explicitCapped = false, shadow = "" }) {
   const r = legacyName ? (reason === "default" ? "legacy-name" : `${reason}+legacy-name`) : reason;
   return (
     `stakes=${normalizeStakes(stakes)} model=${model || "-"} effort=${effort || "-"} reason=${r}` +
     ` tier=${tier || "-"} role=${role || "-"}` +
-    (explicitCapped ? " explicit-capped=dropped" : "")
+    (explicitCapped ? " explicit-capped=dropped" : "") +
+    (shadow ? ` shadow=${shadow}` : "")
   );
 }
 

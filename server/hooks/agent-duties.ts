@@ -47,6 +47,18 @@ import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfil
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
+import {
+  ROUTE_STAMP_LABELS,
+  cappedFamilies,
+  legacyRouteMeta,
+  legacyShadowMismatch,
+  liveRoles,
+  roleNameHit,
+  roleSpawnProfile,
+  routeMetricText,
+  routeRoleKeyOf,
+  routeTierOf,
+} from "../spawn-route.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
@@ -1440,7 +1452,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const hint = String(labels.profile ?? "").trim();
       if (!hint) return;
-      const match = matchStoredProfile(hint);
+      let match = matchStoredProfile(hint);
+      // P5c: a label-only role-name spawn (profile=review, no stored profile of that name) that before(agent.create) never
+      // routed (no `tier` stamp, not runner-configured) is held to the role route, as a named profile is.
+      if (!match?.explicit && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
+        const roles = liveRoles(loadStoredProfiles());
+        if (roleNameHit(hint, roles)) {
+          const hit = roleSpawnProfile(hint, { stakes: labels.stakes, caps: cappedFamilies(currentUsageList()), roles });
+          if (hit) match = { profile: hit.profile as StoredProfile, explicit: true };
+        }
+      }
       if (!match?.explicit) return;
       const profile = match.profile;
       const s: any = me ?? {};
@@ -1570,6 +1591,24 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     };
 
     /**
+     * The usage list spawn failover judges caps on: deps.usageProviders (quota reports) + every capped family as an
+     * `exhausted` entry. Shared by before(agent.create), enforceProfileAfterSpawn and agent.created (P5c).
+     */
+    const currentUsageList = (): any[] => {
+      const list: any[] = [
+        ...(typeof deps.usageProviders === "function"
+          ? deps.usageProviders()
+          : Array.isArray(deps.usageProviders)
+            ? deps.usageProviders
+            : []),
+      ];
+      for (const family of Object.keys(readCappedProviderMap())) {
+        list.push({ id: family, status: "exhausted", usedPct: 100 });
+      }
+      return list;
+    };
+
+    /**
      * idea-218: the profile a worker digest respawns on (once) after it ended with no verdict. The spawn failover order of the
      * digest profile (counterpart, then its role chain: Pre-check - Flash -> Check - Haiku -> Audit - DSF, then same-role
      * profiles on other providers), skipping every capped / over-quota provider and the provider(s) the failed digest ran on.
@@ -1675,6 +1714,44 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         let matchedProfile = profileMatch?.profile ?? null;
 
         st.mark("match-profile");
+        const usageList = currentUsageList();
+        const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
+        // spawn_worker pre-fills model/thinking from the profile and names them in `vs.profile-derived`; those are not caller-explicit.
+        const derivedFields = String(reqLabels["vs.profile-derived"] ?? "").split(",").map((f) => f.trim());
+        const rawCallerModel = derivedFields.includes("model") ? "" : String(config.model ?? "").trim();
+        /** The name the caller asked for, before any failover relabel (the `legacy-name` metric + shadow check key on it). */
+        const requestedProfileName = String(profileHint ?? "").trim();
+
+        // P5c (docs/PLAN_PROFILES_ROLE_ONLY.md, idea-77): a hint that names a ROLE ("implement", "review", "work order")
+        // and no stored profile routes through resolveRoute: role provider list (capped/over-quota skipped), tier ladder
+        // (role default tier x stakes), role mode. It then runs as an explicit profile built from that route, so the cap
+        // wins and a caller model is dropped when the family changes (P5a review M3). Old names and aliases never get
+        // here (stored/pack match first; capitalised "Lead"/"Brainstorm" are aliases): they keep today's walk below.
+        let roleRoute: { profile: any; route: any; explicitCapped: boolean } | null = null;
+        if (requestedProfileName && !profileMatch?.explicit) {
+          const roles = liveRoles(loadStoredProfiles());
+          if (roleNameHit(requestedProfileName, roles)) {
+            roleRoute = roleSpawnProfile(requestedProfileName, {
+              stakes: stakesRaw,
+              caps: cappedFamilies(usageList, [provider]),
+              roles,
+              explicitModel: rawCallerModel,
+            });
+          }
+          if (roleRoute) {
+            matchedProfile = roleRoute.profile as StoredProfile;
+            profileMatch = { profile: matchedProfile, explicit: true };
+            // Role-name spawns carry profile=<Role> (old names keep their old name during the window).
+            const roleName = String(roleRoute.profile.name);
+            if (nextReqLabels?.profile) nextReqLabels.profile = roleName;
+            if (config?.labels?.profile && config.labels.profile !== roleName) {
+              next.labels = { ...(next.labels ?? config.labels), profile: roleName };
+              changed = true;
+            }
+            if (reqLabels.profile) reqLabels.profile = roleName;
+          }
+        }
+
         // Remember whether the caller explicitly named the profile BEFORE any failover, so a
         // fuzzy (role/title/cwd) match can never be promoted to an explicit match and silently
         // overwrite the caller's provider/model. An explicit profile owns the provider choice;
@@ -1684,17 +1761,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         // Auto-failover: when the matched profile's provider is over quota or capped, switch
         // to its healthy counterpart before the session is created. Only when usage/capped
         // data is actually present (tests or on-disk), so normal spawns are unaffected.
-        const usageList: any[] = [
-          ...(typeof deps.usageProviders === "function"
-            ? deps.usageProviders()
-            : Array.isArray(deps.usageProviders)
-              ? deps.usageProviders
-              : []),
-        ];
-        for (const family of Object.keys(readCappedProviderMap())) {
-          usageList.push({ id: family, status: "exhausted", usedPct: 100 });
-        }
-        if (usageList.length > 0 && matchedProfile) {
+        // Role routes already walked their provider list in resolveRoute.
+        if (!roleRoute && usageList.length > 0 && matchedProfile) {
           // Only fail over a fuzzy match when the caller is actually on the matched profile's
           // provider (or left the provider blank). A role/title/cwd inference that picked a
           // default profile must never drag the caller onto another provider, e.g. a fuzzy
@@ -1907,26 +1975,43 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        /** P5c: the tier the route resolved to, stamped as the `tier` label below. */
+        let stampTier = "";
         // Routing by stakes (PLAN_ROUTING_BY_STAKES R1/R2): applied for the provider the spawn ended up on after
         // failover. An explicit caller model/thinking wins; missing/unknown stakes = normal = profile unchanged.
         {
           // `config` is the caller's original request (`next` already carries the profile override), so this reads what the caller asked for.
-          // spawn_worker pre-fills model/thinking from the profile and names them in `vs.profile-derived`; those are not caller-explicit.
-          const derivedFields = String(reqLabels["vs.profile-derived"] ?? "").split(",").map((f) => f.trim());
-          const stakesRaw = reqLabels.stakes || env?.VS_STAKES;
           const stakesOn = normalizeStakes(stakesRaw) !== "normal";
           // Failover moved the spawn to another provider: the caller's model/effort belong to the old one, so they are not explicit here
           // and the failover provider's rung applies.
           const finalFamily = normalizeProviderFamily(String(next.provider ?? provider));
           const sameProvider = finalFamily === normalizeProviderFamily(provider);
-          const rawModel = derivedFields.includes("model") ? "" : String(config.model ?? "").trim();
+          const rawModel = rawCallerModel;
           const modelFamily = normalizeProviderFamily(rawModel);
           // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
           const callerModel = modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily ? "" : rawModel;
           const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
           const keepModel = stakesOn && sameProvider && Boolean(callerModel);
           const keepEffort = stakesOn && sameProvider && Boolean(callerEffort);
-          const route = resolveStakesRoute(String(next.provider ?? provider), matchedProfile, stakesRaw, { model: keepModel, effort: keepEffort });
+          // Role routes: the tier ladder already applied the stakes (resolveRoute), so the old per-stakes ladder is skipped.
+          const route = roleRoute
+            ? {
+                stakes: normalizeStakes(stakesRaw),
+                apply: false,
+                reason:
+                  keepModel && keepEffort
+                    ? "explicit"
+                    : keepModel || keepEffort
+                      ? "explicit+ladder"
+                      : roleRoute.route.reasons.includes("stakes")
+                        ? "ladder"
+                        : roleRoute.route.reasons.includes("failover")
+                          ? "failover"
+                          : "default",
+                model: undefined as string | undefined,
+                effort: undefined as string | undefined,
+              }
+            : resolveStakesRoute(String(next.provider ?? provider), matchedProfile, stakesRaw, { model: keepModel, effort: keepEffort });
           if (keepModel || keepEffort) {
             // An explicit model/thinking beats the ladder AND an explicit profile's defaults; enforceProfileAfterSpawn must not revert it.
             if (keepModel) next.model = callerModel;
@@ -1945,7 +2030,52 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             if (reqAgentId) ladderSpawns.set(reqAgentId, at);
           }
           const reason = route.reason === "default" && failoverProfileName ? "failover" : route.reason;
-          const routeText = `stakes=${route.stakes} model=${next.model ?? "-"} effort=${next.thinkingOptionId ?? "-"} reason=${reason}`;
+          // P5c stamps: tier + role from resolveRoute. Old names/aliases: today's walk above decided the route; resolveRoute
+          // replays it as a shadow (tier/role stamp, `legacy-name`, `shadow=` on any disagreement). Never the authority.
+          let routeTier = "";
+          let routeRole = "";
+          let explicitCapped = false;
+          let shadow = "";
+          const legacyName = wasExplicit && !roleRoute && Boolean(legacyProfileRole(requestedProfileName));
+          if (roleRoute) {
+            routeTier = roleRoute.route.tier;
+            routeRole = roleRoute.route.role;
+            explicitCapped = roleRoute.explicitCapped && !keepModel && !keepCaller;
+          } else if (legacyName) {
+            const meta = legacyRouteMeta(requestedProfileName, {
+              stakes: stakesRaw,
+              caps: cappedFamilies(usageList, [provider]),
+              explicitModel: rawModel,
+            });
+            if (meta) {
+              routeTier = meta.route.tier;
+              routeRole = meta.route.role ?? "";
+              explicitCapped = meta.explicitCapped && !keepModel && !keepCaller;
+              // Only when the hook applied the profile (profile-override keeps the caller's own settings, by design).
+              if (!keepCaller) {
+                shadow = legacyShadowMismatch(
+                  meta,
+                  { provider: String(next.provider ?? provider), model: next.model, effort: next.thinkingOptionId },
+                  { skipModel: keepModel, skipEffort: keepEffort },
+                );
+                if (shadow) log(`route-shadow: ${requestedProfileName} landed ${shadow} (resolveRoute replay disagrees; today's walk kept)`);
+              }
+            }
+          }
+          if (!routeTier) routeTier = routeTierOf(requestedProfileName || matchedProfile?.name || "", stakesRaw);
+          if (!routeRole) routeRole = routeRoleKeyOf(requestedProfileName || matchedProfile?.name || "");
+          stampTier = routeTier;
+          const routeText = routeMetricText({
+            stakes: route.stakes,
+            model: next.model,
+            effort: next.thinkingOptionId,
+            reason,
+            legacyName,
+            tier: routeTier,
+            role: routeRole,
+            explicitCapped,
+            shadow,
+          });
           logProfileMetric(reqLabels, cwd, `route: ${routeText}`, reqAgentId ? [reqAgentId] : []);
           // idea-87: the id does not exist yet, so the route rides the spawn's labels and agent.created logs `route-agent` with it.
           if (!reqAgentId && (request as any).labels) {
@@ -1961,6 +2091,22 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const wf = resolveWfLabel({ labels: reqLabels, env, provider: String(next.provider ?? provider), model: next.model, profile: matchedProfile });
           if ((nextReqLabels ?? reqLabels)[WF_LABEL] !== wf) {
             nextReqLabels = { ...(nextReqLabels ?? reqLabels), [WF_LABEL]: wf };
+            changed = true;
+          }
+          // P5c: every routed spawn carries provider, model, tier and (normalized) stakes, from the final route.
+          const stamp: Labels = {};
+          const stampVals: Record<string, string> = {
+            provider: String(next.provider ?? provider ?? "").trim(),
+            model: String(next.model ?? "").trim(),
+            tier: stampTier,
+            stakes: normalizeStakes(stakesRaw),
+          };
+          for (const k of ROUTE_STAMP_LABELS) {
+            const v = stampVals[k];
+            if (v && (nextReqLabels ?? reqLabels)[k] !== v) stamp[k] = v;
+          }
+          if (Object.keys(stamp).length) {
+            nextReqLabels = { ...(nextReqLabels ?? reqLabels), ...stamp };
             changed = true;
           }
         }
@@ -2284,6 +2430,20 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               model: s.model ?? agent.model ?? s.config?.model,
               profile: hint ? matchStoredProfile(hint)?.profile : null,
             });
+          }
+          // P5c: spawns whose labels never reached before(agent.create) still get the route stamps (only the missing ones).
+          {
+            const s: any = me ?? {};
+            const hint = String(labels.profile ?? "").trim();
+            const stampVals: Record<string, string> = {
+              provider: String(s.provider ?? agent.provider ?? s.config?.provider ?? "").trim(),
+              model: String(s.model ?? agent.model ?? s.config?.model ?? "").trim(),
+              tier: routeTierOf(hint, labels.stakes),
+              stakes: normalizeStakes(labels.stakes),
+            };
+            for (const k of ROUTE_STAMP_LABELS) {
+              if (!String(labels[k] ?? "").trim() && stampVals[k]) want[k] = stampVals[k];
+            }
           }
           if (Object.keys(want).length > 0) {
             await deps.setLabels(agent.id, { ...labels, ...want }).catch((e) => log(`label failed: ${e}`));
