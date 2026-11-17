@@ -1,10 +1,11 @@
 // Role-only routing (docs/PLAN_PROFILES_ROLE_ONLY.md P5a, idea-77): a profile names a ROLE; the model + effort come from
 // one ladder: role default tier x stakes -> tier -> provider rung (server/stakes-ladder.mjs DEFAULT_TIER_LADDER).
 // Pure: no file reads, no globals written. The caller passes the ladders (loadTierLadder()/loadStakesLadder() for the
-// user override) and the capped providers. Not wired into the spawn hook yet (P5c); no profile schema change (P5b).
+// user override) and the capped providers. Not wired into the spawn hook yet (P5c). Stored roles (profiles.json schema
+// v2, P5b) come in as opts.roles from server/profiles-v2.mjs loadRoles(); ROLE_TABLE is the default.
 // Legacy profile names (Workaround, removed in P5f) do NOT use the tier ladder: they replay today's routing exactly
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
-import { LEGACY_PROFILE_ALIASES } from "./profiles.mjs";
+import { LEGACY_PROFILE_ALIASES, LEGACY_PROFILE_ROLES } from "./profiles.mjs";
 import {
   DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
@@ -108,8 +109,8 @@ export const ROLE_TABLE = deepFreeze({
 });
 
 /**
- * The profiles today's failover can land on from the 12 names, with the provider/model/effort/mode each spawns with at
- * normal stakes (DEFAULT_PACK_PROFILES + the user-file-only "Implement - Gemini (trial)"). Legacy pins.
+ * Every old profile name and every profile today's failover can land on from one, with the provider/model/effort/mode
+ * each spawns with at normal stakes (DEFAULT_PACK_PROFILES + the user-file-only "Implement - Gemini (trial)"). Legacy pins.
  */
 export const LEGACY_HOP_PROFILES = deepFreeze({
   "Lead - Claude": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
@@ -127,28 +128,53 @@ export const LEGACY_HOP_PROFILES = deepFreeze({
   "Check - Haiku": { provider: "claude", model: "claude-haiku-5-5", effort: "low", modeId: "auto" },
   "Audit - DSF": { provider: "opencode", model: "deepseek/deepseek-flash", effort: "default", modeId: "plan" },
   "Senior Reasoning - DSP": { provider: "opencode", model: "deepseek/deepseek-v4-pro", effort: "high", modeId: "build" },
+  // P5b: the rest of the shipped pack (chain-only names in ROLE_FAILOVER_CHAINS + their hops).
+  "Spec - Opus": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
+  "Planner - Sonnet": { provider: "claude", model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" },
+  "Implement - Opus": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
+  "Mechanical - DSF": { provider: "opencode", model: "deepseek/deepseek-flash", effort: "default", modeId: "build" },
+  "Scout - Flash": { provider: "antigravity-cli", model: "gemini-3.8-flash", effort: "low", modeId: "plan" },
+  "UX Reviewer - Opus": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
 });
 
 /**
- * Legacy profile name -> role + `via`: the profile today's failover lands on per provider, in walk order (own profile,
- * then the first uncapped hop). Each hop pins provider/model/effort/mode, and the old per-stakes ladder applies on top,
- * so a legacy name routes exactly as today under any caps and stakes. Covers the 12 profiles in use; P5b extends it.
+ * Old profile name -> `via`: the profile today's failover lands on per provider, in walk order (own profile, then the
+ * first uncapped hop), replayed against today's 12-profile user file. Each hop pins provider/model/effort/mode and the
+ * old per-stakes ladder applies on top, so an old name routes exactly as today under any caps and stakes.
+ */
+const LEGACY_VIA = {
+  "Lead - Claude": ["Lead - Claude", "Lead - Gemini", "Senior Reasoning - DSP"],
+  "Lead - Gemini": ["Lead - Gemini", "Lead - Claude", "Senior Reasoning - DSP"],
+  "Brainstorm - Claude": ["Brainstorm - Claude", "Brainstorm - Gemini", "Senior Reasoning - DSP"],
+  "Brainstorm - Gemini": ["Brainstorm - Gemini", "Brainstorm - Claude", "Senior Reasoning - DSP"],
+  "Implement - Sonnet": ["Implement - Sonnet", "Lead - Gemini", "Work Order - DSP"],
+  "Implement - Gemini (trial)": ["Implement - Gemini (trial)", "Implement - Sonnet", "Work Order - DSP"],
+  "Work Order - DSP": ["Work Order - DSP", "Implement - Sonnet", "Lead - Gemini"],
+  "Review - Gemini": ["Review - Gemini", "Review - Sonnet", "Work Order - DSP"],
+  "Review - Sonnet": ["Review - Sonnet", "Review - Gemini", "Senior Reasoning - DSP"],
+  "Pre-check - Flash": ["Pre-check - Flash", "Check - Haiku", "Audit - DSF"],
+  "Art Director - Gemini": ["Art Director - Gemini", "Art Painter - Opus", "Work Order - DSP"],
+  "Art Painter - Opus": ["Art Painter - Opus", "Art Director - Gemini", "Work Order - DSP"],
+  // P5b: the rest of the shipped pack (chain-only names in ROLE_FAILOVER_CHAINS).
+  "Spec - Opus": ["Spec - Opus", "Lead - Gemini", "Senior Reasoning - DSP"],
+  "Planner - Sonnet": ["Planner - Sonnet", "Lead - Gemini", "Senior Reasoning - DSP"],
+  "Implement - Opus": ["Implement - Opus", "Lead - Gemini", "Work Order - DSP"],
+  "Senior Reasoning - DSP": ["Senior Reasoning - DSP", "Lead - Gemini", "Implement - Sonnet"],
+  "Mechanical - DSF": ["Mechanical - DSF", "Pre-check - Flash", "Check - Haiku"],
+  "UX Reviewer - Opus": ["UX Reviewer - Opus", "Work Order - DSP", "Review - Gemini"],
+  "Check - Haiku": ["Check - Haiku", "Pre-check - Flash", "Audit - DSF"],
+  "Audit - DSF": ["Audit - DSF", "Scout - Flash", "Implement - Sonnet"],
+  "Scout - Flash": ["Scout - Flash", "Implement - Sonnet", "Work Order - DSP"],
+};
+
+/**
+ * Legacy profile name -> {role, via}. The role is the legacy alias table's role column (profiles.mjs
+ * LEGACY_PROFILE_ROLES); aliases reach an entry through LEGACY_PROFILE_ALIASES. Covers every old name.
  * Workaround: removed in P5f.
  */
-export const LEGACY_ROUTES = deepFreeze({
-  "Lead - Claude": { role: "lead", via: ["Lead - Claude", "Lead - Gemini", "Senior Reasoning - DSP"] },
-  "Lead - Gemini": { role: "lead", via: ["Lead - Gemini", "Lead - Claude", "Senior Reasoning - DSP"] },
-  "Brainstorm - Claude": { role: "brainstorm", via: ["Brainstorm - Claude", "Brainstorm - Gemini", "Senior Reasoning - DSP"] },
-  "Brainstorm - Gemini": { role: "brainstorm", via: ["Brainstorm - Gemini", "Brainstorm - Claude", "Senior Reasoning - DSP"] },
-  "Implement - Sonnet": { role: "implement", via: ["Implement - Sonnet", "Lead - Gemini", "Work Order - DSP"] },
-  "Implement - Gemini (trial)": { role: "implement", via: ["Implement - Gemini (trial)", "Implement - Sonnet", "Work Order - DSP"] },
-  "Work Order - DSP": { role: "work-order", via: ["Work Order - DSP", "Implement - Sonnet", "Lead - Gemini"] },
-  "Review - Gemini": { role: "review", via: ["Review - Gemini", "Review - Sonnet", "Work Order - DSP"] },
-  "Review - Sonnet": { role: "review", via: ["Review - Sonnet", "Review - Gemini", "Senior Reasoning - DSP"] },
-  "Pre-check - Flash": { role: "pre-check", via: ["Pre-check - Flash", "Check - Haiku", "Audit - DSF"] },
-  "Art Director - Gemini": { role: "art-director", via: ["Art Director - Gemini", "Art Painter - Opus", "Work Order - DSP"] },
-  "Art Painter - Opus": { role: "art-painter", via: ["Art Painter - Opus", "Art Director - Gemini", "Work Order - DSP"] },
-});
+export const LEGACY_ROUTES = deepFreeze(
+  Object.fromEntries(Object.entries(LEGACY_VIA).map(([name, via]) => [name, { role: LEGACY_PROFILE_ROLES[name], via }])),
+);
 
 function deepFreeze(o) {
   for (const v of Object.values(o)) if (v && typeof v === "object") deepFreeze(v);

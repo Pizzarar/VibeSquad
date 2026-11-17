@@ -485,6 +485,58 @@ export const LEGACY_PROFILE_ALIASES = {
   Fast: "Pre-check - Flash",
 };
 
+/**
+ * Role-only profiles (docs/PLAN_PROFILES_ROLE_ONLY.md P5b, idea-77): every old profile name -> its schema-v2 role key
+ * (server/role-route.mjs ROLE_TABLE). Covers the shipped pack, the user-file-only "Implement - Gemini (trial)" and the
+ * chain-only names in ROLE_FAILOVER_CHAINS. The aliases above reach a role through their target name here, so this is
+ * the role column of the legacy alias table, not a second alias map. role-route.mjs LEGACY_ROUTES takes its roles from
+ * it; resolveRoute tags every hit `reason=legacy-name`. Workaround: removed with the aliases in P5f.
+ */
+export const LEGACY_PROFILE_ROLES = Object.freeze({
+  "Lead - Claude": "lead",
+  "Lead - Gemini": "lead",
+  "Brainstorm - Claude": "brainstorm",
+  "Brainstorm - Gemini": "brainstorm",
+  "Implement - Sonnet": "implement",
+  "Implement - Opus": "implement",
+  "Implement - Gemini (trial)": "implement",
+  "Spec - Opus": "implement",
+  "Planner - Sonnet": "implement",
+  "Senior Reasoning - DSP": "implement",
+  "Work Order - DSP": "work-order",
+  "Mechanical - DSF": "work-order",
+  "Review - Gemini": "review",
+  "Review - Sonnet": "review",
+  "UX Reviewer - Opus": "review",
+  "Pre-check - Flash": "pre-check",
+  "Check - Haiku": "pre-check",
+  "Audit - DSF": "pre-check",
+  "Scout - Flash": "pre-check",
+  "Art Director - Gemini": "art-director",
+  "Art Painter - Opus": "art-painter",
+});
+
+/**
+ * Old profile name or alias -> {name, alias, role}: `name` = the canonical old profile name, `alias` = the alias used
+ * (null for a direct name). Exact name, exact alias, then the name case-insensitively: the same order as role-route.mjs
+ * lookupRole, so lowercase "lead" is not an old name (it is the new role). null = not an old name.
+ */
+export function legacyProfileRole(nameInput) {
+  const raw = String(nameInput ?? "").trim();
+  if (!raw) return null;
+  const hit = (name, alias = null) => ({ name, alias, role: LEGACY_PROFILE_ROLES[name] });
+  if (Object.hasOwn(LEGACY_PROFILE_ROLES, raw)) return hit(raw);
+  if (Object.hasOwn(LEGACY_PROFILE_ALIASES, raw) && Object.hasOwn(LEGACY_PROFILE_ROLES, LEGACY_PROFILE_ALIASES[raw])) {
+    return hit(LEGACY_PROFILE_ALIASES[raw], raw);
+  }
+  const lower = raw.toLowerCase();
+  const name = Object.keys(LEGACY_PROFILE_ROLES).find((n) => n.toLowerCase() === lower);
+  return name ? hit(name) : null;
+}
+
+/** profiles.json schemaVersion written by scripts/migrate-profiles-v2.mjs (roles block). Absent = v1 (profiles only). */
+export const PROFILES_SCHEMA_VERSION = 2;
+
 export function deriveRole(name, explicitRole) {
   if (explicitRole === "lead" || explicitRole === "brainstorm" || explicitRole === "worker") {
     return explicitRole;
@@ -588,7 +640,10 @@ export function normalizeProviderOverrides(raw) {
   return out;
 }
 
-/** The raw providers/providerIcons block already on disk, so saves never drop it. */
+/**
+ * The raw top-level blocks already on disk that a profiles save must keep: providers/providerIcons and the schema-v2
+ * `schemaVersion` + `roles` (P5b), so editing a profile never downgrades a migrated file.
+ */
 function readProviderBlock(targetPath) {
   if (!existsSync(targetPath)) return {};
   const res = readJsonFileWithBom(targetPath, {
@@ -599,14 +654,27 @@ function readProviderBlock(targetPath) {
   const parsed = res.data;
   if (!parsed || Array.isArray(parsed)) return {};
   const block = {};
-  if (parsed.providers !== undefined) block.providers = parsed.providers;
-  if (parsed.providerIcons !== undefined) block.providerIcons = parsed.providerIcons;
+  for (const k of PROFILES_FILE_KEEP_KEYS) if (parsed[k] !== undefined) block[k] = parsed[k];
   return block;
+}
+
+/** Top-level keys a save keeps, in file order (between `version` and `profiles`). */
+const PROFILES_FILE_KEEP_KEYS = ["schemaVersion", "providers", "providerIcons", "roles"];
+
+/**
+ * profiles.json body in the one key order every writer uses (version, schemaVersion, providers, providerIcons, roles,
+ * profiles), so a save after the v2 migration and the migration itself produce identical bytes.
+ */
+export function profilesFileBody(block, profiles) {
+  const out = { version: 1 };
+  for (const k of PROFILES_FILE_KEEP_KEYS) if (block?.[k] !== undefined) out[k] = block[k];
+  out.profiles = profiles;
+  return out;
 }
 
 function writeProfilesFile(targetPath, profiles) {
   const block = readProviderBlock(targetPath);
-  writeSettingsAtomic(targetPath, { version: 1, ...block, profiles });
+  writeSettingsAtomic(targetPath, profilesFileBody(block, profiles));
   clearConfigWarning(targetPath);
 }
 
@@ -783,7 +851,10 @@ export function loadProfiles(profilesPath, options = {}) {
         if (dirty) {
           writeProfilesFile(targetPath, profiles);
         }
+        // Schema v2 (P5b): the stored roles ride along untouched; profiles-v2.mjs loadRoles() normalizes + defaults them.
+        const v2 = Number(parsed?.schemaVersion) >= PROFILES_SCHEMA_VERSION && parsed?.roles && typeof parsed.roles === "object";
         return {
+          ...(v2 ? { schemaVersion: Number(parsed.schemaVersion), roles: parsed.roles } : {}),
           providerOverrides,
           exists: true,
           needsSetup: false,
