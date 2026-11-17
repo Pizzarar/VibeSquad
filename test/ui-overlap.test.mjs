@@ -69,14 +69,18 @@ ${describeHits(bad)}`);
 // synthetic page and stay quiet on a compact one, at the thresholds documented in page-audit.js (scroll 2x + 1 viewport, menu 40%).
 const AUDIT_SRC = fs.readFileSync(new URL("../scripts/ui-overlap/page-audit.js", import.meta.url), "utf8");
 const pw = resolvePlaywright(), exe = findBrowser();
+// idea-309: every always-on browser test is bounded (node:test has no default timeout, so a wedged launch/page wait held the suite slot 30+ min).
+// Budget: ensureDist lock wait 60s + vite build 150s (killed, lock released) + launch 60s < 300s, so a slow build fails with its own error first.
+const CLICK_TEST_MS = 300000;
+const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms}ms`)), ms).unref())]);
 const fixtureHtml = (body) => `<!doctype html><body style="margin:0;height:100vh;overflow:hidden">${body}</body>`;
 const BIG_LIST = `<div id="p" style="position:absolute;left:0;top:0;width:300px;height:300px;overflow-y:auto"><div style="height:2000px">rows</div></div>`;
 const SMALL_LIST = `<div id="p" style="position:absolute;left:0;top:0;width:300px;height:300px;overflow-y:auto"><div style="height:500px">rows</div></div>`;
 const BIG_MENU = `<div role="menu" id="m" style="position:absolute;left:0;top:0;width:90vw;height:80vh;background:#ccc">menu</div>`;
 const SMALL_MENU = `<div role="menu" id="m" style="position:absolute;left:0;top:0;width:200px;height:240px;background:#ccc">menu</div>`;
 
-test("compact guard: geometry checks fire on massive scrolls / overbearing menus and not on compact ones", { skip: pw && exe ? false : "no Playwright / Edge / Chrome" }, async () => {
-  const browser = await pw.chromium.launch({ executablePath: exe, headless: true });
+test("compact guard: geometry checks fire on massive scrolls / overbearing menus and not on compact ones", { skip: pw && exe ? false : "no Playwright / Edge / Chrome", timeout: CLICK_TEST_MS }, async () => {
+  const browser = await pw.chromium.launch({ executablePath: exe, headless: true, timeout: 60000 });
   try {
     const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
     const kinds = async (body) => {
@@ -100,12 +104,15 @@ test("compact guard: geometry checks fire on massive scrolls / overbearing menus
 // Clicks the control in takeover / hub / compact and asserts the view is unchanged and the menu/popover is open and unclipped.
 const clickSkip = pw && exe ? false : "no Playwright / Edge / Chrome";
 let clickEnvPromise = null;
+const clickPartial = {}; // server/browser as soon as they exist, so after() can close them even when getClickEnv rejects
 async function getClickEnv() {
   if (!clickEnvPromise) {
     clickEnvPromise = (async () => {
-      await ensureDist();
+      await ensureDist({ lockWaitMs: 60000 }); // bounded inside: lock wait capped, vite build killed at 150s (a withTimeout wrapper here would leave Vite + .dist-build.lock running)
       const { server, baseUrl } = await serveDist();
-      const browser = await pw.chromium.launch({ executablePath: exe, headless: true });
+      clickPartial.server = server;
+      const browser = await pw.chromium.launch({ executablePath: exe, headless: true, timeout: 60000 });
+      clickPartial.browser = browser;
       const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
       await installRoutes(context);
       const page = await context.newPage();
@@ -117,10 +124,14 @@ async function getClickEnv() {
 
 after(async () => {
   if (!clickEnvPromise) return;
-  const env = await clickEnvPromise.catch(() => null);
-  if (!env) return;
-  await env.browser.close().catch(() => {});
-  await new Promise((r) => env.server.close(r));
+  const env = await clickEnvPromise.catch(() => null) ?? clickPartial; // failed setup: still close what it opened
+  if (!env.browser && !env.server) return;
+  // Bounded teardown: a browser.close() that never returns must not outlive the file; kill the Edge child instead.
+  if (env.browser) await withTimeout(env.browser.close(), 15000, "browser.close").catch(() => { try { env.browser.process?.()?.kill("SIGKILL"); } catch {} });
+  if (env.server) {
+    env.server.closeAllConnections?.();
+    await withTimeout(new Promise((r) => env.server.close(r)), 5000, "server.close").catch(() => {});
+  }
 });
 
 let bootDone = false;
@@ -227,7 +238,7 @@ async function assertHubMultiPointClickable(page) {
   assert.deepEqual(leftover, { detailsOpen: false, takeoverOverlay: false, openCls: false, dataOpen: "none" });
 }
 
-test("click-audit A0: data-sky-owner portal targets + SKY_POPOVER_SELECTOR + page stays clickable at all hub points after thinking change & every sky exit path", { skip: clickSkip }, async () => {
+test("click-audit A0: data-sky-owner portal targets + SKY_POPOVER_SELECTOR + page stays clickable at all hub points after thinking change & every sky exit path", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { SKY_POPOVER_SELECTOR, SKY_OWNER_SELECTOR } = await import("../src/skyZonesLogic.ts");
   for (const sel of ["[data-sky-owner]", ".drawer-head-compact", ".drawer-config-popover"]) {
     assert.ok(SKY_POPOVER_SELECTOR.includes(sel), `SKY_POPOVER_SELECTOR must include ${sel}`);
@@ -277,7 +288,7 @@ test("click-audit A0: data-sky-owner portal targets + SKY_POPOVER_SELECTOR + pag
   await assertHubMultiPointClickable(page);
 });
 
-test("click-audit M1 & M2: real outside clicks close takeover, and Overlord takeover does not leak into shared panes state", { skip: clickSkip }, async () => {
+test("click-audit M1 & M2: real outside clicks close takeover, and Overlord takeover does not leak into shared panes state", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "overlord");
   assert.equal(await page.locator(".pin-focus-slot").getAttribute("data-sky-owner"), "demo-hub-overlord");
@@ -294,7 +305,7 @@ test("click-audit M1 & M2: real outside clicks close takeover, and Overlord take
   await assertHubMultiPointClickable(page);
 });
 
-test("click-audit A3 #1: drawer-config-menu-btn in takeover opens unclipped, keeps takeover, and closes on outside/Escape", { skip: clickSkip }, async () => {
+test("click-audit A3 #1: drawer-config-menu-btn in takeover opens unclipped, keeps takeover, and closes on outside/Escape", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -307,7 +318,7 @@ test("click-audit A3 #1: drawer-config-menu-btn in takeover opens unclipped, kee
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #2: drawer-config-menu-btn in hub (50/50 sky-rest) opens unclipped above TVs and closes on outside/Escape", { skip: clickSkip }, async () => {
+test("click-audit A3 #2: drawer-config-menu-btn in hub (50/50 sky-rest) opens unclipped above TVs and closes on outside/Escape", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, null);
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -319,7 +330,7 @@ test("click-audit A3 #2: drawer-config-menu-btn in hub (50/50 sky-rest) opens un
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #3: drawer-config-menu-btn in compact closes on outside click and Escape without exiting pin-focus", { skip: clickSkip }, async () => {
+test("click-audit A3 #3: drawer-config-menu-btn in compact closes on outside click and Escape without exiting pin-focus", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openCompactLane(page, baseUrl);
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -334,7 +345,7 @@ test("click-audit A3 #3: drawer-config-menu-btn in compact closes on outside cli
   await assertPageClickable(page, { hub: false });
 });
 
-test("click-audit A3 #4: drawer-thinking-select in takeover is reachable and keeps takeover & menu open", { skip: clickSkip }, async () => {
+test("click-audit A3 #4: drawer-thinking-select in takeover is reachable and keeps takeover & menu open", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -347,7 +358,7 @@ test("click-audit A3 #4: drawer-thinking-select in takeover is reachable and kee
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #5: drawer-thinking-select in hub (50/50 sky-rest) is reachable and keeps hub & menu open", { skip: clickSkip }, async () => {
+test("click-audit A3 #5: drawer-thinking-select in hub (50/50 sky-rest) is reachable and keeps hub & menu open", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, null);
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -360,7 +371,7 @@ test("click-audit A3 #5: drawer-thinking-select in hub (50/50 sky-rest) is reach
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #8: drawer-mode-select in takeover is reachable and keeps takeover & menu open", { skip: clickSkip }, async () => {
+test("click-audit A3 #8: drawer-mode-select in takeover is reachable and keeps takeover & menu open", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -373,7 +384,7 @@ test("click-audit A3 #8: drawer-mode-select in takeover is reachable and keeps t
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #9: drawer-mode-select in hub (50/50 sky-rest) is reachable and keeps hub & menu open", { skip: clickSkip }, async () => {
+test("click-audit A3 #9: drawer-mode-select in hub (50/50 sky-rest) is reachable and keeps hub & menu open", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, null);
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-config-menu-btn"]').click();
@@ -386,7 +397,7 @@ test("click-audit A3 #9: drawer-mode-select in hub (50/50 sky-rest) is reachable
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #12: drawer-provider-select in takeover keeps takeover and binds to Overlord on Overlord TV takeover", { skip: clickSkip }, async () => {
+test("click-audit A3 #12: drawer-provider-select in takeover keeps takeover and binds to Overlord on Overlord TV takeover", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "overlord");
   assert.equal(await page.locator('[data-testid="pin-focus-bar"] .drawer-head-compact-title').count(), 1, "compact header must bind to Overlord on Overlord TV takeover");
@@ -395,7 +406,7 @@ test("click-audit A3 #12: drawer-provider-select in takeover keeps takeover and 
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #16: drawer-model-select and custom input in takeover keep takeover open", { skip: clickSkip }, async () => {
+test("click-audit A3 #16: drawer-model-select and custom input in takeover keep takeover open", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await page.locator('[data-testid="pin-focus-bar"] [data-testid="drawer-model-select"]').click();
@@ -406,7 +417,7 @@ test("click-audit A3 #16: drawer-model-select and custom input in takeover keep 
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #20: brainstorm-park-inbox-btn in takeover opens inbox popover and keeps takeover", { skip: clickSkip }, async () => {
+test("click-audit A3 #20: brainstorm-park-inbox-btn in takeover opens inbox popover and keeps takeover", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await page.locator('.pin-rail-active-inspector [data-testid="brainstorm-park-inbox-btn"]').click();
@@ -416,7 +427,7 @@ test("click-audit A3 #20: brainstorm-park-inbox-btn in takeover opens inbox popo
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #22: btn-brainstorm-summary in takeover opens summary preview and keeps takeover", { skip: clickSkip }, async () => {
+test("click-audit A3 #22: btn-brainstorm-summary in takeover opens summary preview and keeps takeover", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await page.locator(".pin-rail-active-inspector .btn-brainstorm-summary").click();
@@ -425,7 +436,7 @@ test("click-audit A3 #22: btn-brainstorm-summary in takeover opens summary previ
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #24: drawer-more-toggle in takeover expands secondary tools and keeps takeover", { skip: clickSkip }, async () => {
+test("click-audit A3 #24: drawer-more-toggle in takeover expands secondary tools and keeps takeover", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await ensureMoreExpanded(page);
@@ -434,7 +445,7 @@ test("click-audit A3 #24: drawer-more-toggle in takeover expands secondary tools
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #26: drawer-sandbox-btn in takeover opens unclipped sandbox panel inside viewport and keeps takeover", { skip: clickSkip }, async () => {
+test("click-audit A3 #26: drawer-sandbox-btn in takeover opens unclipped sandbox panel inside viewport and keeps takeover", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await ensureMoreExpanded(page);
@@ -445,7 +456,7 @@ test("click-audit A3 #26: drawer-sandbox-btn in takeover opens unclipped sandbox
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #27: drawer-sandbox-btn in hub (50/50 sky-rest) opens unclipped sandbox panel inside viewport", { skip: clickSkip }, async () => {
+test("click-audit A3 #27: drawer-sandbox-btn in hub (50/50 sky-rest) opens unclipped sandbox panel inside viewport", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, null);
   await ensureMoreExpanded(page);
@@ -456,7 +467,7 @@ test("click-audit A3 #27: drawer-sandbox-btn in hub (50/50 sky-rest) opens uncli
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #28: drawer-sandbox-btn in compact opens unclipped sandbox panel inside viewport", { skip: clickSkip }, async () => {
+test("click-audit A3 #28: drawer-sandbox-btn in compact opens unclipped sandbox panel inside viewport", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openCompactLane(page, baseUrl);
   await ensureMoreExpanded(page);
@@ -467,7 +478,7 @@ test("click-audit A3 #28: drawer-sandbox-btn in compact opens unclipped sandbox 
   await assertPageClickable(page, { hub: false });
 });
 
-test("click-audit A3 #30: drawer-export-btn in takeover opens export options and keeps takeover open", { skip: clickSkip }, async () => {
+test("click-audit A3 #30: drawer-export-btn in takeover opens export options and keeps takeover open", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "riffbot");
   await ensureMoreExpanded(page);
@@ -477,7 +488,7 @@ test("click-audit A3 #30: drawer-export-btn in takeover opens export options and
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #32: AgentTitleEdit in Overlord takeover opens inline rename input and keeps takeover", { skip: clickSkip }, async () => {
+test("click-audit A3 #32: AgentTitleEdit in Overlord takeover opens inline rename input and keeps takeover", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
   await openHubSky(page, baseUrl, "overlord");
   const titleSpan = page.locator('[data-testid="pin-focus-bar"] .drawer-head-compact-title span[title="Double-click to rename"]');
@@ -489,7 +500,7 @@ test("click-audit A3 #32: AgentTitleEdit in Overlord takeover opens inline renam
   await assertPageClickable(page);
 });
 
-test("click-audit A3 #35-39: sky/hub controls (both panels open/closed, composer-more-tab, sky-idle Spin Up, Escape & outside clicks) keep page clickable", { skip: clickSkip }, async () => {
+test("click-audit A3 #35-39: sky/hub controls (both panels open/closed, composer-more-tab, sky-idle Spin Up, Escape & outside clicks) keep page clickable", { skip: clickSkip, timeout: CLICK_TEST_MS }, async () => {
   const { page, baseUrl } = await getClickEnv();
 
   // #35 & #37: RiffBot takeover + composer-more-tab ◂ menu + close
