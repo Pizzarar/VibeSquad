@@ -504,18 +504,24 @@ export function resolveLeadProfile(oldLead, profilesPath, capOpts = {}) {
   // the role route (provider list skipping capped providers, tier rung model + effort), as the spawn hook routes it.
   // Checked before findProfile: its alias lookup would map "lead" to "Lead - Claude". No stakes: the role's default tier.
   const storedHit = profiles.some((p) => String(p?.name ?? "").toLowerCase() === desiredKey.toLowerCase());
-  const roleCfg = storedHit
+  // Over-quota providers (usageProviders, >=95%) are skipped like capped ones, as brainstorm.mjs respawns do.
+  const roleHit = storedHit
     ? null
     : roleSpawnConfig(desiredKey, {
         profiles,
-        usageList: Object.keys(
-          readCappedProviders({
-            useDiskCaps: true,
-            ...(capOpts.cappedProviders !== undefined ? { cappedProviders: capOpts.cappedProviders } : {}),
-            ...(capOpts.cappedProvidersPath ? { cappedProvidersPath: capOpts.cappedProvidersPath } : {}),
-          }),
-        ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+        usageList: [
+          ...(Array.isArray(capOpts.usageProviders) ? capOpts.usageProviders : []),
+          ...Object.keys(
+            readCappedProviders({
+              useDiskCaps: true,
+              ...(capOpts.cappedProviders !== undefined ? { cappedProviders: capOpts.cappedProviders } : {}),
+              ...(capOpts.cappedProvidersPath ? { cappedProvidersPath: capOpts.cappedProvidersPath } : {}),
+            }),
+          ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+        ],
       });
+  // Only the lead role: a worker/Buddy role name here ("Implement") falls back like any unknown profile.
+  const roleCfg = roleHit?.profile?.role === "lead" ? roleHit : null;
   if (roleCfg) return { profileName: roleCfg.profileName, profile: roleCfg.profile, spawnCfg: roleCfg.spawnCfg };
   const profile =
     findProfile(desiredKey, profiles) || findProfile(fallbackProfileName, profiles);
@@ -765,6 +771,8 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath, {
       ...(deps.cappedProviders !== undefined ? { cappedProviders: deps.cappedProviders } : {}),
       ...(deps.cappedProvidersPath ? { cappedProvidersPath: deps.cappedProvidersPath } : {}),
+      // Quota reports (deps.usageProviders: a list, or a function returning the live list, as the spawn hook takes it).
+      ...((u) => (Array.isArray(u) ? { usageProviders: u } : {}))(typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders),
     });
 
     const prompt = buildSuccessorPrompt({

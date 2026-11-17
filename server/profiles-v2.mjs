@@ -254,6 +254,11 @@ export function profilesSchemaVersion(data) {
  *            unmapped: string[], sources?: object}}
  *   unmapped = stored profiles that are not an old name (custom profiles): they stay in `profiles`, no role is made.
  */
+/** A `roles` block with at least one role (an empty object is no roles). */
+function hasRoles(roles) {
+  return isObj(roles) && Object.keys(roles).length > 0;
+}
+
 export function migrateProfilesData(data) {
   const fromVersion = profilesSchemaVersion(data);
   if (fromVersion > PROFILES_SCHEMA_VERSION) {
@@ -264,8 +269,9 @@ export function migrateProfilesData(data) {
     return { ok: false, changed: false, fromVersion, unmapped: [], error: "no profiles list" };
   }
   const unmapped = list.filter((p) => isObj(p) && !legacyProfileRole(p.name)).map((p) => String(p.name ?? ""));
-  // A v2 body without a usable `roles` object (hand-edited, or a save that dropped it) is rebuilt, not trusted as-is.
-  if (fromVersion === PROFILES_SCHEMA_VERSION && isObj(data?.roles)) {
+  // A v2 body without a usable `roles` object (hand-edited, a save that dropped it, or an empty `{}`) is rebuilt, not
+  // trusted as-is. A build is never empty (every role falls back to the shipped pack), so this stays idempotent.
+  if (fromVersion === PROFILES_SCHEMA_VERSION && hasRoles(data?.roles)) {
     return { ok: true, changed: false, fromVersion, unmapped, data };
   }
   const { roles, sources } = buildRolesFromProfiles(list);
@@ -317,7 +323,7 @@ export function migrateProfilesFile(filePath, { dryRun = false } = {}) {
   } catch (err) {
     return { ...summary, ok: false, backupPath, error: `${err?.code || "write error"}: ${err?.message ?? err}; restore from the backup` };
   }
-  if (back.charCodeAt(0) === 0xfeff || profilesSchemaVersion(check) !== PROFILES_SCHEMA_VERSION || !isObj(check.roles) || check.profiles?.length !== res.data.profiles.length) {
+  if (back.charCodeAt(0) === 0xfeff || profilesSchemaVersion(check) !== PROFILES_SCHEMA_VERSION || !hasRoles(check.roles) || check.profiles?.length !== res.data.profiles.length) {
     return { ...summary, ok: false, backupPath, error: "read-back check failed; restore from the backup" };
   }
   return { ...summary, backupPath, bytes: Buffer.byteLength(back) };
@@ -350,7 +356,7 @@ export function loadRoles(filePath) {
     parsed = null;
   }
   const version = parsed ? profilesSchemaVersion(parsed) : 0;
-  if (version >= PROFILES_SCHEMA_VERSION && isObj(parsed.roles)) {
+  if (version >= PROFILES_SCHEMA_VERSION && hasRoles(parsed.roles)) {
     return { schemaVersion: version, roles: normalizeRoles(parsed.roles), source: "v2" };
   }
   const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.profiles) ? parsed.profiles : null;

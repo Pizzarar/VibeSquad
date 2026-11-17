@@ -385,9 +385,9 @@ test("the 9 names P5b adds route exactly as today (real user file) for every cap
   assert.equal(n, 9 * 8 * 6);
 });
 
-test("P5c L4: a schemaVersion 2 body without a roles object is rebuilt, not returned as-is", (t) => {
+test("P5c L4: a schemaVersion 2 body without a roles object (or an empty one) is rebuilt, not returned as-is", (t) => {
   const list = JSON.parse(readFileSync(FIXTURE, "utf8")).profiles;
-  for (const roles of [undefined, null, [], "x"]) {
+  for (const roles of [undefined, null, [], "x", {}]) {
     const res = migrateProfilesData({ version: 1, schemaVersion: 2, ...(roles === undefined ? {} : { roles }), profiles: list });
     assert.deepEqual([res.ok, res.changed, res.fromVersion], [true, true, 2], `roles=${JSON.stringify(roles)}`);
     assert.equal(Object.keys(res.data.roles).length, 8);

@@ -104,6 +104,23 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
 }
 
 /**
+ * Opt-in MCP extras (e.g. playwright) for a ROLE-name spawn on `provider`: the role's per-provider tools, else its own.
+ * null = not a role name (callers keep profiles.mjs profileMcpExtras, which only knows profile names).
+ * @param {string} name
+ * @param {any[]} [profiles] stored v1 profiles (roles are built live from them)
+ * @param {string} [provider]
+ * @returns {string[] | null}
+ */
+export function roleMcpExtras(name, profiles, provider) {
+  const found = roleNameHit(name, liveRoles(profiles));
+  if (!found) return null;
+  const fam = routeProviderFamily(provider);
+  const modeExtras = fam ? found.role.modes?.[fam]?.mcpExtras : undefined;
+  const ex = Array.isArray(modeExtras) ? modeExtras : found.role.mcpExtras;
+  return Array.isArray(ex) ? [...ex] : [];
+}
+
+/**
  * resolveRoute for an old profile name/alias (or null when it is not one): the tier/role stamp + `legacy-name`, and
  * whether a caller model on a capped family was dropped. Never decides the old name's routing (today's walk does).
  * @param {string} name

@@ -1325,6 +1325,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     const handoffCoordinator = createLeadHandoffCoordinator({
       rootDir: REPO_ROOT,
+      // P5c: a role-name lead respawn skips over-quota providers too (resolveLeadProfile), as spawn failover does.
+      ...(deps.usageProviders !== undefined ? { usageProviders: deps.usageProviders } : {}),
       baseHome: () => baseDir(),
       setLabels: (agentId: string, labels: Labels, name?: string) => deps.setLabels(agentId, labels, name),
       sendMessage: async (agentId: string, text: string) => {
@@ -1416,6 +1418,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const failoverSpawns = new Map<string, { profile: string; at: number }>();
     /** Spawns before(agent.create) routed by the stakes ladder: key (agent id or title::cwd) -> time. enforceProfileAfterSpawn keeps their model/effort. */
     const ladderSpawns = new Map<string, number>();
+    /**
+     * P5c: the tier before(agent.create) routed a named spawn at: key (agent id or title::cwd) -> {tier, at}. Env/config-only
+     * spawns (UI spawnEnvFor, MCP create_agent) carry no labels into before(), so it routes them at the stakes it saw
+     * (normal without VS_STAKES); agent.created stamps that tier, not one recomputed from the later `stakes` label.
+     */
+    const routedTiers = new Map<string, { tier: string; at: number }>();
 
     const logProfileMetric = (labels: Labels, cwd: string, text: string, refs: string[] = []) => {
       const where = teamOf(labels, cwd);
@@ -1454,8 +1462,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!hint) return;
       let match = matchStoredProfile(hint);
       // P5c: a label-only role-name spawn (profile=review, no stored profile of that name) that before(agent.create) never
-      // routed (no `tier` stamp, not runner-configured) is held to the role route, as a named profile is.
-      if (!match?.explicit && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
+      // routed (no `tier` stamp, not runner-configured) is held to the role route, as a named profile is. A spawn that
+      // before() configured (beforeConfiguredSpawns: env/config-only role spawns carry no `tier` label) is never re-routed
+      // here: a cap or quota report that flipped since before() ran must not refuse a correctly routed agent.
+      const spawnKey0 = `${agent.title ?? ""}::${agent.cwd ?? (me as any)?.cwd ?? ""}`;
+      const configuredAt = (k: string) => {
+        const ts = beforeConfiguredSpawns.get(k);
+        return ts !== undefined && Date.now() - ts < 30_000;
+      };
+      const routedByBefore = Boolean((agent.id && configuredAt(agent.id)) || configuredAt(spawnKey0));
+      if (!match?.explicit && !routedByBefore && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
         const roles = liveRoles(loadStoredProfiles());
         if (roleNameHit(hint, roles)) {
           const hit = roleSpawnProfile(hint, { stakes: labels.stakes, caps: cappedFamilies(currentUsageList()), roles });
@@ -1748,7 +1764,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
               next.labels = { ...(next.labels ?? config.labels), profile: roleName };
               changed = true;
             }
-            if (reqLabels.profile) reqLabels.profile = roleName;
+            // Every carrier says the role, also when the role came by config.profile / env VS_PROFILE only (as failover relabels).
+            reqLabels.profile = roleName;
           }
         }
 
@@ -1991,8 +2008,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           // A model id of another provider's family (e.g. a claude model inherited by a Gemini partner) is not usable here, so not explicit.
           const callerModel = modelFamily && (modelFamily === "claude" || modelFamily === "antigravity-cli") && modelFamily !== finalFamily ? "" : rawModel;
           const callerEffort = derivedFields.includes("thinking") ? "" : String(config.thinkingOptionId ?? "").trim();
-          const keepModel = stakesOn && sameProvider && Boolean(callerModel);
-          const keepEffort = stakesOn && sameProvider && Boolean(callerEffort);
+          // Role routes: the tier ladder applies at every stakes value (normal = the role's default tier), so an explicit
+          // caller model/effort beats it at normal too (Decided "explicit beats everything", resolveRoute). A caller value
+          // equal to the route's own pick (brainstorm/lead-handoff respawns pass the role route's model + effort, and their
+          // labels never reach this hook) changes nothing, so it is not counted as explicit. Old names: unchanged (stakes only).
+          const ladderActive = Boolean(roleRoute) || stakesOn;
+          const keepModel =
+            ladderActive && sameProvider && Boolean(callerModel) && !(roleRoute && callerModel === String(roleRoute.profile.model ?? ""));
+          const keepEffort =
+            ladderActive &&
+            sameProvider &&
+            Boolean(callerEffort) &&
+            !(roleRoute && callerEffort === String(roleRoute.profile.thinkingOptionId ?? ""));
           // Role routes: the tier ladder already applied the stakes (resolveRoute), so the old per-stakes ladder is skipped.
           const route = roleRoute
             ? {
@@ -2003,11 +2030,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                     ? "explicit"
                     : keepModel || keepEffort
                       ? "explicit+ladder"
-                      : roleRoute.route.reasons.includes("stakes")
-                        ? "ladder"
-                        : roleRoute.route.reasons.includes("failover")
-                          ? "failover"
-                          : "default",
+                      : roleRoute.route.reasons.includes("all-capped")
+                        ? "all-capped"
+                        : roleRoute.route.reasons.includes("stakes")
+                          ? "ladder"
+                          : roleRoute.route.reasons.includes("failover")
+                            ? "failover"
+                            : "default",
                 model: undefined as string | undefined,
                 effort: undefined as string | undefined,
               }
@@ -2065,6 +2094,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           if (!routeTier) routeTier = routeTierOf(requestedProfileName || matchedProfile?.name || "", stakesRaw);
           if (!routeRole) routeRole = routeRoleKeyOf(requestedProfileName || matchedProfile?.name || "");
           stampTier = routeTier;
+          if (requestedProfileName && routeTier) {
+            const at = Date.now();
+            for (const [k, v] of routedTiers) if (at - v.at >= 120_000) routedTiers.delete(k);
+            routedTiers.set(`${title}::${cwd}`, { tier: routeTier, at });
+            if (reqAgentId) routedTiers.set(reqAgentId, { tier: routeTier, at });
+          }
           const routeText = routeMetricText({
             stakes: route.stakes,
             model: next.model,
@@ -2258,6 +2293,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           nextEnv.VS_PROFILE = failoverProfileName;
           envChanged = true;
         }
+        // P5c: a role-name spawn's env names the role label ("implement" -> "Implement"), as its labels do.
+        if (roleRoute && nextEnv.VS_PROFILE && nextEnv.VS_PROFILE !== String(roleRoute.profile.name)) {
+          nextEnv.VS_PROFILE = String(roleRoute.profile.name);
+          envChanged = true;
+        }
         if (role && !nextEnv.VS_ROLE) {
           nextEnv.VS_ROLE = role;
           envChanged = true;
@@ -2432,13 +2472,20 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             });
           }
           // P5c: spawns whose labels never reached before(agent.create) still get the route stamps (only the missing ones).
+          // `tier` = the tier before() actually routed at (routedTiers); only a spawn before() never saw by name (label-only:
+          // enforceProfileAfterSpawn applied the profile) takes the tier from its labels.
           {
             const s: any = me ?? {};
             const hint = String(labels.profile ?? "").trim();
+            const tierKey = `${agent.title ?? ""}::${agent.cwd ?? s.cwd ?? ""}`;
+            const nowT = Date.now();
+            const routed = [agent.id ? routedTiers.get(agent.id) : undefined, routedTiers.get(tierKey)].find((v) => v && nowT - v.at < 120_000);
+            if (agent.id) routedTiers.delete(agent.id);
+            routedTiers.delete(tierKey);
             const stampVals: Record<string, string> = {
               provider: String(s.provider ?? agent.provider ?? s.config?.provider ?? "").trim(),
               model: String(s.model ?? agent.model ?? s.config?.model ?? "").trim(),
-              tier: routeTierOf(hint, labels.stakes),
+              tier: routed?.tier || routeTierOf(hint, labels.stakes),
               stakes: normalizeStakes(labels.stakes),
             };
             for (const k of ROUTE_STAMP_LABELS) {
