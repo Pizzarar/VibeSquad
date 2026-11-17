@@ -588,8 +588,9 @@ export class Runner {
 
   // Short recap of the conversation so far (from the log) to prime a fresh session when a provider cannot resume the old one.
   // A steer-only input that was dropped (a `steer_dropped` after it) never reached the agent, so it is not part of the recap.
-  _primer(id, maxChars = 8000) {
-    const events = this.store.read(id);
+  // Async: a full read of a big log is seconds of JSON.parse, so it is read in yielding slices (readAsync, idea-307).
+  async _primer(id, maxChars = 8000) {
+    const events = await this.store.readAsync(id);
     const dropped = droppedSteerSeqs(events);
     const turns = [];
     for (const e of events) {
@@ -947,30 +948,56 @@ export class Runner {
     } else entry.handle.kill(); // onExit logs the exit and frees the slot
   }
 
-  // Resume spec for a parked agent, read from its log so it survives a runner restart. Null if not parked.
-  _parkedSpec(id) {
-    if (!this.store.exists(id)) return null;
-    const events = this.store.read(id);
+  // The current fold of a log for the resume paths (idea-307): _parkedSpec / _lostSpec / _unstartedPlan / _cutTurn used to parse
+  // the whole log synchronously on every send/resume (loop-lag 302). _fold is stat-validated and incremental (only bytes appended
+  // since the last fold are read; after a boot, since the fold index's offset), and its spec fields (fold-index.mjs newSpecFold)
+  // fold exactly what those loops computed. Same complete lines as store.read: a partial last line is in neither.
+  _specFold(id) { return this.store.exists(id) ? this._fold(id) : null; }
+
+  // A copy of the folded meta: a spec's meta goes to callers (entries, jobs) and must never alias the cached fold.
+  static _metaCopy(f) { return structuredClone(f.meta ?? {}); }
+
+  // The created event's systemPrompt (the fold drops role prompts): the log's first event only, i.e. a full read's events[0].
+  // Read in 64KB slices until that event (each slice completes at least one line, however long): store.read(id, 0, 1) would
+  // read and copy a whole 1MB chunk to parse one line (4ms a call on a big log). Same event: the first complete line with seq >= 0.
+  _createdPrompt(id) {
+    for (let off = 0; ;) {
+      const r = this.store.readFrom(id, off, 0, 1, null, 1 << 16);
+      if (r.events.length) return r.events[0].systemPrompt;
+      if (r.end <= off) return undefined; // end of the complete lines: no such event
+      off = r.end;
+    }
+  }
+
+  // The systemPrompt of the parked event the fold picked: that one line, read by seq via the store's sparse index. Trusted only
+  // when every seq in the log rose strictly (f.seqMono: the event with that seq is unique) and the line read is that same event;
+  // anything else (a hand-edited log: duplicate, missing or gapped seqs) falls back to the full scan the fold replaced.
+  _parkedPrompt(id, f) {
+    const park = f.park;
+    if (f.seqMono && Number.isSafeInteger(park.seq) && park.seq >= 0) {
+      const e = this.store.read(id, park.seq, 1)[0];
+      if (e?.type === 'parked' && e.seq === park.seq && e.ts === park.ts && e.sessionId === park.sessionId) return e.systemPrompt;
+    }
     let parked = null;
-    let archived = false;
-    let stopped = null; // a bg-stopped no input has seen yet (idea-230): the next send tells the agent
-    let refused = null; // a park-drain-refused no input has seen yet: the next send tells the agent (survives a runner restart)
-    // Fold later meta patches (labels, permissionMode, ...) the same way the summary does, so a resume uses the current meta.
-    const meta = { ...(events[0]?.meta ?? {}) };
-    for (const e of events) {
-      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+    for (const e of this.store.read(id)) {
       if (e.type === 'parked') parked = e;
-      else if (e.type === 'park-drain-refused') refused = e;
-      else if (e.type === 'bg-stopped') stopped = e;
-      else if (e.type === 'input' && !e.steerOnly) { refused = null; stopped = null; } // a steer-only input joined a running turn: the notice still owes
-      else if (e.type === 'exit') return null;
-      else if (e.type === 'archive') archived = true;
-      else if (e.type === 'unarchive') archived = false;
       else if (e.type === 'status' && e.status !== 'parked' && e.status !== 'queued') parked = null;
     }
-    if (archived || !parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
-    const c = events[0];
-    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}), ...(stopped?.work?.length ? { bgStopNotice: bgStopNoticeText(stopped.work) } : {}) };
+    return parked?.systemPrompt;
+  }
+
+  // Resume spec for a parked agent, read from its log so it survives a runner restart. Null if not parked.
+  // Meta: the created meta with every later meta patch folded in (labels merged), the same way the summary does, so a resume
+  // uses the current meta. A park-drain-refused / bg-stopped no (non-steer-only) input has seen yet: the next send tells the agent.
+  _parkedSpec(id) {
+    const f = this._specFold(id);
+    if (!f || f.exit || f.archived) return null;
+    const parked = f.park;
+    if (!parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
+    const c = f.created;
+    const meta = Runner._metaCopy(f);
+    const { refused, stopped } = f;
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.prompt ? this._parkedPrompt(id, f) ?? undefined : undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}), ...(stopped?.work?.length ? { bgStopNotice: bgStopNoticeText(stopped.work) } : {}) };
   }
 
   // Whether a closed agent can come back in place (same id + session). Mirrors the resume endpoint's 409 condition
@@ -986,20 +1013,13 @@ export class Runner {
   // Resume spec for a lost agent (runner restarted while it was idle/running): the log's last session id, if no exit/archive.
   _lostSpec(id) {
     if (!this.store.exists(id) || this.live.has(id)) return null;
-    const events = this.store.read(id);
-    let sessionId = null;
-    let archived = false;
-    const meta = { ...(events[0]?.meta ?? {}) };
-    for (const e of events) {
-      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-      if (e.type === 'exit') return null;
-      if (e.type === 'archive') archived = true;
-      else if (e.type === 'unarchive') archived = false;
-      if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
-    }
-    const c = events[0];
-    if (archived || !sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
-    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
+    const f = this._fold(id);
+    if (!f || f.exit) return null;
+    const sessionId = f.sessionId ?? null;
+    const c = f.created;
+    if (f.archived || !sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
+    const meta = Runner._metaCopy(f);
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: this._createdPrompt(id) ?? undefined, resume: sessionId };
   }
 
   // An agent whose log ends in a `queued` status never got its turn: nothing was delivered after the queued events. The runner's
@@ -1007,35 +1027,23 @@ export class Runner {
   // or, when a session was recorded, resumed) and the inputs logged since the last real status, or null if it is not that case.
   _unstartedPlan(id) {
     if (!this.store.exists(id) || this.live.has(id) || this.queue.some((j) => j.id === id)) return null; // a queued job already owns these inputs
-    // Warm folds (recoverQueued's boot pass): a log whose last status is not `queued` can't be unstarted; skip the second full parse.
-    // _fold is stat-validated, so a log that grew since the pass is refolded incrementally, never served stale.
-    if (this._foldsWarm) { const f = this._fold(id); if (f && f.status !== 'queued') return null; }
-    const events = this.store.read(id);
-    const c = events[0];
+    // From the fold (idea-307): lastState = the last status, or 'exited' after an exit; pending = the text inputs (not steer-only:
+    // those never start a turn) after the last non-queued status (inputs before it were delivered).
+    const f = this._fold(id);
+    const c = f?.created;
     if (c?.type !== 'created' || !this.adapters[c.provider]) return null;
-    let status = null;
-    let statusTs = 0;
-    let archived = false;
-    let sessionId = null;
-    let cut = -1; // index of the last non-queued status: inputs before it were delivered
-    const meta = { ...(c.meta ?? {}) };
-    events.forEach((e, i) => {
-      if (e.type === 'exit') status = 'exited';
-      else if (e.type === 'archive') archived = true;
-      else if (e.type === 'unarchive') archived = false;
-      else if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
-      else if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-      else if (e.type === 'status') { status = e.status; statusTs = e.ts ?? 0; if (e.status !== 'queued') cut = i; }
-    });
-    if (status !== 'queued' || archived) return null;
-    const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string' && !e.steerOnly); // a steer-only input never starts a turn
+    if (f.lastState !== 'queued' || f.archived) return null;
+    const inputs = f.pending;
     if (!inputs.length) return null;
+    const meta = Runner._metaCopy(f);
     if (isRetiredMeta(meta)) return null; // retirePredecessors / confirmTakeover only relabel the role (never archive): a former-lead stays dead
+    const statusTs = f.lastStatus?.ts ?? 0;
     if (this.queueMaxAgeMs > 0 && Date.now() - statusTs > this.queueMaxAgeMs) return null; // stale: a days-old input must not run on a whim
     const supersededBy = this._successorOf(id, meta);
+    const sessionId = f.sessionId ?? null;
     const resumable = sessionId && !sessionId.startsWith('-') && this.adapters[c.provider]?.canPark;
     return {
-      spec: { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
+      spec: { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: this._createdPrompt(id) ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
       text: inputs.map((e) => e.text).join('\n\n'),
       owner: inputs.some((e) => e.owner === true),
       ts: inputs[0].ts ?? 0,
@@ -1146,8 +1154,7 @@ export class Runner {
   // `starting` (a send's resume had taken the turn slot). Never for an agent that may no longer act (retired, superseded) or
   // a turn older than queueMaxAgeMs (an old turn must not start again on a whim; same bound as recoverQueued).
   _cutTurn(id, meta) {
-    let last = null;
-    for (const e of this.store.read(id)) if (e.type === 'status') last = e;
+    const last = this._fold(id)?.lastStatus ?? null; // the log's last status event (fold, idea-307)
     if (!last || !(last.status === 'running' || (last.status === 'starting' && last.resume !== true))) return false;
     if (this.queueMaxAgeMs > 0 && Date.now() - (last.ts ?? 0) > this.queueMaxAgeMs) return false;
     return !isRetiredMeta(meta) && !this._successorOf(id, meta);

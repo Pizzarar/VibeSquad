@@ -43,7 +43,20 @@ const TRANSIENT = ['EPERM', 'EACCES', 'EBUSY']; // win32: the file is mid-rename
 
 /** Empty fold state. `offset` is the end of the last complete line folded. */
 export function newFold() {
-  return { created: null, lastSeq: undefined, lastTs: undefined, status: 'unknown', usage: null, perms: new Map(), tools: new Map(), meta: null, archivedAt: null, exit: null, offset: 0 };
+  return { created: null, lastSeq: undefined, lastTs: undefined, status: 'unknown', usage: null, perms: new Map(), tools: new Map(), meta: null, archivedAt: null, exit: null, offset: 0, ...newSpecFold() };
+}
+
+// The resume paths' part of the fold (idea-307): what Runner._parkedSpec / _lostSpec / _unstartedPlan / _cutTurn used to
+// re-derive from a full sync read of the log on every send/resume. Each field mirrors one of their loops exactly:
+//   archived   - the last archive/unarchive (a flag, never archivedAt: a ts-less archive still archives);
+//   park       - the parked event a resume would use (dropped by any status but parked/queued), without its systemPrompt: the
+//                runner reads that one line back by seq when it needs the prompt (role prompts stay out of the index);
+//   refused    - the last park-drain-refused, stopped the last bg-stopped, each since the last non-steer-only input (notices);
+//   lastStatus - the last status event's status/resume/ts (_cutTurn, the queue age); lastState that, or 'exited' after an exit;
+//   pending    - text inputs (not steer-only) after the last non-queued status: what a queued-then-restarted agent still owes;
+//   seqMono    - every seq so far a safe integer above the one before: only then is a by-seq read of `park` that one event.
+function newSpecFold() {
+  return { seqMono: true, archived: false, park: null, refused: null, stopped: null, lastStatus: null, lastState: null, pending: [] };
 }
 
 /**
@@ -55,10 +68,27 @@ export function foldEvent(st, e) {
     if (e.systemPrompt !== undefined) { const { systemPrompt, ...c } = e; st.created = c; } else st.created = e;
     st.meta = { ...e.meta };
   }
+  if (!(Number.isSafeInteger(e.seq) && (st.lastSeq === undefined || e.seq > st.lastSeq))) st.seqMono = false;
   st.lastSeq = e.seq;
   st.lastTs = e.ts;
   applyToolEvent(st.tools, e); // R4-1: oldest open tool call (byte-offset fold: each event is applied exactly once)
-  if (e.type === 'status') { st.status = e.status; st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined; }
+  if (e.type === 'status') {
+    st.status = e.status;
+    st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined;
+    st.lastStatus = { status: e.status, resume: e.resume, ts: e.ts };
+    st.lastState = e.status;
+    if (e.status !== 'queued') { st.pending = []; if (e.status !== 'parked') st.park = null; }
+  }
+  else if (e.type === 'parked') st.park = { seq: e.seq, ts: e.ts, sessionId: e.sessionId, prompt: e.systemPrompt != null };
+  else if (e.type === 'park-drain-refused') st.refused = { drain: e.drain, work: e.work };
+  else if (e.type === 'bg-stopped') st.stopped = { work: e.work };
+  else if (e.type === 'input') {
+    if (!e.steerOnly) { // a steer-only input joined a running turn: the notices still owe, and it never starts a turn
+      st.refused = null;
+      st.stopped = null;
+      if (typeof e.text === 'string') st.pending.push({ text: e.text, owner: e.owner, ts: e.ts });
+    }
+  }
   else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
   else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
   else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
@@ -66,9 +96,9 @@ export function foldEvent(st, e) {
     if (e.sessionId) st.sessionId = e.sessionId;
     if (Array.isArray(e.modes)) st.offered = { modes: e.modes, models: Array.isArray(e.models) ? e.models : [] };
   }
-  else if (e.type === 'archive') st.archivedAt = e.ts;
-  else if (e.type === 'unarchive') st.archivedAt = null;
-  else if (e.type === 'exit' && !st.exit) st.exit = e;
+  else if (e.type === 'archive') { st.archivedAt = e.ts; st.archived = true; }
+  else if (e.type === 'unarchive') { st.archivedAt = null; st.archived = false; }
+  else if (e.type === 'exit') { if (!st.exit) st.exit = e; st.lastState = 'exited'; }
 }
 
 /** The fold state as plain JSON (Maps as [key, value] entries, in insertion order). Bookkeeping (stamp, stat, rec) is not state. */
@@ -77,6 +107,7 @@ export function saveFold(st) {
     created: st.created, lastSeq: st.lastSeq, lastTs: st.lastTs, status: st.status, ahead: st.ahead, usage: st.usage,
     perms: [...st.perms], tools: [...st.tools], meta: st.meta, sessionId: st.sessionId, offered: st.offered,
     archivedAt: st.archivedAt, exit: st.exit, offset: st.offset,
+    seqMono: st.seqMono, archived: st.archived, park: st.park, refused: st.refused, stopped: st.stopped, lastStatus: st.lastStatus, lastState: st.lastState, pending: st.pending,
   };
 }
 
@@ -102,12 +133,28 @@ export function loadFold(o) {
   st.archivedAt = o.archivedAt ?? null;
   st.exit = o.exit ?? null;
   st.offset = o.offset;
+  // The spec fields (idea-307) are never defaulted: a state saved before them (or a damaged one) lacks or mangles one, and the
+  // resume paths decide park/resume/lost/cut from them, so the entry is folded from 0 instead. FOLD_VERSION already drops an
+  // index from older fold code wholesale; this is the per-entry backstop. A missing key reads as undefined, which fails here.
+  if (typeof o.seqMono !== 'boolean' || typeof o.archived !== 'boolean') throw new Error('bad spec fold');
+  if (!Array.isArray(o.pending) || !o.pending.every((p) => isObj(p) && typeof p.text === 'string')) throw new Error('bad spec fold');
+  for (const k of ['park', 'refused', 'stopped', 'lastStatus']) if (o[k] !== null && !isObj(o[k])) throw new Error('bad spec fold');
+  if (o.park !== null && typeof o.park.prompt !== 'boolean') throw new Error('bad spec fold');
+  if (o.lastState !== null && typeof o.lastState !== 'string') throw new Error('bad spec fold'); // a non-string status already fails o.status
+  st.seqMono = o.seqMono;
+  st.archived = o.archived;
+  st.park = o.park;
+  st.refused = o.refused;
+  st.stopped = o.stopped;
+  st.lastStatus = o.lastStatus;
+  st.lastState = o.lastState;
+  st.pending = o.pending;
   return st;
 }
 
 /** Hash of everything that decides what a fold computes: a change to any of it drops every saved state once. */
 export const FOLD_VERSION = (() => {
-  const h = createHash('sha256').update(`v${INDEX_VERSION}\n${newFold}\n${foldEvent}\n${saveFold}\n${loadFold}\n`);
+  const h = createHash('sha256').update(`v${INDEX_VERSION}\n${newFold}\n${newSpecFold}\n${foldEvent}\n${saveFold}\n${loadFold}\n`);
   try { h.update(fs.readFileSync(fileURLToPath(new URL('./open-tools.mjs', import.meta.url)))); } catch { h.update(String(Math.random())); } // unreadable: never trust an old index
   return h.digest('base64').slice(0, 24);
 })();
