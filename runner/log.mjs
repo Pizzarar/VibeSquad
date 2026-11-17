@@ -133,14 +133,15 @@ export class LogStore {
 
   // read() in ~1 MB slices that yield to the event loop between them: a full-log read of a big agent log is seconds of
   // sync JSON.parse (loop-lag 302: runner stalls of 0.6-2.4s in readFrom). Same events as read().
-  async readAsync(id, after = 0, limit = Infinity, sliceBytes = CHUNK) {
+  // `keep(ev)` (optional) drops events before they are collected, so a type-filtered read of a big log stays small in memory.
+  async readAsync(id, after = 0, limit = Infinity, sliceBytes = CHUNK, keep = null) {
     const ix = this._index(id);
     if (!ix || after >= ix.count) return [];
     let offset = after > 0 ? ix.offs[Math.min(Math.floor(after / STEP), ix.offs.length - 1)] : 0;
     const out = [];
     for (;;) {
       const r = this.readFrom(id, offset, after, limit - out.length, null, sliceBytes);
-      for (const e of r.events) out.push(e);
+      for (const e of r.events) if (!keep || keep(e)) out.push(e);
       if (r.end <= offset || out.length >= limit || r.end >= (this._index(id)?.size ?? 0)) return out;
       offset = r.end;
       await new Promise((res) => setImmediate(res));

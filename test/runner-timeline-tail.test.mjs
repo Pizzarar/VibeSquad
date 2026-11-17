@@ -22,12 +22,17 @@ function makeLog(turns) {
 function backendFor(events) {
   const b = Object.create(RunnerBackend.prototype);
   b.calls = [];
+  b.rawRead = 0; // raw events the fake runner sent back, summed over requests
   b.rc = { request: async (_m, p) => {
     b.calls.push(p);
     const q = new URLSearchParams(p.split('?')[1] ?? '');
     const tail = Number(q.get('tail') ?? 0);
     const after = tail > 0 ? Math.max(0, events.length - tail) : Number(q.get('after') ?? 0);
-    return { events: events.slice(after), from: after };
+    const until = q.has('until') ? Number(q.get('until')) : Infinity;
+    const types = q.get('types');
+    const out = events.slice(after).filter((e) => e.seq < until && (!types || e.type === types));
+    b.rawRead += out.length;
+    return { events: out, from: after, total: events.length };
   } };
   return b;
 }
@@ -100,4 +105,37 @@ test('before-page lastSeq matches the full read when a call before the window re
   // cursor right behind the long call too: window start falls between call and result
   const got = await backendFor(events).fetchAgentTimeline('a', { direction: 'before', cursor: { epoch: 'runner', seq: 500 }, limit: 5 });
   assert.deepEqual(got, full(events, 5, { seq: 500 }));
+});
+
+test('a before page of a big log does not request the whole log (bounded window + tool events only)', async () => {
+  const events = makeLog(3000); // ~30k raw events
+  const cursor = { epoch: 'runner', seq: events.length - 200 };
+  const b = backendFor(events);
+  const got = await b.fetchAgentTimeline('a', { direction: 'before', cursor, limit: 20 });
+  assert.deepEqual(got, full(events, 20, cursor));
+  assert.ok(b.calls.every((c) => /until=|types=tool|tail=/.test(c)), `no unbounded read: ${b.calls}`);
+  assert.ok(b.rawRead < events.length / 5, `read ${b.rawRead} of ${events.length}`);
+  // a far-back page with an open tool call below the window still matches
+  const mid = { epoch: 'runner', seq: 12000 };
+  const b2 = backendFor(events);
+  assert.deepEqual(await b2.fetchAgentTimeline('a', { direction: 'before', cursor: mid, limit: 20 }), full(events, 20, mid));
+  assert.ok(b2.rawRead < events.length / 2);
+});
+
+test('random logs: tail and before pages equal the full read (bounded windows, tool results far past the cursor)', async () => {
+  let seed = 7; const rnd = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let it = 0; it < 200; it++) {
+    const ev = []; const add = (type, d = {}) => ev.push({ seq: ev.length, ts: 1, type, ...d }); const open = []; let id = 0;
+    const n = 300 + Math.floor(rnd() * 900);
+    while (ev.length < n) {
+      const r = rnd();
+      if (r < .1) add('input', { text: 'q' }); else if (r < .25) add('thought', { text: 't' }); else if (r < .5) add('output', { text: 'o' });
+      else if (r < .6) { add('tool', { phase: 'call', id: 'c' + id, name: 'x' }); open.push('c' + id++); }
+      else if (r < .65 && open.length) add('tool', { phase: 'result', id: open.splice(Math.floor(rnd() * open.length), 1)[0], status: 'completed' });
+      else if (r < .7) add('error', { message: 'e' }); else if (r < .9) add('turn_done'); else add('status', { status: 'x' });
+    }
+    const limit = 1 + Math.floor(rnd() * 12); const cur = rnd() < .3 ? null : { epoch: 'runner', seq: Math.floor(rnd() * ev.length) };
+    const got = await backendFor(ev).fetchAgentTimeline('a', cur ? { direction: 'before', cursor: cur, limit } : { limit });
+    assert.deepEqual(got, full(ev, limit, cur), `it ${it} limit ${limit} cursor ${cur?.seq}`);
+  }
 });

@@ -987,6 +987,25 @@ export class RunnerBackend {
     }
   }
 
+  /**
+   * idea-308: the raw events a `before` page needs, without reading the log to its end. Rows below the cursor can change from
+   * later events in two ways: a reply absorbs later output until a barrier row (input / tool call / error) at or past the
+   * cursor, and a tool call below the cursor resolves at a later tool result. So: a bounded window [before - w, before + ext)
+   * that grows until it holds such a barrier (or the log end), plus every later tool event (a small, runner-filtered read).
+   */
+  async _beforeWindow(path, before, w) {
+    const start = Math.max(0, before - w);
+    for (let ext = 400; ; ext *= 4) {
+      const until = before + ext;
+      const r = await this.rc.request("GET", `${path}?after=${start}&until=${until}`);
+      const complete = r.total == null || r.total <= until; // an older runner ignores until and sent the whole tail
+      if (!complete && !toTimeline(r.events).some((e) => e.seqStart >= before && e.item.type !== "assistant_message" && e.item.type !== "reasoning")) continue;
+      if (complete) return r;
+      const t = await this.rc.request("GET", `${path}?after=${until}&types=tool`);
+      return { ...r, events: [...r.events, ...t.events] };
+    }
+  }
+
   async fetchAgentTimeline(id, opts = {}) {
     const path = `/agents/${encodeURIComponent(id)}/timeline`;
     const before = opts.direction === "before" && opts.cursor ? opts.cursor.seq : null;
@@ -1005,9 +1024,7 @@ export class RunnerBackend {
     if (!limit) return finish(toTimeline((await this.rc.request("GET", path)).events));
     // idea-308: a windowed read (tail, or a window below the cursor) instead of the whole log; grow x4 until it settles.
     for (let w = Math.max(limit * 4, 400); ; w *= 4) {
-      const r = before == null
-        ? await this.rc.request("GET", `${path}?tail=${w}`)
-        : await this.rc.request("GET", `${path}?after=${Math.max(0, before - w)}`); // reads on to the log end: a row before the cursor can absorb later events
+      const r = before == null ? await this.rc.request("GET", `${path}?tail=${w}`) : await this._beforeWindow(path, before, w);
       const from = r.from ?? (before == null ? 0 : Math.max(0, before - w));
       const entries = toTimeline(r.events);
       if (from <= 0) return finish(entries); // the window holds the whole log: exactly the full read
