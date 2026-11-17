@@ -1723,6 +1723,7 @@ export class Runner {
   }
 
   timeline(id, after = 0, limit = Infinity) { return this.store.read(id, after, limit); }
+  timelineAsync(id, after = 0, limit = Infinity) { return this.store.readAsync(id, after, limit); } // HTTP path: yields between 1 MB slices
 
   list() { return this.store.ids(); } // names only; use status(id) for details
 

@@ -131,10 +131,27 @@ export class LogStore {
     return this.readFrom(id, start, after, limit).events;
   }
 
+  // read() in ~1 MB slices that yield to the event loop between them: a full-log read of a big agent log is seconds of
+  // sync JSON.parse (loop-lag 302: runner stalls of 0.6-2.4s in readFrom). Same events as read().
+  async readAsync(id, after = 0, limit = Infinity, sliceBytes = CHUNK) {
+    const ix = this._index(id);
+    if (!ix || after >= ix.count) return [];
+    let offset = after > 0 ? ix.offs[Math.min(Math.floor(after / STEP), ix.offs.length - 1)] : 0;
+    const out = [];
+    for (;;) {
+      const r = this.readFrom(id, offset, after, limit - out.length, null, sliceBytes);
+      for (const e of r.events) out.push(e);
+      if (r.end <= offset || out.length >= limit || r.end >= (this._index(id)?.size ?? 0)) return out;
+      offset = r.end;
+      await new Promise((res) => setImmediate(res));
+    }
+  }
+
   // Parses complete lines from byte `offset`; returns the events (seq >= after) and `end`, the byte offset after the last complete line read.
   // atEnd(pread, end), when given, runs once on the same open file after the read (pread(pos, len): exactly len bytes, or null),
   // so a caller can take more bytes of the very file it just read (Runner._fold: the fold-index probes) without another open.
-  readFrom(id, offset = 0, after = 0, limit = Infinity, atEnd = null) {
+  // maxBytes (optional): stop after the chunk that crosses it; `end` is then where to resume (readAsync's slice).
+  readFrom(id, offset = 0, after = 0, limit = Infinity, atEnd = null, maxBytes = Infinity) {
     const out = [];
     const ix = this._index(id);
     if (!ix) return { events: out, end: offset };
@@ -143,10 +160,12 @@ export class LogStore {
     if (offset >= end) return { events: out, end: offset };
     const fd = this.fs.openSync(this.file(id), 'r');
     let pos = offset;
+    const start = offset;
+    const stop = offset + maxBytes;
     let carry = Buffer.alloc(0);
     try {
-      const buf = Buffer.allocUnsafe(Math.min(CHUNK, end - offset));
-      while (pos < end && out.length < limit) {
+      const buf = Buffer.allocUnsafe(Math.min(CHUNK, end - offset, maxBytes));
+      while (pos < end && (pos < stop || offset === start) && out.length < limit) { // a slice always completes one line, even a line longer than maxBytes
         const n = this.fs.readSync(fd, buf, 0, Math.min(buf.length, end - pos), pos);
         if (n <= 0) break;
         pos += n;

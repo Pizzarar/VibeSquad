@@ -224,7 +224,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
         const after = Number(url.searchParams.get('after') ?? 0);
         const limit = Number(url.searchParams.get('limit') ?? Infinity);
-        const events = runner.timeline(id, after, limit);
+        const events = await runner.timelineAsync(id, after, limit);
         return json(res, 200, { events, next: events.length ? events[events.length - 1].seq + 1 : after });
       }
       if (parts[2] === 'input' && req.method === 'POST') {

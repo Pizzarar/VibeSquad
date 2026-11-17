@@ -160,3 +160,32 @@ test('incremental status deepEquals a cold fold from 0 across every event kind',
   r.store.append(id, 'exit', { code: 0 }); check();
   r.store.append(id, 'exit', { code: 1 }); check();
 });
+
+test('readAsync matches read() across slices and yields to the loop between them (loop-lag 302)', async () => {
+  const store = new LogStore(tmp());
+  seed(store, 'a', 400, 2000); // ~800 KB
+  for (const after of [0, 150, 399]) {
+    const want = store.read('a', after);
+    assert.deepEqual(await store.readAsync('a', after, Infinity, 64 * 1024), want);
+  }
+  assert.deepEqual(await store.readAsync('a', 0, 5, 64 * 1024), store.read('a', 0, 5));
+  // A concurrent setImmediate chain advances only if readAsync yields; a sync read would starve it until done.
+  let spins = 0;
+  let stop = false;
+  const spin = () => { spins++; if (!stop) setImmediate(spin); };
+  setImmediate(spin);
+  await store.readAsync('a', 0, Infinity, 32 * 1024);
+  stop = true;
+  assert.ok(spins > 3, `loop ran between slices (${spins})`);
+});
+
+test('readAsync does not drop the log after a line longer than the slice (>1 MB mid-log)', async () => {
+  const store = new LogStore(tmp());
+  seed(store, 'a', 20, 100);
+  store.append('a', 'text', { text: 'y'.repeat(1100 * 1024) });
+  for (let i = 0; i < 20; i++) store.append('a', 'text', { text: 'z'.repeat(100) });
+  const want = store.read('a');
+  assert.equal(want.length, 41);
+  assert.deepEqual(await store.readAsync('a', 0, Infinity, 64 * 1024), want);
+  assert.deepEqual(await store.readAsync('a', 0), want);
+});
