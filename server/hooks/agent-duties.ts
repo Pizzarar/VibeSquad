@@ -1002,7 +1002,8 @@ export function bootSizeMetric(
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
-export async function inspectGitSpawnState(cwd: string): Promise<string | null> {
+export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: number } = {}): Promise<string | null> {
+  const timeoutMs = opts.timeoutMs ?? 3000; // production keeps 3s (a hung git must not hold the spawn hook); format tests pass more
   if (!cwd) return null;
   let resolved = "";
   try {
@@ -1018,7 +1019,7 @@ export async function inspectGitSpawnState(cwd: string): Promise<string | null> 
         execFile(
           "git",
           ["--no-optional-locks", ...args],
-          { cwd: resolved, encoding: "utf8", timeout: 3000, windowsHide: true },
+          { cwd: resolved, encoding: "utf8", timeout: timeoutMs, windowsHide: true },
           (err, stdout) => resolve(err ? null : String(stdout ?? "")),
         );
       } catch {
@@ -1079,6 +1080,8 @@ export interface Deps {
   startWatcher: boolean;
   /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
   leadWakeCooldownMs?: number;
+  /** git status cap for the spawn-time snapshot (default 3000); tests asserting the format pass more. */
+  gitSpawnTimeoutMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
   briefRoot?: string;
   /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
@@ -2012,7 +2015,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy || isHubLead);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
-        const gitState = await inspectGitSpawnState(cwd);
+        const gitState = await inspectGitSpawnState(cwd, { timeoutMs: deps.gitSpawnTimeoutMs });
         st.mark("git-spawn-state");
         let bootPluginChars = 0;
         let bootBriefChars = 0;
