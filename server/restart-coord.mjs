@@ -3,11 +3,13 @@
 // named lead has logged `vs log restart-feedback "drained restart"`; a restart that then succeeds logs
 // `restart-feedback: restart-done` and tells each asked lead, so they lift the hold. No new verb or log type: the
 // handshake rides the existing restart-feedback metric subtype (stored as type "metric", text "restart-feedback: ...").
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { toAgent } from "./backend/runner-backend.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
 import { loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
+import { localTokenPath, readLocalToken } from "./local-token.mjs";
 
 export const DRAIN_WINDOW_MS = 30 * 60000; // D2: a rerun this soon after a deferral needs every named lead's drain
 export const DONE_CHAIN_MAX_MS = 24 * 3600000; // D3: deferrals older than this are not a live hold any more
@@ -239,4 +241,84 @@ function stillHeldLine(l) {
   const work = (id) => (l.heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${String(w.cmd ?? w.name ?? "").trim().slice(-80)}`).join(", ");
   const ids = l.stillHeld.map((id) => (work(id) ? `${id} (${work(id)})` : id)).join(", ");
   return `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} ${l.drainedButHeld ? `logged '${DRAINED_TEXT}' but the runner still holds` : "has not drained; the runner still holds"} ${ids}`;
+}
+
+/**
+ * idea-197 (docs/PLAN_PER_POST03.md P4): the D2 window seen from the suite-slot and runtime-sync side. While the newest
+ * restart deferred less than DRAIN_WINDOW_MS ago and none has gone through since (the same deferralChain the D2 guard
+ * reads), its named leads were asked to hold background suites until 'restart-done'. A new full suite or a runtime sync
+ * started now is fresh work the restart has to wait out, so those entry points refuse. Read only: no log, no new verb.
+ * Returns null when no drain is pending, else { deferral, leads, ageMin, leftMin }.
+ */
+export function restartDrainPending(vsHome, { now = Date.now() } = {}) {
+  const chain = deferralChain(vsHome, { now, maxAgeMs: DRAIN_WINDOW_MS });
+  if (!chain) return null;
+  const at = Date.parse(chain.latest.finishedAt ?? chain.latest.startedAt ?? "") || now;
+  return {
+    deferral: chain.latest,
+    leads: chain.latestLeads,
+    ageMin: Math.max(0, Math.round((now - at) / 60000)),
+    leftMin: Math.max(1, Math.ceil((at + DRAIN_WINDOW_MS - now) / 60000)),
+  };
+}
+
+/** The refusal line for `action` ("npm test", "sync-runtime") while restartDrainPending() is non-null. */
+export function drainPendingMessage(action, pending, hint = "") {
+  const who = (pending.leads ?? []).map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""}`).join("; ");
+  return `${action} refused: a VS restart is waiting on a coordinated drain (it deferred ${pending.ageMin} min ago, ` +
+    `${pending.deferral?.file ?? "~/.vibesquad/restart-<ts>.json"}${who ? `; leads asked to drain: ${who}` : ""}). ` +
+    `Full suites and runtime syncs hold until the restart goes through (the asked leads get '${DONE_TEXT}') ` +
+    `or the ${DRAIN_WINDOW_MS / 60000}-min drain window ends (~${pending.leftMin} min left); rerun then, no timer retries.` +
+    (hint ? ` ${hint}` : "") +
+    ` Owner override (the owner's shell only, per-run OK, logged as restart-feedback): rerun with ${DRAIN_OVERRIDE_FLAG} or ${DRAIN_OVERRIDE_ENV}=1.`;
+}
+
+// The owner's override for the suite-slot and sync guards, in the style of `vs restart --kill-background`: owner's shell
+// only (no agent identity, the local token readable), per run, and never silent: each use logs one restart-feedback line.
+export const DRAIN_OVERRIDE_FLAG = "--ignore-drain";
+export const DRAIN_OVERRIDE_ENV = "VIBESQUAD_IGNORE_DRAIN";
+
+export function drainOverrideRequested(argv = [], env = process.env) {
+  return argv.includes(DRAIN_OVERRIDE_FLAG) || String(env[DRAIN_OVERRIDE_ENV] ?? "").trim() === "1";
+}
+
+/** The owner's shell, the way cli/vs.mjs ownerProofFromEnv decides it (kept in step by hand: vs.mjs is the CLI entry). */
+export function drainOverrideOwner(env = process.env) {
+  if (["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN"].some((k) => String(env[k] ?? "").trim())) return false;
+  const base = String(env.VIBESQUAD_HOME || "").trim() || (env.USERPROFILE || env.HOME ? path.join(String(env.USERPROFILE || env.HOME), ".vibesquad") : "");
+  return Boolean(base && readLocalToken(localTokenPath(base)));
+}
+
+const VS_CLI = path.resolve(import.meta.dirname, "..", "cli", "vs.mjs");
+/** One `vs` call from the owner's shell. Never throws: { ok } or { ok: false, error }. */
+function runVsLog(args, env = process.env) {
+  const r = spawnSync(process.execPath, [VS_CLI, ...args], { env, encoding: "utf8", timeout: 30000, windowsHide: true });
+  if (r.status === 0) return { ok: true };
+  const out = String(r.error?.message || r.stderr || r.stdout || `exit ${r.status}`).trim();
+  return { ok: false, error: out.split(String.fromCharCode(10))[0].trim().slice(0, 200) };
+}
+
+/**
+ * The idea-197 guard for one entry point (`action`: "npm test", "sync-runtime"). No pending drain: { ok: true }.
+ * A pending drain without the override, or with it from a non-owner shell: { ok: false, message }. With the owner's
+ * override: { ok: true, overridden: true, logged, note }, after one `vs log restart-feedback "drain-override <action> ..."`
+ * line in the first asked lead's lane (so the leads holding their suites see who went ahead). A failed log does not undo
+ * the owner's OK; the note says so and asks to tell the leads.
+ */
+export function checkDrainGuard(action, { vsHome, env = process.env, override = false, now = Date.now(), hint = "", logVs = runVsLog } = {}) {
+  let pending = null;
+  try { pending = restartDrainPending(vsHome, { now }); } catch { pending = null; } // an unreadable home leaves the entry as it was
+  if (!pending) return { ok: true };
+  if (!override) return { ok: false, pending, message: drainPendingMessage(action, pending, hint) };
+  if (!drainOverrideOwner(env)) {
+    return { ok: false, pending, message: `${action} ${DRAIN_OVERRIDE_FLAG}: needs the owner's per-run OK; only the owner's shell may pass it (an agent or Overlord may not). ` + drainPendingMessage(action, pending, hint) };
+  }
+  const lead = pending.leads?.[0];
+  const file = pending.deferral?.file ? path.basename(pending.deferral.file) : "restart-<ts>.json";
+  const text = `drain-override ${action}: the owner went ahead during the coordinated drain (restart deferred ${pending.ageMin} min ago, ${file})`;
+  const logged = logVs(["log", "restart-feedback", text, ...(lead ? ["--team", lead.team, "--lane", lead.lane] : [])], env);
+  const note = logged.ok
+    ? `${action}: ${DRAIN_OVERRIDE_FLAG}: going ahead during the coordinated drain (owner's per-run OK; logged restart-feedback in ${lead ? `${lead.team}/${lead.lane}` : "the log"}).`
+    : `${action}: ${DRAIN_OVERRIDE_FLAG}: going ahead during the coordinated drain (owner's per-run OK), but the restart-feedback log failed (${logged.error}); tell the asked leads.`;
+  return { ok: true, overridden: true, pending, logged, text, note };
 }

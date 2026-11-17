@@ -4,6 +4,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
+import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "./restart-coord.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
@@ -406,13 +407,13 @@ const ACTION = {
 };
 
 /**
- * The sync entry point: git guard, runtime lock, dist freshness (rebuild or refuse, idea-100), staged copy, then the
+ * The sync entry point: git guard, restart-drain guard (idea-197), runtime lock, dist freshness (rebuild or refuse, idea-100), staged copy, then the
  * live-needs report since the last synced commit. It never restarts the server or runner.
  * Returns `{synced, refused?, skipped?, live, dist, pending}`.
  */
 export function runSync({
   repoRoot = rootDir, env = process.env, force = false, noBuild = false, dryRun = false, lockTimeoutMs = 5000,
-  git = defaultGit, build = viteBuild, log = (line) => console.log(line), now = Date.now,
+  git = defaultGit, build = viteBuild, log = (line) => console.log(line), now = Date.now, ignoreDrain = false, logVs = null,
 } = {}) {
   let head = null;
   try { head = git(repoRoot, "rev-parse", "HEAD"); } catch {}
@@ -432,6 +433,22 @@ export function runSync({
     log(`[sync-runtime] refused: ${why}; the live runtime is unchanged`);
     return { synced: false, refused: why, ...extra };
   };
+  // idea-197: a sync while a `vs restart` waits on a coordinated drain swaps live runtime files under that restart (and the
+  // runner supervisor restarts on runner changes). Refuse until the restart goes through or the D2 window ends; --force
+  // covers the git guard only; the owner's --ignore-drain / VIBESQUAD_IGNORE_DRAIN=1 goes ahead and logs one
+  // restart-feedback line. A dry run copies nothing and still reports.
+  let drainOverride = null;
+  if (!dryRun) {
+    const g = checkDrainGuard("sync-runtime", { vsHome: vsHomeFor(env), env, override: ignoreDrain, now: now(), ...(logVs ? { logVs } : {}) });
+    if (!g.ok) {
+      log(`[sync-runtime] ${g.message} The live runtime is unchanged.`);
+      return { synced: false, refused: g.message, drainPending: true };
+    }
+    if (g.overridden) {
+      log(`[sync-runtime] ${g.note}`);
+      drainOverride = { logged: g.logged.ok === true, text: g.text };
+    }
+  }
 
   const body = () => {
     const prev = readJson(join(runtimeDir, "build-stamp.json"))?.commit ?? null;
@@ -467,7 +484,7 @@ export function runSync({
       writeFileSync(join(runtimeDir, LIVE_NEEDS_FILE), JSON.stringify({ at, from: prev, to: head, live, pending }, null, 2), "utf8");
     } catch {}
     report({ log, range, live, built, dist, pending });
-    return { ...res, built, live, dist, pending };
+    return { ...res, built, live, dist, pending, ...(drainOverride ? { drainOverride } : {}) };
   };
 
   if (dryRun) return body();
@@ -499,7 +516,7 @@ function report({ log, range, live, built, dist, pending, dryRun = false }) {
   for (const u of live.unknown) log(`[sync-runtime] unknown ${LIVE_NEEDS_TRAILER} value "${u.value}" in ${u.commit} (valid: none, ${LIVE_NEEDS.join(", ")})`);
 }
 
-const FLAGS = ["--force", "--no-build", "--dry-run"];
+const FLAGS = ["--force", "--no-build", "--dry-run", DRAIN_OVERRIDE_FLAG];
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   const argv = process.argv.slice(2);
@@ -512,6 +529,7 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename
       force: argv.includes("--force") || process.env.VIBESQUAD_SYNC_FORCE === "1",
       noBuild: argv.includes("--no-build"),
       dryRun: argv.includes("--dry-run"),
+      ignoreDrain: drainOverrideRequested(argv),
     });
     if (res.refused) process.exitCode = 1;
   }
