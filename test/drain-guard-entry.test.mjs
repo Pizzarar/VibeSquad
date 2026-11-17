@@ -8,9 +8,10 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DRAIN_WINDOW_MS, drainPendingMessage, restartDrainPending } from "../server/restart-coord.mjs";
+import { checkDrainGuard, DRAIN_WINDOW_MS, drainedLeadIds, drainOverrideRequested, drainPendingMessage, restartDrainPending } from "../server/restart-coord.mjs";
 import { runSync } from "../server/sync-runtime.mjs";
 import { finishSlot, readQueue, suitePaths, tryAcquireSlot } from "../scripts/suite-lock.mjs";
+import { readLock } from "../runner/lock.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const RUN_TESTS = path.join(root, "scripts", "run-tests.mjs");
@@ -61,8 +62,69 @@ test("drainPendingMessage names the action, the asked leads, the record file and
   assert.match(msg, /^npm test refused: a VS restart is waiting on a coordinated drain \(it deferred 4 min ago, \/h\/restart-x\.json; leads asked to drain: godot lead rn-lead1 \(Godot3\)\)\./);
   assert.match(msg, /'restart-done'/);
   assert.match(msg, /30-min drain window ends \(~26 min left\)/);
-  assert.match(msg, /no timer retries\. Targeted runs still go\.$/);
+  assert.match(msg, /no timer retries\. Targeted runs still go\. Owner override \(the owner's shell only, per-run OK, logged as restart-feedback\): rerun with --ignore-drain or VIBESQUAD_IGNORE_DRAIN=1\.$/);
   assert.doesNotMatch(drainPendingMessage("sync-runtime", { deferral: null, leads: [], ageMin: 0, leftMin: 30 }), /leads asked/);
+});
+
+/** An owner's home: the local token readable (what ownerProofFromEnv / drainOverrideOwner check). */
+function ownerHome(t) {
+  const home = tmp(t, "vs-drain-home-");
+  writeFileSync(path.join(home, "local-token"), "ab".repeat(32));
+  return home;
+}
+
+test("drainOverrideRequested: the --ignore-drain flag or VIBESQUAD_IGNORE_DRAIN=1, nothing else", () => {
+  assert.equal(drainOverrideRequested(["--ignore-drain"], {}), true);
+  assert.equal(drainOverrideRequested([], { VIBESQUAD_IGNORE_DRAIN: "1" }), true);
+  assert.equal(drainOverrideRequested([], { VIBESQUAD_IGNORE_DRAIN: "0" }), false);
+  assert.equal(drainOverrideRequested(["--queue"], {}), false);
+});
+
+test("checkDrainGuard: the owner's override goes ahead and logs one restart-feedback line that never counts as a drain", (t) => {
+  const now = Date.parse("2026-11-17T12:00:00.000Z");
+  const home = ownerHome(t);
+  const calls = [];
+  const logVs = (args, env) => { calls.push({ args, env }); return { ok: true }; };
+  const env = { VIBESQUAD_HOME: home };
+
+  assert.deepEqual(checkDrainGuard("npm test", { vsHome: home, env, override: true, now, logVs }), { ok: true }, "no drain: nothing to override");
+  assert.equal(calls.length, 0);
+
+  restartRecord(home, { startedMs: now - 6 * 60000, finishedMs: now - 3 * 60000 });
+  const refused = checkDrainGuard("npm test", { vsHome: home, env, override: false, now, logVs });
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /^npm test refused: .*--ignore-drain/);
+
+  const g = checkDrainGuard("npm test", { vsHome: home, env, override: true, now, logVs });
+  assert.equal(g.ok, true);
+  assert.equal(g.overridden, true);
+  assert.equal(calls.length, 1, "exactly one log line");
+  const [verb, type, text, ...where] = calls[0].args;
+  assert.deepEqual([verb, type, where], ["log", "restart-feedback", ["--team", "efi", "--lane", "godot"]], "existing type, the first asked lead's lane");
+  assert.match(text, /^drain-override npm test: the owner went ahead during the coordinated drain \(restart deferred 3 min ago, restart-2026-11-17T11-54-00-000Z\.json\)$/);
+  assert.match(g.note, /--ignore-drain: going ahead .*logged restart-feedback in efi\/godot/);
+
+  // The bypass line must never satisfy the D2 restart guard: it is not a 'drained restart'.
+  mkdirSync(path.join(home, "teams", "efi"), { recursive: true });
+  writeFileSync(path.join(home, "teams", "efi", "log.jsonl"), JSON.stringify({ ts: new Date(now).toISOString(), type: "metric", agent: "rn-lead1", text: `restart-feedback: ${text}` }) + "\n");
+  assert.equal(drainedLeadIds(home, ["efi"], new Date(now - 3 * 60000).toISOString()).size, 0);
+
+  // A failed log does not undo the owner's OK, and says so.
+  const failed = checkDrainGuard("sync-runtime", { vsHome: home, env, override: true, now, logVs: () => ({ ok: false, error: "server down" }) });
+  assert.equal(failed.ok, true);
+  assert.match(failed.note, /restart-feedback log failed \(server down\); tell the asked leads/);
+});
+
+test("checkDrainGuard: the override from an agent shell, or without the owner's local token, is refused and logs nothing", (t) => {
+  const now = Date.now();
+  const home = ownerHome(t);
+  restartRecord(home, { startedMs: now - 6 * 60000, finishedMs: now - 3 * 60000 });
+  const logVs = () => assert.fail("no log for a refused override");
+  for (const env of [{ VIBESQUAD_HOME: home, VS_AGENT_ID: "rn-lead1" }, { VIBESQUAD_HOME: home, VS_AGENT_TOKEN: "x" }, { VIBESQUAD_HOME: tmp(t, "vs-drain-notoken-") }]) {
+    const g = checkDrainGuard("sync-runtime", { vsHome: home, env, override: true, now, logVs });
+    assert.equal(g.ok, false, JSON.stringify(env));
+    assert.match(g.message, /^sync-runtime --ignore-drain: needs the owner's per-run OK; only the owner's shell may pass it \(an agent or Overlord may not\)\. sync-runtime refused: /);
+  }
 });
 
 function cleanEnv(extra) {
@@ -115,6 +177,32 @@ test("run-tests.mjs: a queued full run leaves the queue when a drain starts whil
   finishSlot(paths, held);
 });
 
+test("run-tests.mjs: the owner's --ignore-drain gets a full run past the drain guard (here into the queue) after one log attempt", { timeout: 60000 }, async (t) => {
+  const home = ownerHome(t);
+  const dir = tmp(t, "vs-drain-lock-");
+  const paths = suitePaths(dir);
+  restartRecord(home, { startedMs: Date.now() - 5 * 60000, finishedMs: Date.now() - 60000 });
+  // The slot is held so the full run stops in the queue instead of running the whole suite; port 1 keeps the `vs log`
+  // attempt off the live server (it fails fast, and the run still goes: the owner's OK stands).
+  const held = tryAcquireSlot(paths, { agentId: "holder" });
+  const q = spawn(process.execPath, [RUN_TESTS, "--queue", "--ignore-drain"], { cwd: root, env: cleanEnv({ VIBESQUAD_HOME: home, VIBESQUAD_TEST_LOCK_DIR: dir, VIBESQUAD_PORT: "1" }), stdio: ["ignore", "pipe", "pipe"] });
+  const code = new Promise((r) => q.on("exit", r));
+  let out = "";
+  q.stdout.on("data", (d) => (out += d));
+  q.stderr.on("data", (d) => (out += d));
+  for (let i = 0; !out.includes("npm test queued: #1 of 1"); i++) {
+    assert.ok(i < 1200, `never queued: ${out}`);
+    await sleep(25);
+  }
+  await sleep(2500); // past one DRAIN_POLL_MS tick: the waiter stays queued and logs nothing more
+  q.kill();
+  await code;
+  assert.equal(readLock(paths.lock)?.agentId, "holder", "the slot rules still apply: it waited behind the holder");
+  finishSlot(paths, held);
+  assert.doesNotMatch(out, /refused/);
+  assert.equal(out.match(/npm test -- --queue: --ignore-drain: going ahead during the coordinated drain/g)?.length, 1, out);
+});
+
 // sync-runtime: a git repo on master, clean, with a fake runtime under LOCALAPPDATA (never the live one).
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 function syncRepo(t) {
@@ -156,4 +244,36 @@ test("runSync: refused during a pending drain (even with --force), a dry run sti
   const res = runSync({ repoRoot: dir, env, build: noBuild, log: () => {} });
   assert.equal(res.synced, true, JSON.stringify(res));
   assert.equal(existsSync(path.join(runtime, "server", "x.mjs")), true);
+});
+
+test("runSync: the owner's ignoreDrain syncs during a pending drain and logs one restart-feedback line; from an agent shell it is refused", (t) => {
+  const { dir, runtime, env } = syncRepo(t);
+  writeFileSync(path.join(env.VIBESQUAD_HOME, "local-token"), "cd".repeat(32));
+  const now = Date.now();
+  restartRecord(env.VIBESQUAD_HOME, { startedMs: now - 5 * 60000, finishedMs: now - 2 * 60000 });
+  const noBuild = () => assert.fail("no UI input: no build");
+  const calls = [];
+  const logVs = (args) => { calls.push(args); return { ok: true }; };
+
+  const agent = runSync({ repoRoot: dir, env: { ...env, VS_AGENT_ID: "rn-lead1" }, ignoreDrain: true, logVs, build: noBuild, log: () => {} });
+  assert.equal(agent.synced, false);
+  assert.match(agent.refused, /^sync-runtime --ignore-drain: needs the owner's per-run OK/);
+  assert.equal(calls.length, 0);
+  assert.equal(existsSync(path.join(runtime, "server")), false);
+
+  const lines = [];
+  const res = runSync({ repoRoot: dir, env, ignoreDrain: true, logVs, build: noBuild, log: (l) => lines.push(l) });
+  assert.equal(res.synced, true, JSON.stringify(res));
+  assert.equal(existsSync(path.join(runtime, "server", "x.mjs")), true);
+  assert.equal(calls.length, 1, "exactly one log line");
+  assert.deepEqual(calls[0].slice(0, 2), ["log", "restart-feedback"]);
+  assert.match(calls[0][2], /^drain-override sync-runtime: /);
+  assert.deepEqual(res.drainOverride, { logged: true, text: calls[0][2] });
+  assert.match(lines.join("\n"), /\[sync-runtime\] sync-runtime: --ignore-drain: going ahead during the coordinated drain/);
+});
+
+test("sync-runtime CLI accepts --ignore-drain (not an unknown flag)", () => {
+  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--ignore-drain"], { cwd: root, encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(path.join(tmpdir(), "vs-sync-lad-")) } });
+  assert.doesNotMatch(r.stdout + r.stderr, /unknown flag/);
+  assert.notEqual(r.status, 2);
 });
