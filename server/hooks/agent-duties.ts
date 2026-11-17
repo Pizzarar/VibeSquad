@@ -43,7 +43,7 @@ import { writeBriefFile } from "../brief-write.mjs";
 import { defangPromptFences } from "../write-guards.mjs";
 import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
-import { DEFAULT_PACK_PROFILES, deriveRole } from "../profiles.mjs";
+import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
@@ -302,22 +302,8 @@ export function loadStoredProfiles(): StoredProfile[] {
   return [];
 }
 
-const LEGACY_ALIASES: Record<string, string> = {
-  "Lead - Opus": "Lead - Claude",
-  "Brainstorm - Opus": "Brainstorm - Claude",
-  "Art - Gemini": "Art Director - Gemini",
-  "Art - Opus": "Art Painter - Opus",
-  "Builder - Gemini": "Lead - Gemini",
-  "Reviewer - Gemini": "Review - Gemini",
-  Lead: "Lead - Claude",
-  Brainstorm: "Brainstorm - Claude",
-  Buddy: "Brainstorm - Claude",
-  RiffBot: "Brainstorm - Claude",
-  Worker: "Implement - Sonnet",
-  Coder: "Work Order - DSP",
-  Reviewer: "Review - Gemini",
-  Fast: "Pre-check - Flash",
-};
+/** Old/short profile names -> canonical old name: the one table (server/profile-aliases.mjs via profiles.mjs, P5c dedupe). */
+const LEGACY_ALIASES: Readonly<Record<string, string>> = LEGACY_PROFILE_ALIASES;
 
 export interface ProfileMatch {
   profile: StoredProfile;
