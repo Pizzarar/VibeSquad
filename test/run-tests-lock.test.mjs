@@ -360,3 +360,30 @@ test("run-tests.mjs: without --queue a held slot still exits 1; with --queue it 
   assert.equal(existsSync(paths.lock), false);
   assert.equal(existsSync(paths.queue), false);
 });
+
+// idea-309: a wedged file (test running, no events) is named, killed with its child process, and the run ends failed.
+test("run-tests.mjs: a hung test file is killed with its child after VS_TEST_FILE_TIMEOUT_MS, named on stderr, and the slot is freed", { timeout: 90000 }, (t) => {
+  const dir = tmp(t);
+  const pidFile = path.join(dir, "child.pid");
+  const hung = path.join(dir, "hung.test.mjs");
+  writeFileSync(hung, `import test from "node:test";
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+test("wedged", async () => {
+  const c = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+  writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));
+  await new Promise(() => {});
+});
+`);
+  const r = spawnSync(process.execPath, [RUN_TESTS, hung], { cwd: root, env: cleanEnv({ VIBESQUAD_TEST_LOCK_DIR: dir, VS_TEST_FILE_TIMEOUT_MS: "3000" }), encoding: "utf8", timeout: 80000 });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /TEST FILE TIMEOUT: .*hung\.test\.mjs/);
+  const childPid = Number(readFileSync(pidFile, "utf8"));
+  let alive = true;
+  try { process.kill(childPid, 0); } catch { alive = false; }
+  assert.equal(alive, false, "the file's child process (stand-in for headless Edge) is killed");
+  const last = JSON.parse(readFileSync(path.join(dir, "vibesquad-npm-test-last.json"), "utf8"));
+  assert.ok(last.fail >= 1);
+  assert.ok(last.failingFiles.some((f) => f.endsWith("hung.test.mjs")), JSON.stringify(last));
+  assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith("vibesquad-")), ["vibesquad-npm-test-last.json"]);
+});

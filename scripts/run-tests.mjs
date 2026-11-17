@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "../server/restart-coord.mjs";
+import { startWatchdog, DEFAULT_FILE_IDLE_MS } from "./test-watchdog.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -82,6 +83,9 @@ const major = Number(process.versions.node.split(".")[0]);
 const reporter = major >= 23 || process.stdout.isTTY ? "spec" : "tap";
 const summaryFile = path.join(paths.dir, `vibesquad-npm-test-summary-${process.pid}.json`);
 const summaryReporter = pathToFileURL(path.join(root, "scripts", "test-summary-reporter.mjs")).href;
+const progressFile = path.join(paths.dir, `vibesquad-npm-test-progress-${process.pid}.jsonl`);
+const progressReporter = pathToFileURL(path.join(root, "scripts", "test-progress-reporter.mjs")).href;
+const fileIdleMs = Number(process.env.VS_TEST_FILE_TIMEOUT_MS) || DEFAULT_FILE_IDLE_MS;
 const child = spawn(
   process.execPath,
   [
@@ -89,10 +93,15 @@ const child = spawn(
     "--import", "./test/setup/hermetic.mjs",
     `--test-reporter=${reporter}`, "--test-reporter-destination=stdout",
     `--test-reporter=${summaryReporter}`, `--test-reporter-destination=${summaryFile}`,
+    `--test-reporter=${progressReporter}`, `--test-reporter-destination=${progressFile}`,
     ...(files.length ? files : ["test/*.test.mjs"]),
   ],
   { cwd: root, stdio: "inherit" },
 );
+
+// idea-309: one wedged file must not hold the slot forever. A file with a test running and no test event for
+// VS_TEST_FILE_TIMEOUT_MS (default 15 min) is named on stderr, its process tree (incl. a headless browser) is killed, and node --test fails it.
+const watchdog = startWatchdog({ progressFile, rootPid: child.pid, idleMs: fileIdleMs, pollMs: Math.min(5000, Math.max(250, fileIdleMs / 4)), root });
 
 let finished = false;
 function finish(exitCode, signal) {
@@ -100,8 +109,10 @@ function finish(exitCode, signal) {
   finished = true;
   let summary = {};
   try { summary = JSON.parse(readFileSync(summaryFile, "utf8")); } catch {} // killed before the summary: counts stay null
+  watchdog.stop();
   rmSync(summaryFile, { force: true });
-  const failingFiles = (summary.failingFiles ?? []).map((f) => path.relative(root, f).split(path.sep).join("/"));
+  rmSync(progressFile, { force: true });
+  const failingFiles = [...new Set([...(summary.failingFiles ?? []), ...watchdog.killed])].map((f) => path.relative(root, f).split(path.sep).join("/"));
   // A non-zero exit with no counted failure (missing file, bad flag, killed mid-run) is still a FAIL: readers treat
   // fail > 0 as the failure signal, so a null or 0 here would read as a pass.
   const failedRun = exitCode !== 0 || !!signal;
