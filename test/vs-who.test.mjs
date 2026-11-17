@@ -338,7 +338,7 @@ test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, v
     },
     on: () => () => {},
   };
-  const dispose = createPlugin({ startWatcher: false })(server);
+  const dispose = createPlugin({ startWatcher: false, gitSpawnTimeoutMs: 30_000 })(server);
   try {
     assert.ok(beforeHook, "Expected before('agent.create') hook");
     const mutated = await beforeHook({
@@ -454,7 +454,7 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
       },
     };
 
-    const dispose = createPlugin({ startWatcher: false })(server);
+    const dispose = createPlugin({ startWatcher: false, gitSpawnTimeoutMs: 30_000 })(server);
     try {
       const turnEnded = handlers.get("agent.turn_ended");
       await turnEnded(

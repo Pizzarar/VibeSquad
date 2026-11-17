@@ -11,7 +11,7 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 test("inspectGitSpawnState is async: returns a promise and keeps the event loop turning while git runs", async () => {
   let ticks = 0;
   const timer = setInterval(() => ticks++, 1);
-  const p = inspectGitSpawnState(REPO_ROOT);
+  const p = inspectGitSpawnState(REPO_ROOT, { timeoutMs: 30_000 });
   assert.ok(p instanceof Promise);
   const state = await p;
   clearInterval(timer);
@@ -32,7 +32,7 @@ test("inspectGitSpawnState matches plain git for branch and dirty count", async 
   const git = (...a) => spawnSync("git", a, { cwd: REPO_ROOT, encoding: "utf8" }).stdout.trim();
   const branch = git("rev-parse", "--abbrev-ref", "HEAD");
   const dirty = git("status", "--porcelain", "-uno").split(/\r?\n/).filter((l) => l.trim()).length;
-  const state = await inspectGitSpawnState(REPO_ROOT);
+  const state = await inspectGitSpawnState(REPO_ROOT, { timeoutMs: 30_000 });
   assert.ok(state.includes(`branch=${branch},`), state);
   assert.ok(state.endsWith(`dirty=${dirty} files.`), state);
 });

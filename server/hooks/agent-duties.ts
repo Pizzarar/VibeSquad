@@ -1080,6 +1080,8 @@ export interface Deps {
   startWatcher: boolean;
   /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
   leadWakeCooldownMs?: number;
+  /** git status cap for the spawn-time snapshot (default 3000); tests asserting the format pass more. */
+  gitSpawnTimeoutMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
   briefRoot?: string;
   /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
@@ -2013,7 +2015,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy || isHubLead);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
-        const gitState = await inspectGitSpawnState(cwd);
+        const gitState = await inspectGitSpawnState(cwd, { timeoutMs: deps.gitSpawnTimeoutMs });
         st.mark("git-spawn-state");
         let bootPluginChars = 0;
         let bootBriefChars = 0;
