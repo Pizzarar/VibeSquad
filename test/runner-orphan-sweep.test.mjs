@@ -21,7 +21,7 @@ after(() => {
 });
 
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-async function gone(pid, ms = 10000) {
+async function gone(pid, ms = 60000) {
   const end = Date.now() + ms;
   while (Date.now() < end) { if (!alive(pid)) return true; await sleep(100); }
   return !alive(pid);

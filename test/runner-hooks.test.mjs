@@ -586,7 +586,9 @@ test('fetch failures during created / turn_ended keep a lead a lead and still di
     const leadId = b.ctl.runner.create({ ...base, meta: { title: 'L', role: 'lead', lane: 'bug-chaser', team: 'vibesquad' } });
     const workerId = b.ctl.runner.create({ ...base, prompt: 'PASS: built', meta: { title: 'W', role: 'worker', lane: 'bug-chaser', team: 'vibesquad', labels: { job: 'build thing' } } });
     await until(() => b.count('agent.turn_ended', leadId) === 1 && b.count('agent.turn_ended', workerId) === 1, 8000, 'both turns ended');
-    await settle(1500); // hooks finish while reads still fail
+    // Hooks finish while reads still fail: wait for the digest to land (real read) instead of a fixed sleep that is too short under load.
+    await until(async () => (await realList({ filter: { includeArchived: true } })).some((a) => a.labels.digestFor === workerId) || teamLogAll().some((e) => e.type === 'done' && e.agent === workerId), 20000, 'worker digest');
+    await settle(300);
     b.backend.fetchAgent = realFetch;
     b.backend.listAgents = realList;
     const lead = await b.backend.getAgent(leadId);
