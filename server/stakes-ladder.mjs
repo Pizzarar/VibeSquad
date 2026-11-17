@@ -84,3 +84,98 @@ export function resolveStakesRoute(provider, profile, stakes, explicit, opts = {
   if (!model && !effort) return { ...base, reason: keep.model || keep.effort ? "explicit" : "default", apply: false };
   return { stakes: s, model, effort, reason: keep.model || keep.effort ? "explicit+ladder" : "ladder", apply: true };
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Tier ladder (docs/PLAN_PROFILES_ROLE_ONLY.md P5a): provider -> tier -> {model, effort}. Stakes pick a tier
+// (tierA-* -> top, mechanical -> cheap, normal -> the role's default tier, see server/role-route.mjs). Same override
+// file as above; its old per-stakes keys are read onto top/cheap. The per-stakes view above (DEFAULT_STAKES_LADDER,
+// loadStakesLadder, resolveStakesRoute) stays as-is for the live spawn hook until P5c switches it to resolveRoute.
+// Fable is explicit-only (never a rung): an override rung naming a fable model is dropped.
+
+export const TIERS = ["top", "mid", "cheap"];
+
+/** A rung with no `effort` falls back to the role's per-provider effort (server/role-route.mjs ROLE_TABLE). */
+export const DEFAULT_TIER_LADDER = deepFreeze({
+  claude: {
+    top: { model: "claude-opus-5-5", effort: "high" },
+    mid: { model: "claude-sonnet-5-5", effort: "medium" },
+    cheap: { model: "claude-sonnet-5-5", effort: "low" },
+  },
+  "antigravity-cli": {
+    top: { model: "gemini-4-argon", effort: "high" },
+    mid: { model: "gemini-4-argon" },
+    cheap: { model: "gemini-3.8-flash" },
+  },
+  opencode: {
+    top: { model: "deepseek/deepseek-v4-pro", effort: "high" },
+    mid: { model: "deepseek/deepseek-v4-pro" },
+    cheap: { model: "deepseek/deepseek-v4-pro" },
+  },
+});
+
+/** Old per-stakes override keys -> tier, in apply order (later wins): tierA-security beats tierA-invariant on top. */
+const LEGACY_STAKES_TIER_KEYS = [
+  ["mechanical", "cheap"],
+  ["tierA-invariant", "top"],
+  ["tierA-security", "top"],
+];
+
+function deepFreeze(o) {
+  for (const v of Object.values(o)) if (v && typeof v === "object") deepFreeze(v);
+  return Object.freeze(o);
+}
+
+/** The tier stakes force, or null when the role's default tier applies (normal / missing / unknown). */
+export function stakesTier(stakes) {
+  const s = normalizeStakes(stakes);
+  if (s === "tierA-security" || s === "tierA-invariant") return "top";
+  if (s === "mechanical") return "cheap";
+  return null;
+}
+
+function cleanRung(rung) {
+  if (!rung || typeof rung !== "object" || Array.isArray(rung)) return null;
+  const clean = {};
+  if (typeof rung.model === "string" && rung.model.trim()) clean.model = rung.model.trim();
+  if (typeof rung.effort === "string" && rung.effort.trim()) clean.effort = rung.effort.trim();
+  if (clean.model && /fable/i.test(clean.model)) return null; // Fable: explicit-only, never a rung
+  return clean;
+}
+
+/**
+ * Defaults with ~/.vibesquad/stakes-ladder.json merged on top, field by field (an override rung's model/effort replace
+ * the default's; fields it omits keep the default). Tier keys (top/mid/cheap) win over old per-stakes keys for the same
+ * tier. Unknown providers in the file get their own rungs. Read-only: never rewrites the file. Bad file = defaults.
+ */
+export function loadTierLadder(file = stakesLadderPath()) {
+  const out = {};
+  for (const [fam, rungs] of Object.entries(DEFAULT_TIER_LADDER)) {
+    out[fam] = {};
+    for (const [tier, rung] of Object.entries(rungs)) out[fam][tier] = { ...rung };
+  }
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+  } catch {
+    return out;
+  }
+  const src = raw && typeof raw === "object" && raw.ladder && typeof raw.ladder === "object" ? raw.ladder : raw;
+  if (!src || typeof src !== "object" || Array.isArray(src)) return out;
+  for (const [prov, rungs] of Object.entries(src)) {
+    const fam = normalizeProviderFamily(prov);
+    if (!fam || !rungs || typeof rungs !== "object" || Array.isArray(rungs)) continue;
+    const merged = {};
+    for (const [stakesKey, tier] of LEGACY_STAKES_TIER_KEYS) {
+      const clean = cleanRung(rungs[stakesKey]);
+      if (clean) merged[tier] = { ...(merged[tier] ?? {}), ...clean };
+    }
+    for (const tier of TIERS) {
+      const clean = cleanRung(rungs[tier]);
+      if (clean) merged[tier] = { ...(merged[tier] ?? {}), ...clean };
+    }
+    if (!Object.keys(merged).length) continue;
+    out[fam] = out[fam] ?? {};
+    for (const [tier, rung] of Object.entries(merged)) out[fam][tier] = { ...(out[fam][tier] ?? {}), ...rung };
+  }
+  return out;
+}
