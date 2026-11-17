@@ -1002,7 +1002,8 @@ export function bootSizeMetric(
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
-export async function inspectGitSpawnState(cwd: string): Promise<string | null> {
+export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: number } = {}): Promise<string | null> {
+  const timeoutMs = opts.timeoutMs ?? 3000; // production keeps 3s (a hung git must not hold the spawn hook); format tests pass more
   if (!cwd) return null;
   let resolved = "";
   try {
@@ -1018,7 +1019,7 @@ export async function inspectGitSpawnState(cwd: string): Promise<string | null> 
         execFile(
           "git",
           ["--no-optional-locks", ...args],
-          { cwd: resolved, encoding: "utf8", timeout: 3000, windowsHide: true },
+          { cwd: resolved, encoding: "utf8", timeout: timeoutMs, windowsHide: true },
           (err, stdout) => resolve(err ? null : String(stdout ?? "")),
         );
       } catch {
