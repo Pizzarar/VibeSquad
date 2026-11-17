@@ -125,6 +125,14 @@ function deepFreeze(o) {
   return Object.freeze(o);
 }
 
+/** Provider family for routing: provider-failover's families plus deepseek ids/keys -> opencode. "" when blank. */
+export function routeProviderFamily(raw) {
+  const s = String(raw ?? "").trim().toLowerCase();
+  if (!s) return "";
+  if (s === "deepseek" || s.startsWith("deepseek/") || s.startsWith("deepseek-")) return "opencode";
+  return normalizeProviderFamily(s);
+}
+
 /** The tier stakes force, or null when the role's default tier applies (normal / missing / unknown). */
 export function stakesTier(stakes) {
   const s = normalizeStakes(stakes);
@@ -162,7 +170,7 @@ export function loadTierLadder(file = stakesLadderPath()) {
   const src = raw && typeof raw === "object" && raw.ladder && typeof raw.ladder === "object" ? raw.ladder : raw;
   if (!src || typeof src !== "object" || Array.isArray(src)) return out;
   for (const [prov, rungs] of Object.entries(src)) {
-    const fam = normalizeProviderFamily(prov);
+    const fam = routeProviderFamily(prov);
     if (!fam || !rungs || typeof rungs !== "object" || Array.isArray(rungs)) continue;
     const merged = {};
     for (const [stakesKey, tier] of LEGACY_STAKES_TIER_KEYS) {

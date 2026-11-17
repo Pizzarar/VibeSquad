@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { DEFAULT_PACK_PROFILES } from "../server/profiles.mjs";
-import { LEGACY_ROUTES, ROLE_TABLE, lookupRole, resolveRoute } from "../server/role-route.mjs";
+import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES } from "../server/profiles.mjs";
+import { resolveProfileWithFailover } from "../server/provider-failover.mjs";
+import { LEGACY_HOP_PROFILES, LEGACY_ROUTES, ROLE_TABLE, lookupRole, resolveRoute } from "../server/role-route.mjs";
 import {
   DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
@@ -12,110 +13,208 @@ import {
   TIERS,
   loadTierLadder,
   resolveStakesRoute,
+  routeProviderFamily,
   stakesTier,
 } from "../server/stakes-ladder.mjs";
+
+const C = "claude";
+const A = "antigravity-cli";
+const O = "opencode";
 
 // Golden table: the 12 profiles in ~/.vibesquad/profiles.json on 2026-11-17 and the provider/model/effort/mode each one
 // spawns with today at normal stakes (profile fields; the stakes ladder does not apply at normal). 11 of them are also
 // shipped in DEFAULT_PACK_PROFILES (checked below); "Implement - Gemini (trial)" exists only in the user file.
 const GOLDEN = [
-  ["Lead - Claude", "claude", "claude-opus-5-5", "medium", "auto"],
-  ["Lead - Gemini", "antigravity-cli", "gemini-4-argon", "medium", "accept-edits"],
-  ["Brainstorm - Claude", "claude", "claude-opus-5-5", "medium", "auto"],
-  ["Brainstorm - Gemini", "antigravity-cli", "gemini-4-argon", "medium", "accept-edits"],
-  ["Implement - Sonnet", "claude", "claude-sonnet-5-5", "medium", "auto"],
-  ["Work Order - DSP", "opencode", "deepseek/deepseek-v4-pro", "high", "build"],
-  ["Review - Gemini", "antigravity-cli", "gemini-4-argon", "medium", "default"],
-  ["Review - Sonnet", "claude", "claude-sonnet-5-5", "medium", "auto"],
-  ["Pre-check - Flash", "antigravity-cli", "gemini-3.8-flash", "low", "default"],
-  ["Art Director - Gemini", "antigravity-cli", "gemini-4-argon", "medium", "accept-edits"],
-  ["Art Painter - Opus", "claude", "claude-opus-5-5", "medium", "auto"],
-  ["Implement - Gemini (trial)", "antigravity-cli", "gemini-4-argon", "medium", "accept-edits"],
-].map(([name, provider, model, effort, modeId]) => ({ name, provider, model, effort, modeId }));
+  ["Lead - Claude", "lead", C, "claude-opus-5-5", "medium", "auto"],
+  ["Lead - Gemini", "lead", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Brainstorm - Claude", "brainstorm", C, "claude-opus-5-5", "medium", "auto"],
+  ["Brainstorm - Gemini", "brainstorm", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Implement - Sonnet", "worker", C, "claude-sonnet-5-5", "medium", "auto"],
+  ["Work Order - DSP", "worker", O, "deepseek/deepseek-v4-pro", "high", "build"],
+  ["Review - Gemini", "worker", A, "gemini-4-argon", "medium", "default"],
+  ["Review - Sonnet", "worker", C, "claude-sonnet-5-5", "medium", "auto"],
+  ["Pre-check - Flash", "worker", A, "gemini-3.8-flash", "low", "default"],
+  ["Art Director - Gemini", "worker", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Art Painter - Opus", "worker", C, "claude-opus-5-5", "medium", "auto"],
+  ["Implement - Gemini (trial)", "worker", A, "gemini-4-argon", "medium", "accept-edits"],
+].map(([name, role, provider, model, effort, modeId]) => ({ name, role, provider, model, effort, modeId }));
+
+// Today's stored profile list (the effective list resolveProfileWithFailover walks; hop profiles outside it come from
+// the registered DEFAULT_PACK_PROFILES, as in the server).
+const USER_PROFILES = GOLDEN.map((g) => ({ name: g.name, role: g.role, provider: g.provider, model: g.model, modeId: g.modeId, thinkingOptionId: g.effort }));
+
+const row = (provider, model, effort, modeId) => ({ provider, model, effort, modeId });
+const OPUS_MED = row(C, "claude-opus-5-5", "medium", "auto");
+const SONNET_MED = row(C, "claude-sonnet-5-5", "medium", "auto");
+const ARGON_AE = row(A, "gemini-4-argon", "medium", "accept-edits");
+const ARGON_DEF = row(A, "gemini-4-argon", "medium", "default");
+const DSP = row(O, "deepseek/deepseek-v4-pro", "high", "build");
+
+// Failover golden (normal stakes): [name, caps, expected]. Own provider capped, then own + the first hop's provider.
+const FAILOVER_GOLDEN = [
+  ["Lead - Claude", [C], ARGON_AE],
+  ["Lead - Claude", [C, A], DSP],
+  ["Lead - Gemini", [A], OPUS_MED],
+  ["Lead - Gemini", [A, C], DSP],
+  ["Brainstorm - Claude", [C], ARGON_AE],
+  ["Brainstorm - Claude", [C, A], DSP],
+  ["Brainstorm - Gemini", [A], OPUS_MED],
+  ["Brainstorm - Gemini", [A, C], DSP],
+  ["Implement - Sonnet", [C], ARGON_AE],
+  ["Implement - Sonnet", [C, A], DSP],
+  ["Work Order - DSP", [O], SONNET_MED],
+  ["Work Order - DSP", [O, C], ARGON_AE],
+  ["Review - Gemini", [A], SONNET_MED],
+  ["Review - Gemini", [A, C], DSP],
+  ["Review - Sonnet", [C], ARGON_DEF],
+  ["Review - Sonnet", [C, A], DSP],
+  ["Pre-check - Flash", [A], row(C, "claude-haiku-5-5", "low", "auto")],
+  ["Pre-check - Flash", [A, C], row(O, "deepseek/deepseek-flash", "default", "plan")],
+  ["Art Director - Gemini", [A], OPUS_MED],
+  ["Art Director - Gemini", [A, C], DSP],
+  ["Art Painter - Opus", [C], ARGON_AE],
+  ["Art Painter - Opus", [C, A], DSP],
+  ["Implement - Gemini (trial)", [A], SONNET_MED],
+  ["Implement - Gemini (trial)", [A, C], DSP],
+];
 
 const pick = (r) => r && { provider: r.provider, model: r.model, effort: r.effort, modeId: r.modeId };
+const FAMS = [C, A, O];
+const CAP_SETS = [[]];
+for (const f of FAMS) for (const s of [...CAP_SETS]) CAP_SETS.push([...s, f]);
+
+/** Today's route for a profile name: the failover walk, then the old stakes ladder on the landed profile. */
+function today(name, caps, stakes) {
+  const fo = resolveProfileWithFailover(name, USER_PROFILES, [], { cappedProviders: caps, ignoreDiskCaps: true });
+  const p = fo.profile;
+  const sr = resolveStakesRoute(p.provider, p, stakes, false, { ladder: DEFAULT_STAKES_LADDER });
+  return {
+    provider: p.provider,
+    model: (sr.apply && sr.model) || p.model,
+    effort: (sr.apply && sr.effort) || p.thinkingOptionId,
+    modeId: p.modeId,
+  };
+}
 
 test("golden: the 12 current profile names resolve to exactly today's provider/model/effort/mode", () => {
   assert.equal(GOLDEN.length, 12);
   assert.deepEqual(Object.keys(LEGACY_ROUTES).sort(), GOLDEN.map((g) => g.name).sort());
   for (const g of GOLDEN) {
     const r = resolveRoute({ role: g.name, stakes: "normal" });
-    assert.deepEqual(pick(r), { provider: g.provider, model: g.model, effort: g.effort, modeId: g.modeId }, g.name);
-    assert.equal(r.reason, "legacy-name", g.name);
-    assert.equal(r.legacy, g.name);
+    assert.deepEqual(pick(r), row(g.provider, g.model, g.effort, g.modeId), g.name);
+    assert.deepEqual([r.reason, r.legacy, r.capped], ["legacy-name", g.name, false], g.name);
   }
 });
 
-test("golden rows match the shipped profile definitions (today's source of truth in code)", () => {
-  for (const g of GOLDEN) {
-    const p = DEFAULT_PACK_PROFILES.find((x) => x.name === g.name);
-    if (g.name === "Implement - Gemini (trial)") {
+test("golden failover: 24 rows (each name with its own provider capped, then two providers capped)", () => {
+  assert.equal(FAILOVER_GOLDEN.length, 24);
+  for (const [name, caps, want] of FAILOVER_GOLDEN) {
+    const r = resolveRoute({ role: name, caps });
+    assert.deepEqual(pick(r), want, `${name} caps=${caps}`);
+    assert.deepEqual(r.reasons, ["legacy-name", "failover"], `${name} caps=${caps}`);
+    assert.deepEqual(pick(r), today(name, caps, "normal"), `${name} caps=${caps} vs today`);
+  }
+});
+
+test("golden aliases: bare Lead / Brainstorm stay today's Lead - Claude / Brainstorm - Claude (opus/medium)", () => {
+  for (const [alias, target] of [["Lead", "Lead - Claude"], ["Brainstorm", "Brainstorm - Claude"]]) {
+    const r = resolveRoute({ role: alias, stakes: "normal" });
+    assert.deepEqual(pick(r), OPUS_MED, alias);
+    assert.deepEqual([r.reason, r.legacy, r.alias], ["legacy-name", target, alias]);
+  }
+  // other spellings reach the new role and follow the ladder
+  const lr = resolveRoute({ role: "lead" });
+  assert.deepEqual([lr.model, lr.effort, lr.reason, lr.legacy], ["claude-opus-5-5", "high", "default", null]);
+});
+
+test("exhaustive: every legacy name and alias x every cap set x every stakes value == today's code", () => {
+  const names = [...GOLDEN.map((g) => g.name), ...Object.keys(LEGACY_PROFILE_ALIASES)];
+  let n = 0;
+  for (const name of names) {
+    for (const caps of CAP_SETS) {
+      for (const s of [...STAKES_VALUES, undefined, "bogus"]) {
+        const r = resolveRoute({ role: name, stakes: s, caps });
+        assert.deepEqual(pick(r), today(name, caps, s), `${name} caps=[${caps}] stakes=${s}`);
+        assert.equal(r.capped, caps.length === 3, `${name} caps=[${caps}]`);
+        n++;
+      }
+    }
+  }
+  assert.equal(n, names.length * 8 * 6);
+});
+
+test("golden rows and hop pins match the shipped profile definitions", () => {
+  for (const [name, hop] of Object.entries(LEGACY_HOP_PROFILES)) {
+    const p = DEFAULT_PACK_PROFILES.find((x) => x.name === name);
+    if (name === "Implement - Gemini (trial)") {
       assert.equal(p, undefined); // user-file only
+      const g = GOLDEN.find((x) => x.name === name);
+      assert.deepEqual(hop, row(g.provider, g.model, g.effort, g.modeId));
       continue;
     }
-    assert.ok(p, g.name);
-    assert.deepEqual(
-      { provider: p.provider, model: p.model, effort: p.thinkingOptionId, modeId: p.modeId },
-      { provider: g.provider, model: g.model, effort: g.effort, modeId: g.modeId },
-      g.name,
-    );
+    assert.ok(p, name);
+    assert.deepEqual(hop, row(p.provider, p.model, p.thinkingOptionId, p.modeId), name);
   }
-});
-
-test("golden x every stakes value: same result as today's profile + resolveStakesRoute", () => {
-  for (const g of GOLDEN) {
-    const profile = { model: g.model, thinkingOptionId: g.effort };
-    for (const s of [...STAKES_VALUES, undefined, "bogus"]) {
-      const today = resolveStakesRoute(g.provider, profile, s, false, { ladder: DEFAULT_STAKES_LADDER });
-      const want = {
-        provider: g.provider,
-        model: (today.apply && today.model) || g.model,
-        effort: (today.apply && today.effort) || g.effort,
-        modeId: g.modeId,
-      };
-      assert.deepEqual(pick(resolveRoute({ role: g.name, stakes: s })), want, `${g.name} @ ${s}`);
-    }
-  }
+  for (const g of GOLDEN) assert.deepEqual(LEGACY_HOP_PROFILES[g.name], row(g.provider, g.model, g.effort, g.modeId), g.name);
 });
 
 test("done check: Implement + tierA-invariant -> claude opus-5-5/high", () => {
   const r = resolveRoute({ role: "Implement", stakes: "tierA-invariant" });
-  assert.deepEqual([r.provider, r.model, r.effort, r.modeId, r.tier, r.reason], ["claude", "claude-opus-5-5", "high", "auto", "top", "stakes"]);
+  assert.deepEqual([r.provider, r.model, r.effort, r.modeId, r.tier, r.reason], [C, "claude-opus-5-5", "high", "auto", "top", "stakes"]);
 });
 
 test("done check: Review + normal -> gemini-4-argon (antigravity first)", () => {
   const r = resolveRoute({ role: "Review", stakes: "normal" });
-  assert.deepEqual(pick(r), { provider: "antigravity-cli", model: "gemini-4-argon", effort: "medium", modeId: "default" });
+  assert.deepEqual(pick(r), ARGON_DEF);
   assert.deepEqual([r.tier, r.reason], ["mid", "default"]);
-  assert.equal(resolveRoute({ role: "review" }).provider, "antigravity-cli"); // missing stakes = normal
+  assert.equal(resolveRoute({ role: "review" }).provider, A); // missing stakes = normal
 });
 
 test("done check: capped claude + Lead -> antigravity top rung", () => {
-  for (const caps of [["claude"], new Set(["anthropic"]), { claude: true, opencode: false }]) {
-    const r = resolveRoute({ role: "Lead", stakes: "normal", caps });
-    assert.deepEqual(pick(r), { provider: "antigravity-cli", model: "gemini-4-argon", effort: "high", modeId: "accept-edits" });
-    assert.deepEqual([r.tier, r.reason], ["top", "failover"]);
+  for (const caps of [[C], new Set(["anthropic"]), { claude: true, opencode: false }]) {
+    const r = resolveRoute({ role: "lead", stakes: "normal", caps });
+    assert.deepEqual(pick(r), row(A, "gemini-4-argon", "high", "accept-edits"));
+    assert.deepEqual([r.tier, r.reason, r.capped], ["top", "failover", false]);
   }
-  // capped claude + antigravity -> opencode top
-  const r2 = resolveRoute({ role: "Lead", caps: ["claude", "gemini"] });
-  assert.deepEqual(pick(r2), { provider: "opencode", model: "deepseek/deepseek-v4-pro", effort: "high", modeId: "build" });
 });
 
-test("done check: explicit model kept (and every explicit field wins)", () => {
+test("role names keep today's third failover hop (two providers capped)", () => {
+  const cases = [
+    ["lead", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
+    ["Implement", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
+    ["Work Order", [O, C], row(A, "gemini-4-argon", "medium", "accept-edits")],
+    ["Review", [A, C], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
+    ["Pre-check", [A, C], row(O, "deepseek/deepseek-v4-pro", "default", "plan")],
+    ["Art Director", [A, C], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
+    ["Art Painter", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
+  ];
+  for (const [role, caps, want] of cases) {
+    const r = resolveRoute({ role, caps });
+    assert.deepEqual(pick(r), want, role);
+    assert.deepEqual(r.reasons, ["failover"], role);
+  }
+  for (const [k, r] of Object.entries(ROLE_TABLE)) assert.equal(r.providers.length, 3, k);
+});
+
+test("explicit wins; explicit on a capped provider is reported (capped + explicit-capped)", () => {
   const r = resolveRoute({ role: "Implement", stakes: "tierA-invariant", explicit: { model: "claude-sonnet-5-5" } });
-  assert.deepEqual([r.provider, r.model, r.effort, r.reason], ["claude", "claude-sonnet-5-5", "high", "explicit"]);
+  assert.deepEqual([r.provider, r.model, r.effort, r.reason, r.capped], [C, "claude-sonnet-5-5", "high", "explicit", false]);
   assert.deepEqual(r.reasons, ["explicit", "stakes"]);
   const all = resolveRoute({
     role: "Review",
     stakes: "mechanical",
-    caps: ["claude"],
+    caps: [C],
     explicit: { provider: "claude", model: "claude-fable-5-2", thinkingOptionId: "max", modeId: "plan" },
   });
-  assert.deepEqual(pick(all), { provider: "claude", model: "claude-fable-5-2", effort: "max", modeId: "plan" });
-  assert.equal(all.reason, "explicit");
-  // a model naming its own family moves the provider with it, even past a cap
+  assert.deepEqual(pick(all), row(C, "claude-fable-5-2", "max", "plan"));
+  assert.deepEqual([all.reason, all.capped], ["explicit-capped", true]);
+  assert.deepEqual(all.reasons, ["explicit-capped", "explicit", "stakes"]);
+  // a model naming its own family moves the provider with it; on a capped family it is flagged, not rerouted
   const m = resolveRoute({ role: "Review", explicit: { model: "claude-opus-5-5" } });
-  assert.deepEqual([m.provider, m.model, m.effort, m.modeId], ["claude", "claude-opus-5-5", "medium", "auto"]);
+  assert.deepEqual([m.provider, m.model, m.effort, m.modeId, m.capped], [C, "claude-opus-5-5", "medium", "auto", false]);
+  const mc = resolveRoute({ role: "Review - Gemini", caps: ["anthropic"], explicit: { model: "claude-opus-5-5" } });
+  assert.deepEqual([mc.provider, mc.model, mc.reason, mc.capped], [C, "claude-opus-5-5", "explicit-capped", true]);
+  assert.deepEqual(mc.reasons, ["explicit-capped", "explicit", "legacy-name"]);
 });
 
 test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role default", () => {
@@ -135,11 +234,11 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
     "art-painter": "top",
   });
   assert.equal(resolveRoute({ role: "Pre-check", stakes: "tierA-security" }).model, "gemini-4-argon");
-  const lm = resolveRoute({ role: "Lead", stakes: "mechanical" });
+  const lm = resolveRoute({ role: "lead", stakes: "mechanical" });
   assert.deepEqual([lm.model, lm.effort, lm.tier], ["claude-sonnet-5-5", "low", "cheap"]);
 });
 
-test("role table: 8 roles, every preferred provider has a ladder and a mode; names look up case-insensitively", () => {
+test("role table: 8 roles, every preferred provider has a ladder and a mode; lookup order", () => {
   assert.equal(Object.keys(ROLE_TABLE).length, 8);
   for (const [k, r] of Object.entries(ROLE_TABLE)) {
     assert.ok(TIERS.includes(r.tier), k);
@@ -148,10 +247,13 @@ test("role table: 8 roles, every preferred provider has a ladder and a mode; nam
       assert.ok(r.modes[p]?.modeId, `${k}/${p} mode`);
     }
   }
-  assert.deepEqual(ROLE_TABLE.review.providers, ["antigravity-cli", "claude"]);
+  assert.deepEqual(ROLE_TABLE.review.providers, [A, C, O]);
   for (const n of ["Work Order", "work-order", "WORK_ORDER", " work order "]) assert.equal(lookupRole(n)?.key, "work-order", n);
   assert.equal(lookupRole("review - gemini")?.legacy?.name, "Review - Gemini");
   assert.equal(lookupRole("Art Painter")?.key, "art-painter");
+  assert.equal(lookupRole("Lead")?.legacy?.name, "Lead - Claude");
+  assert.equal(lookupRole("Reviewer")?.legacy?.name, "Review - Gemini");
+  assert.equal(lookupRole("lead")?.legacy, null);
 });
 
 test("unknown role -> null; unknown role with an explicit provider still routes", () => {
@@ -161,34 +263,28 @@ test("unknown role -> null; unknown role with an explicit provider still routes"
   assert.deepEqual([r.provider, r.model, r.effort, r.modeId, r.reason, r.role], ["codex", "gpt-x", undefined, undefined, "explicit", null]);
 });
 
-test("all providers capped -> first preference, reason all-capped", () => {
-  const r = resolveRoute({ role: "Review", caps: ["antigravity-cli", "claude"] });
-  assert.deepEqual([r.provider, r.model, r.reason], ["antigravity-cli", "gemini-4-argon", "all-capped"]);
+test("all providers capped -> first preference kept, reason all-capped, capped=true", () => {
+  const r = resolveRoute({ role: "review", caps: [A, C, O] });
+  assert.deepEqual([r.provider, r.model, r.reason, r.capped], [A, "gemini-4-argon", "all-capped", true]);
+  const l = resolveRoute({ role: "Lead - Gemini", caps: [A, C, O] });
+  assert.deepEqual([pick(l), l.reasons, l.capped], [ARGON_AE, ["legacy-name", "all-capped"], true]);
 });
 
-test("legacy name on a capped provider fails over along the role list and drops the provider-specific pin", () => {
-  const r = resolveRoute({ role: "Lead - Claude", caps: ["claude"] });
-  assert.deepEqual(pick(r), { provider: "antigravity-cli", model: "gemini-4-argon", effort: "high", modeId: "accept-edits" });
-  assert.deepEqual(r.reasons, ["legacy-name", "failover"]);
-  const w = resolveRoute({ role: "Work Order - DSP", caps: ["opencode"] });
-  assert.deepEqual(pick(w), { provider: "claude", model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
-  // legacy tier override + model pin (P5b shape)
-  const legacy = { "Implement - Opus": { role: "implement", provider: "claude", tier: "top", pin: { effort: "medium" } } };
-  const io = resolveRoute({ role: "Implement - Opus" }, { legacy });
-  assert.deepEqual([io.model, io.effort, io.tier], ["claude-opus-5-5", "medium", "top"]);
-  const io2 = resolveRoute({ role: "Implement - Opus", stakes: "mechanical" }, { legacy });
-  assert.deepEqual([io2.model, io2.effort, io2.tier], ["claude-sonnet-5-5", "low", "cheap"]);
-});
-
-test("ladder input is honoured and the resolver never mutates it", () => {
+test("ladder inputs are honoured and the resolver never mutates them", () => {
   const ladder = loadTierLadder(join(tmpdir(), "vs-role-route-missing.json"));
   ladder.claude.mid = { model: "claude-x", effort: "max" };
   const snapshot = JSON.stringify(ladder);
   const r = resolveRoute({ role: "Implement", ladder });
   assert.deepEqual([r.model, r.effort], ["claude-x", "max"]);
   assert.equal(JSON.stringify(ladder), snapshot);
+  // the tier ladder does not touch legacy names; the old stakes ladder does
+  assert.equal(resolveRoute({ role: "Implement - Sonnet", ladder }).model, "claude-sonnet-5-5");
+  const stakesLadder = { claude: { "tierA-invariant": { model: "claude-y", effort: "max" } } };
+  const lr = resolveRoute({ role: "Implement - Sonnet", stakes: "tierA-invariant", stakesLadder });
+  assert.deepEqual([lr.model, lr.effort, lr.modeId], ["claude-y", "max", "auto"]);
   assert.ok(Object.isFrozen(DEFAULT_TIER_LADDER.claude.top));
   assert.ok(Object.isFrozen(ROLE_TABLE.lead.modes.claude));
+  assert.ok(Object.isFrozen(LEGACY_ROUTES["Lead - Claude"].via));
 });
 
 test("tier ladder override: old stakes keys migrate onto top/cheap, tier keys win, fields merge, fable dropped, bad file = defaults", () => {
@@ -207,8 +303,8 @@ test("tier ladder override: old stakes keys migrate onto top/cheap, tier keys wi
     assert.deepEqual(l.claude.top, { model: "claude-b", effort: "high" }); // tierA-security beats tierA-invariant, effort kept
     assert.deepEqual(l.claude.cheap, { model: "claude-sonnet-5-5", effort: "minimal" });
     assert.deepEqual(l.claude.mid, DEFAULT_TIER_LADDER.claude.mid);
-    assert.deepEqual(l["antigravity-cli"].top, { model: "gemini-z", effort: "max" });
-    assert.deepEqual(l["antigravity-cli"].cheap, DEFAULT_TIER_LADDER["antigravity-cli"].cheap); // fable never a rung
+    assert.deepEqual(l[A].top, { model: "gemini-z", effort: "max" });
+    assert.deepEqual(l[A].cheap, DEFAULT_TIER_LADDER[A].cheap); // fable never a rung
     assert.deepEqual(l.opencode.mid, { model: "deepseek/deepseek-v4-pro", effort: "low" });
     // the user's real override shape today (claude tierA-security) lands on top unchanged
     writeFileSync(f, "﻿" + JSON.stringify({ ladder: { claude: { "tierA-security": { model: "claude-opus-5-5", effort: "high" } } } }));
@@ -216,6 +312,23 @@ test("tier ladder override: old stakes keys migrate onto top/cheap, tier keys wi
     writeFileSync(f, "{nope");
     assert.deepEqual(loadTierLadder(f), DEFAULT_TIER_LADDER);
     assert.deepEqual(loadTierLadder(join(dir, "missing.json")), DEFAULT_TIER_LADDER);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a deepseek key in the ladder file maps to opencode", () => {
+  assert.equal(routeProviderFamily("deepseek"), O);
+  assert.equal(routeProviderFamily("deepseek/deepseek-v4-pro"), O);
+  assert.equal(routeProviderFamily("gemini"), A);
+  const dir = mkdtempSync(join(tmpdir(), "vs-tier-ds-"));
+  try {
+    const f = join(dir, "stakes-ladder.json");
+    writeFileSync(f, JSON.stringify({ deepseek: { top: { model: "deepseek/deepseek-v5" }, mechanical: { effort: "low" } } }));
+    const l = loadTierLadder(f);
+    assert.deepEqual(l.opencode.top, { model: "deepseek/deepseek-v5", effort: "high" });
+    assert.deepEqual(l.opencode.cheap, { model: "deepseek/deepseek-v4-pro", effort: "low" });
+    assert.equal(l.deepseek, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
