@@ -365,7 +365,9 @@ export async function verbatimDigestText(caller, type, text, backend) {
   const id = String(caller.digestFor);
   try {
     const b = backend ?? sharedRunnerBackend();
-    const [rec, tl] = await Promise.all([b.fetchAgent(id), b.fetchAgentTimeline(id, { direction: "tail" })]);
+    // idea-308: a windowed tail read (O(tail), not O(log)); only a tail with no assistant reply in it falls back to the full read.
+    const [rec, tail] = await Promise.all([b.fetchAgent(id), b.fetchAgentTimeline(id, { direction: "tail", limit: 400 })]);
+    const tl = tail?.hasOlder && !lastAssistantText(tail, Infinity) ? await b.fetchAgentTimeline(id, { direction: "tail" }) : tail;
     const worker = rec?.agent ?? rec;
     return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker) }).text;
   } catch {

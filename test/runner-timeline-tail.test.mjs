@@ -83,3 +83,21 @@ test('no limit reads the whole log, as before', async () => {
   assert.deepEqual(await b.fetchAgentTimeline('a'), full(events, Infinity));
   assert.equal(b.calls[0].includes('?'), false);
 });
+
+test('before-page lastSeq matches the full read when a call before the window resolves at/after the cursor', async () => {
+  const events = [];
+  const add = (type, d = {}) => events.push({ seq: events.length, ts: 1700000000000 + events.length, type, ...d });
+  add('input', { text: 'start' });
+  add('tool', { phase: 'call', id: 'long', name: 'slow' }); // opens far before any window
+  for (let t = 0; t < 300; t++) { add('input', { text: `q${t}` }); add('output', { text: `a${t}` }); add('turn_done'); }
+  add('tool', { phase: 'result', id: 'long', status: 'completed' }); // resolves after the cursor
+  for (let t = 0; t < 30; t++) { add('input', { text: `r${t}` }); add('output', { text: `b${t}` }); add('turn_done'); }
+  const cursor = { epoch: 'runner', seq: 700 };
+  for (const limit of [3, 10, 40]) {
+    const got = await backendFor(events).fetchAgentTimeline('a', { direction: 'before', cursor, limit });
+    assert.deepEqual(got, full(events, limit, cursor), `limit ${limit}`);
+  }
+  // cursor right behind the long call too: window start falls between call and result
+  const got = await backendFor(events).fetchAgentTimeline('a', { direction: 'before', cursor: { epoch: 'runner', seq: 500 }, limit: 5 });
+  assert.deepEqual(got, full(events, 5, { seq: 500 }));
+});
