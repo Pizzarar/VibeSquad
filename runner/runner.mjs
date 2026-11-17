@@ -958,7 +958,16 @@ export class Runner {
   static _metaCopy(f) { return structuredClone(f.meta ?? {}); }
 
   // The created event's systemPrompt (the fold drops role prompts): the log's first event only, i.e. a full read's events[0].
-  _createdPrompt(id) { return this.store.read(id, 0, 1)[0]?.systemPrompt; }
+  // Read in 64KB slices until that event (each slice completes at least one line, however long): store.read(id, 0, 1) would
+  // read and copy a whole 1MB chunk to parse one line (4ms a call on a big log). Same event: the first complete line with seq >= 0.
+  _createdPrompt(id) {
+    for (let off = 0; ;) {
+      const r = this.store.readFrom(id, off, 0, 1, null, 1 << 16);
+      if (r.events.length) return r.events[0].systemPrompt;
+      if (r.end <= off) return undefined; // end of the complete lines: no such event
+      off = r.end;
+    }
+  }
 
   // The systemPrompt of the parked event the fold picked: that one line, read by seq via the store's sparse index. Trusted only
   // when every seq in the log rose strictly (f.seqMono: the event with that seq is unique) and the line read is that same event;

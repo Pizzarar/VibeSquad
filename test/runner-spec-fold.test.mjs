@@ -156,8 +156,13 @@ test(">1MB log: parked spec (incl. the 40KB parked prompt) and lost spec match, 
   const full = [];
   const read = r.store.read.bind(r.store);
   r.store.read = (rid, afterSeq = 0, limit = Infinity) => { if (afterSeq === 0 && limit === Infinity) full.push(rid); return read(rid, afterSeq, limit); };
+  let bytes = 0; // and no near-whole read by readFrom either: only the created line (40KB), the parked line and its block
+  const readFrom = r.store.readFrom.bind(r.store);
+  r.store.readFrom = (rid, off = 0, ...rest) => { const x = readFrom(rid, off, ...rest); bytes += Math.max(0, x.end - off); return x; };
   for (let i = 0; i < 5; i++) { r._unstartedPlan(id); r._parkedSpec(id); r._lostSpec(id); r._cutTurn(id, spec.meta); }
   assert.deepEqual(full, [], "no full sync read on the park/resume/lost/cut paths");
+  assert.ok(bytes < 5 * 4 * 200_000, `the hot path read ${bytes} bytes for 5 rounds (a 3MB log)`);
+  r.store.readFrom = readFrom;
   // A send after more output: still only the new tail is folded.
   appendFileSync(logFile(h, id), JSON.stringify({ seq: lines.length, ts: Date.now(), type: "output", text: "late" }) + "\n");
   r._parkedSpec(id);
@@ -212,4 +217,87 @@ test("a spec's meta never aliases the cached fold", () => {
   a.meta.extra = 1;
   assert.equal(r._parkedSpec(id).meta.labels.role, "lead");
   assert.equal(r.status(id).labels?.role ?? r.folds.get(id).meta.labels.role, "lead");
+});
+
+// The created prompt is read as one line in 64KB slices: a prompt far past one slice, and a hand-edited head (a malformed and
+// a blank line before the created event, which a full read skips too) still give events[0]'s prompt.
+test("created prompt: a line longer than a slice and a malformed head still read as the full read's events[0]", () => {
+  const h = home();
+  const r = runner(h);
+  const now = Date.now();
+  const ln = (seq, type, data) => JSON.stringify({ seq, ts: now - 1000 + seq, type, ...data }) + "\n";
+  const big = "created prompt " + "c".repeat(150_000);
+  const cases = {
+    "rn-longcreated": [ln(0, "created", { provider: "claude", cwd: "/w", meta: {}, systemPrompt: big }), ln(1, "session", { sessionId: "s1" }), ln(2, "input", { text: "go" }), ln(3, "status", { status: "queued" })],
+    "rn-badhead": ["{not json\n", "\n", JSON.stringify({ ts: now, type: "output", text: "no seq" }) + "\n", ln(1, "created", { provider: "claude", cwd: "/w", meta: {}, systemPrompt: big }), ln(2, "session", { sessionId: "s1" })],
+  };
+  for (const [id, ls] of Object.entries(cases)) writeFileSync(logFile(h, id), ls.join(""));
+  check(r, Object.keys(cases), "created prompt");
+  assert.equal(r._lostSpec("rn-longcreated").systemPrompt, big);
+  assert.equal(r._unstartedPlan("rn-longcreated").spec.systemPrompt, big);
+  assert.equal(r._lostSpec("rn-badhead").systemPrompt, big);
+});
+
+// The fold-index file format grew the spec fields (seqMono, archived, park, refused, stopped, lastStatus, lastState, pending).
+// An index written by the code before them is dropped whole (FOLD_VERSION); an entry that still lacks one or carries a
+// mangled one (a damaged file under the current version) is never defaulted: that log is folded from byte 0.
+test("fold index: an entry without the spec fields, or with a mangled one, is refolded from 0, never trusted", async () => {
+  const { readFileSync } = await import("node:fs");
+  const h = home();
+  const r = runner(h, { index: true });
+  const now = Date.now();
+  const ln = (seq, type, data) => JSON.stringify({ seq, ts: now - 5000 + seq, type, ...data }) + "\n";
+  const created = (id) => ln(0, "created", { provider: "claude", cwd: "/w", meta: { title: id, labels: { role: "worker" } }, systemPrompt: `p ${id}` });
+  const parked = (id) => [created(id), ln(1, "session", { sessionId: `s-${id}` }), ln(2, "bg-stopped", { work: [{ cmd: "sleep 9" }] }), ln(3, "parked", { sessionId: `s-${id}`, systemPrompt: `parked ${id}` }), ln(4, "status", { status: "parked" })];
+  const queued = (id) => [created(id), ln(1, "session", { sessionId: `s-${id}` }), ln(2, "status", { status: "idle" }), ln(3, "input", { text: `owed ${id}`, owner: true }), ln(4, "status", { status: "queued" })];
+  const running = (id) => [created(id), ln(1, "session", { sessionId: `s-${id}` }), ln(2, "input", { text: "x" }), ln(3, "status", { status: "running" })];
+  // Each mangle, applied to a saved state, would flip a decision if it were defaulted instead of refolded.
+  const mangles = {
+    "rn-nopark": [parked, (st) => { delete st.park; }],
+    "rn-parkbad": [parked, (st) => { st.park = { ...st.park, prompt: undefined }; }],
+    "rn-nopending": [queued, (st) => { delete st.pending; }],
+    "rn-pendingbad": [queued, (st) => { st.pending = [{ owner: true }]; }],
+    "rn-nolaststate": [queued, (st) => { delete st.lastState; }],
+    "rn-laststatebad": [queued, (st) => { st.lastState = 7; }],
+    "rn-nolaststatus": [running, (st) => { delete st.lastStatus; }],
+    "rn-noarchived": [parked, (st) => { delete st.archived; }],
+    "rn-noseqmono": [parked, (st) => { delete st.seqMono; }],
+    "rn-nostopped": [parked, (st) => { delete st.stopped; }],
+    "rn-norefused": [parked, (st) => { delete st.refused; }],
+  };
+  const ok = ["rn-ok-parked", "rn-ok-queued", "rn-ok-running"];
+  const make = { "rn-ok-parked": parked, "rn-ok-queued": queued, "rn-ok-running": running };
+  const ids = [...Object.keys(mangles), ...ok];
+  const old = Date.now() / 1000 - 60; // out of the racy window, so an untouched entry is trusted as is
+  for (const id of ids) { writeFileSync(logFile(h, id), (mangles[id]?.[0] ?? make[id])(id).join("")); utimesSync(logFile(h, id), old, old); }
+  check(r, ids, "before the save");
+  assert.equal(r.saveFoldIndexSync().result, "written");
+  const saved = JSON.parse(readFileSync(h.file, "utf8"));
+  for (const id of ids) assert.ok(saved.entries[id]?.state, `${id} was saved`);
+  const SPEC = ["seqMono", "archived", "park", "refused", "stopped", "lastStatus", "lastState", "pending"];
+
+  // 1. A pre-idea-307 index: no spec fields anywhere, and the old code's FOLD_VERSION in the header. Dropped whole.
+  const pre = structuredClone(saved);
+  pre.fold = "pre-idea-307-version";
+  for (const id of ids) for (const k of SPEC) delete pre.entries[id].state[k];
+  writeFileSync(h.file, JSON.stringify(pre));
+  const a = runner(h, { index: true });
+  a.recoverQueued({ shouldAdmit: () => false });
+  assert.equal(a.foldIndexStats.entries, 0, "an index from older fold code seeds nothing");
+  check(a, ids, "pre-307 index boot");
+
+  // 2. The current version, one field missing or mangled per entry: those logs fold from 0, the untouched ones are trusted.
+  const cur = structuredClone(saved);
+  for (const [id, [, mangle]] of Object.entries(mangles)) mangle(cur.entries[id].state);
+  writeFileSync(h.file, JSON.stringify(cur));
+  const b = runner(h, { index: true });
+  b.recoverQueued({ shouldAdmit: () => false });
+  assert.equal(b.foldIndexStats.entries, ids.length);
+  assert.equal(b.foldIndexStats.full, Object.keys(mangles).length, `every mangled entry refolds (${JSON.stringify(b.foldIndexStats)})`);
+  assert.equal(b.foldIndexStats.trusted, ok.length, "the untouched entries are trusted");
+  check(b, ids, "mangled index boot");
+  assert.equal(b._parkedSpec("rn-nopark").systemPrompt, "parked rn-nopark");
+  assert.equal(b._unstartedPlan("rn-nopending").text, "owed rn-nopending");
+  assert.equal(b._unstartedPlan("rn-nolaststate").text, "owed rn-nolaststate");
+  assert.equal(b._cutTurn("rn-nolaststatus", {}), true);
 });

@@ -133,15 +133,21 @@ export function loadFold(o) {
   st.archivedAt = o.archivedAt ?? null;
   st.exit = o.exit ?? null;
   st.offset = o.offset;
-  if (typeof o.seqMono !== 'boolean' || typeof o.archived !== 'boolean' || !Array.isArray(o.pending) || !o.pending.every(isObj)) throw new Error('bad spec fold');
+  // The spec fields (idea-307) are never defaulted: a state saved before them (or a damaged one) lacks or mangles one, and the
+  // resume paths decide park/resume/lost/cut from them, so the entry is folded from 0 instead. FOLD_VERSION already drops an
+  // index from older fold code wholesale; this is the per-entry backstop. A missing key reads as undefined, which fails here.
+  if (typeof o.seqMono !== 'boolean' || typeof o.archived !== 'boolean') throw new Error('bad spec fold');
+  if (!Array.isArray(o.pending) || !o.pending.every((p) => isObj(p) && typeof p.text === 'string')) throw new Error('bad spec fold');
   for (const k of ['park', 'refused', 'stopped', 'lastStatus']) if (o[k] !== null && !isObj(o[k])) throw new Error('bad spec fold');
+  if (o.park !== null && typeof o.park.prompt !== 'boolean') throw new Error('bad spec fold');
+  if (o.lastState !== null && typeof o.lastState !== 'string') throw new Error('bad spec fold'); // a non-string status already fails o.status
   st.seqMono = o.seqMono;
   st.archived = o.archived;
   st.park = o.park;
   st.refused = o.refused;
   st.stopped = o.stopped;
   st.lastStatus = o.lastStatus;
-  st.lastState = o.lastState ?? null;
+  st.lastState = o.lastState;
   st.pending = o.pending;
   return st;
 }
