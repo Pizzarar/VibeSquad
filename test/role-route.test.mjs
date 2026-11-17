@@ -98,7 +98,9 @@ function today(name, caps, stakes) {
 
 test("golden: the 12 current profile names resolve to exactly today's provider/model/effort/mode", () => {
   assert.equal(GOLDEN.length, 12);
-  assert.deepEqual(Object.keys(LEGACY_ROUTES).sort(), GOLDEN.map((g) => g.name).sort());
+  // P5b adds more legacy names (role labels), so the 12 golden names are a subset of the table, not all of it.
+  const tableNames = new Set(Object.keys(LEGACY_ROUTES));
+  for (const g of GOLDEN) assert.ok(tableNames.has(g.name), `golden name missing from LEGACY_ROUTES: ${g.name}`);
   for (const g of GOLDEN) {
     const r = resolveRoute({ role: g.name, stakes: "normal" });
     assert.deepEqual(pick(r), row(g.provider, g.model, g.effort, g.modeId), g.name);

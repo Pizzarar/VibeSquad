@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Migrate ~/.vibesquad/profiles.json to schema v2 (roles), docs/PLAN_PROFILES_ROLE_ONLY.md P5b, idea-77.
 //
+// RUN ONLY AFTER P5b IS LIVE AND THE SERVER HAS RESTARTED: a pre-P5b server rewrites profiles.json on save and drops
+// `roles` / `schemaVersion`, silently undoing this migration.
+//
 //   node scripts/migrate-profiles-v2.mjs [--path <profiles.json>] [--dry-run] [--json]
 //
 // Default path: VIBESQUAD_PROFILES_PATH, else $VIBESQUAD_HOME/profiles.json, else ~/.vibesquad/profiles.json.
