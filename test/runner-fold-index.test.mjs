@@ -3,12 +3,13 @@
 // (incl. openTool / resumable / labels), same LogStore line index. Temp homes only.
 import "./helpers/clean-env.mjs";
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, truncateSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Runner } from "../runner/runner.mjs";
-import { FOLD_INDEX_FILE, FOLD_VERSION, readFoldIndex, saveFold } from "../runner/fold-index.mjs";
+import { FOLD_INDEX_FILE, FOLD_VERSION, probe, readFoldIndex, saveFold, serializeFoldIndex } from "../runner/fold-index.mjs";
 
 const adapters = { claude: { canPark: true, lazyResume: true } }; // resumable needs an adapter that can park; nothing is spawned
 function home() {
@@ -25,9 +26,9 @@ const ev = (seq, type, data = {}, ts = 1_700_000_000_000 + seq) => JSON.stringif
 const age = (h, id, s = 60) => { const t = Date.now() / 1000 - s; utimesSync(logFile(h, id), t, t); }; // out of the racy window
 
 // One agent's log: created (with a system prompt), session, a turn with tools, permission, usage, meta label patches.
-function agentLog(id, { closed = null, openCall = false, queued = false, n = 40 } = {}) {
+function agentLog(id, { closed = null, openCall = false, queued = false, n = 40, prompt = 300 } = {}) {
   let s = 0;
-  let out = ev(s++, "created", { provider: "claude", model: "m", cwd: "/w", meta: { title: id, labels: { team: "t", lane: "l", role: "worker" } }, systemPrompt: "You are " + id + " ".repeat(300) });
+  let out = ev(s++, "created", { provider: "claude", model: "m", cwd: "/w", meta: { title: id, labels: { team: "t", lane: "l", role: "worker" } }, systemPrompt: "You are " + id + " ".repeat(prompt) });
   out += ev(s++, "session", { sessionId: `sess-${id}`, modes: ["default", "plan"], models: ["m"] });
   out += ev(s++, "input", { text: "go" });
   out += ev(s++, "status", { status: "running" });
@@ -287,4 +288,170 @@ test("async save after boot yields and writes the same index as the sync save; V
     assert.equal(off.foldIndexStats, null);
     assert.equal(off.saveFoldIndexSync(), null);
   } finally { delete process.env.VS_RUNNER_FOLD_INDEX; }
+});
+
+// unit-fold-hash-4k: the head probe hashes only the first line, capped at 4KB (one small read per log on a cold save).
+const firstLineLen = (file) => readFileSync(file).indexOf(10) + 1;
+// One agent with its own log text; saved by a cold boot (aged first, so the entry is not racy), then the log is replaced.
+function oneAgent(opts) {
+  const h = home();
+  rmSync(h.dir, { recursive: true, force: true });
+  new Runner({ dir: h.dir, adapters, maxLive: 4 });
+  const id = "rn-0000";
+  writeFileSync(logFile(h, id), agentLog(id, opts).text);
+  age(h, id);
+  assert.equal(boot(h).saveFoldIndexSync().result, "written");
+  return { h, id, f: logFile(h, id), entry: readFoldIndex(h.file).get(id) };
+}
+
+test("head probe: the first line only, capped at 4KB", () => {
+  const short = oneAgent({});
+  assert.ok(firstLineLen(short.f) < 4096);
+  assert.equal(short.entry.headLen, firstLineLen(short.f), "a short first line: exactly that line");
+  const long = oneAgent({ prompt: 20_000 });
+  assert.ok(firstLineLen(long.f) > 20_000);
+  assert.equal(long.entry.headLen, 4096, "a long first line: its first 4KB");
+  assert.deepEqual(probe(long.f, long.entry.offset), { headLen: long.entry.headLen, head: long.entry.head, tail: long.entry.tail });
+});
+
+test("same first line but truncated: shorter folds from 0; truncated then regrown past the old size folds from 0", () => {
+  const { h, id, f, entry } = oneAgent({ n: 40 });
+  const text = readFileSync(f, "utf8");
+  const cut = text.indexOf("\n", Math.floor(text.length / 2)) + 1;
+  truncateSync(f, cut); // a whole-line truncation: the first line (the head) is unchanged
+  let r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [1, 0], "shrunk");
+  parity(h, r);
+  // Regrown with other events to past the saved size: head identical, size grew, only the tail probe can tell.
+  let more = "";
+  for (let i = 0; statSync(f).size + Buffer.byteLength(more) <= entry.size + 200; i++) more += ev(900 + i, "text", { text: "regrown " + i });
+  appendFileSync(f, more);
+  assert.ok(statSync(f).size > entry.size);
+  assert.equal(readFileSync(f, "utf8").split("\n")[0], text.split("\n")[0], "same first line");
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [1, 0], "regrown");
+  parity(h, r);
+  assert.equal(r.status(id).meta.labels.role, "worker", "the truncated meta patch is gone");
+});
+
+test("rotated log: a new log (another created line) in its place folds from 0, larger or smaller", () => {
+  for (const bigger of [true, false]) {
+    const { h, id, f, entry } = oneAgent({ n: 20 });
+    // Rotation: the old file moved away, a fresh log for the same id written in its place (a new created event: other ts/seq).
+    let s = 0;
+    let text = ev(s++, "created", { provider: "claude", model: "m2", cwd: "/w2", meta: { title: "rotated", labels: { team: "t", lane: "l", role: "worker" } } }, 1_800_000_000_000);
+    const target = bigger ? entry.size + 1000 : Math.floor(entry.size / 2);
+    while (Buffer.byteLength(text) < target) text += ev(s++, "text", { text: "rotated " + s }, 1_800_000_000_000 + s);
+    writeFileSync(f, text);
+    const r = boot(h);
+    assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed, r.foldIndexStats.trusted], [1, 0, 0], bigger ? "bigger" : "smaller");
+    parity(h, r);
+    assert.equal(r.status(id).meta.title, "rotated");
+  }
+});
+
+test("log shorter than 4KB: resumes on append; a rewritten first line folds from 0", () => {
+  const { h, id, f, entry } = oneAgent({ n: 2, prompt: 50 });
+  assert.ok(entry.size < 4096, `log is ${entry.size} bytes`);
+  assert.equal(entry.headLen, firstLineLen(f));
+  appendFileSync(f, ev(900, "text", { text: "more" }));
+  let r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [0, 1]);
+  parity(h, r);
+  // Back to the saved index (the boot above did not save): first line rewritten, same length, plus an append.
+  const t = readFileSync(f, "utf8");
+  writeFileSync(f, t.replace('"model":"m"', '"model":"z"'));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [1, 0]);
+  parity(h, r);
+  assert.equal(r.folds.get(id).created.model, "z");
+});
+
+test("first line over 4KB: resumes on append; a change inside its first 4KB folds from 0", () => {
+  const { h, id, f, entry } = oneAgent({ prompt: 12_000 });
+  assert.equal(entry.headLen, 4096);
+  appendFileSync(f, ev(900, "text", { text: "more" }));
+  let r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [0, 1]);
+  parity(h, r);
+  const t = readFileSync(f, "utf8");
+  assert.ok(t.indexOf('"cwd":"/w"') < 4096);
+  writeFileSync(f, t.replace('"cwd":"/w"', '"cwd":"/x"'));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [1, 0]);
+  parity(h, r);
+  assert.equal(r.folds.get(id).created.cwd, "/x");
+});
+
+test("an index saved before the 4KB head (headLen = the whole long first line) still resumes; an absurd headLen folds from 0", () => {
+  const { h, id, f, entry } = oneAgent({ prompt: 12_000 });
+  const len = firstLineLen(f);
+  const legacy = { ...entry, headLen: len, head: createHash("sha256").update(readFileSync(f).subarray(0, len)).digest("base64") };
+  writeFileSync(h.file, serializeFoldIndex(new Map([[id, legacy]])));
+  appendFileSync(f, ev(900, "text", { text: "more" }));
+  let r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.resumed], [0, 1], "legacy entry resumed");
+  parity(h, r);
+  // Its save re-pins with the 4KB head once the offset moves.
+  age(h, id);
+  r.status(id);
+  assert.equal(r.saveFoldIndexSync().result, "written");
+  assert.equal(readFoldIndex(h.file).get(id).headLen, 4096);
+  writeFileSync(h.file, serializeFoldIndex(new Map([[id, { ...legacy, headLen: 2 ** 21 }]])));
+  appendFileSync(f, ev(901, "text", { text: "more" }));
+  r = boot(h);
+  assert.equal(r.foldIndexStats.full, 1);
+  parity(h, r);
+});
+
+test("a cold boot's save opens no log (probes taken by the fold); shutdown save is bounded: past its budget unpinned logs are left out", () => {
+  const { h, ids } = setup(6);
+  // A runner whose boot found no index: its fold read every log and took the probes on the way, so even a save with no
+  // budget left (a restart before its first async save) writes every entry, opening no log.
+  rmSync(h.file);
+  const cold = boot(h);
+  assert.equal(cold._foldPins.size, ids.length, "the boot fold pinned every log");
+  const s00 = cold.saveFoldIndexSync({ budgetMs: -1 });
+  assert.deepEqual([s00.entries, s00.skipped, s00.result], [ids.length, undefined, "written"]);
+  assert.equal(readFoldIndex(h.file).size, ids.length);
+  // Folds with no probe taken (none pinned): past the budget they are left out, not probed.
+  cold._foldPins.clear();
+  rmSync(h.file);
+  const s0 = cold.saveFoldIndexSync({ budgetMs: -1 });
+  assert.deepEqual([s0.entries, s0.skipped, s0.result], [0, ids.length, "written"]);
+  assert.equal(readFoldIndex(h.file).size, 0);
+  // Unbounded, the same runner probes and saves all (and pins them).
+  assert.equal(cold.saveFoldIndexSync().entries, ids.length);
+  // A runner booted from that index has every fold pinned: a zero budget still saves all, without reading a log.
+  const warm = boot(h);
+  appendFileSync(logFile(h, ids[0]), ev(900, "text", { text: "more" }));
+  warm.store.append(ids[1], "text", { text: "ahead" }); // ahead of its fold: past the budget it is not caught up, its old entry stays
+  const before = readFoldIndex(h.file);
+  const s1 = warm.saveFoldIndexSync({ budgetMs: -1 });
+  assert.deepEqual([s1.entries, s1.skipped, s1.result], [ids.length, undefined, "written"]);
+  const after = readFoldIndex(h.file);
+  const pick = (e) => ({ offset: e.offset, size: e.size, head: e.head, tail: e.tail, state: e.state });
+  assert.deepEqual(pick(after.get(ids[1])), pick(before.get(ids[1])), "not caught up past the budget: the fold it had");
+  assert.ok(after.get(ids[1]).offset < statSync(logFile(h, ids[1])).size);
+  const r = boot(h);
+  assert.equal(r.foldIndexStats.full, 0);
+  assert.equal(r.foldIndexStats.trusted, ids.length - 2);
+  assert.equal(r.foldIndexStats.resumed, 2, "the appended and the ahead log resume from their saved entries");
+  parity(h, r);
+});
+
+test("probes pin the bytes the fold read: a log replaced (and grown) after its fold, before the save, is refolded next boot", () => {
+  const { h, id, f } = oneAgent({ n: 20 });
+  rmSync(h.file);
+  const r = boot(h); // folds (and pins) the original log
+  // Replaced by another log for the same id, larger, before the save runs.
+  let s = 0;
+  let text = ev(s++, "created", { provider: "claude", model: "m2", cwd: "/w2", meta: { title: "swapped", labels: { team: "t", lane: "l", role: "worker" } } }, 1_800_000_000_000);
+  while (Buffer.byteLength(text) < statSync(f).size + 1000) text += ev(s++, "text", { text: "swapped " + s }, 1_800_000_000_000 + s);
+  writeFileSync(f, text);
+  assert.equal(r.saveFoldIndexSync().result, "written");
+  const r2 = boot(h);
+  assert.deepEqual([r2.foldIndexStats.full, r2.foldIndexStats.resumed, r2.foldIndexStats.trusted], [1, 0, 0]);
+  parity(h, r2);
+  assert.equal(r2.status(id).meta.title, "swapped");
 });

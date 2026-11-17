@@ -9,7 +9,7 @@ import { createBackgroundProbe } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
-import { foldEvent, newFold, probe, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
+import { foldEvent, newFold, probe, probeWith, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -280,6 +280,8 @@ export function parkHoldPollFromEnv(env = process.env) {
 export const DEFAULT_PARK_HOLD_SLOW_AFTER_MS = 60_000;
 // An archived agent that is mid-turn gets a cancel; if it has not stopped by then it is killed (session kept).
 export const DEFAULT_ARCHIVE_KILL_MS = 10_000;
+// Shutdown fold-index save budget (saveFoldIndexSync): logs still unprobed after this are left out of the index.
+export const SHUTDOWN_SAVE_BUDGET_MS = 3000;
 export function archiveKillFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_ARCHIVE_KILL_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_ARCHIVE_KILL_MS;
@@ -1590,7 +1592,12 @@ export class Runner {
     }
     if (!st || size < st.offset) st = newFold();
     if (this._foldSeed && this.foldIndexStats) this.foldIndexStats.bytes += Math.max(0, size - st.offset);
-    const { events, end } = this.store.readFrom(id, st.offset);
+    // With the index on, the head/tail probes for the new offset are taken on the fd this read used (no open per log at save).
+    const pinAt = this._foldIndexOn() ? (pread, end) => {
+      const p = probeWith(pread, end);
+      if (p) this._foldPins.set(id, { offset: end, ...p }); else this._foldPins.delete(id);
+    } : null;
+    const { events, end } = this.store.readFrom(id, st.offset, 0, Infinity, pinAt);
     for (const e of events) foldEvent(st, e);
     st.offset = end;
     st.stamp = stamp;
@@ -1636,11 +1643,13 @@ export class Runner {
     return st;
   }
 
-  // The index entry of a cached fold, or null (nothing worth saving: no fold, or the log is gone / shorter than the fold).
-  _foldEntry(id, st) {
+  // The index entry of a cached fold, or null (nothing worth saving: no fold, or the log is gone / shorter than the fold; or,
+  // with noIo, no probe pinned yet at the fold's offset).
+  _foldEntry(id, st, noIo = false) {
     if (!st?.stat || !st.created || !(st.offset > 0) || st.stat.size < st.offset) return null;
     let pin = this._foldPins.get(id);
     if (!pin || pin.offset !== st.offset) {
+      if (noIo) return null;
       const p = probe(this.store.file(id), st.offset);
       if (!p) return null;
       pin = { offset: st.offset, ...p };
@@ -1655,32 +1664,41 @@ export class Runner {
   }
 
   // A save, one log per step (a generator: the async save yields between steps). A log appended to since its last fold is
-  // folded first (a tail read), so the entry covers what this runner wrote. Returns the entries by id.
-  *_foldIndexSteps() {
+  // folded first (a tail read), so the entry covers what this runner wrote. Past `deadline` (Date.now() ms) no log is read
+  // any more: a fold already pinned at its offset is still saved (no I/O; one behind its log keeps its pinned offset and the
+  // next boot resumes it), the rest are left out (the next boot folds them from 0). Returns { entries, skipped }.
+  *_foldIndexSteps(deadline = Infinity) {
     const entries = new Map();
     let n = 0;
+    let skipped = 0;
     for (const id of this.store.ids()) {
+      const late = Date.now() > deadline;
       let st = this.folds.get(id);
       const ix = this.store.idx.get(id);
-      if (st && ix && ix.size !== st.offset) { try { st = this._fold(id); } catch { st = null; } }
+      const behind = !!(st && ix && ix.size !== st.offset);
+      if (behind && !late) { try { st = this._fold(id); } catch { st = null; } }
       let e = null;
-      try { e = this._foldEntry(id, st); } catch { e = null; }
+      try { e = this._foldEntry(id, st, late); } catch { e = null; }
       if (e) entries.set(id, e);
+      else if (late && st) skipped++;
       if (++n % 32 === 0) yield;
     }
     for (const id of [...this._foldPins.keys()]) if (!entries.has(id)) this._foldPins.delete(id);
-    return entries;
+    return { entries, skipped };
   }
 
-  // Saves every cached fold to foldIndexFile, synchronously (shutdown). Returns { entries, result, ms } or null (no index).
-  saveFoldIndexSync() {
+  // Saves every cached fold to foldIndexFile, synchronously (shutdown: the runner lock, and so the next runner's start, waits
+  // on it). Bounded: logs not yet probed after budgetMs are left out (a restart inside a cold boot's first async save would
+  // otherwise probe every log here). Returns { entries, skipped, result, ms } or null (no index).
+  saveFoldIndexSync({ budgetMs = SHUTDOWN_SAVE_BUDGET_MS } = {}) {
     if (!this._foldIndexOn()) return null;
     const t0 = Date.now();
-    const g = this._foldIndexSteps();
+    const g = this._foldIndexSteps(t0 + budgetMs);
     let r = g.next();
     while (!r.done) r = g.next();
-    const result = writeFoldIndex(this.foldIndexFile, serializeFoldIndex(r.value));
-    return { entries: r.value.size, result, ms: Date.now() - t0 };
+    const { entries, skipped } = r.value;
+    const result = writeFoldIndex(this.foldIndexFile, serializeFoldIndex(entries));
+    return { entries: entries.size, ...(skipped ? { skipped } : {}), result, ms: Date.now() - t0 };
   }
 
   // saveFoldIndexSync for after boot: yields to the event loop whenever a slice has run for sliceMs (a cold index probes every
@@ -1697,8 +1715,9 @@ export class Runner {
         if (Date.now() - t >= sliceMs) { await new Promise((res) => setImmediate(res)); t = Date.now(); }
         r = g.next();
       }
-      const result = this._shutDown ? 'shutdown' : writeFoldIndex(this.foldIndexFile, serializeFoldIndex(r.value));
-      return { entries: r.value.size, result, ms: Date.now() - t0 };
+      const { entries } = r.value;
+      const result = this._shutDown ? 'shutdown' : writeFoldIndex(this.foldIndexFile, serializeFoldIndex(entries));
+      return { entries: entries.size, result, ms: Date.now() - t0 };
     })().finally(() => { this._foldSave = null; });
     return this._foldSave;
   }
