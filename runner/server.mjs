@@ -222,10 +222,17 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[2] === 'timeline' && req.method === 'GET') {
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
-        const after = Number(url.searchParams.get('after') ?? 0);
+        const tail = Number(url.searchParams.get('tail') ?? 0); // idea-308: the last N raw events, so a tail read costs O(tail), not O(log)
+        const total = runner.store.count(id);
+        const after = tail > 0 ? Math.max(0, total - tail) : Number(url.searchParams.get('after') ?? 0);
+        // until=<seq>: only events with seq < until (a bounded window); types=tool: only tool events (small answer for a long tail)
+        const until = url.searchParams.has('until') ? Number(url.searchParams.get('until')) : Infinity;
+        const types = url.searchParams.get('types');
         const limit = Number(url.searchParams.get('limit') ?? Infinity);
-        const events = await runner.timelineAsync(id, after, limit);
-        return json(res, 200, { events, next: events.length ? events[events.length - 1].seq + 1 : after });
+        const events = types
+          ? await runner.store.readAsync(id, after, Infinity, undefined, (e) => e.type === types && e.seq < until)
+          : await runner.timelineAsync(id, after, Number.isFinite(until) ? Math.min(limit, Math.max(0, until - after)) : limit);
+        return json(res, 200, { events, from: after, total, next: events.length ? events[events.length - 1].seq + 1 : after });
       }
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);
