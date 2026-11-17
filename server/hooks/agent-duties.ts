@@ -1471,6 +1471,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         return ts !== undefined && Date.now() - ts < 30_000;
       };
       const routedByBefore = Boolean((agent.id && configuredAt(agent.id)) || configuredAt(spawnKey0));
+      // Consume this spawn's before() entries now, before any early return below: a leftover title::cwd key would let a
+      // later label-only spawn with the same title and cwd skip enforcement for up to 30s (configured) / 120s (ladder).
+      const nowK = Date.now();
+      for (const [k, ts] of beforeConfiguredSpawns) if (nowK - ts >= 30_000) beforeConfiguredSpawns.delete(k);
+      for (const [k, ts] of ladderSpawns) if (nowK - ts >= 120_000) ladderSpawns.delete(k);
+      const configuredEntry = Boolean((agent.id && beforeConfiguredSpawns.has(agent.id)) || beforeConfiguredSpawns.has(spawnKey0));
+      const laddered = Boolean((agent.id && ladderSpawns.has(agent.id)) || ladderSpawns.has(spawnKey0));
+      if (agent.id) {
+        beforeConfiguredSpawns.delete(agent.id);
+        ladderSpawns.delete(agent.id);
+      }
+      beforeConfiguredSpawns.delete(spawnKey0);
+      ladderSpawns.delete(spawnKey0);
       if (!match?.explicit && !routedByBefore && !String(labels.tier ?? "").trim() && labels["vs.spawn-configured"] !== "1") {
         const roles = liveRoles(loadStoredProfiles());
         if (roleNameHit(hint, roles)) {
@@ -1488,16 +1501,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         thinkingOptionId: s.thinkingOptionId ?? agent.thinkingOptionId ?? s.config?.thinkingOptionId ?? null,
       };
       let diffs = profileFieldDiffs(actual, profile);
-      {
-        const nowL = Date.now();
-        for (const [k, ts] of ladderSpawns) if (nowL - ts >= 120_000) ladderSpawns.delete(k);
-        const lk = `${agent.title ?? ""}::${agent.cwd ?? s.cwd ?? ""}`;
-        const laddered = Boolean((agent.id && ladderSpawns.has(agent.id)) || ladderSpawns.has(lk));
-        if (agent.id) ladderSpawns.delete(agent.id);
-        ladderSpawns.delete(lk);
-        // The stakes ladder picked this model/effort on purpose (explicit-override pattern, brainstorm.mjs hasCallerOverride).
-        if (laddered) diffs = diffs.filter((d) => d.field !== "model" && d.field !== "thinking");
-      }
+      // The stakes ladder picked this model/effort on purpose (explicit-override pattern, brainstorm.mjs hasCallerOverride).
+      if (laddered) diffs = diffs.filter((d) => d.field !== "model" && d.field !== "thinking");
       if (!diffs.length) return;
       const name = agent.title || agent.id;
       const cwd = agent.cwd ?? s.cwd ?? "";
@@ -1524,16 +1529,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         await (deps.refuseAgent ?? deps.archiveAgent)(agent.id).catch((e) => log(`refuse failed for ${agent.id}: ${e}`));
         return "refused";
       }
-      const now = Date.now();
-      for (const [k, ts] of beforeConfiguredSpawns) {
-        if (now - ts >= 30_000) beforeConfiguredSpawns.delete(k);
-      }
-      const spawnKey = `${agent.title ?? ""}::${cwd}`;
       const configuredByBefore =
-        labels["vs.spawn-configured"] === "1" || // runner spawns: before() ran in the caller's process, so the maps below are empty here
-        (agent.id && beforeConfiguredSpawns.has(agent.id)) || beforeConfiguredSpawns.has(spawnKey);
-      if (agent.id) beforeConfiguredSpawns.delete(agent.id);
-      beforeConfiguredSpawns.delete(spawnKey);
+        labels["vs.spawn-configured"] === "1" || // runner spawns: before() ran in the caller's process, so the maps above are empty here
+        configuredEntry;
       const isRunning = (s.status ?? agent.status) === "running" || (s.status ?? agent.status) === "initializing";
       if (configuredByBefore || isRunning) {
         return;

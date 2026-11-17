@@ -514,3 +514,80 @@ test(
     assert.equal(created[0].labels.role, "brainstorm");
   }),
 );
+
+// ---- P5c Sonnet r2 lows (idea-77): leftover before() keys (L1), Gemini M1 hook pins (L2) ----
+
+test(
+  "agent.created consumes before()'s title::cwd keys: a second label-only role spawn with the same title::cwd is still enforced (Sonnet r2 L1)",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      // Refusal path: before() routed an env-only Review spawn (beforeConfiguredSpawns title::cwd key set).
+      const out = await h.spawn({ provider: "claude", title: "dup review" }, { env: { VS_PROFILE: "Review" } });
+      assert.equal(out.config.provider, A);
+      const first = { id: "dup-rev-1", title: "dup review", cwd: CWD, provider: out.config.provider, model: out.config.model, labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile: "Review" } };
+      await h.onCreated({ agent: first }, { paseo: paseoFor(first) });
+      assert.deepEqual(h.calls.refused, []);
+      // Same title::cwd, label-only, wrong provider, never seen by before(): must be held to the route and refused.
+      const second = { ...first, id: "dup-rev-2", provider: "claude", model: "claude-sonnet-5-5" };
+      await h.onCreated({ agent: second }, { paseo: paseoFor(second) });
+      assert.deepEqual(h.calls.refused, ["dup-rev-2"]);
+
+      // Settings path: an explicit caller model at normal sets both the configured and the ladder title::cwd keys.
+      const out2 = await h.spawn({ provider: "claude", title: "dup impl", model: "claude-opus-5-5" }, { env: { VS_PROFILE: "Implement" } });
+      assert.equal(out2.config.model, "claude-opus-5-5", "explicit caller model kept");
+      const a1 = { id: "dup-impl-1", title: "dup impl", cwd: CWD, provider: C, model: "claude-opus-5-5", thinkingOptionId: "medium", modeId: "auto", status: "idle", labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile: "Implement" } };
+      await h.onCreated({ agent: a1 }, { paseo: paseoFor(a1) });
+      assert.deepEqual(h.calls.settings.filter((c) => c.agentId === "dup-impl-1"), [], "before()-configured explicit model is kept");
+      // Same title::cwd, label-only, off-route model: neither the configured nor the ladder key may exempt it.
+      const a2 = { ...a1, id: "dup-impl-2" };
+      await h.onCreated({ agent: a2 }, { paseo: paseoFor(a2) });
+      const fix = h.calls.settings.filter((c) => c.agentId === "dup-impl-2");
+      assert.equal(fix.length, 1, "second spawn is enforced");
+      assert.equal(fix[0].patch.model, "claude-sonnet-5-5");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "role route at normal stakes: a caller model/effort that differs from the route's pick is kept (reason=explicit / explicit+ladder) (Gemini M1)",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      // Implement at normal routes to claude-sonnet-5-5 / medium.
+      const both = await h.spawn({ provider: "claude", model: "claude-opus-5-5", thinkingOptionId: "high" }, { labels: LABELS("Implement") });
+      assert.deepEqual(landed(both), { provider: C, model: "claude-opus-5-5", effort: "high", modeId: "auto" });
+      assert.match(String(both.labels[ROUTE_LABEL]), /stakes=normal .*reason=explicit tier=mid role=implement/);
+
+      const modelOnly = await h.spawn({ provider: "claude", model: "claude-opus-5-5" }, { labels: LABELS("Implement") });
+      assert.deepEqual(landed(modelOnly), { provider: C, model: "claude-opus-5-5", effort: "medium", modeId: "auto" });
+      assert.match(String(modelOnly.labels[ROUTE_LABEL]), /reason=explicit\+ladder tier=mid role=implement/);
+
+      const effortOnly = await h.spawn({ provider: "claude", thinkingOptionId: "low" }, { labels: LABELS("Implement") });
+      assert.deepEqual(landed(effortOnly), { provider: C, model: "claude-sonnet-5-5", effort: "low", modeId: "auto" });
+      assert.match(String(effortOnly.labels[ROUTE_LABEL]), /reason=explicit\+ladder tier=mid role=implement/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "role route at normal stakes: a caller model/effort equal to the route's pick is not explicit (reason=default, not laddered) (Gemini M1)",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: {} });
+    try {
+      const same = await h.spawn(
+        { provider: "claude", title: "same pick", model: "claude-sonnet-5-5", thinkingOptionId: "medium" },
+        { labels: LABELS("Implement") },
+      );
+      assert.deepEqual(landed(same), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
+      assert.match(String(same.labels[ROUTE_LABEL]), /reason=default tier=mid role=implement$/);
+      assert.doesNotMatch(String(same.labels[ROUTE_LABEL]), /explicit/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
