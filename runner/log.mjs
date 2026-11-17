@@ -160,11 +160,12 @@ export class LogStore {
     if (offset >= end) return { events: out, end: offset };
     const fd = this.fs.openSync(this.file(id), 'r');
     let pos = offset;
+    const start = offset;
     const stop = offset + maxBytes;
     let carry = Buffer.alloc(0);
     try {
       const buf = Buffer.allocUnsafe(Math.min(CHUNK, end - offset, maxBytes));
-      while (pos < end && pos < stop && out.length < limit) {
+      while (pos < end && (pos < stop || offset === start) && out.length < limit) { // a slice always completes one line, even a line longer than maxBytes
         const n = this.fs.readSync(fd, buf, 0, Math.min(buf.length, end - pos), pos);
         if (n <= 0) break;
         pos += n;

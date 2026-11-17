@@ -178,3 +178,14 @@ test('readAsync matches read() across slices and yields to the loop between them
   stop = true;
   assert.ok(spins > 3, `loop ran between slices (${spins})`);
 });
+
+test('readAsync does not drop the log after a line longer than the slice (>1 MB mid-log)', async () => {
+  const store = new LogStore(tmp());
+  seed(store, 'a', 20, 100);
+  store.append('a', 'text', { text: 'y'.repeat(1100 * 1024) });
+  for (let i = 0; i < 20; i++) store.append('a', 'text', { text: 'z'.repeat(100) });
+  const want = store.read('a');
+  assert.equal(want.length, 41);
+  assert.deepEqual(await store.readAsync('a', 0, Infinity, 64 * 1024), want);
+  assert.deepEqual(await store.readAsync('a', 0), want);
+});
