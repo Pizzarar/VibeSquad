@@ -8,7 +8,8 @@ import { LimitStore, createAgyUsagePoller } from './limits.mjs';
 import { createBackgroundProbe } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
-import { applyToolEvent, oldestOpenTool } from './open-tools.mjs';
+import { oldestOpenTool } from './open-tools.mjs';
+import { foldEvent, newFold, probe, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -306,6 +307,11 @@ export function providerFamily(provider) {
   return 'other';
 }
 
+// The status record of a fold state (no liveness: status() adds that).
+function foldRecord(id, st) {
+  return { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.lastSeq, createdAt: st.created.ts, updatedAt: st.lastTs, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}), openTool: oldestOpenTool(st.tools) };
+}
+
 export class Runner {
   // limitsFile: where limit-window records go (default: limits.jsonl next to the agents dir, i.e. the runner home).
   // pollAgy: after antigravity-cli turns, poll `agy -p /usage` (ACP carries no quota); only the real server turns it on.
@@ -313,7 +319,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv() }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
     this.store = new LogStore(dir);
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
@@ -356,6 +362,11 @@ export class Runner {
     this._drain = null; // { since, until, reason } while a `vs restart` drains (see setDrain); memory only, so a runner start clears it
     this._drainTimer = null;
     this._removeDrainFile(); // a drain file a crashed runner left behind
+    // Persisted boot fold (runner/fold-index.mjs): the real server passes <runner home>/fold-index.json; null (tests) = none.
+    this.foldIndexFile = foldIndexFile;
+    this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
+    this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
+    this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
   }
 
   // ---- Restart drain (ideas 198 + 186) ----
@@ -1057,7 +1068,10 @@ export class Runner {
   recoverQueued({ shouldAdmit } = {}) {
     const plans = [];
     this._foldsWarm = false;
-    for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
+    this._loadFoldIndex(); // each log's fold resumes from the last saved one (fold-index.mjs): only bytes appended since are read
+    try {
+      for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
+    } finally { this._foldSeed = null; } // entries of logs that are gone are dropped; no later _fold reads a seed
     this._foldsWarm = true;
     if (shouldAdmit && !shouldAdmit()) return [];
     this.mintBootTokens(); // from the same pass: every agent that may still act verifies from the first request after a restart
@@ -1557,41 +1571,136 @@ export class Runner {
   }
 
   // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.
+  // Boot: a log not yet folded in this process starts from its saved entry (_seedFold) when that entry is valid.
   _fold(id) {
     let stamp = null;
     let size = 0;
-    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; }
+    let stat = null;
+    const statAt = Date.now(); // before the stat: an mtime written meanwhile still counts as racy (fold-index.mjs)
+    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; }
     // Clean = validated by this stat while the watch is up. Synchronous from the stat to the mark: a change after the stat
     // reaches the watch callback later and unmarks it.
     const watched = !!this._rosterWatch;
     this._foldClean.delete(id);
     let st = this.folds.get(id);
     if (st?.stamp === stamp) { if (watched) this._foldClean.add(id); return st; }
-    if (!st || size < st.offset) st = { created: null, last: null, status: 'unknown', usage: null, perms: new Map(), tools: new Map(), meta: null, archivedAt: null, exit: null, offset: 0 };
-    const { events, end } = this.store.readFrom(id, st.offset);
-    for (const e of events) {
-      if (!st.created) { st.created = e; st.meta = { ...e.meta }; }
-      st.last = e;
-      applyToolEvent(st.tools, e); // R4-1: oldest open tool call (byte-offset fold: each event is applied exactly once)
-      if (e.type === 'status') { st.status = e.status; st.ahead = e.status === 'queued' && Number.isInteger(e.ahead) ? e.ahead : undefined; }
-      else if (e.type === 'usage') st.usage = { contextTokens: e.contextTokens, contextMax: e.contextMax, inputTokens: e.inputTokens, outputTokens: e.outputTokens, costUsd: e.costUsd };
-      else if (e.type === 'permission') { if (e.phase === 'request') st.perms.set(e.id, { id: e.id, toolName: e.toolName }); else st.perms.delete(e.id); }
-      else if (e.type === 'meta') Object.assign(st.meta, e.patch, e.patch?.labels ? { labels: { ...st.meta.labels, ...e.patch.labels } } : {});
-      else if (e.type === 'session') {
-        if (e.sessionId) st.sessionId = e.sessionId;
-        if (Array.isArray(e.modes)) st.offered = { modes: e.modes, models: Array.isArray(e.models) ? e.models : [] };
-      }
-      else if (e.type === 'archive') st.archivedAt = e.ts;
-      else if (e.type === 'unarchive') st.archivedAt = null;
-      else if (e.type === 'exit' && !st.exit) st.exit = e;
+    if (!st && this._foldSeed) {
+      st = this._seedFold(id, stat);
+      if (st?.stamp === stamp) { this.folds.set(id, st); if (watched) this._foldClean.add(id); return st; }
     }
+    if (!st || size < st.offset) st = newFold();
+    if (this._foldSeed && this.foldIndexStats) this.foldIndexStats.bytes += Math.max(0, size - st.offset);
+    const { events, end } = this.store.readFrom(id, st.offset);
+    for (const e of events) foldEvent(st, e);
     st.offset = end;
     st.stamp = stamp;
+    st.stat = stat;
     if (!st.created) { this.folds.delete(id); return null; }
     this.folds.set(id, st);
     if (watched) this._foldClean.add(id);
-    st.rec = { id, provider: st.created.provider, model: st.meta.model ?? st.created.model, cwd: st.created.cwd, meta: { ...st.meta }, usage: st.usage, lastSeq: st.last.seq, createdAt: st.created.ts, updatedAt: st.last.ts, ...(st.offered ? { offered: st.offered } : {}), archivedAt: st.archivedAt, exit: st.exit, ...(st.status === 'queued' ? { queued: { ahead: st.ahead ?? 0 } } : {}), openTool: oldestOpenTool(st.tools) };
+    st.rec = foldRecord(id, st);
     return st;
+  }
+
+  // Loads <foldIndexFile> for the boot pass. Missing, corrupt or another fold version: an empty seed, i.e. a full fold.
+  // VS_RUNNER_FOLD_INDEX=0 turns the index off (every boot folds from byte 0 and nothing is saved).
+  _loadFoldIndex() {
+    this._foldSeed = null;
+    if (!this._foldIndexOn()) return;
+    const t0 = Date.now();
+    const seed = readFoldIndex(this.foldIndexFile);
+    this.foldIndexStats = { entries: seed.size, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: Date.now() - t0 };
+    this._foldSeed = seed;
+  }
+
+  _foldIndexOn() { return !!this.foldIndexFile && process.env.VS_RUNNER_FOLD_INDEX !== '0'; }
+
+  // The fold state saved for a log not yet folded in this process, or null (fold from byte 0). A trusted seed (log unchanged)
+  // gets the current stamp, so _fold serves it as is; a resumed one has none, so _fold reads only the bytes after its offset.
+  // The store's line index is seeded too, so that read (and every append after it) never recounts the lines before the offset.
+  _seedFold(id, stat) {
+    const e = this._foldSeed.get(id);
+    this._foldSeed.delete(id);
+    const r = e ? seedFromEntry(this.store.file(id), e, stat) : null;
+    const s = this.foldIndexStats;
+    if (!r) { if (s) s.full++; return null; }
+    const st = r.state;
+    this._foldPins.set(id, { offset: r.offset, headLen: e.headLen, head: e.head, tail: e.tail });
+    if (r.ix && !this.store.idx.has(id)) this.store.idx.set(id, { size: r.offset, count: r.ix.count, offs: r.ix.offs.slice() });
+    if (r.trusted) {
+      st.stamp = `${stat.size}:${stat.mtimeMs}`;
+      st.stat = stat;
+      st.rec = foldRecord(id, st);
+      if (s) s.trusted++;
+    } else if (s) s.resumed++;
+    return st;
+  }
+
+  // The index entry of a cached fold, or null (nothing worth saving: no fold, or the log is gone / shorter than the fold).
+  _foldEntry(id, st) {
+    if (!st?.stat || !st.created || !(st.offset > 0) || st.stat.size < st.offset) return null;
+    let pin = this._foldPins.get(id);
+    if (!pin || pin.offset !== st.offset) {
+      const p = probe(this.store.file(id), st.offset);
+      if (!p) return null;
+      pin = { offset: st.offset, ...p };
+      this._foldPins.set(id, pin);
+    }
+    const ix = this.store.idx.get(id);
+    return {
+      size: st.stat.size, mtimeMs: st.stat.mtimeMs, statAt: st.stat.at, offset: st.offset, headLen: pin.headLen, head: pin.head, tail: pin.tail,
+      ix: ix && ix.size === st.offset ? { count: ix.count, offs: ix.offs } : null,
+      state: saveFold(st),
+    };
+  }
+
+  // A save, one log per step (a generator: the async save yields between steps). A log appended to since its last fold is
+  // folded first (a tail read), so the entry covers what this runner wrote. Returns the entries by id.
+  *_foldIndexSteps() {
+    const entries = new Map();
+    let n = 0;
+    for (const id of this.store.ids()) {
+      let st = this.folds.get(id);
+      const ix = this.store.idx.get(id);
+      if (st && ix && ix.size !== st.offset) { try { st = this._fold(id); } catch { st = null; } }
+      let e = null;
+      try { e = this._foldEntry(id, st); } catch { e = null; }
+      if (e) entries.set(id, e);
+      if (++n % 32 === 0) yield;
+    }
+    for (const id of [...this._foldPins.keys()]) if (!entries.has(id)) this._foldPins.delete(id);
+    return entries;
+  }
+
+  // Saves every cached fold to foldIndexFile, synchronously (shutdown). Returns { entries, result, ms } or null (no index).
+  saveFoldIndexSync() {
+    if (!this._foldIndexOn()) return null;
+    const t0 = Date.now();
+    const g = this._foldIndexSteps();
+    let r = g.next();
+    while (!r.done) r = g.next();
+    const result = writeFoldIndex(this.foldIndexFile, serializeFoldIndex(r.value));
+    return { entries: r.value.size, result, ms: Date.now() - t0 };
+  }
+
+  // saveFoldIndexSync for after boot: yields to the event loop whenever a slice has run for sliceMs (a cold index probes every
+  // log once: thousands of opens). Concurrent callers share one save; one that ends after shutdown() writes nothing (shutdown did).
+  saveFoldIndex(sliceMs = 8) {
+    if (!this._foldIndexOn()) return Promise.resolve(null);
+    if (this._foldSave) return this._foldSave;
+    this._foldSave = (async () => {
+      const t0 = Date.now();
+      const g = this._foldIndexSteps();
+      let t = Date.now();
+      let r = g.next();
+      while (!r.done) {
+        if (Date.now() - t >= sliceMs) { await new Promise((res) => setImmediate(res)); t = Date.now(); }
+        r = g.next();
+      }
+      const result = this._shutDown ? 'shutdown' : writeFoldIndex(this.foldIndexFile, serializeFoldIndex(r.value));
+      return { entries: r.value.size, result, ms: Date.now() - t0 };
+    })().finally(() => { this._foldSave = null; });
+    return this._foldSave;
   }
 
   timeline(id, after = 0, limit = Infinity) { return this.store.read(id, after, limit); }
@@ -1635,6 +1744,7 @@ export class Runner {
       this.kill(id);
     }
     this.live.clear();
+    try { this.foldIndexSave = this.saveFoldIndexSync(); } catch { /* only a cache: the next boot folds what it lacks */ }
   }
 }
 
