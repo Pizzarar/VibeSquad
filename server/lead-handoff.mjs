@@ -29,7 +29,8 @@ import { sharedSchedules } from "./schedules.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
-import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { findProfile, loadProfiles, readCappedProviders, toPaseoSpawnConfig } from "./profiles.mjs";
+import { roleSpawnConfig } from "./spawn-route.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -491,7 +492,7 @@ export function buildSuccessorPrompt({
   ].join("\n");
 }
 
-export function resolveLeadProfile(oldLead, profilesPath) {
+export function resolveLeadProfile(oldLead, profilesPath, capOpts = {}) {
   const oldLabels = oldLead?.labels ?? {};
   const rawProvider = String(oldLead?.provider || "claude");
   const isAgy = rawProvider.startsWith("antigravity");
@@ -499,6 +500,23 @@ export function resolveLeadProfile(oldLead, profilesPath) {
   const desiredKey = String(oldLabels.profile || fallbackProfileName).trim();
 
   const { profiles } = loadProfiles(profilesPath, { autoSeed: false });
+  // P5c (idea-77): a role-name label ("lead", from a role-name spawn) with no stored profile of that name respawns from
+  // the role route (provider list skipping capped providers, tier rung model + effort), as the spawn hook routes it.
+  // Checked before findProfile: its alias lookup would map "lead" to "Lead - Claude". No stakes: the role's default tier.
+  const storedHit = profiles.some((p) => String(p?.name ?? "").toLowerCase() === desiredKey.toLowerCase());
+  const roleCfg = storedHit
+    ? null
+    : roleSpawnConfig(desiredKey, {
+        profiles,
+        usageList: Object.keys(
+          readCappedProviders({
+            useDiskCaps: true,
+            ...(capOpts.cappedProviders !== undefined ? { cappedProviders: capOpts.cappedProviders } : {}),
+            ...(capOpts.cappedProvidersPath ? { cappedProvidersPath: capOpts.cappedProvidersPath } : {}),
+          }),
+        ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+      });
+  if (roleCfg) return { profileName: roleCfg.profileName, profile: roleCfg.profile, spawnCfg: roleCfg.spawnCfg };
   const profile =
     findProfile(desiredKey, profiles) || findProfile(fallbackProfileName, profiles);
   const spawnCfg = profile
@@ -744,7 +762,10 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const summary = readBrainstormSummary(laneId, rootDir);
     const cwd = oldLead?.cwd || rootDir;
     const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
-    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath);
+    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath, {
+      ...(deps.cappedProviders !== undefined ? { cappedProviders: deps.cappedProviders } : {}),
+      ...(deps.cappedProvidersPath ? { cappedProvidersPath: deps.cappedProvidersPath } : {}),
+    });
 
     const prompt = buildSuccessorPrompt({
       laneId,

@@ -2,7 +2,12 @@
 // Migrate ~/.vibesquad/profiles.json to schema v2 (roles), docs/PLAN_PROFILES_ROLE_ONLY.md P5b, idea-77.
 //
 // RUN ONLY AFTER P5b IS LIVE AND THE SERVER HAS RESTARTED: a pre-P5b server rewrites profiles.json on save and drops
-// `roles` / `schemaVersion`, silently undoing this migration.
+// `roles` / `schemaVersion`, silently undoing this migration. HOLD until P5d's role editor ships (P5b review M: stored
+// roles go stale when a legacy profile is edited; the spawn hook builds roles live from v1 until then).
+//
+// Save race: a profiles save (Settings UI / server) that lands between this script's read and its atomic rename is
+// overwritten (it is in the backup, not the file). Run it with the UI closed, then VERIFY: rerun it (it must print
+// "no change (already-v2)") and check the profile you last edited. If the rerun migrates again, a v1 save won: rerun.
 //
 //   node scripts/migrate-profiles-v2.mjs [--path <profiles.json>] [--dry-run] [--json]
 //
@@ -43,11 +48,17 @@ export function main(argv = process.argv.slice(2), log = console.log) {
     log("usage: node scripts/migrate-profiles-v2.mjs [--path <profiles.json>] [--dry-run] [--json]");
     return 0;
   }
-  const res = migrateProfilesFile(args.path, { dryRun: args.dryRun });
+  let res;
+  try {
+    res = migrateProfilesFile(args.path, { dryRun: args.dryRun });
+  } catch (err) {
+    // Never a raw stack: name the reason and the backup to restore from (it exists once the copy step ran).
+    res = { ok: false, changed: false, path: args.path ?? "profiles.json", error: String(err?.message ?? err), backupPath: err?.backupPath ?? null };
+  }
   if (args.json) {
     log(JSON.stringify(res, null, 2));
   } else if (!res.ok) {
-    log(`migrate-profiles-v2: FAIL ${res.path}: ${res.error}`);
+    log(`migrate-profiles-v2: FAIL ${res.error} path=${res.path} backup=${res.backupPath || "none"}`);
   } else if (!res.changed) {
     log(`migrate-profiles-v2: no change (${res.reason}) ${res.path}`);
   } else {

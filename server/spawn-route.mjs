@@ -49,6 +49,10 @@ export function lifecycleRoleOf(key) {
 /**
  * Families over quota or capped, judged exactly like today's failover (isProviderOverQuota on the hook's usage list,
  * which already carries capped-providers.json as `exhausted` entries). `extra` adds families to check.
+ * @param {any[]} usageList
+ * @param {string[]} [extra]
+ * @param {{threshold?: number, ignoreDiskCaps?: boolean}} [opts]
+ * @returns {string[]}
  */
 export function cappedFamilies(usageList, extra = [], opts = {}) {
   const fams = new Set(ROUTE_FAMILIES);
@@ -64,6 +68,8 @@ export function cappedFamilies(usageList, extra = [], opts = {}) {
  * The profile a role-name spawn runs as. {profile, route, explicitCapped} | null (hint is not a role).
  * `explicitModel`: the caller's model, only to report `explicit-capped` (its family is capped): for profile spawns the
  * cap wins and the model is dropped when the family changes (P5a review M3, today's agent-duties.ts behaviour).
+ * @param {string} hint
+ * @param {{stakes?: string, caps?: string[], roles?: Record<string, any>, ladder?: Record<string, any>, explicitModel?: string}} [opts]
  */
 export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, explicitModel } = {}) {
   const table = roles ?? ROLE_TABLE;
@@ -100,6 +106,8 @@ export function roleSpawnProfile(hint, { stakes, caps = [], roles, ladder, expli
 /**
  * resolveRoute for an old profile name/alias (or null when it is not one): the tier/role stamp + `legacy-name`, and
  * whether a caller model on a capped family was dropped. Never decides the old name's routing (today's walk does).
+ * @param {string} name
+ * @param {{stakes?: string, caps?: string[], explicitModel?: string, stakesLadder?: Record<string, any>}} [opts]
  */
 export function legacyRouteMeta(name, { stakes, caps = [], explicitModel, stakesLadder } = {}) {
   if (!legacyProfileRole(name)) return null;

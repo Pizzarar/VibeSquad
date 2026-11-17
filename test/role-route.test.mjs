@@ -4,46 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES } from "../server/profiles.mjs";
-import { resolveProfileWithFailover } from "../server/provider-failover.mjs";
 import { LEGACY_HOP_PROFILES, LEGACY_ROUTES, ROLE_TABLE, lookupRole, resolveRoute } from "../server/role-route.mjs";
 import {
-  DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
   STAKES_VALUES,
   TIERS,
   loadTierLadder,
-  resolveStakesRoute,
   routeProviderFamily,
   stakesTier,
 } from "../server/stakes-ladder.mjs";
+import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, pick, row, today } from "./helpers/route-golden.mjs";
 
-const C = "claude";
-const A = "antigravity-cli";
-const O = "opencode";
-
-// Golden table: the 12 profiles in ~/.vibesquad/profiles.json on 2026-11-17 and the provider/model/effort/mode each one
-// spawns with today at normal stakes (profile fields; the stakes ladder does not apply at normal). 11 of them are also
-// shipped in DEFAULT_PACK_PROFILES (checked below); "Implement - Gemini (trial)" exists only in the user file.
-const GOLDEN = [
-  ["Lead - Claude", "lead", C, "claude-opus-5-5", "medium", "auto"],
-  ["Lead - Gemini", "lead", A, "gemini-4-argon", "medium", "accept-edits"],
-  ["Brainstorm - Claude", "brainstorm", C, "claude-opus-5-5", "medium", "auto"],
-  ["Brainstorm - Gemini", "brainstorm", A, "gemini-4-argon", "medium", "accept-edits"],
-  ["Implement - Sonnet", "worker", C, "claude-sonnet-5-5", "medium", "auto"],
-  ["Work Order - DSP", "worker", O, "deepseek/deepseek-v4-pro", "high", "build"],
-  ["Review - Gemini", "worker", A, "gemini-4-argon", "medium", "default"],
-  ["Review - Sonnet", "worker", C, "claude-sonnet-5-5", "medium", "auto"],
-  ["Pre-check - Flash", "worker", A, "gemini-3.8-flash", "low", "default"],
-  ["Art Director - Gemini", "worker", A, "gemini-4-argon", "medium", "accept-edits"],
-  ["Art Painter - Opus", "worker", C, "claude-opus-5-5", "medium", "auto"],
-  ["Implement - Gemini (trial)", "worker", A, "gemini-4-argon", "medium", "accept-edits"],
-].map(([name, role, provider, model, effort, modeId]) => ({ name, role, provider, model, effort, modeId }));
-
-// Today's stored profile list (the effective list resolveProfileWithFailover walks; hop profiles outside it come from
-// the registered DEFAULT_PACK_PROFILES, as in the server).
-const USER_PROFILES = GOLDEN.map((g) => ({ name: g.name, role: g.role, provider: g.provider, model: g.model, modeId: g.modeId, thinkingOptionId: g.effort }));
-
-const row = (provider, model, effort, modeId) => ({ provider, model, effort, modeId });
 const OPUS_MED = row(C, "claude-opus-5-5", "medium", "auto");
 const SONNET_MED = row(C, "claude-sonnet-5-5", "medium", "auto");
 const ARGON_AE = row(A, "gemini-4-argon", "medium", "accept-edits");
@@ -77,24 +48,6 @@ const FAILOVER_GOLDEN = [
   ["Implement - Gemini (trial)", [A], SONNET_MED],
   ["Implement - Gemini (trial)", [A, C], DSP],
 ];
-
-const pick = (r) => r && { provider: r.provider, model: r.model, effort: r.effort, modeId: r.modeId };
-const FAMS = [C, A, O];
-const CAP_SETS = [[]];
-for (const f of FAMS) for (const s of [...CAP_SETS]) CAP_SETS.push([...s, f]);
-
-/** Today's route for a profile name: the failover walk, then the old stakes ladder on the landed profile. */
-function today(name, caps, stakes) {
-  const fo = resolveProfileWithFailover(name, USER_PROFILES, [], { cappedProviders: caps, ignoreDiskCaps: true });
-  const p = fo.profile;
-  const sr = resolveStakesRoute(p.provider, p, stakes, false, { ladder: DEFAULT_STAKES_LADDER });
-  return {
-    provider: p.provider,
-    model: (sr.apply && sr.model) || p.model,
-    effort: (sr.apply && sr.effort) || p.thinkingOptionId,
-    modeId: p.modeId,
-  };
-}
 
 test("golden: the 12 current profile names resolve to exactly today's provider/model/effort/mode", () => {
   assert.equal(GOLDEN.length, 12);
