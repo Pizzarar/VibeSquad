@@ -35,7 +35,7 @@ function shortUrl(u) { return String(u || '').replace('file:///', '').split(/[\\
 function runWatchdog() {
   const hb = new Int32Array(workerData.sab);
   let lastV = Atomics.load(hb, 0), lastAt = Date.now(), cap = null, capturedAt = null;
-  const capture = (startedAt) => {
+  const capture = (startedAt, v0) => {
     const session = new Session();
     let done = false, timer = null;
     // Idempotent; the only place done is set, so resume + disable + disconnect always run exactly once, whichever path ends first.
@@ -56,7 +56,10 @@ function runWatchdog() {
       if (done) return;
       try {
         const frames = (m.params.callFrames || []).slice(0, MAX_FRAMES).map((fr) => `${fr.functionName || '(anon)'} ${shortUrl(fr.url || urls.get(fr.location.scriptId))}:${fr.location.lineNumber + 1}`);
-        parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames });
+        // Late capture: under CPU contention enable+pause can land after the stall ended, so the frames are the timer/tick that ran next,
+        // not the blocker. The heartbeat moving since the stall began is the proof; flag it instead of reporting misleading frames.
+        const late = Atomics.load(hb, 0) !== v0;
+        parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames, ...(late ? { late: true } : {}) });
       } catch { /* attribution is best-effort */ } finally { finish(); }
     });
     timer = setTimeout(finish, 5000);
@@ -66,7 +69,7 @@ function runWatchdog() {
   setInterval(() => {
     const v = Atomics.load(hb, 0), t = Date.now();
     if (v !== lastV) { lastV = v; lastAt = t; return; }
-    if (t - lastAt > WATCHDOG_STALL_MS && !cap && capturedAt !== lastAt && !Atomics.load(hb, 1)) { capturedAt = lastAt; capture(lastAt); }
+    if (t - lastAt > WATCHDOG_STALL_MS && !cap && capturedAt !== lastAt && !Atomics.load(hb, 1)) { capturedAt = lastAt; capture(lastAt, v); }
   }, 150);
 }
 if (!isMainThread && workerData?.vsLoopLagWatchdog) runWatchdog();
@@ -126,7 +129,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
         const g = gcAfter(t0, t + 1);
         if (g) rec.gc = g;
         const a = attribs.find((x) => x.stallStartedAt >= t0 - 100 && x.stallStartedAt <= t);
-        if (a) { rec.frames = a.frames; rec.pausedAfterMs = a.pausedAfterMs; }
+        if (a) { rec.pausedAfterMs = a.pausedAfterMs; if (a.late) rec.captureLate = true; else rec.frames = a.frames; }
         try { rec.res = resourceCounts(); } catch { /* optional */ }
         write(rec);
       };

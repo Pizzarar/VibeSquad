@@ -86,13 +86,16 @@ await sleep(600);`);
 test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
   const { r, lines } = runChild(`
 await sleep(700);
-function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},1500)']); }
+function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},3000)']); }
 blockOnChildProcess();
 await sleep(600);`);
   assert.equal(r.status, 0, r.stderr);
   const stall = lines.find((l) => l.driftMs > 1000);
   assert.ok(stall, JSON.stringify(lines));
-  assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
+  // Under CPU contention the pause may land after the call returned; the monitor must then say so (captureLate) rather than report
+  // the next timer's frames as the blocker. Either right frames or an explicit late flag; never wrong frames.
+  if (stall.captureLate) assert.equal(stall.frames, undefined);
+  else assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
   // Load-proof: cpu time does not grow with wall time when the machine is busy, so bound it against the stall's own drift.
   const cpuMs = stall.cpuUserMs + stall.cpuSystemMs;
   assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
