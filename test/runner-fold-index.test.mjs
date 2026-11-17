@@ -145,6 +145,7 @@ test("same-size rewrite with a new mtime, and one inside the racy window with th
   const t1 = readFileSync(f1, "utf8");
   const m = Math.floor(Date.now() / 1000); // whole seconds: restored exactly below
   utimesSync(f1, m, m); // fresh mtime -> the next save records it racy
+  age(h, "rn-0000"); // rn-0000's rewrite above is racy too (r2 saved it within RACY_MS): age it so r3 saves it trusted
   const r3 = boot(h);
   r3.saveFoldIndexSync();
   writeFileSync(f1, t1.replace('"title":"rn-0001!"', '"title":"rn-YYYY!"'));
@@ -169,7 +170,8 @@ test("shrink and removed log: refolded from 0 / dropped; parity", () => {
   assert.equal(r.foldIndexStats.trusted, ids.length - 2);
   parity(h, r);
   assert.equal(r.status("rn-0002"), null);
-  assert.equal(r.status("rn-0000").status, "running");
+  assert.equal(r.status("rn-0000").status, "lost", "a running log with no child in this process reads lost");
+  assert.equal(r.folds.get("rn-0000").status, "running", "the fold keeps the truncated log's last status");
   r.saveFoldIndexSync();
   assert.ok(!readFoldIndex(h.file).has("rn-0002"), "a removed log's entry is not saved again");
 });
@@ -256,12 +258,17 @@ test("save never waits on another process's lock; a dead holder's lock is taken 
   appendFileSync(logFile(h, "rn-0001"), ev(801, "text", { text: "x" }));
   r.status("rn-0001");
   r.store.append("rn-0002", "text", { text: "y" }); // ahead of its fold: the save folds it first
+  // Every log was just written, so a save now would record racy entries (refolded from 0 by design). Age them first: the
+  // folds that already cover their bytes restat (rn-0000, rn-0001); rn-0002 stays ahead of its fold for the save to catch up.
+  for (const id of ["rn-0000", "rn-0001", "rn-0002"]) age(h, id);
+  r.status("rn-0000");
+  r.status("rn-0001");
   r.shutdown();
   assert.equal(r.foldIndexSave.result, "written");
   const e = readFoldIndex(h.file).get("rn-0002");
   assert.equal(e.offset, statSync(logFile(h, "rn-0002")).size, "the shutdown save covers what this runner appended");
   const r2 = boot(h);
-  assert.equal(r2.foldIndexStats.full, 0);
+  assert.deepEqual([r2.foldIndexStats.full, r2.foldIndexStats.trusted], [0, 3]);
   parity(h, r2);
 });
 

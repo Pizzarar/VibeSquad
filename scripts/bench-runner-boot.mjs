@@ -70,11 +70,13 @@ async function boot() {
   rmSync(path.join(rhome, "runner.json"), { force: true });
   const runner = spawn(process.execPath, [path.join(repo, "runner", "server.mjs"), "--home", rhome], { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
   let log = "";
+  let exited = false;
+  runner.on("exit", () => { exited = true; });
   runner.stdout.on("data", (d) => { log += d; });
   runner.stderr.on("data", (d) => { log += d; });
   const t0 = performance.now();
   let line = null;
-  while (!line && performance.now() - t0 < 15 * 60_000) {
+  while (!line && !exited && performance.now() - t0 < 15 * 60_000) { // exited: e.g. {alreadyRunning} (the last runner had not exited yet)
     line = log.split("\n").find((l) => l.startsWith('{"boot":'));
     if (!line) await new Promise((r) => setTimeout(r, 50));
   }
@@ -86,7 +88,8 @@ async function boot() {
     const token = readFileSync(path.join(rhome, "token"), "utf8").trim();
     await fetch(`http://127.0.0.1:${port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } });
   } catch { runner.kill(); }
-  await new Promise((r) => { runner.on("exit", r); setTimeout(r, 10_000); });
+  // Wait for the exit (its shutdown saves the index): the next boot would otherwise find the lock held and exit {alreadyRunning}.
+  if (!exited) await new Promise((r) => { runner.on("exit", r); setTimeout(() => { runner.kill(); r(); }, 120_000); });
   const save = log.split("\n").find((l) => l.startsWith('{"foldIndexSave":'));
   return { ...(line ? JSON.parse(line).boot : { error: log.slice(-400) }), bootWall, ...(save ? JSON.parse(save) : {}) };
 }
