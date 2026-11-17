@@ -625,15 +625,22 @@ export class Runner {
 
   // Probes the agent's tree once (deduped per entry), with a process snapshot started after its turn ended. Resolves to the work list, or null when a turn started meanwhile
   // (the snapshot predates it). A failing probe resolves to [] (the old park) and logs park-probe-error.
+  // idea-305: the dedupe is per turn. A probe started before a turn that has since started AND ended settles to null (its
+  // snapshot predates that turn), so the ended turn's own park check must get a fresh probe, not that stale promise: it
+  // would read null as "a turn started, its idle re-arms" and return, while the idle that re-arms was this very check.
+  // The agent then sat idle, never probed (work null), and heldIds listed it for 87 min with no shell behind it.
   _probeWork(id, e) {
-    if (e.probing) return e.probing;
+    if (e.probing && e.probingGen === e.turnGen) return e.probing;
     const gen = e.turnGen;
-    const settle = (work) => { e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
-    e.probing = Promise.resolve().then(() => this.bgProbe(e.handle.pid, e.lastActive)).then( // lastActive = the turn end: no snapshot from before it
+    let p = null;
+    const settle = (work) => { if (e.probing === p) e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
+    p = Promise.resolve().then(() => this.bgProbe(e.handle.pid, e.lastActive)).then( // lastActive = the turn end: no snapshot from before it
       (work) => settle(Array.isArray(work) ? work : []),
       (err) => { try { this.store.append(id, 'park-probe-error', { message: String(err?.message ?? err) }); } catch { /* log gone */ } return settle([]); },
     );
-    return e.probing;
+    e.probing = p;
+    e.probingGen = gen;
+    return p;
   }
 
   // Room for one more live process (the safety ceiling): parks the oldest idle agent if needed. False when nothing can be parked.
@@ -796,6 +803,7 @@ export class Runner {
   // After a turn ends, park the agent once it has stayed idle for the grace period (process per turn).
   _scheduleParkAfterTurn(id, entry) {
     clearTimeout(entry.parkTimer);
+    entry.parkTimer = null; // null = nothing armed (heldIds' idea-305 re-arm reads it)
     if (entry.inflight > 0 || entry.turns < 1) return;
     this._armPark(id, entry, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
   }
@@ -1193,12 +1201,21 @@ export class Runner {
   // null, and a suite started with run_in_background is already running then. Only a probe that saw nothing clears it.
   // Ideas 228 + 229: held is checked against reality first (_reconcileHeld), so /health, the restart wait and its deferral
   // never report a hold whose shells are all dead (it would otherwise stand until the next poll, up to parkHoldPollMs).
+  // idea-305: "held until its first probe" is only true while that probe is coming (a park timer armed or a probe in flight).
+  // An idle agent left unprobed with neither (a lost re-arm) would be listed forever while vs stop --background finds no
+  // shell, so the park check is re-armed here (logged park-rearm): listed this once, dropped within one grace + probe.
   heldIds() {
     this._reconcileHeld();
     const ids = [];
     for (const [id, e] of this.live) {
       if (e.heldSince !== null && e.heldSince !== undefined) ids.push(id);
-      else if (this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0) ids.push(id);
+      else if (this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0) {
+        ids.push(id);
+        if (e.work == null && !e.parkTimer && !e.probing && e.perms.size === 0 && !this._shutDown) {
+          try { this.store.append(id, 'park-rearm', { reason: 'held unprobed with no park check pending' }); } catch { /* log gone */ }
+          this._scheduleParkAfterTurn(id, e);
+        }
+      }
     }
     return ids;
   }
@@ -1282,6 +1299,7 @@ export class Runner {
   _deliver(entry, text, images = []) {
     if (!entry?.handle) throw new Error('agent is not running');
     clearTimeout(entry.parkTimer);
+    entry.parkTimer = null;
     // inflight counts OPEN TURNS (one per agent at a time), not prompts. A fresh turn takes its slot here — and marks
     // itself active — immediately, without waiting for the adapter's (possibly async, e.g. ACP ready.then) 'running'.
     const fresh = entry.inflight === 0;
