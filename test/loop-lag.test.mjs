@@ -83,22 +83,47 @@ await sleep(600);`);
   for (const k of ["driftMs", "heapUsed", "cpuUserMs", "cpuSystemMs", "ts", "proc"]) assert.ok(k in stall, k);
 });
 
-test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
-  const { r, lines } = runChild(`
+function nativeCallRun() {
+  return runChild(`
 await sleep(700);
-function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},3000)']); }
+function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},1500)']); }
 blockOnChildProcess();
 await sleep(600);`);
+}
+
+test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
+  // The capture races real machine load, so a single run may legitimately land late (that is flagged, see the next test). Never wrong
+  // frames in any attempt; and the on-time path must be proven by at least one of 4 attempts (an always-late capture() fails).
+  let proved = false;
+  for (let i = 0; i < 4 && !proved; i++) {
+    const { r, lines } = nativeCallRun();
+    assert.equal(r.status, 0, r.stderr);
+    const stall = lines.find((l) => l.driftMs > 1000);
+    assert.ok(stall, JSON.stringify(lines));
+    const cpuMs = stall.cpuUserMs + stall.cpuSystemMs; // cpu time does not grow with wall time when busy: bound against drift
+    assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
+    if (stall.captureLate) { assert.equal(stall.frames, undefined); continue; }
+    assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
+    proved = true;
+  }
+  assert.ok(proved, "all 4 attempts captured late");
+});
+
+test("a capture that lands after the stall ended is flagged captureLate with no frames (forced deterministically)", () => {
+  const { r, lines } = runChild(`
+await sleep(700);
+function lateStall() { const e = Date.now() + 1200; while (Date.now() < e) { /* spin */ } }
+lateStall();
+await sleep(600);
+console.log(JSON.stringify({ caps: m.captures() }));`, { opts: "deferPauseUntilResume: true" });
   assert.equal(r.status, 0, r.stderr);
+  const caps = JSON.parse(r.stdout.trim().split("\n").pop()).caps;
+  assert.equal(caps.length, 1, r.stdout);
+  assert.equal(caps[0].late, true);
   const stall = lines.find((l) => l.driftMs > 1000);
   assert.ok(stall, JSON.stringify(lines));
-  // Under CPU contention the pause may land after the call returned; the monitor must then say so (captureLate) rather than report
-  // the next timer's frames as the blocker. Either right frames or an explicit late flag; never wrong frames.
-  if (stall.captureLate) assert.equal(stall.frames, undefined);
-  else assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
-  // Load-proof: cpu time does not grow with wall time when the machine is busy, so bound it against the stall's own drift.
-  const cpuMs = stall.cpuUserMs + stall.cpuSystemMs;
-  assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
+  assert.equal(stall.captureLate, true, JSON.stringify(stall));
+  assert.equal(stall.frames, undefined);
 });
 
 test("one long stall triggers exactly one watchdog capture", () => {

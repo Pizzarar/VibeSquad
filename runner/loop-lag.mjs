@@ -64,7 +64,13 @@ function runWatchdog() {
     });
     timer = setTimeout(finish, 5000);
     timer.unref();
-    try { session.post('Debugger.enable', () => { if (!done) session.post('Debugger.pause'); }); } catch { finish(); }
+    // Test hook (deferPauseUntilResume): hold the pause until the main thread has run again, forcing the late-capture path deterministically.
+    const pause = () => {
+      if (done) return;
+      if (workerData.deferPauseUntilResume && Atomics.load(hb, 0) === v0) { setTimeout(pause, 5); return; }
+      session.post('Debugger.pause');
+    };
+    try { session.post('Debugger.enable', pause); } catch { finish(); }
   };
   setInterval(() => {
     const v = Atomics.load(hb, 0), t = Date.now();
@@ -83,7 +89,7 @@ export function lagLogPath(env = process.env) {
  *   append?:(file:string,line:string)=>Promise<void>, maxBytes?:number, watchdog?:boolean, gcMinMs?:number, gcStandaloneMs?:number}} o
  * Returns { tick, cpuTick, stats, start, stop }. tick/cpuTick are exposed so tests drive a fake clock.
  */
-export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath(), now = Date.now, cpuUsage = () => process.cpuUsage(), heapUsed = () => process.memoryUsage().heapUsed, append, maxBytes = LAG_LOG_MAX_BYTES, gcMinMs = GC_MIN_MS, gcStandaloneMs = GC_STANDALONE_MS } = {}) {
+export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath(), now = Date.now, cpuUsage = () => process.cpuUsage(), heapUsed = () => process.memoryUsage().heapUsed, append, maxBytes = LAG_LOG_MAX_BYTES, gcMinMs = GC_MIN_MS, gcStandaloneMs = GC_STANDALONE_MS, deferPauseUntilResume = false } = {}) {
   let last = now();
   let lagMaxMs = 0;
   const events = []; // [ts, driftMs] over LAG_WINDOW_MS
@@ -172,7 +178,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     try {
       const sab = new SharedArrayBuffer(8);
       hb = new Int32Array(sab);
-      worker = new Worker(fileURLToPath(import.meta.url), { workerData: { vsLoopLagWatchdog: true, sab }, resourceLimits: { maxOldGenerationSizeMb: 32 } });
+      worker = new Worker(fileURLToPath(import.meta.url), { workerData: { vsLoopLagWatchdog: true, sab, deferPauseUntilResume }, resourceLimits: { maxOldGenerationSizeMb: 32 } });
       worker.unref();
       worker.on('message', (m) => { attribs.push(m); while (attribs.length > 20) attribs.shift(); });
       worker.on('error', () => { worker = null; hb = null; });
