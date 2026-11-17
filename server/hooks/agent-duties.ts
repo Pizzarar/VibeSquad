@@ -46,6 +46,7 @@ import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, deriveRole } from "../profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
+import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
@@ -1967,6 +1968,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
         }
 
+        // P1 (idea-223): stamp the workflow arm at dispatch from the final provider/model (after failover + stakes route); the
+        // caller's `wf` label / VS_WF wins. It rides the spawn labels into the runner's `created` meta; label-less spawns get
+        // it from agent.created instead.
+        if ((request as any).labels) {
+          const wf = resolveWfLabel({ labels: reqLabels, env, provider: String(next.provider ?? provider), model: next.model, profile: matchedProfile });
+          if ((nextReqLabels ?? reqLabels)[WF_LABEL] !== wf) {
+            nextReqLabels = { ...(nextReqLabels ?? reqLabels), [WF_LABEL]: wf };
+            changed = true;
+          }
+        }
+
         // A1: Antigravity must never hang on an unsurfaced permission prompt. Keyed on the
         // final provider, after any profile override.
         const finalProvider = String(next.provider ?? provider);
@@ -2277,6 +2289,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           }
 
           st.mark("lead-ord-scan");
+          // P1 (idea-223): a spawn whose labels never reached before(agent.create) still gets its workflow arm.
+          if (!normalizeWfLabel(labels[WF_LABEL])) {
+            const s: any = me ?? {};
+            const hint = String(labels.profile ?? "").trim();
+            want[WF_LABEL] = deriveWfArm({
+              provider: s.provider ?? agent.provider ?? s.config?.provider,
+              model: s.model ?? agent.model ?? s.config?.model,
+              profile: hint ? matchStoredProfile(hint)?.profile : null,
+            });
+          }
           if (Object.keys(want).length > 0) {
             await deps.setLabels(agent.id, { ...labels, ...want }).catch((e) => log(`label failed: ${e}`));
           }
