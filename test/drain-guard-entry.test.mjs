@@ -127,9 +127,12 @@ test("checkDrainGuard: the override from an agent shell, or without the owner's 
   }
 });
 
+/** A child env with this shell's agent identity stripped: drainOverrideOwner (server/restart-coord.mjs) reads all three
+ *  keys to spot an agent shell, so an agent-run `node --test` passes the owner-path tests too. NODE_TEST_CONTEXT keeps
+ *  the child out of the parent's test reporter. */
 function cleanEnv(extra) {
   const env = { ...process.env, ...extra };
-  for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "NODE_TEST_CONTEXT"]) delete env[k];
+  for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "NODE_TEST_CONTEXT"]) delete env[k];
   return env;
 }
 
@@ -273,7 +276,7 @@ test("runSync: the owner's ignoreDrain syncs during a pending drain and logs one
 });
 
 test("sync-runtime CLI accepts --ignore-drain (not an unknown flag)", () => {
-  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--ignore-drain"], { cwd: root, encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(path.join(tmpdir(), "vs-sync-lad-")) } });
+  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--ignore-drain"], { cwd: root, encoding: "utf8", env: cleanEnv({ VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(path.join(tmpdir(), "vs-sync-lad-")) }) });
   assert.doesNotMatch(r.stdout + r.stderr, /unknown flag/);
   assert.notEqual(r.status, 2);
 });
