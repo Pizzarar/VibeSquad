@@ -8,6 +8,7 @@ Before proposing a workflow, check here; if covered, say "already covered by X".
 | Buddy restart | "restart the buddy", "fresh buddy" | `cli/vs.mjs:518` (`vs buddy restart`); `server/mcp/tools.mjs:896` (`restart_buddy`) | @bug |
 | Lead handoff / successor | "hand off the lead", lead at 150k+ | `cli/vs.mjs:516` (`vs lead handoff`); `server/mcp/tools.mjs:891` (`handoff_lead`); docs/PLAN_LEAD_HANDOFF.md:1; docs/PLAN_LEAD_SUCCESSOR_VERB.md:1 | @bug |
 | Spawn a worker by profile | "spawn a worker/implementer for X" | `cli/vs.mjs:515` (`vs spawn`); `server/mcp/tools.mjs:874` (`spawn_worker`) | @bug |
+| Role + tier routing (from P5c) | "which profile/model", "spawn a worker" | docs/PLAN_PROFILES_ROLE_ONLY.md; `server/role-route.mjs` (`resolveRoute`); profile = role, model/effort from provider x tier ladder; legacy names work until P5f | @per |
 | Stakes routing | "top model for crypto/auth", "tierA" | docs/PLAN_ROUTING_BY_STAKES.md:13; `server/stakes-ladder.mjs:8,11`; `--stakes` on `vs spawn` (`cli/vs.mjs:515`) | @per |
 | Release handoff to Release Desk | "release beta", "release stable" | R10 `server/profiles.mjs:41`; docs/PLAN_RELEASE_DESK.md:1 | @rele |
 | Worktree create | "work in a worktree for unit X" | `vs worktree create` (`cli/vs.mjs:2474`); `server/team-worktrees.mjs:125`; STANDING_RULES `server/lessons.mjs:159` | @bug |
