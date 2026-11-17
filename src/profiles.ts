@@ -20,6 +20,60 @@ export type Profile = {
   brief: string;
 };
 
+/**
+ * profiles.json schema v2 (docs/PLAN_PROFILES_ROLE_ONLY.md P5b, idea-77; server/profiles-v2.mjs). A role names a job,
+ * not a model: model + effort come from the tier ladder (role tier x stakes -> provider rung). Types only until P5d.
+ */
+export type Tier = "top" | "mid" | "cheap";
+
+/** The 8 shipped roles (server/role-route.mjs ROLE_TABLE). `Role` above stays the coarse lead/brainstorm/worker label. */
+export type RoleKey =
+  | "lead"
+  | "brainstorm"
+  | "implement"
+  | "work-order"
+  | "review"
+  | "pre-check"
+  | "art-director"
+  | "art-painter";
+
+/** Per-provider settings of a role. `prompt`/`mcpExtras` only when they differ from the role's; `from` = v1 source profile. */
+export type RoleMode = {
+  modeId: string;
+  effort?: string;
+  featureValues?: Record<string, unknown>;
+  prompt?: string;
+  mcpExtras?: string[];
+  from?: string;
+};
+
+export type RoleDef = {
+  name: string;
+  tier: Tier;
+  /** Provider families in preference order (walked on cap/quota). */
+  providers: string[];
+  prompt: string;
+  mcpExtras?: string[];
+  icon?: string;
+  color?: string;
+  brief?: string;
+  modes: Record<string, RoleMode>;
+};
+
+/** Shipped role keys plus any user-added role. */
+export type RolesMap = Partial<Record<RoleKey, RoleDef>> & Record<string, RoleDef>;
+
+/** On-disk ~/.vibesquad/profiles.json after scripts/migrate-profiles-v2.mjs. v1 = no schemaVersion, no roles. */
+export type ProfilesFileV2 = {
+  version: 1;
+  schemaVersion: 2;
+  providers?: Record<string, { color?: string; dim?: string; symbol?: string; name?: string }>;
+  providerIcons?: Record<string, { color?: string; dim?: string; symbol?: string; name?: string }>;
+  roles: RolesMap;
+  /** The v1 profile list, kept for old names until P5f. */
+  profiles: Profile[];
+};
+
 export type ProfileDiffEntry = {
   name: string;
   status: "same" | "modified" | "paseo-only" | "vs-only";
@@ -40,6 +94,9 @@ export type ProfilesState = {
   diff: ProfileDiffEntry[];
   warningsByProfile: Record<string, string[]>;
   installedProviders: string[];
+  /** Schema v2 (P5b): set once the server sends roles (P5d); absent = v1. */
+  schemaVersion?: number;
+  roles?: RolesMap;
 };
 
 const BRIEF = (extra = "") => `Goal: \nFile scope: \nDone-check: \n${extra}`.trimEnd() + "\n";
