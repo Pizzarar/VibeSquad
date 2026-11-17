@@ -4,6 +4,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
+import { drainPendingMessage, restartDrainPending } from "./restart-coord.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 
@@ -406,7 +407,7 @@ const ACTION = {
 };
 
 /**
- * The sync entry point: git guard, runtime lock, dist freshness (rebuild or refuse, idea-100), staged copy, then the
+ * The sync entry point: git guard, restart-drain guard (idea-197), runtime lock, dist freshness (rebuild or refuse, idea-100), staged copy, then the
  * live-needs report since the last synced commit. It never restarts the server or runner.
  * Returns `{synced, refused?, skipped?, live, dist, pending}`.
  */
@@ -432,6 +433,17 @@ export function runSync({
     log(`[sync-runtime] refused: ${why}; the live runtime is unchanged`);
     return { synced: false, refused: why, ...extra };
   };
+  // idea-197: a sync while a `vs restart` waits on a coordinated drain swaps live runtime files under that restart (and the
+  // runner supervisor restarts on runner changes). Refuse until the restart goes through or the D2 window ends; --force
+  // covers the git guard only. A dry run copies nothing and still reports.
+  if (!dryRun) {
+    const pending = restartDrainPending(vsHomeFor(env), { now: now() });
+    if (pending) {
+      const why = drainPendingMessage("sync-runtime", pending);
+      log(`[sync-runtime] ${why} The live runtime is unchanged.`);
+      return { synced: false, refused: why, drainPending: true };
+    }
+  }
 
   const body = () => {
     const prev = readJson(join(runtimeDir, "build-stamp.json"))?.commit ?? null;

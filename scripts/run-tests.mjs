@@ -4,11 +4,15 @@
 // counts and failing files. Files and fields: scripts/suite-lock.mjs.
 //   npm test                     refuse (exit 1) if another suite holds the slot
 //   npm test -- --queue [files]  wait FIFO for the slot instead, printing the queue position
+// While a `vs restart` waits on a coordinated drain (idea-197, the D2 window in server/restart-coord.mjs) a full run is
+// refused, and a queued full run leaves the queue; targeted runs (file args) still go.
 // Other args are forwarded as test files (default: test/*.test.mjs).
 import { spawn } from "node:child_process";
 import { readFileSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { drainPendingMessage, restartDrainPending } from "../server/restart-coord.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -20,6 +24,22 @@ const files = args.filter((a) => a !== "--queue");
 const run = { full: files.length === 0, files };
 const who = (h) => `pid ${h?.pid}${h?.agentId ? `, agent ${h.agentId}` : ""}`;
 
+// idea-197: a full suite started while a restart waits on a coordinated drain is the background work the asked leads were
+// told to hold. Refuse it rather than wait: a queued waiter is itself held work the restart would wait on.
+const DRAIN_POLL_MS = 2000;
+const vsHome = process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+function drainRefusal(action) {
+  if (!run.full) return null;
+  let p = null;
+  try { p = restartDrainPending(vsHome); } catch { return null; } // an unreadable home leaves the slot rules as they are
+  return p ? drainPendingMessage(action, p, "Targeted runs (npm test -- <files>) still go.") : null;
+}
+const refusal = drainRefusal(queue ? "npm test -- --queue" : "npm test");
+if (refusal) {
+  console.error(refusal);
+  process.exit(1);
+}
+
 let slot = null;
 if (queue) {
   let leave = () => {};
@@ -27,12 +47,18 @@ if (queue) {
   process.on("SIGINT", quit);
   process.on("SIGTERM", quit);
   process.on("exit", () => { if (!slot) leave(); });
+  // A drain that starts while we wait: leave the queue (the exit handler above) instead of taking the slot after it.
+  const drainTimer = setInterval(() => {
+    const r = drainRefusal("npm test -- --queue (left the queue)");
+    if (r) { console.error(r); process.exit(1); }
+  }, DRAIN_POLL_MS);
   slot = await waitForSlot(paths, {
     ...run,
     onJoin: (t) => { leave = t.leave; },
     onWait: ({ position, waiting, holder }) =>
       console.error(`npm test queued: #${position} of ${waiting} waiting for the suite slot${holder ? ` (held by ${who(holder)})` : ""}.`),
   });
+  clearInterval(drainTimer);
   process.off("SIGINT", quit);
   process.off("SIGTERM", quit);
 } else {

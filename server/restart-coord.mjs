@@ -240,3 +240,32 @@ function stillHeldLine(l) {
   const ids = l.stillHeld.map((id) => (work(id) ? `${id} (${work(id)})` : id)).join(", ");
   return `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} ${l.drainedButHeld ? `logged '${DRAINED_TEXT}' but the runner still holds` : "has not drained; the runner still holds"} ${ids}`;
 }
+
+/**
+ * idea-197 (docs/PLAN_PER_POST03.md P4): the D2 window seen from the suite-slot and runtime-sync side. While the newest
+ * restart deferred less than DRAIN_WINDOW_MS ago and none has gone through since (the same deferralChain the D2 guard
+ * reads), its named leads were asked to hold background suites until 'restart-done'. A new full suite or a runtime sync
+ * started now is fresh work the restart has to wait out, so those entry points refuse. Read only: no log, no new verb.
+ * Returns null when no drain is pending, else { deferral, leads, ageMin, leftMin }.
+ */
+export function restartDrainPending(vsHome, { now = Date.now() } = {}) {
+  const chain = deferralChain(vsHome, { now, maxAgeMs: DRAIN_WINDOW_MS });
+  if (!chain) return null;
+  const at = Date.parse(chain.latest.finishedAt ?? chain.latest.startedAt ?? "") || now;
+  return {
+    deferral: chain.latest,
+    leads: chain.latestLeads,
+    ageMin: Math.max(0, Math.round((now - at) / 60000)),
+    leftMin: Math.max(1, Math.ceil((at + DRAIN_WINDOW_MS - now) / 60000)),
+  };
+}
+
+/** The refusal line for `action` ("npm test", "sync-runtime") while restartDrainPending() is non-null. */
+export function drainPendingMessage(action, pending, hint = "") {
+  const who = (pending.leads ?? []).map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""}`).join("; ");
+  return `${action} refused: a VS restart is waiting on a coordinated drain (it deferred ${pending.ageMin} min ago, ` +
+    `${pending.deferral?.file ?? "~/.vibesquad/restart-<ts>.json"}${who ? `; leads asked to drain: ${who}` : ""}). ` +
+    `Full suites and runtime syncs hold until the restart goes through (the asked leads get '${DONE_TEXT}') ` +
+    `or the ${DRAIN_WINDOW_MS / 60000}-min drain window ends (~${pending.leftMin} min left); rerun then, no timer retries.` +
+    (hint ? ` ${hint}` : "");
+}
