@@ -159,7 +159,7 @@ export const STANDING_RULES = [
   "Run unit work in `%LOCALAPPDATA%\\VibeSquad\\worktrees\\<repo>\\<unit>`; never `git worktree add ../<repo>-<unit>` into `projects/`.",
   "Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File` (UTF-8 BOM breaks parsers).",
   "Never end a turn on a background task with nothing armed: leads/Buddies arm `vs watch add ...`; workers use `vs wait <id> --timeout <s>`.",
-  "Route by Role + Tier (from P5c): profile = role; model/effort come from the provider x tier ladder; stakes shift the tier; automatic provider failover (Claude -> Gemini -> DeepSeek), never pin every role to one provider; old profile names still work until P5f.",
+  "Route by Role + Tier (from P5c): profile = role; model/effort from the provider x tier ladder; stakes shift the tier; an explicit cap wins for profile spawns; failover Claude -> Gemini -> DeepSeek; old names route as today until P5f.",
   "Detach live children before archiving a Paseo-backed agent (Paseo cascades archives to its children; the runner has no such cascade, so this applies only to Paseo-backed lanes).",
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",
   "Every master merge commit carries Live-Needs: none|frontend-reload|build|server-restart|runner-restart in the final trailer block, with Co-Authored-By; sync-runtime reads it.",
