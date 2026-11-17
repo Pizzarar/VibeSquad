@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +10,11 @@ const CACHE_MS = 60_000;
 
 const defaultGit = (repo, args) =>
   execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, windowsHide: true, stdio: ["ignore", "pipe", "ignore"] }).trim();
+
+const defaultGitAsync = (repo, args) =>
+  new Promise((resolve, reject) => {
+    execFile("git", ["-C", repo, ...args], { encoding: "utf8", timeout: GIT_TIMEOUT_MS, windowsHide: true }, (err, out) => (err ? reject(err) : resolve(String(out).trim())));
+  });
 
 /** Where the server publishes its stale state so `vs` can warn without running git or an HTTP call. */
 export function staleFilePath(env = process.env) {
@@ -46,6 +52,22 @@ export function computeStale({ rootDir, git = defaultGit, exists = existsSync } 
   }
 }
 
+/** computeStale with an async git: the /health path must never block the loop on two git spawns (idea-225). */
+export async function computeStaleAsync({ rootDir, git = defaultGitAsync, exists = existsSync } = {}) {
+  try {
+    const stamp = readBuildStamp(rootDir);
+    if (!stamp?.repo || !exists(stamp.repo)) return null;
+    const head = await git(stamp.repo, ["rev-parse", "master"]);
+    if (!head || head === stamp.commit) return null;
+    const behind = Number.parseInt(await git(stamp.repo, ["rev-list", "--count", `${stamp.commit}..${head}`]), 10);
+    if (!Number.isFinite(behind) || behind <= 0) return null;
+    return { built: stamp.commit.slice(0, 7), head: head.slice(0, 7), behind };
+  } catch {
+    return null;
+  }
+}
+
+let inflight = null;
 let cached = { at: 0, value: null, stampCommit: null };
 
 /** Cached `computeStale` (60s) that also mirrors the result to stale.json for the CLI. */
@@ -62,6 +84,31 @@ export function getStale({ rootDir, env = process.env, now = Date.now(), compute
   return value;
 }
 
+/**
+ * Non-blocking getStale: returns the cached value now and, when it is older than 60s (or the stamp changed), refreshes it in the
+ * background (single-flight, async git, async stale.json write). Resolves with the refreshed value; callers need not await it.
+ */
+export function refreshStale({ rootDir, env = process.env, now = Date.now(), compute = computeStaleAsync } = {}) {
+  const curStampCommit = rootDir ? (readBuildStamp(rootDir)?.commit ?? null) : null;
+  if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return Promise.resolve(cached.value);
+  if (inflight) return inflight;
+  inflight = (async () => {
+    try {
+      const value = await compute({ rootDir });
+      cached = { at: now, value, stampCommit: curStampCommit };
+      try {
+        const file = staleFilePath(env);
+        await mkdir(join(file, ".."), { recursive: true });
+        await writeFile(file, JSON.stringify({ stale: value }));
+      } catch {}
+      return value;
+    } finally {
+      inflight = null;
+    }
+  })();
+  return inflight;
+}
+
 /** Last cached value only: no git, no stale.json write (the read-only /health path). */
 export function peekStale() {
   return cached.value;
@@ -69,6 +116,7 @@ export function peekStale() {
 
 export function resetStaleCache() {
   cached = { at: 0, value: null, stampCommit: null };
+  inflight = null;
 }
 
 /** One-line CLI warning from the published stale.json; null when fresh, missing, or unreadable. */

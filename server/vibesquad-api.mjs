@@ -12,7 +12,7 @@ import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
-import { getStale, peekStale, readBuildStamp } from "./stale-runtime.mjs";
+import { peekStale, readBuildStamp, refreshStale } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { findBuiltApk } from "./android-apk-paths.mjs";
@@ -479,6 +479,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (!isTrusted(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady });
   const { port } = netConfig();
   const warnings = getConfigWarnings();
+  if (isOwner(req)) void refreshStale({ rootDir }).catch(() => {}); // background: never git on the request path
   const extra = {
     localAccess: localAccess(req),
     port,
@@ -486,7 +487,7 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
     exposedIps: exposure.exposedIps,
     // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
     ...loopLagStats(),
-    stale: isOwner(req) ? getStale({ rootDir }) : peekStale(),
+    stale: peekStale(),
     ...(warnings.length ? { configWarnings: warnings } : {}),
   };
   if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });

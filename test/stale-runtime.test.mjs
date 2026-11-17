@@ -52,3 +52,30 @@ test("getStale caches for a minute and staleWarning reads the published file", (
   getStale({ rootDir: "x", env, now: 1000, compute: () => null });
   assert.equal(staleWarning(env), null);
 });
+
+test("refreshStale never blocks the loop on git and is single-flight (idea-225)", async () => {
+  const { refreshStale, peekStale, computeStaleAsync } = await import("../server/stale-runtime.mjs");
+  const home = mkdtempSync(join(tmpdir(), "vs-stale-home-"));
+  const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo: "/r" });
+  resetStaleCache();
+  let calls = 0;
+  const compute = async () => { calls++; await new Promise((r) => setTimeout(r, 300)); return { built: "aaaaaaa", head: "bbbbbbb", behind: 2 }; };
+  let maxGap = 0, last = performance.now();
+  const iv = setInterval(() => { const t = performance.now(); maxGap = Math.max(maxGap, t - last); last = t; }, 10);
+  const p1 = refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 1000, compute });
+  const p2 = refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 1001, compute });
+  assert.equal(peekStale(), null);
+  await Promise.all([p1, p2]);
+  clearInterval(iv);
+  assert.equal(calls, 1);
+  assert.ok(maxGap < 100, `loop gap ${maxGap}ms`);
+  assert.equal(peekStale().behind, 2);
+  assert.match(staleWarning({ VIBESQUAD_HOME: home }), /2 commits behind/);
+  assert.deepEqual(await computeStaleAsync({ rootDir, git: async (_r, a) => (a[0] === "rev-parse" ? "bbbbbbb2222" : "46"), exists: () => true }), { built: "aaaaaaa", head: "bbbbbbb", behind: 46 });
+});
+
+test("/health source never calls the sync getStale", async () => {
+  const { readFileSync } = await import("node:fs");
+  assert.doesNotMatch(readFileSync(new URL("../server/vibesquad-api.mjs", import.meta.url), "utf8"), /getStale\(/);
+  assert.doesNotMatch(readFileSync(new URL("../server/serve.mjs", import.meta.url), "utf8"), /getStale\(/);
+});
