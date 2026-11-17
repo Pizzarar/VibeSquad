@@ -205,6 +205,17 @@ export function highestLaneLeadOrd(agents, laneId, excludeId = "") {
   return max;
 }
 
+/**
+ * Text of the `handoff` log entry. Carries `plan=<docs/PLAN_X.md>` (parseable) so @usage can score a plan handoff
+ * (Buddy -> lead) against a later `done plan <PLAN_x> PASS`. Omitted when the lane has no plan file yet.
+ */
+export function handoffLogText({ oldId, successorId, oldOrd, nextOrd, trigger, plan = "", idleRepointed = 0 }) {
+  const planTag = /^docs\/PLAN_[\w.-]+\.md$/i.test(String(plan)) ? ` plan=${plan}` : "";
+  return `lead ${oldId} -> ${successorId} (ord${oldOrd} -> ord${nextOrd}): handoff (trigger=${trigger})${planTag}${
+    idleRepointed ? `; ${idleRepointed} idle workers re-pointed; last reports already delivered` : ""
+  }`.slice(0, 240);
+}
+
 export const LEAD_COMPACT_FOCUS = "keep the plan, the blocks (status, branch, commit) and the worker ids";
 
 export function leadUsedTokens(lead, overrideTokens) {
@@ -834,12 +845,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     await deleteHeartbeat(oldLead.id);
 
     // Record handoff log entry with trigger=self | auto-250 | hard-300.
-    const logText = `lead ${oldLead.id} -> ${successor.id} (ord${oldOrd} -> ord${nextOrd}): handoff (trigger=${trigger})${
-      idleRepointed ? `; ${idleRepointed} idle workers re-pointed; last reports already delivered` : ""
-    }`.slice(
-      0,
-      240,
-    );
+    const logText = handoffLogText({ oldId: oldLead.id, successorId: successor.id, oldOrd, nextOrd, trigger, plan: latestPlan, idleRepointed });
     appendLog(teamId, {
       agent: successor.id,
       lane: laneId,
