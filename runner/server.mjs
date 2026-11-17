@@ -222,10 +222,11 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[2] === 'timeline' && req.method === 'GET') {
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
-        const after = Number(url.searchParams.get('after') ?? 0);
+        const tail = Number(url.searchParams.get('tail') ?? 0); // idea-308: the last N raw events, so a tail read costs O(tail), not O(log)
+        const after = tail > 0 ? Math.max(0, runner.store.count(id) - tail) : Number(url.searchParams.get('after') ?? 0);
         const limit = Number(url.searchParams.get('limit') ?? Infinity);
         const events = await runner.timelineAsync(id, after, limit);
-        return json(res, 200, { events, next: events.length ? events[events.length - 1].seq + 1 : after });
+        return json(res, 200, { events, from: after, next: events.length ? events[events.length - 1].seq + 1 : after });
       }
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);

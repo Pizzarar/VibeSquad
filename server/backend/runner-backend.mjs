@@ -988,17 +988,42 @@ export class RunnerBackend {
   }
 
   async fetchAgentTimeline(id, opts = {}) {
-    const { events } = await this.rc.request("GET", `/agents/${encodeURIComponent(id)}/timeline`);
-    let entries = toTimeline(events);
-    if (opts.direction === "before" && opts.cursor) entries = entries.filter((e) => e.seqStart < opts.cursor.seq);
-    const limit = Number(opts.limit) > 0 ? Number(opts.limit) : entries.length;
+    const path = `/agents/${encodeURIComponent(id)}/timeline`;
+    const before = opts.direction === "before" && opts.cursor ? opts.cursor.seq : null;
+    const limit = Number(opts.limit) > 0 ? Number(opts.limit) : 0;
     // The newest row can be a thought while the reply it belongs to grew in an earlier row, so change-detection
     // (runnerBridge poll) reads the highest seq across all rows, not the last row's.
-    const lastSeq = entries.reduce((m, e) => Math.max(m, e.seqEnd ?? -1), -1);
-    const hasOlder = entries.length > limit;
-    entries = entries.slice(-limit);
-    const first = entries[0];
-    return { entries, hasOlder, lastSeq, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
+    const finish = (entries, lastSeq) => {
+      if (before != null) entries = entries.filter((e) => e.seqStart < before);
+      const n = limit || entries.length;
+      lastSeq ??= entries.reduce((m, e) => Math.max(m, e.seqEnd ?? -1), -1);
+      const hasOlder = entries.length > n;
+      entries = entries.slice(-n);
+      const first = entries[0];
+      return { entries, hasOlder, lastSeq, startCursor: first ? { epoch: "runner", seq: first.seqStart } : null };
+    };
+    if (!limit) return finish(toTimeline((await this.rc.request("GET", path)).events));
+    // idea-308: a windowed read (tail, or a window below the cursor) instead of the whole log; grow x4 until it settles.
+    for (let w = Math.max(limit * 4, 400); ; w *= 4) {
+      const r = before == null
+        ? await this.rc.request("GET", `${path}?tail=${w}`)
+        : await this.rc.request("GET", `${path}?after=${Math.max(0, before - w)}`); // reads on to the log end: a row before the cursor can absorb later events
+      const from = r.from ?? (before == null ? 0 : Math.max(0, before - w));
+      const entries = toTimeline(r.events);
+      if (from <= 0) return finish(entries); // the window holds the whole log: exactly the full read
+      // Rows from the first barrier (anything but an assistant reply / thought) on are what a full read would build: nothing
+      // joins across a barrier, so the cut-off head of the window cannot change them.
+      const b = entries.findIndex((e) => e.item.type !== "assistant_message" && e.item.type !== "reasoning");
+      if (b < 0) continue;
+      const cand = entries.slice(b).filter((e) => before == null || e.seqStart < before);
+      if (cand.length <= limit) continue; // may still have older rows (hasOlder / startCursor need one more)
+      // A tool result whose call sits before the window still counts toward lastSeq.
+      const calls = new Set(r.events.filter((e) => e.type === "tool" && e.phase === "call").map((e) => e.id));
+      let lastSeq = -1;
+      for (const e of entries) if (before == null || e.seqStart < before) lastSeq = Math.max(lastSeq, e.seqEnd ?? -1);
+      for (const e of r.events) if (e.type === "tool" && e.phase !== "call" && !calls.has(e.id)) lastSeq = Math.max(lastSeq, e.seq);
+      return { ...finish(cand, lastSeq), hasOlder: true };
+    }
   }
 
   async getAgentTimeline(id) {
