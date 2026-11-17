@@ -35,7 +35,7 @@ function shortUrl(u) { return String(u || '').replace('file:///', '').split(/[\\
 function runWatchdog() {
   const hb = new Int32Array(workerData.sab);
   let lastV = Atomics.load(hb, 0), lastAt = Date.now(), cap = null, capturedAt = null;
-  const capture = (startedAt) => {
+  const capture = (startedAt, v0) => {
     const session = new Session();
     let done = false, timer = null;
     // Idempotent; the only place done is set, so resume + disable + disconnect always run exactly once, whichever path ends first.
@@ -56,17 +56,26 @@ function runWatchdog() {
       if (done) return;
       try {
         const frames = (m.params.callFrames || []).slice(0, MAX_FRAMES).map((fr) => `${fr.functionName || '(anon)'} ${shortUrl(fr.url || urls.get(fr.location.scriptId))}:${fr.location.lineNumber + 1}`);
-        parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames });
+        // Late capture: under CPU contention enable+pause can land after the stall ended, so the frames are the timer/tick that ran next,
+        // not the blocker. The heartbeat moving since the stall began is the proof; flag it instead of reporting misleading frames.
+        const late = Atomics.load(hb, 0) !== v0;
+        parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames, ...(late ? { late: true } : {}) });
       } catch { /* attribution is best-effort */ } finally { finish(); }
     });
     timer = setTimeout(finish, 5000);
     timer.unref();
-    try { session.post('Debugger.enable', () => { if (!done) session.post('Debugger.pause'); }); } catch { finish(); }
+    // Test hook (deferPauseUntilResume): hold the pause until the main thread has run again, forcing the late-capture path deterministically.
+    const pause = () => {
+      if (done) return;
+      if (workerData.deferPauseUntilResume && Atomics.load(hb, 0) === v0) { setTimeout(pause, 5); return; }
+      session.post('Debugger.pause');
+    };
+    try { session.post('Debugger.enable', pause); } catch { finish(); }
   };
   setInterval(() => {
     const v = Atomics.load(hb, 0), t = Date.now();
     if (v !== lastV) { lastV = v; lastAt = t; return; }
-    if (t - lastAt > WATCHDOG_STALL_MS && !cap && capturedAt !== lastAt && !Atomics.load(hb, 1)) { capturedAt = lastAt; capture(lastAt); }
+    if (t - lastAt > WATCHDOG_STALL_MS && !cap && capturedAt !== lastAt && !Atomics.load(hb, 1)) { capturedAt = lastAt; capture(lastAt, v); }
   }, 150);
 }
 if (!isMainThread && workerData?.vsLoopLagWatchdog) runWatchdog();
@@ -80,7 +89,7 @@ export function lagLogPath(env = process.env) {
  *   append?:(file:string,line:string)=>Promise<void>, maxBytes?:number, watchdog?:boolean, gcMinMs?:number, gcStandaloneMs?:number}} o
  * Returns { tick, cpuTick, stats, start, stop }. tick/cpuTick are exposed so tests drive a fake clock.
  */
-export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath(), now = Date.now, cpuUsage = () => process.cpuUsage(), heapUsed = () => process.memoryUsage().heapUsed, append, maxBytes = LAG_LOG_MAX_BYTES, gcMinMs = GC_MIN_MS, gcStandaloneMs = GC_STANDALONE_MS } = {}) {
+export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath(), now = Date.now, cpuUsage = () => process.cpuUsage(), heapUsed = () => process.memoryUsage().heapUsed, append, maxBytes = LAG_LOG_MAX_BYTES, gcMinMs = GC_MIN_MS, gcStandaloneMs = GC_STANDALONE_MS, deferPauseUntilResume = false } = {}) {
   let last = now();
   let lagMaxMs = 0;
   const events = []; // [ts, driftMs] over LAG_WINDOW_MS
@@ -126,7 +135,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
         const g = gcAfter(t0, t + 1);
         if (g) rec.gc = g;
         const a = attribs.find((x) => x.stallStartedAt >= t0 - 100 && x.stallStartedAt <= t);
-        if (a) { rec.frames = a.frames; rec.pausedAfterMs = a.pausedAfterMs; }
+        if (a) { rec.pausedAfterMs = a.pausedAfterMs; if (a.late) rec.captureLate = true; else rec.frames = a.frames; }
         try { rec.res = resourceCounts(); } catch { /* optional */ }
         write(rec);
       };
@@ -169,7 +178,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     try {
       const sab = new SharedArrayBuffer(8);
       hb = new Int32Array(sab);
-      worker = new Worker(fileURLToPath(import.meta.url), { workerData: { vsLoopLagWatchdog: true, sab }, resourceLimits: { maxOldGenerationSizeMb: 32 } });
+      worker = new Worker(fileURLToPath(import.meta.url), { workerData: { vsLoopLagWatchdog: true, sab, deferPauseUntilResume }, resourceLimits: { maxOldGenerationSizeMb: 32 } });
       worker.unref();
       worker.on('message', (m) => { attribs.push(m); while (attribs.length > 20) attribs.shift(); });
       worker.on('error', () => { worker = null; hb = null; });
