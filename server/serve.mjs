@@ -50,7 +50,7 @@ import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs"
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
 import { logServerStart } from "./server-start.mjs";
 import { runBriefOrphanSweep } from "./brief-orphan-sweep.mjs";
-import { getStale } from "./stale-runtime.mjs";
+import { refreshStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -501,7 +501,7 @@ if (isMain) {
     const reconciled = persistTemplateReconcile(rootDir).catch((e) => console.warn("template reconcile failed:", e?.message ?? e));
     void reconciled.then(() => sharedSchedules()).then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
-    setImmediate(() => getStale({ rootDir }));
+    void refreshStale({ rootDir }).catch(() => {});
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {
       for (const m of activeMuxes) {
