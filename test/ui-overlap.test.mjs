@@ -70,7 +70,8 @@ ${describeHits(bad)}`);
 const AUDIT_SRC = fs.readFileSync(new URL("../scripts/ui-overlap/page-audit.js", import.meta.url), "utf8");
 const pw = resolvePlaywright(), exe = findBrowser();
 // idea-309: every always-on browser test is bounded (node:test has no default timeout, so a wedged launch/page wait held the suite slot 30+ min).
-const CLICK_TEST_MS = 180000;
+// Budget: ensureDist lock wait 60s + vite build 150s (killed, lock released) + launch 60s < 300s, so a slow build fails with its own error first.
+const CLICK_TEST_MS = 300000;
 const withTimeout = (p, ms, what) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`${what} timed out after ${ms}ms`)), ms).unref())]);
 const fixtureHtml = (body) => `<!doctype html><body style="margin:0;height:100vh;overflow:hidden">${body}</body>`;
 const BIG_LIST = `<div id="p" style="position:absolute;left:0;top:0;width:300px;height:300px;overflow-y:auto"><div style="height:2000px">rows</div></div>`;
@@ -103,12 +104,15 @@ test("compact guard: geometry checks fire on massive scrolls / overbearing menus
 // Clicks the control in takeover / hub / compact and asserts the view is unchanged and the menu/popover is open and unclipped.
 const clickSkip = pw && exe ? false : "no Playwright / Edge / Chrome";
 let clickEnvPromise = null;
+const clickPartial = {}; // server/browser as soon as they exist, so after() can close them even when getClickEnv rejects
 async function getClickEnv() {
   if (!clickEnvPromise) {
     clickEnvPromise = (async () => {
-      await withTimeout(ensureDist(), 150000, "ensureDist");
+      await ensureDist({ lockWaitMs: 60000 }); // bounded inside: lock wait capped, vite build killed at 150s (a withTimeout wrapper here would leave Vite + .dist-build.lock running)
       const { server, baseUrl } = await serveDist();
+      clickPartial.server = server;
       const browser = await pw.chromium.launch({ executablePath: exe, headless: true, timeout: 60000 });
+      clickPartial.browser = browser;
       const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
       await installRoutes(context);
       const page = await context.newPage();
@@ -120,12 +124,14 @@ async function getClickEnv() {
 
 after(async () => {
   if (!clickEnvPromise) return;
-  const env = await clickEnvPromise.catch(() => null);
-  if (!env) return;
+  const env = await clickEnvPromise.catch(() => null) ?? clickPartial; // failed setup: still close what it opened
+  if (!env.browser && !env.server) return;
   // Bounded teardown: a browser.close() that never returns must not outlive the file; kill the Edge child instead.
-  await withTimeout(env.browser.close(), 15000, "browser.close").catch(() => { try { env.browser.process?.()?.kill("SIGKILL"); } catch {} });
-  env.server.closeAllConnections?.();
-  await withTimeout(new Promise((r) => env.server.close(r)), 5000, "server.close").catch(() => {});
+  if (env.browser) await withTimeout(env.browser.close(), 15000, "browser.close").catch(() => { try { env.browser.process?.()?.kill("SIGKILL"); } catch {} });
+  if (env.server) {
+    env.server.closeAllConnections?.();
+    await withTimeout(new Promise((r) => env.server.close(r)), 5000, "server.close").catch(() => {});
+  }
 });
 
 let bootDone = false;

@@ -362,6 +362,20 @@ test("run-tests.mjs: without --queue a held slot still exits 1; with --queue it 
 });
 
 // idea-309: a wedged file (test running, no events) is named, killed with its child process, and the run ends failed.
+function hungFixture(dir, pidFile) {
+  const hung = path.join(dir, "hung.test.mjs");
+  writeFileSync(hung, `import test from "node:test";
+import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+test("wedged", async () => {
+  const c = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], { stdio: "ignore" });
+  writeFileSync(${JSON.stringify(pidFile)}, String(c.pid));
+  await new Promise(() => {});
+});
+`);
+  return hung;
+}
+
 test("run-tests.mjs: a hung test file is killed with its child after VS_TEST_FILE_TIMEOUT_MS, named on stderr, and the slot is freed", { timeout: 90000 }, (t) => {
   const dir = tmp(t);
   const pidFile = path.join(dir, "child.pid");
@@ -386,4 +400,22 @@ test("wedged", async () => {
   assert.ok(last.fail >= 1);
   assert.ok(last.failingFiles.some((f) => f.endsWith("hung.test.mjs")), JSON.stringify(last));
   assert.deepEqual(readdirSync(dir).filter((f) => f.startsWith("vibesquad-")), ["vibesquad-npm-test-last.json"]);
+});
+
+// The watchdog must not depend on how the file arg is spelled: a relative path (what `npm test -- test/x.test.mjs` passes,
+// and a path whose reporter name differs from data.file) fires the same way. The fixture sits under the repo's tmp dir.
+test("run-tests.mjs: the watchdog fires when the hung file is passed as a relative path", { timeout: 90000 }, (t) => {
+  const dir = mkdtempSync(path.join(root, ".tmp-hang-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const lockDir = tmp(t);
+  const pidFile = path.join(dir, "child.pid");
+  const hung = hungFixture(dir, pidFile);
+  const rel = path.relative(root, hung).split(path.sep).join("/");
+  assert.ok(!path.isAbsolute(rel));
+  const r = spawnSync(process.execPath, [RUN_TESTS, rel], { cwd: root, env: cleanEnv({ VIBESQUAD_TEST_LOCK_DIR: lockDir, VS_TEST_FILE_TIMEOUT_MS: "3000" }), encoding: "utf8", timeout: 80000 });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /TEST FILE TIMEOUT: .*hung\.test\.mjs/);
+  let alive = true;
+  try { process.kill(Number(readFileSync(pidFile, "utf8")), 0); } catch { alive = false; }
+  assert.equal(alive, false, "child killed");
 });

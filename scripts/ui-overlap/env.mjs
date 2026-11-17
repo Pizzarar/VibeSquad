@@ -174,14 +174,14 @@ export function distNeedsBuild({ repoRoot = REPO_ROOT, override = process.env.UI
   return sourceMtime(repoRoot) > (stamp.srcMtime ?? 0);
 }
 
-const VITE_BUILD_MS = 5 * 60 * 1000; // a hung build would hold .dist-build.lock and its own caller forever
+const VITE_BUILD_MS = 150 * 1000; // under the click tests' 180s timeout, so the build and its lock die before the test gives up; // a hung build would hold .dist-build.lock and its own caller forever
 async function runViteBuild(repoRoot) {
   const viteBin = path.join(repoRoot, "node_modules", "vite", "bin", "vite.js");
   await new Promise((res, rej) => {
     const child = spawn(process.execPath, [viteBin, "build"], { cwd: repoRoot, stdio: ["ignore", "ignore", "pipe"] });
     let err = "";
     child.stderr?.on("data", (d) => (err += String(d)));
-    const killer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} rej(new Error(`vite build timed out after ${VITE_BUILD_MS}ms`)); }, VITE_BUILD_MS);
+    const killer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} child.stderr?.destroy(); rej(new Error(`vite build timed out after ${VITE_BUILD_MS}ms`)); }, VITE_BUILD_MS);
     killer.unref?.();
     child.on("error", (e) => { clearTimeout(killer); rej(e); });
     child.on("exit", (code) => { clearTimeout(killer); if (code === 0) res(); else rej(new Error(`vite build failed:\n${err.slice(0, 3000)}`)); });

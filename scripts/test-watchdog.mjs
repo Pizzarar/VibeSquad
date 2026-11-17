@@ -1,6 +1,6 @@
 // Per-file hang watchdog for scripts/run-tests.mjs (idea-309). `node --test` has no per-file timeout, and one wedged file
 // (e.g. test/ui-overlap.test.mjs awaiting a headless Edge) held the machine-wide suite slot for 30+ min. A file is hung when
-// it has started running, has not finished, and has emitted no test event for `idleMs`. The watchdog names the file, kills that
+// it has emitted no test event for `idleMs` while its process is still alive. The watchdog names the file, kills that
 // file's node process and every descendant (the Edge child), and lets node --test report the file as failed so the run ends.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -16,8 +16,7 @@ export function foldProgress(text, state = new Map()) {
     try { e = JSON.parse(line); } catch { continue; }
     if (!e?.file) continue;
     const s = state.get(e.file) ?? { open: 0, last: 0 };
-    if (e.ev === "start") s.open = 1;
-    else if (e.ev === "end") s.open = 0;
+    s.open = 1; // any live event: the file has started; "finished" is decided by its process being gone (see startWatchdog)
     s.last = Math.max(s.last, Number(e.t) || 0);
     state.set(e.file, s);
   }
@@ -75,11 +74,13 @@ export function startWatchdog({ progressFile, rootPid, idleMs = DEFAULT_FILE_IDL
       const nl = buf.lastIndexOf(10); // only complete lines
       if (nl >= offset) { foldProgress(buf.subarray(offset, nl + 1).toString("utf8"), state); offset = nl + 1; }
     } catch { return; }
+    let procs = null; // one process listing per tick (slow on Windows), only when a file is idle
     for (const file of hungFiles(state, now(), idleMs)) {
       if (done.has(file)) continue;
       done.add(file);
       let pids = [];
-      try { pids = pidsForFile(list(), rootPid, file); } catch {}
+      try { pids = pidsForFile((procs ??= list()), rootPid, file); } catch {}
+      if (!pids.length) continue; // idle with no live process: it finished normally (done stays set, never rechecked)
       kill(pids);
       killed.push(file);
       const rel = path.relative(root, file).split(path.sep).join("/");
