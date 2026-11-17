@@ -132,7 +132,9 @@ export class LogStore {
   }
 
   // Parses complete lines from byte `offset`; returns the events (seq >= after) and `end`, the byte offset after the last complete line read.
-  readFrom(id, offset = 0, after = 0, limit = Infinity) {
+  // atEnd(pread, end), when given, runs once on the same open file after the read (pread(pos, len): exactly len bytes, or null),
+  // so a caller can take more bytes of the very file it just read (Runner._fold: the fold-index probes) without another open.
+  readFrom(id, offset = 0, after = 0, limit = Infinity, atEnd = null) {
     const out = [];
     const ix = this._index(id);
     if (!ix) return { events: out, end: offset };
@@ -161,6 +163,15 @@ export class LogStore {
           if (ev.seq >= after) out.push(ev);
         }
         carry = Buffer.from(data.subarray(from));
+      }
+      if (atEnd) {
+        const pread = (p, len) => {
+          const b = Buffer.alloc(len);
+          let n = 0;
+          while (n < len) { const r = this.fs.readSync(fd, b, n, len - n, p + n); if (r <= 0) break; n += r; }
+          return n === len ? b : null;
+        };
+        try { atEnd(pread, offset); } catch { /* the caller's extra reads never fail the read */ }
       }
     } finally { this.fs.closeSync(fd); }
     return { events: out, end: offset };

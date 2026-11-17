@@ -8,15 +8,18 @@
 //     (event count + sparse offsets, so appends and timeline reads after boot never rescan the file to count lines);
 //   - trusted without opening the log only when size AND mtime are unchanged and the entry is not racy (mtime within RACY_MS of
 //     statAt: a same-size rewrite in the same clock tick is invisible to a stat); resumed at `offset` only when the log grew and
-//     `head` (sha256 of the first line, at least HEAD_MIN bytes) and `tail` (the PROBE bytes before `offset`) still match;
+//     `head` (sha256 of the first line, capped at HEAD_MAX = 4KB) and `tail` (the PROBE bytes before `offset`) still match;
 //     anything else (shrunk, same-size rewrite, racy, probes differ, unreadable entry) is folded from byte 0;
+//   - head/tail are taken by the fold read itself, on its fd (probeWith via LogStore.readFrom's atEnd): they pin the bytes the
+//     state was folded from, and a cold boot's first save opens no log (12.3s -> 0.15s on 5000 logs, unit-fold-hash-4k);
 //   - the header pins FOLD_VERSION, a hash of the fold code (foldEvent / saveFold / loadFold and runner/open-tools.mjs), so any
 //     change to what the fold computes drops the whole index once; so does a malformed file (any bad line: the index is a cache);
 //   - written atomically (private tmp + rename, retried through win32 EPERM/EBUSY), one entry per line, by one writer at a time
 //     (fold-index.lock, runner/lock.mjs start lock). A writer that finds the lock held SKIPS the save (it is only a cache): boot
 //     never waits on another process's lock, and reading needs no lock (a rename replaces the whole file).
 // Not detected, as in roster-index: a same-size rewrite whose mtime is set back outside the racy window, and an append that also
-// rewrites bytes strictly between the head and the tail probe. Runner logs are append-only and see neither.
+// rewrites bytes strictly between the head and the tail probe (incl. a first line's bytes past HEAD_MAX). Runner logs are
+// append-only and see neither.
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -26,8 +29,12 @@ import { applyToolEvent } from './open-tools.mjs';
 export const FOLD_INDEX_FILE = 'fold-index.json';
 const INDEX_VERSION = 1;
 const PROBE = 512; // bytes just before `offset` that pin an entry to the same file
-const HEAD_MIN = 4096; // the head hash covers at least this much, or the whole first line if longer ...
-const HEAD_MAX = 1 << 20; // ... but never more than 1MB
+// The head hash covers the first line (the created event: agent id + ts) up to HEAD_MAX bytes: one 4KB read per log, so a cold
+// save probes ~5000 logs in a few hundred ms instead of hashing a 10-40KB system prompt each (unit-fold-hash-4k). The head pins
+// the log's identity (a replaced/rotated log starts with another created line); truncation and rewrites are the size/mtime
+// checks' and the tail probe's job. Entries saved before this (headLen up to LEGACY_HEAD_MAX) are still verified as written.
+const HEAD_MAX = 4096;
+const LEGACY_HEAD_MAX = 1 << 20;
 export const RACY_MS = 3000; // an mtime this close to the stat that recorded it proves nothing (coarse FS clocks tick in 2s)
 const LOCK_STALE_MS = 60_000;
 const TRANSIENT = ['EPERM', 'EACCES', 'EBUSY']; // win32: the file is mid-rename by another writer
@@ -133,7 +140,7 @@ export function seedFromEntry(file, e, st) {
   if (st.size === e.size && st.mtimeMs === e.mtimeMs && !racy(e)) trusted = true;
   else if (!(st.size > e.size)) return null; // shrunk, same-size rewrite, or racy: from 0
   if (!trusted) {
-    if (!(e.headLen > 0) || e.headLen > e.offset || typeof e.head !== 'string' || typeof e.tail !== 'string') return null;
+    if (!Number.isSafeInteger(e.headLen) || e.headLen <= 0 || e.headLen > e.offset || e.headLen > LEGACY_HEAD_MAX || typeof e.head !== 'string' || typeof e.tail !== 'string') return null;
     let fd;
     try { fd = fs.openSync(file, 'r'); } catch { return null; }
     try {
@@ -150,27 +157,27 @@ export function seedFromEntry(file, e, st) {
   return { state, offset: e.offset, ix, trusted };
 }
 
-/** Head/tail probes of `file` for a fold ending at `offset`, or null (unreadable, or shorter than the fold: never resumed). */
+/**
+ * Head/tail probes for a fold ending at `offset`, read through `pread(pos, len)` (a Buffer of exactly len bytes, or null), or
+ * null (unreadable, or shorter than the fold: never resumed). Runner._fold takes them on the fd its fold read the log through
+ * (LogStore.readFrom's atEnd), so they pin the very bytes the state was folded from and a save needs no open per log.
+ */
+export function probeWith(pread, offset) {
+  if (!(offset > 0)) return null;
+  const first = pread(0, Math.min(offset, HEAD_MAX));
+  if (!first) return null;
+  const headLen = first.indexOf(10) + 1 || first.length; // the first line with its newline, or its first HEAD_MAX bytes
+  const tailLen = Math.min(PROBE, offset);
+  const tail = pread(offset - tailLen, tailLen);
+  if (!tail) return null;
+  return { headLen, head: sha(first.subarray(0, headLen)), tail: b64(tail) };
+}
+
+/** probeWith on `file` (its own open): for a fold whose read did not take the probes. */
 export function probe(file, offset) {
   let fd;
   try { fd = fs.openSync(file, 'r'); } catch { return null; }
-  try {
-    const first = preadExact(fd, 0, Math.min(offset, 64 * 1024));
-    if (!first) return null;
-    let firstEnd = first.indexOf(10) + 1;
-    let head = first;
-    if (!firstEnd && offset > first.length) { // a first line over 64KB (a long system prompt)
-      head = preadExact(fd, 0, Math.min(offset, HEAD_MAX));
-      if (!head) return null;
-      firstEnd = head.indexOf(10) + 1 || head.length;
-    }
-    const headLen = Math.min(offset, HEAD_MAX, Math.max(firstEnd, HEAD_MIN));
-    const h = headLen <= head.length ? head.subarray(0, headLen) : preadExact(fd, 0, headLen);
-    const tailLen = Math.min(PROBE, offset);
-    const tail = preadExact(fd, offset - tailLen, tailLen);
-    if (!h || !tail) return null;
-    return { headLen, head: sha(h), tail: b64(tail) };
-  } finally { try { fs.closeSync(fd); } catch { /* ignore */ } }
+  try { return probeWith((pos, len) => preadExact(fd, pos, len), offset); } finally { try { fs.closeSync(fd); } catch { /* ignore */ } }
 }
 
 // ---- the file ----
