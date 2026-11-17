@@ -4,7 +4,7 @@
 import "./helpers/clean-env.mjs";
 import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -284,17 +284,19 @@ test('drainHookDecision is pure: null outside an unexpired drain or for non-back
   assert.equal(drainHookDecision(null, d, now), null);
 });
 
-test('drain-hook: no-drain fast path is cheap (exits before reading stdin)', () => {
+test('drain-hook: no-drain fast path is cheap (exits before reading stdin)', async () => {
   const file = path.join(tmp(), 'drain.json');
-  const n = 5;
-  const t0 = process.hrtime.bigint();
-  for (let i = 0; i < n; i++) assert.equal(runHook(file, bg).status, 0);
-  const perMs = Number(process.hrtime.bigint() - t0) / 1e6 / n;
-  const t1 = process.hrtime.bigint();
-  for (let i = 0; i < n; i++) spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8' });
-  const baseMs = Number(process.hrtime.bigint() - t1) / 1e6 / n;
-  console.log(`drain-hook no-drain: ${perMs.toFixed(1)} ms/call (bare node startup ${baseMs.toFixed(1)} ms)`);
-  assert.ok(perMs < baseMs + 250, `hook ${perMs} ms vs node ${baseMs} ms`);
+  // Structural, not a wall-clock budget (idea-286: the old ms-vs-bare-node bound failed under load): the hook is handed a
+  // stdin that never closes and never gets data. If it read stdin it would hang until the kill timer; the fast path exits 0.
+  for (let i = 0; i < 3; i++) {
+    const child = spawn(process.execPath, [DRAIN_HOOK_SCRIPT, file], { stdio: ['pipe', 'ignore', 'pipe'] });
+    const outcome = await new Promise((resolve) => {
+      const guard = setTimeout(() => { child.kill(); resolve('hung'); }, 60_000); // load-proof ceiling, only hit on a real hang
+      child.on('exit', (code) => { clearTimeout(guard); resolve(code); });
+    });
+    child.stdin.destroy();
+    assert.equal(outcome, 0, 'exits 0 without waiting for stdin');
+  }
 });
 
 // ---- adapter settings ----

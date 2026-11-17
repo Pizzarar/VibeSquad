@@ -106,9 +106,12 @@ test("ignores node_modules and .git internals; times out unchanged", async () =>
 test("a stale cursor (another epoch or a missed change) answers changed at once", async () => {
   const d = repo();
   const t0 = Date.now();
-  const r = await gitWatch(d, "bogus:0", FAST);
+  // Structural, not a tight wall clock: the hold is 60s, so answering well inside it proves the stale cursor was not
+  // held; the old < 1000ms bound failed on git spawn latency under full-suite load (idea-243).
+  const HOLD = 60000;
+  const r = await gitWatch(d, "bogus:0", { ...FAST, holdMs: HOLD });
   assert.equal(r.changed, true);
-  assert.ok(Date.now() - t0 < 1000);
+  assert.ok(Date.now() - t0 < HOLD / 2, "answered without waiting out the hold");
 });
 
 test("a change between two polls is not lost while the watcher lingers", async () => {
