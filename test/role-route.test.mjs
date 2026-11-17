@@ -13,7 +13,7 @@ import {
   routeProviderFamily,
   stakesTier,
 } from "../server/stakes-ladder.mjs";
-import { A, C, CAP_SETS, GOLDEN, O, USER_PROFILES, pick, row, today } from "./helpers/route-golden.mjs";
+import { A, C, CAP_SETS, GOLDEN, O, TODAY_FIXTURE, USER_PROFILES, pick, row, today } from "./helpers/route-golden.mjs";
 
 const OPUS_MED = row(C, "claude-opus-5-5", "medium", "auto");
 const SONNET_MED = row(C, "claude-sonnet-5-5", "medium", "auto");
@@ -80,6 +80,23 @@ test("golden aliases: bare Lead / Brainstorm stay today's Lead - Claude / Brains
   // other spellings reach the new role and follow the ladder
   const lr = resolveRoute({ role: "lead" });
   assert.deepEqual([lr.model, lr.effort, lr.reason, lr.legacy], ["claude-opus-5-5", "high", "default", null]);
+});
+
+test("pinned today() fixture (b634cc9a, Sonnet L3) covers every old name + alias x cap set x stakes value, nothing else", () => {
+  const names = [...GOLDEN.map((g) => g.name), ...Object.keys(LEGACY_PROFILE_ALIASES)];
+  assert.deepEqual(Object.keys(TODAY_FIXTURE.index).sort(), [...names].sort());
+  const capKeys = CAP_SETS.map((c) => [C, A, O].filter((f) => c.includes(f)).join(",")).sort();
+  const stakesKeys = [...STAKES_VALUES, "(none)", "bogus"].sort();
+  for (const name of names) {
+    assert.deepEqual(Object.keys(TODAY_FIXTURE.index[name]).sort(), capKeys, name);
+    for (const ck of capKeys) {
+      const byStakes = TODAY_FIXTURE.index[name][ck];
+      assert.deepEqual(Object.keys(byStakes).sort(), stakesKeys, `${name} caps=${ck}`);
+      for (const i of Object.values(byStakes)) assert.ok(Array.isArray(TODAY_FIXTURE.rows[i]) && TODAY_FIXTURE.rows[i].length === 4, `${name} caps=${ck} row ${i}`);
+    }
+  }
+  // No cap: each golden name lands on its own profile at normal stakes.
+  for (const g of GOLDEN) assert.deepEqual(today(g.name, [], "normal"), row(g.provider, g.model, g.effort, g.modeId), g.name);
 });
 
 test("exhaustive: every legacy name and alias x every cap set x every stakes value == today's code", () => {

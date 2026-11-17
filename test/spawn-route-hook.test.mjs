@@ -18,6 +18,7 @@ import {
   roleNameHit,
   roleProfileLabel,
   roleSpawnConfig,
+  roleMcpExtras,
   routeMetricText,
 } from "../server/spawn-route.mjs";
 import { STAKES_VALUES } from "../server/stakes-ladder.mjs";
@@ -323,5 +324,193 @@ test(
     assert.equal(created[0].config.provider, A);
     assert.equal(created[0].config.model, "gemini-4-argon");
     assert.equal(created[0].config.thinkingOptionId, "high");
+  }),
+);
+
+// ---- P5c fix-round pins (idea-77): Gemini L2 (env relabel, all-capped), Sonnet L1 (routed tier stamp), Sonnet L2 (skip) ----
+
+const paseoFor = (agent) => ({
+  getAgent: async () => agent,
+  agents: { ref: () => ({ refresh: async () => ({ agent }), archive: async () => {} }), list: async () => ({ entries: [{ agent }] }) },
+});
+
+test(
+  "env-only role spawn: VS_PROFILE relabels to the role label; agent.created stamps the tier before() routed, not the stakes label's (Gemini L2, Sonnet L1)",
+  withEnv(async () => {
+    const stamped = [];
+    const h = harness({ cappedProviders: {}, setLabels: async (id, labels) => stamped.push({ id, labels }) });
+    try {
+      // UI spawnEnvFor / MCP create_agent: the profile comes by env only, no labels, no stakes -> routed at normal.
+      const out = await h.spawn({ provider: "claude", title: "impl env" }, { env: { VS_PROFILE: "implement" } });
+      assert.deepEqual(landed(out), { provider: C, model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" });
+      assert.equal(out.env.VS_PROFILE, "Implement", "env carrier names the role label, as labels do");
+
+      // The stakes label lands later (tierA-invariant would be tier=top); the agent really runs the mid rung.
+      const agent = {
+        id: "impl-env-1",
+        title: "impl env",
+        cwd: CWD,
+        provider: out.config.provider,
+        model: out.config.model,
+        labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile: "Implement", stakes: "tierA-invariant" },
+      };
+      await h.onCreated({ agent }, { paseo: paseoFor(agent) });
+      assert.deepEqual(h.calls.refused, []);
+      const last = stamped.filter((s) => s.id === "impl-env-1").at(-1);
+      assert.ok(last, "agent.created stamped labels");
+      assert.equal(last.labels.tier, "mid", "tier = the rung before() routed (normal), not top from the stakes label");
+      assert.equal(last.labels.model, "claude-sonnet-5-5");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "label-only role spawn with no before() routing still takes its tier from the labels (Sonnet L1 fallback)",
+  withEnv(async () => {
+    const stamped = [];
+    const h = harness({ cappedProviders: {}, setLabels: async (id, labels) => stamped.push({ id, labels }) });
+    try {
+      const agent = {
+        id: "impl-lbl-1",
+        title: "impl label only",
+        cwd: CWD,
+        provider: "claude",
+        model: "claude-opus-5-5",
+        labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile: "Implement", stakes: "tierA-invariant" },
+      };
+      await h.onCreated({ agent }, { paseo: paseoFor(agent) });
+      const last = stamped.filter((s) => s.id === "impl-lbl-1").at(-1);
+      assert.ok(last, "agent.created stamped labels");
+      assert.equal(last.labels.tier, "top");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "before()-configured env-only role spawn is not refused when a quota report flips before agent.created (Sonnet L2)",
+  withEnv(async () => {
+    let usage = [];
+    const h = harness({ cappedProviders: {}, usageProviders: () => usage });
+    try {
+      const out = await h.spawn({ provider: "claude", title: "review env" }, { env: { VS_PROFILE: "Review" } });
+      assert.equal(out.config.provider, A);
+      // antigravity goes over quota between before() and agent.created: the role route would now say claude.
+      usage = [{ id: "antigravity-cli", status: "exhausted", usedPct: 100 }];
+      const agent = {
+        id: "rev-env-1",
+        title: "review env",
+        cwd: CWD,
+        provider: out.config.provider,
+        model: out.config.model,
+        labels: { team: "vibesquad", lane: "vibesquad", role: "worker", profile: "Review" },
+      };
+      await h.onCreated({ agent }, { paseo: paseoFor(agent) });
+      assert.deepEqual(h.calls.refused, [], "a spawn before() routed correctly is not re-routed after the fact");
+
+      // Control: the same label-only agent that before() never saw is held to the (now flipped) route and refused.
+      const other = { ...agent, id: "rev-env-2", title: "review label only" };
+      await h.onCreated({ agent: other }, { paseo: paseoFor(other) });
+      assert.deepEqual(h.calls.refused, ["rev-env-2"]);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test(
+  "role spawn with every provider capped: route metric says reason=all-capped (Gemini L2)",
+  withEnv(async () => {
+    const h = harness({ cappedProviders: capMap([C, A, O]) });
+    try {
+      const out = await h.spawn({ provider: "claude" }, { labels: LABELS("Implement") });
+      assert.equal(out.labels.profile, "Implement");
+      assert.match(String(out.labels[ROUTE_LABEL]), /reason=all-capped tier=\S+ role=implement/);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+
+test("spawn-route units: roleMcpExtras (Gemini M2: role-name spawns take the role's tools for the landed provider)", () => {
+  // Role names: the role's per-provider extras, else its own.
+  for (const name of ["Implement", "Review", "Art Director", "Art Painter"]) assert.deepEqual(roleMcpExtras(name, USER_PROFILES, C), ["playwright"], name);
+  assert.deepEqual(roleMcpExtras("Review", USER_PROFILES, A), ["playwright"]);
+  // Implement on antigravity runs as the user file's "Implement - Gemini (trial)" mode, which has no extras.
+  assert.deepEqual(roleMcpExtras("Implement", USER_PROFILES, A), []);
+  assert.deepEqual(roleMcpExtras("Implement", undefined, A), ["playwright"], "no stored profiles: the shipped pack's modes");
+  assert.deepEqual(roleMcpExtras("lead", USER_PROFILES, C), []);
+  assert.deepEqual(roleMcpExtras("Pre-check", USER_PROFILES, A), []);
+  // Not a role name: null (callers keep profileMcpExtras for old names).
+  for (const name of ["Lead - Claude", "Implement - Sonnet", "Lead", "No Such Thing", ""]) assert.equal(roleMcpExtras(name, USER_PROFILES, C), null, name);
+  // A copy: callers may mutate it.
+  const a = roleMcpExtras("Review", USER_PROFILES, C);
+  a.push("x");
+  assert.deepEqual(roleMcpExtras("Review", USER_PROFILES, C), ["playwright"]);
+});
+
+test(
+  "lead-handoff resolveLeadProfile: only the lead role respawns by role; usageProviders over quota are skipped (Gemini L1)",
+  withEnv(async ({ profilesPath, vsHome }) => {
+    const noDisk = { cappedProvidersPath: join(vsHome, "none.json"), cappedProviders: [] };
+    // A worker role label on a lead falls back like any unknown profile name (not the Implement route).
+    const impl = resolveLeadProfile({ provider: "claude", labels: { profile: "Implement" } }, profilesPath, noDisk);
+    assert.notEqual(impl.profileName, "Implement");
+    assert.equal(impl.profile.role, "lead");
+    const bs = resolveLeadProfile({ provider: "claude", labels: { profile: "brainstorm" } }, profilesPath, noDisk);
+    // "brainstorm" on a lead is not the lead role: no role route; findProfile's alias lookup decides, as for old names.
+    assert.notEqual(bs.profileName, "brainstorm");
+    assert.ok(legacyProfileRole(bs.profileName), `stored/old profile, got ${bs.profileName}`);
+    // Quota reports (>=95%) skip the provider like a cap does.
+    const over = resolveLeadProfile({ provider: "claude", labels: { profile: "lead" } }, profilesPath, {
+      ...noDisk,
+      usageProviders: [{ id: "claude", usedPct: 99 }],
+    });
+    assert.equal(over.profileName, "lead");
+    assert.deepEqual([over.spawnCfg.provider, over.spawnCfg.model, over.spawnCfg.thinkingOptionId], [A, "gemini-4-argon", "high"]);
+  }),
+);
+
+test(
+  "brainstorm restart: a worker role label (lastProfile Implement) falls back, not the Implement route (Gemini L1)",
+  withEnv(async ({ dir, vsHome, profilesPath }) => {
+    mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
+    writeFileSync(join(dir, "docs", "brainstorm", "bug-chaser.md"), "# Brief\n\n## Open\n- x\n", "utf8");
+    writeFileSync(
+      process.env.VIBESQUAD_TEAMS_FILE,
+      JSON.stringify({ teams: [{ id: "vibesquad", name: "VibeSquad", paths: ["vibesquad"], lanes: [{ id: "bug-chaser", name: "Bug Chaser", lastProfile: "Implement" }] }] }),
+      "utf8",
+    );
+    resetBrainstormRestartState();
+    const created = [];
+    const agentClient = {
+      fetchAgents: async () => [],
+      createAgent: async (req) => (created.push(req), { id: `bs-${created.length}`, labels: req.labels }),
+      archiveAgent: async () => {},
+      updateAgent: async () => {},
+      cancelAgent: async () => {},
+    };
+    await performBrainstormRestart(
+      {
+        reason: "start-brainstorm",
+        mode: "quick-start",
+        teamId: "vibesquad",
+        laneId: "bug-chaser",
+        laneName: "Bug Chaser",
+        agentClient,
+        profilesPath,
+        cappedProviders: [],
+        cappedProvidersPath: join(vsHome, "none.json"),
+        backstopDelayMs: 60000,
+      },
+      dir,
+    );
+    assert.equal(created.length, 1);
+    assert.notEqual(created[0].labels.profile, "Implement");
+    assert.notEqual(created[0].config.model, "claude-sonnet-5-5", "not the Implement mid rung");
+    assert.equal(created[0].labels.role, "brainstorm");
   }),
 );

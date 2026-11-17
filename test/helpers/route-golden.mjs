@@ -1,8 +1,7 @@
 // Shared golden fixtures for the P5 role/tier routing tests (docs/PLAN_PROFILES_ROLE_ONLY.md, idea-77): the 12 profiles
 // in ~/.vibesquad/profiles.json on 2026-11-17, every cap set, and the `today()` oracle (today's failover walk + the old
-// stakes ladder). Used by test/role-route.test.mjs (resolver) and test/spawn-route-hook.test.mjs (spawn hook e2e).
-import { resolveProfileWithFailover } from "../../server/provider-failover.mjs";
-import { DEFAULT_STAKES_LADDER, resolveStakesRoute } from "../../server/stakes-ladder.mjs";
+// stakes ladder, pinned as literal data from b634cc9a). Used by test/role-route.test.mjs (resolver) and test/spawn-route-hook.test.mjs (spawn hook e2e).
+import { readFileSync } from "node:fs";
 
 export const C = "claude";
 export const A = "antigravity-cli";
@@ -37,15 +36,18 @@ export const pick = (r) => r && { provider: r.provider, model: r.model, effort: 
 export const CAP_SETS = [[]];
 for (const f of [C, A, O]) for (const s of [...CAP_SETS]) CAP_SETS.push([...s, f]);
 
-/** Today's route for a profile name: the failover walk, then the old stakes ladder on the landed profile. */
+// Today's routes pinned as literal data (Sonnet L3): generated once from the b634cc9a tree (resolveProfileWithFailover
+// over USER_PROFILES + DEFAULT_STAKES_LADDER) for every old name + alias x every cap set x every stakes value, so a change
+// in provider-failover.mjs / stakes-ladder.mjs cannot move the oracle together with the code under test.
+export const TODAY_FIXTURE = JSON.parse(readFileSync(new URL("../fixtures/route-golden-today-b634cc9a.json", import.meta.url), "utf8"));
+
+/** Today's route for a profile name (b634cc9a, pinned): the failover walk, then the old stakes ladder on the landed profile. */
 export function today(name, caps, stakes) {
-  const fo = resolveProfileWithFailover(name, USER_PROFILES, [], { cappedProviders: caps, ignoreDiskCaps: true });
-  const p = fo.profile;
-  const sr = resolveStakesRoute(p.provider, p, stakes, false, { ladder: DEFAULT_STAKES_LADDER });
-  return {
-    provider: p.provider,
-    model: (sr.apply && sr.model) || p.model,
-    effort: (sr.apply && sr.effort) || p.thinkingOptionId,
-    modeId: p.modeId,
-  };
+  const byCaps = TODAY_FIXTURE.index[name];
+  if (!byCaps) throw new Error(`no pinned golden row for ${name}`);
+  const capKey = [C, A, O].filter((f) => caps.includes(f)).join(",");
+  const i = byCaps[capKey]?.[stakes === undefined ? "(none)" : stakes];
+  if (i === undefined) throw new Error(`no pinned golden row for ${name} caps=[${caps}] stakes=${stakes}`);
+  const [provider, model, effort, modeId] = TODAY_FIXTURE.rows[i];
+  return { provider, model, effort, modeId };
 }
