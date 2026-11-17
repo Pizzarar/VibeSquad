@@ -9,7 +9,7 @@ import { createBackgroundProbe } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
-import { foldEvent, newFold, probe, probeWith, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
+import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -1688,6 +1688,9 @@ export class Runner {
     };
   }
 
+  // The log's mtime is older than RACY_MS (plus a tick of margin): nothing wrote it lately, a fold under this stat is not racy.
+  _settled(id) { try { return Date.now() - statSync(this.store.file(id)).mtimeMs > RACY_MS + 1000; } catch { return false; } }
+
   // A save, one log per step (a generator: the async save yields between steps). A log appended to since its last fold is
   // folded first (a tail read), so the entry covers what this runner wrote. Past `deadline` (Date.now() ms) no log is read
   // any more: a fold already pinned at its offset is still saved (no I/O; one behind its log keeps its pinned offset and the
@@ -1702,6 +1705,14 @@ export class Runner {
       const ix = this.store.idx.get(id);
       const behind = !!(st && ix && ix.size !== st.offset);
       if (behind && !late) { try { st = this._fold(id); } catch { st = null; } }
+      // Racy fold (its log's mtime sat within RACY_MS of the stat that recorded it: a live agent was writing as the cold boot
+      // folded it): saved as is, the next boot cannot trust it and folds the log from 0 (idea-316: 126 of 5418 logs, the
+      // biggest, were 8s of a warm boot). The log has settled since, so fold it from 0 here, off the boot path, under a stat
+      // whose mtime is older than RACY_MS: its entry is then trusted. Same bytes, same fold as the boot's own full fold.
+      else if (!late && st?.stat && racy({ mtimeMs: st.stat.mtimeMs, statAt: st.stat.at }) && this._settled(id)) {
+        try { this.folds.delete(id); st = this._fold(id); } catch { st = null; }
+        yield;
+      }
       let e = null;
       try { e = this._foldEntry(id, st, late); } catch { e = null; }
       if (e) entries.set(id, e);

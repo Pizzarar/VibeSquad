@@ -9,7 +9,7 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync
 import os from "node:os";
 import path from "node:path";
 import { Runner } from "../runner/runner.mjs";
-import { FOLD_INDEX_FILE, FOLD_VERSION, probe, readFoldIndex, saveFold, serializeFoldIndex } from "../runner/fold-index.mjs";
+import { FOLD_INDEX_FILE, FOLD_VERSION, probe, racy as racyEntry, readFoldIndex, saveFold, serializeFoldIndex } from "../runner/fold-index.mjs";
 
 const adapters = { claude: { canPark: true, lazyResume: true } }; // resumable needs an adapter that can park; nothing is spawned
 function home() {
@@ -454,4 +454,32 @@ test("probes pin the bytes the fold read: a log replaced (and grown) after its f
   assert.deepEqual([r2.foldIndexStats.full, r2.foldIndexStats.resumed, r2.foldIndexStats.trusted], [1, 0, 0]);
   parity(h, r2);
   assert.equal(r2.status(id).meta.title, "swapped");
+});
+
+// idea-316: logs written right up to the cold boot are recorded racy; once they settle, the save refolds them (off the boot
+// path) so the next boot trusts them instead of folding the biggest, most active logs from 0 again (126 logs = 8s on 11-17).
+test("racy entries that have settled by the save are refolded there; the warm boot trusts them, parity", () => {
+  const h = home();
+  new Runner({ dir: h.dir, adapters, maxLive: 4 });
+  const ids = writeAgents(h, 6); // fresh mtimes: every entry the cold boot records is racy
+  const cold = boot(h);
+  assert.equal(cold.foldIndexStats.full, ids.length);
+  for (const id of ids) age(h, id); // settled: nothing writes them any more
+  assert.equal(cold.saveFoldIndexSync().result, "written");
+  for (const id of ids) assert.equal(racyEntry(readFoldIndex(h.file).get(id)), false, `${id} saved trusted`);
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.trusted, ids.length);
+  assert.equal(warm.foldIndexStats.full, 0);
+  parity(h, warm, "racy entries refolded at the save");
+});
+
+test("a racy entry whose log is still fresh at the save stays racy (next boot folds it from 0)", () => {
+  const h = home();
+  new Runner({ dir: h.dir, adapters, maxLive: 4 });
+  const ids = writeAgents(h, 3);
+  const cold = boot(h);
+  assert.equal(cold.saveFoldIndexSync().result, "written");
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, ids.length);
+  parity(h, warm);
 });
