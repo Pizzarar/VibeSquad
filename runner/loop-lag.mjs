@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import path from 'node:path';
 import { Worker, isMainThread, workerData, parentPort } from 'node:worker_threads';
 import { PerformanceObserver } from 'node:perf_hooks';
-import { Session } from 'node:inspector';
+import { Session, url as inspectorUrl } from 'node:inspector';
 import { fileURLToPath } from 'node:url';
 
 export const LAG_TICK_MS = 100;
@@ -28,32 +28,45 @@ const KINDS = { 1: 'scavenge', 2: 'minor-ms', 4: 'mark-sweep-compact', 8: 'incre
 // asks it to pause. The pause lands inside blocking JS (busy loops, Atomics.wait) immediately, and right after a native sync call
 // (execSync/readFileSync) returns, with that call's frame on top. The Debugger domain is on only for the few ms of a capture, so
 // idle cost is one 150ms Atomics.load. Always resumes + disables (fails safe: Debugger.disable releases a stuck pause).
+// At most one capture per stall (capturedAt): a stall keeps the heartbeat silent until it ends, so without the gate every 150ms
+// poll would start another pause. Never captures while an inspector is open (hb[1], published by the main thread because
+// inspector.url() is undefined in a worker): V8 pause state is per-isolate, so our resume would unpause a user's breakpoint.
 function shortUrl(u) { return String(u || '').replace('file:///', '').split(/[\\/]/).slice(-2).join('/'); }
 function runWatchdog() {
   const hb = new Int32Array(workerData.sab);
-  let lastV = Atomics.load(hb, 0), lastAt = Date.now(), cap = null;
-  const finish = (session) => { try { session.post('Debugger.disable'); } catch {} try { session.disconnect(); } catch {} cap = null; };
+  let lastV = Atomics.load(hb, 0), lastAt = Date.now(), cap = null, capturedAt = null;
   const capture = (startedAt) => {
     const session = new Session();
-    cap = { session, startedAt };
+    let done = false, timer = null;
+    // Idempotent; the only place done is set, so resume + disable + disconnect always run exactly once, whichever path ends first.
+    const finish = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      try { session.post('Debugger.resume'); } catch {}
+      try { session.post('Debugger.disable'); } catch {}
+      try { session.disconnect(); } catch {}
+      cap = null;
+    };
+    cap = session;
     try { session.connectToMainThread(); } catch { cap = null; return; }
-    let done = false;
     const urls = new Map(); // callFrame.url is empty for ESM; Debugger.enable replays scriptParsed for every loaded script
     session.on('Debugger.scriptParsed', (m) => { if (m.params.url) urls.set(m.params.scriptId, m.params.url); });
     session.on('Debugger.paused', (m) => {
       if (done) return;
-      done = true;
-      const frames = (m.params.callFrames || []).slice(0, MAX_FRAMES).map((fr) => `${fr.functionName || '(anon)'} ${shortUrl(fr.url || urls.get(fr.location.scriptId))}:${fr.location.lineNumber + 1}`);
-      session.post('Debugger.resume', () => finish(session));
-      parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames });
+      try {
+        const frames = (m.params.callFrames || []).slice(0, MAX_FRAMES).map((fr) => `${fr.functionName || '(anon)'} ${shortUrl(fr.url || urls.get(fr.location.scriptId))}:${fr.location.lineNumber + 1}`);
+        parentPort.postMessage({ stallStartedAt: startedAt, pausedAfterMs: Date.now() - startedAt, frames });
+      } catch { /* attribution is best-effort */ } finally { finish(); }
     });
-    session.post('Debugger.enable', () => session.post('Debugger.pause'));
-    setTimeout(() => { if (!done) { done = true; finish(session); } }, 5000).unref();
+    timer = setTimeout(finish, 5000);
+    timer.unref();
+    try { session.post('Debugger.enable', () => { if (!done) session.post('Debugger.pause'); }); } catch { finish(); }
   };
   setInterval(() => {
     const v = Atomics.load(hb, 0), t = Date.now();
     if (v !== lastV) { lastV = v; lastAt = t; return; }
-    if (t - lastAt > WATCHDOG_STALL_MS && !cap) capture(lastAt);
+    if (t - lastAt > WATCHDOG_STALL_MS && !cap && capturedAt !== lastAt && !Atomics.load(hb, 1)) { capturedAt = lastAt; capture(lastAt); }
   }, 150);
 }
 if (!isMainThread && workerData?.vsLoopLagWatchdog) runWatchdog();
@@ -64,10 +77,10 @@ export function lagLogPath(env = process.env) {
 
 /**
  * @param {{proc:string, file?:string, now?:()=>number, cpuUsage?:()=>{user:number,system:number}, heapUsed?:()=>number,
- *   append?:(file:string,line:string)=>Promise<void>, maxBytes?:number}} o
+ *   append?:(file:string,line:string)=>Promise<void>, maxBytes?:number, watchdog?:boolean, gcMinMs?:number, gcStandaloneMs?:number}} o
  * Returns { tick, cpuTick, stats, start, stop }. tick/cpuTick are exposed so tests drive a fake clock.
  */
-export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath(), now = Date.now, cpuUsage = () => process.cpuUsage(), heapUsed = () => process.memoryUsage().heapUsed, append, maxBytes = LAG_LOG_MAX_BYTES } = {}) {
+export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath(), now = Date.now, cpuUsage = () => process.cpuUsage(), heapUsed = () => process.memoryUsage().heapUsed, append, maxBytes = LAG_LOG_MAX_BYTES, gcMinMs = GC_MIN_MS, gcStandaloneMs = GC_STANDALONE_MS } = {}) {
   let last = now();
   let lagMaxMs = 0;
   const events = []; // [ts, driftMs] over LAG_WINDOW_MS
@@ -102,7 +115,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     const drift = t - last - LAG_TICK_MS;
     last = t;
     const cpu = cpuUsage();
-    if (hb) Atomics.add(hb, 0, 1);
+    if (hb) { Atomics.store(hb, 1, inspectorUrl() ? 1 : 0); Atomics.add(hb, 0, 1); } // [1]: inspector open -> watchdog stands down
     if (drift > LAG_THRESHOLD_MS) {
       lagMaxMs = Math.max(lagMaxMs, drift);
       events.push([t, drift]);
@@ -144,12 +157,12 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
   }
   function onGc(list) {
     for (const e of list.getEntries()) {
-      if (e.duration < GC_MIN_MS) continue;
+      if (e.duration < gcMinMs) continue;
       const kind = KINDS[e.detail?.kind ?? e.kind] || 'gc';
       const end = now();
       gcs.push([end, e.duration, kind]);
       while (gcs.length && gcs[0][0] < end - 60_000) gcs.shift();
-      if (e.duration >= GC_STANDALONE_MS) write({ ts: new Date(end).toISOString(), proc, gcMs: Math.round(e.duration), gcKind: kind, heapUsed: heapUsed() });
+      if (e.duration >= gcStandaloneMs) write({ ts: new Date(end).toISOString(), proc, gcMs: Math.round(e.duration), gcKind: kind, heapUsed: heapUsed() });
     }
   }
   function startWatchdog() {
@@ -176,6 +189,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     },
     stop() { for (const x of timers) clearInterval(x); timers = []; obs?.disconnect(); obs = null; worker?.terminate(); worker = null; hb = null; },
     onGc,
+    captures: () => attribs.slice(), // watchdog captures received so far (tests, diagnostics)
   };
 }
 

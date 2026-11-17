@@ -51,17 +51,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const MOD = pathToFileURL(fileURLToPath(new URL("../runner/loop-lag.mjs", import.meta.url))).href;
 const cleanEnv = (extra) => Object.fromEntries(Object.entries({ ...process.env, ...extra }).filter(([k]) => !/^(VS_|VIBESQUAD_|PASEO_)/.test(k) || k in extra));
 
-function runChild(body, { watchdog = true } = {}) {
+function runChild(body, { watchdog = true, args = [], opts = "" } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "lag-"));
   const script = path.join(dir, "child.mjs");
   writeFileSync(script, `import { createLoopLagMonitor } from ${JSON.stringify(MOD)};
 import { execFileSync } from 'node:child_process';
-const m = createLoopLagMonitor({ proc: 'child', file: ${JSON.stringify(path.join(dir, "lag.jsonl"))}, watchdog: ${watchdog} }).start();
+const m = createLoopLagMonitor({ proc: 'child', file: ${JSON.stringify(path.join(dir, "lag.jsonl"))}, watchdog: ${watchdog}, ${opts} }).start();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 ${body}
 await sleep(400); await m.flush(); m.stop();
 `);
-  const r = spawnSync(process.execPath, [script], { env: cleanEnv({ VIBESQUAD_HOME: dir }), encoding: "utf8", timeout: 30_000 });
+  const r = spawnSync(process.execPath, [...args, script], { env: cleanEnv({ VIBESQUAD_HOME: dir }), encoding: "utf8", timeout: 30_000 });
   const f = path.join(dir, "lag.jsonl");
   const lines = existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   rmSync(dir, { recursive: true, force: true });
@@ -93,6 +93,38 @@ await sleep(600);`);
   const stall = lines.find((l) => l.driftMs > 1000);
   assert.ok(stall, JSON.stringify(lines));
   assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
+  // Load-proof: cpu time does not grow with wall time when the machine is busy, so bound it against the stall's own drift.
+  const cpuMs = stall.cpuUserMs + stall.cpuSystemMs;
+  assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
+});
+
+test("one long stall triggers exactly one watchdog capture", () => {
+  const { r, lines } = runChild(`
+await sleep(700);
+const s0 = Date.now();
+function oneLongStall() { const e = Date.now() + 2000; while (Date.now() < e) { /* spin */ } }
+oneLongStall();
+await sleep(600);
+const caps = m.captures().filter((c) => c.stallStartedAt >= s0 - 400);
+console.log(JSON.stringify({ caps: caps.length }));`);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout.trim().split("\n").pop()).caps, 1, r.stdout);
+  const stall = lines.find((l) => l.driftMs > 1500);
+  assert.ok(stall?.frames?.[0]?.startsWith("oneLongStall "), JSON.stringify(lines));
+});
+
+test("watchdog never pauses the main thread while an inspector is open (user debugging)", () => {
+  const { r, lines } = runChild(`
+await sleep(700);
+function stallWhileInspected() { const e = Date.now() + 1200; while (Date.now() < e) { /* spin */ } }
+stallWhileInspected();
+await sleep(600);
+console.log(JSON.stringify({ caps: m.captures().length }));`, { args: ["--inspect=127.0.0.1:0"] });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(JSON.parse(r.stdout.trim().split("\n").pop()).caps, 0, r.stdout);
+  const stall = lines.find((l) => l.driftMs > 1000);
+  assert.ok(stall, JSON.stringify(lines));
+  assert.equal(stall.frames, undefined);
 });
 
 test("without the watchdog the line keeps the old shape (no frames)", () => {
@@ -115,14 +147,32 @@ test("gc pauses >= 20ms are kept, attach to an overlapping stall, and >=100ms ge
   assert.deepEqual(stall.gc, { n: 2, totalMs: 230, maxMs: 150, kind: "mark-sweep-compact" });
 });
 
-test("real gc observer is installed and watchdog overhead at idle is small", () => {
+test("real gc observer: a forced major gc (--expose-gc) reaches the jsonl through PerformanceObserver", () => {
+  const { r, lines } = runChild(`
+await sleep(200);
+const keep = []; for (let i = 0; i < 200_000; i++) keep.push({ i, s: 'x' + i });
+globalThis.gc(); globalThis.gc();
+keep.length = 0;
+await sleep(200);`, { args: ["--expose-gc"], opts: "gcMinMs: 0, gcStandaloneMs: 0" });
+  assert.equal(r.status, 0, r.stderr);
+  const gc = lines.find((l) => l.gcKind === "mark-sweep-compact");
+  assert.ok(gc, JSON.stringify(lines));
+  assert.equal(gc.proc, "child");
+  assert.ok(gc.gcMs >= 0 && gc.heapUsed > 0);
+});
+
+test("watchdog overhead at idle is small", () => {
   const sample = (watchdog) => {
     const { r } = runChild(`
-await sleep(1500); const c0 = process.cpuUsage(); const t0 = Date.now(); await sleep(5000);
-const c = process.cpuUsage(c0); console.log(JSON.stringify({ pct: ((c.user + c.system) / 1000) / (Date.now() - t0) * 100 }));`, { watchdog });
-    return JSON.parse(r.stdout.trim().split("\n").pop()).pct;
+await sleep(1500); const c0 = process.cpuUsage(); const t0 = Date.now(); const n0 = m.captures().length; await sleep(5000);
+const c = process.cpuUsage(c0); console.log(JSON.stringify({ pct: ((c.user + c.system) / 1000) / (Date.now() - t0) * 100, caps: m.captures().length - n0 }));`, { watchdog });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout.trim().split("\n").pop());
   };
-  const off = sample(false), on = sample(true);
-  console.log(`idle cpu: watchdog off ${off.toFixed(3)}% on ${on.toFixed(3)}%`);
-  assert.ok(on - off < 1, `delta ${on - off}`);
+  // A load stall > WATCHDOG_STALL_MS during the window makes a (legitimate) capture, which is not idle cost: resample.
+  let off, on;
+  for (let i = 0; i < 3; i++) { off = sample(false); on = sample(true); if (on.caps === 0) break; }
+  console.log(`idle cpu: watchdog off ${off.pct.toFixed(3)}% on ${on.pct.toFixed(3)}% (captures ${on.caps})`);
+  assert.equal(on.caps, 0, "watchdog captured during every idle window");
+  assert.ok(on.pct - off.pct < 1, `delta ${on.pct - off.pct}`);
 });
