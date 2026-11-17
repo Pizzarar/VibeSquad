@@ -68,6 +68,7 @@ export async function computeStaleAsync({ rootDir, git = defaultGitAsync, exists
 }
 
 let inflight = null;
+let generation = 0;
 let cached = { at: 0, value: null, stampCommit: null };
 
 /** Cached `computeStale` (60s) that also mirrors the result to stale.json for the CLI. */
@@ -85,16 +86,18 @@ export function getStale({ rootDir, env = process.env, now = Date.now(), compute
 }
 
 /**
- * Non-blocking getStale: returns the cached value now and, when it is older than 60s (or the stamp changed), refreshes it in the
- * background (single-flight, async git, async stale.json write). Resolves with the refreshed value; callers need not await it.
+ * Async getStale: resolves at once with the cached value while it is under 60s old (same stamp); otherwise refreshes it
+ * (single-flight, async git, async stale.json write) and resolves with the new value. Never blocks the loop on git.
  */
 export function refreshStale({ rootDir, env = process.env, now = Date.now(), compute = computeStaleAsync } = {}) {
   const curStampCommit = rootDir ? (readBuildStamp(rootDir)?.commit ?? null) : null;
   if (now - cached.at < CACHE_MS && cached.at && curStampCommit === cached.stampCommit) return Promise.resolve(cached.value);
   if (inflight) return inflight;
-  inflight = (async () => {
+  const gen = generation;
+  const p = (async () => {
     try {
       const value = await compute({ rootDir });
+      if (gen !== generation) return value; // resetStaleCache ran mid-flight: don't resurrect the dropped cache or file
       cached = { at: now, value, stampCommit: curStampCommit };
       try {
         const file = staleFilePath(env);
@@ -103,10 +106,11 @@ export function refreshStale({ rootDir, env = process.env, now = Date.now(), com
       } catch {}
       return value;
     } finally {
-      inflight = null;
+      if (inflight === p) inflight = null;
     }
   })();
-  return inflight;
+  inflight = p;
+  return p;
 }
 
 /** Last cached value only: no git, no stale.json write (the read-only /health path). */
@@ -117,6 +121,7 @@ export function peekStale() {
 export function resetStaleCache() {
   cached = { at: 0, value: null, stampCommit: null };
   inflight = null;
+  generation += 1;
 }
 
 /** One-line CLI warning from the published stale.json; null when fresh, missing, or unreadable. */

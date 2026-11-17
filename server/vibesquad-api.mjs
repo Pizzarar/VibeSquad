@@ -479,19 +479,27 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   if (!isTrusted(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady });
   const { port } = netConfig();
   const warnings = getConfigWarnings();
-  if (isOwner(req)) void refreshStale({ rootDir }).catch(() => {}); // background: never git on the request path
-  const extra = {
-    localAccess: localAccess(req),
-    port,
-    lanEnabled: exposure.lanEnabled,
-    exposedIps: exposure.exposedIps,
-    // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
-    ...loopLagStats(),
-    stale: peekStale(),
-    ...(warnings.length ? { configWarnings: warnings } : {}),
+  const send = (stale) => {
+    const extra = {
+      localAccess: localAccess(req),
+      port,
+      lanEnabled: exposure.lanEnabled,
+      exposedIps: exposure.exposedIps,
+      ...loopLagStats(),
+      stale,
+      ...(warnings.length ? { configWarnings: warnings } : {}),
+    };
+    if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });
+    return sendJson(res, 200, { ok: true, distReady: true, ...extra });
   };
-  if (!distReady) return sendJson(res, 503, { ok: false, distReady: false, error: "dist/index.html missing", ...extra });
-  return sendJson(res, 200, { ok: true, distReady: true, ...extra });
+  // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
+  if (!isOwner(req)) return send(peekStale());
+  // Owner: await the async, single-flight refresh (idea-225: git runs off the loop, never execFileSync on the request
+  // path) so the reply and stale.json are current. refreshStale is cached 60s, so most polls resolve at once.
+  return refreshStale({ rootDir })
+    .catch(() => peekStale())
+    .then((stale) => send(stale))
+    .catch(() => {});
 }
 
 // E5: the relay host's status() for the Host pill (serve.mjs registers it; null = no relay configured). Trusted callers only.
