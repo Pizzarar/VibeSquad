@@ -85,11 +85,16 @@ function createFakeRunnerServer() {
         if (!rec) throw new Error(`no such agent: ${id}`);
         return rec;
       }
-      const mTimeline = /^\/agents\/([^/]+)\/timeline$/.exec(route);
+      const mTimeline = /^\/agents\/([^/]+)\/timeline(?:\?(.*))?$/.exec(route);
       if (method === "GET" && mTimeline) {
         const id = decodeURIComponent(mTimeline[1]);
         if (!records.has(id)) throw new Error(`no such agent: ${id}`);
-        return { events };
+        // idea-308: a limited read asks for a raw-event window (?tail=N), not N rows (a row can merge many events), so the
+        // window size is the server's choice; the fake honors tail / after like the runner does.
+        const q = new URLSearchParams(mTimeline[2] ?? "");
+        const tail = Number(q.get("tail") ?? 0);
+        const from = tail > 0 ? Math.max(0, events.length - tail) : Number(q.get("after") ?? 0);
+        return { events: events.slice(from), from, total: events.length };
       }
       const mAction = /^\/agents\/([^/]+)\/(cancel|archive)$/.exec(route);
       if (method === "POST" && mAction) {
