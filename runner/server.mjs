@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Runner, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent } from './runner.mjs';
+import { FOLD_INDEX_FILE } from './fold-index.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
 import { acquireRunnerLock, holdsLock, readLock, readPublished, releaseLock } from './lock.mjs';
@@ -419,7 +420,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   phase('sweepOrphans');
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
-  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)) });
+  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
   phase('init');
   try { const back = runner.recoverQueued({ shouldAdmit: holding }); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
@@ -433,7 +434,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   };
   server.listen(Number(arg('port', 0)), '127.0.0.1', () => {
     phase('listen');
-    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) } }));
+    // foldIndex: how fold-index.json served the fold phase (trusted = log unchanged, nothing read; resumed = only the bytes
+    // appended since the save were folded; full = folded from byte 0; bytes = log bytes folded). Absent with the index off.
+    const fi = runner.foldIndexStats;
+    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fi ? { foldIndex: fi } : {}) }));
+    // Saved after listen (yielding between logs), so the next boot resumes from this one's fold; the boot line is already out.
+    setImmediate(() => runner.saveFoldIndex().then((r) => { if (r) console.log(JSON.stringify({ foldIndexSave: r })); }, (err) => console.error('fold index save failed', err)));
     const port = server.address().port;
     if (!publishIfHolding(home, { port, token, me, onLost: lockLost })) return;
     console.log(JSON.stringify({ listening: port, dir, home }));
