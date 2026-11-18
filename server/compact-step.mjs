@@ -14,6 +14,8 @@ export const COMPACT_SETTLE_MS = 1_500;
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
 
 const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
+/** Per-turn cost from session-cumulative `turn_done.costUsd`: delta vs the previous turn_done (a drop means the session restarted: take it whole). */
+export const costDelta = (cost, base) => Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6;
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
 
 /**
@@ -40,7 +42,7 @@ export function compactSpendFromLog(events) {
       const cost = Number(e.costUsd);
       if (i < c) { tokens = 0; if (Number.isFinite(cost)) base = cost; continue; } // mid-turn /compact: the prior turn ended first
       if (!Number.isFinite(cost)) return { tokens };
-      return { costUsd: Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6, tokens };
+      return { costUsd: costDelta(cost, base), tokens };
     }
   }
   return { tokens }; // turn_done not logged yet
