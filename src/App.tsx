@@ -94,6 +94,7 @@ import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullVie
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
@@ -1781,7 +1782,9 @@ export function App() {
   const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
   // The Squad hub page itself (not a hub agent's chat, not a feature lane): the TVs + tower own the width, so the PinRail steps aside.
-  const hubHome = hubFocused && !hubAgentOpen;
+  // A taken-over TV keeps the rail: its chat's drawer controls portal into the rail's card slot.
+  const skyTakeover = useSkyTakeover(`${hubFocused}:${hubAgentOpen}`);
+  const hubHome = hubFocused && !hubAgentOpen && !skyTakeover;
   const skyOwned = useMemo(() => (hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined), [hubFocused, hubAgentOpen, pinFocusView]);
   const drawerOpen = useFocusDrawerOpen();
   const skyReq = useSkyRequest(); // a rail click on RiffBot / Overlord remounts the TVs with that bot's chat open

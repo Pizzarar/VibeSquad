@@ -5814,6 +5814,15 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .app.pin-focus.pin-rail-collapsed.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 64px; }
 .app.pin-focus.hub-focus.pin-rail-collapsed { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr) 320px 64px; }
 .app.pin-focus.hub-focus.pin-rail-collapsed.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr) 320px 64px; }
+
+/* ── Psycho U1: the Squad hub page is the Squad home, so no PinRail column beside it (the rail returns for a feature lane or a hub agent's chat) ── */
+@media (min-width: 601px) {
+  .app.pin-focus.hub-focus.hub-home,
+  .app.pin-focus.hub-focus.hub-home.pin-rail-collapsed { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr); }
+  .app.pin-focus.hub-focus.hub-home.sidebar-collapsed,
+  .app.pin-focus.hub-focus.hub-home.pin-rail-collapsed.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
+  .app.pin-focus.hub-focus.hub-home .hub-body { grid-column: 2 / -1; }
+}
 .pin-rail.compact .pin-rail-head { justify-content: center; padding: 0 4px; }
 .pin-rail.compact .pin-rail-col,
 .pin-rail.compact .pin-rail-head .muted,
@@ -6443,12 +6452,3 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .usage-ready { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-ready-pill { align-self: flex-start; color: var(--cyan-t); border: 1px solid var(--cyan-t); border-radius: 999px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-variant-numeric: tabular-nums; }
 .usage-ready-tile .usage-cohort-value { font-variant-numeric: tabular-nums; }
-
-/* ── Psycho U1: the Squad hub page is the Squad home, so no PinRail column beside it (the rail returns for a feature lane or a hub agent's chat) ── */
-@media (min-width: 601px) {
-  .app.pin-focus.hub-focus.hub-home,
-  .app.pin-focus.hub-focus.hub-home.pin-rail-collapsed { grid-template-columns: var(--sidebar-w, 265px) minmax(0, 1fr); }
-  .app.pin-focus.hub-focus.hub-home.sidebar-collapsed,
-  .app.pin-focus.hub-focus.hub-home.pin-rail-collapsed.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
-  .app.pin-focus.hub-focus.hub-home .hub-body { grid-column: 2 / -1; }
-}

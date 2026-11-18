@@ -273,6 +273,11 @@ export function exitPinFocus() {
       void focusPin(hub).catch(() => {});
       return;
     }
+    // On the hub page itself the "squad page" level is the hub page (App re-focuses it), so one Esc / ⊞ goes straight to Squads Home.
+    if (hub) {
+      set({ focus: null, home: true, squadsHome: true, homeActive: getPanes().leftActiveId });
+      return;
+    }
   }
   const up = levelUp({ focused: !!state.focus, home: state.home, squadsHome: state.squadsHome });
   if (up === "none") return;

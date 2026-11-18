@@ -112,7 +112,9 @@ test("Psycho U1: HubPages is the Squad home: strip=null, PinRail hidden on the h
   const app = src("App.tsx");
   assert.match(app, /<HubPages[\s\S]*?strip=\{null\}[\s\S]*?tower=\{<SquadFloor view=\{pinFocusView\} \/>\}/);
   assert.ok(!app.includes('<SquadQueue view={pinFocusView} variant="strip" />'));
-  assert.match(app, /const hubHome = hubFocused && !hubAgentOpen;/);
+  // A taken-over TV keeps the rail: its chat's drawer controls portal into the rail's card slot (src/pinSlots.ts).
+  assert.match(app, /const skyTakeover = useSkyTakeover\(/);
+  assert.match(app, /const hubHome = hubFocused && !hubAgentOpen && !skyTakeover;/);
   assert.match(app, /pinFocusView && pinFocus && !hubHome && <PinRail /);
   assert.match(app, /\$\{hubHome \? "hub-home" : ""\}/);
   // The squad page lands on the hub pin (Psycho only); Squads Home and FULL are excluded by the guards.
