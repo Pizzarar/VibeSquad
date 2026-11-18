@@ -456,30 +456,131 @@ test("probes pin the bytes the fold read: a log replaced (and grown) after its f
   assert.equal(r2.status(id).meta.title, "swapped");
 });
 
-// idea-316: logs written right up to the cold boot are recorded racy; once they settle, the save refolds them (off the boot
-// path) so the next boot trusts them instead of folding the biggest, most active logs from 0 again (126 logs = 8s on 11-17).
-test("racy entries that have settled by the save are refolded there; the warm boot trusts them, parity", () => {
+// idea-316: logs written right up to the cold boot are recorded racy; once they settle, the (async) save refolds them off the
+// boot path so the next boot trusts them. Every refold must equal the full fold (parity), whatever happened to the log.
+const savedEntry = (h, id) => readFoldIndex(h.file).get(id);
+const racyOnDisk = (h, ids) => ids.filter((id) => racyEntry(savedEntry(h, id)));
+const freshCold = (n = 6) => { // fresh mtimes: every entry the cold boot records is racy
   const h = home();
   new Runner({ dir: h.dir, adapters, maxLive: 4 });
-  const ids = writeAgents(h, 6); // fresh mtimes: every entry the cold boot records is racy
-  const cold = boot(h);
-  assert.equal(cold.foldIndexStats.full, ids.length);
-  for (const id of ids) age(h, id); // settled: nothing writes them any more
-  assert.equal(cold.saveFoldIndexSync().result, "written");
-  for (const id of ids) assert.equal(racyEntry(readFoldIndex(h.file).get(id)), false, `${id} saved trusted`);
+  const ids = writeAgents(h, n);
+  const r = boot(h);
+  assert.equal(r.foldIndexStats.full, ids.length);
+  return { h, ids, r };
+};
+const settle = (h, ids) => { for (const id of ids) age(h, id); };
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+test("racy entries settled by the async save are refolded there; the warm boot trusts them, parity", async () => {
+  const { h, ids, r } = freshCold();
+  settle(h, ids);
+  assert.equal((await r.saveFoldIndex()).result, "written");
+  assert.deepEqual(racyOnDisk(h, ids), []);
   const warm = boot(h);
   assert.equal(warm.foldIndexStats.trusted, ids.length);
   assert.equal(warm.foldIndexStats.full, 0);
   parity(h, warm, "racy entries refolded at the save");
 });
 
-test("a racy entry whose log is still fresh at the save stays racy (next boot folds it from 0)", () => {
-  const h = home();
-  new Runner({ dir: h.dir, adapters, maxLive: 4 });
-  const ids = writeAgents(h, 3);
-  const cold = boot(h);
-  assert.equal(cold.saveFoldIndexSync().result, "written");
+test("the shutdown (sync) save never refolds: racy entries stay racy, the next boot folds them", () => {
+  const { h, ids, r } = freshCold(3);
+  settle(h, ids);
+  assert.equal(r.saveFoldIndexSync().result, "written");
+  assert.equal(racyOnDisk(h, ids).length, ids.length);
   const warm = boot(h);
   assert.equal(warm.foldIndexStats.full, ids.length);
   parity(h, warm);
+});
+
+test("a save that finds racy logs still fresh schedules another once the window has passed (deferred re-save)", async () => {
+  const { h, ids, r } = freshCold(4);
+  r.resaveDelayMs = 30;
+  assert.equal((await r.saveFoldIndex()).result, "written"); // logs written just now: all racy, nothing settled
+  assert.equal(racyOnDisk(h, ids).length, ids.length);
+  settle(h, ids); // the window passes
+  for (let i = 0; i < 100 && racyOnDisk(h, ids).length; i++) await sleep(20);
+  assert.deepEqual(racyOnDisk(h, ids), [], "the deferred save refolded and saved them trusted");
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, 0);
+  parity(h, warm);
+  r.shutdown();
+});
+
+test("the deferred re-save is bounded and shutdown cancels it", async () => {
+  const { h, ids, r } = freshCold(2);
+  r.resaveDelayMs = 20;
+  let saves = 0;
+  const orig = r.saveFoldIndex.bind(r);
+  r.saveFoldIndex = (...a) => { saves++; return orig(...a); };
+  await r.saveFoldIndex(); // logs never settle: 1 + 3 rounds, then it stops
+  await sleep(400);
+  assert.equal(saves, 4);
+  assert.equal(racyOnDisk(h, ids).length, ids.length);
+  const r2 = freshCold(2);
+  r2.r.resaveDelayMs = 20;
+  await r2.r.saveFoldIndex();
+  r2.r.shutdown();
+  assert.equal(r2.r._resaveTimer, null, "shutdown cleared the re-save timer");
+  await sleep(100);
+});
+
+test("a same-size rewrite of a racy log (mtime set back) is refolded from its current bytes: parity", async () => {
+  const { h, ids, r } = freshCold(4);
+  const f = logFile(h, "rn-0001");
+  const text = readFileSync(f, "utf8");
+  writeFileSync(f, text.replace('"title":"rn-0001!"', '"title":"rn-ZZZZ!"')); // same size
+  settle(h, ids);
+  await r.saveFoldIndex();
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, 0);
+  assert.equal(warm.status("rn-0001").meta.title, "rn-ZZZZ!");
+  parity(h, warm);
+});
+
+test("a racy log truncated (and one grown) after its fold is refolded; parity incl. the line index", async () => {
+  const { h, ids, r } = freshCold(4);
+  const f = logFile(h, "rn-0000");
+  const lines = readFileSync(f, "utf8").split("\n").slice(0, 30).join("\n") + "\n";
+  writeFileSync(f, lines);
+  appendFileSync(logFile(h, "rn-0002"), ev(9000, "text", { text: "more" }));
+  settle(h, ids);
+  await r.saveFoldIndex();
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, 0);
+  assert.equal(warm.store.count("rn-0000"), 30);
+  parity(h, warm);
+});
+
+test("refold reads in bounded slices (yielding between), and an append during a slice drops the refold, never a wrong state", async () => {
+  const { h, ids, r } = freshCold(2);
+  settle(h, ids);
+  r.refoldSliceBytes = 512;
+  const id = "rn-0000";
+  const st = r.folds.get(id);
+  const g = r._refoldSettled(id, st);
+  let yields = 0;
+  let step = g.next();
+  while (!step.done && yields < 3) { yields++; step = g.next(); }
+  assert.ok(yields >= 3, "yielded between slices of a log bigger than one slice");
+  appendFileSync(logFile(h, id), ev(9001, "text", { text: "late" })); // while the refold is mid-way
+  while (!step.done) step = g.next();
+  assert.equal(step.value, st, "changed during the refold: old fold kept");
+  assert.equal(r.folds.get(id), st);
+  // then a normal save + boot still match the full fold
+  settle(h, ids);
+  r.refoldSliceBytes = 1 << 20;
+  await r.saveFoldIndex();
+  parity(h, boot(h));
+});
+
+test("an append between the save's visits and a concurrent store.append during the async save: parity", async () => {
+  const { h, ids, r } = freshCold(6);
+  settle(h, ids);
+  const p = r.saveFoldIndex(1); // 1ms slices: yields often
+  r.store.append("rn-0004", "text", { text: "during the save" });
+  r.store.append("rn-0000", "text", { text: "during the save" });
+  await p;
+  settle(h, ids);
+  await r.saveFoldIndex();
+  parity(h, boot(h));
 });

@@ -282,6 +282,7 @@ export const DEFAULT_PARK_HOLD_SLOW_AFTER_MS = 60_000;
 export const DEFAULT_ARCHIVE_KILL_MS = 10_000;
 // Shutdown fold-index save budget (saveFoldIndexSync): logs still unprobed after this are left out of the index.
 export const SHUTDOWN_SAVE_BUDGET_MS = 3000;
+const RESAVE_ROUNDS = 3;
 export function archiveKillFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_ARCHIVE_KILL_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_ARCHIVE_KILL_MS;
@@ -369,6 +370,9 @@ export class Runner {
     this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
     this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
     this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
+    this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
+    this.resaveDelayMs = RACY_MS + 1500; // saveFoldIndex re-runs this long after a save that left racy entries (their logs may settle)
+    this._resaveTimer = null;
   }
 
   // ---- Restart drain (ideas 198 + 186) ----
@@ -1688,17 +1692,55 @@ export class Runner {
     };
   }
 
-  // The log's mtime is older than RACY_MS (plus a tick of margin): nothing wrote it lately, a fold under this stat is not racy.
-  _settled(id) { try { return Date.now() - statSync(this.store.file(id)).mtimeMs > RACY_MS + 1000; } catch { return false; } }
+  // Folds a racy log again from byte 0, in refoldSliceBytes slices (yielding between them, so the loop never stalls on a big
+  // log), into a private state; returns it (published to this.folds) or `st` unchanged. Sound only because:
+  //   - it starts only when the log's mtime is older than RACY_MS + 1s, and takes ITS OWN stat first (pre): the new fold carries
+  //     that stat, whose mtime then clears the racy test, and the read never goes past pre.size (endCap);
+  //   - a restat after the read must equal pre (size AND mtime), else something wrote the log meanwhile: the result is dropped
+  //     and the old (racy) fold kept; likewise if another _fold replaced or advanced the cached fold during a yield;
+  //   - the line index is dropped first and rebuilt from the bytes (a racy log is the one whose cached count is least trusted).
+  // Never throws: any error keeps `st`.
+  *_refoldSettled(id, st) {
+    try {
+      const file = this.store.file(id);
+      const at = Date.now();
+      const pre = statSync(file);
+      if (!(pre.size > 0) || at - pre.mtimeMs <= RACY_MS + 1000) return st;
+      const stamp0 = st.stamp;
+      this.store.idx.delete(id);
+      const nf = newFold();
+      let pin = null;
+      const pinAt = (pread, end) => { const p = probeWith(pread, end); pin = p ? { offset: end, ...p } : null; };
+      for (;;) {
+        const { events, end } = this.store.readFrom(id, nf.offset, 0, Infinity, pinAt, this.refoldSliceBytes, pre.size);
+        for (const e of events) foldEvent(nf, e);
+        if (end <= nf.offset) break; // nothing complete left before pre.size
+        nf.offset = end;
+        if (end >= pre.size) break;
+        yield;
+      }
+      const post = statSync(file);
+      if (post.size !== pre.size || post.mtimeMs !== pre.mtimeMs) return st;
+      if (this.folds.get(id) !== st || st.stamp !== stamp0 || !nf.created) return st;
+      nf.stamp = `${pre.size}:${pre.mtimeMs}`;
+      nf.stat = { size: pre.size, mtimeMs: pre.mtimeMs, at };
+      nf.rec = foldRecord(id, nf);
+      this.folds.set(id, nf);
+      if (this._rosterWatch) this._foldClean.add(id);
+      if (pin && pin.offset === nf.offset) this._foldPins.set(id, pin); else this._foldPins.delete(id);
+      return nf;
+    } catch { return st; }
+  }
 
   // A save, one log per step (a generator: the async save yields between steps). A log appended to since its last fold is
   // folded first (a tail read), so the entry covers what this runner wrote. Past `deadline` (Date.now() ms) no log is read
   // any more: a fold already pinned at its offset is still saved (no I/O; one behind its log keeps its pinned offset and the
   // next boot resumes it), the rest are left out (the next boot folds them from 0). Returns { entries, skipped }.
-  *_foldIndexSteps(deadline = Infinity) {
+  *_foldIndexSteps(deadline = Infinity, refold = false) {
     const entries = new Map();
     let n = 0;
     let skipped = 0;
+    let racyPending = 0;
     for (const id of this.store.ids()) {
       const late = Date.now() > deadline;
       let st = this.folds.get(id);
@@ -1707,20 +1749,17 @@ export class Runner {
       if (behind && !late) { try { st = this._fold(id); } catch { st = null; } }
       // Racy fold (its log's mtime sat within RACY_MS of the stat that recorded it: a live agent was writing as the cold boot
       // folded it): saved as is, the next boot cannot trust it and folds the log from 0 (idea-316: 126 of 5418 logs, the
-      // biggest, were 8s of a warm boot). The log has settled since, so fold it from 0 here, off the boot path, under a stat
-      // whose mtime is older than RACY_MS: its entry is then trusted. Same bytes, same fold as the boot's own full fold.
-      else if (!late && st?.stat && racy({ mtimeMs: st.stat.mtimeMs, statAt: st.stat.at }) && this._settled(id)) {
-        try { this.folds.delete(id); st = this._fold(id); } catch { st = null; }
-        yield;
-      }
+      // biggest, were 8s of a warm boot). Once the log has settled, fold it again from 0 here, off the boot path, under a stat
+      // older than RACY_MS: its entry is then trusted. Async saves only (the shutdown save cannot yield, and is budgeted).
+      else if (refold && !late && st?.stat && racy({ mtimeMs: st.stat.mtimeMs, statAt: st.stat.at })) st = yield* this._refoldSettled(id, st);
       let e = null;
       try { e = this._foldEntry(id, st, late); } catch { e = null; }
-      if (e) entries.set(id, e);
+      if (e) { entries.set(id, e); if (racy(e)) racyPending++; }
       else if (late && st) skipped++;
       if (++n % 32 === 0) yield;
     }
     for (const id of [...this._foldPins.keys()]) if (!entries.has(id)) this._foldPins.delete(id);
-    return { entries, skipped };
+    return { entries, skipped, racyPending };
   }
 
   // Saves every cached fold to foldIndexFile, synchronously (shutdown: the runner lock, and so the next runner's start, waits
@@ -1739,20 +1778,28 @@ export class Runner {
 
   // saveFoldIndexSync for after boot: yields to the event loop whenever a slice has run for sliceMs (a cold index probes every
   // log once: thousands of opens). Concurrent callers share one save; one that ends after shutdown() writes nothing (shutdown did).
-  saveFoldIndex(sliceMs = 8) {
+  saveFoldIndex(sliceMs = 8, round = 0) {
     if (!this._foldIndexOn()) return Promise.resolve(null);
     if (this._foldSave) return this._foldSave;
     this._foldSave = (async () => {
       const t0 = Date.now();
-      const g = this._foldIndexSteps();
+      const g = this._foldIndexSteps(Infinity, true);
       let t = Date.now();
       let r = g.next();
       while (!r.done) {
         if (Date.now() - t >= sliceMs) { await new Promise((res) => setImmediate(res)); t = Date.now(); }
         r = g.next();
       }
-      const { entries } = r.value;
+      const { entries, racyPending } = r.value;
       const result = this._shutDown ? 'shutdown' : writeFoldIndex(this.foldIndexFile, serializeFoldIndex(entries));
+      // Entries saved racy whose logs have not settled yet (written within the last seconds, e.g. every agent parked by the
+      // previous shutdown): nothing else would save again, so look again once the window has passed. A log still being written
+      // stays racy, hence the bounded rounds.
+      if (racyPending > 0 && round < RESAVE_ROUNDS && !this._shutDown) {
+        clearTimeout(this._resaveTimer);
+        this._resaveTimer = setTimeout(() => { this._resaveTimer = null; this.saveFoldIndex(sliceMs, round + 1).catch(() => {}); }, this.resaveDelayMs);
+        this._resaveTimer.unref?.();
+      }
       return { entries: entries.size, result, ms: Date.now() - t0 };
     })().finally(() => { this._foldSave = null; });
     return this._foldSave;
@@ -1771,6 +1818,8 @@ export class Runner {
   shutdown({ keepResumable = false, keepDrainFile = false } = {}) {
     if (this._shutDown) return;
     this._shutDown = true;
+    clearTimeout(this._resaveTimer);
+    this._resaveTimer = null;
     this._pollAgy?.shutdown();
     this.closeRosterWatch();
     clearInterval(this._quietSweep);
