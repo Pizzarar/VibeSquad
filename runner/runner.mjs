@@ -1274,14 +1274,17 @@ export class Runner {
     const entry = this.live.get(id);
     if (!entry) throw fail(this.store.exists(id) ? 409 : 404, this.store.exists(id) ? `agent ${id} is not live (no process tree)` : 'no such agent');
     if (!entry.handle || !Number.isInteger(entry.handle.pid)) throw fail(409, `agent ${id} has no process to probe`);
-    if (entry.inflight > 0 || entry.status === 'running') throw fail(409, `agent ${id} is running a turn: cancel it first (vs stop)`);
+    // idea-315: --background only touches background shells and the held entry, never the turn, so a running turn is fine
+    // (an agent can clear its own work during a restart drain). Mid-turn the probe also sees the caller's own `vs stop`
+    // shell: it is skipped, so the request does not kill itself.
     if (!this.bgProbe) throw fail(409, 'background probe is off');
     const gen = entry.turnGen; // idea-231: a turn that starts while the probe runs owns the tree now
     const work = await this.bgProbe(entry.handle.pid, Date.now()); // a snapshot started now: nothing stale
     // A turn started (or started and ended) during the probe: the snapshot may hold that turn's own shell, and its work
     // must not be wiped. Nothing is killed; the caller retries once the agent is idle again.
-    if (this.live.get(id) === entry && (entry.turnGen !== gen || entry.inflight > 0 || entry.status === 'running')) throw fail(409, `agent ${id} started a turn while its background work was probed: nothing stopped`);
-    const list = Array.isArray(work) ? work : [];
+    const midTurn = entry.inflight > 0 || entry.status === 'running';
+    if (!midTurn && this.live.get(id) === entry && (entry.turnGen !== gen || entry.inflight > 0 || entry.status === 'running')) throw fail(409, `agent ${id} started a turn while its background work was probed: nothing stopped`);
+    const list = (Array.isArray(work) ? work : []).filter((w) => !(midTurn && /\bvs(?:\.\w+)?\s+stop\b/.test(String(w?.cmd ?? ''))));
     for (const w of list) { try { this.killPid(w.pid); } catch { /* gone */ } }
     if (this.live.get(id) !== entry) return { stopped: list };
     entry.heldSince = null;

@@ -127,3 +127,22 @@ test('a permission that resolves while the agent is idle re-arms the park (the t
   await until(() => h.runner.status(id).status === 'parked');
   h.runner.shutdown();
 });
+
+// ---- 6. idea-315: --background works mid-turn ----------------------------------------------------------------------------
+
+test('stopBackground works mid-turn: kills the held shells, spares the caller\'s own vs stop shell, never cancels the turn', async () => {
+  const h = harness();
+  const id = h.create(); // the create prompt's turn is still running
+  const SELF = { pid: 4243, name: 'bash', cmd: 'vs stop rn-self --background' };
+  h.work.set(h.handles.get(id).pid, [SHELL, SELF]); h.alive.add(SHELL.pid); h.alive.add(SELF.pid);
+  assert.equal(h.runner.live.get(id).inflight > 0, true, 'mid-turn');
+  let cancelled = false;
+  h.handles.get(id).cancel = () => { cancelled = true; };
+  const r = await h.runner.stopBackground(id, { by: id });
+  assert.deepEqual(r.stopped, [SHELL]);
+  assert.equal(h.alive.has(SELF.pid), true, 'own vs stop shell survives');
+  assert.equal(h.alive.has(SHELL.pid), false);
+  assert.equal(cancelled, false, 'turn not cancelled');
+  assert.equal(h.runner.live.get(id).inflight > 0, true, 'turn still open');
+  h.runner.shutdown();
+});
