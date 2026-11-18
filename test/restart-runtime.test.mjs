@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo } from "../scripts/restart-runtime.mjs";
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
@@ -101,7 +101,7 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null, supportsDrain = true } = {}) {
+async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null, supportsDrain = true, runnerInfo = null, oldRunnerHealthDown = false } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
@@ -124,6 +124,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       if (req.headers.authorization !== `Bearer ${token}`) return json(401, { error: "unauthorized" });
       const url = req.url.split("?")[0];
       if (url === "/health") {
+        if (oldRunnerHealthDown && hash === "old-hash") return json(503, { error: "wedged" });
         const h = heldPolls ? (heldPolls.length > 1 ? heldPolls.shift() : heldPolls[0]) : undefined;
         return json(200, { ok: true, running: polls.length > 1 ? polls.shift() : polls[0], ...(h ? { held: h.length, heldAgents: h } : {}), pid, hash });
       }
@@ -206,6 +207,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       if (!w.alive.has(pid)) return null;
       if (pid !== serverPid) {
         w.runnerInfoCalls += 1;
+        if (runnerInfo) return runnerInfo(pid, w); // idea-328: the process query result for a runner pid (e.g. cmd unreadable)
         // runnerRecycled "detect": the pid in runner.json already belongs to something else; "late": it is recycled after detection
         const recycled = runnerRecycled === "detect" || (runnerRecycled === "late" && w.runnerInfoCalls > 2);
         return { pid, ppid: 1, cmd: recycled ? "notepad.exe" : "node runner/server.mjs" };
@@ -509,6 +511,148 @@ test("recycled runner pid: never killed (cmdline must be the runner) at detect t
     assert.deepEqual(w2.hardKills, [], "nothing killed");
     assert.ok(r.errors.some((e) => /no longer the runner/.test(e)));
   } finally { await w2.cleanup(); }
+});
+
+// idea-328 (11-18 13:01Z): procInfo came back empty under load right after the idle wait, the runner was called "recycled" and
+// skipped, and the server tree-kill took it without /shutdown, parking or the fold-index save. An unreadable command line is
+// UNKNOWN: the token-checked /health decides; only a readable command line that is something else counts as recycled.
+const unreadable = (pid) => ({ pid, ppid: null, cmd: "", unknown: true });
+
+test("idea-328: unreadable runner cmdline + healthy /health -> confirmed runner, graceful /shutdown path", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const r = await w.run({});
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.includes("runner idle"), "the idle wait ran against the confirmed runner");
+    assert.ok(names.includes("snapshot before stop"));
+    assert.ok(names.includes("runner stopped gracefully"), names.join(" | "));
+    assert.equal(names.includes("runner not running"), false, "not skipped as recycled");
+    assert.equal(w.shutdownAuth.length, 1, "graceful /shutdown sent once");
+    assert.deepEqual(w.hardKills, [], "nothing force-killed");
+    assert.equal(r.newHash, "new-hash");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-328: unreadable runner cmdline + dead /health -> treated as gone (not recycled), never killed by pid", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable, oldRunnerHealthDown: true, supportsShutdown: false });
+  try {
+    const oldPid = w.runner().pid;
+    const r = await w.run({ runnerBootMs: 300 });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const skip = r.steps.find((s) => s.step === "runner not running");
+    assert.ok(skip, "runner treated as not running");
+    assert.match(skip.note ?? "", /could not be read and \/health did not answer; treated as gone/);
+    assert.doesNotMatch(skip.note ?? "", /recycled/);
+    assert.equal(w.shutdownAuth.length, 0, "no /shutdown to an unconfirmed pid");
+    assert.equal(w.hardKills.includes(oldPid), false, "the unconfirmed pid is never killed by pid");
+    assert.equal(r.newHash, "new-hash");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-328: a readable cmdline that is not the runner is recycled even when /health answers (positive mismatch wins)", async () => {
+  const w = await world({ running: [0], runnerInfo: (pid) => ({ pid, ppid: 1, cmd: "notepad.exe" }) });
+  try {
+    const oldPid = w.runner().pid;
+    const r = await w.run({ runnerBootMs: 300 });
+    const skip = r.steps.find((s) => s.step === "runner not running");
+    assert.match(skip?.note ?? "", /which is not a runner \(recycled\); left alone/);
+    assert.equal(w.shutdownAuth.length, 0);
+    assert.equal(w.hardKills.includes(oldPid), false);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-328: unreadable cmdline + /health naming another pid is not confirmation: the force path refuses to kill", async () => {
+  const w = await world({ supportsShutdown: false });
+  try {
+    const oldPid = w.runner().pid;
+    let calls = 0;
+    // readable at detect (so the run reaches the force path), unreadable right before the kill, /health names another pid
+    const r = await w.run({}, [], {
+      procInfo: (pid) => {
+        if (!w.alive.has(pid)) return null;
+        if (pid !== oldPid) return w.deps.procInfo(pid);
+        calls += 1;
+        return calls <= 3 ? { pid, ppid: 1, cmd: "node runner/server.mjs" } : unreadable(pid);
+      },
+      httpCall: async (url, o) => {
+        const res = await httpCall(url, o);
+        return calls > 3 && /\/health$/.test(url) && res.status === 200 ? { ...res, body: { ...res.body, pid: 999999 } } : res;
+      },
+    });
+    assert.equal(r.ok, false);
+    assert.equal(w.hardKills.includes(oldPid), false, "an unconfirmed pid is never killed");
+    assert.ok(r.errors.some((e) => /could not be confirmed as the runner/.test(e)), JSON.stringify(r.errors));
+  } finally { await w.cleanup(); }
+});
+
+// idea-220: RR1 self-restarted the runner ("runner code changed") while vs restart was about to stop it: /shutdown hit the gone
+// runner and the stop refused ("no longer the runner"), so the server was never restarted. The new runner is adopted instead.
+test("idea-220: a runner the supervisor swapped in right before the stop is adopted and stopped; the restart completes", async () => {
+  const w = await world({ running: [0] });
+  try {
+    const oldPid = w.runner().pid;
+    let swapped = false;
+    const r = await w.run({}, [], {
+      httpCall: async (url, o) => {
+        if (!swapped && o?.method === "POST" && /\/shutdown$/.test(url)) {
+          swapped = true;
+          const old = w.runner(); w.alive.delete(old.pid); rmSync(path.join(w.home, "runner.json"), { force: true }); await close(old.srv);
+          await w.startRunner("rr1-hash");
+        }
+        return httpCall(url, o);
+      },
+    });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const adopt = r.steps.find((s) => s.step === "runner replaced during restart, adopting");
+    assert.ok(adopt, r.steps.map((s) => s.step).join(" | "));
+    assert.equal(adopt.oldPid, oldPid);
+    assert.notEqual(adopt.pid, oldPid);
+    assert.ok(r.steps.some((s) => s.step === "runner stopped gracefully" && s.pid === adopt.pid), "the adopted runner got the graceful stop");
+    assert.deepEqual(w.hardKills, []);
+    assert.deepEqual(w.spawned, ["server"], "the server was restarted");
+    assert.equal(r.newHash, "new-hash");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-220: the old runner exited on its own before the stop (nothing new published): counted as stopped, restart continues", async () => {
+  const w = await world({ running: [0], supportsShutdown: false });
+  try {
+    let gone = false;
+    const r = await w.run({}, [], {
+      httpCall: async (url, o) => {
+        if (!gone && o?.method === "POST" && /\/shutdown$/.test(url)) { gone = true; const old = w.runner(); w.alive.delete(old.pid); await close(old.srv); }
+        return httpCall(url, o);
+      },
+    });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "runner exited before stop"));
+    assert.deepEqual(w.hardKills, []);
+  } finally { await w.cleanup(); }
+});
+
+// idea-148: Get-CimInstance came back empty / timed out under load and that was read as "not the runner". procInfo now retries
+// an empty answer and reports `unknown` instead of an empty command line that looks like a mismatch.
+test("procInfo: retries an empty or failed query, reports unknown (not a mismatch) after the attempts, null once the pid is gone", () => {
+  const alive = () => true;
+  const seq = (outs) => {
+    const calls = [];
+    return { calls, run: (cmd, args, o) => { calls.push(o.timeout); const x = outs.shift(); if (x instanceof Error) throw x; return { stdout: x ?? "" }; } };
+  };
+  let s = seq(["", "", "4321|\"C:\\node.exe\" runner\\server.mjs --home x"]);
+  assert.deepEqual(procInfo(77, { run: s.run, alive, win: true }), { pid: 77, ppid: 4321, cmd: "\"C:\\node.exe\" runner\\server.mjs --home x" });
+  assert.equal(s.calls.length, 3, "two empty answers retried");
+  s = seq([new Error("ETIMEDOUT"), "", ""]);
+  assert.deepEqual(procInfo(77, { run: s.run, alive, win: true }), { pid: 77, ppid: null, cmd: "", unknown: true });
+  assert.equal(s.calls.length, 3);
+  s = seq(["4321|"]); // the process answered but its command line is hidden: unknown, no pointless retry
+  assert.deepEqual(procInfo(77, { run: s.run, alive, win: true }), { pid: 77, ppid: 4321, cmd: "", unknown: true });
+  assert.equal(s.calls.length, 1);
+  let n = 0; s = seq(["", ""]); // exits while we ask
+  assert.equal(procInfo(77, { run: s.run, alive: () => (n++ === 0), win: true }), null);
+  s = seq(["  1 node runner/server.mjs"]);
+  assert.deepEqual(procInfo(77, { run: s.run, alive, win: false }), { pid: 77, ppid: 1, cmd: "node runner/server.mjs" });
+  assert.equal(procInfo(77, { run: s.run, alive: () => false, win: false }), null);
 });
 
 // idea-88 (c): an idle agent whose park is held by background work (a suite it left running) never counts as running, so the
