@@ -634,11 +634,20 @@ export class Runner {
   // snapshot predates that turn), so the ended turn's own park check must get a fresh probe, not that stale promise: it
   // would read null as "a turn started, its idle re-arms" and return, while the idle that re-arms was this very check.
   // The agent then sat idle, never probed (work null), and heldIds listed it for 87 min with no shell behind it.
+  // idea-315: shells seen by a probe taken while the agent was IDLE are proven background (they outlived a turn end), and the
+  // proof survives the next turn start. The process tree cannot tell a running foreground tool shell from a background one,
+  // so a mid-turn stop-background kills only these and spares (and reports) every other shell.
+  _noteBgSeen(e, work) {
+    const seen = e.bgSeen ?? (e.bgSeen = new Map());
+    for (const w of work) if (Number.isInteger(w?.pid)) seen.set(w.pid, `${w.createdMs ?? ''}|${w.cmd ?? ''}`);
+  }
+  _isBgSeen(e, w) { return e.bgSeen?.get(w?.pid) === `${w?.createdMs ?? ''}|${w?.cmd ?? ''}`; }
+
   _probeWork(id, e) {
     if (e.probing && e.probingGen === e.turnGen) return e.probing;
     const gen = e.turnGen;
     let p = null;
-    const settle = (work) => { if (e.probing === p) e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
+    const settle = (work) => { if (e.probing === p) e.probing = null; if (e.turnGen !== gen) return null; e.work = work; this._noteBgSeen(e, work); return work; };
     p = Promise.resolve().then(() => this.bgProbe(e.handle.pid, e.lastActive)).then( // lastActive = the turn end: no snapshot from before it
       (work) => settle(Array.isArray(work) ? work : []),
       (err) => { try { this.store.append(id, 'park-probe-error', { message: String(err?.message ?? err) }); } catch { /* log gone */ } return settle([]); },
@@ -1274,19 +1283,23 @@ export class Runner {
     const entry = this.live.get(id);
     if (!entry) throw fail(this.store.exists(id) ? 409 : 404, this.store.exists(id) ? `agent ${id} is not live (no process tree)` : 'no such agent');
     if (!entry.handle || !Number.isInteger(entry.handle.pid)) throw fail(409, `agent ${id} has no process to probe`);
-    // idea-315: --background only touches background shells and the held entry, never the turn, so a running turn is fine
-    // (an agent can clear its own work during a restart drain). Mid-turn the probe also sees the caller's own `vs stop`
-    // shell: it is skipped, so the request does not kill itself.
     if (!this.bgProbe) throw fail(409, 'background probe is off');
     const gen = entry.turnGen; // idea-231: a turn that starts while the probe runs owns the tree now
     const work = await this.bgProbe(entry.handle.pid, Date.now()); // a snapshot started now: nothing stale
     // A turn started (or started and ended) during the probe: the snapshot may hold that turn's own shell, and its work
     // must not be wiped. Nothing is killed; the caller retries once the agent is idle again.
-    const midTurn = entry.inflight > 0 || entry.status === 'running';
+    const midTurn = entry.inflight > 0 || entry.status === 'running'; // idea-315: allowed, but then only proven-background shells die
     if (!midTurn && this.live.get(id) === entry && (entry.turnGen !== gen || entry.inflight > 0 || entry.status === 'running')) throw fail(409, `agent ${id} started a turn while its background work was probed: nothing stopped`);
-    const list = (Array.isArray(work) ? work : []).filter((w) => !(midTurn && /\bvs(?:\.\w+)?\s+stop\b/.test(String(w?.cmd ?? ''))));
-    for (const w of list) { try { this.killPid(w.pid); } catch { /* gone */ } }
-    if (this.live.get(id) !== entry) return { stopped: list };
+    const all = Array.isArray(work) ? work : [];
+    if (!midTurn) this._noteBgSeen(entry, all);
+    const list = midTurn ? all.filter((w) => this._isBgSeen(entry, w)) : all;
+    const spared = midTurn ? all.filter((w) => !this._isBgSeen(entry, w)) : [];
+    for (const w of list) { try { this.killPid(w.pid); } catch { /* gone */ } entry.bgSeen?.delete(w.pid); }
+    if (midTurn) { // the turn is untouched: no hold/work bookkeeping (the turn owns it), no notice to the agent that just asked
+      if (list.length) { try { this.store.append(id, 'bg-stopped', { work: list, midTurn: true, ...(by ? { by } : {}) }); } catch { /* log gone */ } }
+      return { stopped: list, spared };
+    }
+    if (this.live.get(id) !== entry) return { stopped: list, spared };
     entry.heldSince = null;
     entry.heldNow = null;
     entry.heldWork = null; // no "your work finished" wake for work that was stopped
@@ -1296,7 +1309,7 @@ export class Runner {
       entry.bgStopNotice = bgStopNoticeText(list); // idea-230: if it stays live, its next send carries the notice (parked: folded from the log)
     }
     if (this._parkable(entry)) this._scheduleParkAfterTurn(id, entry);
-    return { stopped: list };
+    return { stopped: list, spared };
   }
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.

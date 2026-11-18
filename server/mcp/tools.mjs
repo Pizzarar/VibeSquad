@@ -490,7 +490,7 @@ async function cancelTool(ctx, args = {}) {
   await verifyCaller(ctx); // X1b: the runner then scopes the cancel to the verified caller
   if (args.background === true) { // idea-230: stop an idle agent's held background shells (runner POST /agents/<id>/stop-background), not its turn
     const r = await ctx.withBackend({ id }, (b) => b.stopBackground(id));
-    return { id, stoppedBackground: r?.stopped ?? [] };
+    return { id, stoppedBackground: r?.stopped ?? [], ...(r?.spared?.length ? { sparedBackground: r.spared } : {}) };
   }
   await ctx.withBackend({ id }, (b) => b.cancelAgent(id));
   return { id, cancelled: true };
