@@ -29,7 +29,6 @@ import {
   TEAMS,
   UNASSIGNED,
   assignAgentToLane,
-  countsAsNeedsYou,
   getTeams,
   saveTeams,
   leadLadderFor,
@@ -53,9 +52,11 @@ import { BoringApp } from "./BoringAde";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
-import { FocusRail, railAlerts } from "./FocusRail";
+import { FocusRail } from "./FocusRail";
 import { topNeedsYouId } from "./needsYouTop";
-import { nowTickValue } from "./useNowTick";
+import { nowTickValue, useNowTick } from "./useNowTick";
+import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
+import { attentionItems, needsYouCount } from "./attentionItems";
 import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
@@ -93,7 +94,7 @@ import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, sky
 import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
 import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
@@ -266,9 +267,11 @@ const SidebarTeam = memo(function SidebarTeam({
     (pin: Pin) => void Promise.resolve(onQuickStart(pin)).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
     [onQuickStart],
   );
-  const firstAlert = v.members
-    .filter(countsAsNeedsYou)
-    .sort(alertOrder)[0];
+  // Spine parity: the collapsed badge is needsYouCount at the shared tick (stalled included, finished excluded), the same number the
+  // BoringInbox heading sums. Worst state colours it: any error -> err, otherwise attn. Expanded squads show their own lane badges instead.
+  const now = useNowTick();
+  const needs = needsYouCount(v.members, now);
+  const needsTone = attentionItems(v.members, now).some((i) => i.kind === "error") ? "err" : "attn";
   return (
     <div className={`team ${active ? "active" : ""} ${expanded ? "expanded" : "collapsed"}`} data-testid={`sidebar-team-${v.team.id}`}>
       <div className="team-head-line">
@@ -292,7 +295,9 @@ const SidebarTeam = memo(function SidebarTeam({
           <span className="team-name"><TeamNameEdit team={v.team} /></span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
-        {firstAlert && <AttentionBadge view={v} onOpen={pick} hubQueueInstead />}
+        {!expanded && needs > 0 && (
+          <AttentionBadge view={v} onOpen={pick} hubQueueInstead count={needs} className={`badge alert team-needs ${needsTone}`} testId={`team-needs-${v.team.id}`} />
+        )}
         {v.team.id !== UNASSIGNED.id && <BugButton view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && (
           <button
@@ -326,6 +331,7 @@ const Sidebar = memo(function Sidebar(props: {
   onStartResize: (e: React.MouseEvent) => void;
   onTeam: (id: string) => void;
   onAgent: PickTeamAgent;
+  onNeedsYouRow: (row: NeedsYouRow) => void;
   onQuickStart: PinHandler;
   onNewSquad: () => void;
   onPairDevice?: () => void;
@@ -340,6 +346,7 @@ const Sidebar = memo(function Sidebar(props: {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const views = props.views;
+  const now = useNowTick();
   const allCollapsed = views.length > 0 && views.every((v) => props.collapsedTeams.has(v.team.id));
   const staleBuild = useStaleBuild();
   const [signalsOpen, setSignalsOpen] = useState<boolean>(() => {
@@ -382,6 +389,11 @@ const Sidebar = memo(function Sidebar(props: {
           {props.sidebarCollapsed ? "»" : "«"}
         </button>
       </div>
+      {!props.sidebarCollapsed && (
+        <div className="sidebar-needs-spine" data-testid="sidebar-needs-spine">
+          <BoringInbox views={views} onOpen={props.onNeedsYouRow} now={now} sidebarMenu />
+        </div>
+      )}
       <SidebarInboxBadge
         onSelect={() => {
           if (props.teamId) props.onTeam(props.teamId);
@@ -1361,9 +1373,8 @@ function onShortcut(e: KeyboardEvent) {
 }
 
 function openTopNeedsYou() {
-  // Normal: row 0 of the SAME list that renders boring-needs-you-count (R6-2); empty = no-op. Psycho: the rail list.
-  const boring = document.documentElement.getAttribute("data-vibe") === "boring";
-  const id = boring ? topNeedsYouId(derived().views, nowTickValue()) : railAlerts().list[0]?.agent.id;
+  // Row 0 of the SAME list that renders boring-needs-you-count (R6-2), in Normal and in the Psycho sidebar spine; empty = no-op.
+  const id = topNeedsYouId(derived().views, nowTickValue());
   if (!id) return;
   // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
   const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: id }, cancelable: true }));
@@ -1818,6 +1829,30 @@ export function App() {
     const hub = hubPinForSquad(view);
     if (hub) void focusPin(hub).catch(() => {});
   }, [vibe, pinLayout, pinsHome, squadsHome, pinFocus, view]);
+  // Psycho Needs-you spine routing (the Sidebar's BoringInbox rows and Ctrl+J): the agent's own lane pin via openPinMember, else the plain onAgent.
+  const routeNeedsYou = useCallback((v: TeamView, agentId: string) => {
+    const { pinned, done } = pinsForSquad(v);
+    const pin = [...pinned, ...done, hubPinForSquad(v)].find((p): p is Pin => !!p && laneMemberIdsOf(p).has(agentId));
+    if (!pin) return onAgent(v.team.id, agentId);
+    setFullView(false);
+    setFocus(false);
+    setTeamId(v.team.id);
+    setScreen("teams");
+    openPinMember(pin, agentId);
+  }, [onAgent]);
+  const onNeedsYouRow = useCallback((row: NeedsYouRow) => routeNeedsYou(row.view, row.item.id), [routeNeedsYou]);
+  useEffect(() => {
+    if (vibe === "boring") return;
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ agentId?: string }>).detail?.agentId;
+      const v = id ? views.find((x) => x.members.some((m) => m.agent.id === id)) : undefined;
+      if (!id || !v) return;
+      e.preventDefault();
+      routeNeedsYou(v, id);
+    };
+    window.addEventListener("vs:boring-open-agent", onOpen);
+    return () => window.removeEventListener("vs:boring-open-agent", onOpen);
+  }, [vibe, views, routeNeedsYou]);
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
@@ -2116,6 +2151,7 @@ export function App() {
           onDiagnostics={openDiagnostics}
           onSettings={openSettings}
           onAgent={onAgent}
+          onNeedsYouRow={onNeedsYouRow}
           onQuickStart={onQuickStart}
           onNewSquad={openNewSquad}
           lanExposed={exposedIps.length > 0 && !isRemote()}

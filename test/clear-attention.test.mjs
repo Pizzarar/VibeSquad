@@ -155,7 +155,7 @@ test("Mark unread puts a quiet chat back in the list; Later hides it, Clear remo
 
 test("wiring: both badges open the list; ⋯ More has Mark unread; classes styled", () => {
   const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), "utf8");
-  assert.match(src("App.tsx"), /<AttentionBadge view=\{v\} onOpen=\{pick\} hubQueueInstead \/>/);
+  assert.match(src("App.tsx"), /<AttentionBadge view=\{v\} onOpen=\{pick\} hubQueueInstead count=\{needs\}/);
   assert.match(src("PinGrid.tsx"), /<AttentionBadge view=\{v\}/);
   assert.match(src("DrawerHeader.tsx"), /markAgentUnread\(agent\)/);
   assert.doesNotMatch(src("paseo.ts"), /daemonClient\.(clearAgentAttention|markWorkspaceUnread)/); // runner agents have no daemon attention flag

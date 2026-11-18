@@ -49,7 +49,12 @@ test("laneTopicLabel: topic is a secondary label only", () => {
 test("R4-3: Needs-you line 1 puts the lane first so end-ellipsis cuts the project", () => {
   const inbox = read("BoringInbox.tsx");
   // the project sits in a nested span (R5-6 hides it at narrow widths); the lane stays first and outside it
-  assert.match(inbox, /\{r\.lane\}(<span[^>]*>)? · \{r\.project\}<\/span>/);
+  const where = inbox.match(/<span className="boring-needs-where[^"]*"[^>]*>([\s\S]*?)<span className="boring-needs-proj">([\s\S]*?)<\/span>/);
+  assert.ok(where, "the Needs-you where-cell still renders the lane, then nests the project in boring-needs-proj");
+  const [, lanePart, projectPart] = where;
+  assert.match(lanePart, /r\.lane\}/, "the lane is rendered before the project span");
+  assert.doesNotMatch(lanePart, /r\.project\}/, "no project text may precede the project span");
+  assert.match(projectPart, /` · \$\{r\.project\}`/, "the Normal path keeps ' · ${r.project}' inside the project span");
   assert.doesNotMatch(inbox, /\{r\.project\} › \{r\.lane\}<\/span>/);
 });
 

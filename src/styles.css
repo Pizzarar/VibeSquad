@@ -6452,3 +6452,52 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .usage-ready { display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
 .usage-ready-pill { align-self: flex-start; color: var(--cyan-t); border: 1px solid var(--cyan-t); border-radius: 999px; padding: var(--sp-1, 4px) var(--sp-3, 12px); font-variant-numeric: tabular-nums; }
 .usage-ready-tile .usage-cohort-value { font-variant-numeric: tabular-nums; }
+
+/* ---- Desk Psycho U2: cross-squad Needs-you spine in the left sidebar (BoringInbox, src/BoringInbox.tsx) ------------------------
+   PC-98 Hypnospace chrome: 1-2px bevels on panel/well fills. Dim text = var(--muted) colour, fully opaque; muted/panel is >= 4.5:1 in
+   dark (#b5a5d8 on #21163d) and light (#574268 on #ebe0e8). Scoped to .sidebar so Normal (html[data-vibe="boring"], boring.css) is untouched. */
+.sidebar-needs-spine { flex: none; max-height: 38vh; overflow-y: auto; margin: 4px 6px 6px; }
+.sidebar .boring-needs-you { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: var(--panel); border: 1px solid var(--border, var(--line)); box-shadow: var(--bevel), var(--hard); color: var(--text); font-size: 12px; }
+.sidebar .boring-needs-head { display: flex; align-items: center; gap: 6px; font-family: var(--arcade); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--amber-t); padding: 0 2px; }
+.sidebar .boring-needs-head .boring-badge { font-family: var(--mono); font-size: 11px; letter-spacing: 0; padding: 0 6px; background: var(--amber); color: var(--on-amber) !important; border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
+.sidebar .boring-needs-head .boring-kbd { margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted); border: 1px solid var(--line); padding: 0 4px; background: var(--well); box-shadow: var(--bevel-in); }
+.sidebar .boring-needs-rows, .sidebar .boring-done-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.sidebar .boring-needs-item { display: grid; gap: 1px; padding: 3px 5px; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--amber); box-shadow: var(--bevel-in); }
+.sidebar .boring-needs-item.attn-error { border-left-color: var(--hot-pink); }
+.sidebar .boring-needs-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.sidebar .boring-needs-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
+.sidebar .boring-needs-open:hover .boring-needs-who { text-decoration: underline; }
+.sidebar .boring-needs-who { flex: 0 1 auto; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; color: var(--muted); }
+.sidebar .boring-needs-where { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .boring-conv-age { flex: none; font-size: 11px; font-weight: 400; color: var(--muted); }
+.sidebar .boring-dot { flex: none; width: 8px; height: 8px; background: var(--amber); border: 1px solid var(--shadow-hard); }
+.sidebar .boring-dot.st-err { background: var(--hot-pink); }
+.sidebar .boring-dot.st-stalled { background: transparent; border-color: var(--amber); }
+.sidebar .boring-dot.st-done { background: var(--emerald); width: 6px; height: 6px; }
+.sidebar .boring-needs-why { padding-left: 14px; min-width: 0; font-size: 11px; color: var(--muted); }
+.sidebar .boring-needs-reason { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+.sidebar .boring-needs-actions { display: flex; gap: 4px; padding: 2px 0 1px 14px; }
+.sidebar .boring-needs-btn, .sidebar .boring-needs-menu-item { min-height: 22px; padding: 0 8px; border: 1px solid var(--line); background: var(--panel-hi); color: var(--text); font: inherit; font-size: 11px; cursor: pointer; box-shadow: var(--bevel); }
+.sidebar .boring-needs-btn:active, .sidebar .boring-needs-menu-item:active { box-shadow: var(--bevel-in); }
+.sidebar .boring-needs-btn.ok { background: var(--mint-fill); color: var(--on-pastel); border-color: var(--shadow-hard); font-weight: 700; }
+.sidebar .boring-needs-btn.bad { background: var(--pink-fill); color: var(--on-pink-fill); border-color: var(--shadow-hard); font-weight: 700; }
+.sidebar .boring-needs-btn:disabled, .sidebar .boring-needs-menu-item:disabled { cursor: default; color: var(--muted); }
+:root[data-theme="light"] .sidebar .boring-needs-btn.ok { color: #fff; } /* light mint-fill is darkened: dark ink was 3.1:1, white is 5.1:1 */
+/* hover/focus menu: opens in the row (no absolute popover, so the scrolling spine never clips it) */
+.sidebar .boring-needs-menu-wrap { flex: none; display: flex; align-items: center; gap: 3px; }
+.sidebar .boring-needs-more { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; line-height: 1; cursor: pointer; box-shadow: var(--bevel); }
+.sidebar .boring-needs-more:hover { color: var(--text); }
+.sidebar .boring-needs-menu { display: none; flex-direction: row; gap: 3px; }
+.sidebar .boring-needs-menu-wrap:hover .boring-needs-menu, .sidebar .boring-needs-menu-wrap:focus-within .boring-needs-menu { display: flex; }
+.sidebar .boring-needs-err { color: var(--pink-t); font-size: 11px; padding: 2px 4px; }
+.sidebar .boring-muted { margin: 0; padding: 2px 4px; font-size: 11px; color: var(--muted); }
+.sidebar .boring-idle-toggle { align-self: flex-start; min-height: 22px; padding: 2px 6px; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; box-shadow: var(--bevel); }
+.sidebar .boring-idle-toggle:hover { color: var(--text); }
+.sidebar .boring-done-row { display: grid; grid-template-columns: 1fr auto; column-gap: 4px; padding: 2px 5px; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--emerald); box-shadow: var(--bevel-in); }
+.sidebar .boring-done-row .boring-needs-where { grid-column: 1 / -1; }
+.sidebar .boring-done-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: 11px; }
+/* collapsed Squad badge: worst state colours it (err pink, else attn amber); label ink is on-fill for >= 4.5:1 */
+:is(.sidebar) .team-head-line > .badge.alert.team-needs.attn { background: var(--amber); color: var(--on-amber) !important; border-color: var(--shadow-hard); }
+:is(.sidebar) .team-head-line > .badge.alert.team-needs.err { background: var(--pink-fill); color: var(--on-pink-fill) !important; border-color: var(--shadow-hard); }
+.sidebar.collapsed .sidebar-needs-spine { display: none; }

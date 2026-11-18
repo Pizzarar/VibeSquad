@@ -220,3 +220,46 @@ test("Psycho U1: Esc from a feature lane or hub agent chat lands on the hub page
   assert.ok(body.indexOf("squadsHome: true") < body.indexOf("levelUp("), "hub-page exit runs before the level-up fallback");
   assert.match(pf, /hubOpenAgent\(f\.agentId, getPanes\(\)\.leftActiveId, laneMemberIdsOf\(hub\), hubZoneIds\(hub\)\)/);
 });
+
+test("Desk Psycho U2: the cross-squad Needs-you spine mounts above SQUADS with Psycho routing", () => {
+  const app = srcOf("App.tsx");
+  const css = srcOf("styles.css");
+  // one source: BoringInbox + needsYouCount/attentionItems at the shared tick; no forked list
+  assert.match(app, /import \{ BoringInbox, type NeedsYouRow \} from "\.\/BoringInbox"/);
+  assert.match(app, /<BoringInbox views=\{views\} onOpen=\{props\.onNeedsYouRow\} now=\{now\} sidebarMenu \/>/);
+  const nav = app.slice(app.indexOf("<nav className={`sidebar"), app.indexOf("sidebar-scroll"));
+  assert.ok(nav.indexOf("<BoringInbox") > 0 && nav.indexOf("<BoringInbox") < nav.indexOf("SQUADS"), "Needs you sits above SQUADS");
+  assert.match(app, /!props\.sidebarCollapsed && \(\s*<div className="sidebar-needs-spine"/);
+  // Esc contract: the hidden hover menu must not carry role=menu in Psycho (SKY_ESC_POPOVER_SELECTOR would swallow Esc during a takeover); Normal keeps it
+  const inbox = srcOf("BoringInbox.tsx");
+  assert.match(inbox, /sidebarMenu = false/);
+  assert.ok(inbox.includes(`role={sidebarMenu ? "group" : "menu"}`));
+  assert.ok(inbox.includes(`role={sidebarMenu ? undefined : "menuitem"}`));
+  // Psycho routing: openPinMember through the lane pin, else onAgent; Ctrl+J reads row 0 of the same list
+  const route = app.slice(app.indexOf("const routeNeedsYou"), app.indexOf("const leftPinLayout"));
+  assert.match(route, /openPinMember\(pin, agentId\)/);
+  assert.match(route, /return onAgent\(v\.team\.id, agentId\)/);
+  assert.match(route, /vibe === "boring"\) return/); // Normal keeps BoringApp's own routing
+  assert.match(app, /topNeedsYouId\(derived\(\)\.views, nowTickValue\(\)\)/);
+  // collapsed Squad badge: needsYouCount, worst state colour, hidden when expanded
+  assert.match(app, /const needs = needsYouCount\(v\.members, now\)/);
+  assert.match(app, /some\(\(i\) => i\.kind === "error"\) \? "err" : "attn"/);
+  assert.match(app, /\{!expanded && needs > 0 && \(\s*<AttentionBadge[^>]*count=\{needs\}[^>]*team-needs \$\{needsTone\}/);
+  assert.match(app, /expanded && v\.team\.id !== UNASSIGNED\.id && <SidebarPins/);
+  // chrome: styles.css only, Psycho-scoped, dim text by colour (never opacity), no boring.css leakage
+  assert.match(css, /\.sidebar \.boring-needs-you \{[^}]*var\(--panel\)[^}]*var\(--line\)[^}]*var\(--bevel\)[^}]*var\(--text\)/);
+  const u2 = css.slice(css.indexOf("Desk Psycho U2"));
+  assert.match(u2, /\.sidebar \.boring-needs-where \{[^}]*color: var\(--muted\)/);
+  assert.doesNotMatch(u2, /opacity/);
+  assert.doesNotMatch(srcOf("boring.css"), /\.sidebar \.boring-needs/);
+  assert.match(u2, /team-needs\.attn \{[^}]*var\(--amber\)[^}]*var\(--on-amber\)/);
+  assert.match(u2, /team-needs\.err \{[^}]*var\(--pink-fill\)/);
+});
+
+test("Desk Psycho U2: the sidebar where-label drops the 'Desk · ' prefix and carries the full location as a title; Normal keeps Desk", () => {
+  const inbox = srcOf("BoringInbox.tsx");
+  assert.ok(inbox.includes('title={sidebarMenu ? `${r.lane} · ${r.project}` : undefined}'));
+  assert.ok(inbox.includes('{sidebarMenu && r.lane === "Desk" ? null : r.lane}'));
+  assert.ok(inbox.includes('{sidebarMenu && r.lane === "Desk" ? r.project : ` · ${r.project}`}'));
+  assert.match(srcOf("styles.css"), /\.sidebar \.boring-needs-where-inline \{[^}]*min-width: 0[^}]*overflow: hidden[^}]*text-overflow: ellipsis[^}]*white-space: nowrap[^}]*color: var\(--muted\)/);
+});
