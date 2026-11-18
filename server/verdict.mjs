@@ -33,6 +33,18 @@ export function firstLine(text) {
   return "";
 }
 
+/** idea-265: provider transport lines (e.g. "⚠ API error (attempt 1): ... EOF") that may precede the verdict; skipped by the gate. */
+const TRANSPORT_NOISE_RE = /^[\s⚠️!*>-]*(?:API error\b|(?:transport|network|connection|stream) error\b|(?:Retrying|Reconnecting)\b|(?:read|write) tcp\b|unexpected EOF\b|EOF\s*$)/i;
+
+/** The first non-blank line that is not provider transport noise (the gate's verdict line). */
+export function gateLine(text) {
+  for (const l of String(text ?? "").split(/\r?\n/)) {
+    if (!l.trim() || TRANSPORT_NOISE_RE.test(l)) continue;
+    return l.replace(/\s+$/, "");
+  }
+  return "";
+}
+
 /** A reviewer run: a `Review - …` profile, or a reviewer-shaped title ("Review - Gemini", "re-review", "R2 review"). */
 export function isReviewerAgent(agent) {
   const labels = agent?.labels ?? {};
@@ -84,7 +96,7 @@ export const GATE_EXIT = { pass: 0, fail: 1, noVerdict: 2, staleHash: 3, notRevi
  * full `git rev-parse <branch>`. Returns { code, ok, line, reason }.
  */
 export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
-  const line = firstLine(lastMessage);
+  const line = gateLine(lastMessage);
   const out = (code, reason) => ({ code, ok: code === GATE_EXIT.pass, line, reason });
   if (!isReviewerAgent(agent)) {
     const who = `${agent?.id ?? "?"} ("${agent?.title ?? ""}"${agent?.labels?.profile ? `, profile ${agent.labels.profile}` : ""})`;

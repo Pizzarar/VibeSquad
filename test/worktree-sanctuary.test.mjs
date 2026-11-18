@@ -279,3 +279,20 @@ test("linkNodeModules skips when the main checkout has no node_modules, and neve
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+// idea-332: no master/main branch containing unrelated history; the worktree branches from the repo's current branch.
+test("defaultBaseRef picks the main checkout's current branch when it is not master/main", async () => {
+  const { defaultBaseRef } = await import("../cli/vs.mjs");
+  const repo = mkdtempSync(join(tmpdir(), "vs-base-"));
+  try {
+    const g = (...a) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...a], { cwd: repo, encoding: "utf8" });
+    g("init", "-q", "-b", "dev");
+    writeFileSync(join(repo, "a.txt"), "a");
+    g("add", "."); g("commit", "-q", "-m", "init");
+    assert.equal(defaultBaseRef(repo), "dev");
+    g("branch", "master"); // a stray master must not win over the checked-out dev
+    assert.equal(defaultBaseRef(repo), "dev");
+    g("checkout", "-q", "--detach");
+    assert.equal(defaultBaseRef(repo), "master");
+  } finally { rmSync(repo, { recursive: true, force: true }); }
+});

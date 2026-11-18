@@ -241,3 +241,15 @@ test("vs verdict (idea-177 L1): a verdict message buried under a long tool tail 
   assert.equal(ok.code, 0, ok.err);
   assert.equal((await run("")).code, GATE_EXIT.noVerdict);
 });
+
+// idea-265: provider transport noise before the verdict line is skipped; the hash/tip rule is unchanged.
+test("evaluateVerdictGate skips transport-noise lines but still needs PASS H/M/L <hash> matching the tip", async () => {
+  const { evaluateVerdictGate } = await import("../server/verdict.mjs");
+  const agent = { id: "r", title: "Review - Gemini", labels: { profile: "Review - Gemini" } };
+  const tip = "abc1234def5678abc1234def5678abc1234def56";
+  const noise = "⚠ API error (attempt 1): Post \"https://x/y\": EOF\nAPI error (attempt 2) EOF\n\n";
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}PASS 0/0/0 abc1234`, tip }).code, 0);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}PASS 0/0/0 ffff111`, tip }).code, 3);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}VERDICT: PASS 0/0/0`, tip }).code, 2);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `Some prose\nPASS 0/0/0 abc1234`, tip }).code, 2);
+});
