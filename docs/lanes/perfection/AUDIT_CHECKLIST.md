@@ -9,4 +9,6 @@ Each finding is one inbox item with evidence (file:line / commit / transcript re
 4. **Rubber stamps + fix offered as a question** (mechanical). From `collect`: `scripts/audit-owner-stamps.mjs` buckets 1-5 (stamps, relay, early handoffs, fixers, fix-offers). Do not reimplement.
 5. **Stale usage reviews** (mechanical). From `collect`: open `usage-review:*` inbox items older than 3 days. Key: `stale-usage-review:<card id>`.
 
+6. **Scriptable turns** (mechanical). From `collect`: `scriptableTurnsBucket` (audit-owner-stamps bucket 7) clusters fixed-shape agent turns (same role + input kind + tool sequence, short output) ranked by tokens; one finding per top-10 cluster with the candidate primitive as a hint. Key: `scriptable:<hash of shape>` (stable, not daily). Report only: the owning lane builds any replacement. `node scripts/audit-owner-stamps.mjs --waste` prints the table.
+
 Risky or owner-only findings (a principle change, anything needing Aub's call): set `"risky": true` so the filer also runs `vs log needs-you`.
