@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
 import { commandAgentVerb, main, runAgentVerb, suggestVerb } from "../cli/vs.mjs";
 
+// idea-321: this file drives the real CLI in-process, and resolveIdentity() (cli/vs.mjs) reads the caller's token from
+// VS_AGENT_TOKEN at call time. From an agent shell that sends the mutating verbs down the agent-verify path against the
+// fake backend (which has no verifyAgent) -> "this.rc.verifyAgent is not a function". These are owner-path tests, so
+// scrub the agent identity once per process, same class as ddc11c05 (drain-guard-entry) and test/api-caller-gate.test.mjs.
+for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN"]) delete process.env[k];
+
 function createFakeRunnerServer() {
   const calls = [];
   const records = new Map([
