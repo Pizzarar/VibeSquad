@@ -1525,7 +1525,7 @@ export function App() {
   const membersRef = useRef(members);
   membersRef.current = members;
   useEffect(() => {
-    setCloseGuard(() => getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
+    setCloseGuard(() => !DEMO && getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
     return () => setCloseGuard(null);
   }, []);
   useAttentionTitle(views);

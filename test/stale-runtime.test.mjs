@@ -79,3 +79,15 @@ test("/health source never calls the sync getStale", async () => {
   assert.doesNotMatch(readFileSync(new URL("../server/vibesquad-api.mjs", import.meta.url), "utf8"), /getStale\(/);
   assert.doesNotMatch(readFileSync(new URL("../server/serve.mjs", import.meta.url), "utf8"), /getStale\(/);
 });
+
+test("peekStale drops a cached value once a sync rewrote the build stamp (idea-276)", async () => {
+  const { writeFileSync } = await import("node:fs");
+  const { refreshStale, peekStale } = await import("../server/stale-runtime.mjs");
+  const home = mkdtempSync(join(tmpdir(), "vs-stale-home-"));
+  const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo: "/r" });
+  resetStaleCache();
+  await refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 1000, compute: async () => ({ built: "aaaaaaa", head: "bbbbbbb", behind: 2 }) });
+  assert.equal(peekStale(rootDir).behind, 2);
+  writeFileSync(join(rootDir, "build-stamp.json"), JSON.stringify({ commit: "bbbbbbb2222", repo: "/r" }));
+  assert.equal(peekStale(rootDir), null);
+});

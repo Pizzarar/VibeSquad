@@ -65,7 +65,7 @@ export function resolvePinChatAgentId(
 }
 
 /** Which sidebar entry owns an agent: the hub desk rows, the Bugs lane, or a feature lane (with the role it plays there). */
-export function boringSelectionForAgent(view: TeamView | undefined, agentId: string | null | undefined): { laneId: string; role: Role | "worker" } | null {
+export function boringSelectionForAgent(view: TeamView | undefined, agentId: string | null | undefined): { laneId: string; role: Role | "worker"; label?: string } | null {
   if (!view || !agentId) return null;
   const zones = skyZonesFor(view);
   if (zones.overlord.member?.agent.id === agentId || zones.overlord.agentId === agentId) return { laneId: "_overlord", role: "lead" };
@@ -82,7 +82,7 @@ export function boringSelectionForAgent(view: TeamView | undefined, agentId: str
     if (isHubPin(pin)) continue;
     const r = roleIn(pin);
     // A lane named after the project (id === team id) is the Desk's own: its members show as Desk rows, not a second "VibeSquad" lane.
-    if (r) return pin.lane.id === view.team.id ? { laneId: "_desk", role: "worker" } : { laneId: pin.lane.id, role: r };
+    if (r) return pin.lane.id === view.team.id ? { laneId: "_desk", role: "worker", ...(r === "brainstorm" ? { label: "Brainstorm" } : r === "lead" ? { label: "Lead" } : {}) } : { laneId: pin.lane.id, role: r };
   }
   return null;
 }
@@ -148,16 +148,17 @@ export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId
   if (o.mode === "project") return { ...base, rowKey: o.teamId ? `${o.teamId}|project` : null };
   let teamId = o.teamId;
   let laneId = o.laneId;
+  let roleLabel: string | undefined;
   let role: Role | "worker" | null = o.workerId && o.agentId === o.workerId ? "worker" : laneId ? o.role : null;
   if (o.agentId) {
     const ordered = [...o.views.filter((v) => v.team.id === o.teamId), ...o.views.filter((v) => v.team.id !== o.teamId)];
     for (const v of ordered) {
       const sel = boringSelectionForAgent(v, o.agentId);
-      if (sel) { teamId = v.team.id; laneId = sel.laneId; role = sel.role; break; }
+      if (sel) { teamId = v.team.id; laneId = sel.laneId; role = sel.role; roleLabel = sel.label; break; }
     }
   }
   const workerId = role === "worker" ? o.agentId : null;
-  const agentLabel = !laneId ? null : role === "worker" ? o.agentTitle || "Worker" : laneId === "_overlord" ? "Overlord" : laneId === "_riffbot" ? "RiffBot" : role === "lead" ? "Lead" : "Brainstorm";
+  const agentLabel = !laneId ? null : role === "worker" ? roleLabel || o.agentTitle || "Worker" : laneId === "_overlord" ? "Overlord" : laneId === "_riffbot" ? "RiffBot" : role === "lead" ? "Lead" : "Brainstorm";
   const rowKey = !teamId || !laneId ? null : workerId ? `${teamId}|worker:${workerId}` : laneId === "_overlord" ? `${teamId}|desk:lead` : laneId === "_riffbot" ? `${teamId}|desk:brainstorm` : `${teamId}|lane:${laneId}`;
   return { teamId, mode: "chat", laneId, role, workerId, agentLabel, rowKey };
 }

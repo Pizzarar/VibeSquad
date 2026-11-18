@@ -495,11 +495,11 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
     return sendJson(res, 200, { ok: true, distReady: true, ...extra });
   };
   // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
-  if (!isOwner(req)) return send(peekStale());
+  if (!isOwner(req)) return send(peekStale(rootDir));
   // Owner: await the async, single-flight refresh (idea-225: git runs off the loop, never execFileSync on the request
   // path) so the reply and stale.json are current. refreshStale is cached 60s, so most polls resolve at once.
   return refreshStale({ rootDir })
-    .catch(() => peekStale())
+    .catch(() => peekStale(rootDir))
     .then((stale) => send(stale))
     .catch(() => {});
 }
