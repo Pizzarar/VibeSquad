@@ -112,6 +112,10 @@ test("cold boot via worker threads: same folds, line index, decisions and requeu
   assert.deepEqual(fi.cold, { logs: ids.length, folded, workers: 2, ms: fi.cold.ms });
   assert.equal(fi.trusted, folded, "every worker entry trusted");
   assert.equal(fi.full, ids.length - folded, "only the logs with no created event fold on the main thread");
+  // idea-337: entries counts the cold entries too (the 11-18 line had trusted=5600 > entries=5457); saved = the file's own
+  assert.deepEqual([fi.saved, fi.entries, fi.discardReason], [0, folded, "missing"]);
+  assert.ok(fi.trusted + fi.resumed <= fi.entries && fi.trusted + fi.resumed + fi.full === ids.length);
+  assert.ok(r.bootFoldMs.prefold > 0, "the prefold's time is in the boot fold breakdown");
   assert.deepEqual(snapshot(r), want);
 });
 

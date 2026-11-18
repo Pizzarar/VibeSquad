@@ -447,9 +447,12 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // foldIndex: how fold-index.json served the fold phase (trusted = log unchanged, nothing read; resumed = only the bytes
     // appended since the save were folded; full = folded from byte 0; bytes = log bytes folded). Absent with the index off.
     // cold (when present): logs the index had no entry for, how many the worker threads folded (counted in trusted/resumed
-    // from then on), the threads used and the ms; a log they could not settle is in `full`.
+    // from then on), the threads used and the ms; a log they could not settle is in `full`. entries = saved (read from the file)
+    // + the cold entries; discardReason (+ foldWas/foldNow) when the file gave none (missing, fold-version, malformed, ...).
+    // foldMs: where the 'fold' phase went (Runner.bootFoldReport: prefold, load, pass {stat, seed, read}, tokens, plans, admit, rest).
     const fi = runner.foldIndexStats;
-    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fi ? { foldIndex: fi } : {}) }));
+    const fm = runner.bootFoldReport(boot.fold);
+    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fm ? { foldMs: fm } : {}), ...(fi ? { foldIndex: fi } : {}) }));
     // Saved after listen (yielding between logs), so the next boot resumes from this one's fold; the boot line is already out.
     setImmediate(() => runner.saveFoldIndex().then((r) => { if (r) console.log(JSON.stringify({ foldIndexSave: r })); }, (err) => console.error('fold index save failed', err)));
     const port = server.address().port;
@@ -463,7 +466,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // runner.json only when it is ours (pid + lockStartedAt). A robbed runner never deletes: the new holder may be publishing.
   const leave = (opts) => {
     const held = holding();
+    const first = !runner._shutDown;
     try { runner.shutdown({ ...opts, keepDrainFile: !held }); } catch (err) { console.error('runner shutdown failed', err); } // later calls are no-ops
+    // The shutdown save is what the next boot resumes from: a boot with logs missing from the index (cold > 0) then shows whether
+    // this runner saved at all (idea-337: the 83f29842 runner never logged one; its pid was left alone by the restart).
+    if (first && runner.foldIndexSave) { try { console.log(JSON.stringify({ foldIndexSave: { ...runner.foldIndexSave, at: 'shutdown' } })); } catch { /* ignore */ } }
     if (held && publishedByMe(home, me)) { try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ } }
     if (held) { try { releaseLock(lockFile); } catch { /* ignore */ } }
   };

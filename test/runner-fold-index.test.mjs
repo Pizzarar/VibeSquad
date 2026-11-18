@@ -80,6 +80,7 @@ function setup(n) {
   for (const id of ids) age(h, id);
   const r = boot(h);
   assert.equal(r.foldIndexStats.entries, 0, "no index yet");
+  assert.equal(r.foldIndexStats.discardReason, "missing", "a first boot says why it folded everything");
   assert.equal(r.foldIndexStats.full, ids.length);
   assert.equal(r.saveFoldIndexSync().result, "written");
   return { h, ids, r };
@@ -92,7 +93,7 @@ test("cold boot folds from 0 and saves; a warm boot of unchanged logs reads noth
   assert.equal(idx.size, ids.length);
   assert.ok(!JSON.stringify([...idx.values()]).includes("You are "), "system prompts are not saved");
   const warm = boot(h);
-  assert.deepEqual({ ...warm.foldIndexStats, loadMs: 0 }, { entries: ids.length, trusted: ids.length, resumed: 0, full: 0, bytes: 0, loadMs: 0 });
+  assert.deepEqual({ ...warm.foldIndexStats, loadMs: 0 }, { entries: ids.length, saved: ids.length, trusted: ids.length, resumed: 0, full: 0, bytes: 0, loadMs: 0 }, "a kept index has no discardReason");
   parity(h, warm, "warm boot = full fold");
   const s3 = warm.status("rn-0003");
   assert.equal(s3.openTool, null, "a lost agent publishes no open tool");
@@ -198,20 +199,48 @@ test("partial last line: not folded, not saved; once completed it is folded exac
   assert.equal(r2.folds.get("rn-p").rec.openTool.id, "late");
 });
 
+test("idea-337: bootFoldMs accounts for the fold phase (load, pass with stat/seed/read, tokens, plans, admit, rest)", () => {
+  const { h, ids } = setup(5);
+  appendFileSync(logFile(h, ids[0]), ev(900, "text", { text: "grown" })); // one resumed log: some read time
+  const r = boot(h);
+  const m = r.bootFoldMs;
+  for (const k of ["prefold", "load", "pass", "stat", "seed", "read", "tokens", "plans", "admit"]) assert.ok(Number.isFinite(m[k]) && m[k] >= 0, k);
+  assert.ok(m.stat + m.seed + m.read <= m.pass + 1, "stat/seed/read are parts of pass");
+  assert.ok(m.seed > 0 && m.stat > 0, "every log was statted and seeded from its entry");
+  const rep = r.bootFoldReport(1_000_000);
+  const named = rep.prefold + rep.load + rep.pass + rep.tokens + rep.plans + rep.admit;
+  assert.ok(Math.abs(named + rep.rest - 1_000_000) <= 6, "named parts + rest = the whole phase (rounding only)");
+  assert.equal(r.bootFoldReport().rest, undefined, "no phase given: no rest");
+  assert.equal(new Runner({ dir: h.dir, adapters }).bootFoldReport(5), null, "before recoverQueued: nothing to report");
+  r._fold(ids[1]); // after the pass: _fold no longer adds to the boot timing
+  assert.deepEqual(r.bootFoldMs, m);
+});
+
 test("an index from an older fold version, a corrupt index and a corrupt entry: full refold, same answer", () => {
   const { h, ids } = setup(4);
   const good = readFileSync(h.file, "utf8");
   writeFileSync(h.file, good.replace(FOLD_VERSION, "older-version"));
   let r = boot(h);
   assert.deepEqual([r.foldIndexStats.entries, r.foldIndexStats.full], [0, ids.length]);
+  // idea-328: the line names the cause (the 83f29842 boot dropped a 15MB index with no word why)
+  assert.deepEqual([r.foldIndexStats.discardReason, r.foldIndexStats.foldWas, r.foldIndexStats.foldNow], ["fold-version", "older-version", FOLD_VERSION]);
   parity(h, r);
   writeFileSync(h.file, good.slice(0, Math.floor(good.length / 2))); // torn
   r = boot(h);
-  assert.deepEqual([r.foldIndexStats.entries, r.foldIndexStats.full], [0, ids.length]);
+  assert.deepEqual([r.foldIndexStats.entries, r.foldIndexStats.full, r.foldIndexStats.discardReason], [0, ids.length, "malformed"]);
   parity(h, r);
   writeFileSync(h.file, "\u0000garbage");
   r = boot(h);
-  assert.equal(r.foldIndexStats.full, ids.length);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.discardReason], [ids.length, "malformed"]);
+  writeFileSync(h.file, good.replace('{"v":1,', '{"v":99,'));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.discardReason, r.foldIndexStats.foldWas], [ids.length, "index-version", undefined]);
+  writeFileSync(h.file, JSON.stringify({ v: 1, fold: FOLD_VERSION, entries: [] }));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.discardReason], [ids.length, "shape"]);
+  writeFileSync(h.file, JSON.stringify({ v: 1, fold: FOLD_VERSION, entries: {} }));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, "discardReason" in r.foldIndexStats], [ids.length, false], "a valid empty index is kept, not discarded");
   // one entry with a broken state: only that log is refolded
   const o = JSON.parse(good);
   o.entries["rn-0001"].state.perms = "nope";

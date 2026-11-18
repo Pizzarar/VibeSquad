@@ -9,7 +9,7 @@ import { createBackgroundProbe } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
-import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
+import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndexInfo, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
 import { COLD_FOLD_MIN, coldFoldEntries, coldFoldWorkersFromEnv } from './fold-cold.mjs';
 import path from 'node:path';
 
@@ -371,6 +371,12 @@ export class Runner {
     this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
     this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
     this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
+    // Where the boot's fold phase (prefoldCold + recoverQueued) spent its ms (idea-337), for the {boot:...} line's foldMs: prefold,
+    // load (the index read; 0 when prefold handed it over), pass (folding every log: of it, stat, seed = validating a saved
+    // entry, read = reading + folding log bytes), tokens (mintBootTokens), plans (the unstarted-turn scan), admit. Floats.
+    this.bootFoldMs = null;
+    this._prefoldMs = 0;
+    this._passMs = null; // = bootFoldMs during recoverQueued's pass only (_fold adds stat/seed/read to it)
     this._coldSeed = null; // prefoldCold's index read + worker-folded entries, taken by the next _loadFoldIndex
     this._coldAbort = null; // AbortController of an in-flight prefoldCold: shutdown() terminates its workers
     this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
@@ -1093,13 +1099,21 @@ export class Runner {
   recoverQueued({ shouldAdmit } = {}) {
     const plans = [];
     this._foldsWarm = false;
+    const tm = this.bootFoldMs = { prefold: this._prefoldMs, load: 0, pass: 0, stat: 0, seed: 0, read: 0, tokens: 0, plans: 0, admit: 0 };
+    this._prefoldMs = 0;
+    let t = performance.now();
+    const lap = (k) => { const now = performance.now(); tm[k] += now - t; t = now; };
     this._loadFoldIndex(); // each log's fold resumes from the last saved one (fold-index.mjs): only bytes appended since are read
+    lap('load');
+    this._passMs = tm;
     try {
       for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
-    } finally { this._foldSeed = null; } // entries of logs that are gone are dropped; no later _fold reads a seed
+    } finally { this._foldSeed = null; this._passMs = null; } // entries of logs that are gone are dropped; no later _fold reads a seed
+    lap('pass');
     this._foldsWarm = true;
     if (shouldAdmit && !shouldAdmit()) return [];
     this.mintBootTokens(); // from the same pass: every agent that may still act verifies from the first request after a restart
+    lap('tokens');
     for (const id of this.store.ids()) {
       let plan = null;
       try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
@@ -1107,6 +1121,7 @@ export class Runner {
       if (plan.supersededBy) continue;
       plans.push({ id, plan });
     }
+    lap('plans');
     // Owner inputs take the free slots first (they would have jumped the queue), then oldest first.
     // Digests next (idea-203): they keep their queue priority across a runner restart.
     const rank = (p) => (p.plan.owner ? 0 : isDigestMeta(p.plan.spec.meta) ? 1 : 2);
@@ -1115,6 +1130,7 @@ export class Runner {
       const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: plan.text, images: [], run: () => this._deliverJob(job) };
       this._admit(job);
     }
+    lap('admit');
     return plans.map((p) => p.id);
   }
 
@@ -1632,8 +1648,10 @@ export class Runner {
     let stamp = null;
     let size = 0;
     let stat = null;
+    const tm = this._passMs; // recoverQueued's boot pass timing, else null
+    const t0 = tm ? performance.now() : 0;
     const statAt = Date.now(); // before the stat: an mtime written meanwhile still counts as racy (fold-index.mjs)
-    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; }
+    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; } finally { if (tm) tm.stat += performance.now() - t0; }
     // Clean = validated by this stat while the watch is up. Synchronous from the stat to the mark: a change after the stat
     // reaches the watch callback later and unmarks it.
     const watched = !!this._rosterWatch;
@@ -1641,7 +1659,9 @@ export class Runner {
     let st = this.folds.get(id);
     if (st?.stamp === stamp) { if (watched) this._foldClean.add(id); return st; }
     if (!st && this._foldSeed) {
+      const t1 = tm ? performance.now() : 0;
       st = this._seedFold(id, stat);
+      if (tm) tm.seed += performance.now() - t1;
       if (st?.stamp === stamp) { this.folds.set(id, st); if (watched) this._foldClean.add(id); return st; }
     }
     if (!st || size < st.offset) st = newFold();
@@ -1651,8 +1671,10 @@ export class Runner {
       const p = probeWith(pread, end);
       if (p) this._foldPins.set(id, { offset: end, ...p }); else this._foldPins.delete(id);
     } : null;
+    const t2 = tm ? performance.now() : 0;
     const { events, end } = this.store.readFrom(id, st.offset, 0, Infinity, pinAt);
     for (const e of events) foldEvent(st, e);
+    if (tm) tm.read += performance.now() - t2;
     st.offset = end;
     st.stamp = stamp;
     st.stat = stat;
@@ -1673,12 +1695,19 @@ export class Runner {
     this._coldSeed = null;
     if (!this._foldIndexOn()) return;
     const t0 = Date.now();
-    const seed = pre ? pre.seed : readFoldIndex(this.foldIndexFile);
-    this.foldIndexStats = { entries: seed.size, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: pre ? pre.loadMs : Date.now() - t0 };
-    if (pre) {
-      for (const [id, e] of pre.entries) if (!seed.has(id)) seed.set(id, e);
-      this.foldIndexStats.cold = { logs: pre.logs, folded: pre.entries.size, workers: pre.workers, ms: pre.ms };
+    const info = pre ? pre.info : readFoldIndexInfo(this.foldIndexFile);
+    const seed = info.entries;
+    // saved = entries read from the file; entries = what the pass could seed from (saved + the cold workers'), so trusted +
+    // resumed <= entries and trusted + resumed + full = the logs folded (idea-337: the 11-18 line read entries=5457 next to
+    // trusted=5600, its 189 cold entries counted in trusted but not in entries).
+    const saved = seed.size;
+    if (pre) for (const [id, e] of pre.entries) if (!seed.has(id)) seed.set(id, e);
+    this.foldIndexStats = { entries: seed.size, saved, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: pre ? pre.loadMs : Date.now() - t0 };
+    if (info.discardReason) { // the file gave nothing: say why, so a full fold explains itself (idea-328)
+      this.foldIndexStats.discardReason = info.discardReason;
+      if (info.foldWas !== undefined) Object.assign(this.foldIndexStats, { foldWas: info.foldWas, foldNow: info.foldNow });
     }
+    if (pre) this.foldIndexStats.cold = { logs: pre.logs, folded: pre.entries.size, workers: pre.workers, ms: pre.ms };
     this._foldSeed = seed;
   }
 
@@ -1688,9 +1717,12 @@ export class Runner {
   // shutdown() during the prefold terminates its workers (and the prefold then hands nothing over).
   async prefoldCold({ workers = coldFoldWorkersFromEnv(), min = COLD_FOLD_MIN, ...opts } = {}) {
     this._coldSeed = null;
+    this._prefoldMs = 0;
     if (this._shutDown || !this._foldIndexOn() || !(workers > 0)) return null;
     const t0 = Date.now();
-    const seed = readFoldIndex(this.foldIndexFile);
+    const p0 = performance.now();
+    const info = readFoldIndexInfo(this.foldIndexFile);
+    const seed = info.entries;
     const loadMs = Date.now() - t0;
     const missing = this.store.ids().filter((id) => !seed.has(id));
     let entries = new Map();
@@ -1699,12 +1731,24 @@ export class Runner {
       this._coldAbort = ac;
       try { entries = await coldFoldEntries(this.store.dir, missing, { ...opts, workers, signal: ac.signal }); } finally { if (this._coldAbort === ac) this._coldAbort = null; }
     }
+    this._prefoldMs = performance.now() - p0;
     if (this._shutDown) return null;
-    this._coldSeed = { seed, loadMs, entries, logs: missing.length, workers: entries.size ? Math.min(workers, missing.length) : 0, ms: Date.now() - t0 };
+    this._coldSeed = { info, loadMs, entries, logs: missing.length, workers: entries.size ? Math.min(workers, missing.length) : 0, ms: Date.now() - t0 };
     return { logs: missing.length, folded: entries.size, ms: this._coldSeed.ms };
   }
 
   _foldIndexOn() { return !!this.foldIndexFile && process.env.VS_RUNNER_FOLD_INDEX !== '0'; }
+
+  // bootFoldMs rounded for the {boot:...} line, or null before recoverQueued. With `phaseMs` (the server's whole 'fold' phase),
+  // `rest` is what the named parts leave of it (event-loop turns, GC), so the line accounts for the whole phase. stat/seed/read
+  // are parts of pass, not added to it.
+  bootFoldReport(phaseMs) {
+    const m = this.bootFoldMs;
+    if (!m) return null;
+    const out = Object.fromEntries(Object.entries(m).map(([k, v]) => [k, Math.round(v)]));
+    if (Number.isFinite(phaseMs)) out.rest = Math.max(0, Math.round(phaseMs - (m.prefold + m.load + m.pass + m.tokens + m.plans + m.admit)));
+    return out;
+  }
 
   // The fold state saved for a log not yet folded in this process, or null (fold from byte 0). A trusted seed (log unchanged)
   // gets the current stamp, so _fold serves it as is; a resumed one has none, so _fold reads only the bytes after its offset.
