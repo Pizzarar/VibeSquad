@@ -6459,7 +6459,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .sidebar-needs-spine { flex: none; max-height: 38vh; overflow-y: auto; margin: 4px 6px 6px; }
 .sidebar .boring-needs-you { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: var(--panel); border: 1px solid var(--border, var(--line)); box-shadow: var(--bevel), var(--hard); color: var(--text); font-size: 12px; }
 .sidebar .boring-needs-head { display: flex; align-items: center; gap: 6px; font-family: var(--arcade); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--amber-t); padding: 0 2px; }
-.sidebar .boring-needs-head .boring-badge { font-family: var(--mono); font-size: 11px; letter-spacing: 0; padding: 0 6px; background: var(--amber); color: var(--on-amber); border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
+.sidebar .boring-needs-head .boring-badge { font-family: var(--mono); font-size: 11px; letter-spacing: 0; padding: 0 6px; background: var(--amber); color: var(--on-amber) !important; border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
 .sidebar .boring-needs-head .boring-kbd { margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted); border: 1px solid var(--line); padding: 0 4px; background: var(--well); box-shadow: var(--bevel-in); }
 .sidebar .boring-needs-rows, .sidebar .boring-done-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
 .sidebar .boring-needs-item { display: grid; gap: 1px; padding: 3px 5px; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--amber); box-shadow: var(--bevel-in); }
