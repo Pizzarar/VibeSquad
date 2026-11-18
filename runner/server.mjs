@@ -430,6 +430,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
   phase('init');
+  // A cold fold (no fold-index entry: first boot, a fold-code change) runs on worker threads first; the boot pass then serves
+  // those logs from their entries (runner/fold-cold.mjs). Part of the 'fold' phase; foldIndex.cold says what it did.
+  try { await runner.prefoldCold(); } catch (err) { console.error('cold fold failed', err); }
   try { const back = runner.recoverQueued({ shouldAdmit: holding }); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   phase('fold');
   startLoopLagMonitor('runner');
@@ -443,6 +446,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     phase('listen');
     // foldIndex: how fold-index.json served the fold phase (trusted = log unchanged, nothing read; resumed = only the bytes
     // appended since the save were folded; full = folded from byte 0; bytes = log bytes folded). Absent with the index off.
+    // cold (when present): logs the index had no entry for, how many the worker threads folded (counted in trusted/resumed
+    // from then on), the threads used and the ms; a log they could not settle is in `full`.
     const fi = runner.foldIndexStats;
     console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fi ? { foldIndex: fi } : {}) }));
     // Saved after listen (yielding between logs), so the next boot resumes from this one's fold; the boot line is already out.
