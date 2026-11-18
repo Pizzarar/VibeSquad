@@ -91,10 +91,10 @@ test('stopBackground: kills each held shell tree from a fresh probe, logs bg-sto
   h.runner.shutdown();
 });
 
-test('stopBackground: refuses a running turn, an unknown agent; nothing to stop is a clean no-op', async () => {
+test('stopBackground: mid-turn kills nothing, an unknown agent; nothing to stop is a clean no-op', async () => {
   const h = harness();
   const id = h.create(); // mid-turn
-  await assert.rejects(h.runner.stopBackground(id), (e) => e.status === 409 && /running/.test(e.message));
+  assert.deepEqual((await h.runner.stopBackground(id)).stopped, [], 'idea-315: mid-turn is allowed but kills nothing');
   await assert.rejects(h.runner.stopBackground('rn-nope'), (e) => e.status === 404);
   h.endTurn(id);
   await until(() => h.kills.length === 1); // no work: parked

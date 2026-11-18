@@ -1274,8 +1274,8 @@ export class Runner {
     const entry = this.live.get(id);
     if (!entry) throw fail(this.store.exists(id) ? 409 : 404, this.store.exists(id) ? `agent ${id} is not live (no process tree)` : 'no such agent');
     if (!entry.handle || !Number.isInteger(entry.handle.pid)) throw fail(409, `agent ${id} has no process to probe`);
-    if (entry.inflight > 0 || entry.status === 'running') throw fail(409, `agent ${id} is running a turn: cancel it first (vs stop)`);
     if (!this.bgProbe) throw fail(409, 'background probe is off');
+    if (entry.inflight > 0 || entry.status === 'running') return this._refreshHeldMidTurn(id, entry); // idea-315
     const gen = entry.turnGen; // idea-231: a turn that starts while the probe runs owns the tree now
     const work = await this.bgProbe(entry.handle.pid, Date.now()); // a snapshot started now: nothing stale
     // A turn started (or started and ended) during the probe: the snapshot may hold that turn's own shell, and its work
@@ -1294,6 +1294,28 @@ export class Runner {
     }
     if (this._parkable(entry)) this._scheduleParkAfterTurn(id, entry);
     return { stopped: list };
+  }
+
+  // idea-315: `vs stop <id> --background` while the agent is running a turn. The process tree cannot tell a running foreground
+  // tool shell from a background one, so this KILLS NOTHING and never touches the turn or entry.work (idea-231). It only
+  // re-probes and drops a STALE held entry (heldSince set, but none of the held pids is under the CLI any more), which is
+  // what a restart drain needs. Returns the shells it saw as `spared` and the resulting hold state as `held`.
+  async _refreshHeldMidTurn(id, entry) {
+    const gen = entry.turnGen;
+    const seen = await this.bgProbe(entry.handle.pid, Date.now());
+    const spared = Array.isArray(seen) ? seen : [];
+    if (this.live.get(id) !== entry || entry.turnGen !== gen) return { stopped: [], spared, held: false }; // the turn moved on: it owns the entry now
+    let held = entry.heldSince !== null && entry.heldSince !== undefined;
+    if (held) {
+      const heldPids = (Array.isArray(entry.heldNow) ? entry.heldNow : Array.isArray(entry.heldWork) ? entry.heldWork : []).map((w) => w?.pid);
+      const present = new Set(spared.map((w) => w.pid));
+      if (!heldPids.some((p) => present.has(p))) {
+        entry.heldSince = null; entry.heldNow = null; entry.heldWork = null; entry.heldProbedAt = null;
+        try { this.store.append(id, 'held-cleared', { midTurn: true, pids: heldPids }); } catch { /* log gone */ }
+        held = false;
+      }
+    }
+    return { stopped: [], spared, held };
   }
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
