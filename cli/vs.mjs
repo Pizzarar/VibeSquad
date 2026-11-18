@@ -2767,11 +2767,18 @@ function commandCap(flags) {
   throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
 }
 
-function defaultBaseRef(repoRoot) {
-  for (const ref of ["master", "main"]) {
-    const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}`], { cwd: repoRoot, encoding: "utf8" });
-    if (r.status === 0) return ref;
-  }
+export function defaultBaseRef(repoRoot) {
+  const git = (args) => spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", windowsHide: true });
+  const hasBranch = (ref) => git(["rev-parse", "--verify", "--quiet", `refs/heads/${ref}`]).status === 0;
+  // idea-332: a repo with no dev branch must branch from its real default, not an unrelated empty master/main.
+  // Order: origin/HEAD target, the main checkout's current branch, master/main, HEAD.
+  const o = git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const originDefault = o.status === 0 ? String(o.stdout).trim().replace(/^origin\//, "") : "";
+  if (originDefault && hasBranch(originDefault)) return originDefault;
+  const cur = git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const curBranch = cur.status === 0 ? String(cur.stdout).trim() : "";
+  if (curBranch && hasBranch(curBranch)) return curBranch;
+  for (const ref of ["master", "main"]) if (hasBranch(ref)) return ref;
   return "HEAD";
 }
 
