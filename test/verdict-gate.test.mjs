@@ -25,6 +25,7 @@ delete process.env.PASEO_AGENT_ID;
 delete process.env.VS_AGENT_TOKEN;
 writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Squad", paths: [], lanes: [{ id: "sq", name: "Hub", hub: true }, { id: "art", name: "Art" }] }] }), "utf8");
 
+import { budget } from "./helpers/load-budget.mjs";
 const { Runner } = await import("../runner/runner.mjs");
 const { createServer: createRunnerServer, writeDiscovery } = await import("../runner/server.mjs");
 const { RunnerClient } = await import("../server/backend/runner-client.mjs");
@@ -50,7 +51,7 @@ const runnerHome = path.join(HOME, "runner");
 const runner = new Runner({ dir: path.join(runnerHome, "agents"), adapters: { claude: fakeAdapter() }, parkGraceMs: 60_000, bgProbe: null });
 const runnerSrv = createRunnerServer(runner, { token: ADMIN, hash: "h" });
 writeDiscovery(runnerHome, { port: await listen(runnerSrv), token: ADMIN });
-const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {} }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
+const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {}, requestTimeoutMs: budget(15000) }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
 const api = createVibesquadMiddleware(ROOT, { backend });
 const vsSrv = http.createServer((req, res) => api(req, res, () => { res.statusCode = 404; res.end("no"); }));
 const vsPort = await listen(vsSrv);

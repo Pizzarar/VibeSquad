@@ -6,6 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { updateJsonFileSync, withFileLockSync } from "../server/file-lock.mjs";
+import { budget } from "./helpers/load-budget.mjs";
 
 const modUrl = pathToFileURL(fileURLToPath(new URL("../server/file-lock.mjs", import.meta.url))).href;
 
@@ -99,7 +100,7 @@ test("real cross-process race: no lost updates", async (t) => {
   const f = path.join(tmp(t), "counter.json");
   writeFileSync(f, JSON.stringify({ n: 0 }));
   const procs = 4, per = 40;
-  const code = `import(${JSON.stringify(modUrl)}).then(m=>{for(let i=0;i<${per};i++)m.updateJsonFileSync(${JSON.stringify(f)},d=>{d.n+=1},{timeoutMs:20000})})`;
+  const code = `import(${JSON.stringify(modUrl)}).then(m=>{for(let i=0;i<${per};i++)m.updateJsonFileSync(${JSON.stringify(f)},d=>{d.n+=1},{timeoutMs:${budget(20000)}})})`;
   await Promise.all(
     Array.from({ length: procs }, () => new Promise((resolve, reject) => {
       const c = spawn(process.execPath, ["-e", code], { stdio: ["ignore", "inherit", "inherit"] });
