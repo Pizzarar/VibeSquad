@@ -328,11 +328,19 @@ test("a runner that exits holding the lock removes its own runner.json and lock,
   const lock = JSON.parse(readFileSync(path.join(home, "runner.lock"), "utf8"));
   assert.equal(pub.lockStartedAt, lock.startedAt, "runner.json is tied to the lock it holds");
   assert.match(a.out(), /"boot":\{"lock":\d+,"sweepOrphans":\d+,"init":\d+,"fold":\d+,"listen":\d+,"total":\d+\}/);
+  // idea-328/337: the line says where the fold phase went and why a fold index was not used
+  const bootLine = JSON.parse(a.out().split("\n").find((l) => l.startsWith('{"boot":')));
+  const fm = bootLine.foldMs;
+  assert.ok(fm && ["prefold", "load", "pass", "stat", "seed", "read", "tokens", "plans", "admit", "rest"].every((k) => Number.isInteger(fm[k])), JSON.stringify(fm));
+  assert.ok(Math.abs(fm.prefold + fm.load + fm.pass + fm.tokens + fm.plans + fm.admit + fm.rest - bootLine.boot.fold) <= 6, "foldMs adds up to the fold phase");
+  assert.equal(bootLine.foldIndex.discardReason, "missing", "a fresh home has no index yet");
   // POST /shutdown runs stop() on every platform (a win32 SIGTERM is a hard kill that skips the handlers).
   const token = readFileSync(path.join(home, "token"), "utf8").trim();
   const res = await fetch(`http://127.0.0.1:${pub.port}/shutdown`, { method: "POST", headers: { authorization: `Bearer ${token}` } });
   assert.ok(res.ok, `shutdown ${res.status}`);
   await a.exited;
+  assert.match(a.out(), /\{"foldIndexSave":\{[^\n]*"at":"shutdown"\}\}/, "the shutdown save is logged once");
+  assert.equal(a.out().match(/"at":"shutdown"/g).length, 1);
   assert.equal(existsSync(path.join(home, "runner.json")), false);
   assert.equal(existsSync(path.join(home, "runner.lock")), false);
 });

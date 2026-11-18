@@ -14,6 +14,8 @@
 //     state was folded from, and a cold boot's first save opens no log (12.3s -> 0.15s on 5000 logs, unit-fold-hash-4k);
 //   - the header pins FOLD_VERSION, a hash of the fold code (foldEvent / saveFold / loadFold and runner/open-tools.mjs), so any
 //     change to what the fold computes drops the whole index once; so does a malformed file (any bad line: the index is a cache);
+//     the boot line's foldIndex.discardReason names which (readFoldIndexInfo). Only the fold's own functions are hashed: editing
+//     anything else here (the reader, probes, comments outside them) keeps every saved index;
 //   - written atomically (private tmp + rename, retried through win32 EPERM/EBUSY), one entry per line, by one writer at a time
 //     (fold-index.lock, runner/lock.mjs start lock). A writer that finds the lock held SKIPS the save (it is only a cache): boot
 //     never waits on another process's lock, and reading needs no lock (a rename replaces the whole file).
@@ -232,20 +234,34 @@ export function probe(file, offset) {
 const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
 const sleepSync = (ms) => Atomics.wait(sleepBuf, 0, 0, ms);
 
-/** Entries by id, or an empty map (missing, unreadable, another version, any malformed byte). Transient win32 errors retried, bounded. */
-export function readFoldIndex(file, { sleep = sleepSync } = {}) {
+/**
+ * readFoldIndex with the reason an index was dropped (idea-328: the 11-18 boot of 83f29842 read a 15MB index in 91ms and kept
+ * none of it, and nothing said why). { entries, discardReason } where discardReason is null (the file was used, even with no
+ * entries) or one of: 'missing' (no file), 'unreadable' (a read error), 'malformed' (not JSON: a torn or foreign file),
+ * 'index-version' (another INDEX_VERSION), 'fold-version' (fold code changed since the save: { foldWas, foldNow } too),
+ * 'shape' (JSON, but not an index). Transient win32 errors retried, bounded.
+ */
+export function readFoldIndexInfo(file, { sleep = sleepSync } = {}) {
+  const drop = (discardReason, extra) => ({ entries: new Map(), discardReason, ...extra });
   let text;
   for (let i = 0; ; i++) {
     try { text = fs.readFileSync(file, 'utf8'); break; } catch (e) {
-      if (i >= 4 || !TRANSIENT.includes(e?.code)) return new Map();
+      if (e?.code === 'ENOENT') return drop('missing');
+      if (i >= 4 || !TRANSIENT.includes(e?.code)) return drop('unreadable');
       sleep(10 * (i + 1));
     }
   }
   let o;
-  try { o = JSON.parse(text); } catch { return new Map(); }
-  if (!isObj(o) || o.v !== INDEX_VERSION || o.fold !== FOLD_VERSION || !isObj(o.entries)) return new Map();
-  return new Map(Object.entries(o.entries));
+  try { o = JSON.parse(text); } catch { return drop('malformed'); }
+  if (!isObj(o)) return drop('shape');
+  if (o.v !== INDEX_VERSION) return drop('index-version');
+  if (o.fold !== FOLD_VERSION) return drop('fold-version', { foldWas: typeof o.fold === 'string' ? o.fold.slice(0, 32) : null, foldNow: FOLD_VERSION });
+  if (!isObj(o.entries)) return drop('shape');
+  return { entries: new Map(Object.entries(o.entries)), discardReason: null };
 }
+
+/** Entries by id, or an empty map (missing, unreadable, another version, any malformed byte). Transient win32 errors retried, bounded. */
+export function readFoldIndex(file, opts) { return readFoldIndexInfo(file, opts).entries; }
 
 /** Layout: a header line `{"v":1,"fold":"…","entries":{`, one `"id":{…},` line per entry, then `}}`. Still one JSON value. */
 export function serializeFoldIndex(entries) {
