@@ -1407,7 +1407,7 @@ async function handlePushTest(req, res) {
 async function handleProfiles(req, res) {
   try {
     if (req.method === "GET") {
-      const state = loadProfiles(undefined, { autoImportPaseo: true });
+      const state = loadProfiles(undefined, { autoImportPaseo: true, listBuiltins: true }); // idea-274
       const diff = diffProfiles(state.profiles, state.paseoProfiles);
       const warningsByProfile = { ...(state.warningsByProfile ?? {}) };
       for (const d of diff) {
