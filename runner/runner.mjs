@@ -683,8 +683,9 @@ export class Runner {
   // idea-146: only a live turn or running background work keeps a slot. Idle agents with no work go first (oldest first); then
   // holds past parkHoldYieldMs (oldest hold first), force-parked and told why (_forcePark). Never for room: a hold younger than
   // that, or an agent whose held work just exited and whose wake check is pending (idea-312: parking it now would drop the
-  // wake; it runs a turn within one grace).
-  _makeRoom(except, { dryRun = false } = {}) {
+  // wake; it runs a turn within one grace). yieldHolds false (a forced park's stopped-work notice, _forcePark): idle agents only,
+  // never another hold, so one yield for room never cascades into the next (the notice waits for a slot like any send).
+  _makeRoom(except, { dryRun = false, yieldHolds = true } = {}) {
     const others = [...this.live.entries()].filter(([k]) => k !== except);
     if (others.length < this.maxLive) return true;
     // A held or unprobed idle agent is probed now (one not yet probed may have nothing); the result re-pumps. A hold this probe
@@ -700,7 +701,7 @@ export class Runner {
     const now = Date.now();
     // A hold yields on a fresh probe that still sees its work (e.work: this round's probe above, which re-pumps), never on a
     // stale one: work that already exited is owed the finished-work wake, not the stopped-work notice.
-    const yieldable = others.filter(([, e]) => this._parkable(e) && e.work?.length > 0 && e.heldSince !== null && e.heldSince !== undefined && now - e.heldSince >= this.parkHoldYieldMs)
+    const yieldable = !yieldHolds ? [] : others.filter(([, e]) => this._parkable(e) && e.work?.length > 0 && e.heldSince !== null && e.heldSince !== undefined && now - e.heldSince >= this.parkHoldYieldMs)
       .sort((a, b) => a[1].heldSince - b[1].heldSince);
     const need = others.length - this.maxLive + 1;
     if (dryRun) return idle.length + yieldable.length >= need; // enough parkable agents to get below the ceiling
@@ -729,7 +730,7 @@ export class Runner {
     setImmediate(() => {
       if (this._shutDown || this.live.has(id) || this.queue.some((j) => j.id === id)) return; // a send resumed it meanwhile: that turn sees its work's state itself
       this.store.append(id, 'bg-wake', { work, forced: reason });
-      try { this.send(id, bgForcedText(work, heldMs, reason), { origin: 'bg-wake' }); } catch (err) {
+      try { this.send(id, bgForcedText(work, heldMs, reason), { origin: 'bg-wake', yieldHolds: false }); } catch (err) {
         try { this.store.append(id, 'error', { message: `bg-wake: ${err.message}` }); } catch { /* log gone */ }
       }
     });
@@ -784,8 +785,13 @@ export class Runner {
       // budget) may start: the family never starts more than cap + OWNER_OVER_CAP + digestReserve turns at once.
       if (running >= cap && !this._overCapKind(job)) return false;
     }
-    return !!entry || this._makeRoom(job.id, { dryRun: true });
+    return !!entry || this._makeRoom(job.id, { dryRun: true, yieldHolds: job.yieldHolds !== false });
   }
+
+  // idea-146: a queued job that may not yield a hold (a stopped-work notice) and waits only for that reason: with yields it
+  // would fit. It does not hold up later jobs of its family that may yield (else every live slot held past its yield age plus
+  // one such notice at the family head would stall that family until some hold ended on its own).
+  _waitsOnYieldOnly(job) { return job.yieldHolds === false && !this._fits(job) && this._fits({ ...job, yieldHolds: true }); }
 
   // Which over-cap budget a job may start from when its family is at the cap: 'owner', 'digest' or null (none left / neither).
   _overCapKind(job) {
@@ -804,7 +810,7 @@ export class Runner {
     // A job that would run ahead of this one in the queue: a same-family job of the same or a higher rank.
     // idea-146/312: a runtime wake into the live process that held its slot for that work (job.inPlace) needs a turn slot only;
     // FIFO behind a queued job that waits for a LIVE slot would deadlock (that job waits on this agent's slot, this turn on it).
-    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job));
+    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job) && !this._waitsOnYieldOnly(j));
     if (!familyQueued && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
@@ -844,7 +850,7 @@ export class Runner {
         const job = this.queue[i];
         const b = blocked.get(job.family);
         if (b !== undefined && (b > 0 || this._rank(job) === 0)) { i++; continue; }
-        if (!this._fits(job)) { blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
+        if (!this._fits(job)) { if (!this._waitsOnYieldOnly(job)) blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
         this.queue.splice(i, 1);
         try { job.run(); } catch (err) { this._failJob(job, err); }
         i = 0; // running it may have changed what fits (a park, a new turn): rescan from the head
@@ -1403,10 +1409,10 @@ export class Runner {
 
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
   // promptless: a bare resume (no send behind it), whose `starting` is tagged `resume: true` (see _settleResume).
-  _resume(id, fallbackSpec = null, { promptless = false } = {}) {
+  _resume(id, fallbackSpec = null, { promptless = false, yieldHolds = true } = {}) {
     const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
-    if (!this._makeRoom(id)) throw new Error('no live process slot free');
+    if (!this._makeRoom(id, { yieldHolds })) throw new Error('no live process slot free');
     this.store.append(id, 'status', { status: 'starting', ...(promptless ? { resume: true } : {}) });
     return this._start(id, spec);
   }
@@ -1484,6 +1490,7 @@ export class Runner {
       id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
       run: () => this._deliverJob(job),
       ...(opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
+      ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
     else this._admit(job);
@@ -1522,7 +1529,7 @@ export class Runner {
   // Starts (or resumes) the job's agent and delivers its text, marking an owner job that begins a fresh turn over the
   // family cap as an over-cap owner turn (tracked for the +OWNER_OVER_CAP budget).
   _deliverJob(job) {
-    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec);
+    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec, { yieldHolds: job.yieldHolds !== false });
     this._noteOverCap(job, entry);
     this._deliver(entry, job.text, job.images ?? []);
   }
