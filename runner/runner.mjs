@@ -246,7 +246,18 @@ export function parkGraceFromEnv(env = process.env) {
 // The after-turn park is held while the agent has background work (a shell its CLI left running: a test suite, a build;
 // see background.mjs), re-checked every poll (unless a restart drain refuses a new hold: see Runner.setDrain), and forced (logged as park-forced, with what was killed) past the max hold
 // so a held agent cannot keep its live slot forever. A max hold of 0 turns the hold off (park kills the tree at once).
-export const DEFAULT_PARK_HOLD_MAX_MS = 60 * 60 * 1000;
+// idea-312: the max hold is a hard ceiling, not the slot policy. At 60 min it force-parked EFI Godot suites (66 min, run with
+// --timeout 7000) that nothing needed the slot from, silently: the CLI died with the work and nobody woke the agent. Holding
+// costs nothing while the live cap has room, so the hard ceiling is 4 h (past any suite's own timeout) and the yield age below
+// is what frees a slot for the queue.
+export const DEFAULT_PARK_HOLD_MAX_MS = 4 * 60 * 60 * 1000;
+// idea-146: a hold older than this gives its live slot up when the queue needs one (Runner._makeRoom: idle agents first, then
+// the oldest such hold; park-forced reason 'room'). Younger holds, and any hold while the live cap has room, keep running.
+export const DEFAULT_PARK_HOLD_YIELD_MS = 60 * 60 * 1000;
+export function parkHoldYieldFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_PARK_HOLD_YIELD_MS);
+  return env.VS_RUNNER_PARK_HOLD_YIELD_MS !== undefined && env.VS_RUNNER_PARK_HOLD_YIELD_MS !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_HOLD_YIELD_MS;
+}
 // A restart drain's TTL ceiling: `vs restart` asks for its wait timeout + stop timeout + a margin.
 export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
 // What an agent whose new background work a drain refused reads at the start of its next input.
@@ -265,6 +276,16 @@ export function bgStopNoticeText(work) {
 export function bgWakeText(work) {
   const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
   return `[VibeSquad runtime] Background work you started before your turn ended (${cmds || 'a shell'}) has finished. Read its output (task output / log file; do not rerun it unless the output is gone) and continue your task. If you were waiting on it to finish your work, report your result now.`;
+}
+// idea-312: what a held agent reads after a forced park stopped the background work it ended its turn on ('room': the live
+// cap needed its slot past the yield age; 'max': the hard max hold). The tree kill may miss detached children, so the work
+// may or may not have finished: the agent checks its output before rerunning, and reruns in the foreground (a live turn is
+// never parked).
+export function bgForcedText(work, heldMs, reason) {
+  const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  const mins = Math.max(1, Math.round((Number(heldMs) || 0) / 60_000));
+  const why = reason === 'room' ? 'the runtime needed its live slot for queued agents' : "it reached the runtime's max hold";
+  return `[VibeSquad runtime] Background work you started before your turn ended (${cmds || 'a shell'}) was still running after ${mins} min and was stopped (${why}). It may not have finished: check its output or log first. If it is incomplete, rerun it in the FOREGROUND with a timeout (a running turn is never stopped), then continue your task and report.`;
 }
 export function parkHoldMaxFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_HOLD_MAX_MS);
@@ -323,7 +344,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
     this.store = new LogStore(dir);
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
@@ -344,6 +365,7 @@ export class Runner {
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
     this.parkGraceMs = parkGraceMs;
     this.parkHoldMaxMs = parkHoldMaxMs;
+    this.parkHoldYieldMs = parkHoldYieldMs;
     this.parkHoldPollMs = parkHoldPollMs;
     this.parkHoldSlowAfterMs = parkHoldSlowAfterMs;
     this.parkHoldSlowPollMs = Math.max(parkHoldPollMs, parkHoldSlowPollMs);
@@ -658,18 +680,59 @@ export class Runner {
   }
 
   // Room for one more live process (the safety ceiling): parks the oldest idle agent if needed. False when nothing can be parked.
+  // idea-146: only a live turn or running background work keeps a slot. Idle agents with no work go first (oldest first); then
+  // holds past parkHoldYieldMs (oldest hold first), force-parked and told why (_forcePark). Never for room: a hold younger than
+  // that, or an agent whose held work just exited and whose wake check is pending (idea-312: parking it now would drop the
+  // wake; it runs a turn within one grace).
   _makeRoom(except, { dryRun = false } = {}) {
     const others = [...this.live.entries()].filter(([k]) => k !== except);
     if (others.length < this.maxLive) return true;
-    // Never for room: an idle agent with background work (held). One not yet probed is probed now; the result re-pumps.
-    for (const [k, e] of others) if (this._parkable(e) && !this._parkableNow(e) && e.work === null) this._probeWork(k, e).then(() => this._pump());
-    const idle = others.filter(([, e]) => this._parkableNow(e)).sort((a, b) => a[1].lastActive - b[1].lastActive);
-    if (dryRun) return idle.length > others.length - this.maxLive; // enough parkable agents to get below the ceiling
-    for (let n = others.length - this.maxLive + 1; n > 0; n--) {
-      if (!idle.length) return false;
-      this.park(idle.shift()[0]);
+    // A held or unprobed idle agent is probed now (one not yet probed may have nothing); the result re-pumps. A hold this probe
+    // finds empty runs its after-hold check at once (the wake), instead of at the next hold poll.
+    for (const [k, e] of others) {
+      if (!(this._parkable(e) && !this._parkableNow(e) && e.work === null)) continue;
+      this._probeWork(k, e).then((w) => {
+        if (Array.isArray(w) && !w.length && e.heldSince !== null && e.heldSince !== undefined && this.live.get(k) === e) this._armPark(k, e, 0);
+        this._pump();
+      });
+    }
+    const idle = others.filter(([, e]) => this._parkableNow(e) && !this._wakeOwed(e)).sort((a, b) => a[1].lastActive - b[1].lastActive);
+    const now = Date.now();
+    // A hold yields on a fresh probe that still sees its work (e.work: this round's probe above, which re-pumps), never on a
+    // stale one: work that already exited is owed the finished-work wake, not the stopped-work notice.
+    const yieldable = others.filter(([, e]) => this._parkable(e) && e.work?.length > 0 && e.heldSince !== null && e.heldSince !== undefined && now - e.heldSince >= this.parkHoldYieldMs)
+      .sort((a, b) => a[1].heldSince - b[1].heldSince);
+    const need = others.length - this.maxLive + 1;
+    if (dryRun) return idle.length + yieldable.length >= need; // enough parkable agents to get below the ceiling
+    for (let n = need; n > 0; n--) {
+      if (idle.length) { this.park(idle.shift()[0]); continue; }
+      if (!yieldable.length) return false;
+      const [k, e] = yieldable.shift();
+      this._forcePark(k, e, 'room');
     }
     return true;
+  }
+
+  // A held agent (heldWork: what its hold is on) whose work a probe just saw exit, with its hold check armed or probing: the
+  // agent is about to be woken (_wakeAfterBackground), so room never parks it into silence. With no check pending nothing would
+  // wake it, so it is not protected (never pinned to its slot).
+  _wakeOwed(e) { return !!e.heldWork && (e.parkTimer !== null || !!e.probing); }
+
+  // Parks a held agent whose background work is still running (the hard max hold, or a yield for room) and tells it, once:
+  // the wake is a normal send, admitted after the current job (setImmediate: never ahead of the job this slot was freed for).
+  _forcePark(id, entry, reason) {
+    const work = entry.work?.length ? entry.work : (entry.heldNow?.length ? entry.heldNow : (entry.heldWork ?? [])); // the fresh snapshot this park acts on
+    const heldMs = Date.now() - (entry.heldSince ?? Date.now());
+    this.store.append(id, 'park-forced', { heldMs, work, reason });
+    entry.heldWork = null;
+    this.park(id);
+    setImmediate(() => {
+      if (this._shutDown || this.live.has(id) || this.queue.some((j) => j.id === id)) return; // a send resumed it meanwhile: that turn sees its work's state itself
+      this.store.append(id, 'bg-wake', { work, forced: reason });
+      try { this.send(id, bgForcedText(work, heldMs, reason), { origin: 'bg-wake' }); } catch (err) {
+        try { this.store.append(id, 'error', { message: `bg-wake: ${err.message}` }); } catch { /* log gone */ }
+      }
+    });
   }
 
   // Running turns of one provider family (agents holding a turn slot), not live processes. A quiet turn (see _sweepQuiet)
@@ -739,7 +802,9 @@ export class Runner {
   // a digest likewise jumps every non-owner job of its family (idea-203).
   _admit(job) {
     // A job that would run ahead of this one in the queue: a same-family job of the same or a higher rank.
-    const familyQueued = this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job));
+    // idea-146/312: a runtime wake into the live process that held its slot for that work (job.inPlace) needs a turn slot only;
+    // FIFO behind a queued job that waits for a LIVE slot would deadlock (that job waits on this agent's slot, this turn on it).
+    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job));
     if (!familyQueued && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
@@ -877,8 +942,7 @@ export class Runner {
       entry.heldNow = work; // what holds it NOW (heldWork keeps what the hold started on, for the wake text): heldIds' reality check
       const heldMs = now - entry.heldSince;
       if (heldMs >= this.parkHoldMaxMs) {
-        this.store.append(id, 'park-forced', { heldMs, work });
-        this.park(id);
+        this._forcePark(id, entry, 'max'); // logs and reports what this FRESH snapshot sees (entry.work, just settled)
         this._pump();
         return;
       }
@@ -916,7 +980,7 @@ export class Runner {
     const work = entry.heldWork;
     entry.heldWork = null;
     this.store.append(id, 'bg-wake', { work });
-    try { this.send(id, bgWakeText(work), { origin: 'bg-wake' }); } catch (err) {
+    try { this.send(id, bgWakeText(work), { origin: 'bg-wake' }); this._pump(); } catch (err) { // pump: a wake queued behind a turn cap leaves this agent idle-parkable, so a job waiting for room may now fit
       try { this.store.append(id, 'error', { message: `bg-wake: ${err.message}` }); } catch { /* log gone */ }
       if (this.live.get(id) === entry && this._parkable(entry)) { this.park(id); this._pump(); }
     }
@@ -1419,6 +1483,7 @@ export class Runner {
     const job = {
       id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
       run: () => this._deliverJob(job),
+      ...(opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
     else this._admit(job);
