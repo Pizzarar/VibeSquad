@@ -110,7 +110,11 @@ export function doneRecently(finished: NeedsYouRow[], logs: DoneLog[], limit = R
 }
 
 /** `now` is owned by BoringApp (one tick shared with the sidebar badges, so heading == badge sum at the 600s boundary). */
-export function BoringInbox({ views, onOpen, now, logs: injected }: { views: TeamView[]; onOpen: (row: NeedsYouRow) => void; now: number; logs?: DoneLog[] }) {
+/**
+ * `sidebarMenu` (Psycho left sidebar, default false = Normal markup unchanged): the hover `⋯` menu drops role="menu"/"menuitem", because the
+ * always-mounted hidden menu would match SKY_ESC_POPOVER_SELECTOR (`[role='menu']`) and make an open sky takeover ignore Esc.
+ */
+export function BoringInbox({ views, onOpen, now, logs: injected, sidebarMenu = false }: { views: TeamView[]; onOpen: (row: NeedsYouRow) => void; now: number; logs?: DoneLog[]; sidebarMenu?: boolean }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
@@ -143,10 +147,10 @@ export function BoringInbox({ views, onOpen, now, logs: injected }: { views: Tea
     return (
       <div className="boring-needs-menu-wrap">
         <button type="button" className="boring-needs-more" data-testid={`boring-needs-menu-${item.id}`} aria-haspopup="menu" aria-label={`More actions for ${r.who}`} title="More actions">⋯</button>
-        <div className="boring-needs-menu" role="menu">
-          <button type="button" role="menuitem" className="boring-needs-menu-item" disabled={dis} data-testid="boring-needs-snooze" onClick={() => run(item.id, () => laterItem(item, deps))}>Snooze 2h</button>
+        <div className="boring-needs-menu" role={sidebarMenu ? "group" : "menu"} aria-label={sidebarMenu ? "Row actions" : undefined}>
+          <button type="button" role={sidebarMenu ? undefined : "menuitem"} className="boring-needs-menu-item" disabled={dis} data-testid="boring-needs-snooze" onClick={() => run(item.id, () => laterItem(item, deps))}>Snooze 2h</button>
           {item.kind !== "permission" && (
-            <button type="button" role="menuitem" className="boring-needs-menu-item" disabled={dis} data-testid="boring-needs-dismiss" onClick={() => run(item.id, () => clearItem(item, deps))}>Dismiss</button>
+            <button type="button" role={sidebarMenu ? undefined : "menuitem"} className="boring-needs-menu-item" disabled={dis} data-testid="boring-needs-dismiss" onClick={() => run(item.id, () => clearItem(item, deps))}>Dismiss</button>
           )}
         </div>
       </div>
