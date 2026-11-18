@@ -11,8 +11,8 @@ import { appendFileSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, write
 import os from "node:os";
 import path from "node:path";
 import { Runner } from "../runner/runner.mjs";
-import { FOLD_INDEX_FILE, saveFold } from "../runner/fold-index.mjs";
-import { coldEntry, coldFoldEntries, coldFoldWorkersFromEnv } from "../runner/fold-cold.mjs";
+import { FOLD_INDEX_FILE, racy, saveFold } from "../runner/fold-index.mjs";
+import { coldEntry, coldFoldEntries, coldFoldLiveWorkers, coldFoldWorkersFromEnv } from "../runner/fold-cold.mjs";
 import { LogStore } from "../runner/log.mjs";
 
 const adapters = { claude: { canPark: true, lazyResume: true }, gemini: { canPark: false } }; // nothing is spawned (_admit stubbed)
@@ -76,11 +76,11 @@ function fixture(count = 3 * KINDS.length) {
 }
 
 // A booted runner: optional prefold, then the boot pass. _admit is stubbed (records the requeued jobs, starts nothing).
-async function boot(h, { workers = 0, index = true, before = null } = {}) {
+async function boot(h, { workers = 0, index = true, before = null, prefold = {} } = {}) {
   const r = new Runner({ dir: h.dir, adapters, maxLive: 4, foldIndexFile: index ? h.file : null, bgProbe: null });
   r.admitted = [];
   r._admit = (job) => r.admitted.push({ id: job.id, text: job.text, owner: job.owner, spec: job.spec });
-  if (workers > 0) await r.prefoldCold({ workers, min: 1 });
+  if (workers > 0) await r.prefoldCold({ ...prefold, workers, min: 1 });
   before?.(r);
   r.back = r.recoverQueued({ shouldAdmit: () => true });
   return r;
@@ -200,5 +200,117 @@ test("cost guard: a cold boot pass opens each log at most twice serially, never 
       assert.ok(n <= (noCreated ? 3 : workers ? 0 : 2), `${workers} workers: ${id} opened ${n}x`);
     }
     nodeFs.rmSync(h.file, { force: true }); // each pass is a cold boot
+  }
+});
+
+// ---- review fixes (Bug25 Tier A R1: H1, H2, M1, M2, M3) ----
+
+// H1: a LogStore whose fs runs `mutate` just before the nth open of the log (open 1: the line count's scan; 2: the first read
+// slice, i.e. after the index was built from the old bytes; 3+: between read slices). coldEntry's own stats are node:fs.
+function mutatingStore(h, id, at, mutate) {
+  let n = 0;
+  const fsImpl = { ...nodeFs, openSync: (p, ...a) => { if (p === logFile(h, id) && ++n === at) mutate(); return nodeFs.openSync(p, ...a); } };
+  return new LogStore(h.dir, fsImpl);
+}
+// Same-size rewrite that adds a line: the created line's prompt gives up as many bytes as a new text line takes.
+function splitRewrite(h, id) {
+  const t = readFileSync(logFile(h, id), "utf8");
+  const extra = JSON.stringify({ seq: 0, ts: 1, type: "text", text: "zz" }) + "\n";
+  const p = " p".repeat(200);
+  const out = t.replace(p, p.slice(extra.length)).replace("\n", "\n" + extra);
+  assert.equal(Buffer.byteLength(out), Buffer.byteLength(t));
+  writeFileSync(logFile(h, id), out);
+}
+const MUTATIONS = {
+  append: (h, id) => appendFileSync(logFile(h, id), ev(900, "input", { text: "late" })),
+  sameSizeRewrite: (h, id) => { const t = readFileSync(logFile(h, id), "utf8"); writeFileSync(logFile(h, id), t.replace("turn 0", "TURN 0")); age(h, id, 40); },
+  rewriteAndAppend: (h, id) => { splitRewrite(h, id); appendFileSync(logFile(h, id), ev(900, "input", { text: "late" })); },
+  truncate: (h, id) => { const t = readFileSync(logFile(h, id), "utf8").split("\n"); writeFileSync(logFile(h, id), t.slice(0, 5).join("\n") + "\n"); age(h, id, 40); },
+};
+
+test("H1: coldEntry pins its bytes: a log written between its stat and the end of its read gives no entry", () => {
+  for (const [name, mutate] of Object.entries(MUTATIONS)) {
+    for (const at of [2, 3]) { // after the line count / between two read slices
+      const { h, ids } = fixture(KINDS.length);
+      const id = ids[0];
+      const store = mutatingStore(h, id, at, () => mutate(h, id));
+      assert.equal(coldEntry(store, id, 256), null, `${name} before open #${at}`);
+    }
+  }
+  const { h, ids } = fixture(KINDS.length); // control: unchanged, read in slices -> an entry
+  assert.ok(coldEntry(mutatingStore(h, ids[0], 99, () => {}), ids[0], 256));
+});
+
+test("H1: a mid-read rewrite+append in the cold fold leaves the boot equal to the serial fold (fold state, line index, decisions)", async () => {
+  const { h, ids } = fixture();
+  const id = ids[0]; // parked
+  let worker = null;
+  const r = await boot(h, { workers: 2, before: (rr) => {
+    // What a worker hands over when the log is rewritten (one line more, same size) and appended right after its line count.
+    worker = coldEntry(mutatingStore(h, id, 2, () => { MUTATIONS.rewriteAndAppend(h, id); age(h, id, 30); }), id);
+    if (worker) rr._coldSeed.entries.set(id, worker); else rr._coldSeed.entries.delete(id);
+  } });
+  assert.deepEqual(snapshot(r), snapshot(await boot(h, { index: false })));
+  assert.equal(worker, null);
+});
+
+test("H2: a log racy at the worker's stat gets no entry; grown before the boot pass it is folded from 0, never resumed", async () => {
+  const { h, ids } = fixture();
+  const fresh = ids[0]; // parked
+  const t = Date.now() / 1000; utimesSync(logFile(h, fresh), t, t);
+  let entries = null;
+  const r = await boot(h, { workers: 2, before: (rr) => {
+    entries = rr._coldSeed.entries;
+    appendFileSync(logFile(h, fresh), ev(900, "input", { text: "wake" }) + ev(901, "status", { status: "running" }));
+    age(h, fresh, 30);
+  } });
+  assert.equal(entries.has(fresh), false, "no worker entry for a racy log");
+  assert.ok([...entries.values()].every((e) => !racy(e)), "no worker entry is racy");
+  assert.equal(r.foldIndexStats.resumed, 0);
+  assert.equal(r.foldIndexStats.full, 1 + ids.filter((_, i) => KINDS[i % KINDS.length] === "noCreated").length);
+  assert.equal(r.folds.get(fresh).lastStatus.status, "running");
+  assert.deepEqual(snapshot(r), snapshot(await boot(h, { index: false })));
+});
+
+test("M1: workers are gone when the pool resolves; shutdown() mid-prefold terminates them and hands nothing over", async () => {
+  const { h, ids } = fixture(6 * KINDS.length);
+  const got = await coldFoldEntries(h.dir, ids, { workers: 3 });
+  assert.ok(got.size > 0);
+  assert.equal(coldFoldLiveWorkers(), 0, "success path: every thread exited before resolve");
+  const ac = new AbortController(); ac.abort();
+  assert.equal((await coldFoldEntries(h.dir, ids, { workers: 3, signal: ac.signal })).size, 0);
+  const r = new Runner({ dir: h.dir, adapters, foldIndexFile: h.file, bgProbe: null });
+  const p = r.prefoldCold({ workers: 3, min: 1, batch: 1 });
+  r.shutdown();
+  assert.equal(await p, null);
+  assert.equal(r._coldSeed, null);
+  assert.equal(coldFoldLiveWorkers(), 0, "shutdown: every thread exited");
+});
+
+test("M3: workers killed mid-batch (timeout) leave a partial set of entries; the boot pass folds the rest: parity", async () => {
+  const { h } = fixture(6 * KINDS.length);
+  const want = snapshot(await boot(h, { index: false }));
+  const seen = new Set();
+  for (const timeoutMs of [0, 15, 40, 120]) {
+    const r = await boot(h, { workers: 3, prefold: { timeoutMs, batch: 1, sliceBytes: 512 } });
+    assert.equal(coldFoldLiveWorkers(), 0);
+    seen.add(r.foldIndexStats.cold.folded);
+    assert.deepEqual(snapshot(r), want, `timeout ${timeoutMs}ms, ${r.foldIndexStats.cold.folded} worker entries`);
+  }
+  assert.ok(seen.size >= 1, [...seen].join());
+});
+
+test("M2: coldEntry folds a log slice by slice (bounded events per read) into the same entry as one whole read", () => {
+  const { h, ids } = fixture(KINDS.length);
+  for (const id of ids) {
+    const whole = coldEntry(new LogStore(h.dir), id);
+    const sliced = new LogStore(h.dir);
+    const real = sliced.readFrom.bind(sliced);
+    let reads = 0, most = 0;
+    sliced.readFrom = (...a) => { const r = real(...a); reads++; most = Math.max(most, r.events.length); return r; };
+    const e = coldEntry(sliced, id, 300);
+    const strip = (o) => (o ? (({ statAt, ...x }) => x)(o) : o);
+    assert.deepEqual(strip(e), strip(whole), id);
+    if (whole && whole.offset > 4000) assert.ok(reads > 5 && most <= 4, `${id}: ${reads} reads, at most ${most} events each`);
   }
 });

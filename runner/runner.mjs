@@ -372,6 +372,7 @@ export class Runner {
     this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
     this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
     this._coldSeed = null; // prefoldCold's index read + worker-folded entries, taken by the next _loadFoldIndex
+    this._coldAbort = null; // AbortController of an in-flight prefoldCold: shutdown() terminates its workers
     this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
     this.resaveDelayMs = RACY_MS + 1500; // saveFoldIndex re-runs this long after a save that left racy entries (their logs may settle)
     this._resaveTimer = null;
@@ -1684,14 +1685,21 @@ export class Runner {
   // Boot, before recoverQueued (runner/fold-cold.mjs): the logs the fold index has no entry for (all of them after a fold-code
   // change, which drops the index) are folded on worker threads, so the boot pass serves them as trusted entries instead of
   // folding each from byte 0 on the main thread. Fewer than COLD_FOLD_MIN such logs, no index, or no workers: nothing to do.
-  async prefoldCold({ workers = coldFoldWorkersFromEnv(), min = COLD_FOLD_MIN } = {}) {
+  // shutdown() during the prefold terminates its workers (and the prefold then hands nothing over).
+  async prefoldCold({ workers = coldFoldWorkersFromEnv(), min = COLD_FOLD_MIN, ...opts } = {}) {
     this._coldSeed = null;
-    if (!this._foldIndexOn() || !(workers > 0)) return null;
+    if (this._shutDown || !this._foldIndexOn() || !(workers > 0)) return null;
     const t0 = Date.now();
     const seed = readFoldIndex(this.foldIndexFile);
     const loadMs = Date.now() - t0;
     const missing = this.store.ids().filter((id) => !seed.has(id));
-    const entries = missing.length >= min ? await coldFoldEntries(this.store.dir, missing, { workers }) : new Map();
+    let entries = new Map();
+    if (missing.length >= min) {
+      const ac = new AbortController();
+      this._coldAbort = ac;
+      try { entries = await coldFoldEntries(this.store.dir, missing, { ...opts, workers, signal: ac.signal }); } finally { if (this._coldAbort === ac) this._coldAbort = null; }
+    }
+    if (this._shutDown) return null;
     this._coldSeed = { seed, loadMs, entries, logs: missing.length, workers: entries.size ? Math.min(workers, missing.length) : 0, ms: Date.now() - t0 };
     return { logs: missing.length, folded: entries.size, ms: this._coldSeed.ms };
   }
@@ -1867,6 +1875,8 @@ export class Runner {
     this._shutDown = true;
     clearTimeout(this._resaveTimer);
     this._resaveTimer = null;
+    this._coldAbort?.abort(); // a boot's prefold still folding: its worker threads are terminated
+    this._coldAbort = null;
     this._pollAgy?.shutdown();
     this.closeRosterWatch();
     clearInterval(this._quietSweep);
