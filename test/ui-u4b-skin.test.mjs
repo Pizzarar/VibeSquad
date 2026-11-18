@@ -8,7 +8,8 @@ import fs from 'node:fs';
 const css = fs.readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const U4_START = css.indexOf('U4b: quiet tools, loud world');
 assert.ok(U4_START > 0, 'U4b block missing');
-const u4 = css.slice(U4_START);
+const U2_START = css.indexOf('Desk Psycho U2: cross-squad'); // Psycho Needs-you spine chrome is appended after U4b and owns its own fonts
+const u4 = css.slice(U4_START, U2_START > U4_START ? U2_START : undefined);
 const u3 = css.slice(0, U4_START);
 
 // ---- tiny CSS helpers ----
