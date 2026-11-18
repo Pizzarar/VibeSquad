@@ -272,7 +272,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (!scoped(res, caller, 'cancel', id)) return;
         try {
           const r = await runner.stopBackground(id, { by: isAgent ? caller.id : 'admin' });
-          return json(res, 200, { ok: true, stopped: r.stopped, ...(r.spared?.length ? { spared: r.spared } : {}) });
+          return json(res, 200, { ok: true, stopped: r.stopped, ...(r.spared ? { spared: r.spared, held: r.held } : {}) });
         } catch (err) { return json(res, err.status ?? 500, { error: String(err.message ?? err) }); }
       }
       if (parts[2] === 'cancel' && req.method === 'POST') {

@@ -128,43 +128,43 @@ test('a permission that resolves while the agent is idle re-arms the park (the t
   h.runner.shutdown();
 });
 
-// ---- 6. idea-315: --background works mid-turn, killing only proven-background shells ---------------------------------------
+// ---- 6. idea-315: mid-turn --background kills nothing; it only refreshes the held entry --------------------------------------
 
-test('mid-turn stopBackground kills only shells an idle probe proved background; a foreground non-vs shell survives and is reported', async () => {
+test('mid-turn stopBackground kills no process (live foreground shell included), leaves the turn and entry.work alone, reports spared', async () => {
   const h = harness();
-  const id = h.create();
+  const id = h.create(); // turn running
   const pid = h.handles.get(id).pid;
-  h.work.set(pid, [SHELL]); h.alive.add(SHELL.pid);
-  h.endTurn(id);
-  await until(() => types(h.runner, id).includes('park-held')); // an idle probe saw SHELL: proven background
-  h.runner.send(id, 'next'); // a new turn starts: its running foreground tool shell appears beside it
   const FG = { pid: 4300, name: 'bash', cmd: 'node --test test/x.test.mjs' };
-  const SELF = { pid: 4243, name: 'bash', cmd: 'vs stop rn-self --background' };
-  h.work.set(pid, [SHELL, FG, SELF]); h.alive.add(FG.pid); h.alive.add(SELF.pid);
+  h.work.set(pid, [SHELL, FG]); h.alive.add(SHELL.pid); h.alive.add(FG.pid);
   const entry = h.runner.live.get(id);
-  assert.equal(entry.inflight > 0, true, 'mid-turn');
+  assert.equal(entry.inflight > 0, true);
   let cancelled = false;
   h.handles.get(id).cancel = () => { cancelled = true; };
   const r = await h.runner.stopBackground(id, { by: id });
-  assert.deepEqual(r.stopped, [SHELL]);
-  assert.deepEqual(r.spared, [FG, SELF]);
-  assert.equal(h.alive.has(SHELL.pid), false);
-  assert.equal(h.alive.has(FG.pid), true, 'foreground shell survives');
-  assert.equal(h.alive.has(SELF.pid), true, 'own vs stop shell survives');
-  assert.equal(cancelled, false, 'turn not cancelled');
-  assert.equal(entry.inflight > 0, true, 'turn still open');
-  assert.equal(entry.work, null, 'the turn\'s own bookkeeping is untouched');
-  assert.ok(!entry.bgStopNotice, 'no notice to the agent that just asked');
+  assert.deepEqual(r, { stopped: [], spared: [SHELL, FG], held: false });
+  assert.equal(h.alive.has(SHELL.pid) && h.alive.has(FG.pid), true, 'nothing killed');
+  assert.equal(cancelled, false);
+  assert.equal(entry.inflight > 0, true);
+  assert.equal(entry.work, null);
   h.runner.shutdown();
 });
 
-test('mid-turn stopBackground with nothing proven kills nothing', async () => {
+test('mid-turn stopBackground clears a stale held entry (held pid gone) but keeps one whose shell is still there', async () => {
   const h = harness();
   const id = h.create();
-  const FG = { pid: 4300, name: 'bash', cmd: 'npm test' };
-  h.work.set(h.handles.get(id).pid, [FG]); h.alive.add(FG.pid);
+  const pid = h.handles.get(id).pid;
+  const entry = h.runner.live.get(id);
+  entry.heldSince = Date.now(); entry.heldNow = [SHELL]; entry.heldWork = [SHELL];
+  h.work.set(pid, [SHELL]); h.alive.add(SHELL.pid);
+  assert.equal((await h.runner.stopBackground(id)).held, true, 'still there: kept');
+  assert.equal(entry.heldSince !== null, true);
+  h.work.set(pid, []); // the held shell is gone
   const r = await h.runner.stopBackground(id);
-  assert.deepEqual(r, { stopped: [], spared: [FG] });
-  assert.equal(h.alive.has(FG.pid), true);
+  assert.deepEqual(r, { stopped: [], spared: [], held: false });
+  assert.equal(entry.heldSince, null);
+  assert.equal(entry.heldNow, null);
+  assert.equal(entry.heldWork, null);
+  assert.equal(entry.work, null, 'entry.work untouched');
+  assert.deepEqual(h.runner.heldIds().includes(id), false);
   h.runner.shutdown();
 });
