@@ -6483,6 +6483,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .sidebar .boring-needs-btn.ok { background: var(--mint-fill); color: var(--on-pastel); border-color: var(--shadow-hard); font-weight: 700; }
 .sidebar .boring-needs-btn.bad { background: var(--pink-fill); color: var(--on-pink-fill); border-color: var(--shadow-hard); font-weight: 700; }
 .sidebar .boring-needs-btn:disabled, .sidebar .boring-needs-menu-item:disabled { cursor: default; color: var(--muted); }
+:root[data-theme="light"] .sidebar .boring-needs-btn.ok { color: #fff; } /* light mint-fill is darkened: dark ink was 3.1:1, white is 5.1:1 */
 /* hover/focus menu: opens in the row (no absolute popover, so the scrolling spine never clips it) */
 .sidebar .boring-needs-menu-wrap { flex: none; display: flex; align-items: center; gap: 3px; }
 .sidebar .boring-needs-more { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; line-height: 1; cursor: pointer; box-shadow: var(--bevel); }
