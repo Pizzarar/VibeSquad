@@ -188,7 +188,7 @@ const ART_DIRECTOR_NOTE_BODY = [
 ].join("\n");
 
 const UX_REVIEWER_NOTE_BODY = [
-  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots.",
+  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots. Write the report only; never switch branches or check out anything in the main checkout (use your own worktree).",
   "1. Read the job list (docs/UX_REVIEW.md §1.3) and the previous round's doc. Do NOT read the unit's plan until after your first pass.",
   "2. Run the app with ?demo at 3200x1800 (the owner's 4K at 120%), then 1920x1080, dark and light. Drive the standard sequences: open project A then B; Ctrl+J into another project; open a Needs-you item; deep-link ?agent=; expand two projects; open a worker; 10+ alerts. Screenshot each.",
   "3. Check the invariants: counts agree everywhere they're shown; exactly one selected row; breadcrumb = selected row = open agent; expanded projects share one shape; no agent listed more than twice on screen; nothing that explains WHY is truncated.",
@@ -373,7 +373,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "medium",
     notes: note(
-      "Claude-family reviewer:\n1. Primary reviewer for Gemini-written work.\n2. DeepSeek work when Gemini is capped AND Check - Haiku failed or doubted.\n3. Tier B Opus work when Gemini is capped.\n\nNever reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
+      "Claude-family reviewer:\n1. Primary reviewer for Gemini-written work.\n2. DeepSeek work when Gemini is capped AND Check - Haiku failed or doubted.\n3. Tier B Opus work when Gemini is capped.\n\nNever reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.\nContext budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -389,7 +389,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
     notes: note(
-      "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. Cause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
+      "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. Context budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn. Cause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },
@@ -402,7 +402,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     modeId: "auto",
     thinkingOptionId: "low",
     notes: note(
-      "Cheap cross-family checker, used only when Gemini is capped or down:\n1. First-pass review of DeepSeek work.\n2. Fallback for Pre-check - Flash on DeepSeek-written reports.\n\nRead-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
+      "Cheap cross-family checker, used only when Gemini is capped or down:\n1. First-pass review of DeepSeek work.\n2. Fallback for Pre-check - Flash on DeepSeek-written reports.\n\nRead-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.\nContext budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.\nCause-vs-symptom gate: your verdict must answer \"Does this fix the cause or hide the symptom?\" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.",
     ),
     brief: REVIEW_BRIEF,
   },

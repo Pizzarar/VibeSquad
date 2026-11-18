@@ -96,7 +96,7 @@ export const ART_DIRECTOR_NOTE_BODY = [
 ].join("\n");
 
 export const UX_REVIEWER_NOTE_BODY = [
-  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots.",
+  "UX Reviewer. Judges whether the app works for the owner's real jobs, across the whole window, after merges. Never edit source; write only docs/UX_REVIEW_R<n>.md and its screenshots. Write the report only; never switch branches or check out anything in the main checkout (use your own worktree).",
   "1. Read the job list (docs/UX_REVIEW.md §1.3) and the previous round's doc. Do NOT read the unit's plan until after your first pass.",
   "2. Run the app with ?demo at 3200x1800 (the owner's 4K at 120%), then 1920x1080, dark and light. Drive the standard sequences: open project A then B; Ctrl+J into another project; open a Needs-you item; deep-link ?agent=; expand two projects; open a worker; 10+ alerts. Screenshot each.",
   "3. Check the invariants: counts agree everywhere they're shown; exactly one selected row; breadcrumb = selected row = open agent; expanded projects share one shape; no agent listed more than twice on screen; nothing that explains WHY is truncated.",
@@ -104,6 +104,9 @@ export const UX_REVIEWER_NOTE_BODY = [
   "5. Report: status table vs the previous round, then findings ranked critical/major/minor, each with job hurt, evidence, fix, files, effort. Question the spec when the spec is the problem. Put owner decisions in an \"Owner decisions\" section with a recommendation; never decide them.",
   "Verdict line: PASS only if no critical or major finding is open for the area under review. Findings go to the owning lane as inbox cards. Art Director stays for pixel art and art-heavy screens; you judge UX flows.",
 ].join("\n");
+
+const REVIEW_CONTEXT_BUDGET_NOTE =
+  "Context budget: read only the diff + touched functions (grep, then offset reads); never open whole large files (runner.mjs, test loops). Never end a turn without a PASS/FAIL verdict: run commands in the foreground (no background shells) and finish the verdict in the same turn.";
 
 const CAUSE_GATE_NOTE =
   'Cause-vs-symptom gate: your verdict must answer "Does this fix the cause or hide the symptom?" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.';
@@ -145,16 +148,18 @@ const NOTE_BODIES = {
     "3. Tier B Opus work when Gemini is capped.",
     "",
     "Never reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.",
+    REVIEW_CONTEXT_BUDGET_NOTE,
     CAUSE_GATE_NOTE,
   ].join("\n"),
   "Review - Gemini":
-    "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. " + CAUSE_GATE_NOTE,
+    "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. " + REVIEW_CONTEXT_BUDGET_NOTE + " " + CAUSE_GATE_NOTE,
   "Check - Haiku": [
     "Cheap cross-family checker, used only when Gemini is capped or down:",
     "1. First-pass review of DeepSeek work.",
     "2. Fallback for Pre-check - Flash on DeepSeek-written reports.",
     "",
     "Read-only. Output PASS or FAIL with file:line evidence. On FAIL or doubt, the lead escalates to Review - Sonnet. Never a Tier A gate. Never checks Claude-written work.",
+    REVIEW_CONTEXT_BUDGET_NOTE,
     CAUSE_GATE_NOTE,
   ].join("\n"),
   "Pre-check - Flash": [
@@ -850,6 +855,14 @@ export function loadProfiles(profilesPath, options = {}) {
         }
         if (dirty) {
           writeProfilesFile(targetPath, profiles);
+        }
+        // Built-ins shipped after this file was written (e.g. UX Reviewer - Opus) show up in lists and pickers.
+        // Opt-in (listBuiltins) for list/picker callers; in-memory only, never written back, so stored (possibly edited) profiles are untouched.
+        if (options.listBuiltins === true) {
+          for (const rawDef of DEFAULT_PACK_PROFILES) {
+            const def = normalizeProfile(rawDef);
+            if (def && !profiles.some((ep) => matchesProfileIdentity(ep, def))) profiles.push(def);
+          }
         }
         // Schema v2 (P5b): the stored roles ride along untouched; profiles-v2.mjs loadRoles() normalizes + defaults them.
         const v2 = Number(parsed?.schemaVersion) >= PROFILES_SCHEMA_VERSION && parsed?.roles && typeof parsed.roles === "object";
