@@ -202,21 +202,31 @@ export function pidAlive(pid) {
   try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
 
-/** { pid, ppid, cmd } or null. */
-export function procInfo(pid) {
-  if (!pidAlive(pid)) return null;
-  try {
-    if (IS_WIN) {
-      const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `$p=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if($p){"$($p.ParentProcessId)|$($p.CommandLine)"}`], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
-      const line = String(r.stdout ?? '').trim();
-      if (!line) return { pid, ppid: null, cmd: '' };
-      const i = line.indexOf('|');
-      return { pid, ppid: Number(line.slice(0, i)) || null, cmd: line.slice(i + 1) };
+/**
+ * { pid, ppid, cmd } or null (the pid is gone). `cmd: ''` with `unknown: true` means the query failed (Get-CimInstance came
+ * back empty or timed out under load, idea-148/328) or the OS would not show the command line: the caller must treat that
+ * as UNKNOWN identity, never as "a different process". An empty answer is retried (attempts) before giving up.
+ */
+export function procInfo(pid, { run = spawnSync, alive = pidAlive, win = IS_WIN, attempts = 3 } = {}) {
+  if (!alive(pid)) return null;
+  for (let i = 0; i < attempts; i++) {
+    let line = '';
+    try {
+      const r = win
+        ? run('powershell', ['-NoProfile', '-NonInteractive', '-Command', `$p=Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if($p){"$($p.ParentProcessId)|$($p.CommandLine)"}`], { encoding: 'utf8', windowsHide: true, timeout: 15000 })
+        : run('ps', ['-o', 'ppid=,args=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 });
+      line = String(r?.stdout ?? '').trim();
+    } catch { /* query failed: retried below */ }
+    if (line) {
+      let ppid = null; let cmd = '';
+      if (win) { const j = line.indexOf('|'); ppid = Number(line.slice(0, j)) || null; cmd = j >= 0 ? line.slice(j + 1).trim() : ''; }
+      else { const m = /^\s*(\d+)\s*(.*)$/.exec(line); ppid = m ? Number(m[1]) : null; cmd = m?.[2]?.trim() ?? ''; }
+      // The process answered but its command line is hidden (another user / protected): a retry would not change that.
+      return cmd ? { pid, ppid, cmd } : { pid, ppid, cmd: '', unknown: true };
     }
-    const r = spawnSync('ps', ['-o', 'ppid=,args=', '-p', String(pid)], { encoding: 'utf8', timeout: 5000 });
-    const m = /^\s*(\d+)\s+(.*)$/.exec(String(r.stdout ?? '').trim());
-    return { pid, ppid: m ? Number(m[1]) : null, cmd: m?.[2] ?? '' };
-  } catch { return { pid, ppid: null, cmd: '' }; }
+    if (!alive(pid)) return null; // exited while we asked
+  }
+  return { pid, ppid: null, cmd: '', unknown: true };
 }
 
 /** Pid listening on a TCP port (the VS server), or null. */
@@ -310,21 +320,43 @@ export async function detectRunner(home, d = defaultDeps) {
   try { token = readFileSync(path.join(home, 'token'), 'utf8').trim(); } catch { /* no runner token */ }
   const runner = { home, port: disc?.port ?? null, pid: disc?.pid ?? null, token, alive: false, health: null, parent: null, cmd: null };
   if (runner.pid) {
-    const pi = d.procInfo(runner.pid);
-    // A pid from runner.json may have been recycled by an unrelated process: alive only if its command line is the runner.
-    runner.isRunner = isRunnerCmd(pi?.cmd);
-    runner.alive = !!pi && runner.isRunner;
-    runner.staleDiscovery = !!pi && !runner.isRunner;
-    runner.parent = pi?.ppid ?? null;
-    runner.cmd = pi?.cmd ?? null;
+    // A pid from runner.json may have been recycled by an unrelated process: alive only if it is the runner. Only a command
+    // line that positively is something else counts as recycled; an unreadable one is confirmed through /health (idea-328).
+    const id = await runnerIdentity(runner, d);
+    runner.identity = id.state;
+    runner.isRunner = id.state === 'runner';
+    runner.alive = runner.isRunner;
+    runner.staleDiscovery = id.state === 'recycled';
+    runner.parent = id.pi?.ppid ?? null;
+    runner.cmd = id.pi?.cmd ?? null;
+    if (id.health) runner.health = id.health;
   }
-  if (runner.alive && runner.port && token) {
-    try {
-      const h = await d.httpCall(`http://127.0.0.1:${runner.port}/health`, { headers: { authorization: `Bearer ${token}` }, timeoutMs: 3000 });
-      if (h.status === 200) runner.health = h.body;
-    } catch { /* unhealthy */ }
-  }
+  if (runner.alive && !runner.health) runner.health = await runnerHealth(runner, d);
   return runner;
+}
+
+/** The runner's token-checked /health body, or null (no discovery, no token, not answering, not 200). */
+async function runnerHealth(runner, d) {
+  if (!runner.port || !runner.token) return null;
+  try {
+    const h = await d.httpCall(`http://127.0.0.1:${runner.port}/health`, { headers: { authorization: `Bearer ${runner.token}` }, timeoutMs: 3000 });
+    return h.status === 200 ? h.body : null;
+  } catch { return null; }
+}
+
+/**
+ * Is runner.pid the runner right now? { state, pi, health? }. state: 'runner' (its command line says so, or the line was
+ * unreadable and the token-checked /health answers with exactly that pid; a body without a pid does not count), 'recycled' (a readable command line that is not the
+ * runner: the only positive mismatch), 'gone' (no such process), 'unknown' (unreadable command line and /health does not
+ * confirm: the runner is not reachable as ours, so it is never killed and never shut down by pid).
+ */
+async function runnerIdentity(runner, d) {
+  const pi = d.procInfo(runner.pid);
+  if (!pi) return { state: 'gone', pi: null };
+  if (pi.cmd) return { state: isRunnerCmd(pi.cmd) ? 'runner' : 'recycled', pi };
+  const health = await runnerHealth(runner, d);
+  if (health && health.pid === runner.pid) return { state: 'runner', pi, health, via: 'health' };
+  return { state: 'unknown', pi };
 }
 
 async function finishDetect({ opts, d, env, home, port, configDir, runner, spid }) {
@@ -589,11 +621,15 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
 
     // Re-detect right before acting: the wait can take minutes, and the runner may have restarted (new pid/port/token) meanwhile.
     det.runner = await detectRunner(det.home, d);
-    // Preflight: refuse before anything is stopped if the server port belongs to something that is not serve.mjs.
+    // Preflight: refuse before anything is stopped if the server port belongs to something that is not serve.mjs. An unreadable
+    // command line (procInfo unknown, after its retries) also aborts here, before the runner is touched (idea-148).
+    const notServeMsg = (pid, pi) => (pi?.unknown
+      ? `pid ${pid} on port ${det.port}: command line could not be read (process query failed or timed out); refusing to touch it`
+      : `pid ${pid} on port ${det.port} is not serve.mjs; refusing to touch it`);
     const pre = d.listenerPid(det.port);
     if (pre) {
       const pi = d.procInfo(pre);
-      if (!pi || !/serve\.mjs/.test(pi.cmd ?? '')) { fail('server stop', `pid ${pre} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
+      if (!pi || !/serve\.mjs/.test(pi.cmd ?? '')) { fail('server stop', notServeMsg(pre, pi)); throw new Error('abort'); }
     }
 
     // Snapshot right before the stop: which agents were already lost (historic; the roster holds hundreds) and which were mid-turn.
@@ -626,21 +662,37 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         if (info && info.pid === pid) rmSync(path.join(det.home, f), { force: true }); // only that dead runner's files
       }
     };
-    const stopRunner = async () => {
+    const notRunningNote = (r) => (r.staleDiscovery ? { note: `runner.json names pid ${r.pid}, which is not a runner (recycled); left alone` }
+      : r.identity === 'unknown' ? { note: `runner.json names pid ${r.pid}: its command line could not be read and /health did not answer; treated as gone` }
+      : {});
+    const stopRunner = async (adopted = false) => {
       const r0 = det.runner;
-      if (!r0.alive) { step('runner not running', r0.staleDiscovery ? { note: `runner.json names pid ${r0.pid}, which is not a runner (recycled); left alone` } : {}); return true; }
+      if (!r0.alive) { step('runner not running', notRunningNote(r0)); return true; }
       let accepted = false;
       try {
         const r = await runnerCall(det, d, 'POST', '/shutdown');
         accepted = r.status === 202;
         if (!accepted) step('runner /shutdown unavailable', { status: r.status, note: r.status === 404 ? 'runner predates /shutdown' : undefined });
       } catch (e) { step('runner /shutdown failed', { error: e.message }); }
+      if (!accepted && !adopted) {
+        // idea-220: the server's runner supervisor (RR1, 'runner code changed') may have restarted the runner under us. A new
+        // runner in runner.json is adopted and stopped instead; an old one that has simply exited is already stopped.
+        const now = await detectRunner(det.home, d);
+        if (now.alive && now.pid !== r0.pid) {
+          step('runner replaced during restart, adopting', { oldPid: r0.pid, pid: now.pid });
+          clearRunnerFiles(r0.pid);
+          det.runner = now;
+          return stopRunner(true);
+        }
+        if (!d.pidAlive(r0.pid)) { step('runner exited before stop', { pid: r0.pid }); clearRunnerFiles(r0.pid); return true; }
+      }
       if (accepted) { if (!(await stopProc('runner', r0.pid, async () => {}))) return false; }
       else if (!opts.force) { fail('runner stop', 'no graceful stop available and --no-force'); return false; }
       else {
         // An old runner cannot be told to stop; a hard kill writes no exit events, so its agents stay resumable (lost).
-        const again = d.procInfo(r0.pid); // re-verify immediately before the kill: the pid may have been recycled
-        if (!again || !isRunnerCmd(again.cmd)) { fail('runner stop', `pid ${r0.pid} is no longer the runner; refusing to kill it`); return false; }
+        // Re-verify immediately before the kill: the pid may have been recycled. Only a confirmed runner is killed.
+        const again = await runnerIdentity(r0, d);
+        if (again.state !== 'runner') { fail('runner stop', again.state === 'unknown' ? `pid ${r0.pid} could not be confirmed as the runner (command line unreadable, /health silent); refusing to kill it` : `pid ${r0.pid} is no longer the runner; refusing to kill it`); return false; }
         d.killHard(r0.pid);
         result.forced.push({ label: 'runner', pid: r0.pid, reason: 'no /shutdown endpoint on this runner build' });
         await d.sleep(500);
@@ -659,7 +711,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (!cur) step('server not running', { port: det.port });
     else {
       const info = d.procInfo(cur);
-      if (!info || !/serve\.mjs/.test(info.cmd ?? '')) { fail('server stop', `pid ${cur} on port ${det.port} is not serve.mjs; refusing to touch it`); throw new Error('abort'); }
+      if (!info || !/serve\.mjs/.test(info.cmd ?? '')) { fail('server stop', notServeMsg(cur, info)); throw new Error('abort'); }
       if (d.serverStopMode === 'tree-kill') {
         const again = d.procInfo(cur); // re-verify immediately before the kill: the pid may have been reused
         if (!again || !/serve\.mjs/.test(again.cmd ?? '')) { fail('server stop', `pid ${cur} changed identity before the kill`); throw new Error('abort'); }
