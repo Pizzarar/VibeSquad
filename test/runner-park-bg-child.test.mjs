@@ -49,9 +49,9 @@ function harness(opts = {}) {
 const types = (runner, id) => runner.timeline(id).map((e) => e.type);
 
 test('env knobs: park hold max / poll', () => {
-  assert.equal(parkHoldMaxFromEnv({}), 60 * 60 * 1000);
+  assert.equal(parkHoldMaxFromEnv({}), 4 * 60 * 60 * 1000, 'idea-312: the hard ceiling outlasts a 2 h suite');
   assert.equal(parkHoldMaxFromEnv({ VS_RUNNER_PARK_HOLD_MAX_MS: '0' }), 0, '0 turns the hold off');
-  assert.equal(parkHoldMaxFromEnv({ VS_RUNNER_PARK_HOLD_MAX_MS: 'x' }), 60 * 60 * 1000);
+  assert.equal(parkHoldMaxFromEnv({ VS_RUNNER_PARK_HOLD_MAX_MS: 'x' }), 4 * 60 * 60 * 1000);
   assert.equal(parkHoldPollFromEnv({}), 15_000);
   assert.equal(parkHoldPollFromEnv({ VS_RUNNER_PARK_HOLD_POLL_MS: '500' }), 500);
 });
@@ -110,7 +110,11 @@ test('max hold: a hold past parkHoldMaxMs is a logged forced park, not a silent 
   assert.equal(forced.length, 1);
   assert.ok(forced[0].heldMs >= 80, `heldMs ${forced[0].heldMs}`);
   assert.equal(forced[0].work[0].pid, 9000, 'what was killed is on record');
-  assert.equal(h.runner.status(id).status, 'parked');
+  assert.equal(forced[0].reason, 'max');
+  // idea-312: parked, then resumed once with the stopped-work notice (never left silent)
+  await until(() => h.runner.timeline(id).some((e) => e.type === 'bg-wake' && e.forced === 'max'));
+  const after = h.runner.timeline(id).filter((e) => e.seq > forced[0].seq).map((e) => e.type + (e.status ? ':' + e.status : ''));
+  assert.deepEqual(after.slice(0, 3), ['parked', 'status:parked', 'bg-wake']);
   h.runner.shutdown();
 });
 
@@ -180,7 +184,9 @@ test('activity after idle (the CLI reporting a finished task on its own) defers 
   h.runner.shutdown();
 });
 
-test('makeRoom never parks a held agent: the new job queues and starts once the shell exits', async () => {
+// idea-312: the shell exiting no longer room-parks a into silence (it ended its turn on that work): a is woken in place,
+// its wake turn runs, and only once that turn ends does it park for b (idea-146: idle with no work releases the slot).
+test('makeRoom never parks a held agent: the new job queues; the shell exits -> a is woken first, then parks for b', async () => {
   const h = harness({ maxLive: 1 });
   const a = h.create();
   const pidA = h.pidOf(a);
@@ -191,6 +197,9 @@ test('makeRoom never parks a held agent: the new job queues and starts once the 
   assert.equal(h.runner.queuePosition(b).queued, true, 'b waits for the live slot');
   assert.deepEqual(h.kills, []);
   h.clear(a, pidA);
+  await until(() => h.runner.timeline(a).some((e) => e.type === 'bg-wake') && h.runner.status(a).status === 'running');
+  assert.deepEqual(h.kills, [], 'woken in place, not parked first');
+  h.endTurn(a);
   await until(() => h.runner.live.has(b));
   assert.deepEqual(h.kills, [a]);
   h.runner.shutdown();
