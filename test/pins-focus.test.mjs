@@ -209,3 +209,14 @@ test("a closed/lost Buddy with history opens read-only under the Spin Up picker;
   assert.match(rail, /const history = !!focus\.agentId && focus\.gone;/, "picker renders above the history");
   assert.match(rail, /\{history && panel\}/);
 });
+
+test("Psycho U1: Esc from a feature lane or hub agent chat lands on the hub page; Esc from the hub page goes up", () => {
+  const pf = fs.readFileSync(new URL("../src/pinFocus.ts", import.meta.url), "utf8");
+  const body = pf.slice(pf.indexOf("export function exitPinFocus()"));
+  assert.match(body, /const hub = hubPinForSquad\(view\);\s*if \(hub && !\(hub\.lane\.id === f\.laneId && !hubChatOpen\(f, hub, view\)\)\) \{\s*void focusPin\(hub\)/);
+  assert.ok(body.indexOf("focusPin(hub)") < body.indexOf("levelUp("), "hub redirect runs before the level-up fallback");
+  // Esc / ⊞ on the hub page itself goes straight to Squads Home (not to the "squad page", which App would re-focus as the hub).
+  assert.match(body, /if \(hub\) \{\s*set\(\{ focus: null, home: true, squadsHome: true/);
+  assert.ok(body.indexOf("squadsHome: true") < body.indexOf("levelUp("), "hub-page exit runs before the level-up fallback");
+  assert.match(pf, /hubOpenAgent\(f\.agentId, getPanes\(\)\.leftActiveId, laneMemberIdsOf\(hub\), hubZoneIds\(hub\)\)/);
+});

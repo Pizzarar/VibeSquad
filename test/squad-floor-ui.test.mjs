@@ -15,7 +15,7 @@ test("App imports SquadFloor and renders it only on the hub page", () => {
   // Rendered exactly once, inside the hubFocused .hub-body branch (next to the Needs-you queue).
   assert.equal((app.match(/<SquadFloor /g) || []).length, 1);
   assert.match(app, /hubFocused \? \(/);
-  assert.ok(app.includes('<SquadQueue view={pinFocusView} variant="strip" />'));
+  assert.ok(app.includes("strip={null}")); // Psycho U1: no middle SquadQueue strip on the hub home
 });
 
 test("SquadFloor opens a character's chat with openPinMember", () => {

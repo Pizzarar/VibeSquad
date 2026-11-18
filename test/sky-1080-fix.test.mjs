@@ -33,7 +33,8 @@ test("geometry: sky is grid row 2, the queue tray row 3 and in flow (relative, n
   // Tracks are sequential: the tray's top is the sky track's bottom, and the sky is clipped to (never larger than) its track.
   assert.match(block(".sky-zones"), /overflow: hidden;/);
   const order = (s) => app.indexOf(s);
-  assert.ok(order("<SkyZones") < order('<SquadQueue view={pinFocusView} variant="strip"') && order('variant="strip"') < order("<SquadFloor"));
+  // Psycho U1: HubPages is the Squad home with no middle queue strip (strip={null}); the sky still sits above the floor. The .sq-strip / .sq-panel css stays for the {strip} slot.
+  assert.ok(order("<SkyZones") < order("strip={null}") && order("strip={null}") < order("<SquadFloor"));
   // Simulated 1080p numbers from the live measurement: track = 1052 - 44 (panes) - 126 (tray) - 410 (floor) = 472 < the old 497 item.
   const track = 1052 - 44 - 126 - 410;
   const oldSky = Math.round(0.46 * 1080);
