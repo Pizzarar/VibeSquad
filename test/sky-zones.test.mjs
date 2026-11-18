@@ -101,7 +101,8 @@ test("queue strip collapses to a thin line when empty, opens with items", () => 
   assert.ok(/variant === "strip" && queueStripState\(items\.length\) === "empty"\) \{\s*return <aside[^>]*sq-strip is-empty[^>]*\/>/.test(q));
   const css = src("styles.css");
   assert.ok(/\.hub-body \.sq-strip\.is-empty \{[^}]*height: 14px/.test(css));
-  assert.ok(src("App.tsx").includes('<SquadQueue view={pinFocusView} variant="strip" />'));
+  // Psycho U1: the Squad Needs-you strip moved to the sidebar spine; HubPages keeps its {strip} slot but App passes null.
+  assert.ok(src("App.tsx").includes("strip={null}"));
 });
 
 test("queue strip order is unchanged: permissions first, then oldest first (shared squadQueue)", () => {

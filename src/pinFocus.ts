@@ -9,11 +9,11 @@ import { isRetiredAgent } from "./identity";
 import { closeTab, getPanes, openAgent, subscribePanes, toggleSplit } from "./panes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { openPin } from "./PinGrid";
-import { focusDrawerOpen } from "./ctxMenuLogic";
+import { focusDrawerOpen, hubOpenAgent } from "./ctxMenuLogic";
 import { isLiveUrlAgent, levelUp, loadSavedFocus, planRestore, reconcilePinFocus, saveFocus, savedFocusForUrl, startsOnGrid } from "./pinFocusLogic";
 import { getPref, getRestoreLastView } from "./prefs";
 import { dormantBuddyId, hubPinForSquad, isHubPin, liveBuddyId, pinsForSquad, type Pin } from "./pins";
-import { subscribeTeams } from "./teams";
+import { subscribeTeams, type TeamView } from "./teams";
 import { derived, subscribeTree } from "./ui";
 
 export type PinFocus = {
@@ -255,8 +255,25 @@ export async function spinUpPin(pin: Pin, profile?: string, openPinFn: typeof op
   }
 }
 
+/** Is a non-sky agent open on the focused hub lane (its chat takes the middle, the sky steps aside)? */
+function hubChatOpen(f: PinFocus, hub: Pin, view: TeamView | undefined): boolean {
+  if (!view) return false;
+  return hubOpenAgent(f.agentId, getPanes().leftActiveId, laneMemberIdsOf(hub), hubZoneIds(hub));
+}
+
 /** Esc / ⊞: one level up. Chat → squad page → Squads Home. The drawers stay mounted, hidden, so drafts and scroll survive. */
 export function exitPinFocus() {
+  // Psycho: the Squad's hub page (RiffBot + Overlord TVs over the Office Tower) is the one Squad home. Esc from any other lane,
+  // or from a hub agent's chat, lands on it; Esc from the hub page itself goes up to Squads Home.
+  const f = state.focus;
+  if (f) {
+    const view = derived().views.find((v) => v.team.id === f.squadId);
+    const hub = hubPinForSquad(view);
+    if (hub && !(hub.lane.id === f.laneId && !hubChatOpen(f, hub, view))) {
+      void focusPin(hub).catch(() => {});
+      return;
+    }
+  }
   const up = levelUp({ focused: !!state.focus, home: state.home, squadsHome: state.squadsHome });
   if (up === "none") return;
   set({ focus: null, home: true, squadsHome: up === "squads-home", homeActive: getPanes().leftActiveId });

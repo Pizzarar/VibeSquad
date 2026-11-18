@@ -1780,6 +1780,8 @@ export function App() {
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
   const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
+  // The Squad hub page itself (not a hub agent's chat, not a feature lane): the TVs + tower own the width, so the PinRail steps aside.
+  const hubHome = hubFocused && !hubAgentOpen;
   const skyOwned = useMemo(() => (hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined), [hubFocused, hubAgentOpen, pinFocusView]);
   const drawerOpen = useFocusDrawerOpen();
   const skyReq = useSkyRequest(); // a rail click on RiffBot / Overlord remounts the TVs with that bot's chat open
@@ -1806,6 +1808,13 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [pinLayout]);
+  // Psycho: the Squad home IS the hub page. Landing on the squad page (sidebar click, Esc from a lane, reload) focuses the hub pin,
+  // so HubPages (SkyZones over SquadFloor) renders instead of the PinGrid. Squads Home, FULL, focus mode and Normal are untouched.
+  useEffect(() => {
+    if (vibe === "boring" || !pinLayout || !pinsHome || squadsHome || pinFocus) return;
+    const hub = hubPinForSquad(view);
+    if (hub) void focusPin(hub).catch(() => {});
+  }, [vibe, pinLayout, pinsHome, squadsHome, pinFocus, view]);
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
@@ -2079,7 +2088,7 @@ export function App() {
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""} ${hubHome ? "hub-home" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {topBanners}
@@ -2178,7 +2187,7 @@ export function App() {
             <HubPages
               agentOpen={hubAgentOpen}
               sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}{overlordErrMsg && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-overlord-error">Could not start the Overlord: {overlordErrMsg}</div>}</>}
-              strip={<SquadQueue view={pinFocusView} variant="strip" />}
+              strip={null}
               tower={<SquadFloor view={pinFocusView} />}
             />
           )}
@@ -2186,7 +2195,7 @@ export function App() {
       ) : (
         panesNode
       )}
-      {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
+      {pinFocusView && pinFocus && !hubHome && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">
