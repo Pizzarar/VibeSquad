@@ -82,7 +82,7 @@ test('a finished worker (parked, then archived) has no live process and a later 
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const home = tmp();
   writeDiscovery(home, { port: server.address().port, token: 't' });
-  const backend = new RunnerBackend({ client: new RunnerClient({ home }), buildPrefix: async () => '' });
+  const backend = new RunnerBackend({ client: new RunnerClient({ home, env: {} }), buildPrefix: async () => '' });
   try {
     const agent = await backend.createAgent({
       config: { provider: 'claude', model: 'm', cwd: process.cwd(), title: 'W' }, initialPrompt: 'work',
@@ -111,7 +111,7 @@ test('send revives only an auto-archived worker: a retired lead stays archived a
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const home = tmp();
   writeDiscovery(home, { port: server.address().port, token: 't' });
-  const backend = new RunnerBackend({ client: new RunnerClient({ home }), buildPrefix: async () => '' });
+  const backend = new RunnerBackend({ client: new RunnerClient({ home, env: {} }), buildPrefix: async () => '' });
   const mk = (role) => backend.createAgent({ config: { provider: 'claude', model: 'm', cwd: process.cwd(), title: role }, initialPrompt: 'x', labels: { team: 'vibesquad', lane: 'bug', role }, env: {} });
   try {
     const lead = await mk('lead');

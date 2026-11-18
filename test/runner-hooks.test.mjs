@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, appendFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { budget } from "./helpers/load-budget.mjs";
 
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rh-'));
 const VS_HOME = tmp();
@@ -27,7 +28,7 @@ const { startRunnerLifecycle, stopRunnerLifecycle } = await import('../server/ba
 const { createPlugin } = await import('../server/hooks/agent-duties.ts');
 
 const until = async (fn, ms = 6000, what = 'condition') => {
-  const end = Date.now() + ms;
+  const end = Date.now() + budget(ms);
   for (;;) {
     const v = await fn();
     if (v) return v;

@@ -169,12 +169,14 @@ describe("S4 over HTTP", () => {
 
   // 5. handoff no longer blocks the event loop
   test("S4-5: POST /handoff runs async, one at a time; the server keeps answering meanwhile", async () => {
-    const first = post("/__vibesquad/handoff", { team: "t", lane: "l" });
+    let firstDone = false;
+    const first = post("/__vibesquad/handoff", { team: "t", lane: "l" }).finally(() => { firstDone = true; });
     await new Promise((r) => setTimeout(r, 100));
     const t0 = Date.now();
     const probe = await call(port, "/__vibesquad/handoff?team=t&lane=l");
     assert.equal(probe.status, 200);
-    assert.ok(Date.now() - t0 < 1200, `GET took ${Date.now() - t0} ms while a handoff ran`);
+    // Structural, not a wall-clock bound: the GET answered while the (800ms) handoff child was still running.
+    assert.equal(firstDone, false, `GET took ${Date.now() - t0} ms: the handoff had already finished, so the loop may have been blocked`);
     const second = await post("/__vibesquad/handoff", { team: "t", lane: "l" });
     assert.equal(second.status, 429, second.body);
     const done = await first;

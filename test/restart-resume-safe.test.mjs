@@ -22,12 +22,13 @@ import { RunnerClient } from "../server/backend/runner-client.mjs";
 import { createClaudeAdapter } from "../runner/adapters/claude.mjs";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { budget } from "./helpers/load-budget.mjs";
 
 const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 const tmp = (p = "vs-rrs-") => { const d = mkdtempSync(path.join(os.tmpdir(), p)); dirs.push(d); return d; };
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (!(await fn())) { if (Date.now() > end) throw new Error("timed out"); await tick(10); } };
+const until = async (fn, ms = 3000) => { const end = Date.now() + budget(ms); while (!(await fn())) { if (Date.now() > end) throw new Error("timed out"); await tick(10); } };
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
 

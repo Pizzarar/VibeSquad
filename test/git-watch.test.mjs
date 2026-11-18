@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { gitWatch, startSignaturePoll, _gitWatcherCount, worktreeEventRelevant, gitDirEventRelevant } from "../server/git-watch.mjs";
 import { handleGitApi } from "../server/git-api.mjs";
+import { until } from "./helpers/load-budget.mjs";
 
 const git = (cwd, ...a) => execFileSync("git", a, { cwd, stdio: "pipe", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -199,13 +200,14 @@ test("fallback poll never overlaps runs, bumps on a changed signature, and stops
   const poll = startSignaturePoll(sig, () => bumps++, 10, () => closed);
   await poll.baseline;
   assert.equal(bumps, 0, "the first signature is the baseline");
-  await sleep(250);
+  await until(() => calls >= 3);
   assert.equal(maxActive, 1, "runs are chained, not overlapped");
   value = "b";
-  await sleep(250);
+  await until(() => bumps >= 1);
   assert.equal(bumps, 1);
   closed = true;
-  await sleep(150); // a run in flight finishes, then nothing reschedules
+  await until(() => active === 0); // a run in flight finishes, then nothing reschedules
+  await sleep(100);
   const after = calls;
   await sleep(250);
   assert.equal(calls, after, "no runs after close");
@@ -216,7 +218,7 @@ test("a signature that throws keeps the poll alive without a false bump", async 
   let n = 0, bumps = 0;
   const poll = startSignaturePoll(async () => { if (++n === 2) throw new Error("git failed"); return "same"; }, () => bumps++, 10, () => false);
   await poll.baseline;
-  await sleep(150);
+  await until(() => n >= 3);
   poll.stop();
   assert.ok(n >= 3);
   assert.equal(bumps, 0);
