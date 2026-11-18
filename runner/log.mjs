@@ -152,12 +152,13 @@ export class LogStore {
   // atEnd(pread, end), when given, runs once on the same open file after the read (pread(pos, len): exactly len bytes, or null),
   // so a caller can take more bytes of the very file it just read (Runner._fold: the fold-index probes) without another open.
   // maxBytes (optional): stop after the chunk that crosses it; `end` is then where to resume (readAsync's slice).
-  readFrom(id, offset = 0, after = 0, limit = Infinity, atEnd = null, maxBytes = Infinity) {
+  // endCap (optional): read no further than this byte, whatever the log has grown to.
+  readFrom(id, offset = 0, after = 0, limit = Infinity, atEnd = null, maxBytes = Infinity, endCap = Infinity) {
     const out = [];
     const ix = this._index(id);
     if (!ix) return { events: out, end: offset };
     if (offset > ix.size) offset = 0;
-    const end = ix.size;
+    const end = Math.min(ix.size, endCap); // endCap: never read past the size a caller stat'ed (Runner._refoldSettled)
     if (offset >= end) return { events: out, end: offset };
     const fd = this.fs.openSync(this.file(id), 'r');
     let pos = offset;

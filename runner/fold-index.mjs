@@ -163,8 +163,8 @@ export const FOLD_VERSION = (() => {
 
 const sha = (buf) => createHash('sha256').update(buf).digest('base64');
 const b64 = (buf) => buf.toString('base64');
-/** An entry whose mtime was within RACY_MS of the stat that recorded it. */
-const racy = (e) => !(typeof e.statAt === 'number' && e.mtimeMs < e.statAt - RACY_MS);
+/** An entry (or a fold stat: { mtimeMs, statAt } / { mtimeMs, at }) whose mtime was within RACY_MS of the stat that recorded it. */
+export const racy = (e) => !(typeof e.statAt === 'number' && e.mtimeMs < e.statAt - RACY_MS);
 
 function preadExact(fd, pos, len) {
   const buf = Buffer.alloc(len);
