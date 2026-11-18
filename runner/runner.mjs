@@ -10,6 +10,7 @@ import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
 import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
+import { COLD_FOLD_MIN, coldFoldEntries, coldFoldWorkersFromEnv } from './fold-cold.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -370,6 +371,8 @@ export class Runner {
     this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
     this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
     this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
+    this._coldSeed = null; // prefoldCold's index read + worker-folded entries, taken by the next _loadFoldIndex
+    this._coldAbort = null; // AbortController of an in-flight prefoldCold: shutdown() terminates its workers
     this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
     this.resaveDelayMs = RACY_MS + 1500; // saveFoldIndex re-runs this long after a save that left racy entries (their logs may settle)
     this._resaveTimer = null;
@@ -1662,13 +1665,43 @@ export class Runner {
 
   // Loads <foldIndexFile> for the boot pass. Missing, corrupt or another fold version: an empty seed, i.e. a full fold.
   // VS_RUNNER_FOLD_INDEX=0 turns the index off (every boot folds from byte 0 and nothing is saved).
+  // A prefoldCold just before (the server's boot) hands over its read of the index plus the entries its workers folded for
+  // the logs the index had none for: those join the seed and are validated like any saved entry (seedFromEntry).
   _loadFoldIndex() {
     this._foldSeed = null;
+    const pre = this._coldSeed;
+    this._coldSeed = null;
     if (!this._foldIndexOn()) return;
     const t0 = Date.now();
-    const seed = readFoldIndex(this.foldIndexFile);
-    this.foldIndexStats = { entries: seed.size, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: Date.now() - t0 };
+    const seed = pre ? pre.seed : readFoldIndex(this.foldIndexFile);
+    this.foldIndexStats = { entries: seed.size, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: pre ? pre.loadMs : Date.now() - t0 };
+    if (pre) {
+      for (const [id, e] of pre.entries) if (!seed.has(id)) seed.set(id, e);
+      this.foldIndexStats.cold = { logs: pre.logs, folded: pre.entries.size, workers: pre.workers, ms: pre.ms };
+    }
     this._foldSeed = seed;
+  }
+
+  // Boot, before recoverQueued (runner/fold-cold.mjs): the logs the fold index has no entry for (all of them after a fold-code
+  // change, which drops the index) are folded on worker threads, so the boot pass serves them as trusted entries instead of
+  // folding each from byte 0 on the main thread. Fewer than COLD_FOLD_MIN such logs, no index, or no workers: nothing to do.
+  // shutdown() during the prefold terminates its workers (and the prefold then hands nothing over).
+  async prefoldCold({ workers = coldFoldWorkersFromEnv(), min = COLD_FOLD_MIN, ...opts } = {}) {
+    this._coldSeed = null;
+    if (this._shutDown || !this._foldIndexOn() || !(workers > 0)) return null;
+    const t0 = Date.now();
+    const seed = readFoldIndex(this.foldIndexFile);
+    const loadMs = Date.now() - t0;
+    const missing = this.store.ids().filter((id) => !seed.has(id));
+    let entries = new Map();
+    if (missing.length >= min) {
+      const ac = new AbortController();
+      this._coldAbort = ac;
+      try { entries = await coldFoldEntries(this.store.dir, missing, { ...opts, workers, signal: ac.signal }); } finally { if (this._coldAbort === ac) this._coldAbort = null; }
+    }
+    if (this._shutDown) return null;
+    this._coldSeed = { seed, loadMs, entries, logs: missing.length, workers: entries.size ? Math.min(workers, missing.length) : 0, ms: Date.now() - t0 };
+    return { logs: missing.length, folded: entries.size, ms: this._coldSeed.ms };
   }
 
   _foldIndexOn() { return !!this.foldIndexFile && process.env.VS_RUNNER_FOLD_INDEX !== '0'; }
@@ -1842,6 +1875,8 @@ export class Runner {
     this._shutDown = true;
     clearTimeout(this._resaveTimer);
     this._resaveTimer = null;
+    this._coldAbort?.abort(); // a boot's prefold still folding: its worker threads are terminated
+    this._coldAbort = null;
     this._pollAgy?.shutdown();
     this.closeRosterWatch();
     clearInterval(this._quietSweep);
