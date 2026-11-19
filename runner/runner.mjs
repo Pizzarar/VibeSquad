@@ -393,11 +393,12 @@ export class Runner {
     this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
     this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
     this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
-    // Where the boot's fold phase (prefoldCold + recoverQueued) spent its ms (idea-337), for the {boot:...} line's foldMs: prefold,
+    // Where the boot's fold phase (prefoldCold + recoverQueued) spent its ms (idea-337), for the {boot:...} line's bootFoldMs (and /health): prefold,
     // load (the index read; 0 when prefold handed it over), pass (folding every log: of it, stat, seed = validating a saved
     // entry, read = reading + folding log bytes), tokens (mintBootTokens), plans (the unstarted-turn scan), admit. Floats.
     this.bootFoldMs = null;
     this._prefoldMs = 0;
+    this._uncreated = new Map(); // id -> stamp of a log with no created event: folded once per stamp, not on every _fold (idea-340)
     this._passMs = null; // = bootFoldMs during recoverQueued's pass only (_fold adds stat/seed/read to it)
     this._coldSeed = null; // prefoldCold's index read + worker-folded entries, taken by the next _loadFoldIndex
     this._coldAbort = null; // AbortController of an in-flight prefoldCold: shutdown() terminates its workers
@@ -1737,13 +1738,14 @@ export class Runner {
     const tm = this._passMs; // recoverQueued's boot pass timing, else null
     const t0 = tm ? performance.now() : 0;
     const statAt = Date.now(); // before the stat: an mtime written meanwhile still counts as racy (fold-index.mjs)
-    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; } finally { if (tm) tm.stat += performance.now() - t0; }
+    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); this._uncreated.delete(id); return null; } finally { if (tm) tm.stat += performance.now() - t0; }
     // Clean = validated by this stat while the watch is up. Synchronous from the stat to the mark: a change after the stat
     // reaches the watch callback later and unmarks it.
     const watched = !!this._rosterWatch;
     this._foldClean.delete(id);
     let st = this.folds.get(id);
     if (st?.stamp === stamp) { if (watched) this._foldClean.add(id); return st; }
+    if (!st && this._uncreated.get(id) === stamp) return null; // already folded at this stamp: no created event (idea-340)
     if (!st && this._foldSeed) {
       const t1 = tm ? performance.now() : 0;
       st = this._seedFold(id, stat);
@@ -1764,7 +1766,8 @@ export class Runner {
     st.offset = end;
     st.stamp = stamp;
     st.stat = stat;
-    if (!st.created) { this.folds.delete(id); return null; }
+    if (!st.created) { this.folds.delete(id); this._uncreated.set(id, stamp); return null; }
+    this._uncreated.delete(id);
     this.folds.set(id, st);
     if (watched) this._foldClean.add(id);
     st.rec = foldRecord(id, st);

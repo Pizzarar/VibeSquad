@@ -149,7 +149,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         // heldWork: id -> the live shells each hold is on ({ pid, name, cmd }), so a deferral names what actually holds.
         const heldWork = runner.heldWork?.() ?? {};
         // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, bootFoldMs: runner.bootFoldReport?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
       }
       if (req.method === 'GET' && parts[0] === 'write-seq' && parts.length === 1) return json(res, 200, { boot: writes.boot, seq: writes.seq });
       if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
@@ -449,10 +449,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     // cold (when present): logs the index had no entry for, how many the worker threads folded (counted in trusted/resumed
     // from then on), the threads used and the ms; a log they could not settle is in `full`. entries = saved (read from the file)
     // + the cold entries; discardReason (+ foldWas/foldNow) when the file gave none (missing, fold-version, malformed, ...).
-    // foldMs: where the 'fold' phase went (Runner.bootFoldReport: prefold, load, pass {stat, seed, read}, tokens, plans, admit, rest).
+    // bootFoldMs: where the 'fold' phase went (Runner.bootFoldReport: prefold, load, pass {stat, seed, read}, tokens, plans, admit, rest).
     const fi = runner.foldIndexStats;
     const fm = runner.bootFoldReport(boot.fold);
-    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fm ? { foldMs: fm } : {}), ...(fi ? { foldIndex: fi } : {}) }));
+    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fm ? { bootFoldMs: fm } : {}), ...(fi ? { foldIndex: fi } : {}) }));
     // Saved after listen (yielding between logs), so the next boot resumes from this one's fold; the boot line is already out.
     setImmediate(() => runner.saveFoldIndex().then((r) => { if (r) console.log(JSON.stringify({ foldIndexSave: r })); }, (err) => console.error('fold index save failed', err)));
     const port = server.address().port;

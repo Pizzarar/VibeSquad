@@ -330,9 +330,9 @@ test("a runner that exits holding the lock removes its own runner.json and lock,
   assert.match(a.out(), /"boot":\{"lock":\d+,"sweepOrphans":\d+,"init":\d+,"fold":\d+,"listen":\d+,"total":\d+\}/);
   // idea-328/337: the line says where the fold phase went and why a fold index was not used
   const bootLine = JSON.parse(a.out().split("\n").find((l) => l.startsWith('{"boot":')));
-  const fm = bootLine.foldMs;
+  const fm = bootLine.bootFoldMs;
   assert.ok(fm && ["prefold", "load", "pass", "stat", "seed", "read", "tokens", "plans", "admit", "rest"].every((k) => Number.isInteger(fm[k])), JSON.stringify(fm));
-  assert.ok(Math.abs(fm.prefold + fm.load + fm.pass + fm.tokens + fm.plans + fm.admit + fm.rest - bootLine.boot.fold) <= 6, "foldMs adds up to the fold phase");
+  assert.ok(Math.abs(fm.prefold + fm.load + fm.pass + fm.tokens + fm.plans + fm.admit + fm.rest - bootLine.boot.fold) <= 6, "bootFoldMs adds up to the fold phase");
   assert.equal(bootLine.foldIndex.discardReason, "missing", "a fresh home has no index yet");
   // POST /shutdown runs stop() on every platform (a win32 SIGTERM is a hard kill that skips the handlers).
   const token = readFileSync(path.join(home, "token"), "utf8").trim();
