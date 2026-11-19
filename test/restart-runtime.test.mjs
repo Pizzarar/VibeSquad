@@ -1652,3 +1652,16 @@ test("launcher hands off and server is healthy within the 3s guard: server.pid s
     assert.equal(readFileSync(path.join(w.configDir, "server.pid"), "utf8"), "888004");
   } finally { await w.cleanup(); }
 });
+
+test("idea-367: dry run prints 'alive, identity unknown' (not 'not running') for a runner whose identity cannot be confirmed", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const old = w.runner();
+    await close(old.srv); // alive pid, cmdline hidden, /health refused: identity unknown
+    const r = await w.run({ dryRun: true });
+    assert.equal(r.plan.detected.runner.identity, "unknown");
+    const text = r.plan.steps.join(" | ");
+    assert.match(text, new RegExp(`runner pid ${old.pid} alive, identity unknown`));
+    assert.doesNotMatch(text, /runner not running/);
+  } finally { await w.cleanup(); }
+});
