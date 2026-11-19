@@ -613,3 +613,20 @@ test("an append between the save's visits and a concurrent store.append during t
   await r.saveFoldIndex();
   parity(h, boot(h));
 });
+
+test("idea-340: a log with no created event is read once at boot; the token / plan scans reuse that fold, a change re-reads it", () => {
+  const { h, ids } = setup(3);
+  writeFileSync(logFile(h, "rn-odd"), ""); // an empty log: no created, _fold returns null and keeps no fold
+  const r = new Runner({ dir: h.dir, adapters, maxLive: 4, foldIndexFile: h.file });
+  let reads = 0;
+  const rf = r.store.readFrom.bind(r.store);
+  r.store.readFrom = (id, ...a) => { if (id === "rn-odd") reads++; return rf(id, ...a); };
+  r.recoverQueued();
+  assert.equal(reads, 1, "the pass reads it once; mintBootTokens and the plan scan do not re-read it");
+  assert.equal(r._fold("rn-odd"), null);
+  assert.equal(reads, 1, "later folds at the same stamp are served");
+  appendFileSync(logFile(h, "rn-odd"), "\n");
+  assert.equal(r._fold("rn-odd"), null);
+  assert.equal(reads, 2, "a changed log is read again");
+  assert.ok(ids.length);
+});
