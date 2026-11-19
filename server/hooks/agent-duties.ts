@@ -57,6 +57,7 @@ import {
   loadUserSettings,
   readJsonFileWithBom,
 } from "../user-settings.mjs";
+import { readLessons, renderLessonsDigest } from "../lessons.mjs";
 
 type Labels = Record<string, string>;
 
@@ -799,6 +800,9 @@ const MAX_SNAPSHOT_CHARS = 600;
 /** Spawn-prompt caps: the file stays the source of truth; the prompt gets the head plus a pointer. */
 export const MAX_INJECT_BRIEF_CHARS = 6_000;
 export const MAX_INJECT_OPEN_UNITS = 30;
+/** Lessons digest caps: most-recent N lessons and a hard char cap (idea-135). */
+export const MAX_LESSONS_DIGEST_LESSONS = 10;
+export const MAX_LESSONS_DIGEST_CHARS = 6_000;
 
 function clipForPrompt(text: string, max: number, pointer: string): string {
   if (text.length <= max) return text;
@@ -885,6 +889,26 @@ export function laneArtifactBlock(root: string, lane: string): string {
   }
   parts.push(`<!-- vibesquad:lane-artifact:end -->`);
   return parts.join("\n");
+}
+
+/**
+ * The `vs lesson add` digest as a spawn-prompt block, or "" when nothing is logged. Capped by
+ * count (the most recent N lessons) and by chars so the injected digest stays cheap; an empty
+ * store yields no section at all (no standing-rules bloat for a lane with no lessons yet).
+ */
+export function lessonsDigestBlock(opts: { storePath?: string; rootDir?: string; limit?: number; maxChars?: number } = {}): string {
+  const limit =
+    typeof opts.limit === "number" && Number.isFinite(opts.limit) && opts.limit >= 0
+      ? Math.floor(opts.limit)
+      : MAX_LESSONS_DIGEST_LESSONS;
+  const maxChars =
+    typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars) && opts.maxChars >= 0
+      ? Math.floor(opts.maxChars)
+      : MAX_LESSONS_DIGEST_CHARS;
+  const recent = readLessons({ limit, storePath: opts.storePath, rootDir: opts.rootDir });
+  if (!recent.length) return "";
+  const digest = renderLessonsDigest({ limit, storePath: opts.storePath, rootDir: opts.rootDir });
+  return digest.length <= maxChars ? digest : `${digest.slice(0, maxChars)}\n[... lessons digest truncated]`;
 }
 
 /**
@@ -2095,6 +2119,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         st.mark("lane-artifacts");
+        // Lessons digest (server/lessons.mjs): `vs lesson add` entries finally reach every spawn.
+        const lessonsMarker = "<!-- vibesquad:lessons:begin -->";
+        if (!String(next.systemPrompt ?? rawSysPrompt ?? "").includes(lessonsMarker)) {
+          const lessonsBlock = lessonsDigestBlock({});
+          if (lessonsBlock) {
+            next.systemPrompt = [String(next.systemPrompt ?? rawSysPrompt ?? "").trim(), lessonsBlock].filter(Boolean).join("\n\n");
+            changed = true;
+          }
+        }
+
+        st.mark("lessons-digest");
         // B2: one `boot-size` metric per boot, measured on the final assembled prompt (prefix + notes + brief + artifacts).
         // A VS Buddy restart already logged its own boot-size in brainstorm.mjs: log once per boot.
         const bootLoggedByVs = role === "brainstorm" && (Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1");
