@@ -90,14 +90,15 @@ await sleep(700);
 function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},1500)']); }
 const b0 = Date.now();
 blockOnChildProcess();
-console.log(JSON.stringify({ blockedMs: Date.now() - b0 }));
-await sleep(600);`);
+const blockedMs = Date.now() - b0; // no other sync work right after the block: a capture landing here would not be flagged late
+await sleep(600);
+console.log(JSON.stringify({ blockedMs }));`);
 }
 
 test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", (t) => {
   // The capture races real machine load, so a single run may legitimately land late (that is flagged, see the next test). Never wrong
   // frames in any attempt; and the on-time path must be proven by at least one of 4 attempts (an always-late capture() fails).
-  let proved = false;
+  let proved = false, lateCount = 0;
   for (let i = 0; i < 4 && !proved; i++) {
     const { r, lines } = nativeCallRun();
     assert.equal(r.status, 0, r.stderr);
@@ -109,14 +110,13 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     assert.ok(stall && stall.driftMs >= blockedMs * 0.7, `max lag line ${stall?.driftMs}ms vs actual block ${blockedMs}ms: ${JSON.stringify(lines)}`);
     const cpuMs = stall.cpuUserMs + stall.cpuSystemMs; // cpu time does not grow with wall time when busy: bound against drift
     assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
-    if (stall.captureLate) { assert.equal(stall.frames, undefined); continue; }
-    // A capture can land just after the block returned (stack is then the post-block code, e.g. console.log): that is a late sample, retry.
-    if (!stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess "))) continue;
+    if (stall.captureLate) { assert.equal(stall.frames, undefined); lateCount++; continue; }
+    assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
     proved = true;
   }
   // Timing-only: every attempt landing late means the machine was saturated (late frames are asserted absent above, and the late flag is
   // proven deterministically by the next test). On a quiet machine the on-time path is still required.
-  if (!proved && !process.env.VS_TEST_STRICT_TIMING) return t.skip("all 4 attempts captured late (machine under load); set VS_TEST_STRICT_TIMING=1 to require an on-time capture");
+  if (!proved && lateCount === 4 && !process.env.VS_TEST_STRICT_TIMING) return t.skip("all 4 attempts captured late (machine under load); set VS_TEST_STRICT_TIMING=1 to require an on-time capture");
   assert.ok(proved, "all 4 attempts captured late");
 });
 
