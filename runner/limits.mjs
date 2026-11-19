@@ -89,13 +89,16 @@ export function runAgyUsage({ spawnImpl, timeoutMs = 30_000, onChild } = {}) {
 }
 
 // Polls at most once per minIntervalMs, one in flight (concurrent calls return []). poll.shutdown() kills an in-flight agy.
-export function createAgyUsagePoller({ store, run = runAgyUsage, minIntervalMs = 5 * 60_000, now = Date.now } = {}) {
+export function createAgyUsagePoller({ store, run = runAgyUsage, minIntervalMs = 5 * 60_000, now = Date.now, canRun = () => true } = {}) {
   let busy = false;
   let lastAt = 0;
   let current = null;
   let stopped = false;
   const poll = async function poll(agentId) {
     if (busy || stopped || now() - lastAt < minIntervalMs) return [];
+    // idea-349: a spawned `agy` makes the shared agy backend announce "subagents and background tasks stopped due to server restart"
+    // to live agy sessions. Skip (without spending the interval) while any agy agent is mid-turn or holding background work.
+    try { if (!canRun(agentId)) return []; } catch { return []; }
     busy = true;
     lastAt = now();
     try {

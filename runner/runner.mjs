@@ -359,7 +359,7 @@ export class Runner {
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
-    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, canRun: () => !this._agyBusy(), ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
@@ -893,6 +893,19 @@ export class Runner {
     this._armPark(id, entry, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
   }
 
+  // idea-349: true unless every live antigravity-cli agent is provably clean: no turn running, no held work, and (where
+  // background work can exist) a post-turn probe that saw none. An agent still waiting on that probe (or parked-grace with an
+  // unknown work state) counts as busy: its shell may be alive and the spawned `agy -p /usage` would announce its death.
+  // The caller is not exempt: park() re-polls once a process is gone, so a refused poll is retried, never lost.
+  _agyBusy() {
+    for (const e of this.live.values()) {
+      if ((PROVIDER_ALIASES[e.provider] ?? e.provider) !== 'antigravity-cli') continue;
+      if (e.inflight > 0 || (e.heldSince !== null && e.heldSince !== undefined)) return true;
+      if (this._mayHoldWork(e) && e.work?.length !== 0) return true;
+    }
+    return false;
+  }
+
   _armPark(id, entry, ms) {
     clearTimeout(entry.parkTimer);
     entry.parkTimer = setTimeout(() => {
@@ -1005,6 +1018,7 @@ export class Runner {
     this.store.append(id, 'status', { status: 'parked' });
     this.live.delete(id);
     entry.handle.kill();
+    if ((PROVIDER_ALIASES[entry.provider] ?? entry.provider) === 'antigravity-cli') this._pollAgy?.(id); // idea-349: the retry a busy turn_done poll was refused for
   }
 
   // Drops a pending archive-stop (flag + kill timer): unarchive, park and exit all end that window.
