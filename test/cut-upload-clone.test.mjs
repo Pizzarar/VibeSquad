@@ -32,14 +32,19 @@ test("daemon upload is cut, but inline text-file attachment is kept", () => {
   assert.match(att, /export function partitionFiles/);
 });
 
-test("GitHub clone entry points are gone from NewSquadModal, TeamActions and App", () => {
+test("dead clone stubs stay gone; NewSquadModal clones through the native gh routes (idea-343)", () => {
+  // The a99d8ef5 stub ("Cloning from GitHub isn't available yet") and TeamActions' dead clone props must not come back.
   for (const f of ["NewSquadModal.tsx", "TeamActions.tsx"]) {
     const s = src(f);
-    assert.doesNotMatch(s, /clone|Clone|github|GitHub/i);
     assert.doesNotMatch(s, /not available yet|Cloning from GitHub/);
-    assert.doesNotMatch(s, /clone-repo-btn|cloneProject|cloneRepo|cloneDest|cloning/);
+    assert.doesNotMatch(s, /clone-repo-btn|cloneProject|cloneRepo\b|cloneDest/);
   }
+  assert.doesNotMatch(src("TeamActions.tsx"), /clone|github/i);
   const ns = src("NewSquadModal.tsx");
+  // The real integration: GitHub repos via /__vibesquad/git/gh-repos, the clone via /__vibesquad/git/gh-clone (server/git-api.mjs).
+  assert.match(ns, /\/__vibesquad\/git\/gh-repos/);
+  assert.match(ns, /\/__vibesquad\/git\/gh-clone/);
+  assert.doesNotMatch(ns, /daemonClient|paseo/i);
   assert.match(ns, /data-testid="new-squad-name"/);
   assert.match(ns, /data-testid="new-squad-start-buddy"/);
   assert.match(ns, /Folder path/);

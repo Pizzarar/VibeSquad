@@ -1,12 +1,15 @@
 // N1: native git routes (server/git-api.mjs) against a temp repo, their cwd/arg validation, and the owner gate over the remote proxy.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { handleGitApi, isGitPath, parseUnifiedDiff, parseStatus, parseCommits, badRefName, badRepoPath } from "../server/git-api.mjs";
+import {
+  handleGitApi, isGitPath, parseUnifiedDiff, parseStatus, parseCommits, badRefName, badRepoPath,
+  parseGithubRepoSpec, badFolderName, cloneDestination, scrubSecrets, githubRemoteSlug, GitError, GIT_READ_ACTIONS, GIT_WRITE_ACTIONS,
+} from "../server/git-api.mjs";
 
 const G = "/__vibesquad/git";
 const sh = (cwd, ...a) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a], { cwd, encoding: "utf8" });
@@ -209,5 +212,185 @@ describe("routes on a temp repo", () => {
     assert.equal(subject, 'big "quoted" subject');
     const body = sh(repo, "log", "-1", "--format=%B").trim();
     assert.equal(body.length, message.slice(0, 10_000).trim().length); // the API's own 10k cap still applies
+  });
+});
+
+// ---- idea-343: From GitHub (gh-repos / gh-clone). gh is stubbed: these tests never reach the network. ----
+
+describe("idea-343 validators", () => {
+  test("parseGithubRepoSpec accepts owner/repo and github.com URLs, normalized to owner/repo", () => {
+    const ok = [
+      ["Pizzarar/VibeSquad", "Pizzarar/VibeSquad"],
+      ["IdleMinds-Dev/SportsBallBattles", "IdleMinds-Dev/SportsBallBattles"],
+      ["a/b.git", "a/b"],
+      ["a/b.GIT", "a/b"],
+      ["o_1/r-2.x", "o_1/r-2.x"],
+      ["https://github.com/IdleMinds-Dev/SportsBallBattles", "IdleMinds-Dev/SportsBallBattles"],
+      ["https://github.com/o/r.git", "o/r"],
+      ["https://github.com/o/r/", "o/r"],
+      ["https://www.github.com/o/r", "o/r"],
+      ["HTTPS://GitHub.com/o/r", "o/r"],
+    ];
+    for (const [raw, want] of ok) assert.equal(parseGithubRepoSpec(raw), want, raw);
+  });
+
+  test("parseGithubRepoSpec rejects flags, traversal, foreign hosts, creds, backslashes, junk", () => {
+    const bad = [
+      "", "o", "-x/r", "o/-x", "--upload-pack=x/r", "o/--help", ".o/r", "o/.r", "../r", "o/..", "./r", "o/.", "o/.git", "o/r/x", "/o/r", "o/r//", "o//r",
+      "o\\r", "o/r\\", "..\\..\\x/y", " o/r", "o/r ", "o /r", "o/r\n", "o/r\t", "o/\u0000r", "o/r\u007f", "o/r\u0085",
+      "https://gitlab.com/o/r", "http://github.com/o/r", "https://github.com.evil.com/o/r", "https://evil.com/github.com/o/r", "https://github.com:443/o/r",
+      "https://user@github.com/o/r", "https://u:p@github.com/o/r", "https://github.com/o/r?x=1", "https://github.com/o/r#frag", "https://github.com/o/r/tree/main",
+      "https://github.com/o", "https://github.com/", "https://github.com/o/r%2F..", "https://github.com/-o/r", "https://github.com/o/../x",
+      "git@github.com:o/r.git", "ssh://git@github.com/o/r", "file:///c/x/r", "C:/o/r", "o/r@main", "ext::sh -c x/r",
+      `o/${"r".repeat(101)}`, `${"o".repeat(101)}/r`, null, undefined, 42, ["o/r"],
+    ];
+    for (const raw of bad) assert.equal(parseGithubRepoSpec(raw), null, JSON.stringify(raw));
+  });
+
+  test("badFolderName / cloneDestination: one safe segment directly inside projectsDir", () => {
+    for (const n of ["SportsBallBattles", "my-app", "a_b.c", "x1", "con1", "COM10", "nulls", "auxiliary"]) assert.equal(badFolderName(n), null, n);
+    const bad = [
+      "", "-x", "--help", ".", "..", ".hidden", "a/b", "a\\b", "..\\x", "../x", "a b", "a.", "a ", "C:", "C:x", "a:b", "x\u0000",
+      "CON", "con", "PRN", "AUX", "NUL", "nul.txt", "Con.tar.gz", "COM1", "com9", "LPT1", "lpt9.log", "a".repeat(101), null, undefined, 5,
+    ];
+    for (const n of bad) assert.ok(badFolderName(n), JSON.stringify(n));
+    const base = join(tmpdir(), "vs-proj-base");
+    assert.equal(cloneDestination(base, "Game"), join(base, "Game"));
+    for (const n of ["..", "a/b", "CON", "-x"]) assert.throws(() => cloneDestination(base, n), (e) => e instanceof GitError && e.status === 400, n);
+  });
+
+  test("scrubSecrets masks GitHub tokens and URL credentials; githubRemoteSlug reads ssh + https remotes", () => {
+    const s = scrubSecrets("fatal: https://x-access-token:ghs_abcdefghijklmnopqrstuvwxyz0123@github.com/o/r.git denied ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 github_pat_11AAAAAAAAAAAAAAAAAAAA_bbbb");
+    assert.doesNotMatch(s, /ghs_|ghp_|github_pat_|x-access-token/);
+    assert.match(s, /https:\/\/\*\*\*@github\.com\/o\/r\.git/);
+    assert.equal(githubRemoteSlug("git@github.com:Owner/Repo.git"), "owner/repo");
+    assert.equal(githubRemoteSlug("https://tok@github.com/o/r"), "o/r");
+    assert.equal(githubRemoteSlug("https://gitlab.com/o/r"), null);
+    assert.equal(githubRemoteSlug(null), null);
+  });
+
+  test("gh-repos / gh-clone stay owner-gated: /__vibesquad/git/* GETs are gated reads, POSTs hit the non-GET owner gate", async () => {
+    const { isGatedRead } = await import("../server/vibesquad-api.mjs");
+    for (const p of [`${G}/gh-repos`, `${G}/gh-clone`]) assert.equal(isGatedRead(p, p), true, p);
+    assert.ok(GIT_READ_ACTIONS.includes("gh-repos") && GIT_WRITE_ACTIONS.includes("gh-clone"));
+  });
+});
+
+describe("idea-343 routes with a stubbed gh", () => {
+  let server, port, projects, ghImpl, projectsDirFn;
+  const calls = [];
+  const call = async (method, action, args = {}) => {
+    const url = `http://127.0.0.1:${port}${G}/${action}${method === "GET" ? `?${new URLSearchParams(args)}` : ""}`;
+    const r = await fetch(url, { method, ...(method === "POST" ? { body: JSON.stringify(args) } : {}) });
+    return { status: r.status, body: await r.json() };
+  };
+  const fakeClone = (dest, origin) => {
+    mkdirSync(dest);
+    sh(dest, "init", "-q", "-b", "main");
+    sh(dest, "remote", "add", "origin", origin);
+  };
+  before(async () => {
+    projects = realpathSync(mkdtempSync(join(tmpdir(), "vs-projects-")));
+    projectsDirFn = () => projects;
+    const runGh = async (args, cwd, opts) => {
+      calls.push({ args, cwd, opts });
+      return ghImpl(args, cwd, opts);
+    };
+    const readBody = (req) => new Promise((ok) => { let b = ""; req.on("data", (c) => (b += c)); req.on("end", () => ok(b ? JSON.parse(b) : {})); });
+    const sendJson = (res, status, obj) => { res.statusCode = status; res.setHeader("content-type", "application/json"); res.end(JSON.stringify(obj)); };
+    server = createServer((req, res) => handleGitApi(req, res, { readBody, sendJson, resolveCwd: async () => null, projectsDir: () => projectsDirFn(), runGh }));
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    port = server.address().port;
+  });
+  after(() => {
+    server.close();
+    try { rmSync(projects, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {}
+  });
+
+  test("gh-repos: fixed argv in the projects folder, mapped rows, junk names dropped; no cwd needed", async () => {
+    calls.length = 0;
+    ghImpl = async () => ({ stdout: JSON.stringify([
+      { full_name: "IdleMinds-Dev/SportsBallBattles", name: "SportsBallBattles", description: "ball", private: true, updated_at: "2026-11-18T00:00:00Z", owner: { login: "x" } },
+      { full_name: "o/r", name: "r", description: null, private: false, updated_at: "2026-11-01T00:00:00Z" },
+      { full_name: "-evil/--x", name: "--x" },
+      { full_name: "o/r/x" },
+    ]) });
+    const r = await call("GET", "gh-repos");
+    assert.equal(r.status, 200);
+    assert.equal(r.body.projectsDir, projects);
+    assert.deepEqual(r.body.repos, [
+      { nameWithOwner: "IdleMinds-Dev/SportsBallBattles", name: "SportsBallBattles", description: "ball", isPrivate: true, updatedAt: "2026-11-18T00:00:00Z" },
+      { nameWithOwner: "o/r", name: "r", description: "", isPrivate: false, updatedAt: "2026-11-01T00:00:00Z" },
+    ]);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].cwd, projects);
+    assert.deepEqual(calls[0].args, ["api", "user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"]);
+    assert.equal((await call("POST", "gh-repos")).status, 405);
+  });
+
+  test("gh-clone: clones with an argv array into projectsDir/<repo>, then reuses that checkout", async () => {
+    calls.length = 0;
+    ghImpl = async (args) => { fakeClone(args[3], `https://github.com/${args[2]}.git`); return { stdout: "", stderr: "" }; };
+    const dest = join(projects, "SportsBallBattles");
+    const r = await call("POST", "gh-clone", { repo: "https://github.com/IdleMinds-Dev/SportsBallBattles.git" });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.deepEqual(r.body, { ok: true, path: dest, reused: false, repo: "IdleMinds-Dev/SportsBallBattles" });
+    assert.deepEqual(calls[0].args, ["repo", "clone", "IdleMinds-Dev/SportsBallBattles", dest, "--", "--quiet"]);
+    assert.equal(calls[0].cwd, projects);
+    assert.equal(calls[0].opts.timeout, 120_000);
+    const again = await call("POST", "gh-clone", { repo: "IdleMinds-Dev/SportsBallBattles" });
+    assert.deepEqual(again.body, { ok: true, path: dest, reused: true, repo: "IdleMinds-Dev/SportsBallBattles" });
+    assert.equal(calls.length, 1); // reuse never runs gh
+  });
+
+  test("gh-clone: folderName is honored; collisions are 409 (non-git folder, nested folder, a file, a different repo)", async () => {
+    calls.length = 0;
+    ghImpl = async (args) => { fakeClone(args[3], `git@github.com:${args[2]}.git`); return { stdout: "" }; };
+    const r = await call("POST", "gh-clone", { repo: "o/r", folderName: "r-local" });
+    assert.equal(r.body.path, join(projects, "r-local"));
+    mkdirSync(join(projects, "plain"));
+    writeFileSync(join(projects, "plain", "x.txt"), "x");
+    const plain = await call("POST", "gh-clone", { repo: "o/plain" });
+    assert.equal(plain.status, 409);
+    assert.equal(plain.body.error, "folder already exists and is not a git repository");
+    mkdirSync(join(projects, "nested")); // inside a parent repo, but not a checkout of its own
+    sh(projects, "init", "-q");
+    assert.equal((await call("POST", "gh-clone", { repo: "o/nested" })).status, 409);
+    rmSync(join(projects, ".git"), { recursive: true, force: true });
+    writeFileSync(join(projects, "afile"), "x");
+    assert.equal((await call("POST", "gh-clone", { repo: "o/afile" })).status, 409);
+    const other = await call("POST", "gh-clone", { repo: "someone-else/r", folderName: "r-local" });
+    assert.equal(other.status, 409);
+    assert.match(other.body.error, /different repository/);
+    assert.equal(calls.length, 1);
+  });
+
+  test("gh-clone: bad repo specs and folder names are 400 before gh runs; gh errors are scrubbed", async () => {
+    calls.length = 0;
+    ghImpl = async () => { throw new Error("unreachable"); };
+    for (const repo of ["-x/r", "../r", "o/r/x", "https://gitlab.com/o/r", "https://u:p@github.com/o/r", "o\\r", " o/r", "", 7]) {
+      assert.equal((await call("POST", "gh-clone", { repo })).status, 400, JSON.stringify(repo));
+    }
+    for (const folderName of ["..", ".", "-x", "a/b", "a\\b", "CON", "nul.txt", "a.", "C:", "../../escape"]) {
+      assert.equal((await call("POST", "gh-clone", { repo: "o/r", folderName })).status, 400, folderName);
+    }
+    assert.equal((await call("POST", "gh-clone", { repo: "o/con" })).status, 400); // default folder = repo name, still validated
+    assert.equal((await call("GET", "gh-clone")).status, 405);
+    assert.equal(calls.length, 0);
+    ghImpl = async () => { throw new GitError(scrubSecrets("fatal: https://ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345@github.com/o/zz denied")); };
+    const e = await call("POST", "gh-clone", { repo: "o/zz" });
+    assert.equal(e.status, 400);
+    assert.doesNotMatch(e.body.error, /ghp_/);
+  });
+
+  test("no usable projects folder: 500, gh never runs", async () => {
+    calls.length = 0;
+    for (const fn of [() => null, () => join(projects, "missing"), () => "relative/dir"]) {
+      projectsDirFn = fn;
+      assert.equal((await call("GET", "gh-repos")).status, 500);
+      assert.equal((await call("POST", "gh-clone", { repo: "o/q" })).status, 500);
+    }
+    projectsDirFn = () => projects;
+    assert.equal(calls.length, 0);
   });
 });

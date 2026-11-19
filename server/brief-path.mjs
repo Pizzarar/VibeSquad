@@ -1,4 +1,4 @@
-import { statSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { findLaneInRegistry, resolveWorktreeRootPath } from "./identity.mjs";
@@ -40,6 +40,20 @@ export function laneWorkingDir(teamId, laneId, rootDir) {
     if (full) return full;
   }
   return null;
+}
+
+/**
+ * idea-343: the folder new projects are cloned into: the parent of this repo's main checkout (e.g. C:\Users\you\projects)
+ * when rootDir is a git checkout, else ~/projects (the installed app's rootDir is %LOCALAPPDATA%\VibeSquad\runtime, whose
+ * parent is no projects folder). Always one of projectBases, so the clone resolves like any registered project path.
+ */
+export function primaryProjectsDir(rootDir) {
+  const mainRoot = rootDir ? resolveWorktreeRootPath(rootDir) || rootDir : null;
+  if (mainRoot && existsSync(join(mainRoot, ".git"))) {
+    const parent = dirname(resolve(mainRoot));
+    if (isDir(parent)) return parent;
+  }
+  return join(homedir(), "projects");
 }
 
 const projectBases = (rootDir) => {
