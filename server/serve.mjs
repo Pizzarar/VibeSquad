@@ -501,6 +501,9 @@ if (isMain) {
     const reconciled = persistTemplateReconcile(rootDir).catch((e) => console.warn("template reconcile failed:", e?.message ?? e));
     void reconciled.then(() => sharedSchedules()).then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
+    // idea-347: the durable restart request (vs restart request): drain asks -> drained logs -> one vs restart, timed here, not in an agent turn.
+    const restartRequests = import("./restart-request.mjs").then((m) => m.startRestartRequestLoop()).catch((e) => console.warn("restart-request loop failed to start:", e?.message ?? e));
+    server.once("close", () => void restartRequests.then((l) => l?.stop()).catch(() => {}));
     void refreshStale({ rootDir }).catch(() => {});
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {

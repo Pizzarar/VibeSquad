@@ -248,6 +248,8 @@ export function parseArgs(argv) {
     "base",
     "brief",
     "timeout",
+    "deadline",
+    "needs",
     "file",
     "goal",
     "files",
@@ -525,6 +527,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
+  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. A durable server-side restart request: the server asks every live lead to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -2582,7 +2585,7 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
   const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
   if (!id || !isRunnerId(id)) {
     if (!hasOwnerProof(env)) throw new Error("vs restart: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Overlord may restart the runtime.");
-    return;
+    return { owner: true, id: "owner", team: "", lane: "" };
   }
   let who = identity;
   if (!who) {
@@ -2604,6 +2607,7 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
   if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane)) {
     throw new Error(`vs restart: ${id} is a ${who.role || "worker"}; restarting the runtime cuts every agent's turn, so only the owner or the Overlord (hub lead) may. Ask your lead.`);
   }
+  return { owner: false, id, team: team.id, lane: lane.id };
 }
 
 /**
@@ -2691,6 +2695,48 @@ export async function confirmRestartStarted(logFile, pid, { timeoutMs = 10000, a
     if (now() >= end) return "unconfirmed";
     await sleep(250);
   }
+}
+
+/** The owner's log lane for restart-feedback lines: the vibesquad Squad's hub lane (else the first hub lane). */
+function ownerHubLane(teams) {
+  const order = [...teams].sort((a, b) => (a.id === "vibesquad" ? -1 : b.id === "vibesquad" ? 1 : 0));
+  for (const t of order) {
+    const hub = (t.lanes ?? []).find((l) => isHubLane(t, l));
+    if (hub) return { team: t.id, lane: hub.id };
+  }
+  return { team: "", lane: "" };
+}
+
+/**
+ * idea-347: `vs restart request <tip> [--deadline <min>] [--needs <tokens>]` | `vs restart status [--json]` | `vs restart abort
+ * [--reason <why>]`. Request and abort are the owner's or the Overlord's (the vs restart gate); status is read-only. The server
+ * loop (server/restart-request.mjs) sends the drain asks, collects 'drained restart <tip>', and fires vs restart once.
+ */
+export async function commandRestartRequest(flags, { identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, now = Date.now } = {}) {
+  const sub = String(flags._[0] ?? "");
+  const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  const rr = await import("../server/restart-request.mjs");
+  if (sub === "status") {
+    if (flags._.length > 1) throw new Error("usage: vs restart status [--json]");
+    const cur = rr.readRestartRequest(vsHome);
+    process.stdout.write((flags.json ? JSON.stringify(cur, null, 2) : rr.formatRequestStatus(cur, now())) + "\n");
+    return 0;
+  }
+  const caller = await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  const by = caller?.owner === false ? caller.id : "owner";
+  if (sub === "abort") {
+    if (flags._.length > 1) throw new Error('usage: vs restart abort [--reason "<why>"]');
+    const req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() });
+    process.stdout.write(`${req.id} aborted; the server tells the asked leads to lift their hold.\n`);
+    return 0;
+  }
+  if (flags._.length !== 2) throw new Error("usage: vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>]");
+  const where = caller?.owner === false && caller.team ? { team: caller.team, lane: caller.lane } : ownerHubLane(teams);
+  const deadlineMin = flags.deadline === undefined ? rr.DEFAULT_DEADLINE_MIN : /^\d+$/.test(String(flags.deadline)) ? Number(flags.deadline) : NaN;
+  const req = rr.createRestartRequest(vsHome, { tip: flags._[1], requestedBy: by, ...where, needs: flags.needs ?? "", deadlineMin, now: now() });
+  process.stdout.write(`${req.id} recorded (tip ${req.tip}, deadline ${req.deadline}). The server sends the drain ask to every live lead within ~${rr.TICK_MS / 1000}s, ` +
+    `fires vs restart once all have logged restart-feedback 'drained restart ${req.tip}' (or at the deadline, naming who did not), and logs restart-done. No timer to hold: end your turn. Progress: vs restart status\n`);
+  return 0;
 }
 
 export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now, confirmStart = spawnFn ? null : confirmRestartStarted } = {}) {
@@ -3034,7 +3080,7 @@ export function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
-    if (command === "restart") return commandRestart(flags);
+    if (command === "restart") return ["request", "status", "abort"].includes(String(flags._[0] ?? "")) ? commandRestartRequest(flags) : commandRestart(flags);
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
