@@ -350,6 +350,47 @@ test("idea-343 NewSquadModal wires the From GitHub tab to gh-repos / gh-clone an
   assert.match(modalSrc, /"Cloning…"/);
 });
 
+// Mirrored from src/NewSquadModal.tsx (ghHttpError / ghErrorSlots); the source-match test below keeps them honest.
+const GH_SERVER_TOO_OLD = "This VibeSquad server doesn't support GitHub import yet — restart VibeSquad";
+function ghHttpError(status, body) {
+  const msg = typeof body?.error === "string" ? body.error : "";
+  if ((status === 404 || status === 405) && (!msg || msg.toLowerCase() === "not found")) return GH_SERVER_TOO_OLD;
+  return msg || `GitHub request failed (${status})`;
+}
+function ghErrorSlots(loadErr, submitErr) {
+  return { status: loadErr, submit: submitErr && submitErr !== loadErr ? submitErr : "" };
+}
+
+test("idea-343 error helpers mirror the modal source", () => {
+  const norm = (s) => s.replace(/\s+/g, "").replace(/:(string|number|unknown)/g, "");
+  const src = (name) => new RegExp(`export function ${name}\\([^)]*\\)[^\\n]*\\{\\n([\\s\\S]*?)\\n\\}`).exec(modalSrc)?.[1];
+  assert.ok(src("ghHttpError") && src("ghErrorSlots"));
+  assert.equal(norm(src("ghHttpError")),norm(ghHttpError.toString().replace(/^[^{]*\{/, "").replace(/\}$/, "")));
+  assert.equal(norm(src("ghErrorSlots")), norm(ghErrorSlots.toString().replace(/^[^{]*\{/, "").replace(/\}$/, "")));
+  assert.match(modalSrc, new RegExp(`GH_SERVER_TOO_OLD = "${GH_SERVER_TOO_OLD}"`));
+});
+
+test("idea-343 a missing route reads as 'restart VibeSquad', never bare 'not found'", () => {
+  assert.equal(ghHttpError(404, null), GH_SERVER_TOO_OLD); // non-JSON generic fallback
+  assert.equal(ghHttpError(404, {}), GH_SERVER_TOO_OLD);
+  assert.equal(ghHttpError(404, { error: "not found" }), GH_SERVER_TOO_OLD);
+  assert.equal(ghHttpError(405, null), GH_SERVER_TOO_OLD);
+  assert.equal(ghHttpError(424, { error: "Not signed in to GitHub CLI — run gh auth login" }), "Not signed in to GitHub CLI — run gh auth login");
+  assert.equal(ghHttpError(409, { error: "folder already exists and is not a git repository" }), "folder already exists and is not a git repository");
+  assert.equal(ghHttpError(502, null), "GitHub request failed (502)");
+});
+
+test("idea-343 each GitHub error renders exactly once", () => {
+  const same = "GitHub CLI (gh) isn't installed";
+  assert.deepEqual(ghErrorSlots(same, same), { status: same, submit: "" }); // same message: status box only
+  assert.deepEqual(ghErrorSlots("", "Repository o/r not found"), { status: "", submit: "Repository o/r not found" });
+  assert.deepEqual(ghErrorSlots("load failed", "clone failed"), { status: "load failed", submit: "clone failed" });
+  // Source: ghErr renders only in the status box, the pink line only reads the de-duplicated submit slot.
+  assert.equal((modalSrc.match(/\{ghErr \|\|/g) ?? []).length, 1);
+  assert.equal((modalSrc.match(/\{err\b/g) ?? []).length, 0);
+  assert.match(modalSrc, /\{errSlots\.submit && <div className="stat-alert small"[^>]*>\{errSlots\.submit\}<\/div>\}/);
+});
+
 test("U5 live sentence shows the effective team name", () => {
   const s = describeIdeaAction({ mode: "new", teamName: resolveIdeaTeamName("Crew", "x"), profile: "P" });
   assert.match(s, /Creates "Crew"/);

@@ -355,10 +355,37 @@ export function githubRemoteSlug(url) {
   return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
 }
 
+/**
+ * idea-343: turns a failed `gh` run into one readable GitError (424 = gh itself failed, 504 = timeout). `repo` is the
+ * owner/repo being cloned, when there is one. Messages are scrubbed; 409/400 validation errors pass through untouched.
+ */
+export function mapGhError(err, repo) {
+  if (!(err instanceof GitError) && err?.code !== "ENOENT") return err;
+  const raw = scrubSecrets(String(err?.message ?? err));
+  const first = raw.split(/\r?\n/).find((l) => l.trim())?.trim() ?? "";
+  if (err.code === "ENOENT" || err.status === 501) return new GitError("GitHub CLI (gh) isn't installed. Install it from https://cli.github.com, then run `gh auth login`.", 424);
+  if (err.status === 504 || /timed out/i.test(raw)) return new GitError("Timed out talking to GitHub", 504);
+  if (err.status === 409 || err.status === 500) return err;
+  if (/gh auth login|not logged in|not authenticated|authentication required|HTTP 401|bad credentials/i.test(raw)) return new GitError("Not signed in to GitHub CLI — run gh auth login", 424);
+  if (/could not resolve to a repository|HTTP 404|repository not found|not found/i.test(raw)) {
+    return new GitError(repo ? `Repository ${repo} not found or you don't have access` : "GitHub CLI: not found (HTTP 404)", repo ? 424 : 502);
+  }
+  return new GitError(`GitHub CLI: ${first.slice(0, 300) || "failed"}`, 502);
+}
+
+/** Runs gh, mapping failures through mapGhError. */
+async function runGhMapped(runGh, args, cwd, opts, repo) {
+  try {
+    return await runGh(args, cwd, opts);
+  } catch (e) {
+    throw mapGhError(e, repo);
+  }
+}
+
 /** Your repos (owned, collaborator, org member), most recently updated first; capped at 100. */
 async function ghRepos(runGh, projectsDir) {
   // Fixed argv, no user input. `gh repo list` only lists the viewer's own repos and would miss org repos.
-  const r = await runGh(["api", "user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"], projectsDir);
+  const r = await runGhMapped(runGh, ["api", "user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"], projectsDir);
   const list = JSON.parse(r.stdout);
   const repos = (Array.isArray(list) ? list : [])
     .map((x) => ({ nameWithOwner: str(x?.full_name, 201), name: str(x?.name, 100), description: str(x?.description, 300), isPrivate: x?.private === true, updatedAt: str(x?.updated_at, 40) }))
@@ -387,7 +414,7 @@ async function ghClone(runGh, body, projectsDir) {
       return { ok: true, path: dest, reused: true, repo };
     }
     // argv only: repo is a validated owner/repo (never '-'-led), dest an absolute path; "--" hands --quiet to git clone.
-    await runGh(["repo", "clone", repo, dest, "--", "--quiet"], projectsDir, { timeout: WRITE_TIMEOUT });
+    await runGhMapped(runGh, ["repo", "clone", repo, dest, "--", "--quiet"], projectsDir, { timeout: WRITE_TIMEOUT }, repo);
     return { ok: true, path: dest, reused: false, repo };
   });
 }
