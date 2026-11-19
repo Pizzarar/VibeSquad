@@ -359,7 +359,7 @@ export class Runner {
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
-    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, canRun: (callerId) => !this._agyBusy(callerId), ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
@@ -891,6 +891,16 @@ export class Runner {
     entry.parkTimer = null; // null = nothing armed (heldIds' idea-305 re-arm reads it)
     if (entry.inflight > 0 || entry.turns < 1) return;
     this._armPark(id, entry, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
+  }
+
+  // idea-349: true when any live antigravity-cli agent is mid-turn (other than callerId, whose turn just ended) or holds background work.
+  _agyBusy(callerId) {
+    for (const [k, e] of this.live) {
+      if ((PROVIDER_ALIASES[e.provider] ?? e.provider) !== 'antigravity-cli') continue;
+      if (e.heldSince !== null && e.heldSince !== undefined) return true;
+      if (k !== callerId && e.inflight > 0) return true;
+    }
+    return false;
   }
 
   _armPark(id, entry, ms) {

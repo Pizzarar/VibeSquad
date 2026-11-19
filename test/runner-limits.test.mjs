@@ -171,3 +171,24 @@ test('poller: concurrent poll() runs agy once; shutdown() kills the in-flight ch
   assert.deepEqual(await Promise.all([a, b, c]), [[], [], []]);
   assert.equal(existsSync(store.file), false);
 });
+
+test('idea-349: agy poller skips (keeps its interval) while canRun says an agy agent is busy', async () => {
+  const store = new LimitStore(path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-lim-')), 'limits.jsonl'));
+  let calls = 0; let busy = true; let t = 1_000_000;
+  const poll = createAgyUsagePoller({ store, run: async () => { calls++; return fx('agy-usage.txt'); }, minIntervalMs: 60_000, now: () => t, canRun: () => !busy });
+  assert.deepEqual(await poll('a'), []); assert.equal(calls, 0, 'no agy spawn while busy');
+  busy = false; t += 1; assert.ok((await poll('a')).length > 0); assert.equal(calls, 1, 'runs once the agents are idle');
+});
+
+test('idea-349: Runner._agyBusy sees other agy turns and held background work, ignores claude and the caller', () => {
+  const r = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), 'vs-run-')) });
+  r.live.set('c', { provider: 'claude', inflight: 1, heldSince: null });
+  assert.equal(r._agyBusy('x'), false);
+  r.live.set('a', { provider: 'antigravity-cli', inflight: 1, heldSince: null });
+  assert.equal(r._agyBusy('a'), false, 'the caller\'s own just-ended turn does not count');
+  assert.equal(r._agyBusy('x'), true);
+  r.live.set('a', { provider: 'agy', inflight: 0, heldSince: 123 });
+  assert.equal(r._agyBusy('a'), true, 'background hold blocks');
+  r.live.set('a', { provider: 'agy', inflight: 0, heldSince: null });
+  assert.equal(r._agyBusy('x'), false);
+});
