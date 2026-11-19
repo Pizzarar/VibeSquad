@@ -414,6 +414,56 @@ test("detection runs under the lock: a refused second run never reads or touches
   } finally { await w.cleanup(); }
 });
 
+// idea-355: `vs restart` started via PowerShell Start-Process never ran and left no restart-*.json. Every launch failure is
+// now loud: non-zero (throw), a log line, and a failed restart-<ts>.json (launchFailed) that `vs watch --restart` reports.
+test("idea-355: confirmRestartStarted: started once the log has the line; exited when the pid dies first; unconfirmed on timeout", async () => {
+  const { confirmRestartStarted, RESTART_STARTED_LINE } = await import("../cli/vs.mjs");
+  const { STARTED_LINE } = await import("../scripts/restart-runtime.mjs");
+  assert.equal(RESTART_STARTED_LINE, STARTED_LINE, "the CLI mirror matches the script");
+  const dir = mkdtempSync(path.join(os.tmpdir(), "vs-355-"));
+  try {
+    const log = path.join(dir, "r.log");
+    let t = 0; const clock = { now: () => t, sleep: async (ms) => { t += ms; } };
+    writeFileSync(log, `[x] ${STARTED_LINE} (pid 5)\n`);
+    assert.equal(await confirmRestartStarted(log, 5, { alive: () => true, ...clock }), "started");
+    writeFileSync(log, "[x] vs restart: launching\n");
+    assert.equal(await confirmRestartStarted(log, 5, { alive: () => false, ...clock }), "exited");
+    assert.equal(await confirmRestartStarted(log, null, { alive: () => true, ...clock }), "exited", "no pid is never 'started'");
+    assert.equal(await confirmRestartStarted(log, 5, { alive: () => true, timeoutMs: 1000, ...clock }), "unconfirmed");
+    let polls = 0;
+    const late = await confirmRestartStarted(log, 5, { alive: () => true, now: clock.now, sleep: async (ms) => { t += ms; if (++polls === 3) writeFileSync(log, `${STARTED_LINE}\n`, { flag: "a" }); } });
+    assert.equal(late, "started");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("idea-355: a detached launch that never runs (or returns no pid) fails loudly with a failed restart-<ts>.json", async () => {
+  const { commandRestart } = await import("../cli/vs.mjs");
+  const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }] }];
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-355-home-"));
+  const results = () => readdirSync(home).filter((f) => /^restart-.*\.json$/.test(f)).map((f) => JSON.parse(readFileSync(path.join(home, f), "utf8")));
+  const quiet = async (fn) => { const orig = process.stdout.write.bind(process.stdout); process.stdout.write = () => true; try { return await fn(); } finally { process.stdout.write = orig; } };
+  const base = { env: { VIBESQUAD_HOME: home }, teams, hasOwnerProof: () => true, drainGuard: () => ({ pending: [] }) };
+  try {
+    await assert.rejects(quiet(() => commandRestart({}, { ...base, spawnFn: () => 4321, confirmStart: async () => "exited" })), /pid 4321 exited without starting[\s\S]*result: /);
+    let recs = results();
+    assert.equal(recs.length, 1);
+    assert.equal(recs[0].ok, false);
+    assert.equal(recs[0].launchFailed, true);
+    assert.match(recs[0].errors[0], /^launch: restart script pid 4321 exited without starting/);
+    assert.match(readFileSync(recs[0].log, "utf8"), /vs restart: restart script pid 4321 exited without starting/, "the log says so too");
+    rmSync(path.join(home, readdirSync(home).find((f) => /^restart-.*\.json$/.test(f))));
+
+    await assert.rejects(quiet(() => commandRestart({}, { ...base, spawnFn: () => undefined })), /returned no pid/);
+    assert.equal(results().length, 1);
+    for (const f of readdirSync(home).filter((f) => /^restart-.*\.json$/.test(f))) rmSync(path.join(home, f));
+
+    // started (or alive but slow): success, no failure record
+    assert.equal(await quiet(() => commandRestart({}, { ...base, spawnFn: () => 4321, confirmStart: async () => "started" })), 0);
+    assert.equal(await quiet(() => commandRestart({}, { ...base, spawnFn: () => 4321, confirmStart: async () => "unconfirmed" })), 0);
+    assert.equal(results().length, 0);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 test("vs restart: --timeout must be a positive integer; unsafe launch args rejected; caller gate; env passed as flags", async () => {
   const { commandRestart, assertRestartCaller } = await import("../cli/vs.mjs");
   const teams = [{ id: "vibesquad", name: "VibeSquad", hub: "vibesquad", lanes: [{ id: "vibesquad" }, { id: "bug-chaser" }] }];
@@ -534,19 +584,111 @@ test("idea-328: unreadable runner cmdline + healthy /health -> confirmed runner,
   } finally { await w.cleanup(); }
 });
 
-test("idea-328: unreadable runner cmdline + dead /health -> treated as gone (not recycled), never killed by pid", async () => {
+// idea-344 supersedes the old "treated as gone": an alive pid with an unreadable cmdline whose /health stays non-200 is not
+// skipped (the server tree-kill would take it down hard). It gets the token /shutdown; with none available the run aborts
+// before anything is stopped, and the pid is never killed.
+test("idea-344: alive pid, unreadable cmdline, /health non-200, no /shutdown -> loud abort, nothing stopped, never killed", async () => {
   const w = await world({ running: [0], runnerInfo: unreadable, oldRunnerHealthDown: true, supportsShutdown: false });
   try {
     const oldPid = w.runner().pid;
     const r = await w.run({ runnerBootMs: 300 });
+    assert.equal(r.ok, false);
+    assert.ok(r.errors.some((e) => /alive, command line unreadable, \/health did not confirm it \(status 503, status 503, status 503\).*token \/shutdown not accepted \(status 404\).*Nothing was stopped/.test(e)), JSON.stringify(r.errors));
+    assert.equal(r.steps.some((s) => s.step === "runner not running"), false, "not treated as gone");
+    assert.equal(w.shutdownAuth.length, 1, "one token-checked /shutdown attempt");
+    assert.deepEqual(w.hardKills, [], "the unconfirmed pid (and the server) are never killed");
+    assert.ok(w.alive.has(oldPid), "runner left running");
+    assert.deepEqual(w.spawned, [], "server not restarted");
+  } finally { await w.cleanup(); }
+});
+
+// A lag-tolerant /health wrapper: the old runner's /health times out `misses` times (or always), like a runner whose event
+// loop is lagging; every timeoutMs it was given is recorded.
+const laggyHealth = (w, misses) => {
+  const oldPort = JSON.parse(readFileSync(path.join(w.home, "runner.json"), "utf8")).port;
+  const seen = { timeouts: [], missed: 0 };
+  seen.httpCall = async (url, o) => {
+    if (url === `http://127.0.0.1:${oldPort}/health`) {
+      seen.timeouts.push(o?.timeoutMs);
+      if (seen.missed < misses) { seen.missed += 1; throw new Error("timeout"); }
+    }
+    return httpCall(url, o);
+  };
+  return seen;
+};
+
+test("idea-344: alive pid + unreadable cmdline + slow /health -> retried with growing timeouts, confirmed, graceful path", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const lag = laggyHealth(w, 2);
+    const r = await w.run({}, [], { httpCall: lag.httpCall });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.includes("runner idle"), "the idle wait ran against the confirmed runner");
+    assert.ok(names.includes("snapshot before stop"));
+    assert.ok(names.includes("runner stopped gracefully"), names.join(" | "));
+    assert.deepEqual(lag.timeouts.slice(0, 3), [3000, 5000, 5000], "lag-tolerant timeouts");
+    assert.equal(w.shutdownAuth.length, 1);
+    assert.deepEqual(w.hardKills, []);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-344: alive pid + unreadable cmdline + /health never answers -> token /shutdown, waits for exit, never killed", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const oldPid = w.runner().pid;
+    const lag = laggyHealth(w, Infinity);
+    const r = await w.run({}, [], { httpCall: lag.httpCall });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const stop = r.steps.find((s) => s.step === "runner stopped gracefully");
+    assert.equal(stop?.pid, oldPid);
+    assert.match(stop?.via ?? "", /identity unconfirmed/);
+    assert.equal(w.shutdownAuth.length, 1, "graceful /shutdown with the token");
+    assert.deepEqual(w.hardKills, [], "no hard kill");
+    assert.equal(r.newHash, "new-hash");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-344: runner.json pid is dead -> gone: no /health probe, no /shutdown, no kill, restart completes", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const old = w.runner();
+    w.alive.delete(old.pid); await close(old.srv);
+    const lag = laggyHealth(w, 0);
+    const r = await w.run({ runnerBootMs: 300 }, [], { httpCall: lag.httpCall });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "runner not running"));
+    assert.deepEqual(lag.timeouts, [], "a dead pid needs no /health probe");
+    assert.equal(w.shutdownAuth.length, 0);
+    assert.deepEqual(w.hardKills, []);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-344: pid dies while /health is retried -> gone, restart completes", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const old = w.runner();
+    const lag = laggyHealth(w, Infinity);
+    const httpCallDying = async (url, o) => { try { return await lag.httpCall(url, o); } catch (e) { if (lag.missed >= 2 && w.alive.has(old.pid)) { w.alive.delete(old.pid); await close(old.srv); } throw e; } };
+    const r = await w.run({ runnerBootMs: 300 }, [], { httpCall: httpCallDying });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.ok(r.steps.some((s) => s.step === "runner not running"), r.steps.map((s) => s.step).join(" | "));
+    assert.equal(w.shutdownAuth.length, 0);
+    assert.deepEqual(w.hardKills, []);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-344: recycled pid with an unreadable cmdline (runner port closed: refused) -> left alone, not killed, restart completes", async () => {
+  const w = await world({ running: [0], runnerInfo: unreadable });
+  try {
+    const old = w.runner();
+    await close(old.srv); // the runner died; its pid now belongs to a protected process (alive, cmdline hidden)
+    const r = await w.run({ runnerBootMs: 300 });
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     const skip = r.steps.find((s) => s.step === "runner not running");
-    assert.ok(skip, "runner treated as not running");
-    assert.match(skip.note ?? "", /could not be read and \/health did not answer; treated as gone/);
-    assert.doesNotMatch(skip.note ?? "", /recycled/);
-    assert.equal(w.shutdownAuth.length, 0, "no /shutdown to an unconfirmed pid");
-    assert.equal(w.hardKills.includes(oldPid), false, "the unconfirmed pid is never killed by pid");
-    assert.equal(r.newHash, "new-hash");
+    assert.match(skip?.note ?? "", /\(refused, refused, refused\); nothing listens on runner port \d+, so it is not serving as the runner; left alone \(not killed\)/);
+    assert.equal(w.shutdownAuth.length, 0);
+    assert.equal(w.hardKills.includes(old.pid), false);
   } finally { await w.cleanup(); }
 });
 
