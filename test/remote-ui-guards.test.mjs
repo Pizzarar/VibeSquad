@@ -48,6 +48,12 @@ describe("R2-4 remote UI & module-load guards", () => {
 
     const newSquad = read("src/NewSquadModal.tsx");
     assert.match(newSquad, /data-testid="new-squad-remote-note"/);
+    // idea-343: the From GitHub tab is shown in remote mode (the host clones into its own projects folder and returns the
+    // path), so the tab strip is not behind isRemote() and only the remote Local folder tab strips the typed paths.
+    assert.match(newSquad, /const github = source === "github"/);
+    assert.match(newSquad, /\{source === "path" && remote \? \(\s*<p className="muted small" data-testid="new-squad-remote-note"/);
+    assert.match(newSquad, /if \(remote && !github\) \{\s*const \{ paths: _paths/);
+    assert.doesNotMatch(newSquad, /\{remote \? \(\s*<p className="muted small" data-testid="new-squad-remote-note"/);
     assert.match(newSquad, /lastProfile: !remote && startBuddy \? selectedProfile : undefined/);
     assert.match(newSquad, /const \{ paths: _paths, path: _path, \.\.\.restTeam \} = builtTeam/);
     assert.match(newSquad, /paths: _lp, path: _lpath, lastProfile: _lastProfile, \.\.\.restLane/);

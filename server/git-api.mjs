@@ -14,8 +14,6 @@ export const isGitPath = (path) => path.startsWith(GIT_PREFIX);
 export const GIT_READ_ACTIONS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details", "watch", "gh-repos"];
 export const GIT_WRITE_ACTIONS = ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "discard", "rename-branch", "pr-create", "pr-merge", "pr-automerge", "gh-clone"];
 const NO_CWD_ACTIONS = ["gh-repos", "gh-clone"]; // still owner-gated: every /__vibesquad/git/* path is (vibesquad-api isGatedRead + non-GET gate)
-/** idea-343 routes the server further limits to the PC's local owner (vibesquad-api: isLocalOwner). */
-export const isGhProjectPath = (path) => NO_CWD_ACTIONS.some((a) => path === `${GIT_PREFIX}${a}`);
 
 export const MAX_OUTPUT = 400_000; // chars per response payload: keeps the JSON under the remote proxy's 512 KB text cap
 const MAX_BUFFER = 16 * 1024 * 1024;
