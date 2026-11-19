@@ -644,6 +644,25 @@ export function createLeadHandoffCoordinator(deps = {}) {
   // is evicted so the caller falls through to a fresh spawn (or adopt) instead of leaving the lane on the old lead with a dead successor.
   // A fetch error is not "dead": only a definite not-found / non-lead answer evicts. `evicted` collects the dead successor ids.
   async function settleDeduped(slotKey, prev, retireNow, oldLeadId, evicted) {
+    const dropSlot = () => { if (completedBySlot.get(slotKey)?.oldLeadId === prev?.oldLeadId) completedBySlot.delete(slotKey); };
+    // The slot is lane+ord, not lead: an entry left by another old lead at the same ord (e.g. a replacement lead spawned at ord1
+    // after `vs lead retire --force`, idea-360) is not this request. Evict it so this live lead really hands off.
+    if (prev && oldLeadId && prev.oldLeadId && prev.oldLeadId !== oldLeadId) {
+      dropSlot();
+      return null;
+    }
+    // A confirmed earlier successor that is now retired / not a lead (force-retired, or retired some other way) can't be "the"
+    // successor any more: evict instead of returning it. Only a definite answer evicts; a lookup error keeps the dedupe.
+    if (prev?.successorId && !prev.pendingConfirmation) {
+      let succ;
+      let lookupFailed = false;
+      try { succ = await getAgent(prev.successorId); } catch { lookupFailed = true; }
+      if (!lookupFailed && (!succ || succ.archivedAt || effectiveAgentRole(succ) !== "lead" || isRetiredAgent(succ))) {
+        dropSlot();
+        selfHandedOff.delete(oldLeadId ?? prev.oldLeadId);
+        return null;
+      }
+    }
     if (prev?.pendingConfirmation && prev.successorId && !confirmedTakeovers.has(prev.successorId)) {
       let succ;
       let lookupFailed = false;
@@ -1119,7 +1138,12 @@ export function createLeadHandoffCoordinator(deps = {}) {
       for (const old of laneLeads) {
         retired.push(await retireLeadRecord(old, { laneId, laneName }));
         pendingTakeover.delete(old.id);
+        selfHandedOff.delete(old.id);
       }
+      // The lane's finished-handoff slots name leads that are all retired now: drop them, so a replacement lead spawned at a
+      // reused ord is never deduped onto a force-retired successor (in-flight spawns are left to finish).
+      const lanePrefix = `${deps.sharedSlots ? `${rootDir}:` : ""}${teamId}:${laneId}:ord`.toLowerCase();
+      for (const key of [...completedBySlot.keys()]) if (key.toLowerCase().startsWith(lanePrefix)) completedBySlot.delete(key);
       const who = callerId ? `Overlord ${callerId}` : "Owner";
       try {
         appendLog(teamId, {

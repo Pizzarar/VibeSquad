@@ -757,3 +757,42 @@ test("idea-360: the owner (local token, no agent id) may force-retire a live lea
     assert.match(readLog(t), /Owner force-retired the live lead\(s\) of lane site-polish: rn-lead/);
   } finally { t.cleanup(); }
 });
+
+test("idea-360 review: after a forced retire, a replacement lead at the same ord hands off for real (no stale slot dedupe)", async () => {
+  const t = overlord();
+  try {
+    t.agents.get("rn-lead-b").labels.ord = "1";
+    const first = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    assert.equal(t.agents.get(first.id).labels.ord, "2");
+    assert.equal(t.agents.get("rn-lead-b").labels.role, "former-lead");
+    const forced = await callTool(t.ctx, "handoff_lead", { action: "retire", lane: "other", force: true });
+    assert.deepEqual(forced.retiredIds, [first.id]);
+    // Replacement lead spawned by hand, at ord1 (the slot the first handoff used).
+    const rep = await spawnLead(t.ctx, { profile: "Lead - Gemini", labels: { role: "lead", lane: "other", ord: "1" } });
+    const repAgent = t.agents.get(rep.id);
+    Object.assign(repAgent, { createdAt: "2026-11-01T00:00:00.000Z", status: "idle" });
+    repAgent.labels = { ...repAgent.labels, team: "site", lane: "other", role: "lead", ord: "1" };
+    const again = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    assert.notEqual(again.deduped, true, "must not return the stale ord1 slot result");
+    assert.equal(again.oldLeadId, rep.id);
+    assert.notEqual(again.id, first.id);
+    assert.equal(t.agents.get(again.id).labels.role, "lead");
+    assert.equal(t.agents.get(rep.id).labels.role, "former-lead");
+  } finally { t.cleanup(); }
+});
+
+test("idea-360 review: settleDeduped evicts a slot entry from another old lead or whose successor is retired (no force retire)", async () => {
+  const t = overlord();
+  try {
+    t.agents.get("rn-lead-b").labels.ord = "1";
+    const first = await callTool(t.ctx, "handoff_lead", { lane: "other" });
+    // The successor is retired some other way (not through --force), and a new ord1 lead appears in the lane.
+    t.agents.get(first.id).labels.role = "former-lead";
+    t.agents.set("rn-rep", { id: "rn-rep", title: "rn-rep", provider: "claude", model: "claude-opus-5-5", cwd: t.dir, status: "idle", createdAt: "2026-11-01T00:00:00.000Z", labels: { team: "site", lane: "other", role: "lead", ord: "1", profile: "Lead - Claude" } });
+    const r = await performLeadHandoffHttp({ agentId: "rn-rep", trigger: "overlord", callerId: "rn-hub-lead", retireImmediately: true, ...t.deps }, t.dir);
+    assert.notEqual(r.deduped, true);
+    assert.equal(r.oldLeadId, "rn-rep");
+    assert.equal(t.agents.get("rn-rep").labels.role, "former-lead");
+    assert.equal(t.agents.get(r.successorId).labels.role, "lead");
+  } finally { t.cleanup(); }
+});
