@@ -88,7 +88,9 @@ function nativeCallRun() {
   return runChild(`
 await sleep(700);
 function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},1500)']); }
+const b0 = Date.now();
 blockOnChildProcess();
+console.log(JSON.stringify({ blockedMs: Date.now() - b0 }));
 await sleep(600);`);
 }
 
@@ -99,12 +101,17 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
   for (let i = 0; i < 4 && !proved; i++) {
     const { r, lines } = nativeCallRun();
     assert.equal(r.status, 0, r.stderr);
-    const stall = lines.find((l) => l.driftMs > 1000);
-    assert.ok(stall, JSON.stringify(lines));
+    // Structural, not absolute: the monitor must have recorded a lag line spanning (most of) the block we actually measured in the child.
+    // A broken monitor records none (or a tiny one), however slow or loaded the machine is; a slow machine only makes the block longer.
+    const blockedMs = JSON.parse(r.stdout.trim().split("\n").pop()).blockedMs;
+    assert.ok(blockedMs >= 1400, `child block measured ${blockedMs}ms`);
+    const stall = lines.reduce((a, l) => (!a || l.driftMs > a.driftMs ? l : a), null);
+    assert.ok(stall && stall.driftMs >= blockedMs * 0.7, `max lag line ${stall?.driftMs}ms vs actual block ${blockedMs}ms: ${JSON.stringify(lines)}`);
     const cpuMs = stall.cpuUserMs + stall.cpuSystemMs; // cpu time does not grow with wall time when busy: bound against drift
     assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
     if (stall.captureLate) { assert.equal(stall.frames, undefined); continue; }
-    assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
+    // A capture can land just after the block returned (stack is then the post-block code, e.g. console.log): that is a late sample, retry.
+    if (!stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess "))) continue;
     proved = true;
   }
   // Timing-only: every attempt landing late means the machine was saturated (late frames are asserted absent above, and the late flag is
