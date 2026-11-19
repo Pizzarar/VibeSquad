@@ -2660,13 +2660,47 @@ async function heldViaRunner(env = process.env, { timeoutMs = 5000 } = {}) {
   }
 }
 
-export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now } = {}) {
+/** First line restart-runtime appends to its --log (mirrors scripts/restart-runtime.mjs STARTED_LINE; not imported, see above). */
+export const RESTART_STARTED_LINE = "restart-runtime started";
+
+/**
+ * idea-355: a `vs restart` that could not get the script going leaves a failed restart-<ts>.json, the same file a real run
+ * writes, so `vs watch --restart` and the drain guard see it (ok:false, launchFailed) even when nobody saw our stderr
+ * (a detached Start-Process). Best effort: returns the file or null.
+ */
+export function writeRestartLaunchFailure(vsHome, error, extra = {}) {
+  const at = new Date().toISOString();
+  const file = path.join(vsHome, `restart-${at.replace(/[:.]/g, "-")}.json`);
+  const rec = { startedAt: at, finishedAt: at, dryRun: false, ok: false, launchFailed: true, steps: [], cutAgents: [], resumedAgents: [], resumeFailed: [], forced: [], errors: [`launch: ${error}`], cliPid: process.pid, ...extra };
+  try { fs.mkdirSync(vsHome, { recursive: true }); fs.writeFileSync(file, JSON.stringify(rec, null, 2)); return file; } catch { return null; }
+}
+
+/**
+ * idea-355: wait (up to timeoutMs) for the launched script to append RESTART_STARTED_LINE to its log. 'started', 'exited'
+ * (its pid is gone and it never wrote the line: it never ran) or 'unconfirmed' (still alive, slow to boot).
+ */
+export async function confirmRestartStarted(logFile, pid, { timeoutMs = 10000, alive = (p) => { try { process.kill(p, 0); return true; } catch (e) { return e.code === "EPERM"; } }, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
+  const seen = () => { try { return fs.readFileSync(logFile, "utf8").includes(RESTART_STARTED_LINE); } catch { return false; } };
+  const end = now() + timeoutMs;
+  for (;;) {
+    if (seen()) return "started";
+    if (!(Number.isInteger(pid) && pid > 0 && alive(pid))) return seen() ? "started" : "exited";
+    if (now() >= end) return "unconfirmed";
+    await sleep(250);
+  }
+}
+
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now, confirmStart = spawnFn ? null : confirmRestartStarted } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
   if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
-  const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  // idea-355: a detached launch (e.g. PowerShell Start-Process) may come without a usable cwd or home: say so, never vanish.
+  try { process.cwd(); } catch (e) { throw new Error(`vs restart: the working directory is unusable (${e.code || e.message}); run it from an existing folder`); }
+  const homeDir = (() => { try { return os.homedir(); } catch { return ""; } })();
+  if (!env.VIBESQUAD_HOME && !homeDir) throw new Error("vs restart: no home directory (USERPROFILE/HOME unset) and no VIBESQUAD_HOME: cannot find ~/.vibesquad");
+  const vsHome = env.VIBESQUAD_HOME || path.join(homeDir, ".vibesquad");
   // D2 retry guard (docs/PLAN_COORDINATED_DRAIN.md): within 30 min of a deferral, every lead it named must have logged
   // restart-feedback 'drained restart' first. --kill-background (owner only, above) is the owner's override.
   if (!flags.dryRun && !flags.killBackground) {
@@ -2698,21 +2732,39 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
     if (r.stderr) process.stderr.write(r.stderr);
     return r.status ?? 1;
   }
+  // idea-355: every way the detached launch can fail is loud: non-zero exit, a message, a line in the log, and a failed
+  // restart-<ts>.json (stderr is invisible when `vs restart` itself was started detached).
+  const launchFail = (why) => {
+    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] vs restart: ${why}\n`); } catch { /* the log may be what failed */ }
+    const file = writeRestartLaunchFailure(vsHome, why, { log: logFile });
+    return new Error(`vs restart: ${why}\nlog: ${logFile}${file ? `\nresult: ${file}` : ""}`);
+  };
+  // A real launch heads the log (tests inject spawnFn and must not write into the owner's ~/.vibesquad/logs).
+  if (!spawnFn) { try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] vs restart (cli pid ${process.pid}, cwd ${process.cwd()}): launching ${script}\n`); } catch (e) { throw launchFail(`cannot write the restart log (${e.code || e.message})`); } }
   let pid = null;
   if (spawnFn) pid = spawnFn(process.execPath, args);
   else if (process.platform === "win32") {
     const q = (x) => `'${String(x).replace(/'/g, "''")}'`;
     const cmdline = [process.execPath, ...args].map((a) => `"${a}"`).join(" ");
     const ps = `$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=${q(cmdline)}; ProcessStartupInformation=$si}; if ($r.ReturnValue -ne 0) { exit 1 }; $r.ProcessId`;
-    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", windowsHide: true });
-    if (r.status !== 0) throw new Error(`could not launch the restart script detached: ${(r.stderr || r.stdout || "").trim()}`);
+    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", windowsHide: true, timeout: 60000 });
+    if (r.status !== 0) throw launchFail(`could not launch the restart script detached: ${(r.error?.message || r.stderr || r.stdout || `powershell exit ${r.status}`).trim()}`);
     pid = Number(String(r.stdout).trim());
   } else {
     // X1b: the relaunched server/runner must never inherit this shell's agent identity (VS_AGENT_ID / PASEO_AGENT_ID /
     // VS_AGENT_TOKEN), or the new server would call the runner as that agent. (WMI above never inherits our env.)
-    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(env) });
-    child.unref();
-    pid = child.pid;
+    try {
+      const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(env) });
+      child.on("error", () => { /* surfaced below: no pid, or it never writes the started line */ });
+      child.unref();
+      pid = child.pid;
+    } catch (e) { throw launchFail(`could not launch the restart script detached: ${e.message}`); }
+  }
+  if (!Number.isInteger(pid) || pid <= 0) throw launchFail(`the detached launch returned no pid (${JSON.stringify(pid)})`);
+  if (confirmStart) {
+    const st = await confirmStart(logFile, pid);
+    if (st === "exited") throw launchFail(`restart script pid ${pid} exited without starting (it never wrote "${RESTART_STARTED_LINE}" to the log)`);
+    if (st !== "started") process.stdout.write(`vs restart: pid ${pid} is alive but has not logged its start yet; check the log below.\n`);
   }
   process.stdout.write(`restart launched (pid ${pid}); it waits for the runner to go idle (no open turns, no background work), then restarts runner + server. If background work outlasts the wait it defers instead (exit 4, nothing stopped).
 log: ${logFile}

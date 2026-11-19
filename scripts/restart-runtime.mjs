@@ -330,33 +330,55 @@ export async function detectRunner(home, d = defaultDeps) {
     runner.parent = id.pi?.ppid ?? null;
     runner.cmd = id.pi?.cmd ?? null;
     if (id.health) runner.health = id.health;
+    if (id.state === 'unknown') { runner.portClosed = !!id.portClosed; runner.healthOutcomes = id.healthOutcomes ?? []; }
   }
-  if (runner.alive && !runner.health) runner.health = await runnerHealth(runner, d);
+  if (runner.alive && !runner.health) runner.health = (await probeRunnerHealth(runner, d)).body;
   return runner;
 }
 
-/** The runner's token-checked /health body, or null (no discovery, no token, not answering, not 200). */
-async function runnerHealth(runner, d) {
-  if (!runner.port || !runner.token) return null;
-  try {
-    const h = await d.httpCall(`http://127.0.0.1:${runner.port}/health`, { headers: { authorization: `Bearer ${runner.token}` }, timeoutMs: 3000 });
-    return h.status === 200 ? h.body : null;
-  } catch { return null; }
+// idea-344 (2be31012 restart): with loop lag at lagMax 1981ms a single 3s /health window missed a live runner, which was
+// then "treated as gone" and taken down by the server tree-kill with no graceful stop and no fold-index save. /health is now
+// retried with growing timeouts and a backoff (worst case ~16s, spent only while it does not answer).
+export const HEALTH_TIMEOUTS_MS = [3000, 5000, 5000];
+/** First line a launched restart-runtime appends to its --log (cli/vs.mjs RESTART_STARTED_LINE mirrors it, idea-355). */
+export const STARTED_LINE = 'restart-runtime started';
+const HEALTH_BACKOFF_MS = [1000, 2000];
+
+/**
+ * The runner's token-checked /health, lag-tolerant: { body, outcomes, refused }. body is the 200 body or null (no discovery,
+ * no token, never answered, never 200). refused: every try was ECONNREFUSED, i.e. nothing listens on the runner's port (a
+ * lagging runner still accepts the connection and times out instead). A 401 is another token: retrying cannot help.
+ */
+async function probeRunnerHealth(runner, d, timeouts = HEALTH_TIMEOUTS_MS) {
+  if (!runner.port || !runner.token) return { body: null, outcomes: ['no runner discovery'], refused: false };
+  const outcomes = [];
+  for (let i = 0; i < timeouts.length; i++) {
+    if (i) await d.sleep(HEALTH_BACKOFF_MS[i - 1] ?? HEALTH_BACKOFF_MS.at(-1));
+    try {
+      const h = await d.httpCall(`http://127.0.0.1:${runner.port}/health`, { headers: { authorization: `Bearer ${runner.token}` }, timeoutMs: timeouts[i] });
+      if (h.status === 200) return { body: h.body, outcomes, refused: false };
+      outcomes.push(`status ${h.status}`);
+      if (h.status === 401) break;
+    } catch (e) { outcomes.push(e?.code === 'ECONNREFUSED' ? 'refused' : String(e?.code || e?.message || e)); }
+  }
+  return { body: null, outcomes, refused: outcomes.length > 0 && outcomes.every((o) => o === 'refused') };
 }
 
 /**
  * Is runner.pid the runner right now? { state, pi, health? }. state: 'runner' (its command line says so, or the line was
  * unreadable and the token-checked /health answers with exactly that pid; a body without a pid does not count), 'recycled' (a readable command line that is not the
- * runner: the only positive mismatch), 'gone' (no such process), 'unknown' (unreadable command line and /health does not
- * confirm: the runner is not reachable as ours, so it is never killed and never shut down by pid).
+ * runner: the only positive mismatch), 'gone' (no such process, also when it exits while /health is retried), 'unknown'
+ * (alive, unreadable command line, and the lag-tolerant /health does not confirm: never killed by pid; portClosed says
+ * whether anything listens on the runner's port at all; see stopUnconfirmed in restartRuntime, idea-344).
  */
 async function runnerIdentity(runner, d) {
   const pi = d.procInfo(runner.pid);
   if (!pi) return { state: 'gone', pi: null };
   if (pi.cmd) return { state: isRunnerCmd(pi.cmd) ? 'runner' : 'recycled', pi };
-  const health = await runnerHealth(runner, d);
-  if (health && health.pid === runner.pid) return { state: 'runner', pi, health, via: 'health' };
-  return { state: 'unknown', pi };
+  const probe = await probeRunnerHealth(runner, d);
+  if (probe.body && probe.body.pid === runner.pid) return { state: 'runner', pi, health: probe.body, via: 'health' };
+  if (!d.pidAlive(runner.pid)) return { state: 'gone', pi: null };
+  return { state: 'unknown', pi, portClosed: probe.refused, healthOutcomes: probe.outcomes };
 }
 
 async function finishDetect({ opts, d, env, home, port, configDir, runner, spid }) {
@@ -499,7 +521,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     if (det.runner.health) { try { agents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1')).body); } catch { /* listed below as unknown */ } }
     result.plan = {
       detected: {
-        runner: { pid: det.runner.pid, alive: det.runner.alive, port: det.runner.port, parentPid: det.runner.parent, cmd: det.runner.cmd, health: det.runner.health, hasToken: !!det.runner.token },
+        runner: { pid: det.runner.pid, alive: det.runner.alive, identity: det.runner.identity ?? null, port: det.runner.port, parentPid: det.runner.parent, cmd: det.runner.cmd, health: det.runner.health, hasToken: !!det.runner.token },
         server: { pid: det.server.pid, port: det.server.port, cmd: det.server.cmd, isServe: det.server.isServe, parentPid: det.server.parent, health: det.server.health },
         runningAgents: agents.filter((a) => a.status === 'running').map(brief),
         heldAgents: det.runner.health?.heldAgents ?? [],
@@ -662,11 +684,33 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         if (info && info.pid === pid) rmSync(path.join(det.home, f), { force: true }); // only that dead runner's files
       }
     };
-    const notRunningNote = (r) => (r.staleDiscovery ? { note: `runner.json names pid ${r.pid}, which is not a runner (recycled); left alone` }
-      : r.identity === 'unknown' ? { note: `runner.json names pid ${r.pid}: its command line could not be read and /health did not answer; treated as gone` }
-      : {});
+    const notRunningNote = (r) => (r.staleDiscovery ? { note: `runner.json names pid ${r.pid}, which is not a runner (recycled); left alone` } : {});
+    // idea-344: runner.json names a LIVE pid whose command line cannot be read and whose /health stayed silent through the
+    // lag-tolerant retries. That used to be "treated as gone", and the server tree-kill then took a lagging runner down hard.
+    // Safe path, never a kill by pid: (a) nothing listens on the runner's port -> it is not serving as the runner (a lagging
+    // runner still accepts connections): left alone, with a loud note; (b) otherwise send the token-checked /shutdown (only
+    // the runner holding that token can accept it, so it cannot hit a recycled pid) with a lag-tolerant timeout and wait for
+    // the pid to exit; (c) not accepted and the pid still alive: abort before the server is touched (nothing stopped yet).
+    // Aborting costs one retry later; going on would cost a hard kill with no graceful stop and no fold-index save.
+    const stopUnconfirmed = async (r) => {
+      const base = `runner.json names pid ${r.pid}: alive, command line unreadable, /health did not confirm it (${(r.healthOutcomes ?? []).join(', ') || 'no answer'})`;
+      if (r.portClosed) { step('runner not running', { note: `${base}; nothing listens on runner port ${r.port}, so it is not serving as the runner; left alone (not killed)` }); return true; }
+      let accepted = false; let why = '';
+      try { const res = await runnerCall(det, d, 'POST', '/shutdown', 15000); accepted = res.status === 202; if (!accepted) why = `status ${res.status}`; } catch (e) { why = e.message; }
+      if (accepted) {
+        const end = d.now() + opts.stopTimeoutSec * 1000;
+        while (d.pidAlive(r.pid) && d.now() < end) await d.sleep(250);
+        if (!d.pidAlive(r.pid)) { step('runner stopped gracefully', { pid: r.pid, via: 'token /shutdown (identity unconfirmed)' }); clearRunnerFiles(r.pid); return true; }
+        fail('runner stop', `${base}; it accepted /shutdown but is still alive after ${opts.stopTimeoutSec}s; refusing to kill an unconfirmed pid`);
+        return false;
+      }
+      if (!d.pidAlive(r.pid)) { step('runner exited before stop', { pid: r.pid }); clearRunnerFiles(r.pid); return true; }
+      fail('runner stop', `${base}; token /shutdown not accepted (${why}). Refusing to go on: stopping the server would take this runner down with no graceful stop and no fold-index save. Nothing was stopped; retry when loop lag drops, or stop the runner by hand (or delete runner.json if pid ${r.pid} is not the runner)`);
+      return false;
+    };
     const stopRunner = async (adopted = false) => {
       const r0 = det.runner;
+      if (!r0.alive && r0.identity === 'unknown') return stopUnconfirmed(r0);
       if (!r0.alive) { step('runner not running', notRunningNote(r0)); return true; }
       let accepted = false;
       try {
@@ -907,8 +951,15 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  // idea-355: a detached launch has no console, so the log file is the only witness. `vs restart` waits for this STARTED_LINE
+  // before reporting success; anything that stops us before restartRuntime runs is written there too.
+  const argv = process.argv.slice(2);
+  const li = argv.indexOf('--log');
+  const earlyLog = (line) => { if (li >= 0 && argv[li + 1]) { try { appendFileSync(argv[li + 1], `[${new Date().toISOString()}] ${line}\n`); } catch { /* console only */ } } };
+  earlyLog(`${STARTED_LINE} (pid ${process.pid})`);
+  process.on('uncaughtException', (e) => { earlyLog(`restart-runtime crashed: ${e?.stack ?? e}`); process.exit(1); });
   let opts;
-  try { opts = parseArgs(process.argv.slice(2)); } catch (e) { console.error(`restart-runtime: ${e.message}`); process.exit(2); }
+  try { opts = parseArgs(argv); } catch (e) { console.error(`restart-runtime: ${e.message}`); earlyLog(`restart-runtime: ${e.message}`); process.exit(2); }
   applyLaunchEnv(opts, process.env); // `vs restart` runs us via WMI, which drops its env
   const log = (line) => { console.log(line); if (opts.log) { try { appendFileSync(opts.log, line + '\n'); } catch { /* console only */ } } };
   const r = await restartRuntime(opts, {}, process.env, log);
