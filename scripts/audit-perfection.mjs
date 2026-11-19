@@ -114,6 +114,7 @@ export function transcriptFindings({ dir, since, until, repo = process.cwd(), no
   }
   // Bucket 7: fixed-shape turns a script could do. One finding per top cluster, key stable per shape (not daily): fileFindings dedupes.
   for (const c of scriptableTurnsBucket(dir, range).clusters) {
+    if (c.notScriptable) continue;
     const eg = c.examples.map((x) => `${x.run} @${new Date(x.ts).toISOString()}`).join('; ');
     out.push({ key: `scriptable:${shortHash(c.signature)}`, text: `Scriptable-turn candidate: ${c.n} turns (${c.runs} runs), ${c.tokens} tokens, $${c.costUsd.toFixed(2)}, shape [${c.signature}], roles ${c.roles.join(',')}. Candidate replacement: ${c.hint}.`, evidence: `audit-owner-stamps bucket 7, lanes ${c.lanes.join(',')}, median output ${c.medianOutChars} chars, e.g. ${eg}` });
   }
