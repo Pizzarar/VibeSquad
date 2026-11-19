@@ -379,8 +379,39 @@ describe("idea-343 routes with a stubbed gh", () => {
     assert.equal(calls.length, 0);
     ghImpl = async () => { throw new GitError(scrubSecrets("fatal: https://ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345@github.com/o/zz denied")); };
     const e = await call("POST", "gh-clone", { repo: "o/zz" });
-    assert.equal(e.status, 400);
+    assert.equal(e.status, 502);
+    assert.match(e.body.error, /^GitHub CLI: fatal: /);
     assert.doesNotMatch(e.body.error, /ghp_/);
+  });
+
+  test("gh failures map to readable messages (stubbed gh, no network)", async () => {
+    const enoent = Object.assign(new Error("spawn gh ENOENT"), { code: "ENOENT" });
+    const cases = [
+      ["not installed (exec 501)", () => new GitError("GitHub CLI (gh) isn't installed. whatever", 501), "clone", 424, /^GitHub CLI \(gh\) isn't installed/],
+      ["not installed (raw ENOENT)", () => enoent, "repos", 424, /^GitHub CLI \(gh\) isn't installed/],
+      ["not signed in (gh auth login)", () => new GitError("To get started with GitHub CLI, please run:  gh auth login"), "repos", 424, /^Not signed in to GitHub CLI — run gh auth login$/],
+      ["not signed in (HTTP 401)", () => new GitError("gh: Bad credentials (HTTP 401)"), "clone", 424, /^Not signed in to GitHub CLI/],
+      ["repo missing (resolve)", () => new GitError("GraphQL: Could not resolve to a Repository with the name 'o/zz'."), "clone", 424, /^Repository o\/zz not found or you don't have access$/],
+      ["repo missing (HTTP 404)", () => new GitError("gh: Not Found (HTTP 404)"), "clone", 424, /^Repository o\/zz not found or you don't have access$/],
+      ["timeout", () => new GitError("gh repo timed out", 504), "clone", 504, /^Timed out talking to GitHub$/],
+      ["other: first line, prefixed + scrubbed", () => new GitError("boom ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345 happened\nsecond line"), "repos", 502, /^GitHub CLI: boom \*\*\* happened$/],
+    ];
+    for (const [name, mk, kind, status, re] of cases) {
+      ghImpl = async () => { throw mk(); };
+      const r = kind === "repos" ? await call("GET", "gh-repos") : await call("POST", "gh-clone", { repo: "o/zz" });
+      assert.equal(r.status, status, name);
+      assert.match(r.body.error, re, name);
+      assert.doesNotMatch(r.body.error, /ghp_/, name);
+    }
+    // 409 collisions keep their own message; they never reach gh.
+    ghImpl = async () => { throw new Error("unreachable"); };
+    mkdirSync(join(projects, "coll"));
+    const c = await call("POST", "gh-clone", { repo: "o/coll" });
+    assert.equal(c.status, 409);
+    assert.equal(c.body.error, "folder already exists and is not a git repository");
+    // gh-repos without a repo name: a 404 is not turned into "Repository … not found".
+    ghImpl = async () => { throw new GitError("gh: Not Found (HTTP 404)"); };
+    assert.match((await call("GET", "gh-repos")).body.error, /^GitHub CLI: /);
   });
 
   test("no usable projects folder: 500, gh never runs", async () => {

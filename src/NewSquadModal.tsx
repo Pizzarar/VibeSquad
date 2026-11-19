@@ -48,9 +48,23 @@ const DEMO_GH_REPOS: GhRepo[] = [
   { nameWithOwner: "your-org/website", name: "website", description: "", isPrivate: false, updatedAt: "2026-10-30T12:00:00Z" },
 ];
 
+export const GH_SERVER_TOO_OLD = "This VibeSquad server doesn't support GitHub import yet — restart VibeSquad";
+
+/** Message for a failed gh-repos / gh-clone response. A 404/405 without a real GitError body means the route is missing (old server). */
+export function ghHttpError(status: number, body: { error?: string } | null): string {
+  const msg = typeof body?.error === "string" ? body.error : "";
+  if ((status === 404 || status === 405) && (!msg || msg.toLowerCase() === "not found")) return GH_SERVER_TOO_OLD;
+  return msg || `GitHub request failed (${status})`;
+}
+
+/** Each error renders once: load errors in the status box under the repo field, submit errors in the pink line above Create. */
+export function ghErrorSlots(loadErr: string, submitErr: string): { status: string; submit: string } {
+  return { status: loadErr, submit: submitErr && submitErr !== loadErr ? submitErr : "" };
+}
+
 async function ghJson<T>(res: Response): Promise<T> {
-  const j = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((j as { error?: string }).error ?? `GitHub request failed (${res.status})`);
+  const j = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(ghHttpError(res.status, j));
   return j as T;
 }
 const fetchGhRepos = () => fetch("/__vibesquad/git/gh-repos").then((r) => ghJson<{ repos: GhRepo[]; projectsDir: string }>(r));
@@ -133,6 +147,7 @@ export function NewSquadModal({
     return q && !ghPicked ? list.filter((r) => r.nameWithOwner.toLowerCase().includes(q) || (r.description ?? "").toLowerCase().includes(q)) : list;
   }, [ghRepos, ghQuery, ghPicked]);
 
+  const errSlots = ghErrorSlots(github ? ghErr : "", err);
   const canSubmit = remote ? squadName.trim().length > 0 : github ? ghSpec !== null : folderPath.trim().length > 0;
 
   const create = async () => {
@@ -379,7 +394,7 @@ export function NewSquadModal({
           )}
         </>
       )}
-      {err && <div className="stat-alert small" style={{ marginTop: 8 }}>{err}</div>}
+      {errSlots.submit && <div className="stat-alert small" style={{ marginTop: 8 }}>{errSlots.submit}</div>}
     </Modal>
   );
 }
