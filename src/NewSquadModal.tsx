@@ -88,6 +88,9 @@ export function NewSquadModal({
 
   const remote = isRemote();
   const github = !remote && source === "github";
+  // Tab-active flags live outside className so the CSS-class scan never reads "path"/"github" as classes.
+  const pathTabActive = source === "path";
+  const githubTabActive = source === "github";
   // The repo to clone: a picked row, else the typed text when it reads as owner/repo or a GitHub URL.
   const ghSpec = ghPicked ?? githubSpecFromInput(ghQuery);
   const rawPath = github ? (ghSpec?.split("/")[1] ?? "") : folderPath;
@@ -226,7 +229,7 @@ export function NewSquadModal({
               type="button"
               role="tab"
               data-testid="new-squad-source-path"
-              className={source === "path" ? "on" : ""}
+              className={pathTabActive ? "on" : ""}
               aria-selected={source === "path"}
               onClick={() => setSource("path")}
             >
@@ -236,7 +239,7 @@ export function NewSquadModal({
               type="button"
               role="tab"
               data-testid="new-squad-source-github"
-              className={source === "github" ? "on" : ""}
+              className={githubTabActive ? "on" : ""}
               aria-selected={source === "github"}
               onClick={() => setSource("github")}
             >
