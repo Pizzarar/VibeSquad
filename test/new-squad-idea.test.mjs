@@ -343,7 +343,7 @@ test("idea-343 NewSquadModal wires the From GitHub tab to gh-repos / gh-clone an
   assert.match(modalSrc, /fetch\("\/__vibesquad\/git\/gh-clone", \{ method: "POST"/);
   assert.match(modalSrc, /placeholder="Search your repos or paste owner\/repo…"/);
   assert.match(modalSrc, /if \(DEMO\) \{\s*setGhRepos\(DEMO_GH_REPOS\)/); // no live gh call in DEMO
-  assert.match(modalSrc, /const github = !remote && source === "github"/); // the tab is never live in remote mode
+  assert.match(modalSrc, /const github = source === "github"/); // live in remote mode too: a remote owner device may clone (host-side dest)
   assert.match(modalSrc, /\(await cloneGhRepo\(ghSpec\)\)\.path/);
   assert.match(modalSrc, /folderPath: finalPath/);
   assert.match(modalSrc, /await saveTeams\(\[\.\.\.teams, newTeam\]\)/);

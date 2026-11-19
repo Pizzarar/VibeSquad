@@ -101,7 +101,8 @@ export function NewSquadModal({
   }, [profiles]);
 
   const remote = isRemote();
-  const github = !remote && source === "github";
+  // idea-343: From GitHub works on a remote owner device too (the host clones into its own projects folder).
+  const github = source === "github";
   // Tab-active flags live outside className so the CSS-class scan never reads "path"/"github" as classes.
   const pathTabActive = source === "path";
   const githubTabActive = source === "github";
@@ -111,8 +112,8 @@ export function NewSquadModal({
   const derived = useMemo(() => deriveSquadNameFromPath(rawPath), [rawPath]);
 
   useEffect(() => {
-    if (!nameEdited && !remote) setSquadName(derived.name);
-  }, [derived.name, nameEdited, remote]);
+    if (!nameEdited && (!remote || github)) setSquadName(derived.name);
+  }, [derived.name, nameEdited, remote, github]);
 
   // Fetch the repo list once, the first time the From GitHub tab opens (DEMO: canned rows, no live call).
   useEffect(() => {
@@ -148,7 +149,7 @@ export function NewSquadModal({
   }, [ghRepos, ghQuery, ghPicked]);
 
   const errSlots = ghErrorSlots(github ? ghErr : "", err);
-  const canSubmit = remote ? squadName.trim().length > 0 : github ? ghSpec !== null : folderPath.trim().length > 0;
+  const canSubmit = github ? ghSpec !== null : remote ? squadName.trim().length > 0 : folderPath.trim().length > 0;
 
   const create = async () => {
     setBusy(true);
@@ -176,7 +177,8 @@ export function NewSquadModal({
         lastProfile: !remote && startBuddy ? selectedProfile : undefined,
       });
       let newTeam: TeamDef = builtTeam;
-      if (remote) {
+      // Remote Local folder: no typed host path is sent. A remote clone keeps its path: the host chose it (gh-clone safe dest).
+      if (remote && !github) {
         const { paths: _paths, path: _path, ...restTeam } = builtTeam as TeamDef & { path?: unknown };
         newTeam = {
           ...restTeam,
@@ -233,121 +235,117 @@ export function NewSquadModal({
         </>
       }
     >
-      {remote ? (
+      <div className="seg" role="tablist" aria-label="Project source" style={{ marginBottom: 10 }}>
+        <button
+          type="button"
+          role="tab"
+          data-testid="new-squad-source-path"
+          className={pathTabActive ? "on" : ""}
+          aria-selected={source === "path"}
+          onClick={() => setSource("path")}
+        >
+          Local folder
+        </button>
+        <button
+          type="button"
+          role="tab"
+          data-testid="new-squad-source-github"
+          className={githubTabActive ? "on" : ""}
+          aria-selected={source === "github"}
+          onClick={() => setSource("github")}
+        >
+          From GitHub
+        </button>
+      </div>
+      {source === "path" && remote ? (
         <p className="muted small" data-testid="new-squad-remote-note">
           Remote mode: creates a squad entry on the host; folder paths are configured on the PC
         </p>
+      ) : source === "path" ? (
+        <div className="pin-idea-field">
+          <label className="muted small">Folder path</label>
+          <input
+            value={folderPath}
+            placeholder="C:\Users\you\projects\my-app"
+            style={{ width: "100%" }}
+            onChange={(e) => setFolderPath(e.target.value)}
+          />
+        </div>
       ) : (
-        <>
-          <div className="seg" role="tablist" aria-label="Project source" style={{ marginBottom: 10 }}>
-            <button
-              type="button"
-              role="tab"
-              data-testid="new-squad-source-path"
-              className={pathTabActive ? "on" : ""}
-              aria-selected={source === "path"}
-              onClick={() => setSource("path")}
-            >
-              Local folder
-            </button>
-            <button
-              type="button"
-              role="tab"
-              data-testid="new-squad-source-github"
-              className={githubTabActive ? "on" : ""}
-              aria-selected={source === "github"}
-              onClick={() => setSource("github")}
-            >
-              From GitHub
-            </button>
-          </div>
-          {source === "path" ? (
-            <div className="pin-idea-field">
-              <label className="muted small">Folder path</label>
-              <input
-                value={folderPath}
-                placeholder="C:\Users\you\projects\my-app"
-                style={{ width: "100%" }}
-                onChange={(e) => setFolderPath(e.target.value)}
-              />
-            </div>
-          ) : (
-            <div className="pin-idea-field">
-              <label className="muted small" htmlFor="new-squad-github-input">
-                GitHub repo
-              </label>
-              <input
-                id="new-squad-github-input"
-                data-testid="new-squad-github-input"
-                value={ghQuery}
-                placeholder="Search your repos or paste owner/repo…"
-                style={{ width: "100%" }}
-                autoFocus
-                onChange={(e) => {
-                  setGhPicked(null);
-                  setGhQuery(e.target.value);
-                }}
-              />
-              <div
-                data-testid="new-squad-github-list"
-                role="listbox"
-                aria-label="Your GitHub repos"
-                style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--line)", background: "var(--well)", marginTop: 6 }}
-              >
-                {ghRepos === null ? (
-                  <div className="muted small" style={{ padding: "6px 8px" }}>
-                    Loading your repos…
-                  </div>
-                ) : ghMatches.length === 0 ? (
-                  <div className="muted small" style={{ padding: "6px 8px" }}>
-                    {ghErr || (ghSpec ? `Will clone ${ghSpec}` : "No matching repos. Paste owner/repo or a GitHub URL.")}
-                  </div>
-                ) : (
-                  ghMatches.map((r) => (
-                    <button
-                      key={r.nameWithOwner}
-                      type="button"
-                      role="option"
-                      aria-selected={ghPicked === r.nameWithOwner}
-                      data-testid={`new-squad-github-repo-${r.nameWithOwner}`}
-                      onClick={() => {
-                        setGhPicked(r.nameWithOwner);
-                        setGhQuery(r.nameWithOwner);
-                      }}
-                      style={{
-                        display: "block",
-                        width: "100%",
-                        textAlign: "left",
-                        padding: "5px 8px",
-                        border: 0,
-                        borderBottom: "1px solid var(--line)",
-                        cursor: "pointer",
-                        background: ghPicked === r.nameWithOwner ? "var(--violet-dim)" : "transparent",
-                        color: "var(--text)",
-                      }}
-                    >
-                      <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{r.nameWithOwner}</span>
-                        {r.isPrivate && <span className="badge">private</span>}
-                      </span>
-                      {r.description && (
-                        <span className="muted small" style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                          {r.description}
-                        </span>
-                      )}
-                    </button>
-                  ))
-                )}
+        <div className="pin-idea-field">
+          <label className="muted small" htmlFor="new-squad-github-input">
+            GitHub repo
+          </label>
+          <input
+            id="new-squad-github-input"
+            data-testid="new-squad-github-input"
+            value={ghQuery}
+            placeholder="Search your repos or paste owner/repo…"
+            style={{ width: "100%" }}
+            autoFocus
+            onChange={(e) => {
+              setGhPicked(null);
+              setGhQuery(e.target.value);
+            }}
+          />
+          <div
+            data-testid="new-squad-github-list"
+            role="listbox"
+            aria-label="Your GitHub repos"
+            style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--line)", background: "var(--well)", marginTop: 6 }}
+          >
+            {ghRepos === null ? (
+              <div className="muted small" style={{ padding: "6px 8px" }}>
+                Loading your repos…
               </div>
-              {ghDir && (
-                <div className="muted small" style={{ marginTop: 4 }} data-testid="new-squad-github-dest">
-                  Clones into {ghDir}
-                  {ghSpec ? `\\${ghSpec.split("/")[1]}` : ""} (an existing checkout of the same repo is reused)
-                </div>
-              )}
+            ) : ghMatches.length === 0 ? (
+              <div className="muted small" style={{ padding: "6px 8px" }}>
+                {ghErr || (ghSpec ? `Will clone ${ghSpec}` : "No matching repos. Paste owner/repo or a GitHub URL.")}
+              </div>
+            ) : (
+              ghMatches.map((r) => (
+                <button
+                  key={r.nameWithOwner}
+                  type="button"
+                  role="option"
+                  aria-selected={ghPicked === r.nameWithOwner}
+                  data-testid={`new-squad-github-repo-${r.nameWithOwner}`}
+                  onClick={() => {
+                    setGhPicked(r.nameWithOwner);
+                    setGhQuery(r.nameWithOwner);
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "5px 8px",
+                    border: 0,
+                    borderBottom: "1px solid var(--line)",
+                    cursor: "pointer",
+                    background: ghPicked === r.nameWithOwner ? "var(--violet-dim)" : "transparent",
+                    color: "var(--text)",
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontFamily: "var(--mono)", fontSize: 12 }}>{r.nameWithOwner}</span>
+                    {r.isPrivate && <span className="badge">private</span>}
+                  </span>
+                  {r.description && (
+                    <span className="muted small" style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.description}
+                    </span>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+          {ghDir && (
+            <div className="muted small" style={{ marginTop: 4 }} data-testid="new-squad-github-dest">
+              Clones into {ghDir}
+              {ghSpec ? `\\${ghSpec.split("/")[1]}` : ""} (an existing checkout of the same repo is reused)
             </div>
           )}
-        </>
+        </div>
       )}
       <div className="pin-idea-field">
         <label className="muted small" htmlFor="new-squad-name-input">
