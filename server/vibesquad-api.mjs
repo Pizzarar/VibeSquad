@@ -10,7 +10,7 @@ import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
 import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
-import { handleGitApi, isGitPath } from "./git-api.mjs";
+import { handleGitApi, isGhProjectPath, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
 import { peekStale, readBuildStamp, refreshStale } from "./stale-runtime.mjs";
 import { execFile } from "node:child_process";
@@ -24,7 +24,7 @@ import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { isServerSideFsError } from "./file-lock.mjs";
-import { resolveProjectPath } from "./brief-path.mjs";
+import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
 import { handleSecretInputRequest } from "./secret-input.mjs";
@@ -41,7 +41,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -1885,7 +1885,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (!path.startsWith("/__vibesquad/")) return next?.();
     if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, caller, ...(opts.backend ? { backend: opts.backend } : {}) });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
-    if (isGitPath(path)) return handleGitApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
+    // idea-343: cloning from GitHub writes into the projects folder: the PC owner only (loopback + local token, never a
+    // relayed or LAN-paired device), matching the modal, which hides the From GitHub tab in remote mode.
+    if (isGhProjectPath(path) && !isLocalOwner(req)) return sendJson(res, 403, { error: "GitHub clone is only available on the host PC", readOnly: true });
+    if (isGitPath(path)) return handleGitApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts), projectsDir: () => primaryProjectsDir(rootDir) });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
     if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
     switch (path) {
