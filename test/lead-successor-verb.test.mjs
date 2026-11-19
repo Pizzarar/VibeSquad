@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { seedDefaultPack } from "../server/profiles.mjs";
-import { performLeadHandoffHttp, resetLeadHandoffState } from "../server/lead-handoff.mjs";
+import { createLeadHandoffCoordinator, performLeadHandoffHttp, resetLeadHandoffState } from "../server/lead-handoff.mjs";
 import { callTool, createContext, VS_TOOLS } from "../server/mcp/tools.mjs";
 import { commandAgentVerb, runAgentVerb } from "../cli/vs.mjs";
 import { tokenFor, verifiedIdentity } from "./helpers/agent-token.mjs";
@@ -624,5 +624,136 @@ test("O6 review: the forced-handoff decision log is written once, and not when t
     assert.equal(count(), 1);
     await performLeadHandoffHttp({ agentId: "rn-lead-b", retireImmediately: true, trigger: "overlord", callerId: "rn-hub-lead", force: true, steer: "go", ...t.deps }, t.dir).catch(() => {});
     assert.equal(count(), 1);
+  } finally { t.cleanup(); }
+});
+
+// idea-359: `vs lead handoff --profile` / handoff_lead {profile}: the successor spawns with a chosen role=lead profile.
+test("idea-359: profile switches the successor's provider/model/mode; default still inherits the old lead's", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    const r = await callTool(t.ctx, "handoff_lead", { profile: "Lead - Gemini" });
+    const req = t.calls.createAgent[0];
+    assert.deepEqual([req.config.provider, req.config.model, req.config.modeId], ["antigravity-cli", "gemini-4-argon", "accept-edits"]);
+    assert.equal(req.labels.profile, "Lead - Gemini");
+    assert.equal(req.env.VS_PROFILE, "Lead - Gemini");
+    assert.equal(t.agents.get("rn-lead").labels.role, "former-lead");
+    // Default (no profile): the Gemini successor's own profile is inherited by its successor (explicit id skips the fresh window).
+    await callTool(t.ctx, "handoff_lead", { id: r.id });
+    const req2 = t.calls.createAgent[1];
+    assert.deepEqual([req2.config.provider, req2.labels.profile], ["antigravity-cli", "Lead - Gemini"]);
+    // And back to Claude at the next handoff (case-insensitive name), through the CLI flag.
+    const n = t.calls.createAgent.length;
+    await runAgentVerb("handoff_lead", { _: [], profile: "lead - claude" }, t.ctx);
+    const req3 = t.calls.createAgent[n];
+    assert.deepEqual([req3.config.provider, req3.config.model, req3.config.modeId, req3.labels.profile], ["claude", "claude-opus-5-5", "auto", "Lead - Claude"]);
+  } finally { t.cleanup(); }
+});
+
+test("idea-359: unknown and non-lead profiles are refused before any spawn; the old lead stays live", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { profile: "Lead - Nope" }), /unknown profile "Lead - Nope" \(lead profiles: .*"Lead - Claude".*"Lead - Gemini".*vs profiles --role lead/);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { profile: "Implement - Sonnet" }), /profile "Implement - Sonnet" has role "worker", not lead/);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { profile: "Brainstorm - Claude" }), /has role "brainstorm", not lead/);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { profile: 7 }), /profile must be a string/);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { action: "retire", profile: "Lead - Claude" }), /applies to a handoff, not a retire/);
+    assert.equal(t.calls.createAgent.length, 0);
+    assert.equal(t.agents.get("rn-lead").labels.role, "lead");
+    // Server re-check on a direct call, and the auto triggers never take a profile.
+    await assert.rejects(performLeadHandoffHttp({ agentId: "rn-lead", trigger: "buddy", callerId: "rn-buddy", profile: "Implement - Sonnet", ...t.deps }, t.dir), (e) => e.status === 400 && /not lead/.test(e.message));
+    await assert.rejects(performLeadHandoffHttp({ agentId: "rn-lead", trigger: "auto-250", profile: "Lead - Gemini", usedTokens: 260_000, ...t.deps }, t.dir), (e) => e.status === 400 && /only applies to a self, buddy or overlord/.test(e.message));
+    assert.equal(t.calls.createAgent.length, 0);
+    // CLI: a bare --profile and --profile on retire are usage errors.
+    await assert.rejects(commandAgentVerb("lead", { _: ["handoff"], profile: true }, () => t.ctx, () => {}), /--profile needs a lead profile name/);
+    await assert.rejects(commandAgentVerb("lead", { _: ["retire"], profile: "Lead - Claude" }, () => t.ctx, () => {}), /does not take --profile/);
+  } finally { t.cleanup(); }
+});
+
+test("idea-359: a repeat inside the fresh-successor window dedupes on the same profile, but a different profile hands off again", async () => {
+  const t = setup({ callerRole: "brainstorm", callerId: "rn-buddy" });
+  try {
+    const first = await callTool(t.ctx, "handoff_lead", {});
+    const same = await callTool(t.ctx, "handoff_lead", { profile: "Lead - Claude" });
+    assert.equal(same.id, first.id);
+    assert.equal(same.deduped, true);
+    const other = await callTool(t.ctx, "handoff_lead", { profile: "Lead - Gemini" });
+    assert.notEqual(other.id, first.id);
+    assert.equal(t.agents.get(other.id).labels.profile, "Lead - Gemini");
+    assert.equal(t.agents.get(first.id).labels.role, "former-lead");
+  } finally { t.cleanup(); }
+});
+
+test("idea-359: the Overlord hands another lane's lead off to a chosen profile", async () => {
+  const t = overlord();
+  try {
+    const r = await callTool(t.ctx, "handoff_lead", { lane: "other", profile: "Lead - Gemini" });
+    assert.equal(r.trigger, "overlord");
+    assert.equal(t.calls.createAgent[0].config.provider, "antigravity-cli");
+    assert.equal(t.agents.get(r.id).labels.profile, "Lead - Gemini");
+  } finally { t.cleanup(); }
+});
+
+// idea-360: `vs lead retire --force` retires a LIVE lead: Overlord (other lane) or owner only, logged as a decision.
+test("idea-360: Overlord force-retires another lane's live lead (decision logged), then can spawn a fresh lead there", async () => {
+  const t = overlord();
+  try {
+    const plain = await callTool(t.ctx, "handoff_lead", { action: "retire", lane: "other" });
+    assert.deepEqual(plain.retiredIds, [], "without --force the live lead is kept");
+    assert.equal(t.agents.get("rn-lead-b").labels.role, "lead");
+    let out = "";
+    assert.equal(await commandAgentVerb("lead", { _: ["retire"], lane: "other", force: true }, () => t.ctx, (s) => { out += s; }), 0);
+    const r = JSON.parse(out);
+    assert.equal(r.forced, true);
+    assert.deepEqual(r.retiredIds, ["rn-lead-b"]);
+    assert.equal(t.agents.get("rn-lead-b").labels.role, "former-lead");
+    assert.match(t.agents.get("rn-lead-b").title, /^\(old\) /);
+    assert.equal(t.agents.get("rn-hub-lead").labels.role, "lead");
+    const line = readLog(t).split("\n").filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.type === "decision");
+    assert.ok(line, "decision entry");
+    assert.match(line.text, /Overlord rn-hub-lead force-retired the live lead\(s\) of lane other: rn-lead-b/);
+    assert.equal(line.lane, "other");
+    // The workaround is unblocked: the lane is leaderless, so spawn_worker role=lead with another profile goes through.
+    const s = await spawnLead(t.ctx, { profile: "Lead - Gemini", labels: { role: "lead", lane: "other" } });
+    assert.ok(s.id);
+  } finally { t.cleanup(); }
+});
+
+test("idea-360: --force is refused for a Buddy, a non-hub lead, the Overlord's own lane and another Squad's Overlord (tool and server)", async () => {
+  const t = overlord();
+  try {
+    const buddy = t.makeCtx({ identity: { agentId: "rn-buddy", team: "site", lane: "site-polish", role: "brainstorm" } });
+    await assert.rejects(callTool(buddy, "handoff_lead", { action: "retire", force: true }), /only the Squad's Overlord \(hub lead\) or the owner/);
+    const lead = t.makeCtx({ identity: { agentId: "rn-lead", team: "site", lane: "site-polish", role: "lead" } });
+    await assert.rejects(callTool(lead, "handoff_lead", { action: "retire", force: true }), /only the Squad's Overlord/);
+    await assert.rejects(callTool(t.ctx, "handoff_lead", { action: "retire", force: true }), /may not force-retire its own lane's lead/);
+    const hubBuddy = t.makeCtx({ identity: { agentId: "rn-hub-buddy", team: "site", lane: "site-hub", role: "brainstorm" } });
+    await assert.rejects(callTool(hubBuddy, "handoff_lead", { action: "retire", force: true }), /only the Squad's Overlord/);
+    const othHub = t.makeCtx({ identity: { agentId: "rn-oth-hub-lead", team: "oth", lane: "oth-hub", role: "lead" } });
+    await assert.rejects(callTool(othHub, "handoff_lead", { action: "retire", lane: "site-polish", force: true }), /not in the caller's Squad/);
+    // Server re-check on direct calls (the HTTP route binds callerId to the verified agent).
+    const agentsForTest = [...t.agents.values()];
+    const direct = (callerId, laneId) => performLeadHandoffHttp({ action: "retire", force: true, callerId, teamId: "site", laneId, ...t.deps }, t.dir, { agentsForTest });
+    await assert.rejects(direct("rn-buddy", "site-polish"), (e) => e.status === 403 && /Overlord/.test(e.message));
+    await assert.rejects(direct("rn-lead", "site-polish"), (e) => e.status === 403 && /Overlord/.test(e.message));
+    await assert.rejects(direct("rn-hub-lead", "site-hub"), (e) => e.status === 403 && /own lane/.test(e.message));
+    // The coordinator itself refuses a same-lane forced retire too.
+    const coord = createLeadHandoffCoordinator({ rootDir: t.dir, listAgents: async () => agentsForTest, getAgent: async (id) => t.agents.get(id) ?? null, setLabels: async () => {}, deleteHeartbeat: async () => {}, appendLog: () => {} });
+    await assert.rejects(coord.retireStaleLeads({ teamId: "site", laneId: "site-polish", callerId: "rn-buddy", force: true }), /forbidden/);
+    await assert.rejects(coord.retireStaleLeads({ teamId: "site", laneId: "site-polish", callerId: "rn-lead", force: true }), /forbidden/);
+    assert.equal(t.agents.get("rn-lead").labels.role, "lead");
+    assert.equal(t.agents.get("rn-hub-lead").labels.role, "lead");
+    assert.equal(readLog(t).includes('"type":"decision"'), false);
+  } finally { t.cleanup(); }
+});
+
+test("idea-360: the owner (local token, no agent id) may force-retire a live lead; logged as Owner", async () => {
+  const t = overlord();
+  try {
+    writeFileSync(join(t.vsHome, "local-token"), "b".repeat(64) + "\n", "utf8");
+    const owner = t.makeCtx({ identity: { agentId: "", team: "site", lane: "site-polish", role: "" } });
+    const r = await callTool(owner, "handoff_lead", { action: "retire", lane: "site-polish", force: true });
+    assert.deepEqual(r.retiredIds, ["rn-lead"]);
+    assert.equal(t.agents.get("rn-lead").labels.role, "former-lead");
+    assert.match(readLog(t), /Owner force-retired the live lead\(s\) of lane site-polish: rn-lead/);
   } finally { t.cleanup(); }
 });

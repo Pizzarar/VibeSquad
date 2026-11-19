@@ -549,6 +549,13 @@ async function handoffLead(ctx, args = {}) {
   if (action && action !== "handoff" && action !== "retire") {
     throw new Error('handoff_lead action must be "handoff" or "retire"');
   }
+  // idea-359: optional successor profile (a role=lead profile); validated by the shared lead-handoff path. Default: inherit.
+  if (args.profile !== undefined && args.profile !== null && typeof args.profile !== "string") throw new Error("handoff_lead profile must be a string");
+  const profile = clean(args.profile).slice(0, 120);
+  if (profile && action === "retire") throw new Error("handoff_lead profile applies to a handoff, not a retire (spawn the new lead with that profile instead)");
+  const force = args.force === true;
+  // A fresh successor already carrying the requested profile is the same request again; another profile is a real new handoff.
+  const sameProfile = (t) => !profile || clean(t?.labels?.profile).toLowerCase() === profile.toLowerCase();
   // Targets may be missing (null); the caller's own lookup never swallows an error (X1b).
   const fetchAgent = async (id) => agentOf(await ctx.withBackend({ id }, (b) => b.fetchAgent(id)).catch(() => null));
   const fetchCaller = (id) => fetchCallerRecord(ctx, id);
@@ -574,6 +581,13 @@ async function handoffLead(ctx, args = {}) {
       if (!target || target.team.id !== callerTeam.id) {
         throw new Error(`cannot retire stale leads: target lane "${askedLane}" is not in the caller's Squad "${callerTeam.id}"`);
       }
+      // idea-360: --force retires a live lead: the Squad's Overlord only, and never in its own lane (the server re-checks).
+      if (force && !(role === LEAD_ROLE && isHubLane(callerTeam, callerLane.lane))) {
+        throw new Error("cannot force-retire a live lead: only the Squad's Overlord (hub lead) or the owner may");
+      }
+      if (force && target.lane.id === callerLane.lane.id) {
+        throw new Error("cannot force-retire a live lead: the Overlord may not force-retire its own lane's lead (use `vs lead handoff`)");
+      }
       if (target.lane.id !== callerLane.lane.id) {
         if (!(role === LEAD_ROLE && isHubLane(callerTeam, callerLane.lane))) {
           throw new Error("cannot retire stale leads: only the Squad's hub lead (Overlord) or the owner may retire stale leads in another lane");
@@ -593,7 +607,7 @@ async function handoffLead(ctx, args = {}) {
       target = findLaneInRegistry(laneHint, teams, teamHint);
       if (!target) throw new Error(`cannot retire stale leads: lane "${laneHint}" is not in the team registry`);
     }
-    const body = { action: "retire", teamId: target.team.id, laneId: target.lane.id, ...(callerId ? { callerId } : {}) };
+    const body = { action: "retire", teamId: target.team.id, laneId: target.lane.id, ...(callerId ? { callerId } : {}), ...(force ? { force: true } : {}) };
     let res;
     let via = "server";
     if (ctx.performHandoff) {
@@ -617,6 +631,7 @@ async function handoffLead(ctx, args = {}) {
       team: res?.teamId ?? target.team.id,
       retired,
       retiredIds: retired.map((x) => x.id),
+      ...(res?.forced ? { forced: true } : {}),
       via,
     };
   }
@@ -643,7 +658,7 @@ async function handoffLead(ctx, args = {}) {
     // The live lead is already a fresh handoff successor: a repeated call (no explicit target id) returns it instead of
     // handing off again. An explicit id means "hand off that agent", so it never takes this short-circuit.
     const age = Date.now() - Date.parse(target.createdAt ?? "");
-    if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
+    if (!askedId && sameProfile(target) && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
     }
   } else if (callerRole === LEAD_ROLE && (await isCrossLaneRequest(ctx, askedId, askedLane, callerId))) {
@@ -669,7 +684,7 @@ async function handoffLead(ctx, args = {}) {
     if (target.id === callerId || targetLane.lane.id === callerLane.lane.id) throw new Error("cannot hand off a lead: the Overlord hands off other lanes' leads; use a plain handoff_lead for itself");
     trigger = "overlord";
     const age = Date.now() - Date.parse(target.createdAt ?? "");
-    if (!askedId && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
+    if (!askedId && sameProfile(target) && target.labels?.["vs.handoff-from"] && age >= 0 && age < HANDOFF_DEDUPE_MS) {
       return handoffView({ successorId: target.id, title: target.title, oldLeadId: target.labels["vs.handoff-from"], deduped: true }, { trigger });
     }
     // O6 floor (mirrored by the server re-check): a healthy lead under 100k is steered first; --force needs a steer.
@@ -702,7 +717,7 @@ async function handoffLead(ctx, args = {}) {
     throw new Error(`cannot hand off a lead: caller role is "${callerRole || "none"}", only a brainstorm (Buddy) or a lead may`);
   }
   const steer = clean(args.steer).slice(0, 2000);
-  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(trigger === "overlord" && steer ? { steer } : {}), ...(trigger === "overlord" && args.force === true ? { force: true } : {}) };
+  const body = { trigger, agentId: target.id, callerId, retireImmediately: true, httpWaitMs: 180_000, ...(profile ? { profile } : {}), ...(trigger === "overlord" && steer ? { steer } : {}), ...(trigger === "overlord" && force ? { force: true } : {}) };
   let res;
   let via = "server";
   if (ctx.performHandoff) {
@@ -966,8 +981,8 @@ export const VS_TOOLS = {
     run: reportTool,
   },
   handoff_lead: {
-    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Returns {id, title, oldLeadId}.",
-    inputSchema: obj({ action: { type: "string", enum: ["handoff", "retire"] }, lane: S, steer: S, force: { type: "boolean" } }),
+    description: "Hand the lane's lead over to a successor (the lead-handoff flow: spawns it, re-parents workers, marks the old lead former-lead), or retire stale predecessor leads in the lane (action=\"retire\"). A Buddy hands off its own lane's live lead; a lead hands off itself (run `vs handoff --judgment-file <file>` first; never edit ~/.vibesquad files by hand); the Squad's Overlord (hub lead) may hand off any lane's lead in its Squad with an optional steer note for the successor. Optional profile (a role=lead profile name, e.g. \"Lead - Claude\"; see `vs profiles --role lead`) spawns the successor with that profile's provider/model/mode instead of inheriting the old lead's; unknown or non-lead profiles are refused. action=\"retire\" with force=true retires a LIVE lead too (the Squad's Overlord on another lane, or the owner; logged as a decision). Returns {id, title, oldLeadId}.",
+    inputSchema: obj({ action: { type: "string", enum: ["handoff", "retire"] }, lane: S, steer: S, force: { type: "boolean" }, profile: S }),
     run: handoffLead,
   },
   restart_buddy: {
