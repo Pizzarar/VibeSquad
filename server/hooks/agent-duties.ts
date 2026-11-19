@@ -57,7 +57,7 @@ import {
   loadUserSettings,
   readJsonFileWithBom,
 } from "../user-settings.mjs";
-import { readLessons, renderLessonsDigest } from "../lessons.mjs";
+import { LESSONS_BEGIN, LESSONS_END, readLessons } from "../lessons.mjs";
 
 type Labels = Record<string, string>;
 
@@ -801,8 +801,8 @@ const MAX_SNAPSHOT_CHARS = 600;
 export const MAX_INJECT_BRIEF_CHARS = 6_000;
 export const MAX_INJECT_OPEN_UNITS = 30;
 /** Lessons digest caps: most-recent N lessons and a hard char cap (idea-135). */
-export const MAX_LESSONS_DIGEST_LESSONS = 10;
-export const MAX_LESSONS_DIGEST_CHARS = 6_000;
+export const MAX_LESSONS_DIGEST_LESSONS = 5;
+export const MAX_LESSONS_DIGEST_CHARS = 1_500;
 
 function clipForPrompt(text: string, max: number, pointer: string): string {
   if (text.length <= max) return text;
@@ -892,11 +892,14 @@ export function laneArtifactBlock(root: string, lane: string): string {
 }
 
 /**
- * The `vs lesson add` digest as a spawn-prompt block, or "" when nothing is logged. Capped by
- * count (the most recent N lessons) and by chars so the injected digest stays cheap; an empty
- * store yields no section at all (no standing-rules bloat for a lane with no lessons yet).
+ * The `vs lesson add` digest as a spawn-prompt block, or "" when nothing is logged. Lessons only —
+ * the STANDING_RULES are too big to inject (one lesson + rules already ~2.6k chars) and are not
+ * repeated here. Capped by count (the lane's own lessons first, then global, most recent first) and
+ * by a hard char cap; an empty store yields no section at all.
  */
-export function lessonsDigestBlock(opts: { storePath?: string; rootDir?: string; limit?: number; maxChars?: number } = {}): string {
+export function lessonsDigestBlock(
+  opts: { storePath?: string; rootDir?: string; limit?: number; maxChars?: number; lane?: string; role?: string } = {},
+): string {
   const limit =
     typeof opts.limit === "number" && Number.isFinite(opts.limit) && opts.limit >= 0
       ? Math.floor(opts.limit)
@@ -905,10 +908,35 @@ export function lessonsDigestBlock(opts: { storePath?: string; rootDir?: string;
     typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars) && opts.maxChars >= 0
       ? Math.floor(opts.maxChars)
       : MAX_LESSONS_DIGEST_CHARS;
-  const recent = readLessons({ limit, storePath: opts.storePath, rootDir: opts.rootDir });
-  if (!recent.length) return "";
-  const digest = renderLessonsDigest({ limit, storePath: opts.storePath, rootDir: opts.rootDir });
-  return digest.length <= maxChars ? digest : `${digest.slice(0, maxChars)}\n[... lessons digest truncated]`;
+  const lane = String(opts.lane ?? "").trim().toLowerCase();
+
+  const all = readLessons({ storePath: opts.storePath, rootDir: opts.rootDir });
+  if (!all.length) return "";
+
+  // Lane-scoped: the lane's own lessons first (category === lane), then global (non-lane) lessons.
+  const isLaneLesson = (l: { category?: string }) => String(l.category ?? "").trim().toLowerCase() === lane;
+  const ordered = [...all.filter(isLaneLesson), ...all.filter((l) => !isLaneLesson(l))];
+
+  const header = "## Recent lessons";
+  const truncNote = "[... lessons digest truncated]";
+  // Reserve the begin marker, header, end marker and a worst-case truncation note, then fill
+  // lesson lines greedily so the whole block can never exceed maxChars.
+  const reserved = LESSONS_BEGIN.length + header.length + truncNote.length + LESSONS_END.length + 4;
+  let budget = maxChars - reserved;
+  const lines: string[] = [];
+  for (const l of ordered) {
+    if (lines.length >= limit) break;
+    const line = `- [${l.category}] ${l.title} — ${l.rule}`;
+    if (line.length + 1 > budget) break;
+    lines.push(line);
+    budget -= line.length + 1;
+  }
+  if (!lines.length) return "";
+
+  const truncated = lines.length < ordered.length;
+  const body = `${LESSONS_BEGIN}\n${header}\n${lines.join("\n")}`;
+  const tail = truncated ? `\n${truncNote}\n${LESSONS_END}` : `\n${LESSONS_END}`;
+  return body + tail;
 }
 
 /**
@@ -2119,13 +2147,18 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         st.mark("lane-artifacts");
-        // Lessons digest (server/lessons.mjs): `vs lesson add` entries finally reach every spawn.
+        // Lessons digest (server/lessons.mjs): `vs lesson add` entries reach every spawn, lane-scoped
+        // and capped. A read failure must never break the spawn: log it and append nothing.
         const lessonsMarker = "<!-- vibesquad:lessons:begin -->";
         if (!String(next.systemPrompt ?? rawSysPrompt ?? "").includes(lessonsMarker)) {
-          const lessonsBlock = lessonsDigestBlock({});
-          if (lessonsBlock) {
-            next.systemPrompt = [String(next.systemPrompt ?? rawSysPrompt ?? "").trim(), lessonsBlock].filter(Boolean).join("\n\n");
-            changed = true;
+          try {
+            const lessonsBlock = lessonsDigestBlock({ lane: artifactLane, role });
+            if (lessonsBlock) {
+              next.systemPrompt = [String(next.systemPrompt ?? rawSysPrompt ?? "").trim(), lessonsBlock].filter(Boolean).join("\n\n");
+              changed = true;
+            }
+          } catch (err) {
+            log(`lessons digest skipped: ${err}`);
           }
         }
 
