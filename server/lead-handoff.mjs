@@ -29,7 +29,7 @@ import { sharedSchedules } from "./schedules.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
-import { findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { DEFAULT_PACK_PROFILES, findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -491,7 +491,33 @@ export function buildSuccessorPrompt({
   ].join("\n");
 }
 
-export function resolveLeadProfile(oldLead, profilesPath) {
+/**
+ * idea-359: an explicit successor profile for `vs lead handoff --profile` / handoff_lead {profile}. It must name a known
+ * profile whose role is "lead"; anything else is refused (400) with the lead profiles that do exist, never silently inherited.
+ */
+export function validateLeadProfile(requested, profilesPath) {
+  const name = String(requested ?? "").trim().slice(0, 120);
+  const bad = (why) => Object.assign(new Error(`lead-handoff: ${why}`), { status: 400 });
+  if (!name) throw bad("profile is empty");
+  const { profiles } = loadProfiles(profilesPath, { autoSeed: false });
+  const leadNames = () => {
+    // findProfile also resolves shipped built-ins missing from an older profiles.json, so list those too.
+    const names = new Set([...profiles, ...DEFAULT_PACK_PROFILES].filter((p) => p?.role === "lead").map((p) => p.name));
+    return [...names].map((n) => `"${n}"`).join(", ") || "none";
+  };
+  const profile = findProfile(name, profiles);
+  if (!profile) throw bad(`unknown profile "${name}" (lead profiles: ${leadNames()}; see \`vs profiles --role lead\`)`);
+  if (profile.role !== "lead") {
+    throw bad(`profile "${profile.name}" has role "${profile.role || "worker"}", not lead (lead profiles: ${leadNames()}; see \`vs profiles --role lead\`)`);
+  }
+  return profile;
+}
+
+export function resolveLeadProfile(oldLead, profilesPath, requestedProfile = "") {
+  if (String(requestedProfile ?? "").trim()) {
+    const profile = validateLeadProfile(requestedProfile, profilesPath);
+    return { profileName: profile.name, profile, spawnCfg: toPaseoSpawnConfig(profile) };
+  }
   const oldLabels = oldLead?.labels ?? {};
   const rawProvider = String(oldLead?.provider || "claude");
   const isAgy = rawProvider.startsWith("antigravity");
@@ -618,6 +644,25 @@ export function createLeadHandoffCoordinator(deps = {}) {
   // is evicted so the caller falls through to a fresh spawn (or adopt) instead of leaving the lane on the old lead with a dead successor.
   // A fetch error is not "dead": only a definite not-found / non-lead answer evicts. `evicted` collects the dead successor ids.
   async function settleDeduped(slotKey, prev, retireNow, oldLeadId, evicted) {
+    const dropSlot = () => { if (completedBySlot.get(slotKey)?.oldLeadId === prev?.oldLeadId) completedBySlot.delete(slotKey); };
+    // The slot is lane+ord, not lead: an entry left by another old lead at the same ord (e.g. a replacement lead spawned at ord1
+    // after `vs lead retire --force`, idea-360) is not this request. Evict it so this live lead really hands off.
+    if (prev && oldLeadId && prev.oldLeadId && prev.oldLeadId !== oldLeadId) {
+      dropSlot();
+      return null;
+    }
+    // A confirmed earlier successor that is now retired / not a lead (force-retired, or retired some other way) can't be "the"
+    // successor any more: evict instead of returning it. Only a definite answer evicts; a lookup error keeps the dedupe.
+    if (prev?.successorId && !prev.pendingConfirmation) {
+      let succ;
+      let lookupFailed = false;
+      try { succ = await getAgent(prev.successorId); } catch { lookupFailed = true; }
+      if (!lookupFailed && (!succ || succ.archivedAt || effectiveAgentRole(succ) !== "lead" || isRetiredAgent(succ))) {
+        dropSlot();
+        selfHandedOff.delete(oldLeadId ?? prev.oldLeadId);
+        return null;
+      }
+    }
     if (prev?.pendingConfirmation && prev.successorId && !confirmedTakeovers.has(prev.successorId)) {
       let succ;
       let lookupFailed = false;
@@ -654,8 +699,11 @@ export function createLeadHandoffCoordinator(deps = {}) {
     forceSynthesize = false,
     job,
     steer,
+    profile: requestedProfile = "",
   }) {
     const { teamId, teamName, laneId, laneName } = resolveTeamAndLane(oldLead, rootDir);
+    // idea-359: refuse a bad explicit profile before anything is planned, spawned or relabelled.
+    if (String(requestedProfile ?? "").trim()) validateLeadProfile(requestedProfile, deps.profilesPath);
 
     // A stale predecessor can't be steered or asked to write Judgment: retire it now. Its packet is never synthesized over.
     const stalePred = isStalePredecessor(oldLead);
@@ -744,7 +792,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const summary = readBrainstormSummary(laneId, rootDir);
     const cwd = oldLead?.cwd || rootDir;
     const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
-    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath);
+    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath, requestedProfile);
 
     const prompt = buildSuccessorPrompt({
       laneId,
@@ -994,7 +1042,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
     }
   }
 
-  async function retireStaleLeads({ teamId: rawTeamId, laneId: rawLaneId, callerId } = {}) {
+  async function retireStaleLeads({ teamId: rawTeamId, laneId: rawLaneId, callerId, force = false } = {}) {
     const teams = loadTeamsRegistry(rootDir);
     const foundLane = findLaneInRegistry(String(rawLaneId || rawTeamId || "vibesquad"), teams, rawTeamId ? String(rawTeamId) : "");
     const teamId = (rawTeamId && findTeamInRegistry(String(rawTeamId), teams)?.id) || foundLane?.team?.id || safeSegment(rawTeamId || "vibesquad");
@@ -1032,6 +1080,13 @@ export function createLeadHandoffCoordinator(deps = {}) {
           );
         }
         const { teamId: callerTeamId, laneId: callerLaneId } = agentTeamAndLane(caller, teams);
+        // idea-360: a forced retire takes down a LIVE lead: Overlord-only and cross-lane, so the hub-lead branch below must run.
+        if (force && callerLaneId === wantLane) {
+          throw Object.assign(
+            new Error("lead-handoff: forbidden: only the Squad's Overlord (hub lead) or the owner may force-retire a live lead, and not in its own lane (use `vs lead handoff`)"),
+            { status: 403 },
+          );
+        }
         if (callerTeamId !== wantTeam) {
           throw Object.assign(
             new Error(`lead-handoff: forbidden: target lane "${laneId}" is not in the caller's Squad "${callerTeamId}"`),
@@ -1074,6 +1129,32 @@ export function createLeadHandoffCoordinator(deps = {}) {
         new Error(`lead-handoff: forbidden: ${callerId} is not the active lead of lane "${laneId}" (${res.winner?.id || "conflict"})`),
         { status: 403 },
       );
+    }
+
+    if (force) {
+      // idea-360: every live lead in the lane goes to former-lead (winner, contenders and any pending successor alike), so a
+      // fresh lead can be spawned with another profile. Owner/Overlord only (checked above); always a decision log entry.
+      const retired = [];
+      for (const old of laneLeads) {
+        retired.push(await retireLeadRecord(old, { laneId, laneName }));
+        pendingTakeover.delete(old.id);
+        selfHandedOff.delete(old.id);
+      }
+      // The lane's finished-handoff slots name leads that are all retired now: drop them, so a replacement lead spawned at a
+      // reused ord is never deduped onto a force-retired successor (in-flight spawns are left to finish).
+      const lanePrefix = `${deps.sharedSlots ? `${rootDir}:` : ""}${teamId}:${laneId}:ord`.toLowerCase();
+      for (const key of [...completedBySlot.keys()]) if (key.toLowerCase().startsWith(lanePrefix)) completedBySlot.delete(key);
+      const who = callerId ? `Overlord ${callerId}` : "Owner";
+      try {
+        appendLog(teamId, {
+          agent: callerId || "you",
+          lane: laneId,
+          type: "decision",
+          text: `${who} force-retired the live lead(s) of lane ${laneId}: ${retired.map((r) => `${r.id} (ord${r.ord})`).join(", ")}`.slice(0, 240),
+          refs: [...retired.map((r) => r.id), ...(callerId ? [callerId] : [])],
+        });
+      } catch {}
+      return { ok: true, action: "retire", forced: true, teamId, laneId, winnerId: null, title: "", retired };
     }
 
     if (res.conflict || !res.winner) {
@@ -1235,6 +1316,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         forceSynthesize: Boolean(options.forceSynthesize),
         job: options.job,
         steer: options.steer,
+        profile: options.profile,
       });
     } catch (err) {
       selfHandedOff.delete(lead.id); // a failed spawn must stay retryable
@@ -1526,6 +1608,14 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
         if (target.lane.id !== callerLane.id && !(callerRole === "lead" && isHubLane(callerTeam, callerLane))) {
           throw forbid("only the Squad's hub lead (Overlord) or the owner may retire stale leads in another lane");
         }
+        // idea-360: --force retires a LIVE lead, so only the Squad's Overlord (a lead in the hub lane) may, and only in
+        // another lane (its own lane's lead is itself: use `vs lead handoff`). The coordinator re-checks it is the active hub lead.
+        if (body.force === true && !(callerRole === "lead" && isHubLane(callerTeam, callerLane))) {
+          throw forbid("only the Squad's Overlord (hub lead) or the owner may force-retire a live lead");
+        }
+        if (body.force === true && target.lane.id === callerLane.id) {
+          throw forbid("the Overlord may not force-retire its own lane's lead (use `vs lead handoff`)");
+        }
         targetTeamId = callerTeam.id;
         targetLaneId = target.lane.id;
       } else {
@@ -1534,7 +1624,7 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
         targetTeamId = found.team.id;
         targetLaneId = found.lane.id;
       }
-      return await coordinator.retireStaleLeads({ teamId: targetTeamId, laneId: targetLaneId, callerId: body.callerId });
+      return await coordinator.retireStaleLeads({ teamId: targetTeamId, laneId: targetLaneId, callerId: body.callerId, force: body.force === true });
     }
 
     // In-process callers may pass oldLead; HTTP callers can't (sanitizeBody strips it and `agents`), so the
@@ -1644,10 +1734,23 @@ export async function performLeadHandoffHttp(body = {}, rootDir = REPO_ROOT, { a
       }
     }
 
+    // idea-359: an explicit successor profile (default: inherit the old lead's). Validated here, before any spawn, so a bad
+    // name is a clear 400 and never a silent inherit; the auto (token-threshold) triggers never take one.
+    const isManualTrigger = trigger === "self" || trigger === "buddy" || trigger === "overlord";
+    const requestedProfile = typeof body.profile === "string" ? body.profile.trim() : "";
+    if (body.profile !== undefined && body.profile !== null && typeof body.profile !== "string") {
+      throw Object.assign(new Error("lead-handoff: profile must be a string"), { status: 400 });
+    }
+    if (requestedProfile) {
+      if (!isManualTrigger) throw Object.assign(new Error(`lead-handoff: profile only applies to a self, buddy or overlord handoff (trigger "${trigger}")`), { status: 400 });
+      validateLeadProfile(requestedProfile, body.profilesPath);
+    }
+
     const handoffPromise =
-      trigger === "self" || trigger === "buddy" || trigger === "overlord"
+      isManualTrigger
         ? coordinator.triggerSelfHandoff(lead, {
             trigger,
+            ...(requestedProfile ? { profile: requestedProfile } : {}),
             steer: trigger === "overlord" ? body.steer : undefined,
             retireImmediately: Boolean(body.retireImmediately),
             forceSynthesize: Boolean(body.forceSynthesize),

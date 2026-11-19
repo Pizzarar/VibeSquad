@@ -523,7 +523,7 @@ Usage:
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
-  vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]   hand the lane's lead to a successor, or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy)
+  vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
@@ -1988,6 +1988,7 @@ export async function runAgentVerb(verb, flags, ctx) {
       ...(flags.lane ? { lane: String(flags.lane) } : {}),
       ...(flags.steer ? { steer: String(flags.steer) } : {}),
       ...(flags.force ? { force: true } : {}),
+      ...(flags.profile !== undefined ? { profile: String(flags.profile) } : {}),
     };
   } else if (verb === "restart_buddy") {
     args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}), ...(flags.profile ? { profile: String(flags.profile) } : {}), ...(flags.provider ? { provider: String(flags.provider) } : {}) };
@@ -2074,8 +2075,10 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   if (verb === "lead") {
     const sub = String(flags._.shift() ?? "").toLowerCase();
     if (sub !== "handoff" && sub !== "retire") {
-      throw new Error('usage: vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]');
+      throw new Error('usage: vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]');
     }
+    if (flags.profile === true || (flags.profile !== undefined && !String(flags.profile).trim())) throw new Error('vs lead handoff --profile needs a lead profile name (see `vs profiles --role lead`)');
+    if (sub === "retire" && flags.profile !== undefined) throw new Error("vs lead retire does not take --profile (it only applies to vs lead handoff)");
     flags.leadAction = sub;
     verb = "handoff_lead";
   }
