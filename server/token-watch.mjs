@@ -154,6 +154,14 @@ export function startTokenWatcher({
     await runner.sendAgentPrompt(agent.id, BRAINSTORM_WARN_NUDGE);
   }
 
+  // G1: Buddies over the cap whose restart waits for the open turn to end (turn_ended re-evaluates them, even if the idle upsert
+  // landed while an earlier evaluation of the same agent was still running and was skipped by `busy`).
+  const restartWaiting = new Set();
+  const isMidTurn = (a) => {
+    const s = String(a?.status ?? "").toLowerCase();
+    return s === "running" || s === "initializing";
+  };
+
   async function evaluateBuddy(agent) {
     const labels = agent.labels ?? {};
     if (labels["vs.restarted-into"] || restarted.has(agent.id)) return;
@@ -174,6 +182,16 @@ export function startTokenWatcher({
         const res = await compact.run(agent, { focus: BUDDY_COMPACT_FOCUS, cap: restartTokens, kind: "buddy", teamId, laneId });
         if (res.outcome === "ok") return; // same id, smaller context: no restart
       }
+      // G1 (unit-buddy-midturn-restart): never restart a Buddy mid-turn, any provider. The Claude branch above only compacts when
+      // idle; a non-Claude Buddy (agy: 21k->158k in ONE turn) used to fall straight through to here and be killed mid-reply, the
+      // owner's message lost. The turn's end (idle upsert / turn_ended) re-evaluates. The snapshot can lag, so the runner's
+      // status now decides too; an unreadable status keeps the snapshot's answer.
+      const now = isMidTurn(agent) || typeof runner.fetchAgent !== "function" ? null : (await runner.fetchAgent(agent.id).catch(() => null))?.agent;
+      if (isMidTurn(agent) || isMidTurn(now)) {
+        restartWaiting.add(agent.id);
+        return;
+      }
+      restartWaiting.delete(agent.id);
       restarted.add(agent.id);
       await restartBuddy({ agentId: agent.id, reason: "auto-token-limit", usedTokens: used, oldAgent: agent });
       return;
@@ -196,8 +214,18 @@ export function startTokenWatcher({
   }
 
   const stop = runner.subscribeEvents((ev) => {
-    const agents = ev.kind === "roster" ? ev.agents ?? [] : ev.kind === "agent" && ev.agent ? [ev.agent] : [];
-    if (ev.kind === "remove") live.delete(ev.agentId);
+    const agents =
+      ev.kind === "roster"
+        ? ev.agents ?? []
+        : ev.kind === "agent" && ev.agent
+          ? [ev.agent]
+          : ev.kind === "turn_ended" && ev.agent?.id && restartWaiting.has(ev.agent.id) // G1: the deferred restart's turn is over
+            ? [ev.agent]
+            : [];
+    if (ev.kind === "remove") {
+      live.delete(ev.agentId);
+      restartWaiting.delete(ev.agentId);
+    }
     if (ev.kind === "turn_ended" && ev.agentId) {
       briefPending.delete(ev.agentId);
       workers.endEpisode(ev.agentId); // not gated by `busy`: a dropped idle upsert must not carry the soft rung into the next turn

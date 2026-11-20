@@ -355,3 +355,93 @@ test("idea-353: idle lead with an armed watch: notice held (no wake), then steer
   w2.stop();
   void id;
 });
+
+// G1 (unit-buddy-midturn-restart): Usage's agy Buddy went 21k->158k in ONE turn and was restarted mid-reply 3x in 26 min.
+const agyBuddy = (id, status = "running") => ({ ...buddy(id), provider: "antigravity-cli", status });
+
+test("G1: a non-Claude Buddy over the cap mid-turn is NOT restarted until its turn ends, then exactly once", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  r.usage("rn-agy", 21_000);
+  r.usage("rn-agy", 158_000);
+  await tick();
+  r.usage("rn-agy", 170_000); // still the same turn
+  await tick();
+  assert.equal(restarts.length, 0, "never restarted mid-turn");
+  r.agents.get("rn-agy").status = "idle"; // the turn ends: the runner's idle upsert
+  r.emit({ kind: "agent", agent: { ...r.agents.get("rn-agy"), labels: { ...r.agents.get("rn-agy").labels } } });
+  await tick();
+  assert.equal(restarts.length, 1);
+  assert.equal(restarts[0].agentId, "rn-agy");
+  assert.equal(restarts[0].reason, "auto-token-limit");
+  r.usage("rn-agy", 171_000);
+  await tick();
+  assert.equal(restarts.length, 1, "one restart per Buddy");
+  w.stop();
+});
+
+test("G1: a stale idle snapshot does not restart a Buddy the runner reports running; its turn_ended does", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  const a = r.agents.get("rn-agy");
+  a.lastUsage = { contextWindowUsedTokens: 160_000, inputTokens: 160_000 };
+  r.emit({ kind: "agent", agent: { ...a, status: "idle", labels: { ...a.labels } } }); // replayed / lagging snapshot
+  await tick();
+  assert.equal(restarts.length, 0, "the runner's status now (running) wins over the snapshot");
+  a.status = "idle";
+  r.emit({ kind: "turn_ended", agentId: "rn-agy", turnId: "9", outcome: { kind: "completed" }, agent: { ...a, labels: { ...a.labels } } });
+  await tick();
+  assert.equal(restarts.length, 1, "the deferred restart runs at turn end without another usage event");
+  w.stop();
+});
+
+test("G1: an errored (not running) non-Claude Buddy over the cap still restarts", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy", "error"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  r.usage("rn-agy", 160_000);
+  await tick();
+  assert.equal(restarts.length, 1);
+  w.stop();
+});
+
+test("G1: an unrelated turn_ended (no deferred restart) evaluates nothing", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy", "idle"));
+  r.agents.get("rn-agy").lastUsage = { contextWindowUsedTokens: 160_000, inputTokens: 160_000 };
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  const a = r.agents.get("rn-agy");
+  r.emit({ kind: "turn_ended", agentId: "rn-agy", turnId: "1", outcome: { kind: "completed" }, agent: { ...a, labels: { ...a.labels } } });
+  await tick();
+  assert.equal(restarts.length, 0, "turn_ended alone only re-checks a Buddy whose restart is waiting");
+  w.stop();
+});
+
+test("G1: a Claude Buddy already compacted once and still over the cap waits for its turn to end too (no second /compact)", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  const b = { ...buddy("rn-cl"), provider: "claude", status: "running" };
+  b.labels = { ...b.labels, [WARN_LABEL]: "1", "vs.compacted-at": "2026-11-19T00:00:00Z" };
+  r.agents.set("rn-cl", b);
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (x) => { restarts.push(x); } });
+  r.usage("rn-cl", 160_000);
+  await tick();
+  assert.equal(restarts.length, 0);
+  r.agents.get("rn-cl").status = "idle";
+  r.usage("rn-cl", 160_500);
+  await tick();
+  assert.equal(restarts.length, 1);
+  assert.equal(r.sent.filter((s) => s.text.startsWith("/compact")).length, 0);
+  w.stop();
+});

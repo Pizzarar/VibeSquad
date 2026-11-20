@@ -48,12 +48,12 @@ export function compactSpendFromLog(events) {
   return { tokens }; // turn_done not logged yet
 }
 
-/** Default log reader: the tail (last 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events; [] when unreadable. */
-function readAgentLogTail(id) {
+/** Default log reader: the tail (last maxBytes, default 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events, oldest first; [] when unreadable. Also brainstorm.mjs's G1 carry scan. */
+export function readAgentLogTail(id, maxBytes = 512 * 1024) {
   try {
     const file = join(vibesquadHome(), "runner", "agents", `${id}.jsonl`);
     const size = statSync(file).size;
-    const from = Math.max(0, size - 512 * 1024);
+    const from = Math.max(0, size - maxBytes);
     const fd = openSync(file, "r");
     let text;
     try { const buf = Buffer.alloc(size - from); readSync(fd, buf, 0, buf.length, from); text = buf.toString("utf8"); } finally { closeSync(fd); }
