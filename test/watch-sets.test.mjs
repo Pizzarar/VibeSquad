@@ -1816,9 +1816,9 @@ test(
 );
 
 test(
-  "plugin idea-351 (race): a digest/PASS done arriving AFTER the watch completed is not suppressed and still wakes the owner",
+  "plugin idea-351 (race): a late digest PASS/done within 120s of the watch completing is covered (no extra wake); a late FAIL still wakes; an armed watch's unknown-author done for a watched agent is held",
   withPluginEnv(async (sb) => {
-    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")]]);
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
     const now = Date.now();
     const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
     const h = await pluginHarness(sb, agents);
@@ -1829,12 +1829,39 @@ test(
       await wait(250);
       assert.equal(h.sent.length, 1);
       assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
-      writeLog(sb, [{ ts: iso(now + 500), agent: "digest-1", lane: "vibesquad", type: "done", text: "FAIL: w1 late verdict", refs: ["w-1"] }]);
+      writeLog(sb, [{ ts: iso(now + 500), agent: "digest-1", lane: "vibesquad", type: "done", text: "PASS: w1 digest", refs: ["w-1"] }]);
       h.scanLogs(false);
       await h.watch.tick();
       await wait(250);
-      assert.equal(h.sent.length, 2, JSON.stringify(h.sent));
+      assert.equal(h.sent.length, 1, "late PASS covered by the completed watch: " + JSON.stringify(h.sent));
+      writeLog(sb, [{ ts: iso(now + 600), agent: "digest-1", lane: "vibesquad", type: "done", text: "FAIL: w1 late verdict", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 2, "FAIL still wakes");
       assert.match(h.sent[1].text, /FAIL: w1 late verdict/);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin idea-351: an armed watch holds an unknown-author done naming its agent (no wake) and an unrelated agent's done still wakes",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
+    const now = Date.now();
+    addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "digest-9", lane: "vibesquad", type: "done", text: "done: w1 summary", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 0, JSON.stringify(h.sent));
+      writeLog(sb, [{ ts: iso(now + 10), agent: "w-2", lane: "vibesquad", type: "done", text: "PASS: w2", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 1);
     } finally {
       h.stop();
     }

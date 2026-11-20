@@ -294,14 +294,32 @@ test("idea-353: running lead gets the wrap-up as a steer (delivered, no wake)", 
   w.stop();
 });
 
-test("idea-353: idle lead with nothing armed is woken once (plain send fallback)", async () => {
+test("idea-353: idle lead, nothing armed, no wake coming: held one cycle, then woken exactly once", async () => {
   const rootDir = makeRoot();
   const r = idleAwareRunner(makeRunner(), { running: false });
   r.agents.set("rn-lead", lead("rn-lead"));
-  const w = startTokenWatcher({ runner: r, rootDir, baseHome: makeRoot() });
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: makeRoot(), noticeRecheckMs: 30 });
   r.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
   await tick();
+  assert.equal(r.sent.length, 0, "not woken on the first idle attempt");
+  await new Promise((x) => setTimeout(x, 80));
   assert.deepEqual(r.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE }]);
+  await new Promise((x) => setTimeout(x, 80));
+  assert.equal(r.sent.length, 1, "once");
+  w.stop();
+});
+
+test("idea-353: idle lead with nothing armed but a wake starting a turn meanwhile: the notice steers into it, no extra turn", async () => {
+  const rootDir = makeRoot();
+  const state = { running: false };
+  const r = idleAwareRunner(makeRunner(), state);
+  r.agents.set("rn-lead", lead("rn-lead"));
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: makeRoot(), noticeRecheckMs: 30 });
+  r.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
+  await tick();
+  state.running = true; // a pending log wake started a turn
+  await new Promise((x) => setTimeout(x, 80));
+  assert.deepEqual(r.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE, steerOnly: true }]);
   w.stop();
 });
 
@@ -332,6 +350,7 @@ test("idea-353: idle lead with an armed watch: notice held (no wake), then steer
   assert.equal(r2.sent.length, 0);
   cancelWatch(s2.id, "rn-lead", { home: home2 });
   await new Promise((x) => setTimeout(x, 100));
+  await new Promise((x) => setTimeout(x, 100)); // the flush path is the same idle+unarmed rule: one more cycle, then one plain send
   assert.deepEqual(r2.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE }]);
   w2.stop();
   void id;

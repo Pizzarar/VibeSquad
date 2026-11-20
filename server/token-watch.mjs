@@ -71,11 +71,23 @@ export function startTokenWatcher({
       return false;
     }
   };
+  // Idle + nothing armed: wait one re-check for a wake we cannot see (a queued log wake starts a turn we can steer into); only if the lead
+  // is STILL idle with nothing armed is it woken, once (otherwise it would never see the 150k notice).
+  const idleUnarmedSeen = new Set();
   async function sendLeadNotice(id, text) {
     heldNotices.delete(id);
     const r = await runner.sendAgentPrompt(id, text, { steerOnly: true });
-    if (r?.delivered !== false) return r;
-    if (!armedWatch(id)) return runner.sendAgentPrompt(id, text);
+    if (r?.delivered !== false) {
+      idleUnarmedSeen.delete(id);
+      return r;
+    }
+    if (!armedWatch(id)) {
+      if (idleUnarmedSeen.has(id)) {
+        idleUnarmedSeen.delete(id);
+        return runner.sendAgentPrompt(id, text);
+      }
+      idleUnarmedSeen.add(id);
+    }
     heldNotices.set(id, text);
     if (!noticeTimers.has(id)) {
       const t = setTimeout(() => {
