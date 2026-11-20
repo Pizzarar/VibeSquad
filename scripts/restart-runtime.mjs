@@ -229,6 +229,21 @@ export function procInfo(pid, { run = spawnSync, alive = pidAlive, win = IS_WIN,
   return { pid, ppid: null, cmd: '', unknown: true };
 }
 
+/**
+ * The pid in a desktop server.pid file, trusted only when it is alive and a node process (idea-373). A dead pid, a reused pid that
+ * is now something else, or garbage is ignored and the file deleted. Unknown identity (command line hidden) counts as live: never
+ * delete a pid file on a failed query. Returns the pid or null.
+ */
+export function readLiveServerPid(file, { info = procInfo, remove = (f) => rmSync(f, { force: true }), read = (f) => readFileSync(f, 'utf8') } = {}) {
+  let text;
+  try { text = String(read(file)).trim(); } catch { return null; } // no file: nothing to clean
+  const pid = /^\d+$/.test(text) ? Number(text) : 0;
+  const p = pid > 0 ? info(pid) : null;
+  if (p && (p.unknown || /(^|[\\/\s"'])node(\.exe)?(\s|["']|$)/i.test(p.cmd))) return pid;
+  try { remove(file); } catch { /* best effort */ }
+  return null;
+}
+
 /** Pid listening on a TCP port (the VS server), or null. */
 export function listenerPid(port) {
   try {
@@ -844,6 +859,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     // 5. start the server (same launch as the desktop app); it boots the runner
     const healthy = async () => { for (const s of ['http', 'https']) { try { if ((await d.httpCall(`${s}://127.0.0.1:${det.port}/api/health`, { timeoutMs: 3000 })).status === 200) return true; } catch { /* next */ } } return false; };
     let spawnedServerPid = null;
+    readLiveServerPid(path.join(det.configDir, 'server.pid'), { info: (p) => d.procInfo?.(p) ?? null }); // drop a stale pid file left by an earlier launch (idea-373)
     if (await healthy()) step('server already up, not starting another', { port: det.port });
     else {
       const sl = det.serverLaunch;

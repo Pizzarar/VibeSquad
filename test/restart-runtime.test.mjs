@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid } from "../scripts/restart-runtime.mjs";
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
@@ -1835,4 +1835,26 @@ test("idea-367: dry run prints 'alive, identity unknown' (not 'not running') for
     assert.match(text, new RegExp(`runner pid ${old.pid} alive, identity unknown`));
     assert.doesNotMatch(text, /runner not running/);
   } finally { await w.cleanup(); }
+});
+
+test("readLiveServerPid: stale/foreign/garbage pid file is ignored and removed; live node pid kept (idea-373)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "vs-pidfile-"));
+  const f = path.join(dir, "server.pid");
+  try {
+    writeFileSync(f, "4242");
+    assert.equal(readLiveServerPid(f, { info: () => null }), null, "dead pid ignored");
+    assert.equal(existsSync(f), false, "dead pid file deleted");
+    writeFileSync(f, "4242");
+    assert.equal(readLiveServerPid(f, { info: (p) => ({ pid: p, ppid: 1, cmd: "C:/Windows/notepad.exe foo" }) }), null, "reused pid (not node) ignored");
+    assert.equal(existsSync(f), false);
+    writeFileSync(f, "not-a-pid");
+    assert.equal(readLiveServerPid(f, { info: () => { throw new Error("must not query"); } }), null, "garbage ignored");
+    assert.equal(existsSync(f), false);
+    writeFileSync(f, "4242");
+    assert.equal(readLiveServerPid(f, { info: (p) => ({ pid: p, ppid: 1, cmd: "C:/Program Files/nodejs/node.exe server/serve.mjs" }) }), 4242, "live node pid kept");
+    assert.equal(existsSync(f), true, "live pid file kept");
+    assert.equal(readLiveServerPid(f, { info: (p) => ({ pid: p, ppid: null, cmd: "", unknown: true }) }), 4242, "unknown identity kept");
+    assert.equal(existsSync(f), true);
+    assert.equal(readLiveServerPid(path.join(dir, "missing.pid")), null, "no file is fine");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
