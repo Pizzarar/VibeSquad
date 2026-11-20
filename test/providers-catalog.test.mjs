@@ -1249,7 +1249,7 @@ test('usa-10: savings baseline formulas (all-Opus routing, context isolation, pa
   writeAgent(home, 'rn-w', [
     { ts: T0, type: 'created', provider: 'claude', model: 'm', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
     { ts: T0, type: 'status', status: 'running' },
-    { ts: T0 + 1000, type: 'usage', inputTokens: 1000, outputTokens: 100 },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 10000, outputTokens: 1000 },
     { ts: T0 + 2000, type: 'status', status: 'idle' },
     { ts: T0 + 2000, type: 'turn_done', costUsd: 0.02 },
   ]);
@@ -1265,13 +1265,82 @@ test('usa-10: savings baseline formulas (all-Opus routing, context isolation, pa
   };
   const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
   const s = u.savings;
-  // all-Opus: 1000 in * $15/MTok + 100 out * $75/MTok = 0.015 + 0.0075 = 0.0225
-  assert.ok(Math.abs(s.soloOpusBaselineUsd - 0.0225) < 1e-9, `baseline ${s.soloOpusBaselineUsd}`);
+  // usa-31: no Opus rows -> fallback $0.85/MT blended input; unsplit 10000 in * 0.85 + 1000 out * $25 = 0.0085 + 0.025 = 0.0335
+  assert.equal(s.effectiveOpusInPerMt, 0.85);
+  assert.ok(Math.abs(s.soloOpusBaselineUsd - 0.0335) < 1e-9, `baseline ${s.soloOpusBaselineUsd}`);
   assert.ok(Math.abs(s.actualCostUsd - 0.02) < 1e-9);
-  assert.ok(Math.abs(s.routingSavingsUsd - 0.0025) < 1e-9);
-  assert.equal(s.contextSavingsTokens, 4000, 'monolithic 5000 (1*brief) vs 1000 actual');
+  assert.ok(Math.abs(s.routingSavingsUsd - 0.0135) < 1e-9);
+  assert.equal(s.contextSavingsTokens, 0, 'monolithic 5000 (1*brief) vs 10000 actual input: no savings');
   assert.equal(s.monolithicBaselineTokens, 5000);
   assert.equal(s.parallelSpeedup, 1, 'working 2000ms over span 2000ms');
+});
+
+// ---- usa-31: honest savings + cache-token split
+const savingsUsage = (agents, fn = () => {}) => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  for (const a of agents) {
+    writeAgent(home, a.id, [
+      { ts: T0, type: 'created', provider: 'claude', model: a.model, cwd: '/w/unit-' + a.id, meta: { lane: 'usage', role: 'worker', profile: 'p' } },
+      { ts: T0 + 1000, type: 'usage', ...a.usage },
+      { ts: T0 + 2000, type: 'turn_done', costUsd: a.cost },
+    ]);
+  }
+  fn(home);
+  return getUsage({ home, git: () => '', laneCodes: { usa: 'usage' } });
+};
+
+test('usa-31: a row already on Opus saves $0 (baseline = actual cost)', () => {
+  const u = savingsUsage([{ id: 'o', model: 'claude-opus-5-5', usage: { inputTokens: 100000, outputTokens: 1000 }, cost: 0.3 }]);
+  assert.equal(u.savings.routingSavingsUsd, 0);
+  assert.ok(Math.abs(u.savings.soloOpusBaselineUsd - 0.3) < 1e-9);
+});
+
+test('usa-31: empirical Opus blended rate from Opus rows; clamped to [0.5, 5]; fallback 0.85 without Opus rows', () => {
+  // (0.30 - 1000*25/1e6) = 0.275 over 100k input = $2.75/MT
+  const mid = savingsUsage([{ id: 'o', model: 'claude-opus-5-5', usage: { inputTokens: 100000, outputTokens: 1000 }, cost: 0.3 }]);
+  assert.equal(mid.savings.effectiveOpusInPerMt, 2.75);
+  const hi = savingsUsage([{ id: 'o', model: 'claude-fable-5-2', usage: { inputTokens: 1000, outputTokens: 10 }, cost: 10 }]);
+  assert.equal(hi.savings.effectiveOpusInPerMt, 5, 'clamped to the fresh-input rate');
+  const lo = savingsUsage([{ id: 'o', model: 'claude-opus-5-5', usage: { inputTokens: 1000000, outputTokens: 10 }, cost: 0.01 }]);
+  assert.equal(lo.savings.effectiveOpusInPerMt, 0.5, 'clamped to the cache-read rate');
+  const none = savingsUsage([{ id: 's', model: 'claude-sonnet-5-5', usage: { inputTokens: 1000, outputTokens: 10 }, cost: 0.001 }]);
+  assert.equal(none.savings.effectiveOpusInPerMt, 0.85);
+});
+
+test('usa-31: split tokens priced at tier rates, unsplit at the empirical rate, baseline never below actual cost', () => {
+  const split = savingsUsage([{ id: 's', model: 'claude-sonnet-5-5', usage: { inputTokens: 1000000, outputTokens: 100000, freshInputTokens: 100000, cacheReadTokens: 800000, cacheWriteTokens: 100000 }, cost: 1 }]);
+  // 0.1M*5 + 0.8M*0.5 + 0.1M*6.25 + 0.1M*25 = 0.5 + 0.4 + 0.625 + 2.5 = 4.025
+  assert.ok(Math.abs(split.savings.soloOpusBaselineUsd - 4.025) < 1e-9, `baseline ${split.savings.soloOpusBaselineUsd}`);
+  assert.ok(Math.abs(split.savings.routingSavingsUsd - 3.025) < 1e-9);
+  assert.equal(split.savings.cacheReadTokens, 800000);
+  assert.equal(split.savings.cacheWriteTokens, 100000);
+  // partial split: 600k unsplit remainder priced at empirical (fallback 0.85)
+  const part = savingsUsage([{ id: 's', model: 'claude-sonnet-5-5', usage: { inputTokens: 1000000, outputTokens: 0, freshInputTokens: 400000 }, cost: 0.1 }]);
+  assert.ok(Math.abs(part.savings.soloOpusBaselineUsd - (2 + 0.6 * 0.85)) < 1e-9);
+  // cheap non-Opus run whose Opus price would be below its actual cost: clamped, saves $0
+  const clamp = savingsUsage([{ id: 's', model: 'claude-sonnet-5-5', usage: { inputTokens: 1000, outputTokens: 0 }, cost: 5 }]);
+  assert.equal(clamp.savings.routingSavingsUsd, 0);
+  assert.equal(clamp.savings.soloOpusBaselineUsd, 5);
+});
+
+test('usa-31: old logs/ledger days without the split still load as 0 and fold into totals', () => {
+  const u = savingsUsage([{ id: 's', model: 'claude-sonnet-5-5', usage: { inputTokens: 500, outputTokens: 5 }, cost: 0.001 }], (home) => {
+    fs.writeFileSync(path.join(home, 'runner', 'usage-ledger.jsonl'), JSON.stringify({ kind: 'day', day: '2026-10-01', costUsd: 1, inputTokens: 1000000, outputTokens: 1000, turns: 3 }) + '\n');
+  });
+  assert.equal(u.totals.cacheReadTokens, 0);
+  assert.equal(u.totals.freshInputTokens, 0);
+  assert.ok(u.totals.inputTokens >= 1000500, 'folded day tokens counted');
+  assert.equal(u.savings.cacheReadTokens, 0);
+});
+
+test('usa-31: usage events carry the cache split into rows/totals and the ledger day record', () => {
+  const u = savingsUsage([{ id: 's', model: 'claude-sonnet-5-5', usage: { inputTokens: 1000, outputTokens: 5, freshInputTokens: 100, cacheReadTokens: 800, cacheWriteTokens: 100 }, cost: 0.001 }]);
+  assert.equal(u.totals.freshInputTokens, 100);
+  assert.equal(u.totals.cacheReadTokens, 800);
+  assert.equal(u.totals.cacheWriteTokens, 100);
+  assert.equal(u.rows[0].cacheReadTokens, 800);
 });
 
 test('usa-10: cohorts compare Last 10 vs Prior 10 (delta = recent - prior)', () => {

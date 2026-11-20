@@ -275,7 +275,7 @@ function bucketFor(st, day) {
   const key = `${st.provider}|${st.model}|${st.lane}|${st.role}|${day}`;
   let b = st.buckets.get(key);
   if (!b) {
-    b = { provider: st.provider, model: st.model, lane: st.lane, role: st.role, day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 };
+    b = { provider: st.provider, model: st.model, lane: st.lane, role: st.role, day, turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, freshInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
     st.buckets.set(key, b);
   }
   return b;
@@ -371,6 +371,9 @@ function foldEvent(st, ev) {
       const b = bucketFor(st, day);
       b.inputTokens += inT;
       b.outputTokens += outT;
+      b.freshInputTokens += tokenCount(ev.freshInputTokens);
+      b.cacheReadTokens += tokenCount(ev.cacheReadTokens);
+      b.cacheWriteTokens += tokenCount(ev.cacheWriteTokens);
     }
     // real claude /compact emits no usage before `compacted`; the turn's usage is the adapter's post_tokens one right after it
     if (st.compactPending) { st.compactPending.inputTokens += inT; st.compactPending.outputTokens += outT; }
@@ -577,12 +580,15 @@ const ZERO_TURN_EXIT_MIN = 3;
 const FIX_AFTER_MERGE_WINDOW_MS = 24 * 3600_000;
 const FIX_UNIT_RE = /\b(?:fix|hotfix|regress(?:ion)?|revert)\b/i;
 
-const zeroStats = () => ({ turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0 });
+const zeroStats = () => ({ turns: 0, costUsd: 0, inputTokens: 0, outputTokens: 0, freshInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
 const addStats = (t, b) => {
   t.turns += b.turns;
   t.costUsd += b.costUsd;
   t.inputTokens += b.inputTokens;
   t.outputTokens += b.outputTokens;
+  t.freshInputTokens += b.freshInputTokens ?? 0;
+  t.cacheReadTokens += b.cacheReadTokens ?? 0;
+  t.cacheWriteTokens += b.cacheWriteTokens ?? 0;
   return t;
 };
 const withAvg = (t) => ({ ...t, avgTokensPerTurn: t.turns ? Math.round((t.inputTokens + t.outputTokens) / t.turns) : 0 });
@@ -1491,8 +1497,13 @@ function computeSpawnStorms(agents) {
 // ---------------------------------------------------------------- benchmark ledger, A/B workflow, savings, cohorts, floor (usa-10)
 
 const WF_TAG_RE = /\[wf:([^\]]+)\]/i;
-const OPUS_IN_PER_MT = 15; // $ per million input tokens — all-Opus routing baseline
-const OPUS_OUT_PER_MT = 75; // $ per million output tokens
+// usa-31: Opus 5.5 tier rates ($ per million tokens) for the all-Opus routing baseline.
+const OPUS_FRESH_IN_PER_MT = 5;
+const OPUS_CACHE_READ_PER_MT = 0.5;
+const OPUS_CACHE_WRITE_PER_MT = 6.25;
+const OPUS_OUT_PER_MT = 25;
+const OPUS_BLENDED_IN_FALLBACK_PER_MT = 0.85; // ~90% cache-read blend, used when no Opus rows exist
+const OPUS_MODEL_RE = /^claude-(?:opus|fable)/i;
 const BRIEF_TOKENS = 5000; // isolated workers each carry a <5k brief (spec)
 
 /** Implementer provider -> one of the workflow families: gemini | claude | dsp | null. */
@@ -1577,11 +1588,35 @@ function buildByWorkflow(merged, agentById) {
 }
 
 /** Counterfactual savings vs a solo monolithic Opus workflow. Baselines are commented inline; divide-by-zero -> null. */
-function buildSavings(merged, totals, lanes, agents) {
+function buildSavings(merged, totals, lanes, agents, rows = []) {
   const inputTokens = totals.inputTokens ?? 0;
   const outputTokens = totals.outputTokens ?? 0;
-  // (a) Role-tier routing savings: price every token at Opus rates and compare against the actual mixed-tier spend.
-  const soloOpusBaselineUsd = (inputTokens * OPUS_IN_PER_MT + outputTokens * OPUS_OUT_PER_MT) / 1_000_000;
+  // (a) Role-tier routing savings (usa-31): price non-Opus tokens at Opus 5.5 tier rates and compare against actual spend.
+  // Rows already on Opus/Fable save $0 (baseline = their actual cost). Cache reads/writes are priced at their own rates;
+  // historical events without a split use the empirical Opus blended input rate (fallback when no Opus rows exist).
+  const n0 = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+  let opusCost = 0, opusIn = 0, opusOut = 0;
+  for (const r of rows) {
+    if (OPUS_MODEL_RE.test(r.model ?? "") && n0(r.costUsd) > 0 && n0(r.inputTokens) > 0) { opusCost += r.costUsd; opusIn += r.inputTokens; opusOut += n0(r.outputTokens); }
+  }
+  const empiricalOpusInPerMt = opusIn > 0
+    ? Math.min(OPUS_FRESH_IN_PER_MT, Math.max(OPUS_CACHE_READ_PER_MT, ((opusCost - (opusOut * OPUS_OUT_PER_MT) / 1e6) * 1e6) / opusIn))
+    : OPUS_BLENDED_IN_FALLBACK_PER_MT;
+  const priceAtOpus = (s) => {
+    const fresh = n0(s.freshInputTokens), read = n0(s.cacheReadTokens), write = n0(s.cacheWriteTokens);
+    const unsplit = Math.max(0, n0(s.inputTokens) - fresh - read - write);
+    return (fresh * OPUS_FRESH_IN_PER_MT + read * OPUS_CACHE_READ_PER_MT + write * OPUS_CACHE_WRITE_PER_MT + unsplit * empiricalOpusInPerMt + n0(s.outputTokens) * OPUS_OUT_PER_MT) / 1e6;
+  };
+  let soloOpusBaselineUsd = 0;
+  const resid = { turns: 0, costUsd: totals.costUsd ?? 0, inputTokens, outputTokens, freshInputTokens: totals.freshInputTokens ?? 0, cacheReadTokens: totals.cacheReadTokens ?? 0, cacheWriteTokens: totals.cacheWriteTokens ?? 0 };
+  for (const r of rows) {
+    const cost = n0(r.costUsd);
+    soloOpusBaselineUsd += OPUS_MODEL_RE.test(r.model ?? "") ? (cost > 0 ? cost : priceAtOpus(r)) : Math.max(cost, priceAtOpus(r));
+    for (const k of ["costUsd", "inputTokens", "outputTokens", "freshInputTokens", "cacheReadTokens", "cacheWriteTokens"]) resid[k] -= n0(r[k]);
+  }
+  // Remainder = ledger-folded days (no per-model detail) or a totals-only call: price as non-Opus, floored at its actual cost.
+  for (const k of Object.keys(resid)) resid[k] = Math.max(0, resid[k]);
+  soloOpusBaselineUsd += Math.max(resid.costUsd, priceAtOpus(resid));
   const actualCostUsd = totals.costUsd ?? 0;
   const routingSavingsUsd = Math.max(0, soloOpusBaselineUsd - actualCostUsd);
   const routingSavingsPct = soloOpusBaselineUsd > 0 ? routingSavingsUsd / soloOpusBaselineUsd : null;
@@ -1614,6 +1649,9 @@ function buildSavings(merged, totals, lanes, agents) {
   return {
     routingSavingsUsd,
     soloOpusBaselineUsd,
+    cacheReadTokens: totals.cacheReadTokens ?? 0,
+    cacheWriteTokens: totals.cacheWriteTokens ?? 0,
+    effectiveOpusInPerMt: Math.round(empiricalOpusInPerMt * 100) / 100,
     actualCostUsd,
     routingSavingsPct: routingSavingsPct === null ? null : Math.round(routingSavingsPct * 1000) / 1000,
     contextSavingsTokens: Math.round(contextSavingsTokens),
@@ -1785,10 +1823,13 @@ function buildLedgerSnapshot(merged, rows) {
   const byDay = new Map();
   for (const r of rows) {
     if (!r.day) continue;
-    const g = getOrSet(byDay, r.day, () => ({ day: r.day, costUsd: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, turns: 0, byProvider: {} }));
+    const g = getOrSet(byDay, r.day, () => ({ day: r.day, costUsd: 0, totalTokens: 0, inputTokens: 0, outputTokens: 0, freshInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, turns: 0, byProvider: {} }));
     g.costUsd += r.costUsd;
     g.inputTokens += r.inputTokens;
     g.outputTokens += r.outputTokens;
+    g.freshInputTokens += r.freshInputTokens ?? 0;
+    g.cacheReadTokens += r.cacheReadTokens ?? 0;
+    g.cacheWriteTokens += r.cacheWriteTokens ?? 0;
     g.totalTokens += r.inputTokens + r.outputTokens;
     g.turns += r.turns;
     const p = g.byProvider[r.provider] ?? (g.byProvider[r.provider] = { turns: 0, costUsd: 0, totalTokens: 0 });
@@ -1811,6 +1852,9 @@ function buildLedgerSnapshot(merged, rows) {
     totalTokens: g.totalTokens,
     inputTokens: g.inputTokens,
     outputTokens: g.outputTokens,
+    freshInputTokens: g.freshInputTokens,
+    cacheReadTokens: g.cacheReadTokens,
+    cacheWriteTokens: g.cacheWriteTokens,
     turns: g.turns,
     unitsMerged: unitsByDay.get(g.day) ?? 0,
     locChanged: locByDay.get(g.day) ?? 0,
@@ -2614,21 +2658,16 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       fromLedger: true,
     });
   }
-  const foldedDayRows = foldedDays.map((r) => ({ day: r.day, turns: r.turns ?? 0, costUsd: r.costUsd ?? 0, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0 }));
+  const foldedDayRows = foldedDays.map((r) => ({ day: r.day, turns: r.turns ?? 0, costUsd: r.costUsd ?? 0, inputTokens: r.inputTokens ?? 0, outputTokens: r.outputTokens ?? 0, freshInputTokens: r.freshInputTokens ?? 0, cacheReadTokens: r.cacheReadTokens ?? 0, cacheWriteTokens: r.cacheWriteTokens ?? 0 }));
   let totalsFinal = totals;
   if (foldedDayRows.length) {
     totalsFinal = { ...totals };
-    for (const d of foldedDayRows) {
-      totalsFinal.turns += d.turns;
-      totalsFinal.costUsd += d.costUsd;
-      totalsFinal.inputTokens += d.inputTokens;
-      totalsFinal.outputTokens += d.outputTokens;
-    }
+    for (const d of foldedDayRows) addStats(totalsFinal, d);
   }
   const byDayFinal = by("day");
-  if (foldedDayRows.length) for (const d of foldedDayRows) byDayFinal.push({ day: d.day, ...zeroStats(), turns: d.turns, costUsd: d.costUsd, inputTokens: d.inputTokens, outputTokens: d.outputTokens });
+  if (foldedDayRows.length) for (const d of foldedDayRows) byDayFinal.push({ day: d.day, ...addStats(zeroStats(), d) });
   const byWorkflow = buildByWorkflow(merged, agentById);
-  const savings = buildSavings(merged, totalsFinal, lanes, agents);
+  const savings = buildSavings(merged, totalsFinal, lanes, agents, rows);
   const cohorts = buildCohorts(merged);
   const floor = buildFloor(merged, agents, totalsFinal);
   yield;
