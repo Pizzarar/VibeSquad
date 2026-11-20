@@ -235,10 +235,18 @@ const PROBES = String.raw`(() => {
 
 async function probe(page, expr) { return page.evaluate(`(() => { const P = window.__u1 ?? (window.__u1 = ${PROBES}); return (${expr}); })()`); }
 
-async function closeLayers(page) {
-  await page.keyboard.press("Escape").catch(() => {});
+// Page state that a stray Escape can change: the app's Escape listener navigates home and collapses the sidebar to the rail.
+const stateSig = (page) => page.evaluate("`${location.pathname}${location.hash}|${Math.round(document.querySelector('.sidebar')?.getBoundingClientRect().width ?? -1)}`").catch(() => "?");
+
+// Close only the open layer: one Escape, a second only while a popover is still open and the page state did not drift
+// (a second Escape on a closed layer reaches App.tsx enterSquadsHome and collapses the sidebar).
+async function closeLayers(page, sig) {
   await page.keyboard.press("Escape").catch(() => {});
   await sleep(120);
+  if ((await stateSig(page)) === sig && (await probe(page, "P.popovers().length").catch(() => 0)) > 0) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await sleep(120);
+  }
 }
 
 const ALL_SURFACES = () => [...O.SURFACES, ...RAIL_SURFACES, ...PHONE_SURFACES, ...BORING_SURFACES];
@@ -341,6 +349,7 @@ export async function run() {
                 if (!cur) { await redo(); cur = (await probe(page, "P.triggers()")).find((x) => x.key === t.key); }
                 if (!cur) { triggersSkipped++; st.triggersSkipped++; process.stderr.write(`  trigger gone ${surf.id} ${combo}: ${t.sel} "${t.text}"\n`); continue; }
                 await probe(page, "P.snapshot()");
+                const pageSig = await stateSig(page);
                 await page.mouse.click(cur.cx, cur.cy);
                 await sleep(/sky/.test(t.sel) ? 4500 : 250); // the sky chat swings in over ~1-4s: judge it once landed
                 const pops = await probe(page, "P.popovers()");
@@ -350,9 +359,10 @@ export async function run() {
                   for (const i of p.issues) record(combo, surf.id, `popover-${i === "outside-viewport" ? "offscreen" : "clipped"}`, { selector: p.selector, classes: p.classes, text: p.text }, { trigger: `${t.sel} "${t.text}"`, popover: p.selector, detail: `box ${Math.round(p.box.x)},${Math.round(p.box.y)} ${Math.round(p.box.w)}x${Math.round(p.box.h)} vs ${size.w}x${size.h}: ${i}` });
                   for (const h of p.hits) record(combo, surf.id, "hit-mismatch", h, { trigger: `${t.sel} "${t.text}"`, popover: p.selector, detail: `in popover; point ${h.at} hits ${h.other?.selector ?? "nothing"}` });
                 }
-                await closeLayers(page);
+                await closeLayers(page, pageSig);
                 const after = await probe(page, "P.hitTest(null).count").catch(() => -1);
-                if (after !== sig) await redo();
+                // Re-run setup when the route/sidebar state drifted (or the control count did), so the next trigger is never measured on a collapsed rail.
+                if (after !== sig || (await stateSig(page)) !== pageSig) await redo();
               }
             }
           } catch (e) {
