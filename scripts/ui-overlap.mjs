@@ -209,7 +209,7 @@ async function checkSidebarNeedsRows(page) {
       if (m.who.text === "Overlord") sawOverlord = true;
       const short = m.who.text.length <= SHORT_ROLE;
       const base = { split: "ours", classes: ["boring-needs-who"], tag: "span", other: null };
-      const trunc = { ...base, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: m.who.text, box: m.who.box };
+      const trunc = { ...base, kind: "needs-row-truncated", selector: `.sidebar .boring-needs-who (row "${m.who.text}")`, text: m.who.text, box: m.who.box };
       if (state === "rest") {
         restCw = m.who.cw;
         if (short && m.who.sw > m.who.cw) hits.push({ ...trunc, detail: `short role name truncated at rest: scrollWidth ${m.who.sw} > clientWidth ${m.who.cw}` });
