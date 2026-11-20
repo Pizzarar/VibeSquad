@@ -73,7 +73,7 @@
     },
     {
       "kind": "compact-scroll",
-      "surface": "pin-grid-teams-toggle",
+      "surface": "squad-full",
       "reason": "Full Teams plumbing view, opened on demand via the squad-full-toggle; the compact grid is the default."
     },
     {
