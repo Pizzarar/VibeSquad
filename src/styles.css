@@ -6490,6 +6490,10 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .sidebar .boring-needs-more:hover { color: var(--text); }
 .sidebar .boring-needs-menu { display: none; flex-direction: row; gap: 3px; }
 .sidebar .boring-needs-menu-wrap:hover .boring-needs-menu, .sidebar .boring-needs-menu-wrap:focus-within .boring-needs-menu { display: flex; }
+/* the spine scroller clips x (content ~137px at 1280): on pointer hover the ⋯ steps aside (keyboard focus keeps it: only :hover hides) and the items tighten so the open menu fits */
+.sidebar .boring-needs-menu-wrap:hover .boring-needs-more { display: none; }
+.sidebar .boring-needs-menu { gap: 2px; }
+.sidebar .boring-needs-menu .boring-needs-menu-item { padding: 0 4px; }
 .sidebar .boring-needs-err { color: var(--pink-t); font-size: 11px; padding: 2px 4px; }
 .sidebar .boring-muted { margin: 0; padding: 2px 4px; font-size: 11px; color: var(--muted); }
 .sidebar .boring-idle-toggle { align-self: flex-start; min-height: 22px; padding: 2px 6px; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; box-shadow: var(--bevel); }
