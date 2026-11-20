@@ -160,8 +160,10 @@ async function toFloor(page, n) {
 // Sidebar Needs-you rows in their HOVER state (the row menu opens on hover): the role name must not truncate and the open menu must sit
 // inside every clipping ancestor (the spine scroller). The rest state is measured too. (5244b82 shipped a clipped menu + ellipsized
 // "Overlord" because the probe never hovered the row.)
+// ui:overlap sets this to "&shortrole=1" in run() (its probe needs the 8-char role); ui:clicks shares the surface with the plain demo (the extra agent adds a floor blip that overlaps another one).
+let NEEDS_QUERY = "";
 async function toSidebarNeeds(page) {
-  await reload(page, "&shortrole=1"); // demo adds a Needs-you row titled "Overlord" (the 8-char role the live scout saw ellipsized)
+  await reload(page, NEEDS_QUERY); // with shortrole the demo adds a Needs-you row titled "Overlord" (the 8-char role the live scout saw ellipsized)
   await toHubPage(page);
   await expandSidebar(page);
   await page.locator(".sidebar .boring-needs-item").locator("visible=true").first().waitFor({ timeout: 8000 });
@@ -223,7 +225,7 @@ async function checkSidebarNeedsRows(page) {
       }
     }
   }
-  if (!sawOverlord) hits.push({ split: "ours", classes: ["boring-needs-who"], tag: "span", other: null, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: "Overlord", detail: "probe fixture missing: no 'Overlord' Needs-you row (demo ?shortrole=1) so the short-role case went unmeasured", box: { x: 0, y: 0, w: 1, h: 1 } });
+  if (NEEDS_QUERY && !sawOverlord) hits.push({ split: "ours", classes: ["boring-needs-who"], tag: "span", other: null, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: "Overlord", detail: "probe fixture missing: no 'Overlord' Needs-you row (demo ?shortrole=1) so the short-role case went unmeasured", box: { x: 0, y: 0, w: 1, h: 1 } });
   await page.mouse.move(2, 2);
   return hits;
 }
@@ -362,6 +364,7 @@ export async function run(opts = {}) {
   fs.mkdirSync(outDir, { recursive: true });
   fs.mkdirSync(shotDir, { recursive: true });
   if (flag("rebuild")) process.env.UI_OVERLAP_REBUILD = "1";
+  NEEDS_QUERY = "&shortrole=1";
 
   const pw = E.resolvePlaywright();
   const exe = E.findBrowser();
