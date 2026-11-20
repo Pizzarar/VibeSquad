@@ -1007,7 +1007,7 @@ code {
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 1; color: var(--muted);
   cursor: default;
 }
 
@@ -3522,7 +3522,7 @@ html, body, #root { overflow-x: hidden; }
 .pin-menu-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1) 0; }
 .pin-menu-list > button { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .pin-menu-list > button:hover:not(:disabled) { background: var(--navy); color: var(--cyan-t); }
-.pin-menu-list > button:disabled { opacity: 0.5; cursor: default; }
+.pin-menu-list > button:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .pin-menu-rename { display: flex; gap: 6px; padding: 6px 8px; }
 .pin-menu-rename input { flex: 1; min-width: 0; background: var(--navy); color: var(--text); border: 1px solid var(--line); padding: 4px 6px; font: inherit; }
 /* Fresh-session divider for quick-started Brainstorms (rendered by AgentDrawer for label vs.fresh-session=brief). */
@@ -4045,7 +4045,7 @@ html, body, #root { overflow-x: hidden; }
   cursor: pointer;
 }
 .usage-review-run:hover:not(:disabled) { border-color: var(--mint-t); color: var(--mint-t); }
-.usage-review-run:disabled { opacity: 0.6; cursor: default; }
+.usage-review-run:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .usage-review-status { color: var(--violet-t); }
 .usage-review-error {
   color: var(--pink-t);
@@ -4086,7 +4086,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-inbox-text { font-size: 12px; line-height: 1.45; word-break: break-word; }
 .usage-inbox-actions { display: flex; gap: var(--sp-2, 8px); }
 .usage-inbox-btn { background: var(--panel-hi); border: 1px solid var(--line); padding: var(--sp-1, 4px) var(--sp-3, 12px); font: inherit; font-size: 11px; letter-spacing: 0.08em; cursor: pointer; }
-.usage-inbox-btn:disabled { opacity: 0.6; cursor: default; }
+.usage-inbox-btn:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .usage-inbox-accept { color: var(--mint-t); border-color: var(--mint-t); }
 .usage-inbox-reject { color: var(--pink-t); border-color: var(--pink-t); }
 .squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, var(--bg)); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
@@ -5354,7 +5354,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .btn.hot { background: var(--pink-fill); color: var(--on-cyan-fill); border: 1px solid var(--shadow-hard); }
 .btn.confirm.armed { border: 1px solid var(--shadow-hard); }
 .btn.successor.warn { background: var(--pastel-amber); }
-.btn:disabled { opacity: 0.55; }
+.btn:disabled { opacity: 1; color: var(--muted); }
 .seg { border: 1px solid var(--line); box-shadow: var(--bevel); background: var(--well); }
 .seg button { border: 0; box-shadow: none; font-weight: 400; color: var(--muted); background: transparent; }
 .seg button.on { background: var(--pastel-violet); color: var(--text); box-shadow: var(--bevel); }
@@ -5439,7 +5439,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .toolbar .search:focus, .you-flag input:focus, .ws-row input:focus, .modal :focus { box-shadow: var(--bevel-in); border-color: var(--violet); outline: 1px solid var(--violet); }
 
 /* U2 review fixes: update-banner buttons keep a visible face; keyboard focus ring replaces the removed glows */
-.update-available-banner .btn:not(.ghost) { background: var(--face-hi) !important; border-color: var(--shadow-hard) !important; color: var(--text) !important; }
+.update-available-banner .btn:not(.ghost):not(:disabled) { background: var(--face-hi) !important; border-color: var(--shadow-hard) !important; color: var(--text) !important; }
 :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible,
 .pin-tile:focus-visible, .cmd-palette > input:focus-visible, .find-files-bar > input:focus-visible {
   outline: 2px solid var(--violet) !important;
@@ -5721,8 +5721,8 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
   border-image: var(--u3-btn-marble-normal) 4 fill / calc(var(--u3-px) * 4) / 0 repeat; background: none; color: var(--u3-ink-text); text-shadow: none; min-height: 0; height: calc(var(--u3-px) * 10);
 }
 .seg { background: none; }
-.btn:disabled { opacity: 0.55; }
-.update-available-banner .btn:not(.ghost) { background: none !important; }
+.btn:disabled { opacity: 1; color: var(--muted); }
+.update-available-banner .btn:not(.ghost):not(:disabled) { background: none !important; }
 .btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
 
 /* ---- chips: 9-slice 16x10 (slice 3/4 drawn at 3/4 kit px), text in the flat rows ---- */
@@ -5887,9 +5887,10 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel)); }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
-/* disabled: quiet dashed ghost, full-contrast muted label (u3f values, no opacity) */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled {
-  opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); box-shadow: none; font-weight: 400; cursor: not-allowed;
+/* disabled (idea-165, single source): quiet dashed ghost, full-contrast muted label, no opacity. Scoped selector = sidebar/sky/focus-bar controls; :root:root selector = unscoped controls (modals, .sky-zones, UsageDashboard) so --muted never lands on a bright fill */
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled,
+:root:root :is(.btn, .usage-review-run, .usage-inbox-btn):disabled {
+  opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); border-image: none; box-shadow: none; text-shadow: none; font-weight: 400; cursor: default;
 }
 
 /* ---- chips and pills ---- */
@@ -6019,7 +6020,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* selected seg / chip: INK on the violet fill (the U3 light label #f6eef8 was 2.85:1 on light violet) */
 :root:root :is(.seg button.on, .tchip.on) { background: var(--violet); color: var(--on-pastel) !important; text-shadow: none; }
 /* selected teal button (Settings UI-scale 100%: label equalled the fill) */
-:root:root .btn.on:not(.ghost) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+:root:root .btn.on:not(.ghost):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* needs-you counts and hot/bad buttons: solid pink fill with on-fill ink (light pink-fill #b4377a + marble = 5.5:1) */
 :root:root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]:not(.muted)) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
 :root:root :is(.btn.hot, .btn.bad):not(:disabled) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
@@ -6027,7 +6028,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
 :root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
 /* ⇄ Handoff (owner's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
-:root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+:root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
 :root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
 
@@ -6065,7 +6066,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .alert-pill :is(.alert-owner, .alert-type, .alert-who) { color: var(--on-pastel); }
 /* light theme: provider glyph colours are inline (cyan/coral on blush = 1.0-2.0), so the label takes the text colour */
 :root[data-theme="light"] .prov-inline { color: var(--text) !important; font-weight: 700; }
-:root[data-theme="light"] :is(.row-actions, .card-top-right) .btn.confirm:not(.armed) { color: color-mix(in srgb, var(--u3-ink-text) 40%, #000) !important; } /* >= 4.5:1 on the light hot-pink / ghost fills */
+:root[data-theme="light"] :is(.row-actions, .card-top-right) .btn.confirm:not(.armed):not(:disabled) { color: color-mix(in srgb, var(--u3-ink-text) 40%, #000) !important; } /* >= 4.5:1 on the light hot-pink / ghost fills */
 /* pin tile title bar varies violet..magenta in the light theme: give the name a flat plate */
 :root[data-theme="light"] .pin-tile-bar .pin-tile-name { flex: 0 1 auto; background: var(--panel-hi); color: var(--text); padding: 0 var(--sp-2); box-shadow: var(--bevel); }
 /* scanlines: text layers above, and a sized tile instead of repeating-* so no scanline box is a layer over text */
@@ -6097,7 +6098,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .composer-more-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1, 4px) 0; }
 .composer-more-item { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .composer-more-item:hover:not(:disabled), .composer-more-item:focus-visible { background: var(--navy); color: var(--cyan-t); outline: none; }
-.composer-more-item:disabled { opacity: 0.5; cursor: default; }
+.composer-more-item:disabled { opacity: 1; color: var(--muted); cursor: default; }
 @media (max-width: 760px) { .composer-more-tab { min-width: 32px; min-height: 48px; } .composer-more-item { min-height: 44px; } }
 
 /* Project header Bugs quick-chip (PLAN_PROJECT_CHIPS_WORKFLOWS C1): icon-size, integer-snapped, zero row-height growth. */
@@ -6126,7 +6127,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   opacity: 1;
   filter: drop-shadow(0 0 2px var(--cyan));
 }
-.quick-chip:disabled { opacity: 0.5; cursor: default; }
+.quick-chip:disabled { opacity: 1; filter: grayscale(1); cursor: default; }
 .quick-chip-art {
   position: relative;
   display: inline-flex;
