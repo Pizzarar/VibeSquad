@@ -33,6 +33,43 @@ test("unansweredOwnerMessages: owner inputs after the last completed turn only; 
   assert.ok(long.length < 8_100 && long.endsWith("END"), "capped, newest words kept");
 });
 
+test("G1 R2: an errored Claude turn (error, then a normal-looking turn_done) leaves the owner message unanswered", () => {
+  // runner/adapters/claude.mjs: a failed result logs `error` and then turn_done { stopReason: m.stop_reason ?? m.subtype }.
+  const errored = [
+    ev(0, "input", { text: "send it", owner: true }),
+    ev(1, "status", { status: "running" }),
+    ev(2, "output", { text: "dispatching" }),
+    ev(3, "error", { message: "API Error: overloaded" }),
+    ev(4, "turn_done", { stopReason: "end_turn" }),
+    ev(5, "status", { status: "idle" }),
+  ];
+  assert.equal(unansweredOwnerMessages(errored).text, "send it");
+  assert.equal(unansweredOwnerMessages([ev(0, "input", { text: "go", owner: true }), ev(1, "turn_done", { stopReason: "error_during_execution" })]).text, "go");
+  // a VS-only turn after it (the brief nudge) answers nothing; the owner's next completed turn does
+  const nudged = [...errored, ev(6, "input", { text: "Context check: update your brief" }), ev(7, "status", { status: "running" }), ev(8, "turn_done", { stopReason: "end_turn" })];
+  assert.equal(unansweredOwnerMessages(nudged).text, "send it");
+  const answered = [...nudged, ev(9, "input", { text: "retry", owner: true }), ev(10, "status", { status: "running" }), ev(11, "turn_done", { stopReason: "end_turn" })];
+  assert.equal(unansweredOwnerMessages(answered).text, "");
+  // an error logged before a turn starts is not that turn's
+  assert.equal(unansweredOwnerMessages([ev(0, "error", { message: "spawn" }), ev(1, "input", { text: "hi", owner: true }), ev(2, "status", { status: "running" }), ev(3, "turn_done", { stopReason: "end_turn" })]).text, "");
+});
+
+test("G1 R2: auto restart after an errored Claude turn carries the owner message to the successor", async () => {
+  const { rootDir, profilesPath, agentClient, creates, oldAgent } = setup();
+  const events = [
+    ev(0, "input", { text: "send it", owner: true }),
+    ev(1, "status", { status: "running" }),
+    ev(2, "error", { message: "API Error" }),
+    ev(3, "turn_done", { stopReason: "end_turn" }),
+    ev(4, "status", { status: "idle" }),
+  ];
+  await performBrainstormRestart(
+    { agentId: oldAgent.id, oldAgent: { ...oldAgent, provider: "claude" }, reason: "auto-token-limit", agentClient, profilesPath, backstopDelayMs: 60_000, readAgentEvents: () => events },
+    rootDir,
+  );
+  assert.match(creates[0].initialPrompt, /Pending message from the user to answer now:\nsend it\s*$/);
+});
+
 function setup() {
   const rootDir = mkdtempSync(join(tmpdir(), "vs-buddy-carry-"));
   mkdirSync(join(rootDir, "docs", "brainstorm"), { recursive: true });

@@ -264,22 +264,38 @@ const CARRY_LOG_BYTES = 4 * 1024 * 1024;
 const CARRY_MAX_CHARS = 8_000;
 
 /**
- * G1 (unit-buddy-midturn-restart): the owner's messages the agent never finished answering. Walks the raw runner-log events (oldest
- * first) back to the last COMPLETED turn (a turn_done not stopped by a cancel; a kill mid-turn logs none) and keeps every owner input
- * (`owner: true`, set by the runner for the owner's composer only; agent sends, steers, nudges and /compact never carry it) after it,
- * oldest first. `afterSeq` limits the scan to events newer than an earlier scan. Returns { text ("" = nothing unanswered), lastSeq }.
+ * G1 (unit-buddy-midturn-restart): the owner's messages the agent never finished answering, from the raw runner-log events (oldest
+ * first). Owner input = `owner: true` (set by the runner for the owner's composer only; agent sends, steers, nudges and /compact never
+ * carry it). A turn answers the owner messages pending so far only if it COMPLETED and itself took an owner input: a VS-only turn
+ * (the brief nudge) answers nothing. Not completed: an `error` in the turn (the Claude adapter logs `error` then a normal-looking
+ * turn_done for a failed turn; ACP logs only the error), a cancel / error stopReason, or no turn_done at all (killed mid-turn).
+ * `afterSeq` keeps only owner inputs newer than an earlier scan. Returns { text ("" = nothing unanswered), lastSeq }.
  */
 export function unansweredOwnerMessages(events, { afterSeq = -1 } = {}) {
   const list = Array.isArray(events) ? events : [];
   let lastSeq = afterSeq;
-  for (const e of list) if (Number.isFinite(Number(e?.seq))) lastSeq = Math.max(lastSeq, Number(e.seq));
-  const texts = [];
-  for (let i = list.length - 1; i >= 0; i--) {
-    const e = list[i];
-    if (Number(e?.seq) <= afterSeq) break;
-    if (e?.type === "turn_done" && !/cancel/i.test(String(e.stopReason ?? ""))) break;
-    if (e?.type === "input" && e.owner === true && typeof e.text === "string" && e.text.trim()) texts.unshift(e.text.trim());
+  let pending = []; // { seq, text } owner inputs not yet answered
+  let turnHadOwner = false;
+  let turnErrored = false;
+  for (const e of list) {
+    if (!e || typeof e !== "object") continue;
+    const seq = Number(e.seq);
+    if (Number.isFinite(seq)) lastSeq = Math.max(lastSeq, seq);
+    if (e.type === "input" && e.owner === true && typeof e.text === "string" && e.text.trim()) {
+      pending.push({ seq, text: e.text.trim() });
+      turnHadOwner = true;
+    } else if (e.type === "error") {
+      turnErrored = true;
+    } else if (e.type === "status" && e.status === "running") {
+      turnErrored = false; // a new turn starts: an error before it (e.g. a failed spawn) is not this turn's
+    } else if (e.type === "turn_done") {
+      const completed = !turnErrored && !/cancel|error/i.test(String(e.stopReason ?? ""));
+      if (completed && turnHadOwner) pending = [];
+      turnHadOwner = false;
+      turnErrored = false;
+    }
   }
+  const texts = pending.filter((p) => !(p.seq <= afterSeq)).map((p) => p.text);
   let text = texts.join("\n\n");
   if (text.length > CARRY_MAX_CHARS) text = `[...]\n${text.slice(-CARRY_MAX_CHARS)}`; // the newest words matter most
   return { text, lastSeq };
