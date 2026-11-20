@@ -157,6 +157,56 @@ async function toFloor(page, n) {
   for (let i = 0; i < n; i++) { await vis(page, tid("sq-floor-next")).evaluate((el) => el.click(), null, { timeout: 6000 }); await sleep(1300); } // the lift ride animates; give it time to settle
 }
 
+// Sidebar Needs-you rows in their HOVER state (the row menu opens on hover): the role name must not truncate and the open menu must sit
+// inside every clipping ancestor (the spine scroller). The rest state is measured too. (5244b82 shipped a clipped menu + ellipsized
+// "Overlord" because the probe never hovered the row.)
+async function toSidebarNeeds(page) {
+  await toHubPage(page);
+  await expandSidebar(page);
+  await page.locator(".sidebar .boring-needs-item").locator("visible=true").first().waitFor({ timeout: 8000 });
+  await sleep(300);
+}
+async function checkSidebarNeedsRows(page) {
+  const n = Math.min(await page.locator(".sidebar .boring-needs-item").count(), 4);
+  const hits = [];
+  for (let i = 0; i < n; i++) {
+    const row = page.locator(".sidebar .boring-needs-item").nth(i);
+    let restTrunc = false, restCw = 0; // a name too long for the row ellipsizes at rest too (by design): only truncation that APPEARS on hover/focus is the regression
+    for (const state of ["rest", "hover", "menu-open", "focus"]) {
+      await page.mouse.move(2, 2);
+      if (state === "hover") { await row.scrollIntoViewIfNeeded().catch(() => {}); await row.hover({ timeout: 3000 }).catch(() => {}); }
+      if (state === "menu-open") { await row.scrollIntoViewIfNeeded().catch(() => {}); await row.locator(".boring-needs-more").hover({ timeout: 3000 }).catch(() => {}); } // the menu opens on the wrap's :hover
+      if (state === "focus") await row.locator(".boring-needs-menu-item").first().focus().catch(() => {});
+      await sleep(120);
+      const m = await row.evaluate((el) => {
+        const r = (e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height, right: b.right, bottom: b.bottom }; };
+        const who = el.querySelector(".boring-needs-who");
+        const menu = el.querySelector(".boring-needs-menu");
+        // clip rect = intersection of every ancestor that clips (overflow not visible) up to the sidebar
+        const clip = { l: 0, t: 0, r: innerWidth, b: innerHeight };
+        for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+          const cs = getComputedStyle(a);
+          const b = a.getBoundingClientRect();
+          if (cs.overflowX !== "visible") { clip.l = Math.max(clip.l, b.left); clip.r = Math.min(clip.r, b.right); }
+          if (cs.overflowY !== "visible") { clip.t = Math.max(clip.t, b.top); clip.b = Math.min(clip.b, b.bottom); }
+          if (a.classList.contains("sidebar")) break;
+        }
+        const shown = !!menu && getComputedStyle(menu).display !== "none";
+        return { who: who ? { sw: who.scrollWidth, cw: who.clientWidth, text: (who.textContent || "").trim(), box: r(who) } : null, menu: shown ? r(menu) : null, clip, items: shown ? [...menu.children].map(r) : [] };
+      });
+      const base = { split: "ours", classes: ["boring-needs-who"], tag: "span", other: null };
+      if (state === "rest") { restTrunc = !!m.who && m.who.sw > m.who.cw; restCw = m.who?.cw ?? 0; }
+      else if (m.who && ((m.who.sw > m.who.cw && !restTrunc) || m.who.cw < restCw - 0.5)) hits.push({ ...base, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: m.who.text, detail: `role name loses width in ${state} state: scrollWidth ${m.who.sw}, clientWidth ${m.who.cw} (rest ${restCw})`, box: m.who.box });
+      if (m.menu) {
+        const right = Math.max(m.menu.right, ...m.items.map((x) => x.right));
+        if (right > m.clip.r + 0.5 || m.menu.x < m.clip.l - 0.5) hits.push({ ...base, classes: ["boring-needs-menu"], tag: "div", kind: "needs-row-menu-clipped", selector: ".sidebar .boring-needs-menu", text: "", detail: `row menu leaves the scroller clip in ${state} state: menu right ${right.toFixed(1)} vs clip right ${m.clip.r.toFixed(1)} (left ${m.menu.x.toFixed(1)} vs ${m.clip.l.toFixed(1)})`, box: m.menu });
+      }
+    }
+  }
+  await page.mouse.move(2, 2);
+  return hits;
+}
+
 const COMPOSER_ROOTS = ['footer.composer', tid("drawer-subagents-bar"), tid("drawer-config-menu-btn")];
 
 // `mobile`: undefined = same setup as desktop, function = alternate route, false = "no mobile route".
@@ -186,6 +236,7 @@ export const SURFACES = [
   { id: "menu-drawer-config", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-config-menu-btn")); await sleep(400); }, mobile: false },
   { id: "menu-drawer-more", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-more-toggle")); await sleep(400); }, mobile: false },
   { id: "menu-pin-tile", setup: async (p) => { await toHubPage(p); await expandSidebar(p); await openSidebarPinMenu(p); await sleep(400); }, mobile: false }, // the sidebar pin menu
+  { id: "sidebar-needs-hover", setup: toSidebarNeeds, check: checkSidebarNeedsRows, checkOnly: true, roots: [".sidebar .boring-needs-you"], mobile: false }, // Needs-you rows at rest / hover / menu-open
   { id: "modal-command-palette", setup: async (p) => { await reset(p); await p.keyboard.press("Control+k"); await p.locator(tid("command-palette")).waitFor({ timeout: 4000 }); await sleep(300); }, mobile: false },
   { id: "modal-new-squad", setup: async (p) => { await reset(p); await click(p, tid("sidebar-new-squad-btn")); await sleep(600); }, mobile: false },
   { id: "modal-diagnostics", setup: async (p) => { await reset(p); await click(p, tid("open-diagnostics-btn")); await p.locator(tid("diagnostics-modal")).waitFor({ timeout: 4000 }); await sleep(500); }, mobile: false },
@@ -205,8 +256,10 @@ const OPEN_LAYER = {
 const HIDE_TEXT = `*,*::before,*::after{-webkit-text-fill-color:transparent!important;text-shadow:none!important;caret-color:transparent!important;-webkit-text-stroke:0!important;transition:none!important;animation:none!important}`;
 
 async function auditSurface(page, size, surf) {
+  if (surf.checkOnly) return { hits: await surf.check(page), texts: [] }; // state probes only: the generic overlap/contrast audit of this region already runs on the hub surface
   const res = await page.evaluate(`(${AUDIT_SRC})(${JSON.stringify({ tolerance: 2, rootSelectors: (size.mobile && surf.mobileRoots) || surf.roots || null, openLayer: OPEN_LAYER[surf.id] ?? null })})`);
   if (res.missing) return res;
+  if (surf.check) res.hits.push(...(await surf.check(page)));
   // Pixel pass: text hidden → sample the real rendered background under every text box.
   const h = await page.addStyleTag({ content: HIDE_TEXT });
   await sleep(60);

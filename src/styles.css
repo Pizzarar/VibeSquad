@@ -6490,9 +6490,12 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .sidebar .boring-needs-more { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; line-height: 1; cursor: pointer; box-shadow: var(--bevel); }
 .sidebar .boring-needs-more:hover { color: var(--text); }
 .sidebar .boring-needs-menu { display: none; flex-direction: row; gap: 3px; }
-.sidebar .boring-needs-menu-wrap:hover .boring-needs-menu, .sidebar .boring-needs-menu-wrap:focus-within .boring-needs-menu { display: flex; }
-/* the spine scroller clips x (content ~137px at 1280): on pointer hover the ⋯ steps aside (keyboard focus keeps it: only :hover hides) and the items tighten so the open menu fits */
-.sidebar .boring-needs-menu-wrap:hover .boring-needs-more { display: none; }
+/* the spine scroller clips x (content ~137px at 1280): the open menu cannot sit inline beside the role name (it ate its width: "Overlord" ellipsized, Dismiss clipped 7.6px).
+   On row hover / keyboard focus the line wraps and the menu takes its own full-width second line, so the name keeps the whole first line. The menu opens off the ROW (not the wrap) so it never moves out from under the pointer. */
+.sidebar .boring-needs-item:hover .boring-needs-line, .sidebar .boring-needs-item:focus-within .boring-needs-line { flex-wrap: wrap; }
+.sidebar .boring-needs-item:hover .boring-needs-menu-wrap, .sidebar .boring-needs-item:focus-within .boring-needs-menu-wrap { flex: 1 0 100%; min-width: 0; justify-content: flex-end; padding-left: 12px; }
+.sidebar .boring-needs-item:hover .boring-needs-menu, .sidebar .boring-needs-item:focus-within .boring-needs-menu { display: flex; min-width: 0; }
+.sidebar .boring-needs-item:hover .boring-needs-more, .sidebar .boring-needs-item:focus-within .boring-needs-more { display: none; }
 .sidebar .boring-needs-menu { gap: 2px; }
 .sidebar .boring-needs-menu .boring-needs-menu-item { padding: 0 4px; }
 .sidebar .boring-needs-err { color: var(--pink-t); font-size: 11px; padding: 2px 4px; }
