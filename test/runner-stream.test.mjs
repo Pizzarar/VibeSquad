@@ -237,7 +237,7 @@ test('claude adapter: images become base64 image blocks ahead of the text; usage
   spawnImpl.last.push({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 10, cache_read_input_tokens: 90, cache_creation_input_tokens: 5, output_tokens: 7 } } });
   await tick();
   const usage = events.find(([t]) => t === 'usage')[1];
-  assert.deepEqual(usage, { contextTokens: 112, inputTokens: 105, outputTokens: 7 });
+  assert.deepEqual(usage, { contextTokens: 112, inputTokens: 105, outputTokens: 7, freshInputTokens: 10, cacheReadTokens: 90, cacheWriteTokens: 5 });
 });
 
 test('ACP adapter: image content blocks when the agent advertises them, an explicit note when it does not; usage_update', async () => {

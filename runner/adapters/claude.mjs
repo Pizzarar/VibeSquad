@@ -132,7 +132,11 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
           if (u) {
             // Context size = everything the last call read (fresh + cached input); outputs add on top for the next call.
             const input = (u.input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-            emit('usage', { contextTokens: input + (u.output_tokens ?? 0), inputTokens: input, outputTokens: u.output_tokens ?? 0 });
+            // usa-31: inputTokens stays the sum; the split lets usage price cache reads/writes at their own tier rates.
+            emit('usage', {
+              contextTokens: input + (u.output_tokens ?? 0), inputTokens: input, outputTokens: u.output_tokens ?? 0,
+              freshInputTokens: u.input_tokens ?? 0, cacheReadTokens: u.cache_read_input_tokens ?? 0, cacheWriteTokens: u.cache_creation_input_tokens ?? 0,
+            });
           }
           for (const b of m.message?.content ?? []) {
             if (b.type === 'text' && b.text) emit('output', { text: b.text });
