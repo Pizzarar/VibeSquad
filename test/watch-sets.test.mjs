@@ -1847,6 +1847,32 @@ test(
 );
 
 test(
+  "idea-374: a late NO-VERDICT digest for a watched agent wakes the lead (it is a FAIL-class report, not a covered PASS)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")]]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 1);
+      assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
+      writeLog(sb, [{ ts: iso(now + 500), agent: "digest-1", lane: "vibesquad", type: "done", text: "NO-VERDICT: w1 reviewer line missing", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 2, "late NO-VERDICT still wakes: " + JSON.stringify(h.sent));
+      assert.match(h.sent[1].text, /NO-VERDICT: w1 reviewer line missing/);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
   "plugin idea-351: an armed watch holds an unknown-author done naming its agent (no wake) and an unrelated agent's done still wakes",
   withPluginEnv(async (sb) => {
     const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
