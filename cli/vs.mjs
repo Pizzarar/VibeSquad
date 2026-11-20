@@ -52,7 +52,7 @@ import {
   whoCandidate,
 } from "../server/identity.mjs";
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
-import { loadProfiles } from "../server/profiles.mjs";
+import { findProfile, loadProfiles } from "../server/profiles.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
 import { fetchWithLocalToken, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
@@ -2100,6 +2100,19 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
+  }
+  // A role=lead profile must never be silently spawned as a worker (that leaves the lane with no lead and `vs who lead`
+  // returns NONE): refuse and point at `vs lead handoff --profile <name>` instead (idea-376).
+  if (verb === "spawn" && flags.profile) {
+    const spawnProfile = String(flags.profile).trim();
+    if (spawnProfile) {
+      const resolved = findProfile(spawnProfile, undefined);
+      if (resolved?.role === "lead") {
+        throw new Error(
+          `vs spawn refuses the role=lead profile "${spawnProfile}" (it would spawn a role=worker agent, leaving the lane with no lead); use \`vs lead handoff --profile "${spawnProfile}"\` to hand the lane's lead to a successor`,
+        );
+      }
+    }
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
