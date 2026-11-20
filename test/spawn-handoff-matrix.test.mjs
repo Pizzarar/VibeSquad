@@ -262,7 +262,7 @@ test("handoff: pending takeover survives a server restart (fresh coordinator) wi
 // ---------------------------------------------------------------- Buddy spawns the lane lead (spawn_worker role=lead)
 
 function buddyCtx(w, identity = { agentId: "rn-bud1", team: "mx", lane: "feat", role: "brainstorm" }) {
-  const profiles = [{ id: "p-l", name: "Lead - Opus", role: "lead", provider: "claude", model: "claude-opus-5-5", modeId: "auto", notes: "lead it" }];
+  const profiles = [{ id: "p-l", name: "Lead - Opus", role: "lead", provider: "claude", model: "claude-opus-5-5", modeId: "auto", notes: "lead it" }, { id: "p-w", name: "Implement - Sonnet", role: "worker", provider: "claude", model: "claude-sonnet-5-5", modeId: "auto", notes: "go" }];
   const withBackend = async (_t, fn) => fn(w);
   return {
     ...verifiedIdentity(identity, { backend: w, teams: TEAMS }), cwd: w.dir, teams: TEAMS,
@@ -329,17 +329,15 @@ test("spoofed --role/--lane/--team/--agent/--ord cannot make a worker spawn a le
     const quiet = () => {};
     const liveBefore = w.who("lead").ids;
 
-    // spawn: the CLI carries no labels, so it can only ever mint a worker under the record's own team/lane.
-    await commandAgentVerb("spawn", { _: [], title: "Sub", profile: "Lead - Opus", prompt: "x", ...spoof }, makeContext, quiet);
-    const spawned = [...w.agents.values()].at(-1);
-    assert.deepEqual([spawned.labels.role, spawned.labels.lane, spawned.labels.team, spawned.labels["vs.parent"]], ["worker", "feat", "mx", "rn-work1"]);
+    // spawn: a role=lead profile is refused outright (never silently downgraded to a worker).
+    await assert.rejects(commandAgentVerb("spawn", { _: [], title: "Sub", profile: "Lead - Opus", prompt: "x", ...spoof }, makeContext, quiet), /role=lead profile/);
     assert.deepEqual(w.who("lead").ids, liveBefore, "no lead was minted");
 
     // handoff_lead and restart_buddy: still a worker, so both refuse.
     await assert.rejects(commandAgentVerb("lead", { _: ["handoff"], ...spoof }, makeContext, quiet), /caller role is "worker"/);
     await assert.rejects(commandAgentVerb("buddy", { _: ["restart"], ...spoof }, makeContext, quiet), /not a live lead/);
     for (const id of seen) assert.deepEqual([id.agentId, id.role, id.team, id.lane], ["rn-work1", "worker", "mx", "feat"]);
-    assert.equal(w.creates, 1, "only the worker spawn reached the backend");
+    assert.equal(w.creates, 0, "no spawn reached the backend (the lead profile was refused)");
     assert.deepEqual(w.who("lead").ids, liveBefore);
 
     // Default-mode verbs (log/spec/task/pin ...) take the same record: --agent/--role/--ord are claims.
@@ -349,6 +347,19 @@ test("spoofed --role/--lane/--team/--agent/--ord cannot make a worker spawn a le
     for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
     w.cleanup();
   }
+});
+
+test("idea-376: vs spawn refuses a role=lead profile instead of silently minting a worker", async () => {
+  const w = setup();
+  try {
+    const before = w.creates;
+    const err = await commandAgentVerb("spawn", { _: [], title: "Lead?", profile: "Lead - Opus", prompt: "x" }, () => buddyCtx(w), () => {}).then(() => null, (e) => e);
+    assert.ok(err, "vs spawn with a role=lead profile must reject");
+    assert.match(err.message, /role=lead profile/);
+    assert.match(err.message, /vs lead handoff --profile/);
+    assert.equal(w.creates, before, "no agent was created");
+    assert.deepEqual(w.who("lead").ids, [], "no lead was minted");
+  } finally { w.cleanup(); }
 });
 
 // ---------------------------------------------------------------- vs who lead during a handoff
@@ -457,9 +468,9 @@ test("R3 stakes param: sets labels.stakes, labels.stakes wins, unknown rejected,
     await callTool(ctx, "spawn_worker", { title: "E", profile: "Lead - Opus", prompt: "x" });
     assert.equal(last().labels.stakes, undefined);
     const out = [];
-    await commandAgentVerb("spawn", { _: [], title: "F", profile: "Lead - Opus", prompt: "x", stakes: "mechanical" }, () => ctx, (s) => out.push(s));
+    await commandAgentVerb("spawn", { _: [], title: "F", profile: "Implement - Sonnet", prompt: "x", stakes: "mechanical" }, () => ctx, (s) => out.push(s));
     assert.equal(last().labels.stakes, "mechanical");
-    await assert.rejects(commandAgentVerb("spawn", { _: [], title: "G", profile: "Lead - Opus", prompt: "x", stakes: "nope" }, () => ctx, () => {}), /unknown stakes/);
+    await assert.rejects(commandAgentVerb("spawn", { _: [], title: "G", profile: "Implement - Sonnet", prompt: "x", stakes: "nope" }, () => ctx, () => {}), /unknown stakes/);
   } finally { w.cleanup(); }
 });
 
