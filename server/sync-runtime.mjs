@@ -384,12 +384,36 @@ function lastRestartOkAt(vsHome) {
   let names = [];
   try { names = readdirSync(vsHome); } catch {}
   for (const name of names) {
-    if (!/^restart-.*\.json$/.test(name)) continue;
+    // idea-116: a manual or desktop-respawn restart never writes a `restart-<ts>.json`; the server-start hook records
+    // its own `server-start-<ts>.json` instead, and it covers earlier server-restart debt exactly like a `vs restart`.
+    if (!/^(?:restart|server-start)-.*\.json$/.test(name)) continue;
     const r = readJson(join(vsHome, name));
     const at = Date.parse(r?.startedAt ?? "");
     if (r?.ok === true && !r.dryRun && at > best) best = at;
   }
   return best;
+}
+
+/**
+ * idea-116: record, on server start, the commit the running server actually loaded, so a manual or desktop-respawn
+ * restart (which never writes a `restart-<ts>.json`) still clears earlier server-restart debt on the next sync. The
+ * commit is the hash the runtime was synced from (the runtime dir's build-stamp.json), else the checkout's HEAD.
+ * Written as `~/.vibesquad/server-start-<ts>.json` — deliberately NOT a `restart-<ts>.json`, which the restart state
+ * machine (restart-request, drain guard) reads as a completed `vs restart`.
+ */
+export function recordServerStart({ repoRoot = rootDir, env = process.env, now = Date.now, git = defaultGit, runtimeDir = runtimeDirFor(env), vsHome = vsHomeFor(env) } = {}) {
+  const stamp = readJson(join(runtimeDir, "build-stamp.json"));
+  let commit = typeof stamp?.commit === "string" ? stamp.commit : null;
+  if (!commit) { try { commit = git(repoRoot, "rev-parse", "HEAD"); } catch { /* no git HEAD: record without a commit */ } }
+  const at = new Date(now()).toISOString();
+  const rec = { startedAt: at, commit: commit ?? null, ok: true, dryRun: false, source: "server-start" };
+  try {
+    mkdirSync(vsHome, { recursive: true });
+    writeFileSync(join(vsHome, `server-start-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify(rec, null, 2), "utf8");
+  } catch (err) {
+    return { ok: false, error: `cannot write server-start record (${firstLine(err)})` };
+  }
+  return { ok: true, commit, at };
 }
 
 /** Server-restart debt: earlier entries not yet covered by a successful restart, plus this range's. */

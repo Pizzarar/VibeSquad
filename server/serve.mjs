@@ -49,6 +49,7 @@ import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
 import { logServerStart } from "./server-start.mjs";
+import { recordServerStart } from "./sync-runtime.mjs";
 import { runBriefOrphanSweep } from "./brief-orphan-sweep.mjs";
 import { refreshStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
@@ -490,6 +491,9 @@ if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
+    // idea-116: clear server-restart debt for whatever commit this process loaded, so a manual/desktop-respawn restart
+    // (which never writes a vs-restart record) isn't reported as "pending" on the next sync.
+    recordServerStart({ repoRoot: rootDir });
     setImmediate(() => runBriefOrphanSweep(rootDir));
     // This server is the runner's only owner: start it now and keep it up (backoff). All other callers only connect.
     if (shouldSuperviseRunner()) {

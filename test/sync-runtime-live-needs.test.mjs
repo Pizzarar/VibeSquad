@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sync from "../server/sync-runtime.mjs";
 
-const { DIST_STAMP, liveNeedsSince, parseLiveNeeds, readLiveNeeds, runSync, syncRuntimeDir, syncSkipReason, viteBuild } = sync;
+const { DIST_STAMP, liveNeedsSince, parseLiveNeeds, readLiveNeeds, recordServerStart, runSync, syncRuntimeDir, syncSkipReason, viteBuild } = sync;
 
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 const put = (dir, rel, text) => {
@@ -178,6 +178,41 @@ test("restarts are reported, never performed, and carry over until a successful 
   merge(dir, "unit-docs2", "Merge unit-docs2\n\nLive-Needs: none", { "docs/y.md": "y" });
   writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: git(dir, "rev-parse", "HEAD"), dirty: false }));
   now += 10 * 60_000;
+  const third = quiet();
+  runSync({ repoRoot: dir, env, now: () => now, log: third.log, build: () => assert.fail() });
+  assert.doesNotMatch(third.text(), /server-restart/);
+  assert.match(third.text(), /live-needs [0-9a-f]{7}\.\.[0-9a-f]{7}: none/);
+});
+
+test("idea-116: a server-start hook records the running commit and clears stale server-restart debt", () => {
+  const dir = repo();
+  const base = git(dir, "rev-parse", "HEAD");
+  put(dir, "dist/index.html", "ui");
+  merge(dir, "unit-s", "Merge unit-s\n\nLive-Needs: server-restart", { "server/serve.mjs": "s2" });
+  const head = git(dir, "rev-parse", "HEAD");
+  const { runtime, home, env } = install(base);
+  writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: head, dirty: false }));
+  let now = Date.parse("2026-11-10T10:00:00Z");
+
+  // First sync: the server-restart merge is owed (the running baseline is stale).
+  const first = quiet();
+  runSync({ repoRoot: dir, env, now: () => now, log: first.log, build: () => assert.fail() });
+  assert.match(first.text(), /server-restart \(pending since/);
+
+  // A manual / desktop-respawn restart loads the runtime (now at HEAD) without writing a vs-restart record.
+  now += 60_000;
+  const rec = recordServerStart({ repoRoot: dir, env, now: () => now });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.commit, head, "records the running commit (the hash the runtime was synced from)");
+  const starts = readdirSync(home).filter((n) => /^server-start-.*\.json$/.test(n));
+  assert.equal(starts.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(home, starts[0]), "utf8")).commit, head);
+  assert.equal(JSON.parse(readFileSync(join(home, starts[0]), "utf8")).source, "server-start");
+
+  // A docs-only merge next: the earlier server restart is now covered by the server start.
+  merge(dir, "unit-docs", "Merge unit-docs\n\nLive-Needs: none", { "docs/z.md": "z" });
+  writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: git(dir, "rev-parse", "HEAD"), dirty: false }));
+  now += 60_000;
   const third = quiet();
   runSync({ repoRoot: dir, env, now: () => now, log: third.log, build: () => assert.fail() });
   assert.doesNotMatch(third.text(), /server-restart/);
