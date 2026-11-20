@@ -493,7 +493,11 @@ if (isMain) {
     logServerStart({ rootDir });
     // idea-116: clear server-restart debt for whatever commit this process loaded, so a manual/desktop-respawn restart
     // (which never writes a vs-restart record) isn't reported as "pending" on the next sync.
-    recordServerStart({ repoRoot: rootDir });
+    try {
+      recordServerStart({ repoRoot: rootDir });
+    } catch (err) {
+      console.warn("recordServerStart failed:", err?.message ?? err);
+    }
     setImmediate(() => runBriefOrphanSweep(rootDir));
     // This server is the runner's only owner: start it now and keep it up (backoff). All other callers only connect.
     if (shouldSuperviseRunner()) {
