@@ -162,6 +162,7 @@ async function toFloor(page, n) {
 // "Overlord" because the probe never hovered the row.)
 // ui:overlap sets this to "&shortrole=1" in run() (its probe needs the 8-char role); ui:clicks shares the surface with the plain demo (the extra agent adds a floor blip that overlaps another one).
 let NEEDS_QUERY = "";
+export const setNeedsQuery = (q) => { NEEDS_QUERY = q; };
 async function toSidebarNeeds(page) {
   await reload(page, NEEDS_QUERY); // with shortrole the demo adds a Needs-you row titled "Overlord" (the 8-char role the live scout saw ellipsized)
   await toHubPage(page);
@@ -169,18 +170,20 @@ async function toSidebarNeeds(page) {
   await page.locator(".sidebar .boring-needs-item").locator("visible=true").first().waitFor({ timeout: 8000 });
   await sleep(300);
 }
-const SHORT_ROLE = 12; // a role name this short or shorter must never truncate, in any state
+const SHORT_ROLE = 8; // a role name this short or shorter ("Overlord", "Lead 37") must never truncate, in any state (styles.css .boring-needs-who min-width: 8ch)
 async function checkSidebarNeedsRows(page) {
   const rows = page.locator(".sidebar .boring-needs-item");
   const n = await rows.count();
   const hits = [];
-  let sawOverlord = false;
+  let sawOverlord = false, sawLead37 = false;
   for (let i = 0; i < n; i++) {
     const row = rows.nth(i);
     let restCw = 0;
     // NO scrollIntoView: a half-visible last row must be measured where it sits (its menu used to be clipped there).
-    for (const state of ["rest", "row-hover", "menu-open", "focus"]) {
+    for (const state of ["rest", "rest-narrow", "row-hover", "menu-open", "focus"]) {
       await page.mouse.move(2, 2);
+      // rest-narrow: the live spine is ~5px narrower than the demo's (148 vs 153 at 1280: "Lead 37" 50 > 49 live while it fits here), so shave 5px off it and re-measure at rest
+      const narrow = state === "rest-narrow" ? await page.addStyleTag({ content: ".sidebar-needs-spine{margin-right:11px!important}" }) : null;
       await page.evaluate(() => document.activeElement?.blur?.());
       if (state === "row-hover") await row.locator(".boring-needs-why").hover({ timeout: 3000, force: true }).catch(() => {});
       if (state === "menu-open") await row.locator(".boring-needs-more").hover({ timeout: 3000, force: true }).catch(() => {}); // the menu opens on the wrap's :hover
@@ -205,14 +208,16 @@ async function checkSidebarNeedsRows(page) {
         const why = el.querySelector(".boring-needs-why");
         return { who: who ? { sw: who.scrollWidth, cw: who.clientWidth, text: (who.textContent || "").trim(), box: r(who) } : null, menu: shown ? r(menu) : null, clip, items: shown ? [...menu.children].map(r) : [], whyShown: !!why && getComputedStyle(why).visibility !== "hidden", rowH: el.getBoundingClientRect().height };
       });
+      if (narrow) await narrow.evaluate((n) => n.remove());
       if (!m.who) continue;
       if (m.who.text === "Overlord") sawOverlord = true;
+      if (m.who.text === "Lead 37") sawLead37 = true;
       const short = m.who.text.length <= SHORT_ROLE;
       const base = { split: "ours", classes: ["boring-needs-who"], tag: "span", other: null };
       const trunc = { ...base, kind: "needs-row-truncated", selector: `.sidebar .boring-needs-who (row "${m.who.text}")`, text: m.who.text, box: m.who.box };
-      if (state === "rest") {
-        restCw = m.who.cw;
-        if (short && m.who.sw > m.who.cw) hits.push({ ...trunc, detail: `short role name truncated at rest: scrollWidth ${m.who.sw} > clientWidth ${m.who.cw}` });
+      if (state === "rest" || state === "rest-narrow") {
+        if (state === "rest") restCw = m.who.cw;
+        if (short && m.who.sw > m.who.cw) hits.push({ ...trunc, detail: `short role name truncated at ${state}: scrollWidth ${m.who.sw} > clientWidth ${m.who.cw}` });
       } else {
         if (m.who.cw < restCw - 0.5) hits.push({ ...trunc, detail: `role name loses width in ${state} state: clientWidth ${m.who.cw} < rest ${restCw} (scrollWidth ${m.who.sw})` });
         if (short && m.who.sw > m.who.cw) hits.push({ ...trunc, detail: `short role name truncated in ${state} state: scrollWidth ${m.who.sw} > clientWidth ${m.who.cw}` });
@@ -225,6 +230,7 @@ async function checkSidebarNeedsRows(page) {
       }
     }
   }
+  if (NEEDS_QUERY && !sawLead37) hits.push({ split: "ours", classes: ["boring-needs-who"], tag: "span", other: null, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: "Lead 37", detail: "probe fixture missing: no 'Lead 37' Needs-you row (demo ?shortrole=1)", box: { x: 0, y: 0, w: 1, h: 1 } });
   if (NEEDS_QUERY && !sawOverlord) hits.push({ split: "ours", classes: ["boring-needs-who"], tag: "span", other: null, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: "Overlord", detail: "probe fixture missing: no 'Overlord' Needs-you row (demo ?shortrole=1) so the short-role case went unmeasured", box: { x: 0, y: 0, w: 1, h: 1 } });
   await page.mouse.move(2, 2);
   return hits;

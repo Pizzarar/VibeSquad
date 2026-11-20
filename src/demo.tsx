@@ -119,9 +119,10 @@ if (typeof location !== "undefined" && new URLSearchParams(location.search).has(
   );
 }
 
-// ?shortrole=1: one Needs-you row with a short role name ("Overlord", 8 chars: the sidebar row where a hover menu ellipsized the name), for the ui:overlap sidebar-needs-hover probe. Off by default.
+// ?shortrole=1: one Needs-you row with a short role name ("Overlord" 8 chars, "Lead 37": the sidebar row where a hover menu ellipsized the name), for the ui:overlap sidebar-needs-hover probe. Off by default.
 if (typeof location !== "undefined" && new URLSearchParams(location.search).has("shortrole")) {
   CAST.push({ id: "demo-short-overlord", who: "gemini", title: "Overlord", status: "running", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B" }), used: 30_000, ago: 3 });
+  CAST.push({ id: "demo-short-lead37", who: "claude", title: "Lead 37", status: "running", labels: vs({ role: "worker", "needs-you": "pick", "needs-you-reason": "pick option A or B" }), used: 30_000, ago: 4 }); // 50px of text: 1px short of the 49px it got at 1280 (live scout)
 }
 
 // ?crowd=1: a populated floor for art review (every desk of the UI Bois team seated + one overflow blip, plus partly filled neighbours),
