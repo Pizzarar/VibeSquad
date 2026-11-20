@@ -777,25 +777,36 @@ test("idea-220: the old runner exited on its own before the stop (nothing new pu
 // at 01:22:33.821 (no shutdown fold-index save) and started a replacement; the re-detect found no runner.json and logged a bare
 // 'runner not running', and the replacement was then tree-killed with the server. Model: the idle /health poll answers, then the
 // runner is killed + runner.json removed; the replacement publishes only on a later sleep (after the re-detect).
-async function rr1KillAfterIdle(w, { replace }) {
+async function rr1KillAfterIdle(w, { replace, keepAlive = false, clock = null, bootMs = 0 }) {
   const oldPid = w.runner().pid;
   let killed = false; let pendingReplace = false;
+  const boot = { pid: null, lockAt: null, published: false };
   const depsOver = {
     httpCall: async (url, o) => {
       const res = await httpCall(url, o);
       if (!killed && (o?.method ?? "GET") === "GET" && /\/health$/.test(url) && res.body?.pid === oldPid && res.body?.running === 0 && w.runner().pid === oldPid) {
-        killed = true; // the supervisor's killTree: no /shutdown, runner.json removed (restartRunnerNow)
-        const old = w.runner(); old.dead = true; w.alive.delete(old.pid); rmSync(path.join(w.home, "runner.json"), { force: true }); await close(old.srv);
+        killed = true;
+        rmSync(path.join(w.home, "runner.json"), { force: true }); // restartRunnerNow removes the discovery file
+        if (!keepAlive) { const old = w.runner(); old.dead = true; w.alive.delete(old.pid); await close(old.srv); } // the supervisor's killTree: no /shutdown
         pendingReplace = replace;
       }
       return res;
     },
     sleep: async (ms) => {
-      if (pendingReplace) { pendingReplace = false; await w.startRunner("rr1-hash"); }
-      return w.deps.sleep(ms);
+      if (clock) await clock.sleep(ms); else await w.deps.sleep(ms);
+      if (pendingReplace && bootMs > 0 && boot.lockAt == null) { // R2 M: the replacement takes runner.lock now and folds for bootMs before publishing
+        boot.pid = w.pidSeq + 1; boot.lockAt = clock.t; w.alive.add(boot.pid);
+        writeFileSync(path.join(w.home, "runner.lock"), JSON.stringify({ pid: boot.pid, startedAt: boot.lockAt }));
+        return;
+      }
+      if (pendingReplace && (bootMs === 0 || clock.t >= boot.lockAt + bootMs)) {
+        pendingReplace = false; boot.published = true;
+        const st = await w.startRunner("rr1-hash");
+        if (bootMs > 0) { assert.equal(st.pid, boot.pid); writeFileSync(path.join(w.home, "runner.json"), JSON.stringify({ ...JSON.parse(readFileSync(path.join(w.home, "runner.json"), "utf8")), lockStartedAt: boot.lockAt })); }
+      }
     },
   };
-  return { oldPid, depsOver };
+  return { oldPid, depsOver, boot };
 }
 
 test("idea-375: RR1 hard-kills the runner right after the idle poll; its replacement is awaited, adopted and stopped gracefully, the exit is logged with its reason", async () => {
@@ -857,6 +868,79 @@ test("idea-375: a /health poll that fails during the idle wait is logged as unre
     assert.ok(names.includes("runner unreachable during idle wait"), names.join(" | "));
     assert.ok(!names.includes("runner idle"), names.join(" | "));
     assert.equal(r.ok, true, JSON.stringify(r.errors));
+  } finally { await w.cleanup(); }
+});
+
+test("idea-375 R2 M: a replacement still folding (holds runner.lock, unpublished) past the publish window is waited on, adopted and stopped gracefully, never left to the tree-kill", async () => {
+  const w = await world({ running: [1, 0] });
+  try {
+    const clock = fakeClock();
+    const { oldPid, depsOver, boot } = await rr1KillAfterIdle(w, { replace: true, clock, bootMs: 60_000 }); // 60 s fold >> the 10 s window
+    const r = await w.run({}, [], { ...depsOver, now: clock.now });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const names = r.steps.map((s) => s.step);
+    const bootStep = r.steps.find((s) => s.step === "replacement runner booting, waiting for it to publish");
+    assert.equal(bootStep?.pid, boot.pid, names.join(" | "));
+    assert.ok(boot.published, "the wait outlasted REPLACEMENT_WAIT_MS until the holder published");
+    const ex = r.steps.find((s) => s.step === "runner exited before stop");
+    assert.equal(ex.pid, oldPid);
+    assert.equal(ex.replacement, boot.pid);
+    assert.ok(r.steps.some((s) => s.step === "runner stopped gracefully" && s.pid === boot.pid), names.join(" | "));
+    assert.ok(!w.hardKills.includes(boot.pid));
+    assert.equal(r.newHash, "new-hash");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-375 R2 M: runner.json removed but the waited runner never exited: not reported as gone; stopped by token /shutdown on its port", async () => {
+  const w = await world({ running: [1, 0] });
+  try {
+    const clock = fakeClock();
+    const { oldPid, depsOver } = await rr1KillAfterIdle(w, { replace: false, keepAlive: true, clock });
+    const r = await w.run({ replacementWaitMs: 1000 }, [], { ...depsOver, now: clock.now });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.includes("waited runner unpublished but still alive, stopping it"), names.join(" | "));
+    assert.ok(!names.includes("runner exited before stop"), names.join(" | "));
+    assert.ok(r.steps.some((s) => s.step === "runner stopped gracefully" && s.pid === oldPid), names.join(" | "));
+    assert.deepEqual(w.hardKills, []);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-375 R2 L: an adopted replacement gets the drain (drainOn moves), so a preflight abort clears it on the replacement, not on the dead runner", async () => {
+  const w = await world({ running: [1, 0], serveCmd: false });
+  try {
+    const { oldPid, depsOver } = await rr1KillAfterIdle(w, { replace: true });
+    const r = await w.run({ replacementWaitMs: 2000 }, [], depsOver);
+    assert.equal(r.ok, false, "the preflight refuses the non-serve.mjs server");
+    const newPid = w.runner().pid;
+    assert.notEqual(newPid, oldPid);
+    assert.ok(r.steps.some((s) => s.step === "drain moved to adopted runner" && s.pid === newPid), r.steps.map((s) => s.step).join(" | "));
+    assert.deepEqual(w.drainCalls.map((c) => `${c.method} ${c.pid === oldPid ? "old" : c.pid === newPid ? "new" : c.pid}`), ["POST old", "POST new", "DELETE new"]);
+    assert.equal(w.runner().drain, null, "the replacement is not left draining until the TTL");
+    assert.ok(r.steps.some((s) => s.step === "drain cleared"));
+  } finally { await w.cleanup(); }
+});
+
+test("idea-375 R2 L: stopRunner's idea-220 adoption also moves the drain to the adopted runner", async () => {
+  const w = await world({ running: [0] });
+  try {
+    const oldPid = w.runner().pid;
+    let swapped = false;
+    const r = await w.run({}, [], {
+      httpCall: async (url, o) => {
+        if (!swapped && o?.method === "POST" && /\/shutdown$/.test(url)) {
+          swapped = true;
+          const old = w.runner(); w.alive.delete(old.pid); rmSync(path.join(w.home, "runner.json"), { force: true }); await close(old.srv);
+          await w.startRunner("rr1-hash");
+        }
+        return httpCall(url, o);
+      },
+    });
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const adopt = r.steps.find((s) => s.step === "runner replaced during restart, adopting");
+    assert.equal(adopt.oldPid, oldPid);
+    assert.ok(r.steps.some((s) => s.step === "drain moved to adopted runner" && s.pid === adopt.pid));
+    assert.ok(w.drainCalls.some((c) => c.method === "POST" && c.pid === adopt.pid));
   } finally { await w.cleanup(); }
 });
 

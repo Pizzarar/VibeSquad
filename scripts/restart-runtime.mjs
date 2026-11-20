@@ -571,6 +571,17 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
   };
   let markerTimer = null;
   let drainOn = null; // { runner: { port, token } }: the runner this restart set a drain on (cleared in the finally)
+  // R2 L (idea-375): an adopted replacement runner booted without our drain (drain.json may still hold the old one's until): set the
+  // drain on it and point drainOn there, so an abort after the adoption (preflight refusal, a failed stop) clears it instead of
+  // leaving it to its TTL. No drain was set (no /drain, --no-wait): nothing to move.
+  const moveDrain = async (fromPid) => {
+    if (!drainOn) return;
+    try {
+      const r = await runnerCall(det, d, 'POST', '/drain', 5000, { ttlMs: drainTtlMs(opts), reason: `vs restart pid ${process.pid} (adopted from pid ${fromPid})` });
+      if (r.status === 200) { drainOn = { runner: { port: det.runner.port, token: det.runner.token } }; step('drain moved to adopted runner', { pid: det.runner.pid }); }
+      else step('drain not moved to adopted runner', { pid: det.runner.pid, status: r.status });
+    } catch (e) { step('drain not moved to adopted runner', { pid: det.runner.pid, error: e.message }); }
+  };
   const fail = (what, e) => { result.errors.push(`${what}: ${e?.message ?? e}`); step('error', { what, error: String(e?.message ?? e) }); };
 
   let det;
@@ -646,22 +657,54 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
     } else step('wait skipped', { reason: det.runner.health ? 'no-wait' : 'runner not healthy' });
 
     // Re-detect right before acting: the wait can take minutes, and the runner may have restarted (new pid/port/token) meanwhile.
-    const waited = det.runner.alive ? det.runner.pid : null;
+    const prev = det.runner;
+    const waited = prev.alive ? prev.pid : null;
     det.runner = await detectRunner(det.home, d);
     // idea-375 (restart 01:22Z 11-20): the runner we waited on went idle and was gone 1.5 s later, before our /shutdown: the old
     // server's runner supervisor (RR1, 'runtime runner code changed') hard-killed it 2 ms after the idle poll, so it never ran its
-    // shutdown fold-index save, and the log only said 'runner not running'. Say so truthfully, and give a replacement the
-    // supervisor starts a moment to publish: it is adopted and stopped gracefully instead of being tree-killed with the server.
-    // (A lagging-but-alive pid is identity 'unknown', not gone: idea-344's stopUnconfirmed handles that one.)
+    // shutdown fold-index save, and the log only said 'runner not running'. Say so truthfully, and wait for a replacement the
+    // supervisor starts: it is adopted and stopped gracefully instead of being tree-killed with the server. A replacement that
+    // holds runner.lock but is still folding (Bug24: a fold can take 120 s) is waited on up to RUNNER_BOOT_MAX_MS from its lock
+    // time, not just the short publish window (R2 M). (A lagging-but-alive pid is identity 'unknown', not gone: idea-344's
+    // stopUnconfirmed handles that one.)
     const stillWaited = det.runner.pid === waited && det.runner.identity !== 'gone' && det.runner.identity !== 'recycled';
     if (waited && !stillWaited) {
+      let lockLib = null;
+      try { lockLib = await d.lock(); } catch { /* no booting-holder check: the short window only */ }
+      const bootMax = lockLib?.RUNNER_BOOT_MAX_MS ?? 0;
+      const bootingReplacement = () => { const b = lockLib?.bootingHolder(det.home, { alive: d.pidAlive, now: d.now(), bootMaxMs: bootMax }); return b && b.pid !== waited ? b : null; };
       const waitMs = opts.replacementWaitMs ?? REPLACEMENT_WAIT_MS;
-      const end = d.now() + waitMs;
-      while (!det.runner.alive && d.now() < end) { await d.sleep(500); det.runner = await detectRunner(det.home, d); }
-      const reason = 'it exited on its own after the idle wait, before vs restart sent /shutdown (the old server\'s runner supervisor RR1 hard-kills an idle runner whose code changed; or a crash): no graceful stop and no shutdown fold-index save by vs restart; the next boot refolds from the last saved index';
-      step('runner exited before stop', { pid: waited, reason, replacement: det.runner.alive ? det.runner.pid : null });
-      if (det.runner.alive) step('runner replaced during restart, adopting', { oldPid: waited, pid: det.runner.pid });
-      else det.runner.goneNote = `the runner this restart waited on (pid ${waited}) exited on its own; no replacement published within ${waitMs / 1000}s`;
+      let end = d.now() + waitMs;
+      let bootingPid = null;
+      for (;;) {
+        if (det.runner.alive) break;
+        const b = bootingReplacement();
+        if (b) {
+          if (b.pid !== bootingPid) step('replacement runner booting, waiting for it to publish', { pid: b.pid, seconds: Math.max(0, Math.round((d.now() - (b.startedAt ?? d.now())) / 1000)), maxSec: Math.round(bootMax / 1000) });
+          bootingPid = b.pid;
+          end = Math.max(end, (b.startedAt ?? d.now()) + bootMax);
+        }
+        if (d.now() >= end) break;
+        await d.sleep(500);
+        det.runner = await detectRunner(det.home, d);
+      }
+      if (!det.runner.alive && d.pidAlive(waited)) {
+        // runner.json no longer names it, but the runner we waited on never exited: it is not gone. Stop it through the normal
+        // path (token /shutdown on its port; a force kill only after its identity is re-verified), never by the server tree-kill.
+        step('waited runner unpublished but still alive, stopping it', { pid: waited, note: 'runner.json no longer names it; its pid is alive' });
+        det.runner = { ...prev, health: null };
+      } else {
+        const reason = "it exited on its own after the idle wait, before vs restart sent /shutdown (the old server's runner supervisor RR1 hard-kills an idle runner whose code changed; or a crash): no graceful stop and no shutdown fold-index save by vs restart; the next boot refolds from the last saved index";
+        step('runner exited before stop', { pid: waited, reason, replacement: det.runner.alive ? det.runner.pid : null });
+        if (det.runner.alive) { step('runner replaced during restart, adopting', { oldPid: waited, pid: det.runner.pid }); await moveDrain(waited); }
+        else {
+          const h = lockLib?.readLock(path.join(det.home, 'runner.lock'));
+          const stuck = h && Number.isInteger(h.pid) && h.pid !== waited && d.pidAlive(h.pid) ? h.pid : null;
+          det.runner.goneNote = stuck
+            ? `the runner this restart waited on (pid ${waited}) exited on its own; replacement pid ${stuck} holds runner.lock but did not publish within its boot max (${Math.round(bootMax / 1000)}s): the server tree-kill takes it down`
+            : `the runner this restart waited on (pid ${waited}) exited on its own; no replacement published within ${waitMs / 1000}s`;
+        }
+      }
     }
     // Preflight: refuse before anything is stopped if the server port belongs to something that is not serve.mjs. An unreadable
     // command line (procInfo unknown, after its retries) also aborts here, before the runner is touched (idea-148).
@@ -746,6 +789,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
           step('runner replaced during restart, adopting', { oldPid: r0.pid, pid: now.pid });
           clearRunnerFiles(r0.pid);
           det.runner = now;
+          await moveDrain(r0.pid);
           return stopRunner(true);
         }
         if (!d.pidAlive(r0.pid)) { step('runner exited before stop', { pid: r0.pid }); clearRunnerFiles(r0.pid); return true; }
