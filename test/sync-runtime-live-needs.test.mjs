@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sync from "../server/sync-runtime.mjs";
 
-const { DIST_STAMP, liveNeedsSince, parseLiveNeeds, readLiveNeeds, runSync, syncRuntimeDir, syncSkipReason, viteBuild } = sync;
+const { DIST_STAMP, liveNeedsSince, parseLiveNeeds, readLiveNeeds, recordServerStart, runSync, syncRuntimeDir, syncSkipReason, viteBuild } = sync;
 
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 const put = (dir, rel, text) => {
@@ -182,6 +182,109 @@ test("restarts are reported, never performed, and carry over until a successful 
   runSync({ repoRoot: dir, env, now: () => now, log: third.log, build: () => assert.fail() });
   assert.doesNotMatch(third.text(), /server-restart/);
   assert.match(third.text(), /live-needs [0-9a-f]{7}\.\.[0-9a-f]{7}: none/);
+});
+
+test("idea-116: a server-start hook records the running commit and clears stale server-restart debt", () => {
+  const dir = repo();
+  const base = git(dir, "rev-parse", "HEAD");
+  put(dir, "dist/index.html", "ui");
+  merge(dir, "unit-s", "Merge unit-s\n\nLive-Needs: server-restart", { "server/serve.mjs": "s2" });
+  const head = git(dir, "rev-parse", "HEAD");
+  const { runtime, home, env } = install(base);
+  writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: head, dirty: false }));
+  let now = Date.parse("2026-11-10T10:00:00Z");
+
+  // First sync: the server-restart merge is owed (the running baseline is stale).
+  const first = quiet();
+  runSync({ repoRoot: dir, env, now: () => now, log: first.log, build: () => assert.fail() });
+  assert.match(first.text(), /server-restart \(pending since/);
+
+  // A manual / desktop-respawn restart loads the runtime (now at HEAD) without writing a vs-restart record.
+  now += 60_000;
+  const rec = recordServerStart({ repoRoot: dir, env, now: () => now });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.commit, head, "records the running commit (the checkout's HEAD)");
+  const starts = readdirSync(home).filter((n) => /^server-start-.*\.json$/.test(n));
+  assert.equal(starts.length, 1);
+  assert.equal(JSON.parse(readFileSync(join(home, starts[0]), "utf8")).commit, head);
+  assert.equal(JSON.parse(readFileSync(join(home, starts[0]), "utf8")).source, "server-start");
+
+  // A docs-only merge next: the earlier server restart is now covered by the server start.
+  merge(dir, "unit-docs", "Merge unit-docs\n\nLive-Needs: none", { "docs/z.md": "z" });
+  writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: git(dir, "rev-parse", "HEAD"), dirty: false }));
+  now += 60_000;
+  const third = quiet();
+  runSync({ repoRoot: dir, env, now: () => now, log: third.log, build: () => assert.fail() });
+  assert.doesNotMatch(third.text(), /server-restart/);
+  assert.match(third.text(), /live-needs [0-9a-f]{7}\.\.[0-9a-f]{7}: none/);
+});
+
+test("idea-116: recordServerStart reads a runtime dir's build stamp, else the checkout's git HEAD", () => {
+  const dir = repo();
+  const head = git(dir, "rev-parse", "HEAD");
+
+  // A packaged/synced runtime dir (not a git checkout) carries build-stamp.json.
+  const rt = mkdtempSync(join(tmpdir(), "vs-rt-"));
+  writeFileSync(join(rt, "build-stamp.json"), JSON.stringify({ commit: head }));
+  const home = mkdtempSync(join(tmpdir(), "vs-home-"));
+  const fromStamp = recordServerStart({ repoRoot: rt, vsHome: home, now: () => Date.parse("2026-11-10T10:00:00Z") });
+  assert.equal(fromStamp.ok, true);
+  assert.equal(fromStamp.commit, head, "runtime dir: the build stamp wins");
+
+  // A repo checkout has no build-stamp.json: fall back to git HEAD.
+  const { env } = install(null);
+  const fromHead = recordServerStart({ repoRoot: dir, env, now: () => Date.parse("2026-11-10T10:00:00Z") });
+  assert.equal(fromHead.ok, true);
+  assert.equal(fromHead.commit, head, "checkout: git HEAD wins");
+});
+
+test("idea-116: recordServerStart records a null commit when there is no git HEAD and no build stamp", () => {
+  const empty = mkdtempSync(join(tmpdir(), "vs-empty-"));
+  const home = mkdtempSync(join(tmpdir(), "vs-home-"));
+  const rec = recordServerStart({
+    repoRoot: empty,
+    env: { LOCALAPPDATA: empty, VIBESQUAD_HOME: home },
+    runtimeDir: empty,
+    vsHome: home,
+    now: () => Date.parse("2026-11-10T10:00:00Z"),
+  });
+  assert.equal(rec.ok, true);
+  assert.equal(rec.commit, null);
+});
+
+test("idea-116: recordServerStart returns ok:false when the vsHome cannot be written", () => {
+  const dir = repo();
+  const blocker = mkdtempSync(join(tmpdir(), "vs-block-"));
+  const file = join(blocker, "not-a-dir");
+  writeFileSync(file, "x"); // a regular file: mkdir beneath it must fail
+  const rec = recordServerStart({ repoRoot: dir, vsHome: join(file, "sub"), now: () => Date.parse("2026-11-10T10:00:00Z") });
+  assert.equal(rec.ok, false);
+  assert.match(rec.error, /cannot write server-start record/);
+});
+
+test("idea-116: a server start whose commit is behind a pending entry keeps that debt", () => {
+  const dir = repo();
+  const base = git(dir, "rev-parse", "HEAD");
+  put(dir, "dist/index.html", "ui");
+  merge(dir, "unit-s", "Merge unit-s\n\nLive-Needs: server-restart", { "server/serve.mjs": "s2" });
+  const head = git(dir, "rev-parse", "HEAD");
+  const { runtime, home, env } = install(base);
+  writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: head, dirty: false }));
+  let now = Date.parse("2026-11-10T10:00:00Z");
+
+  runSync({ repoRoot: dir, env, now: () => now, log: () => {}, build: () => assert.fail() });
+
+  // A server-start record claiming the server loaded the OLD base commit (behind the pending merge): not covered.
+  now += 60_000;
+  writeFileSync(join(home, `server-start-${new Date(now).toISOString().replace(/[:.]/g, "-")}.json`),
+    JSON.stringify({ startedAt: new Date(now).toISOString(), commit: base, ok: true, dryRun: false, source: "server-start" }));
+
+  merge(dir, "unit-docs", "Merge unit-docs\n\nLive-Needs: none", { "docs/z.md": "z" });
+  writeFileSync(join(dir, "dist", DIST_STAMP), JSON.stringify({ commit: git(dir, "rev-parse", "HEAD"), dirty: false }));
+  now += 60_000;
+  const third = quiet();
+  runSync({ repoRoot: dir, env, now: () => now, log: third.log, build: () => assert.fail() });
+  assert.match(third.text(), /server-restart \(pending since/);
 });
 
 test("--dry-run reports the live needs and touches nothing", () => {

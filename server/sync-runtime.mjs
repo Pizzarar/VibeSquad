@@ -392,10 +392,61 @@ function lastRestartOkAt(vsHome) {
   return best;
 }
 
-/** Server-restart debt: earlier entries not yet covered by a successful restart, plus this range's. */
-function restartDebt(runtimeDir, env, live, at) {
-  const clearedAt = lastRestartOkAt(vsHomeFor(env));
-  const owed = (readJson(join(runtimeDir, LIVE_NEEDS_FILE))?.pending?.["server-restart"] ?? []).filter((e) => Date.parse(e.at) > clearedAt);
+/** The commit recorded by the newest successful server-start record (idea-116), or null when none. */
+function lastServerStartCommit(vsHome) {
+  let best = null;
+  let bestAt = 0;
+  let names = [];
+  try { names = readdirSync(vsHome); } catch {}
+  for (const name of names) {
+    if (!/^server-start-.*\.json$/.test(name)) continue;
+    const r = readJson(join(vsHome, name));
+    if (r?.ok !== true || r.dryRun || typeof r.commit !== "string") continue;
+    const at = Date.parse(r?.startedAt ?? "");
+    if (at > bestAt) { bestAt = at; best = r.commit; }
+  }
+  return best;
+}
+
+/**
+ * idea-116: record, on server start, the commit the running server actually loaded, so a manual or desktop-respawn
+ * restart (which never writes a `restart-<ts>.json`) still clears earlier server-restart debt on the next sync. The
+ * commit is the runtime dir's build-stamp.json (the hash it was synced from) when the server runs from a runtime dir,
+ * else the checkout's HEAD. Written as `~/.vibesquad/server-start-<ts>.json` — deliberately NOT a `restart-<ts>.json`,
+ * which the restart state machine (restart-request, drain guard) reads as a completed `vs restart`.
+ */
+export function recordServerStart({ repoRoot = rootDir, env = process.env, now = Date.now, git = defaultGit, runtimeDir = runtimeDirFor(env), vsHome = vsHomeFor(env) } = {}) {
+  let commit = null;
+  // A repo checkout's running commit is its HEAD; a packaged/synced runtime dir's is its own build-stamp.json.
+  const rootStamp = readJson(join(repoRoot, "build-stamp.json"));
+  if (typeof rootStamp?.commit === "string") commit = rootStamp.commit;
+  if (!commit) { try { commit = git(repoRoot, "rev-parse", "HEAD"); } catch { /* not a git checkout */ } }
+  if (!commit) { const rt = readJson(join(runtimeDir, "build-stamp.json")); if (typeof rt?.commit === "string") commit = rt.commit; }
+  const at = new Date(now()).toISOString();
+  const rec = { startedAt: at, commit: commit ?? null, ok: true, dryRun: false, source: "server-start" };
+  try {
+    mkdirSync(vsHome, { recursive: true });
+    writeFileSync(join(vsHome, `server-start-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify(rec, null, 2), "utf8");
+  } catch (err) {
+    return { ok: false, error: `cannot write server-start record (${firstLine(err)})` };
+  }
+  return { ok: true, commit, at };
+}
+
+/** idea-116: a server start that actually loaded `entryCommit` (or a descendant of it) covers that pending entry. */
+function coveredByServerStart(repoRoot, startCommit, entryCommit, git) {
+  if (!startCommit || !entryCommit) return false;
+  if (startCommit === entryCommit || startCommit.startsWith(entryCommit)) return true; // same commit (full vs short)
+  try { git(repoRoot, "merge-base", "--is-ancestor", entryCommit, startCommit); return true; } catch { return false; }
+}
+
+/** Server-restart debt: earlier entries not yet covered by a successful restart or a server start that loaded them, plus this range's. */
+function restartDebt(repoRoot, runtimeDir, env, live, at, { git = defaultGit } = {}) {
+  const vsHome = vsHomeFor(env);
+  const clearedAt = lastRestartOkAt(vsHome); // a successful vs restart at/after the entry covers it (time-based)
+  const startCommit = lastServerStartCommit(vsHome); // a server start covers it only when it loaded that commit or later
+  const owed = (readJson(join(runtimeDir, LIVE_NEEDS_FILE))?.pending?.["server-restart"] ?? [])
+    .filter((e) => Date.parse(e.at) > clearedAt && !coveredByServerStart(repoRoot, startCommit, e.commit, git));
   for (const commit of live.needs["server-restart"] ?? []) owed.push({ commit, at });
   return owed.length ? { "server-restart": owed } : {};
 }
@@ -459,7 +510,7 @@ export function runSync({
 
     if (dryRun) {
       log("[sync-runtime] dry run: nothing copied or built");
-      const pending = restartDebt(runtimeDir, env, live, at);
+      const pending = restartDebt(repoRoot, runtimeDir, env, live, at, { git });
       report({ log, range, live, built: false, dist, pending, dryRun: true });
       return { synced: false, dryRun: true, live, dist, pending };
     }
@@ -479,7 +530,7 @@ export function runSync({
     log(`[sync-runtime] synced ${res.runtimeDir} (${res.commit ? short(res.commit) : "no-git"})`);
 
     // Restart debt survives later syncs (a docs merge after a server merge) until a `vs restart` that started after it.
-    const pending = restartDebt(runtimeDir, env, live, at);
+    const pending = restartDebt(repoRoot, runtimeDir, env, live, at, { git });
     try {
       writeFileSync(join(runtimeDir, LIVE_NEEDS_FILE), JSON.stringify({ at, from: prev, to: head, live, pending }, null, 2), "utf8");
     } catch {}
