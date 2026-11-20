@@ -4,7 +4,7 @@ group: advanced
 level: 2
 method: git
 winget_id: n/a
-verified: UNVERIFIED (steps copied from the VibeSquad README "Quickstart (from source)"; not run; updated for the v0.2.8 built-in runner on 2026-11-07)
+verified: UNVERIFIED (steps copied from the VibeSquad README "Quickstart (from source)"; not run; updated for the v0.3.0 built-in runner and agent-token rule on 2026-11-19)
 licence: free
 size: large
 ---
@@ -75,5 +75,6 @@ Contributors working in many worktrees can run `vs worktree sweep` (dry run) and
 ## Gotchas
 - In PowerShell use `npm.cmd`, not `npm` (a fresh PC blocks scripts). If a command you installed says "running scripts is disabled", run its `.cmd` form, for example `codex.cmd --version`.
 - There is no daemon to install or keep in sync: the server starts and restarts the built-in runner itself.
+- v0.3.0: the runner gives each agent it starts a private `VS_AGENT_TOKEN`. Run your own `vs` commands as the owner (with `VS_AGENT_ID` and `VS_AGENT_TOKEN` unset): an agent id without its token gets 403 (`docs/releases/vibesquad-0.3.0.md:16-21`).
 - Do not run the installer and a from-source server at the same time: both use port `4180` (UNVERIFIED: not tested).
 - VibeSquad listens on `127.0.0.1` (this computer only) by default. Do not open it to your network or connect to other people's machines.
