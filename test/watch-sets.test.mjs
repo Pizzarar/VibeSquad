@@ -1765,3 +1765,80 @@ test("idea-209/210: a cancelled set never fires again (stall or completion), als
     sb.cleanup();
   }
 });
+
+// ---- idea-351 / idea-353: notices that need no decision must not cost the lead a turn -------------------------------------
+
+test(
+  "plugin idea-351: a done naming a watched agent never wakes the owner even when the engine did not take it (pre-set entry)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")]]);
+    const now = Date.now();
+    addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now - 60_000), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: old w1", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 0, JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin idea-351: an unwatched done is held while the lead has an armed watch and rides the watch's completion ping; a blocker still wakes",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-2", lane: "vibesquad", type: "done", text: "PASS: w2 unwatched", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 0, "armed lead: plain done held, no turn");
+      writeLog(sb, [{ ts: iso(now + 10), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 1, JSON.stringify(h.sent));
+      assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
+      assert.match(h.sent[0].text, /\[done\] PASS: w2 unwatched/, "folded into the ping");
+      writeLog(sb, [{ ts: iso(now + 20), agent: "w-2", lane: "vibesquad", type: "blocker", text: "stuck", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 2, "blocker always wakes");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin idea-353: the wrap-up notice is held for an armed idle lead and prepended to its next real wake; idle+unarmed and running leads get it at once",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["lead-2", mk("lead-2", "lead", "nf")], ["lead-3", { ...mk("lead-3", "lead", "ln"), status: "running" }], ["w-1", mk("w-1", "worker")]]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      const { SOFT_FLAG_NUDGE } = await import("../server/lead-handoff.mjs");
+      await h.stop.sendLeadNotice("lead-1", SOFT_FLAG_NUDGE);
+      assert.equal(h.sent.length, 0, "armed idle lead: no turn");
+      await h.stop.sendLeadNotice("lead-2", SOFT_FLAG_NUDGE);
+      await h.stop.sendLeadNotice("lead-3", SOFT_FLAG_NUDGE);
+      assert.deepEqual(h.sent.map((s) => s.to), ["lead-2", "lead-3"]);
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const toL1 = h.sent.filter((s) => s.to === "lead-1");
+      assert.equal(toL1.length, 1);
+      assert.ok(toL1[0].text.startsWith(SOFT_FLAG_NUDGE), "notice prepended");
+      assert.match(toL1[0].text, new RegExp(`Watch ${id} complete`));
+    } finally {
+      h.stop();
+    }
+  }),
+);
