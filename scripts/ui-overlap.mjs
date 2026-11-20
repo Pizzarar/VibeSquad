@@ -67,27 +67,42 @@ async function toSquadsHome(page) {
   await page.locator(tid("squads-home")).waitFor({ timeout: 6000 });
   await sleep(500);
 }
-// Since fc6e7427 (psycho U1) the squad page IS the hub page (HubPages): a squad tile click, or a reload with a saved vibesquad pin
-// focus, lands there, and the PinGrid only shows on a pristine app (no saved team/focus; the demo then opens on it). So reach it by
-// wiping storage before the next load. The old page re-saves its focus while unloading, so the wipe runs from an init script on the
-// next load (flagged via sessionStorage), not from the old page.
-const pgSeeded = new WeakSet();
-async function toPinGrid(page) {
-  await reset(page);
-  if (!pgSeeded.has(page)) {
-    pgSeeded.add(page);
-    await page.addInitScript(() => {
-      if (sessionStorage.getItem("__pinGridFresh")) { sessionStorage.removeItem("__pinGridFresh"); localStorage.clear(); localStorage.setItem("vs.vibePicked", "1"); }
-    });
-  }
-  await page.evaluate(() => sessionStorage.setItem("__pinGridFresh", "1"));
-  await reload(page);
-  await page.locator(tid("pin-grid")).waitFor({ timeout: 6000 });
+// PinGrid retired as the Psycho Squad home (docs/PLAN_PSYCHO_SIDEBAR_HUB.md:13, @desk Option C; shipped fc6e7427): a squad tile click,
+// Esc and reload all land on the hub page (HubPages), and the PinGrid / "Teams" header (+ pin-grid-usage, hub-bar, pin-grid-teams-toggle
+// surfaces) has no real user path any more, so those surfaces are retired rather than faked. Real routes only:
+//   hub page  = SQUADS -> squad tile; full plumbing view (the quick-chip header, App.tsx TeamPage full) = sidebar pin menu -> "Show plumbing".
+async function toHubPage(page) {
+  await toSquadsHome(page);
+  await click(page, `${tid(`squad-home-tile-${SQUAD}`)} .squad-home-tile-name`);
+  await page.locator(tid("hub-pages")).waitFor({ timeout: 8000 });
+  await sleep(500);
+}
+// Below ~1300px the sidebar starts as a 56px rail without the pin rows: expand it, as a user would.
+async function expandSidebar(page) {
+  const t = page.locator('[data-testid="sidebar-collapse-toggle"][aria-expanded="false"]').locator("visible=true").first();
+  if (await t.count()) { await t.click({ timeout: 3000 }); await sleep(500); }
+}
+// PinMenu closes on ANY scroll or resize while open, and Playwright's click scrolls the target into view first: scroll it in, let the
+// sidebar settle, then open the menu with a DOM click so nothing scrolls after it opens (short viewports, e.g. 1280x720).
+async function openSidebarPinMenu(page) {
+  const btn = vis(page, tid(`pin-menu-${SQUAD}`));
+  await btn.waitFor({ state: "visible", timeout: 4000 });
+  await btn.evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await sleep(900);
+  await btn.evaluate((el) => el.click());
+}
+async function toFullPlumbing(page) {
+  await toHubPage(page);
+  await expandSidebar(page);
+  await openSidebarPinMenu(page);
+  await page.getByRole("menuitem", { name: /Show plumbing/ }).evaluate((el) => el.click(), null, { timeout: 4000 }); // DOM click in the open window; the list re-closes within ~300ms on a stray scroll
+  await page.locator(`${tid(`squad-bugs-chip-${SQUAD}`)}, ${tid("squad-full-toggle")}`).locator("visible=true").first().waitFor({ timeout: 6000 });
   await sleep(500);
 }
 async function toFocus(page) {
-  await toPinGrid(page);
-  await click(page, tid(`pin-tile-${SQUAD}`));
+  await toHubPage(page);
+  await expandSidebar(page);
+  await click(page, `${tid(`sidebar-pin-${SQUAD}`)} .pin-row-name`); // the lane name (the row centre can be its needs badge)
   await page.locator(tid("drawer-head-compact")).waitFor({ timeout: 8000 });
   await sleep(700);
 }
@@ -125,12 +140,7 @@ async function phoneDrawer(page) {
 // below (the lift's < > page the floors). `query` reloads the demo first (e.g. "&riff=1" for a live RiffBot + Overlord).
 async function toHub(page, query = "") {
   if (query) await reload(page, query);
-  await toPinGrid(page);
-  // Under 1600 css px the sidebar starts as a 56px rail without the RiffBot row (src/railCollapse.ts): the pin grid's hub bar opens the same view.
-  const row = page.locator(tid(`sidebar-riffbot-${SQUAD}`)).locator("visible=true");
-  if (await row.count()) await row.first().click();
-  else await click(page, tid("hub-bar-btn"));
-  await page.locator(tid("hub-pages")).waitFor({ timeout: 8000 });
+  await toHubPage(page);
   await page.locator(tid("sq-floor-page")).waitFor({ timeout: 8000 });
   await sleep(900);
 }
@@ -152,7 +162,7 @@ const COMPOSER_ROOTS = ['footer.composer', tid("drawer-subagents-bar"), tid("dra
 // `mobile`: undefined = same setup as desktop, function = alternate route, false = "no mobile route".
 export const SURFACES = [
   { id: "squads-home", setup: toSquadsHome, mobile: phoneDrawer, mobileRoots: [tid("phone-drawer")] }, // closest phone analogue: the "..." drawer with the Teams list (the squad pill is disabled with one squad)
-  { id: "pin-grid-usage", setup: toPinGrid, mobile: (p) => phoneHome(p) },
+  { id: "squad-full", setup: toFullPlumbing, mobile: (p) => phoneHome(p) }, // full plumbing header: quick chips (Bugs/Workflows), FULL toggle, usage chip
   { id: "focus-brainstorm", setup: toFocus, mobile: (p) => phoneBuddy(p, "vibesquad") },
   { id: "composer", setup: toFocus, roots: COMPOSER_ROOTS, mobile: (p) => phoneBuddy(p, "vibesquad") },
   {
@@ -171,13 +181,11 @@ export const SURFACES = [
   { id: "hub-floor-1", setup: (p) => toFloor(p, 0), mobile: false },
   { id: "hub-floor-2", setup: (p) => toFloor(p, 1), mobile: false },
   { id: "hub-floor-3", setup: (p) => toFloor(p, 2), mobile: false }, // squad needs 3+ teams in src/demo.tsx
-  { id: "hub-bar", setup: toPinGrid, roots: [tid("hub-bar")], mobile: false },
   { id: "rail-squads-icon", setup: toFocus, roots: [tid("pin-focus-bar")], mobile: false },
-  { id: "pin-grid-teams-toggle", setup: async (p) => { await toPinGrid(p); await click(p, tid("squad-full-toggle")); await sleep(500); }, after: async (p) => { await reload(p); }, mobile: false },
   { id: "settings", setup: async (p) => { await reset(p); await click(p, tid("sidebar-settings-btn")); await p.locator(tid("settings-pane")).waitFor({ timeout: 6000 }); await sleep(600); }, mobile: false },
   { id: "menu-drawer-config", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-config-menu-btn")); await sleep(400); }, mobile: false },
   { id: "menu-drawer-more", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-more-toggle")); await sleep(400); }, mobile: false },
-  { id: "menu-pin-tile", setup: async (p) => { await toPinGrid(p); await click(p, `${tid(`pin-tile-${SQUAD}`)} ${tid(`pin-menu-${SQUAD}`)}, ${tid(`pin-menu-${SQUAD}`)}`); await sleep(400); }, mobile: false },
+  { id: "menu-pin-tile", setup: async (p) => { await toHubPage(p); await expandSidebar(p); await openSidebarPinMenu(p); await sleep(400); }, mobile: false }, // the sidebar pin menu
   { id: "modal-command-palette", setup: async (p) => { await reset(p); await p.keyboard.press("Control+k"); await p.locator(tid("command-palette")).waitFor({ timeout: 4000 }); await sleep(300); }, mobile: false },
   { id: "modal-new-squad", setup: async (p) => { await reset(p); await click(p, tid("sidebar-new-squad-btn")); await sleep(600); }, mobile: false },
   { id: "modal-diagnostics", setup: async (p) => { await reset(p); await click(p, tid("open-diagnostics-btn")); await p.locator(tid("diagnostics-modal")).waitFor({ timeout: 4000 }); await sleep(500); }, mobile: false },
