@@ -49,6 +49,7 @@ import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
+import { redactHostPaths } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
@@ -3531,11 +3532,10 @@ ${detail}` : text, refs: [d.setId] };
       deferredWakeTimers.set(leadId, t);
     }
 
-    /** idea-352: redact host paths from forwarded worker text (vibesquad-api redactHostPaths, per line). "" if the redactor can't load: never forward raw. */
+    /** idea-352: redact host paths from forwarded worker text (server/redact-host-paths.mjs, per line). "" if the redactor can't load: never forward raw. */
     async function redactReportText(text: string): Promise<string> {
       try {
-        const mod: any = await import("../vibesquad-api.mjs");
-        return text.split(/\r?\n/).map((l) => (mod.redactHostPaths({ error: l }) as { error: string }).error).join("\n");
+        return text.split(/\r?\n/).map((l) => (redactHostPaths({ error: l }) as { error: string }).error).join("\n");
       } catch (e) {
         log(`report redaction unavailable, forwarded text dropped: ${e}`);
         return "";
