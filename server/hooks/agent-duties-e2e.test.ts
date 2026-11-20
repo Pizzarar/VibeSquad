@@ -2018,3 +2018,44 @@ test(
     }
   }),
 );
+
+test(
+  "idea-352: a digest-filed [done] verdict wakes the lead with the worker's final message; a worker's own report is not duplicated",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, role: string, extra: any = {}) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5",
+      labels: { team: "vibesquad", lane: "vibesquad", role, ...extra },
+    });
+    const agents = new Map<string, any>([
+      ["w-1", mk("w-1", "worker")],
+      ["w-2", mk("w-2", "worker")],
+      ["lead-1", mk("lead-1", "lead", { lead: "vibesquad" })],
+    ]);
+    const long = "PASS: full report body " + "x".repeat(2500);
+    const timelineByAgent = new Map<string, any[]>([
+      ["w-1", [{ item: { type: "assistant_message", text: long } }]],
+      ["w-2", [{ item: { type: "assistant_message", text: "PASS: own report body" } }]],
+    ]);
+    const h = harness(agents, { briefRoot, timelineByAgent, leadWakeCooldownMs: 50 });
+    const wakes = () => h.sent.filter((s) => s.to === "lead-1" && s.text.includes("New team log event"));
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      await h.onTurnEnded(agents.get("lead-1"));
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      const line = (o: any) => JSON.stringify({ ts: new Date().toISOString(), lane: "vibesquad", type: "done", ...o }) + "\n";
+      writeFileSync(file, line({ agent: "dig-1", text: "PASS: summary", refs: ["w-1"] }), "utf8");
+      h.scanLogs(false);
+      await wait(400);
+      assert.equal(wakes().length, 1);
+      assert.match(wakes()[0].text, /Worker w-1 final message \(auto-forwarded report\):\nPASS: full report body/);
+      assert.match(wakes()[0].text, /truncated; `vs status w-1`/, "capped at AUTO_REPORT_MAX");
+      writeFileSync(file, line({ agent: "w-2", text: "PASS: own", refs: ["w-2"] }), { flag: "a" });
+      h.scanLogs(false);
+      await wait(400);
+      assert.equal(wakes().length, 2);
+      assert.ok(!wakes()[1].text.includes("auto-forwarded"), "worker's own report: no second copy");
+    } finally {
+      h.stop?.();
+    }
+  }),
+);

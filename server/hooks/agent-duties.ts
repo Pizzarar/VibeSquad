@@ -175,7 +175,7 @@ export const EVERYONE_LAYER = [
 export const WORKER_PACK = [
   "Role: worker.",
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
-  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
+  "- Your final message IS the report: the server forwards it to your lead when your turn ends. Do not spend a turn on `vs send`/`report` to the lead afterwards, whatever the task prompt says (`Report to ★ …` means just finish with a final message). Never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
 ].join("\n");
 
@@ -600,6 +600,9 @@ export function isDigestNoise(labels: Labels, title?: string | null): boolean {
   const job = String(labels.job ?? "").trim();
   return !job || /\bprobe/i.test(job) || /\bprobe/i.test(String(title ?? ""));
 }
+
+/** idea-352: cap on a worker's final message forwarded inside the lead's [done] wake. */
+export const AUTO_REPORT_MAX = 2000;
 
 /** A report is loggable as [done] only if it states PASS or FAIL. */
 export function statesVerdict(text: string): boolean {
@@ -3522,6 +3525,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       deferredWakeTimers.set(leadId, t);
     }
 
+    /** idea-352: "\nWorker final message: …" for a digest-authored [done] verdict (author is not the ref'd worker), else "". */
+    async function workerReportBody(paseo: Paseo, entry: LogEntry): Promise<string> {
+      if (entry.type !== "done") return "";
+      const worker = String(entry.refs?.[0] ?? "").trim();
+      if (!worker || worker === entry.agent || worker === "plugin" || worker === "you") return "";
+      const text = await lastAssistantText(paseo, worker);
+      if (!text) return "";
+      const body = text.length > AUTO_REPORT_MAX ? `${text.slice(0, AUTO_REPORT_MAX)}… (truncated; \`vs status ${worker}\` for the rest)` : text;
+      return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
+    }
+
     async function flushWake(paseo: Paseo, leadId: string, recheck = false) {
       if (flushingLeads.has(leadId)) return;
       if (!pendingWake.get(leadId)?.length) return;
@@ -3607,7 +3621,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (plain.length) {
           const last = plain[plain.length - 1]!;
           const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
-          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`);
+          // idea-352: a digest-filed [done] verdict forwards the worker's own final message (the report), so the worker needs no
+          // separate send turn. A worker's own `report` (author === ref) already carries its text: no second copy.
+          const body = await workerReportBody(paseo, last);
+          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}.${body} Run 'vs log --since-me' if more context is needed.`);
         }
         const text = parts.join("\n\n");
         for (const k of watchKeys) watchSending.add(k);
