@@ -5439,7 +5439,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .toolbar .search:focus, .you-flag input:focus, .ws-row input:focus, .modal :focus { box-shadow: var(--bevel-in); border-color: var(--violet); outline: 1px solid var(--violet); }
 
 /* U2 review fixes: update-banner buttons keep a visible face; keyboard focus ring replaces the removed glows */
-.update-available-banner .btn:not(.ghost) { background: var(--face-hi) !important; border-color: var(--shadow-hard) !important; color: var(--text) !important; }
+.update-available-banner .btn:not(.ghost):not(:disabled) { background: var(--face-hi) !important; border-color: var(--shadow-hard) !important; color: var(--text) !important; }
 :is(button, a, input, select, textarea, summary, [tabindex]):focus-visible,
 .pin-tile:focus-visible, .cmd-palette > input:focus-visible, .find-files-bar > input:focus-visible {
   outline: 2px solid var(--violet) !important;
@@ -5722,7 +5722,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .seg { background: none; }
 .btn:disabled { opacity: 1; color: var(--muted); }
-.update-available-banner .btn:not(.ghost) { background: none !important; }
+.update-available-banner .btn:not(.ghost):not(:disabled) { background: none !important; }
 .btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
 
 /* ---- chips: 9-slice 16x10 (slice 3/4 drawn at 3/4 kit px), text in the flat rows ---- */
@@ -6020,7 +6020,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 /* selected seg / chip: INK on the violet fill (the U3 light label #f6eef8 was 2.85:1 on light violet) */
 :root:root :is(.seg button.on, .tchip.on) { background: var(--violet); color: var(--on-pastel) !important; text-shadow: none; }
 /* selected teal button (Settings UI-scale 100%: label equalled the fill) */
-:root:root .btn.on:not(.ghost) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+:root:root .btn.on:not(.ghost):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* needs-you counts and hot/bad buttons: solid pink fill with on-fill ink (light pink-fill #b4377a + marble = 5.5:1) */
 :root:root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]:not(.muted)) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
 :root:root :is(.btn.hot, .btn.bad):not(:disabled) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
@@ -6028,7 +6028,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
 :root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
 /* ⇄ Handoff (owner's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
-:root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+:root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
 :root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
 
@@ -6066,7 +6066,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .alert-pill :is(.alert-owner, .alert-type, .alert-who) { color: var(--on-pastel); }
 /* light theme: provider glyph colours are inline (cyan/coral on blush = 1.0-2.0), so the label takes the text colour */
 :root[data-theme="light"] .prov-inline { color: var(--text) !important; font-weight: 700; }
-:root[data-theme="light"] :is(.row-actions, .card-top-right) .btn.confirm:not(.armed) { color: color-mix(in srgb, var(--u3-ink-text) 40%, #000) !important; } /* >= 4.5:1 on the light hot-pink / ghost fills */
+:root[data-theme="light"] :is(.row-actions, .card-top-right) .btn.confirm:not(.armed):not(:disabled) { color: color-mix(in srgb, var(--u3-ink-text) 40%, #000) !important; } /* >= 4.5:1 on the light hot-pink / ghost fills */
 /* pin tile title bar varies violet..magenta in the light theme: give the name a flat plate */
 :root[data-theme="light"] .pin-tile-bar .pin-tile-name { flex: 0 1 auto; background: var(--panel-hi); color: var(--text); padding: 0 var(--sp-2); box-shadow: var(--bevel); }
 /* scanlines: text layers above, and a sized tile instead of repeating-* so no scanline box is a layer over text */

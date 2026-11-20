@@ -39,3 +39,15 @@ test("the quiet disabled surface exists once: scoped and unscoped selectors shar
   assert.match(rules[0][1], /\.sky-crt-body/);
   assert.match(rules[0][1], /:root:root :is\(\.btn, \.usage-review-run, \.usage-inbox-btn\):disabled/);
 });
+
+test("no !important colour/fill rule on a .btn variant can beat the quiet disabled surface", () => {
+  const bad = [];
+  for (const m of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    const [, sel, body] = m;
+    if (!/(^|[\s,])(:root:root )?[^,]*(\.btn\b|\.usage-review-run|\.usage-inbox-btn)/.test(sel)) continue;
+    if (!/(color|background|border-color):[^;]*!important/.test(body)) continue;
+    if (/:disabled/.test(sel)) continue;
+    bad.push(sel.trim());
+  }
+  assert.deepEqual(bad, []);
+});
