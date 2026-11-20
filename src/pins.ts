@@ -491,8 +491,8 @@ export const dormantBuddyId = (pin: Pin): string | null => (pin.brainstorm && !p
 
 // ── Project header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md, C1 Bugs chip) ──
 
-export type QuickLanes = { bugs?: string };
-export type QuickChipKey = "bugs" | "dot";
+export type QuickLanes = { bugs?: string; workflows?: string };
+export type QuickChipKey = "bugs" | "workflows" | "dot";
 export type QuickChipState = {
   pin: Pin | null;
   leadRunning: boolean;
@@ -500,6 +500,7 @@ export type QuickChipState = {
 };
 
 const BUG_CHASER_ID_RE = /^bug-chaser(?:$|-)/i;
+const WORKFLOWS_ID_RE = /^(?:perfection|workflows)(?:$|-)/i;
 
 /**
  * Resolve a Squad's standing Bugs lane:
@@ -508,8 +509,20 @@ const BUG_CHASER_ID_RE = /^bug-chaser(?:$|-)/i;
  * Returns null when the Squad has no Bugs lane yet (chip offers "Create Bugs team").
  */
 export function resolveQuickBugsLane(team: Pick<TeamDef, "lanes" | "quickLanes"> | null | undefined): PinLane | null {
+  return resolveQuickLane(team, "bugs", BUG_CHASER_ID_RE);
+}
+
+/**
+ * Resolve a Squad's standing Workflows lane (idea-131): explicit `quickLanes.workflows` (id or alias, non-removed),
+ * else the standing non-removed lane whose id matches `perfection*` / `workflows*`. Null = chip offers "Create Workflows team".
+ */
+export function resolveQuickWorkflowsLane(team: Pick<TeamDef, "lanes" | "quickLanes"> | null | undefined): PinLane | null {
+  return resolveQuickLane(team, "workflows", WORKFLOWS_ID_RE);
+}
+
+function resolveQuickLane(team: Pick<TeamDef, "lanes" | "quickLanes"> | null | undefined, key: "bugs" | "workflows", fallback: RegExp): PinLane | null {
   const lanes = (team?.lanes ?? []) as PinLane[];
-  const explicit = team?.quickLanes?.bugs?.trim().toLowerCase();
+  const explicit = team?.quickLanes?.[key]?.trim().toLowerCase();
   if (explicit) {
     const hit = lanes.find(
       (l) =>
@@ -518,7 +531,7 @@ export function resolveQuickBugsLane(team: Pick<TeamDef, "lanes" | "quickLanes">
     );
     if (hit) return hit;
   }
-  return lanes.find((l) => !isRemovedLane(l) && Boolean(l.standing) && BUG_CHASER_ID_RE.test(l.id)) ?? null;
+  return lanes.find((l) => !isRemovedLane(l) && Boolean(l.standing) && fallback.test(l.id)) ?? null;
 }
 
 function laneMembersInView(view: TeamView, lane: PinLane, pin?: Pin | null): Member[] {
@@ -548,8 +561,17 @@ function laneMembersInView(view: TeamView, lane: PinLane, pin?: Pin | null): Mem
 
 /** Resolve the Squad's Bugs quick-chip Pin (hidden lanes included), or null when none exists yet. */
 export function quickBugsPinForSquad(view: TeamView | null | undefined): Pin | null {
+  return quickPinForSquad(view, resolveQuickBugsLane);
+}
+
+/** Workflows quick-chip Pin (hidden lanes included), or null when none exists yet. */
+export function quickWorkflowsPinForSquad(view: TeamView | null | undefined): Pin | null {
+  return quickPinForSquad(view, resolveQuickWorkflowsLane);
+}
+
+function quickPinForSquad(view: TeamView | null | undefined, resolve: (t: Pick<TeamDef, "lanes" | "quickLanes">) => PinLane | null): Pin | null {
   if (!view?.team?.id || view.team.id === UNASSIGNED.id) return null;
-  const lane = resolveQuickBugsLane(view.team);
+  const lane = resolve(view.team);
   if (!lane) return null;
   const all = pinsForSquad(view, { includeHidden: true });
   const existing = [...all.pinned, ...all.done].find((p) => p.lane.id === lane.id);
@@ -582,7 +604,15 @@ export function quickBugsPinForSquad(view: TeamView | null | undefined): Pin | n
 
 /** Derive the Bugs quick-chip state for a Squad: resolved Pin (or null), live lead running dot, and attentionItems needs-you count. */
 export function quickBugsChipState(view: TeamView | null | undefined): QuickChipState {
-  const pin = quickBugsPinForSquad(view);
+  return quickChipState(view, quickBugsPinForSquad(view));
+}
+
+/** Workflows chip state: same shape as the Bugs chip (needsYou badge, lead-running dot). */
+export function quickWorkflowsChipState(view: TeamView | null | undefined): QuickChipState {
+  return quickChipState(view, quickWorkflowsPinForSquad(view));
+}
+
+function quickChipState(view: TeamView | null | undefined, pin: Pin | null): QuickChipState {
   if (!pin || !view) return { pin: null, leadRunning: false, needsYou: 0 };
   const members = laneMembersInView(view, pin.lane, pin);
   const leadRunning = Boolean(pin.lead && isLive(pin.lead) && pin.lead.agent.status === "running");

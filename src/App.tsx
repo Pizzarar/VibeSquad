@@ -91,7 +91,7 @@ import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
 import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
-import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, QuickBugsChip, QuickWorkflowsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
 import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
@@ -1068,7 +1068,10 @@ const TeamPage = memo(function TeamPage(props: {
             <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
             <TeamNameEdit team={view.team} />
             {view.team.id !== UNASSIGNED.id && (
-              <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+              <>
+                <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+                <QuickWorkflowsChip view={view} onOpen={props.onQuickStart} />
+              </>
             )}
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
@@ -1106,7 +1109,10 @@ const TeamPage = memo(function TeamPage(props: {
           <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
           <TeamNameEdit team={view.team} />
           {view.team.id !== UNASSIGNED.id && (
-            <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+            <>
+              <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+              <QuickWorkflowsChip view={view} onOpen={props.onQuickStart} />
+            </>
           )}
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}

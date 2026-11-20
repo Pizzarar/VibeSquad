@@ -461,7 +461,7 @@ export type CreatePinDeps = Pick<OpenPinDeps, "fetch" | "getTeams" | "saveTeams"
   /** Mark the created/reopened lane as a permanent standing team (`standing: true`). */
   standing?: boolean;
   /** Also point the Squad's `quickLanes[quickLane]` at the created/reopened lane id. */
-  quickLane?: "bugs";
+  quickLane?: "bugs" | "workflows";
   /** Called when the server saved the brief in its runtime folder instead of the project's. */
   onBriefFallback?: (laneId: string) => void;
 };
@@ -644,6 +644,15 @@ export function createQuickBugsPin(squadId: string, deps: CreatePinDeps = {}): P
     ...deps,
     standing: true,
     quickLane: "bugs",
+  });
+}
+
+/** Create a Squad's standing Workflows team and record its id in `quickLanes.workflows` (idea-131). */
+export function createQuickWorkflowsPin(squadId: string, deps: CreatePinDeps = {}): Promise<Pin> {
+  return createPin(squadId, "Workflows", "Improve and audit this project's workflows.", {
+    ...deps,
+    standing: true,
+    quickLane: "workflows",
   });
 }
 
