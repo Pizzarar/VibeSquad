@@ -5887,11 +5887,8 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel)); }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
-/* disabled: quiet dashed ghost, full-contrast muted label (u3f values, no opacity) */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled {
-  opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); box-shadow: none; font-weight: 400; cursor: not-allowed;
-}
-/* disabled (idea-165, one source): the same quiet surface for the unscoped controls (modals, .sky-zones, UsageDashboard), so --muted never lands on a bright fill */
+/* disabled (idea-165, single source): quiet dashed ghost, full-contrast muted label, no opacity. Scoped selector = sidebar/sky/focus-bar controls; :root:root selector = unscoped controls (modals, .sky-zones, UsageDashboard) so --muted never lands on a bright fill */
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled,
 :root:root :is(.btn, .usage-review-run, .usage-inbox-btn):disabled {
   opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); border-image: none; box-shadow: none; text-shadow: none; font-weight: 400; cursor: default;
 }

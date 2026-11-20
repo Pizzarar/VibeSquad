@@ -32,3 +32,10 @@ test("disabled .btn / .usage-review-run / .usage-inbox-btn pick up the quiet sur
     assert.match(rule[2], re);
   }
 });
+
+test("the quiet disabled surface exists once: scoped and unscoped selectors share one rule", () => {
+  const rules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].filter(([, sel, body]) => /:disabled/.test(sel) && /border:\s*1px dashed var\(--u4-edge\)/.test(body));
+  assert.equal(rules.length, 1, "duplicate quiet-surface rules drift; keep one selector list");
+  assert.match(rules[0][1], /\.sky-crt-body/);
+  assert.match(rules[0][1], /:root:root :is\(\.btn, \.usage-review-run, \.usage-inbox-btn\):disabled/);
+});
