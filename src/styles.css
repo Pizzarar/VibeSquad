@@ -6465,9 +6465,9 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .sidebar .boring-needs-item { display: grid; gap: 1px; padding: 3px 5px; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--amber); box-shadow: var(--bevel-in); }
 .sidebar .boring-needs-item.attn-error { border-left-color: var(--hot-pink); }
 .sidebar .boring-needs-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.sidebar .boring-needs-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
+.sidebar .boring-needs-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
 .sidebar .boring-needs-open:hover .boring-needs-who { text-decoration: underline; }
-.sidebar .boring-needs-who { flex: 0 1 auto; max-width: none; /* the where-inline sibling has basis 0, so it gives way first; a % cap ellipsized "Overlord" (53 > 49) */ min-width: 9ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar .boring-needs-who { flex: 0 1 auto; max-width: none; /* the where-inline sibling has basis 0, so it gives way first; a % cap ellipsized "Overlord" (53 > 49) */ min-width: 6ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; color: var(--muted); }
 .sidebar .boring-needs-where { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar .boring-conv-age { flex: none; font-size: 11px; font-weight: 400; color: var(--muted); }
