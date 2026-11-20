@@ -59,6 +59,8 @@ export interface WatchDelivery {
   setId: string;
   pingKey: string;
   text: string;
+  /** idea-352: watched workers' final messages (completion ping only), delivered after the text. */
+  detail?: string;
   owner: string;
   team: string;
   lane: string;

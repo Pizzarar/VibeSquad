@@ -28,7 +28,7 @@ The `before("agent.create")` request carries no labels, so the plugin uses env `
 
 ### Worker report routing (A11)
 
-A worker's final message is its report. The worker pack says: "Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`)." Workers never address a lead directly; the digest routes by `team`/`lane` labels to the current lead. `src/antigravity.ts` exports `WORKER_REPORT_ROUTING_GUARD` and `detectMisroutedReport` (surfaced as `a11MisroutedReport` on `AntigravityAudit`) to flag turns that used Claude Code's built-in `SendMessage` or `ListAgents` instead.
+A worker's final message is its report. The worker pack says: "Your final message IS the report: the server forwards it to your lead when your turn ends, so do not spend a turn on `vs send`/`report` to the lead afterwards. Never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`)." Workers never address a lead directly; the digest routes by `team`/`lane` labels to the current lead, and its [done] wake (or a watch set's completion ping) carries the worker's final message, host paths redacted, once (idea-352). `src/antigravity.ts` exports `WORKER_REPORT_ROUTING_GUARD` and `detectMisroutedReport` (surfaced as `a11MisroutedReport` on `AntigravityAudit`) to flag turns that used Claude Code's built-in `SendMessage` or `ListAgents` instead.
 
 ## Measuring
 
