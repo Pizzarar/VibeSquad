@@ -343,6 +343,8 @@ export const HEALTH_TIMEOUTS_MS = [3000, 5000, 5000];
 /** First line a launched restart-runtime appends to its --log (cli/vs.mjs RESTART_STARTED_LINE mirrors it, idea-355). */
 export const STARTED_LINE = 'restart-runtime started';
 const HEALTH_BACKOFF_MS = [1000, 2000];
+/** idea-375: how long a restart whose waited-on runner vanished polls runner.json for a supervisor-started replacement. */
+export const REPLACEMENT_WAIT_MS = 10000;
 
 /**
  * The runner's token-checked /health, lag-tolerant: { body, outcomes, refused }. body is the 200 body or null (no discovery,
@@ -601,6 +603,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
       let held = det.runner.health.held ?? heldAgents.length;
       let heldWork = det.runner.health.heldWork ?? {};
       step('waiting for runner idle', { running, held, timeoutSec: opts.waitTimeoutSec });
+      let waitErr = null; // idea-375: a failed /health poll ends the wait; say so instead of a bare 'runner idle'
       while ((running !== 0 || held > 0) && d.now() < deadline) {
         await d.sleep(2000);
         try {
@@ -609,7 +612,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
           heldAgents = h.heldAgents ?? [];
           held = h.held ?? heldAgents.length;
           heldWork = h.heldWork ?? {};
-        } catch { running = 0; held = 0; break; } // runner died on its own
+        } catch (e) { running = 0; held = 0; waitErr = e?.message ?? String(e); break; } // runner died on its own (or did not answer)
       }
       if (held > 0 && !opts.killBackground) {
         // Never kill a suite or build an agent left running (idea-88): defer, stop nothing, and say who holds it.
@@ -638,11 +641,28 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         try { result.cutAgents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1')).body).filter((a) => a.status === 'running').map(brief); } catch (e) { fail('list cut agents', e); }
         if (held > 0) result.killedBackground = heldAgents;
         step('wait timed out, proceeding', { running, cutAgents: result.cutAgents, ...(held > 0 ? { killedBackground: heldAgents } : {}) });
-      } else step('runner idle');
+      } else if (waitErr) step('runner unreachable during idle wait', { error: waitErr, note: 'not confirmed idle: /health failed; re-detected below before any stop' });
+      else step('runner idle');
     } else step('wait skipped', { reason: det.runner.health ? 'no-wait' : 'runner not healthy' });
 
     // Re-detect right before acting: the wait can take minutes, and the runner may have restarted (new pid/port/token) meanwhile.
+    const waited = det.runner.alive ? det.runner.pid : null;
     det.runner = await detectRunner(det.home, d);
+    // idea-375 (restart 01:22Z 11-20): the runner we waited on went idle and was gone 1.5 s later, before our /shutdown: the old
+    // server's runner supervisor (RR1, 'runtime runner code changed') hard-killed it 2 ms after the idle poll, so it never ran its
+    // shutdown fold-index save, and the log only said 'runner not running'. Say so truthfully, and give a replacement the
+    // supervisor starts a moment to publish: it is adopted and stopped gracefully instead of being tree-killed with the server.
+    // (A lagging-but-alive pid is identity 'unknown', not gone: idea-344's stopUnconfirmed handles that one.)
+    const stillWaited = det.runner.pid === waited && det.runner.identity !== 'gone' && det.runner.identity !== 'recycled';
+    if (waited && !stillWaited) {
+      const waitMs = opts.replacementWaitMs ?? REPLACEMENT_WAIT_MS;
+      const end = d.now() + waitMs;
+      while (!det.runner.alive && d.now() < end) { await d.sleep(500); det.runner = await detectRunner(det.home, d); }
+      const reason = 'it exited on its own after the idle wait, before vs restart sent /shutdown (the old server\'s runner supervisor RR1 hard-kills an idle runner whose code changed; or a crash): no graceful stop and no shutdown fold-index save by vs restart; the next boot refolds from the last saved index';
+      step('runner exited before stop', { pid: waited, reason, replacement: det.runner.alive ? det.runner.pid : null });
+      if (det.runner.alive) step('runner replaced during restart, adopting', { oldPid: waited, pid: det.runner.pid });
+      else det.runner.goneNote = `the runner this restart waited on (pid ${waited}) exited on its own; no replacement published within ${waitMs / 1000}s`;
+    }
     // Preflight: refuse before anything is stopped if the server port belongs to something that is not serve.mjs. An unreadable
     // command line (procInfo unknown, after its retries) also aborts here, before the runner is touched (idea-148).
     const notServeMsg = (pid, pi) => (pi?.unknown
@@ -684,7 +704,7 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         if (info && info.pid === pid) rmSync(path.join(det.home, f), { force: true }); // only that dead runner's files
       }
     };
-    const notRunningNote = (r) => (r.staleDiscovery ? { note: `runner.json names pid ${r.pid}, which is not a runner (recycled); left alone` } : {});
+    const notRunningNote = (r) => (r.goneNote ? { note: r.goneNote } : r.staleDiscovery ? { note: `runner.json names pid ${r.pid}, which is not a runner (recycled); left alone` } : {});
     // idea-344: runner.json names a LIVE pid whose command line cannot be read and whose /health stayed silent through the
     // lag-tolerant retries. That used to be "treated as gone", and the server tree-kill then took a lagging runner down hard.
     // Safe path, never a kill by pid: (a) nothing listens on the runner's port -> it is not serving as the runner (a lagging

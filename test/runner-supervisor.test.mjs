@@ -105,6 +105,33 @@ test("stale hash + zero turns: restarts once per diskHash, then gives up (logs o
   h.sup.stop();
 });
 
+// idea-375: restart 01:22Z 11-20: `vs restart` saw the runner idle at 01:22:33.819 and RR1 hard-killed it at .821 (no graceful
+// stop, no shutdown fold-index save). While the runner reports a vs restart drain, the restart owns the stop: RR1 defers.
+test("idea-375: stale hash + idle but a vs restart drain is active: no restart (deferred, logged once); restarts once the drain ends", async () => {
+  const drain = { since: 1, until: 2, reason: "vs restart pid 6284" };
+  const state = { disk: "disk-hash-123", health: { hash: "old", running: 2, drain } };
+  const h = harness(state);
+  await h.sup.ready;
+  state.health = { hash: "old", running: 0, held: 0, drain }; // the turns finish: idle, exactly when vs restart sends /shutdown
+  for (let i = 0; i < 3; i++) await h.next();
+  assert.equal(h.restarts(), 0);
+  assert.equal(h.logs.filter((l) => /deferred: vs restart drain active \(vs restart pid 6284\)/.test(l)).length, 1, h.logs.join("\n"));
+  state.health = { hash: "old", running: 0, held: 0, drain: null }; // the drain expired (a crashed restart): RR1 resumes
+  await h.next();
+  assert.equal(h.restarts(), 1);
+  h.sup.stop();
+});
+
+test("idea-375: the default healthInfo passes the runner's /health drain through", async () => {
+  let restarts = 0;
+  const pending = [];
+  const owner = { rc: { healthy: async () => true, request: async () => ({ hash: "old", running: 0, held: 0, drain: { since: 1, until: 2, reason: "vs restart" } }) } };
+  const sup = superviseRunner(owner, { diskHash: () => "disk", restart: async () => { restarts += 1; }, log: () => {}, setTimer: (fn) => { pending.push(fn); return { unref() {} }; }, clearTimer() {} });
+  await sup.ready;
+  assert.equal(restarts, 0);
+  sup.stop();
+});
+
 test("restarts again when the runtime disk hash changes to a new value", async () => {
   const state = { disk: "d1", health: { hash: "old", running: 0 } };
   const h = harness(state);

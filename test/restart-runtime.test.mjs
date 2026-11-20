@@ -773,6 +773,93 @@ test("idea-220: the old runner exited on its own before the stop (nothing new pu
   } finally { await w.cleanup(); }
 });
 
+// idea-375 (restart 01:22Z 11-20): 'runner idle' at 01:22:33.819, the old server's RR1 supervisor hard-killed the idle runner
+// at 01:22:33.821 (no shutdown fold-index save) and started a replacement; the re-detect found no runner.json and logged a bare
+// 'runner not running', and the replacement was then tree-killed with the server. Model: the idle /health poll answers, then the
+// runner is killed + runner.json removed; the replacement publishes only on a later sleep (after the re-detect).
+async function rr1KillAfterIdle(w, { replace }) {
+  const oldPid = w.runner().pid;
+  let killed = false; let pendingReplace = false;
+  const depsOver = {
+    httpCall: async (url, o) => {
+      const res = await httpCall(url, o);
+      if (!killed && (o?.method ?? "GET") === "GET" && /\/health$/.test(url) && res.body?.pid === oldPid && res.body?.running === 0 && w.runner().pid === oldPid) {
+        killed = true; // the supervisor's killTree: no /shutdown, runner.json removed (restartRunnerNow)
+        const old = w.runner(); old.dead = true; w.alive.delete(old.pid); rmSync(path.join(w.home, "runner.json"), { force: true }); await close(old.srv);
+        pendingReplace = replace;
+      }
+      return res;
+    },
+    sleep: async (ms) => {
+      if (pendingReplace) { pendingReplace = false; await w.startRunner("rr1-hash"); }
+      return w.deps.sleep(ms);
+    },
+  };
+  return { oldPid, depsOver };
+}
+
+test("idea-375: RR1 hard-kills the runner right after the idle poll; its replacement is awaited, adopted and stopped gracefully, the exit is logged with its reason", async () => {
+  const w = await world({ running: [1, 0] });
+  try {
+    const { oldPid, depsOver } = await rr1KillAfterIdle(w, { replace: true });
+    const r = await w.run({ replacementWaitMs: 2000 }, [], depsOver);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.indexOf("runner idle") >= 0 && names.indexOf("runner idle") < names.indexOf("runner exited before stop"), names.join(" | "));
+    const ex = r.steps.find((s) => s.step === "runner exited before stop");
+    assert.equal(ex.pid, oldPid);
+    assert.match(ex.reason, /before vs restart sent \/shutdown/);
+    assert.match(ex.reason, /no shutdown fold-index save/);
+    assert.ok(ex.replacement && ex.replacement !== oldPid, JSON.stringify(ex));
+    const adopt = r.steps.find((s) => s.step === "runner replaced during restart, adopting");
+    assert.equal(adopt.pid, ex.replacement);
+    assert.ok(r.steps.some((s) => s.step === "runner stopped gracefully" && s.pid === ex.replacement), `the replacement got the graceful stop: ${names.join(" | ")}`);
+    assert.ok(!names.includes("runner not running"), "never a bare 'runner not running' for a runner we waited on");
+    assert.deepEqual(w.hardKills, [], "the replacement is not hard-killed");
+    assert.equal(r.newHash, "new-hash");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-375: RR1 kill with no replacement: bounded wait, then 'runner not running' carries the truthful note; restart completes, nothing killed", async () => {
+  const w = await world({ running: [1, 0] });
+  try {
+    const { oldPid, depsOver } = await rr1KillAfterIdle(w, { replace: false });
+    let t = 0; // fake clock: each sleep advances it, so the 300 ms replacement wait ends after a few polls
+    const sleep = depsOver.sleep;
+    depsOver.now = () => t;
+    depsOver.sleep = async (ms) => { t += ms; return sleep(ms); };
+    const r = await w.run({ replacementWaitMs: 300 }, [], depsOver);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    const ex = r.steps.find((s) => s.step === "runner exited before stop");
+    assert.ok(ex, r.steps.map((s) => s.step).join(" | "));
+    assert.equal(ex.pid, oldPid);
+    assert.equal(ex.replacement, null);
+    const nr = r.steps.find((s) => s.step === "runner not running");
+    assert.match(nr?.note ?? "", new RegExp(`pid ${oldPid}\\) exited on its own; no replacement published within 0.3s`));
+    assert.ok(!r.steps.some((s) => s.step === "snapshot before stop"));
+    assert.deepEqual(w.hardKills, []);
+    assert.deepEqual(w.spawned, ["server"]);
+  } finally { await w.cleanup(); }
+});
+
+test("idea-375: a /health poll that fails during the idle wait is logged as unreachable, never as 'runner idle'", async () => {
+  const w = await world({ running: [1, 0] });
+  try {
+    let fails = 1;
+    const r = await w.run({}, [], {
+      httpCall: async (url, o) => {
+        if (fails && (o?.method ?? "GET") === "GET" && /\/health$/.test(url) && w.startedWait) { fails--; throw Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }); }
+        return httpCall(url, o);
+      },
+      sleep: async (ms) => { w.startedWait = true; return w.deps.sleep(ms); },
+    });
+    const names = r.steps.map((s) => s.step);
+    assert.ok(names.includes("runner unreachable during idle wait"), names.join(" | "));
+    assert.ok(!names.includes("runner idle"), names.join(" | "));
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+  } finally { await w.cleanup(); }
+});
+
 // idea-148: Get-CimInstance came back empty / timed out under load and that was read as "not the runner". procInfo now retries
 // an empty answer and reports `unknown` instead of an empty command line that looks like a mismatch.
 test("procInfo: retries an empty or failed query, reports unknown (not a mismatch) after the attempts, null once the pid is gone", () => {
