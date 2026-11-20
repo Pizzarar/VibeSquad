@@ -10,7 +10,7 @@ The catch: a message sent mid-job can *steer* the agent. It stops what it was do
 - **A real change of direction:** say so plainly ("stop, do this instead"). Use the explicit send-now option if the app has one.
 - **Not sure what the agent is doing right now?** Glance at it first. Interrupting a nearly finished job wastes it.
 
-## How VibeSquad queues your messages (v0.2.8)
+## How VibeSquad queues your messages (v0.2.8 and later)
 
 - **Your messages go first.** A message you type in the app (or send with `vs send` from your own terminal) is an owner message. If the agent is waiting in line behind background work, your message jumps ahead of the queued background turns for the same provider. It can even start a little over the busy limit (up to 2 extra at once), so a message to a busy Buddy starts within seconds instead of waiting behind the workers (`runner/runner.mjs:51-55`, `:259-263`).
 - **Rapid follow-ups merge.** If you send two or three lines in a row while the first is still waiting to start, they join into one turn, in order, with a blank line between them. If any of them is yours, the merged turn counts as yours (`runner/runner.mjs:529-553`). So there is no harm in splitting a thought over a few quick messages.
