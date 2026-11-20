@@ -24,3 +24,11 @@ test("no :disabled / [disabled] / [aria-disabled] control rule sets opacity < 1"
   }
   assert.deepEqual(bad, []);
 });
+
+test("disabled .btn / .usage-review-run / .usage-inbox-btn pick up the quiet surface (panel bg, dashed edge, no fill/shadow)", () => {
+  const rule = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)].find(([, sel]) => /:root:root :is\(\.btn, \.usage-review-run, \.usage-inbox-btn\):disabled/.test(sel));
+  assert.ok(rule, "quiet-surface rule for unscoped disabled controls is missing");
+  for (const re of [/opacity:\s*1/, /background:\s*var\(--panel\)/, /color:\s*var\(--muted\)/, /border:\s*1px dashed var\(--u4-edge\)/, /border-image:\s*none/, /box-shadow:\s*none/, /text-shadow:\s*none/, /font-weight:\s*400/]) {
+    assert.match(rule[2], re);
+  }
+});

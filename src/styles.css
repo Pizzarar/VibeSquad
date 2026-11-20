@@ -5891,6 +5891,10 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled {
   opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); box-shadow: none; font-weight: 400; cursor: not-allowed;
 }
+/* disabled (idea-165, one source): the same quiet surface for the unscoped controls (modals, .sky-zones, UsageDashboard), so --muted never lands on a bright fill */
+:root:root :is(.btn, .usage-review-run, .usage-inbox-btn):disabled {
+  opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); border-image: none; box-shadow: none; text-shadow: none; font-weight: 400; cursor: default;
+}
 
 /* ---- chips and pills ---- */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .label-pill, .status-pill, .lane-tag, .warn-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill, .sidebar-role-pill, .rail-role-tag, .role-tag, .pin-lane-handle, .sidebar-riffbot-badge, .changes-file-badge, .verdict) {
