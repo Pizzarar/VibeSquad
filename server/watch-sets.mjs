@@ -41,6 +41,9 @@ const BACKFILL_TAIL_BYTES = 4 * 1024 * 1024;
 const ANY_SUITE = new Set(["", "*", "any", "suite", "npm-test"]);
 /** Same shape as agent-duties' VERDICT_RE: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …". */
 const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL)\b/;
+/** idea-351: a set that completed this recently still covers a late digest PASS/done for its agents (the digest race). */
+export const COVER_AFTER_FIRE_MS = 120_000;
+const FAIL_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?FAIL\b/;
 const MANAGER_ROLES = new Set(["lead", "brainstorm", "buddy", "overlord"]);
 
 const vsHome = (home) => path.resolve(home || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
@@ -593,7 +596,10 @@ export function createWatchEngine({
       const ts = timeOf(entry.ts);
       const ids = refsOf(entry);
       const taken = [];
-      for (const set of openSets()) {
+      const nowMs = now();
+      const recentlyFired = (set) => set.firedAt && !set.cancelledAt && nowMs - timeOf(set.firedAt) <= COVER_AFTER_FIRE_MS;
+      const coverable = entry.type === "done" && !FAIL_RE.test(String(entry.text ?? ""));
+      for (const set of reload().sets.filter((x) => isOpen(x) || (coverable && recentlyFired(x)))) {
         if (Number.isFinite(ts) && ts < timeOf(set.createdAt)) continue;
         if (entry.agent === set.owner) continue; // the owner's own entries never wake it anyway
         const hit = set.items.filter((i) => i.kind === "agent" && ids.includes(i.ref));
@@ -651,10 +657,13 @@ export function createWatchEngine({
     for (const id of setIds ?? []) {
       const set = cache.sets.find((s) => s.id === id);
       if (!set || (set.cancelledAt && !set.firedAt)) continue;
+      const coverable = entry.type === "done" && !FAIL_RE.test(String(entry.text ?? ""));
       const ids = refsOf(entry);
       for (const item of set.items) {
         if (item.kind !== "agent" || !ids.includes(item.ref)) continue;
-        if (await reportCounts(entry, item.ref)) {
+        // idea-351: a non-manager's done naming a watched agent (a digest whose label is unknown, a late PASS) is covered by the set's
+        // ping even when it is not that item's counted report; a manager's entry and any FAIL still wake the owner.
+        if ((await reportCounts(entry, item.ref)) || (coverable && (await authorKind(String(entry.agent ?? ""))) !== "manager")) {
           out.push(structuredClone(set));
           break;
         }

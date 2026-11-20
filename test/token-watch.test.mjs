@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { addWatch, cancelWatch } from "../server/watch-sets.mjs";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
 import { SOFT_FLAG_NUDGE, LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT } from "../server/lead-handoff.mjs";
 
@@ -79,7 +80,7 @@ test("lead: one soft nudge + needs-you at 150k, none again after a restarted wat
   r.usage("rn-lead", LEAD_FLAG_DEFAULT + 20);
   await tick();
   assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE]);
-  assert.equal(r.sent[0].steerOnly, undefined, "the 150k lead nudge is a plain send (idea-214)");
+  assert.equal(r.sent[0].steerOnly, true, "idea-353: the 150k wrap-up first tries a steer (joins an open turn, no new turn)");
   assert.equal(r.agents.get("rn-lead").labels["handoff-flagged"], "1");
   assert.ok(r.agents.get("rn-lead").labels["needs-you"]);
   // server restart: new watcher over the same labels, roster replay + more usage
@@ -264,4 +265,93 @@ test("token-watch coordinator: a transient fetchAgent error is not 'dead' (confi
     const r = await w.coordinator.confirmTakeover("rn-succ");
     assert.equal(r.confirmed, false);
   } finally { w.stop(); }
+});
+
+// idea-353: the wrap-up notice must not cost an idle, watch-armed lead its own turn, and must never be dropped.
+function idleAwareRunner(r, state) {
+  r.sendAgentPrompt = async (id, text, opts) => {
+    if (opts?.steerOnly) {
+      if (state.running) {
+        r.sent.push({ id, text, steerOnly: true });
+        return { delivered: true };
+      }
+      r.steerDrops = (r.steerDrops ?? 0) + 1;
+      return { delivered: false, reason: "idle" };
+    }
+    r.sent.push({ id, text });
+  };
+  return r;
+}
+
+test("idea-353: running lead gets the wrap-up as a steer (delivered, no wake)", async () => {
+  const rootDir = makeRoot();
+  const r = idleAwareRunner(makeRunner(), { running: true });
+  r.agents.set("rn-lead", { ...lead("rn-lead"), status: "running" });
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: makeRoot() });
+  r.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
+  await tick();
+  assert.deepEqual(r.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE, steerOnly: true }]);
+  w.stop();
+});
+
+test("idea-353: idle lead, nothing armed, no wake coming: held one cycle, then woken exactly once", async () => {
+  const rootDir = makeRoot();
+  const r = idleAwareRunner(makeRunner(), { running: false });
+  r.agents.set("rn-lead", lead("rn-lead"));
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: makeRoot(), noticeRecheckMs: 30 });
+  r.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
+  await tick();
+  assert.equal(r.sent.length, 0, "not woken on the first idle attempt");
+  await new Promise((x) => setTimeout(x, 80));
+  assert.deepEqual(r.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE }]);
+  await new Promise((x) => setTimeout(x, 80));
+  assert.equal(r.sent.length, 1, "once");
+  w.stop();
+});
+
+test("idea-353: idle lead with nothing armed but a wake starting a turn meanwhile: the notice steers into it, no extra turn", async () => {
+  const rootDir = makeRoot();
+  const state = { running: false };
+  const r = idleAwareRunner(makeRunner(), state);
+  r.agents.set("rn-lead", lead("rn-lead"));
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: makeRoot(), noticeRecheckMs: 30 });
+  r.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
+  await tick();
+  state.running = true; // a pending log wake started a turn
+  await new Promise((x) => setTimeout(x, 80));
+  assert.deepEqual(r.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE, steerOnly: true }]);
+  w.stop();
+});
+
+test("idea-353: idle lead with an armed watch: notice held (no wake), then steered into the turn the watch ping starts; flushed once if the watch is cancelled", async () => {
+  const rootDir = makeRoot();
+  const home = makeRoot();
+  const state = { running: false };
+  const r = idleAwareRunner(makeRunner(), state);
+  r.agents.set("rn-lead", lead("rn-lead"));
+  const { id } = addWatch({ owner: "rn-lead", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }] }, { home });
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: home, noticeRecheckMs: 25 });
+  r.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
+  await new Promise((x) => setTimeout(x, 90));
+  assert.equal(r.sent.length, 0, "armed + idle: held, not woken");
+  state.running = true; // the watch ping started a turn
+  await new Promise((x) => setTimeout(x, 60));
+  assert.deepEqual(r.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE, steerOnly: true }]);
+  w.stop();
+
+  // cancel path: a held notice is flushed as one plain send once nothing is armed
+  const r2 = idleAwareRunner(makeRunner(), { running: false });
+  r2.agents.set("rn-lead", lead("rn-lead"));
+  const home2 = makeRoot();
+  const s2 = addWatch({ owner: "rn-lead", team: "t", lane: "l", items: [{ kind: "agent", ref: "rn-w" }] }, { home: home2 });
+  const w2 = startTokenWatcher({ runner: r2, rootDir, baseHome: home2, noticeRecheckMs: 25 });
+  r2.usage("rn-lead", LEAD_FLAG_DEFAULT + 10);
+  await new Promise((x) => setTimeout(x, 60));
+  assert.equal(r2.sent.length, 0);
+  cancelWatch(s2.id, "rn-lead", { home: home2 });
+  await new Promise((x) => setTimeout(x, 100));
+  await new Promise((x) => setTimeout(x, 100)); // the flush path is the same idle+unarmed rule: one more cycle, then one plain send
+  assert.deepEqual(r2.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE }]);
+  w2.stop();
+  void id;
 });

@@ -3037,7 +3037,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const setIds = watchTaken.get(entry);
       if (!watch || !setIds?.length) return false;
       for (const set of await watch.holdingSets(entry, setIds)) {
-        if ((await resolveWatchTarget(paseo, set))?.id === leadId) return true;
+        if ((await resolveWatchTarget(paseo, set))?.id === leadId) {
+          // idea-351: the set's ping still pending for this lead: fold the held text into it, else the watch already reported the agent.
+          const pend = (pendingWake.get(leadId) ?? []).find((e) => watchKeyOf.has(e) && (e.refs ?? []).includes(set.id));
+          if (pend && !pend.text.includes(entry.text)) pend.text += `
+(Also reported: [${entry.type}] ${entry.text})`;
+          return true;
+        }
       }
       return false;
     }
