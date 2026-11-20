@@ -18,7 +18,6 @@ import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
   LEAD_HARD_CAP_DEFAULT,
-  SOFT_FLAG_NUDGE,
   createLeadHandoffCoordinator,
 } from "../lead-handoff.mjs";
 import {
@@ -1133,8 +1132,6 @@ export interface Deps {
   startWatcher: boolean;
   /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
   leadWakeCooldownMs?: number;
-  /** idea-353: how often a held lead notice re-checks whether its watch is gone (default 15s). */
-  noticeRecheckMs?: number;
   /** git status cap for the spawn-time snapshot (default 3000); tests asserting the format pass more. */
   gitSpawnTimeoutMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
@@ -1389,8 +1386,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       setLabels: (agentId: string, labels: Labels, name?: string) => deps.setLabels(agentId, labels, name),
       sendMessage: async (agentId: string, text: string) => {
         if (!paseoApi) return;
-        // idea-353: the 150k wrap-up is a notice, not a decision: never its own turn while the lead is armed or busy.
-        if (text === SOFT_FLAG_NUDGE) return sendLeadNotice(agentId, text);
         await paseoApi.agents.ref(agentId).send(text).catch((e: unknown) => log(`handoff message failed: ${e}`));
       },
       createAgent: async (payload: any) => {
@@ -3047,53 +3042,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       return false;
     }
 
-    /** idea-353: soft notices (the 150k wrap-up) held for a lead until its next real wake; flushWake prepends them. */
-    const leadNotices = new Map<string, string[]>();
-
-    /**
-     * Deliver a no-decision notice to a lead without costing an extra turn. Running lead: a plain send is a steer (no new turn).
-     * Idle lead with an armed watch: hold it, the watch ping (or any real wake) carries it. Idle and nothing armed: wake it once.
-     */
-    async function sendLeadNotice(agentId: string, text: string) {
-      const paseo = paseoApi;
-      if (!paseo) return;
-      const lead = await snap(paseo, agentId);
-      const idle = !!lead && (lead.status === "idle" || (lead.status === "closed" && lead.resumable === true));
-      if (idle && watch?.ownsOpenSet(agentId)) {
-        const held = leadNotices.get(agentId) ?? [];
-        if (!held.includes(text)) leadNotices.set(agentId, [...held, text]);
-        scheduleNoticeCheck(agentId);
-        return;
-      }
-      await paseo.agents.ref(agentId).send(text).catch((e: unknown) => log(`handoff message failed: ${e}`));
-    }
-
-    /**
-     * A held notice is never dropped: while its lead still owns an open watch the watch's ping carries it; once that watch is
-     * cancelled, expired or otherwise gone with nothing carrying the notice, flush it as one send. Re-checks until delivered.
-     */
-    const noticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    function scheduleNoticeCheck(leadId: string) {
-      if (noticeTimers.has(leadId)) return;
-      const t = later(() => {
-        noticeTimers.delete(leadId);
-        void checkHeldNotices(leadId);
-      }, deps.noticeRecheckMs ?? 15_000);
-      noticeTimers.set(leadId, t);
-    }
-    async function checkHeldNotices(leadId: string) {
-      const held = leadNotices.get(leadId);
-      if (!held?.length) return; // a real wake already carried them
-      if (watch?.ownsOpenSet(leadId) || pendingWake.get(leadId)?.length) return scheduleNoticeCheck(leadId);
-      leadNotices.delete(leadId);
-      const paseo = paseoApi;
-      if (!paseo) {
-        leadNotices.set(leadId, held);
-        return scheduleNoticeCheck(leadId);
-      }
-      await paseo.agents.ref(leadId).send(held.join("\n\n")).catch((e: unknown) => log(`held notice send failed: ${e}`));
-    }
-
     /** The lead whose pendingWake holds this ping, "" when it is in the debounce queue or mid-send, null when it is nowhere. */
     function watchQueuedAt(key: string): string | null {
       for (const [leadId, q] of pendingWake) if (q.some((e) => watchKeyOf.get(e) === key)) return leadId;
@@ -3655,9 +3603,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
           parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`);
         }
-        const notices = leadNotices.get(leadId) ?? [];
-        leadNotices.delete(leadId);
-        const text = [...notices, ...parts].join("\n\n");
+        const text = parts.join("\n\n");
         for (const k of watchKeys) watchSending.add(k);
         try {
           if (watchKeys.length) await watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
@@ -3987,7 +3933,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     (dispose as any).sweepDoneWorkersReport = sweepDoneWorkersReport;
     (dispose as any).sweepStaleDigests = sweepStaleDigests;
     (dispose as any).handoffCoordinator = handoffCoordinator;
-    (dispose as any).sendLeadNotice = sendLeadNotice;
     (dispose as any).confirmTakeover = handoffCoordinator.confirmTakeover;
     (dispose as any).sendAgentPrompt = (req: any, ctx?: any) =>
       handleSendAgentPrompt(req, ctx ?? { paseo: paseoApi });

@@ -13,6 +13,7 @@ import {
   loadTeamsConfig,
   resolveTeamAndLane,
 } from "./lead-handoff.mjs";
+import { listWatches } from "./watch-sets.mjs";
 import { appendVsLogEntry, performBrainstormRestart } from "./brainstorm.mjs";
 import { BUDDY_COMPACT_FOCUS, COMPACTED_AT_LABEL, createCompactor, isClaudeAgent, isIdleForCompact } from "./compact-step.mjs";
 import { createWorkerContextGuard, lastAssistantMessage } from "./worker-context-guard.mjs";
@@ -53,11 +54,40 @@ export function startTokenWatcher({
   workerGuard,
   baseHome,
   profilesPath,
+  noticeRecheckMs = 15_000,
 } = {}) {
   const live = new Map(); // id -> latest agent snapshot (for the coordinator's lane/worker lookups)
   const busy = new Set();
   const warned = new Set();
   const restarted = new Set();
+  // idea-353: the 150k wrap-up needs no decision. A running lead takes it as a steer (no new turn); an idle lead with an armed watch is
+  // woken by that watch anyway, so the notice is held and re-tried (it steers into that turn); an idle lead with nothing armed is woken once.
+  const heldNotices = new Map(); // lead id -> notice text
+  const noticeTimers = new Map();
+  const armedWatch = (id) => {
+    try {
+      return listWatches({ owner: id }, { home: baseHome }).length > 0;
+    } catch {
+      return false;
+    }
+  };
+  async function sendLeadNotice(id, text) {
+    heldNotices.delete(id);
+    const r = await runner.sendAgentPrompt(id, text, { steerOnly: true });
+    if (r?.delivered !== false) return r;
+    if (!armedWatch(id)) return runner.sendAgentPrompt(id, text);
+    heldNotices.set(id, text);
+    if (!noticeTimers.has(id)) {
+      const t = setTimeout(() => {
+        noticeTimers.delete(id);
+        const held = heldNotices.get(id);
+        if (held) sendLeadNotice(id, held).catch((e) => console.warn(`[vibesquad] held wrap-up notice ${id}: ${e?.message ?? e}`));
+      }, noticeRecheckMs);
+      t.unref?.();
+      noticeTimers.set(id, t);
+    }
+    return { delivered: false, held: true };
+  }
   const briefPending = new Map(); // id -> ms the warn nudge (brief update) was sent; cleared by that agent's turn_ended
 
   // K2: compact-before-handoff (Claude only), logged to the agent's own lane. Shared by the Buddy path and the lead ladder.
@@ -76,7 +106,8 @@ export function startTokenWatcher({
       profilesPath,
       sharedSlots: true,
       setLabels: (id, labels, name) => runner.updateAgent(id, { ...(name ? { name } : {}), labels }),
-      sendMessage: (id, text, opts) => (opts ? runner.sendAgentPrompt(id, text, opts) : runner.sendAgentPrompt(id, text)),
+      sendMessage: (id, text, opts) =>
+        text === SOFT_FLAG_NUDGE && !opts ? sendLeadNotice(id, text) : opts ? runner.sendAgentPrompt(id, text, opts) : runner.sendAgentPrompt(id, text),
       createAgent: (p) =>
         runner.createAgent({
           config: p.config,
@@ -173,7 +204,12 @@ export function startTokenWatcher({
         .finally(() => busy.delete(agent.id));
     }
   });
-  return { stop, evaluate, coordinator: coord, workerGuard: workers };
+  const stopAll = () => {
+    for (const t of noticeTimers.values()) clearTimeout(t);
+    noticeTimers.clear();
+    return stop();
+  };
+  return { stop: stopAll, evaluate, coordinator: coord, workerGuard: workers };
 }
 
 export { SOFT_FLAG_NUDGE };

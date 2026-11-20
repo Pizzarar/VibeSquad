@@ -1018,7 +1018,6 @@ async function pluginHarness(sb, agents, extra = {}) {
     debounceMs: 20,
     retryBaseMs: 10,
     leadWakeCooldownMs: 40,
-    ...(extra.noticeRecheckMs ? { noticeRecheckMs: extra.noticeRecheckMs } : {}),
     firstPromptRedeliverMs: 60_000,
     setLabels: async () => {},
     archiveAgent: async () => {},
@@ -1817,48 +1816,25 @@ test(
 );
 
 test(
-  "plugin idea-353: a held wrap-up notice is flushed as one send when the watch is cancelled, never dropped",
+  "plugin idea-351 (race): a digest/PASS done arriving AFTER the watch completed is not suppressed and still wakes the owner",
   withPluginEnv(async (sb) => {
     const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")]]);
-    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: Date.now() });
-    const h = await pluginHarness(sb, agents, { noticeRecheckMs: 30 });
-    try {
-      await h.stop.sendLeadNotice("lead-1", "NOTICE-X");
-      await wait(120);
-      assert.equal(h.sent.length, 0, "still armed: held");
-      cancelWatch(id, "lead-1", { home: sb.home });
-      await wait(150);
-      assert.deepEqual(h.sent.map((s) => s.text), ["NOTICE-X"]);
-      await wait(100);
-      assert.equal(h.sent.length, 1, "sent once");
-    } finally {
-      h.stop();
-    }
-  }),
-);
-
-test(
-  "plugin idea-353: the wrap-up notice is held for an armed idle lead and prepended to its next real wake; idle+unarmed and running leads get it at once",
-  withPluginEnv(async (sb) => {
-    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["lead-2", mk("lead-2", "lead", "nf")], ["lead-3", { ...mk("lead-3", "lead", "ln"), status: "running" }], ["w-1", mk("w-1", "worker")]]);
     const now = Date.now();
     const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
     const h = await pluginHarness(sb, agents);
     try {
-      const { SOFT_FLAG_NUDGE } = await import("../server/lead-handoff.mjs");
-      await h.stop.sendLeadNotice("lead-1", SOFT_FLAG_NUDGE);
-      assert.equal(h.sent.length, 0, "armed idle lead: no turn");
-      await h.stop.sendLeadNotice("lead-2", SOFT_FLAG_NUDGE);
-      await h.stop.sendLeadNotice("lead-3", SOFT_FLAG_NUDGE);
-      assert.deepEqual(h.sent.map((s) => s.to), ["lead-2", "lead-3"]);
       writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
       h.scanLogs(false);
       await h.watch.tick();
       await wait(250);
-      const toL1 = h.sent.filter((s) => s.to === "lead-1");
-      assert.equal(toL1.length, 1);
-      assert.ok(toL1[0].text.startsWith(SOFT_FLAG_NUDGE), "notice prepended");
-      assert.match(toL1[0].text, new RegExp(`Watch ${id} complete`));
+      assert.equal(h.sent.length, 1);
+      assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
+      writeLog(sb, [{ ts: iso(now + 500), agent: "digest-1", lane: "vibesquad", type: "done", text: "FAIL: w1 late verdict", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 2, JSON.stringify(h.sent));
+      assert.match(h.sent[1].text, /FAIL: w1 late verdict/);
     } finally {
       h.stop();
     }

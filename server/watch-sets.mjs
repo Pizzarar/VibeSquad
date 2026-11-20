@@ -663,11 +663,6 @@ export function createWatchEngine({
     return out;
   }
 
-  /** idea-351/353: does this agent own an armed (open) watch whose ping will wake it anyway? */
-  function ownsOpenSet(ownerId) {
-    return openSets().some((s) => s.owner === ownerId);
-  }
-
   function readJson(p) {
     try {
       return JSON.parse(fs.readFileSync(p, "utf8").replace(/^﻿/, ""));
@@ -961,7 +956,6 @@ export function createWatchEngine({
     onRunnerEvent,
     onLogEntry,
     holdingSets,
-    ownsOpenSet,
     markAttempted,
     isCancelled,
     markDelivered,
