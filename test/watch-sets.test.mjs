@@ -1867,3 +1867,32 @@ test(
     }
   }),
 );
+
+test("idea-352: the completion ping carries each watched worker's final message once (capped, outside the merge text); a worker's own report is not duplicated", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    const long = "PASS: shipped\n" + "detail line ".repeat(300); // > REPORT_CAP and > FINAL_CAP
+    const { engine, delivered } = engineFor(sb, { clock, lastMessage: async (ref) => (ref === "w-1" ? long : "PASS: own") });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    engine.onRunnerEvent(agentEv("w-2", "running"));
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: clock.t });
+    clock.t += MIN;
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent(agentEv("w-2", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-2" });
+    // w-2 also filed its own report (author = the worker): its final must not ride the ping a second time
+    engine.onLogEntry("vibesquad", { ts: iso(clock.t), agent: "w-2", lane: "vibesquad", type: "done", text: "PASS: own report", refs: ["w-2"] });
+    await engine.tick();
+    assert.equal(delivered.length, 1, "one completion ping");
+    assert.match(delivered[0].text, new RegExp(`Watch ${id} complete`));
+    assert.ok(delivered[0].text.length <= DIGEST_MERGE_MAX, "the final messages are not in the W4 merge text");
+    assert.match(delivered[0].detail, /Final message of w-1 \(auto-forwarded report\):\nPASS: shipped/);
+    assert.match(delivered[0].detail, /truncated; `vs status w-1`/);
+    assert.ok(!delivered[0].detail.includes("w-2"), "own report: no second copy");
+    assert.ok(delivered[0].detail.length < 1500, "per-item cap");
+  } finally {
+    sb.cleanup();
+  }
+});

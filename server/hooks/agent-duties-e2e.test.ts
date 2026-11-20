@@ -2048,7 +2048,7 @@ test(
       await wait(400);
       assert.equal(wakes().length, 1);
       assert.match(wakes()[0].text, /Worker w-1 final message \(auto-forwarded report\):\nPASS: full report body/);
-      assert.match(wakes()[0].text, /truncated; `vs status w-1`/, "capped at AUTO_REPORT_MAX");
+      assert.match(wakes()[0].text, /truncated; vs status w-1/, "capped at AUTO_REPORT_MAX");
       writeFileSync(file, line({ agent: "w-2", text: "PASS: own", refs: ["w-2"] }), { flag: "a" });
       h.scanLogs(false);
       await wait(400);
@@ -2059,3 +2059,48 @@ test(
     }
   }),
 );
+
+test(
+  "idea-352 R2: coalesced [done] wakes forward every worker's message; a worker that sent its own report is skipped; host paths are redacted",
+  withEnv(async ({ vsHome, briefRoot }) => {
+    const mk = (id: string, role: string, extra: any = {}) => ({
+      id, title: id, cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5",
+      labels: { team: "vibesquad", lane: "vibesquad", role, ...extra },
+    });
+    const agents = new Map<string, any>([
+      ["w-a", mk("w-a", "worker")],
+      ["w-b", mk("w-b", "worker")],
+      ["w-c", mk("w-c", "worker")],
+      ["lead-1", mk("lead-1", "lead", { lead: "vibesquad" })],
+    ]);
+    const timelineByAgent = new Map<string, any[]>([
+      ["w-a", [{ item: { type: "assistant_message", text: "PASS: alpha body\nsee D:/work/hidden/file.txt for more" } }]],
+      ["w-b", [{ item: { type: "assistant_message", text: "PASS: bravo body" } }]],
+      ["w-c", [{ item: { type: "tool_call", name: "mcp__vibesquad__send", input: { id: "lead-1" } } }, { item: { type: "assistant_message", text: "PASS: charlie body" } }]],
+    ]);
+    // a long cooldown so the three entries queue and flush as ONE coalesced wake
+    const h = harness(agents, { briefRoot, timelineByAgent, leadWakeCooldownMs: 50 });
+    const wakes = () => h.sent.filter((s) => s.to === "lead-1" && s.text.includes("New team log event"));
+    try {
+      mkdirSync(join(vsHome, "teams", "vibesquad"), { recursive: true });
+      await agentsBusy(agents, "lead-1", "running");
+      await h.onTurnEnded(agents.get("lead-1"));
+      const file = join(vsHome, "teams", "vibesquad", "log.jsonl");
+      const line = (o: any) => JSON.stringify({ ts: new Date().toISOString(), lane: "vibesquad", type: "done", ...o }) + "\n";
+      writeFileSync(file, line({ agent: "dig-a", text: "PASS: a", refs: ["w-a"] }) + line({ agent: "dig-b", text: "PASS: b", refs: ["w-b"] }) + line({ agent: "dig-c", text: "PASS: c", refs: ["w-c"] }), "utf8");
+      agents.get("lead-1").status = "idle";
+      h.scanLogs(false);
+      await wait(500);
+      const all = wakes().map((w) => w.text).join("\n");
+      assert.match(all, /Worker w-a final message[\s\S]*alpha body/);
+      assert.match(all, /Worker w-b final message[\s\S]*bravo body/, "earlier coalesced workers are not dropped");
+      assert.ok(!all.includes("charlie body"), "w-c sent its own report via the send tool: no second copy");
+      assert.ok(!all.includes("hidden"), "host path redacted: " + all);
+    } finally {
+      h.stop?.();
+    }
+  }),
+);
+async function agentsBusy(agents: Map<string, any>, id: string, status: string) {
+  agents.get(id).status = status;
+}
