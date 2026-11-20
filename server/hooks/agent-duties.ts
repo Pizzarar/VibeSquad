@@ -49,6 +49,7 @@ import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
+import { redactHostPaths } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
@@ -175,7 +176,7 @@ export const EVERYONE_LAYER = [
 export const WORKER_PACK = [
   "Role: worker.",
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
-  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
+  "- Your final message IS the report: the server forwards it to your lead when your turn ends. Do not spend a turn on `vs send`/`report` to the lead afterwards, whatever the task prompt says (`Report to ★ …` means just finish with a final message). Never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
 ].join("\n");
 
@@ -600,6 +601,11 @@ export function isDigestNoise(labels: Labels, title?: string | null): boolean {
   const job = String(labels.job ?? "").trim();
   return !job || /\bprobe/i.test(job) || /\bprobe/i.test(String(title ?? ""));
 }
+
+/** idea-352: cap on a worker's final message forwarded inside the lead's [done] wake. */
+export const AUTO_REPORT_MAX = 2000;
+/** idea-352: cap on all forwarded final messages inside one coalesced wake. */
+export const AUTO_REPORT_TOTAL_MAX = 5000;
 
 /** A report is loggable as [done] only if it states PASS or FAIL. */
 export function statesVerdict(text: string): boolean {
@@ -3069,7 +3075,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!target) return log(`watch ${d.setId}: no live ${toOverlord ? "Overlord" : "owner or lead"} for ${d.team}/${d.lane}; ping held`);
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
       const text = toOverlord ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
-      const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text, refs: [d.setId] };
+      // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
+      const detail = d.detail ? await redactReportText(d.detail) : "";
+      const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
+
+${detail}` : text, refs: [d.setId] };
       watchKeyOf.set(entry, d.key);
       pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
       void flushWake(paseo, target.id);
@@ -3522,6 +3532,57 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       deferredWakeTimers.set(leadId, t);
     }
 
+    /** idea-352: redact host paths from forwarded worker text (server/redact-host-paths.mjs, per line). "" if the redactor can't load: never forward raw. */
+    async function redactReportText(text: string): Promise<string> {
+      try {
+        return text.split(/\r?\n/).map((l) => (redactHostPaths({ error: l }) as { error: string }).error).join("\n");
+      } catch (e) {
+        log(`report redaction unavailable, forwarded text dropped: ${e}`);
+        return "";
+      }
+    }
+
+    /** idea-352: did the worker itself deliver its report this turn (own team-log entry just before the digest's, or a send/report tool call after its last user message)? */
+    async function workerSentOwnReport(paseo: Paseo, workerId: string, team: string, atMs: number): Promise<boolean> {
+      try {
+        const own = tailLinesSync(logPath(team), 200).some((l) => {
+          try {
+            const e = JSON.parse(l) as LogEntry;
+            const t = Date.parse(e.ts);
+            return e.agent === workerId && e.type === "done" && t <= atMs + 1000 && t >= atMs - 15 * 60_000;
+          } catch {
+            return false;
+          }
+        });
+        if (own) return true;
+        const page = await paseo.agents.ref(workerId).timeline.refetch({ direction: "tail", limit: 40 });
+        let sent = false;
+        for (const { item } of page.entries) {
+          if (item.type === "user_message") sent = false;
+          else if (item.type !== "assistant_message" && /mcp__vibesquad__(send|report)\b|\bvs send\b|"name":"(send|report)"/.test(JSON.stringify(item))) sent = true;
+        }
+        return sent;
+      } catch {
+        return false;
+      }
+    }
+
+    /** idea-352: "\nWorker … final message: …" for ONE digest-authored [done] verdict (author is not the ref'd worker), else "". */
+    async function workerReportBody(paseo: Paseo, entry: LogEntry, budget = AUTO_REPORT_MAX): Promise<string> {
+      if (entry.type !== "done" || budget <= 0) return "";
+      const worker = String(entry.refs?.[0] ?? "").trim();
+      if (!worker || worker === entry.agent || worker === "plugin" || worker === "you") return "";
+      const text = await lastAssistantText(paseo, worker);
+      if (!text) return "";
+      const w = await snap(paseo, worker);
+      const where = w ? teamOf(w.labels, w.cwd) : null;
+      if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return "";
+      const clean = await redactReportText(text);
+      if (!clean) return "";
+      const body = clean.length > budget ? `${clean.slice(0, budget)}… (truncated; vs status ${worker} for the rest)` : clean;
+      return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
+    }
+
     async function flushWake(paseo: Paseo, leadId: string, recheck = false) {
       if (flushingLeads.has(leadId)) return;
       if (!pendingWake.get(leadId)?.length) return;
@@ -3607,7 +3668,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (plain.length) {
           const last = plain[plain.length - 1]!;
           const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
-          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`);
+          // idea-352: a digest-filed [done] verdict forwards the worker's own final message (the report), so the worker needs no
+          // separate send turn. A worker's own `report` (author === ref) already carries its text: no second copy.
+          // Coalesced events: every digest-filed [done] in the batch forwards its worker's message (shared cap), not only the last.
+          let budget = AUTO_REPORT_TOTAL_MAX;
+          let body = "";
+          for (const e of plain) {
+            const b = await workerReportBody(paseo, e, Math.min(AUTO_REPORT_MAX, budget));
+            budget -= b.length;
+            body += b;
+          }
+          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}.${body} Run 'vs log --since-me' if more context is needed.`);
         }
         const text = parts.join("\n\n");
         for (const k of watchKeys) watchSending.add(k);
