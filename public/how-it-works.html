@@ -113,7 +113,7 @@
         <div>
           <div class="flex items-center gap-2">
             <span class="font-display font-bold text-lg tracking-tight text-white">VibeSquad</span>
-            <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">v0.2.7</span>
+            <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">v0.3.0</span>
           </div>
           <p class="text-[11px] font-mono text-slate-400 hidden sm:block">Interactive Architecture &amp; Workflow Guide</p>
         </div>
@@ -214,7 +214,7 @@
         <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Lead</h3><p class="text-slate-300 mt-1">Splits the plan into blocks, dispatches Workers, reads their reports and merges after review.</p></div>
         <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Worker</h3><p class="text-slate-300 mt-1">Does one block in its own git worktree and reports PASS/FAIL in its final message. In the team log, Leads and Buddies write the entries; a Worker may write only metric and its own done/blocker entries (<code class="text-cyan-300">cli/vs.mjs:545-549</code>).</p></div>
         <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Reviewer</h3><p class="text-slate-300 mt-1">A separate agent checks a Worker's diff. The Lead's prompt pairs Claude work with a Gemini reviewer and Gemini work with a Sonnet reviewer (<code class="text-cyan-300">server/profiles.mjs:64</code>); nothing in code forces it.</p></div>
-        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Overlord</h3><p class="text-slate-300 mt-1">The hub Lead of a Squad. It is the only role allowed to start a Lead on another lane of its own Squad.</p></div>
+        <div class="crt-card rounded-xl bg-slate-900/70 border border-slate-800 p-5"><h3 class="font-display text-lg font-bold text-white">Overlord</h3><p class="text-slate-300 mt-1">The hub Lead of a Squad. It is the only role allowed to start a Lead on another lane of its own Squad. It may also send input to a live Lead or Overlord of another Squad; the runner logs each such send in the sender's team log (<code class="text-cyan-300">runner/runner.mjs:127</code>, <code class="text-cyan-300">runner/server.mjs:209-213</code>).</p></div>
       </div>
       <div class="rounded-xl bg-emerald-950/20 border border-emerald-500/30 p-5 text-sm text-slate-200 space-y-2">
         <h3 class="font-display text-lg font-bold text-emerald-300">What the server does check today</h3>
@@ -222,7 +222,7 @@
           <li>Starting a Lead: only a Buddy (for its own lane) or the Squad's hub Lead may, the lane must exist in the team registry, the profile must be a Lead profile, and a lane with a live Lead is refused (<code class="text-cyan-300">server/mcp/tools.mjs:342-395</code>). Role, ordinal and handoff labels supplied by the caller are stripped.</li>
           <li>The Overlord handing off a healthy Lead under the token floor is refused unless forced with a written steer note (<code class="text-cyan-300">server/lead-handoff.mjs:223-237</code>).</li>
         </ul>
-        <p class="text-xs text-slate-400">What it does not check: that a Worker may not start other Workers, who may publish a release, or which reviewer is used. Those are prompt rules. Agent identity comes from the runner's per-agent token, but the older tokenless fallback is still on unless <code class="text-cyan-300">VS_AGENT_TOKEN_REQUIRED=1</code> is set (<code class="text-cyan-300">server/backend/runner-client.mjs:38</code>), so don't read it as a security boundary yet.</p>
+        <p class="text-xs text-slate-400">What it does not check: that a Worker may not start other Workers, who may publish a release, or which reviewer is used. Those are prompt rules. Agent identity is a server check: the runner mints an in-memory <code class="text-cyan-300">VS_AGENT_TOKEN</code> per agent (<code class="text-cyan-300">runner/runner.mjs:240,286</code>), and a request that names an agent without its token is refused with 403 before anything is sent (<code class="text-cyan-300">server/mcp/tools.mjs:42-57</code>, <code class="text-cyan-300">server/backend/runner-client.mjs:48-67</code>, <code class="text-cyan-300">server/auth.mjs:730-802</code>). The old <code class="text-cyan-300">VS_AGENT_TOKEN_REQUIRED</code> fallback is gone. Limit: agents run as the same OS user, so one that deliberately reads the local token file is treated as the owner; that is an accepted limit in <code class="text-cyan-300">SECURITY.md</code>, not a sandbox.</p>
       </div>
     </section>
 
@@ -241,11 +241,12 @@
         <div class="rounded-xl bg-slate-900/70 border border-slate-800 p-5">
           <h3 class="font-display text-lg font-bold text-white mb-2">Pairing a phone</h3>
           <ul class="text-sm text-slate-300 space-y-1.5 list-disc pl-5">
-            <li>On the PC, open <strong>Pair a Device</strong>: scan the QR, or type the 6-digit one-time code (valid for about a minute, <code class="text-cyan-300">server/auth.mjs:1007</code>).</li>
+            <li>On the PC, open <strong>Pair a Device</strong>: scan the QR, or type the 6-digit one-time code (valid for 5 minutes, <code class="text-cyan-300">server/auth.mjs:16</code>). A code minted from an already paired phone also needs that phone to tap Approve within 60 seconds (<code class="text-cyan-300">server/auth.mjs:1047</code>).</li>
             <li>The window shows the CA SHA-256 fingerprint to compare with the phone. Other devices stay off by default (loopback only) until you turn on remote access.</li>
             <li>Every paired device has a <strong>Revoke</strong> button that signs it out at once.</li>
-            <li>The <code class="text-cyan-300">vs</code> CLI and MCP tools check an HMAC proof from the local server before sending the local token.</li>
-            <li>An end-to-end encrypted relay exists but is <strong>off by default</strong>: it only starts if you hand-edit a <code class="text-cyan-300">wss://</code> endpoint into your settings file. No hosted relay ships. When one is running, Pair a Device also offers a relay link.</li>
+            <li>The <code class="text-cyan-300">vs</code> CLI, MCP tools and the desktop proxy check an HMAC proof from the local server (<code class="text-cyan-300">GET /__vibesquad/local-proof</code>) before sending the local token (<code class="text-cyan-300">server/local-token.mjs:51-66</code>).</li>
+            <li>On a paired phone, the Host drawer holds a <strong>VIBE</strong> toggle (Psycho / Corpo), a <strong>PROVIDER</strong> switch (Claude / Gemini), the pinned <strong>TEAMS</strong> list and <strong>Settings</strong> (<code class="text-cyan-300">src/PhoneCockpit.tsx:250-330</code>).</li>
+            <li>An end-to-end encrypted relay exists but is <strong>off by default</strong>: it only starts if you hand-edit a <code class="text-cyan-300">wss://</code> endpoint into your settings file. No hosted relay ships. When one is running, Pair a Device also offers a relay link, <code class="text-cyan-300">vibesquad://pair#hostId=&amp;pub=&amp;relay=&amp;code=</code>, with everything in the fragment (<code class="text-cyan-300">server/relay-link.mjs:35-50</code>, <code class="text-cyan-300">src/PairDeviceModal.tsx:473</code>). The phone pins the PC's relay key on first use (<code class="text-cyan-300">src/remoteRelayConnect.ts:83-127</code>); <code class="text-cyan-300">vs host-key rotate</code> replaces it and revokes paired devices unless <code class="text-cyan-300">--keep-devices</code> is passed (<code class="text-cyan-300">cli/vs.mjs:2330-2360</code>).</li>
           </ul>
         </div>
       </div>
@@ -256,7 +257,7 @@
   <!-- Footer -->
   <footer class="border-t border-slate-800/80 bg-slate-950/90 py-8 mt-16">
     <div class="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs font-mono text-slate-400">
-      <div>VibeSquad v0.2.7 · Interactive Architecture &amp; Workflow Guide</div>
+      <div>VibeSquad v0.3.0 · Interactive Architecture &amp; Workflow Guide</div>
       <div class="flex items-center gap-4">
         <a href="https://github.com/Pizzarar/VibeSquad" target="_blank" rel="noopener noreferrer" class="text-slate-200 hover:underline">GitHub →</a>
         <a href="https://github.com/Pizzarar/VibeSquad/wiki" target="_blank" rel="noopener noreferrer" class="text-cyan-400 hover:underline">User Guide &amp; Wiki →</a>

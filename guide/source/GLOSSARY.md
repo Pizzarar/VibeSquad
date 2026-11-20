@@ -143,7 +143,7 @@ driving a pixel-art tool. Every MCP server adds its tool descriptions to the con
 install them per project.
 
 **Runner.** The built-in part of VibeSquad that runs and manages many agent sessions in one place. It
-automates the carrying of briefs and reports. (VibeSquad was originally built on Paseo by getpaseo; v0.2.8 no longer needs it.)
+automates the carrying of briefs and reports. (VibeSquad was originally built on Paseo by getpaseo; v0.3.0 no longer needs it.)
 
 **Claude Code.** The command-line agent you start with. It reads `CLAUDE.md`.
 
