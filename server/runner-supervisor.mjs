@@ -79,7 +79,8 @@ export function restartRunnerNow(owner, { alive = pidAlive, waitMs = 3000, kill 
  * hash differs AND there are zero running turns AND no idle agent holds background work (a held park: a suite or build its
  * CLI left running, which the kill would cut; idea-88). It restarts at most once per distinct disk hash (no restart loop), and it
  * never treats an unknown running count as zero (it waits, or derives it from the agent list). A runner build without the
- * `held` field predates the count and is gated on running turns alone.
+ * `held` field predates the count and is gated on running turns alone. While the runner reports an active `vs restart` drain the
+ * hash restart is deferred: that restart stops the runner gracefully itself (idea-375).
  */
 export function superviseRunner(owner, {
   checkMs = 5000,
@@ -87,7 +88,7 @@ export function superviseRunner(owner, {
   maxBackoffMs = 60000,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
-  healthInfo = (o) => o.rc.request("GET", "/health").then((h) => ({ hash: h.hash, running: h.running, held: h.held })).catch(() => null),
+  healthInfo = (o) => o.rc.request("GET", "/health").then((h) => ({ hash: h.hash, running: h.running, held: h.held, drain: h.drain ?? null })).catch(() => null),
   runningCount = (o) => o.listAgents().then((agents) => agents.filter((a) => a.status === "running").length).catch(() => null),
   diskHash = () => hashRunnerFiles(runtimeRunnerDir()),
   restart = (o) => restartRunnerNow(o),
@@ -99,6 +100,7 @@ export function superviseRunner(owner, {
   let pendingLogged = false;
   let restartedFor = null; // the disk hash we already restarted for (restart at most once per distinct hash)
   let gaveUpLogged = false; // "still stale after restart" logged once per stuck hash
+  let drainLogged = false; // "deferred to vs restart" logged once per drain
   const tick = async () => {
     let delay = checkMs;
     try {
@@ -117,6 +119,7 @@ export function superviseRunner(owner, {
         const hash = health?.hash;
         // A runner whose /health has no hash field (old build) is stale; so is a hash that differs from the runtime files.
         const stale = typeof hash !== "string" || hash !== disk;
+        if (!health?.drain) drainLogged = false;
         if (!stale) {
           pendingLogged = false;
         } else {
@@ -129,7 +132,18 @@ export function superviseRunner(owner, {
             running = await runningCount(owner); // number | null
           }
           const held = typeof health?.held === "number" && Number.isFinite(health.held) && health.held > 0 ? health.held : 0;
-          if (running === null || running > 0 || held > 0) {
+          // idea-375: a `vs restart` drain is active (scripts/restart-runtime.mjs sets it before waiting for idle). That restart
+          // owns the stop: it sends the graceful token /shutdown the moment the runner is idle, which saves the fold index. The
+          // RR1 hard kill raced it (01:22:33.821Z, 2 ms after the restart saw idle): no graceful stop, no shutdown fold-index
+          // save, and the replacement it started was then tree-killed with the server. Defer while the drain lasts (TTL-bound, so
+          // a crashed restart cannot block RR1 for good); the restart replaces the runner with the new code anyway.
+          const drain = health?.drain && typeof health.drain === "object" ? health.drain : null;
+          if (drain) {
+            if (!drainLogged) {
+              drainLogged = true;
+              log(`runner restart deferred: vs restart drain active (${drain.reason || "no reason"}), it stops the runner gracefully`);
+            }
+          } else if (running === null || running > 0 || held > 0) {
             if (!pendingLogged) {
               pendingLogged = true;
               const busy = [running === null ? "running turns unknown" : running > 0 ? `${running} running turn(s)` : null, held > 0 ? `${held} agent(s) holding background work` : null].filter(Boolean).join(", ");
