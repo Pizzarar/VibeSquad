@@ -67,9 +67,21 @@ async function toSquadsHome(page) {
   await page.locator(tid("squads-home")).waitFor({ timeout: 6000 });
   await sleep(500);
 }
+// Since fc6e7427 (psycho U1) the squad page IS the hub page (HubPages): a squad tile click, or a reload with a saved vibesquad pin
+// focus, lands there, and the PinGrid only shows on a pristine app (no saved team/focus; the demo then opens on it). So reach it by
+// wiping storage before the next load. The old page re-saves its focus while unloading, so the wipe runs from an init script on the
+// next load (flagged via sessionStorage), not from the old page.
+const pgSeeded = new WeakSet();
 async function toPinGrid(page) {
-  await toSquadsHome(page);
-  await click(page, `${tid(`squad-home-tile-${SQUAD}`)} .squad-home-tile-name`);
+  await reset(page);
+  if (!pgSeeded.has(page)) {
+    pgSeeded.add(page);
+    await page.addInitScript(() => {
+      if (sessionStorage.getItem("__pinGridFresh")) { sessionStorage.removeItem("__pinGridFresh"); localStorage.clear(); localStorage.setItem("vs.vibePicked", "1"); }
+    });
+  }
+  await page.evaluate(() => sessionStorage.setItem("__pinGridFresh", "1"));
+  await reload(page);
   await page.locator(tid("pin-grid")).waitFor({ timeout: 6000 });
   await sleep(500);
 }
