@@ -663,23 +663,6 @@ export function createWatchEngine({
     return out;
   }
 
-  /** idea-351: open sets (by value) watching an agent that `entry` names, minus sets owned by the entry author. Looser than holdingSets: no report check. */
-  function coveringSets(entry) {
-    const ids = refsOf(entry);
-    return openSets().filter((s) => s.owner !== entry?.agent && s.items.some((i) => i.kind === "agent" && ids.includes(i.ref))).map((s) => structuredClone(s));
-  }
-
-  /** idea-351/353: does this agent own an armed (open) watch whose ping will wake it anyway? */
-  function ownsOpenSet(ownerId) {
-    return openSets().some((s) => s.owner === ownerId);
-  }
-
-  /** idea-351: open sets (by value) watching an agent that `entry` names, minus sets owned by the entry author. Looser than holdingSets: no report check. */
-  function coveringSets(entry) {
-    const ids = refsOf(entry);
-    return openSets().filter((s) => s.owner !== entry?.agent && s.items.some((i) => i.kind === "agent" && ids.includes(i.ref))).map((s) => structuredClone(s));
-  }
-
   /** idea-351/353: does this agent own an armed (open) watch whose ping will wake it anyway? */
   function ownsOpenSet(ownerId) {
     return openSets().some((s) => s.owner === ownerId);
@@ -978,7 +961,6 @@ export function createWatchEngine({
     onRunnerEvent,
     onLogEntry,
     holdingSets,
-    coveringSets,
     ownsOpenSet,
     markAttempted,
     isCancelled,

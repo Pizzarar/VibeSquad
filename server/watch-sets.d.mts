@@ -117,9 +117,6 @@ export interface WatchEngine {
   onRunnerEvent(ev: any): void;
   onLogEntry(team: string, entry: { ts: string; agent: string; lane: string; type: string; text: string; refs: string[] }): string[];
   holdingSets(entry: any, setIds: string[]): Promise<WatchSet[]>;
-  coveringSets(entry: any): WatchSet[];
-  ownsOpenSet(ownerId: string): boolean;
-  coveringSets(entry: any): WatchSet[];
   ownsOpenSet(ownerId: string): boolean;
   /** Resolves once attemptedAt is on disk (await it before the send); never rejects. */
   markAttempted(keys: string[], to: string): Promise<void>;

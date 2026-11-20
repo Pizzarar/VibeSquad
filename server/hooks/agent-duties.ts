@@ -1133,6 +1133,8 @@ export interface Deps {
   startWatcher: boolean;
   /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
   leadWakeCooldownMs?: number;
+  /** idea-353: how often a held lead notice re-checks whether its watch is gone (default 15s). */
+  noticeRecheckMs?: number;
   /** git status cap for the spawn-time snapshot (default 3000); tests asserting the format pass more. */
   gitSpawnTimeoutMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
@@ -3045,18 +3047,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       return false;
     }
 
-    /**
-     * idea-351: a `done` that names an agent inside an open watch set owned by this lead is noise: the set's completion ping covers it.
-     * Looser than watchHolds (no report-counts or created-after check), so a done the engine did not "take" still does not wake the lead.
-     */
-    async function watchCovers(paseo: Paseo, entry: LogEntry, leadId: string): Promise<boolean> {
-      if (!watch || entry.type !== "done") return false;
-      for (const set of watch.coveringSets(entry)) {
-        if ((await resolveWatchTarget(paseo, set))?.id === leadId) return true;
-      }
-      return false;
-    }
-
     /** idea-353: soft notices (the 150k wrap-up) held for a lead until its next real wake; flushWake prepends them. */
     const leadNotices = new Map<string, string[]>();
 
@@ -3072,9 +3062,36 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (idle && watch?.ownsOpenSet(agentId)) {
         const held = leadNotices.get(agentId) ?? [];
         if (!held.includes(text)) leadNotices.set(agentId, [...held, text]);
+        scheduleNoticeCheck(agentId);
         return;
       }
       await paseo.agents.ref(agentId).send(text).catch((e: unknown) => log(`handoff message failed: ${e}`));
+    }
+
+    /**
+     * A held notice is never dropped: while its lead still owns an open watch the watch's ping carries it; once that watch is
+     * cancelled, expired or otherwise gone with nothing carrying the notice, flush it as one send. Re-checks until delivered.
+     */
+    const noticeTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    function scheduleNoticeCheck(leadId: string) {
+      if (noticeTimers.has(leadId)) return;
+      const t = later(() => {
+        noticeTimers.delete(leadId);
+        void checkHeldNotices(leadId);
+      }, deps.noticeRecheckMs ?? 15_000);
+      noticeTimers.set(leadId, t);
+    }
+    async function checkHeldNotices(leadId: string) {
+      const held = leadNotices.get(leadId);
+      if (!held?.length) return; // a real wake already carried them
+      if (watch?.ownsOpenSet(leadId) || pendingWake.get(leadId)?.length) return scheduleNoticeCheck(leadId);
+      leadNotices.delete(leadId);
+      const paseo = paseoApi;
+      if (!paseo) {
+        leadNotices.set(leadId, held);
+        return scheduleNoticeCheck(leadId);
+      }
+      await paseo.agents.ref(leadId).send(held.join("\n\n")).catch((e: unknown) => log(`held notice send failed: ${e}`));
     }
 
     /** The lead whose pendingWake holds this ping, "" when it is in the debounce queue or mid-send, null when it is nowhere. */
@@ -3518,7 +3535,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const lead = await findLead(paseo, team, lane);
           if (!lead) continue;
           const fresh: LogEntry[] = [];
-          for (const e of entries) if (e.agent !== lead.id && !(await watchHolds(paseo, e, lead.id)) && !(await watchCovers(paseo, e, lead.id))) fresh.push(e);
+          for (const e of entries) if (e.agent !== lead.id && !(await watchHolds(paseo, e, lead.id))) fresh.push(e);
           if (!fresh.length) continue;
           const queue = pendingWake.get(lead.id) ?? [];
           queue.push(...fresh);
@@ -3597,13 +3614,6 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             }
           }
           if (!keep.length) return;
-        }
-
-        // idea-351: only plain `done` events queued and the lead has an armed watch: its ping will wake it, so hold them (no new turn)
-        // and let that ping (or any real wake) carry them. A blocker/decision/needs-you/you entry always wakes.
-        {
-          const held = pendingWake.get(leadId) ?? [];
-          if (held.length && held.every((e) => !watchKeyOf.has(e) && e.type === "done") && watch?.ownsOpenSet(leadId)) return;
         }
 
         // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal
