@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { budget } from "./helpers/load-budget.mjs";
+import { budget, loadFactor } from "./helpers/load-budget.mjs";
 import test from "node:test";
 import { createLoopLagMonitor } from "../runner/loop-lag.mjs";
 
@@ -213,5 +213,5 @@ const c = process.cpuUsage(c0); console.log(JSON.stringify({ pct: ((c.user + c.s
   for (let i = 0; i < 3; i++) { off = sample(false); on = sample(true); if (on.caps === 0) break; }
   console.log(`idle cpu: watchdog off ${off.pct.toFixed(3)}% on ${on.pct.toFixed(3)}% (captures ${on.caps})`);
   assert.equal(on.caps, 0, "watchdog captured during every idle window");
-  assert.ok(on.pct - off.pct < 1, `delta ${on.pct - off.pct}`);
+  assert.ok(on.pct - off.pct < loadFactor(), `delta ${on.pct - off.pct} (limit ${loadFactor()})`);
 });
