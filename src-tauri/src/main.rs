@@ -2009,6 +2009,50 @@ fn server_pid_path() -> PathBuf {
     config_dir().join("server.pid")
 }
 
+/// Image name of a live process, or None when the pid is gone (idea-373). `Some("")` = alive, identity unknown.
+fn process_image_name(pid: u32) -> Option<String> {
+    let mut cmd;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd = std::process::Command::new("tasklist");
+        cmd.args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"]).creation_flags(0x0800_0000);
+    }
+    #[cfg(not(windows))]
+    {
+        cmd = std::process::Command::new("ps");
+        cmd.args(["-p", &pid.to_string(), "-o", "comm="]);
+    }
+    let out = cmd.output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    #[cfg(windows)]
+    {
+        // `"node.exe","1234",...`; "INFO: No tasks..." means the pid is gone.
+        return line.strip_prefix('"').and_then(|r| r.split('"').next()).map(str::to_string);
+    }
+    #[cfg(not(windows))]
+    Some(line.rsplit('/').next().unwrap_or(line).to_string())
+}
+
+/// The pid in server.pid, trusted only when it is alive and a node process (idea-373). A dead pid, a reused pid that is
+/// now another program, or garbage is ignored and the file deleted; a live pid whose identity can't be read is kept.
+fn read_live_server_pid(path: &std::path::Path, probe: impl Fn(u32) -> Option<String>) -> Option<u32> {
+    let text = fs::read_to_string(path).ok()?;
+    if let Ok(pid) = text.trim().parse::<u32>() {
+        if pid > 0 {
+            if let Some(name) = probe(pid) {
+                let n = name.to_ascii_lowercase();
+                if n.is_empty() || n == "node" || n == "node.exe" {
+                    return Some(pid);
+                }
+            }
+        }
+    }
+    let _ = fs::remove_file(path);
+    None
+}
+
 /// Spawns `node server/serve.mjs` without a window. `background` (login entry) additionally asks the server to boot
 /// the runner and detaches it from this process (new process group, job breakaway when the job allows it).
 fn spawn_server_process(
@@ -2104,6 +2148,8 @@ async fn ensure_local_server_running(state: &Arc<SharedAppState>) {
         // Healthy, whoever owns the process (e.g. restarted externally): drop a dead child + stale pid
         // so they never block a later respawn, and never start a second server.
         reap_dead_managed_server(state);
+        // A leftover server.pid from an earlier launch (dead, or pid reused by another program) must not be trusted (idea-373).
+        let _ = read_live_server_pid(&state.pid_path, process_image_name);
         return;
     }
     let child_alive = reap_dead_managed_server(state);
@@ -3418,6 +3464,27 @@ mod tests {
         assert!(state.managed_server.lock().unwrap().is_none(), "no spawn while the port accepts connections");
         assert_eq!(fs::read_to_string(&pid).unwrap(), "12345", "server.pid untouched");
         let _ = fs::remove_dir_all(pid.parent().unwrap());
+    }
+
+    #[test]
+    fn stale_server_pid_is_ignored_and_removed_live_node_pid_kept() {
+        let dir = std::env::temp_dir().join(format!("vs-test-pidfile-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("server.pid");
+        fs::write(&f, "4242").unwrap();
+        assert_eq!(read_live_server_pid(&f, |_| None), None, "dead pid ignored");
+        assert!(!f.exists(), "dead pid file removed");
+        fs::write(&f, "4242").unwrap();
+        assert_eq!(read_live_server_pid(&f, |_| Some("notepad.exe".into())), None, "reused pid (not node) ignored");
+        assert!(!f.exists());
+        fs::write(&f, "junk").unwrap();
+        assert_eq!(read_live_server_pid(&f, |_| panic!("no probe for garbage")), None);
+        assert!(!f.exists());
+        fs::write(&f, "4242").unwrap();
+        assert_eq!(read_live_server_pid(&f, |_| Some("node.exe".into())), Some(4242), "live node kept");
+        assert!(f.exists());
+        assert_eq!(read_live_server_pid(&f, |_| Some(String::new())), Some(4242), "unknown identity kept");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
