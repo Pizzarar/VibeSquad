@@ -161,30 +161,38 @@ async function toFloor(page, n) {
 // inside every clipping ancestor (the spine scroller). The rest state is measured too. (5244b82 shipped a clipped menu + ellipsized
 // "Overlord" because the probe never hovered the row.)
 async function toSidebarNeeds(page) {
+  await reload(page, "&shortrole=1"); // demo adds a Needs-you row titled "Overlord" (the 8-char role the live scout saw ellipsized)
   await toHubPage(page);
   await expandSidebar(page);
   await page.locator(".sidebar .boring-needs-item").locator("visible=true").first().waitFor({ timeout: 8000 });
   await sleep(300);
 }
+const SHORT_ROLE = 12; // a role name this short or shorter must never truncate, in any state
 async function checkSidebarNeedsRows(page) {
-  const n = Math.min(await page.locator(".sidebar .boring-needs-item").count(), 4);
+  const rows = page.locator(".sidebar .boring-needs-item");
+  const n = await rows.count();
   const hits = [];
+  let sawOverlord = false;
   for (let i = 0; i < n; i++) {
-    const row = page.locator(".sidebar .boring-needs-item").nth(i);
-    let restTrunc = false, restCw = 0; // a name too long for the row ellipsizes at rest too (by design): only truncation that APPEARS on hover/focus is the regression
-    for (const state of ["rest", "hover", "menu-open", "focus"]) {
+    const row = rows.nth(i);
+    let restCw = 0;
+    // NO scrollIntoView: a half-visible last row must be measured where it sits (its menu used to be clipped there).
+    for (const state of ["rest", "row-hover", "menu-open", "focus"]) {
       await page.mouse.move(2, 2);
-      if (state === "hover") { await row.scrollIntoViewIfNeeded().catch(() => {}); await row.hover({ timeout: 3000 }).catch(() => {}); }
-      if (state === "menu-open") { await row.scrollIntoViewIfNeeded().catch(() => {}); await row.locator(".boring-needs-more").hover({ timeout: 3000 }).catch(() => {}); } // the menu opens on the wrap's :hover
+      await page.evaluate(() => document.activeElement?.blur?.());
+      if (state === "row-hover") await row.locator(".boring-needs-why").hover({ timeout: 3000, force: true }).catch(() => {});
+      if (state === "menu-open") await row.locator(".boring-needs-more").hover({ timeout: 3000, force: true }).catch(() => {}); // the menu opens on the wrap's :hover
       if (state === "focus") await row.locator(".boring-needs-menu-item").first().focus().catch(() => {});
       await sleep(120);
       const m = await row.evaluate((el) => {
         const r = (e) => { const b = e.getBoundingClientRect(); return { x: b.x, y: b.y, w: b.width, h: b.height, right: b.right, bottom: b.bottom }; };
         const who = el.querySelector(".boring-needs-who");
         const menu = el.querySelector(".boring-needs-menu");
-        // clip rect = intersection of every ancestor that clips (overflow not visible) up to the sidebar
+        const fixed = !!menu && getComputedStyle(menu).position === "fixed"; // a fixed menu escapes the scroller: only the viewport (and the sidebar's width) clips it
         const clip = { l: 0, t: 0, r: innerWidth, b: innerHeight };
-        for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
+        const sb = el.closest(".sidebar")?.getBoundingClientRect();
+        if (sb) { clip.r = Math.min(clip.r, sb.right); clip.l = Math.max(clip.l, sb.left); }
+        if (!fixed) for (let a = el.parentElement; a && a !== document.documentElement; a = a.parentElement) {
           const cs = getComputedStyle(a);
           const b = a.getBoundingClientRect();
           if (cs.overflowX !== "visible") { clip.l = Math.max(clip.l, b.left); clip.r = Math.min(clip.r, b.right); }
@@ -192,17 +200,30 @@ async function checkSidebarNeedsRows(page) {
           if (a.classList.contains("sidebar")) break;
         }
         const shown = !!menu && getComputedStyle(menu).display !== "none";
-        return { who: who ? { sw: who.scrollWidth, cw: who.clientWidth, text: (who.textContent || "").trim(), box: r(who) } : null, menu: shown ? r(menu) : null, clip, items: shown ? [...menu.children].map(r) : [] };
+        const why = el.querySelector(".boring-needs-why");
+        return { who: who ? { sw: who.scrollWidth, cw: who.clientWidth, text: (who.textContent || "").trim(), box: r(who) } : null, menu: shown ? r(menu) : null, clip, items: shown ? [...menu.children].map(r) : [], whyShown: !!why && getComputedStyle(why).visibility !== "hidden", rowH: el.getBoundingClientRect().height };
       });
+      if (!m.who) continue;
+      if (m.who.text === "Overlord") sawOverlord = true;
+      const short = m.who.text.length <= SHORT_ROLE;
       const base = { split: "ours", classes: ["boring-needs-who"], tag: "span", other: null };
-      if (state === "rest") { restTrunc = !!m.who && m.who.sw > m.who.cw; restCw = m.who?.cw ?? 0; }
-      else if (m.who && ((m.who.sw > m.who.cw && !restTrunc) || m.who.cw < restCw - 0.5)) hits.push({ ...base, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: m.who.text, detail: `role name loses width in ${state} state: scrollWidth ${m.who.sw}, clientWidth ${m.who.cw} (rest ${restCw})`, box: m.who.box });
+      const trunc = { ...base, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: m.who.text, box: m.who.box };
+      if (state === "rest") {
+        restCw = m.who.cw;
+        if (short && m.who.sw > m.who.cw) hits.push({ ...trunc, detail: `short role name truncated at rest: scrollWidth ${m.who.sw} > clientWidth ${m.who.cw}` });
+      } else {
+        if (m.who.cw < restCw - 0.5) hits.push({ ...trunc, detail: `role name loses width in ${state} state: clientWidth ${m.who.cw} < rest ${restCw} (scrollWidth ${m.who.sw})` });
+        if (short && m.who.sw > m.who.cw) hits.push({ ...trunc, detail: `short role name truncated in ${state} state: scrollWidth ${m.who.sw} > clientWidth ${m.who.cw}` });
+      }
+      if (state === "row-hover" && !m.whyShown) hits.push({ ...base, classes: ["boring-needs-why"], tag: "div", kind: "needs-row-reason-hidden", selector: ".sidebar .boring-needs-why", text: m.who.text, detail: "plain row hover hides the reason line (only the open menu may cover it)", box: m.who.box });
       if (m.menu) {
         const right = Math.max(m.menu.right, ...m.items.map((x) => x.right));
-        if (right > m.clip.r + 0.5 || m.menu.x < m.clip.l - 0.5) hits.push({ ...base, classes: ["boring-needs-menu"], tag: "div", kind: "needs-row-menu-clipped", selector: ".sidebar .boring-needs-menu", text: "", detail: `row menu leaves the scroller clip in ${state} state: menu right ${right.toFixed(1)} vs clip right ${m.clip.r.toFixed(1)} (left ${m.menu.x.toFixed(1)} vs ${m.clip.l.toFixed(1)})`, box: m.menu });
+        const bottom = Math.max(m.menu.bottom, ...m.items.map((x) => x.bottom));
+        if (right > m.clip.r + 0.5 || m.menu.x < m.clip.l - 0.5 || bottom > m.clip.b + 0.5 || m.menu.y < m.clip.t - 0.5) hits.push({ ...base, classes: ["boring-needs-menu"], tag: "div", kind: "needs-row-menu-clipped", selector: ".sidebar .boring-needs-menu", text: "", detail: `row menu leaves the clip rect in ${state} state: menu x ${m.menu.x.toFixed(1)}..${right.toFixed(1)} y ${m.menu.y.toFixed(1)}..${bottom.toFixed(1)} vs clip x ${m.clip.l.toFixed(1)}..${m.clip.r.toFixed(1)} y ${m.clip.t.toFixed(1)}..${m.clip.b.toFixed(1)}`, box: m.menu });
       }
     }
   }
+  if (!sawOverlord) hits.push({ split: "ours", classes: ["boring-needs-who"], tag: "span", other: null, kind: "needs-row-truncated", selector: ".sidebar .boring-needs-who", text: "Overlord", detail: "probe fixture missing: no 'Overlord' Needs-you row (demo ?shortrole=1) so the short-role case went unmeasured", box: { x: 0, y: 0, w: 1, h: 1 } });
   await page.mouse.move(2, 2);
   return hits;
 }
@@ -236,7 +257,7 @@ export const SURFACES = [
   { id: "menu-drawer-config", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-config-menu-btn")); await sleep(400); }, mobile: false },
   { id: "menu-drawer-more", setup: async (p) => { await toFocus(p); await click(p, tid("drawer-more-toggle")); await sleep(400); }, mobile: false },
   { id: "menu-pin-tile", setup: async (p) => { await toHubPage(p); await expandSidebar(p); await openSidebarPinMenu(p); await sleep(400); }, mobile: false }, // the sidebar pin menu
-  { id: "sidebar-needs-hover", setup: toSidebarNeeds, check: checkSidebarNeedsRows, checkOnly: true, roots: [".sidebar .boring-needs-you"], mobile: false }, // Needs-you rows at rest / hover / menu-open
+  { id: "sidebar-needs-hover", setup: toSidebarNeeds, check: checkSidebarNeedsRows, checkOnly: true, after: async (p) => { await reload(p); }, roots: [".sidebar .boring-needs-you"], mobile: false }, // Needs-you rows at rest / hover / menu-open
   { id: "modal-command-palette", setup: async (p) => { await reset(p); await p.keyboard.press("Control+k"); await p.locator(tid("command-palette")).waitFor({ timeout: 4000 }); await sleep(300); }, mobile: false },
   { id: "modal-new-squad", setup: async (p) => { await reset(p); await click(p, tid("sidebar-new-squad-btn")); await sleep(600); }, mobile: false },
   { id: "modal-diagnostics", setup: async (p) => { await reset(p); await click(p, tid("open-diagnostics-btn")); await p.locator(tid("diagnostics-modal")).waitFor({ timeout: 4000 }); await sleep(500); }, mobile: false },

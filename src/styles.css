@@ -6491,14 +6491,14 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .sidebar .boring-needs-more:hover { color: var(--text); }
 .sidebar .boring-needs-menu { display: none; flex-direction: row; gap: 3px; }
 /* the spine scroller clips x (content ~137px at 1280): the open menu cannot sit inline beside the role name (it ate its width: "Overlord" ellipsized, Dismiss clipped 7.6px).
-   On row hover / keyboard focus the menu leaves the first line and overlays the row's reason line (reserved at 22px, hidden while the menu shows), so the row never grows (a growing last row pushed the menu out of the scroller)
-   and the name keeps the whole first line. It opens off the ROW, not the wrap, so it never moves from under the pointer. */
+   The menu stays a child of the wrap (so :hover on it keeps the wrap hovered) but is placed (position: fixed, auto offsets) over the row's reason line, right-aligned under the ⋯, outside the spine's clip. The row never grows (a growing last row pushed the menu out of the scroller)
+   and the name keeps the whole first line. Only the ⋯ / menu (wrap hover) or keyboard focus inside the wrap opens it, so plain row hover leaves the reason readable; the reason hides only while the menu covers it. */
 .sidebar .boring-needs-item { position: relative; }
 .sidebar .boring-needs-why { min-height: 22px; box-sizing: border-box; }
-.sidebar .boring-needs-item:hover .boring-needs-why, .sidebar .boring-needs-item:focus-within .boring-needs-why { visibility: hidden; }
-.sidebar .boring-needs-item:hover .boring-needs-menu-wrap, .sidebar .boring-needs-item:focus-within .boring-needs-menu-wrap { position: absolute; left: 5px; right: 5px; top: 27px; height: 22px; justify-content: flex-end; }
-.sidebar .boring-needs-item:hover .boring-needs-menu, .sidebar .boring-needs-item:focus-within .boring-needs-menu { display: flex; min-width: 0; }
-.sidebar .boring-needs-item:hover .boring-needs-more, .sidebar .boring-needs-item:focus-within .boring-needs-more { display: none; }
+.sidebar .boring-needs-item:has(.boring-needs-menu-wrap:hover) .boring-needs-why, .sidebar .boring-needs-item:has(.boring-needs-menu-wrap:focus-within) .boring-needs-why { visibility: hidden; }
+.sidebar .boring-needs-menu-wrap .boring-needs-menu { position: fixed; margin-top: 34px; transform: translateX(calc(-100% + 20px)); height: 22px; align-items: center; z-index: 5; } /* fixed with auto offsets keeps its in-flow spot under the ⋯ but is NOT clipped by the scrolling spine, so a half-visible last row still shows the whole menu */
+.sidebar .boring-needs-menu-wrap .boring-needs-menu::before { content: ""; position: absolute; left: 0; right: 0; top: -6px; height: 6px; } /* hover bridge from the ⋯ to the menu */
+.sidebar .boring-needs-menu-wrap:hover .boring-needs-menu, .sidebar .boring-needs-menu-wrap:focus-within .boring-needs-menu { display: flex; min-width: 0; }
 .sidebar .boring-needs-menu { gap: 2px; }
 .sidebar .boring-needs-menu .boring-needs-menu-item { padding: 0 4px; }
 .sidebar .boring-needs-err { color: var(--pink-t); font-size: 11px; padding: 2px 4px; }
