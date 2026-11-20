@@ -348,6 +348,11 @@ export async function run() {
                 let cur = (await probe(page, "P.triggers()")).find((x) => x.key === t.key);
                 if (!cur) { await redo(); cur = (await probe(page, "P.triggers()")).find((x) => x.key === t.key); }
                 if (!cur) { triggersSkipped++; st.triggersSkipped++; process.stderr.write(`  trigger gone ${surf.id} ${combo}: ${t.sel} "${t.text}"\n`); continue; }
+                // A sidebar Needs-you row can sit half under the spine's bottom edge; its hover menu is a second line (never inline), so the row is scrolled fully into view first, as a user would before reading the menu.
+                if (/boring-needs-menu-/.test(t.sel) && await page.evaluate(([x, y]) => { const li = document.elementFromPoint(x, y)?.closest(".boring-needs-item"); if (!li) return false; li.scrollIntoView({ block: "nearest" }); return true; }, [cur.cx, cur.cy])) {
+                  await sleep(80);
+                  cur = (await probe(page, "P.triggers()")).find((x) => x.key === t.key) ?? cur;
+                }
                 await probe(page, "P.snapshot()");
                 const pageSig = await stateSig(page);
                 await page.mouse.click(cur.cx, cur.cy);
