@@ -1007,7 +1007,7 @@ code {
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 1; color: var(--muted);
   cursor: default;
 }
 
@@ -3522,7 +3522,7 @@ html, body, #root { overflow-x: hidden; }
 .pin-menu-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1) 0; }
 .pin-menu-list > button { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .pin-menu-list > button:hover:not(:disabled) { background: var(--navy); color: var(--cyan-t); }
-.pin-menu-list > button:disabled { opacity: 0.5; cursor: default; }
+.pin-menu-list > button:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .pin-menu-rename { display: flex; gap: 6px; padding: 6px 8px; }
 .pin-menu-rename input { flex: 1; min-width: 0; background: var(--navy); color: var(--text); border: 1px solid var(--line); padding: 4px 6px; font: inherit; }
 /* Fresh-session divider for quick-started Brainstorms (rendered by AgentDrawer for label vs.fresh-session=brief). */
@@ -4045,7 +4045,7 @@ html, body, #root { overflow-x: hidden; }
   cursor: pointer;
 }
 .usage-review-run:hover:not(:disabled) { border-color: var(--mint-t); color: var(--mint-t); }
-.usage-review-run:disabled { opacity: 0.6; cursor: default; }
+.usage-review-run:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .usage-review-status { color: var(--violet-t); }
 .usage-review-error {
   color: var(--pink-t);
@@ -4086,7 +4086,7 @@ html, body, #root { overflow-x: hidden; }
 .usage-inbox-text { font-size: 12px; line-height: 1.45; word-break: break-word; }
 .usage-inbox-actions { display: flex; gap: var(--sp-2, 8px); }
 .usage-inbox-btn { background: var(--panel-hi); border: 1px solid var(--line); padding: var(--sp-1, 4px) var(--sp-3, 12px); font: inherit; font-size: 11px; letter-spacing: 0.08em; cursor: pointer; }
-.usage-inbox-btn:disabled { opacity: 0.6; cursor: default; }
+.usage-inbox-btn:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .usage-inbox-accept { color: var(--mint-t); border-color: var(--mint-t); }
 .usage-inbox-reject { color: var(--pink-t); border-color: var(--pink-t); }
 .squad-home-tile { display: flex; flex-direction: column; gap: 10px; padding: 14px; text-align: left; color: inherit; background: var(--panel, var(--bg)); border: 1px solid var(--line, #232846); border-radius: 10px; cursor: pointer; min-width: 0; }
@@ -5354,7 +5354,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .btn.hot { background: var(--pink-fill); color: var(--on-cyan-fill); border: 1px solid var(--shadow-hard); }
 .btn.confirm.armed { border: 1px solid var(--shadow-hard); }
 .btn.successor.warn { background: var(--pastel-amber); }
-.btn:disabled { opacity: 0.55; }
+.btn:disabled { opacity: 1; color: var(--muted); }
 .seg { border: 1px solid var(--line); box-shadow: var(--bevel); background: var(--well); }
 .seg button { border: 0; box-shadow: none; font-weight: 400; color: var(--muted); background: transparent; }
 .seg button.on { background: var(--pastel-violet); color: var(--text); box-shadow: var(--bevel); }
@@ -5721,7 +5721,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
   border-image: var(--u3-btn-marble-normal) 4 fill / calc(var(--u3-px) * 4) / 0 repeat; background: none; color: var(--u3-ink-text); text-shadow: none; min-height: 0; height: calc(var(--u3-px) * 10);
 }
 .seg { background: none; }
-.btn:disabled { opacity: 0.55; }
+.btn:disabled { opacity: 1; color: var(--muted); }
 .update-available-banner .btn:not(.ghost) { background: none !important; }
 .btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
 
@@ -6097,7 +6097,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .composer-more-list { position: fixed; z-index: 1200; max-width: calc(100vw - 16px); min-width: 180px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--cyan); box-shadow: var(--bevel); padding: var(--sp-1, 4px) 0; }
 .composer-more-item { background: none; border: 0; color: var(--text); font: inherit; text-align: left; padding: 6px 12px; cursor: pointer; }
 .composer-more-item:hover:not(:disabled), .composer-more-item:focus-visible { background: var(--navy); color: var(--cyan-t); outline: none; }
-.composer-more-item:disabled { opacity: 0.5; cursor: default; }
+.composer-more-item:disabled { opacity: 1; color: var(--muted); cursor: default; }
 @media (max-width: 760px) { .composer-more-tab { min-width: 32px; min-height: 48px; } .composer-more-item { min-height: 44px; } }
 
 /* Project header Bugs quick-chip (PLAN_PROJECT_CHIPS_WORKFLOWS C1): icon-size, integer-snapped, zero row-height growth. */
@@ -6126,7 +6126,7 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   opacity: 1;
   filter: drop-shadow(0 0 2px var(--cyan));
 }
-.quick-chip:disabled { opacity: 0.5; cursor: default; }
+.quick-chip:disabled { opacity: 1; filter: grayscale(1); cursor: default; }
 .quick-chip-art {
   position: relative;
   display: inline-flex;
