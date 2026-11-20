@@ -87,7 +87,8 @@ export function readRestartRequest(home) {
  * Record a request (the CLI's `vs restart request`; the caller gate is the CLI's). Refuses while another request is open.
  * `requestedBy` is the Overlord's agent id or "owner"; team/lane are where restart-feedback lines are logged.
  */
-export function createRestartRequest(home, { tip, requestedBy, team = "", lane = "", needs = "", deadlineMin = DEFAULT_DEADLINE_MIN, now = Date.now() } = {}) {
+export function createRestartRequest(home, { tip, requestedBy, team = "", lane = "", needs = "", deadlineMin = DEFAULT_DEADLINE_MIN, scope = "all", now = Date.now() } = {}) {
+  if (scope !== "all" && scope !== "team") throw new Error("vs restart request: scope must be all or team");
   const t = String(tip ?? "").trim();
   if (!TIP_RE.test(t)) throw new Error(`vs restart request: <tip> must be a commit or branch name (letters, digits, . _ / -), got ${JSON.stringify(String(tip ?? ""))}`);
   const min = Number(deadlineMin);
@@ -106,6 +107,8 @@ export function createRestartRequest(home, { tip, requestedBy, team = "", lane =
       team: String(team ?? ""),
       lane: String(lane ?? ""),
       needs: need,
+      // idea-371 L1: the runtime restart is machine-wide, so every Squad's leads are asked by default ("all"); "team" asks only the requester's Squad.
+      scope,
       createdAt: at,
       deadlineMin: min,
       deadline: iso(now + min * 60_000),
@@ -233,9 +236,10 @@ const leadName = (l) => `${l.lane} lead ${l.leadId}${l.title ? ` (${l.title})` :
 const heldLine = (list) => (list ?? []).map((h) => (h.work?.length ? `${h.agentId} (${h.work.map((w) => `pid ${w.pid}: ${w.cmd}`).join(", ")})` : h.agentId)).join(", ");
 
 /** The drain ask (no double quotes or backticks: it may be pasted into a shell). idea-369: names the lane's held work. */
-export function requestAskText(req, lead, held) {
-  const left = Math.max(0, Math.round((Date.parse(req.deadline) - Date.parse(req.createdAt)) / 60000));
-  return `Restart request ${req.id} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}) from ${req.requestedBy}: the server restarts the runtime once every live lead has drained, or at ${req.deadline} (~${left} min) regardless. ` +
+export function requestAskText(req, lead, held, now = Date.now()) {
+  // idea-371 L2: minutes LEFT at ask time (a lead asked later in the drain window is not told the full initial duration).
+  const left = Math.max(0, Math.round((Date.parse(req.deadline) - now) / 60000));
+  return `Restart request ${req.id} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}) from ${req.requestedBy}${req.team ? ` (Squad ${req.team}${req.scope === "team" ? " only" : ", all Squads are asked: the restart is machine-wide"})` : ""}: the server restarts the runtime once every live lead has drained, or at ${req.deadline} (~${left} min) regardless. ` +
     `Please drain: let running suites finish or stop what is not needed (vs stop <agent> --background, idle agents only), hold new background suites, then run: vs log restart-feedback '${DRAINED_TEXT} ${req.tip}'. ` +
     (held?.length ? `The runner holds background work in your lane right now: ${heldLine(held)}; it must finish or be stopped before your drain counts. ` : "") +
     `You get '${DONE_TEXT}' after the restart; lift the hold then. Progress: vs restart status.`;
@@ -272,8 +276,9 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
     if (leads) {
       for (const l of leads) {
         if (l.leadId === req.requestedBy || req.asked[l.leadId]) continue;
+        if (req.scope === "team" && req.team && l.team !== req.team) continue;
         req.asked[l.leadId] = { team: l.team, lane: l.lane, title: l.title ?? null, askedAt: at };
-        actions.push({ kind: "ask", leadId: l.leadId, text: requestAskText(req, l, req.held?.byLead?.[l.leadId]) });
+        actions.push({ kind: "ask", leadId: l.leadId, text: requestAskText(req, l, req.held?.byLead?.[l.leadId], now) });
       }
       const live = new Set(leads.map((l) => l.leadId));
       for (const id of Object.keys(req.asked)) {
@@ -363,7 +368,7 @@ function notifyClosed(req, at, actions) {
 export function formatRequestStatus(req, now = Date.now()) {
   if (!req) return "no restart request (vs restart request <tip> [--deadline <min>])";
   const mins = (t) => Math.round((Date.parse(t) - now) / 60000);
-  const lines = [`restart request ${req.id}: ${req.state} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}, by ${req.requestedBy}, created ${req.createdAt}, deadline ${req.deadline}${TERMINAL.has(req.state) ? "" : ` (${mins(req.deadline) >= 0 ? `in ${mins(req.deadline)} min` : `${-mins(req.deadline)} min ago`})`})`];
+  const lines = [`restart request ${req.id}: ${req.state} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}, by ${req.requestedBy}${req.scope === "team" ? `, ${req.team} Squad only` : ", all Squads"}, created ${req.createdAt}, deadline ${req.deadline}${TERMINAL.has(req.state) ? "" : ` (${mins(req.deadline) >= 0 ? `in ${mins(req.deadline)} min` : `${-mins(req.deadline)} min ago`})`})`];
   const asked = Object.entries(req.asked ?? {});
   const settled = asked.filter(([id]) => req.drained?.[id] || req.gone?.[id]).length;
   if (asked.length) lines.push(`  leads: ${settled}/${asked.length} drained or gone`);

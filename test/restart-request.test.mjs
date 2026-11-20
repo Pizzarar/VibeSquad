@@ -295,3 +295,94 @@ test("vs restart request/abort: Overlord or owner only; status is read-only for 
     process.stdout.write = write;
   }
 });
+
+// ---- idea-370 / idea-371 ----------------------------------------------------------------------------------------------
+
+test("idea-370: a plain vs restart warns (stderr, not blocking) while a request is requested/draining/ready, and is silent otherwise", async () => {
+  const { commandRestart } = await import("../cli/vs.mjs");
+  const home = tmp();
+  const base = { env: { VIBESQUAD_HOME: home }, teams: TEAMS, hasOwnerProof: () => true, drainGuard: () => ({ pending: [] }), heldList: async () => null, spawnFn: () => 4321, confirmStart: null };
+  const run = async () => {
+    const err = [];
+    const e0 = process.stderr.write; const o0 = process.stdout.write;
+    process.stderr.write = (s) => { err.push(String(s)); return true; };
+    process.stdout.write = () => true;
+    try { await commandRestart({}, base); } finally { process.stderr.write = e0; process.stdout.write = o0; }
+    return err.join("");
+  };
+  assert.doesNotMatch(await run(), /restart request/, "no request: no warning");
+  const req = request(home);
+  const warned = await run();
+  assert.ok(warned.includes(`warning: restart request ${req.id} (tip ${TIP}) is requested`), warned);
+  assert.match(warned, /goes ahead anyway/, "not blocking");
+  abortRestartRequest(home, { by: "owner", now: T0 });
+  assert.doesNotMatch(await run(), /restart request/, "a finished request does not warn");
+});
+
+test("idea-371 L2: the ask states the minutes LEFT at ask time, not the initial duration", async () => {
+  const home = tmp();
+  const w = world(home, { agents: [OVE, BUG] });
+  request(home, { deadlineMin: 30 });
+  const loop = w.loop();
+  w.now = T0 + 20 * MIN;
+  await loop.tick();
+  assert.match(w.sends()[0][2], /\(~10 min\)/, "asked 20 min into a 30 min window");
+  assert.doesNotMatch(w.sends()[0][2], /~30 min/);
+  assert.match(readRestartRequest(home).events.map((e) => e.text).join("|"), /drain asks/);
+});
+
+test("idea-371 L2: a lead that appears mid-window is asked once, with the remaining time", async () => {
+  const home = tmp();
+  const w = world(home, { agents: [OVE, BUG] });
+  request(home, { deadlineMin: 30 });
+  const loop = w.loop();
+  await loop.tick();
+  w.agents = [OVE, BUG, UI];
+  w.now = T0 + 25 * MIN;
+  await loop.tick();
+  const ui = w.sends().filter((c) => c[1] === "rn-ui");
+  assert.equal(ui.length, 1);
+  assert.match(ui[0][2], /\(~5 min\)/);
+  w.now = T0 + 26 * MIN;
+  await loop.tick();
+  assert.equal(w.sends().filter((c) => c[1] === "rn-ui").length, 1, "never re-sent");
+});
+
+test("idea-371 L1: scope=all (default) asks every Squad and says so; --team-only asks only the requester's Squad", async () => {
+  const other = { ...ag("rn-oth", "x", "lead"), labels: { team: "other", lane: "x", role: "lead" } };
+  const teams2 = [...TEAMS, { id: "other", name: "Other", hub: "x", lanes: [{ id: "x" }] }];
+  const mk = (home) => {
+    const w = world(home, { agents: [OVE, BUG, other] });
+    const loop = createRestartRequestLoop({ home, teams: () => teams2, now: () => w.now, listAgents: async () => w.agents, heldList: async () => null, runVs: async (a) => { w.calls.push(a); return { ok: true }; }, fire: async () => ({ ok: true }) });
+    return { w, loop };
+  };
+  const h1 = tmp();
+  const a = mk(h1);
+  const r1 = request(h1);
+  assert.equal(r1.scope, "all");
+  await a.loop.tick();
+  assert.deepEqual(a.w.sends().map((c) => c[1]).sort(), ["rn-bug", "rn-oth"], "all Squads asked by default");
+  assert.match(a.w.sends()[0][2], /all Squads are asked: the restart is machine-wide/);
+  assert.match(formatRequestStatus(readRestartRequest(h1), T0), /all Squads/);
+
+  const h2 = tmp();
+  const b = mk(h2);
+  const r2 = request(h2, { scope: "team" });
+  await b.loop.tick();
+  assert.deepEqual(b.w.sends().map((c) => c[1]), ["rn-bug"], "only the requester's Squad");
+  assert.match(b.w.sends()[0][2], /Squad vibesquad only/);
+  assert.match(formatRequestStatus(readRestartRequest(h2), T0), /vibesquad Squad only/);
+  assert.equal(Object.keys(readRestartRequest(h2).asked).includes("rn-oth"), false, "an out-of-scope lead is never asked, so never a laggard");
+  assert.throws(() => request(tmp(), { scope: "bogus" }), /scope must be/);
+  assert.equal(r2.scope, "team");
+});
+
+test("idea-371 L1: vs restart request --team-only records scope=team", async () => {
+  const home = tmp();
+  const out = process.stdout.write;
+  process.stdout.write = () => true;
+  try {
+    await commandRestartRequest({ _: ["request", TIP], teamOnly: true }, { teams: TEAMS, env: { VIBESQUAD_HOME: home }, hasOwnerProof: () => true, now: () => T0 });
+  } finally { process.stdout.write = out; }
+  assert.equal(readRestartRequest(home).scope, "team");
+});

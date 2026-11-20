@@ -289,6 +289,7 @@ export function parseArgs(argv) {
     "dryRun",
     "noForce",
     "killBackground",
+    "teamOnly",
     "background",
     "force",
     "print",
@@ -527,7 +528,7 @@ Usage:
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
   vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
-  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. A durable server-side restart request: the server asks every live lead to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
+  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. A durable server-side restart request: the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -2730,11 +2731,11 @@ export async function commandRestartRequest(flags, { identity = null, teams = TE
     process.stdout.write(`${req.id} aborted; the server tells the asked leads to lift their hold.\n`);
     return 0;
   }
-  if (flags._.length !== 2) throw new Error("usage: vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>]");
+  if (flags._.length !== 2) throw new Error("usage: vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]");
   const where = caller?.owner === false && caller.team ? { team: caller.team, lane: caller.lane } : ownerHubLane(teams);
   const deadlineMin = flags.deadline === undefined ? rr.DEFAULT_DEADLINE_MIN : /^\d+$/.test(String(flags.deadline)) ? Number(flags.deadline) : NaN;
-  const req = rr.createRestartRequest(vsHome, { tip: flags._[1], requestedBy: by, ...where, needs: flags.needs ?? "", deadlineMin, now: now() });
-  process.stdout.write(`${req.id} recorded (tip ${req.tip}, deadline ${req.deadline}). The server sends the drain ask to every live lead within ~${rr.TICK_MS / 1000}s, ` +
+  const req = rr.createRestartRequest(vsHome, { tip: flags._[1], requestedBy: by, ...where, needs: flags.needs ?? "", deadlineMin, scope: flags.teamOnly ? "team" : "all", now: now() });
+  process.stdout.write(`${req.id} recorded (tip ${req.tip}, deadline ${req.deadline}). The server sends the drain ask to every live lead${req.scope === "team" ? ` of Squad ${req.team}` : " of every Squad (the restart is machine-wide; --team-only limits it to yours)"} within ~${rr.TICK_MS / 1000}s, ` +
     `fires vs restart once all have logged restart-feedback 'drained restart ${req.tip}' (or at the deadline, naming who did not), and logs restart-done. No timer to hold: end your turn. Progress: vs restart status\n`);
   return 0;
 }
@@ -2763,6 +2764,17 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
     const skip = drainSkippedNote(g.skipped);
     if (skip) process.stdout.write(`vs restart: drain guard ${skip}
 `);
+  }
+  // idea-370: a plain `vs restart` while a server-side request is open (requested/draining/ready) is not blocked, only flagged:
+  // the request's drain asks and its single fire are the intended path (vs restart status / vs restart abort).
+  if (!flags.dryRun) {
+    try {
+      const open = (await import("../server/restart-request.mjs")).readRestartRequest(vsHome);
+      if (open && ["requested", "draining", "ready"].includes(open.state)) {
+        process.stderr.write(`vs restart: warning: restart request ${open.id} (tip ${open.tip}) is ${open.state}; the server will fire its own restart once the leads drain. This manual restart goes ahead anyway; see vs restart status, or vs restart abort first if you did not mean both.
+`);
+      }
+    } catch { /* an unreadable request file never blocks a restart */ }
   }
   const logFile = path.join(vsHome, "logs", `restart-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
   const args = [script, "--log", logFile];
