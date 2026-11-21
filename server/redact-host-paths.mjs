@@ -46,3 +46,85 @@ export function redactHostPaths(value, rootDir = REPO_ROOT, roots = hostRoots(ro
   }
   return out;
 }
+
+// ---- idea-419: token-level redaction for free text (worker reports, watch pings) ----
+// redactErrorText cuts a whole error string at its first host path; that is right for an API error, wrong for a report,
+// where it replaced every line holding a path (a file:// markdown link, a worktree path in backticks) with "request failed".
+// Here only the path token is swapped: for a repo-relative path when it is under a repo root or a worktree, else <host-path>.
+
+/** What ends a path token in prose/markdown: whitespace, quotes, backticks, brackets, markdown emphasis, table pipes. */
+const TOKEN_TAIL = String.raw`[^\s"'\`<>()\[\]{}|*]*`;
+/** A Windows path with a space under an unknown root (C:\Users\Jo Smith\…, C:\Program Files\…): words that go on with a backslash stay in the token. */
+const SPACED_TAIL = String.raw`(?: [^\s"'\`<>()\[\]{}|*\\/:]+\\${TOKEN_TAIL})*`;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** Regex source for root `r` (lowercased, forward slashes) in any slash style or case, as a drive path, a Git-Bash /c/ or WSL /mnt/c/ path, %20 for a space. */
+function rootPattern(r) {
+  const drive = /^([a-z]):\//.exec(r);
+  const segs = (drive ? r.slice(3) : r).split("/").filter(Boolean).map((s) => escapeRe(s).replace(/ /g, "(?: |%20)"));
+  const head = drive ? String.raw`(?:${drive[1]}:[\\/]+|/(?:mnt/)?${drive[1]}/)` : String.raw`[\\/]+`;
+  return head + segs.join(String.raw`[\\/]+`);
+}
+/** Host paths not under a known root: any drive path, a UNC path, a Git-Bash/WSL drive path, a POSIX home, a Windows env-var path. */
+const GENERIC_PATH = [
+  String.raw`(?<![A-Za-z0-9])[A-Za-z]:[\\/]`,
+  String.raw`\\\\[^\\\s]`,
+  String.raw`(?<![\w.~-])/(?:mnt/)?[a-z]/(?=[^/\s])`,
+  String.raw`(?<![\w.~-])/(?:home|Users|root)/(?=[^/\s])`,
+  String.raw`%(?:LOCALAPPDATA|APPDATA|USERPROFILE|HOMEPATH|HOMEDRIVE|TEMP|TMP|PROGRAMDATA|VIBESQUAD_HOME)%`,
+];
+const GENERIC_POSIX = new RegExp(GENERIC_PATH.slice(2).join("|"), "i");
+const tokenRes = new Map();
+function tokenRe(roots) {
+  const key = roots.join("\n");
+  let re = tokenRes.get(key);
+  if (!re) {
+    const known = [...roots].sort((a, b) => b.length - a.length).map(rootPattern);
+    re = new RegExp(String.raw`(?:file:/{2,3})?(?:${[...known, ...GENERIC_PATH].join("|")})${TOKEN_TAIL}${SPACED_TAIL}`, "gi");
+    if (tokenRes.size > 32) tokenRes.clear();
+    tokenRes.set(key, re);
+  }
+  re.lastIndex = 0;
+  return re;
+}
+/** The stand-in for one path token: the path inside a worktree or under a repo root, else <host-path>. Trailing sentence punctuation is kept. */
+function replaceToken(token, repoRoots) {
+  const [, core, punct] = /^([\s\S]*?)([.,;:!?]*)$/.exec(token);
+  let p = core.replace(/^file:\/{2,3}/i, "").replaceAll("\\", "/").replace(/%20/gi, " ").replace(/\/{2,}/g, "/");
+  p = p.replace(/^\/(?:mnt\/)?([a-z])\//i, "$1:/");
+  const wt = /\/worktrees\/[^/]+\/([^/]+)(?:\/(.*))?$/i.exec(p);
+  if (wt) return (wt[2] ? wt[2] : `<worktree:${wt[1]}>`) + punct;
+  const low = p.toLowerCase();
+  for (const r of repoRoots) {
+    if (low === r || low === `${r}/`) return "<repo-root>" + punct;
+    if (low.startsWith(`${r}/`)) return p.slice(r.length + 1) + punct;
+  }
+  return "<host-path>" + punct;
+}
+/** Index of a host path the token pass left behind (the error-text test plus the POSIX/env-var forms), else -1. */
+function leftoverIndex(text, roots) {
+  const a = hostPathIndex(text, roots);
+  const m = GENERIC_POSIX.exec(text);
+  const b = m ? m.index : -1;
+  return a < 0 ? b : b < 0 ? a : Math.min(a, b);
+}
+
+/**
+ * `text` with each host-path token replaced and the rest of every line kept (idea-419). A path under a worktree
+ * (…/worktrees/<project>/<unit>/rest) or under one of `repoRoots`/rootDir/the server's repo becomes `rest`; any other host
+ * path (drive, UNC, file://, Git-Bash /c/, WSL /mnt/c/, /home|/Users/<name>, %LOCALAPPDATA%…, home/tmp/VIBESQUAD_HOME) becomes
+ * <host-path>. A final check swaps anything the token pass missed, so no host path survives.
+ */
+export function redactHostPathTokens(text, { rootDir = REPO_ROOT, repoRoots = [] } = {}) {
+  const t = String(text ?? "");
+  const home = slashLower(homedir()).replace(/\/+$/, "");
+  // A repo root at or above home (an agent whose cwd is ~) would turn ~/AppData/… into a relative path: such roots are not repos.
+  const repo = [...new Set([rootDir, REPO_ROOT, ...repoRoots].filter(Boolean).map((r) => slashLower(r).replace(/\/+$/, "")))].filter((r) => r.length > 3 && !`${home}/`.startsWith(`${r}/`));
+  const roots = [...new Set([...hostRoots(rootDir), ...repo])];
+  let out = t.replace(tokenRe(roots), (tok) => replaceToken(tok, repo));
+  for (let i = 0, at = leftoverIndex(out, roots); at >= 0; i++, at = leftoverIndex(out, roots)) {
+    if (i >= 64) return redactErrorText(out, roots);
+    const tail = new RegExp(String.raw`^${TOKEN_TAIL}${SPACED_TAIL}`).exec(out.slice(at))[0];
+    out = `${out.slice(0, at)}<host-path>${out.slice(at + Math.max(tail.length, 1))}`;
+  }
+  return out;
+}

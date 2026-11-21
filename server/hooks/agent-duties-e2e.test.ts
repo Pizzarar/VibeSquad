@@ -2096,6 +2096,8 @@ test(
       assert.match(all, /Worker w-b final message[\s\S]*bravo body/, "earlier coalesced workers are not dropped");
       assert.ok(!all.includes("charlie body"), "w-c sent its own report via the send tool: no second copy");
       assert.ok(!all.includes("hidden"), "host path redacted: " + all);
+      assert.match(all, /see <host-path> for more/, "idea-419: only the path token is swapped, the rest of the line stays");
+      assert.ok(!all.includes("request failed"), all);
     } finally {
       h.stop?.();
     }

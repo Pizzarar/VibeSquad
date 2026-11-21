@@ -62,7 +62,7 @@ import {
 } from "../spawn-route.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
-import { redactHostPaths } from "../redact-host-paths.mjs";
+import { redactHostPathTokens } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
@@ -3269,7 +3269,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
       const text = toOverlord ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
-      const detail = d.detail ? await redactReportText(d.detail) : "";
+      const detail = d.detail ? await redactReportText(d.detail, [target.cwd]) : "";
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
 
 ${detail}` : text, refs: [d.setId] };
@@ -3725,10 +3725,15 @@ ${detail}` : text, refs: [d.setId] };
       deferredWakeTimers.set(leadId, t);
     }
 
-    /** idea-352: redact host paths from forwarded worker text (server/redact-host-paths.mjs, per line). "" if the redactor can't load: never forward raw. */
-    async function redactReportText(text: string): Promise<string> {
+    /**
+     * idea-352/idea-419: redact host paths from forwarded worker text token by token (server/redact-host-paths.mjs): a path
+     * becomes repo-relative (inside a worktree or under one of `cwds`) or <host-path>, and the rest of the line stays. Not the
+     * error-text redactor: that cut every path-bearing report line to "request failed (detail names a host path; …)".
+     * "" if the redactor throws: never forward raw.
+     */
+    async function redactReportText(text: string, cwds: (string | undefined)[] = []): Promise<string> {
       try {
-        return text.split(/\r?\n/).map((l) => (redactHostPaths({ error: l }) as { error: string }).error).join("\n");
+        return redactHostPathTokens(text, { repoRoots: cwds.filter((c): c is string => typeof c === "string" && c.length > 0) });
       } catch (e) {
         log(`report redaction unavailable, forwarded text dropped: ${e}`);
         return "";
@@ -3770,7 +3775,7 @@ ${detail}` : text, refs: [d.setId] };
       const w = await snap(paseo, worker);
       const where = w ? teamOf(w.labels, w.cwd) : null;
       if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return "";
-      const clean = await redactReportText(text);
+      const clean = await redactReportText(text, [w?.cwd]);
       if (!clean) return "";
       const body = clean.length > budget ? `${clean.slice(0, budget)}… (truncated; vs status ${worker} for the rest)` : clean;
       return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
