@@ -370,7 +370,8 @@ export async function verbatimDigestText(caller, type, text, backend) {
     const [rec, tail] = await Promise.all([b.fetchAgent(id), b.fetchAgentTimeline(id, { direction: "tail", limit: 400 })]);
     const tl = tail?.hasOlder && !lastAssistantText(tail, Infinity) ? await b.fetchAgentTimeline(id, { direction: "tail" }) : tail;
     const worker = rec?.agent ?? rec;
-    return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker) }).text;
+    const profile = String(worker?.labels?.profile ?? worker?.profile ?? "").trim() || null;
+    return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker), profile }).text;
   } catch {
     return `UNVERIFIED (worker report unreadable): ${text}`;
   }

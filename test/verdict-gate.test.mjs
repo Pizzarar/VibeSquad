@@ -137,6 +137,42 @@ test("digestVerdictText: a reviewer with no verdict line logs NO-VERDICT; a non-
   assert.ok(!isReviewerAgent({ title: "Implement unit", labels: { profile: "Implement - Sonnet" } }));
 });
 
+test("digestVerdictText stamps reviewer=<profile> after the verdict prefix; the gate still parses the stamped line", () => {
+  const stamped = digestVerdictText({ workerText: "PASS 0/0/0 ecba323\nall good", digestText: "PASS: review clean, 67/67", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(stamped.text, "PASS 0/0/0 ecba323 reviewer=Review - Gemini — review clean, 67/67");
+  assert.equal(stamped.verdictLine, "PASS 0/0/0 ecba323", "verdictLine stays the unstamped prefix");
+  // no profile -> no stamp (back-compat)
+  const plain = digestVerdictText({ workerText: "PASS 0/0/0 ecba323\nall good", digestText: "PASS: review clean, 67/67", reviewer: true });
+  assert.equal(plain.text, "PASS 0/0/0 ecba323 — review clean, 67/67");
+  // trailing text on the same line: the stamp goes right after the hash, before the trailing text
+  const trail = digestVerdictText({ workerText: "FAIL 1/0/1 3528a4c stale lock\nH1", digestText: "FAIL: 1 high", reviewer: true, profile: "Review - Sonnet" });
+  assert.equal(trail.text, "FAIL 1/0/1 3528a4c reviewer=Review - Sonnet stale lock — 1 high");
+  // idea-300 M1: a digest that already copies the verdict line verbatim (the prompt's happy path) still gets the stamp
+  const copied = digestVerdictText({ workerText: "PASS 0/0/0 ecba323", digestText: "PASS 0/0/0 ecba323 — all clean", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(copied.text, "PASS 0/0/0 ecba323 reviewer=Review - Gemini — all clean");
+  // ...and it is never double-stamped when the digest already carries a reviewer= stamp
+  const restamped = digestVerdictText({ workerText: "PASS 0/0/0 ecba323", digestText: "PASS 0/0/0 ecba323 reviewer=Review - Gemini — all clean", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(restamped.text, "PASS 0/0/0 ecba323 reviewer=Review - Gemini — all clean");
+  // the merge gate's strict parser still reads PASS|FAIL H/M/L <hash> off the stamped line's front
+  assert.deepEqual(parseVerdictLine("PASS 0/0/0 ecba323 reviewer=Review - Gemini"), { verdict: "PASS", high: 0, medium: 0, low: 0, severity: null, hash: "ecba323" });
+  assert.deepEqual(parseVerdictLine("FAIL 1/0/1 3528a4c reviewer=Review - Sonnet stale lock"), { verdict: "FAIL", high: 1, medium: 0, low: 1, severity: null, hash: "3528a4c" });
+});
+
+test("digestVerdictText stamps bold and letter-severity verdicts after the full prefix; the gate still parses the stamped line", () => {
+  // letter severity: stamp goes after the hash, before nothing else
+  const letter = digestVerdictText({ workerText: "PASS H abc1234", digestText: "PASS: ok", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(letter.text, "PASS H abc1234 reviewer=Review - Gemini — ok");
+  assert.deepEqual(parseVerdictLine(letter.text), { verdict: "PASS", high: null, medium: null, low: null, severity: "H", hash: "abc1234" });
+  // bold around the whole line: stamp lands after the hash, before the closing `**`
+  const bold = digestVerdictText({ workerText: "**FAIL 1/0/0 deadbeef**", digestText: "FAIL: rework", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(bold.text, "**FAIL 1/0/0 deadbeef reviewer=Review - Gemini** — rework");
+  assert.deepEqual(parseVerdictLine(bold.text), { verdict: "FAIL", high: 1, medium: 0, low: 0, severity: null, hash: "deadbeef" });
+  // VERDICT: prefix + bold verdict + letter severity, all combined
+  const combined = digestVerdictText({ workerText: "VERDICT: **PASS M abc1234**", digestText: "PASS: ok", reviewer: true, profile: "Review - Sonnet" });
+  assert.equal(combined.text, "VERDICT: **PASS M abc1234 reviewer=Review - Sonnet** — ok");
+  assert.deepEqual(parseVerdictLine(combined.text), { verdict: "PASS", high: null, medium: null, low: null, severity: "M", hash: "abc1234" });
+});
+
 test("UX Reviewer is not an H/M/L code reviewer: digest 'done' is not rewritten to NO-VERDICT and the gate says not-a-reviewer", () => {
   for (const agent of [{ labels: { profile: "UX Reviewer - Opus" } }, { title: "UX Reviewer · R3", labels: {} }, { title: "UX review R3", labels: {} }]) {
     assert.equal(isReviewerAgent(agent), false, JSON.stringify(agent));
@@ -151,7 +187,7 @@ test("UX Reviewer is not an H/M/L code reviewer: digest 'done' is not rewritten 
 test("/vs-log: a digest's done entry is rewritten in code from the worker's own message (FAIL kept over a PASS digest, NO-VERDICT, passthrough)", async () => {
   const failing = await worker("FAIL 1/0/1 3528a4c lock not released\nH1: watch-sets.mjs:88", { profile: "Review - Gemini" });
   const e1 = await digestLog(digestFor(failing), "PASS: review approved");
-  assert.ok(e1.text.startsWith("FAIL 1/0/1 3528a4c lock not released — VERDICT-MISMATCH: digest said PASS"), e1.text);
+  assert.ok(e1.text.startsWith("FAIL 1/0/1 3528a4c reviewer=Review - Gemini lock not released — VERDICT-MISMATCH: digest said PASS"), e1.text);
   assert.deepEqual(e1.refs, [failing]);
   const vague = await worker("Overall this looks like a PASS to me.", { profile: "Review - Sonnet" });
   assert.equal((await digestLog(digestFor(vague), "PASS: reviewer happy")).text, "NO-VERDICT: reviewer happy");

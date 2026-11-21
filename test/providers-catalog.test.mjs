@@ -491,6 +491,97 @@ test('usage v2: byProfile compares Implement - Sonnet vs a Gemini implementer vi
   assert.equal(workerRole.successBasis, 'implementer-first-try-pass');
 });
 
+test('usage v2: idea-300 byProfile reviewer attribution + costPerRun/tokensPerRun on every row', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-sonnet', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-sonnet', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 500, outputTokens: 100 },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  writeAgent(home, 'rn-rev', [
+    { ts: T0 + 2000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-sonnet', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 2500, type: 'usage', inputTokens: 300, outputTokens: 50 },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.3 },
+    { ts: T0 + 2600, type: 'output', text: 'PASS 0/0/0\n' },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-sonnet' (@usa)"),
+      L('b1', 'a1', sec(T0 + 40000), 'feat: sonnet (@usa) review r2'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const sonnet = byProfileOf(u, 'Implement - Sonnet');
+  const rev = byProfileOf(u, 'Review - Gemini');
+  assert.ok(sonnet && rev, 'implementer and reviewer rows present');
+  // costPerRun + tokensPerRun on every row
+  assert.equal(sonnet.runs, 1);
+  assert.ok(Math.abs(sonnet.costPerRun - 0.5) < 1e-9);
+  assert.equal(sonnet.tokensPerRun, 600);
+  assert.ok(Math.abs(rev.costPerRun - 0.3) < 1e-9);
+  assert.equal(rev.tokensPerRun, 350);
+  // reviewer rows carry reviewed-unit attribution (idea-300)
+  assert.equal(rev.jobKind, 'reviewer');
+  assert.equal(rev.reviewedUnits, 1);
+  assert.equal(rev.mergedUnits, 1, "the reviewer's mergedUnits = reviewed (merged) units");
+  assert.equal(rev.avgReviewRounds, 2, 'review rounds from the merge commit subject');
+  assert.equal(rev.reviewRounds, 2, 'M2: reviewer row reviewRounds matches the reviewed units (not 0)');
+  assert.ok(Math.abs(rev.costPerMergedUnit - 0.3) < 1e-9, 'reviewer cost per reviewed unit');
+  assert.equal(rev.fixAfterMergeRate, 0);
+  assert.equal(rev.fixAfterMergeCount, 0, 'M2: reviewer row fixAfterMergeCount consistent with the 0 rate');
+  // implementer rows keep implementer attribution; reviewedUnits stays 0
+  assert.equal(sonnet.reviewedUnits, 0);
+  assert.equal(sonnet.mergedUnits, 1);
+  // the merged unit records the attributed reviewer
+  assert.equal(u.merged.units[0].reviewerAgentId, 'rn-rev');
+});
+
+test('usage v2: idea-300 M2 — reviewer row reviewRounds/fixAfterMergeCount stay consistent with the averages (fix-after-merge included)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 9, 12);
+  writeAgent(home, 'rn-impl', [
+    { ts: T0 - 1000, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 - 500, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  writeAgent(home, 'rn-rev-a', [
+    { ts: T0 + 1000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 1500, type: 'turn_done', costUsd: 0.3 },
+  ]);
+  writeAgent(home, 'rn-rev-fix', [
+    { ts: T0 + 2000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/fix-x', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.2 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 60000), "Merge branch 'fix-x' (@usa)"),
+      L('b2', 'm1', sec(T0 + 59000), 'fix: x (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-a' (@usa)"),
+      L('b1', 'a1', sec(T0 + 49000), 'feat: a (@usa) review r2'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const rev = byProfileOf(u, 'Review - Gemini');
+  assert.ok(rev, 'reviewer row present');
+  assert.equal(rev.jobKind, 'reviewer');
+  assert.equal(rev.reviewedUnits, 2, 'unit-a and fix-x both attributed to the reviewer');
+  assert.equal(rev.mergedUnits, 2);
+  assert.equal(rev.reviewRounds, 2, 'M2: reviewRounds = reviewedReviewRounds (2 from unit-a + 0 from fix-x), not 0');
+  assert.equal(rev.avgReviewRounds, 1);
+  assert.equal(rev.fixAfterMergeCount, 1, 'M2: fixAfterMergeCount = reviewedFixAfterMergeCount (1), not 0');
+  assert.equal(rev.fixAfterMergeRate, 0.5);
+});
+
 test('usa-12: lead and Buddy report null / no-signal; reviewer uses PASS lines; implementer with no merged unit is no-signal', () => {
   const home = tmp();
   clearUsageCache();
