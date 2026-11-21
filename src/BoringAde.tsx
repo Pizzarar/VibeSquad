@@ -7,10 +7,10 @@ import { openOverlay } from "./CommandPalette";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
-import { openAgent, usePanes } from "./panes";
+import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
-import { openPinMember, setBoringShownAgent, spinUpPin } from "./pinFocus";
+import { setBoringShownAgent, spinUpPin } from "./pinFocus";
 import { boringDeepLinkPending, boringUrlAgent } from "./pinFocusLogic";
 import { boringLaneLabel, laneCode, laneDisplayName, laneTopicLabel } from "./boringLocation";
 import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsChipState, type Pin } from "./pins";
@@ -400,6 +400,23 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const { agents, rosterLoaded } = usePaseo();
   const panes = usePanes();
   const activeAgentId = panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId;
+  /** Shift+click on any agent opener (sidebar, Needs you, Overview) opens it in the right pane; the click event is read, so no row markup changes. */
+  const shiftHeld = () => {
+    const e = typeof window === "undefined" ? undefined : (window.event as MouseEvent | undefined);
+    return !!e && e.type === "click" && e.shiftKey;
+  };
+  // Normal mode shows no tab strip, so per-pane tab history is invisible: with split on, a plain click lands in the ACTIVE pane
+  // (or just focuses the other pane when that agent is already its visible one), never in a pane that merely remembers the agent.
+  const openHere = (id: string) => {
+    if (shiftHeld()) return openAgentInTab(id, "right");
+    // Live state, not the render closure: the workers fold calls collapseSplit() right before this, so `panes` is stale there.
+    const live = getPanes();
+    if (!live.split) return openAgent(id);
+    const otherSide = live.activePane === "left" ? "right" : "left";
+    const otherVisible = otherSide === "left" ? live.leftActiveId : live.rightActiveId;
+    if (id === otherVisible) return setActivePane(otherSide);
+    return openAgentInTab(id, live.activePane);
+  };
   const allViews = views.length > 0 ? views : view ? [view] : [];
   // S8: the active agent owns the sidebar selection + breadcrumb. Keyed on the agent only, so switching project never snaps back.
   // R5-1: also when it becomes landable: a deep-linked agent can reach the roster after the first render.
@@ -441,7 +458,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       setSelectedLaneId(laneId);
       setSelectedWorkerId(target.agentId);
       setMode("chat");
-      openAgent(target.agentId);
+      openHere(target.agentId);
       return;
     }
     pickRole(pin, laneId, target.role === "worker" ? "brainstorm" : target.role);
@@ -453,9 +470,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedWorkerId(null);
     setMode("chat");
     const m = role === "lead" ? pin.lead : pin.brainstorm;
-    if (role === "lead") {
-      if (m) openPinMember(pin, m.agent.id);
-    } else if (m) openAgent(m.agent.id);
+    // Lead and Brainstorm both open through openHere: openPinMember would fold an open split (and Shift+click could never target the right pane).
+    if (m) openHere(m.agent.id);
     else void onOpenPin(pin);
   };
   /** Open every parent of a jumped-to agent (project, lane): an explicit collapse never hides the selected row. */
@@ -475,7 +491,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedWorkerId(sel?.role === "worker" ? agentId : null);
     revealAgent(v, sel, agentId);
     setMode("chat");
-    openAgent(agentId);
+    openHere(agentId);
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
   // R4-6: Ctrl+J opens the top Needs-you agent through this same path (so ?agent= and reload keep your place).
@@ -496,7 +512,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedLaneId(laneId);
     setSelectedWorkerId(null);
     setMode("chat");
-    if (agentId) openAgent(agentId);
+    if (agentId) openHere(agentId);
   };
   const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs) => {
     setSelectedLaneId("_bugs");
@@ -504,7 +520,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedWorkerId(null);
     setMode("chat");
     // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
-    if (b.pin && b.agentId) openAgent(b.agentId);
+    if (b.pin && b.agentId) openHere(b.agentId);
   };
 
   // Resolve the chat target.
@@ -539,14 +555,17 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
 
-  const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
+  const selRaw = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
+  // An empty active pane names nobody: no row is selected and the breadcrumb says so, instead of echoing the other pane's agent.
+  const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId;
+  const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
     sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk" ? "Desk" : sel.laneId === "_bugs" ? "Bugs" : selModel.conversations.find((c) => c.laneId === sel.laneId)?.name ?? null;
   // R7-1: a deep link waiting on the roster shows a bare breadcrumb + "Opening agent…", never the default project's Overview.
   const opening = boringDeepLinkPending({ rosterLoaded: !!rosterLoaded, activeAgentId });
-  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
+  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: splitEmptyActive ? "Split · pick an agent" : sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
   const onCrumb = (key: Crumb["key"]) => {
     if (key === "project") setMode("project");
     else if (key === "lane" && mode === "chat") {
@@ -602,6 +621,36 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     );
   };
 
+  // idea-257: optional 2-pane split. The right pane is panes.rightActiveId; the left falls back to the resolved agent while the left pane is active and has no tab.
+  const leftPaneAgent = (panes.leftActiveId ? agents.get(panes.leftActiveId) : undefined) ?? (panes.activePane === "left" ? agent : undefined);
+  const rightPaneAgent = panes.rightActiveId ? agents.get(panes.rightActiveId) : undefined;
+  const paneCls = (isLeft: boolean) => `boring-pane${panes.activePane === (isLeft ? "left" : "right") ? " boring-pane-active" : ""}`;
+  const closePane = (side: "left" | "right") => {
+    const id = side === "left" ? panes.leftActiveId : panes.rightActiveId;
+    if (id) closeTab(id);
+    else if (side === "right") toggleSplit();
+    // The other pane keeps the chat; only when nothing else is open does Close go back to Overview.
+    if (!(side === "left" ? rightPaneAgent : leftPaneAgent)) setMode("project");
+  };
+  const splitPanes = (
+    <div className="boring-chat-split" data-testid="boring-chat-split">
+      <div className={paneCls(true)} data-testid="boring-pane-left" onMouseDownCapture={() => setActivePane("left")} onFocusCapture={() => setActivePane("left")}>
+        {leftPaneAgent ? <AgentDrawer key={leftPaneAgent.id} agent={leftPaneAgent} onClose={() => closePane("left")} onSuccessor={() => onSuccessor(leftPaneAgent.id)} active pinDecisions noContextPanel /> : emptyCard()}
+      </div>
+      <div className={paneCls(false)} data-testid="boring-pane-right" onMouseDownCapture={() => setActivePane("right")} onFocusCapture={() => setActivePane("right")}>
+        {rightPaneAgent ? (
+          <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions noContextPanel />
+        ) : (
+          <div className="boring-split-empty" data-testid="boring-split-empty">
+            <p>Click an agent in the sidebar or Needs you to open it here.</p>
+            <p className="boring-split-hint">Shift+click always opens on the right.</p>
+            <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={() => toggleSplit()}>Close split</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
   // R2.5: a container shows its count only while collapsed, tinted by its worst state inside (red error, else amber).
   const badge = (n: number, err = false) => (n > 0 ? <span className={`badge boring-badge${err ? " err" : ""}`}>{n}</span> : null);
   const memberAgent = (id: string | null) => (id ? agents.get(id) : undefined);
@@ -632,14 +681,22 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   );
   /** R3.1: under Desk / a lane the tree shows only the on-screen worker row (B7a); all other workers, alerting ones included, fold into "▸ N running · M idle", which opens the right panel's Workers tab. */
   const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], listId: string, foldId: string, onScreen: boolean, open: () => void) => {
-    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id));
+    // A worker open in either split pane counts as on screen (R3.1), not only the selected one.
+    const inPane = (id: string) => panes.split && (id === panes.leftActiveId || id === panes.rightActiveId);
+    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || inPane(w.agent.id));
     const rest = workers.filter((w) => !shown.includes(w));
     const fold = boringWorkerFold(rest);
     return (
       <div className="boring-worker-list" data-testid={listId}>
         {shown.map((w) => workerRow(v, pin, laneId, w))}
         {fold && (
-          <button type="button" className="boring-idle-toggle boring-worker-idle boring-worker-fold" data-testid={foldId} title="Open the Workers tab" onClick={() => { if (!onScreen) open(); openWorkersTab(); }}>
+          <button type="button" className="boring-idle-toggle boring-worker-idle boring-worker-fold" data-testid={foldId} title={panes.split ? "Leave split and open the Workers tab" : "Open the Workers tab"} onClick={() => {
+            // Split panes mount no context panel: fold the split down to the ACTIVE pane's agent (activeAgentId is unchanged, so the
+            // S8 landing effect does not overwrite the lane), then route exactly as in the non-split path.
+            if (panes.split) collapseSplit("active");
+            if (!onScreen) open();
+            openWorkersTab();
+          }}>
             <span className="boring-idle-chev" aria-hidden="true">▸</span>{fold}
           </button>
         )}
@@ -793,6 +850,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           <div className="boring-topbar-actions">
             <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
             <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
+            {mode === "chat" && (agent || panes.split) && (
+              <button type="button" className={`boring-switch-pill ${panes.split ? "on" : ""}`} data-testid="boring-split-toggle" aria-pressed={panes.split} title="Split the chat into two panes (Shift+click an agent to open it on the right)" onClick={() => { if (!panes.split && !panes.leftActiveId && agent) openAgent(agent.id); if (panes.split) collapseSplit("active"); else toggleSplit(); }}>
+                {panes.split ? "◫ Unsplit" : "◫ Split"}
+              </button>
+            )}
             {mode === "chat" && agent && (
               <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
@@ -859,7 +921,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
+            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
           </div>
         )}
       </main>
