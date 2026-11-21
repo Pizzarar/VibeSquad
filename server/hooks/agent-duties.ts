@@ -1046,18 +1046,65 @@ export function composeSpawnPromptParts(prefix: string, profileNotes: string, ra
   return parts;
 }
 
+/**
+ * idea-327 (EXP5): split a first prompt into the char counts of the blocks VS itself injects, so
+ * the `first=` boot-size total can be attributed to what actually rides along. Each block is measured
+ * as its full marker span (markers included); `firstPlan` is the remainder (the work order / plan text
+ * plus any framing), so the four parts always sum to the prompt length. Matched on the stable markers
+ * used by lead-handoff.mjs (packet + brainstorm summary), the plugin's lane artifact block, and the
+ * Buddy/lane brief block.
+ */
+export function measureFirstPromptParts(firstPrompt: string): {
+  firstPacket: number;
+  firstArtifact: number;
+  firstBrief: number;
+  firstPlan: number;
+} {
+  const text = String(firstPrompt ?? "");
+  // Span (chars) from a block's begin marker through the end of its end-marker line, or 0 when either
+  // marker is missing (or the end marker precedes the begin marker).
+  const span = (begin: string, end: string): number => {
+    const s = text.indexOf(begin);
+    if (s < 0) return 0;
+    const e = text.indexOf(end, s + begin.length);
+    if (e < 0) return 0;
+    const lineEnd = text.indexOf("\n", e);
+    return (lineEnd < 0 ? text.length : lineEnd) - s;
+  };
+  const firstPacket = span("--- BEGIN HANDOFF PACKET", "--- END HANDOFF PACKET ---");
+  const firstArtifact = span("<!-- vibesquad:lane-artifact:begin", "<!-- vibesquad:lane-artifact:end -->");
+  const firstBrief =
+    span("--- BEGIN BRAINSTORM SUMMARY", "--- END BRAINSTORM SUMMARY ---") +
+    span("--- BEGIN docs/brainstorm/", "--- END docs/brainstorm/");
+  const firstPlan = Math.max(0, text.length - firstPacket - firstArtifact - firstBrief);
+  return { firstPacket, firstArtifact, firstBrief, firstPlan };
+}
+
 /** The once-per-boot size metric line (docs/PLAN_LEAN_BOOT_1109.md B2). */
 export function bootSizeMetric(
   role: string,
   chars: number,
-  parts?: { provider?: string; lane?: string; sys: number; plugin: number; artifact: number; brief: number; first: number },
+  parts?: {
+    provider?: string;
+    lane?: string;
+    sys: number;
+    plugin: number;
+    artifact: number;
+    brief: number;
+    first: number;
+    firstPacket?: number;
+    firstArtifact?: number;
+    firstBrief?: number;
+    firstPlan?: number;
+  },
 ): string {
   if (!parts) return `boot-size role=${role} chars=${chars}`;
   // usa-22: per-part breakdown. total = final system prompt + first prompt; agent id is not yet known at before.agent.create.
   const total = chars + parts.first;
   return (
     `boot-size role=${role} provider=${parts.provider || "unknown"} lane=${parts.lane || "-"} chars=${chars} total=${total}` +
-    ` sys=${parts.sys} plugin=${parts.plugin} artifact=${parts.artifact} brief=${parts.brief} first=${parts.first} estTok=${Math.ceil(total / 4)}`
+    ` sys=${parts.sys} plugin=${parts.plugin} artifact=${parts.artifact} brief=${parts.brief} first=${parts.first} estTok=${Math.ceil(total / 4)}` +
+    ` firstPacket=${parts.firstPacket ?? 0} firstArtifact=${parts.firstArtifact ?? 0} firstBrief=${parts.firstBrief ?? 0} firstPlan=${parts.firstPlan ?? 0}`
   );
 }
 
@@ -2345,6 +2392,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
           const where = teamOf(envOrReqLabels, cwd);
           if (where) {
             try {
+              const firstPromptText = String((request as any).prompt ?? (request as any).initialPrompt ?? "");
               appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: bootSizeMetric(role, String(next.systemPrompt ?? rawSysPrompt ?? "").length, {
                 provider: finalProvider,
                 lane: where.lane || explicitLane,
@@ -2352,7 +2400,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
                 plugin: bootPluginChars,
                 artifact: bootArtifactChars,
                 brief: bootBriefChars,
-                first: String((request as any).prompt ?? (request as any).initialPrompt ?? "").length,
+                first: firstPromptText.length,
+                ...measureFirstPromptParts(firstPromptText),
               }) });
             } catch (err) {
               log(`boot-size metric write failed: ${err}`);

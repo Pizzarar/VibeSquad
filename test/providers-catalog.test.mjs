@@ -2229,7 +2229,7 @@ test('usa-22: bootSize rollup folds boot-size metrics by role/provider/lane (avg
   assert.equal(w.avgChars, 550);
   assert.equal(w.p90Chars, 900);
   assert.equal(w.p90EstTok, 225);
-  assert.deepEqual(w.avgParts, { sys: 10, plugin: 20, artifact: 30, brief: 0, first: 5 });
+  assert.deepEqual(w.avgParts, { sys: 10, plugin: 20, artifact: 30, brief: 0, first: 5, firstPacket: 0, firstArtifact: 0, firstBrief: 0, firstPlan: 0 });
   const l = rows.find((r) => r.role === 'lead');
   assert.deepEqual([l.provider, l.lane, l.count, l.avgChars, l.avgEstTok], ['unknown', 'other', 1, 4000, 1000], 'legacy line counts as total-only');
   assert.equal(rows.length, 2);

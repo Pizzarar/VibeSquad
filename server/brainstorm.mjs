@@ -953,8 +953,13 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
     });
 
     // The spawn env sets VS_BRIEF_INLINE, so the plugin won't log brief-injected; this is the live check for the lane.
+    // idea-327: split the first prompt (the brainstorm initial prompt) like the plugin hook does, so brainstorm rows
+    // carry the same firstPacket/firstArtifact/firstBrief/firstPlan attribution. Dynamic import avoids the
+    // brainstorm <-> agent-duties <-> lead-handoff static cycle.
     try {
-      appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `boot-size role=brainstorm chars=${initialPrompt.length} brief=${summary.content.length}` });
+      const { measureFirstPromptParts } = await import("./hooks/agent-duties.ts");
+      const fp = measureFirstPromptParts(initialPrompt);
+      appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `boot-size role=brainstorm chars=${initialPrompt.length} brief=${summary.content.length} firstPacket=${fp.firstPacket} firstArtifact=${fp.firstArtifact} firstBrief=${fp.firstBrief} firstPlan=${fp.firstPlan}` });
     } catch {}
     try {
       appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `brief-inlined: lane=${laneId} chars=${summary.content.length}` });

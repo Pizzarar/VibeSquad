@@ -2392,7 +2392,7 @@ function maybeScheduleUsageReview(usage, home, opts = {}) {
 
 /** usa-22: fold `boot-size` metrics (vs logs, deduped like readUsageLogSignals) into avg/p90 chars + estTok per role/provider/lane.
  * Entries without a breakdown (pre usa-22: `role chars`) count as total-only under provider "unknown". Never throws. */
-const BOOT_PARTS = ["sys", "plugin", "artifact", "brief", "first"];
+const BOOT_PARTS = ["sys", "plugin", "artifact", "brief", "first", "firstPacket", "firstArtifact", "firstBrief", "firstPlan"];
 const bootKv = (text) => Object.fromEntries([...String(text ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
 export function foldBootSizes(entries) {
   const groups = new Map();

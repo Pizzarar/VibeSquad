@@ -266,6 +266,6 @@ test("usa-22: bootSizeMetric keeps the legacy shape and adds the per-part breakd
   const line = bootSizeMetric("worker", 1000, { provider: "claude", lane: "usage", sys: 100, plugin: 600, artifact: 300, brief: 0, first: 21 });
   assert.equal(
     line,
-    "boot-size role=worker provider=claude lane=usage chars=1000 total=1021 sys=100 plugin=600 artifact=300 brief=0 first=21 estTok=256",
+    "boot-size role=worker provider=claude lane=usage chars=1000 total=1021 sys=100 plugin=600 artifact=300 brief=0 first=21 estTok=256 firstPacket=0 firstArtifact=0 firstBrief=0 firstPlan=0",
   );
 });
