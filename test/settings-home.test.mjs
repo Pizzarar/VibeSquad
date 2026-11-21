@@ -206,6 +206,15 @@ test("confirm-on-close guard lives on the drafts beforeunload hook", async () =>
   assert.match(src("App.tsx"), /setCloseGuard\(\(\) => !DEMO && getPref\("app\.confirmClose"\) && membersRef\.current\.some\(\(m\) => m\.agent\.status === "running"\)\)/);
 });
 
+test("B9: Legacy: Psycho mode toggle lives in About, backed by app.vibe; no Layout vibe row under App", () => {
+  const home = src("SettingsHome.tsx");
+  assert.match(home, /data-testid="settings-legacy-psycho-toggle"/);
+  assert.match(home, /setVibe\(e\.target\.checked \? "fun" : "boring"\)/);
+  assert.match(home, /Legacy: Psycho mode/);
+  assert.match(home, /\{n\.id === "about" && <About/);
+  assert.ok(!P.visiblePrefDefs().some((d) => d.key === "app.vibe" || d.label === "Layout vibe"));
+});
+
 test("Settings home: one entry point, all sections, rehoused Team/Runner/Profiles, note, push moved", () => {
   const home = src("SettingsHome.tsx");
   for (const label of ["App", "Chat", "Notifications", "New Agent defaults", "Team", "Runner & Providers", "Profiles", "About"]) assert.ok(home.includes(`label: "${label}"`), label);

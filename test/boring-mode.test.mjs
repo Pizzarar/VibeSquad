@@ -251,9 +251,10 @@ test("BoringApp sidebar: CTA, core rows, conversation pills and bottom dock are 
   reset();
   const t = withDesk(squad());
   // R2.3: the standalone Overview button is gone (the project row opens it); Search lives in the sidebar header.
-  for (const id of ["boring-sidebar", "boring-new-conv-btn", "boring-sidebar-search-btn", "boring-core-overlord", "boring-core-riffbot", "boring-core-bugs", "boring-conv-ade", "boring-conv-per", "boring-usage-btn", "boring-settings-btn", "boring-switch-vibespace-btn", "boring-new-project-btn"]) {
+  for (const id of ["boring-sidebar", "boring-new-conv-btn", "boring-sidebar-search-btn", "boring-core-overlord", "boring-core-riffbot", "boring-core-bugs", "boring-conv-ade", "boring-conv-per", "boring-usage-btn", "boring-settings-btn", "boring-new-project-btn"]) {
     assert.ok(byId(t, id), id);
   }
+  assert.equal(byId(t, "boring-switch-vibespace-btn"), null, "B9: no Switch to Psycho in Normal; Legacy: Psycho mode lives in Settings > About");
   assert.equal(byId(t, "boring-project-overview-btn"), null);
   for (const gone of ["boring-conv-brainstorm-ade", "boring-conv-lead-ade", "boring-conv-lead-per"]) assert.equal(byId(t, gone), null, `${gone} (role pills moved to header tabs)`);
   byId(t, "boring-new-conv-btn").props.onClick();
@@ -261,10 +262,10 @@ test("BoringApp sidebar: CTA, core rows, conversation pills and bottom dock are 
   assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["onAddBuddy", "onSettings"]);
 });
 
-test("Switch to Psycho sets app.vibe back to fun", () => {
+test("B9: Normal has no Switch to Psycho button; Psycho keeps its 1-click Normal mode toolbar button", () => {
   reset();
-  byId(render(props(squad())), "boring-switch-vibespace-btn").props.onClick();
-  assert.deepEqual(globalThis.__calls, [["setPref", "app.vibe", "fun"]]);
+  assert.equal(byId(render(props(squad())), "boring-switch-vibespace-btn"), null);
+  assert.match(readFileSync(resolve(import.meta.dirname, "..", "src", "App.tsx"), "utf8"), /onClick=\{\(\) => setPref\("app\.vibe", "boring"\)\}/);
 });
 
 test("Lead pill: no lead running shows the empty card; running lead renders AgentDrawer and enables Check in", () => {
@@ -464,10 +465,10 @@ test("B5f: Idea Inbox and Standup Feed counts preload on BoringApp mount so firs
 });
 
 
-test("B5b: topbar has no duplicate Settings / Switch to Psycho; exactly one switch button in the DOM", () => {
+test("B5b: topbar has no duplicate Settings / Switch to Psycho; no switch button in the DOM (B9)", () => {
   reset();
   const t = render(props(squad()));
-  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-switch-vibespace-btn").length, 1);
+  assert.equal(walk(t, (n) => n.props?.["data-testid"] === "boring-switch-vibespace-btn").length, 0);
   const top = byId(t, "boring-topbar");
   assert.equal(walk(top, (n) => /Settings|Switch to Psycho/.test(JSON.stringify(n.props?.children ?? ""))).length, 0);
 });
@@ -527,7 +528,6 @@ test("B2r: Details toggle lives in the topbar (not the sidebar) and the chat col
 test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => {
   const read = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const fr = read("FirstRunModal.tsx"), app = read("App.tsx"), css = read("boring.css");
-  assert.match(ade, /Switch to Psycho/);
   assert.doesNotMatch(ade + fr + app, /Switch to Vibespace|Hypnospace/);
   assert.match(app, /data-testid="toolbar-vibe-toggle"\s+title="Switch to Normal mode"/);
   assert.match(app, /Normal mode\n/);
@@ -536,8 +536,8 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(fr, /export function FirstLaunchVibePicker/);
   assert.match(ade, /export \{ VIBE_PICKED_KEY, VibePickerCards, FirstLaunchVibePicker, shouldShowFirstLaunchVibePicker \}/);
   // 2e23764 folded the per-branch pickers into the shared `overlays` block (one literal), rendered by every layout.
-  assert.equal((app.match(/<FirstLaunchVibePicker \/>/g) ?? []).length, 1);
-  assert.ok(app.indexOf("<FirstLaunchVibePicker />") > app.indexOf("const overlays = ("));
+  // B9: the picker is no longer mounted anywhere (components stay exported for Legacy use).
+  assert.equal((app.match(/<FirstLaunchVibePicker \/>/g) ?? []).length, 0);
   assert.ok((app.match(/\{overlays\}/g) ?? []).length >= 2);
   assert.match(css, /\.composer \.send,[\s\S]*background: var\(--accent\)/);
   assert.match(css, /#475569/);
@@ -564,13 +564,13 @@ test("shouldShowFirstLaunchVibePicker: fresh installs only, never automation", a
   writeFileSync(join(dir, "shouldShow.mjs"), code);
   const { shouldShowFirstLaunchVibePicker: show } = await import(pathToFileURL(join(dir, "shouldShow.mjs")).href);
   const st = (o) => (k) => o[k] ?? null;
-  assert.equal(show({ getItem: st({}), webdriver: false }), true);
+  assert.equal(show({ getItem: st({}), webdriver: false }), false); // B9: never shown
   assert.equal(show({ getItem: st({}), webdriver: true }), false);
-  assert.equal(show({ getItem: st({ "vs.forceVibePicker": "1" }), webdriver: true }), true);
+  assert.equal(show({ getItem: st({ "vs.forceVibePicker": "1" }), webdriver: true }), false);
   assert.equal(show({ getItem: st({ "vs.vibePicked": "1" }), webdriver: false }), false);
   assert.equal(show({ getItem: st({ "vs.firstRunDone": "1" }), webdriver: false }), false);
   assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "app.vibe": "fun" }) }), webdriver: false }), false);
-  assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "chat.x": 1 }) }), webdriver: false }), true);
+  assert.equal(show({ getItem: st({ "vs.prefs.v1": JSON.stringify({ "chat.x": 1 }) }), webdriver: false }), false);
 });
 
 test("B4: boring-app height compensates the UI scale zoom so the composer stays in view", () => {

@@ -23,7 +23,7 @@ The VibeSquad **agent runner** (`runner/`) manages agent sessions; the VS server
 
 - `vs` CLI: team log, `vs who`, `vs whoami`, `vs handoff`, `vs inbox`, `vs profiles`, `vs restart`
 - Agent duties hook module (`server/hooks/agent-duties.ts`, hosted by the VS server): prompt layering, auto-labelling, digest routing, lead handoff
-- Web UI (`src/`): roster view, team settings, idea inbox, profile management, Pair a Device modal. Two looks, picked on first launch and switchable any time: **Normal** (a plain layout with a sidebar, chat and project cards) and **Psycho** (the pixel-art Vibespace office)
+- Web UI (`src/`): roster view, team settings, idea inbox, profile management, Pair a Device modal. **Normal** (a plain layout with a sidebar, chat and project cards) is the default; **Psycho** (the pixel-art Vibespace office) is a legacy option: turn on **Legacy: Psycho mode** in Settings > About
 - Push server (`server/push.mjs`): Web Push notifications for agent attention events
 
 ## Where it runs
@@ -40,7 +40,7 @@ Download `VibeSquad-setup.exe` from the [latest release](https://github.com/Pizz
 
 - **Per-user install:** it installs for your user account only (`installMode: currentUser`, `src-tauri/tauri.conf.json:48`), so no admin prompt is expected.
 - **SmartScreen:** v0.3.0 has no Windows Authenticode signature, only the updater's minisign one (`docs/releases/vibesquad-0.3.0.md:14`), so Windows SmartScreen may show "Windows protected your PC". Click **More info**, then **Run anyway**, only if the file came from the release page above. (How this looks on a clean PC still needs a clean-PC confirmation.)
-- **First launch:** VibeSquad asks "How will you use VibeSquad on this PC?" (`src-tauri/src/ui_pages.rs:177`, shown while no mode is saved: `src-tauri/src/main.rs:2351-2360`). Pick **💻 Run agents on this PC** (or **🔗 Connect to another PC**). Then choose **Normal** or **Psycho** in **Choose your layout** (`src/FirstRunModal.tsx:120-161`).
+- **First launch:** VibeSquad asks "How will you use VibeSquad on this PC?" (`src-tauri/src/ui_pages.rs:177`, shown while no mode is saved: `src-tauri/src/main.rs:2351-2360`). Pick **💻 Run agents on this PC** (or **🔗 Connect to another PC**). VibeSquad opens in **Normal** (Psycho is a legacy toggle in Settings > About).
 - **Your accounts:** you still install and log in to your AI provider yourself. The **Setup Checklist** shows what it detects (Claude Code, Gemini / Antigravity, optional Git) and links to the installers. **Continue** unlocks once Claude Code or Gemini is detected (`src/FirstRunModal.tsx:199`). Codex and OpenCode users close the checklist with **✕** (`src/FirstRunModal.tsx:210`) and set up their provider under **⚙ SETTINGS → Profiles**.
 - **`vs` in your own terminal:** the installer writes `vs.cmd` and `vs.ps1` into `%APPDATA%\npm` (`src-tauri/nsis/installer-hooks.nsh:15-34`) and does not edit `PATH`. If Node.js is installed that folder is normally already on `PATH`. On a PC without Node, add `%APPDATA%\npm` to your user `PATH`, or run `%APPDATA%\npm\vs.cmd` directly.
 - Quitting VibeSquad stops the server it started (`stop_managed_server`, `src-tauri/src/main.rs:2171-2179`).

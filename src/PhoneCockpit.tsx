@@ -251,29 +251,6 @@ export function PhoneCockpit({ views, view, onSquad, runnerConn, bugSlot, pairSl
           <div className={`phone-health-line ${health.tone}`} data-testid="phone-health-line">
             <span className={`phone-health ${health.tone}`} /> {health.text}
           </div>
-          <div className="phone-seg-group" data-testid="phone-vibe-toggle" role="group" aria-label="Layout vibe">
-            <span className="phone-lanes-head">VIBE</span>
-            <div className="phone-seg-row">
-              <button
-                type="button"
-                className={`phone-seg-btn ${vibe === "fun" ? "on" : ""}`}
-                data-testid="phone-vibe-fun"
-                aria-pressed={vibe === "fun"}
-                onClick={() => setPref("app.vibe", "fun")}
-              >
-                Psycho
-              </button>
-              <button
-                type="button"
-                className={`phone-seg-btn ${vibe === "boring" ? "on" : ""}`}
-                data-testid="phone-vibe-boring"
-                aria-pressed={vibe === "boring"}
-                onClick={() => setPref("app.vibe", "boring")}
-              >
-                Corpo
-              </button>
-            </div>
-          </div>
           <div className="phone-seg-group" data-testid="phone-provider-toggle" role="group" aria-label="Default provider">
             <span className="phone-lanes-head">PROVIDER</span>
             <div className="phone-seg-row">
