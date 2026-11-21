@@ -2,6 +2,8 @@
 // Writes are gated by the caller (vibesquad-api.mjs: owner, or an allow-listed verified agent forwarded to the runner's scope rules).
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { callerOf } from "./auth.mjs";
+import { pickBugIntakeAgent } from "./inbox.mjs";
+import { redactHostPathTokens } from "./redact-host-paths.mjs";
 
 const PREFIX = "/__vibesquad/runner/";
 const ID_RE = /^rn-[A-Za-z0-9_-]{1,64}$/;
@@ -44,7 +46,9 @@ export async function runnerStatus() {
  * An agent caller is forwarded to the runner as that agent ({ id, token }), so the runner's scope rules decide (team, parent,
  * role, protected meta); `owner: true` on input is only ever set for the owner. The body can never name the caller.
  */
-export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), status = runnerStatus, caller = callerOf(req) }) {
+export async function handleRunnerApi(req, res, { readBody, sendJson, backend = sharedRunnerBackend(), status = runnerStatus, caller = callerOf(req), testerTeams = null }) {
+  // E6a: a bug-tester device never reaches the owner/agent code below (deny-by-default, its own scoped handler).
+  if (caller?.kind === "tester") return handleTesterRunnerApi(req, res, { readBody, sendJson, backend, caller, testerTeams });
   const agent = caller?.kind === "agent" ? { id: caller.id, token: caller.token } : null;
   const as = agent ? { caller: agent } : {};
   try {
