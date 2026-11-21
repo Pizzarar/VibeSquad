@@ -110,11 +110,24 @@ function appendSome(n = 50) {
   }
 }
 
-const cleanup = () => {
+let cleaned = false;
+const cleanup = async () => {
+  if (cleaned) return;
+  cleaned = true;
   if (flag("keep") || arg("home")) return;
-  if (liveRunner && liveRunner.exitCode === null) { try { liveRunner.kill(); } catch {} }
+  if (liveRunner && liveRunner.exitCode === null) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 3000);
+      liveRunner.once("exit", () => { clearTimeout(t); resolve(); });
+      try { liveRunner.kill(); } catch { clearTimeout(t); resolve(); }
+    });
+  }
   try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); }
 };
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => { cleanup().then(() => process.exit(sig === "SIGINT" ? 130 : 143)); });
+}
 
 try {
   if (!existsSync(agentsDir)) {
@@ -134,5 +147,5 @@ try {
   }
   console.log(JSON.stringify(results, null, 1));
 } finally {
-  cleanup();
+  await cleanup();
 }

@@ -114,11 +114,24 @@ async function bootWithConcurrentWho(n) {
   return { n, boot, bootWall, whoMs: who.map((w) => w.ms), whoFailed: who.filter((w) => w.code !== 0).length, liveWhoMs: live.ms, liveWhoCode: live.code };
 }
 
-const cleanup = () => {
+let cleaned = false;
+const cleanup = async () => {
+  if (cleaned) return;
+  cleaned = true;
   if (flag("keep") || arg("home")) return;
-  if (liveRunner && liveRunner.exitCode === null) { try { liveRunner.kill(); } catch {} }
+  if (liveRunner && liveRunner.exitCode === null) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 3000);
+      liveRunner.once("exit", () => { clearTimeout(t); resolve(); });
+      try { liveRunner.kill(); } catch { clearTimeout(t); resolve(); }
+    });
+  }
   try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); }
 };
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => { cleanup().then(() => process.exit(sig === "SIGINT" ? 130 : 143)); });
+}
 
 try {
 // The CLI resolves teams from the home's registry: without one, which Squad `--team vibesquad` means depends on the checkout path.
@@ -156,5 +169,5 @@ results.bootConcurrentColdIndex = await bootWithConcurrentWho(CONC);
 results.bootConcurrentWarmIndex = await bootWithConcurrentWho(CONC);
 console.log(JSON.stringify(results, null, 2));
 } finally {
-  cleanup();
+  await cleanup();
 }

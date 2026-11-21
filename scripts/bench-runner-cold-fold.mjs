@@ -54,6 +54,18 @@ function generate() {
   }
 }
 
+let cleaned = false;
+const cleanup = () => {
+  if (cleaned) return;
+  cleaned = true;
+  if (flag("keep")) return;
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); }
+};
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
+}
+
 let res;
 try {
 if (arg("agents-dir")) cpSync(path.resolve(arg("agents-dir")), dir, { recursive: true }); // a copy: the bench never touches the source
@@ -97,7 +109,7 @@ res.serialPerFloor = +(res.serial.ms / res.floor.ms).toFixed(2);
 if (res.prefold) res.prefoldPerSerial = +(res.prefold.ms / res.serial.ms).toFixed(2);
 console.log(JSON.stringify(res, null, 1));
 } finally {
-  if (!flag("keep")) { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); } }
+  cleanup();
 }
 if (flag("check")) {
   const bad = [];

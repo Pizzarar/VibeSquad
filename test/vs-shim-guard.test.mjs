@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, rmdirSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -15,9 +15,32 @@ function git(cwd, args) {
 
 const posix = (p) => p.split("\\").join("/");
 
+// Unlink a symlink/junction itself (never its target); throws when neither works (matches server/team-worktrees.mjs:516-521).
+const unlinkLinkOnly = (p) => { try { unlinkSync(p); } catch { rmdirSync(p); } };
+// Walk a tree without following links (lstat, never recurse into a link); unlink every symlink/junction and verify each is
+// gone via lstat. Returns true only when every link is detached, so the caller never recursive-rms through a live junction.
+const detachLinks = (root) => {
+  const links = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) links.push(p);
+      else if (st.isDirectory()) walk(p);
+    }
+  };
+  walk(root);
+  for (const p of links) {
+    unlinkLinkOnly(p);
+    let still = true;
+    try { lstatSync(p); } catch (e) { if (e?.code === "ENOENT") still = false; }
+    if (still) return false;
+  }
+  return true;
+};
+
 describe("vs install-shim / worktree create from a linked worktree", () => {
   let tmp, main, wt, env, realBin;
-  const junctions = [];
 
   before(() => {
     tmp = realpathSync(mkdtempSync(join(tmpdir(), "vs-shim-guard-")));
@@ -36,7 +59,7 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
     // vs.mjs needs the project's dependencies; junction them in (a worktree has none of its own).
     const commonDir = git(REPO_ROOT, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     const nm = [join(REPO_ROOT, "node_modules"), join(resolve(commonDir, ".."), "node_modules")].find((d) => existsSync(d));
-    if (nm) for (const d of [main, wt]) { const j = join(d, "node_modules"); symlinkSync(nm, j, "junction"); junctions.push(j); }
+    if (nm) for (const d of [main, wt]) symlinkSync(nm, join(d, "node_modules"), "junction");
 
     const home = join(tmp, "home");
     realBin = [join(home, ".local", "bin"), join(home, "AppData", "Roaming", "npm")];
@@ -52,9 +75,13 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
   });
 
   after(() => {
-    // Unlink the node_modules junctions first: a recursive rm must never follow a junction into the real checkout.
-    for (const j of junctions) { try { unlinkSync(j); } catch {} }
-    if (tmp) { try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} }
+    if (!tmp) return;
+    // Detach every junction/symlink (including any the spawned worktree-create made) and verify each is gone. If a link
+    // survives (unlink failed), SKIP the recursive rm and leave the dir: never recurse through a live junction.
+    let safe = false;
+    try { safe = detachLinks(tmp); } catch { safe = false; }
+    if (!safe) return;
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {}
   });
 
   const runVs = (script, args, cwd) =>
