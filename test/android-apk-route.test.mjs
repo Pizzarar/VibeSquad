@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,15 @@ const APK_BYTES = Buffer.from("PK\x03\x04vibesquad-apk-body");
 
 function tmpRoot() {
   return mkdtempSync(join(tmpdir(), "vs-android-route-"));
+}
+
+/** idea-404: syncRuntimeDir reads tracked files from git, so a sync source must be a repo with a commit. */
+function gitRoot() {
+  const root = tmpRoot();
+  const git = (...a) => execFileSync("git", ["-C", root, ...a], { stdio: "ignore" });
+  git("init", "-q", "-b", "master");
+  git("-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init");
+  return root;
 }
 
 function writeApk(root) {
@@ -601,10 +611,10 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
     const runtime = join(lad, "VibeSquad", "runtime");
     mkdirSync(runtime, { recursive: true });
     try {
-      const empty = tmpRoot();
+      const empty = gitRoot();
       assert.equal(syncRuntimeDir(empty).synced, true);
       assert.equal(existsSync(join(runtime, "dist-desktop", "VibeSquad.apk")), false);
-      const repo = tmpRoot();
+      const repo = gitRoot();
       const file = writeApk(repo);
       writeApkSidecar(file);
       syncRuntimeDir(repo);
@@ -627,7 +637,7 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
     mkdirSync(live, { recursive: true });
     writeFileSync(join(live, "VibeSquad.apk"), "live-old");
     try {
-      const repo = tmpRoot();
+      const repo = gitRoot();
       const file = writeApk(repo);
       syncRuntimeDir(repo); // no sidecar
       assert.equal(readFileSync(join(live, "VibeSquad.apk"), "utf8"), "live-old");
