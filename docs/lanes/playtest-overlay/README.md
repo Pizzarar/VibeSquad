@@ -31,7 +31,7 @@ Implemented runtime debug bridge — Thanks to godot-mcp-runtime by Erodenn
 }
 ```
 
-Installed machine-wide on Aub's PC at `C:\Users\Fugma\AppData\Local\VibeSquad\tools\godot-mcp-runtime`, pinned to `3b8a4f31`. It is registered in Claude user scope as `godot-runtime` (`claude mcp get godot-runtime`), with `GODOT_PATH` set to the real console `.exe`. Sessions started before the install need a restart to see it. To upgrade, re-clone at a new pinned commit, rebuild, and update this file and `CREDITS.md`.
+Installed machine-wide in the VS-managed tools directory (`%LOCALAPPDATA%\VibeSquad\tools\godot-mcp-runtime`), pinned to `3b8a4f31`. It is registered in Claude user scope as `godot-runtime` (`claude mcp get godot-runtime`), with `GODOT_PATH` set to the real console `.exe`. Sessions started before the install need a restart to see it. To upgrade, re-clone at a new pinned commit, rebuild, and update this file and `CREDITS.md`.
 
 VS does not inject this server per agent. The runner only knows the `playwright` extra (`runner/adapters/claude.mjs`). Runner agents run with `--strict-mcp-config`, so they only see it if a `godot-runtime` extra is added later.
 

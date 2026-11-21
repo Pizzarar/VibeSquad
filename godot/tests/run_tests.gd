@@ -7,6 +7,7 @@ const Payload := preload("res://addons/vs_playtest/payload.gd")
 const ReportClient := preload("res://addons/vs_playtest/report_client.gd")
 const AutoloadScript := preload("res://addons/vs_playtest/vs_playtest.gd")
 const Picker := preload("res://addons/vs_playtest/picker.gd")
+const Export := preload("res://addons/vs_playtest/export_plugin.gd")
 
 var _pass := 0
 var _fail := 0
@@ -40,6 +41,7 @@ func _initialize() -> void:
 	_test_ring_math()
 	await _test_picker()
 	await _test_capture_flow()
+	_test_export_helpers()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -362,3 +364,32 @@ func _test_capture_flow() -> void:
 
 func _describe_freed(on: Node) -> bool:
 	return on._describe_node(null) == "" and on._describe_node(RefCounted.new()) == ""
+
+
+func _test_export_helpers() -> void:
+	var BS := String.chr(92)
+	var n := Export.normalize_adapter_dir
+	check(n.call("") == "", "adapter_dir: empty disables")
+	check(n.call("res://") == "", "adapter_dir: res:// disables")
+	check(n.call("/") == "", "adapter_dir: / disables")
+	check(n.call("  ") == "", "adapter_dir: blank disables")
+	check(n.call("vs_playtest_adapter") == "res://vs_playtest_adapter/", "adapter_dir: no res:// works")
+	check(n.call("res://vs_playtest_adapter") == "res://vs_playtest_adapter/", "adapter_dir: no trailing slash")
+	check(n.call("res://vs_playtest_adapter/") == "res://vs_playtest_adapter/", "adapter_dir: canonical")
+	check(n.call("a" + BS + "b" + BS) == "res://a/b/", "adapter_dir: backslashes")
+	var c := Export.filter_covers_dir
+	check(c.call("addons/vs_playtest/*", "addons/vs_playtest"), "filter: dir/*")
+	check(c.call("addons/vs_playtest/**", "addons/vs_playtest"), "filter: dir/**")
+	check(c.call("*", "addons/vs_playtest"), "filter: *")
+	check(c.call("tests/*, addons/vs_playtest/* ,x", "addons/vs_playtest"), "filter: among entries, spaces")
+	check(c.call("res://vs_playtest_adapter/*", "res://vs_playtest_adapter/"), "filter: res:// entry and dir")
+	check(c.call("addons"+BS+"vs_playtest"+BS+"*", "addons/vs_playtest"), "filter: backslashes")
+	check(not c.call("", "addons/vs_playtest"), "filter: empty rejected")
+	check(not c.call("addons/vs_playtest/README.md,vs_playtest_adapter/foo.txt", "addons/vs_playtest"), "filter: file-only rejected")
+	check(not c.call("addons/vs_playtest/dock.gd", "addons/vs_playtest"), "filter: single file rejected")
+	check(not c.call("addons/vs_playtest,vs_playtest_adapter", "addons/vs_playtest"), "filter: missing wildcard rejected")
+	check(not c.call("addons/vs_playtest/sub/*", "addons/vs_playtest"), "filter: partial subdir rejected")
+	check(not c.call("other/addons/vs_playtest_extra/*", "addons/vs_playtest"), "filter: sibling prefix rejected")
+	check(not c.call("addons/vs_playtest_extra/*", "addons/vs_playtest"), "filter: sibling prefix 2 rejected")
+	check(not c.call("other/addons/vs_playtest/*", "addons/vs_playtest"), "filter: nested elsewhere rejected")
+	check(not c.call("addons/*", "addons/vs_playtest"), "filter: parent wildcard rejected (strict; spec lists only dir/*, dir/**, *)")

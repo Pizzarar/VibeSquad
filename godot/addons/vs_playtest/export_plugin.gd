@@ -32,13 +32,41 @@ func _get_name() -> String:
 	return "VSPlaytestExport"
 
 
-func _export_begin(features: PackedStringArray, _is_debug: bool, _path: String, _flags: int) -> void:
-	_stripping = not features.has(TAG)
+## "" / "res://" / "/" -> "" (adapter-dir skip disabled, never "skip everything"); otherwise
+## "res://<rel>/" with backslashes and an optional res:// prefix normalised.
+static func normalize_adapter_dir(raw: String) -> String:
+	var rel := raw.strip_edges().replace("\\", "/").trim_prefix("res://").trim_prefix("/").trim_suffix("/")
+	return "" if rel.is_empty() else "res://" + rel + "/"
+
+
+## True if a comma-separated exclude filter has an entry covering the whole dir:
+## `<dir>/*`, `<dir>/**` or `*` (partial, file-only, no-wildcard and sibling-prefix entries do not count).
+static func filter_covers_dir(filter: String, rel_dir: String) -> bool:
+	var dir := rel_dir.replace("\\", "/").trim_prefix("res://").trim_prefix("/").trim_suffix("/")
+	for entry in filter.split(","):
+		var e := entry.strip_edges().replace("\\", "/").trim_prefix("res://").trim_prefix("/")
+		if e == "*" or e == "**" or e == dir + "/*" or e == dir + "/**":
+			return true
+	return false
+
+
+## Puts back any autoload value a previous export left cleared (aborted export, plugin unload).
+func restore() -> void:
+	if _saved_autoload != null:
+		ProjectSettings.set_setting(AUTOLOAD_KEY, _saved_autoload)
+	if _saved_bridge != null:
+		ProjectSettings.set_setting(BRIDGE_KEY, _saved_bridge)
 	_saved_autoload = null
 	_saved_bridge = null
-	_adapter_dir = Settings.get_str(Settings.ADAPTER_DIR)
-	if not _adapter_dir.is_empty() and not _adapter_dir.ends_with("/"):
-		_adapter_dir += "/"
+	_stripping = false
+
+
+func _export_begin(features: PackedStringArray, _is_debug: bool, _path: String, _flags: int) -> void:
+	restore()
+	_stripping = not features.has(TAG)
+	_adapter_dir = normalize_adapter_dir(String(ProjectSettings.get_setting(Settings.ADAPTER_DIR, "res://vs_playtest_adapter/")))
+	if _adapter_dir.is_empty():
+		push_warning("VS Playtest: vs_playtest/adapter_dir is empty or the project root; adapter-dir exclusion is disabled for this export.")
 	if ProjectSettings.has_setting(BRIDGE_KEY):
 		push_error("VS Playtest: project.godot has an McpBridge autoload (a godot-mcp-runtime session is attached). Its script is never exported, so it is removed from this export, but detach with stop_project before exporting and before committing.")
 		_saved_bridge = ProjectSettings.get_setting(BRIDGE_KEY)
@@ -49,7 +77,7 @@ func _export_begin(features: PackedStringArray, _is_debug: bool, _path: String, 
 	if preset.get_script_export_mode() != 0:
 		var filter := preset.get_exclude_filter()
 		var rel_adapter := _adapter_dir.trim_prefix("res://")
-		if not filter.contains("addons/vs_playtest") or (not rel_adapter.is_empty() and not filter.contains(rel_adapter.trim_suffix("/"))):
+		if not filter_covers_dir(filter, "addons/vs_playtest") or (not rel_adapter.is_empty() and not filter_covers_dir(filter, rel_adapter)):
 			push_error("VS Playtest: this preset exports compiled scripts (script_export_mode != Text) and Godot's own script exporter consumes .gd files before export plugins see them, so the addon and adapter dir cannot be dropped automatically. Set Script Export Mode to Text, or put 'addons/vs_playtest/*,%s*' in the preset's Exclude filter." % rel_adapter)
 	if ProjectSettings.has_setting(AUTOLOAD_KEY):
 		_saved_autoload = ProjectSettings.get_setting(AUTOLOAD_KEY)
@@ -62,10 +90,4 @@ func _export_file(path: String, _type: String, _features: PackedStringArray) -> 
 
 
 func _export_end() -> void:
-	if _saved_autoload != null:
-		ProjectSettings.set_setting(AUTOLOAD_KEY, _saved_autoload)
-	if _saved_bridge != null:
-		ProjectSettings.set_setting(BRIDGE_KEY, _saved_bridge)
-	_saved_autoload = null
-	_saved_bridge = null
-	_stripping = false
+	restore()

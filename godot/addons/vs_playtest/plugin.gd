@@ -19,6 +19,7 @@ func _enter_tree() -> void:
 
 func _exit_tree() -> void:
 	if _export_plugin:
+		_export_plugin.restore()
 		remove_export_plugin(_export_plugin)
 		_export_plugin = null
 
