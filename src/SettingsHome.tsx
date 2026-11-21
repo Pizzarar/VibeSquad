@@ -412,13 +412,16 @@ function LegacyPsychoToggle() {
   return (
     <div className="settings-row" data-setting-id="legacy-psycho">
       <div className="settings-row-text">
-        <label className="settings-row-label" htmlFor="legacy-psycho-toggle">
-          Legacy: Psycho mode
-        </label>
-        <div className="muted small">Normal mode is the default. Turn this on to switch to the legacy pixel-art Vibespace layout.</div>
+        <div className="settings-row-label">Legacy: Psycho mode</div>
+        <div className="muted small">Normal is the default. Turn off here anytime to return.</div>
       </div>
-      <div className="settings-row-control">
-        <input id="legacy-psycho-toggle" data-testid="settings-legacy-psycho-toggle" type="checkbox" checked={vibe === "fun"} onChange={(e) => setVibe(e.target.checked ? "fun" : "boring")} />
+      <div className="settings-row-control" data-testid="settings-legacy-psycho-toggle" role="group" aria-label="Legacy: Psycho mode" style={{ display: "flex", gap: 6 }}>
+        <button type="button" className={`btn small ${vibe !== "fun" ? "on" : "ghost"}`} aria-pressed={vibe !== "fun"} data-testid="settings-legacy-psycho-off" onClick={() => setVibe("boring")}>
+          Off
+        </button>
+        <button type="button" className={`btn small ${vibe === "fun" ? "on" : "ghost"}`} aria-pressed={vibe === "fun"} data-testid="settings-legacy-psycho-on" onClick={() => setVibe("fun")}>
+          On
+        </button>
       </div>
     </div>
   );
