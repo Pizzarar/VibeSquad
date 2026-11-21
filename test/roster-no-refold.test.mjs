@@ -6,7 +6,7 @@
 //   - `vs who` prints the same thing whether its agents come from the live runner over HTTP or from the logs;
 //   - refreshRunnerRoster runs one scan at a time (fresh callers share one follow-up) and folds nothing while the runner boots.
 import "./helpers/clean-env.mjs";
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -24,14 +24,19 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const CLI = path.join(REPO, "cli", "vs.mjs");
 const OLD = 1_700_000_000_000; // event clock well before any runner.json startedAt in this file
 
+// idea-471: mkHome's scratch dirs (vs-rnr-*) were never removed. Track every root and remove it after the file runs, even
+// when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY on a just-exited child process).
+const homes = [];
 function mkHome(prefix) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
+  homes.push(root);
   const vsHome = path.join(root, "vs");
   const rhome = path.join(vsHome, "runner");
   const dir = path.join(rhome, "agents");
   fs.mkdirSync(dir, { recursive: true });
   return { root, vsHome, rhome, dir, env: { VIBESQUAD_HOME: vsHome } };
 }
+after(() => { for (const h of homes) fs.rmSync(h, { recursive: true, force: true, maxRetries: 3 }); });
 const line = (seq, type, o = {}) => JSON.stringify({ seq, ts: OLD + seq, type, ...o }) + "\n";
 const created = (id, lane = "l1", role = "worker", extra = {}) =>
   line(0, "created", { provider: "claude", model: "m", cwd: `/w/${id}`, meta: { title: `T ${id}`, labels: { team: "t", lane, role, ...extra } } });

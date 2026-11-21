@@ -15,6 +15,8 @@ const N = 2000;
 const LAG_BUDGET_MS = 1000;
 const MIN_TICKS = 20;
 const home = fs.mkdtempSync(path.join(os.tmpdir(), "vs-roster-"));
+// idea-471: the module-level scratch home was never removed; drop it after the file runs even on failure.
+test.after(() => fs.rmSync(home, { recursive: true, force: true, maxRetries: 3 }));
 const vsHome = path.join(home, "vs");
 const dir = path.join(vsHome, "runner", "agents");
 fs.mkdirSync(dir, { recursive: true });
