@@ -1,6 +1,6 @@
-import test from "node:test";
+import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, realpathSync, symlinkSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, realpathSync, rmdirSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { viteFsAllow } from "../server/vite-fs-allow.mjs";
@@ -36,4 +36,20 @@ test("missing node_modules: fs.allow is just the workspace root", () => {
   const bare = join(base, "bare");
   mkdirSync(bare, { recursive: true });
   assert.deepEqual(viteFsAllow(bare), [realpathSync(bare)]);
+});
+
+// Detach the node_modules junction FIRST (never recurse through it — a recursive
+// rm would follow the link and delete the target), then drop the temp tree.
+after(() => {
+  const link = join(wt, "node_modules");
+  try {
+    if (lstatSync(link).isSymbolicLink()) {
+      try {
+        unlinkSync(link);
+      } catch {
+        rmdirSync(link); // non-recursive: removes the junction, not the target
+      }
+    }
+  } catch {}
+  rmSync(base, { recursive: true, force: true, maxRetries: 3 });
 });
