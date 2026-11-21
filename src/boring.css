@@ -468,7 +468,8 @@ html[data-vibe="boring"] .drawer-head .prov-badge,
 html[data-vibe="boring"] .brainstorm-ctx-bar { border: 0; border-radius: 10px; background: var(--panel-hi); }
 html[data-vibe="boring"] .brainstorm-ctx-track { border: 0; background: var(--panel-hi); }
 html[data-vibe="boring"] .brainstorm-ctx-fill { background: var(--cyan); }
-html[data-vibe="boring"] .btn.ok { background: var(--cyan); border: 0; border-radius: 10px; color: var(--on-accent); }
+/* :disabled repeats the fill on purpose: styles.css ":root:root :is(.btn):disabled" (0,4,0) would otherwise turn modal submits into the Psycho dashed ghost (master kept the solid fill with an important flag). */
+html[data-vibe="boring"] .btn.ok, html[data-vibe="boring"] .btn.ok:disabled { background: var(--cyan); border: 0; border-radius: 10px; color: var(--on-accent); }
 html[data-vibe="boring"] .usage-crt,
 html[data-vibe="boring"] .inbox-card,
 html[data-vibe="boring"] .feed-entry,

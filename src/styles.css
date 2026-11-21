@@ -5710,14 +5710,17 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover, .tl-jump-bottom:hover, .seg button:hover, .tchip:hover { border-image-source: var(--u3-btn-ghost-hover); background: none; }
 .btn.ghost:active, .squads-pager-btn:active, .sidebar-cog-btn:active, .tl-jump-bottom:active, .seg button:active, .tchip:active { border-image-source: var(--u3-btn-ghost-active); box-shadow: none; }
-.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+.btn.hot, .btn.bad, .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+/* Psycho-only: the 9-slice confirm sprites must not paint Normal ConfirmButtons (boring.css owns their look) */
+:where(html:not([data-vibe="boring"])) .btn.confirm.danger:not(.armed) { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
 .btn.hot:hover, .btn.bad:hover, .bad-btn:hover { border-image-source: var(--u3-btn-hot-hover); }
 .btn.hot:active, .btn.bad:active, .bad-btn:active { border-image-source: var(--u3-btn-hot-active); }
 .seg button.on, .tchip.on { border-image-source: var(--u3-btn-on-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
-.btn.warn, .btn.confirm.warn:not(.armed), .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
+.btn.warn, .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
+:where(html:not([data-vibe="boring"])) .btn.confirm.warn:not(.armed) { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
 .btn.warn:hover { border-image-source: var(--u3-btn-warn-hover); }
 .btn.warn:active { border-image-source: var(--u3-btn-warn-active); }
-.btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
 .pin-tile-bar .pin-menu-btn, .modal-head .btn, .pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn {
   border-image: var(--u3-btn-marble-normal) 4 fill / calc(var(--u3-px) * 4) / 0 repeat; background: none; color: var(--u3-ink-text); text-shadow: none; min-height: 0; height: calc(var(--u3-px) * 10);
 }
@@ -5887,7 +5890,8 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root:where(:not([data-vibe="boring"]))[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--on-pastel)); }
 :root:where(:not([data-vibe="boring"]))[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel)); }
 :where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) .btn.warn:not(.confirm):not(.armed) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) .btn.confirm.warn:not(.armed) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
 /* disabled (idea-165, single source): quiet dashed ghost, full-contrast muted label, no opacity. Scoped selector = sidebar/sky/focus-bar controls; :root:root selector = unscoped controls (modals, .sky-zones, UsageDashboard) so --muted never lands on a bright fill */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled,
 /* shared disabled style; the usage buttons keep their Normal (boring.css) look, as before the !important cut */
@@ -6021,19 +6025,20 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root { --on-pink-fill: var(--bg); }
 :root[data-theme="light"] { --on-pink-fill: var(--marble); }
 /* selected seg / chip: INK on the violet fill (the U3 light label #f6eef8 was 2.85:1 on light violet) */
-:root:where(:not([data-vibe="boring"])):root :is(.seg button.on, .tchip.on) { background: var(--violet); color: var(--on-pastel) !important; text-shadow: none; }
+:root:root :is(.seg button.on, .tchip.on) { background: var(--violet); color: var(--on-pastel) !important; text-shadow: none; }
 /* selected teal button (Settings UI-scale 100%: label equalled the fill) */
-:root:where(:not([data-vibe="boring"])):root .btn.on:not(.ghost):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+:root:root .btn.on:not(.ghost):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* needs-you counts and hot/bad buttons: solid pink fill with on-fill ink (light pink-fill #b4377a + marble = 5.5:1) */
-:root:where(:not([data-vibe="boring"])):root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]:not(.muted)) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
+:root:root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]:not(.muted)) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
 :root:where(:not([data-vibe="boring"])):root :is(.btn.hot, .btn.bad):not(:disabled) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
 /* plain confirm (Archive) and warn (Cancel & Resume) buttons */
 :root:where(:not([data-vibe="boring"])):root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
-:root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
+:root:root .btn.warn:not(.confirm):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
+:root:where(:not([data-vibe="boring"])):root .btn.confirm.warn:not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
 /* ⇄ Handoff (owner's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
-:root:where(:not([data-vibe="boring"])):root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
+:root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
-:root:where(:not([data-vibe="boring"])):root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
+:root:root .drawer-labels-list .chip { background: color-mix(in srgb, var(--cyan) 18%, var(--panel)) !important; background-image: none !important; border-image-source: none !important; color: var(--text) !important; text-shadow: none; }
 
 /* usa-11: efficiency trend, clean-run floor, savings, workflow era */
 .usage-efficiency, .usage-workflows { margin-top: var(--sp-4, 16px); padding: var(--sp-4, 16px); background: var(--navy); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; gap: var(--sp-3, 12px); }
