@@ -206,6 +206,44 @@ function cancelSet(id, callerId, now, allow) {
   };
 }
 
+/**
+ * idea-418: which sets follow their owner to a successor: armed ones, plus fired ones whose ping is still unsent (queued behind
+ * the owner's turn; idea-219 lets the owner still cancel those). Cancelled and fully sent sets are history and stay put.
+ */
+const reownable = (set) => !set.cancelledAt && (isOpen(set) || (set.pings ?? []).some((p) => !p.attemptedAt));
+
+function reownSets({ from, to, ids, reason } = {}, now) {
+  const src = String(from ?? "").trim();
+  const dst = String(to ?? "").trim();
+  if (!src || !dst) throw new Error("reownWatches: from and to are required");
+  const want = Array.isArray(ids) ? new Set(ids.map(String)) : null;
+  return (doc) => {
+    const reowned = [];
+    if (src === dst) return { reowned };
+    for (const set of doc.sets) {
+      if (set.owner !== src || (want && !want.has(set.id)) || !reownable(set)) continue;
+      set.owner = dst;
+      // Audit trail: who held it before, when it moved and why (handoff | delivery fallback).
+      set.reowned = [...(Array.isArray(set.reowned) ? set.reowned : []), { from: src, at: iso(now), ...(reason ? { reason: oneLine(reason, 80) } : {}) }];
+      reowned.push(set.id);
+    }
+    return { reowned };
+  };
+}
+
+/**
+ * idea-418: move `from`'s live sets (armed, or fired with an unsent ping) to `to` in one locked read-modify-write, so the
+ * successor owns (and may cancel) what its retired predecessor armed. `ids` limits it to those sets. Returns `{reowned: ids}`.
+ */
+export function reownWatches(spec, { home, now = Date.now() } = {}) {
+  return mutateDoc(watchesPath({ home }), reownSets(spec, now));
+}
+
+/** reownWatches for the server process (lead handoff, the delivery fallback): never blocks the event loop on the lock. */
+export function reownWatchesAsync(spec, { home, now = Date.now() } = {}) {
+  return mutateDocAsync(watchesPath({ home }), reownSets(spec, now));
+}
+
 // ---------------------------------------------------------------------------
 // State machine (pure given its inputs; exported for tests)
 // ---------------------------------------------------------------------------
@@ -943,6 +981,22 @@ export function createWatchEngine({
     reload();
   }
 
+  /**
+   * idea-418: the delivery fallback adopts a retired owner's set for the lead it was delivered to, so watches orphaned before
+   * the handoff re-owned them heal on their first ping. Conditional on the owner still being `from`. Never rejects.
+   */
+  async function reown(setId, from, to, reason = "delivery fallback") {
+    let out = { reowned: [] };
+    try {
+      out = await mutateDocAsync(file, reownSets({ from, to, ids: [setId], reason }, now()));
+    } catch (e) {
+      log(`watch ${setId} re-own ${from} -> ${to} failed: ${e?.message ?? e}`);
+    }
+    cacheStamp = "";
+    reload();
+    return out;
+  }
+
   /** idea-219: true when the ping's set was cancelled (fresh read from disk). The plugin checks it right before the send. */
   function isCancelled(key) {
     cacheStamp = "";
@@ -1019,6 +1073,7 @@ export function createWatchEngine({
     isCancelled,
     markDelivered,
     markFailed,
+    reown,
     get: (id) => {
       const s = reload().sets.find((x) => x.id === id);
       return s ? structuredClone(s) : null;

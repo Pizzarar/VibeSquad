@@ -26,6 +26,7 @@ import {
 import { listDaemonAgents } from "./detach-children.mjs";
 import { getBackend, isRunnerId, readRunnerAgentSync } from "./backend/index.mjs";
 import { sharedSchedules } from "./schedules.mjs";
+import { reownWatchesAsync } from "./watch-sets.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
@@ -211,9 +212,11 @@ export function highestLaneLeadOrd(agents, laneId, excludeId = "") {
  * Text of the `handoff` log entry. Carries `plan=<docs/PLAN_X.md>` (parseable) so @usage can score a plan handoff
  * (Buddy -> lead) against a later `done plan <PLAN_x> PASS`. Omitted when the lane has no plan file yet.
  */
-export function handoffLogText({ oldId, successorId, oldOrd, nextOrd, trigger, plan = "", idleRepointed = 0 }) {
+export function handoffLogText({ oldId, successorId, oldOrd, nextOrd, trigger, plan = "", idleRepointed = 0, watchesReowned = 0 }) {
   const planTag = /^docs\/PLAN_[\w.-]+\.md$/i.test(String(plan)) ? ` plan=${plan}` : "";
   return `lead ${oldId} -> ${successorId} (ord${oldOrd} -> ord${nextOrd}): handoff (trigger=${trigger})${planTag}${
+    watchesReowned ? `; ${watchesReowned} watch${watchesReowned === 1 ? "" : "es"} re-owned` : ""
+  }${
     idleRepointed ? `; ${idleRepointed} idle workers re-pointed; last reports already delivered` : ""
   }`.slice(0, 240);
 }
@@ -954,12 +957,23 @@ export function createLeadHandoffCoordinator(deps = {}) {
       } catch {}
     }
 
+    // idea-418: the predecessor's watch sets follow its workers. Re-owned (not closed) in one locked write: a set whose items are
+    // all done still owes the successor its completion ping and the workers' finals (idea-352), so closing it would drop them.
+    // Best-effort like the worker repoint: the delivery fallback re-owns any set this misses on its first ping.
+    let reownedWatches = [];
+    if (deps.reownWatches !== false) {
+      try {
+        const reown = typeof deps.reownWatches === "function" ? deps.reownWatches : (spec) => reownWatchesAsync(spec, { home: getBase() });
+        reownedWatches = (await reown({ from: oldLead.id, to: successor.id, reason: `handoff trigger=${trigger}` }))?.reowned ?? [];
+      } catch {}
+    }
+
     timer.mark("repoint");
     // Delete old lead's heartbeat.
     await deleteHeartbeat(oldLead.id);
 
     // Record handoff log entry with trigger=self | auto-250 | hard-300.
-    const logText = handoffLogText({ oldId: oldLead.id, successorId: successor.id, oldOrd, nextOrd, trigger, plan: latestPlan, idleRepointed });
+    const logText = handoffLogText({ oldId: oldLead.id, successorId: successor.id, oldOrd, nextOrd, trigger, plan: latestPlan, idleRepointed, watchesReowned: reownedWatches.length });
     appendLog(teamId, {
       agent: successor.id,
       lane: laneId,
@@ -997,6 +1011,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       synthesizedPacket: synthesized,
       prompt,
       repointedWorkers,
+      reownedWatches,
       retiredImmediately: retired,
       pendingConfirmation: !retired,
     });

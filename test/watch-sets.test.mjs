@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -1031,6 +1031,71 @@ test("escalation (R3 M): a real turn after the nudge's clears nudgeTurnAt (persi
   }
 });
 
+test("reownWatches (idea-418): moves armed and fired-but-unsent sets to the successor, leaves history and other owners alone", () => {
+  const sb = sandbox();
+  try {
+    const opts = { home: sb.home, now: T0 };
+    const armed = addWatch({ owner: "old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, opts).id;
+    const pending = addWatch({ owner: "old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-2" }] }, opts).id;
+    const sent = addWatch({ owner: "old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-3" }] }, opts).id;
+    const cancelled = addWatch({ owner: "old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-4" }] }, opts).id;
+    const other = addWatch({ owner: "someone", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-5" }] }, opts).id;
+    cancelWatch(cancelled, "old", opts);
+    // Hand-fire two sets: one whose ping is still queued (no attemptedAt), one already sent.
+    const file = watchesPath({ home: sb.home });
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    for (const s of doc.sets) {
+      if (s.id === pending) Object.assign(s, { firedAt: iso(T0), pings: [{ key: "done", at: iso(T0), text: "x" }] });
+      if (s.id === sent) Object.assign(s, { firedAt: iso(T0), pings: [{ key: "done", at: iso(T0), text: "x", attemptedAt: iso(T0) }] });
+    }
+    writeFileSync(file, JSON.stringify(doc));
+
+    const res = reownWatches({ from: "old", to: "new", reason: "handoff trigger=self" }, { home: sb.home, now: T0 + MIN });
+    assert.deepEqual([...res.reowned].sort(), [armed, pending].sort());
+    const all = new Map(listWatches({ all: true }, { home: sb.home }).map((s) => [s.id, s]));
+    assert.equal(all.get(armed).owner, "new");
+    assert.equal(all.get(pending).owner, "new");
+    assert.deepEqual(all.get(armed).reowned, [{ from: "old", at: iso(T0 + MIN), reason: "handoff trigger=self" }]);
+    assert.equal(all.get(sent).owner, "old", "a fully sent set is history");
+    assert.equal(all.get(cancelled).owner, "old", "a cancelled set is history");
+    assert.equal(all.get(other).owner, "someone");
+    // Idempotent: a repeat moves nothing; the successor may now cancel what it owns (idea-219: even the queued ping).
+    assert.deepEqual(reownWatches({ from: "old", to: "new" }, { home: sb.home }).reowned, []);
+    assert.equal(cancelWatch(pending, "new", { home: sb.home, allow: (s) => s.owner === "new" }).ok, true);
+    assert.equal(cancelWatch(armed, "new", { home: sb.home, allow: (s) => s.owner === "new" }).ok, true);
+    // `ids` limits the move; from === to is a no-op; a blank side throws.
+    const a2 = addWatch({ owner: "new", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-6" }] }, opts).id;
+    const b2 = addWatch({ owner: "new", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-7" }] }, opts).id;
+    assert.deepEqual(reownWatches({ from: "new", to: "newer", ids: [b2] }, { home: sb.home }).reowned, [b2]);
+    assert.deepEqual(listWatches({ owner: "new" }, { home: sb.home }).map((s) => s.id), [a2]);
+    assert.deepEqual(reownWatches({ from: "new", to: "new" }, { home: sb.home }).reowned, []);
+    assert.throws(() => reownWatches({ from: "", to: "x" }, { home: sb.home }), /from and to are required/);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("reownWatchesAsync (idea-418): concurrent re-owns under the file lock move each set exactly once", async () => {
+  const sb = sandbox();
+  try {
+    const ids = [];
+    for (let i = 0; i < 6; i++) ids.push(addWatch({ owner: "old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: `w-${i}` }] }, { home: sb.home, now: T0 }).id);
+    const results = await Promise.all([
+      reownWatchesAsync({ from: "old", to: "new" }, { home: sb.home }),
+      reownWatchesAsync({ from: "old", to: "new" }, { home: sb.home }),
+      reownWatchesAsync({ from: "old", to: "new" }, { home: sb.home }),
+    ]);
+    const moved = results.flatMap((r) => r.reowned);
+    assert.deepEqual([...moved].sort(), [...ids].sort(), "every set moved once, by exactly one writer");
+    for (const s of listWatches({}, { home: sb.home })) {
+      assert.equal(s.owner, "new");
+      assert.equal(s.reowned.length, 1);
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Plugin integration: the wake path (agent-duties.ts Hook 3 / 3b)
 // ---------------------------------------------------------------------------
@@ -1173,8 +1238,75 @@ test(
       const toNew = h.sent.filter((s) => s.to === "lead-new");
       assert.equal(toNew.length, 1, JSON.stringify(h.sent));
       assert.match(toNew[0].text, new RegExp(`Watch ${id} complete`));
-      assert.match(toNew[0].text, /Watch owner lead-old is retired; delivered to you/);
+      assert.match(toNew[0].text, /Watch owner lead-old is retired; the watch is now yours as the lane's lead/);
+      assert.match(toNew[0].text, new RegExp(`vs watch cancel ${id}`));
       assert.equal(h.watch.get(id).pings[0].to, "lead-new");
+      // idea-418: the first fallback delivery re-owned the set, so the successor may cancel it.
+      assert.equal(h.watch.get(id).owner, "lead-new");
+      assert.equal(h.watch.get(id).reowned?.[0]?.from, "lead-old");
+      assert.equal(h.watch.get(id).reowned?.[0]?.reason, "retired-owner delivery");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin (idea-418): a stall ping for a retired owner re-owns the still-armed set, which the successor may then cancel",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-old", mk("lead-old", "former-lead")],
+      ["lead-new", mk("lead-new", "lead")],
+      ["w-1", mk("w-1", "worker", "vibesquad", { "vs.parent": "lead-new" })],
+      ["w-2", mk("w-2", "worker", "vibesquad", { "vs.parent": "lead-new" })],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch(
+      { owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] },
+      { home: sb.home, now: now - 1000 },
+    );
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "blocker", text: "BLOCKED: w1 needs a decision", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const first = h.sent.filter((s) => s.to === "lead-new" && s.text.includes(`Watch ${id}`));
+      assert.equal(first.length, 1, JSON.stringify(h.sent));
+      assert.match(first[0].text, /the watch is now yours/);
+      const set = listWatches({ owner: "lead-new" }, { home: sb.home }).find((x) => x.id === id);
+      assert.ok(set, "the armed set is listed under the successor");
+      assert.equal(set.status, "armed");
+      assert.equal(listWatches({ owner: "lead-old" }, { home: sb.home }).length, 0);
+      // The successor (owner now) passes the verb's owner rule.
+      const res = cancelWatch(id, "lead-new", { home: sb.home, allow: (x) => x.owner === "lead-new" });
+      assert.equal(res.ok, true, JSON.stringify(res));
+      assert.equal(h.sent.filter((s) => s.to === "lead-old").length, 0);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin (idea-418): an owner the refresh cannot read (hiccup) only reroutes the ping; the set is not re-owned",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-new", mk("lead-new", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-ghost", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const toNew = h.sent.filter((s) => s.to === "lead-new");
+      assert.equal(toNew.length, 1, JSON.stringify(h.sent));
+      assert.match(toNew[0].text, /Watch owner lead-ghost is retired; delivered to you as the lane's lead\./);
+      assert.equal(h.watch.get(id).owner, "lead-ghost", "no positive retired read: ownership unchanged");
     } finally {
       h.stop();
     }
