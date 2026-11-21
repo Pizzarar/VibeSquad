@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { updateJsonFileSync } from "./file-lock.mjs";
 import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
+import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
 
@@ -38,7 +39,7 @@ const BUILTIN_FALLBACK_PROFILES = [
     name: "Lead - Gemini",
     role: "lead",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
@@ -48,7 +49,7 @@ const BUILTIN_FALLBACK_PROFILES = [
     name: "Brainstorm - Gemini",
     role: "brainstorm",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
@@ -62,7 +63,7 @@ const BUILTIN_FALLBACK_PROFILES = [
     name: "Review - Gemini",
     role: "worker",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "default",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
@@ -81,7 +82,7 @@ const BUILTIN_FALLBACK_PROFILES = [
     name: "Art Director - Gemini",
     role: "worker",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", sandbox: "off", shareMcp: "off" },

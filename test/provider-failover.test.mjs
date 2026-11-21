@@ -24,6 +24,7 @@ import {
   toPaseoSpawnConfig,
 } from "../server/profiles.mjs";
 import { spawnEnvFor } from "../src/spawn-env.ts";
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
@@ -161,7 +162,7 @@ test("4. toPaseoSpawnConfig with usageProviders fails over automatically and pre
   ];
   const cfg = toPaseoSpawnConfig("Lead - Claude", { usageProviders }, DEFAULT_PACK_PROFILES);
   assert.equal(cfg.provider, "antigravity-cli");
-  assert.equal(cfg.model, "gemini-4-argon");
+  assert.equal(cfg.model, "gemini-4-neon");
   assert.equal(cfg.modeId, "accept-edits");
   assert.deepEqual(cfg.failover, {
     failedOver: true,
@@ -192,7 +193,7 @@ test("5. spawnEnvFor injects CLAUDE_CODE_ENTRYPOINT=Paseo for Claude provider wh
     { VS_ROLE: "worker", CLAUDE_CODE_ENTRYPOINT: "Paseo" },
   );
   assert.deepEqual(
-    spawnEnvFor({ role: "lead", profile: "Lead - Gemini" }, "antigravity-cli/gemini-4-argon"),
+    spawnEnvFor({ role: "lead", profile: "Lead - Gemini" }, "antigravity-cli/gemini-4-neon"),
     { VS_ROLE: "lead", VS_PROFILE: "Lead - Gemini" },
   );
 });
@@ -215,14 +216,16 @@ test("6. oppositeProviderTarget and switch buttons in DrawerHeader.tsx and Hando
   const endIdx = drawerSrc.indexOf(endMarker);
   assert.ok(startIdx > 0 && endIdx > startIdx, "Could not locate oppositeProviderTarget block in DrawerHeader.tsx");
   const tsSnippet = drawerSrc.slice(startIdx, endIdx);
-  const jsSnippet = stripTypeScriptTypes(tsSnippet);
+  // src imports GEMINI_TOP_MODEL from server/model-ids.mjs; the extracted snippet gets the same value inline.
+  const jsSnippet = `const GEMINI_TOP_MODEL = ${JSON.stringify(GEMINI_TOP_MODEL)};
+${stripTypeScriptTypes(tsSnippet)}`;
   const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(jsSnippet)}`);
 
   const toGemini = mod.oppositeProviderTarget("claude", "Lead - Claude");
   assert.deepEqual(toGemini, {
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
-    providerSpec: "antigravity-cli/gemini-4-argon",
+    model: "gemini-4-neon",
+    providerSpec: "antigravity-cli/gemini-4-neon",
     modeId: "accept-edits",
     label: "⇄ Switch to Gemini",
     profile: "Lead - Gemini",

@@ -41,7 +41,7 @@ test("role names spawn as the role: labels.profile = role, config pre-filled fro
   const rows = [
     ["Implement", "Implement", "claude", "claude-sonnet-5-5", "medium"],
     ["implement", "Implement", "claude", "claude-sonnet-5-5", "medium"],
-    ["Review", "Review", "antigravity-cli", "gemini-4-argon", undefined],
+    ["Review", "Review", "antigravity-cli", "gemini-4-neon", undefined],
     ["Work Order", "Work Order", "opencode", undefined, undefined],
     ["Pre-check", "Pre-check", "antigravity-cli", "gemini-3.8-flash", undefined],
   ];

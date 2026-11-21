@@ -30,6 +30,7 @@ import { sharedSchedules } from "./schedules.mjs";
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
 import { DEFAULT_PACK_PROFILES, findProfile, loadProfiles, readCappedProviders, toPaseoSpawnConfig } from "./profiles.mjs";
+import { GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 import { roleSpawnConfig } from "./spawn-route.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
@@ -561,11 +562,11 @@ export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
     : {
         provider: rawProvider.includes("/") ? rawProvider.split("/")[0] : rawProvider,
         model:
-          oldLead?.model ||
+          migrateModelId(oldLead?.model) ||
           (rawProvider.includes("/")
             ? rawProvider.split("/").slice(1).join("/")
             : isAgy
-              ? "gemini-4-argon"
+              ? GEMINI_TOP_MODEL
               : "claude-opus-5-5"),
         modeId: oldLead?.modeId || (isAgy ? "accept-edits" : "auto"),
         thinkingOptionId: oldLead?.thinkingOptionId || "medium",

@@ -4,6 +4,7 @@ import { stripTypeScriptTypes } from "node:module";
 import { dirname, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
@@ -14,7 +15,9 @@ async function loadDrawerModelHelpers() {
   const endIdx = drawerSrc.indexOf("export const providerModelsCache");
   assert.ok(startIdx >= 0 && endIdx > startIdx, "Could not locate PROVIDER_MODEL_HINTS and buildProviderModelOptions in DrawerHeader.tsx");
   const tsSnippet = drawerSrc.slice(startIdx, endIdx);
-  const jsSnippet = stripTypeScriptTypes(tsSnippet);
+  // src imports GEMINI_TOP_MODEL from server/model-ids.mjs; the extracted snippet gets the same value inline.
+  const jsSnippet = `const GEMINI_TOP_MODEL = ${JSON.stringify(GEMINI_TOP_MODEL)};
+${stripTypeScriptTypes(tsSnippet)}`;
   const mod = await import(`data:text/javascript;charset=utf-8,${encodeURIComponent(jsSnippet)}`);
   return { mod, drawerSrc };
 }

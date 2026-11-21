@@ -143,7 +143,7 @@ test(
 
       const rev = await h.spawn({ provider: "claude" }, { labels: LABELS("Review") });
       assert.equal(rev.config.provider, A);
-      assert.equal(rev.config.model, "gemini-4-argon");
+      assert.equal(rev.config.model, "gemini-4-neon");
       assert.deepEqual([rev.labels.profile, rev.labels.provider, rev.labels.tier], ["Review", A, "mid"]);
 
       // Stakes label is normalized on the stamp (lead ruling: OK).
@@ -165,7 +165,7 @@ test(
     try {
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS("lead", { role: "lead" }) });
       assert.equal(out.config.provider, A);
-      assert.equal(out.config.model, "gemini-4-argon");
+      assert.equal(out.config.model, "gemini-4-neon");
       assert.equal(out.config.thinkingOptionId, "high");
       assert.equal(out.labels.profile, "lead");
       assert.equal(out.labels.tier, "top");
@@ -259,7 +259,7 @@ test("spawn-route units: roleSpawnConfig (role names only; caps walk the provide
   assert.deepEqual([lead.spawnCfg.provider, lead.spawnCfg.model, lead.spawnCfg.thinkingOptionId], [C, "claude-opus-5-5", "high"]);
   assert.equal(lead.profile.role, "lead");
   const capped = roleSpawnConfig("lead", { profiles: USER_PROFILES, usageList: [{ id: "claude", status: "exhausted", usedPct: 100 }] });
-  assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-argon", "high"]);
+  assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-neon", "high"]);
   const wo = roleSpawnConfig("Work Order", { profiles: USER_PROFILES, stakes: "mechanical" });
   assert.equal(wo.spawnCfg.provider, O);
   assert.equal(wo.route.tier, "cheap");
@@ -276,7 +276,7 @@ test(
 
     const capped = resolveLeadProfile({ provider: "claude", labels: { profile: "lead" } }, profilesPath, { ...noDisk, cappedProviders: ["claude"] });
     assert.equal(capped.profileName, "lead");
-    assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-argon", "high"]);
+    assert.deepEqual([capped.spawnCfg.provider, capped.spawnCfg.model, capped.spawnCfg.thinkingOptionId], [A, "gemini-4-neon", "high"]);
 
     const old = resolveLeadProfile({ provider: "claude", labels: { profile: "Lead - Claude" } }, profilesPath, { ...noDisk, cappedProviders: ["claude"] });
     assert.equal(old.profileName, "Lead - Claude");
@@ -322,7 +322,7 @@ test(
     assert.equal(created.length, 1);
     assert.equal(created[0].labels.profile, "brainstorm");
     assert.equal(created[0].config.provider, A);
-    assert.equal(created[0].config.model, "gemini-4-argon");
+    assert.equal(created[0].config.model, "gemini-4-neon");
     assert.equal(created[0].config.thinkingOptionId, "high");
   }),
 );
@@ -470,7 +470,7 @@ test(
       usageProviders: [{ id: "claude", usedPct: 99 }],
     });
     assert.equal(over.profileName, "lead");
-    assert.deepEqual([over.spawnCfg.provider, over.spawnCfg.model, over.spawnCfg.thinkingOptionId], [A, "gemini-4-argon", "high"]);
+    assert.deepEqual([over.spawnCfg.provider, over.spawnCfg.model, over.spawnCfg.thinkingOptionId], [A, "gemini-4-neon", "high"]);
   }),
 );
 

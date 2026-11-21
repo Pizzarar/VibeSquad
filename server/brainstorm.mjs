@@ -7,6 +7,7 @@ import { assertBuddyRestartAllowed } from "./buddy-restart-auth.mjs";
 import { findProfileOrFallback, loadProfiles, readCappedProviders, resolveProfileWithFailover, toPaseoSpawnConfig } from "./profiles.mjs";
 import { liveRoles, roleNameHit, roleSpawnConfig } from "./spawn-route.mjs";
 import { readJsonFileWithBom } from "./user-settings.mjs";
+import { GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 import { briefRootFor, laneWorkingDir } from "./brief-path.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { detachLiveChildrenViaClient, listDaemonAgents } from "./detach-children.mjs";
@@ -864,11 +865,11 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
       : {
           provider: rawOldProvider.includes("/") ? rawOldProvider.split("/")[0] : rawOldProvider,
           model:
-            oldAgent?.model ||
+            migrateModelId(oldAgent?.model) ||
             (rawOldProvider.includes("/")
               ? rawOldProvider.split("/").slice(1).join("/")
               : rawOldProvider.startsWith("antigravity")
-                ? "gemini-4-argon"
+                ? GEMINI_TOP_MODEL
                 : "claude-opus-5-5"),
           modeId: oldAgent?.modeId || (rawOldProvider.startsWith("antigravity-cli") ? "accept-edits" : "auto"),
           thinkingOptionId: oldAgent?.thinkingOptionId || "medium",

@@ -1,5 +1,6 @@
 // Fixed cast for ?demo (art review and screenshots without a live daemon) and the
 // ?cast=1 cast sheet. Nothing here talks to Paseo.
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 import type { PaseoAgent } from "./agentTypes";
 import { AGENT_TYPE_NAME, type AgentType } from "./teams";
 import { Avatar, providerSpec } from "./pixel";
@@ -11,7 +12,7 @@ const EFI = "/path/to/main-project";
 const MODELS: Record<string, [string, string]> = {
   claude: ["claude", "claude-opus-5-5"],
   sonnet: ["claude", "claude-sonnet-5-5"],
-  gemini: ["antigravity-cli", "gemini-4-argon"],
+  gemini: ["antigravity-cli", GEMINI_TOP_MODEL],
   opencode: ["opencode", "deepseek/deepseek-v4-pro"],
   deepseek: ["opencode", "deepseek/deepseek-flash"],
   codex: ["codex", "gpt-codex"],

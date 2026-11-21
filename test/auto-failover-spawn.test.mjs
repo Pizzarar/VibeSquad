@@ -11,7 +11,7 @@ const PROFILES = [
     name: "Lead - Gemini",
     role: "lead",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: "gemini-4-neon",
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
@@ -21,7 +21,7 @@ const PROFILES = [
     name: "Brainstorm - Gemini",
     role: "brainstorm",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: "gemini-4-neon",
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
@@ -123,7 +123,7 @@ test(
         { labels: { profile: "Lead - Claude", team: "vibesquad", lane: "vibesquad", role: "lead" } },
       );
       assert.equal(out.config.provider, "antigravity-cli");
-      assert.equal(out.config.model, "gemini-4-argon");
+      assert.equal(out.config.model, "gemini-4-neon");
       assert.equal(out.labels.profile, "Lead - Gemini");
     } finally {
       h.stop?.();
@@ -146,7 +146,7 @@ test(
         { labels: { profile: "Brainstorm - Claude", team: "vibesquad", lane: "vibesquad", role: "brainstorm" } },
       );
       assert.equal(out.config.provider, "antigravity-cli");
-      assert.equal(out.config.model, "gemini-4-argon");
+      assert.equal(out.config.model, "gemini-4-neon");
       assert.equal(out.labels.profile, "Brainstorm - Gemini");
     } finally {
       h.stop?.();

@@ -46,6 +46,7 @@ import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
 import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
+import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
 import {
   ROUTE_STAMP_LABELS,
@@ -310,8 +311,9 @@ export function loadStoredProfiles(): StoredProfile[] {
         : Array.isArray(parsed?.daemon?.agentProfiles)
           ? parsed.daemon.agentProfiles
           : [];
-    // Stored profiles may lack `role` (paseo config.json strips it): derive it from the name.
-    if (list.length > 0) return list.map((p: any) => (p && typeof p === "object" ? { ...p, role: deriveRole(p.name, p.role) } : p)) as StoredProfile[];
+    // Stored profiles may lack `role` (paseo config.json strips it): derive it from the name. A retired model (N1:
+    // gemini-4-argon) reads as its replacement even before server/profiles.mjs loadProfiles() rewrites the file.
+    if (list.length > 0) return list.map((p: any) => (p && typeof p === "object" ? { ...p, role: deriveRole(p.name, p.role), model: migrateModelId(p.model) } : p)) as StoredProfile[];
   }
   return [];
 }

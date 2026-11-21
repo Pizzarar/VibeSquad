@@ -115,9 +115,9 @@ test(
     try {
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS({ stakes: "tierA-invariant" }) });
       assert.equal(out.config.provider, "antigravity-cli");
-      assert.equal(out.config.model, "gemini-4-argon");
+      assert.equal(out.config.model, "gemini-4-neon");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.match(routeMetrics(vsHome)[0], /stakes=tierA-invariant model=gemini-4-argon effort=high reason=ladder/);
+      assert.match(routeMetrics(vsHome)[0], /stakes=tierA-invariant model=gemini-4-neon effort=high reason=ladder/);
     } finally {
       h.stop?.();
     }
@@ -235,9 +235,9 @@ test(
         { labels: LABELS({ stakes: "tierA-invariant" }) },
       );
       assert.equal(out.config.provider, "antigravity-cli");
-      assert.equal(out.config.model, "gemini-4-argon");
+      assert.equal(out.config.model, "gemini-4-neon");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.match(routeMetrics(vsHome)[0], /model=gemini-4-argon effort=high reason=ladder/);
+      assert.match(routeMetrics(vsHome)[0], /model=gemini-4-neon effort=high reason=ladder/);
     } finally {
       h.stop?.();
     }
@@ -386,8 +386,8 @@ test(
         { labels: LABELS({ profile: "Lead - Gemini", stakes: "tierA-security" }) },
       );
       assert.equal(out.config.provider, "antigravity-cli");
-      assert.equal(out.config.model, "gemini-4-argon");
-      assert.match(routeMetrics(vsHome)[0], /model=gemini-4-argon effort=low reason=explicit\+ladder/);
+      assert.equal(out.config.model, "gemini-4-neon");
+      assert.match(routeMetrics(vsHome)[0], /model=gemini-4-neon effort=low reason=explicit\+ladder/);
     } finally {
       h.stop?.();
     }

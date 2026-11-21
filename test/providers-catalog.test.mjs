@@ -45,7 +45,7 @@ test('catalog shape matches the daemon payloads the dropdowns consume', async ()
   assert.ok(models.some((m) => m.id === 'claude-opus-5-5'));
   assert.ok(buildCatalog({ home }).claude.modes.some((m) => m.id === 'auto'));
   const agy = await getModels('agy', { home, ...probeOpts });
-  assert.ok(agy.models.some((m) => m.id === 'gemini-4-argon'), 'profile models are folded in, alias resolves');
+  assert.ok(agy.models.some((m) => m.id === 'gemini-4-neon'), 'profile models are folded in, alias resolves');
 });
 
 test('probe results are cached until refresh or TTL', async () => {

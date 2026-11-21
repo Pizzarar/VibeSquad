@@ -25,11 +25,15 @@ import { COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS, resolveProfileWithFailover 
 import { LEGACY_HOP_PROFILES, LEGACY_ROUTES, ROLE_TABLE, lookupRole, resolveRoute } from "../server/role-route.mjs";
 import { DEFAULT_STAKES_LADDER, STAKES_VALUES, resolveStakesRoute } from "../server/stakes-ladder.mjs";
 import { main as migrateCli, parseArgs } from "../scripts/migrate-profiles-v2.mjs";
+import { migrateModelId } from "../server/model-ids.mjs";
 
 const FIXTURE = new URL("./fixtures/profiles-v1-2026-11-17.json", import.meta.url);
 const FIXTURE_BYTES = readFileSync(FIXTURE);
 const FIXTURE_DATA = JSON.parse(FIXTURE_BYTES.toString("utf8"));
 const USER_PROFILES = FIXTURE_DATA.profiles;
+// The routing oracle reads the file as the server sees it after the N1 load-time migration (gemini-4-argon -> gemini-4-neon,
+// server/profiles.mjs migrateRetiredProfileModels); the raw fixture stays the v2-migration input.
+const LIVE_PROFILES = USER_PROFILES.map((p) => ({ ...p, model: migrateModelId(p.model) }));
 
 const C = "claude";
 const A = "antigravity-cli";
@@ -83,7 +87,7 @@ const load = (f) => loadProfiles(f, { paseoProfiles: [], autoSeed: false });
 
 /** Today's route for an old name: the failover walk over the real user file, then the old stakes ladder. */
 function today(name, caps, stakes) {
-  const fo = resolveProfileWithFailover(name, USER_PROFILES, [], { cappedProviders: caps, ignoreDiskCaps: true });
+  const fo = resolveProfileWithFailover(name, LIVE_PROFILES, [], { cappedProviders: caps, ignoreDiskCaps: true });
   const p = fo.profile;
   const sr = resolveStakesRoute(p.provider, p, stakes, false, { ladder: DEFAULT_STAKES_LADDER });
   return {
@@ -371,7 +375,7 @@ test("the 9 names P5b adds route exactly as today (real user file) for every cap
   let n = 0;
   for (const name of Object.keys(P5B_ROLES)) {
     for (const v of LEGACY_ROUTES[name].via) {
-      const p = DEFAULT_PACK_PROFILES.find((x) => x.name === v) ?? USER_PROFILES.find((x) => x.name === v);
+      const p = DEFAULT_PACK_PROFILES.find((x) => x.name === v) ?? LIVE_PROFILES.find((x) => x.name === v);
       assert.deepEqual(LEGACY_HOP_PROFILES[v], { provider: p.provider, model: p.model, effort: p.thinkingOptionId, modeId: p.modeId }, v);
     }
     for (const caps of CAP_SETS) {

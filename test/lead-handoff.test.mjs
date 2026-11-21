@@ -570,7 +570,7 @@ test("Done-when #2 (250k auto-handoff & 300k forced synthesis): successor has sa
     assert.equal(succ.labels.ord, "19");
     assert.equal(succ.labels.role, "lead");
     assert.equal(succ.provider, "antigravity-cli");
-    assert.equal(succ.model, "gemini-4-argon");
+    assert.equal(succ.model, "gemini-4-neon");
     assert.equal(succ.modeId, "accept-edits");
 
     // 2. First prompt contains the synthesized handoff doc (with vs log + lane summary + open workers) and latest plan

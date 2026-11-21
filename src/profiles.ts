@@ -1,3 +1,4 @@
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 import { useSyncExternalStore } from "react";
 import { DEMO } from "./demoFlag";
 import { setProviderOverrides } from "./pixel";
@@ -220,7 +221,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     icon: "brain",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
@@ -247,7 +248,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     icon: "flask",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
@@ -384,7 +385,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     icon: "search",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "default",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
@@ -445,7 +446,7 @@ export const DEFAULT_PROFILES: Profile[] = [
     icon: "palette",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", sandbox: "off", shareMcp: "off" },

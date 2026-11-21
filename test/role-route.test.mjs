@@ -17,33 +17,33 @@ import { A, C, CAP_SETS, GOLDEN, O, TODAY_FIXTURE, USER_PROFILES, pick, row, tod
 
 const OPUS_MED = row(C, "claude-opus-5-5", "medium", "auto");
 const SONNET_MED = row(C, "claude-sonnet-5-5", "medium", "auto");
-const ARGON_AE = row(A, "gemini-4-argon", "medium", "accept-edits");
-const ARGON_DEF = row(A, "gemini-4-argon", "medium", "default");
+const NEON_AE = row(A, "gemini-4-neon", "medium", "accept-edits");
+const NEON_DEF = row(A, "gemini-4-neon", "medium", "default");
 const DSP = row(O, "deepseek/deepseek-v4-pro", "high", "build");
 
 // Failover golden (normal stakes): [name, caps, expected]. Own provider capped, then own + the first hop's provider.
 const FAILOVER_GOLDEN = [
-  ["Lead - Claude", [C], ARGON_AE],
+  ["Lead - Claude", [C], NEON_AE],
   ["Lead - Claude", [C, A], DSP],
   ["Lead - Gemini", [A], OPUS_MED],
   ["Lead - Gemini", [A, C], DSP],
-  ["Brainstorm - Claude", [C], ARGON_AE],
+  ["Brainstorm - Claude", [C], NEON_AE],
   ["Brainstorm - Claude", [C, A], DSP],
   ["Brainstorm - Gemini", [A], OPUS_MED],
   ["Brainstorm - Gemini", [A, C], DSP],
-  ["Implement - Sonnet", [C], ARGON_AE],
+  ["Implement - Sonnet", [C], NEON_AE],
   ["Implement - Sonnet", [C, A], DSP],
   ["Work Order - DSP", [O], SONNET_MED],
-  ["Work Order - DSP", [O, C], ARGON_AE],
+  ["Work Order - DSP", [O, C], NEON_AE],
   ["Review - Gemini", [A], SONNET_MED],
   ["Review - Gemini", [A, C], DSP],
-  ["Review - Sonnet", [C], ARGON_DEF],
+  ["Review - Sonnet", [C], NEON_DEF],
   ["Review - Sonnet", [C, A], DSP],
   ["Pre-check - Flash", [A], row(C, "claude-haiku-5-5", "low", "auto")],
   ["Pre-check - Flash", [A, C], row(O, "deepseek/deepseek-flash", "default", "plan")],
   ["Art Director - Gemini", [A], OPUS_MED],
   ["Art Director - Gemini", [A, C], DSP],
-  ["Art Painter - Opus", [C], ARGON_AE],
+  ["Art Painter - Opus", [C], NEON_AE],
   ["Art Painter - Opus", [C, A], DSP],
   ["Implement - Gemini (trial)", [A], SONNET_MED],
   ["Implement - Gemini (trial)", [A, C], DSP],
@@ -135,9 +135,9 @@ test("done check: Implement + tierA-invariant -> claude opus-5-5/high", () => {
   assert.deepEqual([r.provider, r.model, r.effort, r.modeId, r.tier, r.reason], [C, "claude-opus-5-5", "high", "auto", "top", "stakes"]);
 });
 
-test("done check: Review + normal -> gemini-4-argon (antigravity first)", () => {
+test("done check: Review + normal -> gemini-4-neon (antigravity first)", () => {
   const r = resolveRoute({ role: "Review", stakes: "normal" });
-  assert.deepEqual(pick(r), ARGON_DEF);
+  assert.deepEqual(pick(r), NEON_DEF);
   assert.deepEqual([r.tier, r.reason], ["mid", "default"]);
   assert.equal(resolveRoute({ role: "review" }).provider, A); // missing stakes = normal
 });
@@ -145,7 +145,7 @@ test("done check: Review + normal -> gemini-4-argon (antigravity first)", () => 
 test("done check: capped claude + Lead -> antigravity top rung", () => {
   for (const caps of [[C], new Set(["anthropic"]), { claude: true, opencode: false }]) {
     const r = resolveRoute({ role: "lead", stakes: "normal", caps });
-    assert.deepEqual(pick(r), row(A, "gemini-4-argon", "high", "accept-edits"));
+    assert.deepEqual(pick(r), row(A, "gemini-4-neon", "high", "accept-edits"));
     assert.deepEqual([r.tier, r.reason, r.capped], ["top", "failover", false]);
   }
 });
@@ -154,7 +154,7 @@ test("role names keep today's third failover hop (two providers capped)", () => 
   const cases = [
     ["lead", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
     ["Implement", [C, A], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
-    ["Work Order", [O, C], row(A, "gemini-4-argon", "medium", "accept-edits")],
+    ["Work Order", [O, C], row(A, "gemini-4-neon", "medium", "accept-edits")],
     ["Review", [A, C], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
     ["Pre-check", [A, C], row(O, "deepseek/deepseek-v4-pro", "default", "plan")],
     ["Art Director", [A, C], row(O, "deepseek/deepseek-v4-pro", "high", "build")],
@@ -205,7 +205,7 @@ test("stakes shift the tier: tierA-* -> top, mechanical -> cheap, normal -> role
     "art-director": "mid",
     "art-painter": "top",
   });
-  assert.equal(resolveRoute({ role: "Pre-check", stakes: "tierA-security" }).model, "gemini-4-argon");
+  assert.equal(resolveRoute({ role: "Pre-check", stakes: "tierA-security" }).model, "gemini-4-neon");
   const lm = resolveRoute({ role: "lead", stakes: "mechanical" });
   assert.deepEqual([lm.model, lm.effort, lm.tier], ["claude-sonnet-5-5", "low", "cheap"]);
 });
@@ -237,9 +237,9 @@ test("unknown role -> null; unknown role with an explicit provider still routes"
 
 test("all providers capped -> first preference kept, reason all-capped, capped=true", () => {
   const r = resolveRoute({ role: "review", caps: [A, C, O] });
-  assert.deepEqual([r.provider, r.model, r.reason, r.capped], [A, "gemini-4-argon", "all-capped", true]);
+  assert.deepEqual([r.provider, r.model, r.reason, r.capped], [A, "gemini-4-neon", "all-capped", true]);
   const l = resolveRoute({ role: "Lead - Gemini", caps: [A, C, O] });
-  assert.deepEqual([pick(l), l.reasons, l.capped], [ARGON_AE, ["legacy-name", "all-capped"], true]);
+  assert.deepEqual([pick(l), l.reasons, l.capped], [NEON_AE, ["legacy-name", "all-capped"], true]);
 });
 
 test("ladder inputs are honoured and the resolver never mutates them", () => {

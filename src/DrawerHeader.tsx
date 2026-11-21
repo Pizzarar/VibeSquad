@@ -1,3 +1,4 @@
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { PaseoAgent } from "./agentTypes";
@@ -345,9 +346,9 @@ export async function setThinkingHelper(agent: PaseoAgent, optionId: string | nu
 
 export const PROVIDER_MODEL_HINTS: Record<string, string[]> = {
   claude: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"],
-  "antigravity-cli": ["gemini-4-argon", "gemini-3.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"],
-  antigravity: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
-  gemini: ["gemini-4-argon", "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  "antigravity-cli": [GEMINI_TOP_MODEL, "gemini-3.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"],
+  antigravity: [GEMINI_TOP_MODEL, "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+  gemini: [GEMINI_TOP_MODEL, "gemini-3.8-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
   codex: ["gpt-5.4", "gpt-5.3-codex", "gpt-4o", "gpt-4o-mini"],
   openai: ["gpt-5.4", "gpt-4o", "gpt-4o-mini"],
   opencode: ["deepseek/deepseek-v4-pro", "deepseek/deepseek-flash"],
@@ -433,8 +434,8 @@ export function oppositeProviderTarget(provider: string, profileName?: string): 
   if (norm === "claude" || norm === "anthropic" || norm.startsWith("claude-")) {
     return {
       provider: "antigravity-cli",
-      model: "gemini-4-argon",
-      providerSpec: "antigravity-cli/gemini-4-argon",
+      model: GEMINI_TOP_MODEL,
+      providerSpec: `antigravity-cli/${GEMINI_TOP_MODEL}`,
       modeId: "accept-edits",
       label: "⇄ Switch to Gemini",
       profile: resolveSwitchedProfile(true),
@@ -456,7 +457,7 @@ export function oppositeProviderTarget(provider: string, profileName?: string): 
 export type ProviderOption = { id: string; label: string; model: string; modeId: string };
 
 export const PROVIDER_OPTIONS: ProviderOption[] = [
-  { id: "antigravity-cli", label: "◆ Gemini", model: "gemini-4-argon", modeId: "accept-edits" },
+  { id: "antigravity-cli", label: "◆ Gemini", model: GEMINI_TOP_MODEL, modeId: "accept-edits" },
   { id: "claude", label: "✶ Claude", model: "claude-opus-5-5", modeId: "auto" },
   { id: "opencode", label: "▲ OpenCode", model: "deepseek/deepseek-v4-pro", modeId: "auto" },
   { id: "codex", label: "● Codex", model: "gpt-5.4", modeId: "auto" },

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { normalizeProviderFamily } from "./provider-failover.mjs";
+import { GEMINI_CHEAP_MODEL, GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 
 export const STAKES_VALUES = ["tierA-security", "tierA-invariant", "normal", "mechanical"];
 
@@ -15,9 +16,9 @@ export const DEFAULT_STAKES_LADDER = {
     mechanical: { model: "claude-sonnet-5-5", effort: "low" },
   },
   "antigravity-cli": {
-    "tierA-security": { model: "gemini-4-argon", effort: "high" },
-    "tierA-invariant": { model: "gemini-4-argon", effort: "high" },
-    mechanical: { model: "gemini-3.8-flash" },
+    "tierA-security": { model: GEMINI_TOP_MODEL, effort: "high" },
+    "tierA-invariant": { model: GEMINI_TOP_MODEL, effort: "high" },
+    mechanical: { model: GEMINI_CHEAP_MODEL },
   },
   opencode: {
     "tierA-security": { effort: "high" },
@@ -54,7 +55,7 @@ export function loadStakesLadder(file = stakesLadderPath()) {
     for (const [stakes, rung] of Object.entries(rungs)) {
       if (!STAKES_VALUES.includes(stakes) || stakes === "normal" || !rung || typeof rung !== "object") continue;
       const clean = {};
-      if (typeof rung.model === "string" && rung.model.trim()) clean.model = rung.model.trim();
+      if (typeof rung.model === "string" && rung.model.trim()) clean.model = migrateModelId(rung.model.trim());
       if (typeof rung.effort === "string" && rung.effort.trim()) clean.effort = rung.effort.trim();
       out[fam] = { ...(out[fam] ?? {}), [stakes]: clean };
     }
@@ -102,9 +103,9 @@ export const DEFAULT_TIER_LADDER = deepFreeze({
     cheap: { model: "claude-sonnet-5-5", effort: "low" },
   },
   "antigravity-cli": {
-    top: { model: "gemini-4-argon", effort: "high" },
-    mid: { model: "gemini-4-argon" },
-    cheap: { model: "gemini-3.8-flash" },
+    top: { model: GEMINI_TOP_MODEL, effort: "high" },
+    mid: { model: GEMINI_TOP_MODEL },
+    cheap: { model: GEMINI_CHEAP_MODEL },
   },
   opencode: {
     top: { model: "deepseek/deepseek-v4-pro", effort: "high" },
@@ -144,7 +145,7 @@ export function stakesTier(stakes) {
 function cleanRung(rung) {
   if (!rung || typeof rung !== "object" || Array.isArray(rung)) return null;
   const clean = {};
-  if (typeof rung.model === "string" && rung.model.trim()) clean.model = rung.model.trim();
+  if (typeof rung.model === "string" && rung.model.trim()) clean.model = migrateModelId(rung.model.trim());
   if (typeof rung.effort === "string" && rung.effort.trim()) clean.effort = rung.effort.trim();
   if (clean.model && /fable/i.test(clean.model)) return null; // Fable: explicit-only, never a rung
   return clean;

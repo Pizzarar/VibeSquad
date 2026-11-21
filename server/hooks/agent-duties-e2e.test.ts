@@ -51,7 +51,7 @@ const PROFILES: any[] = [
     name: "Brainstorm - Gemini",
     role: "brainstorm",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: "gemini-4-neon",
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
@@ -68,7 +68,7 @@ const PROFILES: any[] = [
     name: "Lead - Gemini",
     role: "lead",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: "gemini-4-neon",
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip", shareMcp: "on" },
@@ -86,7 +86,7 @@ const PROFILES: any[] = [
     name: "Review - Gemini",
     role: "worker",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: "gemini-4-neon",
     modeId: "default",
     thinkingOptionId: "medium",
     featureValues: { approvalPolicy: "skip" },
@@ -305,7 +305,7 @@ test(
     try {
       // RiffBot: the Squad hub Buddy (lane vibesquad, hub: true)
       const riff = await h.beforeCreate({
-        config: { cwd: CWD, provider: "antigravity-cli", model: "gemini-4-argon", title: "RiffBot" },
+        config: { cwd: CWD, provider: "antigravity-cli", model: "gemini-4-neon", title: "RiffBot" },
         labels: { role: "brainstorm", lane: "vibesquad" },
       });
       const riffSys = riff.config.systemPrompt;
@@ -316,7 +316,7 @@ test(
 
       // Feature Lane Buddy: lane feat-alpha (not the hub)
       const fea = await h.beforeCreate({
-        config: { cwd: CWD, provider: "antigravity-cli", model: "gemini-4-argon", title: "Fea Buddy" },
+        config: { cwd: CWD, provider: "antigravity-cli", model: "gemini-4-neon", title: "Fea Buddy" },
         labels: { role: "brainstorm", lane: "feat-alpha" },
       });
       const feaSys = fea.config.systemPrompt;
@@ -417,7 +417,7 @@ test(
       cwd: CWD,
       status: "idle",
       provider: "antigravity-cli",
-      model: "gemini-4-argon",
+      model: "gemini-4-neon",
       labels: { team: "vibesquad", lane: "feat-alpha", role: "lead", ord: "2" },
     };
     const agents = new Map<string, any>([["lead-2", lead2]]);
@@ -449,7 +449,7 @@ test(
 
       // 3b: antigravity-cli permission guard when no featureValues/modeId are supplied
       const agy = await h.beforeCreate({
-        config: { provider: "antigravity-cli", model: "gemini-4-argon", cwd: CWD, title: "Fea2 · review" },
+        config: { provider: "antigravity-cli", model: "gemini-4-neon", cwd: CWD, title: "Fea2 · review" },
         labels: { team: "vibesquad", lane: "feat-alpha", role: "worker" },
       });
       assert.equal(agy.config.featureValues.approvalPolicy, "skip");
@@ -486,7 +486,7 @@ test(
         labels: { team: "vibesquad", lane: "feat-alpha", role: "worker", profile: "Review - Gemini" },
       });
       assert.deepEqual(h.appliedSettings, [
-        { agentId: "worker-1", patch: { model: "gemini-4-argon", modeId: "default", thinkingOptionId: "medium" } },
+        { agentId: "worker-1", patch: { model: "gemini-4-neon", modeId: "default", thinkingOptionId: "medium" } },
       ]);
 
       const m2 = metricTexts(vsHome);
@@ -1114,7 +1114,7 @@ test(
         env: { VS_PROFILE: "Brainstorm - Claude" },
       });
       assert.equal(out.config.provider, "antigravity-cli", "provider failed over to antigravity-cli");
-      assert.equal(out.config.model, "gemini-4-argon", "model failed over to gemini-4-argon");
+      assert.equal(out.config.model, "gemini-4-neon", "model failed over to gemini-4-neon");
       assert.equal(out.labels?.profile, "Brainstorm - Gemini", "profile label updated to Brainstorm - Gemini");
     } finally {
       h.stop?.();
@@ -1133,7 +1133,7 @@ test(
         config: {
           cwd: CWD,
           provider: "antigravity-cli",
-          model: "gemini-4-argon",
+          model: "gemini-4-neon",
           title: "RiffBot",
         },
         labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm", profile: "Brainstorm - Gemini" },
@@ -1147,7 +1147,7 @@ test(
         cwd: CWD,
         status: "idle",
         provider: "antigravity-cli",
-        model: "gemini-4-argon",
+        model: "gemini-4-neon",
         modeId: "accept-edits",
         thinkingOptionId: null,
         labels: { team: "vibesquad", lane: "vibesquad", role: "brainstorm", profile: "Brainstorm - Gemini" },
@@ -1163,7 +1163,7 @@ test(
         cwd: CWD,
         status: "running",
         provider: "antigravity-cli",
-        model: "gemini-4-argon",
+        model: "gemini-4-neon",
         modeId: "accept-edits",
         thinkingOptionId: null,
         labels: { team: "vibesquad", lane: "feat-alpha", role: "brainstorm", profile: "Brainstorm - Gemini" },
@@ -1521,7 +1521,7 @@ test(
       cwd: CWD,
       status: "running",
       provider: "antigravity-cli",
-      model: "gemini-4-argon",
+      model: "gemini-4-neon",
       labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "click audit" },
     };
     const agents = new Map<string, any>([["w-run", w]]);
@@ -1604,7 +1604,7 @@ test(
       cwd: CWD,
       status: "idle",
       provider: "antigravity-cli",
-      model: "gemini-4-argon",
+      model: "gemini-4-neon",
       labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "replay" },
     });
     const run = async (turnId: string) => {
@@ -1654,7 +1654,7 @@ test(
         cwd: CWD,
         status: "idle",
         provider: "antigravity-cli",
-        model: "gemini-4-argon",
+        model: "gemini-4-neon",
         labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "lost" },
       };
       const agents = new Map<string, any>([["w-lost", w]]);
@@ -1686,7 +1686,7 @@ test(
       cwd: CWD,
       status: "idle",
       provider: "antigravity-cli",
-      model: "gemini-4-argon",
+      model: "gemini-4-neon",
       labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "queued" },
     };
     const agents = new Map<string, any>([["w-queued", w]]);
@@ -1725,7 +1725,7 @@ test(
       cwd: CWD,
       status: "idle",
       provider: "antigravity-cli",
-      model: "gemini-4-argon",
+      model: "gemini-4-neon",
       labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "live" },
     };
     const agents = new Map<string, any>([["w-live", w]]);
@@ -1765,7 +1765,7 @@ test(
 test(
   "idea-207a: a digest that errors with no retry pending gets exactly one UNVERIFIED fallback and is archived exactly once",
   withEnv(async ({ briefRoot }) => {
-    const w: any = { id: "w-eof", title: "Bug1 · eof", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "eof" } };
+    const w: any = { id: "w-eof", title: "Bug1 · eof", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-neon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "eof" } };
     const agents = new Map<string, any>([["w-eof", w]]);
     const timelineByAgent = new Map<string, any[]>([["w-eof", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
     // No idea-218 alternate (every other digest provider capped): the UNVERIFIED path is unchanged.
@@ -1856,7 +1856,7 @@ const appendVerdict = (digest: string, worker: string, text: string) => {
 test(
   "idea-207 M1: a digest EOF with an A4 transient retry pending waits for the retry; the real verdict lands, no UNVERIFIED",
   withEnv(async ({ briefRoot }) => {
-    const w: any = { id: "w-retry", title: "Bug1 · retry", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "retry" } };
+    const w: any = { id: "w-retry", title: "Bug1 · retry", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-neon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "retry" } };
     const agents = new Map<string, any>([["w-retry", w]]);
     const timelineByAgent = new Map<string, any[]>([["w-retry", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
     const h = harness(agents, { briefRoot, timelineByAgent });
@@ -1894,7 +1894,7 @@ test(
 test(
   "idea-207 M1: a verdict the digest logged before the fallback runs is never followed by an UNVERIFIED entry (error status)",
   withEnv(async ({ briefRoot }) => {
-    const w: any = { id: "w-late", title: "Bug1 · late", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-argon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "late" } };
+    const w: any = { id: "w-late", title: "Bug1 · late", cwd: CWD, status: "idle", provider: "antigravity-cli", model: "gemini-4-neon", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "late" } };
     const agents = new Map<string, any>([["w-late", w]]);
     const timelineByAgent = new Map<string, any[]>([["w-late", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
     const h = harness(agents, { briefRoot, timelineByAgent });

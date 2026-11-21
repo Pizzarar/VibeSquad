@@ -20,7 +20,7 @@
       "icon": "brain",
       "color": "emerald",
       "provider": "antigravity-cli",
-      "model": "gemini-4-argon",
+      "model": "gemini-4-neon",
       "modeId": "accept-edits",
       "thinkingOptionId": "medium",
       "featureValues": {
@@ -48,7 +48,7 @@
       "icon": "flask",
       "color": "emerald",
       "provider": "antigravity-cli",
-      "model": "gemini-4-argon",
+      "model": "gemini-4-neon",
       "modeId": "accept-edits",
       "thinkingOptionId": "medium",
       "featureValues": {
@@ -169,7 +169,7 @@
       "icon": "search",
       "color": "emerald",
       "provider": "antigravity-cli",
-      "model": "gemini-4-argon",
+      "model": "gemini-4-neon",
       "modeId": "default",
       "thinkingOptionId": "medium",
       "featureValues": {
@@ -224,7 +224,7 @@
       "icon": "palette",
       "color": "emerald",
       "provider": "antigravity-cli",
-      "model": "gemini-4-argon",
+      "model": "gemini-4-neon",
       "modeId": "accept-edits",
       "thinkingOptionId": "medium",
       "featureValues": {

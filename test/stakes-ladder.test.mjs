@@ -20,7 +20,7 @@ test("tierA-invariant claude -> opus high; mechanical -> sonnet low", () => {
 
 test("gemini rungs and opencode keeps the profile model", () => {
   const g = resolveStakesRoute("antigravity-cli", { model: "x" }, "tierA-security", false);
-  assert.deepEqual([g.model, g.effort], ["gemini-4-argon", "high"]);
+  assert.deepEqual([g.model, g.effort], ["gemini-4-neon", "high"]);
   assert.equal(resolveStakesRoute("antigravity-cli", { model: "x", thinkingOptionId: "medium" }, "mechanical", false).model, "gemini-3.8-flash");
   const o = resolveStakesRoute("opencode", { model: "deepseek/deepseek-v4-pro", thinkingOptionId: "default" }, "tierA-invariant", false);
   assert.deepEqual([o.model, o.effort], [undefined, "high"]); // rung without a model leaves the spawn's model alone
