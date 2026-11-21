@@ -1,6 +1,21 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { Ago } from "./ui";
+import type { DeviceRole } from "./phonePairLogic";
+
+// E6c: same rules as defaultTesterTeams / formatDeviceRoleBadge / pairStartInit in phonePairLogic.ts (which PhonePairSheet imports).
+// Kept inline because test/pair-modal-apk.test.mjs transpiles this file alone and only stubs ./TeamActions and ./ui.
+const OWNER_ROLE_LABEL = "Owner (full access)";
+const TESTER_ROLE_LABEL = "Alpha Tester (Log Bug + Bug Desk chat only)";
+const defaultTesterTeams = (teams: Array<{ id: string }>): string[] =>
+  teams.some((t) => t.id === "efi") ? ["efi"] : teams.length ? [teams[0].id] : [];
+const formatDeviceRoleBadge = (d: { role?: string; allowedTeams?: string[] | null }): string | null =>
+  d.role === "bug-tester" ? (d.allowedTeams?.length ? `TESTER · ${d.allowedTeams.join(", ")}` : "TESTER") : null;
+const pairStartInit = (role: DeviceRole, allowedTeams: string[]): RequestInit => ({
+  method: "POST",
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(role === "bug-tester" ? { role, allowedTeams } : { role: "owner" }),
+});
 
 type Fingerprint = { full: string | null; short: string | null };
 
@@ -10,6 +25,9 @@ type PairedDevice = {
   createdAt: string;
   lastSeenAt: string;
   current: boolean;
+  /** E6a: owner (default / older servers) or bug-tester scoped to allowedTeams. */
+  role?: DeviceRole;
+  allowedTeams?: string[] | null;
 };
 
 type PairStartResponse = {
@@ -43,7 +61,7 @@ type PairStartResponse = {
   error?: string;
 };
 
-type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number };
+type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number; role?: DeviceRole; allowedTeams?: string[] | null };
 
 type DevicesResponse = {
   devices: PairedDevice[];
@@ -214,6 +232,10 @@ export function PairDeviceModal({
   const [err, setErr] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  // E6c: DEVICE ACCESS ROLE. A tester invite is never auto-minted: switching role or toggling a Squad clears the old code.
+  const [role, setRole] = useState<DeviceRole>("owner");
+  const [squads, setSquads] = useState<Array<{ id: string; name?: string }>>([]);
+  const [testerTeams, setTesterTeams] = useState<string[]>([]);
 
   const loadDevices = useCallback(async () => {
     try {
@@ -242,12 +264,17 @@ export function PairDeviceModal({
     } catch {}
   }, []);
 
-  const startPairing = useCallback(async () => {
+  // Monotonic mint id: a role switch / Squad toggle / newer mint invalidates any pair/start still in flight, so a stale
+  // owner (or wrong-Squad) code can never land under the other role.
+  const mintSeqRef = useRef(0);
+  const startPairing = useCallback(async (mintRole: DeviceRole = "owner", mintTeams: string[] = []) => {
+    const seq = ++mintSeqRef.current;
     setBusy(true);
     setErr("");
     try {
-      const r = await fetch("/__vibesquad/pair/start", { method: "POST" });
+      const r = await fetch("/__vibesquad/pair/start", pairStartInit(mintRole, mintTeams));
       const data = (await r.json()) as PairStartResponse;
+      if (seq !== mintSeqRef.current) return;
       if (!r.ok) {
         setErr(data.error || `HTTP ${r.status}`);
         return;
@@ -257,9 +284,9 @@ export function PairDeviceModal({
         setNetworkMode("meshnet");
       }
     } catch (e) {
-      setErr(String(e));
+      if (seq === mintSeqRef.current) setErr(String(e));
     } finally {
-      setBusy(false);
+      if (seq === mintSeqRef.current) setBusy(false);
     }
   }, []);
 
@@ -267,6 +294,46 @@ export function PairDeviceModal({
     void loadDevices();
     void startPairing();
   }, [loadDevices, startPairing]);
+
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const r = await fetch("/api/teams", { cache: "no-store" });
+        if (!r.ok) return;
+        const data = (await r.json()) as { teams?: Array<{ id: string; name?: string }> };
+        const list = (data.teams ?? []).filter((t) => t && typeof t.id === "string");
+        if (!live) return;
+        setSquads(list);
+        setTesterTeams((cur) => (cur.length ? cur : defaultTesterTeams(list)));
+      } catch {}
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const changeRole = (next: DeviceRole) => {
+    if (next === role) return;
+    mintSeqRef.current++;
+    setBusy(false);
+    setRole(next);
+    setPair(null); // never leave the other role's code on screen
+    setErr("");
+    if (next === "owner") void startPairing("owner");
+  };
+
+  const toggleSquad = (id: string) => {
+    mintSeqRef.current++;
+    setBusy(false);
+    setTesterTeams((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+    setPair(null); // the old invite carried a different Squad scope
+  };
+
+  const mintCurrent = () => void startPairing(role, testerTeams);
+  const isOwnerRole = role === "owner";
+  const isTesterRole = role === "bug-tester";
+  const testerBlocked = role === "bug-tester" && testerTeams.length === 0;
 
   // E4b (X1 L5): a remote paired browser mints approval-required codes; the redeemed device waits for Approve here.
   const [pending, setPending] = useState<PendingPair[]>([]);
@@ -437,6 +504,33 @@ export function PairDeviceModal({
           </div>
         )}
 
+        <div className="preview" style={{ marginBottom: 0 }} data-testid="pair-role-select">
+          <div className="field-label">DEVICE ACCESS ROLE</div>
+          <div className="seg" style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+            <button type="button" className={isOwnerRole ? "on" : ""} data-testid="pair-role-owner" onClick={() => changeRole("owner")}>
+              {OWNER_ROLE_LABEL}
+            </button>
+            <button type="button" className={isTesterRole ? "on" : ""} data-testid="pair-role-tester" onClick={() => changeRole("bug-tester")}>
+              {TESTER_ROLE_LABEL}
+            </button>
+          </div>
+          {role === "bug-tester" && (
+            <div style={{ marginTop: 6 }} data-testid="pair-tester-squads">
+              <div className="muted small">Squads this tester may report bugs to:</div>
+              <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 4 }}>
+                {squads.map((t) => (
+                  <label key={t.id} className="small" style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                    <input type="checkbox" data-testid={`pair-tester-squad-${t.id}`} checked={testerTeams.includes(t.id)} onChange={() => toggleSquad(t.id)} />
+                    {t.name || t.id}
+                  </label>
+                ))}
+                {squads.length === 0 && <span className="muted small">No Squads found.</span>}
+              </div>
+              {testerBlocked && <div className="stat-alert small">Check at least one Squad to generate a tester invite.</div>}
+            </div>
+          )}
+        </div>
+
         <div className="na-grid">
           <div className="na-col" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <div className="preview" style={{ marginBottom: 0 }}>
@@ -483,7 +577,7 @@ export function PairDeviceModal({
                       <button className="btn ok small" onClick={() => copyText("pair", activePairUrl)}>
                         {copied === "pair" ? "✓ Copied Link" : "Copy Pairing Link"}
                       </button>
-                      <button className="btn ghost small" disabled={busy} onClick={startPairing}>
+                      <button className="btn ghost small" disabled={busy || testerBlocked} onClick={mintCurrent}>
                         {busy ? "Generating…" : "↻ New QR Code"}
                       </button>
                     </div>
@@ -498,7 +592,7 @@ export function PairDeviceModal({
                         ? "No LAN or Meshnet address available for pairing."
                         : "Pairing code expired or unavailable."}
                   </span>
-                  <button className="btn ok small" disabled={busy} onClick={startPairing}>
+                  <button className="btn ok small" disabled={busy || testerBlocked} onClick={mintCurrent}>
                     ↻ New QR Code
                   </button>
                 </div>
@@ -705,7 +799,7 @@ export function PairDeviceModal({
                       <button className="btn ok small" onClick={() => copyText("code", pair.code)}>
                         {copied === "code" ? "✓ Copied Code" : "Copy Code"}
                       </button>
-                      <button className="btn ghost small" disabled={busy} onClick={startPairing}>
+                      <button className="btn ghost small" disabled={busy || testerBlocked} onClick={mintCurrent}>
                         {busy ? "…" : "↻ New Code"}
                       </button>
                     </div>
@@ -716,9 +810,11 @@ export function PairDeviceModal({
                 </>
               ) : (
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-                  <span className="muted small">{busy ? "Generating 6-digit pairing code…" : "Pairing code expired."}</span>
-                  <button className="btn ok small" disabled={busy} onClick={startPairing}>
-                    ↻ New Code
+                  <span className="muted small">
+                    {busy ? "Generating 6-digit pairing code…" : role === "bug-tester" && !pair ? "Pick Squads, then generate a tester invite." : "Pairing code expired."}
+                  </span>
+                  <button className="btn ok small" data-testid="pair-generate" disabled={busy || testerBlocked} onClick={mintCurrent}>
+                    {role === "bug-tester" ? "Generate tester invite" : "↻ New Code"}
                   </button>
                 </div>
               )}
@@ -764,6 +860,7 @@ export function PairDeviceModal({
             {pending.map((p) => (
               <div key={p.pendingId} className="pair-pending-item" data-testid="pair-pending-item">
                 <b>{p.name}</b>
+                {formatDeviceRoleBadge(p) && <span className="badge" data-testid="pair-role-badge">{formatDeviceRoleBadge(p)}</span>}
                 <span className="muted small">
                   from {p.ip} · {Math.ceil(p.expiresInMs / 1000)} s left
                 </span>
@@ -805,6 +902,7 @@ export function PairDeviceModal({
                 >
                   <b style={{ color: d.current ? "var(--cyan-t)" : "var(--text)" }}>{d.name}</b>
                   {d.current && <span className="badge">THIS DEVICE</span>}
+                  {formatDeviceRoleBadge(d) && <span className="badge" data-testid="pair-role-badge">{formatDeviceRoleBadge(d)}</span>}
                   <span className="muted small" style={{ marginLeft: "auto" }}>
                     last seen <Ago iso={d.lastSeenAt} /> ago
                   </span>
