@@ -338,6 +338,16 @@ export function acpMcpServer(spec, env = {}) {
   return { name: spec.name, command: spec.command, args: spec.args, env: list };
 }
 
+// Restart drain (Runner.setDrain / setRequestDrain): the mid-turn refusal is Claude-only. Claude Code's --settings
+// PreToolUse hook (adapters/claude.mjs drainHookSettings + runner/drain-hook.mjs) blocks a NEW run_in_background
+// Bash/PowerShell before it runs. ACP providers (opencode, antigravity-cli/agy, codex) have no PreToolUse equivalent:
+// their native shell tools run as the agent's own child processes and surface to the client only as `tool_call` session
+// updates, which this adapter observes (line ~141) rather than approves — there is no client-side point to veto a
+// background shell before it starts. The `session/request_permission` path (permissionOutcome below) auto-approves, and
+// its params carry the tool's title/id, not its input, so it could not detect a run_in_background launch even if the
+// drain state were wired in here. For these providers the drain is therefore enforced only at turn end:
+// Runner._drainRefusesHold stops background shells started after the drain began and tells the agent why on its next
+// input. Closing the mid-turn gap would need a protocol change in ACP (or per-provider hooks outside it), out of scope.
 // Auto-approve unless the lane explicitly asks to deny (meta.permissionMode === 'deny'); a profile's own mode
 // (e.g. "default") never denies, it is the provider's ACP mode.
 function permissionOutcome(params, mode) {
