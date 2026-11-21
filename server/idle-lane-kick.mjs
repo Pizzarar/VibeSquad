@@ -89,8 +89,9 @@ export async function armedWatchOwners(baseHome) {
 }
 
 /** Open work in priority order: TASKS.json live units, then plan blocks not PASS in the brief.
- * Inbox cards are triage items, not lane work: a parked card waits for the owner/lead to triage it and an
- * archived card is done, so neither is open (idea-481). Only a legacy card with no status yet still counts. */
+ * Inbox cards are triage items, not lane work, EXCEPT a plain new card (status "parked", no parkedAt marker)
+ * and an "accepted" card (Review L1: accepted is actionable), which still count. An explicitly parked card
+ * (triage --park stamps parkedAt) and archived/handed-off/rejected cards are skipped (idea-481). */
 export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const root = briefRootFor(teamId, laneId, rootDir);
   const items = await openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
@@ -98,9 +99,12 @@ export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const cards = Array.isArray(inbox) ? inbox : Array.isArray(inbox?.cards) ? inbox.cards : [];
   const sameId = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
   for (const c of cards) {
-    // Any status (parked/archived/accepted/handed-off/rejected) means it is not open lane work; only a
-    // status-less card (legacy) still counts. This keeps parked and archived cards from being nudged.
-    if (c.status || !sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
+    // idea-481: an explicitly parked card (triage --park stamps parkedAt) waits for triage; and any non-parked
+    // status except "accepted" (archived/handed-off/rejected) is not open lane work. A plain new card (status
+    // "parked", no marker) and an accepted card still count.
+    if (c.parkedAt) continue;
+    if (c.status && c.status !== "parked" && c.status !== "accepted") continue;
+    if (!sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
     items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
   }
   try {
