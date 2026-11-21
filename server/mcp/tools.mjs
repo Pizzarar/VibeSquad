@@ -12,6 +12,7 @@ import { fetchWithLocalToken, localTokenPath, readLocalToken } from "../local-to
 import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
+import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
@@ -273,6 +274,18 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
 
 const entriesOf = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : []);
 
+/**
+ * Clip to `cap` chars. At the full cap: tail only (conclusions sit at the end). At the compact cap: head + tail, because a
+ * line-1 verdict or report header is dropped by a tail-only clip (G2 review H1).
+ */
+const COMPACT_ELLIPSIS = " ...[clipped; full:true for more]... ";
+export function clipText(t, cap) {
+  if (cap > COMPACT_LAST_MESSAGE) return t.slice(-cap);
+  const head = Math.round(cap * 0.42); // ~250 of 600
+  const tail = cap - head - COMPACT_ELLIPSIS.length;
+  return t.slice(0, head) + COMPACT_ELLIPSIS + t.slice(-tail);
+}
+
 /** Last assistant text from a timeline, tail-capped (conclusions sit at the end). */
 export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
   const entries = coalesceReplies(entriesOf(timeline)); // Paseo projections can split one reply around a thought
@@ -280,7 +293,7 @@ export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
     const item = entries[i]?.item ?? entries[i];
     if (item?.type === "assistant_message" && item.text) {
       const t = String(item.text);
-      return t.length > cap ? t.slice(-cap) : t;
+      return t.length > cap ? clipText(t, cap) : t;
     }
   }
   return "";
@@ -431,7 +444,10 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
         ...(thinkingOptionId ? { thinkingOptionId } : {}),
         ...(spawn.systemPrompt ? { systemPrompt: spawn.systemPrompt } : {}),
       },
-      initialPrompt: prompt,
+      // G2: a non-Claude lead cannot cap its own tool output; first boot gets the rule line the successor prompt carries.
+      initialPrompt: asLead && isNonClaudeProvider(provider) ? `${prompt}
+
+${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
       labels,
       env,
     }),

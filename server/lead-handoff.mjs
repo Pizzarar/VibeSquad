@@ -1409,7 +1409,9 @@ export function createLeadHandoffCoordinator(deps = {}) {
     // G2: working tokens (meter minus the provider's fixed preamble) so an agy lead is not handed off for a cost it cannot shed.
     // Idle seam: the 150k nudge is steerOnly, the 250k stage writes the packet and waits for idle, only the 300k hard cap
     // (used >= hardCapTokens) may act on a running lead, unchanged.
+    // The hard cap is a safety net on the RAW meter: the subtraction applies to the soft stages (compact, 150k, 250k) only.
     const used = leadWorkingTokens(lead, options.usedTokens);
+    const rawUsed = leadUsedTokens(lead, options.usedTokens);
     const { flagTokens, autoHandoffTokens, hardCapTokens } = thresholds;
 
     // K2: before any stage, a Claude lead at the soft threshold is compacted in place once (idle only, tracked by vs.compacted-at).
@@ -1419,15 +1421,15 @@ export function createLeadHandoffCoordinator(deps = {}) {
       if (res?.outcome === "ok") return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
       // Mid-turn: usage upserts arrive with status=running. Wait for the idle upsert instead of nudging or handing off now (no stamp, no
       // nudge). The hard cap is the exception: past it a running lead still goes to the forced handoff below.
-      if (res?.outcome === "skipped" && res.reason === "busy" && used < hardCapTokens) {
+      if (res?.outcome === "skipped" && res.reason === "busy" && rawUsed < hardCapTokens) {
         return { stage: "compact-deferred", triggered: false, usedTokens: used };
       }
     }
 
     // Stage 4: >= 300k Hard Ceiling Forced Handoff (fires at most once per lead).
-    if (used >= hardCapTokens) {
+    if (rawUsed >= hardCapTokens) {
       if (forced300.has(lead.id) || labels["handoff-hard-300"] === "1") {
-        return { stage: "hard-300", triggered: false, usedTokens: used };
+        return { stage: "hard-300", triggered: false, usedTokens: rawUsed };
       }
       forced300.add(lead.id);
       const packetPath = getHandoffPacketPath(teamId, laneId, getBase());
@@ -1449,7 +1451,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         retireImmediately: false,
         forceSynthesize: needsSynthesis,
       });
-      return { stage: "hard-300", triggered: true, usedTokens: used, ...spawned };
+      return { stage: "hard-300", triggered: true, usedTokens: rawUsed, ...spawned };
     }
 
     // Stage 3: >= 250k and < 300k VS Auto-Handoff.

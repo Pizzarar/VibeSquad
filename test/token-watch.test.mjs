@@ -514,3 +514,16 @@ test("G2: the non-Claude lead cap rules ride the successor prompt, claude's does
   assert.ok(buildSuccessorPrompt({ ...base, provider: "antigravity-cli" }).includes(NON_CLAUDE_LEAD_CAP_RULES));
   assert.ok(!buildSuccessorPrompt({ ...base, provider: "claude" }).includes(NON_CLAUDE_LEAD_CAP_RULES));
 });
+
+test("G2 review M: the preamble subtraction never delays the 300k hard cap (raw meter)", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy-hard", { ...lead("rn-agy-hard"), provider: "antigravity-cli" });
+  const w = startTokenWatcher({ runner: r, rootDir, baseHome: join(rootDir, "home") });
+  r.usage("rn-agy-hard", LEAD_HARD_CAP_DEFAULT + 1); // raw over the cap, working tokens (265k) under it
+  await tick();
+  await tick();
+  assert.equal(r.created.length, 1);
+  assert.equal(r.created[0].labels["vs.handoff-trigger"], "hard-300");
+  w.stop();
+});

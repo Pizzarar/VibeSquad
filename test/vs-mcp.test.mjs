@@ -686,3 +686,15 @@ test('X1b R1 M2: a Paseo-alias call verifies the caller before its metric is log
   assert.deepEqual(order, ['log:metric:true'], 'the metric is logged after verification, as the verified caller');
   assert.deepEqual(b.calls.at(-1).slice(0, 2), ['send', 'rn-work1']);
 });
+
+test('G2 review H1: compact status/wait keeps a long reply line-1 verdict and its tail', async () => {
+  const text = ['VERDICT: FAIL 1/2/1', 'm'.repeat(5000), 'TAIL-MARK'].join(String.fromCharCode(10));
+  const ctx = fakeCtx({ runnerBackend: { ...fakeBackend('rn'), fetchAgentTimeline: async () => ({ entries: [{ item: { type: 'assistant_message', text } }] }) }, paseoBackend: fakeBackend('ps') });
+  for (const tool of ['status', 'wait']) {
+    const r = await callTool(ctx, tool, { id: 'rn-1', timeoutSec: 1 });
+    assert.ok(r.lastMessage.startsWith('VERDICT: FAIL 1/2/1'), tool);
+    assert.ok(r.lastMessage.endsWith('TAIL-MARK'), tool);
+    assert.ok(r.lastMessage.length <= 600, tool);
+  }
+  assert.ok((await callTool(ctx, 'status', { id: 'rn-1', full: true })).lastMessage.endsWith('TAIL-MARK'));
+});
