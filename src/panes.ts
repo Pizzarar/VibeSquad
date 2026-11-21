@@ -265,14 +265,26 @@ export function setActivePane(pane: Pane) {
 /** Split on: an empty right pane waits for Shift+click. Split off: right tabs fold into the left. */
 export function toggleSplit() {
   if (!state.split) return commit({ ...state, split: true, activePane: "right" });
-  const { leftTabs, rightTabs, leftActiveId, rightActiveId } = state;
+  collapseSplit("left");
+}
+
+/**
+ * Split off. `keep` picks whose agent stays on screen: "left" (the toggle default) or "active" (the pane the user is working in,
+ * so the active agent does not change). An empty kept pane falls back to the other pane's agent.
+ */
+export function collapseSplit(keep: "left" | "active" = "left") {
+  if (!state.split) return;
+  const { leftTabs, rightTabs, leftActiveId, rightActiveId, activePane } = state;
+  const preferRight = keep === "active" && activePane === "right";
+  const first = preferRight ? rightActiveId : leftActiveId;
+  const second = preferRight ? leftActiveId : rightActiveId;
   commit({
     ...state,
     split: false,
     activePane: "left",
     leftTabs: [...leftTabs, ...rightTabs],
     rightTabs: [],
-    leftActiveId: leftActiveId ?? rightActiveId,
+    leftActiveId: first ?? second,
     rightActiveId: null,
   });
 }

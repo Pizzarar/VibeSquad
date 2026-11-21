@@ -289,14 +289,20 @@ export function clipText(t, cap) {
 /** Last assistant text from a timeline, tail-capped (conclusions sit at the end). */
 export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
   const entries = coalesceReplies(entriesOf(timeline)); // Paseo projections can split one reply around a thought
+  let failure = "";
+  let crossedTurn = false;
+  const clip = (t) => (t.length > cap ? clipText(t, cap) : t);
   for (let i = entries.length - 1; i >= 0; i--) {
     const item = entries[i]?.item ?? entries[i];
     if (item?.type === "assistant_message" && item.text) {
       const t = String(item.text);
       return t.length > cap ? clipText(t, cap) : t;
     }
+    // The turn boundary stops only the error fallback, never the reply lookup: an older turn's reply is still the last message.
+    if (item?.type === "user_message") { if (failure) return clip(failure); crossedTurn = true; continue; }
+    if (!crossedTurn && !failure && item?.type === "error" && item.message) failure = `[agent error] ${item.message}`;
   }
-  return "";
+  return clip(failure); // never a silent empty lastMessage when the agent died with a reason (idea-442)
 }
 
 const agentOf = (res) => res?.agent ?? res;

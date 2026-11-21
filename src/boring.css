@@ -775,9 +775,10 @@ html[data-vibe="boring"] .boring-project-row:hover { background: var(--surface-3
 html[data-vibe="boring"] .boring-project-row.on { background: transparent; }
 html[data-vibe="boring"] .boring-project-row.on .boring-project-name { font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-sidebar .boring-footer-btn { color: var(--text-2); }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { min-height: 28px; padding: 2px 10px; font-size: var(--t-small); background: var(--surface-2) !important; color: var(--text-2) !important; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:hover { background: var(--surface-3) !important; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.on { background: var(--surface-3) !important; color: var(--text-1) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { min-height: 28px; padding: 2px 10px; font-size: var(--t-small); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]) { background: var(--surface-2) !important; color: var(--text-2) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]):hover { background: var(--surface-3) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]).on { background: var(--surface-3) !important; color: var(--text-1) !important; }
 
 /* Surfaces: flat tone steps. Your message = surface-2 + 2px accent rule; agent text sits on the canvas. */
 html[data-vibe="boring"] .tl-user,
@@ -1218,6 +1219,21 @@ html[data-vibe="boring"] .boring-needs-reason { white-space: normal; display: -w
 /* R7-1: neutral placeholder while a deep link waits for the roster. */
 html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #888); font-size: 14px; }
 
+/* idea-257: optional 2-pane split in the chat column (src/panes.ts). Grid only, no width media queries. */
+html[data-vibe="boring"] .boring-chat-column:has(.boring-chat-split) { max-width: 100%; }
+html[data-vibe="boring"] .boring-chat-split { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; background: var(--border); }
+html[data-vibe="boring"] .boring-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-card); border-top: 2px solid transparent; }
+html[data-vibe="boring"] .boring-pane-active { border-top-color: var(--accent); }
+html[data-vibe="boring"] .boring-pane > .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border: 0; background: var(--bg-card); box-shadow: none !important; }
+/* The context panel is not mounted inside a pane (AgentDrawer noContextPanel), so none of the :has(.boring-context-panel) composer rules can match here. */
+html[data-vibe="boring"] .boring-pane:not(.boring-pane-active) .boring-agent-name { color: var(--text-dim); }
+html[data-vibe="boring"] .boring-pane-active .boring-agent-header { background: color-mix(in srgb, var(--accent) 8%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--accent); }
+html[data-vibe="boring"] .boring-split-empty { margin: auto; max-width: 360px; padding: 24px; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; color: var(--text-dim); }
+html[data-vibe="boring"] .boring-split-empty p { margin: 0; }
+html[data-vibe="boring"] .boring-split-hint { font-size: 12px; color: var(--text-dim); }
+/* The topbar-actions pill rules (!important) exclude this toggle, so its pressed accent fill is not beaten. */
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"]:hover { filter: brightness(1.08); }
 /* B8a: always-visible Trinity card (Overlord, RiffBot, Bugs) set apart from the feature lanes. */
 html[data-vibe="boring"] .boring-trinity-card { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px 6px 6px; margin: 4px 0 6px; background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; }
 html[data-vibe="boring"] .boring-trinity-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 4px; font-size: var(--t-caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
