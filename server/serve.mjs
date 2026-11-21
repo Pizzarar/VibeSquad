@@ -46,6 +46,8 @@ import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { startTokenWatcher } from "./token-watch.mjs";
 import { startIdleLaneKick } from "./idle-lane-kick.mjs";
+import { startTempScratchTtl } from "./disk-dedupe.mjs";
+import { underTestRunner } from "./test-guard.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
@@ -570,6 +572,13 @@ if (isMain) {
       try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
     }
     if (process.env.VS_IDLE_KICK !== "0") { try { const ik = startIdleLaneKick({ runner: sharedRunnerBackend(), rootDir }); server.once("close", () => ik.stop()); } catch (err) { console.warn("idle lane kick not started:", err?.message ?? err); } }
+    // B1 (PLAN_DISK_LIFECYCLE_1121): slow-tick TTL on VS's own "vs-<name>-XXXXXX" Temp scratch dirs; never under a test runner.
+    if (process.env.VS_TEMP_TTL !== "0" && !underTestRunner()) {
+      try {
+        const tt = startTempScratchTtl({ logMetric: (text) => import("./brainstorm.mjs").then(({ appendVsLogEntry }) => appendVsLogEntry({ teamId: "vibesquad", laneId: "vibesquad", agent: "vibesquad-server", type: "metric", text })).catch(() => {}) });
+        server.once("close", () => tt.stop());
+      } catch (err) { console.warn("temp scratch TTL not started:", err?.message ?? err); }
+    }
 
     if (wantOpen) void openBrowser(servedOpenUrl());
   });
