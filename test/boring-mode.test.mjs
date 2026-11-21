@@ -1917,6 +1917,21 @@ test("idea-494: a lane with neither Lead nor Brainstorm keeps the no-agent page;
   assert.doesNotMatch(byId(t2, "boring-conv-per").props.className, /\bon\b/);
 });
 
+test("idea-500: collapsing the lane that holds the selected Lead row moves the selected state to the lane row (exactly one on); chevron says lane", () => {
+  reset();
+  globalThis.__agents.set("per-ld", { id: "per-ld" });
+  const view = squad({ pins: [lanePin("per", { brainstorm: null, lead: mem("per-ld", "idle") }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })] });
+  laneBtn(render(props(view)), "per").props.onClick();
+  assert.match(byId(render(props(view)), "boring-lead-per").props.className, /\bon\b/);
+  byId(render(props(view)), "boring-conv-toggle-per").props.onClick(); // collapse
+  const t = render(props(view));
+  assert.equal(byId(t, "boring-lead-per"), null);
+  assert.match(byId(t, "boring-conv-per").props.className, /\bon\b/); // contains-selection => lane row is the selected one
+  assert.equal(walk(t, (n) => /\bon\b/.test(String(n.props?.className ?? "")) && /boring-(conv-row|worker-row|core-row|project-row)/.test(n.props.className)).length, 1);
+  assert.equal(byId(t, "boring-conv-toggle-per").props["aria-label"], "Expand lane");
+  assert.doesNotMatch(String(byId(t, "boring-conv-toggle-per").props["aria-label"]), /workers/);
+});
+
 test("idea-468: no-agent Bugs lane passes the Bugs pin's real lane id, never the _bugs sentinel", () => {
   reset();
   const view = squad({ bugs: { pin: lanePin("bug-chaser", { brainstorm: null }), leadRunning: false, needsYou: 0 } });

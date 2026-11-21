@@ -573,6 +573,12 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   // An empty active pane names nobody: no row is selected and the breadcrumb says so, instead of echoing the other pane's agent.
   const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId;
   const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
+  // idea-500: keep the selected row visible; only when the selection changes (never on re-render), nearest so it never fights user scrolling.
+  useEffect(() => {
+    if (!sel.rowKey) return;
+    if (typeof document === "undefined") return;
+    document.querySelector<HTMLElement>(".boring-sidebar .boring-conv-row.on, .boring-sidebar .boring-worker-row.on, .boring-sidebar .boring-core-row.on")?.scrollIntoView?.({ block: "nearest" });
+  }, [sel.rowKey]);
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
@@ -740,10 +746,12 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const lead = c.pin && isLive(c.pin.lead) ? c.pin.lead : null; // idea-494: a live OR idle Lead gets its own row (never for the hub's Overlord)
     const leadKey = ["lane", c.laneId, "lead"].join(":");
     const expandable = workers.length > 0 || Boolean(lead);
+    // idea-500: a collapsed lane hides its selected Lead/worker row, so the lane row carries the selected state (derived from sel, no second source).
+    const laneCls = "boring-conv-row" + (isOn(v, `lane:${c.laneId}`) || (!open && sel.teamId === v.team.id && sel.laneId === c.laneId && sel.rowKey !== null) ? " on" : "");
     return (
-      <div key={c.laneId} className={`boring-conv-row ${isOn(v, `lane:${c.laneId}`) ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
+      <div key={c.laneId} className={laneCls} data-testid={`boring-conv-${c.laneId}`}>
         <div className="boring-conv-line">
-          <button type="button" className="boring-chevron-btn" data-testid={`boring-conv-toggle-${c.laneId}`} aria-expanded={open} aria-label={open ? "Collapse workers" : "Expand workers"} disabled={!expandable} onClick={() => setLaneOpen((o) => ({ ...o, [key]: !open }))}>
+          <button type="button" className="boring-chevron-btn" data-testid={`boring-conv-toggle-${c.laneId}`} aria-expanded={open} aria-label={open ? "Collapse lane" : "Expand lane"} disabled={!expandable} onClick={() => setLaneOpen((o) => ({ ...o, [key]: !open }))}>
             {!expandable ? "" : open ? "▾" : "▸"}
           </button>
           <button type="button" className="boring-conv-title" data-testid={c.titleTestId} title={c.topicLabel || undefined} onClick={c.onOpen}>
