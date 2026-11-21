@@ -6,10 +6,13 @@
 // its branch is named in the merge subject ("Merge branch 'x'", "Merge pull request #n from owner/x"); the full sweep
 // checks (sweepMergedWorktrees) still decide. The first tick only records tips: merges made while the server was down are
 // left to `vs worktree sweep`. Squash merges have no parent link, so they are also left to the manual sweep.
-// Dry run by default (logs would-remove): removal needs `apply: true` (server: VS_WORKTREE_AUTOSWEEP=apply).
+// Dry run by default (logs would-remove): removal needs `apply: true` (server: VS_WORKTREE_AUTOSWEEP=apply). An apply holds
+// the sanctuary sweep lock (shared with `vs worktree sweep --apply`). In the server the synchronous git work (discovery and
+// the sweep itself) runs in a worker thread, so the event loop is never blocked; a quiet tick is async for-each-ref only.
 import { execFile } from "node:child_process";
-import { appendVsLogEntry } from "./brainstorm.mjs";
+import { Worker } from "node:worker_threads";
 import {
+  acquireSweepLock,
   defaultGit,
   detectDefaultBranch,
   discoverSanctuaryRepos,
@@ -62,28 +65,107 @@ export function mergesBetween(repoRoot, prev, tip, { git = defaultGit } = {}) {
 }
 
 /**
- * The tick body. `listAgents()` -> the runner roster (cwd, archivedAt, status, resumable). An unreadable roster skips the
- * tick (fail closed: no live-cwd guard, no removal). Returns { skipped } or { removed, kept, results }.
+ * The synchronous (execFileSync) parts of a tick, callable in-process or from the worker thread. Arguments and results
+ * are plain data (structured-clone safe); `git` and `discover` are only injectable in-process (tests).
+ */
+export const AUTOSWEEP_HEAVY = {
+  /** Sanctuary repos and their default branch: [{ repo: { name, repoRoot }, def: { name, refs } }]. */
+  repos({ root, git = defaultGit, discover = discoverSanctuaryRepos }) {
+    return discover(root).repos.map((r) => ({ repo: { name: r.name, repoRoot: r.repoRoot }, def: detectDefaultBranch(r.repoRoot, { git }) }));
+  },
+  /**
+   * groups: [{ repo, def, moves: [{ ref, prev, tip }] }], one per repo (several moved refs of a repo are swept once).
+   * With apply, holds the sweep lock for the whole call; busy -> { busy }. Returns { results: [{ repo, via, refs, ...r }] }.
+   */
+  sweep({ root, groups, liveCwds, apply, now, git = defaultGit }) {
+    const release = apply ? acquireSweepLock(root) : () => {};
+    if (!release) return { busy: true, results: [] };
+    try {
+      const results = [];
+      for (const { repo, def, moves } of groups) {
+        const heads = new Map();
+        const names = new Map();
+        for (const { prev, tip } of moves) {
+          for (const m of mergesBetween(repo.repoRoot, prev, tip, { git })) {
+            for (const p of m.parents) heads.set(p, m.sha);
+            for (const b of m.branches) names.set(b, m.sha);
+          }
+        }
+        if (!heads.size && !names.size) continue;
+        const res = sweepMergedWorktrees(repo.repoRoot, {
+          apply,
+          liveCwds,
+          git,
+          sanctuaryRoot: root,
+          targetBranch: def.name,
+          targetRefs: def.refs,
+          now,
+          only: (wt) => heads.has(wt.head) || Boolean(wt.branch && names.has(wt.branch)),
+        });
+        for (const r of res.results) {
+          const via = (heads.get(r.head) ?? names.get(r.branch) ?? "").slice(0, 8);
+          results.push({ repo: repo.name, via, refs: moves.map((m) => m.ref).join(","), ...r });
+        }
+      }
+      return { results };
+    } finally {
+      release();
+    }
+  },
+};
+
+/** Run one AUTOSWEEP_HEAVY step in a worker thread (the server path). Rejects on a worker error. */
+export function runHeavyInWorker(name, args) {
+  return new Promise((done, fail) => {
+    const w = new Worker(new URL("./worktree-autosweep-worker.mjs", import.meta.url), { workerData: { name, args } });
+    let settled = false;
+    w.once("message", (m) => {
+      settled = true;
+      if (m?.ok) done(m.value);
+      else fail(new Error(m?.error ?? "worker failed"));
+    });
+    w.once("error", (e) => {
+      if (!settled) fail(e);
+      settled = true;
+    });
+    w.once("exit", (code) => {
+      if (!settled) fail(new Error(`worker exited ${code}`));
+    });
+  });
+}
+
+const defaultLog = (text) =>
+  import("./brainstorm.mjs").then((m) => m.appendVsLogEntry({ teamId: "vibesquad", laneId: "vibesquad", agent: "vibesquad-server", type: "metric", text }));
+
+/**
+ * The tick body. `listAgents()` -> the runner roster (cwd, archivedAt, status, resumable, lost). An unreadable or empty
+ * roster skips the tick (fail closed: no live-cwd guard, no removal). `runHeavy(name, args)` runs an AUTOSWEEP_HEAVY step
+ * (default: in-process with the injected git/discover; the server passes runHeavyInWorker).
+ * Returns { skipped } or { apply, removed, wouldRemove, kept, results }.
  */
 export function createWorktreeAutoSweep({
   root = resolveManagedWorktreeRoot(),
   listAgents,
   git = defaultGit,
-  log = (text) => appendVsLogEntry({ teamId: "vibesquad", laneId: "vibesquad", agent: "vibesquad-server", type: "metric", text }),
+  log = defaultLog,
   discover = discoverSanctuaryRepos,
   gitAsync = defaultGitAsync,
   now = () => Date.now(),
   apply = false,
+  runHeavy = null,
 } = {}) {
+  const heavy = runHeavy ?? (async (name, args) => AUTOSWEEP_HEAVY[name]({ ...args, git, discover }));
   const tips = new Map(); // `${repoRoot}|${ref}` -> last seen sha
   let repoCache = { at: -Infinity, repos: [] }; // discovery + default branch, refreshed every CACHE_TTL_MS
+  const say = (text) => {
+    try {
+      Promise.resolve(log(text)).catch(() => {});
+    } catch {}
+  };
 
   async function tick() {
-    // A quiet tick is one async for-each-ref per repo: the server's event loop is never blocked unless a tip moved.
-    if (now() - repoCache.at > CACHE_TTL_MS) {
-      repoCache = { at: now(), repos: discover(root).repos.map((repo) => ({ repo, def: detectDefaultBranch(repo.repoRoot, { git }) })) };
-    }
-    const moved = [];
+    if (now() - repoCache.at > CACHE_TTL_MS) repoCache = { at: now(), repos: await heavy("repos", { root }) };
+    const byRepo = new Map(); // repoRoot -> { repo, def, moves }
     for (const { repo, def } of repoCache.repos) {
       if (!def.refs.length) continue;
       const out = await gitAsync(["for-each-ref", "--format=%(refname)%09%(objectname)", ...def.refs], repo.repoRoot);
@@ -94,10 +176,12 @@ export function createWorktreeAutoSweep({
         const key = `${repo.repoRoot.toLowerCase()}|${ref}`;
         const prev = tips.get(key);
         tips.set(key, tip);
-        if (prev && prev !== tip) moved.push({ repo, def, ref, prev, tip });
+        if (!prev || prev === tip) continue;
+        if (!byRepo.has(repo.repoRoot)) byRepo.set(repo.repoRoot, { repo, def, moves: [] });
+        byRepo.get(repo.repoRoot).moves.push({ ref, prev, tip });
       }
     }
-    if (!moved.length) return { removed: 0, kept: 0, results: [] };
+    if (!byRepo.size) return { apply, removed: 0, wouldRemove: 0, kept: 0, results: [] };
 
     let agents;
     try {
@@ -107,54 +191,33 @@ export function createWorktreeAutoSweep({
     }
     // An empty roster reads as unreadable too: the roster fold returns [] when it cannot read the runner logs.
     if (!Array.isArray(agents) || !agents.length) {
-      log("worktree-autosweep skipped: agent roster unreadable, no live-cwd guard");
+      say("worktree-autosweep skipped: agent roster unreadable, no live-cwd guard");
       return { skipped: "agents-unreadable" };
     }
-    const liveCwds = liveAgentCwds(agents);
-    const results = [];
-    for (const { repo, def, ref, prev, tip } of moved) {
-      const merges = mergesBetween(repo.repoRoot, prev, tip, { git });
-      const heads = new Map();
-      const names = new Map();
-      for (const m of merges) {
-        for (const p of m.parents) heads.set(p, m.sha);
-        for (const b of m.branches) names.set(b, m.sha);
-      }
-      if (!heads.size && !names.size) continue;
-      const res = sweepMergedWorktrees(repo.repoRoot, {
-        apply,
-        liveCwds,
-        git,
-        sanctuaryRoot: root,
-        targetBranch: def.name,
-        targetRefs: def.refs,
-        now: now(),
-        only: (wt) => heads.has(wt.head) || (wt.branch && names.has(wt.branch)),
-      });
-      for (const r of res.results) {
-        const via = (heads.get(r.head) ?? names.get(r.branch) ?? "").slice(0, 8);
-        const unit = r.branch ?? r.head?.slice(0, 8) ?? "?";
-        const text =
-          r.action === "removed" || r.action === "would-remove"
-            ? `worktree-autosweep ${r.action} repo=${repo.name} unit=${unit} merge=${via} ref=${ref} merged-by=${r.mergedBy} branch-kept`
-            : `worktree-autosweep kept repo=${repo.name} unit=${unit} merge=${via} ref=${ref} reason=${r.reason}`;
-        try {
-          log(text);
-        } catch {}
-        results.push({ repo: repo.name, ...r });
-      }
+    const res = await heavy("sweep", { root, groups: [...byRepo.values()], liveCwds: liveAgentCwds(agents), apply, now: now() });
+    if (res.busy) {
+      say("worktree-autosweep skipped: another sweep holds the sanctuary lock");
+      return { skipped: "sweep-busy" };
     }
-    const removed = results.filter((r) => r.action === "removed").length;
-    const wouldRemove = results.filter((r) => r.action === "would-remove").length;
-    return { apply, removed, wouldRemove, kept: results.length - removed - wouldRemove, results };
+    for (const r of res.results) {
+      const unit = r.branch ?? r.head?.slice(0, 8) ?? "?";
+      say(
+        r.action === "removed" || r.action === "would-remove"
+          ? `worktree-autosweep ${r.action} repo=${r.repo} unit=${unit} merge=${r.via} ref=${r.refs} merged-by=${r.mergedBy} branch-kept`
+          : `worktree-autosweep kept repo=${r.repo} unit=${unit} merge=${r.via} ref=${r.refs} reason=${r.reason}`,
+      );
+    }
+    const removed = res.results.filter((r) => r.action === "removed").length;
+    const wouldRemove = res.results.filter((r) => r.action === "would-remove").length;
+    return { apply, removed, wouldRemove, kept: res.results.length - removed - wouldRemove, results: res.results };
   }
 
   return { tick };
 }
 
-/** Server wiring: one tick every AUTOSWEEP_TICK_MS against the runner roster. Returns { stop, tick }. */
+/** Server wiring: one tick every AUTOSWEEP_TICK_MS against the runner roster, git work in a worker. Returns { stop, tick }. */
 export function startWorktreeAutoSweep({ runner, tickMs = AUTOSWEEP_TICK_MS, ...rest } = {}) {
-  const sweep = createWorktreeAutoSweep({ listAgents: () => runner.listAgents(), ...rest });
+  const sweep = createWorktreeAutoSweep({ listAgents: () => runner.listAgents(), runHeavy: runHeavyInWorker, ...rest });
   let running = false;
   const run = () => {
     if (running) return;

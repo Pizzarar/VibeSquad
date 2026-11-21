@@ -8,16 +8,20 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import {
+  SWEEP_LOCK_FILE,
+  acquireSweepLock,
   detectDefaultBranch,
   discoverSanctuaryRepos,
   isBuildOutputEntry,
   liveAgentCwds,
   mergedStatus,
+  removeSweptWorktree,
   sweepAllRepos,
   sweepMergedWorktrees,
+  throttledLiveCwds,
   worktreeDirt,
 } from "../server/team-worktrees.mjs";
-import { createWorktreeAutoSweep, mergeSubjectBranches } from "../server/worktree-autosweep.mjs";
+import { createWorktreeAutoSweep, mergeSubjectBranches, runHeavyInWorker } from "../server/worktree-autosweep.mjs";
 
 const git = (args, cwd) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000 }).trim();
@@ -348,6 +352,142 @@ test("auto-sweep: dry run by default; with apply a lead's merge removes that uni
     git(["merge", "-q", "--no-ff", "-m", "Merge branch 'unit-held'", "unit-held"], repo);
     assert.deepEqual(await sweep.tick(), { skipped: "agents-unreadable" });
     assert.ok(existsSync(held));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---- Tier A review rn-3d805b325403 (PASS 0/4/2 on 23a272be): one test per Medium ----
+
+test("M1 live-cwd: a lost agent (toAgent flattens it to status closed + lost: true) still holds its worktree", () => {
+  const cwds = liveAgentCwds([
+    { id: "lost", status: "closed", lost: true, resumable: false, cwd: "/home/alice/wt-lost" },
+    { id: "gone", status: "closed", lost: false, resumable: false, cwd: "/home/alice/wt-gone" },
+    { id: "resumable", status: "closed", resumable: true, cwd: "/home/alice/wt-resume" },
+    { id: "archived", status: "closed", lost: true, archivedAt: "2026-11-01", cwd: "/home/alice/wt-arch" },
+  ]);
+  assert.deepEqual(cwds, ["/home/alice/wt-lost", "/home/alice/wt-resume"]);
+});
+
+test("M2 removal: a build-output link two levels down that points outside is unlinked, never followed; a link on the parent path is left alone", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const shared = join(root, "shared-store");
+    writeFile(shared, "keep.txt", "precious");
+    writeFile(shared, "dist/keep2.txt", "precious2");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-link");
+    mkdirSync(join(wt, "a", "b"), { recursive: true });
+    symlinkSync(shared, join(wt, "a", "b", "dist"), "junction");
+    const res = removeSweptWorktree(repo, wt, { buildOutput: ["a/b/dist"] });
+    assert.equal(res.removed, true, JSON.stringify(res));
+    assert.equal(existsSync(wt), false);
+    assert.equal(readFileSync(join(shared, "keep.txt"), "utf8"), "precious");
+
+    // an entry reached through a link ("lnk" -> shared): its parent resolves outside, so it is not touched
+    const wt2 = addWorktree(repo, sanct, "repo", "unit-parent-link");
+    symlinkSync(shared, join(wt2, "lnk"), "junction");
+    removeSweptWorktree(repo, wt2, { buildOutput: ["lnk/dist"] });
+    assert.equal(readFileSync(join(shared, "dist", "keep2.txt"), "utf8"), "precious2");
+  }));
+
+test("M3 live-cwd refresh: the roster is re-read right before each removal; unreadable at that point keeps the worktree", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const late = addWorktree(repo, sanct, "repo", "unit-late-agent");
+    const blind = addWorktree(repo, sanct, "repo", "unit-blind");
+    const go = addWorktree(repo, sanct, "repo", "unit-go");
+    // the snapshot taken at start has no agents in these worktrees; by removal time one has moved into unit-late-agent
+    let reads = 0;
+    const refresh = () => {
+      reads++;
+      return [late];
+    };
+    const r1 = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], sanctuaryRoot: sanct, refreshLiveCwds: refresh, only: (w) => w.branch !== "unit-blind" }));
+    assert.equal(r1["unit-late-agent"].reason, "live-cwd");
+    assert.equal(r1["unit-go"].action, "removed");
+    assert.ok(reads >= 2, "read before each removal");
+    assert.ok(existsSync(late) && !existsSync(go));
+    const r2 = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], sanctuaryRoot: sanct, refreshLiveCwds: () => null, only: (w) => w.branch === "unit-blind" }));
+    assert.equal(r2["unit-blind"].reason, "live-cwd-unknown");
+    assert.ok(existsSync(blind));
+
+    // throttledLiveCwds: one roster read per interval; empty or throwing roster -> null
+    let t = 0;
+    let n = 0;
+    const th = throttledLiveCwds(() => (n++, [{ id: "a", status: "running", cwd: "/home/alice/x" }]), { intervalMs: 1000, clock: () => t });
+    assert.deepEqual(th(), ["/home/alice/x"]);
+    th();
+    assert.equal(n, 1);
+    t = 1500;
+    th();
+    assert.equal(n, 2);
+    assert.equal(throttledLiveCwds(() => [])(), null);
+    assert.equal(
+      throttledLiveCwds(() => {
+        throw new Error("x");
+      })(),
+      null,
+    );
+  }));
+
+test("M4 sanctuary lock: one remover at a time across processes; a dead holder's lock is taken over; dry run needs no lock", () =>
+  withTmp((root) => {
+    const sanct = join(root, "sanct");
+    mkdirSync(sanct, { recursive: true });
+    const release = acquireSweepLock(sanct);
+    assert.equal(typeof release, "function");
+    assert.equal(acquireSweepLock(sanct), null, "held by a live pid");
+    const busy = sweepAllRepos({ root: sanct, apply: true, liveCwds: [] });
+    assert.equal(busy.busy, true);
+    assert.deepEqual(busy.repos, []);
+    assert.equal(sweepAllRepos({ root: sanct, apply: false }).busy, undefined, "dry run ignores the lock");
+    release();
+    assert.equal(existsSync(join(sanct, SWEEP_LOCK_FILE)), false);
+
+    writeFile(sanct, SWEEP_LOCK_FILE, JSON.stringify({ pid: 999999, at: Date.now() }));
+    const r2 = acquireSweepLock(sanct, { alive: () => false });
+    assert.equal(typeof r2, "function", "dead holder's lock taken over");
+    r2();
+    writeFile(sanct, SWEEP_LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() - 3 * 60 * 60_000 }));
+    const r3 = acquireSweepLock(sanct);
+    assert.equal(typeof r3, "function", "lock older than the stale limit taken over");
+    r3();
+  }));
+
+test("M4 + L2 auto-sweep in a worker thread: off the event loop, lock-aware, one result per unit when local and origin refs both move", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-w1-worker-"));
+  try {
+    const sanct = join(root, "sanct");
+    const repo = join(root, "repo");
+    initRepo(repo);
+    git(["update-ref", "refs/remotes/origin/master", "HEAD"], repo);
+    const done = addWorktree(repo, sanct, "repo", "unit-w-done");
+    commitFile(done, "d.txt", "d");
+    const agents = [{ id: "other", status: "running", cwd: join(root, "elsewhere") }];
+    const logs = [];
+    const sweep = createWorktreeAutoSweep({ root: sanct, apply: false, runHeavy: runHeavyInWorker, listAgents: async () => agents, log: (t) => logs.push(t) });
+    assert.deepEqual((await sweep.tick()).results, []);
+    git(["merge", "-q", "--no-ff", "-m", "Merge branch 'unit-w-done'", "unit-w-done"], repo);
+    git(["update-ref", "refs/remotes/origin/master", "HEAD"], repo);
+    const res = await sweep.tick();
+    assert.equal(res.results.length, 1, JSON.stringify(res.results));
+    assert.equal(res.results[0].action, "would-remove");
+    assert.equal(logs.filter((t) => t.startsWith("worktree-autosweep would-remove")).length, 1, logs.join(" | "));
+    assert.ok(existsSync(done));
+
+    // apply while a manual sweep holds the lock: skipped, nothing removed
+    const applier = createWorktreeAutoSweep({ root: sanct, apply: true, runHeavy: runHeavyInWorker, listAgents: async () => agents, log: () => {} });
+    await applier.tick();
+    commitFile(repo, "m.txt", "m");
+    const held = acquireSweepLock(sanct);
+    const t2 = await applier.tick();
+    assert.deepEqual(t2, { skipped: "sweep-busy" });
+    assert.ok(existsSync(done));
+    held();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

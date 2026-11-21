@@ -68,6 +68,7 @@ import {
 import {
   createManagedWorktree,
   sweepAllRepos,
+  throttledLiveCwds,
   liveAgentCwds,
   cleanupProjectsFolder,
   resolveManagedWorktreeRoot,
@@ -2999,10 +3000,13 @@ function commandWorktree(flags) {
     const res = sweepAllRepos({
       apply,
       liveCwds,
+      // A full sweep runs for minutes: re-read the roster (at most every 30s) right before each removal.
+      refreshLiveCwds: apply ? throttledLiveCwds(() => listRunnerAgentsSync()) : null,
       sizes: Boolean(flags.sizes),
       repoFilter: flags.here ? (r) => path.resolve(r.repoRoot).toLowerCase() === here : null,
     });
     if (apply && !liveCwds) process.stderr.write("Warning: agent roster unreadable; nothing removed (live-cwd guard fails closed).\n");
+    if (res.busy) process.stderr.write("Warning: another worktree sweep holds the sanctuary lock; nothing removed.\n");
     const out = flags.summary ? { root: res.root, apply, summary: res.summary, dangling: res.dangling.length } : res;
     process.stdout.write(JSON.stringify(out, null, 2) + "\n");
     return 0;
