@@ -230,21 +230,21 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
   };
 
   return (
-    <div className="perm NeedsYouHighlight perm-card" data-testid="perm-card" style={{ flexDirection: "column", alignItems: "stretch" }}>
+    <div className="perm NeedsYouHighlight perm-card" data-testid="perm-card">
       <div>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6 }}>
-          <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="perm-head">
+          <div className="perm-head-main">
             {isQuestion ? (
               <b data-testid="perm-question-agent-title">{agentName || p.agentName || "Agent"}</b>
             ) : (
               <>
                 <b>{p.title ?? p.name}</b>
-                {isMode && <span className="chip" data-testid="perm-mode-chip" style={{ marginLeft: 6 }}>mode change</span>}
+                {isMode && <span className="chip perm-mode-chip" data-testid="perm-mode-chip">mode change</span>}
                 {p.description && <div className="muted small">{p.description}</div>}
               </>
             )}
           </div>
-          <div style={{ position: "relative" }} data-perm-more>
+          <div className="perm-more" data-perm-more>
             <button
               type="button"
               className="btn ghost small"
@@ -255,21 +255,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               ⋯
             </button>
             {moreMenuOpen && (
-              <div
-                style={{
-                  position: "absolute",
-                  right: 0,
-                  top: "100%",
-                  background: "var(--bg, #1e1e1e)",
-                  border: "1px solid var(--line)",
-                  padding: 4,
-                  zIndex: 100,
-                  minWidth: 120,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 4,
-                }}
-              >
+              <div className="perm-more-menu">
                 {isQuestion && (
                   <button
                     type="button"
@@ -303,13 +289,11 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               aria-label="Edit plan"
               value={planDraft ?? planText}
               onChange={(e) => setPlanDraft(e.target.value)}
-              style={{ width: "100%", boxSizing: "border-box", minHeight: 180, maxHeight: "50vh", margin: "6px 0", fontFamily: "monospace", fontSize: 12 }}
             />
           ) : (
             <div
               className="perm-plan-body"
               data-testid="perm-plan-body"
-              style={{ maxHeight: "40vh", overflowY: "auto", margin: "6px 0", padding: 8, background: "var(--well)", border: "1px solid var(--line)", fontSize: 12 }}
             >
               <MarkdownRenderer text={edited ? planDraft! : planText} agentId={agentId} doc />
               {edited && <div className="muted small" data-testid="perm-plan-edited">edited, will be sent on approve</div>}
@@ -335,8 +319,8 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
 
         {isQuestion &&
           questions.map((q, qi) => (
-            <div key={qi} className="perm-question-item" data-testid={`perm-question-item-${qi}`} style={{ marginTop: 6 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 4, marginBottom: 4 }}>
+            <div key={qi} className="perm-question-item" data-testid={`perm-question-item-${qi}`}>
+              <div className="perm-q-head">
                 {q.header && (
                   <span className="chip perm-q-header-chip" data-testid={`perm-q-header-${qi}`}>
                     {q.header}
@@ -348,7 +332,6 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
                 <div
                   role="radiogroup"
                   className="perm-question-options"
-                  style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 4 }}
                 >
                   {q.options.map((opt, oi) => {
                     const { cleanLabel, recommended } = parseRecommendedOption(opt.label);
@@ -367,7 +350,6 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
                           <span
                             className="badge ok perm-rec-badge"
                             data-testid="perm-recommended-badge"
-                            style={{ marginLeft: 6, fontSize: 9, textTransform: "none" }}
                           >
                             Recommended
                           </span>
@@ -419,25 +401,16 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           <pre
             className="perm-preview-cmd"
             data-testid="perm-preview-cmd"
-            style={{
-              margin: "6px 0",
-              padding: 8,
-              background: "var(--well)",
-              border: "1px solid var(--line)",
-              whiteSpace: "pre-wrap",
-              fontFamily: "monospace",
-              fontSize: 11,
-              overflowX: "auto",
-            }}
+            style={{ fontFamily: "monospace", fontSize: 11 }}
           >
             {commandPreview}
           </pre>
         )}
 
         {diffPreview && (
-          <div style={{ margin: "6px 0" }}>
+          <div className="perm-diff-wrap">
             {diffPreview.filePath && (
-              <div className="small muted" style={{ fontFamily: "monospace", marginBottom: 2 }}>
+              <div className="small muted perm-diff-path">
                 {diffPreview.filePath}
               </div>
             )}
@@ -445,24 +418,13 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               <pre
                 className="perm-preview-diff"
                 data-testid="perm-preview-diff"
-                style={{
-                  padding: 8,
-                  background: "var(--well)",
-                  border: "1px solid var(--line)",
-                  whiteSpace: "pre-wrap",
-                  fontFamily: "monospace",
-                  fontSize: 11,
-                  overflowX: "auto",
-                  margin: 0,
-                }}
+                style={{ fontFamily: "monospace", fontSize: 11 }}
               >
                 {diffPreview.content.split("\n").map((line, i) => (
                   <span
                     key={i}
-                    style={{
-                      display: "block",
-                      color: line.startsWith("+") ? "var(--mint-t)" : line.startsWith("-") ? "var(--pink-t)" : undefined,
-                    }}
+                    className="perm-diff-line"
+                    style={{ color: line.startsWith("+") ? "var(--mint-t)" : line.startsWith("-") ? "var(--pink-t)" : undefined }}
                   >
                     {line}
                   </span>
@@ -476,16 +438,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           <pre
             className="perm-preview-input"
             data-testid="perm-preview-input"
-            style={{
-              margin: "6px 0",
-              padding: 8,
-              background: "var(--well)",
-              border: "1px solid var(--line)",
-              whiteSpace: "pre-wrap",
-              fontFamily: "monospace",
-              fontSize: 11,
-              overflowX: "auto",
-            }}
+            style={{ fontFamily: "monospace", fontSize: 11 }}
           >
             {genericPreview}
           </pre>
@@ -497,12 +450,10 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           className="perm-error"
           role="alert"
           data-testid="perm-error"
-          style={{ color: "var(--pink-t)", padding: "4px 0", fontSize: 12 }}
         >
           {error}
           <button
-            className="btn ghost small"
-            style={{ marginLeft: 8 }}
+            className="btn ghost small perm-error-dismiss"
             onClick={() => setError(null)}
           >
             Dismiss
@@ -511,7 +462,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
       )}
 
       {isQuestion ? (
-        <div className="perm-actions perm-question" style={{ flexWrap: "wrap" }}>
+        <div className="perm-actions perm-question">
           <button
             type="button"
             data-testid="perm-question-submit-btn"
@@ -523,7 +474,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           </button>
         </div>
       ) : isPlan ? (
-        <div className="perm-actions perm-plan" style={{ flexWrap: "wrap" }}>
+        <div className="perm-actions perm-plan">
           {planApprovals.length ? (
             planApprovals.map((a) => (
               <button
@@ -552,7 +503,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
               {planEditing ? "Done editing" : "Edit plan, then approve"}
             </button>
           )}
-          <div style={{ display: "flex", gap: 6, flexBasis: "100%", flexWrap: "wrap" }}>
+          <div className="perm-plan-actions-row">
             <input
               className="perm-deny-msg"
               data-testid="perm-deny-msg-input"
@@ -579,7 +530,7 @@ export function PermissionCard({ p, agentId, agentName, permInputs, setPermInput
           </div>
         </div>
       ) : (
-        <div className="perm-actions" style={{ flexWrap: "wrap" }}>
+        <div className="perm-actions">
           {p.actions?.map((a: any) => (
             <button
               key={a.id}
