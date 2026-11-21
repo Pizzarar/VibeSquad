@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
+import { BoringContextPanel } from "./BoringContextPanel";
+import { TimelineErrorBoundary } from "./Timeline";
 import { stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
@@ -449,6 +451,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const currentConv = conversations.find((c) => c.laneId === selectedLaneId) ?? null;
   const currentPin: Pin | null = selectedLaneId === "_bugs" ? core.bugs.pin : currentConv?.pin ?? null;
   const inLane = Boolean(currentPin);
+  // idea-468: Desk selections (_overlord/_riffbot/_desk) have no lane pin of their own; their workers live on the hub pin.
+  const panelPin: Pin | null = currentPin ?? (selectedLaneId === "_overlord" || selectedLaneId === "_riffbot" || selectedLaneId === "_desk" ? hubPin : null);
   const leadStatus = currentPin?.lead?.agent.status ?? "none";
 
   /** Open a lane member from any project: switches project first, then the lane, then the member. */
@@ -598,7 +602,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const startBrainstorm = (pin: Pin) => runStart(startKeyFor(pin) ?? "", () => boringStartBrainstorm(pin));
   const needsBugsLane = selectedLaneId === "_bugs" && !currentPin;
   const startBugs = () => view && runStart("_bugs", () => boringStartBugs(view.team.id));
-  const emptyCard = () => {
+  const emptySpec = () => {
     const startKey = startKeyFor(currentPin);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
     const spec = {
@@ -607,6 +611,19 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => (currentPin ? startBrainstorm(currentPin) : startBugs()), disabled: (!currentPin && !needsBugsLane) || Boolean(startFor?.busy) },
       lead: { text: "No Lead is running yet — ask Brainstorm to hand off a plan.", cta: "Switch to Brainstorm", run: () => setSelectedRole("brainstorm"), disabled: false },
     }[emptyKind];
+    return spec;
+  };
+  /** idea-468 m1: what the agent-less panel's Changes/Files/Terminal tabs offer: open an existing (idle) Lead, else the empty card's own start action. */
+  const noAgentAction = (): { need: string; label: string; disabled?: boolean; run: () => void } => {
+    if (currentPin?.lead && selectedLaneId) return { need: "the Lead open", label: "Open the Lead", run: () => pickRole(currentPin, selectedLaneId, "lead") };
+    const spec = emptySpec();
+    const desk = emptyKind === "overlord" || emptyKind === "riffbot";
+    return { need: desk ? "a running Overlord or RiffBot" : "a running Lead or Brainstorm", label: spec.cta, disabled: spec.disabled, run: () => void spec.run() };
+  };
+  const emptyCard = () => {
+    const startKey = startKeyFor(currentPin);
+    const startFor = startKey && startState?.laneKey === startKey ? startState : null;
+    const spec = emptySpec();
     return (
       <div className="boring-empty-card" data-testid="boring-empty-card">
         {surrealMotif}
@@ -921,7 +938,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
+            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
+              // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
+              // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
+              <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="boring-agent-header" data-testid="boring-lane-no-agent-head"><span><strong>{laneLabel ?? "Lane"}</strong><span className="muted"> · {emptyKind === "overlord" || emptyKind === "riffbot" ? "no Overlord or RiffBot running" : "no Lead or Brainstorm running"}</span></span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
+            ) : emptyCard()}
           </div>
         )}
       </main>
