@@ -9,6 +9,7 @@ import { readDiscovery, runnerHome } from "./backend/runner-client.mjs";
 import { bootingHolder } from "../runner/lock.mjs";
 import { lastAssistantText } from "./mcp/tools.mjs";
 import { digestVerdictText, isReviewerAgent } from "./verdict.mjs";
+import { drainedLogRefusal, isDrainedFeedback } from "./restart-coord.mjs";
 import { handleTerminalsApi, isTerminalsPath } from "./terminals-api.mjs";
 import { handleGitApi, isGitPath } from "./git-api.mjs";
 import { handleProvidersApi } from "./providers-catalog.mjs";
@@ -357,6 +358,28 @@ export function agentLogFields(caller, { type, refs }) {
 }
 
 /**
+ * idea-476 (2): an agent's 'drained restart' (vs log restart-feedback, the MCP report tool) is refused with 409 while the
+ * runner still holds background work in its lane (restart-coord drainedLogRefusal names each holder and pid), so a lead's
+ * drain means drained. The held list and the roster come from the runner; either unreadable refuses too (fail closed:
+ * nothing is recorded as drained on a guess). Any other entry, and the owner's shell, pass untouched.
+ */
+export async function drainedFeedbackGate(caller, type, text, backend) {
+  if (!caller || type !== "metric" || !isDrainedFeedback(text)) return;
+  const b = backend ?? sharedRunnerBackend();
+  let held = null;
+  let agents = null;
+  try {
+    const h = await b.rc.request("GET", "/health", undefined, { restartWait: false });
+    held = Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;
+  } catch (e) { console.warn(`[vibesquad] drained gate: runner /health failed: ${e?.message ?? e}`); }
+  if (held?.ids?.length) {
+    try { agents = await b.listAgents(); } catch (e) { console.warn(`[vibesquad] drained gate: agent list failed: ${e?.message ?? e}`); }
+  }
+  const why = drainedLogRefusal(caller.id, { held, agents, teams: loadTeamsRegistry() });
+  if (why) throw Object.assign(new Error(why), { status: 409 });
+}
+
+/**
  * idea-175: a digest's `done` entry starts with the digested worker's own verdict line (`PASS|FAIL H/M/L <hash>`), copied
  * byte-for-byte here in code, never the model's paraphrase; a disagreeing digest word is marked VERDICT-MISMATCH, and a
  * reviewer with no verdict line logs NO-VERDICT. Any other entry is unchanged. An unreadable worker report is marked UNVERIFIED.
@@ -668,6 +691,7 @@ async function handleLog(req, res, opts = {}) {
       if (!t) return sendJson(res, 400, { error: "empty text" });
       if (t.length > 240) return sendJson(res, 400, { error: `text is ${t.length} chars, limit 240` });
       const who = caller ? agentLogFields(caller, { type, refs }) : { agent: String(agent), type, refs: Array.isArray(refs) ? refs.map(String) : [] };
+      await drainedFeedbackGate(caller, who.type, t, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
       const { entry } = appendVsLogEntry({
         teamId: String(team),
         laneId: String(lane || team),
@@ -682,7 +706,7 @@ async function handleLog(req, res, opts = {}) {
     res.end();
   } catch (e) {
     if (sendServerFsError(res, e, "log")) return; // idea-249: an fs fault names the host path; log it, answer generic
-    sendJson(res, e?.status === 403 ? 403 : 400, { error: String(e?.message ?? e) });
+    sendJson(res, e?.status === 403 || e?.status === 409 ? e.status : 400, { error: String(e?.message ?? e) });
   }
 }
 
@@ -1068,6 +1092,7 @@ async function handleVsLog(req, res, opts = {}) {
       const text = String(body.text ?? "").trim();
       if (!text) return sendJson(res, 400, { ok: false, error: "empty text" });
       const who = caller ? agentLogFields(caller, { type, refs: body.refs }) : { agent: body.agent || body.agentId || loadUserSettings().userName, type, refs: body.refs };
+      await drainedFeedbackGate(caller, who.type, text, opts.backend); // idea-476: a drain is only logged once the lane holds nothing
       const resEntry = appendVsLogEntry({
         teamId,
         laneId,
@@ -1082,7 +1107,7 @@ async function handleVsLog(req, res, opts = {}) {
     res.end();
   } catch (e) {
     if (sendServerFsError(res, e, "vs-log")) return; // idea-249: an fs fault names the host path; log it, answer generic
-    sendJson(res, e?.status === 403 ? 403 : 400, { ok: false, error: String(e?.message ?? e) });
+    sendJson(res, e?.status === 403 || e?.status === 409 ? e.status : 400, { ok: false, error: String(e?.message ?? e) });
   }
 }
 

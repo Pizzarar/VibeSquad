@@ -126,6 +126,12 @@ export function agentMay(caller, action, target) {
   const isLead = caller.role === 'lead';
   switch (action) {
     case 'input': return sameSquad || crossSquadInput(caller, target);
+    case 'stop-background':
+      // idea-474: a lead takes over its lane's leftovers. Its retired predecessor lead (former-lead / old-lead, same Squad AND
+      // same lane) still holds the background shells it started, and nobody else in the lane could stop them. The predecessor's
+      // workers are lane workers, which 'cancel' below already covers. A live lead, a Buddy, another lane or Squad: as cancel.
+      if (isLead && sameSquad && !!caller.lane && t.lane === caller.lane && !self && isRetiredLeadMeta(target.meta)) return true;
+      // falls through: otherwise exactly the cancel scope
     case 'cancel':
       if (self || child) return true;
       if (caller.overlord && sameSquad) return true;
@@ -260,9 +266,18 @@ export function parkHoldYieldFromEnv(env = process.env) {
 }
 // A restart drain's TTL ceiling: `vs restart` asks for its wait timeout + stop timeout + a margin.
 export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
+const REQUEST_DRAIN_ID_RE = /^rr-[\w-]{1,60}$/;
+function drainTtl(ttlMs) {
+  const ttl = Number(ttlMs);
+  if (!Number.isInteger(ttl) || ttl < 1000 || ttl > DRAIN_TTL_MAX_MS) throw Object.assign(new Error(`ttlMs must be an integer from 1000 to ${DRAIN_TTL_MAX_MS}`), { status: 400 });
+  return ttl;
+}
 // What an agent whose new background work a drain refused reads at the start of its next input.
 export function drainNoticeText(drain, work) {
   const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  if (drain?.kind === 'request') { // idea-476: a restart request is (or was) open; a background rerun is refused until restart-done
+    return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped when your turn ended: a restart drain was open (${drain.reason || `restart request ${drain.request?.id ?? ''}`.trim()}), which refuses new background work. If it is still needed, run it in the foreground, or rerun it in the background after restart-done.`;
+  }
   return `[VibeSquad runtime] Background work you started (${cmds || 'a shell'}) was stopped when your turn ended: the runtime was draining for a restart (${drain.reason || 'vs restart'}), which refuses new background work. Rerun it now if it is still needed.`;
 }
 // idea-230: what an agent reads at the start of its next input after someone stopped its background work (vs stop --background).
@@ -387,6 +402,8 @@ export class Runner {
     this.drainFile = drainFile;
     this._drain = null; // { since, until, reason } while a `vs restart` drains (see setDrain); memory only, so a runner start clears it
     this._drainTimer = null;
+    this._reqDrain = null; // { id, tip, since, until, reason } while a restart request is open (see setRequestDrain); memory only too
+    this._reqDrainTimer = null;
     this._removeDrainFile(); // a drain file a crashed runner left behind
     // Persisted boot fold (runner/fold-index.mjs): the real server passes <runner home>/fold-index.json; null (tests) = none.
     this.foldIndexFile = foldIndexFile;
@@ -415,39 +432,95 @@ export class Runner {
   // why). Work that predates the drain keeps holding as before. Expires on its own after ttlMs (a crashed restart cannot
   // leave the runner draining) and never survives a runner start.
   setDrain({ ttlMs, reason = '' } = {}) {
-    const ttl = Number(ttlMs);
-    if (!Number.isInteger(ttl) || ttl < 1000 || ttl > DRAIN_TTL_MAX_MS) throw Object.assign(new Error(`ttlMs must be an integer from 1000 to ${DRAIN_TTL_MAX_MS}`), { status: 400 });
+    const ttl = drainTtl(ttlMs);
     const now = Date.now();
-    const since = this.drainState()?.since ?? now; // a refresh extends the drain; work started since the first set is still new
+    const since = this._restartDrain()?.since ?? now; // a refresh extends the drain; work started since the first set is still new
     this._drain = { since, until: now + ttl, reason: String(reason ?? '').slice(0, 200) };
     clearTimeout(this._drainTimer);
     this._drainTimer = setTimeout(() => this.clearDrain(), ttl);
     this._drainTimer.unref?.();
-    if (this.drainFile) {
-      try {
-        mkdirSync(path.dirname(this.drainFile), { recursive: true });
-        const tmp = `${this.drainFile}.${process.pid}.tmp`;
-        writeFileSync(tmp, JSON.stringify(this._drain));
-        renameSync(tmp, this.drainFile); // the hook never reads a half-written file
-      } catch (err) { console.error('drain file write failed', err); } // the runner-side refusal still applies
-    }
+    this._writeDrainFile();
     return this.drainState();
   }
 
-  /** Ends a drain. True when one was active (an expired one counts as already ended). */
+  /** Ends a `vs restart` drain (an open restart request's drain stays). True when one was active (an expired one counts as already ended). */
   clearDrain() {
     const was = this._drain !== null && Date.now() < this._drain.until;
     clearTimeout(this._drainTimer);
     this._drainTimer = null;
     this._drain = null;
-    this._removeDrainFile();
+    this._writeDrainFile();
     return was;
   }
 
-  /** { since, until, reason } while draining, else null. Expiry is checked here too, not only by the timer. */
-  drainState() {
+  // idea-476 (1): an open server-side restart request (server/restart-request.mjs, idea-347) drains too, from the moment its
+  // drain asks go out, not only once `vs restart` itself runs: NEW background shells are refused (claude: the drain hook
+  // in-turn; every provider: _drainRefusesHold at turn end), foreground work and work already running are untouched. The
+  // VS server's request loop sets it over the admin-only POST /drain/request each tick with a short TTL (a dead server
+  // stops refreshing and it lapses) and ends it on DELETE when the request finishes. Kept apart from setDrain's: the
+  // restart script's DELETE /drain ends its own drain only, never the request's.
+  setRequestDrain({ id, tip = '', ttlMs, reason = '' } = {}) {
+    const rid = String(id ?? '').trim();
+    if (!REQUEST_DRAIN_ID_RE.test(rid)) throw Object.assign(new Error('id must be a restart request id (rr-...)'), { status: 400 });
+    const ttl = drainTtl(ttlMs);
+    const now = Date.now();
+    const prev = this._requestDrainState();
+    const since = prev?.id === rid ? prev.since : now; // a refresh of the same request keeps its window
+    this._reqDrain = { id: rid, tip: String(tip ?? '').slice(0, 64), since, until: now + ttl, reason: String(reason ?? '').slice(0, 200) };
+    clearTimeout(this._reqDrainTimer);
+    this._reqDrainTimer = setTimeout(() => this.clearRequestDrain(), ttl);
+    this._reqDrainTimer.unref?.();
+    this._writeDrainFile();
+    return this.drainState();
+  }
+
+  /** Ends the restart request's drain; with `id`, only that request's. True when one was active and ended. */
+  clearRequestDrain({ id = null } = {}) {
+    const cur = this._reqDrain;
+    if (!cur || (id && cur.id !== String(id))) return false;
+    const was = Date.now() < cur.until;
+    clearTimeout(this._reqDrainTimer);
+    this._reqDrainTimer = null;
+    this._reqDrain = null;
+    this._writeDrainFile();
+    return was;
+  }
+
+  _restartDrain() {
     if (this._drain && Date.now() >= this._drain.until) this.clearDrain();
-    return this._drain ? { ...this._drain } : null;
+    return this._drain;
+  }
+
+  _requestDrainState() {
+    if (this._reqDrain && Date.now() >= this._reqDrain.until) this.clearRequestDrain();
+    return this._reqDrain;
+  }
+
+  /**
+   * { since, until, reason, kind } while draining, else null. kind 'restart' while `vs restart` itself drains (it wins the
+   * reason), 'request' while only a restart request is open (plus request: { id, tip }). Two drains: the earlier `since`
+   * (work started after either began is new) and the later `until`. Expiry is checked here too, not only by the timers.
+   */
+  drainState() {
+    const r = this._restartDrain();
+    const q = this._requestDrainState();
+    if (!r && !q) return null;
+    const request = q ? { request: { id: q.id, tip: q.tip } } : {};
+    if (r) return { since: q ? Math.min(r.since, q.since) : r.since, until: q ? Math.max(r.until, q.until) : r.until, reason: r.reason, kind: 'restart', ...request };
+    return { since: q.since, until: q.until, reason: q.reason, kind: 'request', ...request };
+  }
+
+  // The hook's mirror of drainState(): rewritten on every change, removed once neither drain is active.
+  _writeDrainFile() {
+    if (!this.drainFile) return;
+    const d = (this._drain || this._reqDrain) ? this.drainState() : null;
+    if (!d) { this._removeDrainFile(); return; }
+    try {
+      mkdirSync(path.dirname(this.drainFile), { recursive: true });
+      const tmp = `${this.drainFile}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify(d));
+      renameSync(tmp, this.drainFile); // the hook never reads a half-written file
+    } catch (err) { console.error('drain file write failed', err); } // the runner-side refusal still applies
   }
 
   _removeDrainFile() {
@@ -2017,7 +2090,10 @@ export class Runner {
       clearTimeout(this._drainTimer);
       this._drainTimer = null;
       this._drain = null;
-    } else this.clearDrain(); // the drain ends with this runner (its timer and the hook's file)
+      clearTimeout(this._reqDrainTimer);
+      this._reqDrainTimer = null;
+      this._reqDrain = null;
+    } else { this.clearDrain(); this.clearRequestDrain(); } // the drains end with this runner (their timers and the hook's file)
     const waiting = new Set(this.queue.map((j) => j.id)); // agents with a queued, unstarted input: their log must keep ending in `queued` so the next boot re-enqueues them
     this.queue.length = 0;
     for (const e of this.live.values()) { clearTimeout(e.parkTimer); this._clearArchive(e); }
@@ -2054,6 +2130,11 @@ function roleOf(meta) { return String(meta?.role ?? meta?.labels?.role ?? '').tr
 function roleFamily(meta) { return roleOf(meta).replace(/^former-/, ''); }
 function isRetiredMeta(meta) {
   return [meta?.role, meta?.labels?.role].some((r) => { const v = String(r ?? '').trim().toLowerCase(); return v.startsWith('former-') || v === 'old-lead' || v === 'retired' || v === 'old'; });
+}
+// A lead retired by a handoff (retirePredecessors / confirmTakeover relabel role to former-lead). old-lead / retired / old
+// are the older spellings server/identity.mjs normalizeRoleLabel also reads as former-lead; former-brainstorm etc. are not.
+function isRetiredLeadMeta(meta) {
+  return [meta?.role, meta?.labels?.role].some((r) => ['former-lead', 'old-lead', 'retired', 'old'].includes(String(r ?? '').trim().toLowerCase()));
 }
 
 const effModel = (created, meta) => meta?.model ?? created.model ?? undefined;
