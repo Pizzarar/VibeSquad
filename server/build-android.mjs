@@ -140,6 +140,56 @@ export function ensureAndroidTrustKotlin(mainActivityDir, src = TRUST_KOTLIN_SRC
   return true;
 }
 
+/**
+ * Committed Android launcher icons generated from the Windows VS mark (`src-tauri/icons/icon.png`):
+ * legacy/round mipmaps, the adaptive foreground (safe-zone padded) and its background colour.
+ */
+export const ANDROID_ICON_SOURCE_DIR = resolve(import.meta.dirname, "..", "src-tauri", "icons", "android");
+const ANDROID_ICON_SUBDIRS = ["mipmap-mdpi", "mipmap-hdpi", "mipmap-xhdpi", "mipmap-xxhdpi", "mipmap-xxxhdpi", "mipmap-anydpi-v26", "values"];
+
+/**
+ * Copies the committed Android launcher icons into the generated Tauri project's `res/` tree.
+ * `src-tauri/gen/` is gitignored and `tauri android init` seeds it with Tauri's default icon, so
+ * without this sync the APK ships the wrong mark. Idempotent: rewrites only files whose bytes
+ * differ; returns true when anything was written.
+ */
+export function ensureAndroidIcons(resDir, srcDir = ANDROID_ICON_SOURCE_DIR) {
+  if (!existsSync(resDir) || !existsSync(srcDir)) return false;
+  let changed = false;
+  for (const sub of ANDROID_ICON_SUBDIRS) {
+    const from = join(srcDir, sub);
+    if (!existsSync(from)) continue;
+    const to = join(resDir, sub);
+    for (const name of readdirSync(from)) {
+      const srcFile = join(from, name);
+      if (!statSync(srcFile).isFile()) continue;
+      const destFile = join(to, name);
+      if (existsSync(destFile) && readFileSync(destFile).equals(readFileSync(srcFile))) continue;
+      mkdirSync(to, { recursive: true });
+      copyFileSync(srcFile, destFile);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/**
+ * Points `android:roundIcon` at the committed round mipmap so API 24-25 launchers use the round
+ * VS mark (API 26+ uses the adaptive icon). Without the reference R8/aapt2 strips ic_launcher_round
+ * from the APK as unused. Idempotent: returns false when already declared or the manifest is missing.
+ */
+export function ensureAndroidRoundIcon(manifestPath) {
+  if (!existsSync(manifestPath)) return false;
+  const src = readFileSync(manifestPath, "utf8");
+  if (src.includes("android:roundIcon")) return false;
+  const idx = src.indexOf("<application");
+  if (idx === -1) return false;
+  const end = src.indexOf(">", idx);
+  if (end === -1) return false;
+  writeFileSync(manifestPath, src.slice(0, end) + '\n        android:roundIcon="@mipmap/ic_launcher_round"' + src.slice(end), "utf8");
+  return true;
+}
+
 /** Where `scripts/rotate-android-keystore.mjs` creates the release keystore (outside the repo). */
 export const SIGNING_DIR = join(homedir(), ".vibesquad", "signing");
 export const DEFAULT_KEYSTORE_PATH = join(SIGNING_DIR, "vibesquad-android.jks");
@@ -306,9 +356,11 @@ export function buildAndroidApk({
     console.log("[build:android] 2/6 Android project already initialized.");
   }
 
-  // Step 3: register the vibesquad://pair deep link and fit the WebView inside the system bars.
+  // Step 3: sync the VS launcher icons, register the vibesquad://pair deep link and fit the WebView inside the system bars.
   const manifest = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "AndroidManifest.xml");
+  ensureAndroidIcons(join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "res"));
   ensureAndroidDeepLinkIntentFilter(manifest);
+  ensureAndroidRoundIcon(manifest);
   ensureAndroidCameraPermission(manifest);
   const activityDir = join(rootDir, "src-tauri", "gen", "android", "app", "src", "main", "java", "com", "vibesquad", "desktop");
   ensureAndroidSystemBarFit(join(activityDir, "MainActivity.kt"));
