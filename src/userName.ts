@@ -126,7 +126,8 @@ export function setLocalAccess(access: unknown, extra?: { role?: unknown; allowe
   const role: DeviceRole = access === "bug-tester" || extra?.role === "bug-tester" ? "bug-tester" : access === "read-only" ? "read-only" : "owner";
   const teams = role === "bug-tester" && Array.isArray(extra?.allowedTeams) ? (extra!.allowedTeams as unknown[]).map(String).filter(Boolean) : role === "bug-tester" ? allowedTeams : [];
   const name = role === "bug-tester" && typeof extra?.deviceName === "string" && extra.deviceName.trim() ? extra.deviceName.trim() : role === "bug-tester" ? deviceName : null;
-  const nextReadOnly = !isRemote() && role === "read-only";
+  const next = !isRemote() && access === "read-only";
+  const nextReadOnly = next && role === "read-only";
   const changed = nextReadOnly !== localReadOnly || role !== deviceRole || teams.join(",") !== allowedTeams.join(",") || name !== deviceName;
   localReadOnly = nextReadOnly;
   deviceRole = role;
