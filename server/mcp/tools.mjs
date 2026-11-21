@@ -16,7 +16,7 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
-/** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` restores MAX_LAST_MESSAGE. */
+/** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message uncapped (idea-466). */
 export const COMPACT_LAST_MESSAGE = 600;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
 const WORKER_ROLE = "worker";
@@ -311,7 +311,7 @@ async function snapshot(ctx, id, { full = false } = {}) {
   return ctx.withBackend({ id }, async (b) => {
     const agent = agentOf(await b.fetchAgent(id));
     const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline)?.call(b, id, { direction: "tail", limit: 50, projection: "projected" });
-    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_LAST_MESSAGE : COMPACT_LAST_MESSAGE) };
+    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? Infinity : COMPACT_LAST_MESSAGE) };
   });
 }
 
@@ -1012,11 +1012,11 @@ export const VS_TOOLS = {
   },
   send: { description: "Send a follow-up message to an agent.", inputSchema: obj({ id: S, text: S }, ["id", "text"]), run: sendTool },
   wait: {
-    description: "Block until an agent is idle, errored or the timeout hits. Returns {status, lastMessage} (lastMessage ~600 chars; full:true for ~2k).",
+    description: "Block until an agent is idle, errored or the timeout hits. Returns {status, lastMessage} (lastMessage ~600 chars; full:true for the whole message).",
     inputSchema: obj({ id: S, timeoutSec: { type: "number" }, full: { type: "boolean" } }, ["id"]),
     run: waitTool,
   },
-  status: { description: "Agent status, title and its last assistant message (compact ~600 chars by default; full:true for ~2k). To wait on many agents use watch, not repeated status.", inputSchema: obj({ id: S, full: { type: "boolean" } }, ["id"]), run: statusTool },
+  status: { description: "Agent status, title and its last assistant message (compact ~600 chars by default; full:true for the whole message). To wait on many agents use watch, not repeated status.", inputSchema: obj({ id: S, full: { type: "boolean" } }, ["id"]), run: statusTool },
   report: {
     description: "Write a done/decision/blocker entry to your team log as yourself. The VS server attributes it from your verified token (X1): a worker may only log done/blocker (refs forced to itself), a digest worker done (refs forced to the worker it digests), a lead/Buddy any type; decision from a worker is a 403. Returns {logged, type, agent, refs} as recorded.",
     inputSchema: obj({ type: { type: "string", enum: REPORT_TYPES }, text: S }, ["type", "text"]),
