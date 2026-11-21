@@ -2780,6 +2780,101 @@ test('usa-34: byWorkflow wf label precedence tag > label > derived; invalid/unkn
   assert.deepEqual(['unit-a', 'unit-b', 'unit-c', 'unit-d', 'unit-e'].map(srcOf), ['label', 'tag', 'derived', 'derived', 'derived']);
 });
 
+test('usa-35: wf label from a meta patch applies; a non-string labels.wf falls back to derived', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  // unit-p: no label at created; a runner meta patch carries labels.wf later -> "haiku"/label.
+  writeAgent(home, 'rn-p', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-p', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 500, type: 'meta', patch: { labels: { wf: 'haiku' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  // unit-q: labels.wf is not a string -> ignored, derived mode (never "[object Object]" as an arm).
+  writeAgent(home, 'rn-q', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-q', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: {} } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 200000), "Merge branch 'unit-p' (@usa)"),
+      L('b2', 'm1', sec(T0 + 190000), 'feat (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-q' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const wf = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  assert.equal(wf['haiku'].units, 1, 'meta-patch wf label names the workflow row');
+  assert.equal(wf['haiku'].wfSource, 'label');
+  const derived = wf['claude-sonnet-5-5 · normal -> gemini-review'];
+  assert.ok(derived, 'non-string labels.wf is ignored and the pair is derived');
+  assert.equal(derived.units, 1);
+  assert.equal(derived.wfSource, 'derived');
+  assert.ok(!Object.keys(wf).some((m) => /object/i.test(m)), 'a non-string label never becomes an arm');
+  const srcOf = (name) => u.merged.units.find((x) => x.unit === name).wfSource;
+  assert.deepEqual(['unit-p', 'unit-q'].map(srcOf), ['label', 'derived']);
+});
+
+test('usa-35: one workflow row can mix wf sources (tag+label); reviewer/lead wf labels never override the implementer', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  // unit-r: [wf:haiku] tag + haiku label -> source tag. unit-s: haiku label -> source label. One "haiku" row, source "tag+label".
+  writeAgent(home, 'rn-r', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-r', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'haiku' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-s', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-s', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'haiku' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  // unit-t: the implementer says sonnet; a reviewer (worker) and a lead in the same worktree carry different wf labels.
+  writeAgent(home, 'rn-t', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-t', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'sonnet' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-t-rev', [
+    { ts: T0 + 2000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-t', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini', labels: { wf: 'opus' } } },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  writeAgent(home, 'rn-t-lead', [
+    { ts: T0 + 3000, type: 'created', provider: 'opencode', model: 'deepseek/deepseek-pro', cwd: '/worktrees/unit-t', meta: { lane: 'usage', role: 'lead', labels: { wf: 'dsp' } } },
+    { ts: T0 + 3500, type: 'turn_done', costUsd: 0.1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm3\n';
+    if (args[0] === 'log') return [
+      L('m3', 'm2 b3', sec(T0 + 300000), "Merge branch 'unit-r' (@usa) [wf:haiku]"),
+      L('b3', 'm2', sec(T0 + 290000), 'feat (@usa)'),
+      L('m2', 'm1 b2', sec(T0 + 200000), "Merge branch 'unit-s' (@usa)"),
+      L('b2', 'm1', sec(T0 + 190000), 'feat (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-t' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const wf = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  assert.equal(wf['haiku'].units, 2, 'tag unit and label unit share the haiku row');
+  assert.equal(wf['haiku'].wfSource, 'tag+label', 'sources are folded per row in precedence order');
+  assert.equal(wf['sonnet'].units, 1, "the implementer's own label names the row");
+  assert.equal(wf['sonnet'].wfSource, 'label');
+  assert.ok(!wf['opus'], 'a reviewer wf label in the worktree never names the unit');
+  assert.ok(!wf['dsp'], 'a lead wf label in the worktree never names the unit');
+  const srcOf = (name) => u.merged.units.find((x) => x.unit === name).wfSource;
+  assert.deepEqual(['unit-r', 'unit-s', 'unit-t'].map(srcOf), ['tag', 'label', 'label']);
+  const t = u.merged.units.find((x) => x.unit === 'unit-t');
+  assert.equal(t.workflowMode, 'sonnet');
+  assert.equal(t.reviewerFamily, 'gemini-review', 'the same-worktree reviewer is still attributed');
+});
+
 test('usa-29: autonomy.bySquad rows carry mergedInCoverage (= that squad planAutonomy.mergedUnits)', () => {
   const { home, git, laneCodes } = setupAutonomyHome();
   const u = getUsage({ home, git, laneCodes });
