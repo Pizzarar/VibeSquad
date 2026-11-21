@@ -470,13 +470,28 @@ export function mergedCoverageNote(r: { mergedUnits: number; mergedInCoverage?: 
   return { text: `(in-cov ${r.mergedInCoverage})`, title: "merges inside log coverage; ratios use this" };
 }
 
-/** Implementers first, then by merged units desc, then name. */
+/** Non-implementer reading order: the jobs that act on units first, unlabelled/legacy rows last. */
+const JOB_KIND_ORDER = ["reviewer", "lead", "brainstorm", "digest", "scout"];
+
+const jobKindRank = (p: Pick<ProfileView, "jobKind">): number => {
+  const i = JOB_KIND_ORDER.indexOf((p.jobKind ?? "").toLowerCase());
+  return i === -1 ? JOB_KIND_ORDER.length : i;
+};
+
+/** Implementers first (merged units desc, then name); the rest grouped by jobKind, runs desc, then name. */
 export function sortProfiles(rows: ProfileView[]): ProfileView[] {
   return [...rows].sort((a, b) => {
     const ai = isImplementerView(a) ? 0 : 1;
     const bi = isImplementerView(b) ? 0 : 1;
     if (ai !== bi) return ai - bi;
-    if (b.mergedUnits !== a.mergedUnits) return b.mergedUnits - a.mergedUnits;
+    if (ai === 0) {
+      if (b.mergedUnits !== a.mergedUnits) return b.mergedUnits - a.mergedUnits;
+      return a.profile.localeCompare(b.profile) || a.provider.localeCompare(b.provider);
+    }
+    const ar = jobKindRank(a);
+    const br = jobKindRank(b);
+    if (ar !== br) return ar - br;
+    if (b.runs !== a.runs) return b.runs - a.runs;
     return a.profile.localeCompare(b.profile) || a.provider.localeCompare(b.provider);
   });
 }

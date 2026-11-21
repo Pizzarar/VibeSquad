@@ -437,6 +437,26 @@ test("v0.4 buildProfiles keys by provider|model|stakes|jobKind and sorts impleme
   assert.equal(rows.find((r) => r.stakes === "low").runs, 2);
 });
 
+test("sortProfiles: non-implementer rows group by jobKind, then runs desc", () => {
+  const base = { provider: "claude", turns: 4, avgTurnsPerRun: 4, passRate: 1, loopCount: 0, mergedUnits: 0, reviewRounds: 0, avgReviewRounds: 0, costPerMergedUnit: null, fixAfterMergeCount: 0, fixAfterMergeRate: 0, avgUnitCycleMs: 1, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 1, idleMs: 1 };
+  const row = (profile, jobKind, runs, extra = {}) => ({ ...base, profile, role: jobKind ?? "worker", model: profile, stakes: null, jobKind, runs, ...extra });
+  const rows = buildProfiles({ limits: [], lanes: [], byRole: [], byProfile: [
+    row("a-scout", "scout", 9),
+    row("b-digest", "digest", 8),
+    row("c-lead", "lead", 7),
+    row("d-brainstorm", "brainstorm", 6),
+    row("a-reviewer", "reviewer", 2),
+    row("z-reviewer", "reviewer", 5),
+    row("mid-impl", "implementer", 1, { mergedUnits: 0 }),
+    row("legacy-lead", undefined, 20, { role: "lead", model: undefined }),
+  ] });
+  assert.deepEqual(
+    sortProfiles(rows).map((r) => r.profile),
+    ["mid-impl", "z-reviewer", "a-reviewer", "c-lead", "d-brainstorm", "b-digest", "a-scout", "legacy-lead"],
+    "implementers first, then reviewer→lead→brainstorm→digest→scout→unknown; runs desc inside a group",
+  );
+});
+
 test("mergedCoverageNote only when in-coverage differs from merged", () => {
   assert.equal(mergedCoverageNote({ mergedUnits: 5 }), null);
   assert.equal(mergedCoverageNote({ mergedUnits: 5, mergedInCoverage: 5 }), null);
