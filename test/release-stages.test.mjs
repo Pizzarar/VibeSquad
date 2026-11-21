@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, test } from "node:test";
 import {
   assertFrozenCommit,
@@ -10,6 +10,7 @@ import {
   resolveTagCommit,
   publishRelease,
   buildLatestJson,
+  buildSigningEnv,
   runRelease,
   selectApk,
   signerSignArgs,
@@ -17,8 +18,11 @@ import {
   updaterSigningEnv,
   writeReleaseRecord,
 } from "../server/release.mjs";
+import { resolveUpdaterKeyPassword, UPDATER_KEY_PASSWORD } from "../server/secrets.mjs";
 
 const HEAD = "abc1234def5678abc1234def5678abc1234def56";
+// Credential Manager test double: tests never reach the real store.
+const noStore = () => null;
 
 function fakeExec({ head = HEAD, dirty = "", existingReleases = new Set(), tagShas = {} } = {}) {
   const calls = [];
@@ -102,9 +106,131 @@ describe("signing env (F1)", () => {
       env: { TAURI_SIGNING_PRIVATE_KEY: "inline", TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "hunter2" },
       log: () => {},
       resolveTauriCli: () => "tauri.js",
+      readSecret: noStore,
     });
     assert.ok(calls.some((c) => c.includes("signer")));
     assert.ok(!calls.flat().some((a) => String(a).includes("hunter2")));
+  });
+
+  test("build stage: password from the injected Credential Manager double when the env var is unset; never in argv", () => {
+    const root = makeRoot();
+    const { exec, calls } = fakeExec();
+    const reads = [];
+    const readSecret = (target) => (reads.push(target), target === "vibesquad/updater-key" ? "store-pw" : null);
+    let buildEnv;
+    const wrapped = (cmd, args, opts) => {
+      if (String(args[0]).endsWith("build-desktop.mjs")) buildEnv = opts.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD, "--no-authenticode"], { rootDir: root, exec: wrapped, env: { TAURI_SIGNING_PRIVATE_KEY_PATH: "/k/key" }, log: () => {}, resolveTauriCli: () => "t.js", readSecret });
+    assert.equal(buildEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "store-pw");
+    assert.equal(buildEnv.TAURI_SIGNING_PRIVATE_KEY_PATH, "/k/key");
+    assert.deepEqual(reads, ["vibesquad/updater-key"]);
+    assert.ok(!calls.flat().some((a) => String(a).includes("store-pw")));
+  });
+
+  test("build stage: the env var wins over the store (store not read); absent secret gives an empty string", () => {
+    const { exec } = fakeExec();
+    const capture = (readSecret, env) => {
+      let buildEnv;
+      const wrapped = (cmd, args, opts) => {
+        if (String(args[0]).endsWith("build-desktop.mjs")) buildEnv = opts.env;
+        return exec(cmd, args, opts);
+      };
+      runRelease(["build", "--commit", HEAD, "--no-authenticode"], { rootDir: makeRoot(), exec: wrapped, env, log: () => {}, resolveTauriCli: () => "t.js", readSecret });
+      return buildEnv;
+    };
+    let storeReads = 0;
+    const store = () => (storeReads++, "store-pw");
+    assert.equal(capture(store, { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "env-pw" }).TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "env-pw");
+    assert.equal(storeReads, 0);
+    assert.equal(capture(noStore, {}).TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "");
+  });
+
+  test("build + sign in one run resolve the password once and hand the same value to both children", () => {
+    const root = makeRoot();
+    rmSync(join(root, "dist-desktop", "VibeSquad-setup.exe.sig"));
+    const { exec, calls } = fakeExec();
+    let reads = 0;
+    const readSecret = () => (reads++, "store-pw");
+    const seen = {};
+    const wrapped = (cmd, args, opts) => {
+      if (String(args[0]).endsWith("build-desktop.mjs")) seen.build = opts.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD;
+      if (args.includes("signer")) {
+        seen.sign = opts.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD;
+        writeFileSync(join(root, "dist-desktop", "VibeSquad-setup.exe.sig"), "S");
+      }
+      return exec(cmd, args, opts);
+    };
+    const keyPath = join(root, "dummy-updater.key"); // test fixture, not a real key
+    writeFileSync(keyPath, "not-a-key");
+    runRelease(["--channel", "stable", "--stage-only", "--no-authenticode"], { rootDir: root, exec: wrapped, env: { TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath }, log: () => {}, resolveTauriCli: () => "t.js", readSecret });
+    assert.deepEqual(seen, { build: "store-pw", sign: "store-pw" });
+    assert.equal(reads, 1);
+    assert.ok(!calls.flat().some((a) => String(a).includes("store-pw")));
+  });
+
+  test("--with-android: only the desktop build child gets the password; the android child env has none", () => {
+    const { exec } = fakeExec();
+    const envs = {};
+    const wrapped = (cmd, args, opts) => {
+      const name = basename(String(args[0]));
+      if (name.startsWith("build-")) envs[name] = opts.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD, "--no-authenticode", "--with-android"], {
+      rootDir: makeRoot(),
+      exec: wrapped,
+      env: { TAURI_SIGNING_PRIVATE_KEY_PATH: "/k/key", OTHER: "kept" },
+      log: () => {},
+      resolveTauriCli: () => "t.js",
+      readSecret: () => "store-pw",
+    });
+    assert.equal(envs["build-desktop.mjs"].TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "store-pw");
+    assert.equal("TAURI_SIGNING_PRIVATE_KEY_PASSWORD" in envs["build-android.mjs"], false);
+    assert.equal(envs["build-android.mjs"].OTHER, "kept");
+  });
+
+  test("Authenticode preflight (sign-windows --check) child env has no password; build-desktop child does", () => {
+    const { exec } = fakeExec();
+    const envs = {};
+    const wrapped = (cmd, args, opts) => {
+      envs[basename(String(args[0]))] = opts?.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD], { rootDir: makeRoot(), exec: wrapped, env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "env-pw", OTHER: "kept" }, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore });
+    assert.equal("TAURI_SIGNING_PRIVATE_KEY_PASSWORD" in envs["sign-windows.mjs"], false);
+    assert.equal(envs["sign-windows.mjs"].OTHER, "kept");
+    assert.equal(envs["build-desktop.mjs"].TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "env-pw");
+  });
+
+  test("build stage: an explicitly empty env var means no password and the store is not read", () => {
+    const { exec } = fakeExec();
+    let reads = 0;
+    let buildEnv;
+    const wrapped = (cmd, args, opts) => {
+      if (String(args[0]).endsWith("build-desktop.mjs")) buildEnv = opts.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD, "--no-authenticode"], {
+      rootDir: makeRoot(),
+      exec: wrapped,
+      env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "" },
+      log: () => {},
+      resolveTauriCli: () => "t.js",
+      readSecret: () => (reads++, "store-pw"),
+    });
+    assert.equal(buildEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "");
+    assert.equal(reads, 0);
+  });
+
+  test("resolveUpdaterKeyPassword: shared spec, env wins, store fallback, empty when absent", () => {
+    assert.deepEqual({ ...UPDATER_KEY_PASSWORD }, { envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false, emptyEnvWins: true });
+    const read = (t) => (t === "vibesquad/updater-key" ? "store-pw" : null);
+    assert.equal(resolveUpdaterKeyPassword({ env: {}, read }), "store-pw");
+    assert.equal(resolveUpdaterKeyPassword({ env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "env-pw" }, read }), "env-pw");
+    assert.equal(resolveUpdaterKeyPassword({ env: {}, read: noStore }), "");
+    assert.equal(buildSigningEnv({}, "/k", "x").TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "x");
   });
 });
 
@@ -313,7 +439,7 @@ describe("review fixes", () => {
   test("build --unsigned writes UNSIGNED; sign and publish refuse; a real build clears it", () => {
     const root = makeRoot();
     const { exec } = fakeExec();
-    const run = (args) => runRelease(args, { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
+    const run = (args) => runRelease(args, { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore });
     const marker = join(root, "dist-desktop", "UNSIGNED");
     run(["build", "--commit", HEAD, "--unsigned"]);
     assert.equal(existsSync(marker), true);
@@ -327,7 +453,7 @@ describe("review fixes", () => {
     const root = makeRoot();
     const { exec } = fakeExec();
     const env = { TAURI_SIGNING_PRIVATE_KEY: "k" };
-    const base = { rootDir: root, env, log: () => {}, resolveTauriCli: () => "t.js" };
+    const base = { rootDir: root, env, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore };
     const marker = join(root, "dist-desktop", "UNSIGNED");
     runRelease(["build", "--commit", HEAD, "--unsigned"], { ...base, exec });
     const failing = (cmd, args) => {
@@ -342,7 +468,7 @@ describe("review fixes", () => {
   test("legacy no-subcommand run writes no release record", () => {
     const root = makeRoot();
     const { exec } = fakeExec();
-    runRelease(["--channel", "stable", "--skip-build"], { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
+    runRelease(["--channel", "stable", "--skip-build"], { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore });
     assert.equal(existsSync(join(root, "docs", "releases", "VibeSquad-0.3.0.md")), false);
   });
 
@@ -352,7 +478,7 @@ describe("review fixes", () => {
     const env = { TAURI_SIGNING_PRIVATE_KEY: "k" };
     const manifestPath = (root) => join(root, "dist-desktop", "latest.json");
     const hasAndroid = (root) => "android-aarch64" in JSON.parse(readFileSync(manifestPath(root), "utf8")).platforms;
-    const sign = (root) => runRelease(["sign", "--commit", HEAD], { rootDir: root, exec: fakeExec().exec, env, log: () => {}, resolveTauriCli: () => "t.js" });
+    const sign = (root) => runRelease(["sign", "--commit", HEAD], { rootDir: root, exec: fakeExec().exec, env, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore });
     const publish = (root) => runRelease(["publish", "--channel", "stable", "--commit", HEAD], { rootDir: root, exec: fakeExec().exec, env, log: () => {} });
     const none = makeRoot();
     sign(none);
@@ -372,7 +498,7 @@ describe("review fixes", () => {
   test("--no-authenticode: no preflight/overlay, NO-AUTHENTICODE not UNSIGNED, sign+publish allowed, record has waiver line", () => {
     const root = makeRoot();
     const { exec, calls } = fakeExec();
-    const run = (args) => runRelease(args, { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js" });
+    const run = (args) => runRelease(args, { rootDir: root, exec, env: { TAURI_SIGNING_PRIVATE_KEY: "k" }, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore });
     run(["build", "--commit", HEAD, "--no-authenticode"]);
     assert.ok(!calls.some((c) => c.some((a) => String(a).endsWith("sign-windows.mjs") || String(a).endsWith("tauri.release-sign.conf.json"))));
     assert.ok(calls.some((c) => String(c[1]).endsWith("build-desktop.mjs")));
@@ -389,5 +515,62 @@ describe("review fixes", () => {
     assert.throws(() => parseArgs(["build", "--unsigned", "--no-authenticode"]), /cannot be combined/);
     assert.equal(parseArgs(["build", "--unsigned"]).unsigned, true);
     assert.equal(parseArgs(["build", "--no-authenticode"]).noAuthenticode, true);
+  });
+});
+
+// Source scan: every child-process call, with the text of its argument list (string/template literals skipped).
+function childCalls(src, callee) {
+  const out = [];
+  let i = 0;
+  while ((i = src.indexOf(`${callee}(`, i)) !== -1) {
+    if (/[\w.]/.test(src[i - 1] || "")) {
+      i += callee.length;
+      continue;
+    }
+    let j = i + callee.length + 1;
+    let depth = 1;
+    let quote = null;
+    for (; j < src.length && depth; j++) {
+      const c = src[j];
+      if (quote) {
+        if (c === "\\") j++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "(") depth++;
+      else if (c === ")") depth--;
+    }
+    out.push({ at: i, text: src.slice(i, j) });
+    i = j;
+  }
+  return out;
+}
+
+describe("updater key password never leaks to other children (source scan)", () => {
+  const serverDir = join(import.meta.dirname, "..", "server");
+  test("build-desktop: password detached from process.env before any child; every spawn passes an explicit allowed env", () => {
+    const src = readFileSync(join(serverDir, "build-desktop.mjs"), "utf8");
+    assert.doesNotMatch(src, /\b(spawn|spawnSync|execSync|execFile|exec)\(/, "only execFileSync spawns children here");
+    const calls = childCalls(src, "execFileSync");
+    assert.ok(calls.length >= 5, `found ${calls.length} execFileSync calls`);
+    const detachAt = src.indexOf("detachUpdaterKeyPassword()");
+    assert.ok(detachAt > 0 && detachAt < calls[0].at && detachAt < src.indexOf("ensureTls()"), "detach runs before the first child and ensureTls");
+    for (const { text } of calls) {
+      assert.match(text, /[{,]\s*env\s*[,}]|[{,]\s*env:\s*(tauriEnv|signerEnv)\s*[,}]/, `child without an explicit password-free env: ${text.slice(0, 80)}`);
+    }
+    // exactly the tauri build and signer sign children get the password-carrying envs
+    assert.equal(calls.filter((c) => /env:\s*tauriEnv/.test(c.text)).length, 1);
+    assert.equal(calls.filter((c) => /env:\s*signerEnv/.test(c.text)).length, 1);
+    assert.match(src, /const env = withoutUpdaterKeyPassword\(baseEnv\);/);
+  });
+
+  test("release.mjs: main detaches the password; node children get only stripped or signing envs", () => {
+    const src = readFileSync(join(serverDir, "release.mjs"), "utf8");
+    assert.match(src, /if \(isMain\) \{[\s\S]*?const env = detachUpdaterKeyPassword\(\);[\s\S]*?runRelease\(process\.argv\.slice\(2\), \{ env \}\);/);
+    const nodeChildren = childCalls(src, "exec").filter((c) => c.text.startsWith("exec(process.execPath"));
+    assert.equal(nodeChildren.length, 4, nodeChildren.map((c) => c.text.slice(0, 60)).join("\n"));
+    for (const { text } of nodeChildren) {
+      assert.doesNotMatch(text, /[{,]\s*env\s*[,}]/, `raw env passed to: ${text.slice(0, 80)}`);
+      assert.match(text, /env:\s*(withoutUpdaterKeyPassword\((env|buildEnv)\)|buildEnv|updaterSigningEnv\()/, text.slice(0, 80));
+    }
   });
 });

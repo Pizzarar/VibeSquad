@@ -54,10 +54,13 @@ export function readCredential(target, { exec = execFileSync, platform = process
   }
 }
 
-/** env[envVar] if non-empty, else the credential at `target`; throws (without any value) when required and absent. */
-export function resolveSecret({ envVar, target, required = false }, { env = process.env, read = readCredential } = {}) {
+/**
+ * env[envVar] if non-empty, else the credential at `target`; throws (without any value) when required and absent.
+ * `emptyEnvWins`: an env var that is SET but empty is an explicit answer ("" = no secret), so the store is not read.
+ */
+export function resolveSecret({ envVar, target, required = false, emptyEnvWins = false }, { env = process.env, read = readCredential } = {}) {
   const fromEnv = envVar ? env[envVar] : undefined;
-  if (fromEnv) return fromEnv;
+  if (fromEnv || (emptyEnvWins && fromEnv !== undefined)) return fromEnv;
   const fromStore = target ? read(target) : null;
   if (fromStore) return fromStore;
   if (required) {
@@ -77,4 +80,49 @@ export function withSecretEnv(baseEnv, specs, deps) {
     if (v != null) out[name] = v;
   }
   return out;
+}
+
+/**
+ * The updater minisign key password: TAURI_SIGNING_PRIVATE_KEY_PASSWORD wins (set-but-empty = "no password", store
+ * not read), else the generic credential "vibesquad/updater-key". Optional, so an unpassworded key still builds.
+ * The one spec both `tauri build` (createUpdaterArtifacts signs inside the build) and `tauri signer sign` use.
+ */
+export const UPDATER_KEY_PASSWORD = Object.freeze({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false, emptyEnvWins: true });
+
+/** Resolves UPDATER_KEY_PASSWORD; "" when absent (tauri reads "" as "no password"). Never logs the value. */
+export function resolveUpdaterKeyPassword({ env = process.env, read = readCredential } = {}) {
+  return resolveSecret(UPDATER_KEY_PASSWORD, { env, read }) ?? "";
+}
+
+/**
+ * Entry points call this first: returns a snapshot of `procEnv` (password included, for the resolver) and deletes
+ * the password from `procEnv` itself, so a child spawned without an explicit env (git, gh, taskkill, openssl...)
+ * can never inherit it.
+ */
+export function detachUpdaterKeyPassword(procEnv = process.env) {
+  const snapshot = { ...procEnv };
+  delete procEnv[UPDATER_KEY_PASSWORD.envVar];
+  return snapshot;
+}
+
+/** Copy of env without the updater key password: for every child except `tauri build` and `tauri signer sign`. */
+export function withoutUpdaterKeyPassword(env) {
+  const out = { ...env };
+  delete out[UPDATER_KEY_PASSWORD.envVar];
+  return out;
+}
+
+/**
+ * Child envs for a desktop build. `plain` (npm, git, taskkill, anything else) never carries the password; `tauri`
+ * (`tauri build`, which signs updater artifacts) and `signer` (`tauri signer sign`) do. The password is resolved
+ * once, and only when there is a key (`keyPath`, or an inline TAURI_SIGNING_PRIVATE_KEY).
+ */
+export function updaterKeyChildEnvs(baseEnv, { keyPath = "", read = readCredential } = {}) {
+  const plain = withoutUpdaterKeyPassword(baseEnv);
+  if (!keyPath && !baseEnv.TAURI_SIGNING_PRIVATE_KEY) return { plain, tauri: plain, signer: null };
+  const password = resolveUpdaterKeyPassword({ env: baseEnv, read });
+  const tauri = { ...plain, ...(keyPath ? { TAURI_SIGNING_PRIVATE_KEY: keyPath } : {}), TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password };
+  const signer = keyPath ? { ...plain, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password } : null;
+  if (signer) delete signer.TAURI_SIGNING_PRIVATE_KEY;
+  return { plain, tauri, signer };
 }

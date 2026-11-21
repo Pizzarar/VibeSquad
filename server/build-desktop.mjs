@@ -5,15 +5,21 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
 import { packagedStamp } from "./stale-runtime.mjs";
-import { resolveSecret } from "./secrets.mjs";
+import { detachUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 const cargoBin = join(homedir(), ".cargo", "bin");
-const env = {
-  ...process.env,
-  PATH: `${process.env.PATH || ""};${cargoBin}`,
+// Before any child runs: take the updater key password out of process.env (release.mjs passes it in), so nothing
+// spawned here or in imported helpers (ensureTls -> openssl/icacls) inherits it by default.
+const inheritedEnv = detachUpdaterKeyPassword();
+const baseEnv = {
+  ...inheritedEnv,
+  PATH: `${inheritedEnv.PATH || ""};${cargoBin}`,
 };
+// Every child (npm, git, taskkill) gets `env` explicitly, which never carries the password. Only `tauri build`
+// (tauriEnv) and `tauri signer sign` (signerEnv) below get it.
+const env = withoutUpdaterKeyPassword(baseEnv);
 
 const pinLocalCa = process.argv.includes("--pin-local-ca");
 const certsDir = join(rootDir, "src-tauri", "certs");
@@ -31,7 +37,7 @@ if (pinLocalCa) {
 
 if (process.platform === "win32") {
   try {
-    execFileSync("taskkill", ["/F", "/IM", "VibeSquad.exe"], { stdio: "ignore", windowsHide: true });
+    execFileSync("taskkill", ["/F", "/IM", "VibeSquad.exe"], { env, stdio: "ignore", windowsHide: true });
   } catch {}
 }
 
@@ -85,7 +91,7 @@ copyFileSync(join(rootDir, "docs", "profiles", "DEFAULT_PACK.md"), join(runtimeD
 copyFileSync(join(rootDir, "package.json"), join(runtimeDir, "package.json"));
 copyFileSync(join(rootDir, "teams.example.json"), join(runtimeDir, "teams.example.json"));
 try {
-  const gitOut = (...args) => execFileSync("git", ["-C", rootDir, ...args], { encoding: "utf8" }).trim();
+  const gitOut = (...args) => execFileSync("git", ["-C", rootDir, ...args], { env, encoding: "utf8" }).trim();
   const stamp = packagedStamp({ commit: gitOut("rev-parse", "HEAD"), builtAt: new Date().toISOString() });
   writeFileSync(join(runtimeDir, "build-stamp.json"), JSON.stringify(stamp));
   console.log(`[build:desktop] stamped runtime with commit ${stamp.commit.slice(0, 7)}`);
@@ -98,11 +104,11 @@ console.log(`[build:desktop] staged runtime with ${closure.length} production pa
 
 const licenseFile = join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
 const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
-const signingKeyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
-const signingKeyPassword = resolveSecret({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false }, { env }) ?? "";
-if (signingKeyPath && existsSync(signingKeyPath)) {
-  env.TAURI_SIGNING_PRIVATE_KEY = signingKeyPath;
-  env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = signingKeyPassword;
+const signingKeyPath = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
+const hasSigningKey = Boolean(signingKeyPath && existsSync(signingKeyPath));
+// Same resolver as release.mjs; the value the desk passed (even "" = no password) wins, so no second store read.
+const { tauri: tauriEnv, signer: signerEnv } = updaterKeyChildEnvs(baseEnv, { keyPath: hasSigningKey ? signingKeyPath : "" });
+if (hasSigningKey) {
   console.log(`[build:desktop] Using Tauri updater signing key path ${signingKeyPath}`);
 }
 
@@ -112,7 +118,7 @@ const tauriConfigArgs = cfgAt > 0 && process.argv[cfgAt + 1] ? ["--config", proc
 const tauriCliJs = require.resolve("@tauri-apps/cli/tauri.js");
 execFileSync(process.execPath, [tauriCliJs, "build", "--bundles", "nsis", ...tauriConfigArgs], {
   cwd: rootDir,
-  env,
+  env: tauriEnv,
   stdio: "inherit",
 });
 
@@ -138,16 +144,10 @@ const srcSig = `${srcInstaller}.sig`;
 const destSig = `${destInstaller}.sig`;
 if (existsSync(srcSig)) {
   copyFileSync(srcSig, destSig);
-} else if (signingKeyPath && existsSync(signingKeyPath)) {
-  const signEnv = {
-    ...env,
-    TAURI_SIGNING_PRIVATE_KEY_PATH: signingKeyPath,
-    TAURI_SIGNING_PRIVATE_KEY_PASSWORD: signingKeyPassword,
-  };
-  delete signEnv.TAURI_SIGNING_PRIVATE_KEY;
+} else if (signerEnv) {
   execFileSync(process.execPath, [tauriCliJs, "signer", "sign", "-f", signingKeyPath, destInstaller], {
     cwd: rootDir,
-    env: signEnv,
+    env: signerEnv,
     stdio: "inherit",
   });
 }
