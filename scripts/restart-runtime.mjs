@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Detached, one-shot restart of the VS runner + VS server (idea-78). Every agent, the Overlord included, runs ON the
-// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins only (the coordinated-drain helpers,
+// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs (itself built-ins only) (the coordinated-drain helpers,
 // server/restart-coord.mjs, load lazily on a deferral or after a success; a load failure only loses the lead names). It is meant to
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.
@@ -36,6 +36,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runtimeDir as sharedRuntimeDir } from '../server/runtime-dir.mjs';
 
 const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -420,7 +421,9 @@ async function finishDetect({ opts, d, env, home, port, configDir, runner, spid 
   }
   if (!runtimeDir) {
     const local = env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local');
-    for (const c of [path.join(local, 'com.vibesquad.desktop', 'runtime'), path.join(local, 'VibeSquad', 'runtime')]) {
+    const desktop = IS_WIN ? [path.join(local, 'com.vibesquad.desktop', 'runtime')] : [];
+    const explicit = env.VIBESQUAD_RUNTIME_DIR?.trim(); // an explicit override outranks the desktop app's runtime
+    for (const c of explicit ? [sharedRuntimeDir(env)] : [...desktop, sharedRuntimeDir(env)]) {
       if (looksLikeRuntime(c)) { runtimeDir = c; launchSource = 'installed runtime'; break; }
     }
   }

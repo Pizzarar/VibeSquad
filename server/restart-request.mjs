@@ -21,6 +21,7 @@ import path from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
+import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
 import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, holderLeads } from "./restart-coord.mjs";
@@ -428,7 +429,7 @@ export function needsBuild(needs) {
  * (`<repo>/.git`). null when there is no stamp or it names no main checkout.
  */
 export function syncRepoRoot(env = process.env) {
-  const runtime = path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+  const runtime = runtimeDirOf(env);
   try {
     const repo = JSON.parse(fs.readFileSync(path.join(runtime, "build-stamp.json"), "utf8"))?.repo;
     if (typeof repo !== "string" || path.basename(repo).toLowerCase() !== ".git") return null;
@@ -482,7 +483,7 @@ export function runSyncAsync({ env = process.env, repoRoot = syncRepoRoot(env), 
  * `git rev-list --count <that>..<tip>` in the source checkout (async: the loop never blocks). Unknown parts are null.
  */
 export function runtimeLagAsync(req, { env = process.env, repoRoot = syncRepoRoot(env) } = {}) {
-  const runtime = path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+  const runtime = runtimeDirOf(env);
   let sha = null;
   try { sha = JSON.parse(fs.readFileSync(path.join(runtime, "build-stamp.json"), "utf8"))?.commit ?? null; } catch {}
   if (typeof sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(sha)) sha = null;

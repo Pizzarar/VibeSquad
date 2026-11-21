@@ -4,6 +4,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
+import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "./restart-coord.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -51,7 +52,7 @@ function defaultGit(cwd, ...args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true, maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
-const runtimeDirFor = (env) => join(env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+const runtimeDirFor = (env) => runtimeDirOf(env);
 const vsHomeFor = (env) => env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
 const short = (sha) => String(sha ?? "").slice(0, 7);
@@ -151,7 +152,7 @@ const describeErr = (err) => String(err?.stderr || "").trim().split("\n")[0] || 
 export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}, commit = null } = {}) {
   const rename = ops.rename ?? renameSync;
   const runtimeDir = runtimeDirFor(env);
-  if (!existsSync(runtimeDir)) return { synced: false, runtimeDir };
+  mkdirSync(runtimeDir, { recursive: true }); // first sync on a fresh machine (Linux/forge): create + seed the runtime
 
   let sha;
   let tracked;
@@ -591,7 +592,7 @@ export function runSync({
     return { synced: false, skipped: skip };
   }
   const runtimeDir = runtimeDirFor(env);
-  if (!existsSync(runtimeDir)) return { synced: false, runtimeDir };
+  if (!dryRun) mkdirSync(runtimeDir, { recursive: true }); // first sync seeds the dir; a dry run creates nothing
   const refuse = (why, extra = {}) => {
     log(`[sync-runtime] refused: ${why}; the live runtime is unchanged`);
     return { synced: false, refused: why, ...extra };

@@ -1552,6 +1552,7 @@ export function installVsShim({ binDirs, targetScript, baseHome, force = false }
     "teams.json",
     "teams.example.json",
     "server/teams-file.mjs",
+    "server/runtime-dir.mjs", // scripts/restart-runtime.mjs imports it
     "server/user-settings.mjs",
     "server/identity.mjs",
     "server/inbox.mjs",
