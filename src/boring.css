@@ -1226,3 +1226,13 @@ html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: clamp
 html[data-vibe="boring"] .boring-needs-reason { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 /* R7-1: neutral placeholder while a deep link waits for the roster. */
 html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #888); font-size: 14px; }
+
+/* idea-257: optional 2-pane split in the chat column (src/panes.ts). Grid only, no width media queries. */
+html[data-vibe="boring"] .boring-chat-column:has(.boring-chat-split) { max-width: 100%; }
+html[data-vibe="boring"] .boring-chat-split { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; background: var(--border); }
+html[data-vibe="boring"] .boring-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-card); border-top: 2px solid transparent; }
+html[data-vibe="boring"] .boring-pane-active { border-top-color: var(--accent); }
+html[data-vibe="boring"] .boring-pane > .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border: 0; background: var(--bg-card); box-shadow: none !important; }
+html[data-vibe="boring"] .boring-pane .boring-context-panel { display: none; }
+html[data-vibe="boring"] .boring-split-empty { margin: auto; max-width: 360px; padding: 24px; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; color: var(--text-dim); }
+html[data-vibe="boring"] .boring-split-empty p { margin: 0; }

@@ -119,8 +119,8 @@ stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => membe
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
-stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const usePanes = () => ({ activePane: "left", leftActiveId: null, rightActiveId: null });`);
-stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents });`);
+stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = ${rec("toggleSplit")}; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
+stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
 stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {};`);
 stub("pinFocusLogic.mjs", `export const boringDeepLinkPending = (a) => !a.rosterLoaded && !!a.activeAgentId; export const boringUrlAgent = (a) => (!a.rosterLoaded || a.landingPending ? a.activeAgentId : a.shownAgentId);`);
@@ -170,6 +170,7 @@ const reset = () => {
   hs.slots = [];
   globalThis.__calls = [];
   globalThis.__agents = new Map();
+  globalThis.__rosterLoaded = undefined;
 };
 const walk = (n, f, out = []) => {
   if (!n || typeof n !== "object") return out;
@@ -1406,4 +1407,131 @@ test("R4-6/R4-7: Ctrl+J routes through BoringAde; composer placeholder uses the 
   assert.match(ade, /const openNeedsYou = \(row: NeedsYouRow\) => openAgentIn\(/);
   assert.match(comp, /placeholder=\{`Message \$\{composerTargetName\(agent\)\}/);
   assert.match(ade, /e\.type !== "metric"/);
+});
+
+// ---- idea-257: optional 2-pane split in Normal mode (src/panes.ts) ----------------------------------------
+// zz-* ids are not in the view, so the landing effect (which the sync useEffect stub runs inline) stays inert.
+const splitState = (over = {}) => ({ split: true, activePane: "left", leftActiveId: "zz-l", rightActiveId: "zz-r", ...over });
+const intoChat = (view) => {
+  reset();
+  globalThis.__agents.set("ade-ld", { id: "ade-ld" });
+  globalThis.__agents.set("zz-l", { id: "zz-l" });
+  globalThis.__agents.set("zz-r", { id: "zz-r" });
+  pickTab(view, "ade", "lead");
+  globalThis.__calls = [];
+  globalThis.__rosterLoaded = true; // a tab id with no roster yet would otherwise render "Opening agent…"
+};
+const drawers = (t) => walk(t, (n) => typeof n.type === "function" && n.type.name === "AgentDrawer");
+const clsOf = (n) => n.props.className.split(" ");
+
+test("split toggle: only in chat mode, aria-pressed follows panes.split, click calls toggleSplit", () => {
+  const view = squad();
+  reset();
+  assert.equal(byId(render(props(view)), "boring-split-toggle"), null); // Overview: no agent open
+  intoChat(view);
+  globalThis.__panes = undefined;
+  let btn = byId(render(props(view)), "boring-split-toggle");
+  assert.equal(btn.props["aria-pressed"], false);
+  assert.equal(byId(render(props(view)), "boring-chat-split"), null);
+  btn.props.onClick();
+  assert.deepEqual(globalThis.__calls.at(-1), ["toggleSplit"]);
+  globalThis.__panes = splitState();
+  try {
+    btn = byId(render(props(view)), "boring-split-toggle");
+    assert.equal(btn.props["aria-pressed"], true);
+    assert.ok(clsOf(btn).includes("on"));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("split: two AgentDrawer panes side by side, the active pane is highlighted and a pane click switches it", () => {
+  const view = squad();
+  intoChat(view);
+  try {
+    globalThis.__panes = splitState();
+    let t = render(props(view));
+    assert.ok(byId(t, "boring-chat-split"));
+    assert.deepEqual(drawers(t).map((d) => d.props.agent.id), ["zz-l", "zz-r"]);
+    assert.ok(clsOf(byId(t, "boring-pane-left")).includes("boring-pane-active"));
+    assert.ok(!clsOf(byId(t, "boring-pane-right")).includes("boring-pane-active"));
+    byId(t, "boring-pane-right").props.onMouseDownCapture();
+    assert.deepEqual(globalThis.__calls.at(-1), ["setActivePane", "right"]);
+    globalThis.__panes = splitState({ activePane: "right" });
+    t = render(props(view));
+    assert.ok(clsOf(byId(t, "boring-pane-right")).includes("boring-pane-active"));
+    assert.ok(!clsOf(byId(t, "boring-pane-left")).includes("boring-pane-active"));
+    assert.deepEqual(drawers(t).map((d) => d.props.agent.id), ["zz-l", "zz-r"]);
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("split: an empty right pane shows the placeholder with Close split", () => {
+  const view = squad();
+  intoChat(view);
+  try {
+    globalThis.__panes = splitState({ rightActiveId: null, activePane: "right" });
+    const t = render(props(view));
+    const empty = byId(t, "boring-split-empty");
+    assert.ok(empty);
+    assert.match(JSON.stringify(empty.props.children), /Pick an agent from the sidebar or Shift\+click to open here/);
+    assert.deepEqual(drawers(t).map((d) => d.props.agent.id), ["zz-l"]);
+    byId(t, "boring-split-close").props.onClick();
+    assert.deepEqual(globalThis.__calls.at(-1), ["toggleSplit"]);
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("split: closing one pane closes only that tab and stays in chat; closing the last one goes to Overview", () => {
+  const view = squad();
+  intoChat(view);
+  try {
+    globalThis.__panes = splitState();
+    let t = render(props(view));
+    drawers(t)[1].props.onClose();
+    assert.deepEqual(globalThis.__calls.at(-1), ["closeTab", "zz-r"]);
+    drawers(t)[0].props.onClose();
+    assert.deepEqual(globalThis.__calls.at(-1), ["closeTab", "zz-l"]);
+    t = render(props(view));
+    assert.ok(byId(t, "boring-chat-column"), "the other pane keeps the chat open");
+    // Only one pane has an agent: closing it leaves nothing to show, so back to the project Overview.
+    globalThis.__panes = splitState({ rightActiveId: null });
+    t = render(props(view));
+    drawers(t)[0].props.onClose();
+    t = render(props(view));
+    assert.ok(byId(t, "boring-project-view"));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("Shift+click on an agent opener opens it in the right pane; a plain click does not", () => {
+  const view = squad();
+  intoChat(view);
+  globalThis.__agents.set("ade-bs", { id: "ade-bs" });
+  const win = (event) => (globalThis.window = { event, addEventListener() {}, removeEventListener() {} });
+  try {
+    win({ type: "click", shiftKey: true });
+    byId(render(props(view)), "boring-top-brainstorm").props.onClick();
+    assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openAgentInTab"), [["openAgentInTab", "ade-bs", "right"]]);
+    globalThis.__calls = [];
+    win({ type: "click", shiftKey: false });
+    byId(render(props(view)), "boring-top-brainstorm").props.onClick();
+    assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openAgentInTab"), []);
+    assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "ade-bs"));
+  } finally {
+    delete globalThis.window;
+  }
+});
+
+test("split CSS: grid panes, no width media queries, only new rules; no state literals in the new classNames", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  const sect = css.slice(css.indexOf("idea-257: optional 2-pane split"));
+  assert.match(sect, /\.boring-chat-split \{[^}]*display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/);
+  for (const c of [".boring-pane ", ".boring-pane-active", ".boring-split-empty"]) assert.ok(sect.includes(c), c);
+  assert.ok(!/@media/.test(sect));
+  assert.match(ade, /data-testid="boring-split-toggle"/);
+  assert.match(ade, /data-testid="boring-split-empty"/);
 });

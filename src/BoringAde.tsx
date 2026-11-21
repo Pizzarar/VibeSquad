@@ -7,7 +7,7 @@ import { openOverlay } from "./CommandPalette";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
-import { openAgent, usePanes } from "./panes";
+import { closeTab, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { openPinMember, setBoringShownAgent, spinUpPin } from "./pinFocus";
@@ -397,6 +397,12 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const { agents, rosterLoaded } = usePaseo();
   const panes = usePanes();
   const activeAgentId = panes.activePane === "left" ? panes.leftActiveId : panes.rightActiveId;
+  /** Shift+click on any agent opener (sidebar, Needs you, Overview) opens it in the right pane; the click event is read, so no row markup changes. */
+  const shiftHeld = () => {
+    const e = typeof window === "undefined" ? undefined : (window.event as MouseEvent | undefined);
+    return !!e && e.type === "click" && e.shiftKey;
+  };
+  const openHere = (id: string) => (shiftHeld() ? openAgentInTab(id, "right") : openAgent(id));
   const allViews = views.length > 0 ? views : view ? [view] : [];
   // S8: the active agent owns the sidebar selection + breadcrumb. Keyed on the agent only, so switching project never snaps back.
   // R5-1: also when it becomes landable: a deep-linked agent can reach the roster after the first render.
@@ -438,7 +444,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       setSelectedLaneId(laneId);
       setSelectedWorkerId(target.agentId);
       setMode("chat");
-      openAgent(target.agentId);
+      openHere(target.agentId);
       return;
     }
     pickRole(pin, laneId, target.role === "worker" ? "brainstorm" : target.role);
@@ -452,7 +458,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const m = role === "lead" ? pin.lead : pin.brainstorm;
     if (role === "lead") {
       if (m) openPinMember(pin, m.agent.id);
-    } else if (m) openAgent(m.agent.id);
+    } else if (m) openHere(m.agent.id);
     else void onOpenPin(pin);
   };
   /** Open every parent of a jumped-to agent (project, Desk / lane): an explicit collapse never hides the selected row. */
@@ -475,7 +481,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedWorkerId(sel?.role === "worker" ? agentId : null);
     revealAgent(v, sel, agentId);
     setMode("chat");
-    openAgent(agentId);
+    openHere(agentId);
   };
   const openNeedsYou = (row: NeedsYouRow) => openAgentIn(row.view, row.item.id);
   // R4-6: Ctrl+J opens the top Needs-you agent through this same path (so ?agent= and reload keep your place).
@@ -496,7 +502,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedLaneId(laneId);
     setSelectedWorkerId(null);
     setMode("chat");
-    if (agentId) openAgent(agentId);
+    if (agentId) openHere(agentId);
   };
   const pickBugs = (b: { pin: Pin | null; agentId: string | null } = core.bugs) => {
     setSelectedLaneId("_bugs");
@@ -504,7 +510,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     setSelectedWorkerId(null);
     setMode("chat");
     // Selecting only shows the lane (live Buddy) or its empty card; spawning is the card's "Start Brainstorm" (never focusPin).
-    if (b.pin && b.agentId) openAgent(b.agentId);
+    if (b.pin && b.agentId) openHere(b.agentId);
   };
 
   // Resolve the chat target.
@@ -601,6 +607,35 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       </div>
     );
   };
+
+  // idea-257: optional 2-pane split. The right pane is panes.rightActiveId; the left falls back to the resolved agent while the left pane is active and has no tab.
+  const leftPaneAgent = (panes.leftActiveId ? agents.get(panes.leftActiveId) : undefined) ?? (panes.activePane === "left" ? agent : undefined);
+  const rightPaneAgent = panes.rightActiveId ? agents.get(panes.rightActiveId) : undefined;
+  const paneCls = (isLeft: boolean) => `boring-pane${panes.activePane === (isLeft ? "left" : "right") ? " boring-pane-active" : ""}`;
+  const closePane = (side: "left" | "right") => {
+    const id = side === "left" ? panes.leftActiveId : panes.rightActiveId;
+    if (id) closeTab(id);
+    else if (side === "right") toggleSplit();
+    // The other pane keeps the chat; only when nothing else is open does Close go back to Overview.
+    if (!(side === "left" ? rightPaneAgent : leftPaneAgent)) setMode("project");
+  };
+  const splitPanes = (
+    <div className="boring-chat-split" data-testid="boring-chat-split">
+      <div className={paneCls(true)} data-testid="boring-pane-left" onMouseDownCapture={() => setActivePane("left")} onFocusCapture={() => setActivePane("left")}>
+        {leftPaneAgent ? <AgentDrawer key={leftPaneAgent.id} agent={leftPaneAgent} onClose={() => closePane("left")} onSuccessor={() => onSuccessor(leftPaneAgent.id)} active pinDecisions /> : emptyCard()}
+      </div>
+      <div className={paneCls(false)} data-testid="boring-pane-right" onMouseDownCapture={() => setActivePane("right")} onFocusCapture={() => setActivePane("right")}>
+        {rightPaneAgent ? (
+          <AgentDrawer key={rightPaneAgent.id} agent={rightPaneAgent} onClose={() => closePane("right")} onSuccessor={() => onSuccessor(rightPaneAgent.id)} active pinDecisions />
+        ) : (
+          <div className="boring-split-empty" data-testid="boring-split-empty">
+            <p>Pick an agent from the sidebar or Shift+click to open here</p>
+            <button type="button" className="boring-switch-pill" data-testid="boring-split-close" onClick={() => toggleSplit()}>Close split</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 
   // R2.5: a container shows its count only while collapsed, tinted by its worst state inside (red error, else amber).
   const badge = (n: number, err = false) => (n > 0 ? <span className={`badge boring-badge${err ? " err" : ""}`}>{n}</span> : null);
@@ -808,6 +843,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           <div className="boring-topbar-actions">
             <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
             <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
+            {mode === "chat" && (agent || panes.split) && (
+              <button type="button" className={`boring-switch-pill ${panes.split ? "on" : ""}`} data-testid="boring-split-toggle" aria-pressed={panes.split} title="Split the chat into two panes (Shift+click an agent to open it on the right)" onClick={() => toggleSplit()}>
+                ◫ Split
+              </button>
+            )}
             {mode === "chat" && agent && (
               <button type="button" className={`boring-switch-pill ${detailsOpen ? "on" : ""}`} data-testid="boring-details-toggle" aria-expanded={detailsOpen} onClick={() => setDetailsOpen((v) => !v)}>
                 {detailsOpen ? "▾ Details" : "⋯ Details"}
@@ -874,7 +914,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
+            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
           </div>
         )}
       </main>
