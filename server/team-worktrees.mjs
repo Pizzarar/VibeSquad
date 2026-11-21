@@ -483,8 +483,22 @@ function isFreshWorktree(wtPath, now, graceMs) {
   }
 }
 
+/**
+ * Windows: prefix an absolute path with `\\?\` so node's fs APIs handle paths beyond MAX_PATH (~260 chars) — deep build
+ * output like `src-tauri/gen/android/app/build/intermediates/...` (idea-514). The prefix also disables `..` normalization
+ * (irrelevant here: every caller passes an already-resolved absolute path). Idempotent; a no-op on other platforms.
+ */
+function toLongPath(p) {
+  if (process.platform !== "win32") return p;
+  const abs = resolve(p);
+  if (abs.startsWith("\\\\?\\")) return abs;
+  if (abs.startsWith("\\\\")) return "\\\\?\\UNC\\" + abs.slice(2);
+  return "\\\\?\\" + abs;
+}
+
 /** Delete `abs` without ever following a symlink or junction (a link is unlinked, never recursed into). */
 function removeTreeNoFollow(abs) {
+  abs = toLongPath(abs);
   let st;
   try {
     st = lstatSync(abs);
@@ -514,6 +528,7 @@ function removeTreeNoFollow(abs) {
 
 /** Unlink a symlink or junction itself (never its target); throws when neither works. */
 function unlinkLinkOnly(p) {
+  p = toLongPath(p);
   try {
     unlinkSync(p);
   } catch {
@@ -531,12 +546,12 @@ function unlinkLinkOnly(p) {
 function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly } = {}) {
   const links = [];
   const walk = (dir) => {
-    for (const d of readdirSync(dir, { withFileTypes: true })) {
+    for (const d of readdirSync(toLongPath(dir), { withFileTypes: true })) {
       const p = join(dir, d.name);
       if (dir === wtPath && d.name === ".git") continue;
       if (d.isSymbolicLink()) links.push(p);
       else if (d.isDirectory()) walk(p);
-      else if (!d.isFile() && lstatSync(p).isSymbolicLink()) links.push(p);
+      else if (!d.isFile() && lstatSync(toLongPath(p)).isSymbolicLink()) links.push(p);
     }
   };
   walk(wtPath);
@@ -551,7 +566,7 @@ function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly } = {})
     unlinkLink(p);
     let still = true;
     try {
-      lstatSync(p);
+      lstatSync(toLongPath(p));
     } catch (e) {
       if (e?.code === "ENOENT") still = false;
     }
@@ -595,7 +610,12 @@ export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildO
   }
   try {
     // `force` only for R1 retention, after its WIP is committed to refs/vs-archive/<unit> and re-verified.
-    git(["worktree", "remove", ...(force ? ["--force"] : []), wtPath], repoRoot);
+    // core.longpaths=true: git deletes the whole tree (deep ignored build output included) and must not bail on
+    // >260-char paths (idea-514, "Filename too long").
+    git(
+      [...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []), "worktree", "remove", ...(force ? ["--force"] : []), wtPath],
+      repoRoot,
+    );
     return { removed: true };
   } catch (e) {
     return { removed: false, reason: gitError(e) };

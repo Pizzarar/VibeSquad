@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import {
   SWEEP_LOCK_FILE,
@@ -25,6 +25,9 @@ import { createWorktreeAutoSweep, mergeSubjectBranches, runHeavyInWorker } from 
 
 const git = (args, cwd) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000 }).trim();
+
+/** Build the >260-char test fixtures with the `\\?\` prefix (no MAX_PATH limit), mirroring the sweep's own long-path handling. */
+const toLong = (p) => (process.platform === "win32" ? "\\\\?\\" + resolve(p) : p);
 
 function initRepo(dir, branch = "master") {
   mkdirSync(dir, { recursive: true });
@@ -203,6 +206,62 @@ test("removal never follows links: a junction in node_modules or nested in dist 
     assert.equal(res["unit-links"].action, "removed");
     assert.equal(existsSync(wt), false);
     assert.equal(readFileSync(join(shared, "pkg", "index.js"), "utf8"), "precious");
+  }));
+
+test("W2 deep >260-char ignored build path (Android Gradle dirs) sweeps cleanly", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    commitFile(repo, ".gitignore", "gen/\n");
+    const wt = addWorktree(repo, sanct, "repo", "unit-android-deep");
+    const seg = "intermediates-".repeat(5).slice(0, 60);
+    const deepRel = join("gen", "android", "app", "build", seg, seg, seg, seg, "res.txt");
+    const abs = join(wt, deepRel);
+    mkdirSync(toLong(dirname(abs)), { recursive: true });
+    writeFileSync(toLong(abs), "deep");
+    assert.ok(abs.length > 260, `fixture path is only ${abs.length} chars`);
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], sanctuaryRoot: sanct }));
+    assert.equal(r["unit-android-deep"].action, "removed", JSON.stringify(r["unit-android-deep"]));
+    assert.equal(existsSync(wt), false);
+  }));
+
+test("W2 junction buried past 260 chars is detached, never followed; the outside target's sentinel survives", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const shared = join(root, "shared-store");
+    writeFile(shared, "sentinel.txt", "precious");
+    initRepo(repo);
+    commitFile(repo, ".gitignore", "gen/\n");
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-junction");
+    const seg = "x".repeat(60);
+    const deepDir = join(wt, "gen", "deep", seg, seg, seg, seg);
+    mkdirSync(toLong(deepDir), { recursive: true });
+    const link = join(deepDir, "target");
+    symlinkSync(shared, toLong(link), "junction");
+    assert.ok(link.length > 260, `junction path is only ${link.length} chars`);
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], sanctuaryRoot: sanct }));
+    assert.equal(r["unit-deep-junction"].action, "removed", JSON.stringify(r["unit-deep-junction"]));
+    assert.equal(existsSync(wt), false);
+    assert.equal(readFileSync(join(shared, "sentinel.txt"), "utf8"), "precious");
+  }));
+
+test("W2 deep >260-char non-ignored build output is deleted by the sweep's own fs removal, never by following a link", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-godot-deep");
+    const seg = "y".repeat(60);
+    const deepRel = join(".godot", "editor", seg, seg, seg, seg);
+    const deepAbs = join(wt, deepRel);
+    mkdirSync(toLong(deepAbs), { recursive: true });
+    writeFileSync(toLong(join(deepAbs, "shader.cache")), "cache");
+    assert.ok(join(deepAbs, "shader.cache").length > 260, "build output path past MAX_PATH");
+    const res = removeSweptWorktree(repo, wt, { buildOutput: [deepRel.replace(/\\/g, "/") + "/"] });
+    assert.equal(res.removed, true, JSON.stringify(res));
+    assert.equal(existsSync(wt), false);
   }));
 
 test("live-cwd guard: an agent cwd inside the worktree keeps it; apply with no roster removes nothing", () =>
