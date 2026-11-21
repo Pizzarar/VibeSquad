@@ -57,3 +57,31 @@ test('buildCatalog folds cached probed models into the provider list', async () 
   assert.equal(m.source, 'cli probe');
   clearModelProbeCache();
 });
+
+test('getModels (the dropdown feed) probes antigravity and returns the probed list; claude never spawns the model probe', async () => {
+  const { getModels } = await import('../server/providers-catalog.mjs');
+  clearModelProbeCache();
+  const calls = [];
+  const exec = (file, args, opts, cb) => { calls.push(args); cb(null, args[0] === 'models' ? SAMPLE : 'agy 1.0'); };
+  const agy = await getModels('agy', { home: process.cwd(), execImpl: exec, resolveImpl });
+  assert.ok(agy.models.some((m) => m.id === 'gemini-4-neon-high' && m.source === 'cli probe'), 'alias agy resolves and the probed list is offered');
+  const before = calls.filter((a) => a[0] === 'models').length;
+  await getModels('claude', { home: process.cwd(), execImpl: exec, resolveImpl });
+  assert.equal(calls.filter((a) => a[0] === 'models').length, before, 'no model-list command for claude');
+  clearModelProbeCache();
+});
+
+test('negative cache: a failing probe with no prior success is not respawned per request, but retries after the fail TTL or on refresh', async () => {
+  clearModelProbeCache();
+  let n = 0;
+  const failExec = (f, a, o, cb) => { n++; cb(new Error('nope')); };
+  await probeModelLists({ now: 1000, execImpl: failExec, resolveImpl });
+  await probeModelLists({ now: 2000, execImpl: failExec, resolveImpl });
+  await probeModelLists({ now: 30_000, execImpl: failExec, resolveImpl });
+  assert.equal(n, 1, 'GETs inside the negative TTL reuse the failure');
+  await probeModelLists({ now: 1000 + 61_000, execImpl: failExec, resolveImpl });
+  assert.equal(n, 2, 'retries once the negative TTL lapses');
+  await probeModelLists({ now: 1000 + 61_500, refresh: true, execImpl: failExec, resolveImpl });
+  assert.equal(n, 3, 'refresh always retries');
+  clearModelProbeCache();
+});

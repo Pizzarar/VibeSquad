@@ -1852,7 +1852,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     // owner remote session can already spawn agents that run shell, so a loopback-only clone protected nothing.
     if (isGitPath(path)) return handleGitApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts), projectsDir: () => primaryProjectsDir(rootDir) });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
-    if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
+    if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir), readBody: readCleanBody });
     switch (path) {
       case "/__vibesquad/pair/start":
         return handlePairStart(req, res);

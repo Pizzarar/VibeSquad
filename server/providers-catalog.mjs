@@ -108,8 +108,9 @@ export function probeProviders({ refresh = false, now = Date.now(), execImpl = e
 // (agy prints a "Fetching available models..." header, which has no tab and is skipped).
 export const MODEL_LIST_COMMANDS = { "antigravity-cli": ["models"] };
 const MODEL_PROBE_TTL_MS = 30 * 60_000;
+const MODEL_PROBE_FAIL_TTL_MS = 60_000; // negative cache: a failing CLI is not respawned on every request
 const MODEL_PROBE_TIMEOUT_MS = 15_000;
-const modelProbeCache = new Map(); // provider -> { at, value: {models, source, at, error?}, inflight }
+const modelProbeCache = new Map(); // provider -> { at: last attempt, value: {models, source, at: last good, error?}, inflight }
 let modelProbeRuns = 0;
 export const modelProbeStats = () => ({ runs: modelProbeRuns });
 export const clearModelProbeCache = () => modelProbeCache.clear();
@@ -160,14 +161,15 @@ export async function probeModelLists({ refresh = false, now = Date.now(), execI
   const out = {};
   await Promise.all(Object.keys(MODEL_LIST_COMMANDS).map(async (p) => {
     const hit = modelProbeCache.get(p);
-    if (hit && (hit.inflight || (!refresh && hit.value && now - hit.at < MODEL_PROBE_TTL_MS))) {
+    const ttl = hit?.value?.source === "probe" ? MODEL_PROBE_TTL_MS : MODEL_PROBE_FAIL_TTL_MS;
+    if (hit && (hit.inflight || (!refresh && hit.value && now - hit.at < ttl))) {
       out[p] = hit.inflight ? await hit.inflight : hit.value;
       return;
     }
     const inflight = probeModelsOne(p, { execImpl, resolveImpl, timeout, now, prev: hit?.value });
     modelProbeCache.set(p, { at: hit?.at ?? 0, value: hit?.value, inflight });
     const value = await inflight;
-    modelProbeCache.set(p, { at: value.source === "probe" ? now : hit?.at ?? 0, value });
+    modelProbeCache.set(p, { at: now, value }); // a failure is cached too (value.at keeps the last-good time)
     out[p] = value;
   }));
   return out;
@@ -322,6 +324,8 @@ export async function getProviders(opts = {}) {
   return { providers: Object.values(catalog).map(({ models, modes, ...p }) => p) };
 }
 export async function getModels(provider, opts = {}) {
+  // The model dropdowns read this: fill the offered list from the CLI first (cached, async, failure keeps the last good list).
+  if (MODEL_LIST_COMMANDS[canon(provider)]) await probeModelLists({ refresh: opts.refresh, now: opts.now, execImpl: opts.execImpl, resolveImpl: opts.resolveImpl, ...(opts.modelTimeout ? { timeout: opts.modelTimeout } : {}) });
   const c = buildCatalog({ probes: await probeProviders(opts), home: opts.home })[canon(provider)];
   return c ? { models: c.models, ...(c.available ? {} : { error: c.error }) } : { models: [], error: `unknown provider "${provider}"` };
 }
@@ -2954,10 +2958,9 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
     if (sub === "offered-models") {
       const lists = await probeModelLists({ refresh: opts.refresh, execImpl: probeOpts.modelExecImpl ?? probeOpts.execImpl, resolveImpl: probeOpts.resolveImpl, ...(probeOpts.modelTimeout ? { timeout: probeOpts.modelTimeout } : {}) });
-      const providers = Object.keys(buildCatalog({ home }));
+      const catalog = buildCatalog({ home });
       const out = {};
-      for (const id of providers) {
-        const cat = buildCatalog({ home })[id];
+      for (const [id, cat] of Object.entries(catalog)) {
         out[id] = { models: cat.models, probed: Boolean(MODEL_LIST_COMMANDS[id]), source: lists[id]?.source ?? "static", at: lists[id]?.at ?? null, ...(lists[id]?.error ? { error: lists[id].error } : {}) };
       }
       return sendJson(res, 200, { ok: true, providers: out });
