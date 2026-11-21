@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
+import { BoringContextPanel } from "./BoringContextPanel";
 import { stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
@@ -921,7 +922,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : emptyCard()}
+            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : currentPin && selectedLaneId ? (
+              // idea-468: a lane with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
+              <div className="drawer-shell" data-testid="boring-lane-no-agent"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><BoringContextPanel entries={[]} teamId={activeTeamId} laneId={selectedLaneId} /></div>
+            ) : emptyCard()}
           </div>
         )}
       </main>

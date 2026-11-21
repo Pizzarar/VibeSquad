@@ -54,14 +54,14 @@ export function useContextPanel(): [boolean, () => void] {
 
 const TAB_FOR_DOCK: Partial<Record<string, ContextTab>> = { Changes: "Changes", Files: "Files", Terminal: "Terminal" };
 
-function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
+function WorkersTab({ agent, laneId }: { agent?: PaseoAgent; laneId: string }) {
   const { agents } = usePaseo();
   const laneWorkers = useMemo(
     () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
     [agents, laneId],
   );
-  const openIsLiveWorker = laneWorkers.some((m) => m.agent.id === agent.id && boringWorkerIsLive(m));
-  const members = laneWorkers.filter((m) => m.agent.id !== agent.id); // the open agent is the center header, not a sibling
+  const openIsLiveWorker = laneWorkers.some((m) => m.agent.id === agent?.id && boringWorkerIsLive(m));
+  const members = laneWorkers.filter((m) => m.agent.id !== agent?.id); // the open agent is the center header, not a sibling
   const [showIdle, setShowIdle] = useState(false);
   const live = members.filter(boringWorkerIsLive);
   const idleMembers = members.filter((m) => !boringWorkerIsLive(m));
@@ -89,7 +89,7 @@ function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
   );
 }
 
-function renderWorker(m: Member, agent: PaseoAgent, idle: boolean) {
+function renderWorker(m: Member, agent: PaseoAgent | undefined, idle: boolean) {
   {
     {
         const glyph = boringStateGlyph(m.agent.status, m.attention?.tone);
@@ -157,7 +157,8 @@ function FeedTab({ teamId, laneId }: { teamId: string; laneId: string }) {
   );
 }
 
-export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: PaseoAgent; entries: Entry[]; teamId: string; laneId: string }) {
+/** `agent` is absent on a lane with no live Lead/Brainstorm (idea-468): Workers, Plan and Feed still work; agent-bound tabs say so. */
+export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent?: PaseoAgent; entries: Entry[]; teamId: string; laneId: string }) {
   const [open, toggle] = useContextPanel();
   const [tab, setTab] = useState<ContextTab>(() => {
     const t = (() => { try { return localStorage.getItem(CONTEXT_TAB_KEY); } catch { return null; } })();
@@ -193,14 +194,14 @@ export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: 
     if (open) return null; // badge only renders on the collapsed rail
     let err = 0, attn = 0;
     for (const m of resolve(agents)) {
-      if (m.kind !== "worker" || !isLive(m) || m.agent.id === agent.id || (m.laneId ?? "").toLowerCase() !== laneId.toLowerCase()) continue;
+      if (m.kind !== "worker" || !isLive(m) || m.agent.id === agent?.id || (m.laneId ?? "").toLowerCase() !== laneId.toLowerCase()) continue;
       const g = boringStateGlyph(m.agent.status, m.attention?.tone);
       if (g === "err") err++;
       else if (g === "attn") attn++;
     }
     const n = err + attn;
     return n > 0 ? { tone: err > 0 ? "err" : "attn", n } : null;
-  }, [agents, laneId, open, agent.id]);
+  }, [agents, laneId, open, agent?.id]);
 
   if (!open)
     return (
@@ -221,11 +222,12 @@ export function BoringContextPanel({ agent, entries, teamId, laneId }: { agent: 
       </div>
       <div className="boring-ctx-body" data-testid="boring-context-body">
         {tab === "Workers" && <WorkersTab agent={agent} laneId={laneId} />}
-        {tab === "Changes" && <ChangesPanel agent={agent} />}
+        {!agent && (tab === "Changes" || tab === "Files" || tab === "Terminal") && <div className="boring-ctx-empty" data-testid="boring-ctx-no-agent">Open a Lead or Brainstorm to use {tab}.</div>}
+        {agent && tab === "Changes" && <ChangesPanel agent={agent} />}
         {tab === "Plan" && <PlanTab entries={entries} />}
         {tab === "Feed" && <FeedTab teamId={teamId} laneId={laneId} />}
-        {tab === "Files" && <FilesPanel agent={agent} targetFile={target.file} targetLine={target.line} targetNonce={target.nonce} />}
-        {tab === "Terminal" && <TerminalPanel agent={agent} />}
+        {agent && tab === "Files" && <FilesPanel agent={agent} targetFile={target.file} targetLine={target.line} targetNonce={target.nonce} />}
+        {agent && tab === "Terminal" && <TerminalPanel agent={agent} />}
       </div>
     </aside>
   );
