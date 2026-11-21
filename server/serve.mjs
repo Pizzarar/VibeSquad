@@ -48,6 +48,7 @@ import { startTokenWatcher } from "./token-watch.mjs";
 import { startIdleLaneKick } from "./idle-lane-kick.mjs";
 import { startTempScratchTtl } from "./disk-dedupe.mjs";
 import { underTestRunner } from "./test-guard.mjs";
+import { startWorktreeAutoSweep } from "./worktree-autosweep.mjs";
 import { startDiskAlarm } from "./disk-alarm.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
@@ -581,6 +582,9 @@ if (isMain) {
         server.once("close", () => tt.stop());
       } catch (err) { console.warn("temp scratch TTL not started:", err?.message ?? err); }
     }
+    // W1 (PLAN_DISK_LIFECYCLE_1121): when a unit's merge lands on the default branch, report (default) or, with
+    // VS_WORKTREE_AUTOSWEEP=apply, remove its worktree (merged + clean + no live cwd; branch kept). =0 turns the tick off.
+    if (process.env.VS_WORKTREE_AUTOSWEEP !== "0") { try { const ws = startWorktreeAutoSweep({ runner: sharedRunnerBackend(), apply: process.env.VS_WORKTREE_AUTOSWEEP === "apply" }); server.once("close", () => ws.stop()); } catch (err) { console.warn("worktree auto-sweep not started:", err?.message ?? err); } }
 
     if (wantOpen) void openBrowser(servedOpenUrl());
   });

@@ -90,7 +90,7 @@ test("createManagedWorktree + sweepMergedWorktrees removes merged clean worktree
     assert.equal(resolve(listed[0].path), resolve(repo), "main checkout is listed first");
 
     // Dry run: nothing is removed.
-    const dry = sweepMergedWorktrees(repo, { targetBranch: "master", apply: false });
+    const dry = sweepMergedWorktrees(repo, { targetBranch: "master", apply: false, freshGraceMs: 0 });
     const dryByBranch = Object.fromEntries(dry.results.map((r) => [r.branch, r]));
     assert.equal(dryByBranch["unit-merged"].action, "would-remove");
     assert.equal(dryByBranch["unit-dirty"].action, "kept");
@@ -100,7 +100,7 @@ test("createManagedWorktree + sweepMergedWorktrees removes merged clean worktree
     assert.ok(existsSync(merged.path), "dry run must not remove");
 
     // Apply: only the merged clean worktree goes away.
-    const res = sweepMergedWorktrees(repo, { targetBranch: "master", apply: true });
+    const res = sweepMergedWorktrees(repo, { targetBranch: "master", apply: true, liveCwds: [], freshGraceMs: 0 });
     const byBranch = Object.fromEntries(res.results.map((r) => [r.branch, r]));
     assert.equal(byBranch["unit-merged"].action, "removed");
     assert.equal(byBranch["unit-dirty"].action, "kept");
@@ -251,7 +251,7 @@ test("createManagedWorktree junctions node_modules, keeps it untracked, and swee
     const excludeText = readFileSync(join(repo, ".git", "info", "exclude"), "utf8");
     assert.equal(excludeText.split(/\r?\n/).filter((l) => l === "/node_modules").length, 1);
 
-    const res = sweepMergedWorktrees(repo, { apply: true });
+    const res = sweepMergedWorktrees(repo, { apply: true, liveCwds: [], freshGraceMs: 0 });
     assert.equal(res.results[0].action, "removed");
     assert.equal(existsSync(wt.path), false);
     // The target's contents survive.

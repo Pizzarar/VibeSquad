@@ -67,7 +67,9 @@ import {
 } from "../server/lane-spec.mjs";
 import {
   createManagedWorktree,
-  sweepMergedWorktrees,
+  sweepAllRepos,
+  throttledLiveCwds,
+  liveAgentCwds,
   cleanupProjectsFolder,
   resolveManagedWorktreeRoot,
 } from "../server/team-worktrees.mjs";
@@ -304,6 +306,9 @@ export function parseArgs(argv) {
     "all",
     "restart",
     "keepDevices",
+    "sizes",
+    "here",
+    "summary",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -2982,8 +2987,28 @@ function commandWorktree(flags) {
   }
 
   if (sub === "sweep") {
-    const res = sweepMergedWorktrees(repoRoot, { apply });
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    // W1 (PLAN_DISK_LIFECYCLE_1121): every repo with worktrees in the sanctuary, each against its own default branch
+    // (--here: only the cwd's repo). Merged = ancestor | git cherry | tree match; untracked build output is not dirt.
+    // Branch refs are never deleted. --apply needs the agent roster for the live-cwd guard: unreadable roster, nothing removed.
+    let liveCwds = null;
+    try {
+      const agents = listRunnerAgentsSync();
+      // [] also means "runner logs unreadable" (the fold returns [] then): treat it as unknown, so --apply removes nothing.
+      if (agents.length) liveCwds = liveAgentCwds(agents);
+    } catch {}
+    const here = path.resolve(repoRoot).toLowerCase();
+    const res = sweepAllRepos({
+      apply,
+      liveCwds,
+      // A full sweep runs for minutes: re-read the roster (at most every 30s) right before each removal.
+      refreshLiveCwds: apply ? throttledLiveCwds(() => listRunnerAgentsSync()) : null,
+      sizes: Boolean(flags.sizes),
+      repoFilter: flags.here ? (r) => path.resolve(r.repoRoot).toLowerCase() === here : null,
+    });
+    if (apply && !liveCwds) process.stderr.write("Warning: agent roster unreadable; nothing removed (live-cwd guard fails closed).\n");
+    if (res.busy) process.stderr.write("Warning: another worktree sweep holds the sanctuary lock; nothing removed.\n");
+    const out = flags.summary ? { root: res.root, apply, summary: res.summary, dangling: res.dangling.length } : res;
+    process.stdout.write(JSON.stringify(out, null, 2) + "\n");
     return 0;
   }
 

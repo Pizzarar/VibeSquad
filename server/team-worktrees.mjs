@@ -3,14 +3,15 @@
 // refuses a dirty worktree and `git branch -d` refuses an unmerged branch, and both come back as "kept"
 // with git's reason so the dialog can say why.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmdirSync, statSync, symlinkSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, linkSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const PROTECTED_BRANCHES = new Set(["main", "master"]);
 
 export function defaultGit(args, cwd) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000 }).trim();
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000, maxBuffer: 64 << 20 }).trim();
 }
 
 // idea-249 L1: git's stderr quotes host paths ('C:\\...\\wt' contains modified files) and execFileSync's message is the
@@ -207,7 +208,7 @@ export function listRepoWorktrees(repoRoot, { git = defaultGit } = {}) {
     let wt;
     for (const line of lines) {
       if (line.startsWith("worktree ")) {
-        wt = { path: line.slice("worktree ".length), head: "", branch: "", bare: false, prunable: false };
+        wt = { path: line.slice("worktree ".length), head: "", branch: "", bare: false, prunable: false, locked: false };
         break;
       }
     }
@@ -216,69 +217,720 @@ export function listRepoWorktrees(repoRoot, { git = defaultGit } = {}) {
       if (line.startsWith("HEAD ")) wt.head = line.slice(5).trim();
       else if (line.startsWith("branch ")) wt.branch = line.slice(7).trim().replace(/^refs\/heads\//, "");
       else if (line === "bare") wt.bare = true;
-      else if (line === "prunable") wt.prunable = true;
+      else if (line === "prunable" || line.startsWith("prunable ")) wt.prunable = true;
+      else if (line === "locked" || line.startsWith("locked ")) wt.locked = true;
+      else if (line === "detached") wt.detached = true;
     }
     out.push(wt);
   }
   return out;
 }
 
+// ── W1 (docs/PLAN_DISK_LIFECYCLE_1121.md; idea-464 parts 1+2, idea-424): sweep correctness ──────────────────────────
+// Invariants (Tier A): never remove a dirty worktree, an unmerged one, or one a live agent's cwd points at; never delete a
+// branch ref (the sweep's removal keeps every branch, so a wrong "merged" verdict can only cost a checkout, never a commit);
+// the worktree itself goes through `git worktree remove` without --force, so git's own clean check is the last word.
+
+/** Untracked build output: a worktree whose only untracked entries are these still counts as clean for the sweep. */
+export const BUILD_OUTPUT_DIRS = Object.freeze(["node_modules", "target", ".godot", "dist", ".vite"]);
+const BUILD_OUTPUT_SET = new Set(BUILD_OUTPUT_DIRS);
+
+/** A worktree younger than this with no commit of its own is "fresh" (made for a unit that has not started): never swept. */
+export const FRESH_GRACE_MS = 2 * 60 * 60_000;
+/** Commits of the default branch scanned for a tree match (squash merges). */
+const TREE_SCAN_MAX = 50_000;
+
+const tryGit = (git, args, cwd) => {
+  try {
+    return String(git(args, cwd) ?? "");
+  } catch {
+    return null;
+  }
+};
+const normPath = (p) => {
+  let s = resolve(String(p));
+  try {
+    s = realpathSync.native(s);
+  } catch {}
+  s = s.replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? s.toLowerCase() : s;
+};
+const isInside = (child, parent) => {
+  const c = normPath(child);
+  const p = normPath(parent);
+  return c === p || c.startsWith(p + "/");
+};
+
 /**
- * Remove linked worktrees whose branch is fully merged into `targetBranch` and whose working tree is
- * clean. The main checkout is never touched. Dry-run (`apply: false`) reports what would happen.
- * Returns { repoRoot, apply, results }.
+ * Is `rel` (an untracked entry of `git ls-files --others --directory`, relative to `wtPath`) build output? One of its
+ * segments must be a BUILD_OUTPUT_DIRS name, and the entry must sit at or under that segment. `target` counts only next to
+ * a Cargo.toml (so a new `src/target/` source module is not mistaken for cargo output).
+ */
+export function isBuildOutputEntry(wtPath, rel) {
+  const segs = String(rel).split(/[\\/]+/).filter(Boolean);
+  if (!segs.length || segs.includes("..")) return false;
+  for (let i = 0; i < segs.length; i++) {
+    if (!BUILD_OUTPUT_SET.has(segs[i])) continue;
+    if (segs[i] !== "target") return true;
+    if (existsSync(resolve(wtPath, ...segs.slice(0, i), "Cargo.toml"))) return true;
+  }
+  return false;
+}
+
+const UNTRACKED_DIR_SCAN_MAX = 5_000;
+
+/**
+ * Split a wholly untracked folder `rel` (relative to `wtPath`, trailing slash) into its build-output subfolders and any
+ * other entries, walking without following links and without descending into build output. Returns null (read as dirty)
+ * on a read error or past UNTRACKED_DIR_SCAN_MAX entries.
+ */
+function splitUntrackedDir(wtPath, rel) {
+  const build = [];
+  const other = [];
+  let seen = 0;
+  const walk = (relDir) => {
+    for (const d of readdirSync(resolve(wtPath, relDir), { withFileTypes: true })) {
+      if (++seen > UNTRACKED_DIR_SCAN_MAX) throw new Error("too many entries");
+      const childRel = `${relDir}${d.name}`;
+      if (d.isDirectory() && !d.isSymbolicLink() && isBuildOutputEntry(wtPath, `${childRel}/`)) build.push(`${childRel}/`);
+      else if (d.isDirectory() && !d.isSymbolicLink()) walk(`${childRel}/`);
+      else other.push(childRel);
+    }
+  };
+  try {
+    walk(String(rel).replace(/\\/g, "/").replace(/\/*$/, "/"));
+  } catch {
+    return null;
+  }
+  return { build, other };
+}
+
+/**
+ * The worktree's dirt, split: tracked changes (always dirty), untracked build output (ignored), other untracked files
+ * (dirty). `clean` is false when git can't read the tree.
+ */
+export function worktreeDirt(wtPath, { git = defaultGit } = {}) {
+  const tracked = tryGit(git, ["status", "--porcelain", "--untracked-files=no"], wtPath);
+  const others = tryGit(git, ["ls-files", "-z", "--others", "--exclude-standard", "--directory", "--no-empty-directory"], wtPath);
+  if (tracked === null || others === null) return { clean: false, error: true, tracked: 0, untracked: [], buildOutput: [] };
+  const trackedCount = tracked.split(/\r?\n/).filter((l) => l.trim()).length;
+  const buildOutput = [];
+  const untracked = [];
+  for (const p of others.split("\0").filter(Boolean)) {
+    if (isBuildOutputEntry(wtPath, p)) buildOutput.push(p);
+    else if (/[\\/]$/.test(p)) {
+      // `--directory` collapses a wholly untracked folder (sub/ holding only sub/dist/): look inside it.
+      const x = splitUntrackedDir(wtPath, p);
+      if (x) buildOutput.push(...x.build);
+      if (!x || x.other.length) untracked.push(p);
+    } else untracked.push(p);
+  }
+  return { clean: trackedCount === 0 && untracked.length === 0, error: false, tracked: trackedCount, untracked, buildOutput };
+}
+
+/**
+ * The repo's default branch and the refs to test against: origin/HEAD's name when set, else main, else master (or
+ * `preferred` alone). `refs` holds the local branch and origin's copy, whichever exist (no fetch: a unit merged upstream but
+ * not pulled is still seen through origin/<name>). idea-424: the old sweep tested a hardcoded `master`, which does not exist
+ * in a main-only repo, so every merge-base call failed and read as unmerged.
+ */
+export function detectDefaultBranch(repoRoot, { git = defaultGit, preferred } = {}) {
+  const has = (ref) => tryGit(git, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoRoot) !== null;
+  const names = [];
+  if (preferred) names.push(String(preferred));
+  else {
+    const o = tryGit(git, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repoRoot);
+    const n = o ? o.trim().replace(/^origin\//, "") : "";
+    if (n) names.push(n);
+    for (const d of ["main", "master"]) if (!names.includes(d)) names.push(d);
+  }
+  for (const name of names) {
+    const refs = [`refs/heads/${name}`, `refs/remotes/origin/${name}`].filter(has);
+    if (refs.length) return { name, refs };
+  }
+  return { name: null, refs: [] };
+}
+
+/**
+ * Is commit `head` merged into any of `refs`? In order: ancestry (fast-forward and merge-commit PRs), a tree match (head's
+ * tree equals a commit on the default branch: squash merges), then `git cherry` (every non-merge commit patch-equivalent
+ * upstream: cherry-picks, rebase merges). Any git error reads as not merged (fail closed). Returns { merged, how, ref }.
+ */
+export function mergedStatus(repoRoot, head, refs, { git = defaultGit, treeCache = new Map() } = {}) {
+  if (!head || !refs?.length) return { merged: false, how: null, ref: null };
+  for (const ref of refs) {
+    if (tryGit(git, ["merge-base", "--is-ancestor", head, ref], repoRoot) !== null) return { merged: true, how: "ancestor", ref };
+  }
+  const tree = tryGit(git, ["rev-parse", `${head}^{tree}`], repoRoot)?.trim();
+  if (tree) {
+    for (const ref of refs) {
+      if (!treeCache.has(ref)) {
+        const byTree = new Map(); // tree -> commits on ref carrying it
+        const out = tryGit(git, ["log", "--format=%T %H", `--max-count=${TREE_SCAN_MAX}`, ref], repoRoot) ?? "";
+        for (const line of out.split(/\r?\n/)) {
+          const [t, c] = line.trim().split(" ");
+          if (t && c) byTree.set(t, [...(byTree.get(t) ?? []), c]);
+        }
+        treeCache.set(ref, byTree);
+      }
+      // The matching commit must not be one head already contains: an empty commit, or work reverted back to the fork
+      // point, has the base's tree but merged nothing. A merge-base error skips the commit (fail closed).
+      for (const c of (treeCache.get(ref).get(tree) ?? []).slice(0, 8)) {
+        const mb = tryGit(git, ["merge-base", c, head], repoRoot)?.trim();
+        if (mb && mb !== c) return { merged: true, how: "tree", ref };
+      }
+    }
+  }
+  // git cherry last: it patch-ids every upstream commit since the fork point, the slow check on old branches.
+  for (const ref of refs) {
+    const out = tryGit(git, ["cherry", ref, head], repoRoot);
+    if (out === null) continue;
+    const lines = out.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+    if (lines.length && lines.every((l) => l.startsWith("- "))) return { merged: true, how: "cherry", ref };
+  }
+  return { merged: false, how: null, ref: null };
+}
+
+/**
+ * cwds of agents that may still be working: everything not archived, except a closed agent with no resumable session.
+ * `lost` agents stay in (the process may still run): toAgent flattens the runner's `lost` to status "closed" + `lost: true`,
+ * so the flag is checked as well as the raw status.
+ */
+export function liveAgentCwds(agents) {
+  const out = [];
+  for (const a of Array.isArray(agents) ? agents : []) {
+    if (!a || a.archivedAt || a.archived) continue;
+    if (a.status === "closed" && a.resumable !== true && a.lost !== true) continue;
+    const cwd = String(a.cwd ?? a.config?.cwd ?? "").trim();
+    if (cwd) out.push(cwd);
+  }
+  return out;
+}
+
+/** True when some cwd in `cwds` is `wtPath` or inside it. */
+export const cwdHoldsWorktree = (wtPath, cwds) => (cwds ?? []).some((c) => c && isInside(c, wtPath));
+
+/**
+ * `refs` minus any ref at the same commit as an earlier one (local master == origin/master: test it once). A ref that
+ * does not resolve is kept, so mergedStatus still sees it (and fails closed on it).
+ */
+function distinctRefs(repoRoot, refs, git) {
+  const seen = new Set();
+  return (refs ?? []).filter((ref) => {
+    const id = tryGit(git, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], repoRoot)?.trim();
+    if (!id) return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
+}
+
+/** The worktree's private git dir (from its `.git` file), or null. */
+function worktreeGitDir(wtPath) {
+  try {
+    const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(resolve(wtPath, ".git"), "utf8"));
+    return m ? resolve(wtPath, m[1].trim()) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fresh: created less than `graceMs` ago (its `.git` file's mtime) and HEAD never moved to another commit since then.
+ * `git worktree add -b` writes two reflog lines (the creation, from the zero id, and a no-op "reset: moving to HEAD"), so
+ * entries from the zero id or with old == new do not count. An unreadable age or reflog reads as fresh (kept).
+ */
+function isFreshWorktree(wtPath, now, graceMs) {
+  if (!(graceMs > 0)) return false;
+  let age;
+  try {
+    age = now - statSync(resolve(wtPath, ".git")).mtimeMs;
+  } catch {
+    return true; // unreadable: treat as fresh (kept)
+  }
+  if (age >= graceMs) return false;
+  try {
+    const lines = readFileSync(resolve(worktreeGitDir(wtPath), "logs", "HEAD"), "utf8").split(/\r?\n/).filter(Boolean);
+    return !lines.some((l) => {
+      const [oldId, newId] = l.split(" ");
+      return !/^0+$/.test(oldId) && oldId !== newId;
+    });
+  } catch {
+    return true;
+  }
+}
+
+/** Delete `abs` without ever following a symlink or junction (a link is unlinked, never recursed into). */
+function removeTreeNoFollow(abs) {
+  let st;
+  try {
+    st = lstatSync(abs);
+  } catch {
+    return;
+  }
+  if (st.isSymbolicLink()) {
+    try {
+      unlinkSync(abs);
+    } catch {
+      rmdirSync(abs); // a junction: non-recursive, removes only the link
+    }
+    return;
+  }
+  if (!st.isDirectory()) {
+    try {
+      unlinkSync(abs);
+    } catch {
+      chmodSync(abs, 0o666); // read-only build artifacts on Windows
+      unlinkSync(abs);
+    }
+    return;
+  }
+  for (const name of readdirSync(abs)) removeTreeNoFollow(join(abs, name));
+  rmdirSync(abs);
+}
+
+/** Unlink a symlink or junction itself (never its target); throws when neither works. */
+function unlinkLinkOnly(p) {
+  try {
+    unlinkSync(p);
+  } catch {
+    rmdirSync(p); // a junction: non-recursive, removes only the link
+  }
+}
+
+/**
+ * Detach every untracked link (symlink or junction) anywhere in the worktree, e.g. a gitignored node_modules junction into
+ * the main checkout, which worktreeDirt never lists: `git worktree remove` deletes ignored content and must never reach a
+ * link's target. Walks without following links. A link git tracks (mode 120000) is left alone: git removes a symlink
+ * without following it. Fails closed: a read error, a git error, an unlink that fails or a link still present afterwards
+ * throws, so the caller removes nothing.
+ */
+function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly } = {}) {
+  const links = [];
+  const walk = (dir) => {
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, d.name);
+      if (dir === wtPath && d.name === ".git") continue;
+      if (d.isSymbolicLink()) links.push(p);
+      else if (d.isDirectory()) walk(p);
+      else if (!d.isFile() && lstatSync(p).isSymbolicLink()) links.push(p);
+    }
+  };
+  walk(wtPath);
+  if (!links.length) return;
+  const tracked = new Set();
+  for (const e of String(git(["ls-files", "-s", "-z"], wtPath) ?? "").split("\0")) {
+    const tab = e.indexOf("\t");
+    if (tab > 0 && e.startsWith("120000 ")) tracked.add(e.slice(tab + 1));
+  }
+  for (const p of links) {
+    if (tracked.has(relative(wtPath, p).replace(/\\/g, "/"))) continue;
+    unlinkLink(p);
+    let still = true;
+    try {
+      lstatSync(p);
+    } catch (e) {
+      if (e?.code === "ENOENT") still = false;
+    }
+    if (still) throw Object.assign(new Error(`link still attached: ${p}`), { code: "ELINK" });
+  }
+}
+
+/**
+ * The absolute path of build-output entry `rel` when it is safe to delete without following links: lexically under
+ * `wtPath` (not the root itself), and its parent folder resolves (realpath) inside the worktree, so no link sits on the
+ * way. The entry itself may be a link (removeTreeNoFollow only unlinks it). Else null (left alone).
+ */
+function buildOutputTarget(wtPath, rel) {
+  const base = resolve(wtPath);
+  const abs = resolve(base, rel);
+  const lex = (p) => {
+    const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return process.platform === "win32" ? s.toLowerCase() : s;
+  };
+  if (!lex(abs).startsWith(lex(base) + "/")) return null;
+  if (!isInside(dirname(abs), base)) return null;
+  return abs;
+}
+
+/**
+ * Remove one swept worktree and keep its branch. Untracked build output is deleted first (links unlinked, never followed),
+ * then plain `git worktree remove` (no --force), which refuses anything that turned dirty since the check.
+ * Returns { removed: true } or { removed: false, reason }.
+ */
+export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildOutput = [], unlinkLink } = {}) {
+  try {
+    for (const rel of buildOutput) {
+      // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
+      // before `git worktree remove` could walk it.
+      const abs = buildOutputTarget(wtPath, rel);
+      if (abs) removeTreeNoFollow(abs);
+    }
+    detachUntrackedLinks(resolve(wtPath), { git, unlinkLink });
+  } catch (e) {
+    return { removed: false, reason: `build output not removed (${e?.code ?? "error"})` };
+  }
+  try {
+    git(["worktree", "remove", wtPath], repoRoot);
+    return { removed: true };
+  } catch (e) {
+    return { removed: false, reason: gitError(e) };
+  }
+}
+
+/** Bytes under `abs`, never following links (a node_modules junction counts as 0). */
+export function dirBytesNoFollow(abs) {
+  let total = 0;
+  const stack = [abs];
+  while (stack.length) {
+    const p = stack.pop();
+    let st;
+    try {
+      st = lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (st.isSymbolicLink()) continue;
+    if (st.isDirectory()) {
+      try {
+        for (const name of readdirSync(p)) stack.push(join(p, name));
+      } catch {}
+    } else total += st.size;
+  }
+  return total;
+}
+
+export const SWEEP_LOCK_FILE = ".vs-sweep.lock";
+const SWEEP_LOCK_STALE_MS = 2 * 60 * 60_000;
+const SWEEP_LOCK_BEAT_MS = 60_000;
+const TAKEOVER_STALE_MS = 60_000;
+
+const pidAlive = (pid) => {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    return e?.code === "EPERM";
+  }
+};
+
+/**
+ * The sanctuary-wide apply lock (`<root>/.vs-sweep.lock`, { pid, at, nonce }), shared by `vs worktree sweep --apply` and
+ * the auto-sweep, so two removers never race on `git worktree remove`.
+ * - Create is atomic with full content: a private temp file is hard-linked into place (EEXIST when held), so no reader
+ *   ever sees an empty or half-written lock.
+ * - The holder heartbeats (`release.beat()`, called through the sweep; it bumps the file's mtime at most once a minute).
+ *   Stale = the holder's pid is gone, or no heartbeat for staleMs (a hung holder or a reused pid). An unparseable lock is
+ *   stale only after staleMs without a heartbeat.
+ * - Takeover of a stale lock runs under a second exclusive file (`.takeover`), re-checks staleness there, and only then
+ *   unlinks, so two takers never both win. A leftover `.takeover` older than a minute is cleared (that attempt still fails).
+ * Returns a release function (with `.beat()` -> false once the lock is no longer ours), or null when another live sweep
+ * holds it or the lock can't be written.
+ */
+export function acquireSweepLock(root = resolveManagedWorktreeRoot(), { pid = process.pid, clock = Date.now, staleMs = SWEEP_LOCK_STALE_MS, alive = pidAlive } = {}) {
+  const dir = resolve(root);
+  const file = join(dir, SWEEP_LOCK_FILE);
+  const nonce = randomUUID();
+  const body = JSON.stringify({ pid, at: clock(), nonce });
+  const ours = () => {
+    try {
+      return readFileSync(file, "utf8") === body;
+    } catch {
+      return false;
+    }
+  };
+  const create = () => {
+    const tmp = join(dir, `${SWEEP_LOCK_FILE}.${nonce}.tmp`);
+    writeFileSync(tmp, body, { flag: "wx" });
+    try {
+      linkSync(tmp, file);
+      return true;
+    } catch (e) {
+      if (e?.code === "EEXIST") return false;
+      throw e;
+    } finally {
+      try {
+        unlinkSync(tmp);
+      } catch {}
+    }
+  };
+  const staleness = () => {
+    let st;
+    try {
+      st = statSync(file);
+    } catch (e) {
+      return e?.code === "ENOENT" ? "gone" : false;
+    }
+    let held = null;
+    try {
+      held = JSON.parse(readFileSync(file, "utf8"));
+    } catch {}
+    const quiet = !(clock() - st.mtimeMs < staleMs);
+    return held ? !alive(held.pid) || quiet : quiet;
+  };
+  const takeOver = () => {
+    const t = `${file}.takeover`;
+    try {
+      writeFileSync(t, nonce, { flag: "wx" });
+    } catch (e) {
+      try {
+        if (e?.code === "EEXIST" && !(clock() - statSync(t).mtimeMs < TAKEOVER_STALE_MS)) unlinkSync(t);
+      } catch {}
+      return false;
+    }
+    try {
+      const s = staleness();
+      if (s === "gone") return true;
+      if (!s) return false;
+      unlinkSync(file);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      try {
+        unlinkSync(t);
+      } catch {}
+    }
+  };
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (!create() && !(takeOver() && create())) return null;
+  } catch {
+    return null;
+  }
+  let lastBeat = clock();
+  const release = () => {
+    try {
+      if (ours()) unlinkSync(file);
+    } catch {}
+  };
+  release.beat = () => {
+    if (!ours()) return false;
+    if (clock() - lastBeat >= SWEEP_LOCK_BEAT_MS) {
+      try {
+        const t = new Date(clock());
+        utimesSync(file, t, t);
+        lastBeat = clock();
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  };
+  return release;
+}
+
+/**
+ * A `refreshLiveCwds` for sweepMergedWorktrees: reads the roster with `readAgents()` at most every `intervalMs` and returns
+ * liveAgentCwds of it, or null (unknown: nothing removed) when the read throws or comes back empty.
+ */
+export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Date.now } = {}) {
+  let at = -Infinity;
+  let cwds = null;
+  return () => {
+    if (clock() - at < intervalMs) return cwds;
+    at = clock();
+    try {
+      const agents = readAgents();
+      cwds = Array.isArray(agents) && agents.length ? liveAgentCwds(agents) : null;
+    } catch {
+      cwds = null;
+    }
+    return cwds;
+  };
+}
+
+/**
+ * Sweep one repo's linked worktrees: remove those that are merged (ancestor / cherry / tree, see mergedStatus), clean (build
+ * output aside) and not held by a live agent's cwd. The main checkout, default-branch checkouts, locked and prunable
+ * worktrees are never touched. Options:
+ *   targetBranch   default branch name; omitted: detectDefaultBranch (main or master). `targetRefs` overrides both.
+ *   apply          false (default) reports only.
+ *   liveCwds       live agents' cwds (liveAgentCwds). Required to apply: null/undefined keeps every worktree on apply.
+ *   sanctuaryRoot  when set, worktrees outside it are kept ("outside-sanctuary").
+ *   only           optional predicate on the listed worktree (the auto-sweep's merged-unit filter).
+ *   sizes          adds `bytes` to each would-remove/removed result.
+ *   refreshLiveCwds  optional () => cwds | null, called right before each removal (see throttledLiveCwds); null or a
+ *                  throw keeps the worktree ("live-cwd-unknown").
+ *   heartbeat      optional () => bool (the sweep lock's beat): called per worktree; false before a removal keeps it
+ *                  ("sweep-lock-lost").
+ * Returns { repoRoot, apply, defaultBranch, refs, results }. Branch refs are never deleted.
  */
 export function sweepMergedWorktrees(
   repoRoot,
-  { targetBranch = "master", apply = false, git = defaultGit, exists = existsSync } = {},
+  {
+    targetBranch,
+    targetRefs,
+    apply = false,
+    git = defaultGit,
+    liveCwds,
+    sanctuaryRoot = null,
+    only = null,
+    sizes = false,
+    freshGraceMs = FRESH_GRACE_MS,
+    now = Date.now(),
+    refreshLiveCwds = null,
+    heartbeat = null,
+  } = {},
 ) {
   const repoRootAbs = resolve(repoRoot);
+  const def = targetRefs ? { name: targetBranch ?? null, refs: targetRefs } : detectDefaultBranch(repoRoot, { git, preferred: targetBranch });
+  const testRefs = distinctRefs(repoRoot, def.refs, git);
   const wts = listRepoWorktrees(repoRoot, { git });
+  const treeCache = new Map();
+  const liveKnown = Array.isArray(liveCwds);
   const results = [];
+  let removedAny = false;
   wts.forEach((wt, i) => {
     // Skip the main checkout: it is listed first, and its path is the repo root.
-    if (i === 0 || resolve(wt.path) === repoRootAbs) return;
-
-    let merged = false;
-    if (wt.branch && !PROTECTED_BRANCHES.has(wt.branch.toLowerCase())) {
-      try {
-        git(["merge-base", "--is-ancestor", wt.branch, targetBranch], repoRoot);
-        merged = true;
-      } catch {
-        merged = false;
-      }
-    }
-
-    let clean = false;
-    try {
-      clean = String(git(["status", "--porcelain"], wt.path) ?? "").trim() === "";
-    } catch {
-      clean = false;
-    }
-
-    const r = { path: wt.path, branch: wt.branch || null, merged, clean };
-    if (merged && clean) {
-      if (apply) {
-        removeTeamWorktrees([{ path: wt.path, branch: wt.branch }], { git, exists });
-        r.action = "removed";
-      } else {
-        r.action = "would-remove";
-      }
-    } else {
-      r.action = "kept";
-      r.reason = clean ? "unmerged" : "dirty";
-    }
+    if (i === 0 || wt.bare || normPath(wt.path) === normPath(repoRootAbs)) return;
+    if (only && !only(wt)) return;
+    if (heartbeat) heartbeat(); // keep a long sweep's lock fresh (ownership is re-checked before removing)
+    const r = { path: wt.path, branch: wt.branch || null, head: wt.head || null };
     results.push(r);
+    const keep = (reason) => Object.assign(r, { action: "kept", reason });
+    if (wt.prunable) return keep("prunable");
+    if (wt.locked) return keep("locked");
+    if (sanctuaryRoot && !isInside(wt.path, sanctuaryRoot)) return keep("outside-sanctuary");
+    if (wt.branch && (PROTECTED_BRANCHES.has(wt.branch.toLowerCase()) || wt.branch === def.name)) return keep("default-branch");
+    if (!def.refs.length) return keep("no-default-branch");
+
+    // Cheap checks first; git status (worktreeDirt) runs only on a merged candidate.
+    if (isFreshWorktree(wt.path, now, freshGraceMs)) return keep("fresh");
+    if (liveKnown && cwdHoldsWorktree(wt.path, liveCwds)) return keep("live-cwd");
+    const m = mergedStatus(repoRoot, wt.head, testRefs, { git, treeCache });
+    Object.assign(r, { merged: m.merged, mergedBy: m.how });
+    if (!m.merged) return keep("unmerged");
+    const dirt = worktreeDirt(wt.path, { git });
+    r.clean = dirt.clean;
+    if (dirt.buildOutput.length) r.buildOutput = dirt.buildOutput;
+    if (!dirt.clean) return keep(dirt.error ? "unreadable" : "dirty");
+    if (sizes) r.bytes = dirBytesNoFollow(wt.path);
+    if (!apply) {
+      r.action = "would-remove";
+      if (!liveKnown) r.liveCheck = "unknown";
+      return;
+    }
+    if (!liveKnown) return keep("live-cwd-unknown");
+    if (heartbeat && !heartbeat()) return keep("sweep-lock-lost");
+    if (refreshLiveCwds) {
+      // Re-read the roster right before removing: a long sweep must not act on a roster taken minutes ago.
+      let fresh;
+      try {
+        fresh = refreshLiveCwds();
+      } catch {
+        fresh = null;
+      }
+      if (!Array.isArray(fresh)) return keep("live-cwd-unknown");
+      if (cwdHoldsWorktree(wt.path, fresh)) return keep("live-cwd");
+    }
+    const res = removeSweptWorktree(repoRoot, wt.path, { git, buildOutput: dirt.buildOutput });
+    if (res.removed) {
+      r.action = "removed";
+      removedAny = true;
+    } else keep(res.reason);
   });
 
-  if (apply) {
+  if (apply && removedAny) tryGit(git, ["worktree", "prune"], repoRoot); // best-effort
+  return { repoRoot: repoRootAbs, apply, defaultBranch: def.name, refs: def.refs, results };
+}
+
+/**
+ * Every repo with a linked worktree in the sanctuary (`<root>/<repo>/<unit>/.git` -> its common dir), plus the folders
+ * there that are not worktrees (`orphans`: no `.git`; `dangling`: `.git` points at a git dir that is gone). The sweep only
+ * reports orphans and dangling folders, it never deletes them (removal goes through `git worktree remove`).
+ */
+export function discoverSanctuaryRepos(root = resolveManagedWorktreeRoot()) {
+  const repos = new Map();
+  const orphans = [];
+  const dangling = [];
+  const subdirs = (dir) => {
     try {
-      git(["worktree", "prune"], repoRoot);
+      return readdirSync(dir, { withFileTypes: true })
+        .filter((d) => d.isDirectory() && !d.isSymbolicLink())
+        .map((d) => join(dir, d.name));
     } catch {
-      // prune is best-effort
+      return [];
+    }
+  };
+  for (const group of subdirs(root)) {
+    for (const unit of subdirs(group)) {
+      let st;
+      try {
+        st = lstatSync(join(unit, ".git"));
+      } catch {
+        orphans.push({ path: unit, group: basename(group) });
+        continue;
+      }
+      if (!st.isFile()) continue; // a full clone: not a linked worktree, left alone
+      const gd = worktreeGitDir(unit);
+      if (!gd || !existsSync(gd)) {
+        dangling.push({ path: unit, group: basename(group) });
+        continue;
+      }
+      let common;
+      try {
+        common = resolve(gd, readFileSync(join(gd, "commondir"), "utf8").trim());
+      } catch {
+        common = resolve(gd, "..", "..");
+      }
+      const repoRoot = basename(common).toLowerCase() === ".git" ? dirname(common) : common;
+      const key = normPath(repoRoot);
+      if (!repos.has(key)) repos.set(key, { repoRoot, name: basename(repoRoot), sanctuaryWorktrees: 0 });
+      repos.get(key).sanctuaryWorktrees++;
     }
   }
-  return { repoRoot: repoRootAbs, apply, results };
+  return { root: resolve(root), repos: [...repos.values()], orphans, dangling };
+}
+
+/**
+ * Sweep every repo that has worktrees in the sanctuary (idea-464 part 1), each against its own default branch. Same
+ * options as sweepMergedWorktrees (sanctuaryRoot is `root`); `repoFilter(repo)` narrows the repos. `sizes` also sizes the
+ * orphan folders. An apply holds the sanctuary sweep lock (acquireSweepLock); busy -> { busy: true } and nothing runs.
+ * Returns { root, apply, repos: [sweep result + name], orphans, dangling, summary }.
+ */
+export function sweepAllRepos(opts = {}) {
+  const { root = resolveManagedWorktreeRoot(), apply = false } = opts;
+  if (!apply) return sweepAllReposUnlocked(opts);
+  // One remover at a time across processes (the auto-sweep holds the same lock).
+  const release = acquireSweepLock(root);
+  if (!release) return { root: resolve(root), apply, busy: true, repos: [], orphans: [], dangling: [], summary: {} };
+  try {
+    return sweepAllReposUnlocked({ ...opts, heartbeat: release.beat });
+  } finally {
+    release();
+  }
+}
+
+function sweepAllReposUnlocked({ root = resolveManagedWorktreeRoot(), apply = false, liveCwds, git = defaultGit, sizes = false, repoFilter = null, ...rest } = {}) {
+  const d = discoverSanctuaryRepos(root);
+  const repos = [];
+  for (const repo of d.repos) {
+    if (repoFilter && !repoFilter(repo)) continue;
+    try {
+      repos.push({ name: repo.name, ...sweepMergedWorktrees(repo.repoRoot, { apply, liveCwds, git, sanctuaryRoot: root, sizes, ...rest }) });
+    } catch (e) {
+      repos.push({ name: repo.name, repoRoot: repo.repoRoot, apply, error: gitError(e), results: [] });
+    }
+  }
+  const orphans = d.orphans.map((o) => (sizes ? { ...o, bytes: dirBytesNoFollow(o.path) } : o));
+  const summary = {};
+  for (const r of repos) {
+    const s = (summary[r.name] = { defaultBranch: r.defaultBranch ?? null, worktrees: r.results.length, remove: 0, bytes: 0, kept: {} });
+    for (const x of r.results) {
+      if (x.action === "would-remove" || x.action === "removed") {
+        s.remove++;
+        s.bytes += x.bytes ?? 0;
+      } else s.kept[x.reason] = (s.kept[x.reason] ?? 0) + 1;
+    }
+  }
+  for (const o of orphans) {
+    const s = (summary[`orphans:${o.group}`] ??= { orphanFolders: 0, bytes: 0 });
+    s.orphanFolders++;
+    s.bytes += o.bytes ?? 0;
+  }
+  return { root: d.root, apply, repos, orphans, dangling: d.dangling, summary };
 }
 
 /**
