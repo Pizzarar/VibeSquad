@@ -72,6 +72,8 @@ import {
   readJsonFileWithBom,
 } from "../user-settings.mjs";
 import { LESSONS_BEGIN, LESSONS_END, readLessons } from "../lessons.mjs";
+/** idea-419: stands in for forwarded text when the host-path redactor throws (never forward raw). */
+const REDACTION_WITHHELD = "(message withheld: host-path redaction failed; see the server log; run 'vs log --since-me')";
 
 type Labels = Record<string, string>;
 
@@ -3267,7 +3269,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const target = toOverlord ? await resolveWatchOverlord(paseo, d.set) : await resolveWatchTarget(paseo, d.set);
       if (!target) return log(`watch ${d.setId}: no live ${toOverlord ? "Overlord" : "owner or lead"} for ${d.team}/${d.lane}; ping held`);
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
-      const text = toOverlord ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
+      // idea-419: the ping text carries raw item reports (watch-sets.mjs itemLine) or a W4 merged digest: redacted like the finals.
+      const head = (await redactReportText(d.text, [target.cwd])) || REDACTION_WITHHELD;
+      const text = toOverlord ? `${head}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? head : `${head}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
       const detail = d.detail ? await redactReportText(d.detail, [target.cwd]) : "";
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
@@ -3300,7 +3304,7 @@ ${detail}` : text, refs: [d.setId] };
           `Output ONLY the merged digest text. Do not run any commands, do not send messages, and do not modify files.`,
           ``,
           `--- watch ${d.setId} report ---`,
-          d.text,
+          (await redactReportText(d.text, [target.cwd])) || REDACTION_WITHHELD, // idea-419: the merge worker is an agent too
         ].join("\n");
         const handle = await paseo.agents.create({
           config: { provider, modeId, thinkingOptionId, featureValues },
@@ -3878,7 +3882,8 @@ ${detail}` : text, refs: [d.setId] };
           }
           parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}.${body} Run 'vs log --since-me' if more context is needed.`);
         }
-        const text = parts.join("\n\n");
+        // idea-419: the whole wake is redacted at the send: the relayed [done]/log line (last.text) is raw worker text too.
+        const text = (await redactReportText(parts.join("\n\n"), [liveLead.cwd])) || REDACTION_WITHHELD;
         for (const k of watchKeys) watchSending.add(k);
         try {
           if (watchKeys.length) await watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice

@@ -1967,3 +1967,80 @@ test("idea-352: the completion ping carries each watched worker's final message 
     sb.cleanup();
   }
 });
+
+// ---- idea-419: every relay path to an agent redacts host-path tokens (the ping text, the plain [done] wake, the W4 merge) ----
+const HOSTY = /file:|%3A|%5C|Ann|Lee|Program Files|My App|[A-Za-z]:[\\/]|secret/;
+
+test(
+  "idea-419 plugin: the watch ping's item reports and the plain [done] wake line are token-redacted (encoded file://, spaced, multi-space paths); the rest stays",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+      ["w-2", mk("w-2", "worker")],
+      ["w-3", mk("w-3", "worker")],
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [
+        { ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: fixed [a.ts](file:///C%3A/Users/Ann%20Lee/AppData/Local/VibeSquad/worktrees/VibeSquad/unit-z/server/a.ts#L3) ok", refs: [] },
+        { ts: iso(now + 1), agent: "w-2", lane: "vibesquad", type: "done", text: String.raw`PASS: verified D:\work\Ann  Lee\secret.txt and file://nas/share/secret.md done`, refs: [] },
+        { ts: iso(now + 2), agent: "w-3", lane: "vibesquad", type: "done", text: "PASS: w3 ran C:/Program Files/My App/x.exe, ok", refs: [] },
+      ]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      const ping = toLead.find((s) => s.text.includes(`Watch ${id}`));
+      assert.ok(ping, JSON.stringify(toLead));
+      assert.match(ping.text, /PASS: fixed \[a\.ts\]\(server\/a\.ts#L3\) ok/);
+      assert.match(ping.text, /PASS: verified <host-path> and <host-path> done/);
+      const normal = toLead.find((s) => s.text.startsWith("New team log event"));
+      assert.ok(normal, JSON.stringify(toLead));
+      assert.match(normal.text, /\[done\] PASS: w3 ran <host-path>, ok\. Run/);
+      for (const s of h.sent) {
+        assert.doesNotMatch(s.text, HOSTY, s.text);
+        assert.doesNotMatch(s.text, /request failed|detail names a host path/, s.text);
+      }
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-419 plugin: the W4 merge worker's prompt and the merged digest it returns are token-redacted",
+  withPluginEnv(async (sb) => {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ...refs.map((r) => [r, mk(r, "worker")])]);
+    const now = Date.now();
+    addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: now - 1000 });
+    const spawns = [];
+    const h = await pluginHarness(sb, agents, {
+      create: async (payload) => {
+        spawns.push(payload);
+        return { id: "flash-1", waitForFinish: async () => ({ status: "idle" }) };
+      },
+      timelineFor: (aid) => (aid === "flash-1" ? [{ item: { type: "assistant_message", text: String.raw`MERGED: 6 PASS, log at C:\Users\Ann Lee\AppData\x.log ok` } }] : []),
+    });
+    try {
+      writeLog(sb, refs.map((ref, i) => ({ ts: iso(now + i), agent: ref, lane: "vibesquad", type: "done", text: `see file:///C%3A%5CUsers%5CAnn%20Lee%5C${ref}.md ${longReport(ref)}`, refs: [] })));
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      assert.equal(spawns.length, 1, "one Flash worker spawned");
+      assert.doesNotMatch(spawns[0].prompt, HOSTY, "the merge worker is an agent: no host path in its prompt");
+      assert.match(spawns[0].prompt, /see <host-path>/);
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      assert.equal(toLead.length, 1, JSON.stringify(h.sent));
+      assert.match(toLead[0].text, /MERGED: 6 PASS, log at <host-path> ok/);
+      assert.doesNotMatch(toLead[0].text, HOSTY);
+    } finally {
+      h.stop();
+    }
+  }),
+);

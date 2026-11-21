@@ -19,7 +19,9 @@ function leaks(text) {
   const t = String(text);
   return (
     /(?<![A-Za-z0-9])[A-Za-z]:[\\/]/.test(t) ||
-    /file:\/\//i.test(t) ||
+    /file:/i.test(t) ||
+    /%3A|%5C|%2F(home|Users)/i.test(t) ||
+    /\b(Smith|Ann|Lee|bob|Program Files|My App|secret)\b/.test(t) ||
     /%(LOCALAPPDATA|APPDATA|USERPROFILE)%/i.test(t) ||
     /(?<![\w.~-])\/(?:home|Users)\/[^/\s]/i.test(t) ||
     /(?<![\w.~-])\/(?:mnt\/)?[a-z]\/Users\//i.test(t) ||
@@ -81,6 +83,44 @@ test("idea-419: Windows, POSIX, Git-Bash, WSL, UNC, env-var and JSON-escaped pat
     assert.equal(out, want, input);
     assert.equal(leaks(out), false, `${input} -> ${out}`);
   }
+});
+
+test("idea-419 R2: percent-encoded file:// URLs, file://host/ and encoded bare paths are swapped (review High 1)", () => {
+  const cases = [
+    ["[a](file:///C%3A/Users/Jo%20Smith/projects/Proj/src/a.ts#L9) x", "[a](src/a.ts#L9) x"],
+    ["[w](file:///C%3A%5CUsers%5CAnn%20Lee%5CAppData%5CLocal%5CVibeSquad%5Cworktrees%5CVibeSquad%5Cunit-q%5Ccli%5Cvs.mjs) x", "[w](cli/vs.mjs) x"],
+    ["[s](file:///C%3A%5CUsers%5Cbob%5Csecret.txt) x", "[s](<host-path>) x"],
+    ["[n](file://nas/share/secret.md) and FILE://nas/share/secret.md", "[n](<host-path>) and <host-path>"],
+    ["link file:%2F%2F%2FD%3A%2Fwork%2Fsecret ok", "link <host-path> ok"],
+    ["bare C%3A%5CUsers%5Cbob%5Cx.txt and D%3A%2Fwork%2Fsecret ok", "bare <host-path> and <host-path> ok"],
+    ["unc %5C%5Cnas%5Cshare%5Csecret ok; posix %2Fhome%2Fbob%2Fx ok", "unc <host-path> ok; posix <host-path> ok"],
+  ];
+  for (const [input, want] of cases) {
+    const out = r(input);
+    assert.equal(out, want, input);
+    assert.equal(leaks(out), false, `${input} -> ${out}`);
+  }
+});
+
+test("idea-419 R2: multi-space and spaced forward-slash paths outside the repo roots are swapped whole (review High 2)", () => {
+  const cases = [
+    [String.raw`log C:\Users\Ann  Lee\docs\x.txt ok`, "log <host-path> ok"],
+    ["log C:/Users/Ann  Lee/docs/x.txt ok", "log <host-path> ok"],
+    ["run C:/Program Files/My App/bin/x.exe ok", "run <host-path> ok"],
+    ["see D:/Users/Ann Lee/x.md, done", "see <host-path>, done"],
+    ["posix /home/ann lee/notes/x.txt ok", "posix <host-path> ok"],
+    ["mac /Users/Ann Lee/Library/x.plist ok", "mac <host-path> ok"],
+    [String.raw`tab C:\Users\Ann   Lee\x and more`, "tab <host-path> and more"],
+  ];
+  for (const [input, want] of cases) {
+    const out = r(input);
+    assert.equal(out, want, input);
+    assert.equal(leaks(out), false, `${input} -> ${out}`);
+  }
+  // What ends the token: sentence punctuation, a digit-led word, a word with no separator.
+  assert.equal(r("Ran from D:/x/Proj: 41/41 pass"), "Ran from <host-path>: 41/41 pass");
+  assert.equal(r(String.raw`at D:\x\y.ts 3/4 tests`), "at <host-path> 3/4 tests");
+  assert.equal(r("at D:/x/y.ts and https://github.com/a/b ok"), "at <host-path> and https://github.com/a/b ok");
 });
 
 test("idea-419: text without a host path is returned unchanged", () => {
