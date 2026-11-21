@@ -139,12 +139,20 @@ const TESTER_INPUT_MAX_CHARS = 8000;
 const TESTER_TIMELINE_MAX = 200;
 const testerForbidden = (why = "forbidden: bug-tester device cannot access this route") => Object.assign(new Error(why), { status: 403 });
 
-/** The chat prefix every tester message carries (server-stamped; a body can never drop or change it). */
-export const testerChatPrefix = (name) => `[Alpha Tester · ${String(name ?? "").trim() || "tester"}] `;
+/**
+ * The chat prefix every tester message carries (server-stamped; a body can never drop or change it): `[Alpha Tester · <name>] `,
+ * or `[Alpha Tester · <name> · card:<cardId>] ` for a line about one of the caller's cards (the handler checks ownership).
+ * Brackets, line breaks and "·" are blanked out of the name so a device name can never forge a card tag or close the stamp.
+ */
+export const testerChatPrefix = (name, cardId = null) => {
+  const n = String(name ?? "").replace(/[\r\n[\]·]/g, " ").replace(/\s+/g, " ").trim() || "tester";
+  const card = typeof cardId === "string" && /^idea-\d{1,12}$/.test(cardId) ? ` · card:${cardId}` : "";
+  return `[Alpha Tester · ${n}${card}] `;
+};
 
 /** `text` with the caller's prefix in front (once). */
-export function stampTesterText(caller, text) {
-  const prefix = testerChatPrefix(caller?.name);
+export function stampTesterText(caller, text, { cardId = null } = {}) {
+  const prefix = testerChatPrefix(caller?.name, cardId);
   const t = String(text ?? "").trim();
   return t.startsWith(prefix) ? t : `${prefix}${t}`;
 }
@@ -211,11 +219,11 @@ export async function fetchTesterTimeline(backend, id, { limit, before } = {}) {
 }
 
 /** Send a tester's chat line to an allowed agent: prefixed, never owner, never interrupt / steer-only, no images. */
-export async function sendTesterInput(backend, caller, id, text) {
+export async function sendTesterInput(backend, caller, id, text, { cardId = null } = {}) {
   const t = String(text ?? "").trim();
   if (!t) throw Object.assign(new Error("text is required"), { status: 400 });
   if (t.length > TESTER_INPUT_MAX_CHARS) throw Object.assign(new Error(`text too long (${TESTER_INPUT_MAX_CHARS} chars max)`), { status: 413 });
-  await backend.sendAgentPrompt(id, stampTesterText(caller, t), { owner: false });
+  await backend.sendAgentPrompt(id, stampTesterText(caller, t, { cardId }), { owner: false });
 }
 
 const TESTER_PASS_EVENTS = new Set(["connected", "disconnected", "hb"]);

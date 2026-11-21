@@ -385,6 +385,9 @@ export const isCanonicalTesterPath = (path) =>
   !path.split("/").some((seg) => seg === "." || seg === "..") &&
   !/[%\\\u0000]/.test(path);
 
+/** A path shape no tester route ever has: doubled or back slashes, %-encoding, NUL or a dot segment. */
+const isSuspectPath = (path) => typeof path === "string" && (path.includes("//") || /[%\\\u0000]/.test(path) || path.split("/").some((seg) => seg === "." || seg === ".."));
+
 export const agentWriteAllowed = (path) => AGENT_WRITE_ALLOWLIST.some((r) => (r instanceof RegExp ? r.test(path) : r === path));
 
 const forbidden = (why) => Object.assign(new Error(why), { status: 403 });
@@ -2008,26 +2011,82 @@ function safeJsonText(v) {
   }
 }
 
-/** The telemetry a report may carry, sanitized and capped: clickedPoint {x,y}, cursorNode, scene, state, buildHash, logLines. */
-export function sanitizeTesterTelemetry(src) {
+// Telemetry contract (locked with @playtest-overlay): the known fields below are sanitized and rendered into the card; any other
+// key inside `telemetry` is kept on the stored card (forward-compat) as cleaned JSON, never rendered. Prototype keys are
+// dropped at every depth, logLines is trimmed server-side to its last TESTER_LOG_LINES_MAX lines (never a reject) before it is
+// defanged, and the stored telemetry must serialize to at most TESTER_TELEMETRY_MAX_BYTES UTF-8 bytes (413 otherwise).
+export const TESTER_TELEMETRY_MAX_BYTES = 65536;
+export const TESTER_LOG_LINES_MAX = 200;
+const TESTER_TELEMETRY_MAX_DEPTH = 16;
+const TESTER_RESERVED_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const TESTER_TELEMETRY_KNOWN = new Set(["clickedPoint", "cursorNode", "scene", "state", "buildHash", "logLines", "seed", "adapter", "viewport", "engine", "platform"]);
+
+/** A forward-compat telemetry value as clean JSON: prototype keys dropped at every depth, control chars out, no non-finite numbers. */
+function cleanTelemetryJson(v, depth = 0) {
+  if (v === null || typeof v === "boolean") return v;
+  if (typeof v === "string") return stripControl(v);
+  if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+  if (depth >= TESTER_TELEMETRY_MAX_DEPTH) return undefined;
+  if (Array.isArray(v)) return v.map((x) => cleanTelemetryJson(x, depth + 1)).map((x) => (x === undefined ? null : x));
+  if (isPlainObj(v)) {
+    const out = {};
+    for (const k of Object.keys(v)) {
+      if (TESTER_RESERVED_KEYS.has(k)) continue;
+      const c = cleanTelemetryJson(v[k], depth + 1);
+      if (c !== undefined) out[k] = c;
+    }
+    return out;
+  }
+  return undefined;
+}
+
+/**
+ * The telemetry a report may carry, sanitized and capped: clickedPoint {x,y}, cursorNode, scene, state, buildHash, logLines,
+ * seed, adapter {name,version}, viewport {w,h}, engine, platform; plus (`keepUnknown`, i.e. a `telemetry` object) unknown keys.
+ * Throws 413 when the result serializes past TESTER_TELEMETRY_MAX_BYTES.
+ */
+export function sanitizeTesterTelemetry(src, { keepUnknown = false } = {}) {
   const t = isPlainObj(src) ? src : {};
   const out = {};
   const num = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
+  const str = (v) => typeof v === "string" && v.trim() !== "";
   if (isPlainObj(t.clickedPoint)) {
     const x = num(t.clickedPoint.x);
     const y = num(t.clickedPoint.y);
     if (x !== null && y !== null) out.clickedPoint = { x, y };
   }
-  for (const [k, max] of [["cursorNode", 300], ["scene", 300], ["buildHash", 120]]) {
-    if (typeof t[k] === "string" && t[k].trim()) out[k] = clipTelemetry(t[k], max);
+  for (const [k, max] of [["cursorNode", 300], ["scene", 300], ["buildHash", 120], ["seed", 200], ["engine", 120], ["platform", 120]]) {
+    if (str(t[k])) out[k] = clipTelemetry(t[k], max);
+  }
+  if (isPlainObj(t.adapter) && (str(t.adapter.name) || str(t.adapter.version))) {
+    out.adapter = {
+      ...(str(t.adapter.name) ? { name: clipTelemetry(t.adapter.name, 120) } : {}),
+      ...(str(t.adapter.version) ? { version: clipTelemetry(t.adapter.version, 120) } : {}),
+    };
+  }
+  if (isPlainObj(t.viewport)) {
+    const w = num(t.viewport.w);
+    const h = num(t.viewport.h);
+    if (w !== null && h !== null) out.viewport = { w, h };
   }
   if (t.state !== undefined && t.state !== null) {
-    const raw = typeof t.state === "string" ? t.state : safeJsonText(t.state).slice(0, 4000);
+    const raw = typeof t.state === "string" ? t.state : safeJsonText(cleanTelemetryJson(t.state)).slice(0, 4000);
     if (raw.trim()) out.state = clipTelemetry(raw, 2000);
   }
   if (Array.isArray(t.logLines)) {
-    const lines = t.logLines.filter((l) => typeof l === "string").slice(-50).map((l) => clipTelemetry(l, 500));
+    // trim to the newest lines first (never a reject), then clip + defang each
+    const lines = t.logLines.filter((l) => typeof l === "string").slice(-TESTER_LOG_LINES_MAX).map((l) => clipTelemetry(l, 500));
     if (lines.length) out.logLines = lines;
+  }
+  if (keepUnknown) {
+    for (const k of Object.keys(t)) {
+      if (TESTER_TELEMETRY_KNOWN.has(k) || TESTER_RESERVED_KEYS.has(k) || !k.trim() || k.length > 128) continue;
+      const c = cleanTelemetryJson(t[k], 1);
+      if (c !== undefined) out[k] = c;
+    }
+  }
+  if (Buffer.byteLength(safeJsonText(out), "utf8") > TESTER_TELEMETRY_MAX_BYTES) {
+    throw testerStatus(`telemetry too large (${TESTER_TELEMETRY_MAX_BYTES} bytes of JSON max after logLines trimming)`, 413);
   }
   return out;
 }
@@ -2038,6 +2097,11 @@ function testerReportMarkdown(caller, text, tel) {
   if (tel.scene) facts.push(`- Scene: ${tel.scene}`);
   if (tel.state) facts.push(`- State: ${tel.state}`);
   if (tel.buildHash) facts.push(`- Build: ${tel.buildHash}`);
+  if (tel.seed) facts.push(`- Seed: ${tel.seed}`);
+  if (tel.engine) facts.push(`- Engine: ${tel.engine}`);
+  if (tel.platform) facts.push(`- Platform: ${tel.platform}`);
+  if (tel.adapter) facts.push(`- Adapter: ${[tel.adapter.name, tel.adapter.version].filter(Boolean).join(" ")}`);
+  if (tel.viewport) facts.push(`- Viewport: ${tel.viewport.w}x${tel.viewport.h}`);
   if (tel.clickedPoint) facts.push(`- Clicked point: x=${tel.clickedPoint.x}, y=${tel.clickedPoint.y}`);
   if (tel.cursorNode) facts.push(`- Cursor node: ${tel.cursorNode}`);
   if (tel.logLines?.length) facts.push(`- Log (last ${tel.logLines.length} lines):`, "```text", ...tel.logLines, "```");
@@ -2072,14 +2136,30 @@ function decodeTesterScreenshot(body) {
 }
 
 /** Park one tester card on `team`'s bug lane: forced source, lane and tester meta (addInboxCardsAsync scope). */
-async function parkTesterCard(caller, team, laneId, text, rootDir, telemetry = null) {
-  const meta = { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller), ...(telemetry ? { telemetry } : {}) };
+async function parkTesterCard(caller, team, laneId, text, rootDir, telemetry = null, clientReportId = null) {
+  const meta = { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller), ...(telemetry ? { telemetry } : {}), ...(clientReportId ? { clientReportId } : {}) };
   // `ideas: [text]`: one card whatever the line count (a plain multi-line `text` would be split into one card per line).
   const r = await addInboxCardsAsync({ ideas: [text], teamId: team.id }, rootDir, { teamId: team.id, laneId, source: TESTER_SOURCE, meta });
   const card = r?.added?.[0];
   if (!card) throw new Error("tester card was not parked");
   return card;
 }
+
+const TESTER_CLIENT_REPORT_ID_MAX = 128;
+/** body.clientReportId: absent -> null; else a 1..128 char string without control characters, or a 400. */
+function testerClientReportId(v) {
+  if (v === undefined || v === null) return null;
+  if (typeof v !== "string" || !v.length || v.length > TESTER_CLIENT_REPORT_ID_MAX || /[\u0000-\u001f\u007f]/.test(v)) {
+    throw testerStatus(`clientReportId must be a string of 1-${TESTER_CLIENT_REPORT_ID_MAX} characters`, 400);
+  }
+  return v;
+}
+/** The card this caller already filed for (team, clientReportId), or null. Scoped to the caller: another tester's id never matches. */
+function findTesterReport(caller, teamId, clientReportId) {
+  return readInboxCards().find((c) => c?.testerDeviceId === caller.id && sameId(c.teamId, teamId) && c.clientReportId === clientReportId) ?? null;
+}
+/** In-flight reports keyed by (caller.id, teamId, clientReportId): a concurrent resend waits for the first instead of parking twice. */
+const testerReportsInFlight = new Map();
 
 /** A card as its tester sees it: no attachment paths, delivery target or other owner-side fields; text redacted. */
 function testerCardView(c) {
@@ -2098,6 +2178,9 @@ function testerCardView(c) {
   };
 }
 
+const TESTER_CARD_ID_RE = /^idea-\d{1,12}$/;
+/** The card id a stamped tester chat line carries (`[Alpha Tester · <name> · card:<id>] ...`), or null. */
+const testerChatCardId = (text) => /^\[Alpha Tester · [^\]\n·]* · card:(idea-\d{1,12})\] /.exec(String(text ?? ""))?.[1] ?? null;
 /** The caller's own card `cardId` (testerDeviceId === caller.id, on an allowed Squad), else 403 (also for a missing card). */
 function ownTesterCard(caller, cardId) {
   const id = String(cardId ?? "").trim();
@@ -2109,10 +2192,13 @@ function ownTesterCard(caller, cardId) {
   return card;
 }
 
-/** Deliver a tester card to its bug lane: { delivered, deliveryError?, agentId }. A delivery failure is not a request error. */
-async function deliverTesterCard(cardId, rootDir) {
+/**
+ * Deliver a tester card to its bug lane: { delivered, deliveryError?, agentId }. A delivery failure is not a request error.
+ * `agentClient`: the injected backend (createVibesquadMiddleware opts.backend, tests); null = sendInboxCard's own runner client.
+ */
+async function deliverTesterCard(cardId, rootDir, agentClient = null) {
   try {
-    const r = await sendInboxCard({ cardId }, rootDir);
+    const r = await sendInboxCard({ cardId, ...(agentClient ? { agentClient } : {}) }, rootDir);
     return { delivered: true, agentId: r?.agentId ?? r?.card?.deliveredTo ?? null };
   } catch (e) {
     return { delivered: false, deliveryError: redactTester(e?.message ?? e), agentId: null };
@@ -2141,38 +2227,63 @@ function handleTesterTeams(req, res, { rootDir, caller }) {
  * screenshotBase64?, screenshotMime? } -> one card on the Squad's bug lane (source alpha-tester, tester meta), its screenshot
  * attached, delivered to the bug-intake agent. Answers { ok, cardId, delivered, deliveryError?, laneId, threadAgentId }.
  */
-async function handleTesterReport(req, res, { rootDir, caller, backend }) {
+async function handleTesterReport(req, res, { rootDir, caller, backend, deliveryClient = null }) {
   if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
   try {
     const body = await readTesterBody(req, TESTER_REPORT_MAX_BYTES);
     const { team, laneId } = testerTeamFor(caller, body.teamId, rootDir);
+    const clientReportId = testerClientReportId(body.clientReportId);
     const text = testerText(body.text);
-    const telemetry = sanitizeTesterTelemetry(isPlainObj(body.telemetry) ? body.telemetry : body);
+    const fromTelemetry = isPlainObj(body.telemetry);
+    const telemetry = sanitizeTesterTelemetry(fromTelemetry ? body.telemetry : body, { keepUnknown: fromTelemetry });
     const shot = decodeTesterScreenshot(body); // validated before the card exists: a bad screenshot parks nothing
-    const card = await parkTesterCard(caller, team, laneId, testerReportMarkdown(caller, text, telemetry), rootDir, telemetry);
-    const out = { ok: true, cardId: card.id, laneId };
-    if (shot) {
-      try {
-        await attachInboxMedia({ cardId: card.id, mime: shot.mime, bytes: shot.bytes });
-        out.screenshotAttached = true;
-      } catch (e) {
-        out.screenshotAttached = false;
-        out.screenshotError = redactTester(e?.message ?? e);
-      }
+    if (!clientReportId) return sendJson(res, 200, await fileTesterReport({ caller, team, laneId, text, telemetry, shot, rootDir, backend, deliveryClient }));
+    // Idempotent resend: scoped to (caller.id, teamId, clientReportId), so one tester can never probe another's ids.
+    const key = JSON.stringify([String(caller.id), String(team.id).toLowerCase(), clientReportId]);
+    for (let pending = testerReportsInFlight.get(key); pending; pending = testerReportsInFlight.get(key)) await pending.catch(() => {});
+    const prior = findTesterReport(caller, team.id, clientReportId);
+    if (prior) {
+      const threadAgentId = prior.deliveredTo ?? (await testerIntakeAgentFor(backend, team))?.id ?? null;
+      return sendJson(res, 200, { ok: true, cardId: prior.id, delivered: Boolean(prior.deliveredAt), laneId: prior.laneId ?? laneId, threadAgentId, deduplicated: true });
     }
-    const d = await deliverTesterCard(card.id, rootDir);
-    out.delivered = d.delivered;
-    if (d.deliveryError) out.deliveryError = d.deliveryError;
-    out.threadAgentId = d.agentId ?? (await testerIntakeAgentFor(backend, team))?.id ?? null;
-    return sendJson(res, 200, out);
+    const run = fileTesterReport({ caller, team, laneId, text, telemetry, shot, rootDir, backend, deliveryClient, clientReportId });
+    testerReportsInFlight.set(key, run);
+    try {
+      return sendJson(res, 200, await run);
+    } finally {
+      testerReportsInFlight.delete(key);
+    }
   } catch (e) {
     return sendTesterError(res, e, "tester report");
   }
 }
 
+/** Park, attach and deliver one validated tester report; resolves to the POST /tester/report answer body. */
+async function fileTesterReport({ caller, team, laneId, text, telemetry, shot, rootDir, backend, deliveryClient = null, clientReportId = null }) {
+  const card = await parkTesterCard(caller, team, laneId, testerReportMarkdown(caller, text, telemetry), rootDir, telemetry, clientReportId);
+  const out = { ok: true, cardId: card.id, laneId };
+  if (shot) {
+    try {
+      await attachInboxMedia({ cardId: card.id, mime: shot.mime, bytes: shot.bytes });
+      out.screenshotAttached = true;
+    } catch (e) {
+      out.screenshotAttached = false;
+      out.screenshotError = redactTester(e?.message ?? e);
+    }
+  }
+  const d = await deliverTesterCard(card.id, rootDir, deliveryClient);
+  out.delivered = d.delivered;
+  if (d.deliveryError) out.deliveryError = d.deliveryError;
+  out.threadAgentId = d.agentId ?? (await testerIntakeAgentFor(backend, team))?.id ?? null;
+  return out;
+}
+
 /**
- * GET /__vibesquad/tester/thread?teamId=&limit= -> { ok, teamId, laneId, agent: { id, title, status } | null, messages };
- * POST { teamId?, text } -> the line goes to the bug-intake agent, prefixed and non-owner -> { ok, agentId }.
+ * GET /__vibesquad/tester/thread?teamId=&limit=&after= -> { ok, teamId, laneId, agent: { id, title, status } | null, messages,
+ * cursor }; `after` (a message id) returns only the messages strictly after it when it is still in the window; `cursor` is the
+ * last returned id (or `after` when nothing is newer, or null). messages[] carry `cardId` when the line was card-tagged.
+ * POST { teamId?, text, cardId? } -> the line goes to the bug-intake agent, prefixed (with `card:<cardId>` for one of the
+ * caller's own cards on that Squad) and non-owner -> { ok, agentId }.
  */
 async function handleTesterThread(req, res, { rootDir, caller, backend }) {
   try {
@@ -2180,24 +2291,34 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       const q = new URL(req.url, "http://x").searchParams;
       const { team, laneId } = testerTeamFor(caller, q.get("teamId") || q.get("team") || "", rootDir);
       const limit = Math.min(Math.max(Number(q.get("limit")) || TESTER_THREAD_DEFAULT, 1), TESTER_THREAD_MAX);
+      const after = (q.get("after") ?? "").trim();
       const a = await testerIntakeAgentFor(backend, team);
-      if (!a) return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: null, messages: [] });
-      const t = await fetchTesterTimeline(backend, a.id, { limit });
-      const messages = t.entries.map((e) => ({
-        id: `${a.id}:${e.seqStart ?? ""}`,
-        role: e.item.type === "user_message" ? "user" : "assistant",
-        text: e.item.text,
-        ts: e.timestamp ?? null,
-      }));
-      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") }, messages });
+      if (!a) return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: null, messages: [], cursor: null });
+      const t = await fetchTesterTimeline(backend, a.id, { limit: after ? TESTER_THREAD_MAX : limit });
+      const all = t.entries.map((e) => {
+        const role = e.item.type === "user_message" ? "user" : "assistant";
+        const cardId = role === "user" ? testerChatCardId(e.item.text) : null;
+        return { id: `${a.id}:${e.seqStart ?? ""}`, role, text: e.item.text, ts: e.timestamp ?? null, ...(cardId ? { cardId } : {}) };
+      });
+      const at = after ? all.findIndex((m) => m.id === after) : -1;
+      const messages = at >= 0 ? all.slice(at + 1, at + 1 + limit) : all.slice(-limit);
+      const cursor = messages.length ? messages[messages.length - 1].id : at >= 0 ? after : null;
+      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") }, messages, cursor });
     }
     if (req.method === "POST") {
       const body = await readTesterBody(req);
       const { team } = testerTeamFor(caller, body.teamId, rootDir);
       const text = testerText(body.text);
+      let cardId = null;
+      if (body.cardId !== undefined && body.cardId !== null) {
+        if (typeof body.cardId !== "string" || !TESTER_CARD_ID_RE.test(body.cardId.trim())) throw testerStatus("cardId must be an inbox card id (idea-<n>)", 400);
+        const card = ownTesterCard(caller, body.cardId);
+        if (!sameId(card.teamId, team.id)) throw testerStatus("forbidden: not one of this tester's cards", 403);
+        cardId = card.id;
+      }
       const a = await testerIntakeAgentFor(backend, team);
       if (!a) throw testerStatus(`no live bug-intake agent in Squad "${team.id}"; your report is parked in the inbox`, 409);
-      await sendTesterInput(backend, caller, a.id, text);
+      await sendTesterInput(backend, caller, a.id, text, { cardId });
       return sendJson(res, 200, { ok: true, agentId: a.id });
     }
     return sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -2249,13 +2370,13 @@ async function handleTesterInboxAttachment(req, res, { caller }) {
 }
 
 /** POST /__vibesquad/inbox/send { cardId } for a tester: deliver one of its own cards to its bug lane. */
-async function handleTesterInboxSend(req, res, { rootDir, caller }) {
+async function handleTesterInboxSend(req, res, { rootDir, caller, deliveryClient = null }) {
   if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
   try {
     const body = await readTesterBody(req);
     const card = ownTesterCard(caller, body.cardId);
     if (card.deliveredAt) return sendJson(res, 200, { ok: true, cardId: card.id, delivered: true, already: true });
-    const d = await deliverTesterCard(card.id, rootDir);
+    const d = await deliverTesterCard(card.id, rootDir, deliveryClient);
     return sendJson(res, 200, { ok: true, cardId: card.id, delivered: d.delivered, ...(d.deliveryError ? { deliveryError: d.deliveryError } : {}), agentId: d.agentId });
   } catch (e) {
     return sendTesterError(res, e, "tester inbox send");
@@ -2282,6 +2403,10 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/__vibesquad/local-login/nonce") return handleLocalLoginNonce(req, res);
     if (path === "/__vibesquad/local-proof") return handleLocalProof(req, res); // X1 L3: server proves the token before `vs pair` sends it
     const isApi = path.startsWith("/__vibesquad/") || path.startsWith("/api/");
+    // E6a: a bug-tester never reaches anything through a doubled slash, backslash, %-encoding or dot segment (e.g. //api/settings,
+    // which is not an API path and would otherwise fall through to next()). Checked only for such paths, so plain static
+    // requests pay nothing.
+    if (isSuspectPath(path) && testerDeviceOf(req)) return sendJson(res, 403, { error: "forbidden: bug-tester device cannot access this route" });
     if (isApi && !isTrusted(req)) {
       if (originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4: a cookie write that failed the same-origin proof
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
@@ -2447,7 +2572,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const limit = path === "/__vibesquad/tester/report" ? TESTER_REPORT_MAX_BYTES : path === "/__vibesquad/inbox/attachment" ? INBOX_MEDIA_MAX_BYTES : MAX_BODY_BYTES;
     if (Number(req.headers["content-length"] ?? 0) > limit) return sendJson(res, 413, { error: "payload too large" });
     const backend = opts.backend ?? sharedRunnerBackend();
-    const ctx = { rootDir, caller, backend };
+    const ctx = { rootDir, caller, backend, deliveryClient: opts.backend ?? null };
     if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
     if (path === "/api/teams" || path === "/__vibesquad/teams") return handleTesterTeams(req, res, ctx);
     if (path.startsWith("/__vibesquad/runner/")) {
