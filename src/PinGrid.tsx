@@ -16,13 +16,13 @@ import { useIsShown } from "./panes";
 import { IdeaBox, IdeaPlusTile, noteSendTo, SendToCard, showPinToast, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
 import { PinMenu } from "./PinMenu";
 import { DoneRow, DoneShelf, LooksDoneCard, useDoneShelfOpen } from "./PinDone";
-import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, saveTeams, type Member, type TeamView } from "./teams";
+import { countsAsNeedsYou, getBrainstormThresholds, isHubLane, isHubLaneId, saveTeams, type Member, type TeamView } from "./teams";
 import { ConfirmButton, StatusDot, usePaneClass } from "./ui";
 import { Avatar, TeamEmblem } from "./pixel";
 import { UsageDashboard } from "./UsageDashboard";
 import { laneCodeOf, ordOf } from "./teams";
 import { laneCodeFor } from "./identity";
-import { cleanTitle } from "./ui";
+import { agentDisplayName } from "./identity";
 import { PixelIcon } from "./PixelIcon";
 import { pickLead } from "./pinFocusLogic";
 import { useDpr, useImageOk, useTheme } from "./useBotFace";
@@ -196,7 +196,7 @@ export function NeedsBadgeInline({ pin }: { pin: Pin }) {
   );
 }
 
-const memberTitle = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
+const memberTitle = (m: Member) => agentDisplayName(m.agent, { isHubLaneId }) || m.agent.id.slice(0, 8);
 const hasTeam = (pin: Pin) => !!pin.lead || pin.workers.length > 0 || pin.topicBrainstorms.length > 0;
 /** Team-row status label: a queued agent shows its queue position instead of the bare running/idle. */
 const memberStatusLabel = (agent: { status: string; queued?: { ahead: number } }): string =>
@@ -572,7 +572,7 @@ function BuddyDupeWarning({ pin, onOpenAgent }: { pin: Pin; onOpenAgent: (id: st
         <div key={m.agent.id} className="dup-row">
           <StatusDot agent={m.agent} />
           <button type="button" className="btn ghost small" onClick={() => onOpenAgent(m.agent.id)}>
-            {cleanTitle(m.agent.title) || m.agent.id.slice(0, 8)}
+            {agentDisplayName(m.agent, { isHubLaneId }) || m.agent.id.slice(0, 8)}
           </button>
           <span className="muted small">{m.agent.id.slice(0, 8)}</span>
           <ConfirmButton
@@ -821,7 +821,7 @@ function SquadTile({ v, compact, onSelectSquad, onOpenPin, onOpenAgent }: { v: T
   const { pinned } = pinsForSquad(v);
   const lead = pickLead(v.lanes);
   const ord = lead ? ordOf(lead.agent) : null;
-  const leadName = lead ? (ord ? `${laneCodeOf(lead.laneId || v.team.id)}${ord}` : cleanTitle(lead.agent.title)) : "none";
+  const leadName = lead ? (isHubLaneId(lead.laneId ?? undefined) ? agentDisplayName(lead.agent, { isHubLaneId }) : ord ? `${laneCodeOf(lead.laneId || v.team.id)}${ord}` : agentDisplayName(lead.agent, { isHubLaneId })) : "none";
   const leadState = !lead ? "idle" : lead.agent.status === "running" ? "working" : lead.agent.status === "error" ? "error" : "idle";
   const open = () => onSelectSquad(v.team.id);
   return (

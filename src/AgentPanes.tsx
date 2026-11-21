@@ -3,10 +3,11 @@ import type { PaseoAgent } from "./agentTypes";
 import { getPaseoState, subscribePaseo } from "./paseo";
 import { AgentDrawer } from "./AgentDrawer";
 import { useDraft } from "./drafts";
-import { classifyAgent, leadVariant } from "./teams";
+import { classifyAgent, isHubLaneId, leadVariant } from "./teams";
 import { exitSquadsHome } from "./pinFocus";
 import { setFullView } from "./PinGrid";
-import { StatusDot, cleanTitle } from "./ui";
+import { agentDisplayName } from "./identity";
+import { StatusDot } from "./ui";
 import { Avatar } from "./pixel";
 import { PixelIcon } from "./PixelIcon";
 import {
@@ -37,7 +38,7 @@ const useAgent = (id: string): PaseoAgent | undefined =>
   });
 
 const shortTitle = (a: PaseoAgent | undefined, id: string) => {
-  const t = a ? cleanTitle(a.title) : id.slice(0, 8);
+  const t = a ? agentDisplayName(a, { isHubLaneId }) : id.slice(0, 8);
   return t.length > 22 ? t.slice(0, 21) + "…" : t;
 };
 
@@ -49,7 +50,7 @@ const Tab = memo(function Tab({ id, pane, on, split }: { id: string; pane: Pane;
       className={`pane-tab ${on ? "on" : ""} pane-${pane}`}
       role="tab"
       aria-selected={on}
-      title={a?.title ?? id}
+      title={a ? agentDisplayName(a, { isHubLaneId }) : id}
       onClick={() => activateTab(pane, id)}
       onAuxClick={(e) => {
         if (e.button === 1) {

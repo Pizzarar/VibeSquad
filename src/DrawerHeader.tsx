@@ -20,8 +20,9 @@ import { isImeComposing, shouldComposerSubmit } from "./IdeaInbox";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { AgentActions, StatusDot, ago, shortPath, useTick } from "./ui";
 import { LEGACY_NEEDS_LABEL, LEGACY_NEEDS_REASON, LEGACY_NEEDS_UNTIL, needsYouBadge, useUserName } from "./userName";
-import { AGENT_TYPE_LABEL, kindOf, leadLadderFor, leadVariant } from "./teams";
+import { AGENT_TYPE_LABEL, isHubLaneId, kindOf, leadLadderFor, leadVariant } from "./teams";
 import type { AgentType, Member } from "./teams";
+import { agentDisplayName } from "./identity";
 import type { Entry } from "./Timeline";
 import { openAgent, openAgentInTab, usePanes } from "./panes";
 import { exportFileName, forkSummaryPrompt, forkTitle, transcriptToJson, transcriptToMarkdown } from "./sessionLifecycle";
@@ -1147,7 +1148,7 @@ export function DrawerHeader({
             {featureChips}
           </div>
           <div className="drawer-title" style={{ fontSize: 15 }}>
-            <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+            <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agentDisplayName(agent, { isHubLaneId })}</AgentTitleEdit>
           </div>
           <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
             {providerSelect}
@@ -1172,7 +1173,7 @@ export function DrawerHeader({
     <>
       <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={24} />
       <span className="drawer-head-compact-title">
-        <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agent.title ?? agent.id.slice(0, 8)}</AgentTitleEdit>
+        <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agentDisplayName(agent, { isHubLaneId })}</AgentTitleEdit>
       </span>
     </>
   );

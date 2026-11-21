@@ -8,6 +8,7 @@
 import { kindOfAttention } from "./attentionItems.ts";
 import { castVariant } from "./cast.ts"; // @art owns cast.ts: import only
 import type { Member } from "./teams.ts";
+import { agentDisplayName, agentFaceSeed } from "./identity.ts";
 
 // ── JSON shapes (the @art contract, docs/PLAN_NEON_OFFICE.md) ─────────────────
 
@@ -669,7 +670,7 @@ export function buildTower(input: TowerInput, floor?: FloorModel): Tower {
         : null,
     overlord:
       input.hubLead && isLiveMember(input.hubLead)
-        ? { agentId: input.hubLead.agent.id, title: input.hubLead.agent.title ?? input.hubLead.agent.id.slice(0, 8), role: "overlord", pose: poseFor(input.hubLead), variant: castVariant(input.hubLead.agent.id), seat: "overlord" as const }
+        ? { agentId: input.hubLead.agent.id, title: agentDisplayName(input.hubLead.agent, { hub: true }), role: "overlord", pose: poseFor(input.hubLead), variant: castVariant(agentFaceSeed(input.hubLead.agent, { hub: true })), seat: "overlord" as const }
         : null,
   };
   const floors: Floor[] = [];
