@@ -501,7 +501,8 @@ describe("APK route is case-insensitive", () => {
       }
     });
     const serve = read("server/serve.mjs");
-    assert.equal((serve.match(/isAndroidApkPath\(path\)/g) ?? []).length, 2, "both mesh handlers use the case-insensitive check");
+    // idea-384: only the mesh HTTPS handler serves the APK; plain http 301s it to https (test/pair-artifact-https.test.mjs).
+    assert.equal((serve.match(/isAndroidApkPath\(path\)/g) ?? []).length, 1, "the mesh https handler uses the case-insensitive check");
   });
 });
 

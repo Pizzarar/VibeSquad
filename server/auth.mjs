@@ -9,7 +9,7 @@ import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath 
 import { qrSvg } from "./qr.mjs";
 import { buildRelayPairingLink, publicRelayEndpoint } from "./relay-link.mjs";
 import { isRelayRequest } from "./relay-tunnel.mjs";
-import { resolveAndroidApkPath } from "./vibesquad-api.mjs";
+import { downloadArtifactSha256s, downloadArtifactSha256sAsync, resolveAndroidApkPath } from "./vibesquad-api.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
 export const DEVICE_COOKIE = "vs_device";
@@ -106,6 +106,24 @@ export function isAndroidApkBuilt(rootDir = resolve(import.meta.dirname, "..")) 
   return existsSync(resolveAndroidApkPath(rootDir));
 }
 
+// idea-384: the desktop installer and the Android APK are only ever linked over https (the LAN/Meshnet listener's TLS
+// side; its plain-http side refuses them with a 301 to https), so a LAN MITM can't swap a first install. The dialog also
+// shows each file's SHA-256 (artifactShaFingerprint). Only /ca.crt stays on plain http: it is the bootstrap, checked by
+// the CA fingerprint the dialog shows. Field names keep their old *HttpUrl spelling for API compatibility.
+export const installerHttpsUrl = (host, port) => (host ? `https://${host}:${port}/VibeSquad-setup.exe` : null);
+export const apkHttpsUrl = (host, port) => (host ? `https://${host}:${port}/VibeSquad.apk` : null);
+
+/** Lowercase hex SHA-256 -> the CA-fingerprint display shape: `full` = 64 uppercase hex (matches Get-FileHash), `short` = first 16. */
+export function artifactShaFingerprint(hex) {
+  if (!/^[0-9a-f]{64}$/i.test(String(hex ?? ""))) return null;
+  const full = String(hex).toUpperCase();
+  return { full, short: full.slice(0, 16) };
+}
+const artifactShaFields = ({ desktopInstaller, androidApk }) => ({
+  desktopInstallerSha256: artifactShaFingerprint(desktopInstaller),
+  androidApkSha256: artifactShaFingerprint(androidApk),
+});
+
 export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   const distReady = hasDistIndex(rootDir);
@@ -121,14 +139,10 @@ export function getAuthStatus(rootDir = DEFAULT_ROOT_DIR) {
     caFingerprint: caFingerprint(),
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
-    lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
+    lanDesktopInstallerUrl: installerHttpsUrl(lanIp, port),
     meshnetHttpsUrl: `https://${meshnetHost}:${port}`,
     caHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/ca.crt` : lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
-    desktopSetupHttpUrl: meshnetIp
-      ? `http://${meshnetIp}:${port}/VibeSquad-setup.exe`
-      : lanIp
-        ? `http://${lanIp}:${port}/VibeSquad-setup.exe`
-        : null,
+    desktopSetupHttpUrl: installerHttpsUrl(meshnetIp || lanIp, port),
   };
 }
 
@@ -1372,15 +1386,16 @@ export async function handlePairStart(req, res) {
     lanIp,
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
-    lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
-    lanAndroidApkUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : null,
+    lanDesktopInstallerUrl: installerHttpsUrl(lanIp, port),
+    lanAndroidApkUrl: apkHttpsUrl(lanIp, port),
     lanPairUrl,
     lanQrSvg: lanPairUrl ? await qrSvg(lanPairUrl) : null,
     caHttpUrl: `http://${effectiveMeshnetIp}:${port}/ca.crt`,
-    desktopSetupHttpUrl: `http://${effectiveMeshnetIp}:${port}/VibeSquad-setup.exe`,
-    androidApkHttpUrl: `http://${effectiveMeshnetIp}:${port}/VibeSquad.apk`,
+    desktopSetupHttpUrl: installerHttpsUrl(effectiveMeshnetIp, port),
+    androidApkHttpUrl: apkHttpsUrl(effectiveMeshnetIp, port),
     androidApkAvailable: isAndroidApkBuilt(),
     caFingerprint: caFingerprint(),
+    ...artifactShaFields(await downloadArtifactSha256sAsync()),
     meshnetHost,
     meshnetIp: effectiveMeshnetIp,
     expiresAt,
@@ -1645,13 +1660,14 @@ export function handleDevices(req, res) {
     lanIp,
     port,
     caHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/ca.crt` : null,
-    desktopSetupHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/VibeSquad-setup.exe` : null,
-    androidApkHttpUrl: meshnetIp ? `http://${meshnetIp}:${port}/VibeSquad.apk` : null,
+    desktopSetupHttpUrl: installerHttpsUrl(meshnetIp, port),
+    androidApkHttpUrl: apkHttpsUrl(meshnetIp, port),
     lanHttpsUrl: lanIp ? `https://${lanIp}:${port}` : null,
     lanCaUrl: lanIp ? `http://${lanIp}:${port}/ca.crt` : null,
-    lanDesktopInstallerUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad-setup.exe` : null,
-    lanAndroidApkUrl: lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : null,
+    lanDesktopInstallerUrl: installerHttpsUrl(lanIp, port),
+    lanAndroidApkUrl: apkHttpsUrl(lanIp, port),
     androidApkAvailable: isAndroidApkBuilt(),
+    ...artifactShaFields(downloadArtifactSha256s()), // sync: cached/sidecar hash now, else null + a background hash
   });
 }
 
