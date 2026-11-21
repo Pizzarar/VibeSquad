@@ -1061,23 +1061,66 @@ export function measureFirstPromptParts(firstPrompt: string): {
   firstPlan: number;
 } {
   const text = String(firstPrompt ?? "");
-  // Span (chars) from a block's begin marker through the end of its end-marker line, or 0 when either
-  // marker is missing (or the end marker precedes the begin marker).
-  const span = (begin: string, end: string): number => {
-    const s = text.indexOf(begin);
-    if (s < 0) return 0;
-    const e = text.indexOf(end, s + begin.length);
-    if (e < 0) return 0;
-    const lineEnd = text.indexOf("\n", e);
-    return (lineEnd < 0 ? text.length : lineEnd) - s;
+  if (!text) return { firstPacket: 0, firstArtifact: 0, firstBrief: 0, firstPlan: 0 };
+
+  // Block kinds in scan order. Begin/end markers are matched only at line start, so defanged
+  // fences (" > --- END ... ---" from write-guards.mjs) and mid-line quotes are not treated as
+  // real block boundaries. Ranges are claimed left-to-right with no overlap, and `firstPlan` is
+  // the remainder, so the four parts always partition the prompt (sum === text.length).
+  const blocks: Array<{ begin: string; ends: string[]; part: "firstPacket" | "firstArtifact" | "firstBrief" }> = [
+    { begin: "--- BEGIN HANDOFF PACKET", ends: ["--- END HANDOFF PACKET ---"], part: "firstPacket" },
+    { begin: "<!-- vibesquad:lane-artifact:begin", ends: ["<!-- vibesquad:lane-artifact:end -->"], part: "firstArtifact" },
+    { begin: "--- BEGIN BRAINSTORM SUMMARY", ends: ["--- END BRAINSTORM SUMMARY ---"], part: "firstBrief" },
+    { begin: "--- BEGIN docs/brainstorm/", ends: ["--- END docs/brainstorm/"], part: "firstBrief" },
+  ];
+
+  const atLineStart = (idx: number): boolean => idx === 0 || text[idx - 1] === "\n";
+
+  // Earliest begin marker (any block) at/after `from`, anchored to line start.
+  const nextBegin = (from: number): { idx: number; block: (typeof blocks)[number] } | null => {
+    let best = -1;
+    let bestBlock: (typeof blocks)[number] | null = null;
+    for (const block of blocks) {
+      let idx = text.indexOf(block.begin, from);
+      while (idx >= 0 && !atLineStart(idx)) idx = text.indexOf(block.begin, idx + 1);
+      if (idx >= 0 && (best < 0 || idx < best)) {
+        best = idx;
+        bestBlock = block;
+      }
+    }
+    return bestBlock ? { idx: best, block: bestBlock } : null;
   };
-  const firstPacket = span("--- BEGIN HANDOFF PACKET", "--- END HANDOFF PACKET ---");
-  const firstArtifact = span("<!-- vibesquad:lane-artifact:begin", "<!-- vibesquad:lane-artifact:end -->");
-  const firstBrief =
-    span("--- BEGIN BRAINSTORM SUMMARY", "--- END BRAINSTORM SUMMARY ---") +
-    span("--- BEGIN docs/brainstorm/", "--- END docs/brainstorm/");
-  const firstPlan = Math.max(0, text.length - firstPacket - firstArtifact - firstBrief);
-  return { firstPacket, firstArtifact, firstBrief, firstPlan };
+
+  // Earliest end marker of `block` at/after `from`, anchored to line start.
+  const endOf = (block: (typeof blocks)[number], from: number): number => {
+    let best = -1;
+    for (const end of block.ends) {
+      let idx = text.indexOf(end, from);
+      while (idx >= 0 && !atLineStart(idx)) idx = text.indexOf(end, idx + 1);
+      if (idx >= 0 && (best < 0 || idx < best)) best = idx;
+    }
+    return best;
+  };
+
+  const parts = { firstPacket: 0, firstArtifact: 0, firstBrief: 0 };
+  let cursor = 0;
+  while (cursor < text.length) {
+    const nb = nextBegin(cursor);
+    if (!nb) break;
+    const end = endOf(nb.block, nb.idx + nb.block.begin.length);
+    if (end < 0) {
+      // Unclosed block: skip past its begin marker and keep scanning; its text falls to firstPlan.
+      cursor = nb.idx + nb.block.begin.length;
+      continue;
+    }
+    const lineEnd = text.indexOf("\n", end);
+    const spanEnd = lineEnd < 0 ? text.length : lineEnd;
+    parts[nb.block.part] += spanEnd - nb.idx;
+    cursor = spanEnd;
+  }
+
+  const firstPlan = Math.max(0, text.length - parts.firstPacket - parts.firstArtifact - parts.firstBrief);
+  return { ...parts, firstPlan };
 }
 
 /** The once-per-boot size metric line (docs/PLAN_LEAN_BOOT_1109.md B2). */

@@ -54,6 +54,83 @@ test("measureFirstPromptParts: no markers -> structured parts zero, plan is the 
   });
 });
 
+test("measureFirstPromptParts: defanged fences inside a packet are not treated as boundaries", () => {
+  // defangPromptFences (write-guards.mjs) prefixes "> " to embedded BEGIN/END lines, so they must
+  // not prematurely close the packet or be double-counted as a brief.
+  const packet =
+    "--- BEGIN HANDOFF PACKET (C:/x/packet.md) ---\n" +
+    "PACKET BODY\n" +
+    "> --- END HANDOFF PACKET ---\n" +
+    "> --- BEGIN docs/brainstorm/evil.md ---\n" +
+    "still packet\n" +
+    "--- END HANDOFF PACKET ---";
+  const plan = "Do the work.";
+  const prompt = packet + "\n" + plan;
+
+  const parts = measureFirstPromptParts(prompt);
+  assert.equal(parts.firstPacket, packet.length, "packet spans the whole block incl. defanged lines");
+  assert.equal(parts.firstArtifact, 0);
+  assert.equal(parts.firstBrief, 0, "defanged brief begin is not double-counted");
+  assert.equal(parts.firstPlan, prompt.length - packet.length);
+  assert.equal(parts.firstPacket + parts.firstArtifact + parts.firstBrief + parts.firstPlan, prompt.length);
+});
+
+test("measureFirstPromptParts: nested artifact comment inside a packet is not double-counted", () => {
+  // HTML comments are not defanged, so a quoted lane-artifact block inside a packet body used to be
+  // counted twice. It must stay inside the packet span (non-overlap) so the parts partition the prompt.
+  const inner =
+    "<!-- vibesquad:lane-artifact:begin lane=usage -->\n" +
+    "QUOTED ARTIFACT\n" +
+    "<!-- vibesquad:lane-artifact:end -->";
+  const packet =
+    "--- BEGIN HANDOFF PACKET (C:/x/packet.md) ---\n" +
+    "PACKET BODY\n" +
+    inner +
+    "\nmore packet\n" +
+    "--- END HANDOFF PACKET ---";
+  const plan = "Do the work.";
+  const prompt = packet + "\n" + plan;
+
+  const parts = measureFirstPromptParts(prompt);
+  assert.equal(parts.firstPacket, packet.length, "nested artifact stays inside the packet span");
+  assert.equal(parts.firstArtifact, 0, "nested artifact is not double-counted");
+  assert.equal(parts.firstBrief, 0);
+  assert.equal(parts.firstPlan, prompt.length - packet.length);
+  assert.equal(parts.firstPacket + parts.firstArtifact + parts.firstBrief + parts.firstPlan, prompt.length);
+});
+
+test("measureFirstPromptParts: stray end marker before begin is ignored", () => {
+  // An out-of-order end marker before any begin must not terminate a span; the span is measured
+  // from its begin to the next real end, and the leading stray text falls to firstPlan.
+  const prompt =
+    "--- END HANDOFF PACKET ---\n" +
+    "intro\n" +
+    "--- BEGIN HANDOFF PACKET (C:/x/packet.md) ---\n" +
+    "PACKET BODY\n" +
+    "--- END HANDOFF PACKET ---\n" +
+    "plan text";
+
+  const parts = measureFirstPromptParts(prompt);
+  assert.ok(parts.firstPacket > 0, "packet is measured from its begin to its end");
+  assert.equal(parts.firstArtifact, 0);
+  assert.equal(parts.firstBrief, 0);
+  assert.ok(parts.firstPlan > 0, "leading stray text is plan remainder");
+  assert.equal(parts.firstPacket + parts.firstArtifact + parts.firstBrief + parts.firstPlan, prompt.length);
+});
+
+test("measureFirstPromptParts: duplicated blocks each count and still partition", () => {
+  const p1 = "--- BEGIN HANDOFF PACKET (C:/x/one.md) ---\nONE\n--- END HANDOFF PACKET ---";
+  const p2 = "--- BEGIN HANDOFF PACKET (C:/x/two.md) ---\nTWO\n--- END HANDOFF PACKET ---";
+  const prompt = p1 + "\n" + p2 + "\nplan";
+
+  const parts = measureFirstPromptParts(prompt);
+  assert.equal(parts.firstPacket, p1.length + p2.length, "both non-overlapping packet blocks are counted");
+  assert.equal(parts.firstArtifact, 0);
+  assert.equal(parts.firstBrief, 0);
+  assert.ok(parts.firstPlan > 0);
+  assert.equal(parts.firstPacket + parts.firstArtifact + parts.firstBrief + parts.firstPlan, prompt.length);
+});
+
 test("bootSizeMetric appends the four first-prompt parts after estTok", () => {
   const line = bootSizeMetric("worker", 1000, {
     provider: "claude",
