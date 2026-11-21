@@ -86,10 +86,19 @@ const summaryReporter = pathToFileURL(path.join(root, "scripts", "test-summary-r
 const progressFile = path.join(paths.dir, `vibesquad-npm-test-progress-${process.pid}.jsonl`);
 const progressReporter = pathToFileURL(path.join(root, "scripts", "test-progress-reporter.mjs")).href;
 const fileIdleMs = Number(process.env.VS_TEST_FILE_TIMEOUT_MS) || DEFAULT_FILE_IDLE_MS;
+// idea-412: node --test defaults to availableParallelism()-1 files at once (19 on a 20-CPU box). Each file spawns servers, CLIs and
+// browsers, so the full suite ran load-only timeouts (sec-s4 S4-5, identity-v2 #3, file-lock-async, verdict-gate) that pass solo.
+// Measured on 150 files + those 4: concurrency 19 = identity-v2 #3 27.5s, file-lock M1 15.4s, total 113s; concurrency 8 = 12.4s, 7.8s, 97s.
+// Cap at 8 (VS_TEST_CONCURRENCY overrides).
+function testConcurrency(env = process.env, cpus = os.availableParallelism?.() ?? os.cpus().length) {
+  const n = Math.floor(Number(env.VS_TEST_CONCURRENCY));
+  return n >= 1 ? n : Math.max(1, Math.min(8, cpus - 1));
+}
 const child = spawn(
   process.execPath,
   [
     "--test",
+    `--test-concurrency=${testConcurrency()}`,
     "--import", "./test/setup/hermetic.mjs",
     `--test-reporter=${reporter}`, "--test-reporter-destination=stdout",
     `--test-reporter=${summaryReporter}`, `--test-reporter-destination=${summaryFile}`,
