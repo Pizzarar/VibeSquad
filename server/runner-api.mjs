@@ -4,6 +4,7 @@ import { sharedRunnerBackend } from "./backend/index.mjs";
 import { callerOf } from "./auth.mjs";
 import { pickBugIntakeAgent } from "./inbox.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
+import { defangPromptFences } from "./write-guards.mjs";
 
 const PREFIX = "/__vibesquad/runner/";
 const ID_RE = /^rn-[A-Za-z0-9_-]{1,64}$/;
@@ -218,9 +219,18 @@ export async function fetchTesterTimeline(backend, id, { limit, before } = {}) {
   };
 }
 
+/** C0 controls and DEL out; \t and \n stay (a tester's line may be multi-line); \r goes too, so \r\n collapses to \n. */
+const stripTesterControl = (s) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
+/** A tester's chat text, sanitized: control chars stripped, prompt fences defanged, ``` runs broken (no fake code blocks). */
+export function sanitizeTesterInput(text) {
+  const t = stripTesterControl(text).trim();
+  return defangPromptFences(t).replace(/`{3,}/g, (m) => "ʼ".repeat(m.length));
+}
+
 /** Send a tester's chat line to an allowed agent: prefixed, never owner, never interrupt / steer-only, no images. */
 export async function sendTesterInput(backend, caller, id, text, { cardId = null } = {}) {
-  const t = String(text ?? "").trim();
+  if (typeof text !== "string") throw Object.assign(new Error("text must be a string"), { status: 400 });
+  const t = sanitizeTesterInput(text);
   if (!t) throw Object.assign(new Error("text is required"), { status: 400 });
   if (t.length > TESTER_INPUT_MAX_CHARS) throw Object.assign(new Error(`text too long (${TESTER_INPUT_MAX_CHARS} chars max)`), { status: 413 });
   await backend.sendAgentPrompt(id, stampTesterText(caller, t, { cardId }), { owner: false });

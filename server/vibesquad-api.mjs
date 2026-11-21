@@ -2108,8 +2108,10 @@ function testerReportMarkdown(caller, text, tel) {
   return [testerStamp(caller), text, ...(facts.length ? ["", "**Telemetry**", ...facts] : [])].join("\n");
 }
 
+/** Same magic-byte check as server/inbox.mjs sniffImage (which attachInboxMedia enforces): full 8-byte PNG signature. */
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 function sniffTesterImage(b) {
-  if (b.length > 8 && b[0] === 0x89 && b.toString("latin1", 1, 4) === "PNG") return "image/png";
+  if (b.length > 8 && b.subarray(0, 8).equals(PNG_SIGNATURE)) return "image/png";
   if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
   if (b.length > 12 && b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return "image/webp";
   return "";
@@ -2130,9 +2132,12 @@ function decodeTesterScreenshot(body) {
   if (Math.floor((b64.length * 3) / 4) > INBOX_MEDIA_MAX_BYTES + 2) throw testerStatus("screenshot too large (8 MB max)", 413);
   const bytes = Buffer.from(b64, /[-_]/.test(b64) ? "base64url" : "base64");
   if (!bytes.length) throw testerStatus("empty screenshot", 400);
-  if (!mime) mime = sniffTesterImage(bytes);
-  if (!TESTER_IMAGE_TYPES.includes(mime)) throw testerStatus("screenshot must be png, jpeg or webp", 400);
-  return { mime, bytes };
+  if (bytes.length > INBOX_MEDIA_MAX_BYTES) throw testerStatus("screenshot too large (8 MB max)", 413);
+  // Always sniff the bytes, even with a client-declared mime: a mismatch fails here, before any card is parked, instead
+  // of parking a card whose attachInboxMedia then fails (and whose clientReportId would then dedupe the valid resend).
+  const sniffed = sniffTesterImage(bytes);
+  if (!sniffed || (mime && mime !== sniffed)) throw testerStatus("screenshot must be png, jpeg or webp, and match its declared type", 400);
+  return { mime: sniffed, bytes };
 }
 
 /** Park one tester card on `team`'s bug lane: forced source, lane and tester meta (addInboxCardsAsync scope). */
