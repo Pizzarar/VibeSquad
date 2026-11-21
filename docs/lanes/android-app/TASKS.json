@@ -1,6 +1,6 @@
 {
   "laneId": "android-app",
-  "updatedAt": "2026-11-11T14:16:49.522Z",
+  "updatedAt": "2026-11-21T01:00:30.000Z",
   "units": [
     {
       "id": "unit-and-a1",
@@ -441,6 +441,30 @@
       "doneCheck": "node --test test/phone-cockpit.test.mjs && npm run typecheck",
       "status": "done",
       "commit": "fafc5a7"
+    },
+    {
+      "id": "unit-and-threat-model-181",
+      "goal": "idea-181: update docs/lanes/android-app/E5_THREAT_MODEL.md:146 so keypairFileStamp is documented as path|mtimeMs|size|sha256-16 content-hashed (matching idea-180 61ee1ac8) rather than stat-only",
+      "files": [
+        "docs/lanes/android-app/E5_THREAT_MODEL.md"
+      ],
+      "doneCheck": "node --test test/public-release.test.mjs test/relay-tunnel.test.mjs",
+      "status": "done",
+      "branch": "unit-and-threat-model-181",
+      "commit": "27146861"
+    },
+    {
+      "id": "unit-and-pair-fp-expanded-127",
+      "goal": "idea-127 remainder: default showFullFp to true in src/PairDeviceModal.tsx so the full CA SHA-256 fingerprint is expanded by default next to the phone QR and APK download",
+      "files": [
+        "src/PairDeviceModal.tsx",
+        "test/pair-modal-apk.test.mjs",
+        "test/pair-modal-scroll.test.mjs"
+      ],
+      "doneCheck": "node --test test/pair-modal-apk.test.mjs test/pair-modal-scroll.test.mjs && npm run typecheck",
+      "status": "done",
+      "branch": "unit-and-pair-fp-expanded-127",
+      "commit": "0ec5cd0e"
     }
   ]
 }
