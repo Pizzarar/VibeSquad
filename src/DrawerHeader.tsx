@@ -623,7 +623,7 @@ export function SessionActions({ agent, entries }: { agent: PaseoAgent; entries:
   };
 
   return (
-    <div className="drawer-session-actions">
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px", flexWrap: "wrap" }}>
       <button className="btn ghost small" data-testid="drawer-fork-btn" disabled={busy} onClick={() => void fork()}>
         ⑂ Fork
       </button>
@@ -792,7 +792,7 @@ export function DrawerHeader({
             {(() => {
               const cost = (agent.lastUsage as any)?.totalCostUsd ?? (agent as any)?.usage?.totalCostUsd;
               return typeof cost === "number" && cost >= 0 ? (
-                <span data-testid="drawer-cost-readout" className="chip drawer-cost-readout">
+                <span data-testid="drawer-cost-readout" className="chip" style={{ fontSize: 10, padding: "0 5px" }}>
                   {formatCostUsd(cost)}
                 </span>
               ) : null;
@@ -805,6 +805,7 @@ export function DrawerHeader({
             <button
               data-testid="drawer-copy-cwd-btn"
               className="btn ghost small drawer-copy-btn"
+              style={{ padding: "0 4px", fontSize: 10 }}
               title="Copy full working directory path"
               onClick={() => {
                 navigator.clipboard.writeText(agent.cwd).catch(() => {});
@@ -819,6 +820,7 @@ export function DrawerHeader({
             <button
               data-testid="drawer-copy-id-btn"
               className="btn ghost small drawer-copy-btn"
+              style={{ padding: "0 4px", fontSize: 10 }}
               title="Copy agent ID"
               onClick={() => {
                 navigator.clipboard.writeText(agent.id).catch(() => {});
@@ -923,7 +925,7 @@ export function DrawerHeader({
     <>
 
       {isBs && (
-        <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar">
+        <div className={`brainstorm-ctx-bar tone-${bsTone}`} data-testid="brainstorm-ctx-bar" style={{ margin: "4px 8px 0" }}>
           <div className="brainstorm-ctx-main" style={{ flexWrap: "wrap", gap: 6 }}>
             <span className="brainstorm-ctx-readout">
               {usedK}k / {restartK}k tok
@@ -938,7 +940,8 @@ export function DrawerHeader({
             </div>
             <div className="brainstorm-ctx-actions" style={{ flexWrap: "wrap", gap: 4 }}>
               <button
-                className="btn small btn-brainstorm-restart drawer-ctx-btn"
+                className="btn small btn-brainstorm-restart"
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 disabled={restarting}
                 onClick={() =>
                   void doRestart(planHandedOff ? "handoff" : bsUsedTokens >= warnTokens ? "warn-80k" : "manual")
@@ -948,14 +951,16 @@ export function DrawerHeader({
                 {restarting ? "⇄…" : <><span className="emoji-glyph">⇄ </span>Handoff</>}
               </button>
               <button
-                className="btn ghost small btn-brainstorm-summary drawer-ctx-btn"
+                className="btn ghost small btn-brainstorm-summary"
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 onClick={toggleSummary}
                 title={`Preview docs/brainstorm/${laneId}.md`}
               >
                 <span className="emoji-glyph">📄 </span>Summary
               </button>
               <button
-                className={`btn ghost small btn-brainstorm-inbox drawer-ctx-btn${inboxPopoverOpen ? " on" : ""}`}
+                className={`btn ghost small btn-brainstorm-inbox ${inboxPopoverOpen ? "on" : ""}`}
+                style={{ padding: "2px 6px", fontSize: 10 }}
                 onClick={() => setInboxPopoverOpen((v) => !v)}
                 title="Dump 1 or multiple newline-separated ideas straight into the Idea Inbox (0 tokens)"
                 data-testid="brainstorm-park-inbox-btn"
@@ -1103,7 +1108,7 @@ export function DrawerHeader({
       )}
       {active && <HardeningBar agent={agent} entries={entries} />}
       {!compact && (
-        <div className="drawer-session-actions">
+        <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 10px", flexWrap: "wrap" }}>
           <button
             className="btn ghost small drawer-more-toggle"
             style={{ padding: "1px 6px", fontSize: 10 }}
@@ -1129,10 +1134,10 @@ export function DrawerHeader({
   );
   const header = (
     <>
-      <header className="drawer-head">
+      <header className="drawer-head" style={{ flexWrap: "wrap", padding: "8px 12px", gap: 8, alignItems: "center" }}>
         <Avatar id={agent.id} provider={agent.provider} agentType={agentType} variant={leadVariant(agent)} size={40} />
-        <div className="drawer-id">
-          <div className="drawer-role-line">
+        <div className="drawer-id" style={{ flex: "1 1 240px", minWidth: 0 }}>
+          <div className="drawer-role-line" style={{ flexWrap: "wrap", gap: 4 }}>
             <span className="role-tag">{AGENT_TYPE_LABEL[agentType]}</span>
             <span className="prov-pill" style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}>
               {effectiveProv.symbol} {effectiveProv.name}
@@ -1142,10 +1147,10 @@ export function DrawerHeader({
             <WorkingChip members={working} subs={extraSubs} />
             {featureChips}
           </div>
-          <div className="drawer-title">
+          <div className="drawer-title" style={{ fontSize: 15 }}>
             <StatusDot agent={agent} /> <AgentTitleEdit agent={agent}>{agentDisplayName(agent, { isHubLaneId })}</AgentTitleEdit>
           </div>
-          <div className="muted small drawer-meta-line">
+          <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
             {providerSelect}
             {modelControl}
             {metaRest}
@@ -1154,7 +1159,7 @@ export function DrawerHeader({
           </div>
           {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
         </div>
-        <div className="drawer-actions">
+        <div className="drawer-actions" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
           {extraActions}
           {dockBtns}
         </div>
@@ -1202,7 +1207,7 @@ export function DrawerHeader({
           <>
       {!isBs && <TokenMeter used={used} budget={budget ?? 0} ladder={kindOf(agent) === "lead" ? leadLadderFor(team) : undefined} />}
             {inspector}
-      <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools">
+      <div className="drawer-actions pin-rail-buddy-tools" data-testid="pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
         {primaryUtils}
         <button
           className="btn ghost small drawer-more-toggle"
@@ -1215,10 +1220,10 @@ export function DrawerHeader({
       </div>
       {moreOpen && (
         <>
-      <div className="drawer-actions pin-rail-buddy-tools">
+      <div className="drawer-actions pin-rail-buddy-tools" style={{ flexWrap: "wrap", gap: 4, alignItems: "center" }}>
         {secondaryPlumbing}
       </div>
-      <div className="muted small drawer-meta-line">
+      <div className="muted small drawer-meta-line" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 4 }}>
         {metaRest}
       </div>
       {agent.labels?.["vs.fresh-session"] === "brief" && (

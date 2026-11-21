@@ -6568,16 +6568,3 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .tl-pinned-todo { background: var(--bg); border-bottom: 1px solid var(--line); padding: 4px 8px; cursor: pointer; }
 .tl-pinned-todo-body { margin-top: 4px; font-size: 0.9em; }
 .tl-load-older { text-align: center; padding: 4px 0; }
-
-/* ── idea-255 3.1: DrawerHeader inline style={{}} → token classes (src/DrawerHeader.tsx) ── */
-.drawer-session-actions { display: flex; align-items: center; gap: 6px; padding: 2px 10px; flex-wrap: wrap; }
-.drawer-cost-readout { font-size: 10px; padding: 0 5px; }
-.drawer-copy-btn { padding: 0 4px; font-size: 10px; }
-.drawer-ctx-btn { padding: 2px 6px; font-size: 10px; }
-.brainstorm-ctx-bar { margin: 4px 8px 0; }
-.drawer-head { flex-wrap: wrap; padding: 8px 12px; gap: 8px; align-items: center; }
-.drawer-id { flex: 1 1 240px; min-width: 0; }
-.drawer-role-line { flex-wrap: wrap; gap: 4px; }
-.drawer-title { font-size: 15px; }
-.drawer-meta-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
-.drawer-actions { flex-wrap: wrap; gap: 4px; align-items: center; }
