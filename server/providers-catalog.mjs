@@ -505,7 +505,7 @@ function foldIdentity(st, m) {
   const team = m.team ?? m.labels?.team;
   if (typeof team === "string" && team) st.team = team;
   // usa-34: workflow arm label (created.meta.labels.wf / meta.patch.labels.wf), stamped at dispatch by wf-label.mjs.
-  const wfLabel = normalizeWfLabel(m.labels?.wf);
+  const wfLabel = typeof m.labels?.wf === "string" ? normalizeWfLabel(m.labels.wf) : "";
   if (wfLabel) st.wfLabel = wfLabel;
   // usa-29: stakes (route label) + digest marker (identity.mjs isDigestAgent labels) ride the same meta.
   // vs.route is "stakes=<s> model=<m> effort=<e> reason=<r>" (agent-duties.ts); an explicit stakes/labels.stakes always wins.
