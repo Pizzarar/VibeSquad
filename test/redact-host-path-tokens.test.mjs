@@ -68,8 +68,8 @@ test("idea-419: Windows, POSIX, Git-Bash, WSL, UNC, env-var and JSON-escaped pat
   const cases = [
     [String.raw`also D:\work\hidden\file.txt, then stop.`, "also <host-path>, then stop."],
     [String.raw`see D:/work/hidden/file.txt for more`, "see <host-path> for more"],
-    ["posix /home/aub/src/x.js and /Users/aub/z.md here", "posix <host-path> and <host-path> here"],
-    ["file:///home/aub/x.txt", "<host-path>"],
+    ["posix /home/alice/src/x.js and /Users/alice/z.md here", "posix <host-path> and <host-path> here"],
+    ["file:///home/alice/x.txt", "<host-path>"],
     ["git-bash /c/Users/Jo Smith/projects/Proj/test/a.test.mjs ok", "git-bash test/a.test.mjs ok"],
     ["wsl /mnt/c/Users/Jo Smith/projects/Proj/README.md ok", "wsl README.md ok"],
     [String.raw`share \\nas\share\stuff.txt ok`, "share <host-path> ok"],
