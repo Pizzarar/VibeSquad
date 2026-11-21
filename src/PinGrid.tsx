@@ -821,7 +821,7 @@ function SquadTile({ v, compact, onSelectSquad, onOpenPin, onOpenAgent }: { v: T
   const { pinned } = pinsForSquad(v);
   const lead = pickLead(v.lanes);
   const ord = lead ? ordOf(lead.agent) : null;
-  const leadName = lead ? (isHubLaneId(lead.laneId ?? undefined) ? agentDisplayName(lead.agent, { isHubLaneId }) : ord ? `${laneCodeOf(lead.laneId || v.team.id)}${ord}` : agentDisplayName(lead.agent, { isHubLaneId })) : "none";
+  const leadName = lead ? (isHubLaneId(lead.laneId ?? undefined) ? agentDisplayName(lead.agent, { hub: true }) : ord ? `${laneCodeOf(lead.laneId || v.team.id)}${ord}` : agentDisplayName(lead.agent, { isHubLaneId })) : "none";
   const leadState = !lead ? "idle" : lead.agent.status === "running" ? "working" : lead.agent.status === "error" ? "error" : "idle";
   const open = () => onSelectSquad(v.team.id);
   return (
