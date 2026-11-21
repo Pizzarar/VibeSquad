@@ -149,6 +149,23 @@ test("2. All projects collapsed: project badges sum to the Needs-you count", gua
   assert.equal(badges.reduce((s, b) => s + b.n, 0), count, `badges ${JSON.stringify(badges)} vs Needs-you ${count}`);
 }));
 
+test("2b. Expanding a project keeps its Needs-you total: Core header + Bugs + lane badges equal the collapsed project badge", guard("inv2b", async () => {
+  await load();
+  const bad = [];
+  for (const t of REGISTRY.teams) {
+    const hdr = page.locator(tid(`boring-project-header-${t.id}`));
+    const toggle = page.locator(tid(`boring-project-toggle-${t.id}`));
+    if ((await hdr.getAttribute("aria-expanded")) === "true") { await toggle.click(); await sleep(200); }
+    const collapsed = (await hdr.locator(".boring-badge").count()) ? Number(await hdr.locator(".boring-badge").first().innerText()) : 0;
+    if (collapsed === 0) continue;
+    await toggle.click(); await sleep(200);
+    const inner = await page.evaluate((id) => [...(document.querySelector(`[data-testid="boring-project-lanes-${id}"]`)?.querySelectorAll(".boring-badge") ?? [])].reduce((s, b) => s + Number(b.textContent?.trim() || 0), 0), t.id);
+    if (inner !== collapsed) { bad.push(`${t.id}: collapsed ${collapsed} vs expanded ${inner}`); await shot(`inv2b-${t.id}`); }
+    await toggle.click(); await sleep(200);
+  }
+  assert.deepEqual(bad, [], bad.join("\n"));
+}));
+
 test("3. Exactly one selected sidebar row in every state", guard("inv3", async () => {
   const bad = [];
   for (const s of STATES) {
@@ -187,11 +204,14 @@ test("5. Two expanded projects have the same child structure", guard("inv5", asy
   }
   const shapes = await page.evaluate(() => [...document.querySelectorAll(".boring-project-block")].map((b) => {
     const kids = [...(b.querySelector(".boring-project-lanes")?.children ?? [])];
-    const kind = (k) => (k.classList.contains("boring-desk-block") ? "desk" : k.querySelector('[data-testid^="boring-core-bugs"]') ? "bugs" : k.matches(".boring-conv-row") ? "lane" : k.tagName.toLowerCase() + "." + k.className);
+    const kind = (k) => (k.classList.contains("boring-trinity-card") ? "trinity" : k.classList.contains("boring-lanes-divider") ? "lanes-divider" : k.matches(".boring-conv-row") ? "lane" : k.tagName.toLowerCase() + "." + k.className);
     return { project: b.querySelector(".boring-project-name")?.textContent?.trim(), kids: kids.map(kind) };
   }));
   assert.equal(shapes.length, REGISTRY.teams.length);
-  for (const s of shapes) assert.deepEqual(s.kids.slice(0, 2), ["desk", "bugs"], `${s.project} must start Desk, Bugs: ${JSON.stringify(shapes)}`);
+  for (const s of shapes) assert.deepEqual(s.kids.slice(0, 2), ["trinity", "lanes-divider"], `${s.project} must start Trinity, Lanes divider: ${JSON.stringify(shapes)}`);
+  // Overlord, RiffBot and Bugs are visible inside the Trinity card without expanding anything.
+  const core = await page.evaluate(() => [...document.querySelectorAll(".boring-trinity-card")].map((c) => ["overlord", "riffbot", "bugs"].map((n) => { const e = c.querySelector(`[data-testid^="boring-core-${n}"]`); const r = e?.getBoundingClientRect(); return !!r && r.width > 0 && r.height > 0; })));
+  for (const c of core) assert.deepEqual(c, [true, true, true], "Trinity rows must be visible");
   const nonLane = (s) => s.kids.filter((k) => k !== "lane");
   for (const s of shapes.slice(1)) assert.deepEqual(nonLane(s), nonLane(shapes[0]), `non-lane children differ: ${JSON.stringify(shapes)}`);
 }));

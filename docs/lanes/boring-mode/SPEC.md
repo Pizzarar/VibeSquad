@@ -1,7 +1,8 @@
 # @bor · Boring Mode Spec
-- Goal: A whole-app corporate Vibe-OS ADE layout (`<BoringApp>`, Antigravity desktop + iOS-guided feel with pastel airbrushed sunsets, spray-paint wash, and light surrealism) as a toggleable alternative (`app.vibe = "boring"` labeled **Normal**, default `"fun"` labeled **Psycho**) with a first-launch **Normal vs Psycho** 2-card mode picker (`src/FirstRunModal.tsx`, `idea-128`).
+- Goal: The default whole-app corporate Vibe-OS ADE layout (`<BoringApp>`, Antigravity desktop + iOS-guided feel with pastel airbrushed sunsets, spray-paint wash, and light surrealism). Per Aub 2026-11-21 R12 direction (Hub14), **Normal (`app.vibe = "boring"`) is the default going forward** and **Psycho (`app.vibe = "fun"`)** is being retired to an optional extra (likely an About toggle; keep Psycho working as-is, no deletions without owner OK, no new Psycho parity/polish work).
 - Copy rule (Aub 2026-11-11): The UI must never say `"Hypnospace"`. Per `idea-128` (Aub 2026-11-11), UI labels everywhere are **Normal** (`app.vibe = "boring"`) and **Psycho** (`app.vibe = "fun"`). Internal `app.vibe` values stay `"fun" | "boring"`. Code comments may still say Hypnospace/Vibespace/Boring.
 - Hard rule: Never edit `src/styles.css` (`@ui-bois` owns it) or `art/**` (`@art-direction` owns it). All Boring Mode styling lives in `src/boring.css` under `html[data-vibe="boring"]`.
+- Owner Sidebar Principle (Aub 2026-11-21): Do NOT hide Overlord and RiffBot behind a collapsed `Desk` disclosure (owner dislikes having to expand `Desk` to see RiffBot & Overlord), and visually separate the Trinity (**Overlord**, **RiffBot**, **Bugs**) from regular feature lanes so they do not blend in with the other lanes (supersedes the `@desk` R2 flat `Desk` + `Bugs` + lanes list layout).
 - UX Reviewer Gate (Aub 2026-11-15, `docs/UX_REVIEW_PROCESS.md` `3133427`): Any plan phase touching Normal-mode UI (`src/Boring*.tsx`, `src/boring*.ts`, `src/boring.css`, `src/Timeline.tsx`, `src/PermissionCard.tsx`, `src/BoringContextPanel.tsx`) is not done until a **UX Reviewer** passes it with no critical or major finding open for its area (unless Aub overrides). Buddy look PASS and Art Director do not substitute for UX review; while the UX Reviewer profile (`rn-98ab3a3e3025`) is landing, hold phase closes or request manual review from Hub11.
 - Whole-App Layout Contract (Aub 2026-11-11, updated B6 2026-11-14):
   - **First-Launch Mode Picker & Label Rename (`B4` + `B5` / `idea-128`):**
@@ -13,7 +14,7 @@
   - **Left Sidebar (`1a` Collapsible Project Tree + Trinity Card, `B6b`):**
     - Big **`+ New Conversation`** CTA at the top.
     - Collapsible **Projects (`TeamView`)** tree (`data-testid="boring-project-tree"`) with live/needs-you status dots per project.
-    - Inside the active project: a distinct sunset-tinted **Trinity** card (`.boring-trinity-card`, `data-testid="boring-core-group"`) for **★ Overlord**, **RiffBot**, and **Bugs (`@bug`)**, visually separated from the scrollable **Lanes** list (`StatusDot` + `name` + `age`, expanding **Brainstorm | Lead** pills on the active lane).
+    - Inside every expanded project: a distinct **Core / Trinity** card (`.boring-trinity-card`, `data-testid="boring-trinity"`, `--surface-2`, `1px solid var(--border)`, `3px solid var(--accent)` left rule, with Core header needs-you/error badge) for always-visible **★ Overlord** (with indented Desk workers below it), **RiffBot**, and **Bugs (`@bug`)**, separated by `.boring-lanes-divider` (`Lanes`) from the scrollable **Lanes** list (`StatusDot` + `name` + `age`, expanding **Brainstorm | Lead** pills on the active lane).
     - Bottom links for **Usage & Workflows** (containing **Perfection** `@per` via `BoringPerfectionBar`), **Settings**, and **Switch to Psycho** (`data-testid="boring-switch-vibespace-btn"`).
   - **Centered Main Area & Overview `Cards | Map` (`2a`, `B6c`):**
     - Full-height chat (`AgentDrawer` + `RightDock` when open) with top **Brainstorm | Lead** segmented switcher, **Check in** button, global search (`🔍`), shortcuts (`?`), and `⋯ Details` disclosure for debug labels/IDs.
@@ -24,3 +25,4 @@
 - Plan: `docs/PLAN_BORING_MODE_B5.md` (`unit-bor-sleek-dashboard` B5a–B5f merged `85f41e2` — **DONE**).
 - Plan: `docs/PLAN_BORING_MODE_B6.md` (`unit-bor-b6-vibe-os` B6a–B6e — **DONE (merged edf0eea)** with `★ Bor8`).
 - Plan: `docs/PLAN_BORING_MODE_B7.md` (`unit-bor-inv6-title-dedup` B7a — `idea-271` UX-C invariant #6 title deduplication — **DONE (merged 08a3f9e8)** with `★ Bor10`).
+- Plan: `docs/PLAN_BORING_MODE_B8.md` (`unit-bor-b8-trinity-sidebar` B8a — `idea-446` always-visible Overlord/RiffBot + distinct Trinity card & Lanes divider — **DONE (merged 6cf41b50)** with `★ Bor11`, `docs/UX_REVIEW_R8.md` PASS 0/0/4 `fd6812ad`).
