@@ -517,6 +517,7 @@ export function buildSuccessorPrompt({
       ? ["", "--- BEGIN OVERLORD STEER ---", defangPromptFences(String(steer).trim().slice(0, 2000)), "--- END OVERLORD STEER ---"]
       : []),
     "",
+    ...(isNonClaudeProvider(provider) ? ["", NON_CLAUDE_LEAD_CAP_RULES] : []),
     ...(alreadyRetired ? [] : [TAKEOVER_CONFIRM_INSTRUCTION]),
   ].join("\n");
 }
