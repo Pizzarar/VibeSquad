@@ -545,8 +545,9 @@ test("the deferred re-save is bounded and shutdown cancels it", async () => {
   await r.saveFoldIndex(); // logs never settle: 1 + 3 rounds, then it stops
   // Wait for the bounded chain to finish (condition), not a fixed wall-clock: under load the 20ms-round timers can be
   // delayed past the old 400ms window, leaving the final round pending (3 !== 4). Quiescence = the count reached the
-  // bound and no further round is scheduled (timer cleared); the code stops at 1 + RESAVE_ROUNDS by construction.
-  const quiesced = await until(() => saves >= 4 && r._resaveTimer === null, 5000);
+  // bound, no further round is scheduled (timer cleared) AND the last save finished (the timer callback clears _resaveTimer
+  // before the async save sets _foldSave). The code stops at 1 + RESAVE_ROUNDS by construction.
+  const quiesced = await until(() => saves >= 4 && r._foldSave === null && r._resaveTimer === null, 5000);
   assert.ok(quiesced, `deferred re-save never quiesced at the bounded total (saves=${saves})`);
   assert.equal(saves, 4);
   assert.equal(racyOnDisk(h, ids).length, ids.length);

@@ -96,12 +96,8 @@ console.log(JSON.stringify({ blockedMs }));`);
 }
 
 test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", (t) => {
-  // A native sync call cannot be paused mid-block (the main thread is in native code): the capture always lands right after the
-  // block, on execFileSync's JS continuation. Under load the pause can instead land in the timer/tick that runs next, and the
-  // monitor's captureLate flag can miss it — the heartbeat only bumps inside tick(), so a pause landing in a timer before tick()
-  // is not flagged late and carries that timer's frames instead of the blocker's. The structural assertions below (drift span and
-  // idle-cpu ratio) hold however loaded the machine is; the on-time attribution must be proven by at least one of 4 attempts, and
-  // a run whose every attempt lands late is skipped (strict via VS_TEST_STRICT_TIMING). An on-time capture never has wrong frames.
+  // The capture races real machine load, so a single run may legitimately land late (that is flagged, see the next test). Never wrong
+  // frames in any attempt; and the on-time path must be proven by at least one of 4 attempts (an always-late capture() fails).
   let proved = false, lateCount = 0;
   for (let i = 0; i < 4 && !proved; i++) {
     const { r, lines } = nativeCallRun();
@@ -114,12 +110,8 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
     assert.ok(stall && stall.driftMs >= blockedMs * 0.7, `max lag line ${stall?.driftMs}ms vs actual block ${blockedMs}ms: ${JSON.stringify(lines)}`);
     const cpuMs = stall.cpuUserMs + stall.cpuSystemMs; // cpu time does not grow with wall time when busy: bound against drift
     assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
-    const onTime = stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess "));
-    if (stall.captureLate || !onTime) { // flagged late, or landed in a post-block timer without being flagged (load race): retry
-      if (stall.captureLate) assert.equal(stall.frames, undefined);
-      lateCount++;
-      continue;
-    }
+    if (stall.captureLate) { assert.equal(stall.frames, undefined); lateCount++; continue; }
+    assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
     proved = true;
   }
   // Timing-only: every attempt landing late means the machine was saturated (late frames are asserted absent above, and the late flag is
@@ -143,6 +135,26 @@ console.log(JSON.stringify({ caps: m.captures() }));`, { opts: "deferPauseUntilR
   assert.ok(stall, JSON.stringify(lines));
   assert.equal(stall.captureLate, true, JSON.stringify(stall));
   assert.equal(stall.frames, undefined);
+});
+
+test("the heartbeat bumps before the drift clock is sampled (idea-513 race fix)", () => {
+  // A capture (inspector pause) can land anywhere inside a tick; the heartbeat is the watchdog's "main thread is alive" signal.
+  // It must bump before now()/cpuUsage(), else a capture landing in tick() after the block had already ended reads the stale
+  // heartbeat and is mislabeled not-late with tick()'s frames instead of the blocker's. Here now() records the heartbeat it sees.
+  let readHb = null;
+  let hbAtNow = null;
+  const m = createLoopLagMonitor({
+    proc: "t", file: "x", watchdog: true,
+    now: () => { hbAtNow = readHb ? readHb() : null; return 1_000_000; },
+    cpuUsage: () => ({ user: 0, system: 0 }),
+    heapUsed: () => 42,
+    append: async () => {},
+  });
+  readHb = m.heartbeat;
+  m.start(); // allocates the heartbeat buffer + watchdog worker (idle here: no stall), and the tick interval
+  m.tick();
+  m.stop();
+  assert.equal(hbAtNow, 1, "now() must observe the heartbeat already bumped (the bump precedes now/cpuUsage in tick())");
 });
 
 test("one long stall triggers exactly one watchdog capture", () => {
