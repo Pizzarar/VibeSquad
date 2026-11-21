@@ -1820,6 +1820,19 @@ test("idea-468: no-agent feature lane mounts BoringContextPanel (keyed, in an er
   assert.equal(panel.key, "per");
   assert.equal(panel.props.agent, undefined);
   assert.equal(byType(t, "TimelineErrorBoundary").props.fallbackLabel, "context panel");
+  assert.ok(byId(t, "boring-lane-no-agent-head")); // m2: a header band stands where the agent header would, so the panel keeps its top edge
+  const act = panel.props.noAgentAction; // m1: the empty card's start action, not a dead "Open …"
+  assert.equal(act.label, "Start Brainstorm");
+  assert.match(act.prompt, /^Start a Lead or Brainstorm to see/);
+});
+
+test("idea-468 m1: no-agent lane with an idle Lead offers 'Open the Lead'", () => {
+  reset();
+  const view = squad({ pins: [lanePin("per", { brainstorm: null, lead: mem("per-ld") }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })] });
+  laneBtn(render(props(view)), "per").props.onClick();
+  const act = byType(render(props(view, { agents: new Map() })), "BoringContextPanel").props.noAgentAction;
+  assert.equal(act.label, "Open the Lead");
+  assert.match(act.prompt, /^Open the Lead to see/);
 });
 
 test("idea-468: no-agent Bugs lane passes the Bugs pin's real lane id, never the _bugs sentinel", () => {

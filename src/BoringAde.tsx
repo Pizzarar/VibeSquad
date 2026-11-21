@@ -602,7 +602,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const startBrainstorm = (pin: Pin) => runStart(startKeyFor(pin) ?? "", () => boringStartBrainstorm(pin));
   const needsBugsLane = selectedLaneId === "_bugs" && !currentPin;
   const startBugs = () => view && runStart("_bugs", () => boringStartBugs(view.team.id));
-  const emptyCard = () => {
+  const emptySpec = () => {
     const startKey = startKeyFor(currentPin);
     const startFor = startKey && startState?.laneKey === startKey ? startState : null;
     const spec = {
@@ -611,6 +611,19 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       brainstorm: { text: "No Brainstorm session is running for this conversation yet.", cta: startFor?.busy ? "Starting Brainstorm…" : "Start Brainstorm", run: () => (currentPin ? startBrainstorm(currentPin) : startBugs()), disabled: (!currentPin && !needsBugsLane) || Boolean(startFor?.busy) },
       lead: { text: "No Lead is running yet — ask Brainstorm to hand off a plan.", cta: "Switch to Brainstorm", run: () => setSelectedRole("brainstorm"), disabled: false },
     }[emptyKind];
+    return spec;
+  };
+  /** idea-468 m1: what the agent-less panel's Changes/Files/Terminal tabs offer: open an existing (idle) Lead, else the empty card's own start action. */
+  const noAgentAction = (): { prompt: string; label: string; disabled?: boolean; run: () => void } => {
+    if (currentPin?.lead && selectedLaneId) return { prompt: "Open the Lead to see", label: "Open the Lead", run: () => pickRole(currentPin, selectedLaneId, "lead") };
+    const spec = emptySpec();
+    const desk = emptyKind === "overlord" || emptyKind === "riffbot";
+    return { prompt: desk ? `${spec.cta.replace(/^Start /, "Start the ")} to see` : "Start a Lead or Brainstorm to see", label: spec.cta, disabled: spec.disabled, run: () => void spec.run() };
+  };
+  const emptyCard = () => {
+    const startKey = startKeyFor(currentPin);
+    const startFor = startKey && startState?.laneKey === startKey ? startState : null;
+    const spec = emptySpec();
     return (
       <div className="boring-empty-card" data-testid="boring-empty-card">
         {surrealMotif}
@@ -928,7 +941,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
               // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
               // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
-              <div className="drawer-shell" data-testid="boring-lane-no-agent"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} /></TimelineErrorBoundary></div>
+              <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="drawer-head boring-no-agent-head" data-testid="boring-lane-no-agent-head"><span className="drawer-title">{laneLabel ?? "Lane"}</span><span className="muted"> · no Lead or Brainstorm running</span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
             ) : emptyCard()}
           </div>
         )}

@@ -44,10 +44,10 @@ const store = new Map();
 globalThis.localStorage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => void store.set(k, String(v)), removeItem: (k) => void store.delete(k) };
 globalThis.window = { innerWidth: 1920, addEventListener() {}, removeEventListener() {}, dispatchEvent() {} };
 const { BoringContextPanel } = await import(pathToFileURL(path.join(dir, "BoringContextPanel.mjs")).href);
-const html = (tab, laneId = "bug-chaser") => {
+const html = (tab, laneId = "bug-chaser", noAgentAction) => {
   store.set("vs.context-panel.open", "1");
   store.set("vs.context-panel.tab", tab);
-  return renderToStaticMarkup(React.createElement(BoringContextPanel, { entries: [], teamId: "vs", laneId }));
+  return renderToStaticMarkup(React.createElement(BoringContextPanel, { entries: [], teamId: "vs", laneId, noAgentAction }));
 };
 
 test("agent undefined: Workers tab lists the lane's workers (case-insensitive lane match), not other lanes", () => {
@@ -66,11 +66,19 @@ for (const tab of ["Changes", "Files", "Terminal"]) {
   test(`agent undefined: ${tab} tab shows boring-ctx-no-agent and does not throw`, () => {
     const h = html(tab);
     assert.match(h, /data-testid="boring-ctx-no-agent"/);
-    assert.match(h, new RegExp(`Open a Lead or Brainstorm to use ${tab}`));
+    assert.match(h, new RegExp(`Start a Lead or Brainstorm to see ${tab}\.`));
   });
 }
 
 test("agent undefined: Plan and Feed tabs render", () => {
   assert.match(html("Plan"), /boring-ctx-plan-empty/);
   assert.doesNotMatch(html("Feed"), /boring-ctx-no-agent/);
+});
+
+test("m1: with a noAgentAction the tab names it and renders its button (start / open-the-Lead copy)", () => {
+  const h = html("Changes", "bug-chaser", { prompt: "Open the Lead to see", label: "Open the Lead", run() {} });
+  assert.match(h, /Open the Lead to see Changes\./);
+  assert.match(h, /data-testid="boring-ctx-no-agent-action"[^>]*>Open the Lead</);
+  const d = html("Files", "bug-chaser", { prompt: "Start a Lead or Brainstorm to see", label: "Start Brainstorm", disabled: true, run() {} });
+  assert.match(d, /disabled=""[^>]*>Start Brainstorm</);
 });
