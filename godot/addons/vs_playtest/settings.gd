@@ -7,11 +7,15 @@ const SERVER_URL := "vs_playtest/server_url"
 const HOTKEY_DOCK := "vs_playtest/hotkey_dock"
 const HOTKEY_BUG := "vs_playtest/hotkey_bug"
 const ADAPTER_DIR := "vs_playtest/adapter_dir" # game adapter scripts; dropped from non-vs_playtest exports
+## B2b: absolute path of the owner device token file (remote server_url). "" = $VIBESQUAD_HOME/playtest-device-token,
+## else ~/.vibesquad/playtest-device-token. res:// and user:// paths are refused (the token never enters the project).
+const DEVICE_TOKEN_PATH := "vs_playtest/device_token_path"
 
 ## [name, default, type, hint]. server_url "" = auto: http://127.0.0.1:$VIBESQUAD_PORT (else 4180).
 const ALL: Array = [
 	[TEAM_ID, "", TYPE_STRING],
 	[SERVER_URL, "", TYPE_STRING],
+	[DEVICE_TOKEN_PATH, "", TYPE_STRING],
 	[HOTKEY_DOCK, "F8", TYPE_STRING],
 	[HOTKEY_BUG, "F9", TYPE_STRING],
 	[ADAPTER_DIR, "res://vs_playtest_adapter/", TYPE_STRING],

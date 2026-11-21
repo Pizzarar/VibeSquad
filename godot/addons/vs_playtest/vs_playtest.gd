@@ -43,6 +43,7 @@ var _seen: Dictionary = {}
 var _first_poll_done := false
 var _polling := false
 var _capturing := false
+var _pairing := false
 
 
 static func gate(has_editor: bool, has_tag: bool) -> bool:
@@ -65,6 +66,8 @@ func _ready() -> void:
 	_logs.install()
 	_transport = Transport.new()
 	_transport.server_url = Token.server_url(Settings.get_str(Settings.SERVER_URL))
+	_transport.device_token_path = Settings.get_str(Settings.DEVICE_TOKEN_PATH)
+	_transport.sleep_fn = func(sec: float) -> void: await get_tree().create_timer(sec).timeout
 	add_child(_transport)
 	_client = ReportClient.new(_transport)
 	_client.sleep_fn = func(sec: float) -> void: await get_tree().create_timer(sec).timeout
@@ -79,6 +82,8 @@ func _ready() -> void:
 	_dock.bug_pressed.connect(start_capture)
 	_dock.close_pressed.connect(close_dock)
 	_dock.reply_submitted.connect(_on_reply)
+	_dock.pair_submitted.connect(_on_pair)
+	_dock.unpair_pressed.connect(unpair)
 	_layer_overlay = CanvasLayer.new()
 	_layer_overlay.layer = 110
 	_layer_overlay.add_to_group(Picker.UI_GROUP)
@@ -92,6 +97,7 @@ func _ready() -> void:
 	add_child(_timer)
 	get_tree().root.size_changed.connect(_relayout)
 	set_ui_scale(ui_scale)
+	_refresh_pairing()
 	if _team_id == "":
 		_dock.set_status("Set the project setting vs_playtest/team_id to the Squad that should get reports.")
 
@@ -121,6 +127,24 @@ func cheats() -> Array:
 
 func cheat(id: String, args: Array = []) -> Variant:
 	return _adapter.run_cheat(id, args) if enabled and _adapter != null else null
+
+
+## B2b: true when a valid owner device token file is stored (used when server_url is not loopback).
+## false when disabled (no I/O).
+func is_paired() -> bool:
+	return enabled and _transport != null and _transport.is_paired()
+
+
+## B2b: deletes the device token file (revoke the device in VibeSquad too). true when no token file is left.
+## false when disabled (no I/O).
+func unpair() -> bool:
+	if not enabled or _transport == null:
+		return false
+	var gone: bool = _transport.unpair()
+	_reset_thread()
+	_refresh_pairing()
+	_dock.set_status("Unpaired: the device token file was deleted. Also revoke this device in VibeSquad." if gone else "Could not delete the device token file.")
+	return gone
 
 
 func open_dock() -> void:
@@ -323,9 +347,61 @@ func _on_reply(text: String) -> void:
 		_poll()
 
 
-func _poll() -> void:
-	if _polling or _team_id == "" or not _dock.visible:
+## Pair row state: hidden for a loopback server (local token), else Pair with VS / Unpair; a refused URL or path says why.
+func _refresh_pairing() -> void:
+	if _dock == null:
 		return
+	if _transport.auth_mode() == Token.MODE_LOCAL:
+		_dock.set_pairing(Dock.PAIR_HIDDEN)
+		return
+	var refusal: String = _transport.device_refusal()
+	if refusal != "":
+		_dock.set_pairing(Dock.PAIR_HIDDEN)
+		_dock.set_status(refusal)
+		return
+	if _transport.resolved_device_token_path() == "":
+		_dock.set_pairing(Dock.PAIR_HIDDEN)
+		_dock.set_status("vs_playtest/device_token_path must be an absolute file path outside the project (not res:// or user://).")
+		return
+	var paired: bool = _transport.is_paired()
+	_dock.set_pairing(Dock.PAIR_PAIRED if paired else Dock.PAIR_UNPAIRED)
+	if not paired:
+		_dock.set_status("Not paired with VibeSquad. Mint an owner pairing code in VibeSquad (Pair Device, or vs pair), type the 6 digits and press Pair with VS.")
+
+
+func _on_pair(code: String) -> void:
+	if _pairing:
+		return
+	_pairing = true
+	_dock.set_pair_busy(true)
+	_dock.set_status("Pairing… (if the code came from a phone, approve this device there)")
+	var res: Dictionary = await _transport.pair(code)
+	_pairing = false
+	_dock.set_pair_busy(false)
+	if bool(res.get("ok", false)):
+		_reset_thread()
+		_refresh_pairing()
+		_dock.set_status("Paired with VibeSquad.")
+		_poll()
+	else:
+		_refresh_pairing()
+		_dock.set_status(str(res.get("error", "pairing failed")))
+
+
+## The thread is per principal (local owner vs this device), so a new pairing starts it over.
+func _reset_thread() -> void:
+	_cursor = ""
+	_seen = {}
+	_first_poll_done = false
+	if _dock != null:
+		_dock.clear_messages()
+
+
+func _poll() -> void:
+	if _polling or _pairing or _team_id == "" or not _dock.visible:
+		return
+	if _transport.auth_mode() == Token.MODE_DEVICE and not _transport.is_paired():
+		return # the dock already says how to pair; don't overwrite it every 3 s
 	_polling = true
 	var res: Dictionary = await _client.fetch_thread(_team_id, _cursor)
 	_polling = false

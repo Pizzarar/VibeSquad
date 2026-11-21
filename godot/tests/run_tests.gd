@@ -8,6 +8,13 @@ const ReportClient := preload("res://addons/vs_playtest/report_client.gd")
 const AutoloadScript := preload("res://addons/vs_playtest/vs_playtest.gd")
 const Picker := preload("res://addons/vs_playtest/picker.gd")
 const Export := preload("res://addons/vs_playtest/export_plugin.gd")
+const Transport := preload("res://addons/vs_playtest/transport.gd")
+const LogCapture := preload("res://addons/vs_playtest/log_capture.gd")
+const Dock := preload("res://addons/vs_playtest/dock.gd")
+
+## B2b fixtures: never real tokens.
+const DEV_TOKEN := "Tk3n_B2b-test0123456789abcdefGHIJKLmnopqrstu"
+const DEV_TOKEN_2 := "Second_B2b-tok3n9876543210ZYXWVUTSrqponmlkj"
 
 var _pass := 0
 var _fail := 0
@@ -19,6 +26,17 @@ class MockTransport extends RefCounted:
 	func request(method: String, path: String, body: Variant = null) -> Dictionary:
 		calls.append({"method": method, "path": path, "body": body})
 		return queue.pop_front() if not queue.is_empty() else {"ok": true, "status": 200, "data": {}, "error": ""}
+
+
+## Stands in for HTTPRequest (Transport.http_fn): records every call, answers from a queue.
+class MockHttp extends RefCounted:
+	var queue: Array = []
+	var calls: Array = []
+	func handle(url: String, headers: PackedStringArray, method: int, body: String) -> Dictionary:
+		calls.append({"url": url, "headers": headers, "method": method, "body": body})
+		return queue.pop_front() if not queue.is_empty() else {"result": HTTPRequest.RESULT_SUCCESS, "code": 200, "text": "{}"}
+	static func json(code: int, data: Dictionary) -> Dictionary:
+		return {"result": HTTPRequest.RESULT_SUCCESS, "code": code, "text": JSON.stringify(data)}
 
 
 class FullAdapter extends VSPlaytestAdapter:
@@ -42,6 +60,13 @@ func _initialize() -> void:
 	await _test_picker()
 	await _test_capture_flow()
 	_test_export_helpers()
+	_test_device_egress_table()
+	_test_auth_mode_selection()
+	_test_device_token_path()
+	_test_device_token_file()
+	await _test_device_transport()
+	await _test_pairing()
+	await _test_autoload_pairing_api()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -393,3 +418,326 @@ func _test_export_helpers() -> void:
 	check(not c.call("addons/vs_playtest_extra/*", "addons/vs_playtest"), "filter: sibling prefix 2 rejected")
 	check(not c.call("other/addons/vs_playtest/*", "addons/vs_playtest"), "filter: nested elsewhere rejected")
 	check(not c.call("addons/*", "addons/vs_playtest"), "filter: parent wildcard rejected (strict; spec lists only dir/*, dir/**, *)")
+
+
+# ---------------------------------------------------------------- B2b device-token mode
+
+func _tmp_dir(tag: String) -> String:
+	var d := OS.get_temp_dir().path_join("vsp_%s_%d" % [tag, Time.get_ticks_usec()])
+	DirAccess.make_dir_recursive_absolute(d)
+	return d
+
+
+func _test_device_egress_table() -> void:
+	var BS := String.chr(92)
+	var allow := [
+		"http://127.0.0.1:4180", "http://localhost:4180", "http://[::1]:4180", "HTTP://LOCALHOST",
+		"http://100.64.0.1:4180", "http://100.127.255.255", "http://100.100.100.100:4180/", "http://100.64.0.0",
+		"http://[fd7a:115c:a1e0::1]:4180", "http://[FD7A:115C:A1E0:ab12::5]", "http://[fd7a:115c:a1e0:0:0:0:0:1]",
+		"http://forge.tail1234.ts.net:4180", "http://FORGE.Tail1234.TS.NET:4180", "http://a.ts.net",
+		"https://example.com", "https://vs.example.com:8443/", "https://forge.tail1234.ts.net", "https://100.64.0.1:4180",
+		"https://192.168.1.5:4180", "https://[2001:db8::1]:443", "https://127.0.0.1:4180",
+	]
+	for u: String in allow:
+		check(Token.is_device_egress_allowed(u), "egress: allows %s" % u)
+	var deny := [
+		# plain http to anything that is not loopback / tailnet
+		"http://example.com", "http://192.168.1.5:4180", "http://10.0.0.1", "http://100.63.255.255", "http://100.128.0.1", "http://99.64.0.1",
+		"http://127.0.0.2", "http://0.0.0.0:4180",
+		# lookalike hosts
+		"http://evil.ts.net.attacker.com", "http://100.64.0.1.nip.io", "http://ts.net", "http://.ts.net", "http://evilts.net", "http://ts.net.evil.com",
+		"http://forge.ts.net.", "http://forge.tail.ts.net.:4180", "http://forge..ts.net", "http://-forge.ts.net", "https://example.com.",
+		"http://forge.ts.net-evil.com", "http://forge_ts.net",
+		# userinfo (the B2 R1 bypass)
+		"http://user@forge.ts.net", "http://forge.ts.net@evil.com", "http://100.64.0.1@evil.com", "https://user:pw@example.com",
+		"http://127.0.0.1:4180@evil.com", "https://evil.com@forge.ts.net", "http://user:pw@100.64.0.1:4180", "http://@forge.ts.net",
+		# IPv6
+		"http://[fd7a:115c:a1e1::1]", "http://[fd7a:115c::1]", "http://[fe80::1%25eth0]", "http://[::ffff:100.64.0.1]", "http://[fd7a:115c:a1e0::1",
+		"http://fd7a:115c:a1e0::1", "http://[fd7a:115c:a1e0::1::2]", "http://[fd7a:115c:a1e0:1:2:3:4:5:6]", "http://[fd7a:115c:a1e0:12345::1]", "http://[]",
+		"http://[fc00::1]", "http://[::1]:0",
+		# decimal / octal / hex / short IPv4 forms
+		"http://1681915905", "http://0144.0100.0.1", "http://100.064.0.1", "http://0x64.0x40.0.1", "http://0x64400001", "http://100.64.1", "http://100.64.0.256",
+		"https://1681915905", "https://0x7f000001", "https://0177.0.0.1", "https://2130706433:4180", "https://127.1",
+		# ports
+		"http://100.64.0.1:0", "http://100.64.0.1:65536", "http://forge.ts.net:abc", "http://forge.ts.net:", "https://example.com:99999",
+		# shape
+		"ftp://forge.ts.net", "file:///etc/passwd", "", "forge.ts.net:4180", "//forge.ts.net", "http://forge.ts.net?x=1", "http://forge.ts.net#x",
+		"http://forge.ts.net" + BS + "@evil.com", "http://forge.ts.net/a@evil.com", "http://exa mple.com", "javascript:alert(1)", "http://100.64.0.1 .evil.com",
+		"wss://forge.ts.net", "http:/forge.ts.net", "http://forge.ts.net/x\r\nX-Evil: 1",
+	]
+	for u: String in deny:
+		check(not Token.is_device_egress_allowed(u), "egress: refuses '%s'" % u.c_escape())
+
+
+func _test_auth_mode_selection() -> void:
+	for u in ["http://127.0.0.1:4180", "http://localhost", "http://[::1]:4180", "HTTP://LOCALHOST:4180/"]:
+		check(Token.auth_mode(u) == Token.MODE_LOCAL, "mode: %s -> local token" % u)
+	for u in ["http://forge.tail1234.ts.net:4180", "https://127.0.0.1:4180", "http://100.64.0.1:4180", "http://127.0.0.1.evil.com", "http://127.0.0.1@evil.com", "https://example.com"]:
+		check(Token.auth_mode(u) == Token.MODE_DEVICE, "mode: %s -> device token" % u)
+	check(Token.auth_mode(Token.server_url("", func(_k: String) -> String: return "")) == Token.MODE_LOCAL, "mode: default server_url (auto) is local")
+	var t := Transport.new()
+	t.server_url = "http://127.0.0.1:4180"
+	check(t.auth_mode() == Token.MODE_LOCAL and t.device_refusal() == "", "mode: transport loopback -> local, no refusal")
+	t.server_url = "http://evil.example.com:4180"
+	check(t.auth_mode() == Token.MODE_DEVICE and t.device_refusal().begins_with("refusing to send the device token"), "mode: transport plain-http remote -> refused with a reason")
+	t.server_url = "http://u:secretpw@evil.example.com"
+	check(not t.device_refusal().contains("secretpw"), "mode: refusal message masks userinfo")
+	t.free()
+
+
+func _test_device_token_path() -> void:
+	var BS := String.chr(92)
+	var env := {"VIBESQUAD_HOME": "/tmp/vsh", "USERPROFILE": "C:/Users/x", "HOME": "/home/x"}
+	var getenv := func(k: String) -> String: return env.get(k, "")
+	check(Token.device_token_path("", getenv) == "/tmp/vsh/playtest-device-token", "device path: $VIBESQUAD_HOME wins")
+	var win := {"USERPROFILE": "C:/Users/x", "HOME": "/home/x"}
+	check(Token.device_token_path("", func(k: String) -> String: return win.get(k, "")) == "C:/Users/x/.vibesquad/playtest-device-token", "device path: Windows home fallback")
+	var nix := {"HOME": "/home/x"}
+	check(Token.device_token_path("", func(k: String) -> String: return nix.get(k, "")) == "/home/x/.vibesquad/playtest-device-token", "device path: HOME fallback")
+	check(Token.device_token_path("", func(_k: String) -> String: return "") == "", "device path: no home -> empty")
+	for o in ["/abs/dir/tok", "C:/t/tok", "C:" + BS + "t" + BS + "tok", BS + BS + "srv" + BS + "share" + BS + "tok", "  /abs/tok  "]:
+		check(Token.device_token_path(o, getenv) == o.strip_edges(), "device path: setting override '%s' wins" % o.c_escape())
+	for o in ["res://tok", "user://tok", "uid://abc", "tok", "./tok", "~/.vibesquad/tok", "/dir/", "C:tok", "http://x/tok"]:
+		check(Token.device_token_path(o, getenv) == "", "device path: override '%s' refused (not swapped for the default)" % o)
+	check(Token.token_path(getenv) == "/tmp/vsh/local-token", "device path: local-token path unchanged")
+
+
+func _test_device_token_file() -> void:
+	var dir := _tmp_dir("devtok")
+	var p := dir.path_join("sub").path_join("playtest-device-token")
+	check(Token.write_device_token(p, DEV_TOKEN) == OK, "token file: written (parent dir created)")
+	check(Token.read_device_token(p) == DEV_TOKEN, "token file: reads back")
+	check(FileAccess.get_file_as_string(p) == DEV_TOKEN + "\n", "token file: content is the token only")
+	if not (OS.get_name() in ["Windows", "Web"]):
+		check((FileAccess.get_unix_permissions(p) & 63) == 0, "token file: owner-only permissions (%o)" % FileAccess.get_unix_permissions(p))
+	var leftovers := DirAccess.get_files_at(p.get_base_dir())
+	check(leftovers.size() == 1, "token file: no temp file left behind (%s)" % ", ".join(leftovers))
+	check(Token.write_device_token(p, DEV_TOKEN_2) == OK and Token.read_device_token(p) == DEV_TOKEN_2, "token file: overwrite replaces it")
+	check(Token.write_device_token(p, "bad\ntoken-with-newline") == ERR_INVALID_DATA and Token.read_device_token(p) == DEV_TOKEN_2, "token file: malformed token refused, file untouched")
+	check(Token.write_device_token("res://playtest-device-token", DEV_TOKEN) == ERR_FILE_BAD_PATH and not FileAccess.file_exists("res://playtest-device-token"), "token file: res:// path refused")
+	check(Token.write_device_token("user://playtest-device-token", DEV_TOKEN) == ERR_FILE_BAD_PATH and not FileAccess.file_exists("user://playtest-device-token"), "token file: user:// path refused")
+	for bad in ["short", "has space in it here", "abc\ndef0123456789xyz", "x".repeat(257), "a;b=c0123456789abcdef"]:
+		var q := dir.path_join("bad")
+		var f := FileAccess.open(q, FileAccess.WRITE)
+		f.store_string(bad)
+		f.close()
+		check(Token.read_device_token(q) == "", "token file: malformed '%s' reads as unpaired" % bad.left(24).c_escape())
+		DirAccess.remove_absolute(q)
+	var t := Transport.new()
+	t.device_token_path = p
+	check(t.is_paired(), "unpair: paired before")
+	check(t.unpair() and not FileAccess.file_exists(p) and not t.is_paired(), "unpair: removes the token file")
+	check(t.unpair(), "unpair: idempotent when already gone")
+	t.free()
+	DirAccess.remove_absolute(p.get_base_dir())
+	DirAccess.remove_absolute(dir)
+
+
+func _has_header(headers: PackedStringArray, name: String) -> bool:
+	for h in headers:
+		if h.to_lower().begins_with(name.to_lower() + ":"):
+			return true
+	return false
+
+
+func _test_device_transport() -> void:
+	var dir := _tmp_dir("devtr")
+	var dpath := dir.path_join("playtest-device-token")
+	var lpath := dir.path_join("local-token")
+	var local_tok := "0123456789abcdef".repeat(4)
+	var lf := FileAccess.open(lpath, FileAccess.WRITE)
+	lf.store_string(local_tok)
+	lf.close()
+	Token.write_device_token(dpath, DEV_TOKEN)
+	var t := Transport.new()
+	var mock := MockHttp.new()
+	t.http_fn = Callable(mock, "handle")
+	t.device_token_path = dpath
+	t.local_token_path = lpath
+	# loopback -> local token only, never the device token
+	t.server_url = "http://127.0.0.1:4180"
+	var r: Dictionary = await t.request("GET", "/__vibesquad/tester/thread?teamId=s", null)
+	var h: PackedStringArray = mock.calls[-1]["headers"] if mock.calls.size() > 0 else PackedStringArray()
+	check(r["ok"] and h.has("x-vibesquad-token: " + local_tok), "transport: loopback sends x-vibesquad-token")
+	check(not _has_header(h, "x-vs-device-token") and not _has_header(h, "authorization") and not _has_header(h, "cookie") and not ("|".join(h)).contains(DEV_TOKEN), "transport: loopback never sends the device token or a cookie")
+	# remote tailnet / https -> device token header only
+	for url in ["http://forge.tail1234.ts.net:4180", "https://vs.example.com", "http://100.64.0.7:4180", "http://[fd7a:115c:a1e0::9]:4180"]:
+		t.server_url = url
+		var n := mock.calls.size()
+		r = await t.request("POST", "/__vibesquad/tester/report", {"teamId": "s"})
+		var c: Dictionary = mock.calls[-1] if mock.calls.size() > n else {}
+		var hh: PackedStringArray = c.get("headers", PackedStringArray())
+		check(r["ok"] and str(c.get("url", "")) == url + "/__vibesquad/tester/report" and hh.has("x-vs-device-token: " + DEV_TOKEN), "transport: %s sends x-vs-device-token" % url)
+		check(not _has_header(hh, "x-vibesquad-token") and not _has_header(hh, "cookie") and not ("|".join(hh)).contains(local_tok), "transport: %s never gets the local token or a cookie" % url)
+	# egress refused -> no request at all
+	for url in ["http://evil.example.com:4180", "http://evil.ts.net.attacker.com", "http://100.64.0.1.nip.io", "http://user@forge.ts.net", "http://1681915905"]:
+		t.server_url = url
+		var n2 := mock.calls.size()
+		r = await t.request("GET", "/x", null)
+		check(mock.calls.size() == n2 and not r["ok"] and r["status"] == -1 and str(r["error"]).begins_with("refusing to send the device token"), "transport: %s refused before any request" % url)
+	# unpaired -> refused locally with how-to
+	t.server_url = "https://vs.example.com"
+	t.device_token_path = dir.path_join("missing-token")
+	var n3 := mock.calls.size()
+	r = await t.request("GET", "/x", null)
+	check(mock.calls.size() == n3 and r["status"] == -1 and str(r["error"]).contains("Pair with VS"), "transport: unpaired remote -> -1, says Pair with VS")
+	t.device_token_path = "res://playtest-device-token"
+	r = await t.request("GET", "/x", null)
+	check(mock.calls.size() == n3 and r["status"] == -1 and str(r["error"]).contains("device_token_path"), "transport: res:// device_token_path refused, no fallback to the default file")
+	t.device_token_path = dpath
+	# redirect / TLS / 401 answers
+	mock.queue = [{"result": HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED, "code": 301, "text": ""}]
+	r = await t.request("GET", "/x", null)
+	check(r["status"] == -1 and str(r["error"]).contains("redirect"), "transport: redirect is refused, not followed, not retried")
+	mock.queue = [MockHttp.json(302, {})]
+	r = await t.request("GET", "/x", null)
+	check(r["status"] == -1 and str(r["error"]).contains("redirect"), "transport: a raw 3xx is refused too")
+	mock.queue = [{"result": HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR, "code": 0, "text": ""}]
+	r = await t.request("GET", "/x", null)
+	check(r["status"] == -1 and str(r["error"]).contains("TLS"), "transport: TLS failure explained, not retried")
+	mock.queue = [MockHttp.json(401, {"error": "unauthorized"})]
+	r = await t.request("GET", "/x", null)
+	check(r["status"] == 401 and str(r["error"]).contains("Unpair"), "transport: 401 in device mode says re-pair")
+	check(not str(r).contains(DEV_TOKEN), "transport: result never carries the token")
+	t.free()
+	for f in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(f))
+	DirAccess.remove_absolute(dir)
+
+
+func _test_pairing() -> void:
+	var logs := LogCapture.new()
+	logs.install()
+	var outputs: Array = [] # every result / error string the flows produce
+	var dir := _tmp_dir("pair")
+	var dpath := dir.path_join("playtest-device-token")
+	var t := Transport.new()
+	var mock := MockHttp.new()
+	t.http_fn = Callable(mock, "handle")
+	t.sleep_fn = func(_s: float) -> void: pass
+	t.device_token_path = dpath
+	t.server_url = "https://forge.tail1234.ts.net:4180"
+	# 1. PC-minted code: paired at once
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "owner", "allowedTeams": null, "hostId": "h"})]
+	var r: Dictionary = await t.pair(" 123-456 ")
+	outputs.append(r)
+	var c0: Dictionary = mock.calls[0] if mock.calls.size() > 0 else {}
+	check(str(c0.get("url", "")) == "https://forge.tail1234.ts.net:4180/pair?code=123456&format=json&name=Godot%20playtest" and c0.get("method") == HTTPClient.METHOD_GET, "pair: GET /pair?code=…&format=json (code normalized)")
+	var h0: PackedStringArray = c0.get("headers", PackedStringArray())
+	check(not _has_header(h0, "x-vs-device-token") and not _has_header(h0, "x-vibesquad-token") and not _has_header(h0, "cookie"), "pair: redeem carries no token and no cookie")
+	check(r["ok"] and r["state"] == "paired" and t.is_paired() and Token.read_device_token(dpath) == DEV_TOKEN, "pair: paired -> token stored")
+	check(not r.has("token") and not str(r).contains(DEV_TOKEN), "pair: result never carries the token")
+	check(t.unpair() and not t.is_paired(), "pair: unpair after pairing")
+	# 2. phone-minted code: pending -> pending -> blip -> approved, polled with the token header
+	mock.calls.clear()
+	mock.queue = [
+		MockHttp.json(200, {"ok": true, "state": "pending", "token": DEV_TOKEN_2, "role": "owner"}),
+		MockHttp.json(200, {"state": "pending", "role": "owner"}),
+		MockHttp.json(503, {"error": "blip"}),
+		MockHttp.json(200, {"state": "approved", "role": "owner"}),
+	]
+	r = await t.pair("654321")
+	outputs.append(r)
+	check(r["ok"] and mock.calls.size() == 4 and str(mock.calls[1]["url"]).ends_with("/pair/status") and (mock.calls[1]["headers"] as PackedStringArray).has("x-vs-device-token: " + DEV_TOKEN_2), "pair: pending polls /pair/status with the header token")
+	check(Token.read_device_token(dpath) == DEV_TOKEN_2, "pair: approved -> token stored")
+	t.unpair()
+	# 3. denied / never approved
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "pending", "token": DEV_TOKEN, "role": "owner"}), MockHttp.json(200, {"state": "denied"})]
+	r = await t.pair("111111")
+	outputs.append(r)
+	check(not r["ok"] and r["state"] == "denied" and str(r["error"]).contains("denied") and not FileAccess.file_exists(dpath), "pair: denied -> nothing stored")
+	t.pair_timeout_sec = 6.0
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "pending", "token": DEV_TOKEN, "role": "owner"})]
+	for i in 5:
+		mock.queue.append(MockHttp.json(200, {"state": "pending"}))
+	r = await t.pair("111112")
+	outputs.append(r)
+	check(not r["ok"] and r["state"] == "timeout" and not FileAccess.file_exists(dpath), "pair: never approved -> times out, nothing stored")
+	# 4. a tester code is not an owner device
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "bug-tester", "allowedTeams": ["x"]})]
+	r = await t.pair("222222")
+	outputs.append(r)
+	check(not r["ok"] and r["state"] == "wrong-role" and not FileAccess.file_exists(dpath), "pair: non-owner role refused, nothing stored")
+	# 5. server refusals
+	mock.queue = [MockHttp.json(401, {"ok": false, "state": "invalid", "error": "pairing code invalid, already used, or expired"})]
+	r = await t.pair("333333")
+	outputs.append(r)
+	check(not r["ok"] and str(r["error"]).contains("invalid, already used"), "pair: invalid code -> server reason shown")
+	mock.queue = [MockHttp.json(429, {"ok": false, "state": "rate-limited", "error": "too many pairing attempts", "retryAfterSecs": 90})]
+	r = await t.pair("333334")
+	outputs.append(r)
+	check(not r["ok"] and str(r["error"]).contains("90 s"), "pair: rate limit -> retry hint")
+	mock.queue = [{"result": HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED, "code": 301, "text": ""}]
+	r = await t.pair("333335")
+	outputs.append(r)
+	check(not r["ok"] and str(r["error"]).contains("redirect"), "pair: redirect refused (plain-http listener)")
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": "bad token\r\nX-Evil: 1", "role": "owner"})]
+	r = await t.pair("333336")
+	outputs.append(r)
+	check(not r["ok"] and not FileAccess.file_exists(dpath), "pair: malformed token from the server refused")
+	# 6. refused locally: no request goes out
+	var n := mock.calls.size()
+	for code in ["12345", "1234567", "abcdef", ""]:
+		r = await t.pair(code)
+		outputs.append(r)
+		check(not r["ok"] and mock.calls.size() == n, "pair: bad code '%s' refused before any request" % code)
+	for url in ["http://evil.example.com", "http://evil.ts.net.attacker.com", "http://user@forge.ts.net"]:
+		t.server_url = url
+		r = await t.pair("123456")
+		outputs.append(r)
+		check(not r["ok"] and mock.calls.size() == n and str(r["error"]).contains("pairing code"), "pair: %s refused before any request" % url)
+	t.server_url = "http://127.0.0.1:4180"
+	r = await t.pair("123456")
+	check(not r["ok"] and mock.calls.size() == n and str(r["error"]).contains("no pairing needed"), "pair: loopback server needs no pairing")
+	# 7. token never in any error, result or log line
+	await process_frame
+	logs.uninstall()
+	var lines: Array = logs.last_lines(LogCapture.CAP)
+	var blob := JSON.stringify(outputs) + "\n" + "\n".join(PackedStringArray(lines))
+	check(not blob.contains(DEV_TOKEN) and not blob.contains(DEV_TOKEN_2), "pair: no token in any error/result/log line (%d log lines)" % lines.size())
+	t.free()
+	DirAccess.remove_absolute(dpath)
+	DirAccess.remove_absolute(dir)
+
+
+func _test_autoload_pairing_api() -> void:
+	var off: Node = AutoloadScript.new()
+	off.feature_probe = func(_f: String) -> bool: return false
+	root.add_child(off)
+	await process_frame
+	check(off.is_paired() == false and off.unpair() == false, "api: disabled is_paired()/unpair() are inert")
+	off.queue_free()
+	var logs := LogCapture.new()
+	logs.install()
+	var dir := _tmp_dir("api")
+	var dpath := dir.path_join("playtest-device-token")
+	var on: Node = AutoloadScript.new()
+	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(on)
+	await process_frame
+	check(on._dock.pair_state == Dock.PAIR_HIDDEN, "api: loopback server -> no pair row")
+	var mock := MockHttp.new()
+	on._transport.http_fn = Callable(mock, "handle")
+	on._transport.sleep_fn = func(_s: float) -> void: pass
+	on._transport.device_token_path = dpath
+	on._transport.server_url = "https://forge.tail1234.ts.net:4180"
+	on._refresh_pairing()
+	check(not on.is_paired() and on._dock.pair_state == Dock.PAIR_UNPAIRED and on._dock._pair_btn.text == "Pair with VS", "api: remote + no token -> Pair with VS shown")
+	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "owner"})]
+	on._dock.pair_submitted.emit("123456")
+	for i in 3:
+		await process_frame
+	check(on.is_paired() and on._dock.pair_state == Dock.PAIR_PAIRED and on._dock._unpair_btn.visible, "api: dock pairing -> is_paired(), Unpair shown")
+	var status_paired: String = on._dock._status.text
+	check(on.unpair() and not FileAccess.file_exists(dpath) and not on.is_paired() and on._dock.pair_state == Dock.PAIR_UNPAIRED, "api: unpair() deletes the file, Pair with VS back")
+	var status_unpaired: String = on._dock._status.text
+	on._transport.server_url = "http://evil.example.com"
+	on._refresh_pairing()
+	check(on._dock.pair_state == Dock.PAIR_HIDDEN and str(on._dock._status.text).begins_with("refusing"), "api: refused server_url -> dock says why, no pair row")
+	on.queue_free()
+	await process_frame
+	logs.uninstall()
+	var lines: Array = logs.last_lines(LogCapture.CAP)
+	var blob := status_paired + status_unpaired + "\n".join(PackedStringArray(lines))
+	check(not blob.contains(DEV_TOKEN), "api: token never in dock status or log lines")
+	DirAccess.remove_absolute(dir)

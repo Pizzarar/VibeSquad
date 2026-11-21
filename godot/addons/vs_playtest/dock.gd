@@ -5,6 +5,13 @@ extends PanelContainer
 signal bug_pressed
 signal reply_submitted(text: String)
 signal close_pressed
+## B2b: owner typed a pairing code / pressed Unpair (vs_playtest.gd does the I/O).
+signal pair_submitted(code: String)
+signal unpair_pressed
+
+const PAIR_HIDDEN := "hidden" # loopback server: the local token is used, nothing to pair
+const PAIR_UNPAIRED := "unpaired"
+const PAIR_PAIRED := "paired"
 
 const BASE_FONT := 18
 const BASE_WIDTH := 460.0
@@ -23,6 +30,11 @@ var _bug: Button
 var _close: Button
 var _send: Button
 var _header: PanelContainer
+var _pair_row: HBoxContainer
+var _pair_code: LineEdit
+var _pair_btn: Button
+var _unpair_btn: Button
+var pair_state: String = PAIR_HIDDEN
 
 
 func _init() -> void:
@@ -56,6 +68,26 @@ func _init() -> void:
 	_status.add_theme_color_override("font_color", MUTED)
 	root.add_child(_status)
 
+	# B2b pairing (remote server_url only): "Pair with VS" + 6-digit code, or "Unpair" once a device token is stored.
+	_pair_row = HBoxContainer.new()
+	root.add_child(_pair_row)
+	_pair_code = LineEdit.new()
+	_pair_code.placeholder_text = "6-digit code"
+	_pair_code.max_length = 7
+	_pair_code.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_pair_code.text_submitted.connect(_on_pair)
+	_pair_row.add_child(_pair_code)
+	_pair_btn = Button.new()
+	_pair_btn.text = "Pair with VS"
+	_pair_btn.tooltip_text = "Mint an owner pairing code in VibeSquad (Pair Device, or vs pair), then type it here"
+	_pair_btn.pressed.connect(func() -> void: _on_pair(_pair_code.text))
+	_pair_row.add_child(_pair_btn)
+	_unpair_btn = Button.new()
+	_unpair_btn.text = "Unpair"
+	_unpair_btn.tooltip_text = "Delete this PC's device token file (also revoke the device in VibeSquad)"
+	_unpair_btn.pressed.connect(func() -> void: unpair_pressed.emit())
+	_pair_row.add_child(_unpair_btn)
+
 	_log = RichTextLabel.new()
 	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_log.scroll_following = true
@@ -74,6 +106,7 @@ func _init() -> void:
 	_send.text = "Send"
 	_send.pressed.connect(func() -> void: _on_submit(_input.text))
 	row.add_child(_send)
+	set_pairing(PAIR_HIDDEN)
 	apply_scale(1.0)
 
 
@@ -180,3 +213,25 @@ func _on_submit(text: String) -> void:
 		return
 	_input.clear()
 	reply_submitted.emit(t)
+
+
+## mode: PAIR_HIDDEN | PAIR_UNPAIRED (code box + Pair with VS) | PAIR_PAIRED (Unpair only).
+func set_pairing(mode: String) -> void:
+	pair_state = mode
+	_pair_row.visible = mode != PAIR_HIDDEN
+	_pair_code.visible = mode == PAIR_UNPAIRED
+	_pair_btn.visible = mode == PAIR_UNPAIRED
+	_unpair_btn.visible = mode == PAIR_PAIRED
+
+
+func set_pair_busy(busy: bool) -> void:
+	_pair_btn.disabled = busy
+	_pair_code.editable = not busy
+
+
+func _on_pair(code: String) -> void:
+	var c := code.strip_edges()
+	if c == "" or _pair_btn.disabled:
+		return
+	_pair_code.clear()
+	pair_submitted.emit(c)
