@@ -2684,6 +2684,71 @@ test('usa-38: compact-step lines landing in both logs/*.jsonl and teams/<t>/log.
   assert.equal(cp.okCount, 1);
 });
 
+test('usa-38: a successor whose first turn_done has no costUsd does not dilute meanSuccessorFirstTurnCostUsd', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-nocost', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done' }, // no costUsd -> firstTurnCostUsd stays null
+  ]);
+  writeAgent(home, 'rn-cost', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred2' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.meanSuccessorFirstTurnCostUsd, 0.5); // only rn-cost counts; the no-cost successor is excluded, not $0
+});
+
+test('usa-38: WRITE_HANDOFF_PROMPT ("Write handoff now: ...") also counts as a predecessor wrap-up turn', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-pred', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: 'work' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 1.0 },
+    { ts: T0 + 3, type: 'input', text: 'Write handoff now: run vs handoff --judgment-file f and finish your turn' },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 1.2 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.predecessorWrapUpTurns, 1);
+  assert.equal(cp.predecessorWrapUpCostUsd, 0.2);
+  assert.equal(cp.meanPredecessorWrapUpCostUsd, 0.2);
+});
+
+test('usa-38: agent-log compactions without compact-step metric lines leave attempts=0 and okRate=null', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-c', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: '/compact keep the brief' },
+    { ts: T0 + 2, type: 'compacted', before: 150000, after: 12000 },
+    { ts: T0 + 3, type: 'usage', inputTokens: 12000, outputTokens: 0 },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 1.1 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.runs, 1); // the agent-log compaction is still counted
+  assert.equal(cp.attempts, 0); // but no compact-step metric lines -> 0, not run-fallback
+  assert.equal(cp.okCount, 0);
+  assert.equal(cp.okRate, null); // never 1: derived only from real counts
+});
+
+test('usa-38: squad filter honors a compact-step entry team field when the lane is unmapped', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  fs.writeFileSync(path.join(home, 'teams.json'), JSON.stringify({ teams: [{ id: 'vibesquad', lanes: [{ id: 'usage', code: 'usa' }] }] }));
+  // lane is not in teams.json, but the entry's team field names the squad
+  writeLog(home, 'logs/other--compaction.jsonl', { ts: new Date(T0).toISOString(), agent: 'rn-a', lane: 'unmapped', type: 'metric', team: 'vibesquad', text: 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000', refs: [] });
+  const cp = getUsage({ home, git: noGit, squad: 'vibesquad' }).compaction;
+  assert.equal(cp.attempts, 1);
+  assert.equal(cp.okCount, 1);
+});
+
 test('usage ready-time: a queued status after the first response (follow-up turn behind the cap) does not redefine the spawn queue wait', () => {
   const home = tmp();
   clearUsageCache();

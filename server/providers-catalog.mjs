@@ -21,6 +21,7 @@ import { BUG_LANE_FALLBACK_IDS } from "./lane-pure.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 import { normalizeWfLabel } from "./wf-label.mjs";
+import { SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from "./lead-handoff.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 4000;
@@ -371,8 +372,12 @@ function bucketFor(st, day) {
 }
 
 const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
-// usa-38 EXP3: the predecessor lead's wrap-up nudge (SOFT_FLAG_NUDGE, lead-handoff.mjs) marks the note-writing turn.
-const WRAP_UP_NUDGE_RE = /Wrap up:\s*stop dispatching new blocks/i;
+// usa-38 EXP3: predecessor wrap-up prompts (lead-handoff.mjs) mark the note/handoff-writing turn. Derived from the exported
+// prompt strings (case-insensitive, leading words) so a wording change can't silently desync the metric.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
+  (prompt) => new RegExp(escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+"), "i"),
+);
 
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
@@ -436,7 +441,7 @@ function foldEvent(st, ev) {
     st.msgVerdict = null;
     st.pass = st.priorPass;
     if (typeof ev.text === "string" && COMPACT_INPUT_RE.test(ev.text)) st.compactPending = { costUsd: 0, inputTokens: 0, outputTokens: 0 };
-    if (typeof ev.text === "string" && WRAP_UP_NUDGE_RE.test(ev.text)) st.wrapUpPending = true;
+    if (typeof ev.text === "string" && WRAP_UP_NUDGE_RES.some((re) => re.test(ev.text))) st.wrapUpPending = true;
     if (!st.roleOnly && typeof ev.text === "string" && /^\s*(?:ROLE:\s*reviewer\b|You are (?:acting as )?a READ-ONLY\b)/i.test(ev.text)) {
       st.roleOnly = true;
     }
@@ -473,13 +478,15 @@ function foldEvent(st, ev) {
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);
     let delta = 0;
-    if (Number.isFinite(c) && c >= 0) {
+    const hasCost = Number.isFinite(c) && c >= 0;
+    if (hasCost) {
       delta = c >= st.prevCost ? c - st.prevCost : c;
       st.prevCost = c;
     }
     // usa-38 EXP3: the very first completed turn's cost delta is the successor takeover cost (vs.handoff-from); a wrap-up
-    // nudge marks the predecessor's note-writing turn.
-    if (st.turns === 0 && st.firstTurnCostUsd === undefined) st.firstTurnCostUsd = delta;
+    // nudge marks the predecessor's note-writing turn. Only record firstTurnCostUsd when the turn actually carried a cost,
+    // so a no-cost turn_done (e.g. agy/gemini) never reads as $0 and dilutes the successor mean.
+    if (st.turns === 0 && st.firstTurnCostUsd === undefined && hasCost) st.firstTurnCostUsd = delta;
     if (st.wrapUpPending) {
       st.wrapUpCostUsd = (st.wrapUpCostUsd ?? 0) + delta;
       st.wrapUpTurns = (st.wrapUpTurns ?? 0) + 1;
@@ -1195,7 +1202,7 @@ function buildCompaction(agents, floor, compactEvents = []) {
   const avgCostUsd = runs ? cost / runs : null;
 
   // EXP3: compact-step vs-log outcomes (ok | failed | timeout | still-over).
-  const attempts = compactEvents.length || runs;
+  const attempts = compactEvents.length;
   let okCount = 0, failedCount = 0, timeoutCount = 0, stillOverCount = 0;
   let okCost = 0, okCostCount = 0, failedCost = 0;
   const beforeTokens = [], afterTokens = [], drops = [];
@@ -1216,8 +1223,8 @@ function buildCompaction(agents, floor, compactEvents = []) {
   const medianDropPct = drops.length ? round2(median(drops)) : null;
   // mean cost across ok compactions that logged costUsd; fall back to the agent-log compaction cost when none did.
   const meanOkCostUsd = okCostCount ? round2(okCost / okCostCount) : avgCostUsd;
-  // No metric lines -> agent-log compactions all reached `compacted` (success): ok rate 1. No data at all -> null.
-  const okRate = compactEvents.length ? round2(okCount / compactEvents.length) : (runs ? 1 : null);
+  // okRate derives only from real compact-step events; no metric lines -> null (never 1), so it stays consistent with the counts.
+  const okRate = attempts ? round2(okCount / attempts) : null;
 
   // EXP3 handoff overhead: successor first-turn cost (vs.handoff-from carriers) + predecessor wrap-up turn cost.
   let successorCost = 0, successorCount = 0, wrapUpTurns = 0, wrapUpCost = 0;
@@ -1366,7 +1373,8 @@ function readCompactStepEvents(home, { squad, laneTeams } = {}) {
       if (e.type !== "metric" || e.t === null) continue;
       const text = typeof e.text === "string" ? e.text : "";
       if (!text.startsWith("compact-step ")) continue;
-      if (squad && laneTeams?.get(e.lane) !== squad) continue;
+      const own = typeof e.team === "string" && e.team ? e.team : typeof e.squad === "string" && e.squad ? e.squad : null;
+      if (squad && (own ?? laneTeams?.get(e.lane)) !== squad) continue;
       const agent = /agent=(\S+)/.exec(text)?.[1] ?? "";
       const key = `${agent}\u0000${e.t}`;
       if (seen.has(key)) continue;
@@ -3087,7 +3095,7 @@ function usageToMarkdown(u) {
     for (const g of rt.byProvider) lines.push(`| ${g.provider} | ${g.count} | ${sec(g.medianFirstResponseExclQueueMs)}/${sec(g.p90FirstResponseExclQueueMs)} | ${sec(g.medianFirstResponseMs)}/${sec(g.p90FirstResponseMs)} | ${sec(g.medianReadyExclQueueMs)}/${sec(g.p90ReadyExclQueueMs)} | ${sec(g.medianQueuedMs)}/${sec(g.p90QueuedMs)} |`);
   }
   const cp = u.compaction;
-  if (cp && (cp.attempts || cp.handoffRuns)) {
+  if (cp && (cp.runs || cp.attempts || cp.handoffRuns)) {
     lines.push("");
     lines.push("## Compaction vs handoff");
     lines.push(`- compactions: ${cp.runs} | $${round2(cp.totalCostUsd)} total, ${cp.avgCostUsd === null ? "-" : `$${round2(cp.avgCostUsd)}`} avg | ${cp.totalTokens} tokens | saved ${cp.tokensSaved}`);
