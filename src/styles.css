@@ -4500,6 +4500,7 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 
 .drawer-sandbox { display: inline-block; position: relative; }
+.btn.drawer-sandbox-btn { padding: 0 5px; font-size: 10px; height: 20px; }
 .drawer-sandbox-panel { position: absolute; z-index: 30; margin-top: 2px; width: 300px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); padding: var(--sp-2); display: grid; gap: 6px; font-size: 11px; box-shadow: var(--bevel), 0px 2px 0 var(--shadow-hard); }
 .drawer-sandbox-row { display: grid; gap: 1px; }
 .drawer-sandbox-label { font-size: 10px; opacity: .7; }
@@ -4562,6 +4563,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
 .drawer-head-compact-spacer { flex: 1 1 0; min-width: 0; }
 .drawer-provider-select { background: transparent; border: 1px solid; border-radius: 4px; font-family: var(--display); font-size: 11px; height: 24px; padding: 0 4px; cursor: pointer; }
+/* Provider tint (was inline style); doubled class beats .pin-focus-bar :is(select,input) like the inline value did. */
+.drawer-provider-select.drawer-provider-select { color: var(--prov-color); border-color: var(--prov-color); }
 .drawer-provider-select option { color: var(--fg, #e6e6e6); background: var(--bg); }
 .drawer-head-compact .drawer-model-input { width: 100px; }
 .drawer-head-compact .drawer-mode-select, .drawer-head-compact .drawer-thinking-select { max-width: 96px; }
@@ -4629,6 +4632,10 @@ button.project-file-name:hover { text-decoration: underline; }
   min-width: 0;
   max-width: 100%;
 }
+/* Agent config controls (was inline style in useAgentConfig.tsx). Normal look comes from boring.css. */
+.drawer-cfg-ctl.drawer-cfg-ctl { background: var(--panel-alt); color: var(--fg); border: 1px solid var(--line); font-size: 10px; padding: 1px 4px; height: 20px; }
+:where(html:not([data-vibe="boring"])) .drawer-cfg-ctl.drawer-cfg-ctl.drawer-cfg-w120 { width: 120px; }
+:where(html:not([data-vibe="boring"])) .drawer-cfg-ctl.drawer-cfg-ctl.drawer-cfg-h18 { height: 18px; }
 .successor-bar .btn,
 .btn.successor {
   white-space: normal;

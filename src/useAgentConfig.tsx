@@ -197,7 +197,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
     <select
       data-testid="drawer-provider-select"
       className="drawer-provider-select"
-      style={{ color: effectiveProv.color, borderColor: effectiveProv.color }}
+      style={{ "--prov-color": effectiveProv.color } as React.CSSProperties}
       value={providerKnown ? normalizeProviderId(effectiveProvider) : effectiveProvider}
       disabled={switchBusy || !!agent.archivedAt}
       title={`Provider: ${effectiveProvider}`}
@@ -261,8 +261,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
               return (
                 <select
                   data-testid="drawer-mode-select"
-                  className="drawer-mode-select"
-                  style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
+                  className="drawer-mode-select drawer-cfg-ctl"
                   value={stagedModeId}
                   disabled={modeBusy}
                   onChange={(e) => {
@@ -291,8 +290,7 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
   const thinkingSelect = !thinkingLevels.length ? null : (
             <select
               data-testid="drawer-thinking-select"
-              className="drawer-thinking-select"
-              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", height: 20 }}
+              className="drawer-thinking-select drawer-cfg-ctl"
               value={stagedThinking}
               disabled={thinkingBusy}
               onChange={(e) => {
@@ -316,10 +314,9 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
     <>
             <input
               data-testid="drawer-model-input"
-              className="drawer-model-input"
+              className="drawer-model-input drawer-cfg-ctl drawer-cfg-w120 drawer-cfg-h18"
               aria-label="Model"
               title={`Custom model (${effectiveProvider})`}
-              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 18 }}
               list={modelListId}
               value={modelValue}
               autoFocus
@@ -355,10 +352,9 @@ export function useAgentConfig({ agent, active, isBs, onSuccessor, doRestart, st
   ) : (
             <select
               data-testid="drawer-model-select"
-              className="drawer-model-input"
+              className="drawer-model-input drawer-cfg-ctl drawer-cfg-w120"
               aria-label="Model"
               title={`Model (${effectiveProvider})`}
-              style={{ background: "var(--panel-alt)", color: "var(--fg)", border: "1px solid var(--line)", fontSize: 10, padding: "1px 4px", width: 120, height: 20 }}
               value={modelValue || modelOptions[0] || ""}
               onChange={(e) => {
                 const val = e.target.value;
