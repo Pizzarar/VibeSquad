@@ -31,9 +31,27 @@ test('dedupes within a batch, refiles once the old item is closed, dry-run write
   const file = path.join(baseHome, 'inbox.json');
   const cards = JSON.parse(fs.readFileSync(file, 'utf8'));
   cards[0].status = 'archived';
+  cards[0].updatedAt = new Date(Date.now() - 15 * 24 * 3600 * 1000).toISOString();
   fs.writeFileSync(file, JSON.stringify(cards));
   assert.equal(fileFindings([f('k')], { baseHome }).filed.length, 1);
 });
+
+for (const status of ['archived', 'rejected']) {
+  test(`a key on a ${status} card is not re-filed within 14 days, but is after`, () => {
+    const baseHome = tmp();
+    fileFindings([f('scriptable:abc')], { baseHome });
+    const file = path.join(baseHome, 'inbox.json');
+    const cards = JSON.parse(fs.readFileSync(file, 'utf8'));
+    cards[0].status = status;
+    cards[0].updatedAt = new Date().toISOString();
+    fs.writeFileSync(file, JSON.stringify(cards));
+    const r = fileFindings([f('scriptable:abc')], { baseHome });
+    assert.equal(r.filed.length, 0);
+    assert.deepEqual(r.skipped, ['scriptable:abc']);
+    const later = Date.now() + 15 * 24 * 3600 * 1000;
+    assert.equal(fileFindings([f('scriptable:abc')], { baseHome, now: later }).filed.length, 1);
+  });
+}
 
 test('risky findings call needsYou only when filed; missing evidence throws', () => {
   const baseHome = tmp();
@@ -46,7 +64,8 @@ test('risky findings call needsYou only when filed; missing evidence throws', ()
 
 test('stale usage-review items older than 3 days become findings', () => {
   const baseHome = tmp();
-  addInboxCards({ ideas: ['Old review bullet about loops'], laneId: 'bug-chaser', source: 'usage-review:opus', baseHome });
+  addInboxCards({ ideas: ['Old review bullet about loops'], laneId: 'perfection', source: 'usage-review:opus', baseHome });
+  addInboxCards({ ideas: ['Other lane review bullet'], laneId: 'bug-chaser', source: 'usage-review:opus', baseHome });
   addInboxCards({ ideas: ['Unrelated manual idea'], laneId: 'bug-chaser', source: 'ui', baseHome });
   const now = Date.now() + 4 * 24 * 3600 * 1000;
   const out = staleUsageReviewFindings({ baseHome, now });

@@ -4,7 +4,7 @@
 //   node scripts/audit-perfection.mjs collect [--dir <runner/agents>] [--since <ISO>] [--repo <git dir>]
 //       -> JSON { findings: [...] } of the mechanical checks (owner-stamp buckets 1-5, stale usage-review:* items).
 //   node scripts/audit-perfection.mjs file <findings.json|-> [--dry-run]
-//       -> files each finding as one inbox item (lane perfection, source "audit:perfection"), deduped against OPEN items.
+//       -> files each finding as one inbox item (lane perfection, source "audit:perfection"), deduped against OPEN items and keys archived/rejected in the last 14 days.
 // A finding is { key, text, evidence, risky? }. `key` is the stable dedupe id; risky/owner-only ones also go to `vs log needs-you`.
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,6 +24,9 @@ export const MIN_EARLY_HANDOFFS = 0;
 export const MULTI_IMPL_LISTED = 5;
 export const STALE_USAGE_MS = 3 * 24 * 3600 * 1000;
 const OPEN_STATUSES = new Set(['parked', 'accepted']);
+const JUDGED_STATUSES = new Set(['archived', 'rejected']);
+/** A key on a card archived/rejected within this window is a judged finding: not re-filed. */
+export const JUDGED_WINDOW_MS = 14 * 24 * 3600 * 1000;
 const KEY_RE = /\(audit-key: ([^)]+)\)/;
 
 /** The one place the audit lane id is chosen. A1's findAuditLane replaces this body. */
@@ -43,15 +46,17 @@ export function renderFinding(f) {
  * File findings as inbox items. Skips any finding whose key is already on an OPEN audit:perfection item (or earlier in
  * the same batch). `needsYou(text)` is called for each filed risky finding. `dryRun` returns what would be filed.
  */
-export function fileFindings(findings, { baseHome, dryRun = false, needsYou = () => {} } = {}) {
-  const openCards = readInboxCards(baseHome).filter((c) => c.source === AUDIT_SOURCE && OPEN_STATUSES.has(c.status));
+export function fileFindings(findings, { baseHome, dryRun = false, needsYou = () => {}, now = Date.now() } = {}) {
+  const auditCards = readInboxCards(baseHome).filter((c) => c.source === AUDIT_SOURCE);
+  const openCards = auditCards.filter((c) => OPEN_STATUSES.has(c.status));
   const open = new Set(openCards.map((c) => keyOf(c.text)).filter(Boolean));
+  const judged = new Set(auditCards.filter((c) => JUDGED_STATUSES.has(c.status) && now - Date.parse(c.updatedAt || c.createdAt) < JUDGED_WINDOW_MS).map((c) => keyOf(c.text)).filter(Boolean));
   const filed = [];
   const updated = [];
   const skipped = [];
   for (const f of findings) {
     if (!f?.key || !f.text || !f.evidence) throw new Error(`finding needs key, text and evidence: ${JSON.stringify(f)}`);
-    if (open.has(f.key)) { skipped.push(f.key); continue; }
+    if (open.has(f.key) || judged.has(f.key)) { skipped.push(f.key); continue; }
     const series = seriesOf(f.key);
     const prev = series && openCards.find((c) => seriesOf(keyOf(c.text)) === series);
     open.add(f.key);
@@ -71,10 +76,10 @@ export function fileFindings(findings, { baseHome, dryRun = false, needsYou = ()
   };
 }
 
-/** usage-review:* inbox items still open after STALE_USAGE_MS. */
+/** usage-review:* inbox items in the audit lane still open after STALE_USAGE_MS. */
 export function staleUsageReviewFindings({ baseHome, now = Date.now() } = {}) {
   return readInboxCards(baseHome)
-    .filter((c) => String(c.source || '').startsWith('usage-review:') && OPEN_STATUSES.has(c.status))
+    .filter((c) => c.laneId === auditLaneId() && String(c.source || '').startsWith('usage-review:') && OPEN_STATUSES.has(c.status))
     .filter((c) => now - Date.parse(c.createdAt) > STALE_USAGE_MS)
     .map((c) => ({
       key: `stale-usage-review:${c.id}`,
