@@ -194,6 +194,7 @@ before(async () => {
   // Launch headless Chromium (system Edge) and install route mocks.
   browser = await pw.mod.chromium.launch({ executablePath, headless: true });
   context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  await context.addInitScript(`try { localStorage.setItem("vs.vibeMigratedNormal", "1"); const p = JSON.parse(localStorage.getItem("vs.prefs.v1") || "{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({ ...p, "app.vibe": "fun" })); } catch {}`); // B9: Normal is the default; this smoke targets Psycho
   page = await context.newPage();
 
   page.on("pageerror", (e) => pageErrors.push(String(e?.message ?? e)));

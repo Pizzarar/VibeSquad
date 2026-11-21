@@ -114,6 +114,7 @@ async function getClickEnv() {
       const browser = await pw.chromium.launch({ executablePath: exe, headless: true, timeout: 60000 });
       clickPartial.browser = browser;
       const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+      await context.addInitScript(`try { localStorage.setItem("vs.vibeMigratedNormal", "1"); const p = JSON.parse(localStorage.getItem("vs.prefs.v1") || "{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({ ...p, "app.vibe": "fun" })); } catch {}`); // B9: Normal is the default; these click-audit rows target Psycho
       await installRoutes(context);
       const page = await context.newPage();
       return { server, baseUrl, browser, context, page };

@@ -303,7 +303,7 @@ export async function run() {
           ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: size.dpr, colorScheme: theme, ...(size.mobile ? { hasTouch: true } : {}) });
           await E.installRoutes(ctx);
           // The app derives <html data-vibe> from the app.vibe pref (src/prefs.ts), so seed that, not the attribute.
-          if (vibe !== "fun") await ctx.addInitScript(`try { localStorage.setItem("vs.prefs.v1", JSON.stringify({ "app.vibe": ${JSON.stringify(vibe)} })); } catch {}`);
+          await ctx.addInitScript(`try { localStorage.setItem("vs.vibeMigratedNormal", "1"); const p = JSON.parse(localStorage.getItem("vs.prefs.v1") || "{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({ ...p, "app.vibe": ${JSON.stringify(vibe)} })); } catch {}`); // B9: Normal is the default, so seed fun explicitly too
           await ctx.addInitScript(`try { localStorage.setItem("vs.vibePicked", "1"); } catch {}`);
           page = await ctx.newPage();
           sinceRecycle = 0; seenCrash = crashCount;
