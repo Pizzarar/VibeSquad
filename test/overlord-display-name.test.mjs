@@ -40,6 +40,13 @@ test("agentDisplayName: no hub predicate means plain cleanTitle (hub lead stays 
   assert.equal(agentDisplayName(hubLead, {}), "★ Hub14");
 });
 
+test("agentDisplayName: positional hub:true names a hub lead resolved by cwd with no lane/lead labels", () => {
+  // REVIEW_overlord_name_r1 Low 3: SquadTile knows the lane is the hub lane from lead.laneId, but the agent's own
+  // labels can be empty (cwd-autofix). Without the positional hub flag the helper falls back to the raw title.
+  const cwdResolvedHubLead = { id: "hub-lead-dddd", title: "★ Hub14", labels: { role: "lead", ord: "14" } };
+  assert.equal(agentDisplayName(cwdResolvedHubLead, { hub: true }), "Overlord");
+});
+
 test("agentFaceSeed: two hub leads with different ids share the stable 'overlord' seed", () => {
   assert.equal(agentFaceSeed(hubLead, ctx), "overlord");
   assert.equal(agentFaceSeed(hubLeadJob, ctx), "overlord"); // different id, same seed
