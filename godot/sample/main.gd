@@ -1,14 +1,15 @@
 extends Control
 ## Sample scene. `-- --vs-shot=<png>` (used for the review screenshot) opens the dock + capture overlay, saves the window, quits.
 
-const SampleAdapter := preload("res://sample/sample_adapter.gd")
+# load() lazily: a release export drops the addon and vs_playtest/adapter_dir (the adapter extends its class), so no preload.
+const ADAPTER_PATH := "res://vs_playtest_adapter/sample_adapter.gd"
 
 
 func _ready() -> void:
 	var vsp := get_node_or_null("/root/VSPlaytest")
-	if vsp == null:
+	if vsp == null or not vsp.enabled:
 		return
-	vsp.register_adapter(SampleAdapter.new())
+	vsp.register_adapter(load(ADAPTER_PATH).new())
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("--vs-shot="):
 			_shot(vsp, a.trim_prefix("--vs-shot="))
