@@ -21,7 +21,10 @@ test("resolveProviderSwitchTarget resolves provider/model/mode and skips the cur
   const counter = grab(/const COUNTERPART_PROFILE_MAP[\s\S]*?\r?\n};\r?\n/, "COUNTERPART_PROFILE_MAP");
   const opposite = grab(/export type OppositeProviderTarget[\s\S]*?(?=export type DrawerHeaderProps)/, "oppositeProviderTarget");
   const js = stripTypeScriptTypes(counter + opposite, { mode: "strip" });
-  const mod = await import("data:text/javascript," + encodeURIComponent(js));
+  const dep = `import { GEMINI_TOP_MODEL } from ${JSON.stringify(new URL("../server/model-ids.mjs", import.meta.url).href)};
+`;
+  const modSrc = dep + js;
+  const mod = await import("data:text/javascript," + encodeURIComponent(modSrc));
   assert.equal(mod.normalizeProviderId("gemini"), "antigravity-cli");
   assert.equal(mod.normalizeProviderId("anthropic"), "claude");
   assert.equal(mod.normalizeProviderId("openai"), "codex");
