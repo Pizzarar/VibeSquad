@@ -86,7 +86,7 @@ export function pickModel(want, available = []) {
 }
 
 // A model-API failure relayed by the agent (not our bug, not the task's): worth a short provider cap so failover routes around it.
-export const UPSTREAM_FAILURE_RE = /internal (service )?(error|failure)|service unavailable|overloaded|rate.?limit|(429|500|502|503|504)/i;
+export const UPSTREAM_FAILURE_RE = /internal (service )?(error|failure)|service unavailable|overloaded|rate.?limit|\b(429|500|502|503|504)\b/i;
 
 export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, command, args, mcp = true, mcpPath = mcpServerPath(), resolved } = {}) {
   const def = ACP_PROVIDERS[PROVIDER_ALIASES[provider] ?? provider];
@@ -112,6 +112,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let sessionId = null;
       let promptInFlight = false;
       let imageCapable = false;
+      let cancelling = false; // cancel() sent: the aborted prompt's rejection and a following exit are ours, never an upstream failure
       let stopped = false; // set by kill(): pump() must not start another turn after the child is being torn down
       const queue = [];
       let pendingSystem = systemPrompt || '';
@@ -166,7 +167,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         for (const p of pending.values()) p.reject(new Error('process exited'));
         // idea-442: opencode answers a prompt with "Internal error: Internal service failure" (upstream model API) and exits 1 with
         // empty stderr. Say why on the exit so the status is loud and the server can cap the provider briefly.
-        const why = code !== 0 && code !== null && lastError;
+        const why = code !== 0 && code !== null && !stopped && !cancelling && lastError;
         onExit({ code, signal, ...(why ? { error: `${name} exited (code ${code}) after: ${lastError}`, upstream: UPSTREAM_FAILURE_RE.test(lastError) } : {}) });
       });
 
@@ -247,6 +248,8 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         dropOrphanSteers();
         if (!queue.length) return;
         promptInFlight = true;
+        lastError = null; // only a failure of the turn that is ending the process may read as its cause
+        cancelling = false;
         const steers = [];
         while (queue[0]?.steerOnly) steers.push(queue.shift());
         const real = queue.shift();
@@ -290,8 +293,9 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           if (reportedCost !== undefined) { costTotal = reportedCost; costKnown = true; }
           else if (turnCost !== null) { costTotal += turnCost; costKnown = true; done.costEstimated = true; } // price-table figure, not provider-billed
           if (costKnown) done.costUsd = costTotal;
+          lastError = null;
           emit('turn_done', done);
-        } catch (e) { lastError = e.message; emit('error', { message: e.message }); }
+        } catch (e) { if (!cancelling && !stopped) lastError = e.message; emit('error', { message: e.message }); }
         promptInFlight = false;
         dropOrphanSteers(); // the prompt ended: a steer-only item with no real prompt behind it must not start the next one
         if (queue.length && !stopped) {
@@ -318,6 +322,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         // Differs from the claude adapter, whose cancel only interrupts the current turn and lets later prompts run.
         cancel() {
           for (const q of queue.splice(0)) if (q.steerOnly) emit('steer_dropped', steerDrop('cancelled', q)); // logged, so the recap skips it too
+          if (promptInFlight) cancelling = true;
           if (sessionId) write({ method: 'session/cancel', params: { sessionId } });
         },
         kill() { stopped = true; killTree(child); },

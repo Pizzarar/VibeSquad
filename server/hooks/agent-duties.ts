@@ -44,7 +44,7 @@ import { defangPromptFences } from "../write-guards.mjs";
 import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
-import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
+import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
@@ -1655,15 +1655,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * empty map means no provider is capped, so spawns are left alone when nothing declares one.
      */
     const readCappedProviderMap = (): Record<string, any> => {
+      // Drop expired caps (resetsAt / updatedAt + 5 h), exactly like provider-failover's readers: a 10-minute upstream cap must lapse here too.
+      const live = (m: Record<string, any>): Record<string, any> => dropExpiredCaps(m);
       if (deps.cappedProviders !== undefined && deps.cappedProviders !== null) {
-        return normalizeCappedProviders(deps.cappedProviders);
+        return live(normalizeCappedProviders(deps.cappedProviders));
       }
       const file = process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH
         ? path.resolve(process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH)
         : path.join(baseDir(), "capped-providers.json");
       if (!fs.existsSync(file)) return {};
       try {
-        return normalizeCappedProviders(JSON.parse(fs.readFileSync(file, "utf8")));
+        return live(normalizeCappedProviders(JSON.parse(fs.readFileSync(file, "utf8"))));
       } catch {
         return {};
       }
@@ -2772,11 +2774,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       try {
         const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 20 });
         let last = "";
+        let failure = "";
         for (const { item } of page.entries) {
           if (item.type === "assistant_message" && item.text?.trim()) last = item.text.trim();
-          else if (strict && item.type === "user_message") last = "";
+          else if (item.type === "error" && item.message) failure = `[agent error] ${item.message}`;
+          else if (item.type === "user_message") { failure = ""; if (strict) last = ""; }
         }
-        return last;
+        return last || failure; // an agent that died with a reason is never a silent empty message (idea-442)
       } catch {
         return "";
       }

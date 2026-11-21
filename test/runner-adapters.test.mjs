@@ -545,3 +545,53 @@ test('opencode: a clean exit or an unrelated error carries no upstream flag', as
   const exit = runner.timeline(id).find((e) => e.type === 'exit');
   assert.equal(exit.upstream, false);
 });
+
+// idea-442 review: only an exit caused by the agent's own last failed turn is an upstream failure.
+function exitAfter(promptReplies, then) {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', promptReplies);
+  return { runner, id, spawnImpl, exit: async () => { await then({ runner, id, spawnImpl }); await tick(); await tick(); return runner.timeline(id).find((e) => e.type === 'exit'); } };
+}
+const upstreamErr = (c, m) => c.push({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'Internal error: Internal service failure' } });
+const okReply = (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
+
+test('opencode: exit code 0 after an error carries no reason and no upstream flag', async () => {
+  const t = exitAfter([upstreamErr], ({ spawnImpl }) => spawnImpl.last.emit('exit', 0, null));
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.equal(e.error, undefined);
+  assert.equal(e.upstream, undefined);
+});
+
+test('opencode: an old error, a later good turn, then a non-zero exit is not upstream (lastError cleared per turn)', async () => {
+  const t = exitAfter([upstreamErr, okReply], async ({ runner, id, spawnImpl }) => {
+    runner.send(id, 'again'); await tick(); await tick();
+    spawnImpl.last.emit('exit', 1, null);
+  });
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.equal(e.code, 1);
+  assert.equal(e.upstream, undefined);
+  assert.equal(e.error, undefined);
+});
+
+test('opencode: our own kill() after an upstream error is never upstream', async () => {
+  const t = exitAfter([upstreamErr], ({ runner, id, spawnImpl }) => { runner.kill?.(id); spawnImpl.last.emit('exit', 1, null); });
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.ok(e, 'exit logged');
+  assert.notEqual(e.upstream, true);
+});
+
+test('opencode: cancel() mid-turn then the aborted prompt failing + exit 1 is not upstream', async () => {
+  const t = exitAfter([() => {}], async ({ runner, id, spawnImpl }) => {
+    await tick();
+    runner.cancel(id);
+    const req = spawnImpl.last.written.filter((m) => m.method === 'session/prompt').at(-1);
+    upstreamErr(spawnImpl.last, req);
+    await tick();
+    spawnImpl.last.emit('exit', 1, null);
+  });
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.notEqual(e.upstream, true);
+});

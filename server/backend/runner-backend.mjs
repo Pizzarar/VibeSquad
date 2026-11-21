@@ -461,6 +461,10 @@ export function toTimeline(events) {
       case "error":
         entries.push({ ...base, item: { type: "error", message: e.message } });
         break;
+      case "exit":
+        // idea-442: a non-zero exit's reason (acp.mjs puts the last prompt error on it) must be visible to vs status / digests.
+        if (e.error) entries.push({ ...base, item: { type: "error", message: e.error } });
+        break;
       default:
         break;
     }
@@ -532,12 +536,15 @@ export const UPSTREAM_CAP_TTL_MS = 10 * 60 * 1000;
  * left a silent closed agent that failover kept routing to. An exit that carries `upstream: true` (runner/adapters/acp.mjs) caps the
  * provider for a few minutes so spawn failover routes around it, and says so on stderr. Never throws. Returns the cap written or null.
  */
-export function capProviderOnUpstreamExit(provider, e, { cap = setProviderCapped, log = logRunnerMetric } = {}) {
+export function capProviderOnUpstreamExit(provider, e, { cap = setProviderCapped, log = logRunnerMetric, now = Date.now() } = {}) {
   if (e?.type !== "exit" || e.upstream !== true || !provider) return null;
+  const ageMs = Number.isFinite(e.ts) ? Math.max(0, now - e.ts) : 0;
+  const ttlMs = UPSTREAM_CAP_TTL_MS - ageMs;
+  if (ttlMs <= 0) return null; // a restart catch-up replaying an old exit must not re-cap a provider that has since recovered
   const reason = `upstream failure: ${String(e.error ?? "agent exited").slice(0, 160)}`;
   try {
-    cap(provider, true, { reason, ttlMs: UPSTREAM_CAP_TTL_MS });
-    log(`${provider} capped for ${UPSTREAM_CAP_TTL_MS / 60000} min: ${reason}`);
+    cap(provider, true, { reason, ttlMs });
+    log(`${provider} capped for ${Math.ceil(ttlMs / 60000)} min: ${reason}`);
     return { provider, reason };
   } catch {
     return null; // best effort: the exit already carries the reason

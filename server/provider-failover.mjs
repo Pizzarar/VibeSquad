@@ -199,6 +199,11 @@ export function isCapExpired(entry, now = Date.now()) {
   return exp !== null && exp <= now;
 }
 
+/** A { family: entry } cap map without the entries whose reset time has passed (non-object entries never expire). */
+export function dropExpiredCaps(map, now = Date.now()) {
+  return Object.fromEntries(Object.entries(map ?? {}).filter(([, v]) => !(v && typeof v === "object" && isCapExpired(v, now))));
+}
+
 const parseCapFile = (text) => {
   const parsed = JSON.parse(String(text).replace(/^\uFEFF/, ""));
   const capped = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed.capped ?? parsed) : null;
