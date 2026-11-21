@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { budget } from "./helpers/load-budget.mjs";
 import { reapStaleLock, updateJsonFile, updateJsonFileSync, withFileLock, withFileLockSync } from "../server/file-lock.mjs";
 
 const modUrl = pathToFileURL(fileURLToPath(new URL("../server/file-lock.mjs", import.meta.url))).href;
@@ -81,7 +82,8 @@ test("idea-227: a contended async wait does not block the event loop (sync holde
   const waited = Date.now() - t0;
   assert.equal(value, "got it");
   assert.ok(waited >= 300, `it really waited for the holder (waited ${waited}ms)`);
-  assert.ok(max < 150, `event loop kept ticking while waiting (max gap ${max}ms over a ${waited}ms wait)`);
+  // A blocked loop shows ONE gap spanning the whole wait; scheduler starvation under load only inflates a few ticks.
+  assert.ok(max < Math.min(budget(150), waited / 2), `event loop kept ticking while waiting (max gap ${max}ms over a ${waited}ms wait)`);
   await holder.exited;
 });
 

@@ -113,7 +113,9 @@ function lockAttempt(targetPath, { timeoutMs, staleMs, alive, nonBlockingCreate 
       // name is just another busy poll.
       if (tryCreateLock(lockFile, process.pid, { body: { token }, ...(nonBlockingCreate ? { budgetMs: 0 } : {}) })) return "owned";
     } catch (e) {
-      if (!nonBlockingCreate || !isDeletePending(e)) throw e;
+      // A delete-pending name that outlives tryCreateLock's own short retry budget (CPU-starved Windows box) is still just a
+      // busy lock: keep polling until the caller's timeoutMs instead of leaking a raw EPERM.
+      if (!isDeletePending(e)) throw e;
       if (Date.now() >= deadline) throw timedOut(null);
       return "wait";
     }
