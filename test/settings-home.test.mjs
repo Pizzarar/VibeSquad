@@ -209,7 +209,14 @@ test("confirm-on-close guard lives on the drafts beforeunload hook", async () =>
 test("B9: Legacy: Psycho mode toggle lives in About, backed by app.vibe; no Layout vibe row under App", () => {
   const home = src("SettingsHome.tsx");
   assert.match(home, /data-testid="settings-legacy-psycho-toggle"/);
-  assert.match(home, /setVibe\(e\.target\.checked \? "fun" : "boring"\)/);
+  assert.match(home, /data-testid="settings-legacy-psycho-off"[^>]*onClick=\{\(\) => setVibe\("boring"\)\}/);
+  assert.match(home, /data-testid="settings-legacy-psycho-on"[^>]*onClick=\{\(\) => setVibe\("fun"\)\}/);
+  assert.match(home, /aria-pressed=\{vibe === "fun"\}/);
+  assert.match(home, /Normal is the default\. Turn off here anytime to return\./);
+  assert.ok(!/legacy-psycho-toggle" type="checkbox"/.test(home));
+  const app = src("App.tsx");
+  assert.match(app, /consumeVibeMigratedToast\(\)\) showPinToast\("Normal is now the default\. Psycho lives in Settings › About › Legacy: Psycho mode\."\)/);
+  assert.match(app, /\(focus \|\| pinFocused\) && \(\s*<button[^>]*data-testid="psycho-focus-normal-btn"[\s\S]*?setPref\("app\.vibe", "boring"\)/);
   assert.match(home, /Legacy: Psycho mode/);
   assert.match(home, /\{n\.id === "about" && <About/);
   assert.ok(!P.visiblePrefDefs().some((d) => d.key === "app.vibe" || d.label === "Layout vibe"));

@@ -233,6 +233,15 @@ const listeners = new Set<() => void>();
 export const VIBE_MIGRATED_NORMAL_KEY = "vs.vibeMigratedNormal";
 
 /** One-time: a stored app.vibe "fun" (the old default) becomes "boring" (Normal). Runs at most once; afterwards "fun" is a deliberate Legacy: Psycho choice. */
+let vibeMigratedToast = false;
+
+/** True once (then false) if migrateVibeToNormalOnce actually flipped a stored "fun" to "boring"; drives the one-time toast. */
+export function consumeVibeMigratedToast(): boolean {
+  const v = vibeMigratedToast;
+  vibeMigratedToast = false;
+  return v;
+}
+
 export function migrateVibeToNormalOnce(s: Pick<Storage, "getItem" | "setItem"> | null = storage()): void {
   if (!s) return;
   try {
@@ -242,6 +251,7 @@ export function migrateVibeToNormalOnce(s: Pick<Storage, "getItem" | "setItem"> 
       const obj = safeParse(raw);
       if (obj && typeof obj === "object" && !Array.isArray(obj) && (obj as Record<string, unknown>)["app.vibe"] === "fun") {
         s.setItem(PREFS_KEY, JSON.stringify({ ...(obj as object), "app.vibe": "boring" }));
+        vibeMigratedToast = true;
       }
     }
     s.setItem(VIBE_MIGRATED_NORMAL_KEY, "1");

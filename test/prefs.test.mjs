@@ -2,7 +2,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { getPref, setPref, applyPrefsToDom, PREF_DEFS, migrateVibeToNormalOnce, VIBE_MIGRATED_NORMAL_KEY, PREFS_KEY, searchSettings, visiblePrefDefs } from '../src/prefs.ts';
+import { getPref, setPref, applyPrefsToDom, PREF_DEFS, migrateVibeToNormalOnce, consumeVibeMigratedToast, VIBE_MIGRATED_NORMAL_KEY, PREFS_KEY, searchSettings, visiblePrefDefs } from '../src/prefs.ts';
 
 const read = (p) => fs.readFileSync(new URL(p, import.meta.url), 'utf8');
 
@@ -28,6 +28,19 @@ test('migrateVibeToNormalOnce: fun -> boring once, then a deliberate fun stays',
   migrateVibeToNormalOnce(fresh);
   assert.equal(fresh.m[VIBE_MIGRATED_NORMAL_KEY], '1');
   assert.equal(PREFS_KEY in fresh.m, false);
+});
+
+test('consumeVibeMigratedToast: true once only when fun -> boring actually flipped', () => {
+  consumeVibeMigratedToast();
+  migrateVibeToNormalOnce(memStore());
+  assert.equal(consumeVibeMigratedToast(), false, 'fresh install: no toast');
+  migrateVibeToNormalOnce(memStore({ [PREFS_KEY]: JSON.stringify({ 'app.vibe': 'boring' }) }));
+  assert.equal(consumeVibeMigratedToast(), false, 'already boring: no toast');
+  migrateVibeToNormalOnce(memStore({ [PREFS_KEY]: JSON.stringify({ 'app.vibe': 'fun' }) }));
+  assert.equal(consumeVibeMigratedToast(), true);
+  assert.equal(consumeVibeMigratedToast(), false, 'second call: consumed');
+  migrateVibeToNormalOnce(memStore({ [VIBE_MIGRATED_NORMAL_KEY]: '1', [PREFS_KEY]: JSON.stringify({ 'app.vibe': 'fun' }) }));
+  assert.equal(consumeVibeMigratedToast(), false, 'already migrated: deliberate fun, no toast');
 });
 
 test('app.vibe is not a Settings > App row, but Legacy: Psycho mode is searchable under About', () => {
