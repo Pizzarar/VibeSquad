@@ -4,7 +4,7 @@
 // Temp repos only: nothing here touches the real sanctuary.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -12,6 +12,7 @@ import {
   ARCHIVE_LEDGER_FILE,
   SWEEP_LOCK_FILE,
   acquireSweepLock,
+  archiveWorktree,
   planWip,
   restoreArchivedWorktree,
   retentionSweep,
@@ -317,6 +318,96 @@ test("links are never followed: not sized, not archived through, target survives
     assert.ok(lstatSync(join(wt, "shared")).isSymbolicLink());
     assert.ok(existsSync(join(wt, "shared/precious.bin")));
     assert.equal(readFileSync(join(wt, "notes/n.md"), "utf8"), "n\n");
+  }));
+
+/** Remove a link (junction on Windows, symlink elsewhere) without touching its target. */
+function unlinkLink(p) {
+  try {
+    unlinkSync(p);
+  } catch {
+    rmdirSync(p);
+  }
+}
+const archiveRefOf = (repo, unit) => tryGit(["rev-parse", "--verify", "--quiet", `refs/vs-archive/${unit}`], repo);
+
+test("fail closed: an untracked link over a tracked path (replaced folder, staged delete under a link) keeps the tree", () =>
+  withTmp((root) => {
+    const { repo, sanctuary } = setup(root);
+    const outside = join(root, "outside");
+    writeFile(outside, "other.txt", "outside\n");
+    // A tracked folder replaced by a junction/symlink: its tracked files must not be silently dropped from the WIP.
+    const a = addUnit(repo, sanctuary, "unit-shadow");
+    writeFile(a, "vendored/lib.txt", "tracked lib\n");
+    git(["add", "."], a);
+    git(["commit", "-q", "-m", "vendored"], a);
+    rmSync(join(a, "vendored"), { recursive: true, force: true });
+    symlinkSync(outside, join(a, "vendored"), LINK_TYPE);
+    // A staged delete (gone from the index, still in HEAD) sitting under an untracked link.
+    const b = addUnit(repo, sanctuary, "unit-staged-del");
+    writeFile(b, "vendor2/a.txt", "tracked a\n");
+    git(["add", "."], b);
+    git(["commit", "-q", "-m", "vendor2"], b);
+    git(["rm", "-q", "-r", "--cached", "vendor2"], b);
+    rmSync(join(b, "vendor2"), { recursive: true, force: true });
+    symlinkSync(outside, join(b, "vendor2"), LINK_TYPE);
+
+    for (const wt of [a, b]) {
+      const plan = planWip(wt, { links: scanWorktreeNoFollow(wt).links });
+      assert.equal(plan.ok, false, `${wt}: ${JSON.stringify(plan.entries)}`);
+      assert.equal(plan.reason, "untracked-link");
+    }
+    const agents = [archivedAgent("a", a), archivedAgent("b", b)];
+    const dry = byUnit(retentionSweep({ root: sanctuary, agents, ...OPTS }));
+    const res = byUnit(retentionSweep({ root: sanctuary, agents, apply: true, ...OPTS }));
+    for (const u of ["unit-shadow", "unit-staged-del"]) {
+      assert.equal(dry[u].reason, "untracked-link", JSON.stringify(dry[u]));
+      assert.equal(res[u].reason, "untracked-link", JSON.stringify(res[u]));
+      assert.equal(archiveRefOf(repo, u), null);
+    }
+    for (const p of [a, b]) assert.ok(existsSync(p));
+    assert.equal(readFileSync(join(outside, "other.txt"), "utf8"), "outside\n");
+  }));
+
+test("archive re-checks live cwd / lock after the re-capture, right before removal; the ref is rolled back", () =>
+  withTmp((root) => {
+    const { repo, sanctuary } = setup(root);
+    const wt = addUnit(repo, sanctuary, "unit-late-live");
+    writeFile(wt, "notes/wip.md", "wip\n");
+    let calls = 0;
+    const res = archiveWorktree(repo, wt, { branch: "unit-late-live", beforeRef: () => (++calls === 1 ? null : "live-cwd") });
+    assert.equal(res.archived, false, JSON.stringify(res));
+    assert.equal(res.reason, "live-cwd");
+    assert.equal(calls, 2);
+    assert.ok(existsSync(join(wt, "notes/wip.md")));
+    assert.equal(archiveRefOf(repo, "unit-late-live"), null, "archive ref rolled back");
+  }));
+
+test("archive re-capture compares link paths and targets, not just the count", () =>
+  withTmp((root) => {
+    const { repo, sanctuary } = setup(root);
+    const outA = join(root, "outA");
+    const outB = join(root, "outB");
+    writeFile(outA, "a.txt", "a\n");
+    writeFile(outB, "b.txt", "b\n");
+    const wt = addUnit(repo, sanctuary, "unit-retarget");
+    symlinkSync(outA, join(wt, "shared"), LINK_TYPE);
+    let calls = 0;
+    const res = archiveWorktree(repo, wt, {
+      branch: "unit-retarget",
+      beforeRef: () => {
+        if (++calls === 1) {
+          unlinkLink(join(wt, "shared")); // same count, new target: between the first capture and the re-capture
+          symlinkSync(outB, join(wt, "shared"), LINK_TYPE);
+        }
+        return null;
+      },
+    });
+    assert.equal(res.archived, false, JSON.stringify(res));
+    assert.equal(res.reason, "changed-during-archive");
+    assert.ok(existsSync(wt));
+    assert.ok(existsSync(join(wt, "shared/b.txt")));
+    assert.ok(existsSync(join(outA, "a.txt")) && existsSync(join(outB, "b.txt")), "link targets untouched");
+    assert.equal(archiveRefOf(repo, "unit-retarget"), null);
   }));
 
 test("apply holds the sweep lock: busy -> nothing archived", () =>

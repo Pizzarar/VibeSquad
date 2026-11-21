@@ -1220,6 +1220,9 @@ export function planWip(wtPath, { git = defaultGit, links = [] } = {}) {
     indexSha.set(e.slice(tab + 1), sha);
   }
   const untrackedLinks = links.filter((l) => indexMode.get(l.rel) !== "120000");
+  // An untracked link must not stand at or over a tracked path (a tracked file or folder replaced by a link or junction):
+  // the WIP cannot hold that change and a restore would collide with the recreated link. Fail closed.
+  for (const rel of indexMode.keys()) if (untrackedLinks.some((l) => lexUnder(rel, l.rel))) return fail("untracked-link");
   // GIT_OPTIONAL_LOCKS=0: status must not refresh (rewrite) the index. A rewrite bumps the index mtime that gitTouchMs reads,
   // so a dry run would mark every stale tree "recent-touch" for the next `days` and a later apply would archive nothing.
   const st = tryGitRaw(git, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none"], base, NO_INDEX_WRITE);
@@ -1236,7 +1239,10 @@ export function planWip(wtPath, { git = defaultGit, links = [] } = {}) {
     const rel = raw.replace(/\/+$/, "");
     if (/[\r\n]/.test(rel)) return fail("odd-path");
     if (untracked && isBuildOutputEntry(base, raw)) continue;
-    if (untrackedLinks.some((l) => lexUnder(rel, l.rel))) continue; // recorded as a link, never archived through
+    if (untrackedLinks.some((l) => lexUnder(rel, l.rel))) {
+      if (!untracked) return fail("untracked-link"); // a tracked change (e.g. a staged delete) shadowed by a link
+      continue; // recorded as a link, never archived through
+    }
     if (untracked && raw.endsWith("/")) return fail("nested-repo"); // an embedded git repo: its content is not in the WIP
     const abs = resolve(base, rel);
     if (!isInside(dirname(abs), base)) return fail("path-through-link");
@@ -1345,6 +1351,8 @@ function linksToRecord(wtPath, links, buildDirs, git) {
   return cands.filter((l) => !ignored.has(l.rel)).map((l) => ({ rel: l.rel, target: l.target }));
 }
 
+/** Order-free identity of a link list (path + target), so a retargeted or swapped link reads as a change. */
+const linkKey = (links) => JSON.stringify(links.map((l) => [l.rel, l.target ?? null]).sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)));
 const archiveRef = (unit) => `${ARCHIVE_REF_PREFIX}${unit}`;
 const refExists = (git, repo, ref) => tryGit(git, ["rev-parse", "--verify", "--quiet", ref], repo) !== null;
 
@@ -1436,7 +1444,7 @@ export function archiveWorktree(
     const plan2 = planWip(base, { git, links: sc2.links });
     same =
       !sc2.errors &&
-      sc2.links.length === links.length &&
+      linkKey(sc2.links) === linkKey(links) &&
       plan2.ok &&
       plan2.head === plan.head &&
       captureWipTree(base, plan2, git) === wipTree &&
@@ -1445,6 +1453,12 @@ export function archiveWorktree(
   if (!same) {
     tryGit(git, ["update-ref", "-d", ref, commit], repoRoot);
     return keep("changed-during-archive");
+  }
+  // The re-capture walks the whole tree again (seconds on a big target/): re-check live cwd + lock right before removal.
+  const why2 = beforeRef ? beforeRef() : null;
+  if (why2) {
+    tryGit(git, ["update-ref", "-d", ref, commit], repoRoot);
+    return keep(why2);
   }
   appendLedger(ledgerRoot, { op: "archive", unit, repo: resolve(repoRoot), path: base, branch, head: plan.head, ref, commit, at: new Date(now).toISOString() });
   const res = removeSweptWorktree(repoRoot, base, { git, buildOutput: sc.buildDirs ?? [], force: true });
