@@ -384,7 +384,6 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <div className="usage-cohort-label small">{t.label}</div>
                 <div className="usage-cohort-value">{t.value}</div>
                 <div className="small muted">{t.sub}</div>
-                {t.sub2 && <div className="small muted" data-testid="usage-compaction-ok">{t.sub2}</div>}
               </div>
             ))}
           </div>
@@ -435,6 +434,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <div className="usage-cohort-label small">{t.label}</div>
                 <div className="usage-cohort-value">{t.value}</div>
                 <div className="small muted">{t.sub}</div>
+                {t.sub2 && <div className="small muted" data-testid="usage-compaction-ok">{t.sub2}</div>}
               </div>
             ))}
           </div>
@@ -561,14 +561,13 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
 
       {data.byProfile && (
         <Collapse id="profiles" testid="usage-profile-collapse" className="usage-profiles" summary={profileSummary(allProfiles)}>
-          <div className="usage-kind-filter" role="tablist" aria-label="Profile kind filter" data-testid="usage-profile-kind-filter">
+          <div className="usage-kind-filter" role="group" aria-label="Profile kind filter" data-testid="usage-profile-kind-filter">
             {PROFILE_KIND_FILTERS.map((f) => (
               <button
                 key={f.key}
                 type="button"
-                role="tab"
-                aria-selected={kindFilter === f.key}
-                className={`usage-inbox-tab${kindFilter === f.key ? " is-active" : ""}`}
+                aria-pressed={kindFilter === f.key}
+                className={`usage-squad-pill${kindFilter === f.key ? " is-active" : ""}`}
                 data-filter={f.key}
                 onClick={() => pickKind(f.key)}
               >

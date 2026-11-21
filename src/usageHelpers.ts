@@ -338,8 +338,10 @@ export function buildProfiles(d: UsageData): ProfileView[] {
     const wRun = (a: number, b: number) => (runs > 0 ? (a * prev.runs + b * view.runs) / runs : 0);
     const wUnit = (a: number, b: number) => (units > 0 ? (a * prev.mergedUnits + b * view.mergedUnits) / units : 0);
     const cost = prev.costPerMergedUnit === null && view.costPerMergedUnit === null ? null : wUnit(prev.costPerMergedUnit ?? 0, view.costPerMergedUnit ?? 0);
+    const cpr = prev.costPerRun === null && view.costPerRun === null ? null : wRun(prev.costPerRun ?? 0, view.costPerRun ?? 0);
     out.set(view.key, {
       ...prev,
+      costPerRun: cpr,
       runs,
       turns: prev.turns + view.turns,
       avgTurnsPerRun: runs > 0 ? (prev.turns + view.turns) / runs : 0,
@@ -795,7 +797,8 @@ export type ReadyTile = { key: string; label: string; value: string; sub: string
 
 /** KPI tiles: First Response excl/incl queue, Queue Share, Compaction vs Handoff cost. Missing data renders `—`. */
 /** `ok 80% · ok $0.25 vs successor 1st turn $1.50`; each missing value renders `—`. */
-export function compactionOkText(c: Pick<CompactionStats, "okRate" | "meanOkCostUsd" | "meanSuccessorFirstTurnCostUsd">): string {
+export function compactionOkText(c: Pick<CompactionStats, "okRate" | "meanOkCostUsd" | "meanSuccessorFirstTurnCostUsd">): string | undefined {
+  if (!isNum(c.okRate) && !isNum(c.meanOkCostUsd) && !isNum(c.meanSuccessorFirstTurnCostUsd)) return undefined;
   const usd = (n: number | null | undefined) => (isNum(n) ? usdText(n) : "—");
   return `ok ${pctText(isNum(c.okRate) ? c.okRate : null)} · ok ${usd(c.meanOkCostUsd)} vs successor 1st turn ${usd(c.meanSuccessorFirstTurnCostUsd)}`;
 }

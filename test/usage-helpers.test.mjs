@@ -485,6 +485,16 @@ test("usa-39: cost cell + compaction ok text tolerate absent fields", () => {
   assert.equal(costCellText({ mergedUnits: 0, costPerMergedUnit: null, costPerRun: 0.25 }), "$0.25/run");
   assert.equal(costCellText({ mergedUnits: 0, costPerMergedUnit: null, costPerRun: null }), "—");
   assert.equal(costCellText({ mergedUnits: 0, costPerMergedUnit: null }), "—");
-  assert.equal(compactionOkText({}), "ok — · ok — vs successor 1st turn —");
+  assert.equal(compactionOkText({}), undefined);
+  assert.equal(compactionOkText({ okRate: 0.5 }), "ok 50% · ok — vs successor 1st turn —");
+  assert.equal(readyTimeTiles(null, { runs: 1, totalCostUsd: 0, avgCostUsd: 0, totalTokens: 0, avgTokens: 0, tokensSaved: 0, handoffRuns: 0, restartOverheadCostUsd: 0, avgHandoffCostUsd: 0 }).find((x) => x.key === "compaction-vs-handoff").sub2, undefined);
   assert.match(compactionOkText({ okRate: 0.8, meanOkCostUsd: 0.25, meanSuccessorFirstTurnCostUsd: 1.5 }), /ok 80%.*\$0\.25 vs successor 1st turn \$1\.50/);
+});
+
+test("usa-39: buildProfiles folds costPerRun runs-weighted across duplicate keys", () => {
+  const row = (runs, costPerRun) => ({ provider: "claude", profile: "agent_profile_a", role: "reviewer", runs, turns: runs, avgTurnsPerRun: 1, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, passRate: 0, loopCount: 0, mergedUnits: 0, reviewRounds: 0, avgReviewRounds: 0, costPerMergedUnit: null, fixAfterMergeCount: 0, fixAfterMergeRate: 0, avgUnitCycleMs: null, costPerRun });
+  const one = buildProfiles({ byProfile: [row(1, 1), row(3, 3)] });
+  assert.equal(one.length, 1);
+  assert.equal(one[0].costPerRun, 2.5);
+  assert.equal(buildProfiles({ byProfile: [row(1, undefined), row(3, undefined)] })[0].costPerRun, null);
 });
