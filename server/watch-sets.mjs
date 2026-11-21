@@ -34,6 +34,9 @@ export const PRUNE_AFTER_MS = 24 * 60 * 60_000;
 /** A fired ping whose text is over this many chars is merged by a Pre-check - Flash worker instead of sent raw (block W4). */
 export const DIGEST_MERGE_MAX = 1500;
 const REPORT_CAP = 400; // per item in a ping; W4 merges long texts
+/** idea-352: a watched worker's final message rides the completion ping (once), outside the W4 merge text: per item / per ping caps. */
+export const FINAL_CAP = 1200;
+export const FINAL_TOTAL_CAP = 4000;
 const REPORTS_PER_AGENT = 20;
 const SNAP_REFRESH_MS = 60_000; // re-read a watched agent this often, so a missed runner event cannot hang the set
 const BACKFILL_TAIL_BYTES = 4 * 1024 * 1024;
@@ -41,6 +44,10 @@ const BACKFILL_TAIL_BYTES = 4 * 1024 * 1024;
 const ANY_SUITE = new Set(["", "*", "any", "suite", "npm-test"]);
 /** Same shape as agent-duties' VERDICT_RE: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …". */
 const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL)\b/;
+/** idea-351: a set that completed this recently still covers a late digest PASS/done for its agents (the digest race). */
+export const COVER_AFTER_FIRE_MS = 120_000;
+/** Same set as agent-duties' FAIL_RE (`\b(?:FAIL(?:ED)?|NO-VERDICT)\b`): a NO-VERDICT reviewer report is not a covered PASS. */
+const FAIL_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:FAIL|NO-VERDICT)\b/;
 const MANAGER_ROLES = new Set(["lead", "brainstorm", "buddy", "overlord"]);
 
 const vsHome = (home) => path.resolve(home || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
@@ -228,10 +235,13 @@ export function classifyItem(item, set, ctx) {
       return t - ps > stallMs ? { phase: "pending", state: "stalled", reason: "no-events", ...(done ? { report: done.text } : {}) } : { phase: "pending", state: "waiting" };
     }
     const busy = o.status === "running" || o.status === "initializing";
-    if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text };
+    // idea-352: the worker's final message is forwarded with the completion ping unless the worker filed its own report (no double delivery).
+    const selfReported = reps.some((r) => r.type === "done" && r.agent === item.ref);
+    const fin = !selfReported && o.finalText ? { final: String(o.finalText) } : {};
+    if (done && !busy) return { phase: o.archived ? "archived" : o.status || "idle", state: "done", report: done.text, ...fin };
     // Bug A (11-13): a turn that ended with a non-empty final assistant message is a report, in any round (also after a
     // re-prompt). `finalText` is read from the timeline for an idle agent and cleared when a new turn starts.
-    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText && (o.activeAt ?? -Infinity) >= floor) return { phase: o.status || "idle", state: "done", report: o.finalText };
+    if (!busy && !o.archived && o.status !== "closed" && o.status !== "error" && o.finalText && (o.activeAt ?? -Infinity) >= floor) return { phase: o.status || "idle", state: "done", report: o.finalText, ...fin };
     if (o.archived) return { phase: "archived", state: "stalled", reason: "archived" };
     if (o.status === "closed") return { phase: "closed", state: "stalled", reason: o.lost || o.resumable ? "lost" : "exited" };
     if (o.status === "error") return { phase: "error", state: "stalled", reason: "error" };
@@ -304,6 +314,23 @@ function itemLine(item) {
   return `- ${itemLabel(item)}: ${item.phase || "waiting"}`;
 }
 
+/** idea-352: the watched workers' final messages (those not already carried whole as the item's report), capped; "" when none. */
+export function finalsBlock(set) {
+  let left = FINAL_TOTAL_CAP;
+  const out = [];
+  for (const i of set.items) {
+    if (i.kind !== "agent" || i.state !== "done" || !i.final || left <= 0) continue;
+    const t = String(i.final).trim();
+    // Skip only when the item line already carries the whole text (one line, under REPORT_CAP); a longer final is truncated there.
+    if (!t || (t === String(i.report ?? "").trim() && oneLine(t, Infinity).length <= REPORT_CAP)) continue;
+    const cap = Math.min(FINAL_CAP, left);
+    const body = t.length > cap ? `${t.slice(0, cap - 1)}… (truncated; \`vs status ${i.ref}\` for the rest)` : t;
+    left -= body.length;
+    out.push(`Final message of ${i.ref} (auto-forwarded report):\n${body}`);
+  }
+  return out.join("\n\n");
+}
+
 function completionText(set) {
   const n = (st) => set.items.filter((i) => i.state === st).length;
   const [d, f, s] = [n("done"), n("fail"), n("stalled")];
@@ -350,6 +377,7 @@ export function stepSet(set, ctx) {
       if (c.state === "done" || c.state === "fail") item.doneAt = at;
     }
     if (c.report !== undefined && c.report !== item.report) item.report = c.report;
+    if (c.final && c.final !== item.final) item.final = c.final;
     if (c.run && JSON.stringify(c.run) !== JSON.stringify(item.run)) item.run = c.run;
   }
   set.pings ??= [];
@@ -361,7 +389,8 @@ export function stepSet(set, ctx) {
   // its one ping, also when every item is stalled or the siblings finished before the stall ping.
   const escalated = set.items.some((i) => i.esc1At || i.esc2At);
   if (set.items.every(settled) && !set.items.some(escPending) && (progressed || escalated)) {
-    const ping = { key: "done", at, text: completionText(set) };
+    const detail = finalsBlock(set);
+    const ping = { key: "done", at, text: completionText(set), ...(detail ? { detail } : {}) };
     set.pings.push(ping);
     set.firedAt = at;
     set.lastPingAt = at;
@@ -593,7 +622,10 @@ export function createWatchEngine({
       const ts = timeOf(entry.ts);
       const ids = refsOf(entry);
       const taken = [];
-      for (const set of openSets()) {
+      const nowMs = now();
+      const recentlyFired = (set) => set.firedAt && !set.cancelledAt && nowMs - timeOf(set.firedAt) <= COVER_AFTER_FIRE_MS;
+      const coverable = entry.type === "done" && !FAIL_RE.test(String(entry.text ?? ""));
+      for (const set of reload().sets.filter((x) => isOpen(x) || (coverable && recentlyFired(x)))) {
         if (Number.isFinite(ts) && ts < timeOf(set.createdAt)) continue;
         if (entry.agent === set.owner) continue; // the owner's own entries never wake it anyway
         const hit = set.items.filter((i) => i.kind === "agent" && ids.includes(i.ref));
@@ -651,10 +683,13 @@ export function createWatchEngine({
     for (const id of setIds ?? []) {
       const set = cache.sets.find((s) => s.id === id);
       if (!set || (set.cancelledAt && !set.firedAt)) continue;
+      const coverable = entry.type === "done" && !FAIL_RE.test(String(entry.text ?? ""));
       const ids = refsOf(entry);
       for (const item of set.items) {
         if (item.kind !== "agent" || !ids.includes(item.ref)) continue;
-        if (await reportCounts(entry, item.ref)) {
+        // idea-351: a non-manager's done naming a watched agent (a digest whose label is unknown, a late PASS) is covered by the set's
+        // ping even when it is not that item's counted report; a manager's entry and any FAIL still wake the owner.
+        if ((await reportCounts(entry, item.ref)) || (coverable && (await authorKind(String(entry.agent ?? ""))) !== "manager")) {
           out.push(structuredClone(set));
           break;
         }
@@ -729,7 +764,7 @@ export function createWatchEngine({
     const valid = new Map();
     for (const ref of refs) {
       const list = [];
-      for (const e of reports.get(ref) ?? []) if (await reportCounts(e, ref)) list.push({ type: e.type, ts: e.ts, text: String(e.text ?? "") });
+      for (const e of reports.get(ref) ?? []) if (await reportCounts(e, ref)) list.push({ type: e.type, ts: e.ts, agent: String(e.agent ?? ""), text: String(e.text ?? "") });
       valid.set(ref, list);
     }
     const kinds = new Set(sets.flatMap((s) => s.items.map((i) => i.kind)));
@@ -822,7 +857,7 @@ export function createWatchEngine({
         const key = pingKeyOf(set, ping);
         if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue;
         lastOffer.set(key, t);
-        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, owner: set.owner, team: set.team, lane: set.lane, ...(ping.target ? { target: ping.target } : {}), set: structuredClone(set) };
+        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, ...(ping.detail ? { detail: ping.detail } : {}), owner: set.owner, team: set.team, lane: set.lane, ...(ping.target ? { target: ping.target } : {}), set: structuredClone(set) };
         if (spawnDigest && ping.text.length > DIGEST_MERGE_MAX) {
           // W4: a too-long ping is merged by one Pre-check - Flash worker, which sends the digest to the owner. The one-ping
           // guarantee holds: attemptedAt is persisted BEFORE the spawn, so the ping is never offered (spawned) twice. At most

@@ -1,7 +1,7 @@
 import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, existsSync } from 'node:fs';
+import { readFileSync, mkdtempSync, existsSync, mkdirSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import os from 'node:os';
@@ -170,4 +170,51 @@ test('poller: concurrent poll() runs agy once; shutdown() kills the in-flight ch
   fake.calls[0].child.stdout.write(fx('agy-usage.txt')); fake.calls[0].child.emit('exit', 0);
   assert.deepEqual(await Promise.all([a, b, c]), [[], [], []]);
   assert.equal(existsSync(store.file), false);
+});
+
+test('idea-349: agy poller skips (keeps its interval) while canRun says an agy agent is busy', async () => {
+  const store = new LimitStore(path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-lim-')), 'limits.jsonl'));
+  let calls = 0; let busy = true; let t = 1_000_000;
+  const poll = createAgyUsagePoller({ store, run: async () => { calls++; return fx('agy-usage.txt'); }, minIntervalMs: 60_000, now: () => t, canRun: () => !busy });
+  assert.deepEqual(await poll('a'), []); assert.equal(calls, 0, 'no agy spawn while busy');
+  busy = false; t += 1; assert.ok((await poll('a')).length > 0); assert.equal(calls, 1, 'runs once the agents are idle');
+});
+
+test('idea-349: real turn_done -> idle -> park lifecycle with pollAgy:true polls only once no agy agent may hold work', async () => {
+  const home = tmp();
+  const emitters = {};
+  const dirs = { A: path.join(home, 'A'), B: path.join(home, 'B') };
+  for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
+  let work = [{ pid: 1 }];
+  const adapter = { canPark: true, start({ emit, cwd }) { const h = { pid: 4242, send() {}, cancel() {}, kill() {} }; emitters[path.basename(cwd)] = emit; return h; } };
+  let spawns = 0;
+  const runner = new Runner({
+    dir: path.join(home, 'agents'), adapters: { 'antigravity-cli': adapter }, pollAgy: true, agyUsage: async () => { spawns++; return fx('agy-usage.txt'); },
+    bgProbe: async () => work, pidAlive: () => work.length > 0, parkGraceMs: 60_000, parkHoldPollMs: 60_000, parkHoldMaxMs: 60_000,
+  });
+  const A = runner.create({ provider: 'antigravity-cli', cwd: dirs.A, prompt: 'go' });
+  const B = runner.create({ provider: 'antigravity-cli', cwd: dirs.B, prompt: 'go' });
+  await new Promise((r) => setTimeout(r, 20));
+  for (const c of ['A', 'B']) { emitters[c]('session', { sessionId: 's' + c }); emitters[c]('status', { status: 'running' }); }
+  emitters.A('status', { status: 'idle' }); emitters.A('turn_done', {}); // A ends its turn with a live bg shell: probe not back / sees work
+  emitters.B('status', { status: 'idle' }); emitters.B('turn_done', {}); // B ends moments later
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(spawns, 0, 'no agy -p /usage while A (and B) may still hold background work');
+  assert.ok(runner.live.has(A), 'A is still live (held)');
+  runner.park(A); await new Promise((r) => setTimeout(r, 30));
+  assert.equal(spawns, 0, 'A parked but B may still hold work: the retry is refused too');
+  runner.park(B); await new Promise((r) => setTimeout(r, 30));
+  assert.equal(spawns, 1, 'once nothing agy is live, the park retry polls exactly once');
+  runner.shutdown();
+});
+
+test('idea-349: Runner._agyBusy: unknown post-turn work, held work and running turns are busy; clean/claude are not', () => {
+  const r = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), 'vs-run-')), bgProbe: async () => [], parkHoldMaxMs: 1000 });
+  const agy = (o) => ({ provider: 'agy', inflight: 0, heldSince: null, turnGen: 1, handle: { pid: 1 }, work: [], ...o });
+  r.live.set('c', { provider: 'claude', inflight: 1, heldSince: null });
+  assert.equal(r._agyBusy(), false);
+  r.live.set('a', agy({ work: null })); assert.equal(r._agyBusy(), true, 'probe not back yet');
+  r.live.set('a', agy({ heldSince: 5 })); assert.equal(r._agyBusy(), true);
+  r.live.set('a', agy({ inflight: 1 })); assert.equal(r._agyBusy(), true);
+  r.live.set('a', agy({})); assert.equal(r._agyBusy(), false, 'probed clean');
 });

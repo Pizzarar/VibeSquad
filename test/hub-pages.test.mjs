@@ -107,3 +107,18 @@ test("C5: at <=820px css height sky chat opens as an overlay over the floor half
   assert.match(css, /\.hub-pages\[data-short-height="true"\] \.sky-zone\.sky-chat-panel \{[\s\S]*?position: absolute;[\s\S]*?top: 100%;/);
 });
 
+
+test("Psycho U1: HubPages is the Squad home: strip=null, PinRail hidden on the hub page, rail kept for lanes and hub agents", () => {
+  const app = src("App.tsx");
+  assert.match(app, /<HubPages[\s\S]*?strip=\{null\}[\s\S]*?tower=\{<SquadFloor view=\{pinFocusView\} \/>\}/);
+  assert.ok(!app.includes('<SquadQueue view={pinFocusView} variant="strip" />'));
+  // A taken-over TV keeps the rail: its chat's drawer controls portal into the rail's card slot (src/pinSlots.ts).
+  assert.match(app, /const skyTakeover = useSkyTakeover\(/);
+  assert.match(app, /const hubHome = hubFocused && !hubAgentOpen && !skyTakeover;/);
+  assert.match(app, /pinFocusView && pinFocus && !hubHome && <PinRail /);
+  assert.match(app, /\$\{hubHome \? "hub-home" : ""\}/);
+  // The squad page lands on the hub pin (Psycho only); Squads Home and FULL are excluded by the guards.
+  assert.match(app, /vibe === "boring" \|\| !pinLayout \|\| !pinsHome \|\| squadsHome \|\| pinFocus\) return;\s*const hub = hubPinForSquad\(view\);\s*if \(hub\) void focusPin\(hub\)/);
+  assert.match(src("HubPages.tsx"), /\{strip\}/); // the slot stays
+  assert.match(src("styles.css"), /\.app\.pin-focus\.hub-focus\.hub-home \.hub-body \{ grid-column: 2 \/ -1; \}/);
+});

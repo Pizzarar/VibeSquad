@@ -14,12 +14,13 @@ import { Runner, DRAIN_TTL_MAX_MS, drainNoticeText } from '../runner/runner.mjs'
 import { createServer } from '../runner/server.mjs';
 import { createClaudeAdapter, drainHookSettings, DRAIN_HOOK_SCRIPT } from '../runner/adapters/claude.mjs';
 import { drainHookDecision } from '../runner/drain-hook.mjs';
+import { budget } from "./helpers/load-budget.mjs";
 
 const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 const tmp = (prefix = 'vs-drain-') => { const d = mkdtempSync(path.join(os.tmpdir(), prefix)); dirs.push(d); return d; };
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms));
-const until = async (fn, ms = 3000) => { const end = Date.now() + ms; while (!fn()) { if (Date.now() > end) throw new Error('timed out'); await tick(10); } };
+const until = async (fn, ms = 3000) => { const end = Date.now() + budget(ms); while (!fn()) { if (Date.now() > end) throw new Error('timed out'); await tick(10); } };
 const ADMIN = 'admin-token-drain';
 
 // Fake parkable agents; the probe answers from `work` (pid -> shells), so a test sets the shells' start times.

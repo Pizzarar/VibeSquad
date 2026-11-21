@@ -2,6 +2,10 @@
   "_doc": "Intentional overlaps only; every entry needs a reason. Fields (optional regex strings): kind, selector (hit element css path + classes), other, text, surface.",
   "allow": [
     {
+      "selector": "boring-needs-where-inline",
+      "reason": "Psycho sidebar Needs-you where-label (Lane · Project) is intentionally ellipsised in the 265px sidebar; the full location is the span title tooltip (Desk U2)."
+    },
+    {
       "kind": "overlap",
       "selector": "sq-floor-(char|blip|mark|plate|front|tv)",
       "other": "sq-floor-(char|blip|mark|plate|front|tv)",
@@ -69,7 +73,7 @@
     },
     {
       "kind": "compact-scroll",
-      "surface": "pin-grid-teams-toggle",
+      "surface": "squad-full",
       "reason": "Full Teams plumbing view, opened on demand via the squad-full-toggle; the compact grid is the default."
     },
     {

@@ -46,7 +46,7 @@ const PHONE_SURFACES = [
 const surfById = (id) => O.SURFACES.find((x) => x.id === id).setup;
 const railClick = async (p, id) => { const l = p.locator(tidq(id)).locator("visible=true").first(); await l.waitFor({ state: "visible", timeout: 4000 }); await l.click({ timeout: 4000 }); await sleep(500); };
 const RAIL_SURFACES = [
-  { id: "rail-sidebar-toggled-grid", setup: async (p) => { await surfById("pin-grid-usage")(p); await railClick(p, "sidebar-collapse-toggle"); } },
+  { id: "rail-sidebar-toggled-full", setup: async (p) => { await surfById("squad-full")(p); await railClick(p, "sidebar-collapse-toggle"); } },
   { id: "rail-sidebar-toggled-focus", setup: async (p) => { await surfById("focus-brainstorm")(p); await railClick(p, "sidebar-collapse-toggle"); } },
   { id: "rail-pin-toggled-focus", setup: async (p) => { await surfById("focus-brainstorm")(p); await railClick(p, "pin-rail-collapse-toggle"); } },
   { id: "rail-both-toggled-focus", setup: async (p) => { await surfById("focus-brainstorm")(p); await railClick(p, "sidebar-collapse-toggle"); await railClick(p, "pin-rail-collapse-toggle"); } },
@@ -235,10 +235,18 @@ const PROBES = String.raw`(() => {
 
 async function probe(page, expr) { return page.evaluate(`(() => { const P = window.__u1 ?? (window.__u1 = ${PROBES}); return (${expr}); })()`); }
 
-async function closeLayers(page) {
-  await page.keyboard.press("Escape").catch(() => {});
+// Page state that a stray Escape can change: the app's Escape listener navigates home and collapses the sidebar to the rail.
+const stateSig = (page) => page.evaluate("`${location.pathname}${location.hash}|${Math.round(document.querySelector('.sidebar')?.getBoundingClientRect().width ?? -1)}`").catch(() => "?");
+
+// Close only the open layer: one Escape, a second only while a popover is still open and the page state did not drift
+// (a second Escape on a closed layer reaches App.tsx enterSquadsHome and collapses the sidebar).
+async function closeLayers(page, sig) {
   await page.keyboard.press("Escape").catch(() => {});
   await sleep(120);
+  if ((await stateSig(page)) === sig && (await probe(page, "P.popovers().length").catch(() => 0)) > 0) {
+    await page.keyboard.press("Escape").catch(() => {});
+    await sleep(120);
+  }
 }
 
 const ALL_SURFACES = () => [...O.SURFACES, ...RAIL_SURFACES, ...PHONE_SURFACES, ...BORING_SURFACES];
@@ -267,6 +275,8 @@ export async function run() {
   const uniq = new Map();
   const stats = {}; // combo -> { controls, popovers, mismatch:Set, clipped:Set, skipped, triggersSkipped, triggers, surfaces }
   const skipped = [];
+  let crashCount = 0; // a crashed renderer is a skipped surface, which FAILs the run (pass needs skipped=0); the next surface gets a new context
+  const RECYCLE_EVERY = Number(arg("recycle-every", "6"));
   let controls = 0, popoversSeen = 0, triggersTotal = 0, triggersSkipped = 0;
   const t0 = Date.now();
   const record = (combo, surface, kind, h, extra = {}) => {
@@ -276,7 +286,7 @@ export async function run() {
     if (!u.occurrences.some((o) => o.combo === combo && o.surface === surface)) u.occurrences.push({ combo, surface });
     stats[combo][kind === "hit-mismatch" ? "mismatch" : "clipped"].add(key);
   };
-  const skip = (combo, surface, reason) => { skipped.push({ surface, combo, reason }); stats[combo].skipped++; process.stderr.write(`  SKIP ${surface} ${combo}: ${reason}\n`); };
+  const skip = (combo, surface, reason) => { if (/crash/i.test(reason)) { reason = `RENDERER CRASH (not a legitimate skip): ${reason}`; crashCount++; } skipped.push({ surface, combo, reason }); stats[combo].skipped++; process.stderr.write(`  SKIP ${surface} ${combo}: ${reason}\n`); };
 
   try {
     for (const sid of sizeIds) {
@@ -286,12 +296,19 @@ export async function run() {
         const combo = `${sid}/${theme}${vibe === "fun" ? "" : `/${vibe}`}`;
         stats[combo] = { controls: 0, popovers: 0, mismatch: new Set(), clipped: new Set(), skipped: 0, triggers: 0, triggersSkipped: 0, surfaces: 0 };
         const st = stats[combo];
-        const ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: size.dpr, colorScheme: theme, ...(size.mobile ? { hasTouch: true } : {}) });
-        await E.installRoutes(ctx);
-        // The app derives <html data-vibe> from the app.vibe pref (src/prefs.ts), so seed that, not the attribute.
-        if (vibe !== "fun") await ctx.addInitScript(`try { localStorage.setItem("vs.prefs.v1", JSON.stringify({ "app.vibe": ${JSON.stringify(vibe)} })); } catch {}`);
-        await ctx.addInitScript(`try { localStorage.setItem("vs.vibePicked", "1"); } catch {}`);
-        const page = await ctx.newPage();
+        // M1: one long-lived headless context crashes the renderer after ~10 min, so recycle it every RECYCLE_EVERY surfaces (and after a crash).
+        let ctx, page, sinceRecycle = 0, seenCrash = crashCount;
+        const open = async () => {
+          if (ctx) await ctx.close().catch(() => {});
+          ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: size.dpr, colorScheme: theme, ...(size.mobile ? { hasTouch: true } : {}) });
+          await E.installRoutes(ctx);
+          // The app derives <html data-vibe> from the app.vibe pref (src/prefs.ts), so seed that, not the attribute.
+          if (vibe !== "fun") await ctx.addInitScript(`try { localStorage.setItem("vs.prefs.v1", JSON.stringify({ "app.vibe": ${JSON.stringify(vibe)} })); } catch {}`);
+          await ctx.addInitScript(`try { localStorage.setItem("vs.vibePicked", "1"); } catch {}`);
+          page = await ctx.newPage();
+          sinceRecycle = 0; seenCrash = crashCount;
+        };
+        await open();
         // Rail/menu state persists in storage between surfaces (a probe click can collapse a rail): every setup starts from a clean app.
         const fresh = async () => {
           await page.goto(`${baseUrl}/?demo=1`, { waitUntil: "domcontentloaded", timeout: 30000 });
@@ -300,6 +317,8 @@ export async function run() {
         };
         for (const surf of size.mobile ? PHONE_SURFACES : vibe === "boring" ? BORING_SURFACES : [...O.SURFACES, ...RAIL_SURFACES]) {
           if (only.length && !only.includes(surf.id)) continue;
+          if (crashCount !== seenCrash || sinceRecycle >= RECYCLE_EVERY) await open();
+          sinceRecycle++;
           st.surfaces++;
           // Below ~1300px the rails start collapsed and hide the controls some setups click (pin-team rows, footer buttons): when a
           // setup cannot find its target, expand the collapsed rails (as a user would) and rerun the setup. Rail-toggle surfaces never need this.
@@ -330,6 +349,7 @@ export async function run() {
                 if (!cur) { await redo(); cur = (await probe(page, "P.triggers()")).find((x) => x.key === t.key); }
                 if (!cur) { triggersSkipped++; st.triggersSkipped++; process.stderr.write(`  trigger gone ${surf.id} ${combo}: ${t.sel} "${t.text}"\n`); continue; }
                 await probe(page, "P.snapshot()");
+                const pageSig = await stateSig(page);
                 await page.mouse.click(cur.cx, cur.cy);
                 await sleep(/sky/.test(t.sel) ? 4500 : 250); // the sky chat swings in over ~1-4s: judge it once landed
                 const pops = await probe(page, "P.popovers()");
@@ -339,9 +359,10 @@ export async function run() {
                   for (const i of p.issues) record(combo, surf.id, `popover-${i === "outside-viewport" ? "offscreen" : "clipped"}`, { selector: p.selector, classes: p.classes, text: p.text }, { trigger: `${t.sel} "${t.text}"`, popover: p.selector, detail: `box ${Math.round(p.box.x)},${Math.round(p.box.y)} ${Math.round(p.box.w)}x${Math.round(p.box.h)} vs ${size.w}x${size.h}: ${i}` });
                   for (const h of p.hits) record(combo, surf.id, "hit-mismatch", h, { trigger: `${t.sel} "${t.text}"`, popover: p.selector, detail: `in popover; point ${h.at} hits ${h.other?.selector ?? "nothing"}` });
                 }
-                await closeLayers(page);
+                await closeLayers(page, pageSig);
                 const after = await probe(page, "P.hitTest(null).count").catch(() => -1);
-                if (after !== sig) await redo();
+                // Re-run setup when the route/sidebar state drifted (or the control count did), so the next trigger is never measured on a collapsed rail.
+                if (after !== sig || (await stateSig(page)) !== pageSig) await redo();
               }
             }
           } catch (e) {

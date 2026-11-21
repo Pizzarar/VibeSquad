@@ -16,6 +16,7 @@ import { BRIEF_HISTORY_KEEP, BRIEF_SHRINK_FROM, BRIEF_SHRINK_TO, backupBrief, wr
 import { liveInFlightBlock } from "./in-flight.mjs";
 import { BOOT_CONTEXT_BUDGET, MORE_WORKERS_HINT, bootRoster, fitRows } from "./boot-roster.mjs";
 import { refreshWhosHere } from "./whos-here.mjs";
+import { readAgentLogTail } from "./compact-step.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 
 // import.meta.dirname is undefined when bundled into the Paseo plugin; fall back like server/hooks/agent-duties.ts.
@@ -257,6 +258,48 @@ export function hubTeamsBlock({ team, agents, budget = BOOT_CONTEXT_BUDGET }) {
   });
   const { kept, dropped } = fitRows(rows, budget - head.length - 1 - 40);
   return [head, ...kept, ...(dropped ? [`- +${dropped} more Teams ${MORE_WORKERS_HINT}`] : [])].join("\n");
+}
+
+// G1: how much of the old Buddy's log the carry scan reads (a 150k-token turn's tool output can push the owner's input past 512 KB).
+const CARRY_LOG_BYTES = 4 * 1024 * 1024;
+const CARRY_MAX_CHARS = 8_000;
+
+/**
+ * G1 (unit-buddy-midturn-restart): the owner's messages the agent never finished answering, from the raw runner-log events (oldest
+ * first). Owner input = `owner: true` (set by the runner for the owner's composer only; agent sends, steers, nudges and /compact never
+ * carry it). A turn answers the owner messages pending so far only if it COMPLETED and itself took an owner input: a VS-only turn
+ * (the brief nudge) answers nothing. Not completed: an `error` in the turn (the Claude adapter logs `error` then a normal-looking
+ * turn_done for a failed turn; ACP logs only the error), a cancel / error stopReason, or no turn_done at all (killed mid-turn).
+ * `afterSeq` keeps only owner inputs newer than an earlier scan. Returns { text ("" = nothing unanswered), lastSeq }.
+ */
+export function unansweredOwnerMessages(events, { afterSeq = -1 } = {}) {
+  const list = Array.isArray(events) ? events : [];
+  let lastSeq = afterSeq;
+  let pending = []; // { seq, text } owner inputs not yet answered
+  let turnHadOwner = false;
+  let turnErrored = false;
+  for (const e of list) {
+    if (!e || typeof e !== "object") continue;
+    const seq = Number(e.seq);
+    if (Number.isFinite(seq)) lastSeq = Math.max(lastSeq, seq);
+    if (e.type === "input" && e.owner === true && typeof e.text === "string" && e.text.trim()) {
+      pending.push({ seq, text: e.text.trim() });
+      turnHadOwner = true;
+    } else if (e.type === "error") {
+      turnErrored = true;
+    } else if (e.type === "status" && e.status === "running") {
+      turnErrored = false; // a new turn starts: an error before it (e.g. a failed spawn) is not this turn's
+    } else if (e.type === "turn_done") {
+      const completed = !turnErrored && !/cancel|error/i.test(String(e.stopReason ?? ""));
+      if (completed && turnHadOwner) pending = [];
+      turnHadOwner = false;
+      turnErrored = false;
+    }
+  }
+  const texts = pending.filter((p) => !(p.seq <= afterSeq)).map((p) => p.text);
+  let text = texts.join("\n\n");
+  if (text.length > CARRY_MAX_CHARS) text = `[...]\n${text.slice(-CARRY_MAX_CHARS)}`; // the newest words matter most
+  return { text, lastSeq };
 }
 
 export function buildBrainstormInitialPrompt({ laneId, laneUpper, buddyName, summaryContent, latestPlan, pendingPrompt, inFlight, vibeMode = false, hubTeams = "", autoRetire = false, standing = false }) {
@@ -878,6 +921,23 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
     timer.mark("inFlight");
     const isBootHub = Boolean(bootTeam && !topic && (bootLane ? isHubLane(bootTeam, bootLane) : isHubLane(bootTeam, { id: laneId })));
     const hubTeams = isBootHub ? hubTeamsBlock({ team: bootTeam, agents: liveForBoot, budget: Math.floor(BOOT_CONTEXT_BUDGET / 2) }) : "";
+    // G1: an auto restart (token cap) carries the owner's unanswered message to the successor's first input. A caller-supplied
+    // pendingPrompt (the drawer's draft) wins. token-watch restarts only between turns, so this is usually empty: it catches a turn
+    // that errored or was cancelled, or an owner message queued behind the turn that never started.
+    const carryFromLog = reason.startsWith("auto") && agentId !== "start-brainstorm" && !pendingPrompt.trim();
+    const readOldLog = () => {
+      try {
+        return typeof body.readAgentEvents === "function" ? body.readAgentEvents(agentId) : readAgentLogTail(agentId, CARRY_LOG_BYTES);
+      } catch {
+        return [];
+      }
+    };
+    const carry = carryFromLog ? unansweredOwnerMessages(readOldLog()) : { text: "", lastSeq: -1 };
+    if (carry.text) {
+      try {
+        appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `buddy-carry: owner message carried to the successor chars=${carry.text.length}` });
+      } catch {}
+    }
     const initialPrompt = buildBrainstormInitialPrompt({
       hubTeams,
       inFlight: liveInFlightBlock({ agents: liveForBoot, laneId, teamId, budget: BOOT_CONTEXT_BUDGET - hubTeams.length }),
@@ -886,7 +946,7 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
       buddyName: newTitle,
       summaryContent: summary.content,
       latestPlan,
-      pendingPrompt,
+      pendingPrompt: pendingPrompt.trim() ? pendingPrompt : carry.text,
       vibeMode: bootTeam?.vibeMode === true,
       autoRetire: reason.startsWith("auto"),
     });
@@ -1013,6 +1073,17 @@ async function performBrainstormRestartOnce(body, rootDir = REPO_ROOT, { agentsF
         if (reason.startsWith("auto")) {
           await retireDone;
           retireDone = null;
+          // G1: an owner message that reached the old Buddy while its successor spawned (createAgent can take minutes) went into a
+          // turn the retire just cancelled: hand it to the successor as the owner's own send.
+          if (carryFromLog && spawned && typeof backend.sendAgentPrompt === "function") {
+            const late = unansweredOwnerMessages(readOldLog(), { afterSeq: carry.lastSeq });
+            if (late.text) {
+              await backend.sendAgentPrompt(created.id, late.text, { owner: true }).catch((e) => console.warn(`[vibesquad] buddy-carry late ${agentId} -> ${created.id}: ${e?.message ?? e}`));
+              try {
+                appendVsLogEntry({ teamId, laneId, agent: agentId, type: "metric", text: `buddy-carry: late owner message forwarded to ${created.id} chars=${late.text.length}` });
+              } catch {}
+            }
+          }
         }
       }
     }

@@ -203,7 +203,7 @@ test("confirm-on-close guard lives on the drafts beforeunload hook", async () =>
   assert.equal(e.prevented, true);
   assert.equal(e.returnValue, "");
   D.setCloseGuard(null);
-  assert.match(src("App.tsx"), /setCloseGuard\(\(\) => getPref\("app\.confirmClose"\) && membersRef\.current\.some\(\(m\) => m\.agent\.status === "running"\)\)/);
+  assert.match(src("App.tsx"), /setCloseGuard\(\(\) => !DEMO && getPref\("app\.confirmClose"\) && membersRef\.current\.some\(\(m\) => m\.agent\.status === "running"\)\)/);
 });
 
 test("Settings home: one entry point, all sections, rehoused Team/Runner/Profiles, note, push moved", () => {

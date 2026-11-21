@@ -3,10 +3,12 @@
 // Boots runner/server.mjs of --repo (default: this checkout) against the same home and reads its {boot:{...}} line:
 //   cold   = no runner fold index (fold-index.json removed): every log folded from byte 0
 //   warm   = the index the previous boot wrote, logs unchanged
+//   --live N  mtimes of the N largest logs sit inside the racy window (live agents were writing when the cold boot saved: prod 11-17,
+//             idea-316); warm then reports how many of them the index could still trust (full=0 after the fix)
 //   append = warm, after appending a few events to 50 logs (the live agents' growth between two restarts)
 // --repo <master checkout> times the "before" code; it has no index, so its three numbers are all full folds.
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, utimesSync, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +19,7 @@ const repo = path.resolve(arg("repo", path.join(path.dirname(fileURLToPath(impor
 const MB = Number(arg("mb", 450));
 const N = Number(arg("agents", 5000));
 const RUNS = Number(arg("runs", 1));
+const LIVE = Number(arg("live", 0));
 const root = arg("home") ? path.resolve(arg("home")) : mkdtempSync(path.join(os.tmpdir(), "vs-boot-bench-"));
 const real = path.resolve(os.homedir(), ".vibesquad");
 const rhome = path.join(root, ".vibesquad", "runner");
@@ -91,7 +94,8 @@ async function boot() {
   // Wait for the exit (its shutdown saves the index): the next boot would otherwise find the lock held and exit {alreadyRunning}.
   if (!exited) await new Promise((r) => { runner.on("exit", r); setTimeout(() => { runner.kill(); r(); }, 120_000); });
   const save = log.split("\n").find((l) => l.startsWith('{"foldIndexSave":'));
-  return { ...(line ? JSON.parse(line).boot : { error: log.slice(-400) }), bootWall, ...(save ? JSON.parse(save) : {}) };
+  const fi = line ? JSON.parse(line).foldIndex : null;
+  return { ...(line ? JSON.parse(line).boot : { error: log.slice(-400) }), bootWall, ...(fi ? { trusted: fi.trusted, resumed: fi.resumed, full: fi.full, bytes: fi.bytes, loadMs: fi.loadMs } : {}), ...(save ? JSON.parse(save) : {}) };
 }
 
 function appendSome(n = 50) {
@@ -109,6 +113,7 @@ if (!existsSync(agentsDir)) {
   generate();
   console.error(`generated ${N} agents, ~${MB}MB in ${root} (${ms(t0)}ms)`);
 }
+if (LIVE) { const t = new Date(Date.now() + 4_000); for (let i = 0; i < LIVE; i++) utimesSync(path.join(agentsDir, `${idOf(i)}.jsonl`), t, t); } // mtime just ahead of the cold boot's stats: racy, settled by the post-listen save
 const results = { repo, home: root, mb: MB, agents: N, cold: [], warm: [], append: [] };
 for (let r = 0; r < RUNS; r++) {
   rmSync(path.join(rhome, "fold-index.json"), { force: true });

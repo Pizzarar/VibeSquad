@@ -9,8 +9,8 @@ import { isRunnerId, runnerHandle } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { openContextMenu } from "./CommandPalette";
 import { demoTimeline } from "./demo";
-import { chipIconSrc, hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, perfectionPin, pinsForSquad, quickBugsChipState, SEND_TO_MARKER, snapChipSize, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
-import { createQuickBugsPin, keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
+import { chipIconSrc, hasLooksDone, gridPinsForSquad, hubPinForSquad, isHubPin, liveBuddyDupes, liveBuddyId, looksDoneFor, LOOKS_DONE_MARKER, perfectionPin, pinsForSquad, quickBugsChipState, quickWorkflowsChipState, SEND_TO_MARKER, snapChipSize, topicOfBrainstorm, withoutSpinOffFence, type Pin } from "./pins";
+import { createQuickBugsPin, createQuickWorkflowsPin, keepPinBuddy, openBriefEditor, openPin as openPinAction } from "./pinActions";
 import { openPinMember, usePinFocus } from "./pinFocus";
 import { useIsShown } from "./panes";
 import { IdeaBox, IdeaPlusTile, noteSendTo, SendToCard, showPinToast, SpinOffCard, useSendTo, useSpinOff } from "./PinIdeas";
@@ -727,34 +727,46 @@ export function PinGrid({
 }
 
 // ── Project header Bugs quick-chip (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md C1) ──
-export function QuickBugsChip({
+export function QuickBugsChip(props: { view: TeamView; onOpen: PinHandler; testId?: string }) {
+  return <QuickLaneChip {...props} kind="bugs" />;
+}
+
+// ── Project header Workflows quick-chip (idea-131): same flow as Bugs, opens the standing perfection/workflows lane ──
+export function QuickWorkflowsChip(props: { view: TeamView; onOpen: PinHandler; testId?: string }) {
+  return <QuickLaneChip {...props} kind="workflows" />;
+}
+
+function QuickLaneChip({
   view,
   onOpen,
   testId,
+  kind,
 }: {
   view: TeamView;
   onOpen: PinHandler;
   testId?: string;
+  kind: "bugs" | "workflows";
 }) {
+  const Name = kind === "bugs" ? "Bugs" : "Workflows";
   const theme = useTheme();
   const dpr = useDpr();
   const zoom = useUiScale();
   const { device, css } = snapChipSize(dpr, zoom);
-  const bugsAsset = chipIconSrc("bugs", theme, device);
+  const bugsAsset = chipIconSrc(kind, theme, device);
   const dotAsset = chipIconSrc("dot", theme, device);
   const bugsOk = useImageOk(bugsAsset.src);
   const dotOk = useImageOk(dotAsset.src);
   const [busy, setBusy] = useState(false);
-  const { pin, leadRunning, needsYou } = quickBugsChipState(view);
+  const { pin, leadRunning, needsYou } = (kind === "bugs" ? quickBugsChipState : quickWorkflowsChipState)(view);
   const missing = !pin;
   const label = missing
-    ? `Create Bugs team for ${view.team.name}`
-    : `${pin.lane.name || "Bugs"}${leadRunning ? " · lead running" : ""}${needsYou > 0 ? ` · ${needsYou} need you` : ""}`;
+    ? `Create ${Name} team for ${view.team.name}`
+    : `${pin.lane.name || Name}${leadRunning ? " · lead running" : ""}${needsYou > 0 ? ` · ${needsYou} need you` : ""}`;
   return (
     <button
       type="button"
-      className={`quick-chip quick-chip-bugs ${missing ? "missing" : ""} ${leadRunning ? "lead-running" : ""} ${needsYou > 0 ? "needs-you" : ""}`}
-      data-testid={testId ?? `squad-bugs-chip-${view.team.id}`}
+      className={`quick-chip quick-chip-${kind} ${missing ? "missing" : ""} ${leadRunning ? "lead-running" : ""} ${needsYou > 0 ? "needs-you" : ""}`}
+      data-testid={testId ?? `squad-${kind}-chip-${view.team.id}`}
       title={label}
       aria-label={label}
       disabled={busy}
@@ -766,9 +778,9 @@ export function QuickBugsChip({
           return;
         }
         setBusy(true);
-        void createQuickBugsPin(view.team.id)
+        void (kind === "bugs" ? createQuickBugsPin : createQuickWorkflowsPin)(view.team.id)
           .then((created) => Promise.resolve(onOpen(created)))
-          .catch((err) => showPinToast(`Could not create Bugs team: ${err}`))
+          .catch((err) => showPinToast(`Could not create ${Name} team: ${err}`))
           .finally(() => setBusy(false));
       }}
     >
@@ -786,7 +798,7 @@ export function QuickBugsChip({
         {leadRunning && dotOk && (
           <img
             className="quick-chip-dot"
-            data-testid={`squad-bugs-dot-${view.team.id}`}
+            data-testid={`squad-${kind}-dot-${view.team.id}`}
             src={dotAsset.src}
             srcSet={dotAsset.srcSet}
             alt=""
@@ -796,7 +808,7 @@ export function QuickBugsChip({
         )}
       </span>
       {needsYou > 0 && (
-        <span className="badge alert quick-chip-needs" data-testid={`squad-bugs-needs-${view.team.id}`}>
+        <span className="badge alert quick-chip-needs" data-testid={`squad-${kind}-needs-${view.team.id}`}>
           {needsYou}
         </span>
       )}

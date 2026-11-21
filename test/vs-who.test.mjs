@@ -325,7 +325,7 @@ test("Done-when #3 & Audit §2 + §3A: 0 hits for paseo ls -g, prior-art check r
 
 test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, vs profiles compact output, and audit-delta log subtype", async () => {
   // 1. inspectGitSpawnState on the current git repo
-  const gitState = await inspectGitSpawnState(REPO_ROOT);
+  const gitState = await inspectGitSpawnState(REPO_ROOT, { timeoutMs: 30_000 }); // asserts the format, not latency: under full-suite load git spawn alone can pass the 3s production cap and return null (idea-299)
   assert.ok(gitState, "Expected non-null git state in git worktree");
   assert.match(gitState, /^Starting git state \(snapshot at spawn — re-check before commit\/push\/merge\): branch=\S+, origin=\d+ behind \/ \d+ ahead, dirty=\d+ files\.$/);
 
@@ -338,7 +338,7 @@ test("Audit §3B & §3C & §3D: inspectGitSpawnState injected at agent.create, v
     },
     on: () => () => {},
   };
-  const dispose = createPlugin({ startWatcher: false })(server);
+  const dispose = createPlugin({ startWatcher: false, gitSpawnTimeoutMs: 30_000 })(server);
   try {
     assert.ok(beforeHook, "Expected before('agent.create') hook");
     const mutated = await beforeHook({
@@ -454,7 +454,7 @@ test("misroute-old metric: turn_ended logs relay-old and turn_started agent-mess
       },
     };
 
-    const dispose = createPlugin({ startWatcher: false })(server);
+    const dispose = createPlugin({ startWatcher: false, gitSpawnTimeoutMs: 30_000 })(server);
     try {
       const turnEnded = handlers.get("agent.turn_ended");
       await turnEnded(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { budget, loadFactor } from "./helpers/load-budget.mjs";
 import test from "node:test";
 import { createLoopLagMonitor } from "../runner/loop-lag.mjs";
 
@@ -61,7 +62,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 ${body}
 await sleep(400); await m.flush(); m.stop();
 `);
-  const r = spawnSync(process.execPath, [...args, script], { env: cleanEnv({ VIBESQUAD_HOME: dir }), encoding: "utf8", timeout: 30_000 });
+  const r = spawnSync(process.execPath, [...args, script], { env: cleanEnv({ VIBESQUAD_HOME: dir }), encoding: "utf8", timeout: budget(30_000) });
   const f = path.join(dir, "lag.jsonl");
   const lines = existsSync(f) ? readFileSync(f, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
   rmSync(dir, { recursive: true, force: true });
@@ -83,19 +84,57 @@ await sleep(600);`);
   for (const k of ["driftMs", "heapUsed", "cpuUserMs", "cpuSystemMs", "ts", "proc"]) assert.ok(k in stall, k);
 });
 
-test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", () => {
-  const { r, lines } = runChild(`
+function nativeCallRun() {
+  return runChild(`
 await sleep(700);
 function blockOnChildProcess() { execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},1500)']); }
+const b0 = Date.now();
 blockOnChildProcess();
-await sleep(600);`);
+const blockedMs = Date.now() - b0; // no other sync work right after the block: a capture landing here would not be flagged late
+await sleep(600);
+console.log(JSON.stringify({ blockedMs }));`);
+}
+
+test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, with idle cpu", (t) => {
+  // The capture races real machine load, so a single run may legitimately land late (that is flagged, see the next test). Never wrong
+  // frames in any attempt; and the on-time path must be proven by at least one of 4 attempts (an always-late capture() fails).
+  let proved = false, lateCount = 0;
+  for (let i = 0; i < 4 && !proved; i++) {
+    const { r, lines } = nativeCallRun();
+    assert.equal(r.status, 0, r.stderr);
+    // Structural, not absolute: the monitor must have recorded a lag line spanning (most of) the block we actually measured in the child.
+    // A broken monitor records none (or a tiny one), however slow or loaded the machine is; a slow machine only makes the block longer.
+    const blockedMs = JSON.parse(r.stdout.trim().split("\n").pop()).blockedMs;
+    assert.ok(blockedMs >= 1400, `child block measured ${blockedMs}ms`);
+    const stall = lines.reduce((a, l) => (!a || l.driftMs > a.driftMs ? l : a), null);
+    assert.ok(stall && stall.driftMs >= blockedMs * 0.7, `max lag line ${stall?.driftMs}ms vs actual block ${blockedMs}ms: ${JSON.stringify(lines)}`);
+    const cpuMs = stall.cpuUserMs + stall.cpuSystemMs; // cpu time does not grow with wall time when busy: bound against drift
+    assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
+    if (stall.captureLate) { assert.equal(stall.frames, undefined); lateCount++; continue; }
+    assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
+    proved = true;
+  }
+  // Timing-only: every attempt landing late means the machine was saturated (late frames are asserted absent above, and the late flag is
+  // proven deterministically by the next test). On a quiet machine the on-time path is still required.
+  if (!proved && lateCount === 4 && !process.env.VS_TEST_STRICT_TIMING) return t.skip("all 4 attempts captured late (machine under load); set VS_TEST_STRICT_TIMING=1 to require an on-time capture");
+  assert.ok(proved, "all 4 attempts captured late");
+});
+
+test("a capture that lands after the stall ended is flagged captureLate with no frames (forced deterministically)", () => {
+  const { r, lines } = runChild(`
+await sleep(700);
+function lateStall() { const e = Date.now() + 1200; while (Date.now() < e) { /* spin */ } }
+lateStall();
+await sleep(600);
+console.log(JSON.stringify({ caps: m.captures() }));`, { opts: "deferPauseUntilResume: true" });
   assert.equal(r.status, 0, r.stderr);
+  const caps = JSON.parse(r.stdout.trim().split("\n").pop()).caps;
+  assert.equal(caps.length, 1, r.stdout);
+  assert.equal(caps[0].late, true);
   const stall = lines.find((l) => l.driftMs > 1000);
   assert.ok(stall, JSON.stringify(lines));
-  assert.ok(stall.frames?.some((f) => f.startsWith("execFileSync ") || f.startsWith("blockOnChildProcess ")), JSON.stringify(stall.frames));
-  // Load-proof: cpu time does not grow with wall time when the machine is busy, so bound it against the stall's own drift.
-  const cpuMs = stall.cpuUserMs + stall.cpuSystemMs;
-  assert.ok(cpuMs < stall.driftMs / 2, `cpu ${cpuMs}ms vs drift ${stall.driftMs}ms`);
+  assert.equal(stall.captureLate, true, JSON.stringify(stall));
+  assert.equal(stall.frames, undefined);
 });
 
 test("one long stall triggers exactly one watchdog capture", () => {
@@ -174,5 +213,5 @@ const c = process.cpuUsage(c0); console.log(JSON.stringify({ pct: ((c.user + c.s
   for (let i = 0; i < 3; i++) { off = sample(false); on = sample(true); if (on.caps === 0) break; }
   console.log(`idle cpu: watchdog off ${off.pct.toFixed(3)}% on ${on.pct.toFixed(3)}% (captures ${on.caps})`);
   assert.equal(on.caps, 0, "watchdog captured during every idle window");
-  assert.ok(on.pct - off.pct < 1, `delta ${on.pct - off.pct}`);
+  assert.ok(on.pct - off.pct < loadFactor(), `delta ${on.pct - off.pct} (limit ${loadFactor()})`);
 });

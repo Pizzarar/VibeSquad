@@ -120,7 +120,7 @@ The **Remote Control** tab lets paired phones, tablets and laptops open VibeSqua
 
 - **REMOTE CONTROL & REMOTE ACCESS**: the master switch, **Enabled** or **Off**. If a device reports that remote access is off on the PC, this is the one to turn on.
 - **DIRECT HOME LAN / NORDVPN MESHNET**: **Enabled** or **Off (loopback only)**. When on, VibeSquad serves HTTPS on port 4180 to your home network or meshnet and lists the addresses it is active on.
-- **LINK / PAIR A DEVICE**: the button **📱 Link / Pair a Device (QR & 6-Digit Code)** opens a window with a QR code and a 6-digit pairing code that expires after a short time. Scan the QR or type the code on the other device, and generate a new one when it expires. The window also shows the server addresses to type into the other device. A phone or browser may first need a one-time certificate step, which the same window explains.
+- **LINK / PAIR A DEVICE**: the button **📱 Link / Pair a Device (QR & 6-Digit Code)** opens a window with a QR code and a 6-digit pairing code that expires after 5 minutes. Scan the QR or type the code on the other device, and generate a new one when it expires. The window also shows the server addresses to type into the other device. A phone or browser may first need a one-time certificate step, which the same window explains.
 
 The window scrolls, so on a small screen you can reach everything; the header and **Close** stay put. From top to bottom it shows:
 
@@ -136,6 +136,12 @@ The window scrolls, so on a small screen you can reach everything; the header an
 **Checking the fingerprint.** The window shows a short fingerprint under **CA SHA-256 FINGERPRINT** (**Full hex** shows all of it). It identifies your PC's private certificate. When you install the certificate on a phone, compare the fingerprint the phone shows with the one on your PC screen. If the first characters match, it's your PC's certificate. If they don't, stop and don't install it. Never post or screenshot a real fingerprint.
 
 **Revoking a device.** If a phone is lost or you no longer trust it, open **PAIRED DEVICES** and press **Revoke** next to its name. That device is signed out right away, including any live connection it had open, and has to pair again with a new code to come back. **↻ Refresh** reloads the list.
+
+**Phone Cockpit.** On a paired phone, opening the Host drawer shows a **VIBE** toggle (**Psycho** / **Corpo**), a **PROVIDER** switch (**✶ Claude** / **◆ Gemini**) for the default provider, the pinned **TEAMS** list (tap to open or start a Buddy), and **⚙ Settings**.
+
+**Relay pairing link.** Only if an opt-in `wss://` `relay.endpoint` has been hand-edited into `~/.vibesquad/settings.json` (off by default; no hosted relay ships), the window also shows **RELAY PAIRING LINK (AWAY FROM LAN & MESHNET · END-TO-END ENCRYPTED)**. It carries the one-time code in the link's `#fragment`, and the phone pins the PC's relay key on first use. `vs host-key show` prints the key id and fingerprint; `vs host-key rotate` replaces it and revokes every paired device unless you add `--keep-devices`. `vs devices list` and `vs devices revoke` manage devices either way.
+
+**Approving a new device.** A code made on an already paired phone is not enough on its own: that phone is asked to **Approve** the new device within 60 seconds. Browser writes made with a device cookie must also come from the app's own origin. These are server checks.
 
 Pairing is always required, even with the network switch on. Treat the code like a password: don't post it, or a screenshot of it, anywhere.
 

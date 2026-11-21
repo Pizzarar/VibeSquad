@@ -214,10 +214,10 @@ describe("UX Reviewer phase gate standing rule (UX_REVIEW_PROCESS 3B)", () => {
 });
 
 describe("coordinated drain standing rule (PLAN_COORDINATED_DRAIN D0)", () => {
-  it("is a standing rule (injected into every role), <=240 chars, names the drain handshake and the owner gate", () => {
+  it("is a standing rule (injected into every role), <=300 chars, names the drain handshake and the owner gate", () => {
     const rule = STANDING_RULES.find((r) => r.startsWith("Shared-machine actions"));
     assert.ok(rule, "rule present");
-    assert.ok(rule.length <= 240, `${rule.length} chars`);
+    assert.ok(rule.length <= 300, `${rule.length} chars`);
     assert.match(rule, /vs restart, full-suite slot, runtime sync/);
     assert.match(rule, /holders' leads to drain/);
     assert.match(rule, /`drained`/);

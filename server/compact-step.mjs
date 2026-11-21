@@ -14,6 +14,8 @@ export const COMPACT_SETTLE_MS = 1_500;
 export const BUDDY_COMPACT_FOCUS = "keep Decided / Open / In flight (the brief), the current lane plan, and worker ids";
 
 const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
+/** Per-turn cost from session-cumulative `turn_done.costUsd`: delta vs the previous turn_done (a drop means the session restarted: take it whole). */
+export const costDelta = (cost, base) => Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6;
 const num = (v) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : 0);
 
 /**
@@ -40,18 +42,18 @@ export function compactSpendFromLog(events) {
       const cost = Number(e.costUsd);
       if (i < c) { tokens = 0; if (Number.isFinite(cost)) base = cost; continue; } // mid-turn /compact: the prior turn ended first
       if (!Number.isFinite(cost)) return { tokens };
-      return { costUsd: Math.round((cost >= base ? cost - base : cost) * 1e6) / 1e6, tokens };
+      return { costUsd: costDelta(cost, base), tokens };
     }
   }
   return { tokens }; // turn_done not logged yet
 }
 
-/** Default log reader: the tail (last 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events; [] when unreadable. */
-function readAgentLogTail(id) {
+/** Default log reader: the tail (last maxBytes, default 512KB) of <VIBESQUAD_HOME>/runner/agents/<id>.jsonl as parsed events, oldest first; [] when unreadable. Also brainstorm.mjs's G1 carry scan. */
+export function readAgentLogTail(id, maxBytes = 512 * 1024) {
   try {
     const file = join(vibesquadHome(), "runner", "agents", `${id}.jsonl`);
     const size = statSync(file).size;
-    const from = Math.max(0, size - 512 * 1024);
+    const from = Math.max(0, size - maxBytes);
     const fd = openSync(file, "r");
     let text;
     try { const buf = Buffer.alloc(size - from); readSync(fd, buf, 0, buf.length, from); text = buf.toString("utf8"); } finally { closeSync(fd); }

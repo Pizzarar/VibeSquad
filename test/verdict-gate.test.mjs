@@ -25,6 +25,7 @@ delete process.env.PASEO_AGENT_ID;
 delete process.env.VS_AGENT_TOKEN;
 writeFileSync(path.join(ROOT, "teams.json"), JSON.stringify({ teams: [{ id: "sq", name: "Squad", paths: [], lanes: [{ id: "sq", name: "Hub", hub: true }, { id: "art", name: "Art" }] }] }), "utf8");
 
+import { budget } from "./helpers/load-budget.mjs";
 const { Runner } = await import("../runner/runner.mjs");
 const { createServer: createRunnerServer, writeDiscovery } = await import("../runner/server.mjs");
 const { RunnerClient } = await import("../server/backend/runner-client.mjs");
@@ -50,7 +51,7 @@ const runnerHome = path.join(HOME, "runner");
 const runner = new Runner({ dir: path.join(runnerHome, "agents"), adapters: { claude: fakeAdapter() }, parkGraceMs: 60_000, bgProbe: null });
 const runnerSrv = createRunnerServer(runner, { token: ADMIN, hash: "h" });
 writeDiscovery(runnerHome, { port: await listen(runnerSrv), token: ADMIN });
-const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {} }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
+const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {}, requestTimeoutMs: budget(15000) }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
 const api = createVibesquadMiddleware(ROOT, { backend });
 const vsSrv = http.createServer((req, res) => api(req, res, () => { res.statusCode = 404; res.end("no"); }));
 const vsPort = await listen(vsSrv);
@@ -239,4 +240,16 @@ test("vs verdict (idea-177 L1): a verdict message buried under a long tool tail 
   const ok = await run(`PASS 0/0/0 ${tip.slice(0, 7)}`);
   assert.equal(ok.code, 0, ok.err);
   assert.equal((await run("")).code, GATE_EXIT.noVerdict);
+});
+
+// idea-265: provider transport noise before the verdict line is skipped; the hash/tip rule is unchanged.
+test("evaluateVerdictGate skips transport-noise lines but still needs PASS H/M/L <hash> matching the tip", async () => {
+  const { evaluateVerdictGate } = await import("../server/verdict.mjs");
+  const agent = { id: "r", title: "Review - Gemini", labels: { profile: "Review - Gemini" } };
+  const tip = "abc1234def5678abc1234def5678abc1234def56";
+  const noise = "⚠ API error (attempt 1): Post \"https://x/y\": EOF\nAPI error (attempt 2) EOF\n\n";
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}PASS 0/0/0 abc1234`, tip }).code, 0);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}PASS 0/0/0 ffff111`, tip }).code, 3);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}VERDICT: PASS 0/0/0`, tip }).code, 2);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `Some prose\nPASS 0/0/0 abc1234`, tip }).code, 2);
 });

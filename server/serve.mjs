@@ -49,6 +49,7 @@ import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
 import { logServerStart } from "./server-start.mjs";
+import { recordServerStart } from "./sync-runtime.mjs";
 import { runBriefOrphanSweep } from "./brief-orphan-sweep.mjs";
 import { refreshStale } from "./stale-runtime.mjs";
 import { loadUserSettings } from "./user-settings.mjs";
@@ -490,6 +491,13 @@ if (isMain) {
   server.listen(port, "127.0.0.1", () => {
     console.log(`VibeSquad serving ${distDir} on ${url}`);
     logServerStart({ rootDir });
+    // idea-116: clear server-restart debt for whatever commit this process loaded, so a manual/desktop-respawn restart
+    // (which never writes a vs-restart record) isn't reported as "pending" on the next sync.
+    try {
+      recordServerStart({ repoRoot: rootDir });
+    } catch (err) {
+      console.warn("recordServerStart failed:", err?.message ?? err);
+    }
     setImmediate(() => runBriefOrphanSweep(rootDir));
     // This server is the runner's only owner: start it now and keep it up (backoff). All other callers only connect.
     if (shouldSuperviseRunner()) {
@@ -501,6 +509,9 @@ if (isMain) {
     const reconciled = persistTemplateReconcile(rootDir).catch((e) => console.warn("template reconcile failed:", e?.message ?? e));
     void reconciled.then(() => sharedSchedules()).then((st) => { try { st.seedAuditSchedules(loadTeamsRegistry(rootDir), rootDir); } catch {} st.start(); }).catch(() => {});
     server.once("close", () => void sharedSchedules().then((st) => st.stop()).catch(() => {}));
+    // idea-347: the durable restart request (vs restart request): drain asks -> drained logs -> one vs restart, timed here, not in an agent turn.
+    const restartRequests = import("./restart-request.mjs").then((m) => m.startRestartRequestLoop()).catch((e) => console.warn("restart-request loop failed to start:", e?.message ?? e));
+    server.once("close", () => void restartRequests.then((l) => l?.stop()).catch(() => {}));
     void refreshStale({ rootDir }).catch(() => {});
     let activeMuxes = [];
     const applyLanListeners = (wantLan) => {

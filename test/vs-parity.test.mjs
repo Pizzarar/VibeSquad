@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
 import { commandAgentVerb, main, runAgentVerb, suggestVerb } from "../cli/vs.mjs";
 
+// idea-321: this file drives the real CLI in-process, and resolveIdentity() (cli/vs.mjs) reads the caller's token from
+// VS_AGENT_TOKEN at call time. From an agent shell that sends the mutating verbs down the agent-verify path against the
+// fake backend (which has no verifyAgent) -> "this.rc.verifyAgent is not a function". These are owner-path tests, so
+// scrub the agent identity once per process, same class as ddc11c05 (drain-guard-entry) and test/api-caller-gate.test.mjs.
+for (const k of ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN"]) delete process.env[k];
+
 function createFakeRunnerServer() {
   const calls = [];
   const records = new Map([
@@ -85,11 +91,16 @@ function createFakeRunnerServer() {
         if (!rec) throw new Error(`no such agent: ${id}`);
         return rec;
       }
-      const mTimeline = /^\/agents\/([^/]+)\/timeline$/.exec(route);
+      const mTimeline = /^\/agents\/([^/]+)\/timeline(?:\?(.*))?$/.exec(route);
       if (method === "GET" && mTimeline) {
         const id = decodeURIComponent(mTimeline[1]);
         if (!records.has(id)) throw new Error(`no such agent: ${id}`);
-        return { events };
+        // idea-308: a limited read asks for a raw-event window (?tail=N), not N rows (a row can merge many events), so the
+        // window size is the server's choice; the fake honors tail / after like the runner does.
+        const q = new URLSearchParams(mTimeline[2] ?? "");
+        const tail = Number(q.get("tail") ?? 0);
+        const from = tail > 0 ? Math.max(0, events.length - tail) : Number(q.get("after") ?? 0);
+        return { events: events.slice(from), from, total: events.length };
       }
       const mAction = /^\/agents\/([^/]+)\/(cancel|archive)$/.exec(route);
       if (method === "POST" && mAction) {

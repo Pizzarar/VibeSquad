@@ -882,6 +882,15 @@ test("D2 boringSelectionForAgent: hub agents, bugs lane, lane roles and workers"
   assert.equal(boringSelectionForAgent(v, "nope"), null);
 });
 
+test("idea-330 a Desk-lane Buddy/lead crumb reads its role, never the Buddy topic title", () => {
+  const v = squad({ pins: [{ ...lanePin("vs", { lead: mem("vs-ld") }), lane: { id: "vs", name: "VibeSquad" } }] });
+  v.team = { ...v.team, id: "vs" };
+  for (const [id, label] of [["vs-bs", "Brainstorm"], ["vs-ld", "Lead"]]) {
+    const s = boringActiveSelection({ mode: "chat", views: [v], teamId: "vs", agentId: id, agentTitle: "OpenRouter pipeline critique", laneId: null, role: "brainstorm", workerId: null });
+    assert.equal(s.agentLabel, label);
+  }
+});
+
 test("D2 boringLaneTarget: most urgent member, else Brainstorm", () => {
   assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs"), lead: mem("ld", "running"), workers: [] }), { role: "brainstorm", agentId: "bs" });
   assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs"), lead: mem("ld", "idle", ago(1), { tone: "needs-you" }), workers: [wk("w", "running", "error")] }), { role: "lead", agentId: "ld" });

@@ -760,3 +760,15 @@ test("R13 act-on-lean rule: same text in the shared prefix of all three sources,
     assert.ok(readFileSync(join(root, rel), "utf8").includes(RULE), `${rel}: missing R13`);
   }
 });
+
+test("idea-274: listBuiltins surfaces built-ins missing from an old profiles.json, in memory only", () => {
+  const dir = mkdtempSync(join(tmpdir(), "vs-274-"));
+  const f = join(dir, "profiles.json");
+  writeFileSync(f, JSON.stringify({ profiles: [{ name: "Lead - Claude", provider: "claude", model: "x", notes: "mine" }] }));
+  const plain = loadProfiles(f, { paseoProfiles: [] }).profiles;
+  assert.equal(plain.some((p) => p.name === "UX Reviewer - Opus"), false);
+  const listed = loadProfiles(f, { paseoProfiles: [], listBuiltins: true }).profiles;
+  assert.equal(listed.some((p) => p.name === "UX Reviewer - Opus"), true);
+  assert.equal(listed.find((p) => p.name === "Lead - Claude").notes, "mine");
+  assert.equal(JSON.parse(readFileSync(f, "utf8")).profiles.length, 1, "not written back");
+});

@@ -2,15 +2,18 @@
 // Replaces the Paseo daemon's checkout RPCs. Every command is execFile with an argument array (never a shell string);
 // cwd must pass resolveCwd (a known team path or agent cwd); ref names, branch names and paths that start with '-'
 // are refused; output is capped. Reads are owner-gated by the caller (isGatedRead), writes by the non-GET owner gate.
+// idea-343: gh-repos / gh-clone take no cwd (the repo isn't local yet): they run in deps.projectsDir() and clone into one
+// validated folder directly inside it.
 import { execFile } from "node:child_process";
-import { lstatSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { lstatSync, realpathSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { handleGitWatch } from "./git-watch.mjs";
 
 export const GIT_PREFIX = "/__vibesquad/git/";
 export const isGitPath = (path) => path.startsWith(GIT_PREFIX);
-export const GIT_READ_ACTIONS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details", "watch"];
-export const GIT_WRITE_ACTIONS = ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "discard", "rename-branch", "pr-create", "pr-merge", "pr-automerge"];
+export const GIT_READ_ACTIONS = ["status", "diff", "commits", "commit-diff", "branches", "validate-branch", "stash-list", "pr-status", "pr-timeline", "check-details", "watch", "gh-repos"];
+export const GIT_WRITE_ACTIONS = ["commit", "push", "pull", "merge-base", "switch", "stash-save", "stash-pop", "discard", "rename-branch", "pr-create", "pr-merge", "pr-automerge", "gh-clone"];
+const NO_CWD_ACTIONS = ["gh-repos", "gh-clone"]; // still owner-gated: every /__vibesquad/git/* path is (vibesquad-api isGatedRead + non-GET gate)
 
 export const MAX_OUTPUT = 400_000; // chars per response payload: keeps the JSON under the remote proxy's 512 KB text cap
 const MAX_BUFFER = 16 * 1024 * 1024;
@@ -51,6 +54,58 @@ export function badRepoPath(p) {
 
 const HASH_RE = /^[0-9a-fA-F]{7,64}$/;
 
+// One GitHub owner / repo / local folder segment: GitHub's charset, never "." / "..", never a leading '-' or '.'.
+const SEGMENT_RE = /^[A-Za-z0-9_.-]{1,100}$/;
+const safeSegment = (s) => typeof s === "string" && SEGMENT_RE.test(s) && !s.startsWith("-") && !s.startsWith(".");
+const WIN_RESERVED_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+const GITHUB_URL_RE = /^https:\/\/(?:www\.)?github\.com\/(.*)$/i;
+
+/**
+ * idea-343: `owner/repo`, `owner/repo.git` or `https://github.com/owner/repo(.git)(/)` (www. allowed) -> normalized
+ * "owner/repo", or null. Refuses other hosts and schemes, credentials (user@), ports, query / fragment, percent-encoding,
+ * extra path segments, whitespace, control characters, backslashes, and segments that are "." / ".." or start with '-' / '.'.
+ */
+export function parseGithubRepoSpec(raw) {
+  if (typeof raw !== "string" || !raw || raw.length > 300) return null;
+  if (/[\u0000- \u007f-\u009f\\]/.test(raw)) return null; // whitespace, control chars, backslash anywhere
+  const url = GITHUB_URL_RE.exec(raw);
+  let path = raw;
+  if (url) path = url[1].endsWith("/") ? url[1].slice(0, -1) : url[1];
+  if (/[?#@%:]/.test(path)) return null; // other schemes / scp-style specs, query, fragment, creds, %-escapes, ports
+  const parts = path.split("/");
+  if (parts.length !== 2) return null;
+  const [owner, rawRepo] = parts;
+  const repo = rawRepo.toLowerCase().endsWith(".git") ? rawRepo.slice(0, -4) : rawRepo;
+  if (!safeSegment(owner) || !safeSegment(repo)) return null;
+  return `${owner}/${repo}`;
+}
+
+/** Returns an error string, or null when `name` is one safe folder name to create directly inside the projects folder. */
+export function badFolderName(name) {
+  if (typeof name !== "string" || !name) return "a folder name is required";
+  if (!safeSegment(name)) return "folder name: letters, digits, '_', '-' and '.' only, 1-100 chars, not starting with '-' or '.'";
+  if (name.endsWith(".")) return "folder names cannot end with '.'";
+  if (WIN_RESERVED_RE.test(name)) return `'${name}' is a reserved name on Windows`;
+  return null;
+}
+
+/** `projectsDir/<name>` after badFolderName, asserted to resolve directly inside projectsDir; throws GitError otherwise. */
+export function cloneDestination(projectsDir, name) {
+  const bad = badFolderName(name);
+  if (bad) throw new GitError(bad);
+  const base = resolve(projectsDir);
+  const dest = resolve(join(base, name));
+  if (dirname(dest) !== base) throw new GitError("the clone folder must sit directly inside the projects folder");
+  return dest;
+}
+
+/** Masks GitHub tokens and URL credentials (scheme://user[:pass]@) in text about to leave the server. */
+export function scrubSecrets(text) {
+  return String(text ?? "")
+    .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,})/g, "***")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^/\s@]+@/gi, "$1***@");
+}
+
 // ---- process runner ---------------------------------------------------------------------------------------------
 
 const ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_LITERAL_PATHSPECS: "1", GIT_EDITOR: "true", LC_ALL: "C", GH_PROMPT_DISABLED: "1", NO_COLOR: "1" };
@@ -68,7 +123,7 @@ function exec(cmd, args, cwd, { timeout = READ_TIMEOUT, okCodes = [0], env, inpu
       if (typeof err.code === "number" && okCodes.includes(err.code)) return resolve({ stdout, stderr, code: err.code, truncated: false });
       if (err.killed) return reject(new GitError(`${cmd} ${args[0] ?? ""} timed out`, 504));
       const msg = (stderr.trim() || stdout.trim() || err.message).split(/\r?\n/).slice(0, 8).join("\n");
-      reject(new GitError(msg.slice(0, 2000)));
+      reject(new GitError(scrubSecrets(msg).slice(0, 2000)));
     });
     // `input` goes on stdin, never argv: Windows caps a command line at 32,767 chars.
     if (input !== undefined) child.stdin?.on("error", () => {}).end(input);
@@ -284,6 +339,84 @@ async function prStatus(cwd) {
 
 const NAME_RE = /^[A-Za-z0-9_.-]{1,100}$/;
 
+// ---- idea-343: repos from GitHub (no cwd; run in the projects folder) ---------------------------------------------
+
+const isDirPath = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+const samePath = (a, b) => (process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b);
+const realOrSelf = (p) => { try { return realpathSync(p); } catch { return resolve(p); } };
+// fsmonitor off: these probe a folder that may be a repo we didn't create; nothing here should run its hooks.
+const probeGit = (args, cwd) => git(["-c", "core.fsmonitor=false", ...args], cwd);
+
+/** `git@github.com:o/r.git` / `https://[creds@]github.com/o/r(.git)` -> "o/r" lower-cased, or null. */
+export function githubRemoteSlug(url) {
+  const m = /github\.com[/:]([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?\/?$/i.exec(String(url ?? "").trim());
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+/**
+ * idea-343: turns a failed `gh` run into one readable GitError (424 = gh itself failed, 504 = timeout). `repo` is the
+ * owner/repo being cloned, when there is one. Messages are scrubbed; 409/400 validation errors pass through untouched.
+ */
+export function mapGhError(err, repo) {
+  if (!(err instanceof GitError) && err?.code !== "ENOENT") return err;
+  const raw = scrubSecrets(String(err?.message ?? err));
+  const first = raw.split(/\r?\n/).find((l) => l.trim())?.trim() ?? "";
+  if (err.code === "ENOENT" || err.status === 501) return new GitError("GitHub CLI (gh) isn't installed. Install it from https://cli.github.com, then run `gh auth login`.", 424);
+  if (err.status === 504 || /timed out/i.test(raw)) return new GitError("Timed out talking to GitHub", 504);
+  if (err.status === 409 || err.status === 500) return err;
+  if (/gh auth login|not logged in|not authenticated|authentication required|HTTP 401|bad credentials/i.test(raw)) return new GitError("Not signed in to GitHub CLI — run gh auth login", 424);
+  if (/could not resolve to a repository|HTTP 404|repository not found|not found/i.test(raw)) {
+    return new GitError(repo ? `Repository ${repo} not found or you don't have access` : "GitHub CLI: not found (HTTP 404)", repo ? 424 : 502);
+  }
+  return new GitError(`GitHub CLI: ${first.slice(0, 300) || "failed"}`, 502);
+}
+
+/** Runs gh, mapping failures through mapGhError. */
+async function runGhMapped(runGh, args, cwd, opts, repo) {
+  try {
+    return await runGh(args, cwd, opts);
+  } catch (e) {
+    throw mapGhError(e, repo);
+  }
+}
+
+/** Your repos (owned, collaborator, org member), most recently updated first; capped at 100. */
+async function ghRepos(runGh, projectsDir) {
+  // Fixed argv, no user input. `gh repo list` only lists the viewer's own repos and would miss org repos.
+  const r = await runGhMapped(runGh, ["api", "user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"], projectsDir);
+  const list = JSON.parse(r.stdout);
+  const repos = (Array.isArray(list) ? list : [])
+    .map((x) => ({ nameWithOwner: str(x?.full_name, 201), name: str(x?.name, 100), description: str(x?.description, 300), isPrivate: x?.private === true, updatedAt: str(x?.updated_at, 40) }))
+    .filter((x) => parseGithubRepoSpec(x.nameWithOwner) === x.nameWithOwner);
+  return { repos, projectsDir };
+}
+
+/** Clone `body.repo` into projectsDir/<folderName || repo name>; an existing checkout of the same repo is reused. */
+async function ghClone(runGh, body, projectsDir) {
+  const repo = typeof body.repo === "string" ? parseGithubRepoSpec(body.repo) : null;
+  if (!repo) throw new GitError("repo must be owner/repo or https://github.com/owner/repo");
+  const folder = body.folderName === undefined || body.folderName === null || body.folderName === "" ? repo.split("/")[1] : body.folderName;
+  const dest = cloneDestination(projectsDir, folder);
+  const key = `clone:${process.platform === "win32" ? dest.toLowerCase() : dest}`;
+  return serialized(key, async () => {
+    let st = null;
+    try { st = lstatSync(dest); } catch {}
+    if (st) {
+      if (st.isSymbolicLink() || !st.isDirectory()) throw new GitError(`'${folder}' already exists in the projects folder and is not a folder`, 409);
+      let top = null;
+      try { top = (await probeGit(["rev-parse", "--show-toplevel"], dest)).stdout.trim(); } catch {}
+      if (!top || !samePath(realOrSelf(top), realOrSelf(dest))) throw new GitError("folder already exists and is not a git repository", 409);
+      let origin = null;
+      try { origin = (await probeGit(["remote", "get-url", "origin"], dest)).stdout.trim(); } catch {}
+      if (githubRemoteSlug(origin) !== repo.toLowerCase()) throw new GitError(`'${folder}' already holds a different repository; pick another folder name`, 409);
+      return { ok: true, path: dest, reused: true, repo };
+    }
+    // argv only: repo is a validated owner/repo (never '-'-led), dest an absolute path; "--" hands --quiet to git clone.
+    await runGhMapped(runGh, ["repo", "clone", repo, dest, "--", "--quiet"], projectsDir, { timeout: WRITE_TIMEOUT }, repo);
+    return { ok: true, path: dest, reused: false, repo };
+  });
+}
+
 // ---- handler ----------------------------------------------------------------------------------------------------
 
 const writeChains = new Map(); // cwd -> tail promise: one write at a time per repo (index.lock)
@@ -462,10 +595,11 @@ async function runWrite(action, body, cwd) {
 }
 
 /**
- * @param {{ readBody: Function, sendJson: Function, resolveCwd: (cwd: string) => string | null | Promise<string | null> }} deps
+ * @param {{ readBody: Function, sendJson: Function, resolveCwd: (cwd: string) => string | null | Promise<string | null>, projectsDir?: () => string | null, runGh?: Function }} deps
  * resolveCwd returns the real path of a cwd inside a known team / agent path, or null (refused).
+ * projectsDir (idea-343) is the folder gh-clone clones into; runGh replaces the `gh` runner (tests only).
  */
-export async function handleGitApi(req, res, { readBody, sendJson, resolveCwd }) {
+export async function handleGitApi(req, res, { readBody, sendJson, resolveCwd, projectsDir, runGh = gh }) {
   try {
     const url = new URL(req.url, "http://x");
     const action = url.pathname.slice(GIT_PREFIX.length);
@@ -474,6 +608,12 @@ export async function handleGitApi(req, res, { readBody, sendJson, resolveCwd })
     if (!isRead && !isWrite) return sendJson(res, 404, { error: "not found" });
     if (req.method !== (isRead ? "GET" : "POST")) return sendJson(res, 405, { error: "method not allowed" });
     const body = isWrite ? ((await readBody(req)) ?? {}) : {};
+    if (NO_CWD_ACTIONS.includes(action)) {
+      const dir = typeof projectsDir === "function" ? projectsDir() : null;
+      if (!dir || !isAbsolute(dir) || !isDirPath(dir)) return sendJson(res, 500, { error: "the projects folder was not found" });
+      const base = resolve(dir);
+      return sendJson(res, 200, action === "gh-repos" ? await ghRepos(runGh, base) : await ghClone(runGh, body, base));
+    }
     const rawCwd = isRead ? url.searchParams.get("cwd") : body.cwd;
     const cwd = typeof rawCwd === "string" && rawCwd ? await resolveCwd(rawCwd) : null;
     if (!cwd) return sendJson(res, 403, { error: "cwd is not inside a known team or agent path" });

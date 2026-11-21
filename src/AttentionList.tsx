@@ -176,7 +176,10 @@ export function AttentionBadge({
   testId,
   children,
   hubQueueInstead,
+  count,
 }: {
+  /** Overrides view.needsYou (the sidebar's needsYouCount, stalled included). */
+  count?: number;
   view: TeamView;
   onOpen: (agentId: string) => void;
   className?: string;
@@ -189,8 +192,8 @@ export function AttentionBadge({
   const focus = usePinFocus();
   if (hubQueueInstead && focus?.squadId === view.team.id && hubPinForSquad(view)?.lane.id === focus.laneId) {
     return (
-      <span className={className} data-testid={testId} title={`${view.needsYou} need you: see the Needs-you queue`}>
-        {children ?? view.needsYou}
+      <span className={className} data-testid={testId} title={`${count ?? view.needsYou} need you: see the Needs-you queue`}>
+        {children ?? count ?? view.needsYou}
       </span>
     );
   }
@@ -199,13 +202,13 @@ export function AttentionBadge({
       <button
         className={className}
         data-testid={testId}
-        title={`${view.needsYou} need you: click to review`}
+        title={`${count ?? view.needsYou} need you: click to review`}
         onClick={(e) => {
           e.stopPropagation();
           setAnchor(anchor ? null : e.currentTarget.getBoundingClientRect());
         }}
       >
-        {children ?? view.needsYou}
+        {children ?? count ?? view.needsYou}
       </button>
       {anchor && <Popover view={view} anchor={anchor} onClose={() => setAnchor(null)} onOpen={onOpen} />}
     </>

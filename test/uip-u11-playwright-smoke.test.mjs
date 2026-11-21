@@ -13,7 +13,7 @@
 //   3. Change `Model ▾` while staged on Gemini → the selected model updates in place.
 //   4. Click `★ Lead` and a worker under `Team under this Buddy` → the center chat switches
 //      while `pinFocus` (the right rail) stays active.
-//   5. Click `SQUADS` / Breadcrumb / `⊞` → one-click return to the clean Squads/PinGrid screen.
+//   5. Click `SQUADS` / Breadcrumb / `⊞` → one-click return to the Squad hub home and Squads Home.
 //
 // The test is self-contained: it resolves Playwright (local, `PLAYWRIGHT_DIR`, or the global
 // `@playwright/mcp` bundle), launches the system Edge/Chrome with `playwright-core` (no browser
@@ -60,7 +60,7 @@ const TEAMS_REGISTRY = {
 
 // The demo cast (fixed in src/demo.tsx) — used to build precise selectors/assertions.
 const SQUAD_ID = "vibesquad";
-const LANE_ID = "vibesquad";
+const BUDDY_ID = "demo-bs-vs"; // the demo Brainstorm: a character on the Office Tower (SquadFloor opens its chat)
 const WORKER_ID = "demo-art-o"; // claude worker, status running
 
 // ── Playwright / browser resolution ──────────────────────────────────────────
@@ -267,10 +267,12 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
 
     // Click the Squad → its pinned teams grid.
     await page.locator(`[data-testid="squad-home-tile-${SQUAD_ID}"]`).click();
-    await page.locator(`[data-testid="pin-tile-${LANE_ID}"]`).waitFor({ timeout: 15000 });
+    // PLAN_PSYCHO_SIDEBAR_HUB U1: the Squad home is the hub page (TVs over the Office Tower), not the PinGrid, and it has no PinRail.
+    await page.locator('[data-testid="hub-pages"]').waitFor({ timeout: 15000 });
+    assert.equal(await page.locator('[data-testid="pin-rail"]').count(), 0, "the hub home must not mount the PinRail");
 
-    // Click the Pinned Team → pin-focus view (center drawer + right rail).
-    await page.locator(`[data-testid="pin-tile-${LANE_ID}"]`).click();
+    // Click the lane's Buddy on the Office Tower → pin-focus view (center drawer + right rail). (Was the PinGrid tile.)
+    await page.locator(`[data-testid="sq-floor-char-${BUDDY_ID}"]`).click();
 
     await page.locator('[data-testid="drawer-head-compact"]').waitFor({ timeout: 15000 });
     await expandPinRail(page);
@@ -394,25 +396,24 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
   });
 
   // ── Flow 5 ────────────────────────────────────────────────────────────────
-  await t.test("flow 5: one-click return to the clean Squads/PinGrid screen", async () => {
+  await t.test("flow 5: one-click return to the Squad hub home and Squads Home", async () => {
     resetErrors();
 
-    // ⊞ (pin-focus home) → back to the pin grid.
+    // ⊞ (pin-focus home) from a feature lane → the Squad hub page (the one Squad home; no PinGrid, no PinRail).
     const homeBtn = page.locator('[data-testid="pin-focus-home"]');
     await homeBtn.waitFor({ timeout: 15000 });
     await homeBtn.click();
-    await page.locator('[data-testid="pin-grid"]').waitFor({ timeout: 15000 });
+    await page.locator('[data-testid="hub-pages"]').waitFor({ timeout: 15000 });
+    assert.equal(await page.locator('[data-testid="pin-rail"]').count(), 0, "the hub home must not mount the PinRail");
 
-    // SQUADS toolbar button → Squads Home.
-    await page.getByRole("button", { name: "SQUADS", exact: true }).click();
+    // ⊞ again from the hub page → Squads Home. (The SQUADS toolbar button is not mounted while a lane/hub is pin-focused.)
+    await page.locator('[data-testid="pin-focus-home"]').click();
     await page.locator('[data-testid="squads-home"]').waitFor({ timeout: 15000 });
     assert.ok(await page.locator('[data-testid="squads-home"]').count(), "should return to Squads Home");
 
-    // Re-enter focus and use the breadcrumb Squads crumb as the second path.
+    // Re-enter the Squad (lands on the hub page, which has the same top bar) and use the breadcrumb Squads crumb as the second path.
     await page.locator(`[data-testid="squad-home-tile-${SQUAD_ID}"]`).click();
-    await page.locator(`[data-testid="pin-tile-${LANE_ID}"]`).waitFor({ timeout: 15000 });
-    await page.locator(`[data-testid="pin-tile-${LANE_ID}"]`).click();
-    await page.locator('[data-testid="drawer-head-compact"]').waitFor({ timeout: 15000 });
+    await page.locator('[data-testid="hub-pages"]').waitFor({ timeout: 15000 });
     await page.locator('[data-testid="breadcrumb-squads"]').click();
     await page.locator('[data-testid="squads-home"]').waitFor({ timeout: 15000 });
     assert.ok(await page.locator('[data-testid="squads-home"]').count(), "breadcrumb Squads should land on Squads Home");

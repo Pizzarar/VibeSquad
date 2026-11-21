@@ -182,7 +182,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           if (s) pendingSystem = ''; // the restored session already has its system prompt
           else {
             emit('resume_fallback', { sessionId: resume, reason });
-            const primer = history?.() ?? '';
+            const primer = (await history?.()) ?? ''; // async: the runner reads the log in yielding slices (idea-307)
             if (primer) pendingSystem = `${pendingSystem ? `${pendingSystem}\n\n` : ''}${primer}`;
           }
         }

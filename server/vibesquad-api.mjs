@@ -20,11 +20,12 @@ import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { redactHostPaths } from "./redact-host-paths.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { isServerSideFsError } from "./file-lock.mjs";
-import { resolveProjectPath } from "./brief-path.mjs";
+import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
 import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
 import { handleSecretInputRequest } from "./secret-input.mjs";
@@ -365,7 +366,9 @@ export async function verbatimDigestText(caller, type, text, backend) {
   const id = String(caller.digestFor);
   try {
     const b = backend ?? sharedRunnerBackend();
-    const [rec, tl] = await Promise.all([b.fetchAgent(id), b.fetchAgentTimeline(id, { direction: "tail" })]);
+    // idea-308: a windowed tail read (O(tail), not O(log)); only a tail with no assistant reply in it falls back to the full read.
+    const [rec, tail] = await Promise.all([b.fetchAgent(id), b.fetchAgentTimeline(id, { direction: "tail", limit: 400 })]);
+    const tl = tail?.hasOlder && !lastAssistantText(tail, Infinity) ? await b.fetchAgentTimeline(id, { direction: "tail" }) : tail;
     const worker = rec?.agent ?? rec;
     return digestVerdictText({ workerText: lastAssistantText(tl, Infinity), digestText: text, reviewer: isReviewerAgent(worker) }).text;
   } catch {
@@ -493,11 +496,11 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
     return sendJson(res, 200, { ok: true, distReady: true, ...extra });
   };
   // Read-only callers (incl. the remote proxy) get the cached value: git + stale.json stay with the owner and startup.
-  if (!isOwner(req)) return send(peekStale());
+  if (!isOwner(req)) return send(peekStale(rootDir));
   // Owner: await the async, single-flight refresh (idea-225: git runs off the loop, never execFileSync on the request
   // path) so the reply and stale.json are current. refreshStale is cached 60s, so most polls resolve at once.
   return refreshStale({ rootDir })
-    .catch(() => peekStale())
+    .catch(() => peekStale(rootDir))
     .then((stale) => send(stale))
     .catch(() => {});
 }
@@ -1172,48 +1175,7 @@ function sendCaughtError(req, res, e, what, { fallback = 500, rootDir = REPO_ROO
 // ---- idea-249 (fix round): a non-owner caller (agent, read-only device) never gets a host path ----
 /** The owner (app, phone, owner shell) per the resolved caller; an agent, a read-only device or an unresolved request is not. */
 const ownerRequest = (req) => callerOf(req)?.kind === "owner";
-/** Fields that hold a host path (or text built around one): dropped for a non-owner when the value names one. */
-const HOST_PATH_KEYS = new Set(["path", "cwd", "packetPath", "fullPath", "snapshot", "prompt", "initialPrompt"]);
-/** Fields that hold error text: cut before the host path for a non-owner, so the reason's head survives. */
-const ERROR_TEXT_KEYS = new Set(["error", "errors", "reason", "note"]);
-const DRIVE_OR_UNC = /(^|[^A-Za-z0-9])([A-Za-z]:[\\/]|\\\\[^\\\s])/;
-const slashLower = (p) => String(p ?? "").replaceAll("\\", "/").toLowerCase();
-const hostRoots = (rootDir) =>
-  [...new Set([homedir(), tmpdir(), rootDir, REPO_ROOT, process.env.VIBESQUAD_HOME].filter(Boolean).map((r) => slashLower(r).replace(/\/+$/, "")))].filter((r) => r.length > 3);
-/** Index of the first host path in `text` (a drive/UNC path, or one under home, tmp, the repo root or VIBESQUAD_HOME), else -1. */
-function hostPathIndex(text, roots) {
-  const t = String(text ?? "");
-  const m = DRIVE_OR_UNC.exec(t);
-  const low = slashLower(t);
-  const hits = [m ? m.index + m[1].length : -1, ...roots.map((r) => low.indexOf(r))].filter((i) => i >= 0);
-  return hits.length ? Math.min(...hits) : -1;
-}
-function redactErrorText(text, roots) {
-  const t = String(text);
-  const at = hostPathIndex(t, roots);
-  if (at < 0) return t;
-  const head = t.slice(0, at);
-  const cut = head.lastIndexOf(": ");
-  return `${cut > 0 ? head.slice(0, cut) : "request failed"} (detail names a host path; see the server log)`;
-}
-const isPlainObject = (v) => v !== null && typeof v === "object" && [Object.prototype, null].includes(Object.getPrototypeOf(v));
-/**
- * A copy of `value` fit for a non-owner caller: at any depth, a HOST_PATH_KEYS string that is absolute or names a host path
- * is dropped, and ERROR_TEXT_KEYS text is cut before its host path. Other fields (brief content, ids, repo-relative paths)
- * are kept as they are; the input is not mutated.
- */
-export function redactHostPaths(value, rootDir = REPO_ROOT, roots = hostRoots(rootDir)) {
-  if (Array.isArray(value)) return value.map((v) => redactHostPaths(v, rootDir, roots));
-  if (!isPlainObject(value)) return value;
-  const out = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (typeof v === "string" && HOST_PATH_KEYS.has(k) && (isAbsolute(v) || hostPathIndex(v, roots) >= 0)) continue;
-    if (ERROR_TEXT_KEYS.has(k) && typeof v === "string") out[k] = redactErrorText(v, roots);
-    else if (ERROR_TEXT_KEYS.has(k) && Array.isArray(v)) out[k] = v.map((x) => (typeof x === "string" ? redactErrorText(x, roots) : redactHostPaths(x, rootDir, roots)));
-    else out[k] = redactHostPaths(v, rootDir, roots);
-  }
-  return out;
-}
+export { redactHostPaths };
 /** sendJson that keeps host-path fields for the owner only (idea-249: settings path, packet path, lane cwd are owner UI). */
 function sendFor(req, res, status, data, rootDir = REPO_ROOT) {
   return sendJson(res, status, ownerRequest(req) ? data : redactHostPaths(data, rootDir));
@@ -1405,7 +1367,7 @@ async function handlePushTest(req, res) {
 async function handleProfiles(req, res) {
   try {
     if (req.method === "GET") {
-      const state = loadProfiles(undefined, { autoImportPaseo: true });
+      const state = loadProfiles(undefined, { autoImportPaseo: true, listBuiltins: true }); // idea-274
       const diff = diffProfiles(state.profiles, state.paseoProfiles);
       const warningsByProfile = { ...(state.warningsByProfile ?? {}) };
       for (const d of diff) {
@@ -1883,7 +1845,12 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (!path.startsWith("/__vibesquad/")) return next?.();
     if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, caller, ...(opts.backend ? { backend: opts.backend } : {}) });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
-    if (isGitPath(path)) return handleGitApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
+    // idea-343: gh-repos / gh-clone (git-api NO_CWD_ACTIONS) need the owner, by the same gate as every git route and as runner
+    // spawn above: GET gh-repos is a gated read (isGatedRead -> isGitPath), POST gh-clone a write, so a local-token owner,
+    // a paired LAN device or a relay owner device reaches them; a read-only loopback caller gets 403; an agent caller gets
+    // 403 too (neither route is in AGENT_WRITE_ALLOWLIST, and a gated GET is never open to agents). No host-only gate: an
+    // owner remote session can already spawn agents that run shell, so a loopback-only clone protected nothing.
+    if (isGitPath(path)) return handleGitApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts), projectsDir: () => primaryProjectsDir(rootDir) });
     if (isTerminalsPath(path)) return handleTerminalsApi(req, res, { readBody, sendJson, resolveCwd: (cwd) => resolveShellCwd(cwd, rootDir, opts) });
     if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson, readBody: readCleanBody });
     switch (path) {

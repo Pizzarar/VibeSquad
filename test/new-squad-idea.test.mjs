@@ -288,6 +288,109 @@ test("U5 ideaModalFieldOrder puts Name before idea in new mode", () => {
   assert.deepEqual(ideaModalFieldOrder("existing"), ["tabs", "idea", "team"]);
 });
 
+// ── idea-343: From GitHub tab ────────────────────────────────────────────────
+import { readFileSync } from "node:fs";
+import { parseGithubRepoSpec } from "../server/git-api.mjs";
+import { buildNewSquadTeamDef as realBuildNewSquadTeamDef } from "../src/newSquadDef.ts";
+
+// Mirrored from src/NewSquadModal.tsx (githubSpecFromInput)
+const GH_SEGMENT = /^[A-Za-z0-9_.-]{1,100}$/;
+const ghSegmentOk = (s) => GH_SEGMENT.test(s) && !s.startsWith("-") && !s.startsWith(".");
+function githubSpecFromInput(raw) {
+  const t = raw.trim();
+  if (!t || /[\s\\]/.test(t)) return null;
+  const m = /^https:\/\/(?:www\.)?github\.com\/(.*)$/i.exec(t);
+  const path = m ? m[1].replace(/\/$/, "") : t;
+  if (/[?#@%:]/.test(path)) return null;
+  const parts = path.split("/");
+  if (parts.length !== 2) return null;
+  const repo = parts[1].toLowerCase().endsWith(".git") ? parts[1].slice(0, -4) : parts[1];
+  return ghSegmentOk(parts[0]) && ghSegmentOk(repo) ? `${parts[0]}/${repo}` : null;
+}
+const modalSrc = readFileSync(new URL("../src/NewSquadModal.tsx", import.meta.url), "utf8");
+
+test("idea-343 githubSpecFromInput mirror matches the modal source", () => {
+  const body = /export function githubSpecFromInput\(raw: string\): string \| null \{([\s\S]*?)\n\}/.exec(modalSrc)?.[1];
+  assert.ok(body, "githubSpecFromInput not found in NewSquadModal.tsx");
+  assert.equal(body.replace(/\s+/g, ""), githubSpecFromInput.toString().replace(/^[^{]*\{/, "").replace(/\}$/, "").replace(/\s+/g, ""));
+});
+
+test("idea-343 the client spec check agrees with the server's parseGithubRepoSpec (trimmed input)", () => {
+  const cases = [
+    "IdleMinds-Dev/SportsBallBattles", "o/r.git", "https://github.com/o/r", "https://github.com/o/r.git/", "https://www.github.com/o/r",
+    "-x/r", "../r", "o/r/x", "https://gitlab.com/o/r", "https://u@github.com/o/r", "o\\r", "o /r", "git@github.com:o/r", "o/.git", "SportsBallBattles", "",
+  ];
+  for (const c of cases) assert.equal(githubSpecFromInput(c), parseGithubRepoSpec(c.trim()), c);
+  assert.equal(githubSpecFromInput("  o/r  "), "o/r"); // pasted with whitespace: the modal trims before sending
+});
+
+test("idea-343 picking a repo auto-fills the Squad name from the repo name", () => {
+  assert.equal(deriveSquadNameFromPath("SportsBallBattles").name, "SportsBallBattles");
+  assert.equal(deriveSquadNameFromPath("my-cool-app").name, "My Cool App");
+  assert.equal(deriveSquadNameFromPath(githubSpecFromInput("https://github.com/o/game_engine.git").split("/")[1]).name, "Game Engine");
+});
+
+test("idea-343 a cloned path registers by folder name plus the absolute clone path", () => {
+  const t = realBuildNewSquadTeamDef({ id: "team-sbb", name: "SportsBallBattles", folderPath: "C:\\Users\\you\\projects\\SportsBallBattles", existingTeams: [] });
+  assert.deepEqual(t.paths, ["SportsBallBattles", "C:\\Users\\you\\projects\\SportsBallBattles"]);
+});
+
+test("idea-343 NewSquadModal wires the From GitHub tab to gh-repos / gh-clone and the saveTeams flow", () => {
+  for (const id of ["new-squad-source-path", "new-squad-source-github", "new-squad-github-input", "new-squad-github-list", "new-squad-submit"]) {
+    assert.match(modalSrc, new RegExp(`data-testid="${id}"`), id);
+  }
+  assert.match(modalSrc, /fetch\("\/__vibesquad\/git\/gh-repos"\)/);
+  assert.match(modalSrc, /fetch\("\/__vibesquad\/git\/gh-clone", \{ method: "POST"/);
+  assert.match(modalSrc, /placeholder="Search your repos or paste owner\/repo…"/);
+  assert.match(modalSrc, /if \(DEMO\) \{\s*setGhRepos\(DEMO_GH_REPOS\)/); // no live gh call in DEMO
+  assert.match(modalSrc, /const github = source === "github"/); // live in remote mode too: a remote owner device may clone (host-side dest)
+  assert.match(modalSrc, /\(await cloneGhRepo\(ghSpec\)\)\.path/);
+  assert.match(modalSrc, /folderPath: finalPath/);
+  assert.match(modalSrc, /await saveTeams\(\[\.\.\.teams, newTeam\]\)/);
+  assert.match(modalSrc, /"Cloning…"/);
+});
+
+// Mirrored from src/NewSquadModal.tsx (ghHttpError / ghErrorSlots); the source-match test below keeps them honest.
+const GH_SERVER_TOO_OLD = "This VibeSquad server doesn't support GitHub import yet — restart VibeSquad";
+function ghHttpError(status, body) {
+  const msg = typeof body?.error === "string" ? body.error : "";
+  if ((status === 404 || status === 405) && (!msg || msg.toLowerCase() === "not found")) return GH_SERVER_TOO_OLD;
+  return msg || `GitHub request failed (${status})`;
+}
+function ghErrorSlots(loadErr, submitErr) {
+  return { status: loadErr, submit: submitErr && submitErr !== loadErr ? submitErr : "" };
+}
+
+test("idea-343 error helpers mirror the modal source", () => {
+  const norm = (s) => s.replace(/\s+/g, "").replace(/:(string|number|unknown)/g, "");
+  const src = (name) => new RegExp(`export function ${name}\\([^)]*\\)[^\\n]*\\{\\n([\\s\\S]*?)\\n\\}`).exec(modalSrc)?.[1];
+  assert.ok(src("ghHttpError") && src("ghErrorSlots"));
+  assert.equal(norm(src("ghHttpError")),norm(ghHttpError.toString().replace(/^[^{]*\{/, "").replace(/\}$/, "")));
+  assert.equal(norm(src("ghErrorSlots")), norm(ghErrorSlots.toString().replace(/^[^{]*\{/, "").replace(/\}$/, "")));
+  assert.match(modalSrc, new RegExp(`GH_SERVER_TOO_OLD = "${GH_SERVER_TOO_OLD}"`));
+});
+
+test("idea-343 a missing route reads as 'restart VibeSquad', never bare 'not found'", () => {
+  assert.equal(ghHttpError(404, null), GH_SERVER_TOO_OLD); // non-JSON generic fallback
+  assert.equal(ghHttpError(404, {}), GH_SERVER_TOO_OLD);
+  assert.equal(ghHttpError(404, { error: "not found" }), GH_SERVER_TOO_OLD);
+  assert.equal(ghHttpError(405, null), GH_SERVER_TOO_OLD);
+  assert.equal(ghHttpError(424, { error: "Not signed in to GitHub CLI — run gh auth login" }), "Not signed in to GitHub CLI — run gh auth login");
+  assert.equal(ghHttpError(409, { error: "folder already exists and is not a git repository" }), "folder already exists and is not a git repository");
+  assert.equal(ghHttpError(502, null), "GitHub request failed (502)");
+});
+
+test("idea-343 each GitHub error renders exactly once", () => {
+  const same = "GitHub CLI (gh) isn't installed";
+  assert.deepEqual(ghErrorSlots(same, same), { status: same, submit: "" }); // same message: status box only
+  assert.deepEqual(ghErrorSlots("", "Repository o/r not found"), { status: "", submit: "Repository o/r not found" });
+  assert.deepEqual(ghErrorSlots("load failed", "clone failed"), { status: "load failed", submit: "clone failed" });
+  // Source: ghErr renders only in the status box, the pink line only reads the de-duplicated submit slot.
+  assert.equal((modalSrc.match(/\{ghErr \|\|/g) ?? []).length, 1);
+  assert.equal((modalSrc.match(/\{err\b/g) ?? []).length, 0);
+  assert.match(modalSrc, /\{errSlots\.submit && <div className="stat-alert small"[^>]*>\{errSlots\.submit\}<\/div>\}/);
+});
+
 test("U5 live sentence shows the effective team name", () => {
   const s = describeIdeaAction({ mode: "new", teamName: resolveIdeaTeamName("Crew", "x"), profile: "P" });
   assert.match(s, /Creates "Crew"/);

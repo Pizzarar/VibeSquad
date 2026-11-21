@@ -149,7 +149,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         // heldWork: id -> the live shells each hold is on ({ pid, name, cmd }), so a deferral names what actually holds.
         const heldWork = runner.heldWork?.() ?? {};
         // drain: { since, until, reason } while a `vs restart` refuses new background work (ideas 198 + 186), else null.
-        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
+        return json(res, 200, { ok: true, live: runner.live.size, running, quiet, held: heldAgents.length, heldAgents, heldWork, drain: runner.drainState?.() ?? null, bootFoldMs: runner.bootFoldReport?.() ?? null, pid: process.pid, hash, ...loopLagStats() });
       }
       if (req.method === 'GET' && parts[0] === 'write-seq' && parts.length === 1) return json(res, 200, { boot: writes.boot, seq: writes.seq });
       if (parts[0] === 'drain' && parts.length === 1 && (req.method === 'POST' || req.method === 'DELETE')) {
@@ -222,10 +222,17 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
       }
       if (parts[2] === 'timeline' && req.method === 'GET') {
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
-        const after = Number(url.searchParams.get('after') ?? 0);
+        const tail = Number(url.searchParams.get('tail') ?? 0); // idea-308: the last N raw events, so a tail read costs O(tail), not O(log)
+        const total = runner.store.count(id);
+        const after = tail > 0 ? Math.max(0, total - tail) : Number(url.searchParams.get('after') ?? 0);
+        // until=<seq>: only events with seq < until (a bounded window); types=tool: only tool events (small answer for a long tail)
+        const until = url.searchParams.has('until') ? Number(url.searchParams.get('until')) : Infinity;
+        const types = url.searchParams.get('types');
         const limit = Number(url.searchParams.get('limit') ?? Infinity);
-        const events = runner.timeline(id, after, limit);
-        return json(res, 200, { events, next: events.length ? events[events.length - 1].seq + 1 : after });
+        const events = types
+          ? await runner.store.readAsync(id, after, Infinity, undefined, (e) => e.type === types && e.seq < until)
+          : await runner.timelineAsync(id, after, Number.isFinite(until) ? Math.min(limit, Math.max(0, until - after)) : limit);
+        return json(res, 200, { events, from: after, total, next: events.length ? events[events.length - 1].seq + 1 : after });
       }
       if (parts[2] === 'input' && req.method === 'POST') {
         const b = await readBody(req, maxInputBytes);
@@ -265,7 +272,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (!scoped(res, caller, 'cancel', id)) return;
         try {
           const r = await runner.stopBackground(id, { by: isAgent ? caller.id : 'admin' });
-          return json(res, 200, { ok: true, stopped: r.stopped });
+          return json(res, 200, { ok: true, stopped: r.stopped, ...(r.spared ? { spared: r.spared, held: r.held } : {}) });
         } catch (err) { return json(res, err.status ?? 500, { error: String(err.message ?? err) }); }
       }
       if (parts[2] === 'cancel' && req.method === 'POST') {
@@ -423,6 +430,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE) });
   const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
   phase('init');
+  // A cold fold (no fold-index entry: first boot, a fold-code change) runs on worker threads first; the boot pass then serves
+  // those logs from their entries (runner/fold-cold.mjs). Part of the 'fold' phase; foldIndex.cold says what it did.
+  try { await runner.prefoldCold(); } catch (err) { console.error('cold fold failed', err); }
   try { const back = runner.recoverQueued({ shouldAdmit: holding }); if (back.length) console.log(JSON.stringify({ requeued: back })); } catch (err) { console.error('queue recovery failed', err); }
   phase('fold');
   startLoopLagMonitor('runner');
@@ -436,8 +446,13 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     phase('listen');
     // foldIndex: how fold-index.json served the fold phase (trusted = log unchanged, nothing read; resumed = only the bytes
     // appended since the save were folded; full = folded from byte 0; bytes = log bytes folded). Absent with the index off.
+    // cold (when present): logs the index had no entry for, how many the worker threads folded (counted in trusted/resumed
+    // from then on), the threads used and the ms; a log they could not settle is in `full`. entries = saved (read from the file)
+    // + the cold entries; discardReason (+ foldWas/foldNow) when the file gave none (missing, fold-version, malformed, ...).
+    // bootFoldMs: where the 'fold' phase went (Runner.bootFoldReport: prefold, load, pass {stat, seed, read}, tokens, plans, admit, rest).
     const fi = runner.foldIndexStats;
-    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fi ? { foldIndex: fi } : {}) }));
+    const fm = runner.bootFoldReport(boot.fold);
+    console.log(JSON.stringify({ boot: { ...boot, total: Object.values(boot).reduce((a, b) => a + b, 0) }, ...(fm ? { bootFoldMs: fm } : {}), ...(fi ? { foldIndex: fi } : {}) }));
     // Saved after listen (yielding between logs), so the next boot resumes from this one's fold; the boot line is already out.
     setImmediate(() => runner.saveFoldIndex().then((r) => { if (r) console.log(JSON.stringify({ foldIndexSave: r })); }, (err) => console.error('fold index save failed', err)));
     const port = server.address().port;
@@ -451,7 +466,11 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   // runner.json only when it is ours (pid + lockStartedAt). A robbed runner never deletes: the new holder may be publishing.
   const leave = (opts) => {
     const held = holding();
+    const first = !runner._shutDown;
     try { runner.shutdown({ ...opts, keepDrainFile: !held }); } catch (err) { console.error('runner shutdown failed', err); } // later calls are no-ops
+    // The shutdown save is what the next boot resumes from: a boot with logs missing from the index (cold > 0) then shows whether
+    // this runner saved at all (idea-337: the 83f29842 runner never logged one; its pid was left alone by the restart).
+    if (first && runner.foldIndexSave) { try { console.log(JSON.stringify({ foldIndexSave: { ...runner.foldIndexSave, at: 'shutdown' } })); } catch { /* ignore */ } }
     if (held && publishedByMe(home, me)) { try { rmSync(path.join(home, 'runner.json'), { force: true }); } catch { /* ignore */ } }
     if (held) { try { releaseLock(lockFile); } catch { /* ignore */ } }
   };

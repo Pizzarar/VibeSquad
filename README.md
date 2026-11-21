@@ -6,7 +6,7 @@ Multi-agent coordination system for [Claude Code](https://claude.com/claude-code
 
 VibeSquad organizes Claude Code agents into **Squads** (product-level teams) and **Feature Lanes** (parallel workstreams), each with a **Buddy** (brainstorm partner), a **Lead** (implementation coordinator), and **Workers** (task agents). A lightweight `vs` CLI records decisions, reads team logs, and generates handoff packets — with no prompt or transcript content ever written to disk.
 
-> **New here?** Install the latest release, then open `guide/` and read START_HERE.
+> **New here?** Download `VibeSquad-setup.exe` from the [latest release](https://github.com/Pizzarar/VibeSquad/releases/latest). Install and sign in to your AI provider (Claude Code, Gemini, Codex or OpenCode) yourself too. Then open `guide/` and read START_HERE.
 > The installer does not put `guide/` on your PC: on this page click **Code → Download ZIP**, unzip it somewhere you will find it again (or `git clone`), then follow [guide/README.md](guide/README.md). It hands you to your Buddy, who reads [START_HERE](guide/START_HERE.md) for you.
 
 ## Architecture
@@ -36,10 +36,14 @@ The VibeSquad **agent runner** (`runner/`) manages agent sessions; the VS server
 
 ## Install (Windows, one-stop installer)
 
-Run `VibeSquad-setup.exe`. It bundles everything VibeSquad itself needs: a pinned Node.js LTS (`node.exe` plus npm), the built web app, the server, the `vs` CLI and its production dependencies. No system-wide Node is required, and `vs` works from any terminal afterwards.
+Download `VibeSquad-setup.exe` from the [latest release](https://github.com/Pizzarar/VibeSquad/releases/latest) and run it. It bundles everything VibeSquad itself needs: a pinned Node.js LTS (`node.exe` plus npm), the built web app, the server, the `vs` CLI and its production dependencies. No system-wide Node is required to run the app.
 
-- **Your accounts:** you still install and log in to Claude Code and/or Gemini yourself; the first-launch **Setup Checklist** shows what it detects (Claude Code, Gemini / Antigravity, optional Git) and links to the installers; you need at least one of Claude Code or Gemini to continue.
-- Quitting VibeSquad stops the server it started.
+- **Per-user install:** it installs for your user account only (`installMode: currentUser`, `src-tauri/tauri.conf.json:48`), so no admin prompt is expected.
+- **SmartScreen:** v0.3.0 has no Windows Authenticode signature, only the updater's minisign one (`docs/releases/vibesquad-0.3.0.md:14`), so Windows SmartScreen may show "Windows protected your PC". Click **More info**, then **Run anyway**, only if the file came from the release page above. (How this looks on a clean PC still needs a clean-PC confirmation.)
+- **First launch:** VibeSquad asks "How will you use VibeSquad on this PC?" (`src-tauri/src/ui_pages.rs:177`, shown while no mode is saved: `src-tauri/src/main.rs:2351-2360`). Pick **💻 Run agents on this PC** (or **🔗 Connect to another PC**). Then choose **Normal** or **Psycho** in **Choose your layout** (`src/FirstRunModal.tsx:120-161`).
+- **Your accounts:** you still install and log in to your AI provider yourself. The **Setup Checklist** shows what it detects (Claude Code, Gemini / Antigravity, optional Git) and links to the installers. **Continue** unlocks once Claude Code or Gemini is detected (`src/FirstRunModal.tsx:199`). Codex and OpenCode users close the checklist with **✕** (`src/FirstRunModal.tsx:210`) and set up their provider under **⚙ SETTINGS → Profiles**.
+- **`vs` in your own terminal:** the installer writes `vs.cmd` and `vs.ps1` into `%APPDATA%\npm` (`src-tauri/nsis/installer-hooks.nsh:15-34`) and does not edit `PATH`. If Node.js is installed that folder is normally already on `PATH`. On a PC without Node, add `%APPDATA%\npm` to your user `PATH`, or run `%APPDATA%\npm\vs.cmd` directly.
+- Quitting VibeSquad stops the server it started (`stop_managed_server`, `src-tauri/src/main.rs:2171-2179`).
 
 ## Quickstart (from source)
 

@@ -12,7 +12,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Runner, bgWakeText } from '../runner/runner.mjs';
+import { Runner, bgWakeText, bgForcedText } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { createAcpAdapter } from '../runner/adapters/acp.mjs';
 import { reduceTurn } from '../server/backend/runner-backend.mjs';
@@ -185,16 +185,21 @@ test('no wake when a prompted turn ran after the hold (it already saw the work) 
   } finally { h.runner.shutdown(); }
 });
 
-test('forced park past the max hold kills the work and sends no wake (the work never finished)', async () => {
+// idea-312: the forced park no longer leaves the agent silent: it is told its work was stopped (not that it finished), once.
+test('forced park past the max hold kills the work; the agent gets the stopped-work notice, never the finished-work wake', async () => {
   const h = fakeHarness({ parkHoldMaxMs: 60 });
   try {
     const id = h.create();
     h.work.set(h.pidOf(id), SHELL);
     h.endTurn(id);
     await until(() => h.kills.length === 1);
-    assert.ok(types(h.runner, id).includes('park-forced'));
-    assert.ok(!types(h.runner, id).includes('bg-wake'));
-    assert.equal(h.sends.length, 1);
+    const forced = h.runner.timeline(id).find((e) => e.type === 'park-forced');
+    assert.ok(forced);
+    await until(() => h.sends.length === 2);
+    assert.equal(h.sends[1].text, bgForcedText(SHELL, forced.heldMs, 'max'));
+    assert.notEqual(h.sends[1].text, bgWakeText(SHELL));
+    await tick(60);
+    assert.equal(h.sends.length, 2, 'told once');
   } finally { h.runner.shutdown(); }
 });
 

@@ -444,7 +444,7 @@ test('ACP: a steer dropped at prompt end names its input, and the fresh-session 
   const [drop] = runner.timeline(a).filter((e) => e.type === 'steer_dropped');
   assert.equal(drop.input, steerIn.seq, 'the drop names the input it drops');
   runner.store.append(a, 'input', { text: 'resume trigger' }); // the prompt a resume would send right after the primer
-  const primer = runner._primer(a);
+  const primer = await runner._primer(a);
   assert.match(primer, /User: one/);
   assert.doesNotMatch(primer, /wrap up/, 'the dropped steer never reached the agent');
   runner.shutdown();
@@ -462,7 +462,7 @@ test('ACP: a steer that rode along with a real prompt stays in the primer', asyn
   spawnImpl.finishPrompt();
   await settle();
   runner.store.append(a, 'input', { text: 'resume trigger' });
-  const primer = runner._primer(a);
+  const primer = await runner._primer(a);
   assert.match(primer, /User: wrap up/);
   assert.match(primer, /User: two/);
   runner.shutdown();
@@ -481,11 +481,11 @@ test('ACP: cancel drops a queued steer with a logged steer_dropped (reason cance
   assert.equal(drops[0].reason, 'cancelled');
   assert.equal(drops[0].input, inputs(runner, a).find((e) => e.text === 'wrap up').seq);
   runner.store.append(a, 'input', { text: 'resume trigger' });
-  assert.doesNotMatch(runner._primer(a), /wrap up/);
+  assert.doesNotMatch(await runner._primer(a), /wrap up/);
   runner.shutdown();
 });
 
-test('runner-side drop (adapter refuses the steer) names its input; the primer skips it, earlier joined steers stay', () => {
+test('runner-side drop (adapter refuses the steer) names its input; the primer skips it, earlier joined steers stay', async () => {
   const started = [];
   const adapter = {
     canPark: true,
@@ -503,7 +503,7 @@ test('runner-side drop (adapter refuses the steer) names its input; the primer s
   const refused = inputs(runner, a).find((e) => e.text === 'refused steer');
   assert.equal(runner.timeline(a).find((e) => e.type === 'steer_dropped').input, refused.seq);
   runner.store.append(a, 'input', { text: 'resume trigger' });
-  const primer = runner._primer(a);
+  const primer = await runner._primer(a);
   assert.match(primer, /User: joined steer/);
   assert.doesNotMatch(primer, /refused steer/);
   runner.shutdown();

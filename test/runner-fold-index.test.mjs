@@ -9,7 +9,7 @@ import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync
 import os from "node:os";
 import path from "node:path";
 import { Runner } from "../runner/runner.mjs";
-import { FOLD_INDEX_FILE, FOLD_VERSION, probe, readFoldIndex, saveFold, serializeFoldIndex } from "../runner/fold-index.mjs";
+import { FOLD_INDEX_FILE, FOLD_VERSION, probe, racy as racyEntry, readFoldIndex, saveFold, serializeFoldIndex } from "../runner/fold-index.mjs";
 
 const adapters = { claude: { canPark: true, lazyResume: true } }; // resumable needs an adapter that can park; nothing is spawned
 function home() {
@@ -80,6 +80,7 @@ function setup(n) {
   for (const id of ids) age(h, id);
   const r = boot(h);
   assert.equal(r.foldIndexStats.entries, 0, "no index yet");
+  assert.equal(r.foldIndexStats.discardReason, "missing", "a first boot says why it folded everything");
   assert.equal(r.foldIndexStats.full, ids.length);
   assert.equal(r.saveFoldIndexSync().result, "written");
   return { h, ids, r };
@@ -92,7 +93,7 @@ test("cold boot folds from 0 and saves; a warm boot of unchanged logs reads noth
   assert.equal(idx.size, ids.length);
   assert.ok(!JSON.stringify([...idx.values()]).includes("You are "), "system prompts are not saved");
   const warm = boot(h);
-  assert.deepEqual({ ...warm.foldIndexStats, loadMs: 0 }, { entries: ids.length, trusted: ids.length, resumed: 0, full: 0, bytes: 0, loadMs: 0 });
+  assert.deepEqual({ ...warm.foldIndexStats, loadMs: 0 }, { entries: ids.length, saved: ids.length, trusted: ids.length, resumed: 0, full: 0, bytes: 0, loadMs: 0 }, "a kept index has no discardReason");
   parity(h, warm, "warm boot = full fold");
   const s3 = warm.status("rn-0003");
   assert.equal(s3.openTool, null, "a lost agent publishes no open tool");
@@ -198,20 +199,48 @@ test("partial last line: not folded, not saved; once completed it is folded exac
   assert.equal(r2.folds.get("rn-p").rec.openTool.id, "late");
 });
 
+test("idea-337: bootFoldMs accounts for the fold phase (load, pass with stat/seed/read, tokens, plans, admit, rest)", () => {
+  const { h, ids } = setup(5);
+  appendFileSync(logFile(h, ids[0]), ev(900, "text", { text: "grown" })); // one resumed log: some read time
+  const r = boot(h);
+  const m = r.bootFoldMs;
+  for (const k of ["prefold", "load", "pass", "stat", "seed", "read", "tokens", "plans", "admit"]) assert.ok(Number.isFinite(m[k]) && m[k] >= 0, k);
+  assert.ok(m.stat + m.seed + m.read <= m.pass + 1, "stat/seed/read are parts of pass");
+  assert.ok(m.seed > 0 && m.stat > 0, "every log was statted and seeded from its entry");
+  const rep = r.bootFoldReport(1_000_000);
+  const named = rep.prefold + rep.load + rep.pass + rep.tokens + rep.plans + rep.admit;
+  assert.ok(Math.abs(named + rep.rest - 1_000_000) <= 6, "named parts + rest = the whole phase (rounding only)");
+  assert.equal(r.bootFoldReport().rest, undefined, "no phase given: no rest");
+  assert.equal(new Runner({ dir: h.dir, adapters }).bootFoldReport(5), null, "before recoverQueued: nothing to report");
+  r._fold(ids[1]); // after the pass: _fold no longer adds to the boot timing
+  assert.deepEqual(r.bootFoldMs, m);
+});
+
 test("an index from an older fold version, a corrupt index and a corrupt entry: full refold, same answer", () => {
   const { h, ids } = setup(4);
   const good = readFileSync(h.file, "utf8");
   writeFileSync(h.file, good.replace(FOLD_VERSION, "older-version"));
   let r = boot(h);
   assert.deepEqual([r.foldIndexStats.entries, r.foldIndexStats.full], [0, ids.length]);
+  // idea-328: the line names the cause (the 83f29842 boot dropped a 15MB index with no word why)
+  assert.deepEqual([r.foldIndexStats.discardReason, r.foldIndexStats.foldWas, r.foldIndexStats.foldNow], ["fold-version", "older-version", FOLD_VERSION]);
   parity(h, r);
   writeFileSync(h.file, good.slice(0, Math.floor(good.length / 2))); // torn
   r = boot(h);
-  assert.deepEqual([r.foldIndexStats.entries, r.foldIndexStats.full], [0, ids.length]);
+  assert.deepEqual([r.foldIndexStats.entries, r.foldIndexStats.full, r.foldIndexStats.discardReason], [0, ids.length, "malformed"]);
   parity(h, r);
   writeFileSync(h.file, "\u0000garbage");
   r = boot(h);
-  assert.equal(r.foldIndexStats.full, ids.length);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.discardReason], [ids.length, "malformed"]);
+  writeFileSync(h.file, good.replace('{"v":1,', '{"v":99,'));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.discardReason, r.foldIndexStats.foldWas], [ids.length, "index-version", undefined]);
+  writeFileSync(h.file, JSON.stringify({ v: 1, fold: FOLD_VERSION, entries: [] }));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, r.foldIndexStats.discardReason], [ids.length, "shape"]);
+  writeFileSync(h.file, JSON.stringify({ v: 1, fold: FOLD_VERSION, entries: {} }));
+  r = boot(h);
+  assert.deepEqual([r.foldIndexStats.full, "discardReason" in r.foldIndexStats], [ids.length, false], "a valid empty index is kept, not discarded");
   // one entry with a broken state: only that log is refolded
   const o = JSON.parse(good);
   o.entries["rn-0001"].state.perms = "nope";
@@ -454,4 +483,150 @@ test("probes pin the bytes the fold read: a log replaced (and grown) after its f
   assert.deepEqual([r2.foldIndexStats.full, r2.foldIndexStats.resumed, r2.foldIndexStats.trusted], [1, 0, 0]);
   parity(h, r2);
   assert.equal(r2.status(id).meta.title, "swapped");
+});
+
+// idea-316: logs written right up to the cold boot are recorded racy; once they settle, the (async) save refolds them off the
+// boot path so the next boot trusts them. Every refold must equal the full fold (parity), whatever happened to the log.
+const savedEntry = (h, id) => readFoldIndex(h.file).get(id);
+const racyOnDisk = (h, ids) => ids.filter((id) => racyEntry(savedEntry(h, id)));
+const freshCold = (n = 6) => { // fresh mtimes: every entry the cold boot records is racy
+  const h = home();
+  new Runner({ dir: h.dir, adapters, maxLive: 4 });
+  const ids = writeAgents(h, n);
+  const r = boot(h);
+  assert.equal(r.foldIndexStats.full, ids.length);
+  return { h, ids, r };
+};
+const settle = (h, ids) => { for (const id of ids) age(h, id); };
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+test("racy entries settled by the async save are refolded there; the warm boot trusts them, parity", async () => {
+  const { h, ids, r } = freshCold();
+  settle(h, ids);
+  assert.equal((await r.saveFoldIndex()).result, "written");
+  assert.deepEqual(racyOnDisk(h, ids), []);
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.trusted, ids.length);
+  assert.equal(warm.foldIndexStats.full, 0);
+  parity(h, warm, "racy entries refolded at the save");
+});
+
+test("the shutdown (sync) save never refolds: racy entries stay racy, the next boot folds them", () => {
+  const { h, ids, r } = freshCold(3);
+  settle(h, ids);
+  assert.equal(r.saveFoldIndexSync().result, "written");
+  assert.equal(racyOnDisk(h, ids).length, ids.length);
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, ids.length);
+  parity(h, warm);
+});
+
+test("a save that finds racy logs still fresh schedules another once the window has passed (deferred re-save)", async () => {
+  const { h, ids, r } = freshCold(4);
+  r.resaveDelayMs = 30;
+  assert.equal((await r.saveFoldIndex()).result, "written"); // logs written just now: all racy, nothing settled
+  assert.equal(racyOnDisk(h, ids).length, ids.length);
+  settle(h, ids); // the window passes
+  for (let i = 0; i < 100 && racyOnDisk(h, ids).length; i++) await sleep(20);
+  assert.deepEqual(racyOnDisk(h, ids), [], "the deferred save refolded and saved them trusted");
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, 0);
+  parity(h, warm);
+  r.shutdown();
+});
+
+test("the deferred re-save is bounded and shutdown cancels it", async () => {
+  const { h, ids, r } = freshCold(2);
+  r.resaveDelayMs = 20;
+  let saves = 0;
+  const orig = r.saveFoldIndex.bind(r);
+  r.saveFoldIndex = (...a) => { saves++; return orig(...a); };
+  await r.saveFoldIndex(); // logs never settle: 1 + 3 rounds, then it stops
+  await sleep(400);
+  assert.equal(saves, 4);
+  assert.equal(racyOnDisk(h, ids).length, ids.length);
+  const r2 = freshCold(2);
+  r2.r.resaveDelayMs = 20;
+  await r2.r.saveFoldIndex();
+  r2.r.shutdown();
+  assert.equal(r2.r._resaveTimer, null, "shutdown cleared the re-save timer");
+  await sleep(100);
+});
+
+test("a same-size rewrite of a racy log (mtime set back) is refolded from its current bytes: parity", async () => {
+  const { h, ids, r } = freshCold(4);
+  const f = logFile(h, "rn-0001");
+  const text = readFileSync(f, "utf8");
+  writeFileSync(f, text.replace('"title":"rn-0001!"', '"title":"rn-ZZZZ!"')); // same size
+  settle(h, ids);
+  await r.saveFoldIndex();
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, 0);
+  assert.equal(warm.status("rn-0001").meta.title, "rn-ZZZZ!");
+  parity(h, warm);
+});
+
+test("a racy log truncated (and one grown) after its fold is refolded; parity incl. the line index", async () => {
+  const { h, ids, r } = freshCold(4);
+  const f = logFile(h, "rn-0000");
+  const lines = readFileSync(f, "utf8").split("\n").slice(0, 30).join("\n") + "\n";
+  writeFileSync(f, lines);
+  appendFileSync(logFile(h, "rn-0002"), ev(9000, "text", { text: "more" }));
+  settle(h, ids);
+  await r.saveFoldIndex();
+  const warm = boot(h);
+  assert.equal(warm.foldIndexStats.full, 0);
+  assert.equal(warm.store.count("rn-0000"), 30);
+  parity(h, warm);
+});
+
+test("refold reads in bounded slices (yielding between), and an append during a slice drops the refold, never a wrong state", async () => {
+  const { h, ids, r } = freshCold(2);
+  settle(h, ids);
+  r.refoldSliceBytes = 512;
+  const id = "rn-0000";
+  const st = r.folds.get(id);
+  const g = r._refoldSettled(id, st);
+  let yields = 0;
+  let step = g.next();
+  while (!step.done && yields < 3) { yields++; step = g.next(); }
+  assert.ok(yields >= 3, "yielded between slices of a log bigger than one slice");
+  appendFileSync(logFile(h, id), ev(9001, "text", { text: "late" })); // while the refold is mid-way
+  while (!step.done) step = g.next();
+  assert.equal(step.value, st, "changed during the refold: old fold kept");
+  assert.equal(r.folds.get(id), st);
+  // then a normal save + boot still match the full fold
+  settle(h, ids);
+  r.refoldSliceBytes = 1 << 20;
+  await r.saveFoldIndex();
+  parity(h, boot(h));
+});
+
+test("an append between the save's visits and a concurrent store.append during the async save: parity", async () => {
+  const { h, ids, r } = freshCold(6);
+  settle(h, ids);
+  const p = r.saveFoldIndex(1); // 1ms slices: yields often
+  r.store.append("rn-0004", "text", { text: "during the save" });
+  r.store.append("rn-0000", "text", { text: "during the save" });
+  await p;
+  settle(h, ids);
+  await r.saveFoldIndex();
+  parity(h, boot(h));
+});
+
+test("idea-340: a log with no created event is read once at boot; the token / plan scans reuse that fold, a change re-reads it", () => {
+  const { h, ids } = setup(3);
+  writeFileSync(logFile(h, "rn-odd"), ""); // an empty log: no created, _fold returns null and keeps no fold
+  const r = new Runner({ dir: h.dir, adapters, maxLive: 4, foldIndexFile: h.file });
+  let reads = 0;
+  const rf = r.store.readFrom.bind(r.store);
+  r.store.readFrom = (id, ...a) => { if (id === "rn-odd") reads++; return rf(id, ...a); };
+  r.recoverQueued();
+  assert.equal(reads, 1, "the pass reads it once; mintBootTokens and the plan scan do not re-read it");
+  assert.equal(r._fold("rn-odd"), null);
+  assert.equal(reads, 1, "later folds at the same stamp are served");
+  appendFileSync(logFile(h, "rn-odd"), "\n");
+  assert.equal(r._fold("rn-odd"), null);
+  assert.equal(reads, 2, "a changed log is read again");
+  assert.ok(ids.length);
 });

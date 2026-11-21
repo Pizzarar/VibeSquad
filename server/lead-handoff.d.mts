@@ -73,7 +73,9 @@ export function buildSuccessorPrompt(opts: {
 export function resolveLeadProfile(
   oldLead: any,
   profilesPath?: string,
-  capOpts?: { cappedProviders?: unknown; cappedProvidersPath?: string; usageProviders?: any[] },
+  opts?:
+    | string
+    | { requestedProfile?: string; cappedProviders?: unknown; cappedProvidersPath?: string; usageProviders?: any[] },
 ): { profileName: string; profile: any; spawnCfg: any };
 export function createLeadHandoffCoordinator(deps?: Record<string, any>): {
   evaluateLead(lead: any, options?: Record<string, any>): Promise<any>;

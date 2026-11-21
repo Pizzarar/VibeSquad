@@ -12,7 +12,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { addInboxCards, readInboxCards, triageInboxCards, buildConciseTitle } from '../server/inbox.mjs';
-import { audit, loadRuns, relayBucket, handoffBucket, fixerBucket, fixOfferBucket, gitMerges } from './audit-owner-stamps.mjs';
+import { audit, loadRuns, relayBucket, handoffBucket, fixerBucket, fixOfferBucket, scriptableTurnsBucket, gitMerges } from './audit-owner-stamps.mjs';
+import { createHash } from 'node:crypto';
+
+const shortHash = (s) => createHash('sha1').update(String(s)).digest('hex').slice(0, 8);
 
 export const AUDIT_SOURCE = 'audit:perfection';
 /** Daily-bucket findings are only raised while their count is above these thresholds. */
@@ -108,6 +111,12 @@ export function transcriptFindings({ dir, since, until, repo = process.cwd(), no
   if (fo.total) {
     const eg = fo.examples.slice(0, 3).map((e) => `${e.run} ${e.lane}/${e.role} [${e.kind}]`).join('; ');
     out.push({ key: `fix-offers:${day}`, text: `${fo.total} agent turns ended asking the owner instead of acting (${fo.total - fo.leanAsks} fix-offers, ${fo.leanAsks} lean-asks where the agent already had a lean) (R11).`, evidence: `audit-owner-stamps bucket 5, by lane ${JSON.stringify(fo.byLane)}, e.g. ${eg}` });
+  }
+  // Bucket 7: fixed-shape turns a script could do. One finding per top cluster, key stable per shape (not daily): fileFindings dedupes.
+  for (const c of scriptableTurnsBucket(dir, range).clusters) {
+    if (c.notScriptable) continue;
+    const eg = c.examples.map((x) => `${x.run} @${new Date(x.ts).toISOString()}`).join('; ');
+    out.push({ key: `scriptable:${shortHash(c.signature)}`, text: `Scriptable-turn candidate: ${c.n} turns (${c.runs} runs), ${c.tokens} tokens, $${c.costUsd.toFixed(2)}, shape [${c.signature}], roles ${c.roles.join(',')}. Candidate replacement: ${c.hint}.`, evidence: `audit-owner-stamps bucket 7, lanes ${c.lanes.join(',')}, median output ${c.medianOutChars} chars, e.g. ${eg}` });
   }
   return out;
 }

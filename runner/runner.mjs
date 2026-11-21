@@ -9,7 +9,8 @@ import { createBackgroundProbe } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
-import { foldEvent, newFold, probe, probeWith, readFoldIndex, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
+import { foldEvent, newFold, probe, probeWith, racy, RACY_MS, readFoldIndexInfo, saveFold, seedFromEntry, serializeFoldIndex, writeFoldIndex } from './fold-index.mjs';
+import { COLD_FOLD_MIN, coldFoldEntries, coldFoldWorkersFromEnv } from './fold-cold.mjs';
 import path from 'node:path';
 
 // squad/team/lane/role/ord/profile are plain meta fields, first-class on the agent record.
@@ -245,7 +246,18 @@ export function parkGraceFromEnv(env = process.env) {
 // The after-turn park is held while the agent has background work (a shell its CLI left running: a test suite, a build;
 // see background.mjs), re-checked every poll (unless a restart drain refuses a new hold: see Runner.setDrain), and forced (logged as park-forced, with what was killed) past the max hold
 // so a held agent cannot keep its live slot forever. A max hold of 0 turns the hold off (park kills the tree at once).
-export const DEFAULT_PARK_HOLD_MAX_MS = 60 * 60 * 1000;
+// idea-312: the max hold is a hard ceiling, not the slot policy. At 60 min it force-parked EFI Godot suites (66 min, run with
+// --timeout 7000) that nothing needed the slot from, silently: the CLI died with the work and nobody woke the agent. Holding
+// costs nothing while the live cap has room, so the hard ceiling is 4 h (past any suite's own timeout) and the yield age below
+// is what frees a slot for the queue.
+export const DEFAULT_PARK_HOLD_MAX_MS = 4 * 60 * 60 * 1000;
+// idea-146: a hold older than this gives its live slot up when the queue needs one (Runner._makeRoom: idle agents first, then
+// the oldest such hold; park-forced reason 'room'). Younger holds, and any hold while the live cap has room, keep running.
+export const DEFAULT_PARK_HOLD_YIELD_MS = 60 * 60 * 1000;
+export function parkHoldYieldFromEnv(env = process.env) {
+  const n = Number(env.VS_RUNNER_PARK_HOLD_YIELD_MS);
+  return env.VS_RUNNER_PARK_HOLD_YIELD_MS !== undefined && env.VS_RUNNER_PARK_HOLD_YIELD_MS !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_HOLD_YIELD_MS;
+}
 // A restart drain's TTL ceiling: `vs restart` asks for its wait timeout + stop timeout + a margin.
 export const DRAIN_TTL_MAX_MS = 2 * 60 * 60 * 1000;
 // What an agent whose new background work a drain refused reads at the start of its next input.
@@ -265,6 +277,16 @@ export function bgWakeText(work) {
   const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
   return `[VibeSquad runtime] Background work you started before your turn ended (${cmds || 'a shell'}) has finished. Read its output (task output / log file; do not rerun it unless the output is gone) and continue your task. If you were waiting on it to finish your work, report your result now.`;
 }
+// idea-312: what a held agent reads after a forced park stopped the background work it ended its turn on ('room': the live
+// cap needed its slot past the yield age; 'max': the hard max hold). The tree kill may miss detached children, so the work
+// may or may not have finished: the agent checks its output before rerunning, and reruns in the foreground (a live turn is
+// never parked).
+export function bgForcedText(work, heldMs, reason) {
+  const cmds = work.map((w) => String(w.cmd ?? w.name ?? '').trim().slice(-120)).filter(Boolean).join('; ');
+  const mins = Math.max(1, Math.round((Number(heldMs) || 0) / 60_000));
+  const why = reason === 'room' ? 'the runtime needed its live slot for queued agents' : "it reached the runtime's max hold";
+  return `[VibeSquad runtime] Background work you started before your turn ended (${cmds || 'a shell'}) was still running after ${mins} min and was stopped (${why}). It may not have finished: check its output or log first. If it is incomplete, rerun it in the FOREGROUND with a timeout (a running turn is never stopped), then continue your task and report.`;
+}
 export function parkHoldMaxFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_PARK_HOLD_MAX_MS);
   return env.VS_RUNNER_PARK_HOLD_MAX_MS !== undefined && env.VS_RUNNER_PARK_HOLD_MAX_MS !== '' && Number.isInteger(n) && n >= 0 ? n : DEFAULT_PARK_HOLD_MAX_MS;
@@ -282,6 +304,7 @@ export const DEFAULT_PARK_HOLD_SLOW_AFTER_MS = 60_000;
 export const DEFAULT_ARCHIVE_KILL_MS = 10_000;
 // Shutdown fold-index save budget (saveFoldIndexSync): logs still unprobed after this are left out of the index.
 export const SHUTDOWN_SAVE_BUDGET_MS = 3000;
+const RESAVE_ROUNDS = 3;
 export function archiveKillFromEnv(env = process.env) {
   const n = Number(env.VS_RUNNER_ARCHIVE_KILL_MS);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_ARCHIVE_KILL_MS;
@@ -321,7 +344,7 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
     this.store = new LogStore(dir);
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
@@ -336,12 +359,13 @@ export class Runner {
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
-    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, ...(agyUsage ? { run: agyUsage } : {}) }) : null;
+    this._pollAgy = pollAgy ? createAgyUsagePoller({ store: this.limits, canRun: () => !this._agyBusy(), ...(agyUsage ? { run: agyUsage } : {}) }) : null;
     this.adapters = adapters;
     this.maxLive = maxLive;
     this.turnCaps = { ...DEFAULT_TURN_CAPS, ...turnCaps };
     this.parkGraceMs = parkGraceMs;
     this.parkHoldMaxMs = parkHoldMaxMs;
+    this.parkHoldYieldMs = parkHoldYieldMs;
     this.parkHoldPollMs = parkHoldPollMs;
     this.parkHoldSlowAfterMs = parkHoldSlowAfterMs;
     this.parkHoldSlowPollMs = Math.max(parkHoldPollMs, parkHoldSlowPollMs);
@@ -369,6 +393,18 @@ export class Runner {
     this._foldSeed = null; // id -> saved entry, only during recoverQueued's boot pass
     this._foldPins = new Map(); // id -> { offset, headLen, head, tail }: probes of the last loaded/saved entry, reused while the offset holds
     this.foldIndexStats = null; // the boot pass's index counts, for the {boot:...} line
+    // Where the boot's fold phase (prefoldCold + recoverQueued) spent its ms (idea-337), for the {boot:...} line's bootFoldMs (and /health): prefold,
+    // load (the index read; 0 when prefold handed it over), pass (folding every log: of it, stat, seed = validating a saved
+    // entry, read = reading + folding log bytes), tokens (mintBootTokens), plans (the unstarted-turn scan), admit. Floats.
+    this.bootFoldMs = null;
+    this._prefoldMs = 0;
+    this._uncreated = new Map(); // id -> stamp of a log with no created event: folded once per stamp, not on every _fold (idea-340)
+    this._passMs = null; // = bootFoldMs during recoverQueued's pass only (_fold adds stat/seed/read to it)
+    this._coldSeed = null; // prefoldCold's index read + worker-folded entries, taken by the next _loadFoldIndex
+    this._coldAbort = null; // AbortController of an in-flight prefoldCold: shutdown() terminates its workers
+    this.refoldSliceBytes = 1 << 20; // a settled racy log is refolded in slices of this size, yielding between them (_refoldSettled)
+    this.resaveDelayMs = RACY_MS + 1500; // saveFoldIndex re-runs this long after a save that left racy entries (their logs may settle)
+    this._resaveTimer = null;
   }
 
   // ---- Restart drain (ideas 198 + 186) ----
@@ -588,8 +624,9 @@ export class Runner {
 
   // Short recap of the conversation so far (from the log) to prime a fresh session when a provider cannot resume the old one.
   // A steer-only input that was dropped (a `steer_dropped` after it) never reached the agent, so it is not part of the recap.
-  _primer(id, maxChars = 8000) {
-    const events = this.store.read(id);
+  // Async: a full read of a big log is seconds of JSON.parse, so it is read in yielding slices (readAsync, idea-307).
+  async _primer(id, maxChars = 8000) {
+    const events = await this.store.readAsync(id);
     const dropped = droppedSteerSeqs(events);
     const turns = [];
     for (const e of events) {
@@ -625,30 +662,79 @@ export class Runner {
 
   // Probes the agent's tree once (deduped per entry), with a process snapshot started after its turn ended. Resolves to the work list, or null when a turn started meanwhile
   // (the snapshot predates it). A failing probe resolves to [] (the old park) and logs park-probe-error.
+  // idea-305: the dedupe is per turn. A probe started before a turn that has since started AND ended settles to null (its
+  // snapshot predates that turn), so the ended turn's own park check must get a fresh probe, not that stale promise: it
+  // would read null as "a turn started, its idle re-arms" and return, while the idle that re-arms was this very check.
+  // The agent then sat idle, never probed (work null), and heldIds listed it for 87 min with no shell behind it.
   _probeWork(id, e) {
-    if (e.probing) return e.probing;
+    if (e.probing && e.probingGen === e.turnGen) return e.probing;
     const gen = e.turnGen;
-    const settle = (work) => { e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
-    e.probing = Promise.resolve().then(() => this.bgProbe(e.handle.pid, e.lastActive)).then( // lastActive = the turn end: no snapshot from before it
+    let p = null;
+    const settle = (work) => { if (e.probing === p) e.probing = null; if (e.turnGen !== gen) return null; e.work = work; return work; };
+    p = Promise.resolve().then(() => this.bgProbe(e.handle.pid, e.lastActive)).then( // lastActive = the turn end: no snapshot from before it
       (work) => settle(Array.isArray(work) ? work : []),
       (err) => { try { this.store.append(id, 'park-probe-error', { message: String(err?.message ?? err) }); } catch { /* log gone */ } return settle([]); },
     );
-    return e.probing;
+    e.probing = p;
+    e.probingGen = gen;
+    return p;
   }
 
   // Room for one more live process (the safety ceiling): parks the oldest idle agent if needed. False when nothing can be parked.
-  _makeRoom(except, { dryRun = false } = {}) {
+  // idea-146: only a live turn or running background work keeps a slot. Idle agents with no work go first (oldest first); then
+  // holds past parkHoldYieldMs (oldest hold first), force-parked and told why (_forcePark). Never for room: a hold younger than
+  // that, or an agent whose held work just exited and whose wake check is pending (idea-312: parking it now would drop the
+  // wake; it runs a turn within one grace). yieldHolds false (a forced park's stopped-work notice, _forcePark): idle agents only,
+  // never another hold, so one yield for room never cascades into the next (the notice waits for a slot like any send).
+  _makeRoom(except, { dryRun = false, yieldHolds = true } = {}) {
     const others = [...this.live.entries()].filter(([k]) => k !== except);
     if (others.length < this.maxLive) return true;
-    // Never for room: an idle agent with background work (held). One not yet probed is probed now; the result re-pumps.
-    for (const [k, e] of others) if (this._parkable(e) && !this._parkableNow(e) && e.work === null) this._probeWork(k, e).then(() => this._pump());
-    const idle = others.filter(([, e]) => this._parkableNow(e)).sort((a, b) => a[1].lastActive - b[1].lastActive);
-    if (dryRun) return idle.length > others.length - this.maxLive; // enough parkable agents to get below the ceiling
-    for (let n = others.length - this.maxLive + 1; n > 0; n--) {
-      if (!idle.length) return false;
-      this.park(idle.shift()[0]);
+    // A held or unprobed idle agent is probed now (one not yet probed may have nothing); the result re-pumps. A hold this probe
+    // finds empty runs its after-hold check at once (the wake), instead of at the next hold poll.
+    for (const [k, e] of others) {
+      if (!(this._parkable(e) && !this._parkableNow(e) && e.work === null)) continue;
+      this._probeWork(k, e).then((w) => {
+        if (Array.isArray(w) && !w.length && e.heldSince !== null && e.heldSince !== undefined && this.live.get(k) === e) this._armPark(k, e, 0);
+        this._pump();
+      });
+    }
+    const idle = others.filter(([, e]) => this._parkableNow(e) && !this._wakeOwed(e)).sort((a, b) => a[1].lastActive - b[1].lastActive);
+    const now = Date.now();
+    // A hold yields on a fresh probe that still sees its work (e.work: this round's probe above, which re-pumps), never on a
+    // stale one: work that already exited is owed the finished-work wake, not the stopped-work notice.
+    const yieldable = !yieldHolds ? [] : others.filter(([, e]) => this._parkable(e) && e.work?.length > 0 && e.heldSince !== null && e.heldSince !== undefined && now - e.heldSince >= this.parkHoldYieldMs)
+      .sort((a, b) => a[1].heldSince - b[1].heldSince);
+    const need = others.length - this.maxLive + 1;
+    if (dryRun) return idle.length + yieldable.length >= need; // enough parkable agents to get below the ceiling
+    for (let n = need; n > 0; n--) {
+      if (idle.length) { this.park(idle.shift()[0]); continue; }
+      if (!yieldable.length) return false;
+      const [k, e] = yieldable.shift();
+      this._forcePark(k, e, 'room');
     }
     return true;
+  }
+
+  // A held agent (heldWork: what its hold is on) whose work a probe just saw exit, with its hold check armed or probing: the
+  // agent is about to be woken (_wakeAfterBackground), so room never parks it into silence. With no check pending nothing would
+  // wake it, so it is not protected (never pinned to its slot).
+  _wakeOwed(e) { return !!e.heldWork && (e.parkTimer !== null || !!e.probing); }
+
+  // Parks a held agent whose background work is still running (the hard max hold, or a yield for room) and tells it, once:
+  // the wake is a normal send, admitted after the current job (setImmediate: never ahead of the job this slot was freed for).
+  _forcePark(id, entry, reason) {
+    const work = entry.work?.length ? entry.work : (entry.heldNow?.length ? entry.heldNow : (entry.heldWork ?? [])); // the fresh snapshot this park acts on
+    const heldMs = Date.now() - (entry.heldSince ?? Date.now());
+    this.store.append(id, 'park-forced', { heldMs, work, reason });
+    entry.heldWork = null;
+    this.park(id);
+    setImmediate(() => {
+      if (this._shutDown || this.live.has(id) || this.queue.some((j) => j.id === id)) return; // a send resumed it meanwhile: that turn sees its work's state itself
+      this.store.append(id, 'bg-wake', { work, forced: reason });
+      try { this.send(id, bgForcedText(work, heldMs, reason), { origin: 'bg-wake', yieldHolds: false }); } catch (err) {
+        try { this.store.append(id, 'error', { message: `bg-wake: ${err.message}` }); } catch { /* log gone */ }
+      }
+    });
   }
 
   // Running turns of one provider family (agents holding a turn slot), not live processes. A quiet turn (see _sweepQuiet)
@@ -700,8 +786,13 @@ export class Runner {
       // budget) may start: the family never starts more than cap + OWNER_OVER_CAP + digestReserve turns at once.
       if (running >= cap && !this._overCapKind(job)) return false;
     }
-    return !!entry || this._makeRoom(job.id, { dryRun: true });
+    return !!entry || this._makeRoom(job.id, { dryRun: true, yieldHolds: job.yieldHolds !== false });
   }
+
+  // idea-146: a queued job that may not yield a hold (a stopped-work notice) and waits only for that reason: with yields it
+  // would fit. It does not hold up later jobs of its family that may yield (else every live slot held past its yield age plus
+  // one such notice at the family head would stall that family until some hold ended on its own).
+  _waitsOnYieldOnly(job) { return job.yieldHolds === false && !this._fits(job) && this._fits({ ...job, yieldHolds: true }); }
 
   // Which over-cap budget a job may start from when its family is at the cap: 'owner', 'digest' or null (none left / neither).
   _overCapKind(job) {
@@ -718,7 +809,9 @@ export class Runner {
   // a digest likewise jumps every non-owner job of its family (idea-203).
   _admit(job) {
     // A job that would run ahead of this one in the queue: a same-family job of the same or a higher rank.
-    const familyQueued = this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job));
+    // idea-146/312: a runtime wake into the live process that held its slot for that work (job.inPlace) needs a turn slot only;
+    // FIFO behind a queued job that waits for a LIVE slot would deadlock (that job waits on this agent's slot, this turn on it).
+    const familyQueued = !job.inPlace && this.queue.some((j) => j.family === job.family && this._rank(j) <= this._rank(job) && !this._waitsOnYieldOnly(j));
     if (!familyQueued && this._fits(job)) {
       try { job.run(); } catch (err) { this._failJob(job, err); }
       return;
@@ -758,7 +851,7 @@ export class Runner {
         const job = this.queue[i];
         const b = blocked.get(job.family);
         if (b !== undefined && (b > 0 || this._rank(job) === 0)) { i++; continue; }
-        if (!this._fits(job)) { blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
+        if (!this._fits(job)) { if (!this._waitsOnYieldOnly(job)) blocked.set(job.family, Math.max(b ?? 0, this._rank(job))); i++; continue; }
         this.queue.splice(i, 1);
         try { job.run(); } catch (err) { this._failJob(job, err); }
         i = 0; // running it may have changed what fits (a park, a new turn): rescan from the head
@@ -796,8 +889,22 @@ export class Runner {
   // After a turn ends, park the agent once it has stayed idle for the grace period (process per turn).
   _scheduleParkAfterTurn(id, entry) {
     clearTimeout(entry.parkTimer);
+    entry.parkTimer = null; // null = nothing armed (heldIds' idea-305 re-arm reads it)
     if (entry.inflight > 0 || entry.turns < 1) return;
     this._armPark(id, entry, entry.configStale ? 0 : this.parkGraceMs); // a pending config change must not be served by the old process
+  }
+
+  // idea-349: true unless every live antigravity-cli agent is provably clean: no turn running, no held work, and (where
+  // background work can exist) a post-turn probe that saw none. An agent still waiting on that probe (or parked-grace with an
+  // unknown work state) counts as busy: its shell may be alive and the spawned `agy -p /usage` would announce its death.
+  // The caller is not exempt: park() re-polls once a process is gone, so a refused poll is retried, never lost.
+  _agyBusy() {
+    for (const e of this.live.values()) {
+      if ((PROVIDER_ALIASES[e.provider] ?? e.provider) !== 'antigravity-cli') continue;
+      if (e.inflight > 0 || (e.heldSince !== null && e.heldSince !== undefined)) return true;
+      if (this._mayHoldWork(e) && e.work?.length !== 0) return true;
+    }
+    return false;
   }
 
   _armPark(id, entry, ms) {
@@ -855,8 +962,7 @@ export class Runner {
       entry.heldNow = work; // what holds it NOW (heldWork keeps what the hold started on, for the wake text): heldIds' reality check
       const heldMs = now - entry.heldSince;
       if (heldMs >= this.parkHoldMaxMs) {
-        this.store.append(id, 'park-forced', { heldMs, work });
-        this.park(id);
+        this._forcePark(id, entry, 'max'); // logs and reports what this FRESH snapshot sees (entry.work, just settled)
         this._pump();
         return;
       }
@@ -894,7 +1000,7 @@ export class Runner {
     const work = entry.heldWork;
     entry.heldWork = null;
     this.store.append(id, 'bg-wake', { work });
-    try { this.send(id, bgWakeText(work), { origin: 'bg-wake' }); } catch (err) {
+    try { this.send(id, bgWakeText(work), { origin: 'bg-wake' }); this._pump(); } catch (err) { // pump: a wake queued behind a turn cap leaves this agent idle-parkable, so a job waiting for room may now fit
       try { this.store.append(id, 'error', { message: `bg-wake: ${err.message}` }); } catch { /* log gone */ }
       if (this.live.get(id) === entry && this._parkable(entry)) { this.park(id); this._pump(); }
     }
@@ -913,6 +1019,7 @@ export class Runner {
     this.store.append(id, 'status', { status: 'parked' });
     this.live.delete(id);
     entry.handle.kill();
+    if ((PROVIDER_ALIASES[entry.provider] ?? entry.provider) === 'antigravity-cli') this._pollAgy?.(id); // idea-349: the retry a busy turn_done poll was refused for
   }
 
   // Drops a pending archive-stop (flag + kill timer): unarchive, park and exit all end that window.
@@ -939,30 +1046,56 @@ export class Runner {
     } else entry.handle.kill(); // onExit logs the exit and frees the slot
   }
 
-  // Resume spec for a parked agent, read from its log so it survives a runner restart. Null if not parked.
-  _parkedSpec(id) {
-    if (!this.store.exists(id)) return null;
-    const events = this.store.read(id);
+  // The current fold of a log for the resume paths (idea-307): _parkedSpec / _lostSpec / _unstartedPlan / _cutTurn used to parse
+  // the whole log synchronously on every send/resume (loop-lag 302). _fold is stat-validated and incremental (only bytes appended
+  // since the last fold are read; after a boot, since the fold index's offset), and its spec fields (fold-index.mjs newSpecFold)
+  // fold exactly what those loops computed. Same complete lines as store.read: a partial last line is in neither.
+  _specFold(id) { return this.store.exists(id) ? this._fold(id) : null; }
+
+  // A copy of the folded meta: a spec's meta goes to callers (entries, jobs) and must never alias the cached fold.
+  static _metaCopy(f) { return structuredClone(f.meta ?? {}); }
+
+  // The created event's systemPrompt (the fold drops role prompts): the log's first event only, i.e. a full read's events[0].
+  // Read in 64KB slices until that event (each slice completes at least one line, however long): store.read(id, 0, 1) would
+  // read and copy a whole 1MB chunk to parse one line (4ms a call on a big log). Same event: the first complete line with seq >= 0.
+  _createdPrompt(id) {
+    for (let off = 0; ;) {
+      const r = this.store.readFrom(id, off, 0, 1, null, 1 << 16);
+      if (r.events.length) return r.events[0].systemPrompt;
+      if (r.end <= off) return undefined; // end of the complete lines: no such event
+      off = r.end;
+    }
+  }
+
+  // The systemPrompt of the parked event the fold picked: that one line, read by seq via the store's sparse index. Trusted only
+  // when every seq in the log rose strictly (f.seqMono: the event with that seq is unique) and the line read is that same event;
+  // anything else (a hand-edited log: duplicate, missing or gapped seqs) falls back to the full scan the fold replaced.
+  _parkedPrompt(id, f) {
+    const park = f.park;
+    if (f.seqMono && Number.isSafeInteger(park.seq) && park.seq >= 0) {
+      const e = this.store.read(id, park.seq, 1)[0];
+      if (e?.type === 'parked' && e.seq === park.seq && e.ts === park.ts && e.sessionId === park.sessionId) return e.systemPrompt;
+    }
     let parked = null;
-    let archived = false;
-    let stopped = null; // a bg-stopped no input has seen yet (idea-230): the next send tells the agent
-    let refused = null; // a park-drain-refused no input has seen yet: the next send tells the agent (survives a runner restart)
-    // Fold later meta patches (labels, permissionMode, ...) the same way the summary does, so a resume uses the current meta.
-    const meta = { ...(events[0]?.meta ?? {}) };
-    for (const e of events) {
-      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
+    for (const e of this.store.read(id)) {
       if (e.type === 'parked') parked = e;
-      else if (e.type === 'park-drain-refused') refused = e;
-      else if (e.type === 'bg-stopped') stopped = e;
-      else if (e.type === 'input' && !e.steerOnly) { refused = null; stopped = null; } // a steer-only input joined a running turn: the notice still owes
-      else if (e.type === 'exit') return null;
-      else if (e.type === 'archive') archived = true;
-      else if (e.type === 'unarchive') archived = false;
       else if (e.type === 'status' && e.status !== 'parked' && e.status !== 'queued') parked = null;
     }
-    if (archived || !parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
-    const c = events[0];
-    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.systemPrompt ?? undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}), ...(stopped?.work?.length ? { bgStopNotice: bgStopNoticeText(stopped.work) } : {}) };
+    return parked?.systemPrompt;
+  }
+
+  // Resume spec for a parked agent, read from its log so it survives a runner restart. Null if not parked.
+  // Meta: the created meta with every later meta patch folded in (labels merged), the same way the summary does, so a resume
+  // uses the current meta. A park-drain-refused / bg-stopped no (non-steer-only) input has seen yet: the next send tells the agent.
+  _parkedSpec(id) {
+    const f = this._specFold(id);
+    if (!f || f.exit || f.archived) return null;
+    const parked = f.park;
+    if (!parked || typeof parked.sessionId !== 'string' || !parked.sessionId || parked.sessionId.startsWith('-')) return null;
+    const c = f.created;
+    const meta = Runner._metaCopy(f);
+    const { refused, stopped } = f;
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: parked.prompt ? this._parkedPrompt(id, f) ?? undefined : undefined, resume: parked.sessionId, ...(refused ? { drainNotice: drainNoticeText(refused.drain ?? {}, Array.isArray(refused.work) ? refused.work : []) } : {}), ...(stopped?.work?.length ? { bgStopNotice: bgStopNoticeText(stopped.work) } : {}) };
   }
 
   // Whether a closed agent can come back in place (same id + session). Mirrors the resume endpoint's 409 condition
@@ -978,20 +1111,13 @@ export class Runner {
   // Resume spec for a lost agent (runner restarted while it was idle/running): the log's last session id, if no exit/archive.
   _lostSpec(id) {
     if (!this.store.exists(id) || this.live.has(id)) return null;
-    const events = this.store.read(id);
-    let sessionId = null;
-    let archived = false;
-    const meta = { ...(events[0]?.meta ?? {}) };
-    for (const e of events) {
-      if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-      if (e.type === 'exit') return null;
-      if (e.type === 'archive') archived = true;
-      else if (e.type === 'unarchive') archived = false;
-      if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
-    }
-    const c = events[0];
-    if (archived || !sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
-    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, resume: sessionId };
+    const f = this._fold(id);
+    if (!f || f.exit) return null;
+    const sessionId = f.sessionId ?? null;
+    const c = f.created;
+    if (f.archived || !sessionId || typeof sessionId !== 'string' || sessionId.startsWith('-') || !this.adapters[c?.provider]?.canPark) return null;
+    const meta = Runner._metaCopy(f);
+    return { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: this._createdPrompt(id) ?? undefined, resume: sessionId };
   }
 
   // An agent whose log ends in a `queued` status never got its turn: nothing was delivered after the queued events. The runner's
@@ -999,35 +1125,23 @@ export class Runner {
   // or, when a session was recorded, resumed) and the inputs logged since the last real status, or null if it is not that case.
   _unstartedPlan(id) {
     if (!this.store.exists(id) || this.live.has(id) || this.queue.some((j) => j.id === id)) return null; // a queued job already owns these inputs
-    // Warm folds (recoverQueued's boot pass): a log whose last status is not `queued` can't be unstarted; skip the second full parse.
-    // _fold is stat-validated, so a log that grew since the pass is refolded incrementally, never served stale.
-    if (this._foldsWarm) { const f = this._fold(id); if (f && f.status !== 'queued') return null; }
-    const events = this.store.read(id);
-    const c = events[0];
+    // From the fold (idea-307): lastState = the last status, or 'exited' after an exit; pending = the text inputs (not steer-only:
+    // those never start a turn) after the last non-queued status (inputs before it were delivered).
+    const f = this._fold(id);
+    const c = f?.created;
     if (c?.type !== 'created' || !this.adapters[c.provider]) return null;
-    let status = null;
-    let statusTs = 0;
-    let archived = false;
-    let sessionId = null;
-    let cut = -1; // index of the last non-queued status: inputs before it were delivered
-    const meta = { ...(c.meta ?? {}) };
-    events.forEach((e, i) => {
-      if (e.type === 'exit') status = 'exited';
-      else if (e.type === 'archive') archived = true;
-      else if (e.type === 'unarchive') archived = false;
-      else if (e.type === 'session' && e.sessionId) sessionId = e.sessionId;
-      else if (e.type === 'meta') Object.assign(meta, e.patch, e.patch?.labels ? { labels: { ...meta.labels, ...e.patch.labels } } : {});
-      else if (e.type === 'status') { status = e.status; statusTs = e.ts ?? 0; if (e.status !== 'queued') cut = i; }
-    });
-    if (status !== 'queued' || archived) return null;
-    const inputs = events.filter((e, i) => e.type === 'input' && i > cut && typeof e.text === 'string' && !e.steerOnly); // a steer-only input never starts a turn
+    if (f.lastState !== 'queued' || f.archived) return null;
+    const inputs = f.pending;
     if (!inputs.length) return null;
+    const meta = Runner._metaCopy(f);
     if (isRetiredMeta(meta)) return null; // retirePredecessors / confirmTakeover only relabel the role (never archive): a former-lead stays dead
+    const statusTs = f.lastStatus?.ts ?? 0;
     if (this.queueMaxAgeMs > 0 && Date.now() - statusTs > this.queueMaxAgeMs) return null; // stale: a days-old input must not run on a whim
     const supersededBy = this._successorOf(id, meta);
+    const sessionId = f.sessionId ?? null;
     const resumable = sessionId && !sessionId.startsWith('-') && this.adapters[c.provider]?.canPark;
     return {
-      spec: { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: c.systemPrompt ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
+      spec: { provider: c.provider, model: effModel(c, meta), cwd: c.cwd, meta, systemPrompt: this._createdPrompt(id) ?? undefined, ...(resumable ? { resume: sessionId } : {}) },
       text: inputs.map((e) => e.text).join('\n\n'),
       owner: inputs.some((e) => e.owner === true),
       ts: inputs[0].ts ?? 0,
@@ -1070,13 +1184,21 @@ export class Runner {
   recoverQueued({ shouldAdmit } = {}) {
     const plans = [];
     this._foldsWarm = false;
+    const tm = this.bootFoldMs = { prefold: this._prefoldMs, load: 0, pass: 0, stat: 0, seed: 0, read: 0, tokens: 0, plans: 0, admit: 0 };
+    this._prefoldMs = 0;
+    let t = performance.now();
+    const lap = (k) => { const now = performance.now(); tm[k] += now - t; t = now; };
     this._loadFoldIndex(); // each log's fold resumes from the last saved one (fold-index.mjs): only bytes appended since are read
+    lap('load');
+    this._passMs = tm;
     try {
       for (const id of this.store.ids()) { try { this._fold(id); } catch { /* unreadable log: skipped below too */ } } // one boot pass; later successor checks read the cache
-    } finally { this._foldSeed = null; } // entries of logs that are gone are dropped; no later _fold reads a seed
+    } finally { this._foldSeed = null; this._passMs = null; } // entries of logs that are gone are dropped; no later _fold reads a seed
+    lap('pass');
     this._foldsWarm = true;
     if (shouldAdmit && !shouldAdmit()) return [];
     this.mintBootTokens(); // from the same pass: every agent that may still act verifies from the first request after a restart
+    lap('tokens');
     for (const id of this.store.ids()) {
       let plan = null;
       try { plan = this._unstartedPlan(id); } catch { /* unreadable log: skip */ }
@@ -1084,6 +1206,7 @@ export class Runner {
       if (plan.supersededBy) continue;
       plans.push({ id, plan });
     }
+    lap('plans');
     // Owner inputs take the free slots first (they would have jumped the queue), then oldest first.
     // Digests next (idea-203): they keep their queue priority across a runner restart.
     const rank = (p) => (p.plan.owner ? 0 : isDigestMeta(p.plan.spec.meta) ? 1 : 2);
@@ -1092,6 +1215,7 @@ export class Runner {
       const job = { id, spec: plan.spec, family: providerFamily(plan.spec.provider), needsTurn: true, kind: 'send', owner: plan.owner, digest: isDigestMeta(plan.spec.meta), text: plan.text, images: [], run: () => this._deliverJob(job) };
       this._admit(job);
     }
+    lap('admit');
     return plans.map((p) => p.id);
   }
 
@@ -1138,8 +1262,7 @@ export class Runner {
   // `starting` (a send's resume had taken the turn slot). Never for an agent that may no longer act (retired, superseded) or
   // a turn older than queueMaxAgeMs (an old turn must not start again on a whim; same bound as recoverQueued).
   _cutTurn(id, meta) {
-    let last = null;
-    for (const e of this.store.read(id)) if (e.type === 'status') last = e;
+    const last = this._fold(id)?.lastStatus ?? null; // the log's last status event (fold, idea-307)
     if (!last || !(last.status === 'running' || (last.status === 'starting' && last.resume !== true))) return false;
     if (this.queueMaxAgeMs > 0 && Date.now() - (last.ts ?? 0) > this.queueMaxAgeMs) return false;
     return !isRetiredMeta(meta) && !this._successorOf(id, meta);
@@ -1193,12 +1316,21 @@ export class Runner {
   // null, and a suite started with run_in_background is already running then. Only a probe that saw nothing clears it.
   // Ideas 228 + 229: held is checked against reality first (_reconcileHeld), so /health, the restart wait and its deferral
   // never report a hold whose shells are all dead (it would otherwise stand until the next poll, up to parkHoldPollMs).
+  // idea-305: "held until its first probe" is only true while that probe is coming (a park timer armed or a probe in flight).
+  // An idle agent left unprobed with neither (a lost re-arm) would be listed forever while vs stop --background finds no
+  // shell, so the park check is re-armed here (logged park-rearm): listed this once, dropped within one grace + probe.
   heldIds() {
     this._reconcileHeld();
     const ids = [];
     for (const [id, e] of this.live) {
       if (e.heldSince !== null && e.heldSince !== undefined) ids.push(id);
-      else if (this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0) ids.push(id);
+      else if (this._parkable(e) && this._mayHoldWork(e) && e.work?.length !== 0) {
+        ids.push(id);
+        if (e.work == null && !e.parkTimer && !e.probing && e.perms.size === 0 && !this._shutDown) {
+          try { this.store.append(id, 'park-rearm', { reason: 'held unprobed with no park check pending' }); } catch { /* log gone */ }
+          this._scheduleParkAfterTurn(id, e);
+        }
+      }
     }
     return ids;
   }
@@ -1246,8 +1378,8 @@ export class Runner {
     const entry = this.live.get(id);
     if (!entry) throw fail(this.store.exists(id) ? 409 : 404, this.store.exists(id) ? `agent ${id} is not live (no process tree)` : 'no such agent');
     if (!entry.handle || !Number.isInteger(entry.handle.pid)) throw fail(409, `agent ${id} has no process to probe`);
-    if (entry.inflight > 0 || entry.status === 'running') throw fail(409, `agent ${id} is running a turn: cancel it first (vs stop)`);
     if (!this.bgProbe) throw fail(409, 'background probe is off');
+    if (entry.inflight > 0 || entry.status === 'running') return this._refreshHeldMidTurn(id, entry); // idea-315
     const gen = entry.turnGen; // idea-231: a turn that starts while the probe runs owns the tree now
     const work = await this.bgProbe(entry.handle.pid, Date.now()); // a snapshot started now: nothing stale
     // A turn started (or started and ended) during the probe: the snapshot may hold that turn's own shell, and its work
@@ -1268,12 +1400,34 @@ export class Runner {
     return { stopped: list };
   }
 
+  // idea-315: `vs stop <id> --background` while the agent is running a turn. The process tree cannot tell a running foreground
+  // tool shell from a background one, so this KILLS NOTHING and never touches the turn or entry.work (idea-231). It only
+  // re-probes and drops a STALE held entry (heldSince set, but none of the held pids is under the CLI any more), which is
+  // what a restart drain needs. Returns the shells it saw as `spared` and the resulting hold state as `held`.
+  async _refreshHeldMidTurn(id, entry) {
+    const gen = entry.turnGen;
+    const seen = await this.bgProbe(entry.handle.pid, Date.now());
+    const spared = Array.isArray(seen) ? seen : [];
+    if (this.live.get(id) !== entry || entry.turnGen !== gen) return { stopped: [], spared, held: false }; // the turn moved on: it owns the entry now
+    let held = entry.heldSince !== null && entry.heldSince !== undefined;
+    if (held) {
+      const heldPids = (Array.isArray(entry.heldNow) ? entry.heldNow : Array.isArray(entry.heldWork) ? entry.heldWork : []).map((w) => w?.pid);
+      const present = new Set(spared.map((w) => w.pid));
+      if (!heldPids.some((p) => present.has(p))) {
+        entry.heldSince = null; entry.heldNow = null; entry.heldWork = null; entry.heldProbedAt = null;
+        try { this.store.append(id, 'held-cleared', { midTurn: true, pids: heldPids }); } catch { /* log gone */ }
+        held = false;
+      }
+    }
+    return { stopped: [], spared, held };
+  }
+
   // Starts the parked/lost agent's process in place. Callers have checked the room (_fits); false if there is no spec.
   // promptless: a bare resume (no send behind it), whose `starting` is tagged `resume: true` (see _settleResume).
-  _resume(id, fallbackSpec = null, { promptless = false } = {}) {
+  _resume(id, fallbackSpec = null, { promptless = false, yieldHolds = true } = {}) {
     const spec = this._parkedSpec(id) ?? this._lostSpec(id) ?? this._unstartedPlan(id)?.spec ?? fallbackSpec; // fresh from the log: picks up a config change made while the job waited
     if (!spec) return null;
-    if (!this._makeRoom(id)) throw new Error('no live process slot free');
+    if (!this._makeRoom(id, { yieldHolds })) throw new Error('no live process slot free');
     this.store.append(id, 'status', { status: 'starting', ...(promptless ? { resume: true } : {}) });
     return this._start(id, spec);
   }
@@ -1282,6 +1436,7 @@ export class Runner {
   _deliver(entry, text, images = []) {
     if (!entry?.handle) throw new Error('agent is not running');
     clearTimeout(entry.parkTimer);
+    entry.parkTimer = null;
     // inflight counts OPEN TURNS (one per agent at a time), not prompts. A fresh turn takes its slot here — and marks
     // itself active — immediately, without waiting for the adapter's (possibly async, e.g. ACP ready.then) 'running'.
     const fresh = entry.inflight === 0;
@@ -1349,6 +1504,8 @@ export class Runner {
     const job = {
       id, spec, family, needsTurn: true, kind: 'send', owner: owner || pending?.owner === true, digest: this._isDigest(id, spec), text: [...lead, text].join('\n\n'), images,
       run: () => this._deliverJob(job),
+      ...(opts.origin === 'bg-wake' && live?.handle ? { inPlace: true } : {}), // a runtime wake into its held live process (_admit)
+      ...(opts.yieldHolds === false ? { yieldHolds: false } : {}), // internal (_forcePark's notice; the HTTP layer never passes it): makes room from idle agents only
     };
     if (live?.inflight > 0 && !this.queue.some((j) => j.id === id)) job.run(); // steering a running turn: it already holds its slot
     else this._admit(job);
@@ -1387,7 +1544,7 @@ export class Runner {
   // Starts (or resumes) the job's agent and delivers its text, marking an owner job that begins a fresh turn over the
   // family cap as an over-cap owner turn (tracked for the +OWNER_OVER_CAP budget).
   _deliverJob(job) {
-    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec);
+    const entry = this.live.get(job.id) ?? this._resume(job.id, job.spec, { yieldHolds: job.yieldHolds !== false });
     this._noteOverCap(job, entry);
     this._deliver(entry, job.text, job.images ?? []);
   }
@@ -1578,16 +1735,21 @@ export class Runner {
     let stamp = null;
     let size = 0;
     let stat = null;
+    const tm = this._passMs; // recoverQueued's boot pass timing, else null
+    const t0 = tm ? performance.now() : 0;
     const statAt = Date.now(); // before the stat: an mtime written meanwhile still counts as racy (fold-index.mjs)
-    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); return null; }
+    try { const st = statSync(this.store.file(id)); size = st.size; stamp = `${st.size}:${st.mtimeMs}`; stat = { size: st.size, mtimeMs: st.mtimeMs, at: statAt }; } catch { this.folds.delete(id); this._foldClean.delete(id); this._uncreated.delete(id); return null; } finally { if (tm) tm.stat += performance.now() - t0; }
     // Clean = validated by this stat while the watch is up. Synchronous from the stat to the mark: a change after the stat
     // reaches the watch callback later and unmarks it.
     const watched = !!this._rosterWatch;
     this._foldClean.delete(id);
     let st = this.folds.get(id);
     if (st?.stamp === stamp) { if (watched) this._foldClean.add(id); return st; }
+    if (!st && this._uncreated.get(id) === stamp) return null; // already folded at this stamp: no created event (idea-340)
     if (!st && this._foldSeed) {
+      const t1 = tm ? performance.now() : 0;
       st = this._seedFold(id, stat);
+      if (tm) tm.seed += performance.now() - t1;
       if (st?.stamp === stamp) { this.folds.set(id, st); if (watched) this._foldClean.add(id); return st; }
     }
     if (!st || size < st.offset) st = newFold();
@@ -1597,12 +1759,15 @@ export class Runner {
       const p = probeWith(pread, end);
       if (p) this._foldPins.set(id, { offset: end, ...p }); else this._foldPins.delete(id);
     } : null;
+    const t2 = tm ? performance.now() : 0;
     const { events, end } = this.store.readFrom(id, st.offset, 0, Infinity, pinAt);
     for (const e of events) foldEvent(st, e);
+    if (tm) tm.read += performance.now() - t2;
     st.offset = end;
     st.stamp = stamp;
     st.stat = stat;
-    if (!st.created) { this.folds.delete(id); return null; }
+    if (!st.created) { this.folds.delete(id); this._uncreated.set(id, stamp); return null; }
+    this._uncreated.delete(id);
     this.folds.set(id, st);
     if (watched) this._foldClean.add(id);
     st.rec = foldRecord(id, st);
@@ -1611,16 +1776,68 @@ export class Runner {
 
   // Loads <foldIndexFile> for the boot pass. Missing, corrupt or another fold version: an empty seed, i.e. a full fold.
   // VS_RUNNER_FOLD_INDEX=0 turns the index off (every boot folds from byte 0 and nothing is saved).
+  // A prefoldCold just before (the server's boot) hands over its read of the index plus the entries its workers folded for
+  // the logs the index had none for: those join the seed and are validated like any saved entry (seedFromEntry).
   _loadFoldIndex() {
     this._foldSeed = null;
+    const pre = this._coldSeed;
+    this._coldSeed = null;
     if (!this._foldIndexOn()) return;
     const t0 = Date.now();
-    const seed = readFoldIndex(this.foldIndexFile);
-    this.foldIndexStats = { entries: seed.size, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: Date.now() - t0 };
+    const info = pre ? pre.info : readFoldIndexInfo(this.foldIndexFile);
+    const seed = info.entries;
+    // saved = entries read from the file; entries = what the pass could seed from (saved + the cold workers'), so trusted +
+    // resumed <= entries and trusted + resumed + full = the logs folded (idea-337: the 11-18 line read entries=5457 next to
+    // trusted=5600, its 189 cold entries counted in trusted but not in entries).
+    const saved = seed.size;
+    if (pre) for (const [id, e] of pre.entries) if (!seed.has(id)) seed.set(id, e);
+    this.foldIndexStats = { entries: seed.size, saved, trusted: 0, resumed: 0, full: 0, bytes: 0, loadMs: pre ? pre.loadMs : Date.now() - t0 };
+    if (info.discardReason) { // the file gave nothing: say why, so a full fold explains itself (idea-328)
+      this.foldIndexStats.discardReason = info.discardReason;
+      if (info.foldWas !== undefined) Object.assign(this.foldIndexStats, { foldWas: info.foldWas, foldNow: info.foldNow });
+    }
+    if (pre) this.foldIndexStats.cold = { logs: pre.logs, folded: pre.entries.size, workers: pre.workers, ms: pre.ms };
     this._foldSeed = seed;
   }
 
+  // Boot, before recoverQueued (runner/fold-cold.mjs): the logs the fold index has no entry for (all of them after a fold-code
+  // change, which drops the index) are folded on worker threads, so the boot pass serves them as trusted entries instead of
+  // folding each from byte 0 on the main thread. Fewer than COLD_FOLD_MIN such logs, no index, or no workers: nothing to do.
+  // shutdown() during the prefold terminates its workers (and the prefold then hands nothing over).
+  async prefoldCold({ workers = coldFoldWorkersFromEnv(), min = COLD_FOLD_MIN, ...opts } = {}) {
+    this._coldSeed = null;
+    this._prefoldMs = 0;
+    if (this._shutDown || !this._foldIndexOn() || !(workers > 0)) return null;
+    const t0 = Date.now();
+    const p0 = performance.now();
+    const info = readFoldIndexInfo(this.foldIndexFile);
+    const seed = info.entries;
+    const loadMs = Date.now() - t0;
+    const missing = this.store.ids().filter((id) => !seed.has(id));
+    let entries = new Map();
+    if (missing.length >= min) {
+      const ac = new AbortController();
+      this._coldAbort = ac;
+      try { entries = await coldFoldEntries(this.store.dir, missing, { ...opts, workers, signal: ac.signal }); } finally { if (this._coldAbort === ac) this._coldAbort = null; }
+    }
+    this._prefoldMs = performance.now() - p0;
+    if (this._shutDown) return null;
+    this._coldSeed = { info, loadMs, entries, logs: missing.length, workers: entries.size ? Math.min(workers, missing.length) : 0, ms: Date.now() - t0 };
+    return { logs: missing.length, folded: entries.size, ms: this._coldSeed.ms };
+  }
+
   _foldIndexOn() { return !!this.foldIndexFile && process.env.VS_RUNNER_FOLD_INDEX !== '0'; }
+
+  // bootFoldMs rounded for the {boot:...} line, or null before recoverQueued. With `phaseMs` (the server's whole 'fold' phase),
+  // `rest` is what the named parts leave of it (event-loop turns, GC), so the line accounts for the whole phase. stat/seed/read
+  // are parts of pass, not added to it.
+  bootFoldReport(phaseMs) {
+    const m = this.bootFoldMs;
+    if (!m) return null;
+    const out = Object.fromEntries(Object.entries(m).map(([k, v]) => [k, Math.round(v)]));
+    if (Number.isFinite(phaseMs)) out.rest = Math.max(0, Math.round(phaseMs - (m.prefold + m.load + m.pass + m.tokens + m.plans + m.admit)));
+    return out;
+  }
 
   // The fold state saved for a log not yet folded in this process, or null (fold from byte 0). A trusted seed (log unchanged)
   // gets the current stamp, so _fold serves it as is; a resumed one has none, so _fold reads only the bytes after its offset.
@@ -1663,28 +1880,74 @@ export class Runner {
     };
   }
 
+  // Folds a racy log again from byte 0, in refoldSliceBytes slices (yielding between them, so the loop never stalls on a big
+  // log), into a private state; returns it (published to this.folds) or `st` unchanged. Sound only because:
+  //   - it starts only when the log's mtime is older than RACY_MS + 1s, and takes ITS OWN stat first (pre): the new fold carries
+  //     that stat, whose mtime then clears the racy test, and the read never goes past pre.size (endCap);
+  //   - a restat after the read must equal pre (size AND mtime), else something wrote the log meanwhile: the result is dropped
+  //     and the old (racy) fold kept; likewise if another _fold replaced or advanced the cached fold during a yield;
+  //   - the line index is dropped first and rebuilt from the bytes (a racy log is the one whose cached count is least trusted).
+  // Never throws: any error keeps `st`.
+  *_refoldSettled(id, st) {
+    try {
+      const file = this.store.file(id);
+      const at = Date.now();
+      const pre = statSync(file);
+      if (!(pre.size > 0) || at - pre.mtimeMs <= RACY_MS + 1000) return st;
+      const stamp0 = st.stamp;
+      this.store.idx.delete(id);
+      const nf = newFold();
+      let pin = null;
+      const pinAt = (pread, end) => { const p = probeWith(pread, end); pin = p ? { offset: end, ...p } : null; };
+      for (;;) {
+        const { events, end } = this.store.readFrom(id, nf.offset, 0, Infinity, pinAt, this.refoldSliceBytes, pre.size);
+        for (const e of events) foldEvent(nf, e);
+        if (end <= nf.offset) break; // nothing complete left before pre.size
+        nf.offset = end;
+        if (end >= pre.size) break;
+        yield;
+      }
+      const post = statSync(file);
+      if (post.size !== pre.size || post.mtimeMs !== pre.mtimeMs) return st;
+      if (this.folds.get(id) !== st || st.stamp !== stamp0 || !nf.created) return st;
+      nf.stamp = `${pre.size}:${pre.mtimeMs}`;
+      nf.stat = { size: pre.size, mtimeMs: pre.mtimeMs, at };
+      nf.rec = foldRecord(id, nf);
+      this.folds.set(id, nf);
+      if (this._rosterWatch) this._foldClean.add(id);
+      if (pin && pin.offset === nf.offset) this._foldPins.set(id, pin); else this._foldPins.delete(id);
+      return nf;
+    } catch { return st; }
+  }
+
   // A save, one log per step (a generator: the async save yields between steps). A log appended to since its last fold is
   // folded first (a tail read), so the entry covers what this runner wrote. Past `deadline` (Date.now() ms) no log is read
   // any more: a fold already pinned at its offset is still saved (no I/O; one behind its log keeps its pinned offset and the
   // next boot resumes it), the rest are left out (the next boot folds them from 0). Returns { entries, skipped }.
-  *_foldIndexSteps(deadline = Infinity) {
+  *_foldIndexSteps(deadline = Infinity, refold = false) {
     const entries = new Map();
     let n = 0;
     let skipped = 0;
+    let racyPending = 0;
     for (const id of this.store.ids()) {
       const late = Date.now() > deadline;
       let st = this.folds.get(id);
       const ix = this.store.idx.get(id);
       const behind = !!(st && ix && ix.size !== st.offset);
       if (behind && !late) { try { st = this._fold(id); } catch { st = null; } }
+      // Racy fold (its log's mtime sat within RACY_MS of the stat that recorded it: a live agent was writing as the cold boot
+      // folded it): saved as is, the next boot cannot trust it and folds the log from 0 (idea-316: 126 of 5418 logs, the
+      // biggest, were 8s of a warm boot). Once the log has settled, fold it again from 0 here, off the boot path, under a stat
+      // older than RACY_MS: its entry is then trusted. Async saves only (the shutdown save cannot yield, and is budgeted).
+      else if (refold && !late && st?.stat && racy({ mtimeMs: st.stat.mtimeMs, statAt: st.stat.at })) st = yield* this._refoldSettled(id, st);
       let e = null;
       try { e = this._foldEntry(id, st, late); } catch { e = null; }
-      if (e) entries.set(id, e);
+      if (e) { entries.set(id, e); if (racy(e)) racyPending++; }
       else if (late && st) skipped++;
       if (++n % 32 === 0) yield;
     }
     for (const id of [...this._foldPins.keys()]) if (!entries.has(id)) this._foldPins.delete(id);
-    return { entries, skipped };
+    return { entries, skipped, racyPending };
   }
 
   // Saves every cached fold to foldIndexFile, synchronously (shutdown: the runner lock, and so the next runner's start, waits
@@ -1703,26 +1966,35 @@ export class Runner {
 
   // saveFoldIndexSync for after boot: yields to the event loop whenever a slice has run for sliceMs (a cold index probes every
   // log once: thousands of opens). Concurrent callers share one save; one that ends after shutdown() writes nothing (shutdown did).
-  saveFoldIndex(sliceMs = 8) {
+  saveFoldIndex(sliceMs = 8, round = 0) {
     if (!this._foldIndexOn()) return Promise.resolve(null);
     if (this._foldSave) return this._foldSave;
     this._foldSave = (async () => {
       const t0 = Date.now();
-      const g = this._foldIndexSteps();
+      const g = this._foldIndexSteps(Infinity, true);
       let t = Date.now();
       let r = g.next();
       while (!r.done) {
         if (Date.now() - t >= sliceMs) { await new Promise((res) => setImmediate(res)); t = Date.now(); }
         r = g.next();
       }
-      const { entries } = r.value;
+      const { entries, racyPending } = r.value;
       const result = this._shutDown ? 'shutdown' : writeFoldIndex(this.foldIndexFile, serializeFoldIndex(entries));
+      // Entries saved racy whose logs have not settled yet (written within the last seconds, e.g. every agent parked by the
+      // previous shutdown): nothing else would save again, so look again once the window has passed. A log still being written
+      // stays racy, hence the bounded rounds.
+      if (racyPending > 0 && round < RESAVE_ROUNDS && !this._shutDown) {
+        clearTimeout(this._resaveTimer);
+        this._resaveTimer = setTimeout(() => { this._resaveTimer = null; this.saveFoldIndex(sliceMs, round + 1).catch(() => {}); }, this.resaveDelayMs);
+        this._resaveTimer.unref?.();
+      }
       return { entries: entries.size, result, ms: Date.now() - t0 };
     })().finally(() => { this._foldSave = null; });
     return this._foldSave;
   }
 
   timeline(id, after = 0, limit = Infinity) { return this.store.read(id, after, limit); }
+  timelineAsync(id, after = 0, limit = Infinity) { return this.store.readAsync(id, after, limit); } // HTTP path: yields between 1 MB slices
 
   list() { return this.store.ids(); } // names only; use status(id) for details
 
@@ -1734,6 +2006,10 @@ export class Runner {
   shutdown({ keepResumable = false, keepDrainFile = false } = {}) {
     if (this._shutDown) return;
     this._shutDown = true;
+    clearTimeout(this._resaveTimer);
+    this._resaveTimer = null;
+    this._coldAbort?.abort(); // a boot's prefold still folding: its worker threads are terminated
+    this._coldAbort = null;
     this._pollAgy?.shutdown();
     this.closeRosterWatch();
     clearInterval(this._quietSweep);

@@ -29,7 +29,6 @@ import {
   TEAMS,
   UNASSIGNED,
   assignAgentToLane,
-  countsAsNeedsYou,
   getTeams,
   saveTeams,
   leadLadderFor,
@@ -53,9 +52,11 @@ import { BoringApp } from "./BoringAde";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
-import { FocusRail, railAlerts } from "./FocusRail";
+import { FocusRail } from "./FocusRail";
 import { topNeedsYouId } from "./needsYouTop";
-import { nowTickValue } from "./useNowTick";
+import { nowTickValue, useNowTick } from "./useNowTick";
+import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
+import { attentionItems, needsYouCount } from "./attentionItems";
 import { perfEndPainted, perfStart } from "./perf";
 import { activateNth, getPanes, openAgent, openAgentInTab, setFocus, subscribePanes, toggleFocus, useFocusMode, useHasTabs } from "./panes";
 import {
@@ -90,10 +91,11 @@ import { SquadFloor } from "./SquadFloor";
 import { SkyZones } from "./SkyZones";
 import { HubPages } from "./HubPages";
 import { fetchHubCwd, hubOverlordError, hubSpinUpError, overlordProfileName, skyZoneIds, skyZonesFor, spinUpOverlord } from "./skyZonesLogic";
-import { FullToggle, PinGrid, QuickBugsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
+import { FullToggle, PinGrid, QuickBugsChip, QuickWorkflowsChip, SidebarPins, SquadsHome, setFullView, useFullView, type PinHandler } from "./PinGrid";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { popAction, urlAgentFor } from "./pinFocusLogic";
-import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { clearPinFocus, enterSquadsHome, exitSquadsHome, focusPin, getPinFocus, getPinsHome, getSquadsHome, laneMemberIdsOf, openPinMember, spinUpPin, useFocusDrawerOpen, usePinFocus, useSkyRequest, useBoringShownAgent, usePinsHome, useSquadsHome } from "./pinFocus";
+import { useSkyTakeover } from "./useSkyTakeover";
 import { TopBreadcrumb } from "./Breadcrumb";
 import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
@@ -265,9 +267,11 @@ const SidebarTeam = memo(function SidebarTeam({
     (pin: Pin) => void Promise.resolve(onQuickStart(pin)).catch((e) => alert(`Could not start ${pin.lane.name}: ${e}`)),
     [onQuickStart],
   );
-  const firstAlert = v.members
-    .filter(countsAsNeedsYou)
-    .sort(alertOrder)[0];
+  // Spine parity: the collapsed badge is needsYouCount at the shared tick (stalled included, finished excluded), the same number the
+  // BoringInbox heading sums. Worst state colours it: any error -> err, otherwise attn. Expanded squads show their own lane badges instead.
+  const now = useNowTick();
+  const needs = needsYouCount(v.members, now);
+  const needsTone = attentionItems(v.members, now).some((i) => i.kind === "error") ? "err" : "attn";
   return (
     <div className={`team ${active ? "active" : ""} ${expanded ? "expanded" : "collapsed"}`} data-testid={`sidebar-team-${v.team.id}`}>
       <div className="team-head-line">
@@ -291,7 +295,9 @@ const SidebarTeam = memo(function SidebarTeam({
           <span className="team-name"><TeamNameEdit team={v.team} /></span>
           {v.running > 0 && <span className="badge">{v.running}▶</span>}
         </button>
-        {firstAlert && <AttentionBadge view={v} onOpen={pick} hubQueueInstead />}
+        {!expanded && needs > 0 && (
+          <AttentionBadge view={v} onOpen={pick} hubQueueInstead count={needs} className={`badge alert team-needs ${needsTone}`} testId={`team-needs-${v.team.id}`} />
+        )}
         {v.team.id !== UNASSIGNED.id && <BugButton view={v} onOpen={onPin} />}
         {v.team.id !== UNASSIGNED.id && (
           <button
@@ -325,6 +331,7 @@ const Sidebar = memo(function Sidebar(props: {
   onStartResize: (e: React.MouseEvent) => void;
   onTeam: (id: string) => void;
   onAgent: PickTeamAgent;
+  onNeedsYouRow: (row: NeedsYouRow) => void;
   onQuickStart: PinHandler;
   onNewSquad: () => void;
   onPairDevice?: () => void;
@@ -339,6 +346,7 @@ const Sidebar = memo(function Sidebar(props: {
   const uiScale = useUiScale();
   const uiScalePct = Math.round(uiScale * 100);
   const views = props.views;
+  const now = useNowTick();
   const allCollapsed = views.length > 0 && views.every((v) => props.collapsedTeams.has(v.team.id));
   const staleBuild = useStaleBuild();
   const [signalsOpen, setSignalsOpen] = useState<boolean>(() => {
@@ -381,6 +389,11 @@ const Sidebar = memo(function Sidebar(props: {
           {props.sidebarCollapsed ? "»" : "«"}
         </button>
       </div>
+      {!props.sidebarCollapsed && (
+        <div className="sidebar-needs-spine" data-testid="sidebar-needs-spine">
+          <BoringInbox views={views} onOpen={props.onNeedsYouRow} now={now} sidebarMenu />
+        </div>
+      )}
       <SidebarInboxBadge
         onSelect={() => {
           if (props.teamId) props.onTeam(props.teamId);
@@ -1055,7 +1068,10 @@ const TeamPage = memo(function TeamPage(props: {
             <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
             <TeamNameEdit team={view.team} />
             {view.team.id !== UNASSIGNED.id && (
-              <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+              <>
+                <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+                <QuickWorkflowsChip view={view} onOpen={props.onQuickStart} />
+              </>
             )}
             <span className="h1-stats">
               {teamCount} TEAMS · <span className={view.needsYou > 0 ? "stat-alert" : ""}>{view.needsYou} NEED YOU</span>
@@ -1093,7 +1109,10 @@ const TeamPage = memo(function TeamPage(props: {
           <TeamEmblem name={view.team.name} color={view.team.color} size={32} />
           <TeamNameEdit team={view.team} />
           {view.team.id !== UNASSIGNED.id && (
-            <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+            <>
+              <QuickBugsChip view={view} onOpen={props.onQuickStart} />
+              <QuickWorkflowsChip view={view} onOpen={props.onQuickStart} />
+            </>
           )}
           <span className="h1-stats">
             <span className="stat-cyan">{view.running} WORKING</span> ·{" "}
@@ -1360,9 +1379,8 @@ function onShortcut(e: KeyboardEvent) {
 }
 
 function openTopNeedsYou() {
-  // Normal: row 0 of the SAME list that renders boring-needs-you-count (R6-2); empty = no-op. Psycho: the rail list.
-  const boring = document.documentElement.getAttribute("data-vibe") === "boring";
-  const id = boring ? topNeedsYouId(derived().views, nowTickValue()) : railAlerts().list[0]?.agent.id;
+  // Row 0 of the SAME list that renders boring-needs-you-count (R6-2), in Normal and in the Psycho sidebar spine; empty = no-op.
+  const id = topNeedsYouId(derived().views, nowTickValue());
   if (!id) return;
   // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
   const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: id }, cancelable: true }));
@@ -1513,7 +1531,7 @@ export function App() {
   const membersRef = useRef(members);
   membersRef.current = members;
   useEffect(() => {
-    setCloseGuard(() => getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
+    setCloseGuard(() => !DEMO && getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
     return () => setCloseGuard(null);
   }, []);
   useAttentionTitle(views);
@@ -1780,6 +1798,10 @@ export function App() {
   // Sky-gods hub: the two bots chat in the sky zones; any other agent opened on the hub lane takes the normal focus view.
   const hubAgentOpen = hubFocused && !!pinFocusView && hubOpenAgent(pinFocus?.agentId, activeAgentId, laneMemberIdsOf(hubPinNow), skyZoneIds(skyZonesFor(pinFocusView)));
   // Agents the sky zones own are not mounted in the panes (one mount each); only while the zones are actually shown.
+  // The Squad hub page itself (not a hub agent's chat, not a feature lane): the TVs + tower own the width, so the PinRail steps aside.
+  // A taken-over TV keeps the rail: its chat's drawer controls portal into the rail's card slot.
+  const skyTakeover = useSkyTakeover(`${hubFocused}:${hubAgentOpen}`);
+  const hubHome = hubFocused && !hubAgentOpen && !skyTakeover;
   const skyOwned = useMemo(() => (hubFocused && !hubAgentOpen && pinFocusView ? skyZoneIds(skyZonesFor(pinFocusView)) : undefined), [hubFocused, hubAgentOpen, pinFocusView]);
   const drawerOpen = useFocusDrawerOpen();
   const skyReq = useSkyRequest(); // a rail click on RiffBot / Overlord remounts the TVs with that bot's chat open
@@ -1806,6 +1828,37 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [pinLayout]);
+  // Psycho: the Squad home IS the hub page. Landing on the squad page (sidebar click, Esc from a lane, reload) focuses the hub pin,
+  // so HubPages (SkyZones over SquadFloor) renders instead of the PinGrid. Squads Home, FULL, focus mode and Normal are untouched.
+  useEffect(() => {
+    if (vibe === "boring" || !pinLayout || !pinsHome || squadsHome || pinFocus) return;
+    const hub = hubPinForSquad(view);
+    if (hub) void focusPin(hub).catch(() => {});
+  }, [vibe, pinLayout, pinsHome, squadsHome, pinFocus, view]);
+  // Psycho Needs-you spine routing (the Sidebar's BoringInbox rows and Ctrl+J): the agent's own lane pin via openPinMember, else the plain onAgent.
+  const routeNeedsYou = useCallback((v: TeamView, agentId: string) => {
+    const { pinned, done } = pinsForSquad(v);
+    const pin = [...pinned, ...done, hubPinForSquad(v)].find((p): p is Pin => !!p && laneMemberIdsOf(p).has(agentId));
+    if (!pin) return onAgent(v.team.id, agentId);
+    setFullView(false);
+    setFocus(false);
+    setTeamId(v.team.id);
+    setScreen("teams");
+    openPinMember(pin, agentId);
+  }, [onAgent]);
+  const onNeedsYouRow = useCallback((row: NeedsYouRow) => routeNeedsYou(row.view, row.item.id), [routeNeedsYou]);
+  useEffect(() => {
+    if (vibe === "boring") return;
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ agentId?: string }>).detail?.agentId;
+      const v = id ? views.find((x) => x.members.some((m) => m.agent.id === id)) : undefined;
+      if (!id || !v) return;
+      e.preventDefault();
+      routeNeedsYou(v, id);
+    };
+    window.addEventListener("vs:boring-open-agent", onOpen);
+    return () => window.removeEventListener("vs:boring-open-agent", onOpen);
+  }, [vibe, views, routeNeedsYou]);
   const leftPinLayout = useRef(false);
   useEffect(() => {
     if (!pinLayout) clearPinFocus();
@@ -2079,7 +2132,7 @@ export function App() {
 
   return (
     <div
-      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
+      className={`app ${focus ? "focus" : ""} ${withPanes ? "with-panes" : ""} ${split && withPanes ? "split" : ""} ${pinFocused ? `pin-focus ${drawerOpen ? "" : "pin-no-drawer"} ${hubFocused ? "hub-focus" : ""} ${hubHome ? "hub-home" : ""}` : ""} ${hidePanes ? "pins-home" : ""} ${sheet ? "sheet-open" : ""} ${mobileTeamView ? "mobile-team-view" : ""} ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${pinFocused && pinRailCollapsed ? "pin-rail-collapsed" : ""}`}
       style={{ "--sidebar-w": `${sidebarWidth}px` } as React.CSSProperties}
     >
       {topBanners}
@@ -2104,6 +2157,7 @@ export function App() {
           onDiagnostics={openDiagnostics}
           onSettings={openSettings}
           onAgent={onAgent}
+          onNeedsYouRow={onNeedsYouRow}
           onQuickStart={onQuickStart}
           onNewSquad={openNewSquad}
           lanExposed={exposedIps.length > 0 && !isRemote()}
@@ -2178,7 +2232,7 @@ export function App() {
             <HubPages
               agentOpen={hubAgentOpen}
               sky={<><SkyZones view={pinFocusView} key={skyReq.n} initialOpen={skyReq.bot} onSuccessor={paneSuccessor} onSpinUp={onSpinUpPin} onSpinUpOverlord={onSpinUpOverlord} overlordBusy={overlordBusy} />{hubSpinUpErr && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-spin-up-error">Could not start RiffBot: {hubSpinUpErr}</div>}{overlordErrMsg && <div className="pin-focus-spinup-error" role="alert" data-testid="sky-overlord-error">Could not start the Overlord: {overlordErrMsg}</div>}</>}
-              strip={<SquadQueue view={pinFocusView} variant="strip" />}
+              strip={null}
               tower={<SquadFloor view={pinFocusView} />}
             />
           )}
@@ -2186,7 +2240,7 @@ export function App() {
       ) : (
         panesNode
       )}
-      {pinFocusView && pinFocus && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
+      {pinFocusView && pinFocus && !hubHome && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
       <MobileBar />
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">

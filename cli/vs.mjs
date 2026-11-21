@@ -52,7 +52,7 @@ import {
   whoCandidate,
 } from "../server/identity.mjs";
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
-import { legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
+import { findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
 import { liveRoles, roleProfileLabel } from "../server/spawn-route.mjs";
 import { loadTierLadder } from "../server/stakes-ladder.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
@@ -250,6 +250,8 @@ export function parseArgs(argv) {
     "base",
     "brief",
     "timeout",
+    "deadline",
+    "needs",
     "file",
     "goal",
     "files",
@@ -290,6 +292,7 @@ export function parseArgs(argv) {
     "dryRun",
     "noForce",
     "killBackground",
+    "teamOnly",
     "background",
     "force",
     "print",
@@ -526,8 +529,9 @@ Usage:
   vs task set <unit-id> [--goal <g>] [--files <f1,f2>] [--done-check <cmd>] [--status <todo|running|done|blocked>] [--branch <b>] [--commit <sha>]
   vs cap [list | add <provider> | clear <provider>]
   vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <tierA-security|tierA-invariant|normal|mechanical>]   start a worker in your lane (long brief: --prompt-file <path>, or "-" for stdin)
-  vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]   hand the lane's lead to a successor, or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy)
+  vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]   hand the lane's lead to a successor (--profile: a role=lead profile, see \`vs profiles --role lead\`; default inherits the old lead's), or retire stale predecessor leads to former-lead (owner/Overlord/lane lead/Buddy; --force also retires the live lead: Overlord on another lane or owner only, logged as a decision)
   vs restart [--dry-run] [--timeout <sec>] [--no-force] [--kill-background]   OWNER/Overlord only, never from a worker: restart the runner + VS server detached, once idle (waits for running:0 and no held background work, default 600s). Background work still running defers it and names the holders' leads with a ready-to-send drain ask; no timer retries: within 30 min it refuses until each named lead logged restart-feedback 'drained restart', and a successful restart sends them 'restart-done'. --kill-background: the owner's shell only (per-run OK). Result in ~/.vibesquad/restart-<ts>.json
+  vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. A durable server-side restart request: the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
   vs status <agent>   status + last assistant message
@@ -2032,6 +2036,7 @@ export async function runAgentVerb(verb, flags, ctx) {
       ...(flags.lane ? { lane: String(flags.lane) } : {}),
       ...(flags.steer ? { steer: String(flags.steer) } : {}),
       ...(flags.force ? { force: true } : {}),
+      ...(flags.profile !== undefined ? { profile: String(flags.profile) } : {}),
     };
   } else if (verb === "restart_buddy") {
     args = { lane: String(flags.lane), ...(flags.reason ? { reason: String(flags.reason) } : {}), ...(flags.profile ? { profile: String(flags.profile) } : {}), ...(flags.provider ? { provider: String(flags.provider) } : {}) };
@@ -2118,8 +2123,10 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   if (verb === "lead") {
     const sub = String(flags._.shift() ?? "").toLowerCase();
     if (sub !== "handoff" && sub !== "retire") {
-      throw new Error('usage: vs lead handoff [--lane <code>] [--steer "<note>"] | vs lead retire [--lane <code>]');
+      throw new Error('usage: vs lead handoff [--lane <code>] [--steer "<note>"] [--profile "<Lead profile>"] | vs lead retire [--lane <code>] [--force]');
     }
+    if (flags.profile === true || (flags.profile !== undefined && !String(flags.profile).trim())) throw new Error('vs lead handoff --profile needs a lead profile name (see `vs profiles --role lead`)');
+    if (sub === "retire" && flags.profile !== undefined) throw new Error("vs lead retire does not take --profile (it only applies to vs lead handoff)");
     flags.leadAction = sub;
     verb = "handoff_lead";
   }
@@ -2137,6 +2144,19 @@ export async function commandAgentVerb(verb, flags, makeContext = createContext,
   }
   if (verb === "spawn" && (!flags.profile || !(flags.prompt ?? flags._.length))) {
     throw new Error('usage: vs spawn --title "<t>" --profile "<profile>" --prompt "<text>" | --prompt-file <path|-> [--cwd <dir>] [--stakes <v>]');
+  }
+  // A role=lead profile must never be silently spawned as a worker (that leaves the lane with no lead and `vs who lead`
+  // returns NONE): refuse and point at `vs lead handoff --profile <name>` instead (idea-376).
+  if (verb === "spawn" && flags.profile) {
+    const spawnProfile = String(flags.profile).trim();
+    if (spawnProfile) {
+      const resolved = findProfile(spawnProfile, undefined);
+      if (resolved?.role === "lead") {
+        throw new Error(
+          `vs spawn refuses the role=lead profile "${spawnProfile}" (it would spawn a role=worker agent, leaving the lane with no lead); use \`vs lead handoff --profile "${spawnProfile}"\` to hand the lane's lead to a successor`,
+        );
+      }
+    }
   }
   if (verb === "send" && (!flags._[0] || flags._.length < 2)) throw new Error('usage: vs send <agent> "<text>" | --prompt-file <path|->');
   if (verb === "status" && !flags._[0]) throw new Error("usage: vs status <agent>");
@@ -2623,7 +2643,7 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
   const id = String(env.VS_AGENT_ID ?? "").trim() || String(env.PASEO_AGENT_ID ?? "").trim();
   if (!id || !isRunnerId(id)) {
     if (!hasOwnerProof(env)) throw new Error("vs restart: no owner proof (no agent id and no readable local token under the VibeSquad home); only the owner's shell or the Overlord may restart the runtime.");
-    return;
+    return { owner: true, id: "owner", team: "", lane: "" };
   }
   let who = identity;
   if (!who) {
@@ -2645,6 +2665,7 @@ export async function assertRestartCaller(identity, teams = TEAM_DEFS, env = pro
   if (who.role !== "lead" || !team || !lane || !isHubLane(team, lane)) {
     throw new Error(`vs restart: ${id} is a ${who.role || "worker"}; restarting the runtime cuts every agent's turn, so only the owner or the Overlord (hub lead) may. Ask your lead.`);
   }
+  return { owner: false, id, team: team.id, lane: lane.id };
 }
 
 /**
@@ -2704,13 +2725,89 @@ async function heldViaRunner(env = process.env, { timeoutMs = 5000 } = {}) {
   }
 }
 
-export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now } = {}) {
+/** First line restart-runtime appends to its --log (mirrors scripts/restart-runtime.mjs STARTED_LINE; not imported, see above). */
+export const RESTART_STARTED_LINE = "restart-runtime started";
+
+/**
+ * idea-355: a `vs restart` that could not get the script going leaves a failed restart-<ts>.json, the same file a real run
+ * writes, so `vs watch --restart` and the drain guard see it (ok:false, launchFailed) even when nobody saw our stderr
+ * (a detached Start-Process). Best effort: returns the file or null.
+ */
+export function writeRestartLaunchFailure(vsHome, error, extra = {}) {
+  const at = new Date().toISOString();
+  const file = path.join(vsHome, `restart-${at.replace(/[:.]/g, "-")}.json`);
+  const rec = { startedAt: at, finishedAt: at, dryRun: false, ok: false, launchFailed: true, steps: [], cutAgents: [], resumedAgents: [], resumeFailed: [], forced: [], errors: [`launch: ${error}`], cliPid: process.pid, ...extra };
+  try { fs.mkdirSync(vsHome, { recursive: true }); fs.writeFileSync(file, JSON.stringify(rec, null, 2)); return file; } catch { return null; }
+}
+
+/**
+ * idea-355: wait (up to timeoutMs) for the launched script to append RESTART_STARTED_LINE to its log. 'started', 'exited'
+ * (its pid is gone and it never wrote the line: it never ran) or 'unconfirmed' (still alive, slow to boot).
+ */
+export async function confirmRestartStarted(logFile, pid, { timeoutMs = 10000, alive = (p) => { try { process.kill(p, 0); return true; } catch (e) { return e.code === "EPERM"; } }, sleep = (ms) => new Promise((r) => setTimeout(r, ms)), now = Date.now } = {}) {
+  const seen = () => { try { return fs.readFileSync(logFile, "utf8").includes(RESTART_STARTED_LINE); } catch { return false; } };
+  const end = now() + timeoutMs;
+  for (;;) {
+    if (seen()) return "started";
+    if (!(Number.isInteger(pid) && pid > 0 && alive(pid))) return seen() ? "started" : "exited";
+    if (now() >= end) return "unconfirmed";
+    await sleep(250);
+  }
+}
+
+/** The owner's log lane for restart-feedback lines: the vibesquad Squad's hub lane (else the first hub lane). */
+function ownerHubLane(teams) {
+  const order = [...teams].sort((a, b) => (a.id === "vibesquad" ? -1 : b.id === "vibesquad" ? 1 : 0));
+  for (const t of order) {
+    const hub = (t.lanes ?? []).find((l) => isHubLane(t, l));
+    if (hub) return { team: t.id, lane: hub.id };
+  }
+  return { team: "", lane: "" };
+}
+
+/**
+ * idea-347: `vs restart request <tip> [--deadline <min>] [--needs <tokens>]` | `vs restart status [--json]` | `vs restart abort
+ * [--reason <why>]`. Request and abort are the owner's or the Overlord's (the vs restart gate); status is read-only. The server
+ * loop (server/restart-request.mjs) sends the drain asks, collects 'drained restart <tip>', and fires vs restart once.
+ */
+export async function commandRestartRequest(flags, { identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, now = Date.now } = {}) {
+  const sub = String(flags._[0] ?? "");
+  const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  const rr = await import("../server/restart-request.mjs");
+  if (sub === "status") {
+    if (flags._.length > 1) throw new Error("usage: vs restart status [--json]");
+    const cur = rr.readRestartRequest(vsHome);
+    process.stdout.write((flags.json ? JSON.stringify(cur, null, 2) : rr.formatRequestStatus(cur, now())) + "\n");
+    return 0;
+  }
+  const caller = await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
+  const by = caller?.owner === false ? caller.id : "owner";
+  if (sub === "abort") {
+    if (flags._.length > 1) throw new Error('usage: vs restart abort [--reason "<why>"]');
+    const req = rr.abortRestartRequest(vsHome, { by, reason: flags.reason ?? "", now: now() });
+    process.stdout.write(`${req.id} aborted; the server tells the asked leads to lift their hold.\n`);
+    return 0;
+  }
+  if (flags._.length !== 2) throw new Error("usage: vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]");
+  const where = caller?.owner === false && caller.team ? { team: caller.team, lane: caller.lane } : ownerHubLane(teams);
+  const deadlineMin = flags.deadline === undefined ? rr.DEFAULT_DEADLINE_MIN : /^\d+$/.test(String(flags.deadline)) ? Number(flags.deadline) : NaN;
+  const req = rr.createRestartRequest(vsHome, { tip: flags._[1], requestedBy: by, ...where, needs: flags.needs ?? "", deadlineMin, scope: flags.teamOnly ? "team" : "all", now: now() });
+  process.stdout.write(`${req.id} recorded (tip ${req.tip}, deadline ${req.deadline}). The server sends the drain ask to every live lead${req.scope === "team" ? ` of Squad ${req.team}` : " of every Squad (the restart is machine-wide; --team-only limits it to yours)"} within ~${rr.TICK_MS / 1000}s, ` +
+    `fires vs restart once all have logged restart-feedback 'drained restart ${req.tip}' (or at the deadline, naming who did not), and logs restart-done. No timer to hold: end your turn. Progress: vs restart status\n`);
+  return 0;
+}
+
+export async function commandRestart(flags, { spawnFn = null, identity = null, teams = TEAM_DEFS, env = process.env, hasOwnerProof, verify, drainGuard = restartDrainGuard, listAgents = listAgentsViaRunner, heldList = heldViaRunner, now = Date.now, confirmStart = spawnFn ? null : confirmRestartStarted } = {}) {
   if (flags.timeout !== undefined && !/^[1-9]\d{0,6}$/.test(String(flags.timeout))) throw new Error("vs restart: --timeout must be a positive integer (seconds)");
   if (!flags.dryRun) await assertRestartCaller(identity, teams, env, { ...(hasOwnerProof ? { hasOwnerProof } : {}), ...(verify ? { verify } : {}) });
   if (flags.killBackground && !flags.dryRun) assertKillBackgroundOwner(env, hasOwnerProof ?? ownerProofFromEnv);
   const script = path.resolve(import.meta.dirname, "..", "scripts", "restart-runtime.mjs");
   if (!fs.existsSync(script)) throw new Error(`restart script not found: ${script}`);
-  const vsHome = env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad");
+  // idea-355: a detached launch (e.g. PowerShell Start-Process) may come without a usable cwd or home: say so, never vanish.
+  try { process.cwd(); } catch (e) { throw new Error(`vs restart: the working directory is unusable (${e.code || e.message}); run it from an existing folder`); }
+  const homeDir = (() => { try { return os.homedir(); } catch { return ""; } })();
+  if (!env.VIBESQUAD_HOME && !homeDir) throw new Error("vs restart: no home directory (USERPROFILE/HOME unset) and no VIBESQUAD_HOME: cannot find ~/.vibesquad");
+  const vsHome = env.VIBESQUAD_HOME || path.join(homeDir, ".vibesquad");
   // D2 retry guard (docs/PLAN_COORDINATED_DRAIN.md): within 30 min of a deferral, every lead it named must have logged
   // restart-feedback 'drained restart' first. --kill-background (owner only, above) is the owner's override.
   if (!flags.dryRun && !flags.killBackground) {
@@ -2724,6 +2821,17 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
     const skip = drainSkippedNote(g.skipped);
     if (skip) process.stdout.write(`vs restart: drain guard ${skip}
 `);
+  }
+  // idea-370: a plain `vs restart` while a server-side request is open (requested/draining/ready) is not blocked, only flagged:
+  // the request's drain asks and its single fire are the intended path (vs restart status / vs restart abort).
+  if (!flags.dryRun) {
+    try {
+      const open = (await import("../server/restart-request.mjs")).readRestartRequest(vsHome);
+      if (open && ["requested", "draining", "ready"].includes(open.state)) {
+        process.stderr.write(`vs restart: warning: restart request ${open.id} (tip ${open.tip}) is ${open.state}; the server will fire its own restart once the leads drain. This manual restart goes ahead anyway; see vs restart status, or vs restart abort first if you did not mean both.
+`);
+      }
+    } catch { /* an unreadable request file never blocks a restart */ }
   }
   const logFile = path.join(vsHome, "logs", `restart-${new Date().toISOString().replace(/[:.]/g, "-")}.log`);
   const args = [script, "--log", logFile];
@@ -2742,21 +2850,39 @@ export async function commandRestart(flags, { spawnFn = null, identity = null, t
     if (r.stderr) process.stderr.write(r.stderr);
     return r.status ?? 1;
   }
+  // idea-355: every way the detached launch can fail is loud: non-zero exit, a message, a line in the log, and a failed
+  // restart-<ts>.json (stderr is invisible when `vs restart` itself was started detached).
+  const launchFail = (why) => {
+    try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] vs restart: ${why}\n`); } catch { /* the log may be what failed */ }
+    const file = writeRestartLaunchFailure(vsHome, why, { log: logFile });
+    return new Error(`vs restart: ${why}\nlog: ${logFile}${file ? `\nresult: ${file}` : ""}`);
+  };
+  // A real launch heads the log (tests inject spawnFn and must not write into the owner's ~/.vibesquad/logs).
+  if (!spawnFn) { try { fs.appendFileSync(logFile, `[${new Date().toISOString()}] vs restart (cli pid ${process.pid}, cwd ${process.cwd()}): launching ${script}\n`); } catch (e) { throw launchFail(`cannot write the restart log (${e.code || e.message})`); } }
   let pid = null;
   if (spawnFn) pid = spawnFn(process.execPath, args);
   else if (process.platform === "win32") {
     const q = (x) => `'${String(x).replace(/'/g, "''")}'`;
     const cmdline = [process.execPath, ...args].map((a) => `"${a}"`).join(" ");
     const ps = `$si = New-CimInstance -ClassName Win32_ProcessStartup -ClientOnly -Property @{ShowWindow=[uint16]0}; $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine=${q(cmdline)}; ProcessStartupInformation=$si}; if ($r.ReturnValue -ne 0) { exit 1 }; $r.ProcessId`;
-    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", windowsHide: true });
-    if (r.status !== 0) throw new Error(`could not launch the restart script detached: ${(r.stderr || r.stdout || "").trim()}`);
+    const r = spawnSync("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], { encoding: "utf8", windowsHide: true, timeout: 60000 });
+    if (r.status !== 0) throw launchFail(`could not launch the restart script detached: ${(r.error?.message || r.stderr || r.stdout || `powershell exit ${r.status}`).trim()}`);
     pid = Number(String(r.stdout).trim());
   } else {
     // X1b: the relaunched server/runner must never inherit this shell's agent identity (VS_AGENT_ID / PASEO_AGENT_ID /
     // VS_AGENT_TOKEN), or the new server would call the runner as that agent. (WMI above never inherits our env.)
-    const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(env) });
-    child.unref();
-    pid = child.pid;
+    try {
+      const child = spawn(process.execPath, args, { detached: true, stdio: "ignore", env: stripAgentEnv(env) });
+      child.on("error", () => { /* surfaced below: no pid, or it never writes the started line */ });
+      child.unref();
+      pid = child.pid;
+    } catch (e) { throw launchFail(`could not launch the restart script detached: ${e.message}`); }
+  }
+  if (!Number.isInteger(pid) || pid <= 0) throw launchFail(`the detached launch returned no pid (${JSON.stringify(pid)})`);
+  if (confirmStart) {
+    const st = await confirmStart(logFile, pid);
+    if (st === "exited") throw launchFail(`restart script pid ${pid} exited without starting (it never wrote "${RESTART_STARTED_LINE}" to the log)`);
+    if (st !== "started") process.stdout.write(`vs restart: pid ${pid} is alive but has not logged its start yet; check the log below.\n`);
   }
   process.stdout.write(`restart launched (pid ${pid}); it waits for the runner to go idle (no open turns, no background work), then restarts runner + server. If background work outlasts the wait it defers instead (exit 4, nothing stopped).
 log: ${logFile}
@@ -2811,11 +2937,18 @@ function commandCap(flags) {
   throw new Error(`unknown cap subcommand "${sub}". Use: vs cap list | add | clear`);
 }
 
-function defaultBaseRef(repoRoot) {
-  for (const ref of ["master", "main"]) {
-    const r = spawnSync("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${ref}`], { cwd: repoRoot, encoding: "utf8" });
-    if (r.status === 0) return ref;
-  }
+export function defaultBaseRef(repoRoot) {
+  const git = (args) => spawnSync("git", args, { cwd: repoRoot, encoding: "utf8", windowsHide: true });
+  const hasBranch = (ref) => git(["rev-parse", "--verify", "--quiet", `refs/heads/${ref}`]).status === 0;
+  // idea-332: a repo with no dev branch must branch from its real default, not an unrelated empty master/main.
+  // Order: origin/HEAD target, the main checkout's current branch, master/main, HEAD.
+  const o = git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
+  const originDefault = o.status === 0 ? String(o.stdout).trim().replace(/^origin\//, "") : "";
+  if (originDefault && hasBranch(originDefault)) return originDefault;
+  const cur = git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  const curBranch = cur.status === 0 ? String(cur.stdout).trim() : "";
+  if (curBranch && hasBranch(curBranch)) return curBranch;
+  for (const ref of ["master", "main"]) if (hasBranch(ref)) return ref;
   return "HEAD";
 }
 
@@ -3016,7 +3149,7 @@ export function main(argv) {
     if (command === "spec") return commandSpec(flags);
     if (command === "task") return commandTask(flags);
     if (command === "cap") return commandCap(flags);
-    if (command === "restart") return commandRestart(flags);
+    if (command === "restart") return ["request", "status", "abort"].includes(String(flags._[0] ?? "")) ? commandRestartRequest(flags) : commandRestart(flags);
     if (command === "worktree") return commandWorktree(flags);
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);

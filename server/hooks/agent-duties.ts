@@ -61,6 +61,7 @@ import {
 } from "../spawn-route.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
+import { redactHostPaths } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
@@ -69,6 +70,7 @@ import {
   loadUserSettings,
   readJsonFileWithBom,
 } from "../user-settings.mjs";
+import { LESSONS_BEGIN, LESSONS_END, readLessons } from "../lessons.mjs";
 
 type Labels = Record<string, string>;
 
@@ -186,7 +188,7 @@ export const EVERYONE_LAYER = [
 export const WORKER_PACK = [
   "Role: worker.",
   "- Never run `vs log` writes. Put your result (PASS/FAIL, what changed, refs) in your final message; a digest agent logs it for the lead.",
-  "- Your final message is the report; never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
+  "- Your final message IS the report: the server forwards it to your lead when your turn ends. Do not spend a turn on `vs send`/`report` to the lead afterwards, whatever the task prompt says (`Report to ★ …` means just finish with a final message). Never call built-in SendMessage or ListAgents; mid-task use `send` (VS MCP or `vs send`). For anything long in `vs spawn`/`vs send`, use `--prompt-file <path>` or `-` for stdin, never a huge argv string.",
   "- Report blockers to your lead in your final message. Do not edit lead-only docs or spawn successors.",
 ].join("\n");
 
@@ -225,7 +227,7 @@ export const HUB_LEAD_RULES = [
   "  2. Interrupt + steer: runaway/looping turn → `vs cancel <lead>` (MCP `cancel`), send the steer, `vs wait <lead> --timeout 90`.",
   "  3. Takeover/spawn: only if the steer failed or timed out, the lead is errored/wedged past budget, or `vs who lead --lane <x>` is NONE → `vs lead handoff --lane <x> --steer \"<steer note>\"` (MCP `handoff_lead` with `lane` + `steer`; only the Squad's Overlord may name another lane), or spawn a fresh lead (`spawn_worker` with `role=lead`, `lane=<x>`) for a leaderless lane. Floor: a healthy lead under 100k tokens is refused (steer first, ladder 1-2); an errored, wedged or permission-stuck lead is not. `--force` needs a non-empty `--steer` and is logged as a decision. Never raw-archive a lead.",
   "- Multi-item waits (several leads, a suite run, a restart): run `vs watch add <ids...> [--suite] [--restart] [--stall <min>]` and end your turn (one ping). Use no `vs wait` loops and no heartbeats for multi-item waits; the ladder's `vs wait <lead> --timeout 90` stays for a single steer.",
-  "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
+  "- Own the routed ops: restart the VibeSquad server only when a merged change needs it, log `vs log metric \"server restart: <why>\"`. Restart via the server-side request, not a hand-held drain: `vs restart request <tip> [--deadline <min>] [--needs <Live-Needs tokens>] [--team-only]` (the server asks every live lead of every Squad to drain, fires `vs restart` once, logs restart-done; end your turn, no timer to hold), follow it with `vs restart status`, call it off with `vs restart abort`. A plain `vs restart` while a request is open prints a warning. Fallback only if the request path is unavailable: send the drain asks yourself, wait for each `drained`, then run `vs restart`; handle post-merge runtime syncs and cross-lane tree blockers (untracked files tripping suites, worktree node_modules junction gaps, flaky shared tests) that leads hand you, or route them to @bug (`vs inbox add --lane bug-chaser`).",
   "- Inbox cards with no lane arrive as a `Route this:` message: bounce the card with the existing `vs inbox triage --bounce <cardId> --lane <lane>`, send it on to that lane's Buddy (`vs who brainstorm --lane <lane>`, then `vs send`), and `vs log decision` where it went. Never open a new agent for a card.",
   "- Escalations to the owner (phone cockpit): when you need a decision, end your message with a fenced block ```vs:decision with lines `summary: <1-2 lines: what stopped>`, `do: <your recommended action>`, one `alt: <other option>` per alternative, and optionally `vs:riff @<lane>` to send the owner to that lane's Buddy. It renders as one-tap buttons; keep each line short and put nothing else in the fence.",
   "- Secondary role, fast-lane hub executor: when the owner orders a quick cross-cutting fix or repo chore directly, dispatch hub workers titled `Hub<ord> · <job>` in a worktree from `vs worktree create`. Never take over feature design from Team Buddies.",
@@ -598,6 +600,11 @@ export function isDigestNoise(labels: Labels, title?: string | null): boolean {
   return !job || /\bprobe/i.test(job) || /\bprobe/i.test(String(title ?? ""));
 }
 
+/** idea-352: cap on a worker's final message forwarded inside the lead's [done] wake. */
+export const AUTO_REPORT_MAX = 2000;
+/** idea-352: cap on all forwarded final messages inside one coalesced wake. */
+export const AUTO_REPORT_TOTAL_MAX = 5000;
+
 /** A report is loggable as [done] only if it states PASS or FAIL. */
 export function statesVerdict(text: string): boolean {
   return /\b(PASS|FAIL)\b/.test(text);
@@ -797,6 +804,9 @@ const MAX_SNAPSHOT_CHARS = 600;
 /** Spawn-prompt caps: the file stays the source of truth; the prompt gets the head plus a pointer. */
 export const MAX_INJECT_BRIEF_CHARS = 6_000;
 export const MAX_INJECT_OPEN_UNITS = 30;
+/** Lessons digest caps: most-recent N lessons and a hard char cap (idea-135). */
+export const MAX_LESSONS_DIGEST_LESSONS = 5;
+export const MAX_LESSONS_DIGEST_CHARS = 1_500;
 
 function clipForPrompt(text: string, max: number, pointer: string): string {
   if (text.length <= max) return text;
@@ -883,6 +893,54 @@ export function laneArtifactBlock(root: string, lane: string): string {
   }
   parts.push(`<!-- vibesquad:lane-artifact:end -->`);
   return parts.join("\n");
+}
+
+/**
+ * The `vs lesson add` digest as a spawn-prompt block, or "" when nothing is logged. Lessons only —
+ * the STANDING_RULES are too big to inject (one lesson + rules already ~2.6k chars) and are not
+ * repeated here. Capped by count (the lane's own lessons first, then global, most recent first) and
+ * by a hard char cap; an empty store yields no section at all.
+ */
+export function lessonsDigestBlock(
+  opts: { storePath?: string; rootDir?: string; limit?: number; maxChars?: number; lane?: string; role?: string } = {},
+): string {
+  const limit =
+    typeof opts.limit === "number" && Number.isFinite(opts.limit) && opts.limit >= 0
+      ? Math.floor(opts.limit)
+      : MAX_LESSONS_DIGEST_LESSONS;
+  const maxChars =
+    typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars) && opts.maxChars >= 0
+      ? Math.floor(opts.maxChars)
+      : MAX_LESSONS_DIGEST_CHARS;
+  const lane = String(opts.lane ?? "").trim().toLowerCase();
+
+  const all = readLessons({ storePath: opts.storePath, rootDir: opts.rootDir });
+  if (!all.length) return "";
+
+  // Lane-scoped: the lane's own lessons first (category === lane), then global (non-lane) lessons.
+  const isLaneLesson = (l: { category?: string }) => String(l.category ?? "").trim().toLowerCase() === lane;
+  const ordered = [...all.filter(isLaneLesson), ...all.filter((l) => !isLaneLesson(l))];
+
+  const header = "## Recent lessons";
+  const truncNote = "[... lessons digest truncated]";
+  // Reserve the begin marker, header, end marker and a worst-case truncation note, then fill
+  // lesson lines greedily so the whole block can never exceed maxChars.
+  const reserved = LESSONS_BEGIN.length + header.length + truncNote.length + LESSONS_END.length + 4;
+  let budget = maxChars - reserved;
+  const lines: string[] = [];
+  for (const l of ordered) {
+    if (lines.length >= limit) break;
+    const line = `- [${l.category}] ${l.title} — ${l.rule}`;
+    if (line.length + 1 > budget) break;
+    lines.push(line);
+    budget -= line.length + 1;
+  }
+  if (!lines.length) return "";
+
+  const truncated = lines.length < ordered.length;
+  const body = `${LESSONS_BEGIN}\n${header}\n${lines.join("\n")}`;
+  const tail = truncated ? `\n${truncNote}\n${LESSONS_END}` : `\n${LESSONS_END}`;
+  return body + tail;
 }
 
 /**
@@ -1000,7 +1058,8 @@ export function bootSizeMetric(
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
-export async function inspectGitSpawnState(cwd: string): Promise<string | null> {
+export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: number } = {}): Promise<string | null> {
+  const timeoutMs = opts.timeoutMs ?? 3000; // production keeps 3s (a hung git must not hold the spawn hook); format tests pass more
   if (!cwd) return null;
   let resolved = "";
   try {
@@ -1016,7 +1075,7 @@ export async function inspectGitSpawnState(cwd: string): Promise<string | null> 
         execFile(
           "git",
           ["--no-optional-locks", ...args],
-          { cwd: resolved, encoding: "utf8", timeout: 3000, windowsHide: true },
+          { cwd: resolved, encoding: "utf8", timeout: timeoutMs, windowsHide: true },
           (err, stdout) => resolve(err ? null : String(stdout ?? "")),
         );
       } catch {
@@ -1077,6 +1136,8 @@ export interface Deps {
   startWatcher: boolean;
   /** Min quiet window after a Lead turn during which wakeups are deferred/coalesced. */
   leadWakeCooldownMs?: number;
+  /** git status cap for the spawn-time snapshot (default 3000); tests asserting the format pass more. */
+  gitSpawnTimeoutMs?: number;
   /** Root holding docs/brainstorm/<lane>.md briefs (defaults to the VibeSquad repo). */
   briefRoot?: string;
   /** Grace before a retired Buddy is archived, so an in-flight turn is not killed mid-stream. */
@@ -2177,7 +2238,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy || isHubLead);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
-        const gitState = await inspectGitSpawnState(cwd);
+        const gitState = await inspectGitSpawnState(cwd, { timeoutMs: deps.gitSpawnTimeoutMs });
         st.mark("git-spawn-state");
         let bootPluginChars = 0;
         let bootBriefChars = 0;
@@ -2257,6 +2318,22 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         }
 
         st.mark("lane-artifacts");
+        // Lessons digest (server/lessons.mjs): `vs lesson add` entries reach every spawn, lane-scoped
+        // and capped. A read failure must never break the spawn: log it and append nothing.
+        const lessonsMarker = "<!-- vibesquad:lessons:begin -->";
+        if (!String(next.systemPrompt ?? rawSysPrompt ?? "").includes(lessonsMarker)) {
+          try {
+            const lessonsBlock = lessonsDigestBlock({ lane: artifactLane, role });
+            if (lessonsBlock) {
+              next.systemPrompt = [String(next.systemPrompt ?? rawSysPrompt ?? "").trim(), lessonsBlock].filter(Boolean).join("\n\n");
+              changed = true;
+            }
+          } catch (err) {
+            log(`lessons digest skipped: ${err}`);
+          }
+        }
+
+        st.mark("lessons-digest");
         // B2: one `boot-size` metric per boot, measured on the final assembled prompt (prefix + notes + brief + artifacts).
         // A VS Buddy restart already logged its own boot-size in brainstorm.mjs: log once per boot.
         const bootLoggedByVs = role === "brainstorm" && (Boolean(reqLabels["vs.restarted-from"]) || env?.VS_BRIEF_INLINE === "1");
@@ -3157,7 +3234,13 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const setIds = watchTaken.get(entry);
       if (!watch || !setIds?.length) return false;
       for (const set of await watch.holdingSets(entry, setIds)) {
-        if ((await resolveWatchTarget(paseo, set))?.id === leadId) return true;
+        if ((await resolveWatchTarget(paseo, set))?.id === leadId) {
+          // idea-351: the set's ping still pending for this lead: fold the held text into it, else the watch already reported the agent.
+          const pend = (pendingWake.get(leadId) ?? []).find((e) => watchKeyOf.has(e) && (e.refs ?? []).includes(set.id));
+          if (pend && !pend.text.includes(entry.text)) pend.text += `
+(Also reported: [${entry.type}] ${entry.text})`;
+          return true;
+        }
       }
       return false;
     }
@@ -3183,7 +3266,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!target) return log(`watch ${d.setId}: no live ${toOverlord ? "Overlord" : "owner or lead"} for ${d.team}/${d.lane}; ping held`);
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
       const text = toOverlord ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
-      const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text, refs: [d.setId] };
+      // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
+      const detail = d.detail ? await redactReportText(d.detail) : "";
+      const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
+
+${detail}` : text, refs: [d.setId] };
       watchKeyOf.set(entry, d.key);
       pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
       void flushWake(paseo, target.id);
@@ -3636,6 +3723,57 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       deferredWakeTimers.set(leadId, t);
     }
 
+    /** idea-352: redact host paths from forwarded worker text (server/redact-host-paths.mjs, per line). "" if the redactor can't load: never forward raw. */
+    async function redactReportText(text: string): Promise<string> {
+      try {
+        return text.split(/\r?\n/).map((l) => (redactHostPaths({ error: l }) as { error: string }).error).join("\n");
+      } catch (e) {
+        log(`report redaction unavailable, forwarded text dropped: ${e}`);
+        return "";
+      }
+    }
+
+    /** idea-352: did the worker itself deliver its report this turn (own team-log entry just before the digest's, or a send/report tool call after its last user message)? */
+    async function workerSentOwnReport(paseo: Paseo, workerId: string, team: string, atMs: number): Promise<boolean> {
+      try {
+        const own = tailLinesSync(logPath(team), 200).some((l) => {
+          try {
+            const e = JSON.parse(l) as LogEntry;
+            const t = Date.parse(e.ts);
+            return e.agent === workerId && e.type === "done" && t <= atMs + 1000 && t >= atMs - 15 * 60_000;
+          } catch {
+            return false;
+          }
+        });
+        if (own) return true;
+        const page = await paseo.agents.ref(workerId).timeline.refetch({ direction: "tail", limit: 40 });
+        let sent = false;
+        for (const { item } of page.entries) {
+          if (item.type === "user_message") sent = false;
+          else if (item.type !== "assistant_message" && /mcp__vibesquad__(send|report)\b|\bvs send\b|"name":"(send|report)"/.test(JSON.stringify(item))) sent = true;
+        }
+        return sent;
+      } catch {
+        return false;
+      }
+    }
+
+    /** idea-352: "\nWorker … final message: …" for ONE digest-authored [done] verdict (author is not the ref'd worker), else "". */
+    async function workerReportBody(paseo: Paseo, entry: LogEntry, budget = AUTO_REPORT_MAX): Promise<string> {
+      if (entry.type !== "done" || budget <= 0) return "";
+      const worker = String(entry.refs?.[0] ?? "").trim();
+      if (!worker || worker === entry.agent || worker === "plugin" || worker === "you") return "";
+      const text = await lastAssistantText(paseo, worker);
+      if (!text) return "";
+      const w = await snap(paseo, worker);
+      const where = w ? teamOf(w.labels, w.cwd) : null;
+      if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return "";
+      const clean = await redactReportText(text);
+      if (!clean) return "";
+      const body = clean.length > budget ? `${clean.slice(0, budget)}… (truncated; vs status ${worker} for the rest)` : clean;
+      return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
+    }
+
     async function flushWake(paseo: Paseo, leadId: string, recheck = false) {
       if (flushingLeads.has(leadId)) return;
       if (!pendingWake.get(leadId)?.length) return;
@@ -3721,7 +3859,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         if (plain.length) {
           const last = plain[plain.length - 1]!;
           const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
-          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}. Run 'vs log --since-me' if more context is needed.`);
+          // idea-352: a digest-filed [done] verdict forwards the worker's own final message (the report), so the worker needs no
+          // separate send turn. A worker's own `report` (author === ref) already carries its text: no second copy.
+          // Coalesced events: every digest-filed [done] in the batch forwards its worker's message (shared cap), not only the last.
+          let budget = AUTO_REPORT_TOTAL_MAX;
+          let body = "";
+          for (const e of plain) {
+            const b = await workerReportBody(paseo, e, Math.min(AUTO_REPORT_MAX, budget));
+            budget -= b.length;
+            body += b;
+          }
+          parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}.${body} Run 'vs log --since-me' if more context is needed.`);
         }
         const text = parts.join("\n\n");
         for (const k of watchKeys) watchSending.add(k);

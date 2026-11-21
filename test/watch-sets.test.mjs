@@ -1765,3 +1765,160 @@ test("idea-209/210: a cancelled set never fires again (stall or completion), als
     sb.cleanup();
   }
 });
+
+// ---- idea-351 / idea-353: notices that need no decision must not cost the lead a turn -------------------------------------
+
+test(
+  "plugin idea-351: only events for agents IN the lead's watch are suppressed: an unwatched done, and a pre-watch done naming a watched agent, still wake an idle lead",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
+    const now = Date.now();
+    addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now + 5), agent: "w-2", lane: "vibesquad", type: "done", text: "PASS: w2 unwatched", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 1, JSON.stringify(h.sent));
+      assert.match(h.sent[0].text, /PASS: w2 unwatched/);
+      writeLog(sb, [{ ts: iso(now - 60_000), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: old w1", refs: [] }]);
+      h.scanLogs(false);
+      await wait(200);
+      assert.equal(h.sent.length, 2, "a pre-watch done is not covered by the set: it wakes");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin idea-351: a watched worker's done is still held for the owner (one ping, no extra wake); a blocker from anyone wakes",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 1, JSON.stringify(h.sent));
+      assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
+      writeLog(sb, [{ ts: iso(now + 20), agent: "w-2", lane: "vibesquad", type: "blocker", text: "stuck", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 2, "blocker always wakes");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin idea-351 (race): a late digest PASS/done within 120s of the watch completing is covered (no extra wake); a late FAIL still wakes; an armed watch's unknown-author done for a watched agent is held",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 1);
+      assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
+      writeLog(sb, [{ ts: iso(now + 500), agent: "digest-1", lane: "vibesquad", type: "done", text: "PASS: w1 digest", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 1, "late PASS covered by the completed watch: " + JSON.stringify(h.sent));
+      writeLog(sb, [{ ts: iso(now + 600), agent: "digest-1", lane: "vibesquad", type: "done", text: "FAIL: w1 late verdict", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 2, "FAIL still wakes");
+      assert.match(h.sent[1].text, /FAIL: w1 late verdict/);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-374: a late NO-VERDICT digest for a watched agent wakes the lead (it is a FAIL-class report, not a covered PASS)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")]]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "w-1", lane: "vibesquad", type: "done", text: "PASS: w1", refs: [] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 1);
+      assert.match(h.sent[0].text, new RegExp(`Watch ${id} complete`));
+      writeLog(sb, [{ ts: iso(now + 500), agent: "digest-1", lane: "vibesquad", type: "done", text: "NO-VERDICT: w1 reviewer line missing", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.length, 2, "late NO-VERDICT still wakes: " + JSON.stringify(h.sent));
+      assert.match(h.sent[1].text, /NO-VERDICT: w1 reviewer line missing/);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin idea-351: an armed watch holds an unknown-author done naming its agent (no wake) and an unrelated agent's done still wakes",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ["w-2", mk("w-2", "worker")]]);
+    const now = Date.now();
+    addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents);
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "digest-9", lane: "vibesquad", type: "done", text: "done: w1 summary", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 0, JSON.stringify(h.sent));
+      writeLog(sb, [{ ts: iso(now + 10), agent: "w-2", lane: "vibesquad", type: "done", text: "PASS: w2", refs: [] }]);
+      h.scanLogs(false);
+      await wait(150);
+      assert.equal(h.sent.length, 1);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test("idea-352: the completion ping carries each watched worker's final message once (capped, outside the merge text); a worker's own report is not duplicated", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    const long = "PASS: shipped\n" + "detail line ".repeat(300); // > REPORT_CAP and > FINAL_CAP
+    const { engine, delivered } = engineFor(sb, { clock, lastMessage: async (ref) => (ref === "w-1" ? long : "PASS: own") });
+    engine.onRunnerEvent(agentEv("w-1", "running"));
+    engine.onRunnerEvent(agentEv("w-2", "running"));
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: clock.t });
+    clock.t += MIN;
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onRunnerEvent(agentEv("w-2", "idle"));
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    engine.onRunnerEvent({ kind: "turn_ended", agentId: "w-2" });
+    // w-2 also filed its own report (author = the worker): its final must not ride the ping a second time
+    engine.onLogEntry("vibesquad", { ts: iso(clock.t), agent: "w-2", lane: "vibesquad", type: "done", text: "PASS: own report", refs: ["w-2"] });
+    await engine.tick();
+    assert.equal(delivered.length, 1, "one completion ping");
+    assert.match(delivered[0].text, new RegExp(`Watch ${id} complete`));
+    assert.ok(delivered[0].text.length <= DIGEST_MERGE_MAX, "the final messages are not in the W4 merge text");
+    assert.match(delivered[0].detail, /Final message of w-1 \(auto-forwarded report\):\nPASS: shipped/);
+    assert.match(delivered[0].detail, /truncated; `vs status w-1`/);
+    assert.ok(!delivered[0].detail.includes("w-2"), "own report: no second copy");
+    assert.ok(delivered[0].detail.length < 1500, "per-item cap");
+  } finally {
+    sb.cleanup();
+  }
+});

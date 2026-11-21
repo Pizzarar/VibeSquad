@@ -112,12 +112,14 @@ test("mutual exclusion: async holders here + sync and async holders in other pro
   const f = path.join(tmp(t), "counter.json");
   writeFileSync(f, JSON.stringify({ n: 0 }));
   const per = 30;
-  const syncChild = `import(${JSON.stringify(modUrl)}).then(m=>{for(let i=0;i<${per};i++)m.updateJsonFileSync(${JSON.stringify(f)},d=>{d.n+=1},{timeoutMs:30000})})`;
-  const asyncChild = `import(${JSON.stringify(modUrl)}).then(async m=>{for(let i=0;i<${per};i++)await m.updateJsonFile(${JSON.stringify(f)},d=>{d.n+=1},{timeoutMs:30000})})`;
+  const syncChild = `import(${JSON.stringify(modUrl)}).then(m=>{for(let i=0;i<${per};i++)m.updateJsonFileSync(${JSON.stringify(f)},d=>{d.n+=1},{timeoutMs:30000})}).catch(e=>{console.error(e&&e.stack||e);process.exit(1)})`;
+  const asyncChild = `import(${JSON.stringify(modUrl)}).then(async m=>{for(let i=0;i<${per};i++)await m.updateJsonFile(${JSON.stringify(f)},d=>{d.n+=1},{timeoutMs:30000})}).catch(e=>{console.error(e&&e.stack||e);process.exit(1)})`;
   const run = (code) =>
     new Promise((resolve, reject) => {
-      const c = spawn(process.execPath, ["-e", code], { stdio: ["ignore", "inherit", "inherit"] });
-      c.on("exit", (rc) => (rc === 0 ? resolve() : reject(new Error(`child exit ${rc}`))));
+      const c = spawn(process.execPath, ["-e", code], { stdio: ["ignore", "inherit", "pipe"] });
+      let err = "";
+      c.stderr.on("data", (d) => { err += d; });
+      c.on("exit", (rc) => (rc === 0 ? resolve() : reject(new Error(`child exit ${rc}: ${err.trim()}`))));
       c.on("error", reject);
     });
   // Here: three concurrent async writers whose critical section awaits (so in-process waiters really overlap with it),

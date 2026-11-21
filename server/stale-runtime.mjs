@@ -114,7 +114,9 @@ export function refreshStale({ rootDir, env = process.env, now = Date.now(), com
 }
 
 /** Last cached value only: no git, no stale.json write (the read-only /health path). */
-export function peekStale() {
+export function peekStale(rootDir) {
+  // A sync rewrote build-stamp.json since the value was cached: it describes the old build, so report nothing rather than a stale toast.
+  if (rootDir && cached.at && (readBuildStamp(rootDir)?.commit ?? null) !== cached.stampCommit) return null;
   return cached.value;
 }
 

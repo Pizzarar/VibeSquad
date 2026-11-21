@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { Runner, maxLiveFromEnv, DEFAULT_MAX_LIVE } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { killTree, spawnNoShell } from '../runner/spawn.mjs';
+import { budget } from './helpers/load-budget.mjs';
 
 const dirs = [];
 const pids = new Set();
@@ -159,13 +160,13 @@ test('Runner.shutdown kills the whole process tree (agent + its sidecars)', asyn
   const runner = new Runner({ dir: tmp(), adapters: { fake: adapter }, maxLive: 6 });
   const id = runner.create({ provider: 'fake', cwd: os.tmpdir() });
   const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + budget(5000);
   while (pids.size < 2 && Date.now() < deadline) await tick();
   assert.equal(pids.size, 2, 'parent and grandchild both started');
   const [p, g] = [...pids];
   assert.ok(alive(p) && alive(g));
   runner.shutdown();
-  const until = Date.now() + 8000;
+  const until = Date.now() + budget(8000);
   while ((alive(p) || alive(g)) && Date.now() < until) await tick();
   assert.ok(!alive(p), 'agent process is gone');
   assert.ok(!alive(g), 'its sidecar is gone too');

@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { costDelta } from '../server/compact-step.mjs';
 
 // ---- Pattern table (single source of truth; S3 reuses this). Matched against the whole
 // normalized input (lowercased, trailing punctuation/emoji stripped), first bucket wins. ----
@@ -441,6 +442,97 @@ export function unroutedOpsBucket(dir, { since, until, now = Date.now() } = {}) 
   return r;
 }
 
+// ================= bucket 7: scriptable turns (idea-346) =================
+// Turns (input -> next turn_done) whose shape repeats: same role + input kind + tool sequence, short output. Candidates a
+// script/hook/schedule/cheap tier could replace, ranked by tokens. Report-only; never builds a replacement.
+export const SCRIPTABLE_MIN_TURNS = 5;
+export const SCRIPTABLE_MAX_MEDIAN_CHARS = 400;
+export const SCRIPTABLE_TOP = 10;
+export const SCRIPTABLE_HEAD_CHARS = 60;
+const SHORT_LINE = /^\W*(yes|no|ok|done|pass|fail|still running|nothing new|no change|waiting)\b/i;
+export const normalizeInputHead = (text) => String(text ?? '')
+  .replace(/\brn-[0-9a-f]{6,}\b/gi, '').replace(/\b[0-9a-f]{7,40}\b/gi, '')
+  .replace(/\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?/g, '').replace(/(?:[A-Za-z]:)?[\\/][\w.\\/-]+/g, '')
+  .replace(/\d+/g, '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, SCRIPTABLE_HEAD_CHARS);
+export function toolVerb(e) {
+  if (!/^(Bash|PowerShell)$/.test(e.name)) return e.name;
+  let cmd = String(e.input?.command ?? '').trim().replace(/^(cd\s+\S+\s*(&&|;)\s*)+/, '');
+  cmd = cmd.replace(/^(node\s+\S*vs\.mjs|vs)\b/, 'vs');
+  const words = cmd.split(/\s+/).filter((w) => w && !w.startsWith('-')).slice(0, 2).map((w) => normalizeInputHead(w));
+  return `${e.name}:${words.filter(Boolean).join(' ')}`;
+}
+export const SCRIPTABLE_REAL_OUTPUT_CHARS = 1000;
+export const SCRIPTABLE_HINTS = [
+  [/restart drain|restart-done|hold lifted/i, 'restart drain/ack: scripted by the restart flow (idea-347)'],
+  [/soft limit|context check/i, 'none: soft-limit wrap-up prompt is a system injection, output is the handoff note'],
+  [/\[vs watch\]|\bvs (watch|wait|verdict)\b|\b(sleep|start-sleep)\b|poll|waiting|still running/i, 'vs watch / vs wait / vs verdict (end the turn, one ping)'],
+  [/schedule|cron|\bdaily\b|\bevery \w+ (min|hour|day)/i, 'server/schedules.mjs (timed action)'],
+  [/successor|handoff|you are .{0,30}(lead|buddy|worker)|spawn/i, 'hooks (server/hooks/) at spawn/turn boundary'],
+  [/vs inbox|\binbox\b|dedupe/i, 'server/inbox.mjs (inbox/handoff dedupe)'],
+  [/vs log/i, 'auto-gen In Flight/Teams lines from vs log (brief)'],
+  [/\b(git|gh|npm|node --test|pr view|pr checks)\b/i, 'pre-push / CI gate'],
+  [/status|digest|summary|report|what'?s|pull/i, 'cheap-tier digest (Flash; P5 tiers, idea-77)'],
+];
+// The first two (restart, soft-limit) match on the input head only, so a tool call (`vs log restart-feedback`) can't trigger them.
+export const scriptableHint = (sig, head) => (SCRIPTABLE_HINTS.find(([re], i) => re.test(i < 2 ? head : `${sig} ${head}`)) || [null, 'candidate: no seed match, read the examples'])[1];
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? (s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2) : 0; };
+
+export function scriptableTurnsBucket(dir, { since, until } = {}) {
+  const groups = new Map();
+  let turns = 0;
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.jsonl'))) {
+    const run = f.replace(/\.jsonl$/, '');
+    let meta = {}, cur = null, base = 0;
+    for (const line of fs.readFileSync(path.join(dir, f), 'utf8').split('\n')) {
+      if (!line) continue;
+      let e; try { e = JSON.parse(line); } catch { continue; }
+      if (e.type === 'created') { meta = e.meta || {}; continue; }
+      if (e.type === 'input') { if (!cur) cur = { ts: e.ts, text: String(e.text ?? ''), tools: [], tokens: 0, out: 0, shortOut: false }; continue; }
+      if (e.type === 'turn_done') {
+        const cost = Number(e.costUsd), has = Number.isFinite(cost);
+        const delta = has ? costDelta(cost, base) : 0;
+        if (has) base = cost;
+        const t = cur; cur = null;
+        if (!t || (since !== undefined && t.ts < since) || (until !== undefined && t.ts > until)) continue;
+        turns++;
+        const head = normalizeInputHead(t.text), tools = [];
+        for (const v of t.tools) if (tools[tools.length - 1] !== v) tools.push(v);
+        const sig = `${meta.role || '(none)'} | ${head} | ${tools.join(' > ') || '(no tools)'}`;
+        let g = groups.get(sig);
+        if (!g) groups.set(sig, (g = { signature: sig, head, turns: [] }));
+        g.turns.push({ run, ts: t.ts, tokens: t.tokens, cost: delta, outChars: t.out, short: t.shortOut, role: meta.role || '(none)', lane: meta.lane || '(none)' });
+        continue;
+      }
+      if (!cur) continue;
+      if (e.type === 'usage') cur.tokens += (Number(e.inputTokens) || 0) + (Number(e.outputTokens) || 0);
+      else if (e.type === 'tool' && e.phase === 'call') cur.tools.push(toolVerb(e));
+      else if (e.type === 'output' && typeof e.text === 'string') { cur.out += e.text.length; if (SHORT_LINE.test(e.text.trim())) cur.shortOut = true; }
+    }
+  }
+  const clusters = [];
+  for (const g of groups.values()) {
+    const t = g.turns, runs = new Set(t.map((x) => x.run)), days = new Set(t.map((x) => new Date(x.ts).toISOString().slice(0, 10)));
+    if (t.length < SCRIPTABLE_MIN_TURNS || (runs.size < 2 && days.size < 2)) continue;
+    const med = median(t.map((x) => x.outChars));
+    const notScriptable = med >= SCRIPTABLE_REAL_OUTPUT_CHARS; // fixed-shape input, real output (handoff notes): shown, never a finding
+    if (!(notScriptable || med < SCRIPTABLE_MAX_MEDIAN_CHARS || t.filter((x) => x.short).length / t.length >= 0.5)) continue;
+    const tokens = t.reduce((a, x) => a + x.tokens, 0), cost = Math.round(t.reduce((a, x) => a + x.cost, 0) * 1e6) / 1e6;
+    const by = (k) => Object.entries(t.reduce((m, x) => ((m[x[k]] = (m[x[k]] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).map(([v]) => v);
+    clusters.push({
+      signature: g.signature, notScriptable, n: t.length, runs: runs.size, days: days.size, tokens, costUsd: cost, medianOutChars: med,
+      roles: by('role'), lanes: by('lane'), hint: scriptableHint(g.signature, g.head), examples: t.slice(0, 2).map((x) => ({ run: x.run, ts: x.ts })),
+    });
+  }
+  clusters.sort((a, b) => b.costUsd - a.costUsd || b.tokens - a.tokens);
+  return { turns, clusters: clusters.slice(0, SCRIPTABLE_TOP), clusterCount: clusters.length };
+}
+
+export function printScriptable(sc) {
+  console.log(`(7) scriptable turns: ${sc.turns} turns scanned, ${sc.clusterCount} fixed-shape clusters (top ${sc.clusters.length}, ranked by total $)`);
+  console.log('    $ (ranked) | tokens | n | roles | shape | hint');
+  for (const c of sc.clusters) console.log(`    $${c.costUsd.toFixed(2)} | ${c.tokens} | ${c.n} (${c.runs} runs/${c.days} d) | ${c.roles.join(',')} | ${c.signature} | ${c.notScriptable ? `not-scriptable (real output, median ${c.medianOutChars} chars)` : c.hint}`);
+}
+
 function printWaste({ buckets, ownerInputs, stampsByLane, waste: { relay, handoffs, fixers, fixOffers, unroutedOps } }) {
   console.log('\n== waste report ==');
   console.log(`(1) rubber stamps: ${buckets['rubber stamp'] || 0} of ${ownerInputs} owner inputs`);
@@ -471,7 +563,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const r = audit(args);
   if (args.waste) {
     const runs = loadRuns(args.dir);
-    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs, args), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args), unroutedOps: unroutedOpsBucket(args.dir, args) };
+    r.waste = { relay: relayBucket(runs, args), handoffs: handoffBucket(runs, args), fixers: fixerBucket(runs, gitMerges(args.repo)), fixOffers: fixOfferBucket(args.dir, args), unroutedOps: unroutedOpsBucket(args.dir, args), scriptable: scriptableTurnsBucket(args.dir, args) };
   }
   if (args.json) console.log(JSON.stringify(r, null, 2));
   else {
@@ -484,6 +576,6 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       console.log(`  ${b}: ${r.buckets[b] || 0}`);
       for (const [p, n] of r.topPhrases[b] || []) console.log(`      ${n}x ${p}`);
     }
-    if (r.waste) printWaste(r);
+    if (r.waste) { printWaste(r); printScriptable(r.waste.scriptable); }
   }
 }
