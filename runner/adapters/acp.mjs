@@ -3,7 +3,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
-import { killTree, spawnNoShell } from '../spawn.mjs';
+import { killTree, spawnNoShell, spawnErrorMessage } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 import { estimateCostUsd } from './pricing.mjs';
@@ -162,7 +162,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
-      child.on('error', (err) => onExit({ code: null, error: String(err.message) }));
+      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err) }));
       child.on('exit', (code, signal) => {
         for (const p of pending.values()) p.reject(new Error('process exited'));
         // idea-442: opencode answers a prompt with "Internal error: Internal service failure" (upstream model API) and exits 1 with
