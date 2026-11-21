@@ -487,16 +487,16 @@ test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek
   assert.match(css, /\.usage-crt,[\s\S]*\.feed-entry[^{]*\{[^}]*border: none; border-radius: 14px/);
   assert.match(css, /max-width: 1280px/);
   assert.match(css, /max-width: 1600px; padding: 28px 40px/);
-  assert.match(css, /\.signal,[\s\S]*?border-radius: 50% !important/);
-  assert.match(css, /\.boring-lane-card \{[^}]*border-radius: 14px !important/);
+  assert.match(css, /\.signal,[\s\S]*?border-radius: 50%/);
+  assert.match(css, /\.boring-lane-card \{[^}]*border-radius: 14px/);
   assert.match(css, /\.drawer-head \.drawer-title \{ order: 1; flex: 1 0 100%/);
-  assert.match(css, /\.decision-card \.dc-summary,[\s\S]*?font-size: var\(--t-ui\) !important; font-weight: 400/);
-  assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.role-tag,[\s\S]*?drawer-copy-cwd-btn[^{]*\{ display: none !important/);
+  assert.match(css, /\.decision-card \.dc-summary,[\s\S]*?font-size: var\(--t-ui\); font-weight: 400/);
+  assert.match(css, /\.boring-chat-column:not\(\.boring-details-open\) \.role-tag,[\s\S]*?drawer-copy-cwd-btn[^{]*\{ display: none/);
   assert.match(ade, /Standup Feed \(\$\{feedCount\}\)/);
   assert.match(ade, /Idea Inbox \(\$\{inboxCount\}\)/);
   assert.match(css, /\.boring-footer-btn\.on,\s*html\[data-vibe="boring"\] \.boring-core-row\.on,\s*html\[data-vibe="boring"\] \.boring-conv-row\.on \{[^}]*inset 3px 0 0 var\(--cyan\)/);
-  assert.match(css, /\.decision-card \{ border: 0 !important; border-radius: 14px !important; background: var\(--panel\)/);
-  assert.match(css, /\.usage-collapse,\s*html\[data-vibe="boring"\] \.usage-inbox-row \{ background: var\(--panel\) !important/);
+  assert.match(css, /\.decision-card \{ border: 0; border-radius: 14px; background: var\(--panel\)/);
+  assert.match(css, /\.usage-collapse,\s*html\[data-vibe="boring"\] \.usage-inbox-row \{ background: var\(--panel\)/);
   assert.match(css, /\.usage-collapse-head \{ font-size: 13px; text-transform: none/);
 });
 
@@ -538,17 +538,22 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.equal((app.match(/<FirstLaunchVibePicker \/>/g) ?? []).length, 1);
   assert.ok(app.indexOf("<FirstLaunchVibePicker />") > app.indexOf("const overlays = ("));
   assert.ok((app.match(/\{overlays\}/g) ?? []).length >= 2);
-  assert.match(css, /\.composer \.send,[\s\S]*background: var\(--accent\) !important/);
-  assert.match(css, /#475569 !important/);
+  assert.match(css, /\.composer \.send,[\s\S]*background: var\(--accent\)/);
+  assert.match(css, /#475569/);
   assert.match(css, /--t-body: 15px; --lh-body: 24px/);
   assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
   assert.match(css, /--accent: var\(--cyan\)/);
   assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replace("@media (prefers-reduced-motion: reduce)", ""), /@media/);
   assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
-  assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none !important/);
+  assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none/);
   assert.match(css, /\.drawer-head \.drawer-title \{ font-size: var\(--t-title\) !important/);
   assert.match(css, /\.composer-row > \.btn:not\(\.ghost\):not\(\.warn\)/);
   assert.doesNotMatch(css, /not\(\.boring-details-open\) \.(drawer-actions|brainstorm-ctx-actions)/);
+});
+
+test("U3 (idea-255): boring.css keeps fewer than 10 !important overrides", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.ok((css.match(/!important/g) ?? []).length < 10, `boring.css !important count must stay < 10 (got ${(css.match(/!important/g) ?? []).length})`);
 });
 
 test("shouldShowFirstLaunchVibePicker: fresh installs only, never automation", async () => {
@@ -605,7 +610,7 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
   // B6a
   assert.match(css, /\.boring-chat-column:has\(\.right-dock\) \{ max-width: 100%; \}/);
-  assert.match(css, /\.right-dock-tab \{ border-radius: 10px !important/);
+  assert.match(css, /\.right-dock-tab \{ border-radius: 10px/);
   assert.match(ade, /boring-global-search-btn[\s\S]*openOverlay\("search"\)/);
   assert.match(ade, /boring-shortcuts-btn[\s\S]*openOverlay\("shortcuts"\)/);
   assert.match(ade, /active pinDecisions \/>/);
@@ -1804,4 +1809,25 @@ test("split R4: the Unsplit pill keeps the active pane's agent; the Split pill s
   } finally {
     globalThis.__panes = undefined;
   }
+});
+
+test("normal agent menu: the Archive ConfirmButton rule out-specifies .btn.confirm.warn.armed and the shared .btn:hover rule", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  const spec = (sel) => {
+    let s = sel.trim(), a = 0, b = 0, c = 0;
+    s = s.replace(/:not\(([^)]*)\)/g, (_, inner) => { const r = spec(inner); a += r[0]; b += r[1]; c += r[2]; return ""; });
+    s = s.replace(/\[[^\]]*\]/g, () => { b++; return ""; }).replace(/#[\w-]+/g, () => { a++; return ""; });
+    s = s.replace(/\.[\w-]+/g, () => { b++; return ""; }).replace(/::[\w-]+/g, () => { c++; return ""; }).replace(/:[\w-]+/g, () => { b++; return ""; });
+    c += (s.match(/(^|[\s>+~])[a-zA-Z][\w-]*/g) || []).length;
+    return [a, b, c];
+  };
+  const ge = (x, y) => x[0] !== y[0] ? x[0] > y[0] : x[1] !== y[1] ? x[1] > y[1] : x[2] >= y[2];
+  const m = css.match(/^(html\[data-vibe="boring"\] \.boring-agent-menu-archive [^{]*\.btn[^{]*)\{([^}]*)\}/m);
+  assert.ok(m, "archive rule exists");
+  assert.match(m[2], /background: transparent/);
+  assert.doesNotMatch(m[2], /!important/);
+  const mine = spec(m[1]);
+  assert.ok(ge(mine, spec(".btn.confirm.warn.armed")), `archive ${mine} >= .btn.confirm.warn.armed`);
+  assert.ok(ge(mine, spec('html[data-vibe="boring"] .btn:hover:not(:disabled)')), `archive ${mine} >= boring .btn:hover`);
+  assert.ok(ge(mine, spec(".btn.confirm.warn.armed:hover")));
 });

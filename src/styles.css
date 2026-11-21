@@ -117,6 +117,10 @@
 
 * {
   box-sizing: border-box;
+}
+/* Square corners are the fun-mode pixel look only; Normal mode (html[data-vibe="boring"], src/boring.css)
+   carries its own flat reset and rounded radii, so it must not inherit this universal !important. */
+html:not([data-vibe="boring"]) * {
   border-radius: 0 !important;
 }
 
@@ -1648,7 +1652,7 @@ code {
 .agent-panes.split.active-right .pane-slot.pane-right .drawer-head { box-shadow: inset 0 2px 0 var(--violet); }
 
 /* Open agents light their rows: cyan = left pane, violet = right pane. */
-.row.sel.pane-right, .tree-row.sel.pane-right, .lead-link.sel.pane-right, .card.sel.pane-right, .arch-row.sel.pane-right {
+.row.sel.pane-right, .tree-row.sel.pane-right, .lead-link.sel.pane-right, :where(html:not([data-vibe="boring"])) .card.sel.pane-right, .arch-row.sel.pane-right {
   border-color: var(--violet);
   box-shadow: inset 3px 0 0 var(--violet);
 }
@@ -1771,14 +1775,10 @@ code {
   white-space: nowrap;
   color: var(--cyan-t);
 }
-.tone-amber .brainstorm-ctx-readout,
-.brainstorm-ctx-bar.tone-amber .brainstorm-ctx-readout,
-.brainstorm-ctx-pill.tone-amber .brainstorm-ctx-readout {
+:where(html:not([data-vibe="boring"])) .tone-amber .brainstorm-ctx-readout, :where(html:not([data-vibe="boring"])) .brainstorm-ctx-bar.tone-amber .brainstorm-ctx-readout, :where(html:not([data-vibe="boring"])) .brainstorm-ctx-pill.tone-amber .brainstorm-ctx-readout {
   color: var(--amber-t);
 }
-.tone-red .brainstorm-ctx-readout,
-.brainstorm-ctx-bar.tone-red .brainstorm-ctx-readout,
-.brainstorm-ctx-pill.tone-red .brainstorm-ctx-readout {
+:where(html:not([data-vibe="boring"])) .tone-red .brainstorm-ctx-readout, :where(html:not([data-vibe="boring"])) .brainstorm-ctx-bar.tone-red .brainstorm-ctx-readout, :where(html:not([data-vibe="boring"])) .brainstorm-ctx-pill.tone-red .brainstorm-ctx-readout {
   color: var(--pink-t);
 }
 .brainstorm-ctx-track {
@@ -3293,7 +3293,7 @@ html {
   opacity: 0.94;
 }
 
-.card.card-secondary-lead.card-lead-needs-you {
+:where(html:not([data-vibe="boring"])) .card.card-secondary-lead.card-lead-needs-you {
   border-top: 2px solid var(--hot-pink);
   border-color: var(--hot-pink);
   background-color: var(--bg);
@@ -4045,7 +4045,7 @@ html, body, #root { overflow-x: hidden; }
   white-space: nowrap;
   cursor: pointer;
 }
-.usage-review-run:hover:not(:disabled) { border-color: var(--mint-t); color: var(--mint-t); }
+:where(html:not([data-vibe="boring"])) .usage-review-run:hover:not(:disabled) { border-color: var(--mint-t); color: var(--mint-t); }
 .usage-review-run:disabled { opacity: 1; color: var(--muted); cursor: default; }
 .usage-review-status { color: var(--violet-t); }
 .usage-review-error {
@@ -4500,6 +4500,7 @@ button.project-file-name:hover { text-decoration: underline; }
 }
 
 .drawer-sandbox { display: inline-block; position: relative; }
+.btn.drawer-sandbox-btn { padding: 0 5px; font-size: 10px; height: 20px; }
 .drawer-sandbox-panel { position: absolute; z-index: 30; margin-top: 2px; width: 300px; max-width: calc(100vw - 16px); background: var(--panel); border: 1px solid var(--line); padding: var(--sp-2); display: grid; gap: 6px; font-size: 11px; box-shadow: var(--bevel), 0px 2px 0 var(--shadow-hard); }
 .drawer-sandbox-row { display: grid; gap: 1px; }
 .drawer-sandbox-label { font-size: 10px; opacity: .7; }
@@ -4562,6 +4563,8 @@ button.project-file-name:hover { text-decoration: underline; }
 .drawer-head-compact-title { flex: 0 1 auto; min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--display); font-size: 13px; }
 .drawer-head-compact-spacer { flex: 1 1 0; min-width: 0; }
 .drawer-provider-select { background: transparent; border: 1px solid; border-radius: 4px; font-family: var(--display); font-size: 11px; height: 24px; padding: 0 4px; cursor: pointer; }
+/* Provider tint (was inline style); doubled class beats .pin-focus-bar :is(select,input) like the inline value did. */
+.drawer-provider-select.drawer-provider-select { color: var(--prov-color); border-color: var(--prov-color); }
 .drawer-provider-select option { color: var(--fg, #e6e6e6); background: var(--bg); }
 .drawer-head-compact .drawer-model-input { width: 100px; }
 .drawer-head-compact .drawer-mode-select, .drawer-head-compact .drawer-thinking-select { max-width: 96px; }
@@ -4629,6 +4632,10 @@ button.project-file-name:hover { text-decoration: underline; }
   min-width: 0;
   max-width: 100%;
 }
+/* Agent config controls (was inline style in useAgentConfig.tsx). Normal look comes from boring.css. */
+.drawer-cfg-ctl.drawer-cfg-ctl { background: var(--panel-alt); color: var(--fg); border: 1px solid var(--line); font-size: 10px; padding: 1px 4px; height: 20px; }
+:where(html:not([data-vibe="boring"])) .drawer-cfg-ctl.drawer-cfg-ctl.drawer-cfg-w120 { width: 120px; }
+:where(html:not([data-vibe="boring"])) .drawer-cfg-ctl.drawer-cfg-ctl.drawer-cfg-h18 { height: 18px; }
 .successor-bar .btn,
 .btn.successor {
   white-space: normal;
@@ -5308,7 +5315,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .pin-tile-bar .pin-menu-btn { height: 16px; min-width: 16px; padding: 0 var(--sp-1); line-height: 1; font-size: 11px; background: var(--face-hi); color: var(--text); border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
 .pin-tile-bar .pin-menu-btn:active { box-shadow: var(--bevel-in); }
 .pin-tile-bar .pin-menu { display: inline-flex; align-items: center; }
-.card.card-secondary-lead.card-lead-needs-you { border-color: var(--hot-pink); box-shadow: var(--bevel), var(--hard); }
+:where(html:not([data-vibe="boring"])) .card.card-secondary-lead.card-lead-needs-you { border-color: var(--hot-pink); box-shadow: var(--bevel), var(--hard); }
 .ws-row, .ts-team { box-shadow: var(--bevel); }
 .drawer { background: var(--navy); border-left: 1px solid var(--line); box-shadow: -2px 0 0 var(--shadow-hard); }
 .drawer-head { border-bottom: 1px solid var(--line); box-shadow: var(--bevel); padding-top: var(--cap-pad); }
@@ -5349,9 +5356,11 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover { background: var(--panel-hi); color: var(--text); border-color: var(--violet); box-shadow: var(--bevel); }
 .btn.ok:not(.confirm) { background: var(--cyan-fill); color: var(--on-cyan-fill); border-color: var(--shadow-hard); }
-.btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); }
-.btn.warn, .btn.confirm.warn:not(.armed) { background: var(--pastel-amber); color: var(--text); border: 1px solid var(--amber); }
-.btn.confirm.cool:not(.armed) { background: var(--pastel-teal); color: var(--text); border: 1px solid var(--cyan); }
+.btn.bad, .bad-btn { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.danger:not(.armed) { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); }
+.btn.warn { background: var(--pastel-amber); color: var(--text); border: 1px solid var(--amber); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.warn:not(.armed) { background: var(--pastel-amber); color: var(--text); border: 1px solid var(--amber); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.cool:not(.armed) { background: var(--pastel-teal); color: var(--text); border: 1px solid var(--cyan); }
 .btn.hot { background: var(--pink-fill); color: var(--on-cyan-fill); border: 1px solid var(--shadow-hard); }
 .btn.confirm.armed { border: 1px solid var(--shadow-hard); }
 .btn.successor.warn { background: var(--pastel-amber); }
@@ -5476,8 +5485,8 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
   box-shadow: var(--bevel);
   font-weight: 700;
 }
-.usage-review-run:hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); border-color: var(--shadow-hard); color: var(--on-cyan-fill); }
-.usage-review-run:active:not(:disabled) { box-shadow: var(--bevel-in); transform: translate(1px, 1px); }
+:where(html:not([data-vibe="boring"])) .usage-review-run:hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); border-color: var(--shadow-hard); color: var(--on-cyan-fill); }
+:where(html:not([data-vibe="boring"])) .usage-review-run:active:not(:disabled) { box-shadow: var(--bevel-in); transform: translate(1px, 1px); }
 .usage-estimate, .usage-flag { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); box-shadow: var(--bevel); }
 .usage-estimate { background: var(--pastel-amber); border-color: var(--amber); }
 .usage-flag-storm { background: var(--pastel-amber); color: var(--text); border-color: var(--amber); }
@@ -5674,7 +5683,7 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 .usage-limit, .usage-roles, .usage-loops, .usage-storms {
   border-image: var(--u3-panel-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
 }
-.card.card-lead, .card.card-secondary-lead.card-lead-needs-you { border-image-source: var(--u3-panel-frame-pink); }
+:where(html:not([data-vibe="boring"])) .card.card-lead, :where(html:not([data-vibe="boring"])) .card.card-secondary-lead.card-lead-needs-you { border-image-source: var(--u3-panel-frame-pink); }
 .toolbar .search, .you-flag input, .ws-controls select, .modal input, .modal select, .modal textarea, .attach-body textarea,
 .composer textarea, .seg, .usage-bar, .usage-review-select {
   border-image: var(--u3-well-frame) 8 / calc(var(--u3-px) * 8) / 0 repeat; box-shadow: none; image-rendering: pixelated;
@@ -5703,28 +5712,31 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
   background: none; box-shadow: none; min-height: calc(var(--u3-px) * 14);
   color: var(--u3-ink-text); text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35); font-weight: 700;
 }
-.btn:hover, .btn:hover:not(:disabled), .usage-review-run:hover:not(:disabled) { background: none; border-image-source: var(--u3-btn-primary-hover); box-shadow: none; }
-.btn:active, .usage-review-run:active:not(:disabled) { border-image-source: var(--u3-btn-primary-active); box-shadow: none; }
+.btn:hover, .btn:hover:not(:disabled), :where(html:not([data-vibe="boring"])) .usage-review-run:hover:not(:disabled) { background: none; border-image-source: var(--u3-btn-primary-hover); box-shadow: none; }
+.btn:active, :where(html:not([data-vibe="boring"])) .usage-review-run:active:not(:disabled) { border-image-source: var(--u3-btn-primary-active); box-shadow: none; }
 .btn.ghost, .squads-pager-btn, .sidebar-cog-btn, .tl-jump-bottom, .seg button, .tchip, .sidebar-icon-btn {
   border-image-source: var(--u3-btn-ghost-normal); background: none; color: var(--u3-ghost-text); text-shadow: none; font-weight: 700;
 }
 .btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover, .tl-jump-bottom:hover, .seg button:hover, .tchip:hover { border-image-source: var(--u3-btn-ghost-hover); background: none; }
 .btn.ghost:active, .squads-pager-btn:active, .sidebar-cog-btn:active, .tl-jump-bottom:active, .seg button:active, .tchip:active { border-image-source: var(--u3-btn-ghost-active); box-shadow: none; }
-.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+.btn.hot, .btn.bad, .bad-btn { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
+/* Psycho-only: the 9-slice confirm sprites must not paint Normal ConfirmButtons (boring.css owns their look) */
+:where(html:not([data-vibe="boring"])) .btn.confirm.danger:not(.armed) { border-image-source: var(--u3-btn-hot-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
 .btn.hot:hover, .btn.bad:hover, .bad-btn:hover { border-image-source: var(--u3-btn-hot-hover); }
 .btn.hot:active, .btn.bad:active, .bad-btn:active { border-image-source: var(--u3-btn-hot-active); }
 .seg button.on, .tchip.on { border-image-source: var(--u3-btn-on-normal); background: none; color: var(--u3-lt-text); text-shadow: 0 2px 0 var(--u3-ink-text); }
-.btn.warn, .btn.confirm.warn:not(.armed), .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
+.btn.warn, .btn.successor.warn { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
+:where(html:not([data-vibe="boring"])) .btn.confirm.warn:not(.armed) { border-image-source: var(--u3-btn-warn-normal); background: none; color: var(--u3-ink-text); text-shadow: none; }
 .btn.warn:hover { border-image-source: var(--u3-btn-warn-hover); }
 .btn.warn:active { border-image-source: var(--u3-btn-warn-active); }
-.btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.armed { border-image-source: var(--u3-btn-hot-active); }
 .pin-tile-bar .pin-menu-btn, .modal-head .btn, .pin-rail-active-head .btn, .pin-rail-active-head .pin-menu-btn {
   border-image: var(--u3-btn-marble-normal) 4 fill / calc(var(--u3-px) * 4) / 0 repeat; background: none; color: var(--u3-ink-text); text-shadow: none; min-height: 0; height: calc(var(--u3-px) * 10);
 }
 .seg { background: none; }
 .btn:disabled { opacity: 1; color: var(--muted); }
 .update-available-banner .btn:not(.ghost):not(:disabled) { background: none !important; }
-.btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
+.btn.ok:not(.confirm), .btn.confirm.cool:not(.armed), .usage-review-run, :where(html:not([data-vibe="boring"])) .usage-review-run:hover:not(:disabled) { color: var(--u3-ink-text); }
 
 /* ---- chips: 9-slice 16x10 (slice 3/4 drawn at 3/4 kit px), text in the flat rows ---- */
 .badge, .unit-tag, .chip, .label-pill, .def-badge, .status-pill, .lane-tag, .warn-badge, .verdict, .changes-file-badge,
@@ -5858,56 +5870,59 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 
 /* ---- background wash (page, sidebar, chat pane) ---- */
 body, :root[data-theme="light"] body { background-color: var(--bg); background-image: var(--u4-wash); background-size: auto; background-repeat: no-repeat; background-attachment: fixed; image-rendering: auto; }
-.sidebar { background-color: var(--panel); background-image: var(--u4-ramp); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto; box-shadow: 1px 0 0 var(--line), 2px 0 0 var(--shadow-hard); }
-.agent-panes:not(:has(.sky-zones)) {
+:where(html:not([data-vibe="boring"])) .sidebar { background-color: var(--panel); background-image: var(--u4-ramp); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto; box-shadow: 1px 0 0 var(--line), 2px 0 0 var(--shadow-hard); }
+:where(html:not([data-vibe="boring"])) .agent-panes:not(:has(.sky-zones)) {
   background-color: var(--bg); background-image: var(--u4-wash); background-size: 100% 100%; background-repeat: no-repeat; image-rendering: auto;
   border: 1px solid var(--line); border-image: none; box-shadow: none;
 }
-:is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .timeline { background: transparent; background-image: none; -webkit-mask-image: none; mask-image: none; }
+:where(html:not([data-vibe="boring"])) :is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .timeline { background: transparent; background-image: none; -webkit-mask-image: none; mask-image: none; }
 
 /* ---- quiet tool surfaces: flat solid controls (sidebar + chat pane only) ---- */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-subagent-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-subagent-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home) {
   border: 1px solid var(--u4-edge); border-image: none; background: var(--panel-hi); color: var(--text); box-shadow: var(--bevel);
   text-shadow: none; font-weight: 400; image-rendering: auto;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):hover:not(:disabled) {
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):hover:not(:disabled) {
   border-image: none; background: color-mix(in srgb, var(--violet) 26%, var(--panel-hi)); color: var(--text); box-shadow: var(--bevel);
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):active:not(:disabled) {
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .tl-jump-bottom, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn, .pin-focus-home):active:not(:disabled) {
   border-image: none; box-shadow: var(--bevel-in); transform: translate(1px, 1px);
 }
 /* primary (teal), hot (pink), selected (violet), warn (amber): solid fills with on-fill ink */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip) {
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip) {
   background: var(--cyan-fill); color: var(--on-cyan-fill); border-color: var(--shadow-hard); font-weight: 700;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn) { background: var(--pink-fill); color: var(--u4-on-fill); border-color: var(--shadow-hard); font-weight: 700; }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--marble)); color: var(--on-cyan-fill); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn) { background: var(--pink-fill); color: var(--u4-on-fill); border-color: var(--shadow-hard); font-weight: 700; }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--marble)); color: var(--u4-on-fill); }
 /* light: the --marble hover lightens the fill and drops the white on-fill ink below 4.5:1 — darken toward the ink instead (dark keeps --marble) */
-:root[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--on-pastel)); }
-:root[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.warn, .btn.confirm.warn:not(.armed)) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
+:root:where(:not([data-vibe="boring"]))[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn:not(.ghost):not(.hot):not(.bad):not(.warn):not(.confirm.danger), .drawer-working-chip):hover:not(:disabled) { background: color-mix(in srgb, var(--cyan-fill) 86%, var(--on-pastel)); }
+:root:where(:not([data-vibe="boring"]))[data-theme="light"] :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn.hot, .btn.bad, .btn.confirm.danger:not(.armed), .bad-btn):hover:not(:disabled) { background: color-mix(in srgb, var(--pink-fill) 86%, var(--on-pastel)); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.seg button.on, .tchip.on, .sidebar-inbox-badge.on) { background: var(--violet); color: var(--on-pastel) !important; border-color: var(--shadow-hard); font-weight: 700; }
+:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) .btn.warn:not(.confirm):not(.armed) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) .btn.confirm.warn:not(.armed) { background: var(--amber); color: var(--on-amber); border-color: var(--shadow-hard); font-weight: 700; }
 /* disabled (idea-165, single source): quiet dashed ghost, full-contrast muted label, no opacity. Scoped selector = sidebar/sky/focus-bar controls; :root:root selector = unscoped controls (modals, .sky-zones, UsageDashboard) so --muted never lands on a bright fill */
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.btn, .tchip, .seg button, .sidebar-icon-btn, .sidebar-cog-btn, .drawer-working-chip, .drawer-config-summary, .dock-toggle-btn):disabled,
-:root:root :is(.btn, .usage-review-run, .usage-inbox-btn):disabled {
+/* shared disabled style; the usage buttons keep their Normal (boring.css) look, as before the !important cut */
+:root:root :is(.btn):disabled,
+:root:root:where(:not([data-vibe="boring"])) :is(.usage-review-run, .usage-inbox-btn):disabled {
   opacity: 1; background: var(--panel); color: var(--muted); border: 1px dashed var(--u4-edge); border-image: none; box-shadow: none; text-shadow: none; font-weight: 400; cursor: default;
 }
 
 /* ---- chips and pills ---- */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .label-pill, .status-pill, .lane-tag, .warn-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill, .sidebar-role-pill, .rail-role-tag, .role-tag, .pin-lane-handle, .sidebar-riffbot-badge, .changes-file-badge, .verdict) {
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .label-pill, .status-pill, .lane-tag, .warn-badge, .project-badge, .alert-pill, .pill, .brainstorm-ctx-pill, .quota-pill, .sidebar-role-pill, .rail-role-tag, .role-tag, .pin-lane-handle, .sidebar-riffbot-badge, .changes-file-badge, .verdict) {
   border: 1px solid var(--u4-edge); border-image: none; background: color-mix(in srgb, var(--violet) 16%, var(--panel)); color: var(--text); box-shadow: none; image-rendering: auto; font-weight: 400;
 }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.pin-lane-handle, .label-pill) { background: var(--bg); color: var(--muted); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill, .sidebar-riffbot-badge) { border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new) { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 20%, var(--panel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .quota-pill.warn, .brainstorm-ctx-pill.tone-amber) { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 22%, var(--panel)); }
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .brainstorm-ctx-pill.tone-red) { border-color: var(--hot-pink); background: color-mix(in srgb, var(--hot-pink) 20%, var(--panel)); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.pin-lane-handle, .label-pill) { background: var(--bg); color: var(--muted); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge, .unit-tag, .chip, .status-pill, .project-badge, .lane-tag, .quota-pill, .sidebar-riffbot-badge) { border-color: var(--cyan); background: color-mix(in srgb, var(--cyan) 18%, var(--panel)); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.chip.clean, .status-pill.running, .verdict.safe, .alert-pill.tone-finished, .changes-file-badge.new) { border-color: var(--emerald); background: color-mix(in srgb, var(--emerald) 20%, var(--panel)); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.verdict.check, .alert-pill.tone-permission, .changes-file-badge.mod, .quota-pill.warn, .brainstorm-ctx-pill.tone-amber) { border-color: var(--amber); background: color-mix(in srgb, var(--amber) 22%, var(--panel)); }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.chip.dirty, .warn-badge, .status-pill.error, .changes-file-badge.del, .pill, .alert-pill.tone-error, .quota-pill.hot, .brainstorm-ctx-pill.tone-red) { border-color: var(--hot-pink); background: color-mix(in srgb, var(--hot-pink) 20%, var(--panel)); }
 /* needs-you count / badge: solid pink with on-fill ink */
-:is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge.alert, .team-head .badge) { background: var(--pink-fill); border-color: var(--shadow-hard); color: var(--u4-on-fill) !important; font-weight: 700; }
+:where(html:not([data-vibe="boring"])) :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge.alert, .team-head .badge) { background: var(--pink-fill); border-color: var(--shadow-hard); color: var(--u4-on-fill) !important; font-weight: 700; }
 
 /* provider pills/badges: the inline neon provider colours (#00f0ff Gemini, #e2e8f0 Codex) on --well are ~1.4:1 in light, so drop them for the P0 raised surface */
-:root[data-theme="light"] :is(.prov-pill, .prov-badge) { background: var(--panel-hi); color: var(--text) !important; border-color: var(--u4-edge) !important; }
+:root:where(:not([data-vibe="boring"]))[data-theme="light"] :is(.prov-pill, .prov-badge) { background: var(--panel-hi); color: var(--text) !important; border-color: var(--u4-edge) !important; }
 
 /* ---- sidebar rows ---- */
 .sidebar :is(.team-head, .sidebar-riffbot) { border: 1px solid transparent; border-image: none; background: transparent; box-shadow: none; image-rendering: auto; }
@@ -6024,10 +6039,11 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :root:root .btn.on:not(.ghost):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* needs-you counts and hot/bad buttons: solid pink fill with on-fill ink (light pink-fill #b4377a + marble = 5.5:1) */
 :root:root :is(.badge.alert, [data-testid^="pin-needs-"], [data-testid^="squad-home-needs-"]:not(.muted)) { background: var(--pink-fill); color: var(--on-pink-fill) !important; text-shadow: none; }
-:root:root :is(.btn.hot, .btn.bad):not(:disabled) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
+:root:where(:not([data-vibe="boring"])):root :is(.btn.hot, .btn.bad):not(:disabled) { background: var(--pink-fill); color: var(--on-pink-fill); text-shadow: none; }
 /* plain confirm (Archive) and warn (Cancel & Resume) buttons */
-:root:root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
-:root:root :is(.btn.warn, .btn.confirm.warn):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
+:root:where(:not([data-vibe="boring"])):root .btn.confirm:not(.danger):not(.warn):not(.armed):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill); text-shadow: none; }
+:root:root .btn.warn:not(.confirm):not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
+:root:where(:not([data-vibe="boring"])):root .btn.confirm.warn:not(.armed):not(:disabled) { background: var(--amber); color: var(--on-amber); text-shadow: none; }
 /* ⇄ Handoff (owner's R1 "blank yellow button"): ink label on the teal fill whatever the ctx tone */
 :root:root .brainstorm-ctx-bar:not(.tone-red) .btn-brainstorm-restart:not(.warn):not(:disabled) { background: var(--cyan-fill); color: var(--on-cyan-fill) !important; text-shadow: none; }
 /* teal label chips: tinted panel with body text, like the other quiet chips */
@@ -6458,39 +6474,39 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 /* ---- Desk Psycho U2: cross-squad Needs-you spine in the left sidebar (BoringInbox, src/BoringInbox.tsx) ------------------------
    PC-98 Hypnospace chrome: 1-2px bevels on panel/well fills. Dim text = var(--muted) colour, fully opaque; muted/panel is >= 4.5:1 in
    dark (#b5a5d8 on #21163d) and light (#574268 on #ebe0e8). Scoped to .sidebar so Normal (html[data-vibe="boring"], boring.css) is untouched. */
-.sidebar-needs-spine { flex: none; max-height: 38vh; overflow-y: auto; margin: 4px 6px 6px; }
-.sidebar .boring-needs-you { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: var(--panel); border: 1px solid var(--border, var(--line)); box-shadow: var(--bevel), var(--hard); color: var(--text); font-size: 12px; }
-.sidebar .boring-needs-head { display: flex; align-items: center; gap: 6px; font-family: var(--arcade); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--amber-t); padding: 0 2px; }
-.sidebar .boring-needs-head .boring-badge { font-family: var(--mono); font-size: 11px; letter-spacing: 0; padding: 0 6px; background: var(--amber); color: var(--on-amber) !important; border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
-.sidebar .boring-needs-head .boring-kbd { margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted); border: 1px solid var(--line); padding: 0 4px; background: var(--well); box-shadow: var(--bevel-in); }
-.sidebar .boring-needs-rows, .sidebar .boring-done-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-.sidebar .boring-needs-item { display: grid; gap: 1px; padding: 3px 5px; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--amber); box-shadow: var(--bevel-in); }
-.sidebar .boring-needs-item.attn-error { border-left-color: var(--hot-pink); }
-.sidebar .boring-needs-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.sidebar .boring-needs-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
-.sidebar .boring-needs-open:hover .boring-needs-who { text-decoration: underline; }
-.sidebar .boring-needs-who { flex: 0 1 auto; max-width: none; /* the where-inline sibling has basis 0, so it gives way first; a % cap ellipsized "Overlord" (53 > 49) */ min-width: 8ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; color: var(--muted); }
-.sidebar .boring-needs-where { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar .boring-conv-age { flex: none; font-size: 11px; font-weight: 400; color: var(--muted); }
-.sidebar .boring-dot { flex: none; width: 8px; height: 8px; background: var(--amber); border: 1px solid var(--shadow-hard); }
-.sidebar .boring-dot.st-err { background: var(--hot-pink); }
-.sidebar .boring-dot.st-stalled { background: transparent; border-color: var(--amber); }
-.sidebar .boring-dot.st-done { background: var(--emerald); width: 6px; height: 6px; }
-.sidebar .boring-needs-why { padding-left: 14px; min-width: 0; font-size: 11px; color: var(--muted); }
-.sidebar .boring-needs-reason { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
-.sidebar .boring-needs-actions { display: flex; gap: 4px; padding: 2px 0 1px 14px; }
-.sidebar .boring-needs-btn, .sidebar .boring-needs-menu-item { min-height: 22px; padding: 0 8px; border: 1px solid var(--line); background: var(--panel-hi); color: var(--text); font: inherit; font-size: 11px; cursor: pointer; box-shadow: var(--bevel); }
-.sidebar .boring-needs-btn:active, .sidebar .boring-needs-menu-item:active { box-shadow: var(--bevel-in); }
-.sidebar .boring-needs-btn.ok { background: var(--mint-fill); color: var(--on-pastel); border-color: var(--shadow-hard); font-weight: 700; }
-.sidebar .boring-needs-btn.bad { background: var(--pink-fill); color: var(--on-pink-fill); border-color: var(--shadow-hard); font-weight: 700; }
-.sidebar .boring-needs-btn:disabled, .sidebar .boring-needs-menu-item:disabled { cursor: default; color: var(--muted); }
-:root[data-theme="light"] .sidebar .boring-needs-btn.ok { color: #fff; } /* light mint-fill is darkened: dark ink was 3.1:1, white is 5.1:1 */
+:where(html:not([data-vibe="boring"])) .sidebar-needs-spine { flex: none; max-height: 38vh; overflow-y: auto; margin: 4px 6px 6px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-you { display: flex; flex-direction: column; gap: 4px; padding: 4px; background: var(--panel); border: 1px solid var(--border, var(--line)); box-shadow: var(--bevel), var(--hard); color: var(--text); font-size: 12px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-head { display: flex; align-items: center; gap: 6px; font-family: var(--arcade); font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: var(--amber-t); padding: 0 2px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-head .boring-badge { font-family: var(--mono); font-size: 11px; letter-spacing: 0; padding: 0 6px; background: var(--amber); color: var(--on-amber) !important; border: 1px solid var(--shadow-hard); box-shadow: var(--bevel); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-head .boring-kbd { margin-left: auto; font-family: var(--mono); font-size: 10px; letter-spacing: 0; text-transform: none; color: var(--muted); border: 1px solid var(--line); padding: 0 4px; background: var(--well); box-shadow: var(--bevel-in); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-rows, :where(html:not([data-vibe="boring"])) .sidebar .boring-done-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-item { display: grid; gap: 1px; padding: 3px 5px; background: var(--well); border: 1px solid var(--line); border-left: 3px solid var(--amber); box-shadow: var(--bevel-in); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-item.attn-error { border-left-color: var(--hot-pink); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 3px; min-height: 22px; padding: 0; border: 0; background: transparent; color: var(--text); font: inherit; font-weight: 700; text-align: left; cursor: pointer; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-open:hover .boring-needs-who { text-decoration: underline; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-who { flex: 0 1 auto; max-width: none; /* the where-inline sibling has basis 0, so it gives way first; a % cap ellipsized "Overlord" (53 > 49) */ min-width: 8ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-where-inline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; font-size: 11px; color: var(--muted); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-where { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-conv-age { flex: none; font-size: 11px; font-weight: 400; color: var(--muted); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-dot { flex: none; width: 8px; height: 8px; background: var(--amber); border: 1px solid var(--shadow-hard); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-dot.st-err { background: var(--hot-pink); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-dot.st-stalled { background: transparent; border-color: var(--amber); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-dot.st-done { background: var(--emerald); width: 6px; height: 6px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-why { padding-left: 14px; min-width: 0; font-size: 11px; color: var(--muted); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-reason { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-actions { display: flex; gap: 4px; padding: 2px 0 1px 14px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-btn, :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-menu-item { min-height: 22px; padding: 0 8px; border: 1px solid var(--line); background: var(--panel-hi); color: var(--text); font: inherit; font-size: 11px; cursor: pointer; box-shadow: var(--bevel); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-btn:active, :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-menu-item:active { box-shadow: var(--bevel-in); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-btn.ok { background: var(--mint-fill); color: var(--on-pastel); border-color: var(--shadow-hard); font-weight: 700; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-btn.bad { background: var(--pink-fill); color: var(--on-pink-fill); border-color: var(--shadow-hard); font-weight: 700; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-btn:disabled, :where(html:not([data-vibe="boring"])) .sidebar .boring-needs-menu-item:disabled { cursor: default; color: var(--muted); }
+:root:where(:not([data-vibe="boring"]))[data-theme="light"] .sidebar .boring-needs-btn.ok { color: #fff; } /* light mint-fill is darkened: dark ink was 3.1:1, white is 5.1:1 */
 /* hover/focus menu: opens in the row (no absolute popover, so the scrolling spine never clips it) */
-.sidebar .boring-needs-menu-wrap { flex: none; display: flex; align-items: center; gap: 3px; }
-.sidebar .boring-needs-more { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; line-height: 1; cursor: pointer; box-shadow: var(--bevel); }
-.sidebar .boring-needs-more:hover { color: var(--text); }
-.sidebar .boring-needs-menu { display: none; flex-direction: row; gap: 3px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-menu-wrap { flex: none; display: flex; align-items: center; gap: 3px; }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-more { width: 20px; height: 20px; padding: 0; border: 1px solid var(--line); background: var(--panel-hi); color: var(--muted); font: inherit; line-height: 1; cursor: pointer; box-shadow: var(--bevel); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-more:hover { color: var(--text); }
+:where(html:not([data-vibe="boring"])) .sidebar .boring-needs-menu { display: none; flex-direction: row; gap: 3px; }
 /* the spine scroller clips x (content ~137px at 1280): the open menu cannot sit inline beside the role name (it ate its width: "Overlord" ellipsized, Dismiss clipped 7.6px).
    The menu stays a child of the wrap (so :hover on it keeps the wrap hovered) but is placed (position: fixed, auto offsets) over the row's reason line, right-aligned under the ⋯, outside the spine's clip. The row never grows (a growing last row pushed the menu out of the scroller)
    and the name keeps the whole first line. Only the ⋯ / menu (wrap hover) or keyboard focus inside the wrap opens it, so plain row hover leaves the reason readable; the reason hides only while the menu covers it. */
