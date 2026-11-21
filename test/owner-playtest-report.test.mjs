@@ -1,6 +1,8 @@
 // PTO-B1 (docs/lanes/playtest-overlay/PLAN_V1.md, Tier A: it touches the auth route table): the local owner (loopback +
 // the per-install local token, auth.mjs isLocalOwner) may call the E6a report/thread handlers with a REQUIRED teamId.
 // Owner cards are stamped `[Owner playtest]`; tester gating and tester answers are unchanged; nobody else gains the routes.
+// PTO-B1b (Tier A): a paired OWNER device that authenticates with a header token (Authorization: Bearer / x-vs-device-token)
+// gains the same routes from a remote socket (VS on another box over Tailscale); a cookie-only or relayed owner device does not.
 // Every request goes through the real middleware on a loopback or a Meshnet (non-loopback) socket. Attacker cases are
 // marked "attacker:".
 import assert from "node:assert/strict";
@@ -41,6 +43,7 @@ writeFileSync(join(HOME, "teams.json"), JSON.stringify({ teams: TEAMS }), "utf8"
 const auth = await import("../server/auth.mjs");
 const inbox = await import("../server/inbox.mjs");
 const api = await import("../server/vibesquad-api.mjs");
+const { createSyntheticRequest } = await import("../server/relay-tunnel.mjs");
 after(() => {
   rmSync(HOME, { recursive: true, force: true });
   rmSync(ROOT, { recursive: true, force: true });
@@ -131,6 +134,7 @@ async function pcPair(name, scope) {
   return r.json().token;
 }
 const ownerPhone = await pcPair("Owner phone");
+const ownerGame = await pcPair("Owner game");
 const alice = await pcPair("Alice", { role: "bug-tester", allowedTeams: ["efi"] });
 const deviceId = (name) => auth.listDevices().find((d) => d.name === name)?.id;
 
@@ -305,7 +309,113 @@ describe("owner GET/POST /__vibesquad/tester/thread", () => {
   });
 });
 
-describe("attacker: only the local owner gains the routes", () => {
+describe("PTO-B1b: a remote owner device with a header token", () => {
+  const devReport = (headers, body) => call({ url: REPORT, method: "POST", headers, body });
+
+  test("Authorization: Bearer owner device -> 200 and an [Owner playtest] card owned by that device", async () => {
+    prompts.length = 0;
+    const r = await devReport(bearer(ownerGame), { teamId: "efi", text: "remote door", screenshotBase64: PNG_B64, telemetry: { scene: "res://door.tscn" } });
+    assert.equal(r.status, 200, r.body);
+    const out = r.json();
+    assert.equal(out.ok, true);
+    assert.equal(out.laneId, "efi-bugs");
+    assert.equal(out.threadAgentId, "rn-efibuddy");
+    assert.equal(out.screenshotAttached, true);
+    const card = cardById(out.cardId);
+    assert.ok(card.text.startsWith("[Owner playtest]\n"), card.text.slice(0, 40));
+    assert.equal(card.source, "owner-playtest");
+    assert.equal(card.ownerPlaytest, true);
+    assert.equal(card.ownerPlaytestBy, `device:${deviceId("Owner game")}`);
+    assert.equal("testerDeviceId" in card, false);
+    assert.ok(!JSON.stringify(card).includes(ownerGame), "the device token is never stored on the card");
+    assert.ok(prompts.some((p) => p.id === "rn-efibuddy" && p.text.includes(`#${out.cardId}`)));
+  });
+
+  test("x-vs-device-token owner device -> 200; thread GET and POST work too (owner line)", async () => {
+    const h = { "x-vs-device-token": ownerGame };
+    const r = await devReport(h, { teamId: "efi", text: "via x-vs-device-token" });
+    assert.equal(r.status, 200, r.body);
+    assert.equal(cardById(r.json().cardId).ownerPlaytestBy, `device:${deviceId("Owner game")}`);
+    const g = await call({ url: `${THREAD}?teamId=efi`, headers: h });
+    assert.equal(g.status, 200, g.body);
+    assert.equal(g.json().teamId, "efi");
+    prompts.length = 0;
+    const p = await call({ url: THREAD, method: "POST", headers: bearer(ownerGame), body: { teamId: "efi", text: "remote line", cardId: r.json().cardId } });
+    assert.equal(p.status, 200, p.body);
+    assert.equal(prompts[0].text, `[Owner playtest · card:${r.json().cardId}] remote line`);
+    assert.equal(prompts[0].opts.owner, true);
+  });
+
+  test("every B1 rule holds for a device owner: teamId 400/404/409, validation, 64 KB cap, screenshot sniff, 405", async () => {
+    const h = bearer(ownerGame);
+    const before = cards().length;
+    assert.equal((await devReport(h, { text: "x" })).status, 400);
+    assert.equal((await devReport(h, { teamId: "nope", text: "x" })).status, 404);
+    assert.equal((await devReport(h, { teamId: "nobug", text: "x" })).status, 409);
+    assert.equal((await devReport(h, { teamId: "efi", text: " " })).status, 400);
+    assert.equal((await devReport(h, { teamId: "efi", text: "big", telemetry: { blob: "x".repeat(api.TESTER_TELEMETRY_MAX_BYTES) } })).status, 413);
+    assert.equal((await devReport(h, { teamId: "efi", text: "x", screenshotBase64: Buffer.from("GIF89a....").toString("base64") })).status, 400);
+    assert.equal((await call({ url: REPORT, method: "GET", headers: h })).status, 405);
+    assert.equal((await call({ url: THREAD, headers: h })).status, 400);
+    assert.equal(cards().length, before);
+  });
+
+  test("clientReportId dedupes per owner principal: same device dedupes; another device and the local owner do not collide", async () => {
+    const id = "b1b-principal-id";
+    const a = await devReport(bearer(ownerGame), { teamId: "efi", text: "a", clientReportId: id });
+    assert.equal(a.status, 200, a.body);
+    const a2 = await devReport({ "x-vs-device-token": ownerGame }, { teamId: "efi", text: "a retry", clientReportId: id });
+    assert.equal(a2.json().deduplicated, true, "same device, other header form: still one principal");
+    assert.equal(a2.json().cardId, a.json().cardId);
+    const b = await devReport(bearer(ownerPhone), { teamId: "efi", text: "b", clientReportId: id });
+    assert.equal(b.status, 200, b.body);
+    assert.equal("deduplicated" in b.json(), false, "another owner device is another principal");
+    assert.equal(cardById(b.json().cardId).ownerPlaytestBy, `device:${deviceId("Owner phone")}`);
+    const l = await ownerReport({ teamId: "efi", text: "local", clientReportId: id });
+    assert.equal("deduplicated" in l.json(), false, "the local owner is another principal");
+    assert.equal(cardById(l.json().cardId).ownerPlaytestBy, "local-owner");
+    assert.equal((await ownerReport({ teamId: "efi", text: "local again", clientReportId: id })).json().cardId, l.json().cardId);
+    const t = await testerReport({ teamId: "efi", text: "tester", clientReportId: id });
+    assert.equal("deduplicated" in t.json(), false, "a tester is never an owner principal");
+    assert.equal(cards().filter((c) => c.clientReportId === id).length, 4);
+    // concurrent retries from one device park one card
+    const cid = "b1b-concurrent";
+    const [x, y] = await Promise.all([devReport(bearer(ownerGame), { teamId: "efi", text: "c1", clientReportId: cid }), devReport(bearer(ownerGame), { teamId: "efi", text: "c2", clientReportId: cid })]);
+    assert.equal(x.json().cardId, y.json().cardId);
+    assert.equal(cards().filter((c) => c.clientReportId === cid).length, 1);
+  });
+
+  test("a B1 card without ownerPlaytestBy still dedupes for the local owner (it was the local owner's), never for a device", async () => {
+    const all = cards();
+    const legacy = all.find((c) => c.clientReportId === "owner-report-uuid-1" && c.teamId === "efi" && c.ownerPlaytest === true);
+    assert.ok(legacy);
+    delete legacy.ownerPlaytestBy;
+    inbox.writeInboxCards(all);
+    assert.equal("ownerPlaytestBy" in cardById(legacy.id), false);
+    const again = await ownerReport({ teamId: "efi", text: "retry", clientReportId: "owner-report-uuid-1" });
+    assert.equal(again.json().deduplicated, true);
+    assert.equal(again.json().cardId, legacy.id);
+    const dev = await devReport(bearer(ownerGame), { teamId: "efi", text: "dev", clientReportId: "owner-report-uuid-1" });
+    assert.equal(dev.status, 200, dev.body);
+    assert.equal("deduplicated" in dev.json(), false, "a device never matches a legacy local-owner card");
+  });
+
+  test("a bug-tester device on the same route still gets tester behaviour (both header forms)", async () => {
+    for (const headers of [bearer(alice), { "x-vs-device-token": alice }]) {
+      const r = await call({ url: REPORT, method: "POST", headers, body: { text: "tester path" } });
+      assert.equal(r.status, 200, r.body);
+      assert.deepEqual(Object.keys(r.json()).sort(), ["cardId", "delivered", "laneId", "ok", "threadAgentId"]);
+      const card = cardById(r.json().cardId);
+      assert.ok(card.text.startsWith("[Alpha Tester: Alice]\n"));
+      assert.equal(card.source, "alpha-tester");
+      assert.equal("ownerPlaytest" in card, false);
+      assert.equal("ownerPlaytestBy" in card, false);
+      assert.equal((await call({ url: REPORT, method: "POST", headers, body: { teamId: "oth", text: "x" } })).status, 403);
+    }
+  });
+});
+
+describe("attacker: only the local owner or a header-token owner device gains the routes", () => {
   const routes = [
     { url: REPORT, method: "POST", body: { teamId: "efi", text: "x" } },
     { url: `${THREAD}?teamId=efi`, method: "GET" },
@@ -324,15 +434,79 @@ describe("attacker: only the local owner gains the routes", () => {
     assert.equal(prompts.length, 0);
   });
 
-  test("a remote (Meshnet) caller is refused even with the real local token, and a paired OWNER device (not local) is 403", async () => {
+  test("a remote (Meshnet) caller is refused even with the real local token; an unpaired remote caller is 401", async () => {
     for (const r of routes) {
       const tok = await call({ ...r, headers: ownerLocal() });
       assert.ok([401, 403].includes(tok.status), `remote + local token ${r.method} ${r.url} -> ${tok.status}`);
-      const phone = await call({ ...r, headers: bearer(ownerPhone) });
-      assert.equal(phone.status, 403, `paired owner device ${r.method} ${r.url} -> ${phone.body}`);
       const anon = await call({ ...r });
       assert.equal(anon.status, 401, `unpaired remote ${r.method} ${r.url}`);
     }
+  });
+
+  test("attacker: a COOKIE-only owner device is 403 (same-origin or not, loopback or remote); nothing parked or sent", async () => {
+    const before = cards().length;
+    prompts.length = 0;
+    const cookie = { cookie: `${auth.DEVICE_COOKIE}=${ownerPhone}` };
+    // sanity: the cookie really authenticates (a remote API read is 200 with it, 401 without)
+    assert.equal((await call({ url: "/__vibesquad/settings", headers: cookie })).status, 200);
+    assert.equal((await call({ url: "/__vibesquad/settings" })).status, 401);
+    for (const r of routes) {
+      for (const extra of [{}, { origin: "http://100.64.0.7:4180" }, { "sec-fetch-site": "same-origin" }]) {
+        const out = await call({ ...r, headers: { ...cookie, ...extra } });
+        assert.equal(out.status, 403, `cookie owner ${r.method} ${r.url} ${JSON.stringify(extra)} -> ${out.body}`);
+      }
+      assert.equal((await call({ ...r, local: true, headers: cookie })).status, 403, `loopback cookie owner ${r.method} ${r.url}`);
+    }
+    assert.equal(cards().length, before);
+    assert.equal(prompts.length, 0);
+  });
+
+  test("attacker: a revoked or unknown device token is 401 remote / 403 loopback; a malformed header never falls back to the cookie", async () => {
+    const doomed = await pcPair("Owner doomed");
+    assert.equal((await call({ ...routes[1], headers: bearer(doomed) })).status, 200, "works before the revoke");
+    auth.revokeDevice(deviceId("Owner doomed"));
+    const before = cards().length;
+    for (const r of routes) {
+      for (const headers of [bearer(doomed), { "x-vs-device-token": doomed }, bearer("f".repeat(64)), { "x-vs-device-token": "f".repeat(64) }]) {
+        assert.equal((await call({ ...r, headers })).status, 401, `remote ${r.method} ${r.url}`);
+        assert.equal((await call({ ...r, local: true, headers })).status, 403, `loopback ${r.method} ${r.url}`);
+      }
+      // a malformed header plus a valid owner cookie: the header wins and fails, the cookie is not consulted
+      const mixed = await call({ ...r, headers: { "x-vs-device-token": "not a token", cookie: `${auth.DEVICE_COOKIE}=${ownerPhone}` } });
+      assert.ok([401, 403].includes(mixed.status), `malformed header + cookie ${r.method} ${r.url} -> ${mixed.status}`);
+    }
+    assert.equal(cards().length, before);
+  });
+
+  test("attacker: an owner device token header plus agent headers is 403", async () => {
+    for (const r of routes) {
+      for (const headers of [bearer(ownerPhone), { "x-vs-device-token": ownerPhone }]) {
+        const out = await call({ ...r, headers: { ...headers, "x-vs-agent-id": "rn-efihub", "x-vs-agent-token": "t" } });
+        assert.equal(out.status, 403, `${r.method} ${r.url} -> ${out.body}`);
+      }
+    }
+  });
+
+  test("an E5 relayed owner device is 403 (channel identity, not a header token), even if a token header rides along", async () => {
+    prompts.length = 0;
+    const before = cards().length;
+    const relayed = async (method, path, headers = {}, body) => {
+      const req = createSyntheticRequest({ method, path, headers: { ...(body ? { "content-type": "application/json" } : {}), ...headers }, body: body ? Buffer.from(JSON.stringify(body)) : Buffer.alloc(0), deviceId: deviceId("Owner phone") });
+      const { res, finished } = mkRes();
+      const viaNext = new Promise((done) => mw(req, res, () => done("next")));
+      assert.notEqual(await Promise.race([finished, viaNext]), "next");
+      return res;
+    };
+    // sanity: the same relayed device is a trusted caller on an ordinary API read
+    assert.equal((await relayed("GET", "/__vibesquad/settings")).statusCode, 200);
+    for (const r of routes) {
+      for (const headers of [{}, bearer(ownerPhone), { "x-vs-device-token": ownerPhone }]) {
+        const res = await relayed(r.method, r.url, headers, r.body);
+        assert.equal(res.statusCode, 403, `relay ${r.method} ${r.url} ${JSON.stringify(Object.keys(headers))} -> ${res.body}`);
+      }
+    }
+    assert.equal(cards().length, before);
+    assert.equal(prompts.length, 0);
   });
 
   test("loopback with a foreign Host or Origin is refused even with the token (isLocalBrowserSafe)", async () => {
