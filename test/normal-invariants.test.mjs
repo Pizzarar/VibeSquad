@@ -187,11 +187,14 @@ test("5. Two expanded projects have the same child structure", guard("inv5", asy
   }
   const shapes = await page.evaluate(() => [...document.querySelectorAll(".boring-project-block")].map((b) => {
     const kids = [...(b.querySelector(".boring-project-lanes")?.children ?? [])];
-    const kind = (k) => (k.classList.contains("boring-desk-block") ? "desk" : k.querySelector('[data-testid^="boring-core-bugs"]') ? "bugs" : k.matches(".boring-conv-row") ? "lane" : k.tagName.toLowerCase() + "." + k.className);
+    const kind = (k) => (k.classList.contains("boring-trinity-card") ? "trinity" : k.classList.contains("boring-lanes-divider") ? "lanes-divider" : k.matches(".boring-conv-row") ? "lane" : k.tagName.toLowerCase() + "." + k.className);
     return { project: b.querySelector(".boring-project-name")?.textContent?.trim(), kids: kids.map(kind) };
   }));
   assert.equal(shapes.length, REGISTRY.teams.length);
-  for (const s of shapes) assert.deepEqual(s.kids.slice(0, 2), ["desk", "bugs"], `${s.project} must start Desk, Bugs: ${JSON.stringify(shapes)}`);
+  for (const s of shapes) assert.deepEqual(s.kids.slice(0, 2), ["trinity", "lanes-divider"], `${s.project} must start Trinity, Lanes divider: ${JSON.stringify(shapes)}`);
+  // Overlord, RiffBot and Bugs are visible inside the Trinity card without expanding anything.
+  const core = await page.evaluate(() => [...document.querySelectorAll(".boring-trinity-card")].map((c) => ["overlord", "riffbot", "bugs"].map((n) => { const e = c.querySelector(`[data-testid^="boring-core-${n}"]`); const r = e?.getBoundingClientRect(); return !!r && r.width > 0 && r.height > 0; })));
+  for (const c of core) assert.deepEqual(c, [true, true, true], "Trinity rows must be visible");
   const nonLane = (s) => s.kids.filter((k) => k !== "lane");
   for (const s of shapes.slice(1)) assert.deepEqual(nonLane(s), nonLane(shapes[0]), `non-lane children differ: ${JSON.stringify(shapes)}`);
 }));

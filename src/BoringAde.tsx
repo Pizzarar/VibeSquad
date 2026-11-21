@@ -373,7 +373,6 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
-  const [deskOpen, setDeskOpen] = useState<Record<string, boolean>>({});
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
@@ -455,15 +454,12 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     } else if (m) openAgent(m.agent.id);
     else void onOpenPin(pin);
   };
-  /** Open every parent of a jumped-to agent (project, Desk / lane): an explicit collapse never hides the selected row. */
+  /** Open every parent of a jumped-to agent (project, lane): an explicit collapse never hides the selected row. */
   const revealAgent = (v: TeamView, s: { laneId: string; role: Role | "worker" } | null, id: string) => {
     if (!s) return;
     const tid = v.team.id;
     setProjectOpen((o) => ({ ...o, [tid]: true }));
-    if (s.laneId === "_overlord" || s.laneId === "_riffbot" || s.laneId === "_desk") {
-      setDeskOpen((o) => ({ ...o, [tid]: true }));
-      return;
-    }
+    if (s.laneId === "_overlord" || s.laneId === "_riffbot" || s.laneId === "_desk") return; // Trinity card is always visible
     const key = `${tid}/${s.laneId}`;
     setLaneOpen((o) => ({ ...o, [key]: true }));
   };
@@ -681,33 +677,18 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       </button>
     </div>
   );
-  const deskBlock = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
+  /** B8a: Overlord + RiffBot + Bugs sit in one always-visible Trinity card, separate from the feature lanes (no collapsed Desk). */
+  const trinityCard = (v: TeamView, m: ReturnType<typeof boringSidebarModel>) => {
     const hubPinV = skyZonesFor(v).hub;
-    const key = v.team.id;
     const inDesk = sel.teamId === v.team.id && (sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk");
-    const open = deskOpen[key] ?? inDesk;
     const hw = m.core.deskWorkers;
-    const deskRunning = m.core.overlord.status === "running" || m.core.riffbot.status === "running" ? "running" : "idle";
-    const liveNames = [m.core.overlord.agentId && m.core.overlord.status !== "none" ? "Overlord" : null, m.core.riffbot.agentId && m.core.riffbot.status !== "none" ? "RiffBot" : null].filter(Boolean).join(" · ");
-    const deskGlyph = m.deskErr ? "error" : m.hubNeedsYou > 0 ? "needs-you" : null;
     return (
-      <div key="desk" className="boring-desk-block" data-testid={suffix(v, "boring-desk")}>
-        <div className="boring-conv-line">
-          {chevronCol(open, () => setDeskOpen((o) => ({ ...o, [key]: !open })), "Desk", suffix(v, "boring-desk-toggle"))}
-          <button type="button" className="boring-core-row boring-desk-row" aria-expanded={open} data-testid={suffix(v, "boring-desk-row")} onClick={() => setDeskOpen((o) => ({ ...o, [key]: !open }))}>
-            <span className={`boring-dot ${deskRunning} ${glyphCls(deskRunning, deskGlyph)}`} />
-            <span className="boring-row-label">Desk</span>
-            {liveNames && <span className="boring-desk-sub">{liveNames}</span>}
-            {!open && badge(m.hubNeedsYou, m.deskErr)}
-          </button>
-        </div>
-        {open && (
-          <div className="boring-desk-children">
-            {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId))}
-            {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
-            {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
-          </div>
-        )}
+      <div key="trinity" className="boring-trinity-card" data-testid={suffix(v, "boring-trinity")}>
+        <div className="boring-trinity-head">Core</div>
+        {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId))}
+        {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
+        {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
+        {bugsRow(v, m)}
       </div>
     );
   };
@@ -752,8 +733,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                 </div>
                 {open && (
                   <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
-                    {deskBlock(v, m)}
-                    {bugsRow(v, m)}
+                    {trinityCard(v, m)}
+                    <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
                     {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
                     {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
                   </div>

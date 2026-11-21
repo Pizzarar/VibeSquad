@@ -653,7 +653,6 @@ html[data-vibe="boring"] .boring-project-row:hover,
 html[data-vibe="boring"] .boring-project-row.on { background: var(--panel-hi); }
 html[data-vibe="boring"] .boring-project-row .boring-project-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; }
 html[data-vibe="boring"] .boring-chevron { width: 1em; color: var(--muted); }
-html[data-vibe="boring"] .boring-trinity-card { padding: 8px; border-radius: 14px; border: 0; background: transparent; }
 html[data-vibe="boring"] .boring-section-label { padding: 4px 10px; font-size: 0.72em; font-weight: 700; letter-spacing: 0.08em; color: var(--muted); }
 
 /* B6c: overview Cards | Map */
@@ -715,7 +714,6 @@ html[data-vibe="boring"] .boring-app { position: relative; background: var(--sur
 html[data-vibe="boring"] .boring-app::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: 2px; background: var(--titlebar); z-index: 50; pointer-events: none; }
 html[data-vibe="boring"] .boring-sidebar { background: var(--surface-1); border-right: 1px solid var(--border); padding: 16px 12px; gap: 8px; }
 html[data-vibe="boring"] .boring-topbar { background: var(--surface-0); }
-html[data-vibe="boring"] .boring-trinity-card { background: transparent !important; background-image: none !important; padding: 0; border-radius: 0; }
 
 /* Type: one scale. Messages + composer share --t-body. */
 html[data-vibe="boring"] .boring-app { font-size: var(--t-ui); line-height: var(--lh-ui); }
@@ -1125,14 +1123,11 @@ html[data-vibe="boring"] .boring-overview-bar { display: flex; align-items: cent
 html[data-vibe="boring"] .boring-chevron-btn { flex: 0 0 16px; width: 16px; min-width: 16px; padding: 0; }
 html[data-vibe="boring"] .boring-chevron-spacer { display: inline-block; cursor: default; }
 html[data-vibe="boring"] .boring-project-lanes { padding-left: 16px; }
-html[data-vibe="boring"] .boring-desk-children { padding-left: 16px; display: flex; flex-direction: column; gap: 1px; }
 html[data-vibe="boring"] .boring-conv-line .boring-core-row { flex: 1 1 auto; min-width: 0; padding-left: 4px; }
 html[data-vibe="boring"] .boring-core-row.on { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); }
-html[data-vibe="boring"] .boring-desk-sub { margin-left: auto; font-size: var(--t-caption); color: var(--text-3); white-space: nowrap; }
 html[data-vibe="boring"] .boring-conv-row.on:not(:has(.boring-worker-row.on)) > .boring-conv-line { background: var(--surface-3); box-shadow: inset 2px 0 0 var(--accent); border-radius: 6px; }
 html[data-vibe="boring"] .boring-worker-list { padding-left: 16px; } /* children of the lane: same 16px level step as the Desk members */
 html[data-vibe="boring"] .boring-worker-row { padding-left: 20px; } /* 16px chevron slot + 4px, so the worker dot sits one level right of the lane dot */
-html[data-vibe="boring"] .boring-desk-children > .boring-worker-list { padding-left: 0; } /* Desk workers sit at the Overlord/RiffBot level; the idle fold chevron shares their 16px column */
 html[data-vibe="boring"] .boring-worker-list > .boring-idle-toggle { display: inline-flex; align-items: center; gap: 0; min-height: 24px; padding: 2px 8px 2px 0; }
 html[data-vibe="boring"] .boring-idle-toggle .boring-idle-chev { flex: 0 0 16px; width: 16px; text-align: center; }
 html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: var(--on-accent); }
@@ -1158,9 +1153,6 @@ html[data-vibe="boring"] .boring-ctx-rail-badge.st-err { background: var(--st-er
 /* Plan tab open: the in-timeline pinned todo bar duplicates it. */
 html[data-vibe="boring"] .drawer:has(.boring-context-panel[data-open="true"][data-tab="Plan"]) [data-testid="tl-pinned-todo"] { display: none; }
 
-/* R2 fix2: Desk block/row hooks get real rules (block stacks its line + children; row keeps its label/sub/badge on one line). */
-html[data-vibe="boring"] .boring-desk-block { display: flex; flex-direction: column; gap: 1px; }
-html[data-vibe="boring"] .boring-desk-row { display: flex; align-items: center; gap: 8px; text-align: left; }
 
 /* Desk R2 Unit 2: Needs you = 2-line rows, hover menu, Done recently (src/BoringInbox.tsx); worker reason tint (src/BoringAde.tsx). */
 html[data-vibe="boring"] .boring-needs-item { position: relative; }
@@ -1226,3 +1218,10 @@ html[data-vibe="boring"] .boring-needs-open .boring-needs-who { max-width: clamp
 html[data-vibe="boring"] .boring-needs-reason { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 /* R7-1: neutral placeholder while a deep link waits for the roster. */
 html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #888); font-size: 14px; }
+
+/* B8a: always-visible Trinity card (Overlord, RiffBot, Bugs) set apart from the feature lanes. */
+html[data-vibe="boring"] .boring-trinity-card { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px 6px 6px; margin: 4px 0 6px; background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; }
+html[data-vibe="boring"] .boring-trinity-head { padding: 2px 4px 4px; font-size: var(--t-caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+html[data-vibe="boring"] .boring-trinity-card .boring-row-label { font-weight: 500; color: var(--text-1); }
+html[data-vibe="boring"] .boring-trinity-card .boring-worker-list { padding-left: 0; }
+html[data-vibe="boring"] .boring-lanes-divider { padding: 6px 4px 2px; font-size: var(--t-caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); border-top: 1px solid var(--border); margin-top: 2px; }
