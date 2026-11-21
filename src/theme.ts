@@ -31,9 +31,9 @@ export type VibePref = "fun" | "boring";
 
 export const VIBE_PREFS: readonly VibePref[] = ["fun", "boring"];
 
-/** Anything but an explicit "boring" is the fun default. */
+/** Anything but an explicit "fun" (Legacy: Psycho mode) is Normal ("boring"). */
 export function parseVibePref(raw: unknown): VibePref {
-  return raw === "boring" ? "boring" : "fun";
+  return raw === "fun" ? "fun" : "boring";
 }
 
 /** Same pick from the raw vs.prefs.v1 JSON blob; mirrored by the pre-paint script in index.html. */
@@ -41,6 +41,6 @@ export function vibeFromPrefsBlob(blob: string | null): VibePref {
   try {
     return parseVibePref(blob ? (JSON.parse(blob) as Record<string, unknown>)["app.vibe"] : undefined);
   } catch {
-    return "fun";
+    return "boring";
   }
 }

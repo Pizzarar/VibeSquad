@@ -52,19 +52,20 @@ test('index.html pre-paint script agrees with themeFromPrefsBlob', () => {
   }
 });
 
-test('parseVibePref / vibeFromPrefsBlob default to fun and only accept boring', () => {
+test('parseVibePref / vibeFromPrefsBlob default to boring (Normal) and only accept an explicit fun', () => {
   assert.deepEqual([...VIBE_PREFS], ['fun', 'boring']);
   assert.equal(parseVibePref('boring'), 'boring');
   assert.equal(parseVibePref('fun'), 'fun');
-  for (const bad of [undefined, null, '', 'Boring', 'corp', 3, {}]) assert.equal(parseVibePref(bad), 'fun');
+  for (const bad of [undefined, null, '', 'Boring', 'corp', 3, {}]) assert.equal(parseVibePref(bad), 'boring');
   assert.equal(vibeFromPrefsBlob(JSON.stringify({ 'app.vibe': 'boring' })), 'boring');
-  assert.equal(vibeFromPrefsBlob(JSON.stringify({ 'app.theme': 'dark' })), 'fun');
-  assert.equal(vibeFromPrefsBlob(null), 'fun');
-  assert.equal(vibeFromPrefsBlob('{not json'), 'fun');
+  assert.equal(vibeFromPrefsBlob(JSON.stringify({ 'app.theme': 'dark' })), 'boring');
+  assert.equal(vibeFromPrefsBlob(null), 'boring');
+  assert.equal(vibeFromPrefsBlob('{not json'), 'boring');
 });
 
-test('app.vibe is a registered enum pref right after app.theme, defaulting to fun', () => {
-  assert.equal(PREF_DEFAULTS['app.vibe'], 'fun');
+test('app.vibe is a registered (hidden, Legacy: Psycho mode lives in About) enum pref right after app.theme, defaulting to boring', () => {
+  assert.equal(PREF_DEFAULTS['app.vibe'], 'boring');
+  assert.equal(PREF_DEFS.find((x) => x.key === 'app.vibe').hidden, true);
   const i = PREF_DEFS.findIndex((x) => x.key === 'app.vibe');
   assert.equal(i, PREF_DEFS.findIndex((x) => x.key === 'app.theme') + 1);
   const d = PREF_DEFS[i];
@@ -80,10 +81,19 @@ test('index.html pre-paint script sets dataset.vibe like vibeFromPrefsBlob', () 
     const documentElement = { dataset: {} };
     vm.runInNewContext(code, {
       document: { documentElement },
-      localStorage: { getItem: (k) => (k === PREFS_KEY ? blob : null) },
+      localStorage: { getItem: (k) => (k === PREFS_KEY ? blob : k === 'vs.vibeMigratedNormal' ? '1' : null) },
       window: { matchMedia: () => ({ matches: true }) },
       matchMedia: () => ({ matches: true }),
     });
     assert.equal(documentElement.dataset.vibe, vibeFromPrefsBlob(blob), String(blob));
+    // Before the one-time migration runs, a stored fun still paints Normal (no Psycho flash).
+    const pre = { dataset: {} };
+    vm.runInNewContext(code, {
+      document: { documentElement: pre },
+      localStorage: { getItem: (k) => (k === PREFS_KEY ? blob : null) },
+      window: { matchMedia: () => ({ matches: true }) },
+      matchMedia: () => ({ matches: true }),
+    });
+    assert.equal(pre.dataset.vibe, 'boring', `unmigrated ${blob}`);
   }
 });

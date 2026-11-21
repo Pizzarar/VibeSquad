@@ -75,7 +75,7 @@ const boolTF: Legacy["read"] = (raw) => (raw === "true" ? true : raw === "false"
 export const PREF_DEFAULTS: Prefs = {
   "app.density": "comfortable",
   "app.theme": "system",
-  "app.vibe": "fun",
+  "app.vibe": "boring",
   "app.accent": "cyan",
   "app.confirmClose": true,
   "app.restoreLastView": true,
@@ -110,7 +110,7 @@ export const PREF_DEFS: PrefDef[] = [
     kind: "enum",
     options: [{ value: "system", label: "System" }, { value: "dark", label: "Dark" }, { value: "light", label: "Light" }],
   },
-  { key: "app.vibe", section: "app", label: "Layout vibe", hint: "Psycho or Normal layout.", keywords: ["corpo", "normal", "psycho"], kind: "enum", options: [{ value: "fun", label: "Psycho" }, { value: "boring", label: "Normal" }] },
+  { key: "app.vibe", section: "app", label: "Layout vibe", hint: "Psycho or Normal layout.", keywords: ["corpo", "normal", "psycho"], hidden: true, kind: "enum", options: [{ value: "fun", label: "Psycho" }, { value: "boring", label: "Normal" }] },
   {
     key: "app.accent",
     section: "app",
@@ -230,10 +230,31 @@ let saved: Partial<Prefs> | null = null;
 let version = 0;
 const listeners = new Set<() => void>();
 
+export const VIBE_MIGRATED_NORMAL_KEY = "vs.vibeMigratedNormal";
+
+/** One-time: a stored app.vibe "fun" (the old default) becomes "boring" (Normal). Runs at most once; afterwards "fun" is a deliberate Legacy: Psycho choice. */
+export function migrateVibeToNormalOnce(s: Pick<Storage, "getItem" | "setItem"> | null = storage()): void {
+  if (!s) return;
+  try {
+    if (s.getItem(VIBE_MIGRATED_NORMAL_KEY) === "1") return;
+    const raw = s.getItem(PREFS_KEY);
+    if (raw) {
+      const obj = safeParse(raw);
+      if (obj && typeof obj === "object" && !Array.isArray(obj) && (obj as Record<string, unknown>)["app.vibe"] === "fun") {
+        s.setItem(PREFS_KEY, JSON.stringify({ ...(obj as object), "app.vibe": "boring" }));
+      }
+    }
+    s.setItem(VIBE_MIGRATED_NORMAL_KEY, "1");
+  } catch {
+    /* storage unavailable */
+  }
+}
+
 /** Reads vs.prefs.v1; on first run copies the legacy keys in so exports include them. */
 function load(): Partial<Prefs> {
   if (saved) return saved;
   const s = storage();
+  migrateVibeToNormalOnce(s);
   let raw: string | null = null;
   try {
     raw = s?.getItem(PREFS_KEY) ?? null;
@@ -436,7 +457,8 @@ export const visiblePrefDefs = (): PrefDef[] => PREF_DEFS.filter((d) => !d.hidde
 
 /** Settings that live in rehoused components (Team, Runner, Profiles, About): searchable by label, open their section. */
 export type HomeSection = "app" | "chat" | "notifications" | "newAgent" | "keys" | "team" | "remote" | "runner" | "profiles" | "about";
-export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string }[] = [
+export const EXTRA_SETTINGS: { id: string; section: HomeSection; label: string; keywords?: string[] }[] = [
+  { id: "legacy-psycho", section: "about", label: "Legacy: Psycho mode", keywords: ["psycho", "legacy", "layout", "vibe", "normal", "corpo"] },
   { id: "ui-scale", section: "app", label: "UI scale (4K)" },
   { id: "keybindings", section: "keys", label: "Keybindings (rebind shortcuts)" },
   { id: "user-name", section: "team", label: "Your name" },
@@ -468,7 +490,8 @@ export function searchSettings(q: string): SettingHit[] {
   if (!terms.length) return [];
   return allSettings().filter((s) => {
     const d = s.pref ? DEF.get(s.pref) : undefined;
-    const hay = `${s.label} ${PREF_SECTION_LABEL[s.section as PrefSection] ?? s.section} ${d?.hint ?? ""} ${(d?.options ?? []).map((o) => o.label).join(" ")} ${(d?.keywords ?? []).join(" ")}`.toLowerCase();
+    const extraKw = "keywords" in s ? ((s as { keywords?: string[] }).keywords ?? []).join(" ") : "";
+    const hay = `${s.label} ${PREF_SECTION_LABEL[s.section as PrefSection] ?? s.section} ${d?.hint ?? ""} ${(d?.options ?? []).map((o) => o.label).join(" ")} ${(d?.keywords ?? []).join(" ")} ${extraKw}`.toLowerCase();
     return terms.every((t) => hay.includes(t));
   });
 }

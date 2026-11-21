@@ -373,7 +373,6 @@ type Props = {
   banners?: ReactNode;
 };
 
-const toVibespace = () => setPref("app.vibe", "fun");
 
 export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
   const [mode, setMode] = useState<Mode>("project");
@@ -832,9 +831,6 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           </button>
           <button type="button" className="boring-footer-btn" data-testid="boring-settings-btn" onClick={onSettings}>
             Settings
-          </button>
-          <button type="button" className="boring-footer-btn" data-testid="boring-switch-vibespace-btn" onClick={toVibespace}>
-            Switch to Psycho
           </button>
         </div>
       </aside>

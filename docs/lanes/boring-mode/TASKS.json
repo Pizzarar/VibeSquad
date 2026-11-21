@@ -1,6 +1,6 @@
 {
   "laneId": "boring-mode",
-  "updatedAt": "2026-11-21T08:44:17.441Z",
+  "updatedAt": "2026-11-21T18:12:10.409Z",
   "units": [
     {
       "id": "unit-bor-theme",
@@ -169,6 +169,26 @@
       "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/desk-d3c-context-panel.test.mjs test/desk-d4-polish.test.mjs test/normal-invariants.test.mjs",
       "status": "done",
       "branch": "unit-bor-b8-trinity-sidebar"
+    },
+    {
+      "id": "unit-bor-r8-6-badge-dedup",
+      "goal": "R8-6 (idea-465): Core header badge counts only Desk workers (no double-count when Overlord/RiffBot stalls or needs you) + inv 2b after 66m fastForward",
+      "files": [
+        "src/BoringAde.tsx"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/desk-d3c-context-panel.test.mjs test/desk-d4-polish.test.mjs test/normal-invariants.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-r8-6-badge-dedup"
+    },
+    {
+      "id": "unit-bor-b9-normal-default",
+      "goal": "B9 (Aub/Hub15 order): Make Normal (boring) default, 1-time fun->boring migration, remove chrome/settings/first-run vibe picker, add Legacy: Psycho mode toggle under About, update tests & wiki",
+      "files": [
+        "index.html"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/ui-theme.test.mjs test/prefs.test.mjs test/settings-home.test.mjs test/boring-mode.test.mjs test/normal-invariants.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-b9-normal-default"
     }
   ]
 }

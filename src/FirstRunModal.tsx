@@ -14,18 +14,8 @@ export const VIBE_PICKED_KEY = "vs.vibePicked";
 
 /** Fresh installs only: never for automation (unless forced), nor anyone who already finished setup, picked, or set app.vibe. */
 export function shouldShowFirstLaunchVibePicker(opts?: { getItem?: (k: string) => string | null; webdriver?: boolean }): boolean {
-  const getItem = opts?.getItem ?? ((k: string) => (typeof localStorage === "undefined" ? null : localStorage.getItem(k)));
-  const webdriver = opts?.webdriver ?? (typeof navigator !== "undefined" && Boolean(navigator.webdriver));
-  if (getItem("vs.forceVibePicker") === "1") return true;
-  if (webdriver) return false;
-  if (getItem(VIBE_PICKED_KEY) || getItem(FIRST_RUN_DONE_KEY)) return false;
-  try {
-    const parsed = JSON.parse(getItem("vs.prefs.v1") ?? "null");
-    if (parsed && typeof parsed === "object" && "app.vibe" in parsed) return false;
-  } catch {
-    /* unreadable prefs blob: treat as unset */
-  }
-  return true;
+  void opts;
+  return false; // B9: Normal is the default; Psycho is Legacy under Settings > About, so no first-launch picker.
 }
 
 const cardStyle = (on: boolean): React.CSSProperties => ({
@@ -220,7 +210,6 @@ export function FirstRunModal({ initial, onClose }: { initial?: FirstRunStatus |
       }
     >
       <div data-testid="first-run-checklist-modal">
-        <VibePickerCards />
         {!status ? (
           <p>Checking your machine…</p>
         ) : (

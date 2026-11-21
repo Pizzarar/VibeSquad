@@ -2,9 +2,9 @@
 
 What each area of VibeSquad's Settings window does, when to touch it, and the safe default. If a setting isn't listed here, you don't need it yet.
 
-Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** and **Layout vibe** (Normal or Psycho, see [Normal and Psycho](../Concepts/Modes.md)) are on **App**, and **UPDATE CHANNEL** is on **About**. The screenshot below is the **App** tab, which opens first.
+Open it from the **⚙ SETTINGS** button in a Squad's header in VibeSquad. It opens a **Settings** page with a list of tabs down the left (App, Chat, Notifications, New Agent defaults, Keybindings, Team, Remote Control, Runner & Providers, Profiles, About) and a search box. Section names below are the labels you will see on screen; if one is not where you expect, click through the tabs or search for it. Where things live: **YOUR NAME** and **ALLOW OTHER DEVICES** are on the **Team** tab (the **Remote Control** tab has the full pairing flow, below), **DISPLAY & 4K UI SCALE** is on **App**, and **UPDATE CHANNEL** and **Legacy: Psycho mode** (off = Normal, the default; see [Normal and Psycho](../Concepts/Modes.md)) are on **About**. The screenshot below is the **App** tab, which opens first.
 
-![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Layout vibe, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
+![The Settings window on its App tab: the tab list on the left, then UI density, Theme, Accent color, Open in IDE and Display & 4K UI scale](../assets/screenshots/07a-settings-top.png)
 
 ## Your name
 
@@ -29,7 +29,7 @@ The **YOUR NAME** box. This is the name VibeSquad shows on NEEDS badges, in the 
 
 ## Update channel
 
-On the **About** tab, **UPDATE CHANNEL** shows your version and two buttons:
+On the **About** tab, a **Legacy: Psycho mode** toggle switches to the old pixel-art layout (off by default). **UPDATE CHANNEL** shows your version and two buttons:
 
 - **Stable**: new releases ask before VibeSquad restarts.
 - **Beta**: rolling pre-releases install on their own, when no agent is in the middle of a turn.
@@ -137,7 +137,7 @@ The window scrolls, so on a small screen you can reach everything; the header an
 
 **Revoking a device.** If a phone is lost or you no longer trust it, open **PAIRED DEVICES** and press **Revoke** next to its name. That device is signed out right away, including any live connection it had open, and has to pair again with a new code to come back. **↻ Refresh** reloads the list.
 
-**Phone Cockpit.** On a paired phone, opening the Host drawer shows a **VIBE** toggle (**Psycho** / **Corpo**), a **PROVIDER** switch (**✶ Claude** / **◆ Gemini**) for the default provider, the pinned **TEAMS** list (tap to open or start a Buddy), and **⚙ Settings**.
+**Phone Cockpit.** On a paired phone, opening the Host drawer shows a **PROVIDER** switch (**✶ Claude** / **◆ Gemini**) for the default provider, the pinned **TEAMS** list (tap to open or start a Buddy), and **⚙ Settings**.
 
 **Relay pairing link.** Only if an opt-in `wss://` `relay.endpoint` has been hand-edited into `~/.vibesquad/settings.json` (off by default; no hosted relay ships), the window also shows **RELAY PAIRING LINK (AWAY FROM LAN & MESHNET · END-TO-END ENCRYPTED)**. It carries the one-time code in the link's `#fragment`, and the phone pins the PC's relay key on first use. `vs host-key show` prints the key id and fingerprint; `vs host-key rotate` replaces it and revokes every paired device unless you add `--keep-devices`. `vs devices list` and `vs devices revoke` manage devices either way.
 

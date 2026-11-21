@@ -116,9 +116,6 @@ test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher &
 
   const c = src("PhoneCockpit.tsx");
   for (const id of [
-    "phone-vibe-toggle",
-    "phone-vibe-fun",
-    "phone-vibe-boring",
     "phone-provider-toggle",
     "phone-provider-claude",
     "phone-provider-gemini",
@@ -129,14 +126,13 @@ test("E1c: Phone Cockpit Settings, Psycho/Corpo toggle, Claude/Gemini switcher &
   ]) {
     assert.ok(c.includes(id), `PhoneCockpit includes ${id}`);
   }
-  assert.match(c, /Psycho/);
-  assert.match(c, /Corpo/);
+  assert.doesNotMatch(c, /phone-vibe|Corpo/); // B9: vibe toggle moved to Settings > About (Legacy: Psycho mode)
   assert.match(c, /⚙ Settings/);
   assert.match(c, /oppositeProviderTarget/);
   assert.match(c, /triggerBrainstormRestart/);
 
   const hits = searchSettings("corpo");
-  assert.ok(hits.some((h) => h.id === "app.vibe"), "searchSettings('corpo') finds app.vibe");
+  assert.ok(hits.some((h) => h.id === "legacy-psycho"), "searchSettings('corpo') finds Legacy: Psycho mode");
 });
 
 test("E1b: top safe-area inset applied once on the cockpit (App's .app padding is not mounted in the phone shell)", () => {
