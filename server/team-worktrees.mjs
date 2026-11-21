@@ -4,14 +4,28 @@
 // with git's reason so the dialog can say why.
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, linkSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, linkSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 const PROTECTED_BRANCHES = new Set(["main", "master"]);
 
-export function defaultGit(args, cwd) {
-  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000, maxBuffer: 64 << 20 }).trim();
+/**
+ * Run git. Options (R1 retention): `env` extra environment (e.g. GIT_INDEX_FILE), `input` stdin, `buffer` returns the raw
+ * stdout Buffer (untrimmed, for blob bytes).
+ */
+export function defaultGit(args, cwd, { env, input, buffer = false } = {}) {
+  const out = execFileSync("git", args, {
+    cwd,
+    encoding: buffer ? "buffer" : "utf8",
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    ...(input === undefined ? {} : { input }),
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+    windowsHide: true,
+    timeout: buffer || input !== undefined ? 300_000 : 30_000,
+    maxBuffer: buffer ? 2 << 30 : 64 << 20,
+  });
+  return buffer ? out : out.trim();
 }
 
 // idea-249 L1: git's stderr quotes host paths ('C:\\...\\wt' contains modified files) and execFileSync's message is the
@@ -558,7 +572,7 @@ function buildOutputTarget(wtPath, rel) {
  * then plain `git worktree remove` (no --force), which refuses anything that turned dirty since the check.
  * Returns { removed: true } or { removed: false, reason }.
  */
-export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildOutput = [], unlinkLink } = {}) {
+export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildOutput = [], unlinkLink, force = false } = {}) {
   try {
     for (const rel of buildOutput) {
       // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
@@ -571,7 +585,8 @@ export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildO
     return { removed: false, reason: `build output not removed (${e?.code ?? "error"})` };
   }
   try {
-    git(["worktree", "remove", wtPath], repoRoot);
+    // `force` only for R1 retention, after its WIP is committed to refs/vs-archive/<unit> and re-verified.
+    git(["worktree", "remove", ...(force ? ["--force"] : []), wtPath], repoRoot);
     return { removed: true };
   } catch (e) {
     return { removed: false, reason: gitError(e) };
@@ -1026,4 +1041,734 @@ export function cleanupProjectsFolder(
     }
   }
   return { projectsDir: projectsDirAbs, apply, items };
+}
+
+// ── R1 (docs/PLAN_DISK_LIFECYCLE_1121.md; idea-464 part 3): retention + restore ─────────────────────────────────────────
+// An UNMERGED sanctuary worktree whose owner agents are all archived or lost (none live) and whose tree has not been touched
+// for RETENTION_DAYS is archived: its WIP (tracked changes + untracked files, not ignored, not build output, not links) is
+// committed to refs/vs-archive/<unit> (the branch never moves), then the tree is removed. `vs worktree restore <unit>`
+// recreates the worktree on the branch and writes the WIP back byte-for-byte. Invariants (Tier A):
+// - Dry run by default. Apply holds W1's sanctuary sweep lock, re-reads the roster right before each archive, and needs a
+//   readable roster (unknown owner = nothing archived).
+// - Never remove a tree before its archive commit is written, the ref created (create-only), and the WIP re-captured to the
+//   identical tree. Any git error before removal fails closed (kept); the ref is only retired by a restore that verified.
+// - Blobs are hashed with --no-filters and written back raw: no eol/LFS filter can change a byte across the round trip.
+// - Links (symlinks/junctions) are never followed: sizing, scanning and deleting lstat; untracked links are recorded in the
+//   archive (path + target) and recreated on restore, never archived through.
+// - Owner = every roster agent whose cwd is inside the tree. Any live one (liveAgentCwds' predicate, so a resumable lost
+//   agent counts as live) keeps the tree.
+
+export const RETENTION_DAYS = 7;
+export const ARCHIVE_REF_PREFIX = "refs/vs-archive/";
+export const RESTORED_REF_PREFIX = "refs/vs-archive-restored/";
+export const ARCHIVE_LEDGER_FILE = ".vs-archive.jsonl";
+/** Untracked WIP larger than this is not archived (kept, "wip-too-large"): a human decides. */
+export const WIP_MAX_BYTES = 1 << 30;
+const DAY_MS = 86_400_000;
+const ARCHIVE_ENV = Object.freeze({
+  GIT_AUTHOR_NAME: "VibeSquad retention",
+  GIT_AUTHOR_EMAIL: "retention@vibesquad.invalid",
+  GIT_COMMITTER_NAME: "VibeSquad retention",
+  GIT_COMMITTER_EMAIL: "retention@vibesquad.invalid",
+});
+const OP_IN_PROGRESS = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "rebase-merge", "rebase-apply"];
+const UNMERGED_XY = new Set(["DD", "AU", "UD", "UA", "DU", "AA", "UU"]);
+const lexUnder = (rel, dir) => rel === dir || rel.startsWith(`${dir}/`);
+const stripLongPrefix = (p) => String(p).replace(/^\\\\\?\\/, "");
+const lexPath = (p) => String(p).replace(/\\/g, "/");
+
+/** Normalized cwds of the roster, once per sweep (realpath per agent, not per agent x worktree). null = roster unknown. */
+export function indexAgentCwds(agents) {
+  if (!Array.isArray(agents) || !agents.length) return null;
+  const out = [];
+  for (const a of agents) {
+    const cwd = String(a?.cwd ?? a?.config?.cwd ?? "").trim();
+    if (cwd) out.push({ agent: a, cwd: normPath(cwd) });
+  }
+  return out;
+}
+
+/**
+ * The tree's owner state from the roster index (indexAgentCwds): "live" (some holder is live by liveAgentCwds' rule),
+ * "archived" (every holder archived), "lost" (holders closed for good, or no roster agent references the tree), or
+ * "unknown" (no roster). Returns { state, detail?, agents: ids }.
+ */
+export function worktreeOwner(wtPath, index) {
+  if (!index) return { state: "unknown", agents: [] };
+  const p = normPath(wtPath);
+  const holders = index.filter((x) => x.cwd === p || x.cwd.startsWith(p + "/")).map((x) => x.agent);
+  const ids = holders.map((a) => a.id ?? null).filter(Boolean).slice(0, 8);
+  if (!holders.length) return { state: "lost", detail: "no-record", agents: [] };
+  if (holders.some((a) => liveAgentCwds([a]).length)) return { state: "live", agents: ids };
+  if (holders.every((a) => a.archivedAt || a.archived)) return { state: "archived", agents: ids };
+  return { state: "lost", detail: "closed", agents: ids };
+}
+
+/**
+ * Walk the tree without following links: { bytes, buildBytes (inside BUILD_OUTPUT_DIRS folders, e.g. src-tauri/target),
+ * buildDirs, links: [{ rel, target }], lastTouchMs, errors }. With `stopAfterMs`, returns { recent: true, lastTouchMs } as
+ * soon as any entry's mtime is newer (an active tree is not walked to the end).
+ */
+export function scanWorktreeNoFollow(wtPath, { stopAfterMs = null } = {}) {
+  const base = resolve(wtPath);
+  let bytes = 0;
+  let buildBytes = 0;
+  let lastTouchMs = 0;
+  let errors = 0;
+  const links = [];
+  const buildDirs = [];
+  const stack = [{ abs: base, rel: "", build: false }];
+  while (stack.length) {
+    const { abs, rel, build } = stack.pop();
+    let st;
+    try {
+      st = lstatSync(abs);
+    } catch {
+      errors++;
+      continue;
+    }
+    if (st.mtimeMs > lastTouchMs) lastTouchMs = st.mtimeMs;
+    if (stopAfterMs != null && lastTouchMs > stopAfterMs) return { recent: true, lastTouchMs };
+    if (st.isSymbolicLink()) {
+      let target = null;
+      try {
+        target = stripLongPrefix(readlinkSync(abs));
+      } catch {
+        errors++;
+      }
+      if (rel) links.push({ rel, target });
+      continue;
+    }
+    if (st.isDirectory()) {
+      let inBuild = build;
+      if (!build && rel && isBuildOutputEntry(base, `${rel}/`)) {
+        inBuild = true;
+        buildDirs.push(`${rel}/`);
+      }
+      let names;
+      try {
+        names = readdirSync(abs);
+      } catch {
+        errors++;
+        continue;
+      }
+      for (const n of names) stack.push({ abs: join(abs, n), rel: rel ? `${rel}/${n}` : n, build: inBuild });
+    } else {
+      bytes += st.size;
+      if (build) buildBytes += st.size;
+    }
+  }
+  return { recent: false, bytes, buildBytes, buildDirs, links, lastTouchMs, errors };
+}
+
+/** Latest git-side touch of a worktree: its HEAD / index / HEAD reflog mtimes and HEAD's committer time. */
+function gitTouchMs(wtPath, git) {
+  let t = 0;
+  const gd = worktreeGitDir(wtPath);
+  if (gd) {
+    for (const f of ["HEAD", "index", join("logs", "HEAD")]) {
+      try {
+        t = Math.max(t, statSync(resolve(gd, f)).mtimeMs);
+      } catch {}
+    }
+  }
+  const ct = Number(tryGit(git, ["log", "-1", "--format=%ct", "HEAD"], wtPath)?.trim());
+  if (ct > 0) t = Math.max(t, ct * 1000);
+  return t;
+}
+
+/** A merge / rebase / cherry-pick / revert / bisect in progress (state that lives only in the worktree's git dir). */
+function gitOpInProgress(wtPath) {
+  const gd = worktreeGitDir(wtPath);
+  if (!gd) return true; // unreadable: fail closed
+  return OP_IN_PROGRESS.some((f) => existsSync(resolve(gd, f)));
+}
+
+/**
+ * What the archive would hold. Entries come from `git status` (tracked changes and untracked files, ignored excluded):
+ * { rel, op: "file", mode } | { rel, op: "link", target } (a tracked symlink) | { rel, op: "del" }. Untracked build output
+ * and anything at or under an untracked link (`links`, from scanWorktreeNoFollow) are left out. Fails closed (ok: false,
+ * reason) on a git error, submodules, an unmerged index, a nested repo, a path through a link, or a special file.
+ * Returns { ok, head, entries, dirtyFiles, untrackedBytes, untrackedLinks }.
+ */
+export function planWip(wtPath, { git = defaultGit, links = [] } = {}) {
+  const base = resolve(wtPath);
+  const fail = (reason) => ({ ok: false, reason });
+  const head = tryGit(git, ["rev-parse", "--verify", "HEAD^{commit}"], base)?.trim();
+  if (!head) return fail("unreadable");
+  const staged = tryGit(git, ["ls-files", "-s", "-z"], base);
+  if (staged === null) return fail("unreadable");
+  const indexMode = new Map();
+  for (const e of staged.split("\0")) {
+    const tab = e.indexOf("\t");
+    if (tab < 0) continue;
+    const [mode, , stage] = e.slice(0, tab).split(" ");
+    if (mode === "160000") return fail("submodules");
+    if (stage !== "0") return fail("unmerged-index");
+    indexMode.set(e.slice(tab + 1), mode);
+  }
+  const untrackedLinks = links.filter((l) => indexMode.get(l.rel) !== "120000");
+  const st = tryGit(git, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none"], base);
+  if (st === null) return fail("unreadable");
+  const entries = new Map();
+  let untrackedBytes = 0;
+  for (const rec of st.split("\0")) {
+    if (rec.length < 4) continue;
+    const xy = rec.slice(0, 2);
+    const raw = rec.slice(3);
+    if (UNMERGED_XY.has(xy)) return fail("unmerged-index");
+    if (xy === "!!") continue;
+    const untracked = xy === "??";
+    const rel = raw.replace(/\/+$/, "");
+    if (/[\r\n]/.test(rel)) return fail("odd-path");
+    if (untracked && isBuildOutputEntry(base, raw)) continue;
+    if (untrackedLinks.some((l) => lexUnder(rel, l.rel))) continue; // recorded as a link, never archived through
+    if (untracked && raw.endsWith("/")) return fail("nested-repo"); // an embedded git repo: its content is not in the WIP
+    const abs = resolve(base, rel);
+    if (!isInside(dirname(abs), base)) return fail("path-through-link");
+    let s;
+    try {
+      s = lstatSync(abs);
+    } catch (e) {
+      if (e?.code === "ENOENT") {
+        entries.set(rel, { rel, op: "del" });
+        continue;
+      }
+      return fail("unreadable");
+    }
+    if (s.isSymbolicLink()) {
+      if (indexMode.get(rel) !== "120000") return fail("untracked-link");
+      try {
+        entries.set(rel, { rel, op: "link", target: readlinkSync(abs) });
+      } catch {
+        return fail("unreadable");
+      }
+    } else if (s.isFile()) {
+      const mode = process.platform === "win32" ? (indexMode.get(rel) ?? "100644") : s.mode & 0o111 ? "100755" : "100644";
+      entries.set(rel, { rel, op: "file", mode });
+      if (untracked) untrackedBytes += s.size;
+    } else if (s.isDirectory()) {
+      if (untracked) return fail("nested-repo");
+      entries.set(rel, { rel, op: "del" }); // a tracked file replaced by a folder: the folder's files are listed on their own
+    } else return fail("special-file");
+  }
+  return { ok: true, head, entries: [...entries.values()], dirtyFiles: entries.size, untrackedBytes, untrackedLinks };
+}
+
+/** Build the WIP tree for `plan` in a throwaway index (the worktree's own index is never touched); writes blobs raw. */
+function captureWipTree(wtPath, plan, git) {
+  const base = resolve(wtPath);
+  const idx = join(tmpdir(), `vs-archive-${randomUUID()}.index`);
+  const env = { GIT_INDEX_FILE: idx };
+  try {
+    git(["read-tree", plan.head], base, { env });
+    const files = plan.entries.filter((e) => e.op === "file");
+    const shas = files.length
+      ? String(git(["hash-object", "-w", "--no-filters", "--stdin-paths"], base, { input: files.map((e) => e.rel).join("\n") + "\n" }))
+          .split(/\r?\n/)
+          .filter(Boolean)
+      : [];
+    if (shas.length !== files.length) throw new Error("hash-object count mismatch");
+    const zero = "0".repeat(plan.head.length);
+    const lines = plan.entries.filter((e) => e.op === "del").map((e) => `0 ${zero}\t${e.rel}`);
+    files.forEach((e, i) => lines.push(`${e.mode} ${shas[i]}\t${e.rel}`));
+    for (const e of plan.entries.filter((x) => x.op === "link")) {
+      lines.push(`120000 ${String(git(["hash-object", "-w", "--stdin"], base, { input: e.target })).trim()}\t${e.rel}`);
+    }
+    if (lines.length) git(["update-index", "--add", "--replace", "-z", "--index-info"], base, { env, input: lines.join("\0") + "\0" });
+    return String(git(["write-tree"], base, { env })).trim();
+  } finally {
+    for (const f of [idx, `${idx}.lock`]) {
+      try {
+        unlinkSync(f);
+      } catch {}
+    }
+  }
+}
+
+/** Ignored, non-build-output entries: `git worktree remove --force` deletes them and the archive does not hold them. */
+function ignoredNonBuild(wtPath, git) {
+  const out = tryGit(git, ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"], wtPath);
+  if (out === null) return null;
+  return out.split("\0").filter((p) => p && !isBuildOutputEntry(wtPath, p));
+}
+
+/**
+ * The untracked links an archive records for restore: not inside build output and not gitignored (ignored content is not
+ * archived either; the node_modules junction is recreated by linkNodeModules). null on a git error.
+ */
+function linksToRecord(wtPath, links, buildDirs, git) {
+  const cands = links.filter((l) => l.target && !isBuildOutputEntry(wtPath, l.rel) && !(buildDirs ?? []).some((b) => lexUnder(l.rel, b.replace(/\/+$/, ""))));
+  if (!cands.length) return [];
+  let out;
+  try {
+    out = String(git(["check-ignore", "-z", "--stdin"], wtPath, { input: cands.map((l) => l.rel).join("\0") + "\0" }));
+  } catch (e) {
+    if (e?.status !== 1) return null; // 1 = none ignored; anything else is an error
+    out = "";
+  }
+  const ignored = new Set(out.split("\0").filter(Boolean));
+  return cands.filter((l) => !ignored.has(l.rel)).map((l) => ({ rel: l.rel, target: l.target }));
+}
+
+const archiveRef = (unit) => `${ARCHIVE_REF_PREFIX}${unit}`;
+const refExists = (git, repo, ref) => tryGit(git, ["rev-parse", "--verify", "--quiet", ref], repo) !== null;
+
+function appendLedger(root, entry) {
+  if (!root) return;
+  try {
+    mkdirSync(root, { recursive: true });
+    appendFileSync(join(root, ARCHIVE_LEDGER_FILE), JSON.stringify(entry) + "\n");
+  } catch (e) {
+    console.warn(`[vibesquad] archive ledger not written: ${e?.message ?? e}`);
+  }
+}
+
+/**
+ * Archive one worktree (the retention sweep has already decided it is a candidate): commit its index tree and its WIP tree
+ * (parents: HEAD, index commit) to refs/vs-archive/<unit> (create-only), re-capture the WIP and compare, then remove the
+ * tree (build output and untracked links first, never followed; then `git worktree remove --force`). The branch ref never
+ * moves and is never deleted. `beforeRef()` (live re-check, lock heartbeat) returns a keep reason or null.
+ * Returns { archived, reason?, ref, commit, removed, removeReason? }.
+ */
+export function archiveWorktree(
+  repoRoot,
+  wtPath,
+  { git = defaultGit, branch, unit = basename(resolve(wtPath)), scan, owner = null, ledgerRoot = null, beforeRef = null, now = Date.now() } = {},
+) {
+  const base = resolve(wtPath);
+  const ref = archiveRef(unit);
+  const keep = (reason) => ({ archived: false, reason, ref });
+  if (!branch) return keep("no-branch");
+  if (tryGit(git, ["check-ref-format", ref], repoRoot) === null) return keep("bad-unit-name");
+  if (refExists(git, repoRoot, ref)) return keep("archive-ref-exists");
+  if (gitOpInProgress(base)) return keep("git-op-in-progress");
+  const sc = scan ?? scanWorktreeNoFollow(base);
+  if (sc.errors) return keep("scan-error");
+  const links = sc.links;
+  const plan = planWip(base, { git, links });
+  if (!plan.ok) return keep(plan.reason);
+  if (plan.untrackedBytes > WIP_MAX_BYTES) return keep("wip-too-large");
+  const recordLinks = linksToRecord(base, plan.untrackedLinks, sc.buildDirs, git);
+  if (!recordLinks) return keep("unreadable");
+  let commit, wipTree, indexTree;
+  try {
+    indexTree = String(git(["write-tree"], base)).trim();
+    wipTree = captureWipTree(base, plan, git);
+    const indexCommit = String(git(["commit-tree", indexTree, "-p", plan.head, "-F", "-"], base, { env: ARCHIVE_ENV, input: `vs-archive index ${unit}\n` })).trim();
+    const meta = {
+      v: 1,
+      unit,
+      repo: resolve(repoRoot),
+      path: base,
+      branch,
+      head: plan.head,
+      index: indexCommit,
+      links: recordLinks,
+      dirtyFiles: plan.dirtyFiles,
+      owner,
+      at: new Date(now).toISOString(),
+    };
+    commit = String(
+      git(["commit-tree", wipTree, "-p", plan.head, "-p", indexCommit, "-F", "-"], base, { env: ARCHIVE_ENV, input: `vs-archive ${unit}\n\n${JSON.stringify(meta)}\n` }),
+    ).trim();
+  } catch (e) {
+    return keep(`archive-failed: ${gitError(e)}`);
+  }
+  const why = beforeRef ? beforeRef() : null;
+  if (why) return keep(why);
+  try {
+    git(["update-ref", "-m", `vs-archive ${unit}`, ref, commit, ""], repoRoot); // "" = must not exist yet
+  } catch (e) {
+    return keep(`archive-ref-failed: ${gitError(e)}`);
+  }
+  // Re-capture: anything written since the first capture (or an index / HEAD change) means the archive is stale.
+  let same = false;
+  try {
+    const sc2 = scanWorktreeNoFollow(base);
+    const plan2 = planWip(base, { git, links: sc2.links });
+    same =
+      !sc2.errors &&
+      sc2.links.length === links.length &&
+      plan2.ok &&
+      plan2.head === plan.head &&
+      captureWipTree(base, plan2, git) === wipTree &&
+      String(git(["write-tree"], base)).trim() === indexTree;
+  } catch {}
+  if (!same) {
+    tryGit(git, ["update-ref", "-d", ref, commit], repoRoot);
+    return keep("changed-during-archive");
+  }
+  appendLedger(ledgerRoot, { op: "archive", unit, repo: resolve(repoRoot), path: base, branch, head: plan.head, ref, commit, at: new Date(now).toISOString() });
+  const res = removeSweptWorktree(repoRoot, base, { git, buildOutput: sc.buildDirs ?? [], force: true });
+  if (res.removed) tryGit(git, ["worktree", "prune"], repoRoot);
+  return { archived: true, ref, commit, removed: res.removed, ...(res.removed ? {} : { removeReason: res.reason }) };
+}
+
+/**
+ * Retention over every sanctuary repo (or `repoFilter`'s): unmerged, owner archived/lost, untouched for `days`. Dry run by
+ * default: each candidate is reported as "would-archive" with { repo, unit, branch, ownerState, lastTouchAgeDays, bytes,
+ * buildBytes, dirtyFiles, untrackedBytes, links, ignoredLost }. `agents` is the full roster (archived included);
+ * `refreshAgents()` re-reads it right before each archive. Apply holds the sweep lock (busy -> { busy: true }).
+ */
+export function retentionSweep(opts = {}) {
+  const { root = resolveManagedWorktreeRoot(), apply = false } = opts;
+  if (!apply) return retentionSweepUnlocked(opts);
+  const release = acquireSweepLock(root);
+  if (!release) return { root: resolve(root), apply, busy: true, repos: [], candidates: [], summary: {} };
+  try {
+    return retentionSweepUnlocked({ ...opts, heartbeat: release.beat });
+  } finally {
+    release();
+  }
+}
+
+function retentionSweepUnlocked({
+  root = resolveManagedWorktreeRoot(),
+  apply = false,
+  agents,
+  refreshAgents = null,
+  git = defaultGit,
+  days = RETENTION_DAYS,
+  now = Date.now(),
+  repoFilter = null,
+  heartbeat = null,
+  freshGraceMs = FRESH_GRACE_MS,
+} = {}) {
+  const cutoff = now - days * DAY_MS;
+  const index = indexAgentCwds(agents);
+  const d = discoverSanctuaryRepos(root);
+  const repos = [];
+  for (const repo of d.repos) {
+    if (repoFilter && !repoFilter(repo)) continue;
+    const results = [];
+    const entry = { name: repo.name, repoRoot: repo.repoRoot, results };
+    repos.push(entry);
+    try {
+      const def = detectDefaultBranch(repo.repoRoot, { git });
+      entry.defaultBranch = def.name;
+      const testRefs = distinctRefs(repo.repoRoot, def.refs, git);
+      const treeCache = new Map();
+      const wts = listRepoWorktrees(repo.repoRoot, { git });
+      wts.forEach((wt, i) => {
+        if (i === 0 || wt.bare || normPath(wt.path) === normPath(repo.repoRoot)) return;
+        if (heartbeat) heartbeat();
+        const r = { repo: repo.name, unit: basename(wt.path), path: wt.path, branch: wt.branch || null };
+        results.push(r);
+        const keep = (reason) => Object.assign(r, { action: "kept", reason });
+        if (wt.prunable) return keep("prunable");
+        if (wt.locked) return keep("locked");
+        if (!isInside(wt.path, root)) return keep("outside-sanctuary");
+        if (!wt.branch) return keep("no-branch");
+        if (PROTECTED_BRANCHES.has(wt.branch.toLowerCase()) || wt.branch === def.name) return keep("default-branch");
+        if (!def.refs.length) return keep("no-default-branch");
+        if (isFreshWorktree(wt.path, now, freshGraceMs)) return keep("fresh");
+        const owner = worktreeOwner(wt.path, index);
+        r.ownerState = owner.state;
+        if (owner.detail) r.ownerDetail = owner.detail;
+        if (owner.agents.length) r.ownerAgents = owner.agents;
+        if (owner.state === "live") return keep("live-cwd");
+        if (owner.state === "unknown" && apply) return keep("roster-unknown");
+        const m = mergedStatus(repo.repoRoot, wt.head, testRefs, { git, treeCache });
+        if (m.merged) return keep("merged"); // W1's sweep removes it
+        if (gitOpInProgress(wt.path)) return keep("git-op-in-progress");
+        const unit = r.unit;
+        if (refExists(git, repo.repoRoot, archiveRef(unit))) return keep("archive-ref-exists");
+        const gt = gitTouchMs(wt.path, git);
+        const sc = gt > cutoff ? { recent: true, lastTouchMs: gt } : scanWorktreeNoFollow(wt.path, { stopAfterMs: cutoff });
+        const touch = Math.max(gt, sc.lastTouchMs ?? 0);
+        r.lastTouchAt = new Date(touch).toISOString();
+        r.lastTouchAgeDays = Math.round(((now - touch) / DAY_MS) * 10) / 10;
+        if (sc.recent) return keep("recent-touch");
+        if (sc.errors) return keep("scan-error");
+        const plan = planWip(wt.path, { git, links: sc.links });
+        if (!plan.ok) return keep(plan.reason);
+        Object.assign(r, { bytes: sc.bytes, buildBytes: sc.buildBytes, dirtyFiles: plan.dirtyFiles, untrackedBytes: plan.untrackedBytes });
+        const rec = linksToRecord(wt.path, plan.untrackedLinks, sc.buildDirs, git);
+        const ign = ignoredNonBuild(wt.path, git);
+        if (ign === null || rec === null) return keep("unreadable");
+        r.links = rec.length;
+        r.ignoredLost = ign.length;
+        if (ign.length) r.ignoredSample = ign.slice(0, 5);
+        if (plan.untrackedBytes > WIP_MAX_BYTES) return keep("wip-too-large");
+        if (!apply) {
+          r.action = "would-archive";
+          if (owner.state === "unknown") r.liveCheck = "unknown";
+          return;
+        }
+        const res = archiveWorktree(repo.repoRoot, wt.path, {
+          git,
+          branch: wt.branch,
+          unit,
+          scan: sc,
+          owner: { state: owner.state, agents: owner.agents },
+          ledgerRoot: root,
+          now,
+          beforeRef: () => {
+            if (heartbeat && !heartbeat()) return "sweep-lock-lost";
+            if (!refreshAgents) return null;
+            let fresh;
+            try {
+              fresh = indexAgentCwds(refreshAgents());
+            } catch {
+              fresh = null;
+            }
+            const o = worktreeOwner(wt.path, fresh);
+            if (o.state === "unknown") return "roster-unknown";
+            return o.state === "live" ? "live-cwd" : null;
+          },
+        });
+        if (!res.archived) return keep(res.reason);
+        Object.assign(r, { action: "archived", ref: res.ref, commit: res.commit, removed: res.removed });
+        if (!res.removed) r.removeReason = res.removeReason;
+      });
+    } catch (e) {
+      entry.error = gitError(e);
+    }
+  }
+  const candidates = [];
+  const summary = { candidates: 0, bytes: 0, buildBytes: 0, dirtyFiles: 0, repos: {} };
+  for (const r of repos) {
+    const s = (summary.repos[r.name] = { worktrees: r.results.length, candidates: 0, bytes: 0, buildBytes: 0, kept: {} });
+    for (const x of r.results) {
+      if (x.action === "would-archive" || x.action === "archived") {
+        candidates.push(x);
+        s.candidates++;
+        s.bytes += x.bytes ?? 0;
+        s.buildBytes += x.buildBytes ?? 0;
+        summary.candidates++;
+        summary.bytes += x.bytes ?? 0;
+        summary.buildBytes += x.buildBytes ?? 0;
+        summary.dirtyFiles += x.dirtyFiles ?? 0;
+      } else s.kept[x.reason] = (s.kept[x.reason] ?? 0) + 1;
+    }
+  }
+  return { root: d.root, apply, days, rosterKnown: Boolean(index), repos, candidates, summary };
+}
+
+function readLedger(root) {
+  try {
+    return readFileSync(join(root, ARCHIVE_LEDGER_FILE), "utf8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/** Raw bytes of each blob (one `git cat-file --batch`). */
+function readBlobs(repo, shas, git) {
+  const map = new Map();
+  if (!shas.length) return map;
+  const out = git(["cat-file", "--batch"], repo, { input: shas.join("\n") + "\n", buffer: true });
+  let pos = 0;
+  for (const sha of shas) {
+    const nl = out.indexOf(0x0a, pos);
+    const [id, type, size] = out.subarray(pos, nl).toString("utf8").split(" ");
+    if (id !== sha || type !== "blob") throw new Error(`blob ${sha} unreadable`);
+    const n = Number(size);
+    map.set(sha, out.subarray(nl + 1, nl + 1 + n));
+    pos = nl + 1 + n + 1;
+  }
+  return map;
+}
+
+/**
+ * `vs worktree restore <unit>`: find refs/vs-archive/<unit> (the ledger's repos, every sanctuary repo, or `repoRoot`),
+ * recreate the worktree at its old path on its branch (the branch must still point at the archived HEAD; a deleted branch is
+ * recreated there), write the WIP back raw (deletions, files, modes, tracked links), restore the index, recreate untracked
+ * links whose target exists, then re-capture and compare with the archive. Only a verified restore retires the ref (moved to
+ * refs/vs-archive-restored/<unit>/<ms>, never deleted outright). Holds the sweep lock. Returns { ok, reason?, ... }.
+ */
+export function restoreArchivedWorktree(unit, { root = resolveManagedWorktreeRoot(), repoRoot = null, git = defaultGit, now = Date.now(), lock = true } = {}) {
+  const name = String(unit ?? "").trim();
+  const ref = archiveRef(name);
+  const fail = (reason, extra = {}) => ({ ok: false, unit: name, reason, ...extra });
+  if (!name || /[\\/]/.test(name) || tryGit(git, ["check-ref-format", ref], repoRoot ?? root) === null) return fail("bad-unit-name");
+  const seen = new Map();
+  const consider = (p) => {
+    if (p && !seen.has(normPath(p))) seen.set(normPath(p), p);
+  };
+  if (repoRoot) consider(resolve(repoRoot));
+  else {
+    for (const e of readLedger(root)) if (e.op === "archive" && e.unit === name) consider(e.repo);
+    for (const r of discoverSanctuaryRepos(root).repos) consider(r.repoRoot);
+  }
+  const hits = [...seen.values()].filter((r) => existsSync(r) && refExists(git, r, ref));
+  if (!hits.length) return fail("no-archive");
+  if (hits.length > 1) return fail("ambiguous", { repos: hits });
+  const repo = hits[0];
+  const release = lock ? acquireSweepLock(root) : () => {};
+  if (!release) return fail("sweep-lock-busy");
+  try {
+    return restoreUnlocked(name, ref, repo, { root, git, now, fail });
+  } finally {
+    release();
+  }
+}
+
+function restoreUnlocked(unit, ref, repo, { root, git, now, fail }) {
+  let commit, meta, parents;
+  try {
+    commit = String(git(["rev-parse", "--verify", `${ref}^{commit}`], repo)).trim();
+    const body = String(git(["cat-file", "commit", commit], repo));
+    const sep = body.indexOf("\n\n");
+    parents = body
+      .slice(0, sep)
+      .split("\n")
+      .filter((l) => l.startsWith("parent "))
+      .map((l) => l.slice(7).trim());
+    const line = body
+      .slice(sep + 2)
+      .split("\n")
+      .find((l) => l.startsWith("{"));
+    meta = JSON.parse(line);
+  } catch (e) {
+    return fail(`archive-unreadable: ${e?.message ?? e}`);
+  }
+  if (meta?.v !== 1 || meta.unit !== unit || !meta.branch || !isAbsolute(String(meta.path)) || parents[0] !== meta.head || parents[1] !== meta.index) {
+    return fail("archive-metadata-mismatch");
+  }
+  const dest = resolve(meta.path);
+  const out = { unit, repoRoot: repo, path: dest, branch: meta.branch, commit };
+  try {
+    lstatSync(dest);
+    return fail("path-exists", out);
+  } catch (e) {
+    if (e?.code !== "ENOENT") return fail("path-unreadable", out);
+  }
+  const tip = tryGit(git, ["rev-parse", "--verify", "--quiet", `refs/heads/${meta.branch}^{commit}`], repo)?.trim();
+  if (!tip) {
+    if (tryGit(git, ["branch", meta.branch, meta.head], repo) === null) return fail("branch-recreate-failed", out);
+    out.branchRecreated = true;
+  } else if (tip !== meta.head) return fail("branch-moved", { ...out, tip, archivedHead: meta.head });
+  try {
+    mkdirSync(dirname(dest), { recursive: true });
+    git(["worktree", "add", dest, meta.branch], repo);
+  } catch (e) {
+    return fail(`worktree-add-failed: ${gitError(e)}`, out);
+  }
+  try {
+    applyWip(dest, meta.head, commit, git);
+    git(["read-tree", `${meta.index}^{tree}`], dest);
+    tryGit(git, ["update-index", "-q", "--refresh"], dest);
+  } catch (e) {
+    return fail(`apply-failed: ${e?.code ?? gitError(e)}`, out); // the tree stays for inspection; the ref stays
+  }
+  const links = { restored: [], skipped: [] };
+  for (const l of Array.isArray(meta.links) ? meta.links : []) {
+    const abs = resolve(dest, l.rel);
+    if (!lexPath(abs).startsWith(lexPath(dest) + "/")) {
+      links.skipped.push({ rel: l.rel, why: "outside-tree" });
+      continue;
+    }
+    const tgt = isAbsolute(l.target) ? l.target : resolve(dirname(abs), l.target);
+    if (!existsSync(tgt)) {
+      links.skipped.push({ rel: l.rel, why: "target-missing", target: l.target });
+      continue;
+    }
+    try {
+      lstatSync(abs);
+      links.skipped.push({ rel: l.rel, why: "exists" });
+      continue;
+    } catch {}
+    try {
+      mkdirSync(dirname(abs), { recursive: true });
+      if (!isInside(dirname(abs), dest)) throw Object.assign(new Error("path through link"), { code: "ELINK" });
+      symlinkSync(l.target, abs, process.platform === "win32" ? (statSync(tgt).isDirectory() ? "junction" : "file") : undefined);
+      links.restored.push(l.rel);
+    } catch (e) {
+      links.skipped.push({ rel: l.rel, why: `link-failed (${e?.code ?? "error"})` });
+    }
+  }
+  try {
+    linkNodeModules(repo, dest, git);
+  } catch {}
+  out.links = links;
+  // Verify: the restored tree re-captures to the archived WIP tree, and the index to the archived index tree.
+  let verified = false;
+  try {
+    const wipTree = String(git(["rev-parse", `${commit}^{tree}`], repo)).trim();
+    const indexTree = String(git(["rev-parse", `${meta.index}^{tree}`], repo)).trim();
+    const sc = scanWorktreeNoFollow(dest);
+    const plan = planWip(dest, { git, links: sc.links });
+    verified = plan.ok && plan.head === meta.head && captureWipTree(dest, plan, git) === wipTree && String(git(["write-tree"], dest)).trim() === indexTree;
+  } catch {}
+  out.verified = verified;
+  if (!verified) return fail("verify-mismatch", out); // ref kept: the archive still holds the WIP
+  const retired = `${RESTORED_REF_PREFIX}${unit}/${now}`;
+  if (tryGit(git, ["update-ref", "-m", `vs-archive restored ${unit}`, retired, commit, ""], repo) !== null) {
+    tryGit(git, ["update-ref", "-d", ref, commit], repo);
+    out.retiredRef = retired;
+  }
+  appendLedger(root, { op: "restore", unit, repo, path: dest, branch: meta.branch, commit, at: new Date(now).toISOString() });
+  return { ok: true, ...out };
+}
+
+/** Write the archived WIP (diff HEAD -> WIP commit) into a fresh checkout of HEAD: deletions first, then raw blobs. */
+function applyWip(dest, head, commit, git) {
+  const raw = String(git(["diff-tree", "-r", "-z", "--no-renames", head, commit], dest));
+  const parts = raw.split("\0");
+  const dels = [];
+  const writes = [];
+  for (let i = 0; i + 1 < parts.length; i += 2) {
+    const m = /^:(\d+) (\d+) ([0-9a-f]+) ([0-9a-f]+) (\w)/.exec(parts[i]);
+    if (!m) throw Object.assign(new Error("unparsed diff-tree record"), { code: "EDIFF" });
+    const rel = parts[i + 1];
+    if (m[5] === "D") dels.push(rel);
+    else writes.push({ rel, mode: m[2], sha: m[4] });
+  }
+  const base = resolve(dest);
+  const target = (rel) => {
+    const abs = resolve(base, rel);
+    if (!lexPath(abs).startsWith(lexPath(base) + "/")) throw Object.assign(new Error("outside tree"), { code: "EOUTSIDE" });
+    return abs;
+  };
+  for (const rel of dels) {
+    const abs = target(rel);
+    if (!isInside(dirname(abs), base)) throw Object.assign(new Error("path through link"), { code: "ELINK" });
+    try {
+      unlinkSync(abs);
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e;
+    }
+    // Drop folders the deletions emptied (git tracks no empty folders; the archived tree had none there).
+    for (let dir = dirname(abs); dir !== base && isInside(dir, base); dir = dirname(dir)) {
+      try {
+        if (readdirSync(dir).length) break;
+        rmdirSync(dir);
+      } catch {
+        break;
+      }
+    }
+  }
+  const blobs = readBlobs(base, [...new Set(writes.map((w) => w.sha))], git);
+  const symlinks = tryGit(git, ["config", "--bool", "core.symlinks"], base)?.trim() !== "false";
+  for (const w of writes) {
+    if (w.mode === "160000") throw Object.assign(new Error("submodule in archive"), { code: "ESUBMODULE" });
+    const abs = target(w.rel);
+    mkdirSync(dirname(abs), { recursive: true });
+    if (!isInside(dirname(abs), base)) throw Object.assign(new Error("path through link"), { code: "ELINK" });
+    try {
+      const st = lstatSync(abs);
+      if (st.isDirectory() && !st.isSymbolicLink()) throw Object.assign(new Error("folder in the way"), { code: "EISDIR" });
+      unlinkLinkOnly(abs);
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e;
+    }
+    const bytes = blobs.get(w.sha);
+    if (w.mode === "120000" && symlinks) symlinkSync(bytes.toString("utf8"), abs);
+    else {
+      writeFileSync(abs, bytes);
+      if (w.mode === "100755" && process.platform !== "win32") chmodSync(abs, 0o755);
+    }
+  }
 }
