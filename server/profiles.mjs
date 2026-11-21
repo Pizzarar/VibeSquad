@@ -113,6 +113,9 @@ const REVIEW_CONTEXT_BUDGET_NOTE =
 const CAUSE_GATE_NOTE =
   'Cause-vs-symptom gate: your verdict must answer "Does this fix the cause or hide the symptom?" Hiding the symptom (timeout or cap bump, retry loop, swallowed error, manual cleanup, flag flip) with no named follow-up that replaces it is a FAIL.';
 
+const VERDICT_LINE_NOTE =
+  "Final verdict line: end with exactly one line `PASS|FAIL H/M/L <sha>`, where H/M/L are numeric high/medium/low finding counts and <sha> is the branch tip commit hash (e.g. `PASS 0/1/2 abc1234`).";
+
 const NOTE_BODIES = {
   "Lead - Claude": LEAD_NOTE_BODY,
   "Lead - Gemini": `${LEAD_NOTE_BODY}\nYour planning docs are Gemini-written, so Review - Sonnet reviews them.`,
@@ -151,10 +154,11 @@ const NOTE_BODIES = {
     "",
     "Never reviews Sonnet-written work or its own. Read-only: verify the diff, invariants and scope, confirm the verification output is real and matches the claims, and rerun the tests yourself. Gates merges.",
     REVIEW_CONTEXT_BUDGET_NOTE,
+    VERDICT_LINE_NOTE,
     CAUSE_GATE_NOTE,
   ].join("\n"),
   "Review - Gemini":
-    "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. " + REVIEW_CONTEXT_BUDGET_NOTE + " " + CAUSE_GATE_NOTE,
+    "Primary reviewer for all Claude-written work (Tier A and B) and all DeepSeek work. The only Tier A reviewer: when quota is short, Tier A goes first. Never reviews Gemini-written work. Gemini drops long sessions: run commands in the foreground with timeouts, keep a progress log and keep briefs narrow. Check your numbers against your own logs and your quotes against `git show`. " + REVIEW_CONTEXT_BUDGET_NOTE + " " + VERDICT_LINE_NOTE + " " + CAUSE_GATE_NOTE,
   "Check - Haiku": [
     "Cheap cross-family checker, used only when Gemini is capped or down:",
     "1. First-pass review of DeepSeek work.",
