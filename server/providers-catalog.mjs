@@ -20,6 +20,7 @@ import { addInboxCardsAsync, readInboxCards, significantTokenOverlap } from "./i
 import { BUG_LANE_FALLBACK_IDS } from "./lane-pure.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
+import { normalizeWfLabel } from "./wf-label.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 4000;
@@ -503,6 +504,9 @@ function foldIdentity(st, m) {
   if (rawProfile) st.profile = PROFILE_NAME_BY_ID.get(rawProfile) ?? rawProfile;
   const team = m.team ?? m.labels?.team;
   if (typeof team === "string" && team) st.team = team;
+  // usa-34: workflow arm label (created.meta.labels.wf / meta.patch.labels.wf), stamped at dispatch by wf-label.mjs.
+  const wfLabel = normalizeWfLabel(m.labels?.wf);
+  if (wfLabel) st.wfLabel = wfLabel;
   // usa-29: stakes (route label) + digest marker (identity.mjs isDigestAgent labels) ride the same meta.
   // vs.route is "stakes=<s> model=<m> effort=<e> reason=<r>" (agent-duties.ts); an explicit stakes/labels.stakes always wins.
   const route = typeof m.labels?.["vs.route"] === "string" ? (/\bstakes=([A-Za-z0-9_-]+)/.exec(m.labels["vs.route"])?.[1] ?? m.labels["vs.route"]) : undefined;
@@ -1076,6 +1080,7 @@ function agentV2(st, agentId) {
     title: st.title ?? "",
     roleOnly: !!st.roleOnly,
     stakes: normalizeStakes(st.stakes),
+    wfLabel: st.wfLabel ?? null,
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
     createdAt: st.createdAt ?? st.firstTs ?? null,
@@ -1585,6 +1590,9 @@ function computeSpawnStorms(agents) {
 // ---------------------------------------------------------------- benchmark ledger, A/B workflow, savings, cohorts, floor (usa-10)
 
 const WF_TAG_RE = /\[wf:([^\]]+)\]/i;
+const WF_SOURCE_ORDER = ["tag", "label", "derived"];
+/** Collapse a group's source set into a deterministic string ("tag", "tag+label", …) in precedence order. */
+const wfSourceOf = (set) => [...set].sort((a, b) => WF_SOURCE_ORDER.indexOf(a) - WF_SOURCE_ORDER.indexOf(b)).join("+");
 // usa-31: Opus 5.5 tier rates ($ per million tokens) for the all-Opus routing baseline.
 const OPUS_FRESH_IN_PER_MT = 5;
 const OPUS_CACHE_READ_PER_MT = 0.5;
@@ -1621,14 +1629,22 @@ function attributeReviewerFamily(unit, implementer, index) {
   return (unit.reviewRounds ?? 0) > 0 || implementer ? "gemini-review" : "no-review";
 }
 
-/** workflowMode: explicit `[wf:<mode>]` tag wins (pilot uses [wf:sonnet]/[wf:dsp]/[wf:gemini], keep the tag value),
- * else (usa-29) derived dynamically as `${implModel} · ${stakes} -> ${reviewerFamily}` from the attributed implementer
- * (no implementer = "unattributed"). */
-function classifyWorkflowMode(unit, implementer, reviewerFamily = "gemini-review") {
+/** Workflow mode precedence (usa-34): (1) explicit `[wf:<mode>]` tag in the merge subject (pilot tags kept verbatim),
+ * (2) the attributed implementer run's `wf` label (stamped at dispatch by wf-label.mjs), (3) derived dynamically as
+ * `${implModel} · ${stakes} -> ${reviewerFamily}` (usa-29). No tag and no implementer = "unattributed". An empty or
+ * "unknown" wf label falls through to derived. Returns `{ mode, source }` with source "tag" | "label" | "derived". */
+function classifyWorkflow(unit, implementer, reviewerFamily = "gemini-review") {
   const m = WF_TAG_RE.exec(unit?.subject ?? "");
-  if (m) return m[1].trim().toLowerCase() || "unattributed";
-  if (!implementer) return "unattributed";
-  return `${implementer.model ? baseModel(implementer.model) : (providerFamily(implementer.provider) || "unknown")} · ${implementer.stakes ?? "normal"} -> ${reviewerFamily}`;
+  if (m) return { mode: m[1].trim().toLowerCase() || "unattributed", source: "tag" };
+  if (!implementer) return { mode: "unattributed", source: "derived" };
+  const wf = normalizeWfLabel(implementer.wfLabel);
+  if (wf && wf !== "unknown") return { mode: wf, source: "label" };
+  return { mode: `${implementer.model ? baseModel(implementer.model) : (providerFamily(implementer.provider) || "unknown")} · ${implementer.stakes ?? "normal"} -> ${reviewerFamily}`, source: "derived" };
+}
+
+/** String form for the per-unit ledger field; `classifyWorkflow` is the single source of the precedence logic. */
+function classifyWorkflowMode(unit, implementer, reviewerFamily = "gemini-review") {
+  return classifyWorkflow(unit, implementer, reviewerFamily).mode;
 }
 
 /** A/B workflow rollup. Cost/tokens per unit come from the attributed implementer (one worker ≈ one unit). */
@@ -1639,10 +1655,12 @@ function buildByWorkflow(merged, agentById) {
     const workflowMode = u.workflowMode ?? classifyWorkflowMode(u, implementer);
     const g = getOrSet(groups, workflowMode, () => ({
       workflowMode, implementerModel: u.implementerModel ?? (implementer?.model ? baseModel(implementer.model) : null), stakes: u.stakes ?? (implementer ? (implementer.stakes ?? "normal") : null), reviewerFamily: u.reviewerFamily ?? null,
+      wfSources: new Set(),
       units: 0, firstTryPassCount: 0, reviewRoundsSum: 0, costUsd: 0,
       inputTokens: 0, outputTokens: 0, locAdded: 0, locDeleted: 0, unitCycleSum: 0, unitCycleCount: 0,
       fixAfterMergeCount: 0, knownCostUnits: 0,
     }));
+    g.wfSources.add(u.wfSource ?? "derived");
     g.units += 1;
     if ((u.reviewRounds ?? 0) <= 1) g.firstTryPassCount += 1;
     g.reviewRoundsSum += u.reviewRounds ?? 0;
@@ -1660,6 +1678,7 @@ function buildByWorkflow(merged, agentById) {
     const totalLoc = g.locAdded + g.locDeleted;
     return {
       workflowMode: g.workflowMode,
+      wfSource: wfSourceOf(g.wfSources),
       implementerModel: g.implementerModel, stakes: g.stakes, reviewerFamily: g.reviewerFamily,
       units: g.units,
       firstTryPassRate: g.units ? Math.round((g.firstTryPassCount / g.units) * 1000) / 1000 : 0,
@@ -2625,6 +2644,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const mergedAtMs = tsMs(u.mergedAt);
     const implementer = attributeImplementer(u, agents, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, workerIndex);
+    const workflow = classifyWorkflow(u, implementer, reviewerFamily);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
     const isFixUnit = (typeof u.unit === "string" && /^(fix|hotfix)-/i.test(u.unit)) || (typeof u.subject === "string" && FIX_UNIT_RE.test(u.subject));
@@ -2644,7 +2664,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       outputTokens: implementer ? implementer.outputTokens : 0,
       turns: implementer ? implementer.turns : 0,
       reviewerFamily,
-      workflowMode: classifyWorkflowMode(u, implementer, reviewerFamily),
+      workflowMode: workflow.mode,
+      wfSource: workflow.source,
       unitCycleMs, fixAfterMerge,
     };
   }
