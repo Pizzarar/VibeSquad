@@ -1,5 +1,11 @@
 /* Boring Mode (@bor B1): corporate ADE skin. Standalone: every rule is scoped under html[data-vibe="boring"],
-   so data-vibe="fun" (the default) applies nothing. Never edit styles.css for this; it lives here. */
+   so data-vibe="fun" (the default) applies nothing. Never edit styles.css for this; it lives here.
+
+   Specificity floor (idea-255 U3): a selector ending in `:not(#bw)` has an always-true ID-weight term (1,0,0). Normal mode
+   used to win against the Psycho U3/V1b rules in styles.css (`:root:root ...`, `:is(.sidebar, ...) :is(.btn ...)`, 9-slice
+   `.btn.confirm.*` border-image) with `!important`. The floor wins the same fights without the flag, and keeps the
+   original order among the rules that had `!important`. Do not drop it from a rule without re-running the Normal-mode
+   computed-style diff against the Psycho rules (styles.css ~5700-6040). */
 
 /* B5a: native Midnight Mall (dark) / Pastel Morning (light) tokens flow through from styles.css; only aliases + flattening here. */
 html[data-vibe="boring"],
@@ -45,10 +51,6 @@ html[data-vibe="boring"] .chat-box,
 html[data-vibe="boring"] .chat-drawer,
 html[data-vibe="boring"] .drawer,
 html[data-vibe="boring"] .team-emblem {
-  border-image: none;
-  box-shadow: none;
-  text-shadow: none;
-  filter: none;
   backdrop-filter: none;
   border-style: solid;
   border-width: 0;
@@ -56,6 +58,20 @@ html[data-vibe="boring"] .team-emblem {
   border-radius: var(--radius);
   background-image: none;
 }
+html[data-vibe="boring"] .card:not(#bw),
+html[data-vibe="boring"] .menu:not(#bw),
+html[data-vibe="boring"] .toolbar:not(#bw),
+html[data-vibe="boring"] .btn:not(#bw),
+html[data-vibe="boring"] .badge:not(#bw),
+html[data-vibe="boring"] .pill:not(#bw),
+html[data-vibe="boring"] .chip:not(#bw),
+html[data-vibe="boring"] .pin-tile:not(#bw),
+html[data-vibe="boring"] .pin-grid:not(#bw),
+html[data-vibe="boring"] .pin-rail:not(#bw),
+html[data-vibe="boring"] .chat-box:not(#bw),
+html[data-vibe="boring"] .chat-drawer:not(#bw),
+html[data-vibe="boring"] .drawer:not(#bw),
+html[data-vibe="boring"] .team-emblem:not(#bw) { border-image: none; box-shadow: none; text-shadow: none; filter: none; }
 html[data-vibe="boring"] .card,
 html[data-vibe="boring"] .menu,
 html[data-vibe="boring"] .pin-tile,
@@ -200,11 +216,16 @@ html[data-vibe="boring"] .boring-conv-title { border: 0; background: transparent
 html[data-vibe="boring"] .boring-row-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--t-ui); font-weight: 500; color: var(--text); }
 html[data-vibe="boring"] .boring-conv-age,
 html[data-vibe="boring"] .boring-conv-code,
-html[data-vibe="boring"] .boring-muted { color: var(--text-dim); font-size: 12px; }
+html[data-vibe="boring"] .boring-muted { color: var(--text-dim); }
+html[data-vibe="boring"] .boring-conv-age:not(#bw),
+html[data-vibe="boring"] .boring-conv-code:not(#bw),
+html[data-vibe="boring"] .boring-muted:not(#bw) { font-size: 12px; }
 html[data-vibe="boring"] .boring-conv-code { font-family: var(--mono); }
-html[data-vibe="boring"] .boring-badge { background: var(--accent); color: #fff; padding: 0 6px; font-size: 11px; }
-html[data-vibe="boring"] .boring-dot { width: 8px; height: 8px; background: var(--border-strong); flex: none; }
-html[data-vibe="boring"] .boring-dot.running { background: var(--accent); }
+html[data-vibe="boring"] .boring-badge { background: var(--accent); color: #fff; padding: 0 6px; }
+html[data-vibe="boring"] .boring-badge:not(#bw) { font-size: 11px; }
+html[data-vibe="boring"] .boring-dot { flex: none; }
+html[data-vibe="boring"] .boring-dot:not(#bw) { width: 8px; height: 8px; background: var(--border-strong); }
+html[data-vibe="boring"] .boring-dot.running:not(#bw) { background: var(--accent); }
 html[data-vibe="boring"] .boring-sidebar-footer { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
 
 html[data-vibe="boring"] .boring-chat-column { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; max-width: clamp(920px, 68vw, 1360px); margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; }
@@ -221,12 +242,15 @@ html[data-vibe="boring"] .boring-empty-card .boring-empty-error { margin: 0; col
 html[data-vibe="boring"] .usage-limits,
 html[data-vibe="boring"] .usage-cohort-tiles,
 html[data-vibe="boring"] .usage-saving-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
-html[data-vibe="boring"] .usage-crt { background: var(--bg-card); border: 1px solid var(--border); box-shadow: none; overflow: visible; }
+html[data-vibe="boring"] .usage-crt { border: 1px solid var(--border); box-shadow: none; overflow: visible; }
+html[data-vibe="boring"] .usage-crt:not(#bw) { background: var(--bg-card); }
 html[data-vibe="boring"] .usage-crt::after { content: none; background: none; }
 html[data-vibe="boring"] .usage-crt-bar { border-bottom: 1px solid var(--border); }
 html[data-vibe="boring"] .usage-crt-title { color: var(--text); letter-spacing: 0; text-transform: none; }
 html[data-vibe="boring"] .usage-cohort-tile,
-html[data-vibe="boring"] .usage-saving-card { background: var(--bg-card); border: 1px solid var(--border); box-shadow: none; padding: 12px; }
+html[data-vibe="boring"] .usage-saving-card { border: 1px solid var(--border); box-shadow: none; padding: 12px; }
+html[data-vibe="boring"] .usage-cohort-tile:not(#bw),
+html[data-vibe="boring"] .usage-saving-card:not(#bw) { background: var(--bg-card); }
 
 /* Art-leak guard: styles.css pixel frames and spray-paint dither must not reach Boring Mode. */
 html[data-vibe="boring"] *,
@@ -239,33 +263,53 @@ html[data-vibe="boring"] .usage-crt,
 html[data-vibe="boring"] .usage-section,
 html[data-vibe="boring"] .tchip,
 html[data-vibe="boring"] .cast-toggle,
-html[data-vibe="boring"] .inbox-park-btn { background-image: none; background-color: var(--bg-card); border: 1px solid var(--border); box-shadow: none; filter: none; }
+html[data-vibe="boring"] .inbox-park-btn { background-color: var(--bg-card); border: 1px solid var(--border); filter: none; }
+html[data-vibe="boring"] .idea-inbox:not(#bw),
+html[data-vibe="boring"] .team-feed:not(#bw),
+html[data-vibe="boring"] .inbox-card:not(#bw),
+html[data-vibe="boring"] .usage-crt:not(#bw),
+html[data-vibe="boring"] .usage-section:not(#bw),
+html[data-vibe="boring"] .tchip:not(#bw),
+html[data-vibe="boring"] .cast-toggle:not(#bw),
+html[data-vibe="boring"] .inbox-park-btn:not(#bw) { background-image: none; box-shadow: none; }
 html[data-vibe="boring"] .idea-inbox::before,
 html[data-vibe="boring"] .idea-inbox::after,
 html[data-vibe="boring"] .team-feed::before,
 html[data-vibe="boring"] .team-feed::after,
 html[data-vibe="boring"] .usage-crt::before,
-html[data-vibe="boring"] .usage-crt::after { display: none; background-image: none; }
+html[data-vibe="boring"] .usage-crt::after { display: none; }
+html[data-vibe="boring"] .idea-inbox:not(#bw)::before,
+html[data-vibe="boring"] .idea-inbox:not(#bw)::after,
+html[data-vibe="boring"] .team-feed:not(#bw)::before,
+html[data-vibe="boring"] .team-feed:not(#bw)::after,
+html[data-vibe="boring"] .usage-crt:not(#bw)::before,
+html[data-vibe="boring"] .usage-crt:not(#bw)::after { background-image: none; }
 
 /* B2r: full-height chat geometry (styles.css only grows .drawer under .pane-slot, so it collapsed here). */
 html[data-vibe="boring"] .boring-chat-column > .drawer,
-html[data-vibe="boring"] .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--border); border-right: 1px solid var(--border); border-top: 0; border-bottom: 0; background: var(--bg-card); box-shadow: none; }
+html[data-vibe="boring"] .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border-left: 1px solid var(--border); border-right: 1px solid var(--border); border-top: 0; border-bottom: 0; background: var(--bg-card); }
+html[data-vibe="boring"] .boring-chat-column > .drawer:not(#bw),
+html[data-vibe="boring"] .drawer:not(#bw) { box-shadow: none; }
 html[data-vibe="boring"] .drawer > .drawer-shell,
 html[data-vibe="boring"] .drawer-shell { flex: 1 1 0; min-height: 0; display: flex; overflow: hidden; }
 html[data-vibe="boring"] .drawer-shell > .timeline,
 html[data-vibe="boring"] .timeline { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: clamp(16px, 1.4vw, 28px); gap: 12px; background: var(--bg); }
 html[data-vibe="boring"] .drawer > .composer,
 html[data-vibe="boring"] .composer { flex-shrink: 0; border-top: 1px solid var(--border); background: var(--bg-elev); padding: 12px 16px; }
-html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--accent); border-color: var(--accent); color: #ffffff; font-weight: 600; min-height: 40px; padding: 0 18px; }
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { border-color: var(--accent); min-height: 40px; padding: 0 18px; }
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn):not(#bw) { background: var(--accent); color: #ffffff; font-weight: 600; }
 
 /* B2r: no art leaks. Sprites/emblems gone; pixel fonts remapped above. */
-html[data-vibe="boring"] .avatar,
-html[data-vibe="boring"] .cast-sprite,
-html[data-vibe="boring"] .team-emblem { display: none; }
+html[data-vibe="boring"] .avatar:not(#bw),
+html[data-vibe="boring"] .cast-sprite:not(#bw),
+html[data-vibe="boring"] .team-emblem:not(#bw) { display: none; }
 html[data-vibe="boring"] .drawer-head { background: var(--bg-elev); border-bottom: 1px solid var(--border); padding: 10px 16px; }
 html[data-vibe="boring"] .role-tag,
 html[data-vibe="boring"] .prov-pill,
-html[data-vibe="boring"] .drawer-provider-select { color: var(--text); border-color: var(--border); background: var(--bg-card); font-family: var(--sans); }
+html[data-vibe="boring"] .drawer-provider-select { font-family: var(--sans); }
+html[data-vibe="boring"] .role-tag:not(#bw),
+html[data-vibe="boring"] .prov-pill:not(#bw),
+html[data-vibe="boring"] .drawer-provider-select:not(#bw) { color: var(--text); border-color: var(--border); background: var(--bg-card); }
 
 /* B2r: one clean context bar; the hover title carries the thresholds. */
 html[data-vibe="boring"] .brainstorm-ctx-marker,
@@ -293,8 +337,15 @@ html[data-vibe="boring"] .tl-assistant,
 html[data-vibe="boring"] .tl-tool,
 html[data-vibe="boring"] .tl-sub,
 html[data-vibe="boring"] .tl-todo,
-html[data-vibe="boring"] .tl-note { background: var(--bg-card); border: 1px solid var(--border); color: var(--text); }
-html[data-vibe="boring"] .tl-user { background: var(--bg-hover); border-color: var(--border-strong); }
+html[data-vibe="boring"] .tl-note { color: var(--text); }
+html[data-vibe="boring"] .tl-user:not(#bw),
+html[data-vibe="boring"] .tl-assistant:not(#bw),
+html[data-vibe="boring"] .tl-tool:not(#bw),
+html[data-vibe="boring"] .tl-sub:not(#bw),
+html[data-vibe="boring"] .tl-todo:not(#bw),
+html[data-vibe="boring"] .tl-note:not(#bw) { background: var(--bg-card); border: 1px solid var(--border); }
+html[data-vibe="boring"] .tl-user { border-color: var(--border-strong); }
+html[data-vibe="boring"] .tl-user:not(#bw) { background: var(--bg-hover); }
 html[data-vibe="boring"] .inbox-card { background: var(--bg-elev); border: 1px solid var(--border); padding: 14px; }
 html[data-vibe="boring"] .feed-entry { border-bottom: 1px solid var(--border); padding: 8px 0; }
 html[data-vibe="boring"] .tchip,
@@ -319,7 +370,15 @@ html[data-vibe="boring"] .drawer-head .brainstorm-tag,
 html[data-vibe="boring"] .drawer-head .tag,
 html[data-vibe="boring"] .drawer-head [class*="tag"],
 html[data-vibe="boring"] .brainstorm-ctx-bar,
-html[data-vibe="boring"] .brainstorm-ctx-track { background-image: none; box-shadow: none; text-shadow: none; font-family: var(--sans); letter-spacing: normal; }
+html[data-vibe="boring"] .brainstorm-ctx-track { box-shadow: none; text-shadow: none; font-family: var(--sans); letter-spacing: normal; }
+html[data-vibe="boring"] .drawer-head .role-tag:not(#bw),
+html[data-vibe="boring"] .drawer-head .provider-tag:not(#bw),
+html[data-vibe="boring"] .drawer-head .drawer-badge:not(#bw),
+html[data-vibe="boring"] .drawer-head .brainstorm-tag:not(#bw),
+html[data-vibe="boring"] .drawer-head .tag:not(#bw),
+html[data-vibe="boring"] .drawer-head [class*="tag"]:not(#bw),
+html[data-vibe="boring"] .brainstorm-ctx-bar:not(#bw),
+html[data-vibe="boring"] .brainstorm-ctx-track:not(#bw) { background-image: none; }
 html[data-vibe="boring"] .brainstorm-ctx-track { background: var(--bg-hover); border: 1px solid var(--border); }
 html[data-vibe="boring"] .brainstorm-ctx-fill { background: var(--accent); background-image: none; box-shadow: none; }
 
@@ -328,7 +387,10 @@ html[data-vibe="boring"] .composer button[type="submit"],
 html[data-vibe="boring"] .composer-send { background: var(--accent); background-color: var(--accent); background-image: none; color: #ffffff; opacity: 1; border: 1px solid var(--accent); font-weight: 600; }
 html[data-vibe="boring"] .composer .send:disabled,
 html[data-vibe="boring"] .composer button[type="submit"]:disabled,
-html[data-vibe="boring"] .composer-send:disabled { background: #475569; background-color: #475569; border-color: #475569; color: #ffffff; opacity: 0.85; }
+html[data-vibe="boring"] .composer-send:disabled { opacity: 0.85; }
+html[data-vibe="boring"] .composer .send:disabled:not(#bw),
+html[data-vibe="boring"] .composer button[type="submit"]:disabled:not(#bw),
+html[data-vibe="boring"] .composer-send:disabled:not(#bw) { background: #475569; background-color: #475569; border-color: #475569; color: #ffffff; }
 
 html[data-vibe="boring"] .boring-app,
 html[data-vibe="boring"] .boring-chat-column .timeline,
@@ -343,34 +405,54 @@ html[data-vibe="boring"] .drawer-head button,
 html[data-vibe="boring"] .drawer-provider-select,
 html[data-vibe="boring"] .drawer-mode-select,
 html[data-vibe="boring"] .drawer-thinking-select,
-html[data-vibe="boring"] .drawer-model-input { min-height: 36px; padding: 6px 12px; font-size: var(--t-ui); background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); }
+html[data-vibe="boring"] .drawer-model-input { min-height: 36px; padding: 6px 12px; font-size: var(--t-ui); }
+html[data-vibe="boring"] .drawer-head select:not(#bw),
+html[data-vibe="boring"] .drawer-head .chip:not(#bw),
+html[data-vibe="boring"] .drawer-head button:not(#bw),
+html[data-vibe="boring"] .drawer-provider-select:not(#bw),
+html[data-vibe="boring"] .drawer-mode-select:not(#bw),
+html[data-vibe="boring"] .drawer-thinking-select:not(#bw),
+html[data-vibe="boring"] .drawer-model-input:not(#bw) { background: var(--bg-card); color: var(--text); border: 1px solid var(--border-strong); }
 html[data-vibe="boring"] .drawer-head .drawer-controls,
 html[data-vibe="boring"] .drawer-head .drawer-row,
 html[data-vibe="boring"] .drawer-head .drawer-actions { gap: 8px; align-items: center; flex-wrap: wrap; }
 
 /* B4 round 2: kill 9-slice border-image chips/buttons, inline-style header sizes, plain ctx bar, solid Send */
-html[data-vibe="boring"] .role-tag, html[data-vibe="boring"] .prov-pill, html[data-vibe="boring"] .prov-badge, html[data-vibe="boring"] .badge,
-html[data-vibe="boring"] .unit-tag, html[data-vibe="boring"] .chip, html[data-vibe="boring"] .label-pill, html[data-vibe="boring"] .status-pill,
-html[data-vibe="boring"] .lane-tag, html[data-vibe="boring"] .warn-badge, html[data-vibe="boring"] .verdict, html[data-vibe="boring"] .pill,
-html[data-vibe="boring"] .brainstorm-ctx-pill, html[data-vibe="boring"] .quota-pill, html[data-vibe="boring"] .sidebar-role-pill,
-html[data-vibe="boring"] .rail-role-tag, html[data-vibe="boring"] .pin-lane-handle, html[data-vibe="boring"] .btn,
-html[data-vibe="boring"] .btn.ok, html[data-vibe="boring"] .btn.ghost, html[data-vibe="boring"] .btn.warn { border-image: none; image-rendering: auto; }
+html[data-vibe="boring"] .role-tag:not(#bw), html[data-vibe="boring"] .prov-pill:not(#bw), html[data-vibe="boring"] .prov-badge:not(#bw), html[data-vibe="boring"] .badge:not(#bw),
+html[data-vibe="boring"] .unit-tag:not(#bw), html[data-vibe="boring"] .chip:not(#bw), html[data-vibe="boring"] .label-pill:not(#bw), html[data-vibe="boring"] .status-pill:not(#bw),
+html[data-vibe="boring"] .lane-tag:not(#bw), html[data-vibe="boring"] .warn-badge:not(#bw), html[data-vibe="boring"] .verdict:not(#bw), html[data-vibe="boring"] .pill:not(#bw),
+html[data-vibe="boring"] .brainstorm-ctx-pill:not(#bw), html[data-vibe="boring"] .quota-pill:not(#bw), html[data-vibe="boring"] .sidebar-role-pill:not(#bw),
+html[data-vibe="boring"] .rail-role-tag:not(#bw), html[data-vibe="boring"] .pin-lane-handle:not(#bw), html[data-vibe="boring"] .btn:not(#bw),
+html[data-vibe="boring"] .btn.ok:not(#bw), html[data-vibe="boring"] .btn.ghost:not(#bw), html[data-vibe="boring"] .btn.warn:not(#bw) { border-image: none; image-rendering: auto; }
 html[data-vibe="boring"] .drawer-head .role-tag,
 html[data-vibe="boring"] .drawer-head .prov-pill,
-html[data-vibe="boring"] .drawer-head .prov-badge { border: 1px solid var(--border); border-image: none; border-radius: 6px; padding: 4px 10px; font-size: var(--t-small); font-family: var(--sans); background: var(--bg-card); background-image: none; color: var(--text); box-shadow: none; text-shadow: none; }
-html[data-vibe="boring"] .btn.ok { background: var(--accent); background-image: none; border: 1px solid var(--accent); border-image: none; color: #ffffff; border-radius: 6px; box-shadow: none; text-shadow: none; }
-html[data-vibe="boring"] .brainstorm-ctx-bar { padding: 8px 12px; margin: 6px 0 0; background: var(--bg-elev); background-image: none; border: 1px solid var(--border); border-image: none; border-radius: 6px; box-shadow: none; }
-html[data-vibe="boring"] .brainstorm-ctx-readout { font-family: var(--sans); font-size: var(--t-small); color: var(--text-muted); }
+html[data-vibe="boring"] .drawer-head .prov-badge { border-radius: 6px; padding: 4px 10px; font-size: var(--t-small); font-family: var(--sans); box-shadow: none; text-shadow: none; }
+html[data-vibe="boring"] .drawer-head .role-tag:not(#bw),
+html[data-vibe="boring"] .drawer-head .prov-pill:not(#bw),
+html[data-vibe="boring"] .drawer-head .prov-badge:not(#bw) { border: 1px solid var(--border); border-image: none; background: var(--bg-card); background-image: none; color: var(--text); }
+html[data-vibe="boring"] .btn.ok { border-radius: 6px; }
+html[data-vibe="boring"] .btn.ok:not(#bw) { background: var(--accent); background-image: none; border: 1px solid var(--accent); border-image: none; color: #ffffff; box-shadow: none; text-shadow: none; }
+html[data-vibe="boring"] .brainstorm-ctx-bar { padding: 8px 12px; margin: 6px 0 0; border: 1px solid var(--border); border-image: none; border-radius: 6px; box-shadow: none; }
+html[data-vibe="boring"] .brainstorm-ctx-bar:not(#bw) { background: var(--bg-elev); background-image: none; }
+html[data-vibe="boring"] .brainstorm-ctx-readout { font-family: var(--sans); font-size: var(--t-small); }
+html[data-vibe="boring"] .brainstorm-ctx-readout:not(#bw) { color: var(--text-muted); }
 html[data-vibe="boring"] .drawer-head .drawer-title { font-size: var(--t-title) !important; font-weight: 600; }
 html[data-vibe="boring"] .drawer-head .drawer-meta-line { font-size: var(--t-ui); gap: 8px; }
 html[data-vibe="boring"] .drawer-head .drawer-role-line { gap: 8px; align-items: center; }
 html[data-vibe="boring"] .drawer-head select, html[data-vibe="boring"] .drawer-head .chip, html[data-vibe="boring"] .drawer-head button,
 html[data-vibe="boring"] .drawer-provider-select, html[data-vibe="boring"] .drawer-mode-select, html[data-vibe="boring"] .drawer-thinking-select,
-html[data-vibe="boring"] .drawer-model-input { min-height: 36px; height: auto; width: auto; padding: 6px 12px; font-size: var(--t-ui); font-family: var(--sans); border-radius: 6px; background: var(--bg-card); background-image: none; color: var(--text); border: 1px solid var(--border-strong); border-image: none; box-shadow: none; }
+html[data-vibe="boring"] .drawer-model-input { min-height: 36px; height: auto; width: auto; padding: 6px 12px; font-size: var(--t-ui); font-family: var(--sans); border-radius: 6px; }
+html[data-vibe="boring"] .drawer-head select:not(#bw), html[data-vibe="boring"] .drawer-head .chip:not(#bw), html[data-vibe="boring"] .drawer-head button:not(#bw),
+html[data-vibe="boring"] .drawer-provider-select:not(#bw), html[data-vibe="boring"] .drawer-mode-select:not(#bw), html[data-vibe="boring"] .drawer-thinking-select:not(#bw),
+html[data-vibe="boring"] .drawer-model-input:not(#bw) { background: var(--bg-card); background-image: none; color: var(--text); border: 1px solid var(--border-strong); border-image: none; box-shadow: none; }
 html[data-vibe="boring"] .composer .send,
 html[data-vibe="boring"] .composer button[type="submit"],
 html[data-vibe="boring"] .composer-send,
-html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--accent); background-color: var(--accent); background-image: none; border: 1px solid var(--accent); border-image: none; color: #ffffff; opacity: 1; font-weight: 600; min-height: 40px; padding: 0 18px; border-radius: 6px; }
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { opacity: 1; min-height: 40px; padding: 0 18px; border-radius: 6px; }
+html[data-vibe="boring"] .composer .send:not(#bw),
+html[data-vibe="boring"] .composer button[type="submit"]:not(#bw),
+html[data-vibe="boring"] .composer-send:not(#bw),
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn):not(#bw) { background: var(--accent); background-color: var(--accent); background-image: none; border: 1px solid var(--accent); border-image: none; color: #ffffff; font-weight: 600; }
 html[data-vibe="boring"] .boring-app { width: calc(100vw / var(--vs-ui-scale, 1)); height: calc(100vh / var(--vs-ui-scale, 1)); height: calc(100dvh / var(--vs-ui-scale, 1)); }
 
 /* ===== B5: sleek pass. Borderless tone-stepped surfaces; radius 14 (cards) / 10 (controls) / 999 (pills); one --cyan accent. ===== */
@@ -404,8 +486,8 @@ html[data-vibe="boring"] .boring-switch-pill.on { border: 0; box-shadow: none; b
 html[data-vibe="boring"] .boring-new-conv-btn,
 html[data-vibe="boring"] .boring-primary-cta { background: var(--cyan); border: 0; color: var(--on-accent); border-radius: 10px; }
 html[data-vibe="boring"] .boring-badge { background: var(--amber); color: var(--on-accent); border-radius: 999px; }
-html[data-vibe="boring"] .boring-dot { background: var(--muted); }
-html[data-vibe="boring"] .boring-dot.running { background: var(--cyan); }
+html[data-vibe="boring"] .boring-dot:not(#bw) { background: var(--muted); }
+html[data-vibe="boring"] .boring-dot.running:not(#bw) { background: var(--cyan); }
 html[data-vibe="boring"] .boring-sidebar-footer { border-top: 0; }
 
 /* B5c: Overview tabs, core strip, lane cards (one click target, no buttons inside), idle disclosure. */
@@ -415,7 +497,9 @@ html[data-vibe="boring"] .boring-core-strip { display: grid; grid-template-colum
 html[data-vibe="boring"] .boring-card-grid { grid-template-columns: repeat(auto-fill, minmax(clamp(320px, 22vw, 520px), 1fr)); gap: 16px; }
 html[data-vibe="boring"] .boring-lane-card { background: var(--panel); border: 0; border-radius: 14px; cursor: pointer; transition: background-color 120ms ease; }
 html[data-vibe="boring"] .boring-lane-card:hover,
-html[data-vibe="boring"] .boring-lane-card:focus-visible { background: var(--panel-hi); outline: none; }
+html[data-vibe="boring"] .boring-lane-card:focus-visible { outline: none; }
+html[data-vibe="boring"] .boring-lane-card:hover:not(#bw),
+html[data-vibe="boring"] .boring-lane-card:focus-visible:not(#bw) { background: var(--panel-hi); }
 html[data-vibe="boring"] .boring-lane-card[aria-disabled="true"] { cursor: default; opacity: 0.6; }
 html[data-vibe="boring"] .boring-core-tile { padding: 16px; gap: 6px; }
 html[data-vibe="boring"] .boring-card { min-height: 88px; }
@@ -436,9 +520,17 @@ html[data-vibe="boring"] .tl-assistant,
 html[data-vibe="boring"] .tl-tool,
 html[data-vibe="boring"] .tl-sub,
 html[data-vibe="boring"] .tl-todo,
-html[data-vibe="boring"] .tl-note { background: var(--panel); border: none; border-width: 0; border-radius: 14px; color: var(--text); }
+html[data-vibe="boring"] .tl-note { border-width: 0; border-radius: 14px; color: var(--text); }
+html[data-vibe="boring"] .tl-user:not(#bw),
+html[data-vibe="boring"] .tl-assistant:not(#bw),
+html[data-vibe="boring"] .tl-tool:not(#bw),
+html[data-vibe="boring"] .tl-sub:not(#bw),
+html[data-vibe="boring"] .tl-todo:not(#bw),
+html[data-vibe="boring"] .tl-note:not(#bw) { background: var(--panel); border: none; }
 html[data-vibe="boring"] .tl-user,
-html[data-vibe="boring"] .tl-note.tl-user { background: color-mix(in srgb, var(--violet) 14%, var(--panel)); border-color: transparent; }
+html[data-vibe="boring"] .tl-note.tl-user { border-color: transparent; }
+html[data-vibe="boring"] .tl-user:not(#bw),
+html[data-vibe="boring"] .tl-note.tl-user:not(#bw) { background: color-mix(in srgb, var(--violet) 14%, var(--panel)); }
 html[data-vibe="boring"] .tl-note[data-testid="tl-empty-indicator"] { border: 0; border-radius: 14px; background: var(--panel); }
 html[data-vibe="boring"] .composer { background: var(--bg); border-top: 1px solid var(--border); padding: 16px 24px; }
 html[data-vibe="boring"] .composer textarea,
@@ -447,10 +539,17 @@ html[data-vibe="boring"] .composer-row { background: var(--panel-hi); border: 0;
 html[data-vibe="boring"] .composer .send,
 html[data-vibe="boring"] .composer button[type="submit"],
 html[data-vibe="boring"] .composer-send,
-html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { background: var(--cyan); background-color: var(--cyan); background-image: none; border: 0; border-radius: 10px; color: var(--on-accent); }
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn) { border-radius: 10px; }
+html[data-vibe="boring"] .composer .send:not(#bw),
+html[data-vibe="boring"] .composer button[type="submit"]:not(#bw),
+html[data-vibe="boring"] .composer-send:not(#bw),
+html[data-vibe="boring"] .composer-row > .btn:not(.ghost):not(.warn):not(#bw) { background: var(--cyan); background-color: var(--cyan); background-image: none; border: 0; color: var(--on-accent); }
 html[data-vibe="boring"] .composer .send:disabled,
 html[data-vibe="boring"] .composer button[type="submit"]:disabled,
-html[data-vibe="boring"] .composer-send:disabled { background: var(--panel-hi); background-color: var(--panel-hi); color: var(--muted); opacity: 1; }
+html[data-vibe="boring"] .composer-send:disabled { opacity: 1; }
+html[data-vibe="boring"] .composer .send:disabled:not(#bw),
+html[data-vibe="boring"] .composer button[type="submit"]:disabled:not(#bw),
+html[data-vibe="boring"] .composer-send:disabled:not(#bw) { background: var(--panel-hi); background-color: var(--panel-hi); color: var(--muted); }
 html[data-vibe="boring"] .drawer-head select,
 html[data-vibe="boring"] .drawer-head .chip,
 html[data-vibe="boring"] .drawer-head button,
@@ -461,10 +560,22 @@ html[data-vibe="boring"] .drawer-model-input,
 html[data-vibe="boring"] .drawer-head .role-tag,
 html[data-vibe="boring"] .drawer-head .prov-pill,
 html[data-vibe="boring"] .drawer-head .prov-badge,
-html[data-vibe="boring"] .brainstorm-ctx-bar { border: 0; border-radius: 10px; background: var(--panel-hi); }
+html[data-vibe="boring"] .brainstorm-ctx-bar { border-radius: 10px; }
+html[data-vibe="boring"] .drawer-head select:not(#bw),
+html[data-vibe="boring"] .drawer-head .chip:not(#bw),
+html[data-vibe="boring"] .drawer-head button:not(#bw),
+html[data-vibe="boring"] .drawer-provider-select:not(#bw),
+html[data-vibe="boring"] .drawer-mode-select:not(#bw),
+html[data-vibe="boring"] .drawer-thinking-select:not(#bw),
+html[data-vibe="boring"] .drawer-model-input:not(#bw),
+html[data-vibe="boring"] .drawer-head .role-tag:not(#bw),
+html[data-vibe="boring"] .drawer-head .prov-pill:not(#bw),
+html[data-vibe="boring"] .drawer-head .prov-badge:not(#bw),
+html[data-vibe="boring"] .brainstorm-ctx-bar:not(#bw) { border: 0; background: var(--panel-hi); }
 html[data-vibe="boring"] .brainstorm-ctx-track { border: 0; background: var(--panel-hi); }
 html[data-vibe="boring"] .brainstorm-ctx-fill { background: var(--cyan); }
-html[data-vibe="boring"] .btn.ok { background: var(--cyan); border: 0; border-radius: 10px; color: var(--on-accent); }
+html[data-vibe="boring"] .btn.ok { border-radius: 10px; }
+html[data-vibe="boring"] .btn.ok:not(#bw) { background: var(--cyan); border: 0; color: var(--on-accent); }
 html[data-vibe="boring"] .usage-crt,
 html[data-vibe="boring"] .inbox-card,
 html[data-vibe="boring"] .feed-entry,
@@ -496,12 +607,19 @@ html[data-vibe="boring"] .dup-warning,
 html[data-vibe="boring"] .brainstorm-warn-banner,
 html[data-vibe="boring"] .warning-banner { border: 0; border-radius: 14px; box-shadow: none; background: var(--panel-hi); background-image: none; }
 html[data-vibe="boring"] .timeline .tl-user,
-html[data-vibe="boring"] .tl-user { background: color-mix(in srgb, var(--violet) 14%, var(--panel)); border: 0; box-shadow: none; border-radius: 14px; }
+html[data-vibe="boring"] .tl-user { box-shadow: none; border-radius: 14px; }
+html[data-vibe="boring"] .timeline .tl-user:not(#bw),
+html[data-vibe="boring"] .tl-user:not(#bw) { background: color-mix(in srgb, var(--violet) 14%, var(--panel)); border: 0; }
 html[data-vibe="boring"] .timeline .tl-tool,
 html[data-vibe="boring"] .tl-tool,
 html[data-vibe="boring"] .tl-tool.failed,
 html[data-vibe="boring"] .timeline .tl-assistant,
-html[data-vibe="boring"] .tl-assistant { border: 0; border-left: 0; box-shadow: none; border-radius: 14px; background: var(--panel); }
+html[data-vibe="boring"] .tl-assistant { box-shadow: none; border-radius: 14px; }
+html[data-vibe="boring"] .timeline .tl-tool:not(#bw),
+html[data-vibe="boring"] .tl-tool:not(#bw),
+html[data-vibe="boring"] .tl-tool.failed:not(#bw),
+html[data-vibe="boring"] .timeline .tl-assistant:not(#bw),
+html[data-vibe="boring"] .tl-assistant:not(#bw) { border: 0; border-left: 0; background: var(--panel); }
 html[data-vibe="boring"] .squads-dashboard { background: transparent; background-image: none; border: 0; border-image: none; box-shadow: none; padding-top: 0; }
 html[data-vibe="boring"] .usage-limit,
 html[data-vibe="boring"] .usage-roles,
@@ -513,37 +631,58 @@ html[data-vibe="boring"] .usage-crt,
 html[data-vibe="boring"] .usage-cohort-tile,
 html[data-vibe="boring"] .usage-saving-card,
 html[data-vibe="boring"] .usage-collapse,
-html[data-vibe="boring"] .usage-inbox-row { background: var(--panel); background-image: none; border: 0; border-image: none; border-radius: 14px; box-shadow: none; }
-html[data-vibe="boring"] .usage-inbox-row { background: var(--panel-hi); padding: 12px 16px; }
+html[data-vibe="boring"] .usage-inbox-row { border: 0; border-image: none; border-radius: 14px; }
+html[data-vibe="boring"] .usage-limit:not(#bw),
+html[data-vibe="boring"] .usage-roles:not(#bw),
+html[data-vibe="boring"] .usage-loops:not(#bw),
+html[data-vibe="boring"] .usage-storms:not(#bw),
+html[data-vibe="boring"] .usage-efficiency:not(#bw),
+html[data-vibe="boring"] .usage-workflows:not(#bw),
+html[data-vibe="boring"] .usage-crt:not(#bw),
+html[data-vibe="boring"] .usage-cohort-tile:not(#bw),
+html[data-vibe="boring"] .usage-saving-card:not(#bw),
+html[data-vibe="boring"] .usage-collapse:not(#bw),
+html[data-vibe="boring"] .usage-inbox-row:not(#bw) { background: var(--panel); background-image: none; box-shadow: none; }
+html[data-vibe="boring"] .usage-inbox-row { padding: 12px 16px; }
+html[data-vibe="boring"] .usage-inbox-row:not(#bw) { background: var(--panel-hi); }
 html[data-vibe="boring"] .usage-inbox-btn,
 html[data-vibe="boring"] .usage-inbox-tab,
 html[data-vibe="boring"] .usage-review-select,
 html[data-vibe="boring"] .usage-squad-pill,
 html[data-vibe="boring"] .usage-ready-pill,
-html[data-vibe="boring"] .usage-export { border: 0; border-image: none; border-radius: 10px; background: var(--panel-hi); color: var(--text); box-shadow: none; }
+html[data-vibe="boring"] .usage-export { border-radius: 10px; }
+html[data-vibe="boring"] .usage-inbox-btn:not(#bw),
+html[data-vibe="boring"] .usage-inbox-tab:not(#bw),
+html[data-vibe="boring"] .usage-review-select:not(#bw),
+html[data-vibe="boring"] .usage-squad-pill:not(#bw),
+html[data-vibe="boring"] .usage-ready-pill:not(#bw),
+html[data-vibe="boring"] .usage-export:not(#bw) { border: 0; border-image: none; background: var(--panel-hi); color: var(--text); box-shadow: none; }
 html[data-vibe="boring"] .usage-review-run,
-html[data-vibe="boring"] .usage-inbox-accept { background: var(--cyan); color: var(--on-accent); border: 0; border-image: none; border-radius: 10px; box-shadow: none; }
+html[data-vibe="boring"] .usage-inbox-accept { border-radius: 10px; }
+html[data-vibe="boring"] .usage-review-run:not(#bw),
+html[data-vibe="boring"] .usage-inbox-accept:not(#bw) { background: var(--cyan); color: var(--on-accent); border: 0; border-image: none; box-shadow: none; }
 html[data-vibe="boring"] .usage-collapse { padding: 12px 16px; }
 html[data-vibe="boring"] .usage-collapse-head { font-size: 13px; text-transform: none; letter-spacing: 0; font-weight: 500; color: var(--muted); }
 html[data-vibe="boring"] .decision-card { border: 0; border-radius: 14px; background: var(--panel); box-shadow: none; padding: 14px 16px; }
-html[data-vibe="boring"] .decision-card .btn { border: 0; border-radius: 10px; background: var(--panel-hi); color: var(--text); box-shadow: none; }
+html[data-vibe="boring"] .decision-card .btn { border-radius: 10px; }
+html[data-vibe="boring"] .decision-card .btn:not(#bw) { border: 0; background: var(--panel-hi); color: var(--text); box-shadow: none; }
 html[data-vibe="boring"] .decision-card .btn:hover { filter: brightness(1.08); }
 
 /* ===== B5f: 4K type scale, wide Overview, segmented tabs, round dots, calm chat header. ===== */
-html[data-vibe="boring"] .boring-card-line,
-html[data-vibe="boring"] .boring-conv-age,
-html[data-vibe="boring"] .boring-conv-code,
-html[data-vibe="boring"] .boring-muted,
-html[data-vibe="boring"] .boring-badge,
-html[data-vibe="boring"] .badge,
-html[data-vibe="boring"] .small,
-html[data-vibe="boring"] .tl-meta,
-html[data-vibe="boring"] .tl-time,
-html[data-vibe="boring"] .feed-meta,
-html[data-vibe="boring"] .inbox-meta,
-html[data-vibe="boring"] .usage-collapse-head,
-html[data-vibe="boring"] .btn,
-html[data-vibe="boring"] .btn.small { font-size: var(--t-ui); }
+html[data-vibe="boring"] .boring-card-line:not(#bw),
+html[data-vibe="boring"] .boring-conv-age:not(#bw),
+html[data-vibe="boring"] .boring-conv-code:not(#bw),
+html[data-vibe="boring"] .boring-muted:not(#bw),
+html[data-vibe="boring"] .boring-badge:not(#bw),
+html[data-vibe="boring"] .badge:not(#bw),
+html[data-vibe="boring"] .small:not(#bw),
+html[data-vibe="boring"] .tl-meta:not(#bw),
+html[data-vibe="boring"] .tl-time:not(#bw),
+html[data-vibe="boring"] .feed-meta:not(#bw),
+html[data-vibe="boring"] .inbox-meta:not(#bw),
+html[data-vibe="boring"] .usage-collapse-head:not(#bw),
+html[data-vibe="boring"] .btn:not(#bw),
+html[data-vibe="boring"] .btn.small:not(#bw) { font-size: var(--t-ui); }
 html[data-vibe="boring"] .boring-card-head .boring-row-label { font-size: var(--t-title); font-weight: 600; }
 html[data-vibe="boring"] .boring-dashboard-wrap { max-width: 1600px; padding: 28px 40px; gap: 24px; }
 html[data-vibe="boring"] .boring-card-grid { grid-template-columns: repeat(auto-fill, minmax(clamp(380px, 24vw, 560px), 1fr)); gap: 20px; }
@@ -564,49 +703,49 @@ html[data-vibe="boring"] .boring-topbar-switcher {
 }
 html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill,
 html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill {
-  background: transparent;
   color: var(--muted);
   border-radius: 999px;
   padding: 6px 16px;
   min-height: 36px;
   font-weight: 500;
 }
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill:not(#bw),
+html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill:not(#bw) { background: transparent; }
 html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill.on,
 html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill.on {
-  background: var(--panel-hi);
-  color: var(--text);
   font-weight: 600;
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 45%, transparent);
 }
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill.on:not(#bw),
+html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill.on:not(#bw) { background: var(--panel-hi); color: var(--text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 45%, transparent); }
 html[data-vibe="boring"] .boring-dot,
 html[data-vibe="boring"] .signal,
 html[data-vibe="boring"] .status-dot,
 html[data-vibe="boring"] .conn,
 html[data-vibe="boring"] .sidebar-stale-dot {
   display: inline-block;
-  width: 9px;
-  height: 9px;
   border-radius: 50%;
-  border: 0;
   box-shadow: none;
-  background-image: none;
   image-rendering: auto;
-  animation: none;
   flex: none;
 }
-html[data-vibe="boring"] .boring-dot,
-html[data-vibe="boring"] .signal,
-html[data-vibe="boring"] .signal.idle,
-html[data-vibe="boring"] .signal.closed { background: var(--muted); }
-html[data-vibe="boring"] .boring-dot.running,
-html[data-vibe="boring"] .signal.running,
-html[data-vibe="boring"] .conn.connected { background: var(--cyan); }
-html[data-vibe="boring"] .boring-dot.error,
-html[data-vibe="boring"] .signal.error,
-html[data-vibe="boring"] .signal.attn-error,
-html[data-vibe="boring"] .signal.attn-permission,
-html[data-vibe="boring"] .signal.attn-needs-you,
-html[data-vibe="boring"] .conn.disconnected { background: var(--amber); }
+html[data-vibe="boring"] .boring-dot:not(#bw),
+html[data-vibe="boring"] .signal:not(#bw),
+html[data-vibe="boring"] .status-dot:not(#bw),
+html[data-vibe="boring"] .conn:not(#bw),
+html[data-vibe="boring"] .sidebar-stale-dot:not(#bw) { width: 9px; height: 9px; border: 0; background-image: none; animation: none; }
+html[data-vibe="boring"] .boring-dot:not(#bw),
+html[data-vibe="boring"] .signal:not(#bw),
+html[data-vibe="boring"] .signal.idle:not(#bw),
+html[data-vibe="boring"] .signal.closed:not(#bw) { background: var(--muted); }
+html[data-vibe="boring"] .boring-dot.running:not(#bw),
+html[data-vibe="boring"] .signal.running:not(#bw),
+html[data-vibe="boring"] .conn.connected:not(#bw) { background: var(--cyan); }
+html[data-vibe="boring"] .boring-dot.error:not(#bw),
+html[data-vibe="boring"] .signal.error:not(#bw),
+html[data-vibe="boring"] .signal.attn-error:not(#bw),
+html[data-vibe="boring"] .signal.attn-permission:not(#bw),
+html[data-vibe="boring"] .signal.attn-needs-you:not(#bw),
+html[data-vibe="boring"] .conn.disconnected:not(#bw) { background: var(--amber); }
 html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .role-tag,
 html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .prov-pill,
 html[data-vibe="boring"] .boring-chat-column:not(.boring-details-open) .drawer-role-line .chip,
@@ -625,19 +764,22 @@ html[data-vibe="boring"] .drawer-head .drawer-role-line { order: 3; width: auto;
 html[data-vibe="boring"] .drawer-head .meter { order: 4; flex: 1 0 100%; }
 html[data-vibe="boring"] .decision-card,
 html[data-vibe="boring"] .decision-card .dc-summary,
-html[data-vibe="boring"] .decision-card .btn { font-size: var(--t-ui); font-weight: 400; line-height: 1.5; }
+html[data-vibe="boring"] .decision-card .btn { line-height: 1.5; }
+html[data-vibe="boring"] .decision-card:not(#bw),
+html[data-vibe="boring"] .decision-card .dc-summary:not(#bw),
+html[data-vibe="boring"] .decision-card .btn:not(#bw) { font-size: var(--t-ui); font-weight: 400; }
 html[data-vibe="boring"] .decision-card { padding: 10px 14px; }
-html[data-vibe="boring"] .decision-card .dc-summary,
-html[data-vibe="boring"] .decision-card .dc-primary { font-weight: 500; }
+html[data-vibe="boring"] .decision-card .dc-summary:not(#bw),
+html[data-vibe="boring"] .decision-card .dc-primary:not(#bw) { font-weight: 500; }
 
 /* ---- B6: Corporate Vibe-OS (pastel airbrushed sunsets, spray-paint wash, light surrealism) ---- */
 /* D1 (UX_REVIEW 1.1): flat canvas. The sunset/radial wash is gone; hue lives in status + accent only. */
 html[data-vibe="boring"] .boring-app,
 html[data-vibe="boring"] .boring-main { background: var(--surface-0); }
 html[data-vibe="boring"] .boring-topbar { border-bottom: 1px solid var(--border); }
-html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill.on,
-html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill.on,
-html[data-vibe="boring"] .boring-lane-card:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-overview-tabs .boring-switch-pill.on:not(#bw),
+html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill.on:not(#bw),
+html[data-vibe="boring"] .boring-lane-card:hover:not(#bw) { background: var(--surface-3); }
 
 /* B6a: dock + feature parity (details-only hiding is limited to debug plumbing, see B2r rules above) */
 html[data-vibe="boring"] .boring-chat-column:has(.right-dock) { max-width: 100%; }
@@ -722,7 +864,11 @@ html[data-vibe="boring"] .boring-row-label { font-size: var(--t-ui); line-height
 html[data-vibe="boring"] .boring-conv-age,
 html[data-vibe="boring"] .boring-conv-code,
 html[data-vibe="boring"] .boring-muted,
-html[data-vibe="boring"] .boring-card-line { font-size: var(--t-caption); line-height: var(--lh-caption); color: var(--text-3); }
+html[data-vibe="boring"] .boring-card-line { line-height: var(--lh-caption); color: var(--text-3); }
+html[data-vibe="boring"] .boring-conv-age:not(#bw),
+html[data-vibe="boring"] .boring-conv-code:not(#bw),
+html[data-vibe="boring"] .boring-muted:not(#bw),
+html[data-vibe="boring"] .boring-card-line:not(#bw) { font-size: var(--t-caption); }
 html[data-vibe="boring"] .boring-section-label { font-size: var(--t-small); line-height: var(--lh-small); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-3); padding: 8px 12px 4px; }
 html[data-vibe="boring"] .boring-topbar-title { font-size: var(--t-title); line-height: var(--lh-title); font-weight: 600; }
 html[data-vibe="boring"] .boring-card-head .boring-row-label { font-size: var(--t-title); line-height: var(--lh-title); font-weight: 600; }
@@ -735,13 +881,18 @@ html[data-vibe="boring"] .composer input:not([type="file"]) { font-size: var(--t
 html[data-vibe="boring"] .tl-tool,
 html[data-vibe="boring"] .drawer-head,
 html[data-vibe="boring"] .decision-card,
-html[data-vibe="boring"] .decision-card .btn { font-size: var(--t-ui); line-height: var(--lh-ui); }
+html[data-vibe="boring"] .decision-card .btn { line-height: var(--lh-ui); }
+html[data-vibe="boring"] .tl-tool:not(#bw),
+html[data-vibe="boring"] .drawer-head:not(#bw),
+html[data-vibe="boring"] .decision-card:not(#bw),
+html[data-vibe="boring"] .decision-card .btn:not(#bw) { font-size: var(--t-ui); }
 html[data-vibe="boring"] .timeline pre,
 html[data-vibe="boring"] .timeline code,
 html[data-vibe="boring"] .perm-preview-cmd,
 html[data-vibe="boring"] .perm-preview-diff { font-family: var(--mono); font-size: var(--t-mono); line-height: var(--lh-mono); }
 html[data-vibe="boring"] .drawer-head .drawer-title { font-size: var(--t-title); line-height: var(--lh-title); }
-html[data-vibe="boring"] .boring-badge { font-size: var(--t-caption); line-height: 16px; color: var(--on-accent); background: var(--st-attn); }
+html[data-vibe="boring"] .boring-badge { line-height: 16px; color: var(--on-accent); background: var(--st-attn); }
+html[data-vibe="boring"] .boring-badge:not(#bw) { font-size: var(--t-caption); }
 html[data-vibe="boring"] .boring-kbd { text-transform: none; letter-spacing: 0; font: 500 var(--t-caption)/var(--lh-caption) var(--sans); color: var(--text-3); padding: 0 4px; border: 1px solid var(--border-strong); margin-left: 6px; }
 
 /* 1.3 / 1.9 measure + density. Column 880 centred; prose 760; composer on the same column. */
@@ -777,52 +928,67 @@ html[data-vibe="boring"] .boring-project-row.on { background: transparent; }
 html[data-vibe="boring"] .boring-project-row.on .boring-project-name { font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-sidebar .boring-footer-btn { color: var(--text-2); }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { min-height: 28px; padding: 2px 10px; font-size: var(--t-small); }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]) { background: var(--surface-2); color: var(--text-2); }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]):hover { background: var(--surface-3); }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]).on { background: var(--surface-3); color: var(--text-1); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]):not(#bw) { background: var(--surface-2); color: var(--text-2); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]):hover:not(#bw) { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]).on:not(#bw) { background: var(--surface-3); color: var(--text-1); }
 
 /* Surfaces: flat tone steps. Your message = surface-2 + 2px accent rule; agent text sits on the canvas. */
 html[data-vibe="boring"] .tl-user,
-html[data-vibe="boring"] .timeline .tl-user { background: var(--surface-2); border-left: 2px solid var(--accent); border-radius: 8px; padding: 12px 16px; }
+html[data-vibe="boring"] .timeline .tl-user { border-radius: 8px; padding: 12px 16px; }
+html[data-vibe="boring"] .tl-user:not(#bw),
+html[data-vibe="boring"] .timeline .tl-user:not(#bw) { background: var(--surface-2); border-left: 2px solid var(--accent); }
 html[data-vibe="boring"] .tl-assistant,
-html[data-vibe="boring"] .timeline .tl-assistant { background: transparent; padding: 4px 0; border-radius: 0; }
+html[data-vibe="boring"] .timeline .tl-assistant { padding: 4px 0; border-radius: 0; }
+html[data-vibe="boring"] .tl-assistant:not(#bw),
+html[data-vibe="boring"] .timeline .tl-assistant:not(#bw) { background: transparent; }
 html[data-vibe="boring"] .tl-tool,
 html[data-vibe="boring"] .timeline .tl-tool,
 html[data-vibe="boring"] .tl-sub,
 html[data-vibe="boring"] .tl-todo,
-html[data-vibe="boring"] .tl-note { background: var(--surface-1); border-radius: 8px; }
+html[data-vibe="boring"] .tl-note { border-radius: 8px; }
+html[data-vibe="boring"] .tl-tool:not(#bw),
+html[data-vibe="boring"] .timeline .tl-tool:not(#bw),
+html[data-vibe="boring"] .tl-sub:not(#bw),
+html[data-vibe="boring"] .tl-todo:not(#bw),
+html[data-vibe="boring"] .tl-note:not(#bw) { background: var(--surface-1); }
 html[data-vibe="boring"] .boring-lane-card,
 html[data-vibe="boring"] .boring-empty-card { background: var(--surface-1); border-radius: 8px; }
-html[data-vibe="boring"] .boring-lane-card:hover { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-lane-card:hover:not(#bw) { background: var(--surface-3); }
 html[data-vibe="boring"] .composer-row,
 html[data-vibe="boring"] .composer textarea { background: var(--surface-sunken); border-radius: 8px; }
 html[data-vibe="boring"] .right-dock { background: var(--surface-1); }
 
 /* 1.5 state glyphs: run (teal) / attn (amber) / err / stalled / idle / done. Accent is never status. */
-html[data-vibe="boring"] .boring-dot.st-run,
-html[data-vibe="boring"] .boring-dot.st-run.running { background: var(--st-run); }
-html[data-vibe="boring"] .boring-dot.st-attn { background: var(--st-attn); }
-html[data-vibe="boring"] .boring-dot.st-err { background: var(--st-err); }
-html[data-vibe="boring"] .boring-dot.st-done { background: var(--st-done); width: 6px; height: 6px; }
-html[data-vibe="boring"] .boring-dot.st-idle { background: transparent; box-shadow: inset 0 0 0 1.5px var(--text-3); }
-html[data-vibe="boring"] .boring-dot.st-stalled { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-attn); }
-html[data-vibe="boring"] .boring-dot.st-run { animation: boring-run-pulse 2s ease-in-out infinite; }
+html[data-vibe="boring"] .boring-dot.st-run:not(#bw),
+html[data-vibe="boring"] .boring-dot.st-run.running:not(#bw) { background: var(--st-run); }
+html[data-vibe="boring"] .boring-dot.st-attn:not(#bw) { background: var(--st-attn); }
+html[data-vibe="boring"] .boring-dot.st-err:not(#bw) { background: var(--st-err); }
+html[data-vibe="boring"] .boring-dot.st-done:not(#bw) { background: var(--st-done); width: 6px; height: 6px; }
+html[data-vibe="boring"] .boring-dot.st-idle { box-shadow: inset 0 0 0 1.5px var(--text-3); }
+html[data-vibe="boring"] .boring-dot.st-idle:not(#bw) { background: transparent; }
+html[data-vibe="boring"] .boring-dot.st-stalled { box-shadow: inset 0 0 0 1.5px var(--st-attn); }
+html[data-vibe="boring"] .boring-dot.st-stalled:not(#bw) { background: transparent; }
+html[data-vibe="boring"] .boring-dot.st-run:not(#bw) { animation: boring-run-pulse 2s ease-in-out infinite; }
 @keyframes boring-run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
-@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-dot.st-run { animation: none; } }
-html[data-vibe="boring"] .signal.running, html[data-vibe="boring"] .conn.connected { background: var(--st-run); }
-html[data-vibe="boring"] .signal.error, html[data-vibe="boring"] .signal.attn-error { background: var(--st-err); }
-html[data-vibe="boring"] .signal.attn-permission, html[data-vibe="boring"] .signal.attn-needs-you, html[data-vibe="boring"] .conn.disconnected { background: var(--st-attn); }
+@media (prefers-reduced-motion: reduce) { html[data-vibe="boring"] .boring-dot.st-run:not(#bw) { animation: none; } }
+html[data-vibe="boring"] .signal.running:not(#bw), html[data-vibe="boring"] .conn.connected:not(#bw) { background: var(--st-run); }
+html[data-vibe="boring"] .signal.error:not(#bw), html[data-vibe="boring"] .signal.attn-error:not(#bw) { background: var(--st-err); }
+html[data-vibe="boring"] .signal.attn-permission:not(#bw), html[data-vibe="boring"] .signal.attn-needs-you:not(#bw), html[data-vibe="boring"] .conn.disconnected:not(#bw) { background: var(--st-attn); }
 
 /* 1.7 permission card: [Allow] accent, [Allow for session] secondary, [Deny…] secondary danger + full-width reason. */
-html[data-vibe="boring"] .perm-card { margin: 12px auto 0; width: calc(100% - 48px); max-width: var(--measure-col); box-sizing: border-box; padding: 12px 16px; background: var(--st-attn-bg); border: 1px solid var(--st-attn); border-radius: 8px; box-shadow: none; outline: 0; font-size: var(--t-ui); line-height: var(--lh-ui); color: var(--text-1); }
+html[data-vibe="boring"] .perm-card { margin: 12px auto 0; width: calc(100% - 48px); max-width: var(--measure-col); box-sizing: border-box; padding: 12px 16px; background: var(--st-attn-bg); border: 1px solid var(--st-attn); border-radius: 8px; outline: 0; font-size: var(--t-ui); line-height: var(--lh-ui); color: var(--text-1); }
+html[data-vibe="boring"] .perm-card:not(#bw) { box-shadow: none; }
 html[data-vibe="boring"] .perm-card b { font-weight: 600; }
 html[data-vibe="boring"] .perm-card .perm-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
-html[data-vibe="boring"] .perm-card .btn { min-height: 32px; padding: 4px 14px; border-radius: 6px; font-size: var(--t-ui); font-weight: 500; border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-1); }
-html[data-vibe="boring"] .perm-card .btn:hover:not(:disabled) { background: var(--surface-3); }
+html[data-vibe="boring"] .perm-card .btn { min-height: 32px; padding: 4px 14px; border-radius: 6px; font-weight: 500; }
+html[data-vibe="boring"] .perm-card .btn:not(#bw) { font-size: var(--t-ui); border: 1px solid var(--border-strong); background: var(--surface-2); color: var(--text-1); }
+html[data-vibe="boring"] .perm-card .btn:hover:not(:disabled):not(#bw) { background: var(--surface-3); }
 html[data-vibe="boring"] .perm-card .btn.perm-allow,
-html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
-html[data-vibe="boring"] .perm-card .btn.perm-deny,
-html[data-vibe="boring"] .perm-card .btn.bad { color: var(--st-err); border-color: var(--st-err); background: transparent; }
+html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on) { font-weight: 600; }
+html[data-vibe="boring"] .perm-card .btn.perm-allow:not(#bw),
+html[data-vibe="boring"] .perm-card .btn.ok:not(.perm-allow-secondary):not(.on):not(#bw) { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+html[data-vibe="boring"] .perm-card .btn.perm-deny:not(#bw),
+html[data-vibe="boring"] .perm-card .btn.bad:not(#bw) { color: var(--st-err); border-color: var(--st-err); background: transparent; }
 html[data-vibe="boring"] .perm-card .btn.perm-deny::after { content: "…"; }
 html[data-vibe="boring"] .perm-card .perm-deny-msg { order: 9; flex: 1 1 100%; width: 100%; min-height: 32px; box-sizing: border-box; padding: 4px 12px; border: 1px solid var(--border-strong); background: var(--surface-sunken); color: var(--text-1); font-size: var(--t-ui); }
 html[data-vibe="boring"] .perm-card .perm-preview-cmd,
@@ -838,19 +1004,25 @@ html[data-vibe="boring"] .usage-crt,
 html[data-vibe="boring"] .usage-limit,
 html[data-vibe="boring"] .usage-collapse,
 html[data-vibe="boring"] .usage-cohort-tile,
-html[data-vibe="boring"] .usage-saving-card { background: var(--surface-1); border-radius: 8px; }
-html[data-vibe="boring"] .usage-inbox-row { background: var(--surface-2); }
-html[data-vibe="boring"] .usage-inbox-btn,
-html[data-vibe="boring"] .usage-inbox-tab,
-html[data-vibe="boring"] .usage-review-select,
-html[data-vibe="boring"] .usage-squad-pill,
-html[data-vibe="boring"] .usage-ready-pill,
-html[data-vibe="boring"] .usage-export { background: var(--surface-2); }
-html[data-vibe="boring"] .usage-review-run,
-html[data-vibe="boring"] .usage-inbox-accept { background: var(--accent); color: var(--on-accent); }
+html[data-vibe="boring"] .usage-saving-card { border-radius: 8px; }
+html[data-vibe="boring"] .usage-crt:not(#bw),
+html[data-vibe="boring"] .usage-limit:not(#bw),
+html[data-vibe="boring"] .usage-collapse:not(#bw),
+html[data-vibe="boring"] .usage-cohort-tile:not(#bw),
+html[data-vibe="boring"] .usage-saving-card:not(#bw) { background: var(--surface-1); }
+html[data-vibe="boring"] .usage-inbox-row:not(#bw) { background: var(--surface-2); }
+html[data-vibe="boring"] .usage-inbox-btn:not(#bw),
+html[data-vibe="boring"] .usage-inbox-tab:not(#bw),
+html[data-vibe="boring"] .usage-review-select:not(#bw),
+html[data-vibe="boring"] .usage-squad-pill:not(#bw),
+html[data-vibe="boring"] .usage-ready-pill:not(#bw),
+html[data-vibe="boring"] .usage-export:not(#bw) { background: var(--surface-2); }
+html[data-vibe="boring"] .usage-review-run:not(#bw),
+html[data-vibe="boring"] .usage-inbox-accept:not(#bw) { background: var(--accent); color: var(--on-accent); }
 
 /* D1: the context strip is a quiet row on the canvas, not a mauve slab (beats the old B5 --panel-hi rule). */
-html[data-vibe="boring"] .brainstorm-ctx-bar { background: transparent; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; }
+html[data-vibe="boring"] .brainstorm-ctx-bar { border-radius: 0; }
+html[data-vibe="boring"] .brainstorm-ctx-bar:not(#bw) { background: transparent; border: 0; border-bottom: 1px solid var(--border); }
 
 /* ===== D1 fix round: single-primary buttons, column alignment, sidebar weights, glyph cleanup ===== */
 /* .normal-only elements carry inline display:none so Psycho never needs an unscoped rule here */
@@ -861,10 +1033,12 @@ html[data-vibe="boring"] .emoji-glyph { display: none; }
 html[data-vibe="boring"] .drawer-head [data-testid="mark-read"],
 html[data-vibe="boring"] .drawer-head .btn-brainstorm-restart,
 html[data-vibe="boring"] .drawer-head .btn.ok,
-html[data-vibe="boring"] .drawer-head .btn.on {
-  background: var(--surface-2); background-image: none; color: var(--text-1);
-  border: 1px solid var(--border-strong); font-weight: 500;
+html[data-vibe="boring"] .drawer-head .btn.on { font-weight: 500;
 }
+html[data-vibe="boring"] .drawer-head [data-testid="mark-read"]:not(#bw),
+html[data-vibe="boring"] .drawer-head .btn-brainstorm-restart:not(#bw),
+html[data-vibe="boring"] .drawer-head .btn.ok:not(#bw),
+html[data-vibe="boring"] .drawer-head .btn.on:not(#bw) { background: var(--surface-2); background-image: none; color: var(--text-1); border: 1px solid var(--border-strong); }
 
 /* Plan / Tasks bar and permission card sit on the centred conversation column. */
 html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
@@ -880,15 +1054,16 @@ html[data-vibe="boring"] .boring-core-group,
 html[data-vibe="boring"] .boring-conv-list { gap: 0; }
 html[data-vibe="boring"] .boring-conv-row { padding: 0; }
 html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
-html[data-vibe="boring"][data-theme="light"] .boring-badge { background: #8a5700; color: #ffffff; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge { background: #8a5700; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge:not(#bw) { color: #ffffff; }
 
 /* Light permission card: amber, not beige-pink. */
 html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00; }
 
 /* Context meter: neutral until it is genuinely high. */
-html[data-vibe="boring"] .brainstorm-ctx-fill,
-html[data-vibe="boring"] .brainstorm-ctx-fill.tone-amber { background: var(--border-strong); }
-html[data-vibe="boring"] .brainstorm-ctx-fill.tone-red { background: var(--st-err); }
+html[data-vibe="boring"] .brainstorm-ctx-fill:not(#bw),
+html[data-vibe="boring"] .brainstorm-ctx-fill.tone-amber:not(#bw) { background: var(--border-strong); }
+html[data-vibe="boring"] .brainstorm-ctx-fill.tone-red:not(#bw) { background: var(--st-err); }
 html[data-vibe="boring"] .meter .meter-fill { background: var(--border-strong); background-image: none; }
 html[data-vibe="boring"] .meter.warn .meter-fill { background: var(--st-attn); }
 html[data-vibe="boring"] .meter.alert .meter-fill { background: var(--st-err); }
@@ -970,7 +1145,7 @@ html[data-vibe="boring"] .boring-toolrow .bt-del { color: var(--st-err); }
 html[data-vibe="boring"] .boring-toolrow .bt-status { flex: 0 0 auto; width: 16px; text-align: center; font-weight: 700; color: var(--st-ok); }
 html[data-vibe="boring"] .boring-toolrow[data-state="failed"] .bt-status { color: var(--st-err); }
 html[data-vibe="boring"] .boring-toolrow[data-state="running"] .bt-status { color: var(--st-run); }
-html[data-vibe="boring"] .tl-tool.failed { border-left: 3px solid var(--st-err); }
+html[data-vibe="boring"] .tl-tool.failed:not(#bw) { border-left: 3px solid var(--st-err); }
 html[data-vibe="boring"] .bt-error { margin: 4px 0 0 24px; font-family: var(--mono); font-size: var(--t-small, 12px); color: var(--st-err); }
 html[data-vibe="boring"] .bt-spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--border-strong, var(--border)); border-top-color: var(--st-run); animation: boring-run-pulse 2s ease-in-out infinite; }
 html[data-vibe="boring"] .boring-tool-output { font-family: var(--mono); font-size: var(--t-small, 12px); }
@@ -980,9 +1155,10 @@ html[data-vibe="boring"] .tl-tool-detail { padding: 8px 12px 12px 28px; }
 html[data-vibe="boring"] .tl-tool-detail .tl-detail-label { font-weight: 400; font-size: var(--t-caption, 11px); color: var(--text-3); }
 html[data-vibe="boring"] .tl-exit-badge { display: inline-block; background: var(--st-err-bg); color: var(--st-err); border: 1px solid color-mix(in srgb, var(--st-err) 40%, transparent); padding: 0 6px; font: 12px/18px var(--mono); }
 html[data-vibe="boring"] .tl-exit-badge.ok { background: color-mix(in srgb, var(--st-ok) 10%, transparent); color: var(--st-ok); border-color: color-mix(in srgb, var(--st-ok) 40%, transparent); }
-html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) { background: transparent; min-height: 32px; margin-block: 0; padding-top: 0; padding-bottom: 0; border-radius: 6px; }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) { min-height: 32px; margin-block: 0; padding-top: 0; padding-bottom: 0; border-radius: 6px; }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow):not(#bw) { background: transparent; }
 html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow) > .boring-toolrow { min-height: 32px; }
-html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow):hover { background: var(--surface-3, var(--panel-hi)); }
+html[data-vibe="boring"] .tl-tool:has(> .boring-toolrow):hover:not(#bw) { background: var(--surface-3, var(--panel-hi)); }
 /* ===== D2 (@desk, UX_REVIEW S9): dense urgency-sorted lane table. Implemented Normal Mode UX redesign — Thanks to Antigravity by Google DeepMind. ===== */
 html[data-vibe="boring"] .boring-lane-table { width: 100%; border-collapse: collapse; font-size: var(--t-ui, 13px); color: var(--text-2); }
 html[data-vibe="boring"] .boring-lane-table th { text-align: left; padding: 6px 12px; font-size: var(--t-small, 12px); font-weight: 600; color: var(--text-3); text-transform: none; letter-spacing: 0; border-bottom: 1px solid var(--border-strong); position: sticky; top: 0; background: var(--bg, var(--panel)); }
@@ -1014,7 +1190,7 @@ html[data-vibe="boring"] .boring-agent-name { font-size: 15px; font-weight: 600;
 html[data-vibe="boring"] .boring-agent-role { font-size: var(--t-ui); color: var(--text-3); white-space: nowrap; }
 html[data-vibe="boring"] .boring-agent-spacer { flex: 1 1 0; }
 html[data-vibe="boring"] .boring-hdr-btn { background: transparent; background-image: none; border: 1px solid var(--border); color: var(--text-1); border-radius: 6px; min-height: 28px; padding: 0 10px; font-size: var(--t-ui); font-weight: 500; box-shadow: none; text-shadow: none; cursor: pointer; }
-html[data-vibe="boring"] .boring-hdr-btn:hover:not(:disabled), html[data-vibe="boring"] .boring-hdr-btn.on { background: var(--surface-3); }
+html[data-vibe="boring"] .boring-hdr-btn:hover:not(:disabled):not(#bw), html[data-vibe="boring"] .boring-hdr-btn.on:not(#bw) { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-hdr-more { font-size: 18px; line-height: 1; padding: 0 10px; }
 html[data-vibe="boring"] .boring-ctx-meter { display: inline-flex; align-items: center; gap: 6px; font-size: var(--t-ui); color: var(--st-attn); }
 html[data-vibe="boring"] .boring-ctx-meter-pct { font-variant-numeric: tabular-nums; }
@@ -1038,7 +1214,8 @@ html[data-vibe="boring"] .boring-needs-you-wrap .you-flag, html[data-vibe="borin
 html[data-vibe="boring"] .boring-agent-panel { padding: 8px 14px; background: var(--surface-1); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 html[data-vibe="boring"] .boring-agent-panel-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 html[data-vibe="boring"] .boring-agent-panel textarea { width: 100%; background: var(--surface-sunken); color: var(--text-1); border: 1px solid var(--border); padding: 6px 8px; font: inherit; }
-html[data-vibe="boring"] .boring-agent-menu-archive .btn { background: transparent; background-image: none; border: 1px solid var(--border); color: var(--st-err); border-radius: 6px; width: 100%; text-align: left; }
+html[data-vibe="boring"] .boring-agent-menu-archive .btn { border-radius: 6px; width: 100%; text-align: left; }
+html[data-vibe="boring"] .boring-agent-menu-archive .btn:not(#bw) { background: transparent; background-image: none; border: 1px solid var(--border); color: var(--st-err); }
 
 /* D3a fix round: restored config/session controls inside the ⋯ menu + bars under the header */
 html[data-vibe="boring"] .boring-agent-menu { max-height: min(78vh, 720px); overflow-y: auto; min-width: 280px; }
@@ -1226,7 +1403,8 @@ html[data-vibe="boring"] .boring-chat-column:has(.boring-chat-split) { max-width
 html[data-vibe="boring"] .boring-chat-split { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1px; background: var(--border); }
 html[data-vibe="boring"] .boring-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-card); border-top: 2px solid transparent; }
 html[data-vibe="boring"] .boring-pane-active { border-top-color: var(--accent); }
-html[data-vibe="boring"] .boring-pane > .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border: 0; background: var(--bg-card); box-shadow: none; }
+html[data-vibe="boring"] .boring-pane > .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border: 0; background: var(--bg-card); }
+html[data-vibe="boring"] .boring-pane > .drawer:not(#bw) { box-shadow: none; }
 /* The context panel is not mounted inside a pane (AgentDrawer noContextPanel), so none of the :has(.boring-context-panel) composer rules can match here. */
 html[data-vibe="boring"] .boring-pane:not(.boring-pane-active) .boring-agent-name { color: var(--text-dim); }
 html[data-vibe="boring"] .boring-pane-active .boring-agent-header { background: color-mix(in srgb, var(--accent) 8%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--accent); }

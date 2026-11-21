@@ -496,7 +496,7 @@ test("B5a/B5d: native palette inherited, borderless tone-stepped surfaces, sleek
   assert.match(ade, /Idea Inbox \(\$\{inboxCount\}\)/);
   assert.match(css, /\.boring-footer-btn\.on,\s*html\[data-vibe="boring"\] \.boring-core-row\.on,\s*html\[data-vibe="boring"\] \.boring-conv-row\.on \{[^}]*inset 3px 0 0 var\(--cyan\)/);
   assert.match(css, /\.decision-card \{ border: 0; border-radius: 14px; background: var\(--panel\)/);
-  assert.match(css, /\.usage-collapse,\s*html\[data-vibe="boring"\] \.usage-inbox-row \{ background: var\(--panel\)/);
+  assert.match(css, /\.usage-collapse:not\(#bw\),\s*html\[data-vibe="boring"\] \.usage-inbox-row:not\(#bw\) \{ background: var\(--panel\)/);
   assert.match(css, /\.usage-collapse-head \{ font-size: 13px; text-transform: none/);
 });
 
@@ -545,7 +545,7 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(css, /--accent: var\(--cyan\)/);
   assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replace("@media (prefers-reduced-motion: reduce)", ""), /@media/);
   assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
-  assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none/);
+  assert.match(css, /\.role-tag[\s\S]*\.btn\.warn(?::not\(#bw\))? \{ border-image: none/);
   assert.match(css, /\.drawer-head \.drawer-title \{ font-size: var\(--t-title\) !important/);
   assert.match(css, /\.composer-row > \.btn:not\(\.ghost\):not\(\.warn\)/);
   assert.doesNotMatch(css, /not\(\.boring-details-open\) \.(drawer-actions|brainstorm-ctx-actions)/);

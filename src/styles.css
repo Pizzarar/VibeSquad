@@ -5911,7 +5911,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 :is(.sidebar, .agent-panes:not(:has(.sky-zones)), .sky-crt-body, .pin-focus-bar) :is(.badge.alert, .team-head .badge) { background: var(--pink-fill); border-color: var(--shadow-hard); color: var(--u4-on-fill) !important; font-weight: 700; }
 
 /* provider pills/badges: the inline neon provider colours (#00f0ff Gemini, #e2e8f0 Codex) on --well are ~1.4:1 in light, so drop them for the P0 raised surface */
-:root[data-theme="light"] :is(.prov-pill, .prov-badge) { background: var(--panel-hi); color: var(--text) !important; border-color: var(--u4-edge) !important; }
+:root[data-theme="light"] :is(.prov-pill, .prov-badge):not(:where(html[data-vibe="boring"] .drawer-head *)) { background: var(--panel-hi); color: var(--text) !important; border-color: var(--u4-edge) !important; }
 
 /* ---- sidebar rows ---- */
 .sidebar :is(.team-head, .sidebar-riffbot) { border: 1px solid transparent; border-image: none; background: transparent; box-shadow: none; image-rendering: auto; }
