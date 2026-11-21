@@ -66,7 +66,10 @@ html[data-vibe="boring"] .toolbar,
 html[data-vibe="boring"] .pin-rail { background-color: var(--bg-elev); }
 html[data-vibe="boring"] .btn { background-color: var(--bg-elev); color: var(--text); font-family: var(--sans); }
 html[data-vibe="boring"] .btn:hover:not(:disabled) { background-color: var(--bg-hover); }
-html[data-vibe="boring"] .btn.confirm.armed { animation: none; }
+/* Specificity raise (shared, not Psycho-only): styles.css .btn.confirm.armed (0,3,0) paints a bevel box-shadow; Normal armed buttons stay flat. */
+html[data-vibe="boring"] .btn.confirm.armed { animation: none; box-shadow: none; }
+/* Specificity raise (shared): styles.css .btn:hover:not(:disabled) (0,3,0) swaps in the Hypnospace sprite border-image; Normal keeps border-image: none on hover/active. */
+html[data-vibe="boring"] .btn:hover:not(:disabled), html[data-vibe="boring"] .btn:active:not(:disabled) { border-image: none; }
 html[data-vibe="boring"] .badge,
 html[data-vibe="boring"] .pill,
 html[data-vibe="boring"] .chip { background-color: var(--bg-hover); color: var(--text-dim); font-family: var(--sans); }
@@ -361,6 +364,7 @@ html[data-vibe="boring"] .drawer-head .prov-badge { border: 1px solid var(--bord
 html[data-vibe="boring"] .btn.ok { background: var(--accent); background-image: none; border: 1px solid var(--accent); border-image: none; color: #ffffff; border-radius: 6px; box-shadow: none; text-shadow: none; }
 html[data-vibe="boring"] .brainstorm-ctx-bar { padding: 8px 12px; margin: 6px 0 0; background: var(--bg-elev); background-image: none; border: 1px solid var(--border); border-image: none; border-radius: 6px; box-shadow: none; }
 html[data-vibe="boring"] .brainstorm-ctx-readout { font-family: var(--sans); font-size: var(--t-small); color: var(--text-muted); }
+/* U3 survivor: DrawerHeader (still rendered in Normal via PhoneCockpit chatOnly) sets style={{ fontSize: 15 }} inline on .drawer-title; only !important beats an inline style. */
 html[data-vibe="boring"] .drawer-head .drawer-title { font-size: var(--t-title) !important; font-weight: 600; }
 html[data-vibe="boring"] .drawer-head .drawer-meta-line { font-size: var(--t-ui); gap: 8px; }
 html[data-vibe="boring"] .drawer-head .drawer-role-line { gap: 8px; align-items: center; }
@@ -722,7 +726,7 @@ html[data-vibe="boring"] .boring-row-label { font-size: var(--t-ui); line-height
 html[data-vibe="boring"] .boring-conv-age,
 html[data-vibe="boring"] .boring-conv-code,
 html[data-vibe="boring"] .boring-muted,
-html[data-vibe="boring"] .boring-card-line { font-size: var(--t-caption); line-height: var(--lh-caption); color: var(--text-3); }
+html[data-vibe="boring"] .boring-card-line { line-height: var(--lh-caption); color: var(--text-3); }
 html[data-vibe="boring"] .boring-section-label { font-size: var(--t-small); line-height: var(--lh-small); font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-3); padding: 8px 12px 4px; }
 html[data-vibe="boring"] .boring-topbar-title { font-size: var(--t-title); line-height: var(--lh-title); font-weight: 600; }
 html[data-vibe="boring"] .boring-card-head .boring-row-label { font-size: var(--t-title); line-height: var(--lh-title); font-weight: 600; }
@@ -741,7 +745,7 @@ html[data-vibe="boring"] .timeline code,
 html[data-vibe="boring"] .perm-preview-cmd,
 html[data-vibe="boring"] .perm-preview-diff { font-family: var(--mono); font-size: var(--t-mono); line-height: var(--lh-mono); }
 html[data-vibe="boring"] .drawer-head .drawer-title { font-size: var(--t-title); line-height: var(--lh-title); }
-html[data-vibe="boring"] .boring-badge { font-size: var(--t-caption); line-height: 16px; color: var(--on-accent); background: var(--st-attn); }
+html[data-vibe="boring"] .boring-badge { line-height: 16px; color: var(--on-accent); background: var(--st-attn); }
 html[data-vibe="boring"] .boring-kbd { text-transform: none; letter-spacing: 0; font: 500 var(--t-caption)/var(--lh-caption) var(--sans); color: var(--text-3); padding: 0 4px; border: 1px solid var(--border-strong); margin-left: 6px; }
 
 /* 1.3 / 1.9 measure + density. Column 880 centred; prose 760; composer on the same column. */
@@ -794,8 +798,9 @@ html[data-vibe="boring"] .tl-note { background: var(--surface-1); border-radius:
 html[data-vibe="boring"] .boring-lane-card,
 html[data-vibe="boring"] .boring-empty-card { background: var(--surface-1); border-radius: 8px; }
 html[data-vibe="boring"] .boring-lane-card:hover { background: var(--surface-3); }
-html[data-vibe="boring"] .composer-row,
-html[data-vibe="boring"] .composer textarea { background: var(--surface-sunken); border-radius: 8px; }
+html[data-vibe="boring"] .composer-row { background: var(--surface-sunken); border-radius: 8px; }
+/* no background here: the composer textarea stays transparent inside the pill (earlier .composer textarea rule) */
+html[data-vibe="boring"] .composer textarea { border-radius: 8px; }
 html[data-vibe="boring"] .right-dock { background: var(--surface-1); }
 
 /* 1.5 state glyphs: run (teal) / attn (amber) / err / stalled / idle / done. Accent is never status. */
