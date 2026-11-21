@@ -687,6 +687,51 @@ test("restart item: restart-<ts>.json ok:true = done, ok:false = stall, none aft
   }
 });
 
+// idea-398 fix round (Hub13): the 11-20 02:54 silent old-code restart. A restart fired by a request whose sync was
+// skipped pings with the runtime NOT updated note; a request fired long before, or one that synced, adds nothing.
+test("restart item: a restart fired after a skipped sync pings 'runtime NOT updated: still <sha>, N behind <tip>, reason <why>'", async () => {
+  const sb = sandbox();
+  try {
+    const note = "runtime NOT updated: still 1111111, 3 behind abc1234def, reason skipped: working tree not clean (server/a.mjs)";
+    writeFileSync(join(sb.home, "restart-request.json"), JSON.stringify({
+      current: { id: "rr-new", tip: "abc1234def", state: "firing", firedAt: iso(T0 + MIN), sync: { ok: false, at: iso(T0 + MIN), reason: "skipped: x", note } },
+      history: [
+        { id: "rr-old", tip: "0000000aaa", state: "done", firedAt: iso(T0 - 5 * 60 * MIN), sync: { ok: false, note: "runtime NOT updated: still OLDOLD" } },
+        { id: "rr-ok", tip: "2222222bbb", state: "done", firedAt: iso(T0 - 30 * MIN), sync: { ok: true, commit: "2222222bbb" } },
+      ],
+    }));
+    addWatch({ owner: "lead-1", items: [{ kind: "restart" }] }, { home: sb.home, now: T0 });
+    const { engine, delivered, clock } = engineFor(sb);
+    writeFileSync(join(sb.home, "restart-2026-11-10T12-02-00-000Z.json"), JSON.stringify({ startedAt: iso(T0 + 2 * MIN), finishedAt: iso(T0 + 3 * MIN), ok: true, cutAgents: ["rn-1"], resumedAgents: ["rn-1"] }));
+    clock.t = T0 + 4 * MIN;
+    await engine.tick();
+    assert.equal(delivered.length, 1);
+    assert.match(delivered[0].text, /restart: done — restart ok: cut 1, resumed 1/);
+    assert.ok(delivered[0].text.includes(note), delivered[0].text);
+    assert.ok(!delivered[0].text.includes("OLDOLD"), "a request fired hours before is not this restart's");
+
+    const sb2 = sandbox();
+    try {
+      // A later request that synced supersedes an earlier skipped one: this restart runs the synced runtime.
+      writeFileSync(join(sb2.home, "restart-request.json"), JSON.stringify({
+        current: { id: "rr-ok", tip: "x", state: "done", firedAt: iso(T0 + MIN), sync: { ok: true } },
+        history: [{ id: "rr-skip", tip: "y", state: "done", firedAt: iso(T0 - 10 * MIN), sync: { ok: false, note: "runtime NOT updated: still SKIPPED" } }],
+      }));
+      addWatch({ owner: "lead-1", items: [{ kind: "restart" }] }, { home: sb2.home, now: T0 });
+      const e2 = engineFor(sb2);
+      writeFileSync(join(sb2.home, "restart-2026-11-10T12-02-00-000Z.json"), JSON.stringify({ startedAt: iso(T0 + 2 * MIN), finishedAt: iso(T0 + 3 * MIN), ok: true, cutAgents: [] }));
+      e2.clock.t = T0 + 4 * MIN;
+      await e2.engine.tick();
+      assert.equal(e2.delivered.length, 1);
+      assert.ok(!e2.delivered[0].text.includes("NOT updated"), e2.delivered[0].text);
+    } finally {
+      sb2.cleanup();
+    }
+  } finally {
+    sb.cleanup();
+  }
+});
+
 test("a cancelled set never fires and drops its unsent pings", async () => {
   const sb = sandbox();
   try {
