@@ -3020,7 +3020,7 @@ function commandWorktree(flags) {
   if (sub === "retention") {
     // R1 (PLAN_DISK_LIFECYCLE_1121): unmerged worktrees whose owner is archived or lost and untouched for --days (7).
     // Dry run by default (report only). --apply archives WIP to refs/vs-archive/<unit> (branch kept) and removes the tree;
-    // the first real apply needs Aub's OK. The roster includes archived agents; unreadable roster = nothing archived.
+    // the first real apply needs the owner's OK. The roster includes archived agents; unreadable roster = nothing archived.
     const days = flags.days === undefined ? RETENTION_DAYS : Number(flags.days);
     if (!Number.isFinite(days) || days < 1) throw new Error("--days must be a number >= 1");
     let agents = [];
