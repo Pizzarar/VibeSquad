@@ -6536,3 +6536,18 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .perm-error { color: var(--pink-t); padding: 4px 0; font-size: 12px; }
 .perm-error-dismiss { margin-left: 8px; }
 .perm-plan-actions-row { display: flex; gap: 6px; flex-basis: 100%; flex-wrap: wrap; }
+
+/* ── idea-255 3.1: FilePreview inline style={{}} → token classes (src/FilePreview.tsx) ── */
+.fpv-image { display: flex; flex-direction: column; gap: 8px; height: 100%; min-height: 0; }
+.fpv-toolbar { align-items: center; flex-wrap: wrap; }
+.fpv-stage { flex: 1; min-height: 180px; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 12px; border-radius: 6px; border: 1px solid var(--line); background: repeating-conic-gradient(#1a2030 0% 25%, #121722 0% 50%) 50% / 16px 16px; }
+.fpv-html { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 320px; }
+.fpv-row { justify-content: space-between; }
+.fpv-html-frame { width: 100%; flex: 1; min-height: 300px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; }
+.fpv-pdf { display: flex; flex-direction: column; gap: 6px; height: 100%; min-height: 360px; }
+.fpv-name { font-family: var(--mono); }
+.fpv-pdf-frame { width: 100%; flex: 1; min-height: 340px; border: 1px solid var(--line); border-radius: 6px; }
+.fpv-media-card { display: flex; flex-direction: column; gap: 10px; padding: 12px; }
+.fpv-media { width: 100%; }
+.fpv-video { width: 100%; max-height: 65vh; border-radius: 4px; background: #000; }
+.fpv-binary-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; }

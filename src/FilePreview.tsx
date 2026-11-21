@@ -539,9 +539,9 @@ export function FilePreview({
     return (
       <div
         data-testid="file-preview-image"
-        style={{ display: "flex", flexDirection: "column", gap: 8, height: "100%", minHeight: 0 }}
+        className="fpv-image"
       >
-        <div className="files-toolbar" style={{ alignItems: "center", flexWrap: "wrap" }}>
+        <div className="files-toolbar fpv-toolbar">
           <button
             type="button"
             className={`btn ghost small${zoom === "fit" ? " active" : ""}`}
@@ -582,21 +582,7 @@ export function FilePreview({
             {typeof zoom === "number" ? ` · ${zoom}%` : ""}
           </span>
         </div>
-        <div
-          style={{
-            flex: 1,
-            minHeight: 180,
-            overflow: "auto",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 12,
-            borderRadius: 6,
-            border: "1px solid var(--line)",
-            background:
-              "repeating-conic-gradient(#1a2030 0% 25%, #121722 0% 50%) 50% / 16px 16px",
-          }}
-        >
+        <div className="fpv-stage">
           {dataUrl ? (
             <img
               src={dataUrl}
@@ -634,25 +620,18 @@ export function FilePreview({
     const rawHtml = text ?? decodeBytesToText(bytes);
     const content = sanitizeHtmlPreview(rawHtml);
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, height: "100%", minHeight: 320 }}>
-        <div className="row" style={{ justifyContent: "space-between" }}>
+      <div className="fpv-html">
+        <div className="row fpv-row">
           <span className="muted small">Sandboxed HTML preview (scripts disabled)</span>
           <span className="pill small">{sizeBadge}</span>
         </div>
         <iframe
           data-testid="file-preview-html"
+          className="fpv-html-frame"
           sandbox=""
           srcDoc={content}
           title={fileName}
           referrerPolicy="no-referrer"
-          style={{
-            width: "100%",
-            flex: 1,
-            minHeight: 300,
-            border: "1px solid var(--line)",
-            borderRadius: 6,
-            background: "#ffffff",
-          }}
         />
       </div>
     );
@@ -661,22 +640,16 @@ export function FilePreview({
   if (kind === "pdf") {
     const dataUrl = bytes ? bytesToDataUrl(bytes, "application/pdf") : "";
     return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 6, height: "100%", minHeight: 360 }}>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small" style={{ fontFamily: "var(--mono)" }}>{fileName}</span>
+      <div className="fpv-pdf">
+        <div className="row fpv-row">
+          <span className="small fpv-name">{fileName}</span>
           <span className="pill small" data-testid="file-preview-pdf-size">{sizeBadge}</span>
         </div>
         <iframe
           data-testid="file-preview-pdf"
+          className="fpv-pdf-frame"
           src={dataUrl}
           title={fileName}
-          style={{
-            width: "100%",
-            flex: 1,
-            minHeight: 340,
-            border: "1px solid var(--line)",
-            borderRadius: 6,
-          }}
         />
       </div>
     );
@@ -685,12 +658,12 @@ export function FilePreview({
   if (kind === "audio") {
     const dataUrl = bytes ? bytesToDataUrl(bytes, resolvedMime) : "";
     return (
-      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small" style={{ fontFamily: "var(--mono)" }}>{fileName}</span>
+      <div className="card fpv-media-card">
+        <div className="row fpv-row">
+          <span className="small fpv-name">{fileName}</span>
           <span className="pill small">{resolvedMime} · {sizeBadge}</span>
         </div>
-        <audio data-testid="file-preview-audio" controls src={dataUrl} style={{ width: "100%" }} />
+        <audio data-testid="file-preview-audio" controls src={dataUrl} className="fpv-media" />
       </div>
     );
   }
@@ -698,16 +671,16 @@ export function FilePreview({
   if (kind === "video") {
     const dataUrl = bytes ? bytesToDataUrl(bytes, resolvedMime) : "";
     return (
-      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 10, padding: 12 }}>
-        <div className="row" style={{ justifyContent: "space-between" }}>
-          <span className="small" style={{ fontFamily: "var(--mono)" }}>{fileName}</span>
+      <div className="card fpv-media-card">
+        <div className="row fpv-row">
+          <span className="small fpv-name">{fileName}</span>
           <span className="pill small">{resolvedMime} · {sizeBadge}</span>
         </div>
         <video
           data-testid="file-preview-video"
+          className="fpv-video"
           controls
           src={dataUrl}
-          style={{ width: "100%", maxHeight: "65vh", borderRadius: 4, background: "#000" }}
         />
       </div>
     );
@@ -716,12 +689,11 @@ export function FilePreview({
   // Unsupported binary (or fallback)
   return (
     <div
-      className="card"
+      className="card fpv-binary-card"
       data-testid="file-preview-binary"
-      style={{ display: "flex", flexDirection: "column", gap: 6, padding: 12 }}
     >
-      <div className="row" style={{ justifyContent: "space-between" }}>
-        <strong className="small" style={{ fontFamily: "var(--mono)" }}>{fileName}</strong>
+      <div className="row fpv-row">
+        <strong className="small fpv-name">{fileName}</strong>
         <span className="pill small">{resolvedMime} · {sizeBadge}</span>
       </div>
       <div className="muted small">Binary file — preview not available</div>
