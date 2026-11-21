@@ -17,13 +17,13 @@ const PROTECTED_BRANCHES = new Set(["main", "master"]);
 export function defaultGit(args, cwd, { env, input, buffer = false } = {}) {
   const out = execFileSync("git", args, {
     cwd,
-    encoding: buffer ? "buffer" : "utf8",
+    ...(buffer ? {} : { encoding: "utf8" }), // no encoding = Buffer out; "buffer" would also be used to encode a string `input` (ERR_UNKNOWN_ENCODING)
     stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
     ...(input === undefined ? {} : { input }),
     ...(env ? { env: { ...process.env, ...env } } : {}),
     windowsHide: true,
     timeout: buffer || input !== undefined ? 300_000 : 30_000,
-    maxBuffer: buffer ? 2 << 30 : 64 << 20,
+    maxBuffer: buffer ? 2 ** 31 : 64 << 20, // not `2 << 30`: that overflows int32 to a negative (ERR_OUT_OF_RANGE)
   });
   return buffer ? out : out.trim();
 }
@@ -257,6 +257,15 @@ const TREE_SCAN_MAX = 50_000;
 const tryGit = (git, args, cwd) => {
   try {
     return String(git(args, cwd) ?? "");
+  } catch {
+    return null;
+  }
+};
+/** Like tryGit but untrimmed (buffer mode): `status --porcelain` records start with a space (" M", " D") that trim() eats. */
+const tryGitRaw = (git, args, cwd) => {
+  try {
+    const out = git(args, cwd, { buffer: true });
+    return Buffer.isBuffer(out) ? out.toString("utf8") : String(out ?? "");
   } catch {
     return null;
   }
@@ -1199,16 +1208,18 @@ export function planWip(wtPath, { git = defaultGit, links = [] } = {}) {
   const staged = tryGit(git, ["ls-files", "-s", "-z"], base);
   if (staged === null) return fail("unreadable");
   const indexMode = new Map();
+  const indexSha = new Map();
   for (const e of staged.split("\0")) {
     const tab = e.indexOf("\t");
     if (tab < 0) continue;
-    const [mode, , stage] = e.slice(0, tab).split(" ");
+    const [mode, sha, stage] = e.slice(0, tab).split(" ");
     if (mode === "160000") return fail("submodules");
     if (stage !== "0") return fail("unmerged-index");
     indexMode.set(e.slice(tab + 1), mode);
+    indexSha.set(e.slice(tab + 1), sha);
   }
   const untrackedLinks = links.filter((l) => indexMode.get(l.rel) !== "120000");
-  const st = tryGit(git, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none"], base);
+  const st = tryGitRaw(git, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none"], base);
   if (st === null) return fail("unreadable");
   const entries = new Map();
   let untrackedBytes = 0;
@@ -1252,8 +1263,28 @@ export function planWip(wtPath, { git = defaultGit, links = [] } = {}) {
       entries.set(rel, { rel, op: "del" }); // a tracked file replaced by a folder: the folder's files are listed on their own
     } else return fail("special-file");
   }
-  return { ok: true, head, entries: [...entries.values()], dirtyFiles: entries.size, untrackedBytes, untrackedLinks };
+  return { ok: true, head, entries: [...entries.values()], dirtyFiles: entries.size, untrackedBytes, untrackedLinks, indexMode, indexSha };
 }
+
+/**
+ * Clean tracked files whose working bytes are the raw blob (`hash-object --no-filters` == index sha). A fresh checkout runs
+ * the repo's filters (core.autocrlf, eol / ident attributes) and could write them differently (an agent's LF file under
+ * autocrlf=true comes back CRLF), so restore rewrites these raw. Clean files that differ from their blob are already the
+ * filtered checkout form and come back the same way. Returns [{ rel, sha }].
+ */
+function rawIdenticalClean(base, plan, git) {
+  const dirty = new Set(plan.entries.map((e) => e.rel));
+  const clean = [...plan.indexMode]
+    .filter(([rel, mode]) => (mode === "100644" || mode === "100755") && !dirty.has(rel) && !/[\r\n]/.test(rel))
+    .map(([rel]) => rel);
+  if (!clean.length) return [];
+  const raw = String(git(["hash-object", "--no-filters", "--stdin-paths"], base, { input: clean.join("\n") + "\n" }))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  if (raw.length !== clean.length) throw new Error("hash-object count mismatch");
+  return clean.flatMap((rel, i) => (raw[i] === plan.indexSha.get(rel) ? [{ rel, sha: raw[i] }] : []));
+}
+const RAW_MANIFEST = "clean-raw.txt";
 
 /** Build the WIP tree for `plan` in a throwaway index (the worktree's own index is never touched); writes blobs raw. */
 function captureWipTree(wtPath, plan, git) {
@@ -1356,6 +1387,15 @@ export function archiveWorktree(
     indexTree = String(git(["write-tree"], base)).trim();
     wipTree = captureWipTree(base, plan, git);
     const indexCommit = String(git(["commit-tree", indexTree, "-p", plan.head, "-F", "-"], base, { env: ARCHIVE_ENV, input: `vs-archive index ${unit}\n` })).trim();
+    // Optional third parent: the raw-identical clean file list (rawIdenticalClean), in a commit so gc keeps it.
+    const same = rawIdenticalClean(base, plan, git);
+    let rawCommit = null;
+    if (same.length) {
+      const list = same.map((x) => `${x.sha} ${x.rel}`).join("\n") + "\n";
+      const blob = String(git(["hash-object", "-w", "--no-filters", "--stdin"], base, { input: list })).trim();
+      const tree = String(git(["mktree"], base, { input: `100644 blob ${blob}\t${RAW_MANIFEST}\n` })).trim();
+      rawCommit = String(git(["commit-tree", tree, "-F", "-"], base, { env: ARCHIVE_ENV, input: `vs-archive raw ${unit}\n` })).trim();
+    }
     const meta = {
       v: 1,
       unit,
@@ -1364,13 +1404,17 @@ export function archiveWorktree(
       branch,
       head: plan.head,
       index: indexCommit,
+      raw: rawCommit,
       links: recordLinks,
       dirtyFiles: plan.dirtyFiles,
       owner,
       at: new Date(now).toISOString(),
     };
     commit = String(
-      git(["commit-tree", wipTree, "-p", plan.head, "-p", indexCommit, "-F", "-"], base, { env: ARCHIVE_ENV, input: `vs-archive ${unit}\n\n${JSON.stringify(meta)}\n` }),
+      git(["commit-tree", wipTree, "-p", plan.head, "-p", indexCommit, ...(rawCommit ? ["-p", rawCommit] : []), "-F", "-"], base, {
+        env: ARCHIVE_ENV,
+        input: `vs-archive ${unit}\n\n${JSON.stringify(meta)}\n`,
+      }),
     ).trim();
   } catch (e) {
     return keep(`archive-failed: ${gitError(e)}`);
@@ -1634,7 +1678,7 @@ function restoreUnlocked(unit, ref, repo, { root, git, now, fail }) {
   } catch (e) {
     return fail(`archive-unreadable: ${e?.message ?? e}`);
   }
-  if (meta?.v !== 1 || meta.unit !== unit || !meta.branch || !isAbsolute(String(meta.path)) || parents[0] !== meta.head || parents[1] !== meta.index) {
+  if (meta?.v !== 1 || meta.unit !== unit || !meta.branch || !isAbsolute(String(meta.path)) || parents[0] !== meta.head || parents[1] !== meta.index || (parents[2] ?? null) !== (meta.raw ?? null) || parents.length > 3) {
     return fail("archive-metadata-mismatch");
   }
   const dest = resolve(meta.path);
@@ -1658,6 +1702,7 @@ function restoreUnlocked(unit, ref, repo, { root, git, now, fail }) {
   }
   try {
     applyWip(dest, meta.head, commit, git);
+    if (meta.raw) applyRawClean(dest, meta.raw, git);
     git(["read-tree", `${meta.index}^{tree}`], dest);
     tryGit(git, ["update-index", "-q", "--refresh"], dest);
   } catch (e) {
@@ -1711,6 +1756,31 @@ function restoreUnlocked(unit, ref, repo, { root, git, now, fail }) {
   }
   appendLedger(root, { op: "restore", unit, repo, path: dest, branch: meta.branch, commit, at: new Date(now).toISOString() });
   return { ok: true, ...out };
+}
+
+/** Rewrite raw the clean files the archive saw byte-equal to their blob, where the filtered checkout wrote them otherwise. */
+function applyRawClean(dest, rawCommit, git) {
+  const base = resolve(dest);
+  const out = git(["cat-file", "blob", `${rawCommit}:${RAW_MANIFEST}`], base, { buffer: true });
+  const list = (Buffer.isBuffer(out) ? out.toString("utf8") : String(out))
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => ({ sha: l.slice(0, l.indexOf(" ")), rel: l.slice(l.indexOf(" ") + 1) }));
+  if (!list.length) return;
+  const now = String(git(["hash-object", "--no-filters", "--stdin-paths"], base, { input: list.map((x) => x.rel).join("\n") + "\n" }))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  if (now.length !== list.length) throw Object.assign(new Error("hash-object count mismatch"), { code: "EHASH" });
+  const fix = list.filter((x, i) => now[i] !== x.sha);
+  if (!fix.length) return;
+  const blobs = readBlobs(base, [...new Set(fix.map((x) => x.sha))], git);
+  for (const x of fix) {
+    const abs = resolve(base, x.rel);
+    if (!lexPath(abs).startsWith(lexPath(base) + "/")) throw Object.assign(new Error("outside tree"), { code: "EOUTSIDE" });
+    if (!isInside(dirname(abs), base)) throw Object.assign(new Error("path through link"), { code: "ELINK" });
+    if (!lstatSync(abs).isFile()) throw Object.assign(new Error("not a plain file"), { code: "ENOTFILE" });
+    writeFileSync(abs, blobs.get(x.sha)); // an overwrite keeps the checkout's mode bits
+  }
 }
 
 /** Write the archived WIP (diff HEAD -> WIP commit) into a fresh checkout of HEAD: deletions first, then raw blobs. */

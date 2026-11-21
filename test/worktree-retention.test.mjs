@@ -118,6 +118,11 @@ test("dry run: a stale unmerged tree with an archived owner is listed with sizes
     assert.deepEqual(c.ownerAgents, ["a1"]);
     assert.ok(c.lastTouchAgeDays >= 29, `age ${c.lastTouchAgeDays}`);
     assert.equal(c.dirtyFiles, 2);
+    // The first porcelain record starts with a space (" M"): a trimmed read would plan "rc/keep.txt" as a deletion.
+    assert.deepEqual(
+      planWip(wt).entries.map((e) => `${e.op} ${e.rel}`).sort(),
+      ["file notes/todo.md", "file src/keep.txt"],
+    );
     assert.ok(c.buildBytes >= 200_000 && c.bytes > c.buildBytes, `bytes ${c.bytes} build ${c.buildBytes}`);
     assert.equal(c.ignoredLost, 1); // debug.log: deleted by an apply, reported so a human sees it
     assert.equal(res.summary.candidates, 1);
@@ -212,7 +217,12 @@ test("WIP round trip: archive keeps the branch, removes the tree; restore brings
     writeFile(wt, "debug.log", "ignored\n");
     const branchTip = git(["rev-parse", "refs/heads/unit-wip"], repo);
     const before = snapshot(wt, ["dist", "src-tauri/target", "debug.log"]);
-    const statusBefore = git(["status", "--porcelain", "--untracked-files=all"], wt);
+    // Untracked build output (dist/) is sized, not archived: it is the one status line restore does not bring back.
+    const statusBefore = git(["status", "--porcelain", "--untracked-files=all"], wt)
+      .split("\n")
+      .filter((l) => l !== "?? dist/bundle.js")
+      .join("\n");
+    assert.ok(statusBefore.startsWith("D src/gone.txt\n M src/keep.txt\nMM src/staged.txt"), statusBefore); // dirty tracked are in it
     const indexBefore = git(["write-tree"], wt);
 
     const res = retentionSweep({ root: sanctuary, agents: [archivedAgent("a1", wt)], apply: true, refreshAgents: () => [archivedAgent("a1", wt)], ...OPTS });
