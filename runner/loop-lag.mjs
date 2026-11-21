@@ -120,11 +120,14 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
   };
   function prune(t) { while (events.length && events[0][0] < t - LAG_WINDOW_MS) events.shift(); }
   function tick() {
+    // Bump the heartbeat before any drift/cpu work: it is the watchdog's "main thread is alive" signal, and a capture can land
+    // anywhere in this tick. Bumping it only after now()/cpuUsage() left a window where a capture that landed in tick() after the
+    // block had already ended read the stale heartbeat (not "late") and carried tick()'s frames instead of the blocker's (idea-513).
+    if (hb) { Atomics.store(hb, 1, inspectorUrl() ? 1 : 0); Atomics.add(hb, 0, 1); } // [1]: inspector open -> watchdog stands down
     const t = now();
     const drift = t - last - LAG_TICK_MS;
     last = t;
     const cpu = cpuUsage();
-    if (hb) { Atomics.store(hb, 1, inspectorUrl() ? 1 : 0); Atomics.add(hb, 0, 1); } // [1]: inspector open -> watchdog stands down
     if (drift > LAG_THRESHOLD_MS) {
       lagMaxMs = Math.max(lagMaxMs, drift);
       events.push([t, drift]);
@@ -199,6 +202,7 @@ export function createLoopLagMonitor({ watchdog = false, proc, file = lagLogPath
     stop() { for (const x of timers) clearInterval(x); timers = []; obs?.disconnect(); obs = null; worker?.terminate(); worker = null; hb = null; },
     onGc,
     captures: () => attribs.slice(), // watchdog captures received so far (tests, diagnostics)
+    heartbeat: () => (hb ? Atomics.load(hb, 0) : null), // watchdog heartbeat counter (test hook, idea-513)
   };
 }
 

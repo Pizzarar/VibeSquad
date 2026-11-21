@@ -137,6 +137,26 @@ console.log(JSON.stringify({ caps: m.captures() }));`, { opts: "deferPauseUntilR
   assert.equal(stall.frames, undefined);
 });
 
+test("the heartbeat bumps before the drift clock is sampled (idea-513 race fix)", () => {
+  // A capture (inspector pause) can land anywhere inside a tick; the heartbeat is the watchdog's "main thread is alive" signal.
+  // It must bump before now()/cpuUsage(), else a capture landing in tick() after the block had already ended reads the stale
+  // heartbeat and is mislabeled not-late with tick()'s frames instead of the blocker's. Here now() records the heartbeat it sees.
+  let readHb = null;
+  let hbAtNow = null;
+  const m = createLoopLagMonitor({
+    proc: "t", file: "x", watchdog: true,
+    now: () => { hbAtNow = readHb ? readHb() : null; return 1_000_000; },
+    cpuUsage: () => ({ user: 0, system: 0 }),
+    heapUsed: () => 42,
+    append: async () => {},
+  });
+  readHb = m.heartbeat;
+  m.start(); // allocates the heartbeat buffer + watchdog worker (idle here: no stall), and the tick interval
+  m.tick();
+  m.stop();
+  assert.equal(hbAtNow, 1, "now() must observe the heartbeat already bumped (the bump precedes now/cpuUsage in tick())");
+});
+
 test("one long stall triggers exactly one watchdog capture", () => {
   const { r, lines } = runChild(`
 await sleep(700);
