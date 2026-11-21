@@ -117,6 +117,10 @@
 
 * {
   box-sizing: border-box;
+}
+/* Square corners are the fun-mode pixel look only; Normal mode (html[data-vibe="boring"], src/boring.css)
+   carries its own flat reset and rounded radii, so it must not inherit this universal !important. */
+html:not([data-vibe="boring"]) * {
   border-radius: 0 !important;
 }
 
