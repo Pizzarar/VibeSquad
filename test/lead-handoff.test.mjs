@@ -1077,3 +1077,114 @@ test("HTTP self-handoff with slow createAgent returns 202 + handoffId quickly wi
     env.cleanup();
   }
 });
+
+test("idea-105: a 30-worker repoint writes only vs.parent per worker (no full-label set, so no per-worker Who's-here fan-out) and still re-owns watch sets", async (t) => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  t.after(() => {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  });
+
+  const N = 30;
+  const BUSY = 20; // running workers get a steer-only notice; the rest are idle (label-only)
+  const oldLead = {
+    id: "lead-repoint-1",
+    title: "★ SITE POLISH ord9",
+    provider: "claude",
+    model: "claude-opus-5-5",
+    cwd: env.dir,
+    status: "idle",
+    createdAt: "2026-10-31T00:00:00.000Z",
+    labels: { team: "site", lane: "site-polish", role: "lead", ord: "9", profile: "Lead - Claude" },
+  };
+  const agents = new Map([[oldLead.id, oldLead]]);
+  const workerIds = new Set();
+  for (let i = 0; i < N; i++) {
+    const id = `w-repoint-${i}`;
+    workerIds.add(id);
+    agents.set(id, {
+      id,
+      title: `SITE POLISH · job-${i}`,
+      provider: "claude",
+      model: "claude-sonnet-5-5",
+      cwd: env.dir,
+      status: i < BUSY ? "running" : "idle",
+      labels: { team: "site", lane: "site-polish", role: "worker", ord: String(i + 2), job: `job-${i}`, "vs.parent": oldLead.id },
+    });
+  }
+
+  const opts = { home: env.vsHome };
+  const armed = addWatch({ owner: oldLead.id, team: "site", lane: "site-polish", items: [{ kind: "agent", ref: "w-repoint-0" }] }, opts).id;
+  const suite = addWatch({ owner: oldLead.id, team: "site", lane: "site-polish", items: [{ kind: "suite" }] }, opts).id;
+
+  const labelCalls = [];
+  const messages = [];
+  const coordinator = createLeadHandoffCoordinator({
+    rootDir: env.dir,
+    baseHome: env.vsHome,
+    profilesPath: env.profilesPath,
+    listAgents: async () => [...agents.values()],
+    getAgent: async (id) => agents.get(id) ?? null,
+    setLabels: async (id, labels, name) => {
+      labelCalls.push({ id, labels, name });
+      const cur = agents.get(id);
+      if (cur) {
+        cur.labels = { ...(cur.labels ?? {}), ...labels };
+        if (name) cur.title = name;
+      }
+    },
+    sendMessage: async (id, text, msgOpts) => {
+      messages.push({ id, text, ...(msgOpts?.steerOnly ? { steerOnly: true } : {}) });
+    },
+    createAgent: async (payload) => {
+      const created = {
+        id: "succ-repoint-10",
+        title: payload.title,
+        provider: payload.config.provider,
+        model: payload.config.model,
+        cwd: payload.cwd,
+        status: "idle",
+        labels: { ...payload.labels },
+        prompt: payload.prompt,
+      };
+      agents.set(created.id, created);
+      return created;
+    },
+    deleteHeartbeat: async () => {},
+    appendLog: () => {},
+  });
+
+  const res = await coordinator.evaluateLead(oldLead, { usedTokens: 305_000 });
+  assert.equal(res.triggered, true);
+  assert.equal(res.stage, "hard-300");
+  const succId = res.successorId;
+  assert.equal(succId, "succ-repoint-10");
+
+  // Every open worker re-pointed to the successor.
+  for (const id of workerIds) assert.equal(agents.get(id).labels["vs.parent"], succId, `${id} re-pointed`);
+
+  // The regression guard: each worker's label write carried ONLY vs.parent. A full-label set (with role/lane/team/ord)
+  // would make RunnerBackend.updateAgent treat it as a possible Who's-here move and pay two extra fetchAgent round-trips.
+  const workerCalls = labelCalls.filter((c) => workerIds.has(c.id));
+  assert.equal(workerCalls.length, N, "one label write per open worker");
+  for (const c of workerCalls) assert.deepEqual(c.labels, { "vs.parent": succId }, `minimal payload for ${c.id}`);
+
+  // Busy workers are told (steer-only); idle workers are label-only (idea-201/214).
+  for (let i = 0; i < N; i++) {
+    const id = `w-repoint-${i}`;
+    if (i < BUSY) {
+      const notice = messages.find((m) => m.id === id);
+      assert.ok(notice, `${id} told about the new lead`);
+      assert.equal(notice.steerOnly, true, `${id} notice is steer-only`);
+    } else {
+      assert.equal(messages.filter((m) => m.id === id).length, 0, `${id} idle worker is not messaged`);
+    }
+  }
+
+  // Watch sets still follow the successor.
+  assert.deepEqual([...(res.reownedWatches ?? [])].sort(), [armed, suite].sort());
+  assert.equal(listWatches({ owner: oldLead.id }, opts).length, 0, "the retired lead owns nothing armed");
+});

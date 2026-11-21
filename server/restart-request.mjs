@@ -33,6 +33,28 @@ export const TERMINAL = new Set(["done", "aborted"]);
 export const DEFAULT_DEADLINE_MIN = 30;
 export const MAX_DEADLINE_MIN = 240;
 export const TICK_MS = 15_000;
+/**
+ * idea-476 (1): while a request is open the loop holds the runner's request drain (runner POST /drain/request), so NEW
+ * background shells are refused from the drain ask on, not only once vs restart runs. Refreshed every tick with this TTL:
+ * a server that dies stops refreshing and the drain lapses within it, never blocking background work for the whole deadline.
+ */
+export const REQUEST_DRAIN_TTL_MS = 5 * 60_000;
+/** A fired request whose vs restart launch was never recorded (a server crash between firedAt and the launch) holds the drain this long at most. */
+export const FIRING_DRAIN_MAX_MS = 15 * 60_000;
+
+/**
+ * idea-476 (1): whether the runner's request drain should be held for `req` now. Open (requested, draining, ready): yes.
+ * Firing: only until the vs restart launch is recorded (vs restart then holds its own drain, POST /drain, from its first
+ * seconds), and never past FIRING_DRAIN_MAX_MS after the fire, so a fire that never launched cannot hold background work
+ * for FIRING_TIMEOUT_MS. Done, aborted, no request: no.
+ */
+export function requestHoldsDrain(req, now = Date.now()) {
+  if (!req || TERMINAL.has(req.state)) return false;
+  if (req.state !== "firing") return true;
+  if (req.launch) return false;
+  const fired = Date.parse(req.firedAt ?? "");
+  return Number.isFinite(fired) && now - fired < FIRING_DRAIN_MAX_MS;
+}
 /** A fired request with no restart-<ts>.json after this long is aborted (restart-runtime's own drain wait tops out at 2h). */
 export const FIRING_TIMEOUT_MS = 3 * 3600_000;
 /** A restart result counts for a request when it started no earlier than this before the fire (clock skew between processes). */
@@ -548,15 +570,40 @@ export function createRestartRequestLoop({
   now = () => Date.now(),
   tickMs = TICK_MS,
   log = () => {},
+  // idea-476: { set(req), clear(id) } over the runner's /drain/request; the default holds nothing (tests, no runner).
+  drain = null,
 } = {}) {
   let busy = null;
+  // The request id this process last set the runner drain for; null once released. `undefined` at start: an earlier server
+  // process (a server restart mid-request) may have set one, so the first release clears whatever request drain the runner
+  // holds instead of leaving it to its TTL.
+  let drainHeld;
+
+  async function holdDrain(req) {
+    if (!drain) return;
+    try { await drain.set(req); drainHeld = req.id; } catch (e) { log(`restart-request ${req.id}: runner drain not set (${e?.message ?? e}); new background work is not refused`); }
+  }
+  async function releaseDrain() {
+    if (!drain || drainHeld === null) return;
+    const id = drainHeld ?? null;
+    try { await drain.clear(id); drainHeld = null; } catch (e) { log(`restart-request ${id ?? "(earlier process)"}: runner drain not cleared (${e?.message ?? e}); it lapses within ${REQUEST_DRAIN_TTL_MS / 60_000} min`); }
+  }
   let scanned = null; // { id, at }: the last drained-log scan for this request (in memory: a restarted server rescans once)
   let timer = null;
 
   const logArgs = (req, text) => ["log", "restart-feedback", fitLog(text, FEEDBACK_MAX), ...(req.team && req.lane ? ["--team", req.team, "--lane", req.lane] : [])];
 
   async function run() {
-    const cur = readRestartRequest(home);
+    let cur;
+    try { cur = readRestartRequest(home); } catch (e) {
+      // Fail closed both ways (idea-476): an unreadable request file is no open request. Background starts are NOT refused
+      // (a drain held on a file nobody can read would block every lane's suites until it lapses), and nothing is stepped,
+      // so no lead is marked drained and nothing fires. Logged every tick until the file is readable again.
+      log(`restart-request: ${REQUEST_FILE} unreadable (${e?.message ?? e}): runner drain released, background starts allowed, no lead marked drained, nothing fired`);
+      await releaseDrain();
+      return { state: null, actions: [], unreadable: true };
+    }
+    if (!cur || TERMINAL.has(cur.state)) await releaseDrain();
     if (!cur || (TERMINAL.has(cur.state) && cur.notifiedAt)) return { state: cur?.state ?? null, actions: [] };
     const open = !TERMINAL.has(cur.state) && cur.state !== "firing";
     let leads = null;
@@ -582,6 +629,10 @@ export function createRestartRequestLoop({
       return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results }) };
     });
     if (open) scanned = { id: cur.id, at: scanAt };
+    // The drain follows the stepped state (requestHoldsDrain): held while the request is open and until its vs restart
+    // launch is recorded, released once it launched, finished or was aborted.
+    if (requestHoldsDrain(req, now())) await holdDrain(req);
+    else await releaseDrain();
     // Effects, after the state that caused them is on disk (an ask is never re-sent, a fire never repeated).
     const outcomes = {};
     for (const a of actions) {
@@ -662,6 +713,11 @@ export function createRestartRequestLoop({
   return loop;
 }
 
+/** The runner POST /drain/request body for an open request (its id scopes the later DELETE). */
+export function requestDrainBody(req, ttlMs = REQUEST_DRAIN_TTL_MS) {
+  return { id: req.id, tip: req.tip, ttlMs, reason: `restart request ${req.id} for ${req.tip} (${req.state})` };
+}
+
 /** The production loop on the real home: the shared runner backend's agent list and /health held list. */
 export async function startRestartRequestLoop({ home, log = (l) => console.warn(l) } = {}) {
   const { sharedRunnerBackend } = await import("./backend/index.mjs");
@@ -673,6 +729,10 @@ export async function startRestartRequestLoop({ home, log = (l) => console.warn(
     heldList: async () => {
       const h = await backend.rc.request("GET", "/health", undefined, { restartWait: false });
       return Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;
+    },
+    drain: {
+      set: (req) => backend.rc.request("POST", "/drain/request", requestDrainBody(req), { restartWait: false }),
+      clear: (id) => backend.rc.request("DELETE", "/drain/request", { id }, { restartWait: false }),
     },
   });
   loop.start();

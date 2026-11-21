@@ -119,7 +119,7 @@ export function superviseRunner(owner, {
         const hash = health?.hash;
         // A runner whose /health has no hash field (old build) is stale; so is a hash that differs from the runtime files.
         const stale = typeof hash !== "string" || hash !== disk;
-        if (!health?.drain) drainLogged = false;
+        if (!health?.drain || health.drain.kind === "request") drainLogged = false;
         if (!stale) {
           pendingLogged = false;
         } else {
@@ -137,7 +137,8 @@ export function superviseRunner(owner, {
           // RR1 hard kill raced it (01:22:33.821Z, 2 ms after the restart saw idle): no graceful stop, no shutdown fold-index
           // save, and the replacement it started was then tree-killed with the server. Defer while the drain lasts (TTL-bound, so
           // a crashed restart cannot block RR1 for good); the restart replaces the runner with the new code anyway.
-          const drain = health?.drain && typeof health.drain === "object" ? health.drain : null;
+          // idea-476: a restart REQUEST's drain (kind 'request': vs restart not running yet) does not defer; only vs restart's own.
+          const drain = health?.drain && typeof health.drain === "object" && health.drain.kind !== "request" ? health.drain : null;
           if (drain) {
             if (!drainLogged) {
               drainLogged = true;

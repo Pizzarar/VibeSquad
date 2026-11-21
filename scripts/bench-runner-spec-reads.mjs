@@ -56,6 +56,7 @@ const PATH = arg("path", null);
 const SIDE = arg("side", null);
 
 if (!PATH) { // driver: one child per (path, side), then a table
+  try {
   const self = fileURLToPath(import.meta.url);
   const run = (p, side) => JSON.parse(execFileSync(process.execPath, ["--expose-gc", self, "--mb", String(MB), "--iters", String(ITERS), "--path", p, "--side", side], { encoding: "utf8", maxBuffer: 1 << 24 }));
   const rows = [];
@@ -70,7 +71,9 @@ if (!PATH) { // driver: one child per (path, side), then a table
   console.log("| path | before median / max | after first | after warm median / max | after +50 events |");
   console.log("|---|---|---|---|---|");
   for (const r of rows) console.log(`| ${r.path} | ${r.beforeMedian} / ${r.beforeMax} | ${r.afterFirst} | ${r.afterWarmMedian} / ${r.afterWarmMax} | ${r.afterTail} |`);
-  rmSync(root, { recursive: true, force: true });
+  } finally {
+    try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {}
+  }
   process.exit(0);
 }
 
@@ -90,4 +93,4 @@ try {
     out.afterTail = +ms(() => p.after(r)).toFixed(2);
   }
   console.log(JSON.stringify(out));
-} finally { rmSync(root, { recursive: true, force: true }); }
+} finally { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} }

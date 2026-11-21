@@ -2,11 +2,17 @@
 import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
 import { createServer } from '../runner/server.mjs';
+
+// idea-471: the vs-nb- homes are scratch dirs in %TEMP% that were never removed. Collect and remove them after the file
+// runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY on a just-closed server).
+const homes = [];
+const mkHome = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-nb-')); homes.push(d); return d; };
+test.after(() => { for (const d of homes) rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
 
 const N = 1500;
 const fake = { start: () => ({ send() {}, cancel() {}, kill() {}, interrupt() {} }) };
@@ -20,7 +26,7 @@ function seed(dir) {
 }
 
 test('statusAllAsync matches statusAll', async () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-nb-'));
+  const home = mkHome();
   const r = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fake }, maxLive: 5 });
   seed(path.join(home, 'agents'));
   const { ids, agents: a } = await r.statusAllAsync(1);
@@ -31,7 +37,7 @@ test('statusAllAsync matches statusAll', async () => {
 });
 
 test('POST /agents answers fast while GET /agents?full=1 scans a large cold roster', async () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-nb-'));
+  const home = mkHome();
   const dir = path.join(home, 'agents');
   const r = new Runner({ dir, adapters: { claude: fake }, maxLive: 5 });
   seed(dir);
@@ -56,7 +62,7 @@ test('POST /agents answers fast while GET /agents?full=1 scans a large cold rost
 });
 
 test('concurrent scans share one pass; an agent created mid-scan is in both ids and agents', async () => {
-  const home = mkdtempSync(path.join(os.tmpdir(), 'vs-nb-'));
+  const home = mkHome();
   const r = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fake }, maxLive: 5 });
   seed(path.join(home, 'agents'));
   const p1 = r.statusAllAsync(1);

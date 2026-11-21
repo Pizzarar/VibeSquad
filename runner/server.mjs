@@ -160,11 +160,25 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (req.method === 'DELETE') {
           const cleared = runner.clearDrain();
           console.log(JSON.stringify({ drain: 'cleared', active: cleared }));
-          return json(res, 200, { ok: true, cleared, drain: null });
+          return json(res, 200, { ok: true, cleared, drain: runner.drainState() }); // an open restart request's drain stays (idea-476)
         }
         const b = await readBody(req);
         const drain = runner.setDrain({ ttlMs: b.ttlMs, reason: typeof b.reason === 'string' ? b.reason : '' });
         console.log(JSON.stringify({ drain: 'set', ...drain }));
+        return json(res, 200, { ok: true, drain });
+      }
+      if (parts[0] === 'drain' && parts[1] === 'request' && parts.length === 2 && (req.method === 'POST' || req.method === 'DELETE')) {
+        // idea-476 (1): the open restart request's drain, refreshed by the VS server's request loop (server/restart-request.mjs):
+        // POST { id, tip, ttlMs, reason } starts or refreshes it, DELETE { id } ends that request's drain. Admin only, as /drain.
+        if (isAgent) return forbid(res, 'drain is admin only (set by the restart request loop)');
+        if (!token || typeof runner.setRequestDrain !== 'function') return json(res, 403, { error: 'drain not enabled' });
+        const b = await readBody(req);
+        if (req.method === 'DELETE') {
+          const cleared = runner.clearRequestDrain({ id: typeof b.id === 'string' && b.id ? b.id : null });
+          console.log(JSON.stringify({ drain: 'request-cleared', id: b.id ?? null, active: cleared }));
+          return json(res, 200, { ok: true, cleared, drain: runner.drainState() });
+        }
+        const drain = runner.setRequestDrain({ id: b.id, tip: typeof b.tip === 'string' ? b.tip : '', ttlMs: b.ttlMs, reason: typeof b.reason === 'string' ? b.reason : '' });
         return json(res, 200, { ok: true, drain });
       }
       if (req.method === 'GET' && parts[0] === 'verify-agent' && parts.length === 1) {
@@ -267,9 +281,10 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         return json(res, 200, { ok: true, ...runner.unwedge(id, { retry: b.retry === true, reason: typeof b.reason === 'string' ? b.reason.slice(0, 300) : '' }) });
       }
       if (parts[2] === 'stop-background' && req.method === 'POST') {
-        // Ideas 228 + 229: stop an idle agent's background work, each shell's whole tree (taskkill /T /F). Same scope as cancel.
+        // Ideas 228 + 229: stop an idle agent's background work, each shell's whole tree (taskkill /T /F). Same scope as cancel,
+        // plus (idea-474) a lane lead over its retired predecessor lead in the same Squad + lane (agentMay 'stop-background').
         if (!runner.store.exists(id)) return json(res, 404, { error: 'no such agent' });
-        if (!scoped(res, caller, 'cancel', id)) return;
+        if (!scoped(res, caller, 'stop-background', id)) return;
         try {
           const r = await runner.stopBackground(id, { by: isAgent ? caller.id : 'admin' });
           return json(res, 200, { ok: true, stopped: r.stopped, ...(r.spared ? { spared: r.spared, held: r.held } : {}) });

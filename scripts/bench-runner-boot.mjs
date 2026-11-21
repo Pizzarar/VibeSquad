@@ -69,9 +69,11 @@ function generate() {
 }
 
 const ms = (t0) => Math.round(performance.now() - t0);
+let liveRunner = null;
 async function boot() {
   rmSync(path.join(rhome, "runner.json"), { force: true });
   const runner = spawn(process.execPath, [path.join(repo, "runner", "server.mjs"), "--home", rhome], { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  liveRunner = runner;
   let log = "";
   let exited = false;
   runner.on("exit", () => { exited = true; });
@@ -108,20 +110,42 @@ function appendSome(n = 50) {
   }
 }
 
-if (!existsSync(agentsDir)) {
-  const t0 = performance.now();
-  generate();
-  console.error(`generated ${N} agents, ~${MB}MB in ${root} (${ms(t0)}ms)`);
+let cleaned = false;
+const cleanup = async () => {
+  if (cleaned) return;
+  cleaned = true;
+  if (flag("keep") || arg("home")) return;
+  if (liveRunner && liveRunner.exitCode === null) {
+    await new Promise((resolve) => {
+      const t = setTimeout(resolve, 3000);
+      liveRunner.once("exit", () => { clearTimeout(t); resolve(); });
+      try { liveRunner.kill(); } catch { clearTimeout(t); resolve(); }
+    });
+  }
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); }
+};
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => { cleanup().then(() => process.exit(sig === "SIGINT" ? 130 : 143)); });
 }
-if (LIVE) { const t = new Date(Date.now() + 4_000); for (let i = 0; i < LIVE; i++) utimesSync(path.join(agentsDir, `${idOf(i)}.jsonl`), t, t); } // mtime just ahead of the cold boot's stats: racy, settled by the post-listen save
-const results = { repo, home: root, mb: MB, agents: N, cold: [], warm: [], append: [] };
-for (let r = 0; r < RUNS; r++) {
-  rmSync(path.join(rhome, "fold-index.json"), { force: true });
-  results.cold.push(await boot());
-  await new Promise((res) => setTimeout(res, 3500)); // past the racy window of the entries the cold boot wrote
-  results.warm.push(await boot());
-  appendSome();
-  results.append.push(await boot());
+
+try {
+  if (!existsSync(agentsDir)) {
+    const t0 = performance.now();
+    generate();
+    console.error(`generated ${N} agents, ~${MB}MB in ${root} (${ms(t0)}ms)`);
+  }
+  if (LIVE) { const t = new Date(Date.now() + 4_000); for (let i = 0; i < LIVE; i++) utimesSync(path.join(agentsDir, `${idOf(i)}.jsonl`), t, t); } // mtime just ahead of the cold boot's stats: racy, settled by the post-listen save
+  const results = { repo, home: root, mb: MB, agents: N, cold: [], warm: [], append: [] };
+  for (let r = 0; r < RUNS; r++) {
+    rmSync(path.join(rhome, "fold-index.json"), { force: true });
+    results.cold.push(await boot());
+    await new Promise((res) => setTimeout(res, 3500)); // past the racy window of the entries the cold boot wrote
+    results.warm.push(await boot());
+    appendSome();
+    results.append.push(await boot());
+  }
+  console.log(JSON.stringify(results, null, 1));
+} finally {
+  await cleanup();
 }
-console.log(JSON.stringify(results, null, 1));
-if (!flag("keep") && !arg("home")) rmSync(root, { recursive: true, force: true });

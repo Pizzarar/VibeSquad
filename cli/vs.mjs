@@ -67,9 +67,14 @@ import {
 } from "../server/lane-spec.mjs";
 import {
   createManagedWorktree,
-  sweepMergedWorktrees,
+  sweepAllRepos,
+  throttledLiveCwds,
+  liveAgentCwds,
   cleanupProjectsFolder,
   resolveManagedWorktreeRoot,
+  retentionSweep,
+  restoreArchivedWorktree,
+  RETENTION_DAYS,
 } from "../server/team-worktrees.mjs";
 import { appendLesson, readLessons } from "../server/lessons.mjs";
 import {
@@ -277,6 +282,8 @@ export function parseArgs(argv) {
     "owner",
     "judgment",
     "judgmentFile",
+    "days",
+    "repo",
   ]);
   const booleans = new Set([
     "sinceMe",
@@ -304,6 +311,9 @@ export function parseArgs(argv) {
     "all",
     "restart",
     "keepDevices",
+    "sizes",
+    "here",
+    "summary",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -2982,9 +2992,61 @@ function commandWorktree(flags) {
   }
 
   if (sub === "sweep") {
-    const res = sweepMergedWorktrees(repoRoot, { apply });
-    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    // W1 (PLAN_DISK_LIFECYCLE_1121): every repo with worktrees in the sanctuary, each against its own default branch
+    // (--here: only the cwd's repo). Merged = ancestor | git cherry | tree match; untracked build output is not dirt.
+    // Branch refs are never deleted. --apply needs the agent roster for the live-cwd guard: unreadable roster, nothing removed.
+    let liveCwds = null;
+    try {
+      const agents = listRunnerAgentsSync();
+      // [] also means "runner logs unreadable" (the fold returns [] then): treat it as unknown, so --apply removes nothing.
+      if (agents.length) liveCwds = liveAgentCwds(agents);
+    } catch {}
+    const here = path.resolve(repoRoot).toLowerCase();
+    const res = sweepAllRepos({
+      apply,
+      liveCwds,
+      // A full sweep runs for minutes: re-read the roster (at most every 30s) right before each removal.
+      refreshLiveCwds: apply ? throttledLiveCwds(() => listRunnerAgentsSync()) : null,
+      sizes: Boolean(flags.sizes),
+      repoFilter: flags.here ? (r) => path.resolve(r.repoRoot).toLowerCase() === here : null,
+    });
+    if (apply && !liveCwds) process.stderr.write("Warning: agent roster unreadable; nothing removed (live-cwd guard fails closed).\n");
+    if (res.busy) process.stderr.write("Warning: another worktree sweep holds the sanctuary lock; nothing removed.\n");
+    const out = flags.summary ? { root: res.root, apply, summary: res.summary, dangling: res.dangling.length } : res;
+    process.stdout.write(JSON.stringify(out, null, 2) + "\n");
     return 0;
+  }
+
+  if (sub === "retention") {
+    // R1 (PLAN_DISK_LIFECYCLE_1121): unmerged worktrees whose owner is archived or lost and untouched for --days (7).
+    // Dry run by default (report only). --apply archives WIP to refs/vs-archive/<unit> (branch kept) and removes the tree;
+    // the first real apply needs the owner's OK. The roster includes archived agents; unreadable roster = nothing archived.
+    const days = flags.days === undefined ? RETENTION_DAYS : Number(flags.days);
+    if (!Number.isFinite(days) || days < 1) throw new Error("--days must be a number >= 1");
+    let agents = [];
+    try {
+      agents = listRunnerAgentsSync();
+    } catch {}
+    const here = path.resolve(repoRoot).toLowerCase();
+    const res = retentionSweep({
+      apply,
+      agents,
+      refreshAgents: apply ? () => listRunnerAgentsSync() : null,
+      days,
+      repoFilter: flags.here ? (r) => path.resolve(r.repoRoot).toLowerCase() === here : null,
+    });
+    if (apply && !res.rosterKnown && !res.busy) process.stderr.write("Warning: agent roster unreadable; nothing archived (owner check fails closed).\n");
+    if (res.busy) process.stderr.write("Warning: another worktree sweep holds the sanctuary lock; nothing archived.\n");
+    process.stdout.write(JSON.stringify(flags.summary ? retentionReport(res, Number(flags.limit) || 10) : res, null, 2) + "\n");
+    return 0;
+  }
+
+  if (sub === "restore") {
+    const unit = String(flags._[1] ?? "").trim();
+    if (!unit) throw new Error("worktree restore needs a unit: vs worktree restore <unit> [--repo <path>]");
+    const res = restoreArchivedWorktree(unit, { repoRoot: flags.repo ? path.resolve(String(flags.repo)) : null });
+    process.stdout.write(JSON.stringify(res, null, 2) + "\n");
+    return res.ok ? 0 : 1;
   }
 
   if (sub === "cleanup-projects") {
@@ -2999,7 +3061,26 @@ function commandWorktree(flags) {
     return 0;
   }
 
-  throw new Error(`unknown worktree subcommand "${sub}". Use: vs worktree create | sweep | cleanup-projects | root`);
+  throw new Error(`unknown worktree subcommand "${sub}". Use: vs worktree create | sweep | retention | restore | cleanup-projects | root`);
+}
+
+/** `vs worktree retention --summary`: totals plus the top `limit` candidates by size (one flat row each). */
+export function retentionReport(res, limit = 10) {
+  const top = [...(res.candidates ?? [])]
+    .sort((a, b) => (b.bytes ?? 0) - (a.bytes ?? 0))
+    .slice(0, limit)
+    .map((c) => ({
+      repo: c.repo,
+      unit: c.unit,
+      ownerState: c.ownerState,
+      ageDays: c.lastTouchAgeDays,
+      bytes: c.bytes,
+      buildShare: c.bytes ? Math.round(((c.buildBytes ?? 0) / c.bytes) * 100) / 100 : 0,
+      dirtyFiles: c.dirtyFiles,
+      ignoredLost: c.ignoredLost,
+      ...(c.action === "archived" ? { action: c.action, ref: c.ref, removed: c.removed } : {}),
+    }));
+  return { root: res.root, apply: res.apply, days: res.days, rosterKnown: res.rosterKnown, busy: Boolean(res.busy), summary: res.summary, top };
 }
 
 /** idea-452 shared-master push guard: `vs push-guard check [remote]` dry-runs the pre-push hook for HEAD; `install` sets core.hooksPath. */

@@ -1,7 +1,7 @@
 // Own-daemon Block 5: `vs mcp alias-report` grouping, and shared prompt text naming VS MCP tools (with the Paseo names as the fallback).
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -10,6 +10,8 @@ import { ART_PAINTER_NOTE_BODY } from '../server/profiles.mjs';
 import { WORKER_PACK, LEAD_FALLBACK_PACK } from '../server/hooks/agent-duties.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
+const tmpDirs = [];
+after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 const hit = (ts, tool, caller, lane = 'runner-pilot', agent = caller) => ({ ts, agent, lane, type: 'metric', text: `mcp-alias: tool=${tool} caller=${caller} lane=${lane}`, refs: [] });
 
 test('aliasReport groups by alias + caller, counts, keeps last-seen, sorts by hits', () => {
@@ -47,6 +49,7 @@ test('parseDuration accepts s/m/h/d/w and rejects junk', () => {
 
 test('vs mcp alias-report reads team logs under VIBESQUAD_HOME (text + --json)', () => {
   const home = mkdtempSync(path.join(os.tmpdir(), 'vs-alias-'));
+  tmpDirs.push(home);
   const dir = path.join(home, '.vibesquad', 'teams', 'vibesquad');
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'log.jsonl'), [hit(new Date().toISOString(), 'send_agent_prompt', 'rn-7')].map((e) => JSON.stringify(e)).join('\n') + '\n');

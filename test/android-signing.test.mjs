@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test } from "node:test";
+import { after, describe, test } from "node:test";
 import { checkCertPin, parseSignerSha256, signAndVerifyApk, verifyApkCert } from "../server/build-android.mjs";
 import { parseKeytoolSha256, rotateAndroidKeystore } from "../scripts/rotate-android-keystore.mjs";
 
@@ -10,7 +10,9 @@ const SECRET = "s3cr3t-Pa55-xyz";
 const FP = "ab".repeat(32);
 const FP2 = "cd".repeat(32);
 const certs = (fp) => `Signer #1 certificate DN: CN=VibeSquad\nSigner #1 certificate SHA-256 digest: ${fp}\n`;
-const tmp = () => mkdtempSync(join(tmpdir(), "vs-sign-"));
+const tmpDirs = [];
+const tmp = () => { const d = mkdtempSync(join(tmpdir(), "vs-sign-")); tmpDirs.push(d); return d; };
+after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 
 function rotate(over = {}) {
   const calls = [];

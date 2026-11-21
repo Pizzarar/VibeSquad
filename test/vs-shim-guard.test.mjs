@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, rmdirSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -14,6 +14,30 @@ function git(cwd, args) {
 }
 
 const posix = (p) => p.split("\\").join("/");
+
+// Unlink a symlink/junction itself (never its target); throws when neither works (matches server/team-worktrees.mjs:516-521).
+const unlinkLinkOnly = (p) => { try { unlinkSync(p); } catch { rmdirSync(p); } };
+// Walk a tree without following links (lstat, never recurse into a link); unlink every symlink/junction and verify each is
+// gone via lstat. Returns true only when every link is detached, so the caller never recursive-rms through a live junction.
+const detachLinks = (root) => {
+  const links = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const p = join(dir, name);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) links.push(p);
+      else if (st.isDirectory()) walk(p);
+    }
+  };
+  walk(root);
+  for (const p of links) {
+    unlinkLinkOnly(p);
+    let still = true;
+    try { lstatSync(p); } catch (e) { if (e?.code === "ENOENT") still = false; }
+    if (still) return false;
+  }
+  return true;
+};
 
 describe("vs install-shim / worktree create from a linked worktree", () => {
   let tmp, main, wt, env, realBin;
@@ -50,7 +74,15 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
     };
   });
 
-  after(() => rmSync(tmp, { recursive: true, force: true }));
+  after(() => {
+    if (!tmp) return;
+    // Detach every junction/symlink (including any the spawned worktree-create made) and verify each is gone. If a link
+    // survives (unlink failed), SKIP the recursive rm and leave the dir: never recurse through a live junction.
+    let safe = false;
+    try { safe = detachLinks(tmp); } catch { safe = false; }
+    if (!safe) return;
+    try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {}
+  });
 
   const runVs = (script, args, cwd) =>
     spawnSync(process.execPath, [script, ...args], { cwd, env, encoding: "utf8" });
