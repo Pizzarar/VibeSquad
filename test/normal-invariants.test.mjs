@@ -196,7 +196,7 @@ test("5. Two expanded projects have the same child structure", guard("inv5", asy
   for (const s of shapes.slice(1)) assert.deepEqual(nonLane(s), nonLane(shapes[0]), `non-lane children differ: ${JSON.stringify(shapes)}`);
 }));
 
-test("6. No agent title appears more than twice in the visible viewport", { skip: "known failure idea-271: after Ctrl+J the opened agent title shows 5x in view (Needs-you row, sidebar worker row, breadcrumb, agent header, context panel); also 3-4x on deep link" }, guard("inv6", async () => {
+test("6. No agent title appears more than twice in the visible viewport", guard("inv6", async () => {
   const bad = [];
   for (const s of STATES) {
     await s.go();

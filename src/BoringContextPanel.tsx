@@ -57,8 +57,8 @@ const TAB_FOR_DOCK: Partial<Record<string, ContextTab>> = { Changes: "Changes", 
 function WorkersTab({ agent, laneId }: { agent: PaseoAgent; laneId: string }) {
   const { agents } = usePaseo();
   const members = useMemo(
-    () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
-    [agents, laneId],
+    () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && m.agent.id !== agent.id && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
+    [agents, laneId, agent.id],
   );
   const [showIdle, setShowIdle] = useState(false);
   const live = members.filter(boringWorkerIsLive);
