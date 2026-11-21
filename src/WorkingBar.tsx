@@ -2,8 +2,8 @@
 // One selector feeds the chip in the compact chat header and the slim bar above the composer.
 import { openAgent } from "./panes";
 import { derived, sameList, StatusDot, subscribeTree, useSelect } from "./ui";
-import { cleanTitle } from "./ui";
-import type { Member } from "./teams";
+import { isHubLaneId, type Member } from "./teams";
+import { agentDisplayName } from "./identity";
 
 const running = (m: Member | null | undefined): m is Member => !!m && m.agent.status === "running";
 
@@ -25,7 +25,7 @@ export function useWorkingMembers(agentId: string, isBs: boolean, teamId: string
   );
 }
 
-const nameOf = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
+const nameOf = (m: Member) => agentDisplayName(m.agent, { isHubLaneId }) || m.agent.id.slice(0, 8);
 
 /** Compact header chip + compact working member chips in the top bar (C3). */
 export function WorkingChip({ members, subs }: { members: Member[]; subs: number }) {

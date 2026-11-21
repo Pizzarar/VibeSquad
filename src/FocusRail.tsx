@@ -1,10 +1,9 @@
 import { memo, useState } from "react";
 import type { ProviderQuotaView } from "./antigravity";
-import { alertLabel, budgetFor, fmtTok, isHiddenLane, leadVariant, usedTokens, type Member, type TeamView } from "./teams";
+import { alertLabel, budgetFor, fmtTok, isHiddenLane, isHubLaneId, leadVariant, usedTokens, type Member, type TeamView } from "./teams";
 import {
   StatusDot,
   alertOrder,
-  cleanTitle,
   clickable,
   derived,
   getTreeState,
@@ -19,7 +18,7 @@ import { setFocus, setSheet, useAgentPane } from "./panes";
 import { exitSquadsHome } from "./pinFocus";
 import { setFullView } from "./PinGrid";
 import { useUserName, needsYouBadge } from "./userName";
-import { isRetiredAgent } from "./identity";
+import { agentDisplayName, isRetiredAgent } from "./identity";
 import { Avatar, TeamEmblem, providerSpec } from "./pixel";
 
 // Focus rail (docs/design/FOCUS_CHAT.md): an interrupt queue and a switchboard, not a roster.
@@ -49,7 +48,7 @@ const backToTeam = () => {
 };
 
 const isLive = (m: Member) => m.agent.status !== "idle" && m.agent.status !== "closed" && !m.agent.archivedAt;
-const name = (m: Member) => cleanTitle(m.agent.title) || m.agent.id.slice(0, 8);
+const name = (m: Member) => agentDisplayName(m.agent, { isHubLaneId }) || m.agent.id.slice(0, 8);
 
 const RailRow = memo(
   function RailRow({ m, alert, teamSuffix }: { m: Member; alert?: boolean; teamSuffix?: string }) {
@@ -62,7 +61,7 @@ const RailRow = memo(
     return (
       <div
         className={`rrow ${alert ? "q" : ""} ${pane ? `open pane-${pane}` : ""} ${a.status}`}
-        title={`${a.title ?? a.id}${m.attention ? ` · ${m.attention.reason}` : ""}`}
+        title={`${agentDisplayName(a, { isHubLaneId })}${m.attention ? ` · ${m.attention.reason}` : ""}`}
         {...clickable(() => selectAgent(a.id))}
       >
         <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={32} />

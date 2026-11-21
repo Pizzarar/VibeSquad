@@ -4,8 +4,9 @@ import { getPaseoState, subscribePaseo } from "./paseo";
 import { useDraft } from "./drafts";
 import { railAlerts } from "./FocusRail";
 import { activateTab, closeTab, getPanes, openAgent, setSheet, subscribePanes, usePanes, type Pane } from "./panes";
-import { classifyAgent, leadVariant } from "./teams";
-import { StatusDot, cleanTitle, sameList, subscribeTree, useSelect } from "./ui";
+import { classifyAgent, isHubLaneId, leadVariant } from "./teams";
+import { StatusDot, sameList, subscribeTree, useSelect } from "./ui";
+import { agentDisplayName } from "./identity";
 import { Avatar } from "./pixel";
 
 // Mobile (<600px) view toggle so the user can view the Team roster without closing mounted agent tabs.
@@ -40,7 +41,7 @@ const useAgent = (id: string): PaseoAgent | undefined =>
   });
 
 const shortTabTitle = (a: PaseoAgent | undefined, id: string) => {
-  const t = a ? cleanTitle(a.title) : id.slice(0, 8);
+  const t = a ? agentDisplayName(a, { isHubLaneId }) : id.slice(0, 8);
   return t.length > 28 ? t.slice(0, 27) + "…" : t;
 };
 
@@ -228,7 +229,7 @@ export const MobileBar = memo(function MobileBar() {
           className={`mobile-bar-btn mobile-bar-needs ${alerts.length > 0 ? "has-alerts" : ""}`}
           onClick={onNeedsYouClick}
           data-testid="mobile-bar-needs-you"
-          title={alerts.length > 0 ? `Jump to ${alerts[0].agent.title ?? "agent"} (${alerts.length} need you)` : "0 agents need you"}
+          title={alerts.length > 0 ? `Jump to ${agentDisplayName(alerts[0].agent, { isHubLaneId })} (${alerts.length} need you)` : "0 agents need you"}
         >
           <span className="mobile-bar-icon">⚡</span>
           <span className="mobile-bar-label">{alerts.length > 0 ? `Needs you (${alerts.length})` : "0"}</span>

@@ -653,3 +653,56 @@ export function formatDisplayTitle({
   }
   return `${c}${ordRaw} · ${cleanJob || "worker"}`;
 }
+
+// ---- Display-only agent name + face seed (idea-71) -----------------------------
+
+/** Mirrors src/ui.tsx cleanTitle, kept local so identity.ts stays React-free for `node --test`. */
+function cleanAgentTitle(t?: string | null): string {
+  let s = (t ?? "untitled").replace(/\s*\(talk here[^)]*\)/gi, "").trim();
+  const lower = s.toLowerCase();
+  if (lower.startsWith("★ lead · ")) s = s.slice("★ lead · ".length).trim();
+  else if (lower.startsWith("brainstorm · ")) s = s.slice("brainstorm · ".length).trim();
+  return s;
+}
+
+/** Context for the display/face helpers. `isHubLaneId` is injected (src/teams.ts isHubLaneId) so identity.ts stays pure. */
+export interface AgentDisplayContext {
+  /** True when the agent is already known to sit on its Squad's hub lane (callers with positional knowledge pass this). */
+  hub?: boolean;
+  /** The existing hub-lane predicate (`src/teams.ts` isHubLaneId); used when `hub` is not set. */
+  isHubLaneId?: (laneKey: string | undefined) => boolean;
+}
+
+/** True when `agent` is a lead or former-lead on its Squad's hub lane. */
+function isHubLeadOrFormer(agent: IdentityInput, ctx: AgentDisplayContext): boolean {
+  const labels = extractLabels(agent);
+  const role = normalizeRoleLabel(labels);
+  if (role !== "lead" && role !== "former-lead") return false;
+  if (ctx.hub === true) return true;
+  const laneKey = String(labels.lane ?? labels.lead ?? "").trim();
+  return Boolean(laneKey && ctx.isHubLaneId?.(laneKey));
+}
+
+/**
+ * Display-only name for one agent. A lead or former-lead on its Squad's hub lane reads "Overlord" /
+ * "Overlord · job" / "(old) Overlord" (formatDisplayTitle, idea-71); every other agent keeps the
+ * current `cleanTitle(agent.title)` behaviour.
+ */
+export function agentDisplayName(agent: IdentityInput, ctx: AgentDisplayContext = {}): string {
+  if (isHubLeadOrFormer(agent, ctx)) {
+    const labels = extractLabels(agent);
+    const role = normalizeRoleLabel(labels);
+    const job = String(labels.job ?? "").trim();
+    return formatDisplayTitle({ role, hub: true, job });
+  }
+  return cleanAgentTitle(agent.title);
+}
+
+/**
+ * Stable sprite seed: a hub lead/former-lead hashes as "overlord" (matching SkyZones faces.json key), so its
+ * face never changes across lead handoffs; every other agent keeps its id.
+ */
+export function agentFaceSeed(agent: IdentityInput, ctx: AgentDisplayContext = {}): string {
+  if (isHubLeadOrFormer(agent, ctx)) return "overlord";
+  return String(agent.id ?? agent.title ?? "");
+}

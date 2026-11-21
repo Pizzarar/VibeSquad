@@ -17,6 +17,7 @@ import {
   getBrainstormThresholds,
   getTeamsVersion,
   isBrainstormAgent,
+  isHubLaneId,
   isOverBudget,
   leadLadderFor,
   leadVariant,
@@ -32,6 +33,7 @@ import {
 } from "./teams";
 import { Avatar, TokenMeter, providerSpec } from "./pixel";
 import { getPanes, modeFromEvent, openAgent, subscribePanes, useAgentPane, useShownPane } from "./panes";
+import { agentDisplayName } from "./identity";
 
 export function ago(iso?: string | null, now = Date.now()): string {
   if (!iso) return "?";
@@ -364,7 +366,7 @@ export const AgentRow = memo(
         <span className="row-title">
           {caret && <TreeCaret id={a.id} />}
           <StatusDot agent={a} />
-          <span className="row-name">{(a.title ?? a.id.slice(0, 8)).replace(/\s*\(talk here[^)]*\)/gi, "").trim()}</span>
+          <span className="row-name">{agentDisplayName(a, { isHubLaneId })}</span>
           <span className="role-tag">{AGENT_TYPE_LABEL[m.agentType]}</span>
           <DiagBadges m={m} />
         </span>
@@ -398,7 +400,7 @@ export const AgentRow = memo(
 // ---- alerts ------------------------------------------------------------------------
 
 const shortName = (m: Member) => {
-  const t = cleanTitle(m.agent.title);
+  const t = agentDisplayName(m.agent, { isHubLaneId });
   return t.length > 18 ? t.slice(0, 17) + "…" : t;
 };
 
@@ -416,7 +418,7 @@ export const AlertPill = memo(
     return (
       <button
         className={`alert-pill tone-${att.tone}`}
-        title={`${m.agent.title ?? m.agent.id}: ${att.reason}`}
+        title={`${agentDisplayName(m.agent, { isHubLaneId })}: ${att.reason}`}
         onClick={(e) => {
           e.stopPropagation();
           onOpen(m.agent.id);
@@ -539,14 +541,14 @@ const TreeRow = memo(
         className={`tree-row ${compact ? "compact" : ""} ${paneCls} ${a.status} ${last ? "last" : ""}`}
         style={{ paddingLeft: depth * 16 }}
         {...clickable(() => onPick(a.id))}
-        title={a.title ?? ""}
+        title={agentDisplayName(a, { isHubLaneId })}
       >
         <span className="tree-elbow" style={{ left: depth * 16 - 10 }} />
         <Avatar id={a.id} provider={a.provider} agentType={m.agentType} variant={leadVariant(m)} size={32} />
         <span className="tree-main">
           <span className="tree-name-line">
             <StatusDot agent={a} />
-            <span className="row-name">{cleanTitle(a.title) || a.id.slice(0, 8)}</span>
+            <span className="row-name">{agentDisplayName(a, { isHubLaneId }) || a.id.slice(0, 8)}</span>
             {!compact && <span className="role-tag">{AGENT_TYPE_LABEL[m.agentType]}</span>}
             <TreeCaret id={a.id} />
           </span>

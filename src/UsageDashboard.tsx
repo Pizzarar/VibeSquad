@@ -6,6 +6,8 @@ import type { PinHandler } from "./PinGrid";
 import type { Pin } from "./pins";
 import { refreshInboxCards, triageInbox, useInboxCards } from "./IdeaInbox";
 import { fetchJsonTimeout } from "./fetchTimeout";
+import { isHubLaneId } from "./teams";
+import { agentDisplayName } from "./identity";
 
 // Usage dashboard for the Squads screen (docs/PLAN_USAGE_DASHBOARD.md step 4).
 // Data: GET /__vibesquad/providers/usage (server/providers-catalog.mjs getUsage).
@@ -484,7 +486,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
             <div className="small muted">none (&gt;{data.loops?.threshold ?? "?"} turns with no PASS)</div>
           ) : (
             flagged.slice(0, 5).map((f) => (
-              <div className="usage-loop small" key={f.agentId} title={f.title}>
+              <div className="usage-loop small" key={f.agentId} title={agentDisplayName({ id: f.agentId, title: f.title, labels: { role: f.role, lane: f.lane } }, { isHubLaneId })}>
                 <span className="usage-flag">loop</span> {f.lane} · {f.role} · {f.turns} turns
               </div>
             ))

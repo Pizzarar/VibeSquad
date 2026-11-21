@@ -16,7 +16,8 @@ import { respondToPermission } from "./PermissionCard";
 import { bumpAgents, clearAgentAttention, clearNeedsYou, snoozeNeedsYou } from "./paseo";
 import { usePinFocus } from "./pinFocus";
 import { hubPinForSquad } from "./pins";
-import type { TeamView } from "./teams";
+import { isHubLaneId, type TeamView } from "./teams";
+import { agentDisplayName } from "./identity";
 
 const deps: AttentionDeps = {
   clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }),
@@ -51,7 +52,7 @@ function Row({ item, onOpen, onError }: { item: AttentionItem; onOpen: (id: stri
   return (
     <li className={`attn-row attn-${item.kind}`} data-testid={`attn-row-${item.id}`}>
       <div className="attn-who">
-        <b>{item.who}</b>
+        <b>{agentDisplayName(item.agent, { isHubLaneId })}</b>
         <span className="attn-kind">{KIND_LABEL[item.kind]}</span>
       </div>
       <div className="attn-reason">{item.reason}</div>

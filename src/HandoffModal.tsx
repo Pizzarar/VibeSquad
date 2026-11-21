@@ -6,7 +6,8 @@ import { sendMessage, spawnTeamAgent, updateAgent } from "./paseo";
 import { DEMO } from "./demoFlag";
 import { buildName, Field, Modal, TITLE_LIMIT, findProfile, useProfiles } from "./TeamActions";
 import { postLog } from "./TeamFeed";
-import { fmtTok, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView } from "./teams";
+import { fmtTok, isHubLaneId, ordOf, retiredLeadTitle, usedTokens, type Member, type TeamView } from "./teams";
+import { agentDisplayName } from "./identity";
 
 const PARENT = "vs.parent"; // the runner's one parent key (server/identity.mjs, lead-handoff repoint)
 const labelsOf = (m: Member) => m.agent.labels as Record<string, string>;
@@ -174,7 +175,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
       }
     >
       <div className="muted small" style={{ marginBottom: 8 }}>
-        Current lead {lead.agent.title} · {fmtTok(usedTokens(lead))} context
+        Current lead {agentDisplayName(lead.agent, { isHubLaneId })} · {fmtTok(usedTokens(lead))} context
       </div>
       <Field label="New title">
         <input value={title} onChange={(e) => setTitle(e.target.value)} />

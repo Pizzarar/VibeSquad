@@ -9,7 +9,8 @@ import { openPinMember } from "./pinFocus";
 import { hubPinForSquad, pinsForSquad, type Pin } from "./pins";
 import { Avatar } from "./pixel";
 import { queueStripState } from "./skyZonesLogic";
-import type { Member, TeamView } from "./teams";
+import { isHubLaneId, type Member, type TeamView } from "./teams";
+import { agentDisplayName, agentFaceSeed } from "./identity";
 
 const deps: AttentionDeps = {
   clearNeedsYou: (a) => clearNeedsYou(a, { optimistic: true }),
@@ -44,10 +45,10 @@ function Row({ item, member, lane, now, onOpen, onError }: { item: AttentionItem
           onOpen();
         }}
       >
-        <Avatar id={item.agent.id} provider={item.agent.provider} agentType={member?.agentType ?? "unknown"} size={28} />
+        <Avatar id={agentFaceSeed(item.agent, { isHubLaneId })} provider={item.agent.provider} agentType={member?.agentType ?? "unknown"} size={28} />
         <span className="sq-text">
           <span className="sq-who">
-            <b>{item.who}</b>
+            <b>{agentDisplayName(item.agent, { isHubLaneId })}</b>
             <span className="sq-lane muted small">{lane}</span>
           </span>
           <span className="sq-reason" title={item.reason}>{item.reason}</span>

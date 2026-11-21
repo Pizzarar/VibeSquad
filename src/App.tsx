@@ -43,6 +43,7 @@ import {
   type TeamView,
 } from "./teams";
 import { isHubLaneId, titleFor } from "./teams";
+import { agentDisplayName } from "./identity";
 import { AgentPanes } from "./AgentPanes";
 import { hubOpenAgent } from "./ctxMenuLogic";
 import { CommandPaletteHost, agentCtxItems, dateBucket, teamCtxItems, openContextMenu, openOverlay, parseUrlState, serializeUrlState, type DateBucket } from "./CommandPalette";
@@ -71,7 +72,6 @@ import {
   TreeCaret,
   TreeChildren,
   alertOrder,
-  cleanTitle,
   clickable,
   derived,
   sameList,
@@ -232,7 +232,7 @@ function useAttentionAlerts(members: Member[]) {
       if (!claimAlert(m.agent.id, m.attention!.tone)) continue; // the daemon event already alerted
       chime = true;
       if ("Notification" in window && Notification.permission === "granted") {
-        new Notification(`${m.team.name}: ${m.agent.title ?? "agent"}`, { body: m.attention!.reason, tag: m.agent.id });
+        new Notification(`${m.team.name}: ${agentDisplayName(m.agent, { isHubLaneId })}`, { body: m.attention!.reason, tag: m.agent.id });
       }
     }
     if (chime && prefs["notify.sound"]) playAlertChime();
@@ -642,7 +642,7 @@ const Card = memo(function Card({ label, m, onPick, onSuccessor }: CardProps) {
           </span>
         </div>
         <div className="card-title">
-          <StatusDot agent={a} /> {cleanTitle(a.title)} <TreeCaret id={a.id} />
+          <StatusDot agent={a} /> {agentDisplayName(a, { isHubLaneId })} <TreeCaret id={a.id} />
         </div>
         <div className="muted small">
           {isBs && (
@@ -748,7 +748,7 @@ function ArchRow({ m }: { m: Member }) {
   return (
     <div className={`arch-row ${paneCls}`}>
       <Avatar id={m.agent.id} provider={m.agent.provider} agentType={m.agentType} variant={leadVariant(m)} size={32} />
-      <span className="row-name">{cleanTitle(m.agent.title) || m.agent.id.slice(0, 8)}</span>
+      <span className="row-name">{agentDisplayName(m.agent, { isHubLaneId }) || m.agent.id.slice(0, 8)}</span>
       <span className="role-tag">{AGENT_TYPE_LABEL[m.agentType]}</span>
       <span className={`status-pill ${m.agent.status}`}>{m.agent.status}</span>
       <span className="muted small">archived <Ago iso={m.agent.archivedAt} /> ago</span>
@@ -788,7 +788,7 @@ const ChainedRow = memo(
     return (
       <div className="handoff-row warn">
         <span className="warn-badge">⚠ CHAINED</span>
-        <span className="row-name">{m.agent.title}</span>
+        <span className="row-name">{agentDisplayName(m.agent, { isHubLaneId })}</span>
         <span className="muted small">still parented to {parentOf(m).slice(0, 8)}</span>
         <ConfirmButton
           label="Fix chain (detach)"
@@ -808,7 +808,7 @@ const ChainedRow = memo(
 
 const HandoffPairRow = memo(
   function HandoffPairRow({ p }: { p: PairRow }) {
-    const rawOld = cleanTitle(p.oldLead.agent.title);
+    const rawOld = agentDisplayName(p.oldLead.agent, { isHubLaneId });
     const strippedOld = rawOld.toLowerCase().startsWith("(old)") ? rawOld.slice(5).trim() : rawOld;
     return (
       <div className="handoff-row">
@@ -816,7 +816,7 @@ const HandoffPairRow = memo(
         <span className="row-name">
           <span className="muted">(old)</span> {strippedOld}{" "}
           <span className="arrow">→</span>{" "}
-          {p.lead ? <b className="cur-lead">★ {cleanTitle(p.lead.agent.title)}</b> : <span className="muted">no current lead</span>}
+          {p.lead ? <b className="cur-lead">★ {agentDisplayName(p.lead.agent, { isHubLaneId })}</b> : <span className="muted">no current lead</span>}
         </span>
         <span className={`badge ${p.liveWorkers ? "alert" : ""}`} title="workers still attached to the old lead">
           {p.liveWorkers} attached
@@ -1004,7 +1004,7 @@ function SquadUnsortedGroup({ view, onPick }: { view: TeamView; onPick: (id: str
         return (
           <div key={a.id} data-testid={`unsorted-agent-${a.id}`} className="unsorted-agent-row">
             <button type="button" className="btn ghost small" onClick={() => onPick(a.id)}>
-              {cleanTitle(a.title) || a.id.slice(0, 8)}
+              {agentDisplayName(a, { isHubLaneId }) || a.id.slice(0, 8)}
             </button>
             <span className="muted small">{a.cwd}</span>
             <select
@@ -1175,8 +1175,8 @@ const TeamPage = memo(function TeamPage(props: {
                   .filter((m): m is Member => !!m && (m === lead ? duplicateLeads.length > 0 : m === brainstorm ? duplicateBrainstorms.length > 0 : true))
                   .map((m) => (
                     <div key={m.agent.id} className="dup-row">
-                      <span className="muted small">{m.kind}</span> {cleanTitle(m.agent.title)}{" "}
-                      <ConfirmButton label={`Retire (${cleanTitle(m.agent.title)})`} armedLabel="Tap again to retire" busyLabel="Retiring…" tone="warn" onConfirm={() => retireAgent(m.agent, lane.name)} />
+                      <span className="muted small">{m.kind}</span> {agentDisplayName(m.agent, { isHubLaneId })}{" "}
+                      <ConfirmButton label={`Retire (${agentDisplayName(m.agent, { isHubLaneId })})`} armedLabel="Tap again to retire" busyLabel="Retiring…" tone="warn" onConfirm={() => retireAgent(m.agent, lane.name)} />
                     </div>
                   ))}
               </div>
