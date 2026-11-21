@@ -47,6 +47,7 @@ import { startPushWatcher } from "./push.mjs";
 import { startTokenWatcher } from "./token-watch.mjs";
 import { startIdleLaneKick } from "./idle-lane-kick.mjs";
 import { startWorktreeAutoSweep } from "./worktree-autosweep.mjs";
+import { startDiskAlarm } from "./disk-alarm.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
@@ -570,6 +571,7 @@ if (isMain) {
     if (process.env.VS_TOKEN_WATCH !== "0") {
       try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
     }
+    if (process.env.VS_DISK_ALARM !== "0") { try { const da = startDiskAlarm({ rootDir }); server.once("close", () => da.stop()); } catch (err) { console.warn("disk alarm not started:", err?.message ?? err); } }
     if (process.env.VS_IDLE_KICK !== "0") { try { const ik = startIdleLaneKick({ runner: sharedRunnerBackend(), rootDir }); server.once("close", () => ik.stop()); } catch (err) { console.warn("idle lane kick not started:", err?.message ?? err); } }
     // W1 (PLAN_DISK_LIFECYCLE_1121): when a unit's merge lands on the default branch, report (default) or, with
     // VS_WORKTREE_AUTOSWEEP=apply, remove its worktree (merged + clean + no live cwd; branch kept). =0 turns the tick off.

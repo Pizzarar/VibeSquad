@@ -208,5 +208,14 @@ test("keyboard helper and Timeline wiring: aria-expanded, aria-hidden caret, Ent
   assert.match(tl, /toggleRunExpanded/);
   assert.match(tl, /data-testid="tl-tool-run"/);
   assert.match(tl, /aria-expanded=/);
-  assert.match(tl, /<span aria-hidden="true" style=\{\{ cursor: "pointer" \}\}>\{expanded \? "▾" : "▸"\}<\/span>/);
+  // The caret is styled by class, not an inline style: still aria-hidden, still ▾/▸, still inside
+  // the tl-tool-run row that carries the toggle handler.
+  const caret = '<span aria-hidden="true" className="tl-cursor">{expanded ? "▾" : "▸"}</span>';
+  assert.ok(tl.includes(caret), "collapsed caret is aria-hidden and class-driven");
+  assert.ok(
+    tl.indexOf(caret) > tl.indexOf('data-testid="tl-tool-run"'),
+    "caret stays inside the tl-tool-run row (toggle stays in place)",
+  );
+  const css = fs.readFileSync(path.join(root, "src/styles.css"), "utf8");
+  assert.match(css, /\.tl-cursor \{ cursor: pointer; \}/, ".tl-cursor sets cursor: pointer");
 });

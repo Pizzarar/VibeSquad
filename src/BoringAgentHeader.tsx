@@ -204,19 +204,15 @@ export function BoringAgentHeader(p: BoringAgentHeaderProps) {
         )}
         <span className="boring-agent-spacer" />
         {running && (
-          <>
-            <button
-              type="button"
-              className="boring-hdr-btn"
-              data-testid="boring-interrupt-btn"
-              title="Interrupt the current turn; the agent stays available"
-              // No bare-interrupt route exists yet: Interrupt and Stop both call stopAgent (known gap, kept as-is).
-              onClick={() => void stopAgent(agent.id).catch(() => {})}
-            >
-              Interrupt
-            </button>
-            <ConfirmButton label="Stop" armedLabel="Tap to stop" busyLabel="Stopping…" tone="danger" className="boring-hdr-btn boring-hdr-stop" onConfirm={() => stopAgent(agent.id)} />
-          </>
+          <button
+            type="button"
+            className="boring-hdr-btn"
+            data-testid="boring-interrupt-btn"
+            title="Stop the current turn (keeps the agent)"
+            onClick={() => void stopAgent(agent.id).catch(() => {})}
+          >
+            Interrupt
+          </button>
         )}
         {!p.chatOnly && (
           <button
