@@ -131,6 +131,16 @@ test("dry run: a stale unmerged tree with an archived owner is listed with sizes
     assert.ok(existsSync(join(wt, "notes/todo.md")));
     assert.equal(tryGit(["rev-parse", "--verify", "--quiet", "refs/vs-archive/unit-stale"], repo), null);
     assert.ok(!existsSync(join(sanctuary, SWEEP_LOCK_FILE)));
+
+    // A dry run must not rewrite the index: its mtime is a touch signal, so a refresh would read as "recent-touch" next run.
+    const indexPath = resolve(wt, git(["rev-parse", "--git-path", "index"], wt));
+    const old = new Date(Date.now() - 20 * DAY);
+    utimesSync(join(wt, "README.md"), new Date(), new Date()); // stat-dirty, content-clean: plain `git status` refreshes
+    utimesSync(indexPath, old, old);
+    retentionSweep({ root: sanctuary, agents: [archivedAgent("a1", wt)], ...OPTS });
+    assert.equal(lstatSync(indexPath).mtimeMs, old.getTime(), "dry run left the index alone");
+    git(["status", "--porcelain"], wt);
+    assert.notEqual(lstatSync(indexPath).mtimeMs, old.getTime(), "setup check: a plain status does refresh the index");
   }));
 
 test("skip rules: live cwd, owner live (resumable lost), recent touch, merged, roster unknown on apply", () =>
@@ -340,3 +350,14 @@ test("fail closed: an existing archive ref, a nested repo, and an in-progress me
     assert.equal(res["unit-merging"].reason, "git-op-in-progress");
     for (const p of [a, b, c]) assert.ok(existsSync(p));
   }));
+
+test("CLI: retention/restore flags parse; --summary report ranks top candidates by size with build share", async () => {
+  const { parseArgs, retentionReport } = await import("../cli/vs.mjs");
+  const f = parseArgs(["worktree", "retention", "--days", "14", "--summary", "--limit", "3"]);
+  assert.deepEqual([f._[1], f.days, f.summary, f.limit, Boolean(f.apply)], ["retention", "14", true, "3", false]);
+  assert.equal(parseArgs(["worktree", "restore", "unit-x", "--repo", "C:/r"]).repo, "C:/r");
+  const cand = (unit, bytes, buildBytes) => ({ repo: "r", unit, ownerState: "archived", lastTouchAgeDays: 9, bytes, buildBytes, dirtyFiles: 1, ignoredLost: 0, action: "would-archive" });
+  const rep = retentionReport({ root: "/s", apply: false, days: 7, rosterKnown: true, summary: { candidates: 3 }, candidates: [cand("a", 10, 5), cand("b", 300, 270), cand("c", 0, 0)] }, 2);
+  assert.deepEqual(rep.top.map((x) => [x.unit, x.bytes, x.buildShare]), [["b", 300, 0.9], ["a", 10, 0.5]]);
+  assert.equal(rep.busy, false);
+});

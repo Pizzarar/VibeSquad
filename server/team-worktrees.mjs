@@ -262,9 +262,9 @@ const tryGit = (git, args, cwd) => {
   }
 };
 /** Like tryGit but untrimmed (buffer mode): `status --porcelain` records start with a space (" M", " D") that trim() eats. */
-const tryGitRaw = (git, args, cwd) => {
+const tryGitRaw = (git, args, cwd, env) => {
   try {
-    const out = git(args, cwd, { buffer: true });
+    const out = git(args, cwd, { buffer: true, ...(env ? { env } : {}) });
     return Buffer.isBuffer(out) ? out.toString("utf8") : String(out ?? "");
   } catch {
     return null;
@@ -1074,6 +1074,7 @@ export const ARCHIVE_LEDGER_FILE = ".vs-archive.jsonl";
 /** Untracked WIP larger than this is not archived (kept, "wip-too-large"): a human decides. */
 export const WIP_MAX_BYTES = 1 << 30;
 const DAY_MS = 86_400_000;
+const NO_INDEX_WRITE = Object.freeze({ GIT_OPTIONAL_LOCKS: "0" });
 const ARCHIVE_ENV = Object.freeze({
   GIT_AUTHOR_NAME: "VibeSquad retention",
   GIT_AUTHOR_EMAIL: "retention@vibesquad.invalid",
@@ -1219,7 +1220,9 @@ export function planWip(wtPath, { git = defaultGit, links = [] } = {}) {
     indexSha.set(e.slice(tab + 1), sha);
   }
   const untrackedLinks = links.filter((l) => indexMode.get(l.rel) !== "120000");
-  const st = tryGitRaw(git, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none"], base);
+  // GIT_OPTIONAL_LOCKS=0: status must not refresh (rewrite) the index. A rewrite bumps the index mtime that gitTouchMs reads,
+  // so a dry run would mark every stale tree "recent-touch" for the next `days` and a later apply would archive nothing.
+  const st = tryGitRaw(git, ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--no-renames", "--ignore-submodules=none"], base, NO_INDEX_WRITE);
   if (st === null) return fail("unreadable");
   const entries = new Map();
   let untrackedBytes = 0;
