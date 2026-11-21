@@ -27,6 +27,16 @@ export function parseVerdictLine(line) {
   return { verdict: m[1], high: Number(m[2]), medium: Number(m[3]), low: Number(m[4]), hash: m[5] };
 }
 
+/** idea-300: stamp ` reviewer=<profile>` right after the `PASS|FAIL H/M/L <hash>` prefix of a verdict line. The gate still
+ * parses the prefix (the stamp is trailing); the line is unchanged when there is no profile or no verdict prefix. */
+function stampReviewer(line, profile) {
+  const p = String(profile ?? "").trim();
+  if (!p) return line;
+  const m = LINE_PARSE_RE.exec(String(line ?? ""));
+  if (!m) return line;
+  return `${m[0]} reviewer=${p}${line.slice(m[0].length)}`;
+}
+
 /** The first non-blank line of a message (trailing whitespace dropped), "" when there is none. */
 export function firstLine(text) {
   for (const l of String(text ?? "").split(/\r?\n/)) if (l.trim()) return l.replace(/\s+$/, "");
@@ -68,18 +78,19 @@ const LEAD_WORD_RE = /^\s*(PASS|FAIL)\b\s*:?\s*/;
  * - otherwise the digest's text is unchanged.
  * Returns { text, verdictLine, mismatch, noVerdict }.
  */
-export function digestVerdictText({ workerText, digestText, reviewer = false }) {
+export function digestVerdictText({ workerText, digestText, reviewer = false, profile = null }) {
   const digest = String(digestText ?? "").trim();
   const line = extractVerdictLine(workerText);
   const lead = LEAD_WORD_RE.exec(digest);
   const digestWord = lead ? lead[1] : (/\b(PASS|FAIL)\b/.exec(digest)?.[1] ?? null);
   const summary = (lead ? digest.slice(lead[0].length) : digest).trim();
   if (line) {
+    const stamped = stampReviewer(line, profile);
     const word = line.slice(0, 4);
     if (digest.startsWith(line)) return { text: digest, verdictLine: line, mismatch: false, noVerdict: false };
     const mismatch = Boolean(digestWord && digestWord !== word);
     const rest = mismatch ? `VERDICT-MISMATCH: digest said ${digestWord}, the reviewer's line wins${summary ? `; ${summary}` : ""}` : summary;
-    return { text: rest ? `${line} — ${rest}` : line, verdictLine: line, mismatch, noVerdict: false };
+    return { text: rest ? `${stamped} — ${rest}` : stamped, verdictLine: line, mismatch, noVerdict: false };
   }
   if (reviewer) {
     return { text: `NO-VERDICT: ${summary || "reviewer's final message has no PASS|FAIL H/M/L <hash> line"}`, verdictLine: null, mismatch: false, noVerdict: true };

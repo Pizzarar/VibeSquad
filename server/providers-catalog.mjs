@@ -1611,18 +1611,26 @@ function providerFamily(provider) {
   return p || null;
 }
 
-/** Reviewer family for a merged unit: the reviewer run(s) in the unit's worktree (else the lane's cwd-less reviewer runs created between
- * the implementer and the merge) -> `${providerFamily}-review`. No reviewer found: "gemini-review" when the unit was reviewed
- * (reviewRounds > 0) or the implementer is known (Review-Gemini is the default loop), else "no-review". */
-function attributeReviewerFamily(unit, implementer, index) {
+/** The reviewer run attributed to a merged unit (idea-300): the reviewer run(s) in the unit's worktree (else the lane's
+ * cwd-less reviewer runs created between the implementer and the merge), most recent first. Returns the agent, or null
+ * when no reviewer run can be attributed. */
+function attributeReviewerAgent(unit, implementer, index) {
   const mergedAtMs = tsMs(unit.mergedAt);
   const isRev = (a) => a.jobKind === "reviewer" && sameSquad(unit, a);
   let revs = typeof unit.unit === "string" && unit.unit ? (index?.byUnit.get(unit.unit.toLowerCase()) ?? []).filter(isRev) : [];
   if (!revs.length && unit.lane && mergedAtMs !== null && implementer) {
     revs = (index?.byLane.get(unit.lane) ?? []).filter((a) => isRev(a) && !unitNameOfCwd(a.cwd) && a.createdAt !== null && a.createdAt >= (implementer.createdAt ?? 0) && a.createdAt <= mergedAtMs);
   }
-  if (revs.length) {
-    const rev = revs.slice().sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0))[0];
+  if (!revs.length) return null;
+  return revs.slice().sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0))[0];
+}
+
+/** Reviewer family for a merged unit: the attributed reviewer run's provider -> `${providerFamily}-review`. No reviewer found:
+ * "gemini-review" when the unit was reviewed (reviewRounds > 0) or the implementer is known (Review-Gemini is the default loop),
+ * else "no-review". */
+function attributeReviewerFamily(unit, implementer, index) {
+  const rev = attributeReviewerAgent(unit, implementer, index);
+  if (rev) {
     const fam = providerFamily(rev.provider);
     if (fam) return `${fam}-review`;
   }
@@ -2643,6 +2651,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
     const implementer = attributeImplementer(u, agents, workerIndex);
+    const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
     const reviewerFamily = attributeReviewerFamily(u, implementer, workerIndex);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
@@ -2659,6 +2668,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
+      reviewerAgentId: reviewer ? reviewer.agentId : null,
       costUsd: implementer ? implementer.costUsd : null,
       inputTokens: implementer ? implementer.inputTokens : 0,
       outputTokens: implementer ? implementer.outputTokens : 0,
@@ -2686,7 +2696,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -2711,20 +2721,42 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
   }
-  const byProfile = [...profileMap.values()].map((g) => ({
-    provider: g.provider, model: g.model, stakes: g.stakes, jobKind: g.jobKind, profile: g.profile, role: g.role,
-    runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
-    inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
-    workingMs: g.workingMs, idleMs: g.idleMs,
-    passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
-    ...roleSuccess(g),
-    loopCount: g.loopCount,
-    errorCount: g.errorCount,
-    mergedUnits: g.mergedUnits, firstTryCount: g.firstTryCount, reviewRounds: g.reviewRounds, avgReviewRounds: g.mergedUnits ? Math.round((g.reviewRounds / g.mergedUnits) * 100) / 100 : 0,
-    costPerMergedUnit: g.mergedUnits ? g.costUsd / g.mergedUnits : null,
-    fixAfterMergeCount: g.fixAfterMergeCount, fixAfterMergeRate: g.mergedUnits ? Math.round((g.fixAfterMergeCount / g.mergedUnits) * 1000) / 1000 : 0,
-    avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
-  })).sort((a, b) => b.costUsd - a.costUsd || a.profile.localeCompare(b.profile) || a.role.localeCompare(b.role));
+  // idea-300: attribute reviewed (merged) units to reviewer rows — reviewer cost per reviewed unit, review rounds, fix-after-merge.
+  for (const u of merged) {
+    if (!u.reviewerAgentId) continue;
+    const a = agentById.get(u.reviewerAgentId);
+    if (!a) continue;
+    const g = profileMap.get(profileKey(a));
+    if (!g) continue;
+    g.reviewedUnits += 1;
+    g.reviewedReviewRounds += u.reviewRounds;
+    if (u.fixAfterMerge) g.reviewedFixAfterMergeCount += 1;
+  }
+  const byProfile = [...profileMap.values()].map((g) => {
+    const isReviewer = g.jobKind === "reviewer";
+    const mergedUnits = isReviewer ? g.reviewedUnits : g.mergedUnits;
+    return {
+      provider: g.provider, model: g.model, stakes: g.stakes, jobKind: g.jobKind, profile: g.profile, role: g.role,
+      runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
+      costPerRun: g.runs ? g.costUsd / g.runs : null,
+      tokensPerRun: g.runs ? Math.round((g.inputTokens + g.outputTokens) / g.runs) : 0,
+      inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
+      workingMs: g.workingMs, idleMs: g.idleMs,
+      passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
+      ...roleSuccess(g),
+      loopCount: g.loopCount,
+      errorCount: g.errorCount,
+      reviewedUnits: isReviewer ? g.reviewedUnits : 0,
+      mergedUnits,
+      firstTryCount: g.firstTryCount,
+      reviewRounds: g.reviewRounds,
+      avgReviewRounds: mergedUnits ? Math.round(((isReviewer ? g.reviewedReviewRounds : g.reviewRounds) / mergedUnits) * 100) / 100 : 0,
+      costPerMergedUnit: mergedUnits ? g.costUsd / mergedUnits : null,
+      fixAfterMergeCount: g.fixAfterMergeCount,
+      fixAfterMergeRate: mergedUnits ? Math.round(((isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount) / mergedUnits) * 1000) / 1000 : 0,
+      avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
+    };
+  }).sort((a, b) => b.costUsd - a.costUsd || a.profile.localeCompare(b.profile) || a.role.localeCompare(b.role));
 
   // per-lane v2 aggregates: working/idle time, unit cycle, fix rate, and plan cycle from handoff log entries.
   const workByLane = new Map();
