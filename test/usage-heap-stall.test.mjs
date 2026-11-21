@@ -189,7 +189,7 @@ test('heap-stall (a2): getUsageAsync refreshes pooled git with async execFile on
     let ticks = stop();
     assert.equal(res.merged.units.filter((u) => !u.fromLedger).length, 8);
     assert.equal(calls.sync, 0, 'cold: no synchronous git spawn');
-    assert.ok(calls.async >= 3, `cold: rev-parse + log + numstat ran async (${calls.async})`);
+    assert.equal(calls.async, 2, `cold: log + numstat ran async; HEAD is read from the .git files, no rev-parse (idea-518) (${calls.async})`);
     assert.ok(ticks >= 3, `cold: loop turned ${ticks} times`);
 
     // A new merge, then a request past the 15 s HEAD-check TTL: the new HEAD is rebuilt, still with async git only.
@@ -201,7 +201,7 @@ test('heap-stall (a2): getUsageAsync refreshes pooled git with async execFile on
     ticks = stop();
     assert.equal(res.merged.units.filter((u) => !u.fromLedger).length, 9, 'new HEAD picked up');
     assert.equal(calls.sync, 0, 'TTL lapse: no synchronous git spawn');
-    assert.ok(calls.async >= 3, `TTL lapse: async git (${calls.async})`);
+    assert.equal(calls.async, 2, `TTL lapse, new HEAD: log + numstat async only (${calls.async})`);
     assert.ok(ticks >= 3, `TTL lapse: loop turned ${ticks} times`);
     reset();
     const sync = withRoot(repo3, () => getUsage({ home: home3, now: later }));

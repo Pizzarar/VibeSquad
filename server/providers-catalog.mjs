@@ -1010,20 +1010,24 @@ function readSquadReposUncached(home) {
 }
 
 /** Merged units of every Squad repo, each tagged { repo, squad } and keyed repo+sha. Per-repo cache by HEAD, plus a
- * short HEAD-check TTL so a poll storm spawns at most one `git rev-parse` per repo per 15s. */
-function readPooledMergedUnits(home, laneOf, now = Date.now) {
+ * short HEAD-check TTL so a poll storm spawns at most one `git rev-parse` per repo per 15s.
+ * idea-518: `spawn: false` (the request path, getUsageAsync) never runs git here: it serves what warmPooledMergedUnits()
+ * cached (stale-while-revalidate), so a TTL that lapsed during a slow warm no longer falls back to execFileSync (~9 s
+ * per hit on the owner's loop). Only the synchronous getUsage() contract (tests, no server caller) keeps spawning. */
+function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = {}) {
   const out = [];
   for (const r of readSquadRepos(home, now)) {
     const key = normRepoKey(r.root);
     const t = now();
     let hc = repoHeadCheck.get(key);
-    if (!hc || t - hc.at >= HEAD_CHECK_TTL_MS) {
+    if (spawn && (!hc || t - hc.at >= HEAD_CHECK_TTL_MS)) {
       let git = repoGitFns.get(key);
       if (!git) { git = gitIn(r.root); repoGitFns.set(key, git); }
-      hc = { at: t, units: readMergedUnits(git) };
+      const units = readMergedUnits(git);
+      hc = { at: t, units, head: mergedCache.get(git)?.head ?? null };
       repoHeadCheck.set(key, hc);
     }
-    for (const u of hc.units) {
+    for (const u of hc?.units ?? []) {
       const lane = laneOf(u);
       out.push({ ...u, lane, repo: r.name, squad: (lane && r.laneTeam.get(lane)) || r.teams[0] || null });
     }
@@ -1035,20 +1039,57 @@ const gitAsyncIn = (root) => (args) => new Promise((ok, fail) => {
   execFile("git", args, { cwd: root, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, out) => (err ? fail(err) : ok(out)));
 });
 
-/** heap-stall-1114: readPooledMergedUnits() runs up to 3 execFileSync git calls per Squad repo whenever the HEAD-check TTL has
- * lapsed (the cold /usage call held the server loop ~7 s on them). This does the same work with async git, so the synchronous
- * pass right after finds every repo fresh and spawns nothing. Same cache entries, same failure results as the sync path. */
-async function warmPooledMergedUnits(home, now = Date.now) {
-  for (const r of readSquadRepos(home, now)) {
-    const key = normRepoKey(r.root);
-    const hc = repoHeadCheck.get(key);
-    if (hc && now() - hc.at < HEAD_CHECK_TTL_MS) continue;
+const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
+/**
+ * idea-518: HEAD's sha read straight from the .git files, no spawn (a git child costs ~0.3-2 s of loop time on a loaded
+ * Windows box). Follows a linked worktree's `gitdir:` file and `commondir`; loose ref first, then packed-refs, as git
+ * resolves it. Anything it can't read that way (reftable, a symref chain, a missing ref) returns null and the caller
+ * falls back to `git rev-parse HEAD` (async): it never guesses a sha.
+ */
+export function readHeadShaFs(root) {
+  try {
+    const dotGit = join(root, ".git");
+    const st = statSync(dotGit);
+    let gitDir = dotGit;
+    if (st.isFile()) {
+      const m = /^gitdir:\s*(.+)$/m.exec(readFileSync(dotGit, "utf8"));
+      if (!m) return null;
+      gitDir = resolve(root, m[1].trim());
+    } else if (!st.isDirectory()) return null;
+    let commonDir = gitDir;
+    try { commonDir = resolve(gitDir, readFileSync(join(gitDir, "commondir"), "utf8").trim()); } catch { /* not a linked worktree */ }
+    const head = readFileSync(join(gitDir, "HEAD"), "utf8").trim();
+    if (SHA_RE.test(head)) return head.toLowerCase();
+    const ref = /^ref:\s*(refs\/\S+)$/.exec(head)?.[1];
+    if (!ref || ref.split("/").some((p) => p === ".." || p === "." || p === "")) return null;
+    let loose = null;
+    try { loose = readFileSync(join(commonDir, ref), "utf8").trim(); } catch { /* not a loose ref */ }
+    if (loose !== null) return SHA_RE.test(loose) ? loose.toLowerCase() : null; // a symref or junk: let git decide
+    let packed = "";
+    try { packed = readFileSync(join(commonDir, "packed-refs"), "utf8"); } catch { return null; }
+    for (const line of packed.split("\n")) {
+      const [sha, name] = line.trim().split(" ");
+      if (name === ref && SHA_RE.test(sha)) return sha.toLowerCase();
+    }
+    return null;
+  } catch { return null; }
+}
+
+const pooledRefresh = new Map(); // normalised root -> in-flight refresh (single-flight per repo)
+
+/** One repo's async refresh: HEAD from the .git files (rev-parse only as a fallback), `git log` only when HEAD moved. */
+function refreshRepoMergedUnits(r, now, readHead) {
+  const key = normRepoKey(r.root);
+  const hit = pooledRefresh.get(key);
+  if (hit) return hit;
+  const p = (async () => {
     let git = repoGitFns.get(key);
     if (!git) { git = gitIn(r.root); repoGitFns.set(key, git); }
     const gitA = gitAsyncIn(r.root);
     let units = [];
+    let head = null;
     try {
-      const head = (await gitA(["rev-parse", "HEAD"])).trim();
+      head = readHead(r.root) ?? (await gitA(["rev-parse", "HEAD"])).trim();
       const cached = mergedCache.get(git);
       if (cached && cached.head === head) units = cached.units;
       else {
@@ -1057,10 +1098,33 @@ async function warmPooledMergedUnits(home, now = Date.now) {
         units = await drainSliced(mergedUnitsSteps(head, raw, numstatRaw));
         mergedCache.set(git, { head, units });
       }
-    } catch { /* rev-parse/log failed: the sync path would cache [] for the TTL too */ }
-    repoHeadCheck.set(key, { at: now(), units });
+    } catch { /* rev-parse/log failed: cache [] for the TTL, as the sync path does; a known head keeps it from retrying per request */ }
+    repoHeadCheck.set(key, { at: now(), units, head });
+  })().finally(() => pooledRefresh.delete(key));
+  pooledRefresh.set(key, p);
+  return p;
+}
+
+/** heap-stall-1114 / idea-518: fills the per-repo merged-unit cache with async git so the request path never spawns
+ * synchronously (usageSteps runs readPooledMergedUnits with spawn: false). Inside the 15 s TTL a repo is skipped
+ * unless its HEAD (read from the .git files, no spawn) moved; a lapsed TTL with an unchanged HEAD just re-stamps it. */
+async function warmPooledMergedUnits(home, now = Date.now, { readHead = readHeadShaFs } = {}) {
+  for (const r of readSquadRepos(home, now)) {
+    const hc = repoHeadCheck.get(normRepoKey(r.root));
+    if (hc && now() - hc.at < HEAD_CHECK_TTL_MS) {
+      const fsHead = readHead(r.root);
+      if (!fsHead || fsHead === hc.head) continue;
+    }
+    await refreshRepoMergedUnits(r, now, readHead);
   }
 }
+
+/** Test seam (idea-518): the pooled merged-unit cache internals. */
+export const pooledMergedTestHooks = {
+  warm: (home, now, opts) => warmPooledMergedUnits(home, now, opts),
+  read: (home, now, opts) => readPooledMergedUnits(home, (u) => u.code ?? null, now, opts),
+  inflight: () => pooledRefresh.size,
+};
 
 /** lowercase lane code or id -> lane id, from <home>/teams.json lanes[]. */
 function readLaneCodes(home) {
@@ -2636,7 +2700,7 @@ export function getUsageAsync(opts = {}) {
   const p = usageQueue.then(async () => {
     const warmed = await warmUsageCaches(opts.home);
     if (!opts.git) await warmPooledMergedUnits(opts.home, opts.now); // an injected git (tests) keeps the sync single-repo path
-    const value = await drainSliced(usageSteps({ ...opts, warmed }));
+    const value = await drainSliced(usageSteps({ ...opts, warmed, noSyncGit: true })); // idea-518: steps read the warmed cache only
     if (ttl > 0) usageResults.set(key, { at: clock(), value });
     return value;
   }).finally(() => usageInflight.delete(key));
@@ -2655,7 +2719,7 @@ export const usageTestHooks = {
 };
 
 /** The /usage rollup as steps: `yield` marks a point where the async path may hand the loop back (no other effect). */
-function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed } = {}) {
+function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: squadOpt, now = Date.now, warmed, noSyncGit = false } = {}) {
   const homeDir = home || vibesquadHome();
   const squad = typeof squadOpt === "string" && squadOpt.trim() ? squadOpt.trim() : null; // usa-24: optional per-Squad filter
   const laneTeams = readLaneTeams(home);
@@ -2734,7 +2798,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const laneOf = (u) => (u.code ? (codes.get(u.code) ?? u.code) : null);
   // Injected git (tests) keeps the single-repo path; otherwise pool every Squad repo (usa-20).
   yield;
-  const mergedRawAll = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now);
+  const mergedRawAll = git ? readMergedUnits(git).map((u) => ({ ...u, lane: laneOf(u), repo: null, squad: null })) : readPooledMergedUnits(home, laneOf, now, { spawn: !noSyncGit });
   const unitSquad = (u) => u.squad ?? laneTeams.get(u.lane) ?? null;
   const mergedRaw = squad ? mergedRawAll.filter((u) => unitSquad(u) === squad) : mergedRawAll;
   const mergedByLane = new Map();
