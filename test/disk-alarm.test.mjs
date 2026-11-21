@@ -7,7 +7,7 @@ function setup(pctRef) {
   let t = 1_000_000;
   const logs = [];
   const alarm = createDiskAlarm({
-    targets: ["C:\data\sanctuary", "D:\projects"],
+    targets: ["C:\\data\\sanctuary", "D:\\projects"],
     stat: async (p) => ({ total: 1000 * 1024 ** 3, free: (driveOf(p) === "C:" ? pctRef.c : pctRef.d) * 10 * 1024 ** 3 }),
     now: () => t,
     log: async (type, text) => logs.push({ type, text }),
@@ -15,7 +15,13 @@ function setup(pctRef) {
   return { alarm, logs, advance: (m) => (t += m * MIN) };
 }
 
-test("driveOf", () => assert.equal(driveOf("C:\a\b"), "C:"));
+test("driveOf normalizes to uppercase X: for backslash, forward-slash and mixed-case roots", () => {
+  assert.equal(driveOf("C:\a\b"), "C:");
+  assert.equal(driveOf("c:\a\b"), "C:");
+  assert.equal(driveOf("c:/a/b"), "C:");
+  assert.equal(driveOf("D:\\"), "D:");
+  assert.equal(driveOf("D:"), "D:");
+});
 
 test("logs a metric per drive, then at most hourly unless pct moves >2", async () => {
   const p = { c: 50, d: 50 };
@@ -68,4 +74,48 @@ test("VS_DISK_ALARM=0 opts out", async () => {
 test("a failing stat is skipped, not thrown", async () => {
   const alarm = createDiskAlarm({ targets: ["C:\\data"], stat: async () => { throw new Error("boom"); }, log: async () => {} });
   assert.deepEqual(await alarm.tick(), []);
+});
+
+test("paths on one drive (any case/slash) give one reading", async () => {
+  const logs = [];
+  let stats = 0;
+  const alarm = createDiskAlarm({
+    targets: ["C:\data\sanctuary", "c:\work\projects", "C:/other"],
+    stat: async () => { stats++; return { total: 1000, free: 500 }; },
+    log: async (type, text) => logs.push({ type, text }),
+  });
+  const r = await alarm.tick();
+  assert.equal(stats, 1);
+  assert.equal(r.length, 1);
+  assert.equal(logs.length, 1);
+});
+
+test("a failed needs-you write is retried next tick (alarmed only set after success)", async () => {
+  let fail = true;
+  const logs = [];
+  const alarm = createDiskAlarm({
+    targets: ["C:\data"],
+    stat: async () => ({ total: 1000, free: 100 }),
+    now: () => 1,
+    log: async (type, text) => {
+      if (type === "needs-you" && fail) throw new Error("disk full");
+      logs.push({ type, text });
+    },
+  });
+  await assert.rejects(alarm.tick(), /disk full/);
+  fail = false;
+  await alarm.tick();
+  assert.equal(logs.filter((l) => l.type === "needs-you").length, 1);
+});
+
+test("enabled startDiskAlarm ticks at start and stop() clears the interval", async () => {
+  let called = 0;
+  const h = startDiskAlarm({ env: {}, tickMs: 5, targets: ["C:\data"], stat: async () => { called++; return { free: 900, total: 1000 }; }, log: async () => {} });
+  assert.notEqual(h.disabled, true);
+  await new Promise((r) => setTimeout(r, 40));
+  h.stop();
+  const n = called;
+  assert.ok(n >= 1);
+  await new Promise((r) => setTimeout(r, 40));
+  assert.equal(called, n);
 });

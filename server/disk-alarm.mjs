@@ -18,7 +18,13 @@ const GB = 1024 ** 3;
 export const OVERLORD_TEAM = "vibesquad";
 export const OVERLORD_LANE = "vibesquad";
 
-export const driveOf = (p) => parse(String(p)).root.replace(/[\/]+$/, "") || "/";
+/** Normalized drive key: `X:` (uppercase) for a drive-letter path with either slash style, else the POSIX/UNC root without trailing separators. */
+export function driveOf(p) {
+  const str = String(p);
+  const m = /^([A-Za-z]):/.exec(str);
+  if (m) return `${m[1].toUpperCase()}:`;
+  return parse(str).root.replace(/[\\/]+$/, "") || "/";
+}
 
 async function defaultStat(p) {
   const s = await statfs(p);
@@ -66,8 +72,8 @@ export function createDiskAlarm({
         logged = true;
       }
       if (!st.alarmed && pct < DISK_LOW_PCT) {
-        st.alarmed = true;
         await log("needs-you", `Disk low on ${drive}: ${freeGb} GB free (${pct}%). Free space or move worktrees/artifacts before it hits zero.`);
+        st.alarmed = true; // only after the write succeeded: a failed log retries next tick
         raised = true;
       } else if (st.alarmed && pct > DISK_REARM_PCT) st.alarmed = false;
       results.push({ drive, pct, logged, raised });
