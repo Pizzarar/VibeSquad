@@ -6,26 +6,29 @@
 /**
  * A reviewer's verdict line. Canonical form: `PASS|FAIL H/M/L <hash>` with numeric counts
  * (e.g. "FAIL 1/0/1 3528a4c"). Accepted variants: a single highest-severity letter instead of
- * the counts (`PASS H abc123`), an optional `VERDICT:` prefix, and markdown bold markers (`**...**`).
+ * the counts (`PASS H abc123`), an optional `VERDICT:` prefix, and markdown bold markers (`**...**`),
+ * including bold around the prefix (`**VERDICT:**`) or around the verdict (`VERDICT: **…**`).
  * `VERDICT_CORE` captures (1) PASS|FAIL, (2) `h/m/l` counts or the highest-severity letter, (3) the hash.
  */
+const BOLD = "(?:\\*\\*|__)?";
+/** The bold-tolerant verdict prefix, shared with agent-duties / watch-sets: `VERDICT:`, `**VERDICT:**`, `VERDICT: **…**` (matches empty). */
+export const VERDICT_PREFIX_SRC = `${BOLD}[ \\t]*(?:VERDICT[ \\t]*:[ \\t]*${BOLD}[ \\t]*)?`;
 const VERDICT_CORE = "(PASS|FAIL)[ \\t]+(\\d+\\/\\d+\\/\\d+|[HhMmLl])[ \\t]+([0-9a-f]{7,40})(?![0-9a-zA-Z])";
-const VERDICT_LINE_SRC = `^[ \\t]*(?:\\*\\*|__)?[ \\t]*(?:VERDICT[ \\t]*:[ \\t]*)?${VERDICT_CORE}`;
+const VERDICT_LINE_SRC = `^[ \\t]*${VERDICT_PREFIX_SRC}${VERDICT_CORE}`;
 /** A verdict line anywhere in a message (multiline): the core at the start of a line, tolerating a `VERDICT:` prefix and bold. */
 export const VERDICT_LINE_RE = new RegExp(VERDICT_LINE_SRC, "m");
-/** The strict parse of one line (the gate reads the reviewer's first or last line). */
+/** The strict parse of one line. */
 const LINE_PARSE_RE = new RegExp(VERDICT_LINE_SRC);
 const NON_IMPLEMENTER_REVIEW_PROFILE_RE = /^Review\b/i;
 const UX_REVIEWER_RE = /\bUX Review(?:er)?\b/i;
 const REVIEWER_TITLE_RE = /\b(?:re-?review|reviewer)\b|(?:^|[·:\s-])review(?:\s|$)/i;
 
-/** The full verdict line (byte-for-byte, minus a trailing \r) of the first `PASS|FAIL H/M/L <hash>` line in `text`, or null. */
+/** The full verdict line (byte-for-byte, minus trailing whitespace) of the message's effective verdict: the first FAIL if any,
+ * else the first PASS — agreeing with evaluateVerdictGate's fail-closed scan — or null when there is none. */
 export function extractVerdictLine(text) {
-  const s = String(text ?? "");
-  const m = VERDICT_LINE_RE.exec(s);
-  if (!m) return null;
-  const end = s.indexOf("\n", m.index);
-  return s.slice(m.index, end < 0 ? s.length : end).replace(/\r$/, "");
+  const vs = scanVerdicts(text);
+  if (!vs.length) return null;
+  return (vs.find((x) => x.verdict.verdict === "FAIL") ?? vs[0]).line;
 }
 
 /** Parses one line as a verdict: { verdict, high, medium, low, severity, hash } or null. The letter form
@@ -61,11 +64,25 @@ export function gateLine(text) {
   return "";
 }
 
-/** The last non-blank line of a message (trailing whitespace dropped), "" when there is none. */
+/** The last non-blank line of a message (trailing whitespace dropped) that is not provider transport noise, "" when there is none. */
 function lastLine(text) {
   const lines = String(text ?? "").split(/\r?\n/);
-  for (let i = lines.length - 1; i >= 0; i--) if (lines[i].trim()) return lines[i].replace(/\s+$/, "");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].trim() || TRANSPORT_NOISE_RE.test(lines[i])) continue;
+    return lines[i].replace(/\s+$/, "");
+  }
   return "";
+}
+
+/** Every verdict line in `text`, in order: { line (raw, trailing whitespace stripped), verdict }. Transport noise is skipped. */
+function scanVerdicts(text) {
+  const out = [];
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    if (!raw.trim() || TRANSPORT_NOISE_RE.test(raw)) continue;
+    const verdict = parseVerdictLine(raw);
+    if (verdict) out.push({ line: raw.replace(/\s+$/, ""), verdict });
+  }
+  return out;
 }
 
 /** A reviewer run: a `Review - …` profile, or a reviewer-shaped title ("Review - Gemini", "re-review", "R2 review"). */
@@ -114,40 +131,32 @@ export function digestVerdictText({ workerText, digestText, reviewer = false }) 
 export const GATE_EXIT = { pass: 0, fail: 1, noVerdict: 2, staleHash: 3, notReviewer: 4, noBranch: 5 };
 
 /**
- * The merge gate (idea-170): the reviewer's own verdict line (the FIRST or the LAST non-empty line) must be
- * `PASS H/M/L <hash>` (or the accepted variants) and `hash` a prefix of `tip`.
+ * The merge gate (idea-170): the reviewer's own verdict line must be `PASS H/M/L <hash>` (or the accepted variants) and
+ * `hash` a prefix of `tip`. The gate fails closed: every line of `lastMessage` is scanned, and ANY `FAIL` verdict anywhere
+ * fails the gate (whatever the first or last line says); otherwise the first `PASS` is checked against the tip.
  * `agent`: the reviewer's record ({ title, labels }); `lastMessage`: its last assistant message (uncapped); `tip`: the
  * full `git rev-parse <branch>`. Returns { code, ok, line, reason }.
  */
 export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
-  const first = gateLine(lastMessage);
+  const out = (code, reason, line = "") => ({ code, ok: code === GATE_EXIT.pass, line, reason });
   if (!isReviewerAgent(agent)) {
     const who = `${agent?.id ?? "?"} ("${agent?.title ?? ""}"${agent?.labels?.profile ? `, profile ${agent.labels.profile}` : ""})`;
-    return { code: GATE_EXIT.notReviewer, ok: false, line: first, reason: `not a reviewer: ${who} has no Review profile or reviewer title` };
+    return out(GATE_EXIT.notReviewer, `not a reviewer: ${who} has no Review profile or reviewer title`);
   }
-  // A reviewer often writes findings first and the verdict last: accept either the first or last non-empty line.
-  let line = first;
-  let v = parseVerdictLine(first);
-  if (!v) {
-    const last = lastLine(lastMessage);
-    if (last && last !== first) {
-      const vl = parseVerdictLine(last);
-      if (vl) {
-        v = vl;
-        line = last;
-      }
-    }
+  const verdicts = scanVerdicts(lastMessage);
+  // Fail closed: a FAIL verdict on any line fails the gate, regardless of a PASS on the first or last line.
+  const fail = verdicts.find((x) => x.verdict.verdict === "FAIL");
+  if (fail) {
+    const counts = fail.verdict.severity ? `highest severity ${fail.verdict.severity}` : `${fail.verdict.high}/${fail.verdict.medium}/${fail.verdict.low}`;
+    return out(GATE_EXIT.fail, `FAIL: the reviewer failed ${fail.verdict.hash} (${counts})`, fail.line);
   }
-  const out = (code, reason) => ({ code, ok: code === GATE_EXIT.pass, line, reason });
-  if (!v) return out(GATE_EXIT.noVerdict, "no verdict line: the reviewer's first or last line is not `PASS|FAIL H/M/L <hash>`");
-  if (v.verdict !== "PASS") {
-    const counts = v.severity ? `highest severity ${v.severity}` : `${v.high}/${v.medium}/${v.low}`;
-    return out(GATE_EXIT.fail, `FAIL: the reviewer failed ${v.hash} (${counts})`);
-  }
+  const pass = verdicts.find((x) => x.verdict.verdict === "PASS");
+  if (!pass) return out(GATE_EXIT.noVerdict, "no verdict line: the reviewer's message has no `PASS|FAIL H/M/L <hash>` line");
+  const v = pass.verdict;
   const t = String(tip ?? "").trim().toLowerCase();
-  if (!/^[0-9a-f]{7,64}$/.test(t)) return out(GATE_EXIT.noBranch, `branch ${branch || "?"} did not resolve to a commit`);
+  if (!/^[0-9a-f]{7,64}$/.test(t)) return out(GATE_EXIT.noBranch, `branch ${branch || "?"} did not resolve to a commit`, pass.line);
   if (!t.startsWith(v.hash.toLowerCase())) {
-    return out(GATE_EXIT.staleHash, `hash mismatch (stale review): reviewed ${v.hash}, ${branch || "branch"} tip is ${t.slice(0, 12)}`);
+    return out(GATE_EXIT.staleHash, `hash mismatch (stale review): reviewed ${v.hash}, ${branch || "branch"} tip is ${t.slice(0, 12)}`, pass.line);
   }
-  return out(GATE_EXIT.pass, `PASS on ${branch || "branch"} tip ${t.slice(0, 12)}`);
+  return out(GATE_EXIT.pass, `PASS on ${branch || "branch"} tip ${t.slice(0, 12)}`, pass.line);
 }

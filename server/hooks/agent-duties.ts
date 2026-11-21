@@ -63,7 +63,7 @@ import {
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine, finalsTextFor } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
-import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
+import { extractVerdictLine, isReviewerAgent, VERDICT_PREFIX_SRC } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -4112,7 +4112,7 @@ ${detail}` : text, refs: [d.setId] };
     /** The newest done entry attributed to a worker. */
     type DoneIndex = Map<string, LogEntry>;
     /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", "NO-VERDICT: …", plus a `VERDICT:` prefix or bold markers. */
-    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:\*\*|__)?\s*(?:VERDICT\s*:\s*)?(?:PASS|FAIL|NO-VERDICT)\b/;
+    const VERDICT_RE = new RegExp(`^\\s*(?:UNVERIFIED\\b.*?:\\s*)?${VERDICT_PREFIX_SRC}(?:PASS|FAIL|NO-VERDICT)\\b`);
     /**
      * One pass over a team log: per worker, the NEWEST `done` entry that belongs to it. Workers cannot `vs log`, so the report
      * is normally the digest's `{agent: digest, refs: [worker]}`. An entry belongs to worker W when its author is W, or when it
