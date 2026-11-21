@@ -2161,6 +2161,14 @@ const defaultRunGemini = oneShotReviewRun("agy", ["-p"]);
 
 const REVIEW_BULLET_LEAD_RE = /^(?:[-*•+]\s+|\d+[.)]\s+)+/;
 const REVIEW_GRADE_RE = /^grade\b|previous review|no prior review/i;
+// idea-320: the prompt asks for `[target] change -> where -> expected effect -> evidence`. `[engine-bug]` routes to the
+// @bug lane (`bug-chaser`); every other target (or no tag) routes to perfection (Workflows).
+const REVIEW_TARGET_RE = /^\s*\[([a-z][a-z-]*)\]\s*/i;
+/** Lane a review bullet routes to based on its `[target]` tag. */
+function reviewBulletLane(bullet) {
+  const m = String(bullet ?? "").match(REVIEW_TARGET_RE);
+  return m && String(m[1]).toLowerCase() === "engine-bug" ? "bug-chaser" : "perfection";
+}
 
 /** A bare section label (e.g. "Profile/Provider routing", "Loops/Tool friction:", "Handoffs/Review rounds:"). */
 function isReviewHeading(line) {
@@ -2175,7 +2183,8 @@ function isReviewHeading(line) {
 /**
  * Split a review response into actionable bullets: strip leading `-`, `*`, `•`, `+` and `1.` markers, drop empty lines
  * and bare section headings, and skip the closed-loop KPI self-grade line (a `/^grade\b|previous review|no prior review/i`
- * match, or the first line of a multi-line reply). Each bullet is truncated to `maxLen` and the list capped at `max`.
+ * match, or the first line of a multi-line reply). Each bullet keeps its full text (the card title is truncated separately
+ * by `buildConciseTitle`); the list is capped at `max`.
  */
 export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
   const lines = String(text ?? "")
@@ -2190,17 +2199,17 @@ export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
     const line = raw.replace(REVIEW_BULLET_LEAD_RE, "").trim();
     if (!line) continue;
     if (isReviewHeading(line)) continue;
-    out.push(clip(line, maxLen));
+    out.push(line);
     if (out.length >= max) break;
   }
   return out;
 }
 
-/** True when `text` significantly overlaps any of the `seen` texts (>=2 shared tokens, or >=1 with jaccard >= 0.15). */
+/** True when `text` is a near-duplicate of any `seen` text (>=3 shared significant tokens AND Jaccard >= 0.5), so distinct bugs sharing a couple of words are not merged. */
 function overlapsSeen(text, seen) {
   for (const other of seen) {
     const { shared, jaccard } = significantTokenOverlap(text, other);
-    if (shared >= 2 || (shared >= 1 && jaccard >= 0.15)) return true;
+    if (shared >= 3 && jaccard >= 0.5) return true;
   }
   return false;
 }
@@ -2222,18 +2231,22 @@ async function routeReviewToInbox(opusResult, geminiResult, dir) {
   const seen = existing.map((c) => `${c.title || ""} ${c.text || ""}`).filter(Boolean);
   const process = async (result, source) => {
     if (!result?.ok || typeof result.text !== "string") return;
-    const ideas = [];
+    const byLane = new Map(); // laneId -> bullets (idea-320: [engine-bug] -> bug-chaser, else perfection)
     for (const bullet of parseReviewBullets(result.text)) {
       if (overlapsSeen(bullet, seen)) continue;
-      ideas.push(bullet);
+      const laneId = reviewBulletLane(bullet);
+      const list = byLane.get(laneId) ?? [];
+      list.push(bullet);
+      byLane.set(laneId, list);
       seen.push(bullet);
     }
-    if (!ideas.length) return;
-    try {
-      const res = await addInboxCardsAsync({ ideas, laneId: "perfection", teamId: "vibesquad", source, baseHome: dir });
-      for (const c of res.added ?? []) sent.push(c.id);
-    } catch (e) {
-      console.error(`usage-review: failed to route ${source} bullets to perfection inbox: ${e?.message ?? e}`);
+    for (const [laneId, ideas] of byLane) {
+      try {
+        const res = await addInboxCardsAsync({ ideas, laneId, teamId: "vibesquad", source, baseHome: dir });
+        for (const c of res.added ?? []) sent.push(c.id);
+      } catch (e) {
+        console.error(`usage-review: failed to route ${source} bullets to ${laneId} inbox: ${e?.message ?? e}`);
+      }
     }
   };
   await process(opusResult, "usage-review:opus");
@@ -2256,9 +2269,15 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
       const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last, promptPath });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
+      // idea-319: retry a provider call once, but only when it timed out (nonzero exits / quota errors are not retried).
+      const withTimeoutRetry = (run) => async ({ prompt, timeoutMs }) => {
+        const attempt = () => run({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 }));
+        const first = await attempt();
+        return first.ok || !/\btimed out\b/i.test(String(first.error ?? "")) ? first : attempt();
+      };
       const results = await Promise.all([
-        opusRun({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
-        geminiRun({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
+        withTimeoutRetry(opusRun)({ prompt, timeoutMs }),
+        withTimeoutRetry(geminiRun)({ prompt, timeoutMs }),
       ]);
       for (const [name, r] of [["opus", results[0]], ["gemini", results[1]]]) {
         console.log(`usage-review: ${name} ${r?.ok ? "ok" : "failed"} ms=${r?.ms ?? 0} timeoutMs=${timeoutMs} promptChars=${prompt.length}${r?.ok ? "" : ` error=${String(r?.error ?? "").slice(0, 120)}`}`);
