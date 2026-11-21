@@ -1791,7 +1791,7 @@ test("split R2: an empty active right pane selects no row and the breadcrumb say
     globalThis.__panes = splitState({ rightActiveId: null, activePane: "right" });
     const t = render(props(view));
     assert.match(JSON.stringify(t), /Split · pick an agent/);
-    assert.equal(walk(t, (n) => typeof n.props?.className === "string" && /boring-(lane|worker)-row.*on/.test(n.props.className)).length, 0);
+    assert.equal(walk(t, (n) => typeof n.props?.className === "string" && /\bboring-(lane|worker)-row\b.*\bon\b/.test(n.props.className)).length, 0);
   } finally {
     globalThis.__panes = undefined;
   }
@@ -1930,6 +1930,22 @@ test("idea-500: collapsing the lane that holds the selected Lead row moves the s
   assert.equal(walk(t, (n) => /\bon\b/.test(String(n.props?.className ?? "")) && /boring-(conv-row|worker-row|core-row|project-row)/.test(n.props.className)).length, 1);
   assert.equal(byId(t, "boring-conv-toggle-per").props["aria-label"], "Expand lane");
   assert.doesNotMatch(String(byId(t, "boring-conv-toggle-per").props["aria-label"]), /workers/);
+});
+
+test("idea-503: collapsing a lane while a WORKER row is selected puts .on on the lane row (exactly one on)", () => {
+  reset();
+  const view = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1", "running")] }), lanePin("per")] });
+  globalThis.__agents = new Map([["w1", { id: "w1", title: "Worker One" }]]);
+  byId(render(props(view)), "boring-conv-toggle-ade").props.onClick();
+  laneBtn(render(props(view)), "ade").props.onClick();
+  byType(render(props(view)), "BoringInbox").props.onOpen({ teamId: "vs", view, item: { id: "w1" } });
+  let t = render(props(view));
+  assert.match(String(onRows(t)[0].props.className), /boring-worker-row/);
+  byId(t, "boring-conv-toggle-ade").props.onClick(); // collapse
+  t = render(props(view));
+  assert.equal(byId(t, "boring-worker-w1"), null);
+  assert.match(byId(t, "boring-conv-ade").props.className, /\bon\b/);
+  assert.equal(onRows(t).length, 1);
 });
 
 test("idea-468: no-agent Bugs lane passes the Bugs pin's real lane id, never the _bugs sentinel", () => {

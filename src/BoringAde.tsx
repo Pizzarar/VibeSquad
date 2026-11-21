@@ -577,7 +577,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   useEffect(() => {
     if (!sel.rowKey) return;
     if (typeof document === "undefined") return;
-    document.querySelector<HTMLElement>(".boring-sidebar .boring-conv-row.on, .boring-sidebar .boring-worker-row.on, .boring-sidebar .boring-core-row.on")?.scrollIntoView?.({ block: "nearest" });
+    document.querySelector<HTMLElement>(".boring-sidebar .boring-project-row.on, .boring-sidebar .boring-conv-row.on, .boring-sidebar .boring-worker-row.on, .boring-sidebar .boring-core-row.on")?.scrollIntoView?.({ block: "nearest" });
   }, [sel.rowKey]);
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
