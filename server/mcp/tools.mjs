@@ -16,8 +16,10 @@ import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
-/** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message uncapped (idea-466). */
+/** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
 export const COMPACT_LAST_MESSAGE = 600;
+/** idea-466 M1: `full: true` is generous but bounded (64KB); a longer message is clipped keeping the head plus an explicit marker. */
+export const MAX_FULL_LAST_MESSAGE = 65536;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
 const WORKER_ROLE = "worker";
 const LEAD_ROLE = "lead";
@@ -275,12 +277,14 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
 const entriesOf = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : []);
 
 /**
- * Clip to `cap` chars. At the full cap: tail only (conclusions sit at the end). At the compact cap: head + tail, because a
- * line-1 verdict or report header is dropped by a tail-only clip (G2 review H1).
+ * Clip to `cap` chars. Above the compact cap the message is long-form: keep the head (the verdict / root cause / report
+ * header sits at the top) and append an explicit truncation marker. At the compact cap: head + tail, because a line-1
+ * verdict or report header is dropped by a tail-only clip (G2 review H1).
  */
 const COMPACT_ELLIPSIS = " ...[clipped; full:true for more]... ";
+const FULL_TRUNCATION_MARKER = "…[truncated at 64KB]";
 export function clipText(t, cap) {
-  if (cap > COMPACT_LAST_MESSAGE) return t.slice(-cap);
+  if (cap > COMPACT_LAST_MESSAGE) return t.slice(0, cap - FULL_TRUNCATION_MARKER.length) + FULL_TRUNCATION_MARKER;
   const head = Math.round(cap * 0.42); // ~250 of 600
   const tail = cap - head - COMPACT_ELLIPSIS.length;
   return t.slice(0, head) + COMPACT_ELLIPSIS + t.slice(-tail);
@@ -311,7 +315,7 @@ async function snapshot(ctx, id, { full = false } = {}) {
   return ctx.withBackend({ id }, async (b) => {
     const agent = agentOf(await b.fetchAgent(id));
     const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline)?.call(b, id, { direction: "tail", limit: 50, projection: "projected" });
-    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? Infinity : COMPACT_LAST_MESSAGE) };
+    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_FULL_LAST_MESSAGE : COMPACT_LAST_MESSAGE) };
   });
 }
 
@@ -1012,11 +1016,11 @@ export const VS_TOOLS = {
   },
   send: { description: "Send a follow-up message to an agent.", inputSchema: obj({ id: S, text: S }, ["id", "text"]), run: sendTool },
   wait: {
-    description: "Block until an agent is idle, errored or the timeout hits. Returns {status, lastMessage} (lastMessage ~600 chars; full:true for the whole message).",
+    description: "Block until an agent is idle, errored or the timeout hits. Returns {status, lastMessage} (lastMessage ~600 chars; full:true up to 64KB).",
     inputSchema: obj({ id: S, timeoutSec: { type: "number" }, full: { type: "boolean" } }, ["id"]),
     run: waitTool,
   },
-  status: { description: "Agent status, title and its last assistant message (compact ~600 chars by default; full:true for the whole message). To wait on many agents use watch, not repeated status.", inputSchema: obj({ id: S, full: { type: "boolean" } }, ["id"]), run: statusTool },
+  status: { description: "Agent status, title and its last assistant message (compact ~600 chars by default; full:true up to 64KB). To wait on many agents use watch, not repeated status.", inputSchema: obj({ id: S, full: { type: "boolean" } }, ["id"]), run: statusTool },
   report: {
     description: "Write a done/decision/blocker entry to your team log as yourself. The VS server attributes it from your verified token (X1): a worker may only log done/blocker (refs forced to itself), a digest worker done (refs forced to the worker it digests), a lead/Buddy any type; decision from a worker is a 403. Returns {logged, type, agent, refs} as recorded.",
     inputSchema: obj({ type: { type: "string", enum: REPORT_TYPES }, text: S }, ["type", "text"]),

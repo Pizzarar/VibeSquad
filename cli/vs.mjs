@@ -550,7 +550,7 @@ Usage:
   vs restart request <tip> [--deadline <min, default 30>] [--needs <Live-Needs tokens>] [--team-only] | vs restart status [--json] | vs restart abort [--reason "<why>"]   request/abort: OWNER/Overlord only. A durable server-side restart request: the server asks every live lead of every Squad (--team-only: yours only; the restart is machine-wide) to drain (naming held background work), marks each lead drained on vs log restart-feedback 'drained restart <tip>' (dead leads count as drained), then fires vs restart once (all drained, or the deadline with the laggards logged) and logs restart-done. No agent turn holds the timer
   vs buddy restart --lane <code> [--reason "<why>"] [--profile "<Brainstorm profile>" | --provider claude|gemini]   restart a lane's Buddy via the brainstorm-restart path, or start its first one if it has none (lane lead: its own lane; Overlord: any lane in its Squad; owner: any)
   vs send <agent> "<text>" | --prompt-file <path|->   message an agent (long text: --prompt-file <path>, or "-" for stdin)
-  vs status <agent> [--full]   status + last assistant message (compact head+tail by default; --full for the whole message)
+  vs status <agent> [--full]   status + last assistant message (compact head+tail by default; --full up to 64KB)
   vs ls [--lane <lane>] [--team <team>]   list live agents in your lane
   vs logs <agent> [--limit <N>]   agent timeline entries
   vs inspect <agent>   full agent record

@@ -391,7 +391,19 @@ test('vs status --full returns the whole lastMessage; the default stays capped (
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const full = await runAgentVerb('status', { _: ['rn-1'], full: true }, ctx);
-  assert.equal(full.lastMessage.length, 5000, '--full returns the uncapped tail (fakeBackend timeline is 5000 chars)');
+  assert.equal(full.lastMessage.length, 5000, '--full returns the whole message under 64KB (fakeBackend timeline is 5000 chars)');
+  const compact = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
+  assert.equal(compact.lastMessage.length, 600, 'default stays compact');
+});
+
+test('vs status --full caps at 64KB keeping the head plus a truncation marker (idea-466 M1)', async () => {
+  const head = 'ROOT-CAUSE: ' + 'a'.repeat(70000); // > 64KB
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgentTimeline: async () => ({ entries: [{ item: { type: 'assistant_message', text: head } }] }) };
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const full = await runAgentVerb('status', { _: ['rn-1'], full: true }, ctx);
+  assert.ok(full.lastMessage.length <= 65536, `capped at 64KB (got ${full.lastMessage.length})`);
+  assert.ok(full.lastMessage.startsWith('ROOT-CAUSE: '), 'keeps the head');
+  assert.ok(full.lastMessage.endsWith('…[truncated at 64KB]'), 'clear truncation marker');
   const compact = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
   assert.equal(compact.lastMessage.length, 600, 'default stays compact');
 });
