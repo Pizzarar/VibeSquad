@@ -93,6 +93,8 @@ export type ProfileRow = {
   reviewRounds: number;
   avgReviewRounds: number;
   costPerMergedUnit: number | null;
+  /** usa-36 (absent on older servers) */
+  costPerRun?: number | null;
   fixAfterMergeCount: number;
   fixAfterMergeRate: number;
   avgUnitCycleMs: number | null;
@@ -258,6 +260,7 @@ export type ProfileView = {
   mergedUnits: number;
   avgReviewRounds: number;
   costPerMergedUnit: number | null;
+  costPerRun: number | null;
   fixRate: number;
   workPct: number | null;
 };
@@ -316,6 +319,7 @@ export function buildProfiles(d: UsageData): ProfileView[] {
       mergedUnits: p.mergedUnits ?? 0,
       avgReviewRounds: p.avgReviewRounds ?? 0,
       costPerMergedUnit: p.costPerMergedUnit ?? null,
+      costPerRun: typeof p.costPerRun === "number" && Number.isFinite(p.costPerRun) ? p.costPerRun : null,
       fixRate: p.fixAfterMergeRate ?? 0,
       workPct: total > 0 ? (p.workingMs ?? 0) / total : null,
     };
@@ -334,8 +338,10 @@ export function buildProfiles(d: UsageData): ProfileView[] {
     const wRun = (a: number, b: number) => (runs > 0 ? (a * prev.runs + b * view.runs) / runs : 0);
     const wUnit = (a: number, b: number) => (units > 0 ? (a * prev.mergedUnits + b * view.mergedUnits) / units : 0);
     const cost = prev.costPerMergedUnit === null && view.costPerMergedUnit === null ? null : wUnit(prev.costPerMergedUnit ?? 0, view.costPerMergedUnit ?? 0);
+    const cpr = prev.costPerRun === null && view.costPerRun === null ? null : wRun(prev.costPerRun ?? 0, view.costPerRun ?? 0);
     out.set(view.key, {
       ...prev,
+      costPerRun: cpr,
       runs,
       turns: prev.turns + view.turns,
       avgTurnsPerRun: runs > 0 ? (prev.turns + view.turns) / runs : 0,
@@ -727,7 +733,7 @@ export function autonomySummary(a: Autonomy | null | undefined, squad: string | 
   return `Autonomy & Dogfood · ${scope} · ${ratioText(a.ownerTouches.unitsPerOwnerTouch)} units/touch · streak ${a.unassistedStreak.current} (best ${a.unassistedStreak.longest}) · ${a.stalls.total} stall${a.stalls.total === 1 ? "" : "s"}`;
 }
 
-export type AutonomyTile = { key: string; label: string; value: string; sub: string };
+export type AutonomyTile = { key: string; label: string; value: string; sub: string; sub2?: string };
 
 /** The five KPI tiles of the scorecard strip. */
 export function autonomyTiles(a: Autonomy): AutonomyTile[] {
@@ -754,6 +760,8 @@ export type ReadyTime = { overall: ReadyGroup | null; byProvider: ReadyGroup[]; 
 export type CompactionStats = {
   runs: number; totalCostUsd: number; avgCostUsd: number | null; totalTokens: number; avgTokens: number | null;
   tokensSaved: number; handoffRuns: number; restartOverheadCostUsd: number; avgHandoffCostUsd: number | null;
+  /** usa-38 (absent on older servers) */
+  okRate?: number | null; meanOkCostUsd?: number | null; meanSuccessorFirstTurnCostUsd?: number | null;
 };
 
 const isNum = (n: number | null | undefined): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
@@ -785,9 +793,16 @@ export function readyTimeSummary(r: ReadyTime | null | undefined, c?: Compaction
   return `Ready Time & Compaction · ${o.count} run${o.count === 1 ? "" : "s"} · 1st response ${msText(o.medianFirstResponseExclQueueMs)} med (excl queue) · queue ${pctText(o.queuedShare)}${comp}`;
 }
 
-export type ReadyTile = { key: string; label: string; value: string; sub: string };
+export type ReadyTile = { key: string; label: string; value: string; sub: string; sub2?: string };
 
 /** KPI tiles: First Response excl/incl queue, Queue Share, Compaction vs Handoff cost. Missing data renders `—`. */
+/** `ok 80% · ok $0.25 vs successor 1st turn $1.50`; each missing value renders `—`. */
+export function compactionOkText(c: Pick<CompactionStats, "okRate" | "meanOkCostUsd" | "meanSuccessorFirstTurnCostUsd">): string | undefined {
+  if (!isNum(c.okRate) && !isNum(c.meanOkCostUsd) && !isNum(c.meanSuccessorFirstTurnCostUsd)) return undefined;
+  const usd = (n: number | null | undefined) => (isNum(n) ? usdText(n) : "—");
+  return `ok ${pctText(isNum(c.okRate) ? c.okRate : null)} · ok ${usd(c.meanOkCostUsd)} vs successor 1st turn ${usd(c.meanSuccessorFirstTurnCostUsd)}`;
+}
+
 export function readyTimeTiles(r: ReadyTime | null | undefined, c: CompactionStats | null | undefined): ReadyTile[] {
   const o = r?.overall ?? null;
   const usdOrDash = (n: number | null | undefined) => (isNum(n) ? usdText(n) : "—");
@@ -799,6 +814,40 @@ export function readyTimeTiles(r: ReadyTime | null | undefined, c: CompactionSta
       key: "compaction-vs-handoff", label: "Compaction vs Handoff",
       value: c ? `${usdOrDash(c.avgCostUsd)} vs ${usdOrDash(c.avgHandoffCostUsd)}` : "—",
       sub: c ? `${c.runs} compaction${c.runs === 1 ? "" : "s"} · ${tokText(c.tokensSaved)} tok saved · ${c.handoffRuns} handoff${c.handoffRuns === 1 ? "" : "s"}` : "no data",
+      sub2: c ? compactionOkText(c) : undefined,
     },
   ];
+}
+
+// ---- usa-39: jobKind filter pills for the profile table
+
+export type ProfileKindFilter = "all" | "implementers" | "reviewers" | "digests" | "coord";
+export const PROFILE_KIND_KEY = "vs.usage.profileKind";
+export const PROFILE_KIND_FILTERS: { key: ProfileKindFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "implementers", label: "Implementers" },
+  { key: "reviewers", label: "Reviewers" },
+  { key: "digests", label: "Digests & Scouts" },
+  { key: "coord", label: "Coord" },
+];
+/** Stored value -> a valid filter; anything unknown falls back to `all`. */
+export const parseProfileKind = (v: string | null | undefined): ProfileKindFilter =>
+  PROFILE_KIND_FILTERS.some((f) => f.key === v) ? (v as ProfileKindFilter) : "all";
+
+/** Kind bucket for a row: v0.4 jobKind, else the legacy role. Unknown kinds only show under All. */
+function profileKindBucket(p: Pick<ProfileView, "jobKind" | "role">): ProfileKindFilter | null {
+  const k = (p.jobKind || p.role || "").toLowerCase();
+  if (k === "implementer" || k === "worker") return "implementers";
+  if (k === "reviewer") return "reviewers";
+  if (k === "digest" || k === "scout") return "digests";
+  if (k === "lead" || k === "brainstorm") return "coord";
+  return null;
+}
+export function filterProfilesByKind<T extends Pick<ProfileView, "jobKind" | "role">>(rows: T[], f: ProfileKindFilter): T[] {
+  return f === "all" ? rows : rows.filter((p) => profileKindBucket(p) === f);
+}
+/** Cost/unit for rows that merge units, else `$/run` (— when absent). */
+export function costCellText(p: Pick<ProfileView, "mergedUnits" | "costPerMergedUnit" | "costPerRun">): string {
+  if (p.costPerMergedUnit !== null && p.mergedUnits > 0) return usdText(p.costPerMergedUnit);
+  return p.costPerRun !== null && p.costPerRun !== undefined ? `${usdText(p.costPerRun)}/run` : "—";
 }
