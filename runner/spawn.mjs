@@ -25,7 +25,7 @@ export function resolveExecutable(cmd, { env = process.env, platform = process.p
       if (target) return target;
     }
   }
-  throw new Error(`cannot resolve executable "${cmd}" without a shell`);
+  throw new Error(`executable "${cmd}" not found${path.isAbsolute(cmd) ? '' : ' on PATH'}`);
 }
 
 // npm .cmd shims end with: "%dp0%\path\to\target" %*   (target is an .exe, or a .js run by node)
@@ -51,6 +51,14 @@ export function spawnNoShell(cmd, args, opts = {}, spawnImpl = spawn) {
   const child = spawnImpl(r.file, [...r.args, ...args], { ...rest, shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
   try { childLedger?.add(child, r.file); } catch { /* the ledger is best effort */ }
   return child;
+}
+
+// A spawn 'error' (not a normal child exit). The common one is ENOENT: the executable resolved fine (it existed at
+// resolve time) but vanished before spawn — a CLI mid-update. Say so plainly so the failed run reads as
+// "<cmd> binary not found at <path>", not a bare "spawn <path> ENOENT".
+export function spawnErrorMessage(cmd, err) {
+  if (err?.code === 'ENOENT') return `${cmd} binary not found at ${err.path ?? cmd}`;
+  return String(err?.message ?? err);
 }
 
 // Kill a child and its descendants. child.kill() on win32 only ends the direct child, so a claude/opencode
