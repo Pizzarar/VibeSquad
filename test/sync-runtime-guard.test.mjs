@@ -266,6 +266,9 @@ test("idea-404: files deleted from git (and earlier untracked leaks) are removed
   assert.deepEqual(res.pruned, ["server/backend/leaked.mjs", "server/old.mjs"], "a case-only rename never prunes its new spelling");
   assert.ok(!existsSync(join(runtime, "server/old.mjs")));
   assert.ok(!existsSync(join(runtime, "server/backend/leaked.mjs")));
+  assert.ok(!existsSync(join(runtime, "server/backend")), "a dir emptied by the prune is removed");
+  assert.ok(existsSync(join(runtime, "server")), "the mirrored dir itself stays");
+  assert.ok(existsSync(join(runtime, "runner/node_modules/pkg")), "vendored dirs are never touched");
   assert.equal(read(runtime, "server/case.mjs"), "case1");
   for (const rel of ["runner/node_modules/pkg/index.js", "node_modules/x/index.js", "plugin/index.js", "scripts/squadz.mjs", "docs/profiles/DEFAULT_PACK.md", "dist/assets/old-chunk.js"]) {
     assert.ok(existsSync(join(runtime, rel)), `${rel} is not a git mirror and stays`);

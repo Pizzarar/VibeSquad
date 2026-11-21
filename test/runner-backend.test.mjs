@@ -384,12 +384,17 @@ test('lead-handoff list path (listDaemonAgents) pages through the backend list w
   assert.deepEqual(pages, [null, 'c1']);
 });
 
-test('runtime sync and desktop build ship runner/ (RUNNER_ENTRY)', () => {
-  const entryList = /\["dist", "public", "server", "cli", "runner"\]/;
-  for (const rel of ['server/sync-runtime.mjs', 'server/build-desktop.mjs']) {
-    const src = readFileSync(path.join(import.meta.dirname, '..', rel), 'utf8');
-    assert.match(src, entryList, `${rel} should ship runner/`);
-  }
+test('runtime sync and desktop build ship runner/ (RUNNER_ENTRY)', async () => {
+  // idea-404: sync ships the git-tracked runner/ files of the synced commit (plus the dist/ build output), so assert that
+  // behaviourally on this repo's HEAD instead of matching the source text of an entry list.
+  const { TRACKED_ENTRIES, BUILT_ENTRIES, trackedRuntimeFiles } = await import('../server/sync-runtime.mjs');
+  assert.ok(TRACKED_ENTRIES.includes('runner'), 'runner/ is a tracked runtime entry');
+  assert.ok(BUILT_ENTRIES.includes('dist'), 'dist/ ships as build output');
+  const repo = path.join(import.meta.dirname, '..');
+  const runnerFiles = trackedRuntimeFiles(repo, 'HEAD').filter((f) => f.startsWith('runner/'));
+  assert.ok(runnerFiles.includes('runner/runner.mjs'), `sync ships runner/runner.mjs (got ${runnerFiles.length} runner/ files)`);
+  const desktop = readFileSync(path.join(repo, 'server/build-desktop.mjs'), 'utf8');
+  assert.match(desktop, /\["dist", "public", "server", "cli", "runner"\]/, 'server/build-desktop.mjs should ship runner/');
 });
 
 test('startOwned starts the runner detached, hidden, unref-ed, with stdio in runner.log', async () => {
