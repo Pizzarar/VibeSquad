@@ -1417,6 +1417,90 @@ test(
 );
 
 test(
+  "plugin (idea-418): an over-long completion ping for a retired owner spawns the Flash merge for the successor; the fired set stays history",
+  withPluginEnv(async (sb) => {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const agents = new Map([
+      ["lead-old", mk("lead-old", "former-lead")],
+      ["lead-new", mk("lead-new", "lead")],
+      ...refs.map((r) => [r, mk(r, "worker")]),
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: now - 1000 });
+    const spawns = [];
+    const h = await pluginHarness(sb, agents, {
+      create: async (payload) => {
+        spawns.push(payload);
+        return { id: "flash-1", waitForFinish: async () => ({ status: "idle" }) };
+      },
+      timelineFor: (aid) => (aid === "flash-1" ? [{ item: { type: "assistant_message", text: "MERGED: 6 done, all PASS" } }] : []),
+    });
+    try {
+      writeLog(sb, refs.map((ref, i) => ({ ts: iso(now + i), agent: ref, lane: "vibesquad", type: "done", text: longReport(ref), refs: [] })));
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      assert.equal(spawns.length, 1, "one Flash worker spawned");
+      assert.equal(h.sent.filter((s) => s.to === "lead-old").length, 0, "nothing goes to the retired owner");
+      const toNew = h.sent.filter((s) => s.to === "lead-new");
+      assert.equal(toNew.length, 1, JSON.stringify(h.sent));
+      assert.match(toNew[0].text, /MERGED: 6 done, all PASS/);
+      // W4 marks the ping attempted before the spawn: the fired set has nothing left to send or cancel, so it is not re-owned.
+      const set = h.watch.get(id);
+      assert.ok(set.firedAt && set.pings.every((p) => p.attemptedAt));
+      assert.equal(set.owner, "lead-old");
+      assert.equal(set.reowned, undefined);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "plugin (idea-418): an over-long stall ping for a retired owner spawns the Flash merge for the successor and re-owns the still-armed set",
+  withPluginEnv(async (sb) => {
+    const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
+    const agents = new Map([
+      ["lead-old", mk("lead-old", "former-lead")],
+      ["lead-new", mk("lead-new", "lead")],
+      ...refs.map((r) => [r, mk(r, "worker")]),
+    ]);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-old", team: "vibesquad", lane: "vibesquad", items: refs.map((ref) => ({ kind: "agent", ref })) }, { home: sb.home, now: now - 1000 });
+    const spawns = [];
+    const h = await pluginHarness(sb, agents, {
+      create: async (payload) => {
+        spawns.push(payload);
+        return { id: "flash-1", waitForFinish: async () => ({ status: "idle" }) };
+      },
+      timelineFor: (aid) => (aid === "flash-1" ? [{ item: { type: "assistant_message", text: "MERGED: 5 blocked" } }] : []),
+    });
+    try {
+      // Five long blockers (w-6 still running): one stall ping over DIGEST_MERGE_MAX, and the set stays armed.
+      writeLog(sb, refs.slice(0, 5).map((ref, i) => ({ ts: iso(now + i), agent: ref, lane: "vibesquad", type: "blocker", text: `BLOCKED: ${longReport(ref)}`, refs: [] })));
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      await h.watch.tick();
+      const set = h.watch.get(id);
+      assert.ok(!set.firedAt, "the set is still armed");
+      assert.ok(set.pings[0].text.length > DIGEST_MERGE_MAX, `stall ping is over-long (${set.pings[0].text.length})`);
+      assert.equal(spawns.length, 1, "one Flash worker spawned");
+      assert.equal(h.sent.filter((s) => s.to === "lead-old").length, 0, "nothing goes to the retired owner");
+      const toNew = h.sent.filter((s) => s.to === "lead-new");
+      assert.equal(toNew.length, 1, JSON.stringify(h.sent));
+      assert.match(toNew[0].text, /MERGED: 5 blocked/);
+      assert.equal(set.owner, "lead-new", "the digest path adopts the armed set for the successor");
+      assert.deepEqual(set.reowned.map((r) => [r.from, r.reason]), [["lead-old", "retired-owner delivery"]]);
+      assert.equal(cancelWatch(id, "lead-new", { home: sb.home, allow: (x) => x.owner === "lead-new" }).ok, true);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
   "plugin: a failed Flash merge falls back to the truncated raw text, delivered once",
   withPluginEnv(async (sb) => {
     const refs = ["w-1", "w-2", "w-3", "w-4", "w-5", "w-6"];
