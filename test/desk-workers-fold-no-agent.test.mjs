@@ -22,7 +22,9 @@ const mk = (id, status, laneId) => ({ kind: "worker", laneId, agent: { id, statu
 globalThis.__members = [mk("w-run", "running", "Bug-Chaser"), mk("w-idle", "idle", "bug-chaser"), mk("w-other", "running", "other")];
 stub("agentTypes", "");
 for (const n of ["ChangesPanel", "FilesPanel", "TerminalPanel"]) stub(n, `export const ${n} = (p) => { if (!p.agent) throw new Error("${n} needs an agent"); return null; };`);
-stub("BoringAde", `export const boringStateGlyph = (s) => (s === "running" ? "run" : "idle"); export const boringWorkerIsLive = (m) => m.agent.status === "running";`);
+stub("attentionItems", `export * from ${JSON.stringify(pathToFileURL(path.join(root, "src", "attentionItems.ts")).href)};`);
+stub("useNowTick", "export const useNowTick = () => Date.now();");
+stub("BoringAde", `export const boringStateGlyph = (s) => (s === "running" ? "run" : s === "stalled" ? "stalled" : s === "quiet" ? "quiet" : "idle"); export const boringWorkerIsLive = (m) => m.agent.status === "running";`);
 stub("demo", "export const demoLog = () => [];");
 stub("demoFlag", "export const DEMO = true;");
 stub("panes", "export const openAgent = () => {};");
@@ -81,4 +83,19 @@ test("m1: with a noAgentAction the tab names it and renders its button (start / 
   assert.match(h, /data-testid="boring-ctx-no-agent-action"[^>]*>Open the Lead</);
   const d = html("Files", "bug-chaser", { need: "a running Lead or Brainstorm", label: "Start Brainstorm", disabled: true, run() {} });
   assert.match(d, /disabled=""[^>]*>Start Brainstorm</);
+});
+
+test("idea-493: a worker quiet 40m (running, no tool in flight) renders st-stalled in the Workers tab; a fresh one stays run", () => {
+  const old = new Date(Date.now() - 40 * 60_000).toISOString();
+  const quiet = new Date(Date.now() - 5 * 60_000).toISOString();
+  globalThis.__members = [
+    { ...mk("w-stalled", "running", "bug-chaser"), agent: { ...mk("w-stalled", "running", "bug-chaser").agent, updatedAt: old } },
+    { ...mk("w-5m", "running", "bug-chaser"), agent: { ...mk("w-5m", "running", "bug-chaser").agent, updatedAt: quiet } },
+    mk("w-fresh", "running", "bug-chaser"),
+  ];
+  const h = html("Workers");
+  const dot = (id) => h.match(new RegExp(`boring-ctx-worker-${id}".*?boring-dot st-([a-z]+)`))?.[1];
+  assert.equal(dot("w-stalled"), "stalled");
+  assert.equal(dot("w-5m"), "quiet"); // 90s-10m: faint quiet ring, the full ring is reserved for Needs-you
+  assert.equal(dot("w-fresh"), "run");
 });
