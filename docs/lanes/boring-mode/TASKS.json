@@ -1,6 +1,6 @@
 {
   "laneId": "boring-mode",
-  "updatedAt": "2026-11-21T03:41:05.452Z",
+  "updatedAt": "2026-11-21T08:44:17.441Z",
   "units": [
     {
       "id": "unit-bor-theme",
@@ -156,6 +156,19 @@
       ],
       "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/desk-d3c-context-panel.test.mjs test/desk-d4-polish.test.mjs test/normal-invariants.test.mjs",
       "status": "done"
+    },
+    {
+      "id": "unit-bor-b8-trinity-sidebar",
+      "goal": "B8a (idea-446): Always-visible Overlord/RiffBot in distinct Trinity card separated from feature lanes",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/boring.css",
+        "test/boring-mode.test.mjs",
+        "test/normal-invariants.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/desk-d3c-context-panel.test.mjs test/desk-d4-polish.test.mjs test/normal-invariants.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-b8-trinity-sidebar"
     }
   ]
 }
