@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE } from "../server/watch-sets.mjs";
+import { addWatch, cancelWatch, createWatchEngine, listWatches, reownWatches, reownWatchesAsync, watchesPath, DIGEST_MERGE_MAX, SUITE_LOCK_FILE, SUITE_RESULT_FILE, FINAL_TOTAL_CAP, finalsBlock, finalsTextFor } from "../server/watch-sets.mjs";
 
 const T0 = Date.parse("2026-11-10T12:00:00.000Z");
 const MIN = 60_000;
@@ -2331,3 +2331,185 @@ test(
     }
   }),
 );
+
+test(
+  "idea-450: a duplicate [done] from a SECOND digest agent (same worker + verdict, reworded) is still deduped",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: "PASS 1/0/0 deadbeef: w1 body" } }] : []),
+    });
+    try {
+      const now = Date.now();
+      writeLog(sb, [
+        { ts: iso(now), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 1/0/0 deadbeef: w1 done", refs: ["w-1"] },
+        { ts: iso(now + 10), agent: "dig-2", lane: "vibesquad", type: "done", text: "PASS 1/0/0 deadbeef: w1 done (retry)", refs: ["w-1"] },
+      ]);
+      h.scanLogs(false);
+      await wait(250);
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      const relays = toLead.filter((s) => s.text.startsWith("New team log event"));
+      assert.equal(relays.length, 1, JSON.stringify(toLead));
+      assert.equal(toLead.map((s) => s.text).join("\n").split("auto-forwarded report").length - 1, 1, JSON.stringify(toLead));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-450 H1: an Overlord's watch ping and the lane lead's [done] relay each get the final (keyed by recipient, not worker)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["ovl", mk("ovl", "lead", "vibesquad")],
+      ["lead-fa", mk("lead-fa", "lead", "feat-alpha")],
+      ["w-1", mk("w-1", "worker", "feat-alpha")],
+    ]);
+    const final = "PASS 0/0/0 deadbeef\n" + "fidelity-detail ".repeat(50);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "ovl", team: "vibesquad", lane: "feat-alpha", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: final } }] : []),
+    });
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "dig-1", lane: "feat-alpha", type: "done", text: "PASS 0/0/0 deadbeef: w1 done", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const toOvl = h.sent.filter((s) => s.to === "ovl").map((s) => s.text).join("\n");
+      const toFa = h.sent.filter((s) => s.to === "lead-fa").map((s) => s.text).join("\n");
+      assert.match(toOvl, new RegExp(`Watch ${id} complete`));
+      assert.match(toOvl, /Final message of w-1 \(auto-forwarded report\):/);
+      assert.match(toFa, /Worker w-1 final message \(auto-forwarded report\):/, "the lane lead's relay must still carry the final (not suppressed by the Overlord's ping): " + toFa);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-450 H2: digest-first order forwards once — the lead's own watch holds the [done], the watch ping is the one copy",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const final = "PASS 0/0/0 deadbeef\n" + "fidelity-detail ".repeat(50);
+    const now = Date.now();
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: now - 1000 });
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: final } }] : []),
+    });
+    try {
+      writeLog(sb, [{ ts: iso(now), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 deadbeef: w1 done", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const leadText = h.sent.filter((s) => s.to === "lead-1").map((s) => s.text).join("\n");
+      assert.match(leadText, new RegExp(`Watch ${id} complete`));
+      assert.equal(leadText.split("auto-forwarded report").length - 1, 1, leadText);
+      assert.ok(!leadText.includes("Worker w-1 final message"), "no separate relay in the digest-first order: " + leadText);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-450: a short final (carried in the item line, no detail) is still marked forwarded, so the late [done] relay does not double it",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const short = "PASS: w1 shipped";
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: short } }] : []),
+      watchSets: { now: () => clock.t },
+    });
+    try {
+      h.watch.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+      h.watch.onRunnerEvent(agentEv("w-1", "running"));
+      clock.t += MIN;
+      h.watch.onRunnerEvent(agentEv("w-1", "idle"));
+      h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+      clock.t += 20 * MIN;
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(h.sent.filter((s) => s.to === "lead-1" && s.text.includes(`Watch ${id}`)).length, 1);
+      // The digest's [done] lands > COVER_AFTER_FIRE_MS after the fire, so it relays (not held) — but must not re-send the short final.
+      clock.t += 121_000;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 done", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const leadText = h.sent.filter((s) => s.to === "lead-1").map((s) => s.text).join("\n");
+      assert.equal(leadText.split(short).length - 1, 1, "the short final appears once (item line), not again in the relay: " + leadText);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-450: a new turn re-forwards a NEW final (the dedupe keys on the final hash, not the worker alone)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    let final = "PASS 0/0/0 first\n" + "fidelity-detail ".repeat(50);
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: final } }] : []),
+    });
+    try {
+      const now = Date.now();
+      // First completion: the relay forwards the first final once (no watch).
+      writeLog(sb, [{ ts: iso(now), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 first: done", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      let leadText = h.sent.filter((s) => s.to === "lead-1").map((s) => s.text).join("\n");
+      assert.match(leadText, /PASS 0\/0\/0 first/);
+      // A fix round produces a NEW final: it must still forward.
+      final = "PASS 0/0/0 second\n" + "fidelity-detail ".repeat(50);
+      writeLog(sb, [{ ts: iso(now + 1000), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 second: done", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      leadText = h.sent.filter((s) => s.to === "lead-1").map((s) => s.text).join("\n");
+      assert.match(leadText, /PASS 0\/0\/0 second/, "the new final must still forward after a new turn: " + leadText);
+      assert.equal(leadText.split("auto-forwarded report").length - 1, 2, "two completions, two forwarded finals: " + leadText);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test("idea-450 unit: finalsBlock refs = full finals delivered (short-in-itemline + long-in-detail), excluding the overflow worker; finalsTextFor drops a skip ref", () => {
+  const long = (ch) => "PASS: " + ch.repeat(1300);
+  const mkItem = (ref, final, report) => ({ kind: "agent", ref, state: "done", final, report });
+  const set = {
+    items: [
+      mkItem("w-short", "PASS: short", "PASS: short"),
+      mkItem("w-l1", long("a"), long("a")),
+      mkItem("w-l2", long("b"), long("b")),
+      mkItem("w-l3", long("c"), long("c")),
+      mkItem("w-l4", long("d"), long("d")),
+      mkItem("w-over", long("e"), long("e")),
+    ],
+  };
+  const b = finalsBlock(set);
+  // w-short rides the item line; w-l1..w-l4 fill FINAL_TOTAL_CAP (1200 each = 4800, so w-l4 is truncated and w-over is dropped).
+  assert.ok(b.refs.includes("w-short"), "short final is marked forwarded (delivered in the item line)");
+  assert.ok(b.refs.includes("w-l1") && b.refs.includes("w-l2") && b.refs.includes("w-l3"));
+  assert.ok(!b.refs.includes("w-over"), "overflow worker's full final is not delivered, so it is not marked forwarded");
+  assert.ok(!b.text.includes("w-over"));
+  const filtered = finalsTextFor(set, ["w-l1"]);
+  assert.ok(!filtered.includes("w-l1"), "finalsTextFor omits a skip ref (already delivered to this recipient)");
+  assert.ok(filtered.includes("w-l2"));
+});
+
