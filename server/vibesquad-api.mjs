@@ -1,6 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { loopLagStats } from "../runner/loop-lag.mjs";
-import { fetchTesterTimeline, handleRunnerApi, sendTesterInput, testerTeamRecords } from "./runner-api.mjs";
+import { fetchTesterTimeline, handleRunnerApi, sanitizeTesterInput, sendTesterInput, testerTeamRecords } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { tailLines } from "./log-tail.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
@@ -43,7 +43,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isOwnerDevice, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -1946,6 +1946,22 @@ const testerName = (caller) => String(caller?.name ?? "").replace(/[\r\n\]]/g, "
 /** The card header every tester card starts with (server-stamped). */
 const testerStamp = (caller) => `[Alpha Tester: ${testerName(caller)}]`;
 
+// ---- PTO-B1: the local owner on the same report/thread handlers (docs/lanes/playtest-overlay/PLAN_V1.md) ----
+// The owner's in-game playtest dock (loopback + the per-install local token, auth.mjs isLocalOwner) files reports and reads
+// the reply thread through the handlers below with a synthetic caller. Differences from a tester: `teamId` is required
+// (400 missing, 404 unknown; no default Squad), the card is stamped `[Owner playtest]` with source `owner-playtest` and the
+// server-only meta `ownerPlaytest: true` (never testerDeviceId), clientReportId dedupes per (owner, Squad), a thread POST
+// may tag only an owner-playtest card of that Squad and is sent as an owner line `[Owner playtest(· card:<id>)] `.
+const OWNER_PLAYTEST_SOURCE = "owner-playtest";
+const OWNER_PLAYTEST_STAMP = "[Owner playtest]";
+const OWNER_PLAYTEST_CALLER = Object.freeze({ kind: "owner-playtest" });
+const isOwnerPlaytest = (caller) => caller?.kind === "owner-playtest";
+/** True for an owner-playtest report card (server meta only: a body can never set ownerPlaytest, see addInboxCardsAsync). */
+const isOwnerPlaytestCard = (c) => c?.ownerPlaytest === true && c.source === OWNER_PLAYTEST_SOURCE && !c.testerDeviceId;
+const ownerPlaytestChatPrefix = (cardId = null) => (cardId ? `[Owner playtest · card:${cardId}] ` : "[Owner playtest] ");
+/** The card id an owner-playtest chat line carries (`[Owner playtest · card:<id>] ...`), or null. */
+const ownerPlaytestChatCardId = (text) => /^\[Owner playtest · card:(idea-\d{1,12})\] /.exec(String(text ?? ""))?.[1] ?? null;
+
 /** The registry records of the caller's allowedTeams (runner-api testerTeamRecords over teams.json). */
 function testerTeamsOf(caller, rootDir) {
   return testerTeamRecords(caller, loadTeamsForInbox(rootDir));
@@ -1953,11 +1969,23 @@ function testerTeamsOf(caller, rootDir) {
 
 /** The allowed Squad a tester request names (`teamId`, default its first): 403 outside allowedTeams, 404 gone, 409 no bug lane. */
 function testerTeamFor(caller, teamId, rootDir) {
+  if (isOwnerPlaytest(caller)) return ownerPlaytestTeamFor(teamId, rootDir);
   const allowed = (caller?.allowedTeams ?? []).map((t) => String(t).trim().toLowerCase());
   const want = typeof teamId === "string" && teamId.trim() ? teamId.trim().toLowerCase() : allowed[0] ?? "";
   if (!want || !allowed.includes(want)) throw testerStatus("forbidden: that Squad is not on this tester's invite", 403);
   const team = testerTeamsOf(caller, rootDir).find((t) => String(t.id).trim().toLowerCase() === want);
   if (!team) throw testerStatus(`Squad "${want}" not found`, 404);
+  const laneId = resolveBugLaneId(team);
+  if (!laneId) throw testerStatus(`Squad "${team.id}" has no bug lane`, 409);
+  return { team, laneId };
+}
+
+/** PTO-B1: the Squad an owner playtest request names. `teamId` is required: 400 missing, 404 unknown, 409 no bug lane. */
+function ownerPlaytestTeamFor(teamId, rootDir) {
+  if (typeof teamId !== "string" || !teamId.trim()) throw testerStatus("teamId is required", 400);
+  const want = teamId.trim().toLowerCase();
+  const team = TEAM_ID_OK.test(want) ? loadTeamsForInbox(rootDir).find((t) => t && String(t.id ?? "").trim().toLowerCase() === want) : null;
+  if (!team) throw testerStatus(`Squad "${redactTester(want.slice(0, 64))}" not found`, 404);
   const laneId = resolveBugLaneId(team);
   if (!laneId) throw testerStatus(`Squad "${team.id}" has no bug lane`, 409);
   return { team, laneId };
@@ -2105,7 +2133,7 @@ function testerReportMarkdown(caller, text, tel) {
   if (tel.clickedPoint) facts.push(`- Clicked point: x=${tel.clickedPoint.x}, y=${tel.clickedPoint.y}`);
   if (tel.cursorNode) facts.push(`- Cursor node: ${tel.cursorNode}`);
   if (tel.logLines?.length) facts.push(`- Log (last ${tel.logLines.length} lines):`, "```text", ...tel.logLines, "```");
-  return [testerStamp(caller), text, ...(facts.length ? ["", "**Telemetry**", ...facts] : [])].join("\n");
+  return [isOwnerPlaytest(caller) ? OWNER_PLAYTEST_STAMP : testerStamp(caller), text, ...(facts.length ? ["", "**Telemetry**", ...facts] : [])].join("\n");
 }
 
 /** Same magic-byte check as server/inbox.mjs sniffImage (which attachInboxMedia enforces): full 8-byte PNG signature. */
@@ -2142,9 +2170,11 @@ function decodeTesterScreenshot(body) {
 
 /** Park one tester card on `team`'s bug lane: forced source, lane and tester meta (addInboxCardsAsync scope). */
 async function parkTesterCard(caller, team, laneId, text, rootDir, telemetry = null, clientReportId = null) {
-  const meta = { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller), ...(telemetry ? { telemetry } : {}), ...(clientReportId ? { clientReportId } : {}) };
+  const owner = isOwnerPlaytest(caller);
+  const who = owner ? { ownerPlaytest: true } : { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller) };
+  const meta = { ...who, ...(telemetry ? { telemetry } : {}), ...(clientReportId ? { clientReportId } : {}) };
   // `ideas: [text]`: one card whatever the line count (a plain multi-line `text` would be split into one card per line).
-  const r = await addInboxCardsAsync({ ideas: [text], teamId: team.id }, rootDir, { teamId: team.id, laneId, source: TESTER_SOURCE, meta });
+  const r = await addInboxCardsAsync({ ideas: [text], teamId: team.id }, rootDir, { teamId: team.id, laneId, source: owner ? OWNER_PLAYTEST_SOURCE : TESTER_SOURCE, meta });
   const card = r?.added?.[0];
   if (!card) throw new Error("tester card was not parked");
   return card;
@@ -2161,6 +2191,7 @@ function testerClientReportId(v) {
 }
 /** The card this caller already filed for (team, clientReportId), or null. Scoped to the caller: another tester's id never matches. */
 function findTesterReport(caller, teamId, clientReportId) {
+  if (isOwnerPlaytest(caller)) return readInboxCards().find((c) => isOwnerPlaytestCard(c) && sameId(c.teamId, teamId) && c.clientReportId === clientReportId) ?? null;
   return readInboxCards().find((c) => c?.testerDeviceId === caller.id && sameId(c.teamId, teamId) && c.clientReportId === clientReportId) ?? null;
 }
 /** In-flight reports keyed by (caller.id, teamId, clientReportId): a concurrent resend waits for the first instead of parking twice. */
@@ -2194,6 +2225,14 @@ function ownTesterCard(caller, cardId) {
   if (!card || card.testerDeviceId !== caller.id || !allowed.includes(String(card.teamId ?? "").toLowerCase())) {
     throw testerStatus("forbidden: not one of this tester's cards", 403);
   }
+  return card;
+}
+
+/** PTO-B1: an owner-playtest report card `cardId` on `team`, else 403 (also for a missing card or a tester's card). */
+function ownerPlaytestCard(cardId, team) {
+  const id = String(cardId ?? "").trim();
+  const card = /^idea-\d+$/.test(id) ? readInboxCards().find((c) => c?.id === id) : null;
+  if (!card || !isOwnerPlaytestCard(card) || !sameId(card.teamId, team.id)) throw testerStatus("forbidden: not an owner playtest card of that Squad", 403);
   return card;
 }
 
@@ -2244,7 +2283,8 @@ async function handleTesterReport(req, res, { rootDir, caller, backend, delivery
     const shot = decodeTesterScreenshot(body); // validated before the card exists: a bad screenshot parks nothing
     if (!clientReportId) return sendJson(res, 200, await fileTesterReport({ caller, team, laneId, text, telemetry, shot, rootDir, backend, deliveryClient }));
     // Idempotent resend: scoped to (caller.id, teamId, clientReportId), so one tester can never probe another's ids.
-    const key = JSON.stringify([String(caller.id), String(team.id).toLowerCase(), clientReportId]);
+    // PTO-B1: the owner's key has another shape (4 items), so it can never collide with a tester device's key.
+    const key = JSON.stringify(isOwnerPlaytest(caller) ? [OWNER_PLAYTEST_SOURCE, "", String(team.id).toLowerCase(), clientReportId] : [String(caller.id), String(team.id).toLowerCase(), clientReportId]);
     for (let pending = testerReportsInFlight.get(key); pending; pending = testerReportsInFlight.get(key)) await pending.catch(() => {});
     const prior = findTesterReport(caller, team.id, clientReportId);
     if (prior) {
@@ -2302,7 +2342,7 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       const t = await fetchTesterTimeline(backend, a.id, { limit: after ? TESTER_THREAD_MAX : limit });
       const all = t.entries.map((e) => {
         const role = e.item.type === "user_message" ? "user" : "assistant";
-        const cardId = role === "user" ? testerChatCardId(e.item.text) : null;
+        const cardId = role === "user" ? (isOwnerPlaytest(caller) ? ownerPlaytestChatCardId : testerChatCardId)(e.item.text) : null;
         return { id: `${a.id}:${e.seqStart ?? ""}`, role, text: e.item.text, ts: e.timestamp ?? null, ...(cardId ? { cardId } : {}) };
       });
       const at = after ? all.findIndex((m) => m.id === after) : -1;
@@ -2317,13 +2357,14 @@ async function handleTesterThread(req, res, { rootDir, caller, backend }) {
       let cardId = null;
       if (body.cardId !== undefined && body.cardId !== null) {
         if (typeof body.cardId !== "string" || !TESTER_CARD_ID_RE.test(body.cardId.trim())) throw testerStatus("cardId must be an inbox card id (idea-<n>)", 400);
-        const card = ownTesterCard(caller, body.cardId);
+        const card = isOwnerPlaytest(caller) ? ownerPlaytestCard(body.cardId, team) : ownTesterCard(caller, body.cardId);
         if (!sameId(card.teamId, team.id)) throw testerStatus("forbidden: not one of this tester's cards", 403);
         cardId = card.id;
       }
       const a = await testerIntakeAgentFor(backend, team);
       if (!a) throw testerStatus(`no live bug-intake agent in Squad "${team.id}"; your report is parked in the inbox`, 409);
-      await sendTesterInput(backend, caller, a.id, text, { cardId });
+      if (isOwnerPlaytest(caller)) await backend.sendAgentPrompt(a.id, `${ownerPlaytestChatPrefix(cardId)}${sanitizeTesterInput(text)}`, { owner: true });
+      else await sendTesterInput(backend, caller, a.id, text, { cardId });
       return sendJson(res, 200, { ok: true, agentId: a.id });
     }
     return sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -2432,6 +2473,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const owner = caller.kind === "owner";
     const write = req.method !== "GET" && req.method !== "HEAD";
     if (caller.kind === "denied") return sendJson(res, caller.status, { error: caller.error });
+    if (path === "/__vibesquad/tester/report" || path === "/__vibesquad/tester/thread") return ownerPlaytestGated(req, res, path, caller);
     if (isApi && !owner && (write || isGatedRead(path, req.url))) {
       if (caller.kind !== "agent" && originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4 (never for an agent caller)
       if (caller.kind !== "agent") return sendJson(res, 403, { error: READ_ONLY_ERROR, readOnly: true });
@@ -2567,6 +2609,26 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       default:
         return next?.();
     }
+  }
+
+  /**
+   * PTO-B1: the E6a report/thread routes for a non-tester caller. Only the local owner (no agent headers, and auth.mjs
+   * isLocalOwner: loopback socket + loopback Host/Origin + the per-install local token) reaches them. A paired owner device
+   * (LAN / Meshnet / relay), an agent and a read-only caller get 403 here: no new primitive, no remote relaxation.
+   */
+  function ownerPlaytestGated(req, res, path, caller) {
+    if (caller.kind !== "owner" || hasAgentHeaders(req) || !isLocalOwner(req)) {
+      if (caller.kind !== "agent" && originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4, as gated()
+      return sendJson(res, 403, { ok: false, error: "forbidden: the playtest report/thread routes need a bug-tester device or the local owner token" });
+    }
+    if (path === "/__vibesquad/tester/report" ? req.method !== "POST" : req.method !== "GET" && req.method !== "POST") {
+      return sendJson(res, 405, { ok: false, error: "method not allowed" });
+    }
+    const limit = path === "/__vibesquad/tester/report" ? TESTER_REPORT_MAX_BYTES : MAX_BODY_BYTES;
+    if (Number(req.headers["content-length"] ?? 0) > limit) return sendJson(res, 413, { error: "payload too large" });
+    const backend = opts.backend ?? sharedRunnerBackend();
+    const ctx = { rootDir, caller: OWNER_PLAYTEST_CALLER, backend, deliveryClient: opts.backend ?? null };
+    return path === "/__vibesquad/tester/report" ? handleTesterReport(req, res, ctx) : handleTesterThread(req, res, ctx);
   }
 
   /** E6a: the whole route table for a bug-tester device (deny-by-default: TESTER_ROUTE_ALLOWLIST on a canonical path). */
