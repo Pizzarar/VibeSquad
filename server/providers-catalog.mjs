@@ -17,6 +17,7 @@ import { resolveTeamsFilePath } from "./teams-file.mjs";
 import { normalizeStakes } from "./stakes-ladder.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { addInboxCardsAsync, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
+import { BUG_LANE_FALLBACK_IDS } from "./lane-pure.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
@@ -2146,7 +2147,7 @@ export function oneShotReviewRun(cmd, args) {
       let err = "";
       let done = false;
       const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve({ ...r, ms: Date.now() - started }); };
-      const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
+      const timer = setTimeout(() => { killTree(child); finish({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
       timer.unref?.();
       child.stdout?.on("data", (d) => { out += d; });
       child.stderr?.on("data", (d) => { err = (err + d).slice(-2000); }); // bounded tail: an unread stderr pipe can stall the child
@@ -2161,6 +2162,14 @@ const defaultRunGemini = oneShotReviewRun("agy", ["-p"]);
 
 const REVIEW_BULLET_LEAD_RE = /^(?:[-*•+]\s+|\d+[.)]\s+)+/;
 const REVIEW_GRADE_RE = /^grade\b|previous review|no prior review/i;
+// idea-320: the prompt asks for `[target] change -> where -> expected effect -> evidence`. `[engine-bug]` routes to the
+// @bug lane (`bug-chaser`); every other target (or no tag) routes to perfection (Workflows).
+const REVIEW_TARGET_RE = /^\s*\[([a-z][a-z-]*)\]\s*/i;
+/** Lane a review bullet routes to based on its `[target]` tag. */
+function reviewBulletLane(bullet) {
+  const m = String(bullet ?? "").match(REVIEW_TARGET_RE);
+  return m && String(m[1]).toLowerCase() === "engine-bug" ? "bug-chaser" : "perfection";
+}
 
 /** A bare section label (e.g. "Profile/Provider routing", "Loops/Tool friction:", "Handoffs/Review rounds:"). */
 function isReviewHeading(line) {
@@ -2175,9 +2184,11 @@ function isReviewHeading(line) {
 /**
  * Split a review response into actionable bullets: strip leading `-`, `*`, `•`, `+` and `1.` markers, drop empty lines
  * and bare section headings, and skip the closed-loop KPI self-grade line (a `/^grade\b|previous review|no prior review/i`
- * match, or the first line of a multi-line reply). Each bullet is truncated to `maxLen` and the list capped at `max`.
+ * match, or the first line of a multi-line reply). Each bullet is capped at `maxLen` (default 2000: enough to keep the
+ * evidence, but bounded so a runaway bullet cannot make a huge card body; the card title is shortened separately by
+ * `buildConciseTitle`). The list is capped at `max`.
  */
-export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
+export function parseReviewBullets(text, { max = 5, maxLen = 2000 } = {}) {
   const lines = String(text ?? "")
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -2196,44 +2207,60 @@ export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
   return out;
 }
 
-/** True when `text` significantly overlaps any of the `seen` texts (>=2 shared tokens, or >=1 with jaccard >= 0.15). */
+/** True when `text` is a near-duplicate of any `seen` text (>=3 shared significant tokens AND Jaccard >= 0.5), so distinct bugs sharing a couple of words are not merged. */
 function overlapsSeen(text, seen) {
   for (const other of seen) {
     const { shared, jaccard } = significantTokenOverlap(text, other);
-    if (shared >= 2 || (shared >= 1 && jaccard >= 0.15)) return true;
+    if (shared >= 3 && jaccard >= 0.5) return true;
   }
   return false;
 }
 
-/** True when an inbox card is an open perfection (Workflows) card (status "parked" or "accepted", or legacy unset status). */
-const isOpenPerfectionCard = (c) =>
-  Boolean(c) &&
-  String(c.laneId || "").toLowerCase() === "perfection" &&
-  (!c.status || c.status === "parked" || c.status === "accepted");
+/** True when an inbox card is open (status "parked" or "accepted", or legacy unset status). */
+const isOpenCard = (c) => Boolean(c) && (!c.status || c.status === "parked" || c.status === "accepted");
+/** True when a lane id is one of the bug lane fallbacks (bug-runner, bug-chaser). */
+const isBugLaneId = (laneId) => BUG_LANE_FALLBACK_IDS.includes(String(laneId || "").toLowerCase());
 
 /**
- * Best-effort: parse the review's actionable bullets and enqueue them into the perfection (Workflows) inbox, deduped
- * against open perfection cards (status parked or accepted) and across the opus/gemini sets. Returns the enqueued card ids (never throws).
+ * Best-effort: parse the review's actionable bullets and enqueue them into the target lane's inbox, deduped against that
+ * lane's open cards (bug-chaser includes its fallback bug lanes) and across the opus/gemini sets. Returns the enqueued card ids (never throws).
  */
 async function routeReviewToInbox(opusResult, geminiResult, dir) {
   const sent = [];
   if (!dir || isForbiddenRealHome(dir)) return sent;
-  const existing = readInboxCards(dir).filter(isOpenPerfectionCard);
-  const seen = existing.map((c) => `${c.title || ""} ${c.text || ""}`).filter(Boolean);
+  // idea-320 fix1: seed `seen` per target lane so a recurring [engine-bug] bullet already open in bug-chaser does not re-card.
+  const seen = new Map(); // target laneId ("bug-chaser" | "perfection") -> seen texts
+  const seenFor = (laneId) => {
+    let list = seen.get(laneId);
+    if (!list) { list = []; seen.set(laneId, list); }
+    return list;
+  };
+  for (const c of readInboxCards(dir)) {
+    if (!isOpenCard(c)) continue;
+    const laneId = String(c.laneId || "").toLowerCase();
+    const target = laneId === "perfection" ? "perfection" : isBugLaneId(laneId) ? "bug-chaser" : null;
+    if (!target) continue;
+    const text = `${c.title || ""} ${c.text || ""}`.trim();
+    if (text) seenFor(target).push(text);
+  }
   const process = async (result, source) => {
     if (!result?.ok || typeof result.text !== "string") return;
-    const ideas = [];
+    const byLane = new Map(); // laneId -> bullets (idea-320: [engine-bug] -> bug-chaser, else perfection)
     for (const bullet of parseReviewBullets(result.text)) {
-      if (overlapsSeen(bullet, seen)) continue;
-      ideas.push(bullet);
-      seen.push(bullet);
+      const laneId = reviewBulletLane(bullet);
+      if (overlapsSeen(bullet, seenFor(laneId))) continue;
+      const list = byLane.get(laneId) ?? [];
+      list.push(bullet);
+      byLane.set(laneId, list);
+      seenFor(laneId).push(bullet);
     }
-    if (!ideas.length) return;
-    try {
-      const res = await addInboxCardsAsync({ ideas, laneId: "perfection", teamId: "vibesquad", source, baseHome: dir });
-      for (const c of res.added ?? []) sent.push(c.id);
-    } catch (e) {
-      console.error(`usage-review: failed to route ${source} bullets to perfection inbox: ${e?.message ?? e}`);
+    for (const [laneId, ideas] of byLane) {
+      try {
+        const res = await addInboxCardsAsync({ ideas, laneId, teamId: "vibesquad", source, baseHome: dir });
+        for (const c of res.added ?? []) sent.push(c.id);
+      } catch (e) {
+        console.error(`usage-review: failed to route ${source} bullets to ${laneId} inbox: ${e?.message ?? e}`);
+      }
     }
   };
   await process(opusResult, "usage-review:opus");
@@ -2256,9 +2283,17 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
       const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last, promptPath });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
+      // idea-319 fix1: retry a provider call once, only on an explicit `timedOut` flag from the killTree timer (never by
+      // matching error text), and give the retry half the original budget so the two attempts total <= 1.5x timeoutMs.
+      const withTimeoutRetry = (run) => async ({ prompt, timeoutMs }) => {
+        const attempt = (budgetMs) => run({ prompt, timeoutMs: budgetMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 }));
+        const first = await attempt(timeoutMs);
+        if (first.ok || first.timedOut !== true) return first;
+        return attempt(Math.floor(timeoutMs / 2));
+      };
       const results = await Promise.all([
-        opusRun({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
-        geminiRun({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
+        withTimeoutRetry(opusRun)({ prompt, timeoutMs }),
+        withTimeoutRetry(geminiRun)({ prompt, timeoutMs }),
       ]);
       for (const [name, r] of [["opus", results[0]], ["gemini", results[1]]]) {
         console.log(`usage-review: ${name} ${r?.ok ? "ok" : "failed"} ms=${r?.ms ?? 0} timeoutMs=${timeoutMs} promptChars=${prompt.length}${r?.ok ? "" : ` error=${String(r?.error ?? "").slice(0, 120)}`}`);
