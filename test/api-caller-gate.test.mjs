@@ -84,6 +84,9 @@ const ids = {
 ids.worker = mk({ team: "sq", lane: "art", role: "worker", labels: { "vs.parent": ids.lead } });
 ids.digest = mk({ team: "sq", lane: "art", role: "worker", profile: "Pre-check - Flash", labels: { digestFor: ids.worker } });
 const runnerSrv = createRunnerServer(runner, { token: ADMIN, hash: "h" });
+// Same process as the spawned stand-in `vs` and sync fs: a loop stall past node's 5s keep-alive makes the server reap a socket the client pool
+// is about to reuse -> ECONNRESET -> "runner not responding". Never reap idle sockets in tests (see verdict-gate.test.mjs).
+runnerSrv.keepAliveTimeout = 0;
 const runnerPort = await listen(runnerSrv);
 writeDiscovery(runnerHome, { port: runnerPort, token: ADMIN });
 
@@ -91,6 +94,7 @@ const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome,
 const api = createVibesquadMiddleware(ROOT, { backend });
 const hits = [];
 const vsSrv = http.createServer((req, res) => { hits.push(`${req.method} ${req.url.split("?")[0]}`); api(req, res, () => { res.statusCode = 404; res.end("no"); }); });
+vsSrv.keepAliveTimeout = 0;
 const vsPort = await listen(vsSrv);
 after(async () => { await close(vsSrv); await close(runnerSrv); runner.shutdown(); });
 
@@ -346,6 +350,9 @@ test("X1c: /handoff: worker 403; the lane's lead 200 and the packet exists with 
   const r = await call(ids.lead, "POST", "/__vibesquad/handoff", { team: "sq", lane: "art" });
   assert.ok(r.status === 200 || r.status === 202, JSON.stringify(r.body));
   if (r.status === 202) { for (let i = 0; i < 100 && !existsSync(packet); i++) await new Promise((ok) => setTimeout(ok, 50)); }
+  // The packet is written before `vs handoff` exits, and the server allows one handoff at a time (429 while handoffRunning): under load the
+  // next POST raced the still-running child. Wait for the run to finish (GET `running`), not just for its output.
+  for (let i = 0; i < 400; i++) { if ((await call(ids.lead, "GET", "/__vibesquad/handoff?team=sq&lane=art")).body?.running !== true) break; await new Promise((ok) => setTimeout(ok, 50)); }
   assert.equal(existsSync(packet), true, "the packet was written by `vs handoff`");
   assert.equal(readFileSync(packet, "utf8").trim(), `packet by ${ids.lead}`, "the handoff runs as the verified lead");
   assert.equal(hits.filter((h) => h === "POST /__vibesquad/handoff").length, before + 1, "no HTTP loop");
