@@ -2,7 +2,7 @@
 // clear/snooze call each kind maps to. Pure (deps injected) so tests drive it with fixtures.
 import type { PaseoAgent } from "./agentTypes";
 import { isLocallyHidden, isMarkedUnread } from "./attentionLocal.ts";
-import { boringNeedsYouStall, formatToolMinutes, shortToolName } from "./boringHeaderStrip.ts";
+import { BORING_STALL_SECONDS, boringNeedsYouStall, formatToolMinutes, shortToolName } from "./boringHeaderStrip.ts";
 import type { Member } from "./teams.ts";
 
 export const LATER_MS = 2 * 3_600_000;
@@ -161,6 +161,16 @@ export const needsYouTotal = (views: ReadonlyArray<{ members: Member[] }>, now: 
  */
 export const stalledCount = (members: Member[], now: number): number =>
   attentionItems(members, now).filter((i) => i.kind === "stalled").length;
+
+/** R3.2 glyph rule: running, nothing pending, no tool call in flight, no update for BORING_STALL_SECONDS (90s) -> the amber-ring `stalled` glyph. */
+export function glyphStatusOf(a: PaseoAgent, now: number): string | undefined {
+  if (a.status !== "running" || a.pendingPermissions?.length || openToolOf(a, now)) return a.status;
+  const updated = Date.parse(a.updatedAt ?? "");
+  return !Number.isNaN(updated) && (now - updated) / 1000 >= BORING_STALL_SECONDS ? "stalled" : a.status;
+}
+
+/** A worker the Needs-you list shows as stalled (10m rule): it gets its own tree row instead of folding. */
+export const isNeedsYouStalled = (m: Member, now: number): boolean => stalledCount([m], now) > 0;
 
 const signatureOf = (a: PaseoAgent, kind: ItemKind) =>
   kind === "error" && a.status === "error" ? (a.lastError ?? "error") : (a.attentionReason ?? "attention");

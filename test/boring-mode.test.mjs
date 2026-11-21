@@ -115,7 +115,7 @@ globalThis.setInterval = (...a) => { const t = realSetInterval(...a); t?.unref?.
 stub("useNowTick.mjs", "export const useNowTick = () => Date.now();");
 stub("demo.mjs", "export const demoLog = () => [];");
 stub("demoFlag.mjs", "export const DEMO = false;");
-stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length;`);
+stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length; export const isNeedsYouStalled = (m) => Boolean(m.stalled); export const glyphStatusOf = (a) => a.status;`);
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
@@ -979,6 +979,17 @@ test("D2 BoringApp: a lane expands to a one-line '▸ N running · M idle' fold 
 });
 
 // ---- D2 fix round: M2 deep links, L1 unread-on-open, permission reason, M1 no double count ------------------
+test("idea-493 BoringApp: a worker Needs-you lists as stalled gets its own tree row and leaves the fold counts", () => {
+  reset();
+  const ws = [wk("w1", "running"), { ...wk("w2", "running"), stalled: true }, wk("w3", "idle")];
+  const view = squad({ pins: [lanePin("ade", { workers: ws }), lanePin("per")] });
+  byId(render(props(view)), "boring-conv-toggle-ade").props.onClick();
+  const t = render(props(view));
+  assert.ok(byId(t, "boring-worker-w2"), "stalled worker has its own row");
+  assert.equal(byId(t, "boring-worker-w1"), null);
+  assert.equal(JSON.stringify(byId(t, "boring-workers-fold-ade").props.children).includes("1 running · 1 idle"), true);
+});
+
 test("D2 M2 boringAgentLanding: an agent outside every pinned lane (hub worker) still lands in chat; unknown agents do not", () => {
   const v = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1")] })] });
   assert.equal(boringAgentLanding([v], "ade-ld", () => true).mode, "chat");

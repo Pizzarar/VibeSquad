@@ -186,3 +186,16 @@ test("R6-2: Ctrl+J reads the Needs-you list (not the rail); railAlerts and the h
   const closed = member(agent("c", { status: "closed", labels: { "needs-you": "pick" } }));
   assert.deepEqual(attentionItems([closed], NOW), []);
 });
+
+test("idea-493: glyphStatusOf = 90s quiet glyph rule; isNeedsYouStalled = the 10m Needs-you rule (tool in flight clears the glyph)", async () => {
+  const { glyphStatusOf, isNeedsYouStalled } = await import("../src/attentionItems.ts");
+  const now = Date.now();
+  const ago = (s) => new Date(now - s * 1000).toISOString();
+  const w = (status, s, extra = {}) => ({ kind: "worker", laneId: "x", attention: null, agent: { id: "w", status, updatedAt: ago(s), ...extra } });
+  assert.equal(glyphStatusOf(w("running", 30).agent, now), "running");
+  assert.equal(glyphStatusOf(w("running", 120).agent, now), "stalled");
+  assert.equal(glyphStatusOf(w("running", 120, { openToolSince: now - 60_000 }).agent, now), "running");
+  assert.equal(glyphStatusOf(w("idle", 9999).agent, now), "idle");
+  assert.equal(isNeedsYouStalled(w("running", 120), now), false);
+  assert.equal(isNeedsYouStalled(w("running", 2400), now), true);
+});

@@ -3,7 +3,7 @@ import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
 import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
-import { stalledCount } from "./attentionItems";
+import { glyphStatusOf, isNeedsYouStalled, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
 import { demoLog } from "./demo";
@@ -691,7 +691,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const suffix = (v: TeamView, base: string) => (v.team.id === activeTeamId ? base : `${base}-${v.team.id}`);
   const workerRow = (v: TeamView, pin: Pin, laneId: string, w: Pin["workers"][number]) => (
     <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
-      <span className={`boring-dot ${w.agent.status} ${glyphCls(w.agent.status, w.attention?.tone)}`} />
+      <span className={`boring-dot ${w.agent.status} ${glyphCls(glyphStatusOf(w.agent, now), w.attention?.tone)}`} />
       <span className="boring-row-label">{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
     </button>
@@ -700,7 +700,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], listId: string, foldId: string, onScreen: boolean, open: () => void) => {
     // A worker open in either split pane counts as on screen (R3.1), not only the selected one.
     const inPane = (id: string) => panes.split && (id === panes.leftActiveId || id === panes.rightActiveId);
-    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || inPane(w.agent.id));
+    // R3.1: a worker Needs-you lists as stalled (10m) gets its own row, so it never hides in "N running".
+    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || inPane(w.agent.id) || isNeedsYouStalled(w, now));
     const rest = workers.filter((w) => !shown.includes(w));
     const fold = boringWorkerFold(rest);
     return (
