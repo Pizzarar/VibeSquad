@@ -1820,10 +1820,11 @@ test("idea-468: no-agent feature lane mounts BoringContextPanel (keyed, in an er
   assert.equal(panel.key, "per");
   assert.equal(panel.props.agent, undefined);
   assert.equal(byType(t, "TimelineErrorBoundary").props.fallbackLabel, "context panel");
+  assert.doesNotMatch(JSON.stringify(byId(t, "boring-lane-no-agent-head").props.children), /drawer-title/); // boring.css gives .drawer-title order:1 + flex:1 0 100% (M3)
   assert.ok(byId(t, "boring-lane-no-agent-head")); // m2: a header band stands where the agent header would, so the panel keeps its top edge
   const act = panel.props.noAgentAction; // m1: the empty card's start action, not a dead "Open …"
   assert.equal(act.label, "Start Brainstorm");
-  assert.match(act.prompt, /^Start a Lead or Brainstorm to see/);
+  assert.equal(act.need, "a running Lead or Brainstorm");
 });
 
 test("idea-468 m1: no-agent lane with an idle Lead offers 'Open the Lead'", () => {
@@ -1832,7 +1833,7 @@ test("idea-468 m1: no-agent lane with an idle Lead offers 'Open the Lead'", () =
   laneBtn(render(props(view)), "per").props.onClick();
   const act = byType(render(props(view, { agents: new Map() })), "BoringContextPanel").props.noAgentAction;
   assert.equal(act.label, "Open the Lead");
-  assert.match(act.prompt, /^Open the Lead to see/);
+  assert.equal(act.need, "the Lead open");
 });
 
 test("idea-468: no-agent Bugs lane passes the Bugs pin's real lane id, never the _bugs sentinel", () => {
@@ -1857,4 +1858,13 @@ test("idea-468: no pin at all (no hub, project selected) mounts no panel", () =>
   const view = squad({ zones: { hub: null, riffbot: zone(null), overlord: zone(null) } });
   byId(withDesk(view), "boring-core-overlord").props.onClick();
   assert.equal(byType(render(props(view)), "BoringContextPanel"), null);
+});
+
+test("idea-468 M3: Desk no-agent band says Overlord/RiffBot, not Lead/Brainstorm", () => {
+  reset();
+  const view = squad({ zones: { hub: { lane: { id: "hub" } }, riffbot: zone(null), overlord: zone(null) } });
+  byId(withDesk(view), "boring-core-overlord").props.onClick();
+  const t = render(props(view));
+  assert.match(JSON.stringify(byId(t, "boring-lane-no-agent-head").props.children), /no Overlord or RiffBot running/);
+  assert.equal(byType(t, "BoringContextPanel").props.noAgentAction.need, "a running Overlord or RiffBot");
 });

@@ -158,7 +158,7 @@ function FeedTab({ teamId, laneId }: { teamId: string; laneId: string }) {
 }
 
 /** `agent` is absent on a lane with no live Lead/Brainstorm (idea-468): Workers, Plan and Feed still work; agent-bound tabs say so. */
-export type NoAgentAction = { prompt: string; label: string; disabled?: boolean; run: () => void };
+export type NoAgentAction = { need: string; label: string; disabled?: boolean; run: () => void };
 export function BoringContextPanel({ agent, entries, teamId, laneId, noAgentAction }: { agent?: PaseoAgent; entries: Entry[]; teamId: string; laneId: string; noAgentAction?: NoAgentAction }) {
   const [open, toggle] = useContextPanel();
   const [tab, setTab] = useState<ContextTab>(() => {
@@ -225,8 +225,8 @@ export function BoringContextPanel({ agent, entries, teamId, laneId, noAgentActi
         {tab === "Workers" && <WorkersTab agent={agent} laneId={laneId} />}
         {!agent && (tab === "Changes" || tab === "Files" || tab === "Terminal") && (
           <div className="boring-ctx-empty" data-testid="boring-ctx-no-agent">
-            {noAgentAction ? `${noAgentAction.prompt} ${tab}.` : `Start a Lead or Brainstorm to see ${tab}.`}
-            {noAgentAction && <> <button type="button" className="boring-ctx-idle-toggle" data-testid="boring-ctx-no-agent-action" disabled={noAgentAction.disabled} onClick={noAgentAction.run}>{noAgentAction.label}</button></>}
+            <span>{tab} needs {noAgentAction?.need ?? "a running Lead or Brainstorm"}.</span>
+            {noAgentAction && <button type="button" className="boring-ctx-no-agent-action" data-testid="boring-ctx-no-agent-action" disabled={noAgentAction.disabled} onClick={noAgentAction.run}>{noAgentAction.label}</button>}
           </div>
         )}
         {agent && tab === "Changes" && <ChangesPanel agent={agent} />}

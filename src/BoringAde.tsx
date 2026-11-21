@@ -614,11 +614,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     return spec;
   };
   /** idea-468 m1: what the agent-less panel's Changes/Files/Terminal tabs offer: open an existing (idle) Lead, else the empty card's own start action. */
-  const noAgentAction = (): { prompt: string; label: string; disabled?: boolean; run: () => void } => {
-    if (currentPin?.lead && selectedLaneId) return { prompt: "Open the Lead to see", label: "Open the Lead", run: () => pickRole(currentPin, selectedLaneId, "lead") };
+  const noAgentAction = (): { need: string; label: string; disabled?: boolean; run: () => void } => {
+    if (currentPin?.lead && selectedLaneId) return { need: "the Lead open", label: "Open the Lead", run: () => pickRole(currentPin, selectedLaneId, "lead") };
     const spec = emptySpec();
     const desk = emptyKind === "overlord" || emptyKind === "riffbot";
-    return { prompt: desk ? `${spec.cta.replace(/^Start /, "Start the ")} to see` : "Start a Lead or Brainstorm to see", label: spec.cta, disabled: spec.disabled, run: () => void spec.run() };
+    return { need: desk ? "a running Overlord or RiffBot" : "a running Lead or Brainstorm", label: spec.cta, disabled: spec.disabled, run: () => void spec.run() };
   };
   const emptyCard = () => {
     const startKey = startKeyFor(currentPin);
@@ -941,7 +941,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
               // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
               // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
-              <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="drawer-head boring-no-agent-head" data-testid="boring-lane-no-agent-head"><span className="drawer-title">{laneLabel ?? "Lane"}</span><span className="muted"> · no Lead or Brainstorm running</span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
+              <div data-testid="boring-lane-no-agent" style={{ flex: "1 1 0", minHeight: 0, display: "flex", flexDirection: "column" }}><div className="boring-agent-header" data-testid="boring-lane-no-agent-head"><span><strong>{laneLabel ?? "Lane"}</strong><span className="muted"> · {emptyKind === "overlord" || emptyKind === "riffbot" ? "no Overlord or RiffBot running" : "no Lead or Brainstorm running"}</span></span></div><div className="drawer-shell"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} noAgentAction={noAgentAction()} /></TimelineErrorBoundary></div></div>
             ) : emptyCard()}
           </div>
         )}

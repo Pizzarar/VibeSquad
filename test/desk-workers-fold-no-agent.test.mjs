@@ -66,7 +66,7 @@ for (const tab of ["Changes", "Files", "Terminal"]) {
   test(`agent undefined: ${tab} tab shows boring-ctx-no-agent and does not throw`, () => {
     const h = html(tab);
     assert.match(h, /data-testid="boring-ctx-no-agent"/);
-    assert.match(h, new RegExp(`Start a Lead or Brainstorm to see ${tab}\.`));
+    assert.match(h, new RegExp(`${tab} needs a running Lead or Brainstorm\\.`));
   });
 }
 
@@ -76,9 +76,9 @@ test("agent undefined: Plan and Feed tabs render", () => {
 });
 
 test("m1: with a noAgentAction the tab names it and renders its button (start / open-the-Lead copy)", () => {
-  const h = html("Changes", "bug-chaser", { prompt: "Open the Lead to see", label: "Open the Lead", run() {} });
-  assert.match(h, /Open the Lead to see Changes\./);
+  const h = html("Changes", "bug-chaser", { need: "the Lead open", label: "Open the Lead", run() {} });
+  assert.match(h, /Changes needs the Lead open\./);
   assert.match(h, /data-testid="boring-ctx-no-agent-action"[^>]*>Open the Lead</);
-  const d = html("Files", "bug-chaser", { prompt: "Start a Lead or Brainstorm to see", label: "Start Brainstorm", disabled: true, run() {} });
+  const d = html("Files", "bug-chaser", { need: "a running Lead or Brainstorm", label: "Start Brainstorm", disabled: true, run() {} });
   assert.match(d, /disabled=""[^>]*>Start Brainstorm</);
 });
