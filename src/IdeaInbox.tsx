@@ -538,7 +538,7 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
                       {(card as { source?: string }).source === "alpha-tester" && (
                         <span className="inbox-tester-badge" data-testid="inbox-tester-badge" title="Submitted by an alpha tester device">
                           ALPHA TESTER
-                          {(card as { meta?: { testerDeviceName?: unknown } }).meta?.testerDeviceName ? ` · ${String((card as { meta?: { testerDeviceName?: unknown } }).meta?.testerDeviceName)}` : ""}
+                          {testerDeviceNameOf(card) ? ` · ${testerDeviceNameOf(card)}` : ""}
                         </span>
                       )}
                       {card.status === "accepted" && <span className="inbox-merged-badge">accepted</span>}
@@ -656,3 +656,10 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
     </section>
   );
 });
+
+/** E6a flattens server-owned meta onto the card (card.testerDeviceName); older shapes nest it under card.meta. */
+function testerDeviceNameOf(card: unknown): string {
+  const c = card as { testerDeviceName?: unknown; meta?: { testerDeviceName?: unknown } };
+  const v = c.testerDeviceName ?? c.meta?.testerDeviceName;
+  return typeof v === "string" ? v : "";
+}

@@ -78,7 +78,7 @@ function BugSheet({ view, testerName, onClose }: { view: TeamView; testerName: s
         {done && <div role="status" data-testid="tester-bug-done">{done}</div>}
         <div className="tester-bug-row end">
           <button type="button" className="btn" onClick={onClose}>{done ? "Close" : "Cancel"}</button>
-          <button type="button" className="btn primary" data-testid="tester-bug-send" disabled={busy || !text.trim() || !bugLane} onClick={() => void send()}>
+          <button type="button" className="btn" data-testid="tester-bug-send" disabled={busy || !text.trim() || !bugLane} onClick={() => void send()}>
             {busy ? "Sending…" : "Send"}
           </button>
         </div>
@@ -91,7 +91,7 @@ export function TesterCockpit({ views, view, onSquad, runnerConn }: { views: Tea
   const allowed = useAllowedTeams();
   const deviceName = useDeviceName();
   const [sheet, setSheet] = useState(false);
-  const squads = allowed.length ? views.filter((v) => allowed.includes(v.team.id)) : views;
+  const squads = allowed.length ? views.filter((v) => allowed.some((a) => a.toLowerCase() === v.team.id.toLowerCase())) : views;
   const active = (view && squads.find((v) => v.team.id === view.team.id)) ?? squads[0];
   useEffect(() => {
     if (active && view && active.team.id !== view.team.id) onSquad(active.team.id);
@@ -113,7 +113,7 @@ export function TesterCockpit({ views, view, onSquad, runnerConn }: { views: Tea
           active && <span className="tester-squad-badge" data-testid="tester-squad-badge">{active.team.name}</span>
         )}
         <span className="tester-spacer" />
-        <button type="button" className="btn primary" data-testid="tester-log-bug-btn" disabled={!active} onClick={() => setSheet(true)}>🐞 Log Bug</button>
+        <button type="button" className="btn" data-testid="tester-log-bug-btn" disabled={!active} onClick={() => setSheet(true)}>🐞 Log Bug</button>
         <button
           type="button"
           className="btn ghost"

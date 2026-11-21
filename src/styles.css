@@ -6608,3 +6608,4 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .tester-bug-row.end { justify-content: flex-end; }
 .tester-bug-err { color: #c0123f; }
 .inbox-tester-badge { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--text); border: 1px solid var(--line); background: rgba(47, 191, 113, 0.18); padding: 1px 6px; border-radius: 999px; }
+.tester-body > * { flex: 1; min-height: 0; }

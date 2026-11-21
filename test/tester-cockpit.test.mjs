@@ -53,9 +53,11 @@ describe("IdeaInbox badge", () => {
     const s = read("src/IdeaInbox.tsx");
     assert.match(s, /source === "alpha-tester"/);
     assert.match(s, /data-testid="inbox-tester-badge"/);
-    assert.match(s, /testerDeviceName/);
+    assert.match(s, /c\.testerDeviceName \?\? c\.meta\?\.testerDeviceName/);
     assert.match(read("src/styles.css"), /\.inbox-tester-badge/);
     assert.match(read("src/styles.css"), /\.tester-cockpit/);
+    assert.match(read("src/styles.css"), /\.tester-body > \* \{ flex: 1; min-height: 0; \}/);
+    assert.match(read("src/TesterCockpit.tsx"), /toLowerCase\(\) === v\.team\.id\.toLowerCase\(\)/);
   });
 });
 
