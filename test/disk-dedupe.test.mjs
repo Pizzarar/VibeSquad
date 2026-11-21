@@ -5,7 +5,8 @@ import { existsSync, lstatSync, lutimesSync, mkdirSync, mkdtempSync, readdirSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { formatTempTtlMetric, isVsScratchName, startTempScratchTtl, sweepTempScratch } from "../server/disk-dedupe.mjs";
+import { catchUpTempScratch, formatCatchUpReport, formatTempTtlMetric, isVsScratchName, startTempScratchTtl, sweepTempScratch } from "../server/disk-dedupe.mjs";
+import { commandTempTtl, parseArgs } from "../cli/vs.mjs";
 
 const DAY = 86_400_000;
 const NOW = Date.now();
@@ -172,4 +173,163 @@ test("tick logs a bytes-freed metric only when something was freed, and honors V
     tt.stop();
   }
   assert.match(formatTempTtlMetric({ removed: 1, bytesFreed: 5, young: 0, errors: 0, matched: 1, scanned: 1, truncated: true }, 3), /truncated=1$/);
+});
+
+test("maxMs bounds one pass by wall clock (stop=time) and the metric carries ms and the stop reason", async () => {
+  const root = makeRoot();
+  try {
+    for (const s of ["Aa11Bb", "Cc22Dd", "Ee33Ff"]) scratch(root, `vs-time-${s}`);
+    let t = 0;
+    const clock = () => (t += 10); // every read advances 10ms
+    const r = await sweepTempScratch({ tempDir: root, now: NOW, maxMs: 25, clock });
+    assert.equal(r.truncated, true);
+    assert.equal(r.stop, "time");
+    assert.ok(r.removed >= 1 && r.removed < 3, `removed ${r.removed}`);
+    assert.equal(readdirSync(root).length, 3 - r.removed);
+    assert.match(formatTempTtlMetric(r, 3), / ms=\d+ truncated=time$/);
+    const r2 = await sweepTempScratch({ tempDir: root, now: NOW });
+    assert.equal(r2.truncated, false);
+    assert.equal(r2.stop, null);
+    assert.deepEqual(readdirSync(root), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("scheduler: a truncated pass runs the next one on the backlog cadence, an untruncated one waits for the slow tick", async () => {
+  let calls = 0;
+  const truncs = [true, true, false];
+  let done;
+  const third = new Promise((r) => (done = r));
+  const tt = startTempScratchTtl({
+    env: {},
+    tempDir: "/placeholder/tmp",
+    firstMs: 1,
+    backlogMs: 5,
+    tickMs: 3_600_000,
+    sweep: async () => {
+      calls++;
+      if (calls === 3) done();
+      return { scanned: 1, matched: 1, removed: 0, young: 0, errors: 0, bytesFreed: 0, truncated: truncs[calls - 1] ?? false, stop: null, ms: 0 };
+    },
+  });
+  try {
+    await Promise.race([third, new Promise((_, rej) => setTimeout(() => rej(new Error("backlog cadence did not re-run the sweep")), 2000))]);
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(calls, 3, "after the untruncated third pass the next one waits for the slow tick");
+  } finally {
+    tt.stop();
+  }
+});
+
+test("catch-up dry run reports count and bytes by prefix and age, deletes nothing, and keeps every guard", async () => {
+  const root = makeRoot();
+  const outside = makeRoot();
+  try {
+    writeFileSync(join(outside, "keep.txt"), "sentinel");
+    const a = scratch(root, "vs-cat-Aa11Bb", { files: { "f.bin": "x".repeat(300) } });
+    scratch(root, "vs-cat-Cc22Dd", { files: { "f.bin": "x".repeat(200) } });
+    const b = scratch(root, "vs-other-Ee33Ff", { files: { "g.bin": "y".repeat(50) } });
+    ageTree(b, new Date(NOW - 10 * DAY));
+    const fresh = scratch(root, "vs-cat-Gg44Hh", { old: false, files: { "h.bin": "z".repeat(10) } });
+    // Old top dir with one fresh file deep inside: aged <1d and not past the TTL.
+    const freshDeep = scratch(root, "vs-cat-Ii55Jj", { files: { "a.txt": "q" } });
+    mkdirSync(join(freshDeep, "in"));
+    ageTree(freshDeep);
+    writeFileSync(join(freshDeep, "in", "new.txt"), "n");
+    utimesSync(freshDeep, OLD, OLD);
+    // A link inside a candidate: never followed (its target's bytes are not counted).
+    const withLink = scratch(root, "vs-link-Kk66Ll", { files: { "a.txt": "x".repeat(7) } });
+    symlinkSync(outside, join(withLink, "node_modules"), "junction");
+    ageTree(withLink);
+    const unrelated = scratch(root, "other-app-Ab12Cd");
+    const badName = scratch(root, "vs-boot-bench-5k");
+
+    const r = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW });
+    assert.equal(r.apply, false);
+    assert.equal(r.removed, 0);
+    for (const p of [a, b, fresh, freshDeep, withLink, unrelated, badName]) assert.equal(existsSync(p), true, `dry run kept ${p}`);
+    assert.equal(existsSync(join(outside, "keep.txt")), true);
+    assert.equal(r.vsNamed, 7);
+    assert.equal(r.nameMismatch, 1);
+    assert.equal(r.matched, 6);
+    assert.equal(r.eligible, 4);
+    const cat = r.byPrefix["vs-cat"];
+    assert.equal(cat.count, 4);
+    assert.equal(cat.bytes, 300 + 200 + 10 + 2);
+    assert.equal(cat.eligible, 2);
+    assert.equal(cat.eligibleBytes, 500);
+    assert.deepEqual(cat.ages["<1d"], { count: 2, bytes: 12 });
+    assert.deepEqual(cat.ages["3-7d"], { count: 2, bytes: 500 });
+    assert.deepEqual(r.byPrefix["vs-other"].ages[">=7d"], { count: 1, bytes: 50 });
+    assert.equal(r.byPrefix["vs-link"].bytes, 7, "link target bytes never counted");
+    assert.equal(r.byPrefix["other-app"], undefined);
+    const text = formatCatchUpReport(r);
+    assert.match(text, /DRY RUN/);
+    assert.match(text, /^vs-cat \| 4 \| /m);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("catch-up apply removes only expired VS trees; link targets, fresh trees, files, top-level links and unrelated names survive", async () => {
+  const root = makeRoot();
+  const outside = makeRoot();
+  try {
+    writeFileSync(join(outside, "keep.txt"), "sentinel");
+    const old = scratch(root, "vs-cat-Aa11Bb");
+    const withLink = scratch(root, "vs-link-Kk66Ll");
+    symlinkSync(outside, join(withLink, "node_modules"), "junction");
+    ageTree(withLink);
+    const fresh = scratch(root, "vs-cat-Gg44Hh", { old: false });
+    const unrelated = scratch(root, "other-app-Ab12Cd");
+    const vsFile = join(root, "vs-file-Ab12Cd");
+    writeFileSync(vsFile, "x");
+    utimesSync(vsFile, OLD, OLD);
+    const topLink = join(root, "vs-top-Zz99Yy");
+    symlinkSync(outside, topLink, "junction");
+    lutimesSync(topLink, OLD, OLD);
+
+    const r = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW, apply: true });
+    assert.equal(r.removed, 2);
+    assert.equal(r.errors, 0);
+    assert.equal(r.notDir, 2);
+    assert.equal(existsSync(old), false);
+    assert.equal(existsSync(withLink), false);
+    assert.equal(existsSync(join(outside, "keep.txt")), true, "junction target intact");
+    assert.equal(existsSync(fresh), true);
+    assert.equal(existsSync(unrelated), true);
+    assert.equal(existsSync(vsFile), true);
+    assert.equal(lstatSync(topLink).isSymbolicLink(), true);
+    await assert.rejects(catchUpTempScratch({ tempDir: root, ttlDays: 0 }), /at least 1 day/);
+    await assert.rejects(catchUpTempScratch({ tempDir: "relative/tmp" }), /absolute/);
+  } finally {
+    rmSync(join(root, "vs-top-Zz99Yy"), { force: true, recursive: false });
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("vs temp-ttl --catch-up: dry run by default; --apply is refused from an agent shell before anything is touched", async () => {
+  const root = makeRoot();
+  try {
+    const old = scratch(root, "vs-cli-Aa11Bb");
+    let out = "";
+    const io = { tempDir: root, write: (t) => (out += t), progress: () => {} };
+    assert.equal(await commandTempTtl(parseArgs(["--catch-up"]), { ...io, env: {} }), 0);
+    assert.match(out, /DRY RUN/);
+    assert.equal(existsSync(old), true);
+    await assert.rejects(commandTempTtl(parseArgs(["--catch-up", "--apply"]), { ...io, env: { VS_AGENT_ID: "w1" } }), /owner verb/);
+    await assert.rejects(commandTempTtl(parseArgs(["--catch-up", "--apply"]), { ...io, env: { VS_AGENT_TOKEN: "t" } }), /owner verb/);
+    assert.equal(existsSync(old), true, "a refused --apply removed nothing");
+    await assert.rejects(commandTempTtl(parseArgs([]), { ...io, env: {} }), /usage: vs temp-ttl --catch-up/);
+    await assert.rejects(commandTempTtl(parseArgs(["--catch-up", "--days", "0"]), { ...io, env: {} }), /--days/);
+    out = "";
+    assert.equal(await commandTempTtl(parseArgs(["--catch-up", "--apply", "--json"]), { ...io, env: {} }), 0);
+    assert.equal(JSON.parse(out).removed, 1);
+    assert.equal(existsSync(old), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

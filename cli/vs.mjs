@@ -314,6 +314,7 @@ export function parseArgs(argv) {
     "sizes",
     "here",
     "summary",
+    "catchUp",
   ]);
 
   for (let i = 0; i < argv.length; i++) {
@@ -553,6 +554,7 @@ Usage:
   vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ...
   vs stop <agent> [--background]   interrupt an agent's current turn; --background instead stops an IDLE agent's held background shells (whole process trees; it gets a notice on its next input)
   vs archive <agent>   archive a single agent
+  vs temp-ttl --catch-up [--apply] [--days N] [--limit N] [--json]   one-time sweep of expired VS scratch dirs (vs-<name>-XXXXXX) in the temp dir: dry run by default (count + bytes by prefix and age), --apply deletes (owner shell only)
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
   vs wait <agent> [--timeout <seconds>]   block until idle (exit 0), error or blocked (1), timeout (2); no limit by default
   vs watch add <agent...> [--suite] [--restart] [--stall <min>] [--owner <agent>]   register a watch set (agents + your suite run + a restart) and end your turn; one ping when it completes or stalls (--stall default 15 min)
@@ -3064,6 +3066,28 @@ function commandWorktree(flags) {
   throw new Error(`unknown worktree subcommand "${sub}". Use: vs worktree create | sweep | retention | restore | cleanup-projects | root`);
 }
 
+/**
+ * `vs temp-ttl --catch-up` (idea-478): one pass over the whole temp dir with the B1 TTL guards and no per-pass cap.
+ * Dry run unless --apply, and --apply is an owner verb (it deletes), so it never runs from an agent shell.
+ */
+export async function commandTempTtl(flags, { env = process.env, tempDir = os.tmpdir(), write = (t) => process.stdout.write(t), progress = (t) => process.stderr.write(t) } = {}) {
+  if (!flags.catchUp || flags._.length) throw new Error("usage: vs temp-ttl --catch-up [--apply] [--days N] [--limit N] [--json]");
+  if (flags.apply) assertOwnerShell("vs temp-ttl --catch-up --apply", env);
+  const { TEMP_TTL_DAYS, catchUpTempScratch, formatCatchUpReport } = await import("../server/disk-dedupe.mjs");
+  const ttlDays = flags.days === undefined ? (env.VS_TEMP_TTL_DAYS ? Number(env.VS_TEMP_TTL_DAYS) : TEMP_TTL_DAYS) : Number(flags.days);
+  if (!Number.isFinite(ttlDays) || ttlDays < 1) throw new Error("--days must be a number >= 1");
+  const limit = flags.limit === undefined ? 30 : Number(flags.limit);
+  if (!Number.isInteger(limit) || limit < 1) throw new Error("--limit must be a positive integer");
+  const r = await catchUpTempScratch({
+    tempDir,
+    ttlDays,
+    apply: flags.apply === true,
+    onProgress: flags.json ? undefined : (o) => progress(`... scanned=${o.scanned} matched=${o.matched} pastTTL=${o.eligible}${o.apply ? ` removed=${o.removed}` : ""}\n`),
+  });
+  write((flags.json ? JSON.stringify(r) : formatCatchUpReport(r, { limit })) + "\n");
+  return 0; // locked/denied trees are counted in errors= and left for the sweep
+}
+
 /** `vs worktree retention --summary`: totals plus the top `limit` candidates by size (one flat row each). */
 export function retentionReport(res, limit = 10) {
   const top = [...(res.candidates ?? [])]
@@ -3167,6 +3191,7 @@ export const KNOWN_VERBS = [
   "archive",
   "mcp",
   "install-shim",
+  "temp-ttl",
   "open",
   "help",
 ];
@@ -3260,6 +3285,7 @@ export function main(argv) {
     if (command === "wait") return commandWait(flags);
     if (command === "verdict") return commandVerdict(flags);
     if (command === "push-guard") return commandPushGuard(flags);
+    if (command === "temp-ttl") return commandTempTtl(flags);
     if (
       command === "spawn" ||
       command === "send" ||
