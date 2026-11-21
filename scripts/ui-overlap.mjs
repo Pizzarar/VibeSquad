@@ -393,6 +393,7 @@ export async function run(opts = {}) {
       if (!size) throw new Error(`unknown size ${sid}`);
       for (const theme of themes) {
         const ctx = await browser.newContext({ viewport: { width: size.w, height: size.h }, deviceScaleFactor: size.dpr, colorScheme: theme });
+        await ctx.addInitScript(`try { localStorage.setItem("vs.vibeMigratedNormal", "1"); const p = JSON.parse(localStorage.getItem("vs.prefs.v1") || "{}"); localStorage.setItem("vs.prefs.v1", JSON.stringify({ ...p, "app.vibe": "fun" })); } catch {}`); // B9: Normal is the default; this audit targets Psycho
         await E.installRoutes(ctx);
         const page = await ctx.newPage();
         const pageErrors = [];
