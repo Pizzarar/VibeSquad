@@ -315,7 +315,7 @@ export function readCappedProviders(opts = {}) {
   return result;
 }
 
-export function setProviderCapped(providerId, capped = true, { reason = "manual cap", normalizeKey = true, ...opts } = {}) {
+export function setProviderCapped(providerId, capped = true, { reason = "manual cap", normalizeKey = true, ttlMs, ...opts } = {}) {
   const key = normalizeKey ? normalizeProviderFamily(providerId) : String(providerId ?? "").trim().toLowerCase();
   if (!key) return readCappedProviders(opts);
 
@@ -334,7 +334,7 @@ export function setProviderCapped(providerId, capped = true, { reason = "manual 
         if (!isCapExpired(v, now)) live[k] = v;
       }
       if (capped) {
-        live[key] = { reason, updatedAt: new Date(now).toISOString() };
+        live[key] = { reason, updatedAt: new Date(now).toISOString(), ...(Number.isFinite(ttlMs) && ttlMs > 0 ? { resetsAt: now + ttlMs } : {}) };
       } else {
         delete live[key];
         if (!normalizeKey) {

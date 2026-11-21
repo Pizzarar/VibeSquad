@@ -85,6 +85,9 @@ export function pickModel(want, available = []) {
   return variants.find((i) => /medium$/.test(i)) ?? variants[0] ?? null;
 }
 
+// A model-API failure relayed by the agent (not our bug, not the task's): worth a short provider cap so failover routes around it.
+export const UPSTREAM_FAILURE_RE = /internal (service )?(error|failure)|service unavailable|overloaded|rate.?limit|(429|500|502|503|504)/i;
+
 export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, command, args, mcp = true, mcpPath = mcpServerPath(), resolved } = {}) {
   const def = ACP_PROVIDERS[PROVIDER_ALIASES[provider] ?? provider];
   if (!def && !command) throw new Error(`no ACP definition for provider "${provider}"`);
@@ -119,6 +122,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       let reportedCost; // agent-reported cumulative session cost (usage_update.cost), if any
       let costTotal = 0; // cumulative session cost, same convention as claude's total_cost_usd (the fold diffs it)
       let costKnown = false;
+      let lastError = null; // latest session/prompt (or handshake) failure: the agent often exits right after it, so the exit must carry it
 
       lineReader(child.stdout, (line) => {
         let m;
@@ -160,7 +164,10 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       child.on('error', (err) => onExit({ code: null, error: String(err.message) }));
       child.on('exit', (code, signal) => {
         for (const p of pending.values()) p.reject(new Error('process exited'));
-        onExit({ code, signal });
+        // idea-442: opencode answers a prompt with "Internal error: Internal service failure" (upstream model API) and exits 1 with
+        // empty stderr. Say why on the exit so the status is loud and the server can cap the provider briefly.
+        const why = code !== 0 && code !== null && lastError;
+        onExit({ code, signal, ...(why ? { error: `${name} exited (code ${code}) after: ${lastError}`, upstream: UPSTREAM_FAILURE_RE.test(lastError) } : {}) });
       });
 
       const ready = (async () => {
@@ -218,6 +225,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
       ready.catch((e) => {
         // A session that never came up is dead: surface it and end the process so the agent reads as exited, not "starting".
         failed = e;
+        lastError = e.message;
         emit('error', { message: e.message });
         killTree(child);
       });
@@ -283,7 +291,7 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
           else if (turnCost !== null) { costTotal += turnCost; costKnown = true; done.costEstimated = true; } // price-table figure, not provider-billed
           if (costKnown) done.costUsd = costTotal;
           emit('turn_done', done);
-        } catch (e) { emit('error', { message: e.message }); }
+        } catch (e) { lastError = e.message; emit('error', { message: e.message }); }
         promptInFlight = false;
         dropOrphanSteers(); // the prompt ended: a steer-only item with no real prompt behind it must not start the next one
         if (queue.length && !stopped) {

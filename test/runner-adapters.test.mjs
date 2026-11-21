@@ -524,3 +524,24 @@ test('acp steered prompt: does not emit idle or turn_ended while adapter queue i
   const transitions = runner.timeline(id).map((e) => reduceTurn(t, e)).filter(Boolean);
   assert.deepEqual(transitions.map((tr) => tr.kind), ['turn_started', 'turn_ended']);
 });
+
+test('opencode: prompt "Internal service failure" then exit 1 -> exit event carries the reason and upstream:true (idea-442)', async () => {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { c.push({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'Internal error: Internal service failure' } }); setTimeout(() => c.emit('exit', 1, null), 5); },
+  ]);
+  await tick(); await tick(); await tick();
+  const exit = runner.timeline(id).find((e) => e.type === 'exit');
+  assert.equal(exit.code, 1);
+  assert.match(exit.error, /opencode exited \(code 1\) after: Internal error: Internal service failure/);
+  assert.equal(exit.upstream, true);
+  assert.ok(spawnImpl.last);
+});
+
+test('opencode: a clean exit or an unrelated error carries no upstream flag', async () => {
+  const { runner, id } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { c.push({ jsonrpc: '2.0', id: m.id, error: { code: -1, message: 'bad tool schema' } }); setTimeout(() => c.emit('exit', 1, null), 5); },
+  ]);
+  await tick(); await tick(); await tick();
+  const exit = runner.timeline(id).find((e) => e.type === 'exit');
+  assert.equal(exit.upstream, false);
+});
