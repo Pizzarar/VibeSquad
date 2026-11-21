@@ -69,8 +69,11 @@ export function runnerPaseoFacade(backend, plugin, { pollMs = 1000 } = {}) {
           timeline: { refetch: (opts) => tl(id, opts) },
         };
       },
-      async list() {
-        return { entries: (await backend.listAgents()).map((agent) => ({ agent })) };
+      async list(opts) {
+        // Only filter.includeArchived is passed on (idea-504 R2 M1: a finished, archived replacement still counts); other
+        // callers' options (includeBackground, page) never applied here and still don't.
+        const archived = opts?.filter?.includeArchived === true ? { filter: { includeArchived: true } } : undefined;
+        return { entries: (await backend.listAgents(archived)).map((agent) => ({ agent })) };
       },
       async create({ config = {}, cwd, title, prompt, labels, env, autoArchive } = {}) {
         const pm = plugin.splitProviderModel(config.provider, config.model);

@@ -147,6 +147,57 @@ export function digestSpawnConfig(p: StoredProfile | null, profile: string): Dig
     ...(featureValues ? { featureValues } : {}),
   };
 }
+
+// ---- idea-504: one-time respawn of a worker that died on an upstream model-API failure in its first turn ----
+
+/** Label on the respawned worker: the dead worker it replaces. A worker carrying it is never respawned again (no loop). */
+export const RESPAWN_OF_LABEL = "respawnOf";
+/** Label stamped on the dead worker once it was respawned: the replacement's id (a replayed exit sees it and stops). */
+export const RESPAWNED_AS_LABEL = "respawnedAs";
+/** An upstream exit older than this is a restart catch-up replay, not a fresh death: never respawned (same window as the cap). */
+export const UPSTREAM_RESPAWN_MAX_AGE_MS = 10 * 60_000;
+/** Timeline rows read to judge the dead worker's first turn; a timeline this long is no first-turn death. */
+export const UPSTREAM_RESPAWN_TIMELINE_LIMIT = 200;
+/** ACP tool kinds a dying first turn may have run and still be respawned: reads only (no edit, no shell, so no commit). */
+const RESPAWN_SAFE_TOOL_KINDS = new Set(["read", "search", "think", "fetch"]);
+/** Labels the replacement must not inherit: the spawn hook re-derives them for the new provider/profile. */
+const RESPAWN_DROPPED_LABELS = new Set([
+  "profile", "provider", "model", "tier", "wf", "vs.route", "vs.profile-derived", "vs.spawn-configured", "vs.mcp", "vs.auto-archived",
+  RESPAWNED_AS_LABEL, "digestFor", "digestTurn", // digestTurn = DIGEST_TURN_LABEL (declared below)
+]);
+
+/**
+ * idea-504: may this upstream exit be respawned, and with what prompt? Pure. `entries` is the dead worker's timeline
+ * (toTimeline rows), `ageMs` how long ago it exited. Respawns ONLY a worker's first-turn death: one prompt, no finished turn,
+ * no tool call beyond reads (an edit or a shell command may have changed files or committed), never a respawn of a respawn.
+ * Returns { prompt } or { skip: <reason> } (the reason goes on the metric line).
+ */
+export function upstreamRespawnPlan(
+  entries: Array<{ item?: any; turnEnd?: boolean }>,
+  labels: Labels,
+  { ageMs = 0, role = "" }: { ageMs?: number; role?: string } = {},
+): { prompt: string } | { skip: string } {
+  if (labels[RESPAWN_OF_LABEL]) return { skip: "already-a-respawn" };
+  if (labels[RESPAWNED_AS_LABEL]) return { skip: "already-respawned" };
+  if (role !== "worker" || isDigestAgent(labels)) return { skip: `role-${role || "unknown"}` };
+  if (!(ageMs <= UPSTREAM_RESPAWN_MAX_AGE_MS)) return { skip: "stale-exit" };
+  if (entries.length >= UPSTREAM_RESPAWN_TIMELINE_LIMIT) return { skip: "not-first-turn" };
+  const prompts = entries.filter((e) => e.item?.type === "user_message");
+  if (prompts.length !== 1 || entries.some((e) => e.turnEnd)) return { skip: "not-first-turn" };
+  const edit = entries.find((e) => e.item?.type === "tool_call" && !RESPAWN_SAFE_TOOL_KINDS.has(String(e.item?.detail?.kind ?? "").toLowerCase()));
+  if (edit) return { skip: `tool-edits(${String(edit.item?.name ?? "tool").slice(0, 40)})` };
+  const prompt = String(prompts[0].item?.text ?? "");
+  if (!prompt.trim()) return { skip: "no-prompt" };
+  return { prompt };
+}
+
+/** idea-504: the replacement's labels: the dead worker's own (team, lane, role, job, ord, stakes, vs.parent, ...) + profile + respawnOf. */
+export function respawnLabels(labels: Labels, profile: string, deadId: string): Labels {
+  const out: Labels = {};
+  for (const [k, v] of Object.entries(labels ?? {})) if (!RESPAWN_DROPPED_LABELS.has(k) && v !== undefined) out[k] = v;
+  return { ...out, profile, [RESPAWN_OF_LABEL]: deadId };
+}
+
 /** Label on a worker digest: the worker turn (runner turnId) it reports on, so a restarted server can find it on the runner (idea-123). */
 export const DIGEST_TURN_LABEL = "digestTurn";
 /** A digest's waiter gives up (and archives it) after DIGEST_WAIT_ROUNDS x 10 min; one open past this with no live waiter in this process (server restarted) is swept (idea-62). */
@@ -1784,8 +1835,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * digest profile (counterpart, then its role chain: Pre-check - Flash -> Check - Haiku -> Audit - DSF, then same-role
      * profiles on other providers), skipping every capped / over-quota provider and the provider(s) the failed digest ran on.
      * null when no other provider is available.
+     * idea-504 reuses it for a worker that died on an upstream failure (`name` = the worker's profile; `executes` false keeps a
+     * plan/read-only pick for a worker that was read-only itself).
      */
-    const alternateDigestProfile = (failedProviders: string[]): StoredProfile | null => {
+    const alternateProfileFor = (name: string, failedProviders: string[], executes = true): StoredProfile | null => {
       const failed = new Set(failedProviders.map((p) => normalizeProviderFamily(p)).filter(Boolean));
       const skipped = new Set<string>(); // families with no profile that can run the digest's vs command
       const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
@@ -1795,16 +1848,39 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       for (;;) {
         // Failed, skipped and capped families first: isProviderOverQuota reads the first entry that matches a family.
         const usage: any[] = [...[...failed, ...skipped].map(exhausted), ...capped.map(exhausted), ...quota];
-        const fo = resolveProfileWithFailover(DIGEST_PROFILE, stored, usage);
+        const fo = resolveProfileWithFailover(name, stored, usage);
         const alt = fo.failedOver ? (fo.profile as StoredProfile | null) : null;
         const fam = normalizeProviderFamily(alt?.provider);
         if (!alt?.provider || !fam || failed.has(fam) || skipped.has(fam)) return null;
         // L1: a plan/read-only profile (Audit - DSF) can't execute `vs log done --digest`: use an executing worker profile
         // on the same provider instead (same model first: Audit - DSF -> Mechanical - DSF), else try the next provider.
-        const runnable = digestCanExecute(alt) ? alt : executingDigestProfileOn(fam, alt.model, stored);
+        const runnable = !executes || digestCanExecute(alt) ? alt : executingDigestProfileOn(fam, alt.model, stored);
         if (runnable) return runnable;
         skipped.add(fam);
       }
+    };
+    const alternateDigestProfile = (failedProviders: string[]): StoredProfile | null => alternateProfileFor(DIGEST_PROFILE, failedProviders);
+    /**
+     * idea-504: the profile a worker that died upstream on `failedProvider` is re-spawned on. A P5c role-name profile
+     * ("Implement", "Work Order": R2 M2) routes through roleSpawnProfile with the failed family, capped and over-quota families
+     * as caps (the legacy failover returns null for role names); an old/stored profile name uses the idea-218 failover order.
+     * null when nothing off the failed family is available.
+     */
+    const alternateWorkerProfile = (fromProfile: string, failedProvider: string, stakes: string): StoredProfile | null => {
+      const stored = loadStoredProfiles();
+      const roles = liveRoles(stored);
+      const failedFam = normalizeProviderFamily(failedProvider);
+      if (roleNameHit(fromProfile, roles)) {
+        const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
+        const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+        const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
+        const route = roleSpawnProfile(fromProfile, { stakes: stakes || undefined, caps: cappedFamilies(usage, failedFam ? [failedFam] : []), roles });
+        const p = (route?.profile ?? null) as StoredProfile | null;
+        const fam = normalizeProviderFamily(p?.provider);
+        return p?.provider && fam && fam !== failedFam ? p : null;
+      }
+      const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());
+      return alternateProfileFor(fromProfile, [failedProvider], own ? digestCanExecute(own) : true);
     };
 
     // ---- Hook 1: before agent.create ---------------------------------------
@@ -2861,6 +2937,119 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       ),
     );
 
+    // ---- Hook 2b: idea-504 upstream-exit respawn -----------------------------
+    // A worker that dies on an upstream model-API failure (runner exit upstream:true, idea-442) in its FIRST turn is re-spawned
+    // ONCE on the alternate provider (the idea-218 failover order, failed + capped providers skipped), with the same title, cwd,
+    // labels and prompt. Runner-only: the event comes from RunnerBackend (server/backend/runner-lifecycle.mjs), once, in the server.
+    const upstreamRespawnSeen = new Set<string>(); // dead ids this process already handled (the labels below survive a restart)
+    // R2 H1: one follow-up run per upstream death. The A4 transient retry (handleFailure, from the same exit's failed turn_ended)
+    // owns any death it scheduled a resend for: the respawn yields to it. A dead worker the respawn claimed (right before its
+    // create) is never resent by A4. Lifecycle hooks run serially (turn_ended before upstream_exit), and both claims are taken
+    // synchronously, so the two can never both act on one exit in either order.
+    const upstreamRespawnClaimed = new Set<string>();
+
+    async function respawnAfterUpstreamExit(paseo: Paseo, agent: any, { error = "", ts }: { error?: string; ts?: number } = {}) {
+      const deadId = String(agent?.id ?? "").trim();
+      if (!deadId || upstreamRespawnSeen.has(deadId)) return;
+      upstreamRespawnSeen.add(deadId);
+      if (upstreamRespawnSeen.size > 500) upstreamRespawnSeen.delete(upstreamRespawnSeen.values().next().value as string);
+      const { snap: me, labels } = await labelsFor(paseo, agent);
+      const cwd = String(me?.cwd ?? agent?.cwd ?? "");
+      const where = teamOf(labels, cwd || undefined);
+      const fromProvider = String(me?.provider ?? agent?.provider ?? "").trim();
+      const fromFam = normalizeProviderFamily(fromProvider) || fromProvider || "?";
+      const metric = (text: string) => {
+        const line = `upstream-respawn ${text}`;
+        log(line);
+        if (!where) return;
+        try {
+          appendLog(where.team, { agent: "plugin", lane: where.lane, type: "metric", text: line });
+        } catch {
+          /* a metric never breaks the respawn */
+        }
+      };
+      const skip = (reason: string) => metric(`result=skipped reason=${reason} agent=${deadId} provider=${fromFam}`);
+      if (!where) return skip("no-team");
+      // A lead/user cancel or archive never respawns (acp.mjs already drops upstream on cancel/kill; this covers a late archive).
+      if (me?.archivedAt || labels[AUTO_ARCHIVED_LABEL] === "1") return skip("archived");
+      if (isWorkerBusy(me)) return skip(`revived(${me?.status})`); // someone already sent it a new prompt
+      // R2 L1: no (or a bad) exit time can't prove the exit is fresh: NaN -> upstreamRespawnPlan's stale-exit.
+      const ageMs = typeof ts === "number" && Number.isFinite(ts) ? Math.max(0, Date.now() - ts) : Number.NaN;
+      let entries: any[] = [];
+      try {
+        entries = (await paseo.agents.ref(deadId).timeline.refetch({ direction: "tail", limit: UPSTREAM_RESPAWN_TIMELINE_LIMIT })).entries ?? [];
+      } catch {
+        return skip("timeline-unreadable");
+      }
+      const plan = upstreamRespawnPlan(entries, labels, { ageMs, role: effectiveAgentRole({ labels }) });
+      if ("skip" in plan) return skip(plan.skip);
+      // At most once per task, across restarts: a replacement already carrying respawnOf=<dead> ends it.
+      try {
+        // R2 M1: archived agents too: a replacement that already finished and was archived still counts.
+        const { entries: all } = await paseo.agents.list({ filter: { includeArchived: true } });
+        const prior = (all ?? []).map((e: any) => e?.agent ?? e).find((a: any) => a?.labels?.[RESPAWN_OF_LABEL] === deadId);
+        if (prior) return skip(`already-respawned(${prior.id})`);
+      } catch {
+        return skip("list-failed"); // can't prove there is no replacement: never risk a second one
+      }
+      const fromProfile = String(labels.profile ?? "").trim();
+      if (!fromProfile) return skip("no-profile");
+      const alt = alternateWorkerProfile(fromProfile, fromProvider, String(labels.stakes ?? ""));
+      if (!alt?.provider) return skip("no-alternate");
+      // R2 H1: the claim, synchronously before the create (no await since the A4 check).
+      if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");
+      upstreamRespawnClaimed.add(deadId);
+      const title = String(me?.title ?? agent?.title ?? "").trim() || `respawn of ${deadId}`;
+      const newLabels = respawnLabels(labels, alt.name, deadId);
+      let newId = "";
+      try {
+        const handle = await paseo.agents.create({
+          config: {
+            provider: `${alt.provider}/${alt.model}`,
+            ...(alt.modeId ? { modeId: alt.modeId } : {}),
+            ...(alt.thinkingOptionId ? { thinkingOptionId: alt.thinkingOptionId } : {}),
+            ...(alt.featureValues ? { featureValues: { ...alt.featureValues } } : {}),
+          },
+          cwd: cwd || undefined,
+          title,
+          prompt: plan.prompt,
+          labels: newLabels,
+          env: { VS_PROFILE: alt.name },
+        });
+        newId = String(handle?.id ?? handle?.agent?.id ?? "").trim();
+      } catch (err) {
+        return skip(`spawn-failed(${String((err as any)?.message ?? err).slice(0, 80)})`);
+      }
+      if (!newId) return skip("spawn-no-id");
+      await deps.setLabels(deadId, { [RESPAWNED_AS_LABEL]: newId }).catch((e: unknown) => log(`respawnedAs label failed for ${deadId}: ${e}`));
+      const toFam = normalizeProviderFamily(alt.provider) || alt.provider;
+      const why = String(error || "upstream failure").replace(/\s+/g, " ").slice(0, 160);
+      // The lead's notice (decision wakes it): both ids, so it re-points its watch from the dead worker to the replacement.
+      appendLog(where.team, {
+        agent: "plugin",
+        lane: where.lane,
+        type: "decision",
+        text: `RESPAWNED ${deadId} -> ${newId}: worker "${title}" died on an upstream ${fromFam} failure in its first turn (${why}); re-spawned once on ${alt.name} (${toFam}) with the same prompt and labels. Watch ${newId}; ${deadId} is dead.`,
+        refs: [deadId, newId],
+      });
+      metric(`result=respawned agent=${deadId} new=${newId} provider=${fromFam}->${toFam} profile=${fromProfile}->${alt.name} age=${Math.round(ageMs / 1000)}s`);
+    }
+
+    try {
+      stops.push(
+        server.on("agent.upstream_exit" as any, async (payload: { agent: any; error?: string; ts?: number }, { paseo }: { paseo: any }) => {
+          paseoApi = paseo;
+          try {
+            await respawnAfterUpstreamExit(paseo, payload?.agent, payload ?? {});
+          } catch (err) {
+            log(`upstream respawn failed for ${payload?.agent?.id}: ${err}`);
+          }
+        }),
+      );
+    } catch {
+      // A host (the Paseo daemon) may restrict on() event names: runner agents only.
+    }
+
     // strict (watch sets): a user_message after the last assistant message means a newer turn began, so that text is stale -> "".
     async function lastAssistantText(paseo: Paseo, id: string, strict = false): Promise<string> {
       try {
@@ -3149,6 +3338,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // A4: transient network error retry with exponential backoff.
     async function handleFailure(paseo: Paseo, agent: any, message: string) {
       if (!TRANSIENT_ERROR.test(message)) return;
+      if (upstreamRespawnClaimed.has(agent.id)) {
+        log(`transient error on ${agent.id}: no A4 retry, it was re-spawned after an upstream failure (idea-504)`);
+        return;
+      }
       const n = retries.get(agent.id) ?? 0;
       if (n >= MAX_RETRIES) {
         log(`transient error on ${agent.id} persisted after ${n} retries: ${message}`);
