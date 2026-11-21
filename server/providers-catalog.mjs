@@ -126,6 +126,9 @@ const strList = (v) => (Array.isArray(v) ? [...new Set(v.map((x) => String(x).tr
 // Periodic Opus + Gemini usage review cadence (usa-7). Off means "never auto-run"; manual Run now still works.
 export const USAGE_REVIEW_INTERVALS = ["off", "6h", "12h", "1d", "3d", "5d", "2w"];
 const USAGE_REVIEW_DEFAULT_INTERVAL = "1d";
+// Per-reviewer one-shot timeout (T2/idea-399: Gemini timed out at 60s on 9 of the last 11 runs; payload ~31k chars is normal).
+export const USAGE_REVIEW_DEFAULT_TIMEOUT_MS = 180_000;
+const USAGE_REVIEW_TIMEOUT_RANGE = [10_000, 900_000];
 const USAGE_REVIEW_INTERVAL_MS = {
   "6h": 6 * 3600_000,
   "12h": 12 * 3600_000,
@@ -160,7 +163,9 @@ export function normalizeRunnerSettings(raw) {
     if (Object.keys(entry).length) providers[id] = entry;
   }
   const interval = USAGE_REVIEW_INTERVALS.includes(r.usageReview?.interval) ? r.usageReview.interval : USAGE_REVIEW_DEFAULT_INTERVAL;
-  return { providers, usageReview: { interval } };
+  const t = Number(r.usageReview?.timeoutMs);
+  const timeoutMs = Number.isFinite(t) && t >= USAGE_REVIEW_TIMEOUT_RANGE[0] && t <= USAGE_REVIEW_TIMEOUT_RANGE[1] ? Math.round(t) : USAGE_REVIEW_DEFAULT_TIMEOUT_MS;
+  return { providers, usageReview: { interval, timeoutMs } };
 }
 
 export function loadRunnerSettings(home) {
@@ -186,7 +191,8 @@ export function saveRunnerSettings(patch, home) {
     }
   }
   const usageReview = patch && patch.usageReview && typeof patch.usageReview === "object"
-    ? incoming.usageReview
+    ? { interval: "interval" in patch.usageReview ? incoming.usageReview.interval : current.usageReview.interval,
+        timeoutMs: "timeoutMs" in patch.usageReview ? incoming.usageReview.timeoutMs : current.usageReview.timeoutMs }
     : current.usageReview;
   const next = { ...raw, runner: { ...(raw.runner && typeof raw.runner === "object" ? raw.runner : {}), providers, usageReview } };
   writeSettingsAtomic(settingsPath(home), next);
@@ -2043,7 +2049,7 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   return out.join("\n");
 }
 
-/** One-shot CLI run: prompt as the trailing arg (as runAgyUsage does), stdin not used, stdout captured, 60s killTree timeout. */
+/** One-shot CLI run: prompt as the trailing arg (as runAgyUsage does), stdin not used, stdout captured, killTree timeout (default 60s; runUsageReview passes runner.usageReview.timeoutMs). */
 export function oneShotReviewRun(cmd, args) {
   return ({ prompt, spawnImpl, timeoutMs = 60_000 }) =>
     new Promise((resolve) => {
@@ -2163,16 +2169,19 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
   if (usageReviewInFlight) return usageReviewInFlight;
   usageReviewInFlight = (async () => {
     try {
-      const interval = loadRunnerSettings(home).usageReview.interval;
+      const { interval, timeoutMs } = loadRunnerSettings(home).usageReview;
       const last = latestUsageReview(home);
       const sinceMs = last ? toMs(last.at) : null;
       const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last, promptPath });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
       const results = await Promise.all([
-        opusRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
-        geminiRun({ prompt }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
+        opusRun({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
+        geminiRun({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 })),
       ]);
+      for (const [name, r] of [["opus", results[0]], ["gemini", results[1]]]) {
+        console.log(`usage-review: ${name} ${r?.ok ? "ok" : "failed"} ms=${r?.ms ?? 0} timeoutMs=${timeoutMs} promptChars=${prompt.length}${r?.ok ? "" : ` error=${String(r?.error ?? "").slice(0, 120)}`}`);
+      }
       const dir = home || vibesquadHome();
       const sentCardIds = await routeReviewToInbox(results[0], results[1], dir);
       const record = {

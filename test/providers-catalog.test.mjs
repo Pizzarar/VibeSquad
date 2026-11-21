@@ -2705,3 +2705,29 @@ test('usa-29 fix1: ledger persists implementerModel/stakes/reviewerFamily; folde
   const rec = readUsageLedger(home).find((r) => r.kind === 'unit' && r.unit === 'unit-live');
   assert.deepEqual([rec.implementerModel, rec.stakes, rec.reviewerFamily], ['claude-sonnet-5-5', 'mechanical', 'gemini-review']);
 });
+
+test('usage review T2: timeoutMs defaults to 180s, normalizes, persists, and plumbs to both reviewers; ms is logged per run', async () => {
+  assert.equal(normalizeRunnerSettings({}).usageReview.timeoutMs, 180_000);
+  assert.equal(normalizeRunnerSettings({ usageReview: { timeoutMs: 5 } }).usageReview.timeoutMs, 180_000, 'below range -> default');
+  assert.equal(normalizeRunnerSettings({ usageReview: { timeoutMs: 240000 } }).usageReview.timeoutMs, 240000);
+  const home = tmp();
+  saveRunnerSettings({ usageReview: { timeoutMs: 90000 } }, home);
+  saveRunnerSettings({ usageReview: { interval: '6h' } }, home);
+  const s = loadRunnerSettings(home).usageReview;
+  assert.equal(s.timeoutMs, 90000, 'interval-only patch keeps timeoutMs');
+  assert.equal(s.interval, '6h');
+  const seen = [];
+  const lines = [];
+  const orig = console.log;
+  console.log = (...a) => { lines.push(a.join(' ')); };
+  try {
+    await runUsageReview({
+      home, usage: { totals: { turns: 1 } },
+      runOpus: async ({ timeoutMs }) => { seen.push(timeoutMs); return { ok: true, text: 'x', ms: 12 }; },
+      runGemini: async ({ timeoutMs }) => { seen.push(timeoutMs); return { ok: false, error: 'timed out after 90000ms', ms: 90001 }; },
+    });
+  } finally { console.log = orig; }
+  assert.deepEqual(seen, [90000, 90000]);
+  assert.ok(lines.some((l) => /usage-review: opus ok ms=12 timeoutMs=90000/.test(l)), lines.join('|'));
+  assert.ok(lines.some((l) => /usage-review: gemini failed ms=90001 /.test(l)), lines.join('|'));
+});
