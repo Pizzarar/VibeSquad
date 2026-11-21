@@ -119,7 +119,7 @@ stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => membe
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
-stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
+stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
 stub("pinFocusBoring.mjs", `export const openPinMember = ${rec("openPinMember")}; export const spinUpPin = (...a) => globalThis.__spinUpPin(...a); export const setBoringShownAgent = () => {};`);
@@ -1631,7 +1631,7 @@ test("split R1: the workers fold works in split (folds to the active pane's agen
     // From Overview the Desk is not on screen: the fold must open the Desk (not the active pane's agent, not a dead click).
     byId(withDesk(view), "boring-desk-workers-fold").props.onClick();
     // Live getPanes() after toggleSplit: split is off, so the Desk opens plainly; the stale split must never re-target a pane.
-    assert.deepEqual(globalThis.__calls.filter((c) => /^(toggleSplit|openAgent|openAgentInTab|setActivePane)$/.test(c[0])).map((c) => c[0]), ["toggleSplit", "openAgent"]);
+    assert.deepEqual(globalThis.__calls.filter((c) => /^(toggleSplit|collapseSplit|openAgent|openAgentInTab|setActivePane)$/.test(c[0])).map((c) => c[0]), ["collapseSplit", "openAgent"]);
     assert.equal(store["vs.context-panel.tab"], "Workers");
     assert.deepEqual(events.map((e) => e.detail.tab), ["Workers"]);
   } finally {
@@ -1682,7 +1682,7 @@ test("split R2: the workers fold off screen (Overview + stale split) opens the D
     globalThis.__panes = splitState({ activePane: "right" });
     assert.equal(byId(render(props(view)), "boring-split-toggle"), null); // Overview
     byId(withDesk(view), "boring-desk-workers-fold").props.onClick();
-    assert.deepEqual(globalThis.__calls.filter((c) => /^(toggleSplit|openAgent|openAgentInTab|setActivePane)$/.test(c[0])).map((c) => c[0]), ["toggleSplit", "openAgent"]);
+    assert.deepEqual(globalThis.__calls.filter((c) => /^(toggleSplit|collapseSplit|openAgent|openAgentInTab|setActivePane)$/.test(c[0])).map((c) => c[0]), ["collapseSplit", "openAgent"]);
     assert.ok(!globalThis.__calls.some((c) => c[0] === "openAgentInTab" || c[0] === "setActivePane"));
     assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent")); // the Desk opened plainly (split already exited)
   } finally {
@@ -1703,9 +1703,10 @@ test("split R3: another lane's workers fold in split exits split, then opens tha
     byId(render(props(view)), "boring-conv-toggle-ade").props.onClick();
     globalThis.__calls = [];
     byId(render(props(view)), "boring-workers-fold-ade").props.onClick();
-    const names = globalThis.__calls.filter((c) => /^(toggleSplit|openAgent|openAgentInTab|setActivePane)$/.test(c[0])).map((c) => c[0]);
-    assert.deepEqual(names.slice(0, 1), ["toggleSplit"]);
+    const names = globalThis.__calls.filter((c) => /^(toggleSplit|collapseSplit|openAgent|openAgentInTab|setActivePane)$/.test(c[0])).map((c) => c[0]);
+    assert.deepEqual(names.slice(0, 1), ["collapseSplit"]);
     assert.ok(!globalThis.__calls.some((c) => c[0] === "openAgentInTab" || c[0] === "setActivePane"), JSON.stringify(globalThis.__calls));
+    assert.deepEqual(globalThis.__calls.find((c) => c[0] === "collapseSplit"), ["collapseSplit", "active"]);
   } finally {
     globalThis.__panes = undefined;
     delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
@@ -1739,6 +1740,44 @@ test("split R2: an empty active right pane selects no row and the breadcrumb say
     const t = render(props(view));
     assert.match(JSON.stringify(t), /Split · pick an agent/);
     assert.equal(walk(t, (n) => typeof n.props?.className === "string" && /boring-(lane|worker)-row.*on/.test(n.props.className)).length, 0);
+  } finally {
+    globalThis.__panes = undefined;
+  }
+});
+
+test("split R4 N2-r: Review left, Overlord active right, fold of a lane with no Lead/Brainstorm keeps the ACTIVE agent and opens that lane's Desk-less worker view", () => {
+  const ws = [wk("w1", "running"), wk("w2", "idle"), wk("w3", "idle")];
+  const view = squad({ pins: [lanePin("ade", { workers: ws }), lanePin("per")] });
+  reset();
+  globalThis.localStorage = { setItem() {}, getItem: () => null };
+  globalThis.window = { dispatchEvent() {}, addEventListener() {}, removeEventListener() {} };
+  globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+  try {
+    globalThis.__panes = splitState({ activePane: "right", leftActiveId: "review-1", rightActiveId: "overlord-1" });
+    byId(render(props(view)), "boring-conv-toggle-ade").props.onClick();
+    globalThis.__calls = [];
+    const fold = byId(render(props(view)), "boring-workers-fold-ade");
+    assert.equal(fold.props.title, "Leave split and open the Workers tab");
+    fold.props.onClick();
+    assert.deepEqual(globalThis.__calls.find((c) => c[0] === "collapseSplit"), ["collapseSplit", "active"]);
+    assert.equal(globalThis.__panes.leftActiveId, "overlord-1"); // never Review: the active agent does not change, so S8 cannot re-land
+    assert.ok(!globalThis.__calls.some((c) => c[0] === "toggleSplit"));
+  } finally {
+    globalThis.__panes = undefined;
+    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+  }
+});
+
+test("split R4: the Unsplit pill keeps the active pane's agent; the Split pill still toggles on", () => {
+  const view = squad();
+  intoChat(view);
+  try {
+    globalThis.__panes = splitState({ activePane: "right" });
+    byId(render(props(view)), "boring-split-toggle").props.onClick();
+    assert.deepEqual(globalThis.__calls.at(-1), ["collapseSplit", "active"]);
+    assert.equal(globalThis.__panes.leftActiveId, "zz-r");
+    const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+    assert.match(css, /\[aria-pressed="true"\]:hover \{ filter: brightness\(1\.08\); \}/);
   } finally {
     globalThis.__panes = undefined;
   }

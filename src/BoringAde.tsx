@@ -7,7 +7,7 @@ import { openOverlay } from "./CommandPalette";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
-import { closeTab, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
+import { closeTab, collapseSplit, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { setBoringShownAgent, spinUpPin } from "./pinFocus";
@@ -405,7 +405,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   // (or just focuses the other pane when that agent is already its visible one), never in a pane that merely remembers the agent.
   const openHere = (id: string) => {
     if (shiftHeld()) return openAgentInTab(id, "right");
-    // Live state, not the render closure: the workers fold calls toggleSplit() right before this, so `panes` is stale there.
+    // Live state, not the render closure: the workers fold calls collapseSplit() right before this, so `panes` is stale there.
     const live = getPanes();
     if (!live.split) return openAgent(id);
     const otherSide = live.activePane === "left" ? "right" : "left";
@@ -686,9 +686,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       <div className="boring-worker-list" data-testid={listId}>
         {shown.map((w) => workerRow(v, pin, laneId, w))}
         {fold && (
-          <button type="button" className="boring-idle-toggle boring-worker-idle boring-worker-fold" data-testid={foldId} title="Open the Workers tab" onClick={() => {
-            // Split panes mount no context panel: fold the split down to the active pane's agent, then open its Workers tab.
-            if (panes.split) { const id = activeAgentId; toggleSplit(); if (!onScreen) open(); else if (id) openAgent(id); } else if (!onScreen) open();
+          <button type="button" className="boring-idle-toggle boring-worker-idle boring-worker-fold" data-testid={foldId} title={panes.split ? "Leave split and open the Workers tab" : "Open the Workers tab"} onClick={() => {
+            // Split panes mount no context panel: fold the split down to the ACTIVE pane's agent (activeAgentId is unchanged, so the
+            // S8 landing effect does not overwrite the lane), then route exactly as in the non-split path.
+            if (panes.split) collapseSplit("active");
+            if (!onScreen) open();
             openWorkersTab();
           }}>
             <span className="boring-idle-chev" aria-hidden="true">▸</span>{fold}
@@ -845,7 +847,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             <button type="button" className="boring-switch-pill" data-testid="boring-global-search-btn" title="Search all transcripts" aria-label="Search transcripts" onClick={() => openOverlay("search")}>Search</button>
             <button type="button" className="boring-switch-pill" data-testid="boring-shortcuts-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts" onClick={() => openOverlay("shortcuts")}>Shortcuts <kbd className="boring-kbd">?</kbd></button>
             {mode === "chat" && (agent || panes.split) && (
-              <button type="button" className={`boring-switch-pill ${panes.split ? "on" : ""}`} data-testid="boring-split-toggle" aria-pressed={panes.split} title="Split the chat into two panes (Shift+click an agent to open it on the right)" onClick={() => { if (!panes.split && !panes.leftActiveId && agent) openAgent(agent.id); toggleSplit(); }}>
+              <button type="button" className={`boring-switch-pill ${panes.split ? "on" : ""}`} data-testid="boring-split-toggle" aria-pressed={panes.split} title="Split the chat into two panes (Shift+click an agent to open it on the right)" onClick={() => { if (!panes.split && !panes.leftActiveId && agent) openAgent(agent.id); if (panes.split) collapseSplit("active"); else toggleSplit(); }}>
                 {panes.split ? "◫ Unsplit" : "◫ Split"}
               </button>
             )}
