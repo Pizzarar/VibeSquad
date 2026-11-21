@@ -49,8 +49,7 @@ export function SandboxView({
     <span ref={ref} className="drawer-sandbox">
       <button
         data-testid="drawer-sandbox-btn"
-        className="btn ghost small"
-        style={{ padding: "0 5px", fontSize: 10, height: 20 }}
+        className="btn ghost small drawer-sandbox-btn"
         title="Sandbox and permission posture (read-only)"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
