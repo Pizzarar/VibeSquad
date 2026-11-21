@@ -937,14 +937,14 @@ export function createLeadHandoffCoordinator(deps = {}) {
     // Re-point open in-flight workers and notify them to report to the new lead.
     const repointedWorkers = [];
     let idleRepointed = 0;
-    for (const w of openWorkers) {
-      const updatedWorkerLabels = {
-        ...(w.labels ?? {}),
-        "vs.parent": successor.id, // the one parent key (RunnerBackend.toAgent reads it; X1c dropped paseo.parent-agent-id)
-      };
-      // Best-effort per worker: a failed repoint must not abort the handoff after the successor exists (that strands two leads).
+    // idea-105: only vs.parent changes (the runner merges labels, so the rest of the set never has to be re-sent). Re-sending
+    // the full label set made RunnerBackend.updateAgent see role/lane/team/ord and treat every repoint as a possible
+    // Who's-here move, paying two extra fetchAgent round-trips per worker. Run them concurrently too, so the step's wall
+    // time is bounded by the slowest worker rather than the sum (30 serial workers = the 4.8s repoint, the closest call to
+    // the 6s stall budget). Best-effort per worker: a failed repoint must not abort the handoff after the successor exists.
+    await Promise.all(openWorkers.map(async (w) => {
       try {
-        await setLabels(w.id, updatedWorkerLabels);
+        await setLabels(w.id, { "vs.parent": successor.id }); // the one parent key (RunnerBackend.toAgent reads it; X1c dropped paseo.parent-agent-id)
         repointedWorkers.push(w.id);
         // idea-201: messaging an IDLE worker starts a turn that re-states its last final report; turn_ended then
         // re-delivers it (and spawns a fresh digest) to the successor as if new. The vs.parent label is all an idle
@@ -955,7 +955,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
           await sendMessage(w.id, `Report to ${successor.title} (${successor.id}).`, { steerOnly: true });
         } else idleRepointed++;
       } catch {}
-    }
+    }));
 
     // idea-418: the predecessor's watch sets follow its workers. Re-owned (not closed) in one locked write: a set whose items are
     // all done still owes the successor its completion ping and the workers' finals (idea-352), so closing it would drop them.
