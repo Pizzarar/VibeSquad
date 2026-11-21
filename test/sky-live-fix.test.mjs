@@ -19,7 +19,7 @@ test("chat-only: AgentDrawer never opens, persists or listens for the right dock
   assert.match(d, /if \(!chatOnly\) localStorage\.setItem\("vs\.right-dock\.open"/);
   assert.match(d, /if \(chatOnly\) return;\s*\n\s*const onOpenDock/);
   assert.match(d, /\{(?:vibe !== "boring" && )?dockOpen && !chatOnly && \(/);
-  assert.match(d, /vibe === "boring" && !chatOnly && \(/);
+  assert.match(d, /vibe === "boring" && !chatOnly && (?:!noContextPanel && )?\(/);
 });
 
 test("G8: the face box is the whole TV screen (no chat-height cut); the chat lives in its own panel over the right TV", () => {
