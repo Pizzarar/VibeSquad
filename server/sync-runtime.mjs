@@ -62,7 +62,8 @@ const firstLine = (err) => String(err?.message ?? err).split("\n")[0];
  * store (never the working tree), so untracked scratch files, and uncommitted edits made by other agents between the guard and
  * the copy, never reach it. `scripts/restart-runtime.mjs`: `vs restart` launches it, so the runtime cli/ needs it beside it.
  */
-export const TRACKED_ENTRIES = Object.freeze(["public", "server", "cli", "runner", "scripts/restart-runtime.mjs"]);
+// package.json carries the version server-start.mjs logs; without it the runtime's copy goes stale (idea-496).
+export const TRACKED_ENTRIES = Object.freeze(["public", "server", "cli", "runner", "scripts/restart-runtime.mjs", "package.json"]);
 /** Build output, untracked by design (gitignored): copied from the working tree; distStatus vouches that it matches HEAD. */
 export const BUILT_ENTRIES = Object.freeze(["dist"]);
 /**

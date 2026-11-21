@@ -204,6 +204,17 @@ test("idea-404: untracked files in server/, cli/, runner/, public/ never reach t
   assert.deepEqual(trackedRuntimeFiles(dir, "HEAD"), ["cli/vs.mjs", "public/p.txt", "runner/r.mjs", "scripts/restart-runtime.mjs", "server/a.mjs"]);
 });
 
+test("idea-496: package.json is synced so server-start reads the current version, not a stale one", () => {
+  const dir = trackedRepo();
+  put(dir, "package.json", JSON.stringify({ name: "vibesquad", version: "0.3.0" }));
+  commitAll(dir, "bump 0.3.0");
+  const { runtime, env } = fakeInstall();
+  const res = syncRuntimeDir(dir, { env });
+  assert.equal(res.synced, true);
+  assert.equal(JSON.parse(read(runtime, "package.json")).version, "0.3.0");
+  assert.ok(trackedRuntimeFiles(dir, "HEAD").includes("package.json"), "package.json is a tracked runtime entry");
+});
+
 test("idea-404: content comes from the synced commit, not the working tree (forced dirty edit, HEAD moving mid-sync)", () => {
   const dir = trackedRepo();
   const base = git(dir, "rev-parse", "HEAD");
