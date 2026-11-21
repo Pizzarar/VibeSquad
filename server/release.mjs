@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveSecret } from "./secrets.mjs";
+import { readCredential, resolveUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -102,8 +102,12 @@ export function defaultReleaseNotes(version, channel = "stable") {
 
 export const DEFAULT_RELEASE_REPO = process.env.VIBESQUAD_RELEASE_REPO || "Pizzarar/VibeSquad";
 
-export function buildSigningEnv(baseEnv = process.env, keyPath = "") {
-  const password = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "";
+/**
+ * Child env for the build stage (`build-desktop.mjs` -> `tauri build`, which signs updater artifacts itself
+ * because tauri.conf.json sets createUpdaterArtifacts). Pass `password` from resolveUpdaterKeyPassword so a
+ * Credential Manager password reaches the build; the env-only default is for callers that already resolved it.
+ */
+export function buildSigningEnv(baseEnv = process.env, keyPath = "", password = baseEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ?? "") {
   return {
     ...baseEnv,
     ...(keyPath ? { TAURI_SIGNING_PRIVATE_KEY: keyPath, TAURI_SIGNING_PRIVATE_KEY_PATH: keyPath } : {}),
@@ -113,15 +117,10 @@ export function buildSigningEnv(baseEnv = process.env, keyPath = "") {
 
 /**
  * Child env for `tauri signer sign`. The key password travels ONLY as TAURI_SIGNING_PRIVATE_KEY_PASSWORD
- * (never argv, where it would show in process listings). Single seam: a later secrets resolver swaps the
- * `password` source here.
+ * (never argv, where it would show in process listings). Same resolver as the build stage
+ * (resolveUpdaterKeyPassword: env var wins, else Credential Manager "vibesquad/updater-key").
  */
-export function updaterSigningEnv(
-  baseEnv = process.env,
-  keyPath = "",
-  deps = {},
-  password = resolveSecret({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false }, { env: baseEnv, ...deps }) ?? "",
-) {
+export function updaterSigningEnv(baseEnv = process.env, keyPath = "", deps = {}, password = resolveUpdaterKeyPassword({ env: baseEnv, ...deps })) {
   const env = buildSigningEnv({ ...baseEnv, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: password }, keyPath);
   delete env.TAURI_SIGNING_PRIVATE_KEY;
   return env;
@@ -433,7 +432,7 @@ export function writeReleaseRecord({ dir = rootDir, project, repo, version, chan
   return target;
 }
 
-export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync, env = process.env, log = console.log, resolveTauriCli = () => require.resolve("@tauri-apps/cli/tauri.js") } = {}) {
+export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync, env = process.env, log = console.log, resolveTauriCli = () => require.resolve("@tauri-apps/cli/tauri.js"), readSecret = readCredential } = {}) {
   const opts = parseArgs(argv);
   if (opts.commit) opts.commit = canonicalizeCommit(opts.commit, exec, root);
   const channel = opts.channel === "stable" ? "stable" : "beta";
@@ -479,10 +478,13 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
 
   const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
   const keyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || defaultKeyPath;
+  // Updater key password: resolved at most once per run, only when a stage needs it, never logged.
+  let updaterKeyPw;
+  const updaterKeyPassword = () => (updaterKeyPw ??= resolveUpdaterKeyPassword({ env, read: readSecret }));
 
   if (stages.includes("build") && !opts.skipBuild) {
     rmSync(join(distDir, ANDROID_MARKER), { force: true });
-    const buildEnv = buildSigningEnv(env, keyPath);
+    const buildEnv = buildSigningEnv(env, keyPath, updaterKeyPassword());
     const signArgs = [];
     if (!opts.unsigned && !opts.noAuthenticode) {
       // Authenticode (tauri signCommand overlay) runs inside the build, before the minisign updater .sig below.
@@ -521,7 +523,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     mkdirSync(distDir, { recursive: true });
     if (!existsSync(sigPath) && existsSync(installerPath)) {
       const tauriCliJs = resolveTauriCli();
-      exec(process.execPath, signerSignArgs(tauriCliJs, keyPath, installerPath), { cwd: root, env: updaterSigningEnv(env, keyPath), stdio: "inherit" });
+      exec(process.execPath, signerSignArgs(tauriCliJs, keyPath, installerPath), { cwd: root, env: updaterSigningEnv(env, keyPath, {}, updaterKeyPassword()), stdio: "inherit" });
     }
     if (!existsSync(sigPath)) throw new Error(`Signature file missing at ${sigPath}`);
     const manifest = buildLatestJson({ version: targetVersion, channel, signature: readFileSync(sigPath, "utf8").trim(), android: Boolean(selectApk({ distDir, version: targetVersion, commit })) });

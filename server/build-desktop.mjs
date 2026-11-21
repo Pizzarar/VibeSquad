@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
 import { packagedStamp } from "./stale-runtime.mjs";
-import { resolveSecret } from "./secrets.mjs";
+import { resolveUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -99,8 +99,11 @@ console.log(`[build:desktop] staged runtime with ${closure.length} production pa
 const licenseFile = join(rootDir, "public", "THIRD-PARTY-LICENSES.txt");
 const defaultKeyPath = join(homedir(), ".tauri", "vibesquad-updater.key");
 const signingKeyPath = env.TAURI_SIGNING_PRIVATE_KEY_PATH || (existsSync(defaultKeyPath) ? defaultKeyPath : "");
-const signingKeyPassword = resolveSecret({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false }, { env }) ?? "";
-if (signingKeyPath && existsSync(signingKeyPath)) {
+const hasSigningKey = Boolean(signingKeyPath && existsSync(signingKeyPath));
+// Same resolver as release.mjs. A non-empty password the desk passed wins (no store read here); an empty one
+// (unpassworded key) falls through to one more store read, which finds nothing.
+const signingKeyPassword = hasSigningKey ? resolveUpdaterKeyPassword({ env }) : "";
+if (hasSigningKey) {
   env.TAURI_SIGNING_PRIVATE_KEY = signingKeyPath;
   env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = signingKeyPassword;
   console.log(`[build:desktop] Using Tauri updater signing key path ${signingKeyPath}`);
@@ -138,7 +141,7 @@ const srcSig = `${srcInstaller}.sig`;
 const destSig = `${destInstaller}.sig`;
 if (existsSync(srcSig)) {
   copyFileSync(srcSig, destSig);
-} else if (signingKeyPath && existsSync(signingKeyPath)) {
+} else if (hasSigningKey) {
   const signEnv = {
     ...env,
     TAURI_SIGNING_PRIVATE_KEY_PATH: signingKeyPath,

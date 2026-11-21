@@ -78,3 +78,15 @@ export function withSecretEnv(baseEnv, specs, deps) {
   }
   return out;
 }
+
+/**
+ * The updater minisign key password: TAURI_SIGNING_PRIVATE_KEY_PASSWORD wins, else the generic credential
+ * "vibesquad/updater-key". Optional, so an unpassworded key still builds. The one spec both `tauri build`
+ * (createUpdaterArtifacts signs inside the build) and `tauri signer sign` use.
+ */
+export const UPDATER_KEY_PASSWORD = Object.freeze({ envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false });
+
+/** Resolves UPDATER_KEY_PASSWORD; "" when absent (tauri reads "" as "no password"). Never logs the value. */
+export function resolveUpdaterKeyPassword({ env = process.env, read = readCredential } = {}) {
+  return resolveSecret(UPDATER_KEY_PASSWORD, { env, read }) ?? "";
+}
