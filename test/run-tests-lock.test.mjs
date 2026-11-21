@@ -425,7 +425,7 @@ test("run-tests.mjs: caps node --test file concurrency (idea-412); VS_TEST_CONCU
   const log = path.join(dir, "spans.log");
   const mk = (n) => {
     const f = path.join(dir, `span${n}.test.mjs`);
-    writeFileSync(f, `import test from "node:test";\nimport { appendFileSync } from "node:fs";\ntest("s${n}", async () => { appendFileSync(${JSON.stringify(log)}, "start\n"); await new Promise((r) => setTimeout(r, 600)); appendFileSync(${JSON.stringify(log)}, "end\n"); });\n`);
+    writeFileSync(f, `import test from "node:test";\nimport { appendFileSync } from "node:fs";\ntest("s${n}", async () => { appendFileSync(${JSON.stringify(log)}, "start\\n"); await new Promise((r) => setTimeout(r, 600)); appendFileSync(${JSON.stringify(log)}, "end\\n"); });\n`);
     return f;
   };
   const files = [mk(1), mk(2), mk(3)];
