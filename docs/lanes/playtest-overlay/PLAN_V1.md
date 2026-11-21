@@ -56,6 +56,26 @@ No workarounds in v1.
 4. Exporting with a release preset (no `vs_playtest` tag) yields a .pck with zero `vs_playtest` files (checked with `--export-pack` plus a file listing).
 5. Headless Godot tests pass and the server test suite passes.
 
+## Remote owner path (added 11-21, Hub15 steer, owner OK)
+VS server moves to a separate Linux box on Tailscale (@forge-host). The game and the Godot editor stay on the dev PC. So the owner can no longer be assumed to be on loopback. Loopback stays supported.
+
+**Decided (Pto1):**
+- **Reuse E6a device auth, no new primitive.** The game pairs once as a normal **owner** device through the existing JSON pair redeem (`GET /pair?code=…&format=json`, then `GET /pair/status` if pending; `docs/PLAN_E6_TESTER_ROLES.md:15,45`). It then sends `Authorization: Bearer <deviceToken>` (or `x-vs-device-token`). Checked: E6a already resolves header-authenticated owner devices and exempts them from cookie write refusal (`PLAN_E6_TESTER_ROLES.md:44`).
+- **Server (B1b, Tier A):** `ownerPlaytestGated` accepts either today's local owner (loopback + local token) **or** a paired device with `role === "owner"` authenticated by a **header** token (not the cookie). Every other B1 rule is unchanged: explicit `teamId`, no agent headers, `[Owner playtest]` stamp, same handlers, payload, caps and dedupe (scope = owner device id or local owner + Squad). Testers are unchanged, and so is every non-owner denial. The B1 test "paired OWNER device (not local) is 403" flips to: header-token owner device → 200; cookie-only owner device → 403.
+- **Addon (B2b):** two auth modes, picked automatically:
+  1. `server_url` is loopback: local token (`x-vibesquad-token`), as today.
+  2. Otherwise: device token from a file outside the project (`$VIBESQUAD_HOME/playtest-device-token`, else `~/.vibesquad/playtest-device-token`; never under `res://` or `user://`, never exported).
+  - **Token egress rule:** the local token only ever goes to loopback (B2 H1 parser). The device token goes only to loopback, a Tailscale address (`100.64.0.0/10`, `fd7a:115c:a1e0::/48`, `*.ts.net`) or any `https://` host. Otherwise the request is refused and the dock says why. Redirects stay off.
+  - **Pairing in the dock:** with no device token and a remote `server_url`, the dock shows "Pair with VS". The owner mints a normal owner pairing code in VS (existing Pair Device UI / `vs pair`), types the 6 digits, and the addon redeems it as JSON and stores the token (polling `/pair/status` while pending). There's an "Unpair" action that deletes the file. Revoking the device in VS cuts it off (existing E6a revoke).
+- **Addon API additions** (noted to the Buddy for EFI): setting `vs_playtest/device_token_path` (optional override of the file above), and methods `is_paired()` and `unpair()`. Nothing existing changes.
+- **Accepted risk:** the game process holds a full-owner device token. This is owner-only, on the owner's own dev PC, in editor/`vs_playtest` builds only, and the file sits outside the project. Follow-up (not v1): a least-privilege `owner-playtest` device role limited to report/thread.
+- **Bridge:** unchanged. godot-mcp-runtime runs next to the game on the dev PC (localhost). An agent that runs on the forge box can't reach it; agents that drive the game must run on the dev PC. @forge-host to confirm where Godot-lane agents run.
+
+| Block | Touches | Clashes with | Kind |
+|---|---|---|---|
+| **B1b Remote owner device on report/thread** (Tier A) | `server/vibesquad-api.mjs` (ownerPlaytestGated), `test/owner-playtest-report.test.mjs` | none in lane | Root cause |
+| **B2b Addon device-token mode + pair UI** | `godot/addons/vs_playtest/{token,transport,report_client,dock,settings,vs_playtest}.gd`, `godot/tests/run_tests.gd`, the addon README | B3 r2 fix (`run_tests.gd`, README): runs after it lands | Root cause |
+
 ## Lead
 New Claude lead (`Lead - Claude`, Opus 5.5), because B1 is Tier A (auth route table).
 
