@@ -2010,7 +2010,7 @@ export const resetUsageReviewPromptWarnForTest = () => {
 
 /**
  * Resolve docs/lanes/perfection/USAGE_REVIEW_PROMPT.md against the live VibeSquad repo checkout rather than REPO_ROOT.
- * Why: server/sync-runtime.mjs (syncRuntimeDir, line 35) only copies ["dist", "public", "server", "cli", "runner"] into
+ * Why: server/sync-runtime.mjs (syncRuntimeDir: TRACKED_ENTRIES + BUILT_ENTRIES) only copies dist/, public/, server/, cli/, runner/ into
  * %LOCALAPPDATA%\VibeSquad\runtime — it never copies docs/ — and writes build-stamp.json with `repo: "<liveRepo>/.git"`.
  * Resolving via gitRepoRoot() (VIBESQUAD_ROOT -> build-stamp.json repo -> REPO_ROOT) reads the live repo's file even when
  * the server runs from the runtime copy, so Workflows (@perfection) edits take effect on the next review without a sync.

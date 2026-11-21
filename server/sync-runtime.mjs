@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
@@ -62,9 +62,9 @@ const firstLine = (err) => String(err?.message ?? err).split("\n")[0];
  * store (never the working tree), so untracked scratch files, and uncommitted edits made by other agents between the guard and
  * the copy, never reach it. `scripts/restart-runtime.mjs`: `vs restart` launches it, so the runtime cli/ needs it beside it.
  */
-const TRACKED_ENTRIES = ["public", "server", "cli", "runner", "scripts/restart-runtime.mjs"];
+export const TRACKED_ENTRIES = Object.freeze(["public", "server", "cli", "runner", "scripts/restart-runtime.mjs"]);
 /** Build output, untracked by design (gitignored): copied from the working tree; distStatus vouches that it matches HEAD. */
-const BUILT_ENTRIES = ["dist"];
+export const BUILT_ENTRIES = Object.freeze(["dist"]);
 /**
  * Runtime dirs that mirror git: a file in them that is not tracked at the synced commit is stale (deleted or renamed in git,
  * or an untracked file an older sync copied) and is removed. node_modules is never touched; neither is anything outside
@@ -120,6 +120,22 @@ function stageFromCommit(repoRoot, commit, files, stage, indexFile) {
   // core.autocrlf pinned off: the machine-wide Git for Windows default (true) must not decide the runtime's bytes; the
   // repo's .gitattributes (eol=lf) still applies, so this writes what a clean checkout of this repo holds.
   gitExec(repoRoot, ["-c", "core.autocrlf=false", "checkout-index", "-f", "-z", "--stdin", `--prefix=${prefix}`], { env, input: `${files.join("\0")}\0` });
+}
+
+/**
+ * After the stale files moved out, drop the directories that left empty (server/backend/ once its last file was deleted
+ * from git), walking up to, but never removing, the mirrored dir itself. Best effort: rmdir refuses a non-empty dir, and
+ * a failure here never fails a sync that already succeeded.
+ */
+function removeEmptiedDirs(runtimeDir, pruned) {
+  const dirs = new Set();
+  for (const rel of pruned) {
+    const parts = rel.split("/").slice(0, -1);
+    for (let n = parts.length; n > 1; n--) dirs.add(parts.slice(0, n).join("/"));
+  }
+  for (const rel of [...dirs].sort((a, b) => b.split("/").length - a.split("/").length || b.localeCompare(a))) {
+    try { rmdirSync(join(runtimeDir, rel)); } catch {}
+  }
 }
 
 const describeErr = (err) => String(err?.stderr || "").trim().split("\n")[0] || firstLine(err);
@@ -212,6 +228,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
     return { synced: false, runtimeDir, error: `copy failed, the live runtime was kept: ${firstLine(err)}` };
   }
   clean();
+  removeEmptiedDirs(runtimeDir, pruned);
 
   // The live server serves runtime/dist-desktop/VibeSquad.apk. Ship the staged build only as a verified pair
   // (sidecar present and equal to the apk's hash), via temp file + rename, apk first and sidecar last.
