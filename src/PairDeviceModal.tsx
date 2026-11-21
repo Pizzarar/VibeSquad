@@ -173,7 +173,7 @@ export function PairDeviceModal({
     initialPair && !initialPair.lanIp ? "meshnet" : "lan",
   );
   const [useIpMode, setUseIpMode] = useState(false);
-  const [showFullFp, setShowFullFp] = useState(false);
+  const [showFullFp, setShowFullFp] = useState(true);
   const [showWinHelp, setShowWinHelp] = useState(false);
   const [showAndroidHelp, setShowAndroidHelp] = useState(false);
   const [busy, setBusy] = useState(false);

@@ -74,6 +74,14 @@ describe("PairDeviceModal rendered APK download & gating", () => {
     assert.match(html, /href="http:\/\/100\.64\.0\.10:4180\/VibeSquad\.apk"/);
   });
 
+  test("expands the full CA SHA-256 fingerprint by default (idea-127), no toggle click needed", () => {
+    const pair = basePair();
+    const html = renderModal(pair);
+    assert.ok(html.includes(`<code class="small">${pair.caFingerprint.full}</code>`));
+    assert.match(html, />Hide full</);
+    assert.doesNotMatch(html, />Full hex</);
+  });
+
   test("hides the APK download card when androidApkAvailable=false", () => {
     const html = renderModal(basePair({ androidApkAvailable: false }));
     assert.doesNotMatch(html, /data-testid="download-android-apk"/);
