@@ -107,7 +107,7 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
 });
 
 /** Fake machine: a stub runner + stub server, a fake process table, and deps for restartRuntime. */
-async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null, supportsDrain = true, runnerInfo = null, oldRunnerHealthDown = false } = {}) {
+async function world({ running = [0], held = null, supportsShutdown = true, serverBootsRunner = true, serveCmd = true, treeKill = false, strayAfterServerStop = false, swapRunnerOnFirstSleep = false, spoofAfterVerify = false, runnerRecycled = null, agentStatus = null, envExtra = {}, extraAgents = [], teams = null, supportsDrain = true, runnerInfo = null, oldRunnerHealthDown = false, heldWork = null } = {}) {
   const tmp = mkdtempSync(path.join(os.tmpdir(), "vs-restart-"));
   const home = path.join(tmp, "runner");
   const configDir = path.join(tmp, "config");
@@ -132,7 +132,7 @@ async function world({ running = [0], held = null, supportsShutdown = true, serv
       if (url === "/health") {
         if (oldRunnerHealthDown && hash === "old-hash") return json(503, { error: "wedged" });
         const h = heldPolls ? (heldPolls.length > 1 ? heldPolls.shift() : heldPolls[0]) : undefined;
-        return json(200, { ok: true, running: polls.length > 1 ? polls.shift() : polls[0], ...(h ? { held: h.length, heldAgents: h } : {}), pid, hash });
+        return json(200, { ok: true, running: polls.length > 1 ? polls.shift() : polls[0], ...(h ? { held: h.length, heldAgents: h, ...(heldWork ? { heldWork: Object.fromEntries(h.filter((id) => heldWork[id]).map((id) => [id, heldWork[id]])) } : {}) } : {}), pid, hash });
       }
       const one = /^\/agents\/([^/]+)$/.exec(url);
       if (one && req.method === "GET" && agentStatus) { // agentStatus(id) -> the agent's status right now (per-id GET)
@@ -983,8 +983,10 @@ test("held background work outlasting the wait defers the restart: nothing stopp
   try {
     const r = await w.run({ waitTimeoutSec: 0.05 });
     assert.equal(r.ok, false);
-    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], heldWork: {}, running: 0, leads: [], unresolved: [{ agentId: "rn-suite", reason: "not in the runner's agent list" }] });
-    assert.ok(r.errors.some((e) => /deferred: 1 agent\(s\) still hold background work .*rn-suite.*No lead resolved for: rn-suite/.test(e)), JSON.stringify(r.errors));
+    assert.deepEqual(r.deferred, { held: 1, heldAgents: ["rn-suite"], heldWork: {}, running: 0, leads: [], unresolved: [{ agentId: "rn-suite", reason: "not in the runner's agent list" }],
+      owners: { "rn-suite": { agentId: "rn-suite", title: null, team: null, lane: null, role: null, state: "missing" } }, gone: [],
+      blocking: ["rn-suite NO OWNER (not in the runner's agent list): no shell listed yet (held until its first probe)"] });
+    assert.ok(r.errors.some((e) => /deferred: 1 agent\(s\) still hold background work .*Blocking: rn-suite NO OWNER .*No lead resolved for: rn-suite/.test(e)), JSON.stringify(r.errors));
     assert.ok(!r.errors.some((e) => /rerun later|pass --kill-background/.test(e)), "the deferral never suggests a timer retry or --kill-background");
     assert.equal(w.shutdownAuth.length, 0, "runner never told to stop");
     assert.deepEqual(w.hardKills, [], "nothing killed");
@@ -1213,6 +1215,67 @@ test("D1 deferral names each holder's lane lead (vs who lead resolution) with a 
     assert.deepEqual(saved.deferred.leads, r.deferred.leads, "restart-<ts>.json carries the leads + asks");
     assert.deepEqual(w.vsCalls, [], "a deferral sends nothing on its own");
     assert.equal(w.shutdownAuth.length, 0);
+  } finally { await w.cleanup(); }
+});
+
+// idea-475 (11-21): four machine-wide restarts aborted on what read as "unowned" shells. The deferral must name, per held
+// agent, its own id, title, Squad/lane and role, then each shell's pid, command (Claude's Bash wrapper stripped) and age.
+const CLAUDE_WRAPPED = `/usr/bin/bash -c -l "source /c/Users/x/.claude/shell-snapshots/snap.sh && eval 'npm test > /tmp/p5_suite.log 2>&1; echo rc=$? >> /tmp/p5_suite.log' < /dev/null && pwd -P >| /c/Users/x/AppData/Local/Temp/claude-ccc6-cwd"`;
+test("idea-475: a deferral names each blocking shell's owner (id, title, team/lane, role), pid, command and age; no owner says NO OWNER + pid", async () => {
+  const t0 = Date.now();
+  const agents = [...holderAgents.map((a) => (a.id === "rn-suite" ? { ...a, title: "ART-PHC1-P5 · ingest chrome slots (Sonnet)" } : a))];
+  const heldWork = { "rn-suite": [{ pid: 19572, name: "bash", cmd: CLAUDE_WRAPPED, createdMs: t0 - 14 * 60000 }], "rn-ghost": [{ pid: 777, name: "powershell", cmd: String.raw`powershell -File C:\x\survey_part1.ps1` }] };
+  const w = await world({ running: [0], held: [["rn-suite", "rn-ghost"]], extraAgents: agents, teams: EFI_TEAMS, heldWork });
+  try {
+    const logs = [];
+    const r = await w.run({ waitTimeoutSec: 0.05 }, logs);
+    assert.equal(r.ok, false);
+    const [b1, b2] = r.deferred.blocking;
+    assert.match(b1, /^rn-suite \[ART-PHC1-P5 ingest chrome slots \(Sonnet\)\] efi\/godot worker: pid 19572 bash, 1[45]m old: /);
+    assert.match(b1, /echo rc=\$\? >> \/tmp\/p5_suite\.log$/, "the command, not Claude's '< /dev/null && pwd -P >| cwd' wrapper");
+    assert.ok(!/pwd -P|claude-ccc6-cwd/.test(b1));
+    assert.equal(b2, "rn-ghost NO OWNER (not in the runner's agent list): pid 777 powershell, age unknown: powershell -File C:/x/survey_part1.ps1");
+    assert.deepEqual(r.deferred.owners["rn-suite"], { agentId: "rn-suite", title: "ART-PHC1-P5 · ingest chrome slots (Sonnet)", team: "efi", lane: "godot", role: "worker", state: "live" });
+    const err = r.errors.find((e) => e.startsWith("deferred:"));
+    assert.ok(err.indexOf("Blocking: rn-suite [ART-PHC1-P5") < err.indexOf("Ask these leads"), "owners come before the long tail");
+    assert.match(err, /rn-ghost NO OWNER \(not in the runner's agent list\): pid 777/);
+    assert.ok(logs.some((x) => /^blocking: rn-suite \[/.test(x)));
+    assert.equal(w.shutdownAuth.length, 0, "a live owner's suite is never stopped");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-475: when every holder's owner is archived or exited, the shells count as drained (logged) and the restart proceeds", async () => {
+  const dead = [
+    { id: "rn-arch", status: "idle", title: "W1 · old worker", archivedAt: new Date().toISOString(), labels: { team: "efi", lane: "godot", role: "worker" } },
+    { id: "rn-exit", status: "closed", resumable: false, title: "W2", labels: { team: "efi", lane: "godot", role: "worker" } },
+  ];
+  const w = await world({ running: [0], held: [["rn-arch", "rn-exit"]], extraAgents: [...holderAgents, ...dead], teams: EFI_TEAMS, heldWork: { "rn-arch": [{ pid: 55, name: "bash", cmd: "sleep 9999" }] } });
+  try {
+    const logs = [];
+    const r = await w.run({ waitTimeoutSec: 0.05 }, logs);
+    assert.equal(r.deferred, undefined, "no deferral on dead-owner shells");
+    const st = r.steps.find((s) => s.step === "dead-owner background work counted as drained");
+    assert.ok(st, JSON.stringify(r.steps.map((s) => s.step)));
+    assert.deepEqual(st.gone, [{ agentId: "rn-arch", reason: "owner archived" }, { agentId: "rn-exit", reason: "owner exited" }]);
+    assert.match(st.blocking[0], /^rn-arch \[W1 old worker\] efi\/godot worker, owner ARCHIVED: counted drainable: pid 55 bash/);
+    assert.ok(logs.some((x) => /dead-owner background work counted as drained/.test(x)));
+    assert.deepEqual(r.killedBackground, ["rn-arch", "rn-exit"], "recorded as cut, by id");
+    assert.ok(r.steps.some((s) => s.step === "wait timed out, proceeding"));
+    assert.equal(w.shutdownAuth.length, 1, "the restart went on");
+  } finally { await w.cleanup(); }
+});
+
+test("idea-475: a dead-owner shell beside a live owner's suite still defers (never kills live work); the dead one is listed as gone", async () => {
+  const dead = { id: "rn-arch", status: "idle", archivedAt: new Date().toISOString(), labels: { team: "efi", lane: "godot", role: "worker" } };
+  const w = await world({ running: [0], held: [["rn-suite", "rn-arch"]], extraAgents: [...holderAgents, dead], teams: EFI_TEAMS });
+  try {
+    const r = await w.run({ waitTimeoutSec: 0.05 });
+    assert.equal(r.ok, false);
+    assert.deepEqual(r.deferred.leads.map((l) => [l.leadId, l.heldAgents]), [["rn-lead-godot", ["rn-suite"]]], "the dead owner's shell asks no lead");
+    assert.deepEqual(r.deferred.gone, [{ agentId: "rn-arch", reason: "owner archived" }]);
+    assert.match(r.errors.find((e) => e.startsWith("deferred:")), /Owner gone \(counted drainable, not waited on\): rn-arch \(owner archived\)/);
+    assert.equal(w.shutdownAuth.length, 0);
+    assert.equal(r.steps.some((s) => s.step === "dead-owner background work counted as drained"), false);
   } finally { await w.cleanup(); }
 });
 

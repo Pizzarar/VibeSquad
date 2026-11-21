@@ -68,6 +68,27 @@ const vsHomeOf = (home) => path.resolve(home || process.env.VIBESQUAD_HOME || pa
 export const requestPath = (home) => path.join(vsHomeOf(home), REQUEST_FILE);
 const iso = (ms) => new Date(ms).toISOString();
 const clean = (t, cap = 80) => String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$-]+/g, " ").replace(/\s+/g, " ").trim().slice(-cap);
+/** clean() keeping the HEAD (a message whose important part comes first), cut with '...'. */
+const cleanHead = (t, cap) => fitLog(clean(t, Infinity), cap);
+/** Cap for an abort reason: whole in vs restart status and the leads' send; the log line is cut again by fitLog. */
+const ABORT_REASON_MAX = 900;
+
+/**
+ * idea-475: why a fired restart deferred. 11-21: the abort reason kept the deferral message's last 300 chars, which dropped
+ * every lead and holder and cut the agent id mid-way ("deferred on background work: 95d4c3966a --background ..."), so four
+ * restarts read as blocked by unowned shells. The record's `blocking` lines (owner first, then pid, age, command) lead now.
+ */
+export function deferredAbortReason(r) {
+  const d = r?.deferred;
+  const lines = Array.isArray(d?.blocking) && d.blocking.length ? d.blocking
+    : (d?.heldAgents ?? []).map((id) => {
+      const lead = (d.leads ?? []).find((l) => (l.heldAgents ?? []).includes(id));
+      const un = (d.unresolved ?? []).find((u) => u.agentId === id);
+      return `${id}${lead ? ` (${lead.team}/${lead.lane}, lead ${lead.leadId}${lead.leadTitle ? ` ${lead.leadTitle}` : ""})` : un ? ` NO OWNER (${un.reason})` : ""}`;
+    });
+  const head = lines.length ? `blocking: ${lines.join(" | ")}` : (r?.errors?.[0] ?? "no error recorded");
+  return cleanHead(`the restart deferred on background work: ${head}`, ABORT_REASON_MAX);
+}
 
 // ---- the file -------------------------------------------------------------------------------------------------------
 
@@ -189,12 +210,13 @@ export function liveLeads(agents, teams = loadTeamsRegistry()) {
 /** The runner's held list ({ ids, work }) grouped by the holders' live leads (restart-coord holderLeads). */
 export function heldByLead(held, agents, teams = loadTeamsRegistry()) {
   if (!held || !Array.isArray(held.ids)) return null;
-  const { leads, unresolved } = holderLeads(held.ids, agents, teams);
+  const { leads, unresolved, gone = [] } = holderLeads(held.ids, agents, teams);
   const work = held.work && typeof held.work === "object" ? held.work : {};
   const entry = (id) => ({ agentId: id, work: (work[id] ?? []).map((w) => ({ pid: w.pid, cmd: clean(w.cmd ?? w.name) })) });
   return {
     byLead: Object.fromEntries(leads.map((l) => [l.leadId, l.heldAgents.map(entry)])),
     unresolved: unresolved.map((u) => ({ ...entry(u.agentId), reason: u.reason })),
+    gone: gone.map((g) => ({ ...entry(g.agentId), reason: g.reason })), // idea-475: owner archived/exited, blocks no lead
   };
 }
 
@@ -366,7 +388,7 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
         event(req, at, `restart done (${r.file ? path.basename(r.file) : "result"})`);
       } else if (r) {
         req.result = { file: r.file ?? null, ok: false, finishedAt: r.finishedAt ?? null };
-        abort(req, at, `the restart ${r.deferred ? "deferred on background work" : "failed"}: ${clean(r.errors?.[0] ?? "no error recorded", 300)}`);
+        abort(req, at, r.deferred ? deferredAbortReason(r) : `the restart failed: ${cleanHead(r.errors?.[0] ?? "no error recorded", 300)}`);
       } else if (now - fired > FIRING_TIMEOUT_MS) {
         abort(req, at, `no restart result within ${FIRING_TIMEOUT_MS / 3600_000}h of the fire`);
       }
@@ -404,6 +426,7 @@ export function formatRequestStatus(req, now = Date.now()) {
     const st = req.gone?.[id] ? `gone ${req.gone[id]} (counts as drained)` : req.drained?.[id] ? `drained ${req.drained[id]}` : "NOT drained";
     lines.push(`  - ${leadName({ leadId: id, ...a })}: ${st}${a.error ? `; ask failed: ${a.error}` : ""}${held.length ? `; runner holds ${heldLine(held)}` : ""}`);
   }
+  if (req.held?.gone?.length) lines.push(`  held by a gone owner (counted drainable): ${req.held.gone.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
   if (req.held?.unresolved?.length) lines.push(`  held with no lead resolved: ${req.held.unresolved.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
   if (req.held === null && !TERMINAL.has(req.state)) lines.push("  runner held list: unknown (runner unreachable or older)");
   if (req.laggards?.length) lines.push(`  fired at the deadline without: ${req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ")}`);

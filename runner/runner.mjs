@@ -5,7 +5,7 @@ import { createClaudeAdapter, CLAUDE_PERMISSION_MODES, CLAUDE_EFFORTS } from './
 import { createAcpAdapter, acpProviderIds, PROVIDER_ALIASES, pickModel } from './adapters/acp.mjs';
 import { LogStore } from './log.mjs';
 import { LimitStore, createAgyUsagePoller } from './limits.mjs';
-import { createBackgroundProbe } from './background.mjs';
+import { createBackgroundProbe, shellCmdTail } from './background.mjs';
 import { killPidTree } from './spawn.mjs';
 import { pidAlive as defaultPidAlive } from './lock.mjs';
 import { oldestOpenTool } from './open-tools.mjs';
@@ -1408,14 +1408,14 @@ export class Runner {
     return ids;
   }
 
-  // What each held agent's hold is on right now: id -> [{ pid, name, cmd }] (the latest probe's shells that are still
+  // What each held agent's hold is on right now: id -> [{ pid, name, cmd, createdMs? }] (the latest probe's shells that are still
   // alive; [] for an agent held only until its first probe). For /health, so a deferral can name the actual command.
   heldWork() {
     const out = {};
     for (const id of this.heldIds()) {
       const e = this.live.get(id);
       const work = Array.isArray(e?.heldNow) ? e.heldNow : [];
-      out[id] = work.filter((w) => !this.pidAlive || this.pidAlive(w.pid)).map((w) => ({ pid: w.pid, name: w.name, cmd: String(w.cmd ?? '').slice(-160) }));
+      out[id] = work.filter((w) => !this.pidAlive || this.pidAlive(w.pid)).map((w) => ({ pid: w.pid, name: w.name, cmd: shellCmdTail(w.cmd, 160), ...(Number.isFinite(w.createdMs) ? { createdMs: w.createdMs } : {}) })); // idea-475: createdMs dates each shell in a deferral
     }
     return out;
   }

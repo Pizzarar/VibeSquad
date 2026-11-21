@@ -21,6 +21,14 @@ const MCP_LAUNCHERS = [
   new RegExp(String.raw`(?:^|[\s"'\\/@])mcp-server(?:-[\w-]+)?(?:\.(?:exe|cmd))?` + END, 'i'), // mcp-server-fetch
   new RegExp(String.raw`(?:^|[\s"'\\/@])[\w-]+-mcp(?:\.(?:exe|cmd))?` + END, 'i'), // blender-mcp, foo-mcp.exe (a package/binary, not a script file)
 ];
+// idea-475: Claude Code's Bash tool wraps every command as `bash -c -l "source <snapshot> && eval '<cmd>' < /dev/null && pwd -P >|
+// <tmp>/claude-XXXX-cwd"`. A tail cut kept only that wrapper (restart deferrals named "pid 2680: done' < /dev/null && pwd -P
+// >| .../claude-96be-cwd"), so the display text drops the trailing wrapper first and then keeps the last `max` chars.
+const CLAUDE_WRAP_TAIL = /'?\s*<\s*\/dev\/null\s*&&\s*pwd\s+-P\s*>\|\s*\S+?"?\s*$/;
+export function shellCmdTail(cmd, max = 160) {
+  const t = String(cmd ?? '').replace(CLAUDE_WRAP_TAIL, '').trimEnd();
+  return t.length > max ? t.slice(-max) : t;
+}
 const isSidecar = (p) => { const cmd = String(p.cmd ?? ''); return !TOOL_SHELL.test(cmd) && MCP_LAUNCHERS.some((re) => re.test(cmd)); };
 
 // Pure: shells under rootPid that are not inside an MCP sidecar's subtree, topmost first (a shell's own subtree is its
@@ -43,7 +51,7 @@ export function backgroundWork(procs, rootPid) {
       seen.add(c.pid);
       if (parent?.createdMs && c.createdMs && c.createdMs + 50 < parent.createdMs) continue;
       if (isSidecar(c)) continue; // at any depth: wrapper CLIs start their MCP servers one level down
-      if (SHELLS.has(imageOf(c.name))) { out.push({ pid: c.pid, name: imageOf(c.name), cmd: String(c.cmd ?? '').slice(-240), ...(c.createdMs ? { createdMs: c.createdMs } : {}) }); continue; } // createdMs: a restart drain refuses holds on work started after it (Runner._drainRefusesHold)
+      if (SHELLS.has(imageOf(c.name))) { out.push({ pid: c.pid, name: imageOf(c.name), cmd: shellCmdTail(c.cmd, 240), ...(c.createdMs ? { createdMs: c.createdMs } : {}) }); continue; } // createdMs: a restart drain refuses holds on work started after it (Runner._drainRefusesHold)
       walk(c.pid);
     }
   };
