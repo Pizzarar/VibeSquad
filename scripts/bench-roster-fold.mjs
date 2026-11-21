@@ -20,6 +20,7 @@ const vsHome = path.join(root, ".vibesquad");
 if (path.resolve(vsHome).toLowerCase().startsWith(real.toLowerCase())) throw new Error("refusing to bench inside the real ~/.vibesquad");
 const rhome = path.join(vsHome, "runner");
 const agentsDir = path.join(rhome, "agents");
+let liveRunner = null;
 
 // Clean child env: no VS_/VIBESQUAD_/PASEO_ from this shell, the synthetic home only.
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(VS_|VIBESQUAD_|PASEO_)/i.test(k)));
@@ -88,6 +89,7 @@ async function refreshTiming() {
 async function bootWithConcurrentWho(n) {
   rmSync(path.join(rhome, "runner.json"), { force: true });
   const runner = spawn(process.execPath, [path.join(repo, "runner", "server.mjs"), "--home", rhome], { env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  liveRunner = runner;
   let log = "";
   runner.stdout.on("data", (d) => { log += d; });
   runner.stderr.on("data", (d) => { log += d; });
@@ -112,6 +114,13 @@ async function bootWithConcurrentWho(n) {
   return { n, boot, bootWall, whoMs: who.map((w) => w.ms), whoFailed: who.filter((w) => w.code !== 0).length, liveWhoMs: live.ms, liveWhoCode: live.code };
 }
 
+const cleanup = () => {
+  if (flag("keep") || arg("home")) return;
+  if (liveRunner && liveRunner.exitCode === null) { try { liveRunner.kill(); } catch {} }
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); }
+};
+
+try {
 // The CLI resolves teams from the home's registry: without one, which Squad `--team vibesquad` means depends on the checkout path.
 const teamsFile = path.join(vsHome, "teams.json");
 if (!existsSync(teamsFile)) {
@@ -146,4 +155,6 @@ rmSync(idx, { force: true });
 results.bootConcurrentColdIndex = await bootWithConcurrentWho(CONC);
 results.bootConcurrentWarmIndex = await bootWithConcurrentWho(CONC);
 console.log(JSON.stringify(results, null, 2));
-if (!flag("keep") && !arg("home")) rmSync(root, { recursive: true, force: true });
+} finally {
+  cleanup();
+}

@@ -1,10 +1,14 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { scriptableTurnsBucket, normalizeInputHead } from '../scripts/audit-owner-stamps.mjs';
 import { transcriptFindings, fileFindings } from '../scripts/audit-perfection.mjs';
+
+const tmpDirs = [];
+const tmp = (p) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), p)); tmpDirs.push(d); return d; };
+after(() => { for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 
 const DAY = 24 * 3600 * 1000;
 const T0 = Date.parse('2026-11-10T10:00:00Z');
@@ -28,7 +32,7 @@ function pollTurns(runIdx, count, startCost, ts0) {
 }
 
 function fixture() {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-scriptable-'));
+  const dir = tmp('vs-scriptable-');
   fs.writeFileSync(path.join(dir, 'rn-a.jsonl'), jl(pollTurns(0, 3, 0, T0)));
   const b = pollTurns(1, 3, 1.0, T0 + DAY); // second run, next day, cumulative cost starts at 1.0
   b.push({ type: 'input', ts: T0 + DAY + 900000, text: 'Please write a long design essay about caching' });
@@ -65,7 +69,7 @@ test('since/until window and thresholds drop the cluster', () => {
 
 test('transcriptFindings emits one stable scriptable:<hash> finding; fileFindings dedupes it', () => {
   const dir = fixture();
-  const noRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-norepo-'));
+  const noRepo = tmp('vs-norepo-');
   const now = T0 + 5 * DAY;
   const fs1 = transcriptFindings({ dir, since: T0 - 1, repo: noRepo, now }).filter((f) => f.key.startsWith('scriptable:'));
   assert.equal(fs1.length, 1);
@@ -74,14 +78,14 @@ test('transcriptFindings emits one stable scriptable:<hash> finding; fileFinding
   assert.ok(fs1[0].evidence.includes('rn-a'));
   const later = transcriptFindings({ dir, since: T0 - 1, repo: noRepo, now: now + 3 * DAY }).filter((f) => f.key.startsWith('scriptable:'));
   assert.equal(later[0].key, fs1[0].key);
-  const baseHome = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-home-'));
+  const baseHome = tmp('vs-home-');
   assert.equal(fileFindings(fs1, { baseHome }).filed.length, 1);
   assert.equal(fileFindings(fs1, { baseHome }).filed.length, 0);
 });
 
 // generic fixture: `count` identical-shape turns over 2 runs/days; cost per turn = costs[i % costs.length]
 function shapeDir(specs) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-shape-'));
+  const dir = tmp('vs-shape-');
   specs.forEach((s, k) => {
     for (let r = 0; r < 2; r++) {
       const ts0 = T0 + r * DAY, ev = [{ seq: 0, ts: ts0, type: 'created', meta: { role: s.role || 'lead', lane: 'efi' } }];
@@ -135,7 +139,7 @@ test('fixed-shape input with real output (median >= 1000) is not-scriptable: in 
   const big = r.clusters.find((c) => /soft limit/.test(c.signature));
   assert.equal(big.notScriptable, true);
   assert.equal(r.clusters.find((c) => /stall/.test(c.signature)).notScriptable, false);
-  const noRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-norepo-'));
+  const noRepo = tmp('vs-norepo-');
   const f = transcriptFindings({ dir, since: T0 - 1, repo: noRepo, now: T0 + 5 * DAY }).filter((x) => x.key.startsWith('scriptable:'));
   assert.equal(f.length, 1);
   assert.match(f[0].text, /stall/);

@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -7,7 +7,9 @@ import { execFileSync } from 'node:child_process';
 import { fileFindings, staleUsageReviewFindings, transcriptFindings, AUDIT_SOURCE } from '../scripts/audit-perfection.mjs';
 import { readInboxCards, addInboxCards } from '../server/inbox.mjs';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-audit-'));
+const tmpDirs = [];
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-audit-')); tmpDirs.push(d); return d; };
+after(() => { for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 const f = (key, extra = {}) => ({ key, text: `Panel ${key} opens expanded.`, evidence: `src/X.tsx:10 ${key}`, ...extra });
 
 test('files with source audit:perfection, lane perfection, and a second run files nothing', () => {

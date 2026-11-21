@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
-import { describe, test } from "node:test";
+import { after, describe, test } from "node:test";
 import {
   assertFrozenCommit,
   DEFAULT_RELEASE_REPO,
@@ -50,8 +50,10 @@ function fakeExec({ head = HEAD, dirty = "", existingReleases = new Set(), tagSh
   return { exec, calls };
 }
 
+const roots = [];
 function makeRoot({ version = "0.3.0", apk = false, marker = null } = {}) {
   const root = mkdtempSync(join(tmpdir(), "rel-"));
+  roots.push(root);
   mkdirSync(join(root, "src-tauri"), { recursive: true });
   mkdirSync(join(root, "dist-desktop"), { recursive: true });
   mkdirSync(join(root, "docs", "releases"), { recursive: true });
@@ -70,6 +72,8 @@ function makeRoot({ version = "0.3.0", apk = false, marker = null } = {}) {
   if (marker) writeFileSync(join(root, "dist-desktop", "android-build.json"), JSON.stringify(marker));
   return root;
 }
+
+after(() => { for (const root of roots) { try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 
 describe("signing env (F1)", () => {
   test("password is in env only, never in argv", () => {

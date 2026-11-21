@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { after, before, describe, it } from "node:test";
@@ -17,6 +17,7 @@ const posix = (p) => p.split("\\").join("/");
 
 describe("vs install-shim / worktree create from a linked worktree", () => {
   let tmp, main, wt, env, realBin;
+  const junctions = [];
 
   before(() => {
     tmp = realpathSync(mkdtempSync(join(tmpdir(), "vs-shim-guard-")));
@@ -35,7 +36,7 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
     // vs.mjs needs the project's dependencies; junction them in (a worktree has none of its own).
     const commonDir = git(REPO_ROOT, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
     const nm = [join(REPO_ROOT, "node_modules"), join(resolve(commonDir, ".."), "node_modules")].find((d) => existsSync(d));
-    if (nm) for (const d of [main, wt]) symlinkSync(nm, join(d, "node_modules"), "junction");
+    if (nm) for (const d of [main, wt]) { const j = join(d, "node_modules"); symlinkSync(nm, j, "junction"); junctions.push(j); }
 
     const home = join(tmp, "home");
     realBin = [join(home, ".local", "bin"), join(home, "AppData", "Roaming", "npm")];
@@ -50,7 +51,11 @@ describe("vs install-shim / worktree create from a linked worktree", () => {
     };
   });
 
-  after(() => rmSync(tmp, { recursive: true, force: true }));
+  after(() => {
+    // Unlink the node_modules junctions first: a recursive rm must never follow a junction into the real checkout.
+    for (const j of junctions) { try { unlinkSync(j); } catch {} }
+    if (tmp) { try { rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} }
+  });
 
   const runVs = (script, args, cwd) =>
     spawnSync(process.execPath, [script, ...args], { cwd, env, encoding: "utf8" });
