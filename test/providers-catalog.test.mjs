@@ -491,6 +491,97 @@ test('usage v2: byProfile compares Implement - Sonnet vs a Gemini implementer vi
   assert.equal(workerRole.successBasis, 'implementer-first-try-pass');
 });
 
+test('usage v2: idea-300 byProfile reviewer attribution + costPerRun/tokensPerRun on every row', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  writeAgent(home, 'rn-sonnet', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-sonnet', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'usage', inputTokens: 500, outputTokens: 100 },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  writeAgent(home, 'rn-rev', [
+    { ts: T0 + 2000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-sonnet', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 2500, type: 'usage', inputTokens: 300, outputTokens: 50 },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.3 },
+    { ts: T0 + 2600, type: 'output', text: 'PASS 0/0/0\n' },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm1\n';
+    if (args[0] === 'log') return [
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-sonnet' (@usa)"),
+      L('b1', 'a1', sec(T0 + 40000), 'feat: sonnet (@usa) review r2'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const sonnet = byProfileOf(u, 'Implement - Sonnet');
+  const rev = byProfileOf(u, 'Review - Gemini');
+  assert.ok(sonnet && rev, 'implementer and reviewer rows present');
+  // costPerRun + tokensPerRun on every row
+  assert.equal(sonnet.runs, 1);
+  assert.ok(Math.abs(sonnet.costPerRun - 0.5) < 1e-9);
+  assert.equal(sonnet.tokensPerRun, 600);
+  assert.ok(Math.abs(rev.costPerRun - 0.3) < 1e-9);
+  assert.equal(rev.tokensPerRun, 350);
+  // reviewer rows carry reviewed-unit attribution (idea-300)
+  assert.equal(rev.jobKind, 'reviewer');
+  assert.equal(rev.reviewedUnits, 1);
+  assert.equal(rev.mergedUnits, 1, "the reviewer's mergedUnits = reviewed (merged) units");
+  assert.equal(rev.avgReviewRounds, 2, 'review rounds from the merge commit subject');
+  assert.equal(rev.reviewRounds, 2, 'M2: reviewer row reviewRounds matches the reviewed units (not 0)');
+  assert.ok(Math.abs(rev.costPerMergedUnit - 0.3) < 1e-9, 'reviewer cost per reviewed unit');
+  assert.equal(rev.fixAfterMergeRate, 0);
+  assert.equal(rev.fixAfterMergeCount, 0, 'M2: reviewer row fixAfterMergeCount consistent with the 0 rate');
+  // implementer rows keep implementer attribution; reviewedUnits stays 0
+  assert.equal(sonnet.reviewedUnits, 0);
+  assert.equal(sonnet.mergedUnits, 1);
+  // the merged unit records the attributed reviewer
+  assert.equal(u.merged.units[0].reviewerAgentId, 'rn-rev');
+});
+
+test('usage v2: idea-300 M2 — reviewer row reviewRounds/fixAfterMergeCount stay consistent with the averages (fix-after-merge included)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 9, 12);
+  writeAgent(home, 'rn-impl', [
+    { ts: T0 - 1000, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 - 500, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  writeAgent(home, 'rn-rev-a', [
+    { ts: T0 + 1000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 1500, type: 'turn_done', costUsd: 0.3 },
+  ]);
+  writeAgent(home, 'rn-rev-fix', [
+    { ts: T0 + 2000, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', cwd: '/worktrees/fix-x', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 2500, type: 'turn_done', costUsd: 0.2 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm2\n';
+    if (args[0] === 'log') return [
+      L('m2', 'm1 b2', sec(T0 + 60000), "Merge branch 'fix-x' (@usa)"),
+      L('b2', 'm1', sec(T0 + 59000), 'fix: x (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 50000), "Merge branch 'unit-a' (@usa)"),
+      L('b1', 'a1', sec(T0 + 49000), 'feat: a (@usa) review r2'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const rev = byProfileOf(u, 'Review - Gemini');
+  assert.ok(rev, 'reviewer row present');
+  assert.equal(rev.jobKind, 'reviewer');
+  assert.equal(rev.reviewedUnits, 2, 'unit-a and fix-x both attributed to the reviewer');
+  assert.equal(rev.mergedUnits, 2);
+  assert.equal(rev.reviewRounds, 2, 'M2: reviewRounds = reviewedReviewRounds (2 from unit-a + 0 from fix-x), not 0');
+  assert.equal(rev.avgReviewRounds, 1);
+  assert.equal(rev.fixAfterMergeCount, 1, 'M2: fixAfterMergeCount = reviewedFixAfterMergeCount (1), not 0');
+  assert.equal(rev.fixAfterMergeRate, 0.5);
+});
+
 test('usa-12: lead and Buddy report null / no-signal; reviewer uses PASS lines; implementer with no merged unit is no-signal', () => {
   const home = tmp();
   clearUsageCache();
@@ -2229,7 +2320,7 @@ test('usa-22: bootSize rollup folds boot-size metrics by role/provider/lane (avg
   assert.equal(w.avgChars, 550);
   assert.equal(w.p90Chars, 900);
   assert.equal(w.p90EstTok, 225);
-  assert.deepEqual(w.avgParts, { sys: 10, plugin: 20, artifact: 30, brief: 0, first: 5 });
+  assert.deepEqual(w.avgParts, { sys: 10, plugin: 20, artifact: 30, brief: 0, first: 5, firstPacket: 0, firstArtifact: 0, firstBrief: 0, firstPlan: 0 });
   const l = rows.find((r) => r.role === 'lead');
   assert.deepEqual([l.provider, l.lane, l.count, l.avgChars, l.avgEstTok], ['unknown', 'other', 1, 4000, 1000], 'legacy line counts as total-only');
   assert.equal(rows.length, 2);
@@ -2510,6 +2601,194 @@ test('usage compaction: /compact arriving mid-turn is not charged the prior turn
   assert.equal(cp.totalTokens, 12000);
   assert.equal(cp.totalCostUsd, 0.1);
   assert.equal(cp.tokensSaved, 138000);
+});
+
+// ---- usa-38: compaction vs handoff decision metric (idea-381) ----
+
+test('usa-38: compact-step vs-log outcomes fold into compaction (okRate, medians, meanOkCostUsd, failedCostUsd)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  const step = (at, agent, text) => writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + at, agent, 'usage', 'metric', text));
+  step(1, 'rn-a', 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000');
+  step(2, 'rn-b', 'compact-step agent agent=rn-b outcome=ok before=100000 after=20000 cap=150000 ms=60000 costUsd=0.20 tokens=10000');
+  step(3, 'rn-c', 'compact-step agent agent=rn-c outcome=ok before=120000 after=24000 cap=150000 ms=50000'); // no costUsd field
+  step(4, 'rn-d', 'compact-step agent agent=rn-d outcome=failed before=158000 after=? cap=150000 ms=2500 costUsd=0.10 tokens=2000 -> falling through to handoff');
+  step(5, 'rn-e', 'compact-step agent agent=rn-e outcome=timeout before=152000 after=? cap=150000 ms=125000 -> falling through to handoff');
+  step(6, 'rn-f', 'compact-step agent agent=rn-f outcome=still-over before=160000 after=155000 cap=150000 ms=60000 costUsd=0.20 tokens=5000 -> falling through to handoff');
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 6);
+  assert.equal(cp.okCount, 3);
+  assert.equal(cp.failedCount, 1);
+  assert.equal(cp.timeoutCount, 1);
+  assert.equal(cp.stillOverCount, 1);
+  assert.equal(cp.okRate, 0.5);
+  assert.equal(cp.medianBeforeTokens, 120000);
+  assert.equal(cp.medianAfterTokens, 20000);
+  assert.equal(cp.medianDropPct, 0.8);
+  assert.equal(cp.meanOkCostUsd, 0.2); // mean over the 2 ok events that logged costUsd (0.20+0.20)/2
+  assert.equal(cp.failedCostUsd, 0.3); // failed 0.10 + still-over 0.20
+  // existing fields intact when there are no agent logs
+  assert.equal(cp.runs, 0);
+  assert.equal(cp.avgCostUsd, null);
+  assert.equal(cp.handoffRuns, 0);
+});
+
+test('usa-38: successor first-turn + predecessor wrap-up costs fold into handoff overhead', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-pred', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: 'work' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 1.0 },
+    { ts: T0 + 3, type: 'input', text: 'Wrap up: stop dispatching new blocks, let in-flight workers finish' },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 1.3 },
+    { ts: T0 + 5, type: 'input', text: 'Wrap up: stop dispatching new blocks, run vs handoff' },
+    { ts: T0 + 6, type: 'turn_done', costUsd: 1.8 },
+  ]);
+  writeAgent(home, 'rn-succ1', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.4 },
+    { ts: T0 + 3, type: 'input', text: 'more work' },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 0.9 },
+  ]);
+  writeAgent(home, 'rn-succ2', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred2' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.6 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.handoffRuns, 2);
+  assert.equal(cp.meanSuccessorFirstTurnCostUsd, 0.5); // (0.4 + 0.6) / 2
+  assert.equal(cp.predecessorWrapUpTurns, 2);
+  assert.equal(cp.predecessorWrapUpCostUsd, 0.8); // 0.3 + 0.5
+  assert.equal(cp.meanPredecessorWrapUpCostUsd, 0.4); // 0.8 / 2 turns
+  assert.equal(cp.meanHandoffOverheadCostUsd, 0.9); // 0.5 + 0.4
+});
+
+test('usa-38: no compactions or handoffs yields null EXP3 fields', () => {
+  const home = tmp();
+  clearUsageCache();
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 0);
+  assert.equal(cp.okRate, null);
+  assert.equal(cp.medianBeforeTokens, null);
+  assert.equal(cp.medianAfterTokens, null);
+  assert.equal(cp.medianDropPct, null);
+  assert.equal(cp.meanOkCostUsd, null);
+  assert.equal(cp.failedCostUsd, 0);
+  assert.equal(cp.meanSuccessorFirstTurnCostUsd, null);
+  assert.equal(cp.predecessorWrapUpTurns, 0);
+  assert.equal(cp.predecessorWrapUpCostUsd, 0);
+  assert.equal(cp.meanPredecessorWrapUpCostUsd, null);
+  assert.equal(cp.meanHandoffOverheadCostUsd, null);
+});
+
+test('usa-38: markdown export prints compaction outcomes and handoff overhead', async () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + 1, 'rn-a', 'usage', 'metric', 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000'));
+  writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + 2, 'rn-b', 'usage', 'metric', 'compact-step agent agent=rn-b outcome=failed before=158000 after=? cap=150000 ms=2500 costUsd=0.10 tokens=2000 -> falling through to handoff'));
+  writeAgent(home, 'rn-succ', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.4 },
+  ]);
+  const call = async (url) => {
+    let out;
+    await handleProvidersApi({ method: 'GET', url }, {}, {
+      home, ...probeOpts, git: noGit,
+      readBody: async () => ({}),
+      sendJson: (_r, code, data) => { out = { code, data }; },
+    });
+    return out;
+  };
+  const md = await call('/__vibesquad/providers/usage-export?format=md');
+  assert.equal(md.code, 200);
+  assert.match(md.data.markdown, /## Compaction vs handoff/);
+  assert.match(md.data.markdown, /outcomes: 2 attempts \(50% ok\) \| ok 1 \/ failed 1 \/ timeout 0 \/ still-over 0/);
+  assert.match(md.data.markdown, /token drop \(ok\): median 150000 -> 15000 \(90%\)/);
+  assert.match(md.data.markdown, /successor 1st turn: \$0\.4 \| predecessor wrap-up: \$- \| handoff overhead \$0\.4/);
+});
+
+test('usa-38: compact-step lines landing in both logs/*.jsonl and teams/<t>/log.jsonl are deduped', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  const text = 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000';
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(T0, 'rn-a', 'usage', 'metric', text));
+  writeLog(home, 'teams/vibesquad/log.jsonl', L_ENTRY(T0, 'rn-a', 'usage', 'metric', text));
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 1);
+  assert.equal(cp.okCount, 1);
+});
+
+test('usa-38: a successor whose first turn_done has no costUsd does not dilute meanSuccessorFirstTurnCostUsd', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-nocost', [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done' }, // no costUsd -> firstTurnCostUsd stays null
+  ]);
+  writeAgent(home, 'rn-cost', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred2' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.5 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.meanSuccessorFirstTurnCostUsd, 0.5); // only rn-cost counts; the no-cost successor is excluded, not $0
+});
+
+test('usa-38: WRITE_HANDOFF_PROMPT ("Write handoff now: ...") also counts as a predecessor wrap-up turn', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-pred', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: 'work' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 1.0 },
+    { ts: T0 + 3, type: 'input', text: 'Write handoff now: run vs handoff --judgment-file f and finish your turn' },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 1.2 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.predecessorWrapUpTurns, 1);
+  assert.equal(cp.predecessorWrapUpCostUsd, 0.2);
+  assert.equal(cp.meanPredecessorWrapUpCostUsd, 0.2);
+});
+
+test('usa-38: agent-log compactions without compact-step metric lines leave attempts=0 and okRate=null', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-c', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: '/compact keep the brief' },
+    { ts: T0 + 2, type: 'compacted', before: 150000, after: 12000 },
+    { ts: T0 + 3, type: 'usage', inputTokens: 12000, outputTokens: 0 },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 1.1 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.runs, 1); // the agent-log compaction is still counted
+  assert.equal(cp.attempts, 0); // but no compact-step metric lines -> 0, not run-fallback
+  assert.equal(cp.okCount, 0);
+  assert.equal(cp.okRate, null); // never 1: derived only from real counts
+});
+
+test('usa-38: squad filter honors a compact-step entry team field when the lane is unmapped', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  fs.writeFileSync(path.join(home, 'teams.json'), JSON.stringify({ teams: [{ id: 'vibesquad', lanes: [{ id: 'usage', code: 'usa' }] }] }));
+  // lane is not in teams.json, but the entry's team field names the squad
+  writeLog(home, 'logs/other--compaction.jsonl', { ts: new Date(T0).toISOString(), agent: 'rn-a', lane: 'unmapped', type: 'metric', team: 'vibesquad', text: 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000', refs: [] });
+  const cp = getUsage({ home, git: noGit, squad: 'vibesquad' }).compaction;
+  assert.equal(cp.attempts, 1);
+  assert.equal(cp.okCount, 1);
 });
 
 test('usage ready-time: a queued status after the first response (follow-up turn behind the cap) does not redefine the spawn queue wait', () => {

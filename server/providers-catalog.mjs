@@ -21,6 +21,7 @@ import { BUG_LANE_FALLBACK_IDS } from "./lane-pure.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 import { normalizeWfLabel } from "./wf-label.mjs";
+import { SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT } from "./lead-handoff.mjs";
 
 const PROBE_TTL_MS = 10 * 60_000;
 const PROBE_TIMEOUT_MS = 4000;
@@ -371,6 +372,12 @@ function bucketFor(st, day) {
 }
 
 const COMPACT_INPUT_RE = /^\s*\/compact\b/i;
+// usa-38 EXP3: predecessor wrap-up prompts (lead-handoff.mjs) mark the note/handoff-writing turn. Derived from the exported
+// prompt strings (case-insensitive, leading words) so a wording change can't silently desync the metric.
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const WRAP_UP_NUDGE_RES = [SOFT_FLAG_NUDGE, WRITE_HANDOFF_PROMPT].map(
+  (prompt) => new RegExp(escapeRe(prompt.split(/\s+/).slice(0, 4).join(" ")).replace(/ /g, "\\s+"), "i"),
+);
 
 function foldEvent(st, ev) {
   const t = tsMs(ev.ts);
@@ -434,6 +441,7 @@ function foldEvent(st, ev) {
     st.msgVerdict = null;
     st.pass = st.priorPass;
     if (typeof ev.text === "string" && COMPACT_INPUT_RE.test(ev.text)) st.compactPending = { costUsd: 0, inputTokens: 0, outputTokens: 0 };
+    if (typeof ev.text === "string" && WRAP_UP_NUDGE_RES.some((re) => re.test(ev.text))) st.wrapUpPending = true;
     if (!st.roleOnly && typeof ev.text === "string" && /^\s*(?:ROLE:\s*reviewer\b|You are (?:acting as )?a READ-ONLY\b)/i.test(ev.text)) {
       st.roleOnly = true;
     }
@@ -470,9 +478,19 @@ function foldEvent(st, ev) {
     // claude reports a session-cumulative total_cost_usd; a lower value means a fresh process, so count it whole.
     const c = Number(ev.costUsd);
     let delta = 0;
-    if (Number.isFinite(c) && c >= 0) {
+    const hasCost = Number.isFinite(c) && c >= 0;
+    if (hasCost) {
       delta = c >= st.prevCost ? c - st.prevCost : c;
       st.prevCost = c;
+    }
+    // usa-38 EXP3: the very first completed turn's cost delta is the successor takeover cost (vs.handoff-from); a wrap-up
+    // nudge marks the predecessor's note-writing turn. Only record firstTurnCostUsd when the turn actually carried a cost,
+    // so a no-cost turn_done (e.g. agy/gemini) never reads as $0 and dilutes the successor mean.
+    if (st.turns === 0 && st.firstTurnCostUsd === undefined && hasCost) st.firstTurnCostUsd = delta;
+    if (st.wrapUpPending) {
+      st.wrapUpCostUsd = (st.wrapUpCostUsd ?? 0) + delta;
+      st.wrapUpTurns = (st.wrapUpTurns ?? 0) + 1;
+      st.wrapUpPending = false;
     }
     if (st.compactPending && !st.compactPending.compacted) {
       st.compactPending.inputTokens = 0; st.compactPending.outputTokens = 0; // /compact arrived mid-turn: this turn_done closes the prior turn, not the compaction
@@ -1100,6 +1118,9 @@ function agentV2(st, agentId) {
     lastError: st.lastError ?? "",
     lastErrorTs: st.lastErrorTs ?? null,
     handoff: !!st.handoff,
+    firstTurnCostUsd: st.firstTurnCostUsd ?? null,
+    wrapUpCostUsd: st.wrapUpCostUsd ?? 0,
+    wrapUpTurns: st.wrapUpTurns ?? 0,
     loop: st.turns > LOOP_TURN_THRESHOLD && !st.pass,
     restartedOrResumed: !!st.restartedOrResumed,
     queuedMs: st.queuedAt !== undefined && st.queueEndedAt !== undefined ? Math.max(0, st.queueEndedAt - st.queuedAt) : null,
@@ -1163,19 +1184,64 @@ function buildReadyTime(agents) {
 }
 
 /**
- * Compaction vs handoff (idea-132). A compaction = a `compacted` event (before/after tokens -> tokensSaved); its cost/tokens are the turn
- * answering the `/compact` input. Handoff cost = agents carrying vs.handoff-from. Shape:
- * getUsage().compaction = { runs, totalCostUsd, avgCostUsd, totalTokens, avgTokens, tokensSaved, handoffRuns, restartOverheadCostUsd, avgHandoffCostUsd }
+ * Compaction vs handoff (idea-132, idea-381). A compaction = a `compacted` event (before/after tokens -> tokensSaved); its cost/tokens are the turn
+ * answering the `/compact` input. Handoff cost = agents carrying vs.handoff-from. EXP3 (usa-38) folds `compact-step` vs-log outcomes
+ * (compactEvents, see readCompactStepEvents) and successor/predecessor turn costs (firstTurnCostUsd / wrapUpCostUsd on agentV2).
+ * Shape (existing fields unchanged):
+ * getUsage().compaction = { runs, totalCostUsd, avgCostUsd, totalTokens, avgTokens, tokensSaved, handoffRuns, restartOverheadCostUsd, avgHandoffCostUsd,
+ *   attempts, okCount, failedCount, timeoutCount, stillOverCount, okRate, medianBeforeTokens, medianAfterTokens, medianDropPct,
+ *   meanOkCostUsd, failedCostUsd, meanSuccessorFirstTurnCostUsd, predecessorWrapUpTurns, predecessorWrapUpCostUsd,
+ *   meanPredecessorWrapUpCostUsd, meanHandoffOverheadCostUsd }
  */
-function buildCompaction(agents, floor) {
+function buildCompaction(agents, floor, compactEvents = []) {
   let runs = 0, cost = 0, tokens = 0, saved = 0, handoffRuns = 0, handoffCost = 0;
   for (const a of agents) {
     runs += a.compactions; cost += a.compactCostUsd; tokens += a.compactInputTokens + a.compactOutputTokens; saved += a.compactSavedTokens;
     if (a.handoff) { handoffRuns += 1; handoffCost += a.costUsd; }
   }
+  const avgCostUsd = runs ? cost / runs : null;
+
+  // EXP3: compact-step vs-log outcomes (ok | failed | timeout | still-over).
+  const attempts = compactEvents.length;
+  let okCount = 0, failedCount = 0, timeoutCount = 0, stillOverCount = 0;
+  let okCost = 0, okCostCount = 0, failedCost = 0;
+  const beforeTokens = [], afterTokens = [], drops = [];
+  for (const e of compactEvents) {
+    if (e.outcome === "ok") {
+      okCount += 1;
+      if (e.costUsd !== null) { okCost += e.costUsd; okCostCount += 1; }
+      if (e.before !== null && e.before > 0 && e.after !== null && e.after >= 0) {
+        beforeTokens.push(e.before); afterTokens.push(e.after); drops.push(e.before > 0 ? (e.before - e.after) / e.before : 0);
+      }
+    } else if (e.outcome === "failed") { failedCount += 1; if (e.costUsd !== null) failedCost += e.costUsd; }
+    else if (e.outcome === "timeout") { timeoutCount += 1; if (e.costUsd !== null) failedCost += e.costUsd; }
+    else if (e.outcome === "still-over") { stillOverCount += 1; if (e.costUsd !== null) failedCost += e.costUsd; }
+  }
+  const median = (arr) => (arr.length ? pctile(arr.slice().sort((x, y) => x - y), 0.5) : null);
+  const medianBeforeTokens = median(beforeTokens);
+  const medianAfterTokens = median(afterTokens);
+  const medianDropPct = drops.length ? round2(median(drops)) : null;
+  // mean cost across ok compactions that logged costUsd; fall back to the agent-log compaction cost when none did.
+  const meanOkCostUsd = okCostCount ? round2(okCost / okCostCount) : avgCostUsd;
+  // okRate derives only from real compact-step events; no metric lines -> null (never 1), so it stays consistent with the counts.
+  const okRate = attempts ? round2(okCount / attempts) : null;
+
+  // EXP3 handoff overhead: successor first-turn cost (vs.handoff-from carriers) + predecessor wrap-up turn cost.
+  let successorCost = 0, successorCount = 0, wrapUpTurns = 0, wrapUpCost = 0;
+  for (const a of agents) {
+    if (a.handoff && a.firstTurnCostUsd !== null) { successorCost += a.firstTurnCostUsd; successorCount += 1; }
+    if (a.wrapUpTurns > 0) { wrapUpTurns += a.wrapUpTurns; wrapUpCost += a.wrapUpCostUsd; }
+  }
+  const meanSuccessorFirstTurnCostUsd = successorCount ? round2(successorCost / successorCount) : null;
+  const meanPredecessorWrapUpCostUsd = wrapUpTurns ? round2(wrapUpCost / wrapUpTurns) : null;
+  const meanHandoffOverheadCostUsd = meanSuccessorFirstTurnCostUsd !== null ? round2(meanSuccessorFirstTurnCostUsd + (meanPredecessorWrapUpCostUsd ?? 0)) : null;
+
   return {
-    runs, totalCostUsd: cost, avgCostUsd: runs ? cost / runs : null, totalTokens: tokens, avgTokens: runs ? Math.round(tokens / runs) : null,
+    runs, totalCostUsd: cost, avgCostUsd, totalTokens: tokens, avgTokens: runs ? Math.round(tokens / runs) : null,
     tokensSaved: saved, handoffRuns, restartOverheadCostUsd: floor?.restartOverheadCostUsd ?? 0, avgHandoffCostUsd: handoffRuns ? handoffCost / handoffRuns : null,
+    attempts, okCount, failedCount, timeoutCount, stillOverCount, okRate,
+    medianBeforeTokens, medianAfterTokens, medianDropPct, meanOkCostUsd, failedCostUsd: round2(failedCost),
+    meanSuccessorFirstTurnCostUsd, predecessorWrapUpTurns: wrapUpTurns, predecessorWrapUpCostUsd: round2(wrapUpCost), meanPredecessorWrapUpCostUsd, meanHandoffOverheadCostUsd,
   };
 }
 
@@ -1289,6 +1355,43 @@ function readHandoffs(home) {
     }
   }
   return out.sort((a, b) => a.ts - b.ts);
+}
+
+/**
+ * usa-38 EXP3: `compact-step` metric lines from the vs logs (type "metric", text starts "compact-step "), deduped on
+ * agent+ts (the same entry lands in both logs/*.jsonl and teams/<t>/log.jsonl). Fields: kind, agent, outcome
+ * (ok|failed|timeout|still-over), before, after (tokens, "?" when the compaction never finished), ms, costUsd, tokens.
+ */
+function readCompactStepEvents(home, { squad, laneTeams } = {}) {
+  const dir = home || vibesquadHome();
+  if (isForbiddenRealHome(dir)) return [];
+  const num = (v) => (typeof v === "string" && v !== "" && v !== "?" && Number.isFinite(Number(v)) ? Number(v) : null);
+  const seen = new Set();
+  const out = [];
+  for (const file of vsLogFiles(dir)) {
+    for (const e of logLines(file)) {
+      if (e.type !== "metric" || e.t === null) continue;
+      const text = typeof e.text === "string" ? e.text : "";
+      if (!text.startsWith("compact-step ")) continue;
+      const own = typeof e.team === "string" && e.team ? e.team : typeof e.squad === "string" && e.squad ? e.squad : null;
+      if (squad && (own ?? laneTeams?.get(e.lane)) !== squad) continue;
+      const agent = /agent=(\S+)/.exec(text)?.[1] ?? "";
+      const key = `${agent}\u0000${e.t}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        kind: /^compact-step\s+(\S+)/.exec(text)?.[1] ?? "",
+        agent,
+        outcome: /outcome=(\S+)/.exec(text)?.[1] ?? "",
+        before: num(/before=(\S+)/.exec(text)?.[1]),
+        after: num(/after=(\S+)/.exec(text)?.[1]),
+        ms: num(/ms=(\S+)/.exec(text)?.[1]),
+        costUsd: num(/costUsd=(\S+)/.exec(text)?.[1]),
+        tokens: num(/tokens=(\S+)/.exec(text)?.[1]),
+      });
+    }
+  }
+  return out;
 }
 
 // Recent vs-log signals for the periodic usage review (usa-9): @usa/usage-lane notes, friction (blockers, FAIL
@@ -1611,19 +1714,26 @@ function providerFamily(provider) {
   return p || null;
 }
 
-/** Reviewer family for a merged unit: the reviewer run(s) in the unit's worktree (else the lane's cwd-less reviewer runs created between
- * the implementer and the merge) -> `${providerFamily}-review`. No reviewer found: "gemini-review" when the unit was reviewed
- * (reviewRounds > 0) or the implementer is known (Review-Gemini is the default loop), else "no-review". */
-function attributeReviewerFamily(unit, implementer, index) {
+/** The reviewer run attributed to a merged unit (idea-300): the reviewer run(s) in the unit's worktree (else the lane's
+ * cwd-less reviewer runs created between the implementer and the merge), most recent first. Returns the agent, or null
+ * when no reviewer run can be attributed. */
+function attributeReviewerAgent(unit, implementer, index) {
   const mergedAtMs = tsMs(unit.mergedAt);
   const isRev = (a) => a.jobKind === "reviewer" && sameSquad(unit, a);
   let revs = typeof unit.unit === "string" && unit.unit ? (index?.byUnit.get(unit.unit.toLowerCase()) ?? []).filter(isRev) : [];
   if (!revs.length && unit.lane && mergedAtMs !== null && implementer) {
     revs = (index?.byLane.get(unit.lane) ?? []).filter((a) => isRev(a) && !unitNameOfCwd(a.cwd) && a.createdAt !== null && a.createdAt >= (implementer.createdAt ?? 0) && a.createdAt <= mergedAtMs);
   }
-  if (revs.length) {
-    const rev = revs.slice().sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0))[0];
-    const fam = providerFamily(rev.provider);
+  if (!revs.length) return null;
+  return revs.slice().sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0))[0];
+}
+
+/** Reviewer family for a merged unit: the attributed reviewer run's provider -> `${providerFamily}-review`. No reviewer found:
+ * "gemini-review" when the unit was reviewed (reviewRounds > 0) or the implementer is known (Review-Gemini is the default loop),
+ * else "no-review". */
+function attributeReviewerFamily(unit, implementer, reviewer) {
+  if (reviewer) {
+    const fam = providerFamily(reviewer.provider);
     if (fam) return `${fam}-review`;
   }
   return (unit.reviewRounds ?? 0) > 0 || implementer ? "gemini-review" : "no-review";
@@ -2392,7 +2502,7 @@ function maybeScheduleUsageReview(usage, home, opts = {}) {
 
 /** usa-22: fold `boot-size` metrics (vs logs, deduped like readUsageLogSignals) into avg/p90 chars + estTok per role/provider/lane.
  * Entries without a breakdown (pre usa-22: `role chars`) count as total-only under provider "unknown". Never throws. */
-const BOOT_PARTS = ["sys", "plugin", "artifact", "brief", "first"];
+const BOOT_PARTS = ["sys", "plugin", "artifact", "brief", "first", "firstPacket", "firstArtifact", "firstBrief", "firstPlan"];
 const bootKv = (text) => Object.fromEntries([...String(text ?? "").matchAll(/(\w+)=(\S+)/g)].map((m) => [m[1], m[2]]));
 export function foldBootSizes(entries) {
   const groups = new Map();
@@ -2643,7 +2753,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   function mergedUnitV2(u) {
     const mergedAtMs = tsMs(u.mergedAt);
     const implementer = attributeImplementer(u, agents, workerIndex);
-    const reviewerFamily = attributeReviewerFamily(u, implementer, workerIndex);
+    const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
+    const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
@@ -2659,6 +2770,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       implementerModel: implementer?.model ? baseModel(implementer.model) : null,
       stakes: implementer ? (implementer.stakes ?? "normal") : null,
       implementerAgentId: implementer ? implementer.agentId : null,
+      reviewerAgentId: reviewer ? reviewer.agentId : null,
       costUsd: implementer ? implementer.costUsd : null,
       inputTokens: implementer ? implementer.inputTokens : 0,
       outputTokens: implementer ? implementer.outputTokens : 0,
@@ -2686,7 +2798,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -2711,20 +2823,42 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     if (u.unitCycleMs !== null) { g.unitCycleSum += u.unitCycleMs; g.unitCycleCount += 1; }
     if (u.fixAfterMerge) g.fixAfterMergeCount += 1;
   }
-  const byProfile = [...profileMap.values()].map((g) => ({
-    provider: g.provider, model: g.model, stakes: g.stakes, jobKind: g.jobKind, profile: g.profile, role: g.role,
-    runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
-    inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
-    workingMs: g.workingMs, idleMs: g.idleMs,
-    passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
-    ...roleSuccess(g),
-    loopCount: g.loopCount,
-    errorCount: g.errorCount,
-    mergedUnits: g.mergedUnits, firstTryCount: g.firstTryCount, reviewRounds: g.reviewRounds, avgReviewRounds: g.mergedUnits ? Math.round((g.reviewRounds / g.mergedUnits) * 100) / 100 : 0,
-    costPerMergedUnit: g.mergedUnits ? g.costUsd / g.mergedUnits : null,
-    fixAfterMergeCount: g.fixAfterMergeCount, fixAfterMergeRate: g.mergedUnits ? Math.round((g.fixAfterMergeCount / g.mergedUnits) * 1000) / 1000 : 0,
-    avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
-  })).sort((a, b) => b.costUsd - a.costUsd || a.profile.localeCompare(b.profile) || a.role.localeCompare(b.role));
+  // idea-300: attribute reviewed (merged) units to reviewer rows — reviewer cost per reviewed unit, review rounds, fix-after-merge.
+  for (const u of merged) {
+    if (!u.reviewerAgentId) continue;
+    const a = agentById.get(u.reviewerAgentId);
+    if (!a) continue;
+    const g = profileMap.get(profileKey(a));
+    if (!g) continue;
+    g.reviewedUnits += 1;
+    g.reviewedReviewRounds += u.reviewRounds;
+    if (u.fixAfterMerge) g.reviewedFixAfterMergeCount += 1;
+  }
+  const byProfile = [...profileMap.values()].map((g) => {
+    const isReviewer = g.jobKind === "reviewer";
+    const mergedUnits = isReviewer ? g.reviewedUnits : g.mergedUnits;
+    return {
+      provider: g.provider, model: g.model, stakes: g.stakes, jobKind: g.jobKind, profile: g.profile, role: g.role,
+      runs: g.runs, turns: g.turns, avgTurnsPerRun: g.runs ? Math.round((g.turns / g.runs) * 100) / 100 : 0,
+      costPerRun: g.runs ? g.costUsd / g.runs : null,
+      tokensPerRun: g.runs ? Math.round((g.inputTokens + g.outputTokens) / g.runs) : 0,
+      inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
+      workingMs: g.workingMs, idleMs: g.idleMs,
+      passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
+      ...roleSuccess(g),
+      loopCount: g.loopCount,
+      errorCount: g.errorCount,
+      reviewedUnits: isReviewer ? g.reviewedUnits : 0,
+      mergedUnits,
+      firstTryCount: g.firstTryCount,
+      reviewRounds: isReviewer ? g.reviewedReviewRounds : g.reviewRounds,
+      avgReviewRounds: mergedUnits ? Math.round(((isReviewer ? g.reviewedReviewRounds : g.reviewRounds) / mergedUnits) * 100) / 100 : 0,
+      costPerMergedUnit: mergedUnits ? g.costUsd / mergedUnits : null,
+      fixAfterMergeCount: isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount,
+      fixAfterMergeRate: mergedUnits ? Math.round(((isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount) / mergedUnits) * 1000) / 1000 : 0,
+      avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
+    };
+  }).sort((a, b) => b.costUsd - a.costUsd || a.profile.localeCompare(b.profile) || a.role.localeCompare(b.role));
 
   // per-lane v2 aggregates: working/idle time, unit cycle, fix rate, and plan cycle from handoff log entries.
   const workByLane = new Map();
@@ -2816,6 +2950,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const savings = buildSavings(merged, totalsFinal, lanes, agents, rows);
   const cohorts = buildCohorts(merged);
   const floor = buildFloor(merged, agents, totalsFinal);
+  const compactEvents = readCompactStepEvents(home, { squad, laneTeams });
   yield;
 
   // ---- usa-24: Squad filter + autonomy scorecard (bySquad always compares every Squad, unfiltered)
@@ -2862,7 +2997,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byProfile,
     spawnStorms,
     readyTime,
-    compaction: buildCompaction(agents, floor),
+    compaction: buildCompaction(agents, floor, compactEvents),
     bootSize,
     recentErrors,
     byWorkflow,
@@ -2959,11 +3094,15 @@ function usageToMarkdown(u) {
     for (const g of rt.byProvider) lines.push(`| ${g.provider} | ${g.count} | ${sec(g.medianFirstResponseExclQueueMs)}/${sec(g.p90FirstResponseExclQueueMs)} | ${sec(g.medianFirstResponseMs)}/${sec(g.p90FirstResponseMs)} | ${sec(g.medianReadyExclQueueMs)}/${sec(g.p90ReadyExclQueueMs)} | ${sec(g.medianQueuedMs)}/${sec(g.p90QueuedMs)} |`);
   }
   const cp = u.compaction;
-  if (cp && (cp.runs || cp.handoffRuns)) {
+  if (cp && (cp.runs || cp.attempts || cp.handoffRuns)) {
     lines.push("");
     lines.push("## Compaction vs handoff");
     lines.push(`- compactions: ${cp.runs} | $${round2(cp.totalCostUsd)} total, ${cp.avgCostUsd === null ? "-" : `$${round2(cp.avgCostUsd)}`} avg | ${cp.totalTokens} tokens | saved ${cp.tokensSaved}`);
     lines.push(`- handoffs: ${cp.handoffRuns} | avg $${cp.avgHandoffCostUsd === null ? "-" : round2(cp.avgHandoffCostUsd)} | restart overhead $${round2(cp.restartOverheadCostUsd)}`);
+    lines.push(`- outcomes: ${cp.attempts} attempts (${cp.okRate === null ? "-" : `${Math.round(cp.okRate * 100)}%`} ok) | ok ${cp.okCount} / failed ${cp.failedCount} / timeout ${cp.timeoutCount} / still-over ${cp.stillOverCount}`);
+    lines.push(`- ok cost: mean $${cp.meanOkCostUsd === null ? "-" : round2(cp.meanOkCostUsd)} | failed $${round2(cp.failedCostUsd)}`);
+    lines.push(`- token drop (ok): median ${cp.medianBeforeTokens ?? "-"} -> ${cp.medianAfterTokens ?? "-"}${cp.medianDropPct === null ? "" : ` (${Math.round(cp.medianDropPct * 100)}%)`}`);
+    lines.push(`- successor 1st turn: $${cp.meanSuccessorFirstTurnCostUsd === null ? "-" : round2(cp.meanSuccessorFirstTurnCostUsd)} | predecessor wrap-up: $${cp.meanPredecessorWrapUpCostUsd === null ? "-" : round2(cp.meanPredecessorWrapUpCostUsd)} | handoff overhead $${cp.meanHandoffOverheadCostUsd === null ? "-" : round2(cp.meanHandoffOverheadCostUsd)}`);
   }
   const bs = u.bootSize ?? [];
   if (bs.length) {

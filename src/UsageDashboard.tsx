@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -312,7 +312,15 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
     return [...(data?.limits ?? [])].sort((a, b) => rank(a) - rank(b) || a.provider.localeCompare(b.provider) || a.window.localeCompare(b.window));
   }, [data]);
   const rows = useMemo(() => (data ? sortRows(buildRows(data), sort.key, sort.dir) : []), [data, sort]);
-  const profiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
+  const [kindFilter, setKindFilter] = useState<ProfileKindFilter>(() => {
+    try { return parseProfileKind(localStorage.getItem(PROFILE_KIND_KEY)); } catch { return "all"; }
+  });
+  const pickKind = (k: ProfileKindFilter) => {
+    setKindFilter(k);
+    try { localStorage.setItem(PROFILE_KIND_KEY, k); } catch { /* storage unavailable */ }
+  };
+  const allProfiles = useMemo(() => (data ? sortProfiles(buildProfiles(data)) : []), [data]);
+  const profiles = useMemo(() => filterProfilesByKind(allProfiles, kindFilter), [allProfiles, kindFilter]);
   const workflows = useMemo(() => sortWorkflows(data?.byWorkflow), [data]);
 
   const review = data?.usageReview;
@@ -426,6 +434,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                 <div className="usage-cohort-label small">{t.label}</div>
                 <div className="usage-cohort-value">{t.value}</div>
                 <div className="small muted">{t.sub}</div>
+                {t.sub2 && <div className="small muted" data-testid="usage-compaction-ok">{t.sub2}</div>}
               </div>
             ))}
           </div>
@@ -551,9 +560,23 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
       </Collapse>
 
       {data.byProfile && (
-        <Collapse id="profiles" testid="usage-profile-collapse" className="usage-profiles" summary={profileSummary(profiles)}>
+        <Collapse id="profiles" testid="usage-profile-collapse" className="usage-profiles" summary={profileSummary(allProfiles)}>
+          <div className="usage-kind-filter" role="group" aria-label="Profile kind filter" data-testid="usage-profile-kind-filter">
+            {PROFILE_KIND_FILTERS.map((f) => (
+              <button
+                key={f.key}
+                type="button"
+                aria-pressed={kindFilter === f.key}
+                className={`usage-squad-pill${kindFilter === f.key ? " is-active" : ""}`}
+                data-filter={f.key}
+                onClick={() => pickKind(f.key)}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
           {profiles.length === 0 ? (
-            <div className="small muted">no profile data yet</div>
+            <div className="small muted">{allProfiles.length === 0 ? "no profile data yet" : "no profiles of this kind"}</div>
           ) : (
             <div className="usage-table-wrap">
               <table className="usage-table" data-testid="usage-profile-table">
@@ -585,7 +608,7 @@ export function UsageDashboard({ perfection }: { perfection?: UsagePerfection } 
                       <td className="num" title={successTooltip(p)}>{successText(p)}</td>
                       <td className="num">{p.mergedUnits}</td>
                       <td className="num">{p.mergedUnits > 0 ? p.avgReviewRounds.toFixed(1) : "–"}</td>
-                      <td className="num">{p.costPerMergedUnit === null ? "–" : usd(p.costPerMergedUnit)}</td>
+                      <td className="num">{costCellText(p)}</td>
                       <td className={`num${p.fixRate >= HIGH_FIX_RATE ? " usage-high" : ""}`}>{pctText(p.fixRate)}</td>
                       <td className="num">{workIdlePct(p.workPct)}</td>
                     </tr>

@@ -6572,3 +6572,9 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .tl-pinned-todo { background: var(--bg); border-bottom: 1px solid var(--line); padding: 4px 8px; cursor: pointer; }
 .tl-pinned-todo-body { margin-top: 4px; font-size: 0.9em; }
 .tl-load-older { text-align: center; padding: 4px 0; }
+.usage-kind-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}

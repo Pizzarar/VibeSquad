@@ -141,12 +141,12 @@ export async function triggerBrainstormRestart(opts: {
 }
 
 /** `chatOnly` (sky-gods zones): messages + composer only. The right dock (Changes/Files/Terminal) is never rendered, never read from or written to the shared `vs.right-dock.open` key, and `vs:open-right-dock` is ignored. */
-type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean; pinDecisions?: boolean };
+type DrawerProps = { agent: PaseoAgent; onClose: () => void; onSuccessor?: () => void; active?: boolean; chatOnly?: boolean; pinDecisions?: boolean; noContextPanel?: boolean };
 
 /** Provider switches staged but not yet sent, per agent id (survives AgentDrawer unmount/remount). */
 export const stagedSwitchByAgent = new Map<string, ProviderSwitchTarget>();
 
-export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false, pinDecisions = false }: DrawerProps) {
+export const AgentDrawer = memo(function AgentDrawer({ agent, onClose, onSuccessor, active = true, chatOnly = false, pinDecisions = false, noContextPanel = false }: DrawerProps) {
   useTeams();
   const labels = (agent.labels ?? {}) as Record<string, string>;
   const prov = providerSpec(agent.provider);
@@ -676,7 +676,7 @@ ${draft}`);
             onParkText={(txt) => void parkToInbox(txt, false)}
           />
         </TimelineErrorBoundary>
-        {vibe === "boring" && !chatOnly && (
+        {vibe === "boring" && !chatOnly && !noContextPanel && (
           <TimelineErrorBoundary fallbackLabel="context panel">
             <BoringContextPanel key={agent.id} agent={agent} entries={entries} teamId={teamId} laneId={laneId} />
           </TimelineErrorBoundary>
