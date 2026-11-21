@@ -143,15 +143,40 @@ test("laneHasOpenNeedsYou: label, log tail, answered by a later decision", async
   assert.equal(await laneHasOpenNeedsYou({ teamId: "vs", laneId: "bug", baseHome: home, nowMs: now }), false);
 });
 
-test("laneOpenWork: parked cards are scoped to the Squad AND lane", async () => {
+test("laneOpenWork: parked and archived cards are not open work (idea-481); only a status-less card counts, scoped to the Squad AND lane", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
   fs.writeFileSync(path.join(home, "inbox.json"), JSON.stringify([
-    { id: "idea-1", title: "mine", teamId: "vs", laneId: "bug", status: "parked" },
+    { id: "idea-1", title: "parked", teamId: "vs", laneId: "bug", status: "parked" },
     { id: "idea-2", title: "other squad", teamId: "efi", laneId: "bug", status: "parked" },
     { id: "idea-3", title: "archived", teamId: "vs", laneId: "bug", status: "archived" },
+    { id: "idea-4", title: "legacy", teamId: "vs", laneId: "bug" },
+    { id: "idea-5", title: "other squad legacy", teamId: "efi", laneId: "bug" },
   ]));
   const items = await laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: home, baseHome: home });
-  assert.deepEqual(items, ["idea-1 mine"]);
+  assert.deepEqual(items, ["idea-4 legacy"]);
+});
+
+test("idle-kick does not nudge a lane whose only open work is parked/archived inbox cards (idea-481)", async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
+  fs.writeFileSync(path.join(home, "inbox.json"), JSON.stringify([
+    { id: "idea-297", title: "parked usage", teamId: "vs", laneId: "bug", status: "parked" },
+    { id: "idea-224", title: "archived", teamId: "vs", laneId: "bug", status: "archived" },
+  ]));
+  let t = 1_000_000;
+  const sent = [];
+  const kick = createIdleLaneKick({
+    rootDir: home,
+    baseHome: home,
+    teams: () => TEAMS,
+    listAgents: async () => [ag("L", "lead", "bug"), ag("OV", "lead", "vs")],
+    send: async (id, text) => sent.push({ id, text }),
+    log: () => {},
+    now: () => t,
+  });
+  await kick.tick();
+  t += 11 * MIN;
+  assert.deepEqual(await kick.tick(), []);
+  assert.equal(sent.length, 0);
 });
 
 test("open work and registry reads are cached across ticks within the TTL", async () => {

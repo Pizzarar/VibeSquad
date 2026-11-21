@@ -88,7 +88,9 @@ export async function armedWatchOwners(baseHome) {
   return new Set((doc.sets ?? []).filter((s) => !s.firedAt && !s.cancelledAt).map((s) => s.owner));
 }
 
-/** Open work in priority order: TASKS.json live units, parked cards of THIS Squad+lane, plan blocks not PASS in the brief. */
+/** Open work in priority order: TASKS.json live units, then plan blocks not PASS in the brief.
+ * Inbox cards are triage items, not lane work: a parked card waits for the owner/lead to triage it and an
+ * archived card is done, so neither is open (idea-481). Only a legacy card with no status yet still counts. */
 export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const root = briefRootFor(teamId, laneId, rootDir);
   const items = await openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
@@ -96,7 +98,9 @@ export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const cards = Array.isArray(inbox) ? inbox : Array.isArray(inbox?.cards) ? inbox.cards : [];
   const sameId = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
   for (const c of cards) {
-    if ((c.status && c.status !== "parked") || !sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
+    // Any status (parked/archived/accepted/handed-off/rejected) means it is not open lane work; only a
+    // status-less card (legacy) still counts. This keeps parked and archived cards from being nudged.
+    if (c.status || !sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
     items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
   }
   try {
