@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
+import { Worker } from "node:worker_threads";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { getHostId } from "./host-id.mjs";
 import { ensureLocalToken, LOCAL_TOKEN_FILE, LOCAL_TOKEN_HEADER, localTokenPath } from "./local-token.mjs";
@@ -94,10 +95,81 @@ const isPrivateLanIpv4 = (ip) => {
 
 const VIRTUAL_IFACE_RE = /vEthernet|WSL|Hyper-V|Docker|VMware|VirtualBox|NordLynx|Tailscale|ZeroTier|Loopback|TAP|TUN/i;
 
+// idea-518: os.networkInterfaces() is a synchronous GetAdaptersAddresses call. On a Windows box with vEthernet/WSL/VPN
+// adapters it held the server loop ~2 s per call, and netConfig() ran it twice per /api/auth/status poll (~43% of the
+// loop blocked, 'server unreachable' prompts). Now: one synchronous read the first time an address is needed (boot binds
+// its listeners from it), then the snapshot is refreshed in a worker thread, single-flight, once it is NET_REFRESH_MS
+// old; readers get the last snapshot meanwhile. A failed refresh keeps the last snapshot. A missing address stays null
+// (fail closed: pair/start 503s, isAllowedHostHeader drops it), never a guess.
+export const NET_REFRESH_MS = 30_000;
+let ifaceSnap = null; // { at, ifaces }: the last os.networkInterfaces() result
+let ifaceRefresh = null; // in-flight background refresh
+let ifaceWorker = null;
+
+const IFACE_WORKER_SRC = `const { parentPort } = require("node:worker_threads");
+const { networkInterfaces } = require("node:os");
+parentPort.on("message", () => { let r = null; try { r = networkInterfaces(); } catch {} parentPort.postMessage(r); });`;
+
+/** os.networkInterfaces() run in a persistent, unref'd worker thread: the GetAdaptersAddresses wait is off the loop. */
+function readInterfacesOffLoop() {
+  return new Promise((ok, fail) => {
+    let w = ifaceWorker;
+    if (!w) {
+      w = ifaceWorker = new Worker(IFACE_WORKER_SRC, { eval: true });
+      w.unref();
+      w.on("error", () => { if (ifaceWorker === w) ifaceWorker = null; });
+      w.on("exit", () => { if (ifaceWorker === w) ifaceWorker = null; });
+    }
+    const done = (fn) => (v) => { w.off("message", onMsg); w.off("error", onErr); w.off("exit", onExit); fn(v); };
+    const onMsg = done(ok);
+    const onErr = done(fail);
+    const onExit = done(() => fail(new Error("interface worker exited")));
+    w.once("message", onMsg);
+    w.once("error", onErr);
+    w.once("exit", onExit);
+    w.postMessage(0);
+  });
+}
+
+/** Refreshes the interface snapshot off the loop. Single-flight: concurrent callers share one read. */
+export function refreshNetInterfaces({ read = readInterfacesOffLoop, now = Date.now } = {}) {
+  if (ifaceRefresh) return ifaceRefresh;
+  const p = Promise.resolve()
+    .then(read)
+    .then(
+      (ifaces) => {
+        if (ifaces && typeof ifaces === "object") ifaceSnap = { at: now(), ifaces };
+        else if (ifaceSnap) ifaceSnap = { ...ifaceSnap, at: now() }; // no answer: keep the last snapshot, retry after the TTL
+      },
+      () => { if (ifaceSnap) ifaceSnap = { ...ifaceSnap, at: now() }; },
+    )
+    .finally(() => { if (ifaceRefresh === p) ifaceRefresh = null; });
+  ifaceRefresh = p;
+  return p;
+}
+
+/** The current interface snapshot: synchronous only the first time, then the cached one (stale ones refresh in the background). */
+export function netInterfaces({ now = Date.now, read } = {}) {
+  if (!ifaceSnap) {
+    let ifaces = {};
+    try { ifaces = networkInterfaces() ?? {}; } catch { /* no interfaces known: every address stays null */ }
+    ifaceSnap = { at: now(), ifaces };
+  } else if (now() - ifaceSnap.at >= NET_REFRESH_MS) {
+    refreshNetInterfaces(read ? { read, now } : { now }).catch(() => {});
+  }
+  return ifaceSnap.ifaces;
+}
+
+/** Test seam: install a snapshot (null = forget it, so the next read is the synchronous first one). */
+export function setNetInterfacesForTest(ifaces, at = Date.now()) {
+  ifaceSnap = ifaces ? { at, ifaces } : null;
+  ifaceRefresh = null;
+}
+
 /** Home/office LAN IPv4: env override, else first physical RFC-1918 interface. */
-export function detectLanIp() {
+export function detectLanIp(interfaces = netInterfaces()) {
   if (process.env.VIBESQUAD_LAN_IP) return process.env.VIBESQUAD_LAN_IP.trim();
-  const ifaces = Object.entries(networkInterfaces());
+  const ifaces = Object.entries(interfaces ?? {});
   const v4 = (list) => (list ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => a.address);
 
   const physical = ifaces.filter(([name]) => !VIRTUAL_IFACE_RE.test(name));
@@ -121,9 +193,9 @@ export function detectLanIp() {
 }
 
 /** NordVPN Meshnet IPv4: env override, else the NordLynx interface, else any 100.64.0.0/10 address. */
-export function detectMeshnetIp() {
+export function detectMeshnetIp(interfaces = netInterfaces()) {
   if (process.env.VIBESQUAD_MESHNET_IP) return process.env.VIBESQUAD_MESHNET_IP;
-  const ifaces = Object.entries(networkInterfaces());
+  const ifaces = Object.entries(interfaces ?? {});
   const v4 = (list) => (list ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => a.address);
   for (const [name, list] of ifaces) if (/NordLynx/i.test(name) && v4(list)[0]) return v4(list)[0];
   for (const [, list] of ifaces) {
@@ -134,11 +206,12 @@ export function detectMeshnetIp() {
 }
 
 export function netConfig() {
+  const ifaces = netInterfaces(); // one snapshot for both addresses (idea-518)
   return {
     port: Number(process.env.VIBESQUAD_PORT || 4180),
-    meshnetIp: detectMeshnetIp(),
+    meshnetIp: detectMeshnetIp(ifaces),
     meshnetHost: process.env.VIBESQUAD_MESHNET_HOST || DEFAULT_MESHNET_HOST,
-    lanIp: detectLanIp(),
+    lanIp: detectLanIp(ifaces),
   };
 }
 

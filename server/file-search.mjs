@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { copyFileSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, watch, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
@@ -128,15 +128,21 @@ export function findRg(env = process.env) {
   return found;
 }
 
-const isGitRepo = (cwd) => spawnSync("git", ["rev-parse", "--is-inside-work-tree"], { cwd, windowsHide: true, timeout: 5000 }).stdout?.toString().trim() === "true";
+// idea-518: async (was a spawnSync on the server loop for every search when ripgrep is missing).
+const isGitRepo = (cwd) => new Promise((ok) => {
+  try {
+    execFile("git", ["rev-parse", "--is-inside-work-tree"], { cwd, windowsHide: true, timeout: 5000, encoding: "utf8" }, (err, out) => ok(!err && String(out).trim() === "true"));
+  } catch { ok(false); }
+});
 
 /** Streams matches; resolves { matches, truncated, engine }. `signal` kills the child (client abort). */
-export function runSearch(cwd, opts, { signal, timeoutMs = SEARCH_TIMEOUT_MS, max = SEARCH_MAX_MATCHES, rg = findRg() } = {}) {
+export async function runSearch(cwd, opts, { signal, timeoutMs = SEARCH_TIMEOUT_MS, max = SEARCH_MAX_MATCHES, rg = findRg() } = {}) {
   const engine = rg ? "rg" : "git";
   const cmd = rg ?? "git";
-  const args = rg ? rgArgs(opts) : gitGrepArgs(opts, { noIndex: !isGitRepo(cwd) });
+  if (signal?.aborted) return { matches: [], truncated: false, timedOut: false, engine };
+  const args = rg ? rgArgs(opts) : gitGrepArgs(opts, { noIndex: !(await isGitRepo(cwd)) });
   const parse = rg ? parseRgLine : parseGitGrepLine;
-  if (signal?.aborted) return Promise.resolve({ matches: [], truncated: false, timedOut: false, engine });
+  if (signal?.aborted) return { matches: [], truncated: false, timedOut: false, engine };
   return new Promise((done) => {
     const matches = [];
     let truncated = false;
@@ -238,12 +244,37 @@ export function listFiles(rawCwd, { refresh = false, now = Date.now() } = {}) {
   const hit = fileCache.get(cwd);
   if (hit && !refresh && now - hit.at < FILES_TTL_MS) return hit.value;
   let value;
-  const r = spawnSync("git", ["-c", "core.quotepath=off", "ls-files", "-co", "--exclude-standard", "-z"], { cwd, windowsHide: true, timeout: SEARCH_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync("git", LS_FILES_ARGS, { cwd, windowsHide: true, timeout: SEARCH_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024 });
   if (r.status === 0) value = { ...parseLsFiles(r.stdout.toString("utf8")), source: "git" };
   else value = { ...walkFiles(cwd), source: "walk" };
   fileCache.set(cwd, { at: now, value });
   if (fileCache.size > 32) fileCache.delete(fileCache.keys().next().value);
   return value;
+}
+
+const LS_FILES_ARGS = ["-c", "core.quotepath=off", "ls-files", "-co", "--exclude-standard", "-z"];
+const fileInflight = new Map(); // real cwd -> in-flight listFilesAsync (single-flight per directory)
+
+/** listFiles() for the request handlers (idea-518): same cache and result, but `git ls-files` runs async (it was a
+ * spawnSync on the server loop, up to SEARCH_TIMEOUT_MS per cold call). Concurrent cold calls for one dir share a spawn. */
+export function listFilesAsync(rawCwd, { refresh = false, now = Date.now() } = {}) {
+  const cwd = realOr(rawCwd);
+  const hit = fileCache.get(cwd);
+  if (hit && !refresh && now - hit.at < FILES_TTL_MS) return Promise.resolve(hit.value);
+  const inflight = fileInflight.get(cwd);
+  if (inflight) return inflight;
+  const p = new Promise((ok) => {
+    try {
+      execFile("git", LS_FILES_ARGS, { cwd, windowsHide: true, timeout: SEARCH_TIMEOUT_MS, maxBuffer: 64 * 1024 * 1024, encoding: "buffer" }, (err, stdout) => ok(err ? null : stdout));
+    } catch { ok(null); }
+  }).then((out) => {
+    const value = out ? { ...parseLsFiles(out.toString("utf8")), source: "git" } : { ...walkFiles(cwd), source: "walk" };
+    fileCache.set(cwd, { at: now, value });
+    if (fileCache.size > 32) fileCache.delete(fileCache.keys().next().value);
+    return value;
+  }).finally(() => fileInflight.delete(cwd));
+  fileInflight.set(cwd, p);
+  return p;
 }
 
 // ---- HTTP ---------------------------------------------------------------------------------
@@ -274,11 +305,10 @@ export function handleFileList(req, res, roots, sendJson) {
   const params = new URL(req.url, "http://x").searchParams;
   return confined(params.get("cwd") ?? "", roots, (c) => {
     if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-    try {
-      return sendJson(res, 200, { ok: true, ...listFiles(c.cwd, { refresh: params.get("refresh") === "1" }) });
-    } catch (e) {
-      return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
-    }
+    return listFilesAsync(c.cwd, { refresh: params.get("refresh") === "1" }).then(
+      (v) => sendJson(res, 200, { ok: true, ...v }),
+      (e) => sendJson(res, 500, { ok: false, error: String(e?.message ?? e) }),
+    );
   });
 }
 
@@ -732,7 +762,7 @@ export async function handleFsResolve(req, res, cwdFor, sendJson, roots) {
     if (!raw) return sendJson(res, 404, { ok: false, error: "unknown agent" });
     const c = await confineReq(raw, roots ?? []); // same realpath + roots check as list/read
     if (c.error) return sendJson(res, c.status ?? 400, { ok: false, error: c.error });
-    return sendJson(res, 200, { ok: true, ...resolveBareName(listFiles(c.cwd).files, params.get("name") ?? "") });
+    return sendJson(res, 200, { ok: true, ...resolveBareName((await listFilesAsync(c.cwd)).files, params.get("name") ?? "") });
   } catch (e) {
     return sendJson(res, 500, { ok: false, error: String(e?.message ?? e) });
   }
