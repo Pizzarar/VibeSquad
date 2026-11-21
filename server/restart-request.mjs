@@ -23,7 +23,8 @@ import { randomBytes } from "node:crypto";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
-import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, holderLeads } from "./restart-coord.mjs";
+import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, holderLeads } from "./restart-coord.mjs";
+import { redactHostPathTokens } from "./redact-host-paths.mjs";
 import { isLiveAgent, loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { toAgent } from "./backend/runner-backend.mjs";
 
@@ -70,6 +71,8 @@ const iso = (ms) => new Date(ms).toISOString();
 const clean = (t, cap = 80) => String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$-]+/g, " ").replace(/\s+/g, " ").trim().slice(-cap);
 /** clean() keeping the HEAD (a message whose important part comes first), cut with '...'. */
 const cleanHead = (t, cap) => fitLog(clean(t, Infinity), cap);
+/** clean() keeping the TAIL with a cut-into first word dropped (no half word or path fragment at the head). */
+const cleanTail = (t, cap) => { const c = clean(t, Infinity); return c.length > cap ? c.slice(-cap).replace(/^\S*\s*/, "") : c; };
 /** Cap for an abort reason: whole in vs restart status and the leads' send; the log line is cut again by fitLog. */
 const ABORT_REASON_MAX = 900;
 
@@ -87,7 +90,7 @@ export function deferredAbortReason(r) {
       return `${id}${lead ? ` (${lead.team}/${lead.lane}, lead ${lead.leadId}${lead.leadTitle ? ` ${lead.leadTitle}` : ""})` : un ? ` NO OWNER (${un.reason})` : ""}`;
     });
   const head = lines.length ? `blocking: ${lines.join(" | ")}` : (r?.errors?.[0] ?? "no error recorded");
-  return cleanHead(`the restart deferred on background work: ${head}`, ABORT_REASON_MAX);
+  return cleanHead(redactHostPathTokens(`the restart deferred on background work: ${head}`), ABORT_REASON_MAX); // R2: abort reasons go to the team log and leads' sends
 }
 
 // ---- the file -------------------------------------------------------------------------------------------------------
@@ -212,7 +215,7 @@ export function heldByLead(held, agents, teams = loadTeamsRegistry()) {
   if (!held || !Array.isArray(held.ids)) return null;
   const { leads, unresolved, gone = [] } = holderLeads(held.ids, agents, teams);
   const work = held.work && typeof held.work === "object" ? held.work : {};
-  const entry = (id) => ({ agentId: id, work: (work[id] ?? []).map((w) => ({ pid: w.pid, cmd: clean(w.cmd ?? w.name) })) });
+  const entry = (id) => ({ agentId: id, work: (work[id] ?? []).map((w) => ({ pid: w.pid, cmd: cleanTail(heldCmdRedacted(w.cmd || w.name), 80) })) }); // idea-475 R2: host paths redacted before the filter and cut
   return {
     byLead: Object.fromEntries(leads.map((l) => [l.leadId, l.heldAgents.map(entry)])),
     unresolved: unresolved.map((u) => ({ ...entry(u.agentId), reason: u.reason })),
@@ -388,7 +391,7 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
         event(req, at, `restart done (${r.file ? path.basename(r.file) : "result"})`);
       } else if (r) {
         req.result = { file: r.file ?? null, ok: false, finishedAt: r.finishedAt ?? null };
-        abort(req, at, r.deferred ? deferredAbortReason(r) : `the restart failed: ${cleanHead(r.errors?.[0] ?? "no error recorded", 300)}`);
+        abort(req, at, r.deferred ? deferredAbortReason(r) : `the restart failed: ${cleanHead(redactHostPathTokens(r.errors?.[0] ?? "no error recorded"), 300)}`);
       } else if (now - fired > FIRING_TIMEOUT_MS) {
         abort(req, at, `no restart result within ${FIRING_TIMEOUT_MS / 3600_000}h of the fire`);
       }
@@ -578,12 +581,15 @@ export function runVsAsync(args, { env = process.env, timeoutMs = 60_000 } = {})
 
 /**
  * The server loop. Deps (all injectable for tests): listAgents() -> runner agents, heldList() -> { ids, work } | null,
+ * listAgentsWithArchived() -> the same list plus archived records (read only when a held id is not in listAgents(), so an
+ * archived holder resolves as a gone owner, not "not in the runner's agent list"; idea-475 R2),
  * runVs(args) -> { ok, error? } (logs, sends), fire() -> { ok, error? } (the existing `vs restart` path), teams() -> registry.
  * tick() reads the inputs outside the lock, steps under it, persists, then runs the effects; it never overlaps itself.
  */
 export function createRestartRequestLoop({
   home,
   listAgents,
+  listAgentsWithArchived = null,
   heldList = async () => null,
   runVs = (args) => runVsAsync(args),
   fire = () => runVsAsync(["restart"], { timeoutMs: 120_000 }),
@@ -642,7 +648,11 @@ export function createRestartRequestLoop({
         leads = liveLeads(agents, reg);
         let h = null;
         try { h = await heldList(); } catch { h = null; }
-        held = h ? heldByLead(h, agents, reg) : null;
+        let holders = agents;
+        if (h && listAgentsWithArchived && Array.isArray(h.ids) && h.ids.some((id) => !agents.some((a) => a?.id === id))) {
+          try { const all = await listAgentsWithArchived(); if (Array.isArray(all)) holders = all; } catch (e) { log(`restart-request: archived agent list failed: ${e?.message ?? e}`); }
+        }
+        held = h ? heldByLead(h, holders, reg) : null;
       }
       const sinceMs = Date.parse(cur.createdAt);
       drained = drainedSince(home, { sinceMs, stopMs: scanned?.id === cur.id ? scanned.at : sinceMs, tip: cur.tip });
@@ -749,6 +759,7 @@ export async function startRestartRequestLoop({ home, log = (l) => console.warn(
     home,
     log,
     listAgents: () => backend.listAgents(),
+    listAgentsWithArchived: () => backend.listAgents({ filter: { includeArchived: true } }),
     heldList: async () => {
       const h = await backend.rc.request("GET", "/health", undefined, { restartWait: false });
       return Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;

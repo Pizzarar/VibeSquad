@@ -430,7 +430,8 @@ export async function drainedFeedbackGate(caller, type, text, backend, teams = n
     held = Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;
   } catch (e) { console.warn(`[vibesquad] drained gate: runner /health failed: ${e?.message ?? e}`); }
   if (held?.ids?.length) {
-    try { agents = await b.listAgents(); } catch (e) { console.warn(`[vibesquad] drained gate: agent list failed: ${e?.message ?? e}`); }
+    // idea-475 R2: archived records too, so an archived holder's shell reads as a gone owner (ownerGone), not a live blocker.
+    try { agents = await b.listAgents({ filter: { includeArchived: true } }); } catch (e) { console.warn(`[vibesquad] drained gate: agent list failed: ${e?.message ?? e}`); }
   }
   const why = drainedLogRefusal(caller.id, { held, agents, teams: teams ?? loadTeamsRegistry(), callerTeam: caller.team ?? null, callerLane: caller.lane ?? null });
   if (why) throw Object.assign(new Error(why), { status: 409 });

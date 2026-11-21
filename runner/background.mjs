@@ -24,10 +24,12 @@ const MCP_LAUNCHERS = [
 // idea-475: Claude Code's Bash tool wraps every command as `bash -c -l "source <snapshot> && eval '<cmd>' < /dev/null && pwd -P >|
 // <tmp>/claude-XXXX-cwd"`. A tail cut kept only that wrapper (restart deferrals named "pid 2680: done' < /dev/null && pwd -P
 // >| .../claude-96be-cwd"), so the display text drops the trailing wrapper first and then keeps the last `max` chars.
+// A cut drops the word it landed in (R2): a half path ("sers/<name>/AppData/...") would slip past the server's host-path
+// redaction, which only knows whole paths.
 const CLAUDE_WRAP_TAIL = /'?\s*<\s*\/dev\/null\s*&&\s*pwd\s+-P\s*>\|\s*\S+?"?\s*$/;
 export function shellCmdTail(cmd, max = 160) {
   const t = String(cmd ?? '').replace(CLAUDE_WRAP_TAIL, '').trimEnd();
-  return t.length > max ? t.slice(-max) : t;
+  return t.length > max ? t.slice(-max).replace(/^\S*\s*/, '') : t;
 }
 const isSidecar = (p) => { const cmd = String(p.cmd ?? ''); return !TOOL_SHELL.test(cmd) && MCP_LAUNCHERS.some((re) => re.test(cmd)); };
 

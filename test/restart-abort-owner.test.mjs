@@ -42,12 +42,13 @@ test("blockingLines: owner first, then pid, name, age and the command; NO OWNER 
   const heldWork = {
     "rn-live": [{ pid: 16696, name: "powershell", cmd: "python run_godot.py\nprint('GODOT_EXIT')", createdMs: now - 95 * 60000 }],
     "rn-nolane": [{ pid: 12, name: "bash", cmd: "sleep 5", createdMs: now - 30000 }],
-    "rn-x": [{ pid: 7, name: "bash", cmd: "x".repeat(300) }],
+    "rn-x": [{ pid: 7, name: "bash", cmd: Array(60).fill("abcd").join(" ") }],
   };
   const lines = blockingLines(["rn-live", "rn-nolane", "rn-x"], { owners, heldWork, unresolved: [{ agentId: "rn-x", reason: "not in the runner's agent list" }], now });
   assert.equal(lines[0], "rn-live [ART-PHC1-P2 review (Gemini)] efi/art-pipeline worker: pid 16696 powershell, 1h35m old: python run_godot.py print( GODOT_EXIT )");
   assert.equal(lines[1], "rn-nolane NO OWNER LANE (no Squad/lane label): pid 12 bash, 30s old: sleep 5");
-  assert.match(lines[2], /^rn-x NO OWNER \(not in the runner's agent list\): pid 7 bash, age unknown: \.\.\.x{80}$/);
+  // a cut keeps the tail and drops the word it landed in (R2: no half path at the head)
+  assert.match(lines[2], /^rn-x NO OWNER \(not in the runner's agent list\): pid 7 bash, age unknown: \.\.\.abcd( abcd){15}$/);
   for (const l of lines) assert.ok(!/["`\n]/.test(l), "pastes into vs send \"...\"");
 });
 
@@ -93,15 +94,65 @@ test("stepRequest: a deferred fire aborts with the owner-first reason; the logge
   const req = { id: "rr-20261121075958-0bb3", tip: "abc1234", requestedBy: "owner", state: "firing", firedAt: new Date(fired).toISOString(), deadline: new Date(fired).toISOString(), asked: { "rn-37b05a6f04af": { team: "vibesquad", lane: "vibesquad" } } };
   const actions = stepRequest(req, { now: fired + 20 * 60000, results: [{ ...LEGACY, startedAt: new Date(fired + 1000).toISOString(), deferred: { ...LEGACY.deferred, blocking } }] });
   assert.equal(req.state, "aborted");
-  assert.equal(req.abortReason, `the restart deferred on background work: blocking: ${blocking[0]}`);
+  // R2 H1: the reason goes to the team log and every asked lead's send: the host path is redacted, owner/title/lane kept
+  assert.equal(req.abortReason, "the restart deferred on background work: blocking: rn-f395d4c3966a [Hub14 disk survey] vibesquad/vibesquad worker: pid 3780 powershell, 10m old: powershell -File <host-path>");
   const logLine = fitLog(actions.find((a) => a.kind === "log").text, LOG_MAX - "restart-feedback: ".length);
   assert.match(logLine, /aborted: the restart deferred on background work: blocking: rn-f395d4c3966a \[Hub14 disk survey\] vibesquad\/vibesquad worker: pid 3780/);
-  assert.ok(actions.some((a) => a.kind === "send" && a.text.includes("survey_part1.ps1")), "the asked lead's send carries the whole reason");
+  assert.ok(actions.some((a) => a.kind === "send" && a.text.includes("powershell -File <host-path>")), "the asked lead's send carries the whole reason");
+  for (const a of actions) assert.ok(!/C:\/x|survey_part1/.test(a.text ?? ""), a.text);
+});
+
+test("R2 H1: held commands are host-path redacted in blocking lines, drain asks, refusals and heldByLead; ids, titles, lanes stay", () => {
+  const win = String.raw`powershell -NoProfile -File C:\Users\someone\AppData\Local\Temp\probe.ps1 -Out C:\Users\someone\out.txt`;
+  const posix = "cd /home/someone/proj && npm test -- --queue";
+  const heldWork = { "rn-live": [{ pid: 41, name: "powershell", cmd: win }, { pid: 42, name: "bash", cmd: posix }] };
+  const owners = { "rn-live": { agentId: "rn-live", title: "rn-live · task", team: "efi", lane: "art-pipeline", role: "worker", state: "live" } };
+  const [line] = blockingLines(["rn-live"], { owners, heldWork, now: 0 });
+  assert.match(line, /^rn-live \[rn-live task\] efi\/art-pipeline worker: pid 41 powershell, age unknown: powershell -NoProfile -File <host-path> -Out <host-path>; pid 42 bash, age unknown: cd <host-path> && npm test -- --queue$/);
+  const msg = deferralMessage({ held: 1, heldAgents: ["rn-live"], waitSec: 1, leads: [{ lane: "art-pipeline", leadId: lead.id, leadTitle: "★ Art39", heldAgents: ["rn-live"] }], unresolved: [], heldWork, owners });
+  const agents = [lead, worker("rn-live")];
+  const refusal = drainedLogRefusal(lead.id, { held: { ids: ["rn-live"], work: heldWork }, agents, teams: TEAMS });
+  const hb = heldByLead({ ids: ["rn-live"], work: heldWork }, agents, TEAMS);
+  const hbCmds = hb.byLead[lead.id][0].work.map((w) => w.cmd);
+  assert.deepEqual(hbCmds, ["powershell -NoProfile -File <host-path> -Out <host-path>", "cd <host-path> && npm test -- --queue"]);
+  for (const t of [line, msg, refusal, ...hbCmds]) assert.ok(!/someone|[A-Za-z]:[\\/]/.test(t), t);
+  assert.match(msg, /rn-live/);
 });
 
 test("shellCmdTail strips Claude Code's Bash wrapper before keeping the tail; other commands pass through", () => {
   const wrapped = `/usr/bin/bash -c -l "source /c/snap.sh && eval 'until ! tasklist //FI \\"PID eq 26796\\" | grep -q 26796; do sleep 20; done; echo done' < /dev/null && pwd -P >| /c/Users/x/AppData/Local/Temp/claude-96be-cwd"`;
   assert.match(shellCmdTail(wrapped, 40), /do sleep 20; done; echo done$/);
   assert.equal(shellCmdTail("powershell -File a.ps1"), "powershell -File a.ps1");
-  assert.equal(shellCmdTail("x".repeat(200), 160).length, 160);
+  assert.equal(shellCmdTail("ab ".repeat(100).trim(), 160), "ab ".repeat(53).trim(), "tail kept, the cut word dropped");
+  // R2: a cut inside a host path drops the fragment ("meone/AppData/...") the server's whole-path redaction would miss
+  assert.equal(shellCmdTail("cd C:/Users/someone/AppData/Local/Temp/wt && npm test -- --queue", 50), "&& npm test -- --queue");
+});
+
+test("R2 M1: the restart-request loop reads archived records only when a held id is missing, so an archived holder is gone, not unresolved", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { createRestartRequestLoop, createRestartRequest, readRestartRequest } = await import("../server/restart-request.mjs");
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-rr-arch-"));
+  try {
+    const now = Date.parse("2026-11-21T12:00:00Z");
+    createRestartRequest(home, { tip: "abc1234", requestedBy: "owner", needs: "server-restart", now });
+    const arch = worker("rn-arch", { archivedAt: "2026-11-21T00:00:00Z" });
+    let archivedReads = 0;
+    let held = { ids: ["rn-live"], work: {} };
+    const loop = createRestartRequestLoop({
+      home, teams: () => TEAMS, now: () => now, runVs: async () => ({ ok: true }), fire: async () => ({ ok: true }),
+      listAgents: async () => [lead, worker("rn-live")],
+      listAgentsWithArchived: async () => { archivedReads++; return [lead, worker("rn-live"), arch]; },
+      heldList: async () => held,
+    });
+    await loop.tick();
+    assert.equal(archivedReads, 0, "every held id listed: no archived read");
+    held = { ids: ["rn-arch"], work: { "rn-arch": [{ pid: 5, cmd: "sleep 1" }] } };
+    await loop.tick();
+    const req = readRestartRequest(home);
+    assert.equal(archivedReads, 1);
+    assert.deepEqual(req.held.gone, [{ agentId: "rn-arch", work: [{ pid: 5, cmd: "sleep 1" }], reason: "owner archived" }]);
+    assert.deepEqual(req.held.unresolved, [], "not 'not in the runner's agent list'");
+  } finally { rmSync(home, { recursive: true, force: true }); }
 });

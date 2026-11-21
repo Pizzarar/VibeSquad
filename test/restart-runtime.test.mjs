@@ -1220,7 +1220,7 @@ test("D1 deferral names each holder's lane lead (vs who lead resolution) with a 
 
 // idea-475 (11-21): four machine-wide restarts aborted on what read as "unowned" shells. The deferral must name, per held
 // agent, its own id, title, Squad/lane and role, then each shell's pid, command (Claude's Bash wrapper stripped) and age.
-const CLAUDE_WRAPPED = `/usr/bin/bash -c -l "source /c/Users/x/.claude/shell-snapshots/snap.sh && eval 'npm test > /tmp/p5_suite.log 2>&1; echo rc=$? >> /tmp/p5_suite.log' < /dev/null && pwd -P >| /c/Users/x/AppData/Local/Temp/claude-ccc6-cwd"`;
+const CLAUDE_WRAPPED = `/usr/bin/bash -c -l "source /c/Users/x/.claude/shell-snapshots/snap.sh && eval 'npm test > logs/p5_suite.log 2>&1; echo rc=$? >> logs/p5_suite.log' < /dev/null && pwd -P >| /c/Users/x/AppData/Local/Temp/claude-ccc6-cwd"`;
 test("idea-475: a deferral names each blocking shell's owner (id, title, team/lane, role), pid, command and age; no owner says NO OWNER + pid", async () => {
   const t0 = Date.now();
   const agents = [...holderAgents.map((a) => (a.id === "rn-suite" ? { ...a, title: "ART-PHC1-P5 · ingest chrome slots (Sonnet)" } : a))];
@@ -1232,14 +1232,18 @@ test("idea-475: a deferral names each blocking shell's owner (id, title, team/la
     assert.equal(r.ok, false);
     const [b1, b2] = r.deferred.blocking;
     assert.match(b1, /^rn-suite \[ART-PHC1-P5 ingest chrome slots \(Sonnet\)\] efi\/godot worker: pid 19572 bash, 1[45]m old: /);
-    assert.match(b1, /echo rc=\$\? >> \/tmp\/p5_suite\.log$/, "the command, not Claude's '< /dev/null && pwd -P >| cwd' wrapper");
+    assert.match(b1, /echo rc=\$\? >> logs\/p5_suite\.log$/, "the command, not Claude's '< /dev/null && pwd -P >| cwd' wrapper");
     assert.ok(!/pwd -P|claude-ccc6-cwd/.test(b1));
-    assert.equal(b2, "rn-ghost NO OWNER (not in the runner's agent list): pid 777 powershell, age unknown: powershell -File C:/x/survey_part1.ps1");
+    assert.equal(b2, "rn-ghost NO OWNER (not in the runner's agent list): pid 777 powershell, age unknown: powershell -File <host-path>", "R2 H1: host paths redacted");
     assert.deepEqual(r.deferred.owners["rn-suite"], { agentId: "rn-suite", title: "ART-PHC1-P5 · ingest chrome slots (Sonnet)", team: "efi", lane: "godot", role: "worker", state: "live" });
     const err = r.errors.find((e) => e.startsWith("deferred:"));
     assert.ok(err.indexOf("Blocking: rn-suite [ART-PHC1-P5") < err.indexOf("Ask these leads"), "owners come before the long tail");
     assert.match(err, /rn-ghost NO OWNER \(not in the runner's agent list\): pid 777/);
     assert.ok(logs.some((x) => /^blocking: rn-suite \[/.test(x)));
+    // R2 H1: the deferral feeds the request's abort reason, the team log and the leads' sends: no host path anywhere in it
+    for (const t of [err, ...r.deferred.blocking, ...r.deferred.leads.map((l) => l.ask), ...logs.filter((x) => /^(blocking|drain ask)/.test(x))]) {
+      assert.ok(!/[A-Za-z]:[\\/]|\/c\/Users|survey_part1/.test(t), t);
+    }
     assert.equal(w.shutdownAuth.length, 0, "a live owner's suite is never stopped");
   } finally { await w.cleanup(); }
 });

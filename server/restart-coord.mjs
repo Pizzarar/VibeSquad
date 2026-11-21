@@ -11,6 +11,7 @@ import { linesFromEndSync } from "./log-tail.mjs";
 import { loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { localTokenPath, readLocalToken } from "./local-token.mjs";
 import { shellCmdTail } from "../runner/background.mjs";
+import { redactHostPathTokens } from "./redact-host-paths.mjs";
 
 export const DRAIN_WINDOW_MS = 30 * 60000; // D2: a rerun this soon after a deferral needs every named lead's drain
 export const DONE_CHAIN_MAX_MS = 24 * 3600000; // D3: deferrals older than this are not a live hold any more
@@ -89,10 +90,21 @@ const ageText = (ms) => {
   return m < 90 ? `${m}m old` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m old`;
 };
 
-/** Display text for one held shell's command: no quote, backtick or newline (it pastes into vs send "..."), tail kept. */
+/**
+ * idea-475 R2: a held shell's command fit for a message (deferral, abort reason, drain ask, team log, vs send to leads in
+ * other Squads): Claude's Bash wrapper stripped, then every host-path token redacted (redactHostPathTokens) on the WHOLE
+ * text, before any character filter (which drops backslashes and would hide a drive path) or cut (which could half-keep one).
+ */
+export function heldCmdRedacted(cmd) {
+  return redactHostPathTokens(shellCmdTail(cmd, Infinity));
+}
+/** The last `max` chars of `t` with a cut-into first word dropped, so no fragment of a word or path heads the text. */
+const tailWords = (t, max) => (t.length > max ? t.slice(-max).replace(/^\S*\s*/, "") : t);
+
+/** Display text for one held shell's command: host paths redacted, no quote, backtick or newline (it pastes into vs send "..."), tail kept. */
 const cmdText = (w, max = 80) => {
-  const t = shellCmdTail(w?.cmd ?? w?.name, 400).replace(/\\/g, "/").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$-]+/g, " ").replace(/\s+/g, " ").trim();
-  return t.length > max ? `...${t.slice(-max)}` : t;
+  const t = heldCmdRedacted(w?.cmd || w?.name).replace(/\\/g, "/").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$-]+/g, " ").replace(/\s+/g, " ").trim();
+  return t.length > max ? `...${tailWords(t, max)}` : t;
 };
 
 /**
@@ -171,8 +183,8 @@ export function drainAskText(lead, at) {
 
 /** "pid 4242: bash tools/run_suite.sh ..." for one agent's held shells (the runner's /health heldWork), "" when unknown. */
 function workLine(heldWork, id) {
-  const clean = (t) => String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$'-]+/g, " ").trim().slice(-80); // no quote, backtick or newline: it pastes into vs send "..."
-  return (heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${clean(shellCmdTail(w.cmd ?? w.name, 400))}`).join(", ");
+  const clean = (t) => tailWords(String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$'-]+/g, " ").trim(), 80); // no quote, backtick or newline: it pastes into vs send "..."
+  return (heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${clean(heldCmdRedacted(w.cmd || w.name))}`).join(", "); // idea-475 R2: host paths redacted first
 }
 
 export function doneText(at) {
