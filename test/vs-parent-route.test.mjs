@@ -116,14 +116,16 @@ test(
     try {
       const labels = { profile: "Implement - Sonnet", team: "vibesquad", lane: "vibesquad", role: "worker", job: "x", stakes: "tierA-security" };
       const out = await h.spawn({ config: { cwd: CWD, provider: "claude" }, labels });
-      assert.equal(out.labels[ROUTE_LABEL], "stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder");
+      // P5c (idea-77): an old profile name keeps today's route and appends +legacy-name plus the tier/role stamp (spawn-route.mjs routeMetricText).
+      const route = "stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder+legacy-name tier=top role=implement";
+      assert.equal(out.labels[ROUTE_LABEL], route);
       const agent = { id: "rn-routed", title: "Implement - x", cwd: CWD, status: "running", provider: "claude", model: out.config.model, thinkingOptionId: out.config.thinkingOptionId, labels: out.labels };
       h.agents.set(agent.id, agent);
       await h.created(agent);
       await h.created(agent); // a second created event logs nothing new
       const paired = teamLog(vsHome).filter((e) => e.text.startsWith("route-agent:"));
       assert.equal(paired.length, 1);
-      assert.equal(paired[0].text, "route-agent: id=rn-routed stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder");
+      assert.equal(paired[0].text, `route-agent: id=rn-routed ${route}`);
       assert.deepEqual(paired[0].refs, ["rn-routed"]);
       assert.equal(teamLog(vsHome).filter((e) => e.text.startsWith("route:")).length, 1, "the before() route metric is unchanged");
     } finally {
