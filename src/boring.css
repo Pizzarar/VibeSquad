@@ -1052,6 +1052,9 @@ html[data-vibe="boring"] .boring-agent-menu { max-height: min(78vh, 720px); over
 html[data-vibe="boring"] .boring-agent-menu-section { display: flex; flex-direction: column; gap: 6px; padding: 6px 10px; }
 html[data-vibe="boring"] .boring-agent-menu-title { font: 500 11px/16px var(--font-sans, inherit); text-transform: none; letter-spacing: 0; color: var(--text-3); }
 html[data-vibe="boring"] .btn.drawer-sandbox-btn { font-size: var(--t-ui); }
+/* idea-480: inside the agent ⋯ menu the Sandbox panel anchors to the menu (static wrapper) and fills its width, so it never runs off the right edge and the "not reported by" line wraps */
+html[data-vibe="boring"] .boring-agent-menu .drawer-sandbox { position: static; display: block; }
+html[data-vibe="boring"] .boring-agent-menu .drawer-sandbox-panel { left: 4px; right: 4px; width: auto; max-width: none; box-sizing: border-box; }
 html[data-vibe="boring"] .boring-cfg-row { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 8px; font-size: var(--t-ui); color: var(--text-2); }
 html[data-vibe="boring"] .boring-cfg-row select,
 html[data-vibe="boring"] .boring-cfg-row input { width: 100%; height: 26px; font-size: 12px; background: var(--surface-1); color: var(--text-1); border: 1px solid var(--border); min-width: 0; }
