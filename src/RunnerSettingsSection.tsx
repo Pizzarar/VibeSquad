@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Field } from "./TeamActions";
-import { listAvailableProviders, loadRunnerSettings, saveRunnerSettings, loadRunnerUsage, type RunnerProviderSettings, type RunnerUsage } from "./paseoProviders";
+import { listAvailableProviders, loadOfferedModels, type OfferedModels, loadRunnerSettings, saveRunnerSettings, loadRunnerUsage, type RunnerProviderSettings, type RunnerUsage } from "./paseoProviders";
 import { sortProviders, providerState, type CatalogProvider } from "./paseoProvidersLogic";
 
 /** Runner & Providers: edits the `runner` block of ~/.vibesquad/settings.json (merged server-side, other keys untouched) and shows usage rollups. */
@@ -14,6 +14,21 @@ export function RunnerSettingsSection() {
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const [offered, setOffered] = useState<Record<string, OfferedModels>>({});
+  const [probing, setProbing] = useState(false);
+  const refreshOffered = useCallback(async (refresh: boolean) => {
+    setProbing(true);
+    try {
+      setOffered((await loadOfferedModels(refresh)).providers ?? {});
+    } catch {
+      /* keep the last list; the probe is best-effort */
+    } finally {
+      setProbing(false);
+    }
+  }, []);
+  useEffect(() => {
+    void refreshOffered(false);
+  }, [refreshOffered]);
 
   const load = useCallback(async (force = false) => {
     setErr("");
@@ -67,6 +82,28 @@ export function RunnerSettingsSection() {
                 <input type="checkbox" data-testid={`runner-enabled-${p.provider}`} checked={d.enabled !== false} onChange={(e) => patch(p.provider, { enabled: e.target.checked })} />
                 <span className="small">Enabled</span>
               </label>
+            </div>
+            <div data-testid={`runner-offered-${p.provider}`} style={{ marginTop: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                <span className="field-label">OFFERED MODELS ({offered[p.provider]?.models.length ?? 0})</span>
+                {offered[p.provider]?.probed && (
+                  <>
+                    <span className="muted small" data-testid={`runner-offered-source-${p.provider}`} title={offered[p.provider]?.error ?? ""}>
+                      {offered[p.provider]?.source === "probe" ? "from CLI" : offered[p.provider]?.source === "cache" ? "last good list" : "built-in list"}
+                      {offered[p.provider]?.error ? ` · probe failed: ${offered[p.provider]?.error}` : ""}
+                    </span>
+                    <button type="button" className="btn ghost small" data-testid={`runner-offered-refresh-${p.provider}`} disabled={probing} onClick={() => void refreshOffered(true)}>
+                      {probing ? "Refreshing…" : "Refresh"}
+                    </button>
+                  </>
+                )}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                {(offered[p.provider]?.models ?? []).map((m) => (
+                  <span key={m.id} className="def-badge" title={m.id}>{m.label === m.id ? m.id : `${m.label} · ${m.id}`}</span>
+                ))}
+                {!(offered[p.provider]?.models.length) && <span className="muted small">none reported</span>}
+              </div>
             </div>
             <div className="row2" style={{ marginTop: 6 }}>
               <Field label="EXTRA MODELS (comma-separated)">

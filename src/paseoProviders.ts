@@ -16,6 +16,9 @@ async function catalogGet<T>(path: string): Promise<T> {
 }
 
 export const listAvailableProviders = () => catalogGet<ProvidersAvailable>("");
+export interface OfferedModels { models: { id: string; label: string; source?: string }[]; probed: boolean; source: "probe" | "cache" | "static"; at: number | null; error?: string }
+/** Offered models per provider; refresh=true re-runs the CLI probe (`agy models`) server-side. */
+export const loadOfferedModels = (refresh = false) => catalogGet<{ ok: boolean; providers: Record<string, OfferedModels> }>(`/offered-models${refresh ? "?refresh=1" : ""}`);
 export const listProviderModels = (provider: string) => catalogGet<ProviderModelsPayload>(`/models?provider=${encodeURIComponent(provider)}`);
 export const listProviderModes = (provider: string) => catalogGet<ProviderModesPayload>(`/modes?provider=${encodeURIComponent(provider)}`);
 

@@ -103,6 +103,84 @@ export function probeProviders({ refresh = false, now = Date.now(), execImpl = e
   );
 }
 
+// ---------------------------------------------------------------- offered-model probe (idea-403)
+// Providers whose CLI has a cheap list command: provider -> args after the executable. Output is `<id>	<label>` per line
+// (agy prints a "Fetching available models..." header, which has no tab and is skipped).
+export const MODEL_LIST_COMMANDS = { "antigravity-cli": ["models"] };
+const MODEL_PROBE_TTL_MS = 30 * 60_000;
+const MODEL_PROBE_FAIL_TTL_MS = 60_000; // negative cache: a failing CLI is not respawned on every request
+const MODEL_PROBE_TIMEOUT_MS = 15_000;
+const modelProbeCache = new Map(); // provider -> { at: last attempt, value: {models, source, at: last good, error?}, inflight }
+let modelProbeRuns = 0;
+export const modelProbeStats = () => ({ runs: modelProbeRuns });
+export const clearModelProbeCache = () => modelProbeCache.clear();
+
+/** Parse `<id>	<label>` lines (ANSI stripped, deduped, header/noise lines without a tab dropped). */
+export function parseModelList(text) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of String(text ?? "").replace(/\x1b\[[0-9;]*[A-Za-z]/g, "").split(/\r?\n/)) {
+    const [id, ...rest] = raw.split("\t");
+    const mid = id.trim();
+    if (!rest.length || !/^[A-Za-z0-9][\w.:/@+-]*$/.test(mid) || seen.has(mid)) continue;
+    seen.add(mid);
+    out.push({ id: mid, label: rest.join(" ").trim() || mid });
+  }
+  return out;
+}
+
+function runModelList(file, args, execImpl, timeout) {
+  return new Promise((resolve) => {
+    execImpl(file, args, { shell: false, windowsHide: true, timeout, maxBuffer: 1 << 20 }, (err, stdout) => {
+      if (err) return resolve({ ok: false, error: String(err.killed ? `timed out after ${timeout}ms` : err.message ?? err).split("\n")[0].slice(0, 160) });
+      const models = parseModelList(stdout);
+      resolve(models.length ? { ok: true, models } : { ok: false, error: "no models in CLI output" });
+    });
+  });
+}
+
+async function probeModelsOne(provider, { execImpl, resolveImpl, timeout, now, prev }) {
+  modelProbeRuns++;
+  let res;
+  try {
+    const r = resolveImpl(PROBE_COMMANDS[provider]);
+    res = await runModelList(r.file, [...r.args, ...MODEL_LIST_COMMANDS[provider]], execImpl, timeout);
+  } catch (e) {
+    res = { ok: false, error: `${PROBE_COMMANDS[provider]} not found on PATH` };
+  }
+  if (res.ok) return { models: res.models, source: "probe", at: now };
+  // Failed probe: keep the last good list; otherwise the static fallback (empty -> built-in/profile models only).
+  return { models: prev?.models ?? [], source: prev?.models?.length ? "cache" : "static", at: prev?.at ?? null, error: res.error };
+}
+
+/**
+ * Fill each provider's offered-model list from its CLI. Async (execFile), per-provider timeout, cached with a TTL;
+ * concurrent callers share the in-flight probe. Resolves { [provider]: { models, source: probe|cache|static, at, error? } }.
+ */
+export async function probeModelLists({ refresh = false, now = Date.now(), execImpl = execFile, resolveImpl = resolveExecutable, timeout = MODEL_PROBE_TIMEOUT_MS } = {}) {
+  const out = {};
+  await Promise.all(Object.keys(MODEL_LIST_COMMANDS).map(async (p) => {
+    const hit = modelProbeCache.get(p);
+    const ttl = hit?.value?.source === "probe" ? MODEL_PROBE_TTL_MS : MODEL_PROBE_FAIL_TTL_MS;
+    if (hit && (hit.inflight || (!refresh && hit.value && now - hit.at < ttl))) {
+      out[p] = hit.inflight ? await hit.inflight : hit.value;
+      return;
+    }
+    const inflight = probeModelsOne(p, { execImpl, resolveImpl, timeout, now, prev: hit?.value });
+    modelProbeCache.set(p, { at: hit?.at ?? 0, value: hit?.value, inflight });
+    const value = await inflight;
+    modelProbeCache.set(p, { at: now, value }); // a failure is cached too (value.at keeps the last-good time)
+    out[p] = value;
+  }));
+  return out;
+}
+/** Cache-only read (never spawns): last good list per provider, for buildCatalog/getModels. */
+export function cachedModelLists() {
+  const out = {};
+  for (const [p, h] of modelProbeCache) if (h.value?.models?.length) out[p] = h.value;
+  return out;
+}
+
 // ---------------------------------------------------------------- settings (~/.vibesquad/settings.json "runner" key)
 const settingsPath = (home) => join(home || vibesquadHome(), "settings.json");
 
@@ -221,6 +299,7 @@ export function buildCatalog({ probes, home } = {}) {
       if (mid && !models.has(mid)) models.set(mid, { id: mid, label: label || mid, description: description || `from ${source}`, source });
     };
     for (const [mid, label] of BASE_MODELS[id] ?? []) add(mid, label, "built-in");
+    for (const m of cachedModelLists()[id]?.models ?? []) add(m.id, m.label, "cli probe");
     for (const p of profiles) if (canon(p.provider) === id && p.model) add(p.model, p.model, `profile ${p.name}`);
     for (const mid of cfg.models ?? []) add(mid, mid, "settings.json");
     const modes = new Map();
@@ -251,6 +330,8 @@ export async function getProviders(opts = {}) {
   return { providers: Object.values(catalog).map(({ models, modes, ...p }) => p) };
 }
 export async function getModels(provider, opts = {}) {
+  // The model dropdowns read this: fill the offered list from the CLI first (cached, async, failure keeps the last good list).
+  if (MODEL_LIST_COMMANDS[canon(provider)]) await probeModelLists({ refresh: opts.refresh, now: opts.now, execImpl: opts.execImpl, resolveImpl: opts.resolveImpl, ...(opts.modelTimeout ? { timeout: opts.modelTimeout } : {}) });
   const c = buildCatalog({ probes: await probeProviders(opts), home: opts.home })[canon(provider)];
   return c ? { models: c.models, ...(c.available ? {} : { error: c.error }) } : { models: [], error: `unknown provider "${provider}"` };
 }
@@ -2884,6 +2965,15 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     }
     if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
     if (sub === "") return sendJson(res, 200, await getProviders(opts));
+    if (sub === "offered-models") {
+      const lists = await probeModelLists({ refresh: opts.refresh, execImpl: probeOpts.modelExecImpl ?? probeOpts.execImpl, resolveImpl: probeOpts.resolveImpl, ...(probeOpts.modelTimeout ? { timeout: probeOpts.modelTimeout } : {}) });
+      const catalog = buildCatalog({ home });
+      const out = {};
+      for (const [id, cat] of Object.entries(catalog)) {
+        out[id] = { models: cat.models, probed: Boolean(MODEL_LIST_COMMANDS[id]), source: lists[id]?.source ?? "static", at: lists[id]?.at ?? null, ...(lists[id]?.error ? { error: lists[id].error } : {}) };
+      }
+      return sendJson(res, 200, { ok: true, providers: out });
+    }
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
     if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
