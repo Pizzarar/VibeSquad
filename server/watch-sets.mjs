@@ -288,16 +288,32 @@ export function classifyItem(item, set, ctx) {
   );
   const last = cands.at(-1)?.rec;
   if (last) {
+    const stale = notUpdatedFor(last, ctx.restartRequests);
     if (last.ok === true) {
       const cut = Array.isArray(last.cutAgents) ? last.cutAgents.length : 0;
       const resumed = Array.isArray(last.resumedAgents) ? last.resumedAgents.length : 0;
-      return { phase: "finished", state: "done", report: `restart ok: cut ${cut}, resumed ${resumed}${last.newHash ? `, now ${String(last.newHash).slice(0, 12)}` : ""}` };
+      return { phase: "finished", state: "done", report: `restart ok: cut ${cut}, resumed ${resumed}${last.newHash ? `, now ${String(last.newHash).slice(0, 12)}` : ""}${stale}` };
     }
     const errs = (Array.isArray(last.errors) ? last.errors : []).map((e) => (typeof e === "string" ? e : e?.message ?? e?.step ?? JSON.stringify(e)));
-    return { phase: "finished", state: "stalled", reason: "restart-failed", report: `restart failed${errs.length ? `: ${errs.join("; ")}` : ""}` };
+    return { phase: "finished", state: "stalled", reason: "restart-failed", report: `restart failed${errs.length ? `: ${errs.join("; ")}` : ""}${stale}` };
   }
   const ps = since("waiting", created);
   return t - ps > stallMs ? { phase: "waiting", state: "stalled", reason: "no-result" } : { phase: "waiting", state: "waiting" };
+}
+
+/**
+ * idea-398 fix round (11-20 02:54): the restart request (restart-request.json, current + history) that fired this
+ * restart: the latest one fired no later than a minute after the restart started and at most 3h before it (the
+ * request's own firing timeout). Its sync was skipped -> "; <runtime NOT updated note>"; else (synced, no sync, none) "".
+ */
+const NOT_UPDATED_WINDOW_MS = 3 * 3600_000;
+function notUpdatedFor(rec, requests) {
+  const started = timeOf(rec?.startedAt);
+  if (!started || !Array.isArray(requests)) return "";
+  const last = requests
+    .filter((r) => timeOf(r?.firedAt) && started >= timeOf(r.firedAt) - 60_000 && started - timeOf(r.firedAt) <= NOT_UPDATED_WINDOW_MS)
+    .sort((a, b) => timeOf(b.firedAt) - timeOf(a.firedAt))[0];
+  return last?.sync?.ok === false && typeof last.sync.note === "string" && last.sync.note ? `; ${last.sync.note}` : "";
 }
 
 function itemLabel(item) {
@@ -733,6 +749,13 @@ export function createWatchEngine({
     return out.sort((a, b) => timeOf(a.rec.finishedAt ?? a.rec.startedAt) - timeOf(b.rec.finishedAt ?? b.rec.startedAt));
   }
 
+  /** restart-request.json (current + history) as a flat list; [] when absent or mid-write. */
+  function readRestartRequests() {
+    const doc = readJson(path.join(vsHome(home), "restart-request.json"));
+    if (!doc || typeof doc !== "object") return [];
+    return [doc.current, ...(Array.isArray(doc.history) ? doc.history : [])].filter((r) => r && typeof r === "object");
+  }
+
   /** Async inputs for one evaluation: re-read stale watched agents, resolve report authors. */
   async function gather(sets) {
     const t = now();
@@ -777,6 +800,7 @@ export function createWatchEngine({
       alive,
       suite: kinds.has("suite") ? { result: readJson(path.join(td, SUITE_RESULT_FILE)), lock: readJson(path.join(td, SUITE_LOCK_FILE)) } : {},
       restarts: kinds.has("restart") ? readRestarts() : [],
+      restartRequests: kinds.has("restart") ? readRestartRequests() : [],
     };
   }
 

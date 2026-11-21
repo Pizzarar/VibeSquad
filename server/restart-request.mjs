@@ -12,10 +12,13 @@
 // counts too; another tip does not). The fire runs the existing `vs restart` path as the owner's shell (the same path and
 // identity scripts/restart-runtime.mjs uses for its done broadcast); this module never restarts anything itself.
 // idea-369: each ask and `vs restart status` carry the runner's held background work (/health heldAgents + heldWork) per lead.
+// idea-398: a request with `--needs build` (the Live-Needs token) runs the source repo's sync-runtime (it rebuilds a stale
+// dist, then copies the runtime) right before the `vs restart` launch, once the leads have drained. A sync that does not
+// happen is never silent: the request logs `sync-skipped reason=...` (restart-feedback) and fires on the runtime as last synced.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
@@ -356,9 +359,11 @@ function notifyClosed(req, at, actions) {
   if (req.notifiedAt) return actions;
   req.notifiedAt = at;
   const done = req.state === "done";
-  actions.push({ kind: "log", text: done ? `${DONE_TEXT} ${req.tip} (restart-request ${req.id})` : `restart-request ${req.id} aborted: ${req.abortReason}` });
-  const text = done ? `${doneText(at)} (restart-request ${req.id}, tip ${req.tip})`
-    : `Restart request ${req.id} (tip ${req.tip}) was aborted: ${req.abortReason}. No restart is pending from it; lift your background-suite hold.`;
+  // idea-398 fix round: a restart after a skipped sync ran the old runtime; never let its done line read as a clean one.
+  const stale = req.sync && req.sync.ok === false ? `; ${req.sync.note ?? notUpdatedNote({ tip: req.tip, reason: req.sync.reason })}` : "";
+  actions.push({ kind: "log", text: done ? `${DONE_TEXT} ${req.tip} (restart-request ${req.id})${stale}` : `restart-request ${req.id} aborted: ${req.abortReason}${stale}` });
+  const text = done ? `${doneText(at)} (restart-request ${req.id}, tip ${req.tip})${stale}`
+    : `Restart request ${req.id} (tip ${req.tip}) was aborted: ${req.abortReason}${stale}. No restart is pending from it; lift your background-suite hold.`;
   for (const id of Object.keys(req.asked ?? {})) if (!req.gone?.[id]) actions.push({ kind: "send", leadId: id, text });
   return actions;
 }
@@ -380,6 +385,8 @@ export function formatRequestStatus(req, now = Date.now()) {
   if (req.held?.unresolved?.length) lines.push(`  held with no lead resolved: ${req.held.unresolved.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
   if (req.held === null && !TERMINAL.has(req.state)) lines.push("  runner held list: unknown (runner unreachable or older)");
   if (req.laggards?.length) lines.push(`  fired at the deadline without: ${req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ")}`);
+  if (req.sync) lines.push(req.sync.ok ? `  synced ${req.sync.at}: runtime at ${String(req.sync.commit ?? "?").slice(0, 7)}${req.sync.built ? " (dist rebuilt)" : ""}` : `  sync-skipped reason=${req.sync.reason} (${req.sync.at})${req.sync.note ? `; ${req.sync.note}` : ""}`);
+  else if (needsBuild(req.needs) && !TERMINAL.has(req.state)) lines.push("  needs build: sync-runtime (build if stale) runs right before the fire");
   if (req.firedAt) lines.push(`  fired ${req.firedAt}${req.launch ? (req.launch.ok ? " (vs restart launched)" : ` (launch failed: ${req.launch.error})`) : ""}`);
   if (req.result?.file) lines.push(`  result: ${req.result.file}`);
   if (req.abortReason) lines.push(`  aborted: ${req.abortReason}`);
@@ -388,6 +395,115 @@ export function formatRequestStatus(req, now = Date.now()) {
 }
 
 // ---- the driver -----------------------------------------------------------------------------------------------------
+
+/** idea-398: does the request's --needs list carry the Live-Needs `build` token? */
+export function needsBuild(needs) {
+  return String(needs ?? "").toLowerCase().split(/[\s,]+/).includes("build");
+}
+
+/**
+ * The source checkout the live runtime was synced from: the runtime's build-stamp.json records its git common dir
+ * (`<repo>/.git`). null when there is no stamp or it names no main checkout.
+ */
+export function syncRepoRoot(env = process.env) {
+  const runtime = path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+  try {
+    const repo = JSON.parse(fs.readFileSync(path.join(runtime, "build-stamp.json"), "utf8"))?.repo;
+    if (typeof repo !== "string" || path.basename(repo).toLowerCase() !== ".git") return null;
+    return path.dirname(path.resolve(repo));
+  } catch { return null; }
+}
+
+const SYNC_TIMEOUT_MS = 20 * 60_000; // sync-runtime's own lock staleMs: it outlasts a vite build
+/**
+ * Run `<repo>/server/sync-runtime.mjs` (its git guard, drain guard, build-if-stale and copy) async, so the loop never
+ * blocks. Never --force and never the owner's drain override: a guard that says no is reported, not bypassed.
+ * Returns { ok: true, commit, built } | { ok: false, reason }.
+ */
+export function runSyncAsync({ env = process.env, repoRoot = syncRepoRoot(env), timeoutMs = SYNC_TIMEOUT_MS } = {}) {
+  if (!repoRoot) return Promise.resolve({ ok: false, reason: "the live runtime has no build-stamp.json naming its source checkout" });
+  const script = path.join(repoRoot, "server", "sync-runtime.mjs");
+  if (!fs.existsSync(script)) return Promise.resolve({ ok: false, reason: `no server/sync-runtime.mjs in ${repoRoot}` });
+  const resultFile = path.join(os.tmpdir(), `vs-sync-result-${process.pid}-${randomBytes(4).toString("hex")}.json`);
+  const e = { ...env, VIBESQUAD_SYNC_RESULT: resultFile, VIBESQUAD_SYNC_FORCE: "", VIBESQUAD_IGNORE_DRAIN: "" };
+  for (const k of AGENT_ENV_KEYS) delete e[k];
+  return new Promise((resolve) => {
+    let out = "";
+    let child;
+    const done = (r) => { try { fs.rmSync(resultFile, { force: true }); } catch {} resolve(r); };
+    try {
+      child = spawn(process.execPath, [script], { env: e, cwd: repoRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (err) { done({ ok: false, reason: `sync-runtime did not start: ${clean(err?.message ?? err, 200)}` }); return; }
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch {} }, timeoutMs);
+    timer.unref?.();
+    child.stdout.on("data", (b) => { out = (out + b).slice(-4000); });
+    child.stderr.on("data", (b) => { out = (out + b).slice(-4000); });
+    child.on("error", (err) => { clearTimeout(timer); done({ ok: false, reason: `sync-runtime did not start: ${clean(err?.message ?? err, 200)}` }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      let res = null;
+      try { res = JSON.parse(fs.readFileSync(resultFile, "utf8")); } catch {}
+      if (res?.synced) return done({ ok: true, commit: res.commit ?? null, built: Boolean(res.built) });
+      const why = timedOut ? `sync-runtime timed out after ${Math.round(timeoutMs / 60_000)} min`
+        : res?.skipped ? `skipped: ${res.skipped}`
+        : res?.refused ? `refused: ${res.refused}`
+        : res ? "no live runtime dir to sync into"
+        : `sync-runtime exited ${code} without a result (${out.trim().split(/\r?\n/).pop() ?? ""})`;
+      done({ ok: false, reason: why });
+    });
+  });
+}
+
+/**
+ * Where the live runtime stands against the request's tip when its sync did not run: the runtime build-stamp commit and
+ * `git rev-list --count <that>..<tip>` in the source checkout (async: the loop never blocks). Unknown parts are null.
+ */
+export function runtimeLagAsync(req, { env = process.env, repoRoot = syncRepoRoot(env) } = {}) {
+  const runtime = path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+  let sha = null;
+  try { sha = JSON.parse(fs.readFileSync(path.join(runtime, "build-stamp.json"), "utf8"))?.commit ?? null; } catch {}
+  if (typeof sha !== "string" || !/^[0-9a-f]{7,40}$/i.test(sha)) sha = null;
+  if (!sha || !repoRoot || !TIP_RE.test(String(req?.tip ?? ""))) return Promise.resolve({ sha, behind: null });
+  return new Promise((resolve) => {
+    execFile("git", ["-C", repoRoot, "rev-list", "--count", `${sha}..${req.tip}`], { windowsHide: true, timeout: 15_000 }, (err, out) => {
+      const n = Number.parseInt(String(out ?? "").trim(), 10);
+      resolve({ sha, behind: !err && Number.isFinite(n) ? n : null });
+    });
+  });
+}
+
+/** The 11-20 02:54 regression guard: the one phrase every restart-done line and watch ping carries after a skipped sync. */
+export function notUpdatedNote({ sha = null, behind = null, tip = "?", reason = "unknown" } = {}) {
+  return `runtime NOT updated: still ${sha ? String(sha).slice(0, 7) : "?"}, ${Number.isInteger(behind) ? behind : "?"} behind ${tip}, reason ${fitLog(clean(reason, 1000), NOTE_REASON_MAX)}`;
+}
+
+/** vs log rejects text over 240 chars (cli/vs.mjs MAX_TEXT, vibesquad-api POST /log): an over-long line is lost, not cut. */
+export const LOG_MAX = 240;
+const FEEDBACK_MAX = LOG_MAX - "restart-feedback: ".length; // the CLI prefixes metric subtypes
+const NOTE_REASON_MAX = 80; // keeps 'restart-done <tip> (restart-request <id>); <note>' inside FEEDBACK_MAX
+/** Head-preserving cut to `max` chars (the important part of every line here comes first). */
+export function fitLog(text, max = LOG_MAX) {
+  const t = String(text ?? "");
+  return t.length <= max ? t : `${t.slice(0, max - 3).trimEnd()}...`;
+}
+
+/** The restart-feedback line for a pre-fire sync outcome (idea-398). */
+export function syncFeedbackText(req, r) {
+  if (r?.ok) {
+    const sha = String(r.commit ?? "").slice(0, 7) || "?";
+    const off = r.commit && /^[0-9a-f]{7,40}$/i.test(req.tip) && !tipMatches(req.tip, r.commit) ? `; HEAD ${sha} is not the requested tip ${req.tip}` : "";
+    return `restart-request ${req.id} synced the runtime to ${sha}${r.built ? " (dist rebuilt)" : ""} before vs restart (needs build)${off}`;
+  }
+  // With the note (the loop always adds it) the reason lives in the note: one line, inside the log limit.
+  if (r?.note) return `sync-skipped (restart-request ${req.id}, needs build), vs restart fires anyway: ${r.note}`;
+  return `sync-skipped reason=${clean(r?.reason ?? "unknown", 300)} (restart-request ${req.id}, tip ${req.tip}, needs build): firing vs restart on the runtime as last synced`;
+}
+
+/** The needs-you line for the Overlord's lane when the restart fires on old code (idea-398 fix round, Hub13). */
+export function notUpdatedNeedsYouText(req, note) {
+  return fitLog(`restart-request ${req.id} fires vs restart on old code: ${note}. Fix the reason, sync, request again.`);
+}
 
 const VS_CLI = path.resolve(import.meta.dirname, "..", "cli", "vs.mjs");
 const AGENT_ENV_KEYS = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_LANE", "VS_TEAM", "VS_ORD", "VS_PROFILE"];
@@ -426,6 +542,8 @@ export function createRestartRequestLoop({
   heldList = async () => null,
   runVs = (args) => runVsAsync(args),
   fire = () => runVsAsync(["restart"], { timeoutMs: 120_000 }),
+  sync = () => runSyncAsync(),
+  runtimeLag = (req) => runtimeLagAsync(req),
   teams = () => loadTeamsRegistry(),
   now = () => Date.now(),
   tickMs = TICK_MS,
@@ -435,7 +553,7 @@ export function createRestartRequestLoop({
   let scanned = null; // { id, at }: the last drained-log scan for this request (in memory: a restarted server rescans once)
   let timer = null;
 
-  const logArgs = (req, text) => ["log", "restart-feedback", text, ...(req.team && req.lane ? ["--team", req.team, "--lane", req.lane] : [])];
+  const logArgs = (req, text) => ["log", "restart-feedback", fitLog(text, FEEDBACK_MAX), ...(req.team && req.lane ? ["--team", req.team, "--lane", req.lane] : [])];
 
   async function run() {
     const cur = readRestartRequest(home);
@@ -468,6 +586,36 @@ export function createRestartRequestLoop({
     const outcomes = {};
     for (const a of actions) {
       if (a.kind === "fire") {
+        // idea-398: --needs build syncs (and rebuilds) first. firedAt is already on disk, so a crash here never fires twice.
+        if (needsBuild(req.needs)) {
+          let s;
+          try { s = await sync(req); } catch (e) { s = { ok: false, reason: String(e?.message ?? e) }; }
+          if (!s?.ok) {
+            let lag = null;
+            try { lag = await runtimeLag(req); } catch {}
+            s = { ...s, ok: false, note: notUpdatedNote({ sha: lag?.sha ?? null, behind: lag?.behind ?? null, tip: req.tip, reason: s?.reason ?? "unknown" }) };
+          }
+          const text = syncFeedbackText(req, s);
+          await mutateAsync(home, (doc) => {
+            if (doc.current?.id !== req.id) return;
+            const at = iso(now());
+            doc.current.sync = s?.ok ? { ok: true, at, commit: s.commit ?? null, built: Boolean(s.built) } : { ok: false, at, reason: clean(s?.reason ?? "unknown", 300), note: s.note };
+            event(doc.current, at, s?.ok ? `synced the runtime to ${String(s.commit ?? "?").slice(0, 7)}` : `sync-skipped reason=${clean(s?.reason ?? "unknown", 200)}`);
+          });
+          log(text);
+          const lr = await runVs(logArgs(req, text)).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+          if (!lr?.ok) log(`restart-request ${req.id}: sync log failed: ${lr?.error}`);
+          if (!s?.ok) {
+            // Never silent (11-20 02:54): a needs-you in the requester's lane, and the requesting Overlord told directly.
+            const ny = notUpdatedNeedsYouText(req, s.note);
+            const nr = await runVs(["log", "needs-you", ny, ...(req.team && req.lane ? ["--team", req.team, "--lane", req.lane] : [])]).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+            if (!nr?.ok) log(`restart-request ${req.id}: needs-you log failed: ${nr?.error}`);
+            if (req.requestedBy && req.requestedBy !== "owner") {
+              const sr = await runVs(["send", req.requestedBy, ny]).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+              if (!sr?.ok) log(`restart-request ${req.id}: send to ${req.requestedBy} failed: ${sr?.error}`);
+            }
+          }
+        }
         let r;
         try { r = await fire(req); } catch (e) { r = { ok: false, error: String(e?.message ?? e) }; }
         await mutateAsync(home, (doc) => {
