@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Modal } from "./TeamActions";
 import { Ago } from "./ui";
 import type { DeviceRole } from "./phonePairLogic";
@@ -264,12 +264,17 @@ export function PairDeviceModal({
     } catch {}
   }, []);
 
+  // Monotonic mint id: a role switch / Squad toggle / newer mint invalidates any pair/start still in flight, so a stale
+  // owner (or wrong-Squad) code can never land under the other role.
+  const mintSeqRef = useRef(0);
   const startPairing = useCallback(async (mintRole: DeviceRole = "owner", mintTeams: string[] = []) => {
+    const seq = ++mintSeqRef.current;
     setBusy(true);
     setErr("");
     try {
       const r = await fetch("/__vibesquad/pair/start", pairStartInit(mintRole, mintTeams));
       const data = (await r.json()) as PairStartResponse;
+      if (seq !== mintSeqRef.current) return;
       if (!r.ok) {
         setErr(data.error || `HTTP ${r.status}`);
         return;
@@ -279,9 +284,9 @@ export function PairDeviceModal({
         setNetworkMode("meshnet");
       }
     } catch (e) {
-      setErr(String(e));
+      if (seq === mintSeqRef.current) setErr(String(e));
     } finally {
-      setBusy(false);
+      if (seq === mintSeqRef.current) setBusy(false);
     }
   }, []);
 
@@ -310,6 +315,8 @@ export function PairDeviceModal({
 
   const changeRole = (next: DeviceRole) => {
     if (next === role) return;
+    mintSeqRef.current++;
+    setBusy(false);
     setRole(next);
     setPair(null); // never leave the other role's code on screen
     setErr("");
@@ -317,11 +324,15 @@ export function PairDeviceModal({
   };
 
   const toggleSquad = (id: string) => {
+    mintSeqRef.current++;
+    setBusy(false);
     setTesterTeams((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
     setPair(null); // the old invite carried a different Squad scope
   };
 
   const mintCurrent = () => void startPairing(role, testerTeams);
+  const isOwnerRole = role === "owner";
+  const isTesterRole = role === "bug-tester";
   const testerBlocked = role === "bug-tester" && testerTeams.length === 0;
 
   // E4b (X1 L5): a remote paired browser mints approval-required codes; the redeemed device waits for Approve here.
@@ -496,10 +507,10 @@ export function PairDeviceModal({
         <div className="preview" style={{ marginBottom: 0 }} data-testid="pair-role-select">
           <div className="field-label">DEVICE ACCESS ROLE</div>
           <div className="seg" style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
-            <button type="button" className={role === "owner" ? "on" : ""} data-testid="pair-role-owner" onClick={() => changeRole("owner")}>
+            <button type="button" className={isOwnerRole ? "on" : ""} data-testid="pair-role-owner" onClick={() => changeRole("owner")}>
               {OWNER_ROLE_LABEL}
             </button>
-            <button type="button" className={role === "bug-tester" ? "on" : ""} data-testid="pair-role-tester" onClick={() => changeRole("bug-tester")}>
+            <button type="button" className={isTesterRole ? "on" : ""} data-testid="pair-role-tester" onClick={() => changeRole("bug-tester")}>
               {TESTER_ROLE_LABEL}
             </button>
           </div>

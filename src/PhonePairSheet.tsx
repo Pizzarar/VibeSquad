@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   OWNER_ROLE_LABEL,
   TESTER_ROLE_LABEL,
@@ -47,6 +47,10 @@ export function PhonePairSheet() {
   const [role, setRole] = useState<DeviceRole>("owner");
   const [squads, setSquads] = useState<Array<{ id: string; name?: string }>>([]);
   const [testerTeams, setTesterTeams] = useState<string[]>([]);
+  const isOwnerRole = role === "owner";
+  const isTesterRole = role === "bug-tester";
+  // Monotonic mint id: a role switch / Squad toggle / newer mint drops any pair/start still in flight (no stale owner code under Alpha Tester).
+  const mintSeqRef = useRef(0);
   const testerBlocked = role === "bug-tester" && testerTeams.length === 0;
 
   const loadSquads = useCallback(async () => {
@@ -64,12 +68,16 @@ export function PhonePairSheet() {
 
   const changeRole = (next: DeviceRole) => {
     if (next === role) return;
+    mintSeqRef.current++;
+    setBusy(false);
     setRole(next);
     setPair(null);
     setErr("");
   };
 
   const toggleSquad = (id: string) => {
+    mintSeqRef.current++;
+    setBusy(false);
     setTesterTeams((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
     setPair(null);
   };
@@ -112,20 +120,22 @@ export function PhonePairSheet() {
   }, [open, loadDevices, loadPending, loadSquads]);
 
   const mint = async () => {
+    const seq = ++mintSeqRef.current;
     setBusy(true);
     setErr("");
     try {
       const r = await fetch("/__vibesquad/pair/start", pairStartInit(role, testerTeams));
       const data = await json<PairStart>(r);
+      if (seq !== mintSeqRef.current) return;
       if (!r.ok) {
         setErr(data.error ?? `HTTP ${r.status}`);
         return;
       }
       setPair(data);
     } catch (e) {
-      setErr(String((e as Error)?.message ?? e));
+      if (seq === mintSeqRef.current) setErr(String((e as Error)?.message ?? e));
     } finally {
-      setBusy(false);
+      if (seq === mintSeqRef.current) setBusy(false);
     }
   };
 
@@ -187,13 +197,13 @@ export function PhonePairSheet() {
       </button>
       {open && (
         <div className="phone-pair-sheet" data-testid="phone-pair-sheet">
-          <div className="phone-pair-role" data-testid="phone-pair-role">
+          <div className="phone-pair-devices" data-testid="phone-pair-role">
             <div className="field-label">DEVICE ACCESS ROLE</div>
             <div className="seg">
-              <button type="button" className={role === "owner" ? "on" : ""} data-testid="phone-pair-role-owner" onClick={() => changeRole("owner")}>
+              <button type="button" className={isOwnerRole ? "on" : ""} data-testid="phone-pair-role-owner" onClick={() => changeRole("owner")}>
                 {OWNER_ROLE_LABEL}
               </button>
-              <button type="button" className={role === "bug-tester" ? "on" : ""} data-testid="phone-pair-role-tester" onClick={() => changeRole("bug-tester")}>
+              <button type="button" className={isTesterRole ? "on" : ""} data-testid="phone-pair-role-tester" onClick={() => changeRole("bug-tester")}>
                 {TESTER_ROLE_LABEL}
               </button>
             </div>
@@ -201,7 +211,7 @@ export function PhonePairSheet() {
               <div data-testid="phone-pair-tester-squads">
                 <div className="muted small">Squads this tester may report bugs to:</div>
                 {squads.map((t) => (
-                  <label key={t.id} className="small phone-pair-squad">
+                  <label key={t.id} className="small" style={{ display: "block" }}>
                     <input type="checkbox" data-testid={`phone-pair-squad-${t.id}`} checked={testerTeams.includes(t.id)} onChange={() => toggleSquad(t.id)} /> {t.name || t.id}
                   </label>
                 ))}

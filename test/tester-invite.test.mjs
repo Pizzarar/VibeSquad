@@ -88,6 +88,19 @@ describe("pair UIs wire the role selector", () => {
       assert.ok(src.includes(`${prefix}-role-badge`));
     });
   }
+  for (const file of ["src/PairDeviceModal.tsx", "src/PhonePairSheet.tsx"]) {
+    test(`${file}: a stale in-flight mint can never land under another role`, () => {
+      const src = read(file);
+      assert.ok(src.includes("mintSeqRef = useRef(0)"));
+      assert.ok(src.includes("const seq = ++mintSeqRef.current"));
+      assert.ok(src.includes("seq !== mintSeqRef.current) return"), "response dropped when superseded");
+      const change = src.slice(src.indexOf("const changeRole"), src.indexOf("const toggleSquad"));
+      const toggle = src.slice(src.indexOf("const toggleSquad"), src.indexOf("const toggleSquad") + 400);
+      assert.ok(change.includes("mintSeqRef.current++"), "role switch invalidates");
+      assert.ok(toggle.includes("mintSeqRef.current++"), "Squad toggle invalidates");
+      assert.ok(!/className={role ===/.test(src), "no string literals from role comparisons inside className");
+    });
+  }
   test("labels are the spec strings", () => {
     assert.equal(logic.OWNER_ROLE_LABEL, "Owner (full access)");
     assert.equal(logic.TESTER_ROLE_LABEL, "Alpha Tester (Log Bug + Bug Desk chat only)");
