@@ -524,3 +524,88 @@ test('acp steered prompt: does not emit idle or turn_ended while adapter queue i
   const transitions = runner.timeline(id).map((e) => reduceTurn(t, e)).filter(Boolean);
   assert.deepEqual(transitions.map((tr) => tr.kind), ['turn_started', 'turn_ended']);
 });
+
+test('opencode: prompt "Internal service failure" then exit 1 -> exit event carries the reason and upstream:true (idea-442)', async () => {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { c.push({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'Internal error: Internal service failure' } }); setTimeout(() => c.emit('exit', 1, null), 5); },
+  ]);
+  await tick(); await tick(); await tick();
+  const exit = runner.timeline(id).find((e) => e.type === 'exit');
+  assert.equal(exit.code, 1);
+  assert.match(exit.error, /opencode exited \(code 1\) after: Internal error: Internal service failure/);
+  assert.equal(exit.upstream, true);
+  assert.ok(spawnImpl.last);
+});
+
+test('opencode: a clean exit or an unrelated error carries no upstream flag', async () => {
+  const { runner, id } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { c.push({ jsonrpc: '2.0', id: m.id, error: { code: -1, message: 'bad tool schema' } }); setTimeout(() => c.emit('exit', 1, null), 5); },
+  ]);
+  await tick(); await tick(); await tick();
+  const exit = runner.timeline(id).find((e) => e.type === 'exit');
+  assert.equal(exit.upstream, false);
+});
+
+// idea-442 review: only an exit caused by the agent's own last failed turn is an upstream failure.
+function exitAfter(promptReplies, then) {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', promptReplies);
+  return { runner, id, spawnImpl, exit: async () => { await then({ runner, id, spawnImpl }); await tick(); await tick(); return runner.timeline(id).find((e) => e.type === 'exit'); } };
+}
+const upstreamErr = (c, m) => c.push({ jsonrpc: '2.0', id: m.id, error: { code: -32603, message: 'Internal error: Internal service failure' } });
+const okReply = (c, m) => c.push({ jsonrpc: '2.0', id: m.id, result: { stopReason: 'end_turn' } });
+
+test('opencode: exit code 0 after an error carries no reason and no upstream flag', async () => {
+  const t = exitAfter([upstreamErr], ({ spawnImpl }) => spawnImpl.last.emit('exit', 0, null));
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.equal(e.error, undefined);
+  assert.equal(e.upstream, undefined);
+});
+
+test('opencode: an old error, a later good turn, then a non-zero exit is not upstream (lastError cleared per turn)', async () => {
+  const t = exitAfter([upstreamErr, okReply], async ({ runner, id, spawnImpl }) => {
+    runner.send(id, 'again'); await tick(); await tick();
+    spawnImpl.last.emit('exit', 1, null);
+  });
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.equal(e.code, 1);
+  assert.equal(e.upstream, undefined);
+  assert.equal(e.error, undefined);
+});
+
+test('opencode: our own kill() after an upstream error is never upstream', async () => {
+  const t = exitAfter([upstreamErr], ({ runner, id, spawnImpl }) => { runner.kill?.(id); spawnImpl.last.emit('exit', 1, null); });
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.ok(e, 'exit logged');
+  assert.notEqual(e.upstream, true);
+});
+
+test('opencode: cancel() mid-turn then the aborted prompt failing + exit 1 is not upstream', async () => {
+  const t = exitAfter([() => {}], async ({ runner, id, spawnImpl }) => {
+    await tick();
+    runner.cancel(id);
+    const req = spawnImpl.last.written.filter((m) => m.method === 'session/prompt').at(-1);
+    upstreamErr(spawnImpl.last, req);
+    await tick();
+    spawnImpl.last.emit('exit', 1, null);
+  });
+  await tick(); await tick();
+  const e = await t.exit();
+  assert.notEqual(e.upstream, true);
+});
+
+test('opencode: a queued prompt starting right after the failing one does not drop the exit reason (R2 Low)', async () => {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { upstreamErr(c, m); },
+    () => {}, // the queued second prompt never answers: the child dies
+  ]);
+  runner.send(id, 'queued behind the first');
+  await tick(); await tick(); await tick();
+  spawnImpl.last.emit('exit', 1, null);
+  await tick(); await tick();
+  const e = runner.timeline(id).find((x) => x.type === 'exit');
+  assert.equal(e.upstream, true);
+  assert.match(e.error, /Internal service failure/);
+});
