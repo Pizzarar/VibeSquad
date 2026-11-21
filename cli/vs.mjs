@@ -2299,6 +2299,7 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
   if (p.hostId) lines.push(`Host id:        ${p.hostId}`);
   if (p.caHttpUrl) lines.push(`CA download:    ${p.caHttpUrl}`);
   if (p.androidApkAvailable && p.androidApkHttpUrl) lines.push(`Android APK:    ${p.androidApkHttpUrl}`);
+  if (p.androidApkAvailable && p.androidApkHttpUrl && p.androidApkSha256?.full) lines.push(`APK SHA-256:    ${p.androidApkSha256.full}`);
   lines.push("");
   lines.push("Scan with the VibeSquad app (or open the link and type the code), then install the CA if asked.");
   lines.push(`Paired devices: vs devices list   ·   lost phone: vs devices revoke <id|--all>   (port ${port})`);

@@ -370,12 +370,9 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     if (path === "/ca.crt" && (req.method === "GET" || req.method === "HEAD")) {
       return handleCaCrt(req, res);
     }
-    if ((path === "/VibeSquad-setup.exe" || path === "/__vibesquad/desktop/VibeSquad-setup.exe") && (req.method === "GET" || req.method === "HEAD")) {
-      return handleDesktopInstaller(req, res, rootDir);
-    }
-    if (isAndroidApkPath(path) && (req.method === "GET" || req.method === "HEAD")) {
-      return handleAndroidApk(req, res, rootDir);
-    }
+    // idea-384: no installer or APK bytes over plain http off-loopback (this listener binds LAN/Meshnet IPs only), so a
+    // LAN MITM can't swap a first install: /VibeSquad-setup.exe and /VibeSquad.apk fall through to the 301 to https
+    // below. /ca.crt stays: it is the bootstrap, checked by the CA fingerprint the pair dialog shows.
     if (path === "/__vibesquad/desktop/update.json" && (req.method === "GET" || req.method === "HEAD")) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
@@ -404,7 +401,7 @@ export function createMeshnetMux({ port: p = port, meshnetHost = netConfig().mes
     res.setHeader("Upgrade", "TLS/1.3, HTTP/1.1");
     res.setHeader("content-type", "text/plain; charset=utf-8");
     res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
-    res.end(`426 Upgrade Required — use https://${target(req)} (or GET /VibeSquad-setup.exe or GET /ca.crt)`);
+    res.end(`426 Upgrade Required — use https://${target(req)} (or GET /ca.crt)`);
   };
 
   const handleMeshnetHttps = (req, res) => {

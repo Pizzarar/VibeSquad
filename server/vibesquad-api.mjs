@@ -1556,6 +1556,8 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad-setup.exe"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  const sha = artifactSha256(file, stat);
+  if (sha) res.setHeader("x-vibesquad-sha256", sha);
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
 }
@@ -1563,38 +1565,94 @@ export function handleDesktopInstaller(req, res, rootDir = REPO_ROOT) {
 /** The APK download path, case-insensitive (phones lowercase typed URLs: /vibesquad.apk). */
 export const isAndroidApkPath = (path) => /^\/(?:__vibesquad\/android\/)?vibesquad\.apk$/i.test(path);
 
-// sha256 of the served APK for x-vibesquad-apk-sha256. Never hashes on the request path: trust the build sidecar
-// when it is at least as new as the APK, else hash by stream in the background (header omitted until ready).
-// Cache is keyed by path+mtime+size so the header always matches the bytes served.
-const apkHashCache = new Map();
-const apkHashPending = new Set();
-function apkSha256(file, stat) {
+// sha256 of a served download artifact (APK, desktop installer): x-vibesquad-apk-sha256 and the pair dialog's
+// per-artifact SHA-256 (idea-384). Never hashes on the request path: trust the build sidecar (<file>.sha256) when it is
+// at least as new as the file, else hash by stream in the background (header / field omitted until ready).
+// Cache is keyed by path+mtime+size so the hash always matches the bytes served.
+const artifactHashCache = new Map();
+const artifactHashPending = new Map(); // `${file}|${key}` -> Promise<string> ("" on read error)
+function cachedArtifactSha256(file, stat) {
   const key = `${stat.mtimeMs}:${stat.size}`;
-  const hit = apkHashCache.get(file);
-  if (hit?.key === key) return hit.hash;
+  const hit = artifactHashCache.get(file);
+  if (hit?.key === key) return { key, hash: hit.hash };
   try {
     const side = `${file}.sha256`;
     if (existsSync(side) && statSync(side).mtimeMs >= stat.mtimeMs) {
-      const hash = readFileSync(side, "utf8").trim().toLowerCase();
+      const hash = readFileSync(side, "utf8").trim().split(/\s+/)[0].toLowerCase();
       if (/^[0-9a-f]{64}$/.test(hash)) {
-        apkHashCache.set(file, { key, hash });
-        return hash;
+        artifactHashCache.set(file, { key, hash });
+        return { key, hash };
       }
     }
   } catch {}
+  return { key, hash: "" };
+}
+function hashArtifactInBackground(file, key) {
   const pend = `${file}|${key}`;
-  if (!apkHashPending.has(pend)) {
-    apkHashPending.add(pend);
+  let p = artifactHashPending.get(pend);
+  if (p) return p;
+  p = new Promise((done) => {
     const h = createHash("sha256");
     createReadStream(file)
       .on("data", (c) => h.update(c))
       .on("end", () => {
-        apkHashCache.set(file, { key, hash: h.digest("hex") });
-        apkHashPending.delete(pend);
+        const hash = h.digest("hex");
+        artifactHashCache.set(file, { key, hash });
+        artifactHashPending.delete(pend);
+        done(hash);
       })
-      .on("error", () => apkHashPending.delete(pend));
-  }
+      .on("error", () => {
+        artifactHashPending.delete(pend);
+        done("");
+      });
+  });
+  artifactHashPending.set(pend, p);
+  return p;
+}
+/** Lowercase hex SHA-256 of `file` if known now, else "" (and a background hash starts). */
+function artifactSha256(file, stat) {
+  const { key, hash } = cachedArtifactSha256(file, stat);
+  if (hash) return hash;
+  void hashArtifactInBackground(file, key);
   return "";
+}
+/** Lowercase hex SHA-256 of `file`, waiting for the stream hash when not cached; "" when missing/unreadable. */
+async function artifactSha256Async(file) {
+  let stat;
+  try {
+    stat = statSync(file);
+  } catch {
+    return "";
+  }
+  const { key, hash } = cachedArtifactSha256(file, stat);
+  return hash || hashArtifactInBackground(file, key);
+}
+
+/** idea-384: SHA-256 (lowercase hex) of the files /VibeSquad-setup.exe and /VibeSquad.apk serve, for the pair dialog. */
+export function downloadArtifactSha256s(rootDir = REPO_ROOT) {
+  const one = (file) => {
+    try {
+      return existsSync(file) ? artifactSha256(file, statSync(file)) || null : null;
+    } catch {
+      return null;
+    }
+  };
+  return { desktopInstaller: one(resolveDesktopInstallerPath(rootDir)), androidApk: one(resolveAndroidApkPath(rootDir)) };
+}
+/** Same, waiting for any in-flight hash (bounded by `timeoutMs`; a slow disk yields null, never a stale hash). */
+export async function downloadArtifactSha256sAsync(rootDir = REPO_ROOT, { timeoutMs = 10_000 } = {}) {
+  const one = async (file) => {
+    if (!existsSync(file)) return null;
+    let timer;
+    const timeout = new Promise((done) => (timer = setTimeout(() => done(""), timeoutMs)));
+    try {
+      return (await Promise.race([artifactSha256Async(file), timeout])) || null;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+  const [desktopInstaller, androidApk] = await Promise.all([one(resolveDesktopInstallerPath(rootDir)), one(resolveAndroidApkPath(rootDir))]);
+  return { desktopInstaller, androidApk };
 }
 
 export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
@@ -1612,7 +1670,7 @@ export function handleAndroidApk(req, res, rootDir = REPO_ROOT) {
   res.setHeader("content-length", String(stat.size));
   res.setHeader("content-disposition", 'attachment; filename="VibeSquad.apk"');
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
-  const sha = apkSha256(file, stat);
+  const sha = artifactSha256(file, stat);
   if (sha) res.setHeader("x-vibesquad-apk-sha256", sha);
   if (req.method === "HEAD") return res.end();
   createReadStream(file).on("error", () => res.destroy()).pipe(res);
@@ -1630,7 +1688,8 @@ export function handleDesktopUpdateJson(req, res, rootDir = REPO_ROOT) {
   const file = resolveDesktopInstallerPath(rootDir);
   const exists = existsSync(file);
   const stat = exists ? statSync(file) : null;
-  const downloadUrl = `http://${ip}:${port}/__vibesquad/desktop/VibeSquad-setup.exe`;
+  // idea-384: https off-loopback; the LAN/Meshnet plain-http listener no longer serves the installer (it 301s to https).
+  const downloadUrl = `${ip === "127.0.0.1" ? "http" : "https"}://${ip}:${port}/__vibesquad/desktop/VibeSquad-setup.exe`;
   let signature = "";
   const sigFile = `${file}.sig`;
   if (existsSync(sigFile)) {

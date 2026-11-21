@@ -28,6 +28,9 @@ type PairStartResponse = {
   caHttpUrl: string;
   desktopSetupHttpUrl?: string;
   caFingerprint: Fingerprint;
+  /** idea-384: SHA-256 of the file each download link serves (null until hashed / not built). */
+  desktopInstallerSha256?: Fingerprint | null;
+  androidApkSha256?: Fingerprint | null;
   meshnetHost: string;
   meshnetIp: string;
   expiresAt: number;
@@ -57,7 +60,15 @@ type DevicesResponse = {
   lanDesktopInstallerUrl?: string | null;
   lanAndroidApkUrl?: string | null;
   androidApkAvailable?: boolean;
+  desktopInstallerSha256?: Fingerprint | null;
+  androidApkSha256?: Fingerprint | null;
 };
+
+/**
+ * idea-384: installer/APK links are https only (a plain-http first install can be swapped by a LAN MITM). An http:// link
+ * from an older server is upgraded to https on the same host:port; the LAN listener serves both schemes on one port.
+ */
+export const httpsArtifactUrl = (u?: string | null) => (u ? u.trim().replace(/^http:\/\//i, "https://") : "");
 
 export function resolvePairModalUrls({
   pair,
@@ -95,13 +106,17 @@ export function resolvePairModalUrls({
     ? pair?.lanCaUrl || meta?.lanCaUrl || `http://${lanIp}:${port}/ca.crt`
     : pair?.caHttpUrl || meta?.caHttpUrl || (ip ? `http://${ip}:${port}/ca.crt` : "");
 
-  const setupUrl = isLan
-    ? pair?.lanDesktopInstallerUrl || meta?.lanDesktopInstallerUrl || `http://${lanIp}:${port}/VibeSquad-setup.exe`
-    : pair?.desktopSetupHttpUrl || (ip ? `http://${ip}:${port}/VibeSquad-setup.exe` : "");
+  const setupUrl = httpsArtifactUrl(
+    isLan
+      ? pair?.lanDesktopInstallerUrl || meta?.lanDesktopInstallerUrl || `https://${lanIp}:${port}/VibeSquad-setup.exe`
+      : pair?.desktopSetupHttpUrl || (ip ? `https://${ip}:${port}/VibeSquad-setup.exe` : ""),
+  );
 
-  const rawApkUrl = isLan
-    ? pair?.lanAndroidApkUrl || meta?.lanAndroidApkUrl || (lanIp ? `http://${lanIp}:${port}/VibeSquad.apk` : "")
-    : pair?.androidApkHttpUrl || meta?.androidApkHttpUrl || (ip ? `http://${ip}:${port}/VibeSquad.apk` : "");
+  const rawApkUrl = httpsArtifactUrl(
+    isLan
+      ? pair?.lanAndroidApkUrl || meta?.lanAndroidApkUrl || (lanIp ? `https://${lanIp}:${port}/VibeSquad.apk` : "")
+      : pair?.androidApkHttpUrl || meta?.androidApkHttpUrl || (ip ? `https://${ip}:${port}/VibeSquad.apk` : ""),
+  );
   const apkUrl = hasUsableUrlHost(rawApkUrl) ? rawApkUrl : "";
   const androidApkAvailable = Boolean((pair?.androidApkAvailable || meta?.androidApkAvailable) && apkUrl);
 
@@ -147,6 +162,23 @@ export function resolvePairModalUrls({
   };
 }
 
+/** idea-384: a download's SHA-256 in the CA-fingerprint pattern (short form + "Full hex" toggle). Full = Get-FileHash output. */
+function ArtifactSha({ label, sha, testId }: { label: string; sha?: Fingerprint | null; testId: string }) {
+  const [showFull, setShowFull] = useState(false);
+  return (
+    <div className="muted small" data-testid={testId} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 4 }}>
+      <span>{label} SHA-256:</span>
+      <code style={{ color: "var(--cyan-t)", fontWeight: 700 }}>{sha?.short ?? "not available yet"}</code>
+      {sha?.full && (
+        <button type="button" className="btn ghost small" onClick={() => setShowFull((v) => !v)}>
+          {showFull ? "Hide full" : "Full hex"}
+        </button>
+      )}
+      {showFull && sha?.full && <code className="small" style={{ wordBreak: "break-all", flexBasis: "100%" }}>{sha.full}</code>}
+    </div>
+  );
+}
+
 export function PairDeviceModal({
   onClose,
   initialPair = null,
@@ -168,6 +200,8 @@ export function PairDeviceModal({
     lanAndroidApkUrl: string | null;
     androidApkHttpUrl: string | null;
     androidApkAvailable: boolean;
+    desktopInstallerSha256: Fingerprint | null;
+    androidApkSha256: Fingerprint | null;
   } | null>(null);
   const [networkMode, setNetworkMode] = useState<"lan" | "meshnet">(() =>
     initialPair && !initialPair.lanIp ? "meshnet" : "lan",
@@ -199,6 +233,8 @@ export function PairDeviceModal({
         lanAndroidApkUrl: data.lanAndroidApkUrl ?? null,
         androidApkHttpUrl: data.androidApkHttpUrl ?? null,
         androidApkAvailable: data.androidApkAvailable ?? false,
+        desktopInstallerSha256: data.desktopInstallerSha256 ?? null,
+        androidApkSha256: data.androidApkSha256 ?? null,
       });
       if (!data.lanIp) {
         setNetworkMode("meshnet");
@@ -310,6 +346,8 @@ export function PairDeviceModal({
   } = resolvePairModalUrls({ pair, meta, networkMode, useIpMode });
 
   const fp = pair?.caFingerprint?.short ? pair.caFingerprint : meta?.caFingerprint;
+  const installerSha = pair?.desktopInstallerSha256?.short ? pair.desktopInstallerSha256 : meta?.desktopInstallerSha256;
+  const apkSha = pair?.androidApkSha256?.short ? pair.androidApkSha256 : meta?.androidApkSha256;
 
   const remainingSec = pair ? Math.max(0, Math.floor((pair.expiresAt - now) / 1000)) : 0;
   const mins = Math.floor(remainingSec / 60);
@@ -378,8 +416,9 @@ export function PairDeviceModal({
               <div>
                 <div className="field-label">🤖 ANDROID APP (SIDELOAD APK · {isLan ? "HOME LAN" : "MESHNET"})</div>
                 <div className="muted small" style={{ marginTop: 2 }}>
-                  Install the app, then scan with the in-app Scan (not the phone camera). Direct HTTP link: <code>{apkUrl}</code>
+                  Install the app, then scan with the in-app Scan (not the phone camera). Direct HTTPS link: <code>{apkUrl}</code>
                 </div>
+                <ArtifactSha label="APK" sha={apkSha} testId="android-apk-sha256" />
               </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                 <a
@@ -496,7 +535,7 @@ export function PairDeviceModal({
             <div className="preview" style={{ marginBottom: 0 }}>
               <div className="field-label">BROWSER / iPHONE (NO APK) — INSTALL ROOT CA FIRST (ONE-TIME PER DEVICE)</div>
               <div className="muted small" style={{ margin: "4px 0 8px" }}>
-                Plain HTTP on {isLan ? "Home LAN" : "Meshnet"} serves <code>/ca.crt</code> and <code>/VibeSquad-setup.exe</code>. If you previously installed an older CA before LAN mode, re-install <code>/ca.crt</code> once.
+                Plain HTTP on {isLan ? "Home LAN" : "Meshnet"} serves only <code>/ca.crt</code> (check its fingerprint below); the app installers download over HTTPS. If you previously installed an older CA before LAN mode, re-install <code>/ca.crt</code> once.
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginBottom: 8 }}>
                 <a className="btn ok small" href="/ca.crt" download="vibesquad-ca.crt">
@@ -611,8 +650,9 @@ export function PairDeviceModal({
                 </button>
               </div>
               <div className="muted small" style={{ wordBreak: "break-all" }}>
-                Direct HTTP link ({isLan ? "Home LAN" : "Meshnet"}): <code>{setupUrl}</code>
+                Direct HTTPS link ({isLan ? "Home LAN" : "Meshnet"}): <code>{setupUrl}</code>
               </div>
+              <ArtifactSha label="Installer" sha={installerSha} testId="desktop-installer-sha256" />
             </div>
 
             <div
