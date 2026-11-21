@@ -867,7 +867,7 @@ html[data-vibe="boring"] .drawer-head .btn.on {
 }
 
 /* Plan / Tasks bar and permission card sit on the centred conversation column. */
-html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent !important; border-bottom: 1px solid var(--border) !important; color: var(--text-2); font-size: var(--t-small); }
+html[data-vibe="boring"] [data-testid="tl-pinned-todo"] { max-width: var(--measure-col); width: 100%; margin-inline: auto; box-sizing: border-box; background: transparent; border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
 html[data-vibe="boring"] .perm-card { width: 100%; max-width: var(--measure-prose); margin-inline: auto; box-sizing: border-box; }
 
 /* Sidebar: default text-2/400, selected text-1/500; row pitch exactly --row-h. */

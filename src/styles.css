@@ -6551,3 +6551,20 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .fpv-media { width: 100%; }
 .fpv-video { width: 100%; max-height: 65vh; border-radius: 4px; background: #000; }
 .fpv-binary-card { display: flex; flex-direction: column; gap: 6px; padding: 12px; }
+
+/* ── idea-255 3.1: Timeline inline style={{}} → token classes (src/Timeline.tsx) ── */
+.tl-retry-btn { margin-left: 8px; padding: 1px 6px; font-size: 10px; }
+.tl-code-block { position: relative; }
+.tl-code-copy { position: absolute; top: 4px; right: 4px; font-size: 0.75em; user-select: none; }
+.tl-tool-scroll { max-height: 240px; overflow: auto; }
+.tl-tool-error { color: var(--pink-t); }
+.tl-subagent-body { padding-left: 20px; border-left: 2px solid var(--line); margin-top: 4px; }
+.tl-compaction { text-align: center; color: var(--muted); border-top: 1px dashed var(--line); border-bottom: 1px dashed var(--line); padding: 2px 0; font-size: 0.85em; }
+.tl-reasoning { cursor: pointer; color: var(--muted); font-size: 0.9em; }
+.tl-reasoning-body { margin-top: 4px; white-space: pre-wrap; }
+.tl-cursor { cursor: pointer; }
+.tl-sub-err { color: var(--pink-t); font-size: 0.85em; }
+.tl-tool-err { color: var(--pink-t); margin-left: 4px; }
+.tl-pinned-todo { background: var(--bg); border-bottom: 1px solid var(--line); padding: 4px 8px; cursor: pointer; }
+.tl-pinned-todo-body { margin-top: 4px; font-size: 0.9em; }
+.tl-load-older { text-align: center; padding: 4px 0; }
