@@ -37,6 +37,15 @@ VS does not inject this server per agent. The runner only knows the `playwright`
 
 On another machine, do the manual recipe: install as above, then `claude mcp add --scope user godot-runtime -e GODOT_PATH=<exe> -e GODOT_MCP_DISABLE_ELICITATION=true -- node <tools-dir>/godot-mcp-runtime/dist/index.js`.
 
+## VS on a remote server (forge)
+
+When the VS server runs on a remote host (forge) and the game runs on the dev PC:
+
+- **Report URL.** Set `vs_playtest/server_url` to `http://<forge>.<tailnet>.ts.net:<VS port>` (Tailscale MagicDNS; a `100.x` tailnet address also works). Pair the game as an owner device (coming: the addon's device-token pairing lands in B2b, not documented here yet).
+- **Bridge for agents on forge.** Agents reach the debug bridge as a stdio MCP server over SSH: `ssh devpc npx godot-mcp-runtime@4.0.1`. The bridge itself stays on loopback on the dev PC and no new port is opened. Set `GODOT_PATH` to the real console `.exe` in the dev PC's environment, as above.
+- **Version pin.** npm `godot-mcp-runtime@4.0.1` is tag `v4.0.1` (`ad386b91`). Our pinned commit `3b8a4f31` is the next commit after it and only changes CI/docs files (`.github/workflows/publish.yml`, `CONTRIBUTING.md`, release-notes script and its test), so the npm 4.0.1 package has the same runtime code. Always pin the exact version; never `@latest`.
+- **SSH setup** (OpenSSH server on the dev PC, forge key, the `devpc` host alias) is in `docs/PLAN_FORGE_CUTOVER.md` stage B (owned by `@forge-host`).
+
 ## Attach recipe
 1. Make sure the Godot editor is closed or not saving the project.
 2. Call `run_project` with `{"projectPath": "<project dir>", "attach": true}`. It injects the bridge and then waits.
