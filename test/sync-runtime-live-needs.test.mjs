@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as sync from "../server/sync-runtime.mjs";
@@ -9,6 +9,10 @@ import * as sync from "../server/sync-runtime.mjs";
 const { DIST_STAMP, liveNeedsSince, parseLiveNeeds, readLiveNeeds, recordServerStart, runSync, syncRuntimeDir, syncSkipReason, viteBuild } = sync;
 
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(join(tmpdir(), "vs-live-")); tmpDirs.push(d); return d; };
 const put = (dir, rel, text) => {
   mkdirSync(join(dir, rel, ".."), { recursive: true });
   writeFileSync(join(dir, rel), text);
@@ -29,7 +33,7 @@ const merge = (dir, branch, msg, files) => {
 };
 
 function repo() {
-  const dir = mkdtempSync(join(tmpdir(), "vs-live-"));
+  const dir = tmp();
   git(dir, "init", "-q", "-b", "master");
   git(dir, "config", "user.email", "t@t");
   git(dir, "config", "user.name", "t");
@@ -40,11 +44,11 @@ function repo() {
 
 /** A fake install: LOCALAPPDATA/VibeSquad/runtime + VIBESQUAD_HOME, never the live ones. */
 function install(lastSynced) {
-  const lad = mkdtempSync(join(tmpdir(), "vs-live-lad-"));
+  const lad = tmp();
   const runtime = join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
   if (lastSynced) writeFileSync(join(runtime, "build-stamp.json"), JSON.stringify({ commit: lastSynced, repo: "x", builtAt: "t" }));
-  const home = mkdtempSync(join(tmpdir(), "vs-live-home-"));
+  const home = tmp();
   return { runtime, home, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: home } };
 }
 
@@ -224,9 +228,9 @@ test("idea-116: recordServerStart reads a runtime dir's build stamp, else the ch
   const head = git(dir, "rev-parse", "HEAD");
 
   // A packaged/synced runtime dir (not a git checkout) carries build-stamp.json.
-  const rt = mkdtempSync(join(tmpdir(), "vs-rt-"));
+  const rt = tmp();
   writeFileSync(join(rt, "build-stamp.json"), JSON.stringify({ commit: head }));
-  const home = mkdtempSync(join(tmpdir(), "vs-home-"));
+  const home = tmp();
   const fromStamp = recordServerStart({ repoRoot: rt, vsHome: home, now: () => Date.parse("2026-11-10T10:00:00Z") });
   assert.equal(fromStamp.ok, true);
   assert.equal(fromStamp.commit, head, "runtime dir: the build stamp wins");
@@ -239,8 +243,8 @@ test("idea-116: recordServerStart reads a runtime dir's build stamp, else the ch
 });
 
 test("idea-116: recordServerStart records a null commit when there is no git HEAD and no build stamp", () => {
-  const empty = mkdtempSync(join(tmpdir(), "vs-empty-"));
-  const home = mkdtempSync(join(tmpdir(), "vs-home-"));
+  const empty = tmp();
+  const home = tmp();
   const rec = recordServerStart({
     repoRoot: empty,
     env: { LOCALAPPDATA: empty, VIBESQUAD_HOME: home },
@@ -254,7 +258,7 @@ test("idea-116: recordServerStart records a null commit when there is no git HEA
 
 test("idea-116: recordServerStart returns ok:false when the vsHome cannot be written", () => {
   const dir = repo();
-  const blocker = mkdtempSync(join(tmpdir(), "vs-block-"));
+  const blocker = tmp();
   const file = join(blocker, "not-a-dir");
   writeFileSync(file, "x"); // a regular file: mkdir beneath it must fail
   const rec = recordServerStart({ repoRoot: dir, vsHome: join(file, "sub"), now: () => Date.parse("2026-11-10T10:00:00Z") });
@@ -451,7 +455,7 @@ test("L: viteBuild reads output as utf8 and falls back to stdout for the error l
 });
 
 test("L: an unknown flag exits non-zero before touching anything", () => {
-  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--dryrun"], { encoding: "utf8", env: { ...process.env, LOCALAPPDATA: mkdtempSync(join(tmpdir(), "vs-sync-lad-")) } });
+  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--dryrun"], { encoding: "utf8", env: { ...process.env, LOCALAPPDATA: tmp() } });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /unknown flag --dryrun/);
 });

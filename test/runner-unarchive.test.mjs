@@ -1,7 +1,7 @@
 import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -9,7 +9,11 @@ import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
 import { RunnerBackend, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-unarch-'));
+const tmpDirs = [];
+test.after(() => {
+  for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
+});
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-unarch-')); tmpDirs.push(d); return d; };
 
 test('unarchive restores an archived runner agent: roster, sync read, timeline, meta kept; archive event stays in the log', async () => {
   const adapter = { start({ emit }) { return { send(t) { emit('status', { status: 'running' }); emit('output', { text: `echo:${t}` }); emit('turn_done', {}); emit('status', { status: 'idle' }); }, cancel() {}, kill() {} }; } };
@@ -48,5 +52,5 @@ test('unarchive restores an archived runner agent: roster, sync read, timeline, 
     await backend.archiveAgent(agent.id);
     assert.equal((await backend.fetchAgents()).entries.length, 0);
     await assert.rejects(() => backend.unarchiveAgent('rn-nope'));
-  } finally { server.close(); server.closeAllConnections?.(); }
+  } finally { runner.shutdown(); server.close(); server.closeAllConnections?.(); }
 });

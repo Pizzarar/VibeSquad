@@ -4,7 +4,7 @@
 import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_OPEN_TOOLS, applyToolEvent, clearsOpenTools, oldestOpenTool, toolTimeoutMs } from "../runner/open-tools.mjs";
@@ -12,7 +12,9 @@ import { Runner } from "../runner/runner.mjs";
 import { RunnerBackend, openToolFields, readRunnerAgentSync, toAgent } from "../server/backend/runner-backend.mjs";
 import { reduceRunnerRoster } from "../src/runnerBridge.ts";
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), "vs-opentools-"));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), "vs-opentools-")); tmpDirs.push(d); return d; };
 const until = async (fn, ms = 2000) => {
   const end = Date.now() + ms;
   while (Date.now() < end) { const v = fn(); if (v) return v; await new Promise((r) => setTimeout(r, 10)); }

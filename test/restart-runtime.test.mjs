@@ -14,7 +14,7 @@ import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo,
 // idea-471: the vs-rs- runner scratch dirs are created inline and never removed by the Runner. Collect and remove them
 // after the file runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY).
 const tmpDirs = [];
-test.after(() => { for (const d of tmpDirs) rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 const rsDir = () => { const d = mkdtempSync(path.join(os.tmpdir(), "vs-rs-")); tmpDirs.push(d); return d; };
 
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));

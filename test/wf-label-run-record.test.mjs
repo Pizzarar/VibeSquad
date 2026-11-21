@@ -4,11 +4,13 @@
 import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-wfrr-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-wfrr-')); tmpDirs.push(d); return d; };
 const VS_HOME = tmp();
 const ROOT = tmp();
 process.env.VIBESQUAD_HOME = VS_HOME;

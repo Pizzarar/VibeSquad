@@ -1,12 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, readFileSync, existsSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, readFileSync, existsSync, readdirSync, statSync, lstatSync, unlinkSync, rmdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fsWrite, fsCreate, fsRename, fsDelete, fsDuplicate, fsWatch, handleFsMutation, handleFsWatch, FS_WRITE_MAX, _watcherCount, ADE_GATED_READ_PATHS } from "../server/file-search.mjs";
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "vs-w-")));
-const outside = realpathSync(mkdtempSync(join(tmpdir(), "vs-wout-")));
+const tmpDirs = [];
+function rmSafe(root) {
+  const links = [];
+  const walk = (p) => {
+    let st; try { st = lstatSync(p); } catch { return; }
+    if (st.isSymbolicLink()) { links.push(p); return; }
+    if (!st.isDirectory()) return;
+    let es; try { es = readdirSync(p); } catch { return; }
+    for (const e of es) walk(join(p, e));
+  };
+  walk(root);
+  let survived = false;
+  for (const p of links) {
+    try { unlinkSync(p); } catch { try { rmdirSync(p); } catch {} }
+    try { lstatSync(p); survived = true; } catch {}
+  }
+  if (survived) return;
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+}
+test.after(() => { for (const d of tmpDirs) rmSafe(d); });
+
+const root = realpathSync(mkdtempSync(join(tmpdir(), "vs-w-"))); tmpDirs.push(root);
+const outside = realpathSync(mkdtempSync(join(tmpdir(), "vs-wout-"))); tmpDirs.push(outside);
 mkdirSync(join(root, "src"));
 mkdirSync(join(root, ".git"));
 writeFileSync(join(root, "a.txt"), "one");

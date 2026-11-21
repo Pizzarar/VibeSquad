@@ -3,12 +3,14 @@
 import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, appendFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync, appendFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { budget } from "./helpers/load-budget.mjs";
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rh-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-rh-')); tmpDirs.push(d); return d; };
 const VS_HOME = tmp();
 const ROOT = tmp();
 process.env.VIBESQUAD_HOME = VS_HOME;
@@ -293,6 +295,7 @@ test('ACP-style failure before the first "running" still ends the turn as failed
     assert.equal(evs[0].agent.status, 'error');
   } finally {
     off();
+    runner.shutdown();
     server.close();
     server.closeAllConnections?.();
   }
@@ -383,6 +386,7 @@ test('cold start: agent spawned before the event stream connects still gets exac
     assert.deepEqual(seen2, []);
   } finally {
     await stopRunnerLifecycle();
+    runner.shutdown();
     server.close();
     server.closeAllConnections?.();
   }
@@ -451,7 +455,7 @@ async function bootCtl({ delayStream = 0 } = {}) {
   return {
     ctl, backend, seen, tap, runner, home,
     count: (hook, id) => seen.filter(([h, i]) => h === hook && i === id).length,
-    async close() { await stopRunnerLifecycle(); server.close(); server.closeAllConnections?.(); },
+    async close() { await stopRunnerLifecycle(); runner.shutdown(); server.close(); server.closeAllConnections?.(); },
   };
 }
 

@@ -4,7 +4,7 @@
 // across restarts. P0 fix round: only fresh usage from a turn that is live now; the startup / backfill pass and idle, queued, closed
 // or archived workers never get an input and never cause a lead ping.
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,6 +22,9 @@ import {
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 
 const tick = () => new Promise((r) => setTimeout(r, 15));
+
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 
 /** Fake RunnerBackend. fetchAgent answers the runner's status NOW (the map); emitted snapshots may differ (a replay). */
 function makeRunner() {
@@ -92,14 +95,14 @@ function makeRunner() {
 }
 
 function makeEnv(teamsExtra = {}) {
-  const rootDir = mkdtempSync(join(tmpdir(), "vs-wcg-root-"));
+  const rootDir = mkdtempSync(join(tmpdir(), "vs-wcg-root-")); tmpDirs.push(rootDir);
   mkdirSync(join(rootDir, "docs", "brainstorm"), { recursive: true });
   writeFileSync(
     join(rootDir, "teams.json"),
     JSON.stringify({ teams: [{ id: "t", name: "T", lanes: [{ id: "l", name: "L" }, { id: "m", name: "M" }] }], ...teamsExtra }),
   );
   process.env.VIBESQUAD_ROOT = rootDir;
-  const home = mkdtempSync(join(tmpdir(), "vs-wcg-home-"));
+  const home = mkdtempSync(join(tmpdir(), "vs-wcg-home-")); tmpDirs.push(home);
   process.env.VIBESQUAD_HOME = home;
   return { rootDir, home };
 }

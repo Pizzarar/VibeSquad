@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,9 @@ import { LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, SOFT_FLAG_NUDGE } from "../se
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 const tick = (ms = 30) => new Promise((r) => setTimeout(r, ms));
+
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 
 /** Fake runner. `mode` decides what a `/compact` turn does: ok | over | timeout | fail. */
 function makeRunner(mode = "ok") {
@@ -54,7 +57,7 @@ function makeRunner(mode = "ok") {
 }
 
 function setup(mode) {
-  const dir = mkdtempSync(join(tmpdir(), "vs-compact-step-"));
+  const dir = mkdtempSync(join(tmpdir(), "vs-compact-step-")); tmpDirs.push(dir);
   mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
   writeFileSync(join(dir, "teams.json"), JSON.stringify({ teams: [{ id: "t", name: "T", lanes: [{ id: "l", name: "L" }] }] }));
   process.env.VIBESQUAD_ROOT = dir;

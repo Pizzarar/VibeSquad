@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,10 @@ import { SOFT_FLAG_NUDGE, LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, PROVIDER_PRE
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 
 const tick = () => new Promise((r) => setTimeout(r, 15));
+
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const mkTmp = () => { const d = mkdtempSync(join(tmpdir(), "vs-token-watch-")); tmpDirs.push(d); return d; };
 
 /** Fake RunnerBackend: stores agents, records writes, and replays events to listeners. Labels persist across watcher instances. */
 function makeRunner() {
@@ -57,7 +61,7 @@ function makeRunner() {
 }
 
 function makeRoot() {
-  const dir = mkdtempSync(join(tmpdir(), "vs-token-watch-"));
+  const dir = mkTmp();
   mkdirSync(join(dir, "docs", "brainstorm"), { recursive: true });
   writeFileSync(join(dir, "teams.json"), JSON.stringify({ teams: [{ id: "t", name: "T", lanes: [{ id: "l", name: "L" }] }] }));
   process.env.VIBESQUAD_ROOT = dir;

@@ -1,13 +1,34 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, lstatSync, readdirSync, unlinkSync, rmdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { handleLocalImage, lookupAgentCwd, resolveAllowedImage } from "../server/vibesquad-api.mjs";
 
-const base = mkdtempSync(join(tmpdir(), "vs-img-"));
+const tmpDirs = [];
+function rmSafe(root) {
+  const links = [];
+  const walk = (p) => {
+    let st; try { st = lstatSync(p); } catch { return; }
+    if (st.isSymbolicLink()) { links.push(p); return; }
+    if (!st.isDirectory()) return;
+    let es; try { es = readdirSync(p); } catch { return; }
+    for (const e of es) walk(join(p, e));
+  };
+  walk(root);
+  let survived = false;
+  for (const p of links) {
+    try { unlinkSync(p); } catch { try { rmdirSync(p); } catch {} }
+    try { lstatSync(p); survived = true; } catch {}
+  }
+  if (survived) return;
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+}
+test.after(() => { for (const d of tmpDirs) rmSafe(d); });
+
+const base = mkdtempSync(join(tmpdir(), "vs-img-")); tmpDirs.push(base);
 const root = join(base, "allowed");
 const outside = join(base, "outside");
 const agentWorktree = join(base, "worktree-agent-1");

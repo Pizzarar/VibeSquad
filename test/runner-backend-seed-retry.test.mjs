@@ -18,10 +18,13 @@ const until = async (fn, ms = 3000) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+const dirs = [];
+test.after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+
 // The stream never opens, so only seedListener runs (seedRoster is not involved).
 // rc.home is <vibesquad home>/runner, so seed metrics land in <tmp>/teams/_unassigned, never the real ~/.vibesquad.
 function make(failures) {
-  const vs = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-seed-'));
+  const vs = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-seed-')); dirs.push(vs);
   const rc = { vs, home: path.join(vs, 'runner'), request: async () => { throw new Error('unused'); }, stream: () => ({ close() {} }) };
   const b = new RunnerBackend({ client: rc, buildPrefix: async () => '' });
   b.vs = vs;
@@ -83,7 +86,7 @@ test('retry stops when the backend gen changes', async () => {
 
 test('seedRoster succeeds while a listener retry is pending: one roster + connected, no later disconnected, timer cleared', async () => {
   let fail = true;
-  const vs = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-seed-'));
+  const vs = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-seed-')); dirs.push(vs);
   const rc = { home: path.join(vs, 'runner'), request: async () => { throw new Error('unused'); }, stream: (h) => { rc.h = h; return { close() {} }; } };
   const b = new RunnerBackend({ client: rc, buildPrefix: async () => '' });
   b.live.retry.base = 20;

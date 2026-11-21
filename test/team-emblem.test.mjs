@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,6 +10,7 @@ import { transformSync } from "rolldown/utils";
 const srcDir = resolve(import.meta.dirname, "..", "src");
 const code = transformSync("pixel.tsx", readFileSync(join(srcDir, "pixel.tsx"), "utf8"), { lang: "tsx", jsx: { runtime: "classic" } }).code.replace('"./cast"', '"./cast.mjs"').replace('"./uiScale"', '"./uiScale.mjs"').replace('"./useBotFace"', '"./useBotFace.mjs"');
 const dir = mkdtempSync(join(tmpdir(), "vs-team-emblem-"));
+test.after(() => { try { rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} });
 writeFileSync(join(dir, "pixel.mjs"), code);
 writeFileSync(join(dir, "cast.mjs"), transformSync("cast.ts", readFileSync(join(srcDir, "cast.ts"), "utf8"), { lang: "ts" }).code);
 // pixel.tsx also imports the React-hook modules uiScale and useBotFace; the pure helpers under test never call them, so stub them.

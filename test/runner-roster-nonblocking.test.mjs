@@ -12,7 +12,7 @@ import { createServer } from '../runner/server.mjs';
 // runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY on a just-closed server).
 const homes = [];
 const mkHome = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-nb-')); homes.push(d); return d; };
-test.after(() => { for (const d of homes) rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
+test.after(() => { for (const d of homes) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 
 const N = 1500;
 const fake = { start: () => ({ send() {}, cancel() {}, kill() {}, interrupt() {} }) };

@@ -1,7 +1,7 @@
 import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, mkdtempSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import os from 'node:os';
@@ -12,7 +12,9 @@ import { Runner } from '../runner/runner.mjs';
 import { until } from './helpers/load-budget.mjs';
 
 const fx = (n) => readFileSync(new URL(`./fixtures/limits/${n}`, import.meta.url), 'utf8');
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-limits-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-limits-')); tmpDirs.push(d); return d; };
 const lines = (f) => readFileSync(f, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
 
 test('claude rate_limit_event fixture: seven_day -> weekly, fraction -> pct, epoch s -> ISO', () => {
@@ -174,7 +176,7 @@ test('poller: concurrent poll() runs agy once; shutdown() kills the in-flight ch
 });
 
 test('idea-349: agy poller skips (keeps its interval) while canRun says an agy agent is busy', async () => {
-  const store = new LimitStore(path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-lim-')), 'limits.jsonl'));
+  const store = new LimitStore(path.join(tmp(), 'limits.jsonl'));
   let calls = 0; let busy = true; let t = 1_000_000;
   const poll = createAgyUsagePoller({ store, run: async () => { calls++; return fx('agy-usage.txt'); }, minIntervalMs: 60_000, now: () => t, canRun: () => !busy });
   assert.deepEqual(await poll('a'), []); assert.equal(calls, 0, 'no agy spawn while busy');
@@ -210,7 +212,7 @@ test('idea-349: real turn_done -> idle -> park lifecycle with pollAgy:true polls
 });
 
 test('idea-349: Runner._agyBusy: unknown post-turn work, held work and running turns are busy; clean/claude are not', () => {
-  const r = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), 'vs-run-')), bgProbe: async () => [], parkHoldMaxMs: 1000 });
+  const r = new Runner({ dir: tmp(), bgProbe: async () => [], parkHoldMaxMs: 1000 });
   const agy = (o) => ({ provider: 'agy', inflight: 0, heldSince: null, turnGen: 1, handle: { pid: 1 }, work: [], ...o });
   r.live.set('c', { provider: 'claude', inflight: 1, heldSince: null });
   assert.equal(r._agyBusy(), false);
