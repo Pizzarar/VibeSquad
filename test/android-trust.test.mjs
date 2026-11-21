@@ -4,15 +4,16 @@
 //   and the build hooks (server/build-android.mjs) that wire it into the generated Android project
 import assert from "node:assert/strict";
 import { createHash, X509Certificate } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test } from "node:test";
+import { after, describe, test } from "node:test";
 
 const home = mkdtempSync(join(tmpdir(), "vs-trust-"));
 process.env.VIBESQUAD_HOME = home;
 process.env.VIBESQUAD_LAN_IP = "192.168.1.20";
 process.env.VIBESQUAD_MESHNET_IP = "100.64.0.7";
+after(() => { try { rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} });
 
 const auth = await import("../server/auth.mjs");
 const { normalizeFp, parsePairInput, toAndroidDeepLink } = await import("../src/remoteSession.ts");

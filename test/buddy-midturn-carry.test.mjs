@@ -1,13 +1,16 @@
 // G1 (PLAN_INBOX_TOP3_1119, unit-buddy-midturn-restart): an auto-restarted Buddy's successor gets the owner's unanswered message.
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { performBrainstormRestart, resetBrainstormRestartState, unansweredOwnerMessages } from "../server/brainstorm.mjs";
 import { seedDefaultPack } from "../server/profiles.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
+
+const tmpDirs = [];
+after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 
 const ev = (seq, type, extra = {}) => ({ seq, ts: seq, type, ...extra });
 
@@ -72,6 +75,7 @@ test("G1 R2: auto restart after an errored Claude turn carries the owner message
 
 function setup() {
   const rootDir = mkdtempSync(join(tmpdir(), "vs-buddy-carry-"));
+  tmpDirs.push(rootDir);
   mkdirSync(join(rootDir, "docs", "brainstorm"), { recursive: true });
   writeFileSync(join(rootDir, "teams.json"), JSON.stringify({ teams: [{ id: "t", name: "T", lanes: [{ id: "l", name: "L" }] }] }));
   writeFileSync(join(rootDir, "docs", "brainstorm", "l.md"), "# Brief\n\n## Open\n- x\n", "utf8");

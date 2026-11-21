@@ -54,6 +54,20 @@ function generate() {
   }
 }
 
+let cleaned = false;
+const cleanup = () => {
+  if (cleaned) return;
+  cleaned = true;
+  if (flag("keep")) return;
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch (e) { console.error(`cleanup failed: ${e.message}`); }
+};
+
+for (const sig of ["SIGINT", "SIGTERM"]) {
+  process.on(sig, () => { cleanup(); process.exit(sig === "SIGINT" ? 130 : 143); });
+}
+
+let res;
+try {
 if (arg("agents-dir")) cpSync(path.resolve(arg("agents-dir")), dir, { recursive: true }); // a copy: the bench never touches the source
 else generate();
 const old = Date.now() / 1000 - 600;
@@ -82,7 +96,7 @@ async function pass(workers) {
   return out;
 }
 
-const res = { repo, logs: files.length, mb: Math.round(files.reduce((a, f) => a + readFileSync(path.join(dir, f)).length, 0) / 2 ** 20) };
+res = { repo, logs: files.length, mb: Math.round(files.reduce((a, f) => a + readFileSync(path.join(dir, f)).length, 0) / 2 ** 20) };
 res.floor = floor();
 res.serial = await pass(0);
 const canPrefold = typeof Runner.prototype.prefoldCold === "function";
@@ -94,7 +108,9 @@ if (canPrefold) {
 res.serialPerFloor = +(res.serial.ms / res.floor.ms).toFixed(2);
 if (res.prefold) res.prefoldPerSerial = +(res.prefold.ms / res.serial.ms).toFixed(2);
 console.log(JSON.stringify(res, null, 1));
-if (!flag("keep")) rmSync(root, { recursive: true, force: true });
+} finally {
+  cleanup();
+}
 if (flag("check")) {
   const bad = [];
   if (res.serialPerFloor > SERIAL_MAX) bad.push(`serial cold pass ${res.serialPerFloor}x the read+parse floor (max ${SERIAL_MAX}x)`);

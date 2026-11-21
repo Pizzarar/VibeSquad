@@ -1,13 +1,16 @@
 // unit-and-p0-white: blank white screen after pairing (BUG_INVENTORY theme 6). Diagnostics + the enter hop page.
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, test } from "node:test";
+import { after, describe, test } from "node:test";
 import { handleEnter } from "../server/auth.mjs";
 import { ensureAndroidTrustKotlin } from "../server/build-android.mjs";
 import { diagError, diagLines, installDiagOverlay } from "../src/diagOverlay.ts";
 import { isAndroidApkPath } from "../server/vibesquad-api.mjs";
+
+const tmpDirs = [];
+after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 
 function enter(url, method = "GET") {
   const out = { headers: {}, body: "" };
@@ -98,11 +101,11 @@ describe("WebView remote debugging", () => {
   });
 
   test("only a sideload/debug build flips the flag in the generated copy", () => {
-    const dir = mkdtempSync(join(tmpdir(), "vs-webdebug-"));
+    const dir = mkdtempSync(join(tmpdir(), "vs-webdebug-")); tmpDirs.push(dir);
     const from = join(dir, "VsTrust.kt");
     writeFileSync(from, src);
-    const plain = mkdtempSync(join(tmpdir(), "vs-webdebug-a-"));
-    const dbg = mkdtempSync(join(tmpdir(), "vs-webdebug-b-"));
+    const plain = mkdtempSync(join(tmpdir(), "vs-webdebug-a-")); tmpDirs.push(plain);
+    const dbg = mkdtempSync(join(tmpdir(), "vs-webdebug-b-")); tmpDirs.push(dbg);
     ensureAndroidTrustKotlin(plain, from);
     ensureAndroidTrustKotlin(dbg, from, { webDebug: true });
     assert.match(readFileSync(join(plain, "VsTrust.kt"), "utf8"), /WEB_DEBUG = false/);

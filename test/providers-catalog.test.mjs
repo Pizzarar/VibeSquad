@@ -1,4 +1,4 @@
-import test from 'node:test';
+import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
@@ -13,7 +13,10 @@ import {
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-'));
+const tmpDirs = [];
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-')); tmpDirs.push(d); return d; };
+// Every test calls tmp() (often several times); these throwaway fixture dirs had no teardown and leaked. Sweep them once at exit.
+after(() => { for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); } catch {} } });
 // Declares a temp dir as "the real ~/.vibesquad" (VS_TEST_REAL_HOME) so forbidden-home guards are exercised without touching the developer's actual home.
 function withFakeRealHome(fn) {
   const fakeReal = tmp();
