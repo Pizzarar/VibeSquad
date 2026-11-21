@@ -1,0 +1,28 @@
+; Engine configuration file.
+; Sample/test project for the vs_playtest addon. The canonical addon lives in addons/vs_playtest (no copy).
+
+config_version=5
+
+[application]
+
+config/name="VS Playtest Sample"
+config/version="sample-0.1.0"
+run/main_scene="res://sample/main.tscn"
+config/features=PackedStringArray("4.5")
+
+[autoload]
+
+VSPlaytest="*res://addons/vs_playtest/vs_playtest.gd"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/vs_playtest/plugin.cfg")
+
+[vs_playtest]
+
+team_id="sample"
