@@ -1054,6 +1054,7 @@ code {
 
 .perm-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   align-items: center;
 }
@@ -6512,3 +6513,26 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 :is(.sidebar) .team-head-line > .badge.alert.team-needs.attn { background: var(--amber); color: var(--on-amber) !important; border-color: var(--shadow-hard); }
 :is(.sidebar) .team-head-line > .badge.alert.team-needs.err { background: var(--pink-fill); color: var(--on-pink-fill) !important; border-color: var(--shadow-hard); }
 .sidebar.collapsed .sidebar-needs-spine { display: none; }
+
+/* ── idea-255 3.1: PermissionCard inline style={{}} → token classes (src/PermissionCard.tsx) ── */
+.perm-card { flex-direction: column; align-items: stretch; }
+.perm-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 6px; }
+.perm-head-main { min-width: 0; flex: 1; }
+.perm-mode-chip { margin-left: 6px; }
+.perm-more { position: relative; }
+.perm-more-menu { position: absolute; right: 0; top: 100%; background: var(--bg); border: 1px solid var(--line); padding: 4px; z-index: 100; min-width: 120px; display: flex; flex-direction: column; gap: 4px; }
+.perm-plan-edit { width: 100%; box-sizing: border-box; min-height: 180px; max-height: 50vh; margin: 6px 0; font-family: monospace; font-size: 12px; }
+.perm-plan-body { max-height: 40vh; overflow-y: auto; margin: 6px 0; padding: 8px; background: var(--well); border: 1px solid var(--line); font-size: 12px; }
+.perm-question-item { margin-top: 6px; }
+.perm-q-head { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; }
+.perm-question-options { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.perm-rec-badge { margin-left: 6px; font-size: 9px; text-transform: none; }
+.perm-preview-cmd { margin: 6px 0; padding: 8px; background: var(--well); border: 1px solid var(--line); white-space: pre-wrap; overflow-x: auto; }
+.perm-preview-diff { margin: 0; padding: 8px; background: var(--well); border: 1px solid var(--line); white-space: pre-wrap; overflow-x: auto; }
+.perm-preview-input { margin: 6px 0; padding: 8px; background: var(--well); border: 1px solid var(--line); white-space: pre-wrap; overflow-x: auto; }
+.perm-diff-wrap { margin: 6px 0; }
+.perm-diff-path { font-family: monospace; margin-bottom: 2px; }
+.perm-diff-line { display: block; }
+.perm-error { color: var(--pink-t); padding: 4px 0; font-size: 12px; }
+.perm-error-dismiss { margin-left: 8px; }
+.perm-plan-actions-row { display: flex; gap: 6px; flex-basis: 100%; flex-wrap: wrap; }

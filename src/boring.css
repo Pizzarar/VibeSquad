@@ -827,7 +827,7 @@ html[data-vibe="boring"] .perm-card .btn.perm-deny::after { content: "…"; }
 html[data-vibe="boring"] .perm-card .perm-deny-msg { order: 9; flex: 1 1 100%; width: 100%; min-height: 32px; box-sizing: border-box; padding: 4px 12px; border-radius: 6px; border: 1px solid var(--border-strong); background: var(--surface-sunken); color: var(--text-1); font-size: var(--t-ui); }
 html[data-vibe="boring"] .perm-card .perm-preview-cmd,
 html[data-vibe="boring"] .perm-card .perm-preview-diff,
-html[data-vibe="boring"] .perm-card .perm-preview-input { background: var(--surface-sunken) !important; border: 0 !important; border-radius: 6px; padding: 12px !important; }
+html[data-vibe="boring"] .perm-card .perm-preview-input { background: var(--surface-sunken); border: 0; border-radius: 6px; padding: 12px; }
 /* The permission count banner repeats what the card already says. */
 html[data-vibe="boring"] .drawer .banner.permission { display: none; }
 
