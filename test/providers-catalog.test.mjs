@@ -2720,6 +2720,66 @@ test('usa-29: byWorkflow derives implModel · stakes -> reviewerFamily pairs; [w
   assert.equal(u.merged.units.find((x) => x.unit === 'unit-a').reviewerFamily, 'claude-review');
 });
 
+test('usa-34: byWorkflow wf label precedence tag > label > derived; invalid/unknown label falls back', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 3, 12);
+  // label "opus" beats the derived Sonnet pair; a [wf:dsp] tag beats the "gemini" label; no label derives;
+  // "unknown" and an empty-normalising label both fall back to derived.
+  writeAgent(home, 'rn-a', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-a', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'opus' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-b', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-b', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'gemini' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-c', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-c', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet' } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-d', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-d', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: 'unknown' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  writeAgent(home, 'rn-e', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'claude-sonnet-5-5', cwd: '/worktrees/unit-e', meta: { lane: 'usage', role: 'worker', profile: 'Implement - Sonnet', labels: { wf: '   ' } } },
+    { ts: T0 + 1000, type: 'turn_done', costUsd: 1 },
+  ]);
+  const git = (args) => {
+    if (args[0] === 'rev-parse') return 'm5\n';
+    if (args[0] === 'log') return [
+      L('m5', 'm4 b5', sec(T0 + 500000), "Merge branch 'unit-e' (@usa)"),
+      L('b5', 'm4', sec(T0 + 490000), 'feat (@usa)'),
+      L('m4', 'm3 b4', sec(T0 + 400000), "Merge branch 'unit-d' (@usa)"),
+      L('b4', 'm3', sec(T0 + 390000), 'feat (@usa)'),
+      L('m3', 'm2 b3', sec(T0 + 300000), "Merge branch 'unit-c' (@usa)"),
+      L('b3', 'm2', sec(T0 + 290000), 'feat (@usa)'),
+      L('m2', 'm1 b2', sec(T0 + 200000), "Merge branch 'unit-b' (@usa) [wf:dsp]"),
+      L('b2', 'm1', sec(T0 + 190000), 'feat (@usa)'),
+      L('m1', 'a1 b1', sec(T0 + 100000), "Merge branch 'unit-a' (@usa)"),
+      L('b1', 'a1', sec(T0 + 90000), 'feat (@usa)'),
+      L('a1', 'root', sec(T0), 'mainline'),
+      L('root', '', '0', 'init'),
+    ].join('\n');
+    return '';
+  };
+  const u = getUsage({ home, git, laneCodes: { usa: 'usage' } });
+  const wf = Object.fromEntries(u.byWorkflow.map((w) => [w.workflowMode, w]));
+  assert.equal(wf['dsp'].units, 1, '[wf:dsp] tag beats the gemini label');
+  assert.equal(wf['dsp'].wfSource, 'tag');
+  assert.equal(wf['opus'].units, 1, 'opus label beats the derived Sonnet pair');
+  assert.equal(wf['opus'].wfSource, 'label');
+  const derived = wf['claude-sonnet-5-5 · normal -> gemini-review'];
+  assert.equal(derived.units, 3, 'no-label, unknown-label and empty-label all derive');
+  assert.equal(derived.wfSource, 'derived');
+  assert.ok(!wf['gemini'], 'the overridden label never becomes a row');
+  assert.ok(!wf['unknown'], 'the unknown label falls back to derived');
+  // per-unit source is recorded too
+  const srcOf = (name) => u.merged.units.find((x) => x.unit === name).wfSource;
+  assert.deepEqual(['unit-a', 'unit-b', 'unit-c', 'unit-d', 'unit-e'].map(srcOf), ['label', 'tag', 'derived', 'derived', 'derived']);
+});
+
 test('usa-29: autonomy.bySquad rows carry mergedInCoverage (= that squad planAutonomy.mergedUnits)', () => {
   const { home, git, laneCodes } = setupAutonomyHome();
   const u = getUsage({ home, git, laneCodes });
