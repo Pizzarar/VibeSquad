@@ -24,7 +24,7 @@ stub("agentTypes", "");
 for (const n of ["ChangesPanel", "FilesPanel", "TerminalPanel"]) stub(n, `export const ${n} = (p) => { if (!p.agent) throw new Error("${n} needs an agent"); return null; };`);
 stub("attentionItems", `export * from ${JSON.stringify(pathToFileURL(path.join(root, "src", "attentionItems.ts")).href)};`);
 stub("useNowTick", "export const useNowTick = () => Date.now();");
-stub("BoringAde", `export const boringStateGlyph = (s) => (s === "running" ? "run" : s === "stalled" ? "stalled" : "idle"); export const boringWorkerIsLive = (m) => m.agent.status === "running";`);
+stub("BoringAde", `export const boringStateGlyph = (s) => (s === "running" ? "run" : s === "stalled" ? "stalled" : s === "quiet" ? "quiet" : "idle"); export const boringWorkerIsLive = (m) => m.agent.status === "running";`);
 stub("demo", "export const demoLog = () => [];");
 stub("demoFlag", "export const DEMO = true;");
 stub("panes", "export const openAgent = () => {};");
@@ -96,6 +96,6 @@ test("idea-493: a worker quiet 40m (running, no tool in flight) renders st-stall
   const h = html("Workers");
   const dot = (id) => h.match(new RegExp(`boring-ctx-worker-${id}".*?boring-dot st-([a-z]+)`))?.[1];
   assert.equal(dot("w-stalled"), "stalled");
-  assert.equal(dot("w-5m"), "stalled"); // the 90s glyph rule, not the 10m Needs-you rule
+  assert.equal(dot("w-5m"), "quiet"); // 90s-10m: faint quiet ring, the full ring is reserved for Needs-you
   assert.equal(dot("w-fresh"), "run");
 });

@@ -3,7 +3,7 @@ import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
 import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
-import { glyphStatusOf, isNeedsYouStalled, stalledCount } from "./attentionItems";
+import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
 import { demoLog } from "./demo";
@@ -168,10 +168,12 @@ export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId
 /** R3.5: the sidebar header carries the fixed app name, never the current project (the breadcrumb owns that). */
 export const APP_NAME = "VibeSquad";
 /** R3.1: folded-away workers as "N running · M idle" (zero parts omitted); null when nothing is folded. */
-export function boringWorkerFold(rest: { agent: { status?: string; archivedAt?: string | null } }[]): string | null {
+export function boringWorkerFold(rest: { agent: { status?: string; archivedAt?: string | null; updatedAt?: string | null } }[], now = Date.now()): string | null {
   if (rest.length === 0) return null;
-  const running = rest.filter((w) => boringWorkerIsLive(w as never)).length;
-  return [running > 0 && `${running} running`, rest.length - running > 0 && `${rest.length - running} idle`].filter(Boolean).join(" · ");
+  const live = rest.filter((w) => boringWorkerIsLive(w as never));
+  const quiet = live.filter((w) => glyphStatusOf(w.agent as never, now) === "quiet").length;
+  const running = live.length - quiet;
+  return [running > 0 && `${running} running`, quiet > 0 && `${quiet} quiet`, rest.length - live.length > 0 && `${rest.length - live.length} idle`].filter(Boolean).join(" · ");
 }
 /** R3.1: open the right panel on its Workers tab. A not-yet-mounted panel reads the localStorage prefs; a mounted one hears the event. */
 export function openWorkersTab() {
@@ -283,11 +285,12 @@ export async function boringStartBugs(squadId: string, deps: { create?: (squadId
 const startInFlight = new Set<string>();
 
 /** D1 (UX_REVIEW 1.5): one glyph vocabulary from status + attention tone: run, attn, err, stalled, idle, done. */
-export type BoringStateGlyph = "run" | "attn" | "err" | "stalled" | "idle" | "done";
+export type BoringStateGlyph = "run" | "attn" | "err" | "stalled" | "quiet" | "idle" | "done";
 export function boringStateGlyph(status: string | null | undefined, tone?: string | null): BoringStateGlyph {
   if (tone === "error" || status === "error") return "err";
   if (tone === "permission" || tone === "needs-you") return "attn";
   if (status === "stalled") return "stalled";
+  if (status === "quiet") return "quiet";
   if (status === "running") return "run";
   if (tone === "finished") return "done";
   return "idle";
@@ -700,10 +703,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], listId: string, foldId: string, onScreen: boolean, open: () => void) => {
     // A worker open in either split pane counts as on screen (R3.1), not only the selected one.
     const inPane = (id: string) => panes.split && (id === panes.leftActiveId || id === panes.rightActiveId);
-    // R3.1: a worker Needs-you lists as stalled (10m) gets its own row, so it never hides in "N running".
-    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || inPane(w.agent.id) || isNeedsYouStalled(w, now));
+    // R3.1: every worker Needs-you counts (permission, pick, error, stalled) gets its own row, so own rows == the lane badge.
+    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || inPane(w.agent.id) || isInNeedsYou(w, now));
     const rest = workers.filter((w) => !shown.includes(w));
-    const fold = boringWorkerFold(rest);
+    const fold = boringWorkerFold(rest, now);
     return (
       <div className="boring-worker-list" data-testid={listId}>
         {shown.map((w) => workerRow(v, pin, laneId, w))}

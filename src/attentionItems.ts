@@ -162,15 +162,22 @@ export const needsYouTotal = (views: ReadonlyArray<{ members: Member[] }>, now: 
 export const stalledCount = (members: Member[], now: number): number =>
   attentionItems(members, now).filter((i) => i.kind === "stalled").length;
 
-/** R3.2 glyph rule: running, nothing pending, no tool call in flight, no update for BORING_STALL_SECONDS (90s) -> the amber-ring `stalled` glyph. */
+/**
+ * R3.2 glyph states for a worker dot. `stalled` (full amber ring) = exactly what Needs-you lists as stalled (10m quiet, or a tool call past its
+ * ceiling); `quiet` (faint dashed ring) = running, nothing pending, no tool in flight, no update for BORING_STALL_SECONDS (90s) but not yet Needs-you.
+ */
 export function glyphStatusOf(a: PaseoAgent, now: number): string | undefined {
+  if (stalledReason(a, now)) return "stalled";
   if (a.status !== "running" || a.pendingPermissions?.length || openToolOf(a, now)) return a.status;
   const updated = Date.parse(a.updatedAt ?? "");
-  return !Number.isNaN(updated) && (now - updated) / 1000 >= BORING_STALL_SECONDS ? "stalled" : a.status;
+  return !Number.isNaN(updated) && (now - updated) / 1000 >= BORING_STALL_SECONDS ? "quiet" : a.status;
 }
 
-/** A worker the Needs-you list shows as stalled (10m rule): it gets its own tree row instead of folding. */
+/** A worker the Needs-you list shows as stalled (10m rule or hung tool). */
 export const isNeedsYouStalled = (m: Member, now: number): boolean => stalledCount([m], now) > 0;
+
+/** A worker that counts toward Needs-you (permission, pick, error, label, stalled; not `finished`): it gets its own tree row instead of folding. */
+export const isInNeedsYou = (m: Member, now: number): boolean => attentionItems([m], now).some((i) => i.kind !== "finished");
 
 const signatureOf = (a: PaseoAgent, kind: ItemKind) =>
   kind === "error" && a.status === "error" ? (a.lastError ?? "error") : (a.attentionReason ?? "attention");

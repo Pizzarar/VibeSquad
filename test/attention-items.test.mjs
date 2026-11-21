@@ -193,9 +193,23 @@ test("idea-493: glyphStatusOf = 90s quiet glyph rule; isNeedsYouStalled = the 10
   const ago = (s) => new Date(now - s * 1000).toISOString();
   const w = (status, s, extra = {}) => ({ kind: "worker", laneId: "x", attention: null, agent: { id: "w", status, updatedAt: ago(s), ...extra } });
   assert.equal(glyphStatusOf(w("running", 30).agent, now), "running");
-  assert.equal(glyphStatusOf(w("running", 120).agent, now), "stalled");
+  assert.equal(glyphStatusOf(w("running", 120).agent, now), "quiet");
   assert.equal(glyphStatusOf(w("running", 120, { openToolSince: now - 60_000 }).agent, now), "running");
   assert.equal(glyphStatusOf(w("idle", 9999).agent, now), "idle");
   assert.equal(isNeedsYouStalled(w("running", 120), now), false);
   assert.equal(isNeedsYouStalled(w("running", 2400), now), true);
+});
+
+test("idea-493 R2: hung tool past its ceiling = stalled glyph; in-ceiling tool = running; quiet 90s-10m = quiet; isInNeedsYou covers permission/error/stalled, not finished", async () => {
+  const { glyphStatusOf, isInNeedsYou } = await import("../src/attentionItems.ts");
+  const now = Date.now();
+  const w = (status, s, extra = {}, attention = null) => ({ kind: "worker", laneId: "x", attention, agent: { id: "w", status, updatedAt: new Date(now - s * 1000).toISOString(), ...extra } });
+  assert.equal(glyphStatusOf(w("running", 30, { openToolSince: now - 65 * 60_000 }).agent, now), "stalled");
+  assert.equal(glyphStatusOf(w("running", 30, { openToolSince: now - 5 * 60_000 }).agent, now), "running");
+  assert.equal(glyphStatusOf(w("running", 120).agent, now), "quiet");
+  assert.equal(glyphStatusOf(w("running", 2400).agent, now), "stalled");
+  assert.equal(isInNeedsYou(w("running", 30), now), false);
+  assert.equal(isInNeedsYou(w("running", 30, {}, { tone: "permission", reason: "Allow?" }), now), true);
+  assert.equal(isInNeedsYou(w("running", 30, {}, { tone: "finished", reason: "done" }), now), false);
+  assert.equal(isInNeedsYou(w("running", 2400), now), true);
 });
