@@ -1,9 +1,10 @@
 // B1 (docs/PLAN_DISK_LIFECYCLE_1121.md): Temp scratch TTL (server/disk-dedupe.mjs). Every fixture lives under a private
 // mkdtemp root that the sweep is pointed at: the machine's real temp dir is never swept here.
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, lutimesSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, lutimesSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import * as fsp from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { catchUpTempScratch, formatCatchUpReport, formatTempTtlMetric, isVsScratchName, startTempScratchTtl, sweepTempScratch } from "../server/disk-dedupe.mjs";
 import { commandTempTtl, parseArgs } from "../cli/vs.mjs";
@@ -210,7 +211,7 @@ test("scheduler: a truncated pass runs the next one on the backlog cadence, an u
     sweep: async () => {
       calls++;
       if (calls === 3) done();
-      return { scanned: 1, matched: 1, removed: 0, young: 0, errors: 0, bytesFreed: 0, truncated: truncs[calls - 1] ?? false, stop: null, ms: 0 };
+      return { scanned: 1, matched: 1, removed: 5, young: 0, errors: 0, bytesFreed: 0, truncated: truncs[calls - 1] ?? false, stop: "count", ms: 0 };
     },
   });
   try {
@@ -398,6 +399,159 @@ test("catch-up checkpoint: a time budget stops the scan, the next call resumes a
     assert.equal(last.eligible, 5);
     assert.equal(readdirSync(root).length, 5, "dry run chunks delete nothing");
     await assert.rejects(catchUpTempScratch({ tempDir: root, ttlDays: 4, checkpoint }), /another run/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(ckDir, { recursive: true, force: true });
+  }
+});
+
+test("scheduler: a pass cut off by time with nothing removed goes back to the slow tick and still logs a metric", async () => {
+  let calls = 0;
+  const metrics = [];
+  const tt = startTempScratchTtl({
+    env: {},
+    tempDir: "/placeholder/tmp",
+    firstMs: 1,
+    backlogMs: 5,
+    tickMs: 3_600_000,
+    logMetric: (t) => metrics.push(t),
+    sweep: async () => {
+      calls++;
+      return { scanned: 9, matched: 9, removed: 0, young: 9, errors: 0, bytesFreed: 0, truncated: true, stop: "time", ms: 240000 };
+    },
+  });
+  try {
+    await new Promise((r) => setTimeout(r, 120));
+    assert.equal(calls, 1, "no 60 s loop when a truncated pass made no progress");
+    assert.equal(metrics.length, 1);
+    assert.match(metrics[0], /removed=0 .* truncated=time$/);
+  } finally {
+    tt.stop();
+  }
+});
+
+/** fs wrapper whose readdir runs `hook(path)` once, right after the first read of `target` (inside the scan's walk). */
+function hookedFs(target, hook) {
+  let fired = false;
+  return {
+    lstat: fsp.lstat,
+    opendir: fsp.opendir,
+    rmdir: fsp.rmdir,
+    unlink: fsp.unlink,
+    readdir: async (p) => {
+      const names = await fsp.readdir(p);
+      if (!fired && p === target) {
+        fired = true;
+        hook(p);
+      }
+      return names;
+    },
+  };
+}
+
+/** Replace dir `p` with a junction to `target`, aged so only the link-type check can refuse it. */
+function swapForJunction(p, target) {
+  rmSync(p, { recursive: true, force: true });
+  symlinkSync(target, p, "junction");
+  lutimesSync(p, OLD, OLD);
+}
+
+for (const mode of ["sweep", "catch-up"]) {
+  const run = (root, fs) =>
+    mode === "sweep" ? sweepTempScratch({ tempDir: root, now: NOW, fs }) : catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW, apply: true, fs });
+
+  test(`${mode}: a candidate swapped for a junction during the walk is never followed; the link target survives`, async () => {
+    const root = makeRoot();
+    const outside = makeRoot();
+    try {
+      writeFileSync(join(outside, "keep.txt"), "sentinel");
+      mkdirSync(join(outside, "sub"));
+      writeFileSync(join(outside, "sub", "deep.txt"), "deep");
+      ageTree(outside);
+      const p = scratch(root, "vs-swap-Aa11Bb");
+      const r = await run(root, hookedFs(p, () => swapForJunction(p, outside)));
+      assert.equal(r.removed, 0);
+      assert.equal(existsSync(join(outside, "keep.txt")), true, "junction target intact");
+      assert.equal(existsSync(join(outside, "sub", "deep.txt")), true, "junction target subtree intact");
+      assert.equal(lstatSync(p).isSymbolicLink(), true, "the swapped-in link itself is left alone");
+    } finally {
+      rmSync(join(root, "vs-swap-Aa11Bb"), { force: true, recursive: false });
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  test(`${mode}: a tree written to during the walk is not deleted (top-level write and deep write)`, async () => {
+    const root = makeRoot();
+    try {
+      const top = scratch(root, "vs-wtop-Aa11Bb");
+      const fs1 = hookedFs(top, (p) => writeFileSync(join(p, "fresh.txt"), "new"));
+      const r1 = await run(root, fs1);
+      assert.equal(r1.removed, 0);
+      assert.equal(existsSync(join(top, "fresh.txt")), true, "top-level fresh write kept");
+      rmSync(top, { recursive: true, force: true });
+      // Deep write after the walk has read that subdir: the top dir's mtime is unchanged, so only removeTree's
+      // per-entry check can catch it.
+      const deep = scratch(root, "vs-wdeep-Cc22Dd");
+      mkdirSync(join(deep, "in"));
+      writeFileSync(join(deep, "in", "old.txt"), "o");
+      ageTree(deep);
+      const fs2 = hookedFs(join(deep, "in"), (p) => writeFileSync(join(p, "fresh.txt"), "new"));
+      const r2 = await run(root, fs2);
+      assert.equal(r2.errors, 1, "removal stopped at the fresh entry");
+      assert.equal(existsSync(join(deep, "in", "fresh.txt")), true, "deep fresh write kept");
+      assert.equal(r2.removed, 0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("catch-up checkpoint: a future, non-numeric or malformed checkpoint is refused before anything is removed", async () => {
+  const root = makeRoot();
+  const ckDir = makeRoot();
+  try {
+    const d = scratch(root, "vs-ckv-Aa11Bb");
+    const checkpoint = join(ckDir, "ck.json");
+    const base = { tempDir: resolve(root), ttlDays: 3, apply: true, eligible: 0, removed: 0, bytesFreed: 0, byPrefix: {}, done: [] };
+    for (const bad of [{ now: NOW + 30 * DAY }, { now: "x" }, { now: null }, { now: NOW - DAY, done: "nope" }, { now: NOW - DAY, byPrefix: [] }]) {
+      writeFileSync(checkpoint, JSON.stringify({ ...base, ...bad }));
+      await assert.rejects(catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW, apply: true, checkpoint }), /checkpoint .* is invalid/, JSON.stringify(bad));
+    }
+    assert.equal(existsSync(d), true, "a refused checkpoint removed nothing");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(ckDir, { recursive: true, force: true });
+  }
+});
+
+test("catch-up checkpointed apply: a failed removal is not marked done, so the resumed chunk retries it", async () => {
+  const root = makeRoot();
+  const ckDir = makeRoot();
+  try {
+    const d = scratch(root, "vs-busy-Aa11Bb", { files: { "f.bin": "x".repeat(20) } });
+    const checkpoint = join(ckDir, "ck.json");
+    let failOnce = true;
+    const fs = {
+      ...hookedFs("", () => {}),
+      unlink: async (p) => {
+        if (failOnce) {
+          failOnce = false;
+          throw Object.assign(new Error("busy"), { code: "EBUSY" });
+        }
+        return fsp.unlink(p);
+      },
+    };
+    const r1 = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW, apply: true, checkpoint, fs });
+    assert.equal(r1.errors, 1);
+    assert.equal(r1.removed, 0);
+    assert.equal(existsSync(d), true);
+    assert.deepEqual(JSON.parse(readFileSync(checkpoint, "utf8")).done, [], "a failed removal is not done");
+    const r2 = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW, apply: true, checkpoint, fs });
+    assert.equal(r2.removed, 1);
+    assert.equal(r2.bytesFreed, 20);
+    assert.equal(existsSync(d), false);
+    assert.equal(r2.byPrefix["vs-busy"].eligible, 1, "counted once");
   } finally {
     rmSync(root, { recursive: true, force: true });
     rmSync(ckDir, { recursive: true, force: true });

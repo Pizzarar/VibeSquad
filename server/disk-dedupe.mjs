@@ -70,8 +70,26 @@ async function treeAge(dir, cutoff, fs) {
   return { young: false, bytes };
 }
 
-/** Remove `dir` bottom-up without following links: links and files are unlinked, real dirs rmdir'd once empty. */
-async function removeTree(dir, fs) {
+const freshError = (p) => Object.assign(new Error(`entry inside the TTL, removal stopped: ${p}`), { code: "VS_TTL_FRESH" });
+
+/**
+ * Remove `dir` bottom-up without following links: links and files are unlinked, real dirs rmdir'd once empty.
+ * Every level is lstat'ed right before its readdir, and anything that is not a real directory there (a dir swapped for
+ * a junction/symlink after the scan) is refused instead of read, so a link target is never walked or emptied. With
+ * `cutoff`, any entry (or dir) modified at/after it stops the removal (VS_TTL_FRESH): a tree written to after the scan
+ * keeps its fresh entries. Residual: the lstat -> readdir gap is not atomic (no handle-relative ops in Node), but it is
+ * one syscall wide instead of a whole tree walk.
+ */
+async function removeTree(dir, fs, cutoff = Infinity) {
+  let dirSt;
+  try {
+    dirSt = await fs.lstat(dir);
+  } catch (e) {
+    if (e?.code === "ENOENT") return 0;
+    throw e;
+  }
+  if (!isDirNotLink(dirSt)) throw Object.assign(new Error(`not a real directory, refused: ${dir}`), { code: "VS_TTL_NOT_DIR" });
+  if (dirSt.mtimeMs >= cutoff) throw freshError(dir);
   let freed = 0;
   const names = await fs.readdir(dir);
   for (const name of names) {
@@ -83,6 +101,7 @@ async function removeTree(dir, fs) {
       if (e?.code === "ENOENT") continue;
       throw e;
     }
+    if (st.mtimeMs >= cutoff) throw freshError(p);
     if (st.isSymbolicLink()) {
       // A junction / dir symlink is removed as a link: unlink first, rmdir (non-recursive) as the Windows fallback.
       try {
@@ -92,7 +111,7 @@ async function removeTree(dir, fs) {
         await fs.rmdir(p);
       }
     } else if (st.isDirectory()) {
-      freed += await removeTree(p, fs);
+      freed += await removeTree(p, fs, cutoff); // re-lstat's p at entry
     } else {
       try {
         await fs.unlink(p);
@@ -111,6 +130,21 @@ async function removeTree(dir, fs) {
 }
 
 const defaultFs = { lstat, opendir, readdir, rmdir, unlink };
+
+/**
+ * The scan -> delete re-check: the tree walk can take seconds, so right before removal `p` must still be a real
+ * directory (not swapped for a link) whose own mtime is before the cutoff. removeTree then re-checks every level.
+ */
+async function stillExpiredDir(p, cutoff, fs) {
+  let st;
+  try {
+    st = await fs.lstat(p);
+  } catch (e) {
+    if (e?.code === "ENOENT") return false;
+    throw e;
+  }
+  return isDirNotLink(st) && st.mtimeMs < cutoff;
+}
 
 /** Shared guards for every pass: TTL >= 1 day, an absolute temp dir that is a real directory (not a link). */
 async function checkedRoot(tempDir, ttlDays, fs) {
@@ -172,8 +206,13 @@ export async function sweepTempScratch({
         out.young++;
         continue;
       }
-      if (apply) out.bytesFreed += await removeTree(p, fs);
-      else out.bytesFreed += age.bytes;
+      if (apply) {
+        if (!(await stillExpiredDir(p, cutoff, fs))) {
+          out.young++; // swapped for a link, written to, or gone since the walk: left alone
+          continue;
+        }
+        out.bytesFreed += await removeTree(p, fs, cutoff);
+      } else out.bytesFreed += age.bytes;
       out.removed++;
     } catch {
       out.errors++; // locked or permission-denied: left for a later tick
@@ -188,8 +227,8 @@ export const formatTempTtlMetric = (r, ttlDays) =>
 
 /**
  * First pass TEMP_TTL_FIRST_MS after start; each later pass starts TEMP_TTL_TICK_MS after the previous one ends, or
- * only `backlogMs` after it when that pass was truncated (backlog cadence). A metric is logged only when a pass freed
- * something or hit errors. VS_TEMP_TTL_DAYS overrides the TTL (min 1).
+ * only `backlogMs` after it when that pass was truncated and removed something (backlog cadence). A metric is logged
+ * when a pass freed something, hit errors or was truncated. VS_TEMP_TTL_DAYS overrides the TTL (min 1).
  */
 export function startTempScratchTtl({
   env = process.env,
@@ -209,7 +248,7 @@ export function startTempScratchTtl({
     running = true;
     try {
       const r = await sweep({ tempDir, ttlDays });
-      if ((r.removed > 0 || r.errors > 0) && logMetric) logMetric(formatTempTtlMetric(r, ttlDays));
+      if ((r.removed > 0 || r.errors > 0 || r.truncated) && logMetric) logMetric(formatTempTtlMetric(r, ttlDays));
       return r;
     } catch (e) {
       console.warn(`[vibesquad] temp-scratch-ttl: ${e?.message ?? e}`);
@@ -222,7 +261,9 @@ export function startTempScratchTtl({
     if (stopped) return;
     timer = setTimeout(async () => {
       const r = await tick();
-      schedule(r?.truncated ? backlogMs : tickMs);
+      // Backlog cadence only while passes still make progress: a pass cut off by the time budget with nothing removed
+      // (a slow scan over young dirs) goes back to the slow tick instead of looping every backlogMs.
+      schedule(r?.truncated && r.removed > 0 ? backlogMs : tickMs);
     }, ms);
     timer.unref?.();
   };
@@ -320,12 +361,18 @@ export async function catchUpTempScratch({
   if (sampleN && apply === true) throw new Error("sample mode is a dry run only; --apply always walks every tree");
   if (sampleN && checkpoint) throw new Error("sample mode needs no checkpoint");
   const started = clock();
-  const out = { tempDir: root, ttlDays: days, apply: apply === true, estimated: sampleN > 0, complete: true, scanned: 0, vsNamed: 0, nameMismatch: 0, notDir: 0, matched: 0, eligible: 0, removed: 0, errors: 0, bytesFreed: 0, byPrefix: {}, ms: 0 };
+  const out = { tempDir: root, ttlDays: days, apply: apply === true, estimated: sampleN > 0, complete: true, scanned: 0, vsNamed: 0, nameMismatch: 0, notDir: 0, matched: 0, eligible: 0, removed: 0, errors: 0, recheckKept: 0, bytesFreed: 0, byPrefix: {}, ms: 0 };
   let done = new Set();
   if (checkpoint) {
     const ck = await readCheckpoint(checkpoint);
     if (ck) {
       if (ck.tempDir !== root || ck.ttlDays !== days || ck.apply !== out.apply) throw new Error(`checkpoint ${checkpoint} is for another run (tempDir/ttlDays/apply differ); delete it to start over`);
+      // The checkpoint sets the deletion cutoff on --apply, so it is validated: a future or non-numeric `now` would move
+      // the cutoff past the real TTL and expose live scratch.
+      const num = (v) => typeof v === "number" && Number.isFinite(v) && v >= 0;
+      if (!num(ck.now) || ck.now > now || !num(ck.eligible) || !num(ck.removed) || !num(ck.bytesFreed) || !Array.isArray(ck.done) || !ck.byPrefix || typeof ck.byPrefix !== "object" || Array.isArray(ck.byPrefix)) {
+        throw new Error(`checkpoint ${checkpoint} is invalid (now must be a finite time no later than the current one); delete it to start over`);
+      }
       now = ck.now; // keep the age buckets of the first chunk
       Object.assign(out, { eligible: ck.eligible, removed: ck.removed, bytesFreed: ck.bytesFreed, byPrefix: ck.byPrefix });
       done = new Set(ck.done);
@@ -398,6 +445,23 @@ export async function catchUpTempScratch({
       out.errors++; // not marked done: a resumed chunk retries it
       continue;
     }
+    const expired = t.newest < cutoff; // past the TTL with no fresh entry anywhere in the tree
+    if (expired && out.apply === true) {
+      let freed;
+      try {
+        if (!(await stillExpiredDir(p, cutoff, fs))) {
+          out.recheckKept++; // swapped for a link, written to, or gone since the walk; not done: a resumed chunk re-checks
+          continue;
+        }
+        freed = await removeTree(p, fs, cutoff);
+      } catch {
+        out.errors++; // locked, or a fresh entry found mid-removal; not done: a resumed chunk retries it
+        continue;
+      }
+      out.bytesFreed += freed;
+      out.removed++;
+    }
+    // Marked done (and counted) only once its outcome is final, so a failed removal is retried on resume.
     done.add(ent.name);
     const row = (out.byPrefix[pre] ??= emptyRow());
     row.count++;
@@ -405,19 +469,10 @@ export async function catchUpTempScratch({
     const bucket = row.ages[ageBucket(now - t.newest)];
     bucket.count++;
     bucket.bytes += t.bytes;
-    if (t.newest < cutoff) {
-      // past the TTL with no fresh entry anywhere in the tree
+    if (expired) {
       out.eligible++;
       row.eligible++;
       row.eligibleBytes += t.bytes;
-      if (out.apply === true) {
-        try {
-          out.bytesFreed += await removeTree(p, fs);
-          out.removed++;
-        } catch {
-          out.errors++;
-        }
-      }
     }
     if (checkpoint && ++sinceSave >= 500) {
       sinceSave = 0;
@@ -461,7 +516,7 @@ export function formatCatchUpReport(r, { limit = 30 } = {}) {
   const cell = (a) => `${a.count}/${gib(a.bytes)}`;
   const lines = [
     `temp-ttl catch-up ${r.apply ? "APPLY" : "DRY RUN (nothing removed; add --apply to delete)"} tempDir=${r.tempDir} ttlDays=${r.ttlDays} ms=${r.ms}`,
-    `scanned=${r.scanned} vs-named=${r.vsNamed} nameMismatch=${r.nameMismatch} notDir=${r.notDir} matched=${r.matched} errors=${r.errors}`,
+    `scanned=${r.scanned} vs-named=${r.vsNamed} nameMismatch=${r.nameMismatch} notDir=${r.notDir} matched=${r.matched} errors=${r.errors}${r.recheckKept ? ` recheckKept=${r.recheckKept}` : ""}`,
     ...(r.estimated
       ? [`SAMPLED: counts and ages from each top dir's own mtime (exact); GiB estimated from ${r.sampledTrees} walked trees. Fresh-file guard kept ${r.guardKept} of ${r.sampledPastTtl} sampled past-TTL trees, so past-TTL is an upper bound.`]
       : []),
