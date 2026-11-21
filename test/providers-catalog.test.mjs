@@ -1474,7 +1474,7 @@ test('usa-10: GET /usage-export returns json or markdown, 400 on bad format', as
 
 // ---------------------------------------------------------------- usa-15 / usa-19: auto-route review bullets to perfection inbox
 
-test('usa-15: parseReviewBullets strips markers/headings, skips the self-grade line, caps and keeps full text', () => {
+test('usa-15: parseReviewBullets strips markers/headings, skips the self-grade line, caps and truncates to maxLen', () => {
   const text = [
     'Grade: prior review improved firstTryPassRate 0->1.',
     '- Profile/Provider routing: shift implementation to Gemini for low-risk units.',
@@ -1489,7 +1489,7 @@ test('usa-15: parseReviewBullets strips markers/headings, skips the self-grade l
   assert.equal(bullets[0], 'Profile/Provider routing: shift implementation to Gemini for low-risk units.');
   assert.equal(bullets[1], 'Reduce review rounds by having Buddy pre-check the plan.');
   assert.equal(bullets[2], 'Cache tool results to cut re-fetching.');
-  assert.equal(bullets[3], 'a'.repeat(300), 'maxLen no longer truncates: the full bullet body is kept');
+  assert.equal(bullets[3], `${'a'.repeat(99)}…`, 'explicit maxLen still truncates');
 });
 
 test('usa-15: parseReviewBullets skips the first line of a multi-line reply and treats a lone grade line as empty', () => {
@@ -1797,27 +1797,31 @@ test('usa-33 (idea-318): a >400-char bullet keeps its full text in the card body
   assert.ok(card.title.length < long.length, 'title is a short truncation');
 });
 
-test('usa-33 (idea-319): a timed-out provider call retries once (and recovers); non-timeout failures are not retried', async () => {
+test('usa-33 (idea-319 fix1): an explicit timedOut flag retries once with half the budget; a "timed out" error text without the flag is not retried', async () => {
   const home = tmp();
   let geminiCalls = 0;
+  const budgets = [];
   const runOpus = async () => ({ ok: true, text: 'Grade: ok.', ms: 1 });
-  const runGemini = async () => {
+  const runGemini = async ({ timeoutMs }) => {
     geminiCalls++;
+    budgets.push(timeoutMs);
     return geminiCalls === 1
-      ? { ok: false, error: 'timed out after 180000ms', ms: 180001 }
+      ? { ok: false, timedOut: true, error: 'timed out after 180000ms', ms: 180001 }
       : { ok: true, text: 'No prior review.\n- Reduce review rounds.', ms: 2 };
   };
   const rec = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 2 } }, runOpus, runGemini });
-  assert.equal(geminiCalls, 2, 'timeout retried exactly once');
+  assert.equal(geminiCalls, 2, 'timedOut retried exactly once');
+  assert.deepEqual(budgets, [180000, 90000], 'retry gets half the budget (total <= 1.5x)');
   assert.equal(rec.gemini.ok, true, 'second attempt recovered');
   assert.equal(rec.sentCardIds.length, 1, 'recovered gemini bullet routed');
 
+  // A non-timeout failure whose error merely contains "timed out" (no timedOut flag) is not retried.
   const home2 = tmp();
   let opusCalls = 0;
-  const runOpus2 = async () => { opusCalls++; return { ok: false, error: 'quota exceeded', ms: 1 }; };
+  const runOpus2 = async () => { opusCalls++; return { ok: false, error: 'provider said: timed out waiting for quota', ms: 1 }; };
   const runGemini2 = async () => ({ ok: true, text: 'No prior review.\n- Cache results.', ms: 1 });
   await runUsageReview({ home: home2, trigger: 'manual', usage: { totals: { turns: 2 } }, runOpus: runOpus2, runGemini: runGemini2 });
-  assert.equal(opusCalls, 1, 'non-timeout (quota) failure is not retried');
+  assert.equal(opusCalls, 1, 'non-timeout error containing "timed out" is not retried');
 });
 
 test('usa-33 (idea-320): [engine-bug] bullets route to bug-chaser, every other target to perfection', async () => {
@@ -1842,6 +1846,27 @@ test('usa-33 (idea-320): [engine-bug] bullets route to bug-chaser, every other t
   assert.match(bug[0].text, /^\[engine-bug\]/);
   assert.equal(perf.length, 3, 'everything else -> perfection');
   assert.ok(perf.every((c) => !/^\[engine-bug\]/.test(c.text)));
+});
+
+test('usa-33 fix1: a recurring [engine-bug] bullet is deduped against open bug-chaser cards across runs (one card total)', async () => {
+  const home = tmp();
+  const bullet = '- [engine-bug] spawn hangs on restart -> runner/spawn.mjs -> no hang -> watch: spawn latency';
+  const runOpus = async () => ({ ok: true, text: `Grade: KPIs steady.\n${bullet}`, ms: 1 });
+  const runGemini = async () => ({ ok: false, error: 'quota', ms: 1 });
+  const r1 = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 1 } }, runOpus, runGemini });
+  assert.equal(r1.sentCardIds.length, 1, 'first run files the engine-bug card');
+  const r2 = await runUsageReview({ home, trigger: 'manual', usage: { totals: { turns: 2 } }, runOpus, runGemini });
+  assert.equal(r2.sentCardIds.length, 0, 'second run sees the same open bug-chaser card -> no new card');
+  assert.equal(readInboxCards(home).filter((c) => c.laneId === 'bug-chaser').length, 1, 'exactly one bug-chaser card');
+});
+
+test('usa-33 fix1: parseReviewBullets caps a runaway bullet at the default 2000 chars', () => {
+  const long = 'x'.repeat(5000);
+  const bullets = parseReviewBullets(`Grade: ok.\n- ${long}`);
+  assert.equal(bullets.length, 1);
+  assert.equal(bullets[0].length, 2000, 'clipped to maxLen 2000');
+  assert.ok(bullets[0].endsWith('…'));
+  assert.ok(bullets[0].startsWith('x'.repeat(1999)));
 });
 
 test('usa-19: getUsage and readUsageLogSignals pool agent runs, logs, handoffs, and lane codes across multiple Squads', () => {
@@ -2807,10 +2832,10 @@ test('usage review T2: timeoutMs defaults to 180s, normalizes, persists, and plu
     await runUsageReview({
       home, usage: { totals: { turns: 1 } },
       runOpus: async ({ timeoutMs }) => { seen.push(timeoutMs); return { ok: true, text: 'x', ms: 12 }; },
-      runGemini: async ({ timeoutMs }) => { seen.push(timeoutMs); return { ok: false, error: 'timed out after 90000ms', ms: 90001 }; },
+      runGemini: async ({ timeoutMs }) => { seen.push(timeoutMs); return { ok: false, error: 'quota exceeded', ms: 90001 }; },
     });
   } finally { console.log = orig; }
-  assert.deepEqual(seen, [90000, 90000, 90000], 'gemini timeout retried once, opus once');
+  assert.deepEqual(seen, [90000, 90000], 'no timedOut flag -> no retry; each reviewer called once');
   assert.ok(lines.some((l) => /usage-review: opus ok ms=12 timeoutMs=90000/.test(l)), lines.join('|'));
   assert.ok(lines.some((l) => /usage-review: gemini failed ms=90001 /.test(l)), lines.join('|'));
 });

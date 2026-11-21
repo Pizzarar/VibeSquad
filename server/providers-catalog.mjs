@@ -17,6 +17,7 @@ import { resolveTeamsFilePath } from "./teams-file.mjs";
 import { normalizeStakes } from "./stakes-ladder.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { addInboxCardsAsync, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
+import { BUG_LANE_FALLBACK_IDS } from "./lane-pure.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 
@@ -2146,7 +2147,7 @@ export function oneShotReviewRun(cmd, args) {
       let err = "";
       let done = false;
       const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve({ ...r, ms: Date.now() - started }); };
-      const timer = setTimeout(() => { killTree(child); finish({ ok: false, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
+      const timer = setTimeout(() => { killTree(child); finish({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
       timer.unref?.();
       child.stdout?.on("data", (d) => { out += d; });
       child.stderr?.on("data", (d) => { err = (err + d).slice(-2000); }); // bounded tail: an unread stderr pipe can stall the child
@@ -2183,10 +2184,11 @@ function isReviewHeading(line) {
 /**
  * Split a review response into actionable bullets: strip leading `-`, `*`, `•`, `+` and `1.` markers, drop empty lines
  * and bare section headings, and skip the closed-loop KPI self-grade line (a `/^grade\b|previous review|no prior review/i`
- * match, or the first line of a multi-line reply). Each bullet keeps its full text (the card title is truncated separately
- * by `buildConciseTitle`); the list is capped at `max`.
+ * match, or the first line of a multi-line reply). Each bullet is capped at `maxLen` (default 2000: enough to keep the
+ * evidence, but bounded so a runaway bullet cannot make a huge card body; the card title is shortened separately by
+ * `buildConciseTitle`). The list is capped at `max`.
  */
-export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
+export function parseReviewBullets(text, { max = 5, maxLen = 2000 } = {}) {
   const lines = String(text ?? "")
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -2199,7 +2201,7 @@ export function parseReviewBullets(text, { max = 5, maxLen = 200 } = {}) {
     const line = raw.replace(REVIEW_BULLET_LEAD_RE, "").trim();
     if (!line) continue;
     if (isReviewHeading(line)) continue;
-    out.push(line);
+    out.push(clip(line, maxLen));
     if (out.length >= max) break;
   }
   return out;
@@ -2214,31 +2216,43 @@ function overlapsSeen(text, seen) {
   return false;
 }
 
-/** True when an inbox card is an open perfection (Workflows) card (status "parked" or "accepted", or legacy unset status). */
-const isOpenPerfectionCard = (c) =>
-  Boolean(c) &&
-  String(c.laneId || "").toLowerCase() === "perfection" &&
-  (!c.status || c.status === "parked" || c.status === "accepted");
+/** True when an inbox card is open (status "parked" or "accepted", or legacy unset status). */
+const isOpenCard = (c) => Boolean(c) && (!c.status || c.status === "parked" || c.status === "accepted");
+/** True when a lane id is one of the bug lane fallbacks (bug-runner, bug-chaser). */
+const isBugLaneId = (laneId) => BUG_LANE_FALLBACK_IDS.includes(String(laneId || "").toLowerCase());
 
 /**
- * Best-effort: parse the review's actionable bullets and enqueue them into the perfection (Workflows) inbox, deduped
- * against open perfection cards (status parked or accepted) and across the opus/gemini sets. Returns the enqueued card ids (never throws).
+ * Best-effort: parse the review's actionable bullets and enqueue them into the target lane's inbox, deduped against that
+ * lane's open cards (bug-chaser includes its fallback bug lanes) and across the opus/gemini sets. Returns the enqueued card ids (never throws).
  */
 async function routeReviewToInbox(opusResult, geminiResult, dir) {
   const sent = [];
   if (!dir || isForbiddenRealHome(dir)) return sent;
-  const existing = readInboxCards(dir).filter(isOpenPerfectionCard);
-  const seen = existing.map((c) => `${c.title || ""} ${c.text || ""}`).filter(Boolean);
+  // idea-320 fix1: seed `seen` per target lane so a recurring [engine-bug] bullet already open in bug-chaser does not re-card.
+  const seen = new Map(); // target laneId ("bug-chaser" | "perfection") -> seen texts
+  const seenFor = (laneId) => {
+    let list = seen.get(laneId);
+    if (!list) { list = []; seen.set(laneId, list); }
+    return list;
+  };
+  for (const c of readInboxCards(dir)) {
+    if (!isOpenCard(c)) continue;
+    const laneId = String(c.laneId || "").toLowerCase();
+    const target = laneId === "perfection" ? "perfection" : isBugLaneId(laneId) ? "bug-chaser" : null;
+    if (!target) continue;
+    const text = `${c.title || ""} ${c.text || ""}`.trim();
+    if (text) seenFor(target).push(text);
+  }
   const process = async (result, source) => {
     if (!result?.ok || typeof result.text !== "string") return;
     const byLane = new Map(); // laneId -> bullets (idea-320: [engine-bug] -> bug-chaser, else perfection)
     for (const bullet of parseReviewBullets(result.text)) {
-      if (overlapsSeen(bullet, seen)) continue;
       const laneId = reviewBulletLane(bullet);
+      if (overlapsSeen(bullet, seenFor(laneId))) continue;
       const list = byLane.get(laneId) ?? [];
       list.push(bullet);
       byLane.set(laneId, list);
-      seen.push(bullet);
+      seenFor(laneId).push(bullet);
     }
     for (const [laneId, ideas] of byLane) {
       try {
@@ -2269,11 +2283,13 @@ export function runUsageReview({ home, trigger = "manual", usage, runOpus, runGe
       const prompt = buildUsageReviewPrompt(usage, { home, sinceMs, previousReview: last, promptPath });
       const opusRun = runOpus ?? defaultRunOpus;
       const geminiRun = runGemini ?? defaultRunGemini;
-      // idea-319: retry a provider call once, but only when it timed out (nonzero exits / quota errors are not retried).
+      // idea-319 fix1: retry a provider call once, only on an explicit `timedOut` flag from the killTree timer (never by
+      // matching error text), and give the retry half the original budget so the two attempts total <= 1.5x timeoutMs.
       const withTimeoutRetry = (run) => async ({ prompt, timeoutMs }) => {
-        const attempt = () => run({ prompt, timeoutMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 }));
-        const first = await attempt();
-        return first.ok || !/\btimed out\b/i.test(String(first.error ?? "")) ? first : attempt();
+        const attempt = (budgetMs) => run({ prompt, timeoutMs: budgetMs }).catch((e) => ({ ok: false, error: String(e?.message ?? e), ms: 0 }));
+        const first = await attempt(timeoutMs);
+        if (first.ok || first.timedOut !== true) return first;
+        return attempt(Math.floor(timeoutMs / 2));
       };
       const results = await Promise.all([
         withTimeoutRetry(opusRun)({ prompt, timeoutMs }),
