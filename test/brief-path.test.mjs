@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { afterEach } from "node:test";
@@ -11,8 +11,11 @@ afterEach(() => {
   else process.env.VIBESQUAD_TEAMS_FILE = prevTeams;
 });
 
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+
 function setup() {
-  const base = mkdtempSync(join(tmpdir(), "vs-brief-path-"));
+  const base = mkdtempSync(join(tmpdir(), "vs-brief-path-")); tmpDirs.push(base);
   const runtime = join(base, "runtime"); // stands in for %LOCALAPPDATA%\VibeSquad\runtime
   const project = join(base, "MyProj");
   mkdirSync(runtime, { recursive: true });

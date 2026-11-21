@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +12,7 @@ import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const ROOT = join(fileURLToPath(import.meta.url), "../../");
 const tmp = mkdtempSync(join(tmpdir(), "vs-first-run-"));
+test.after(() => { try { rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} });
 
 // An empty PATH/APPDATA means no agent CLI is found on the test machine.
 const cleanEnv = { PATH: "", APPDATA: join(tmp, "no-appdata"), LOCALAPPDATA: join(tmp, "no-local") };

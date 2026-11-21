@@ -24,8 +24,11 @@ const fakeRunner = (frames, { silent = false } = {}) =>
     );
   });
 
+const homes = [];
+test.after(() => { for (const h of homes) { try { fs.rmSync(h, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 const home = () => {
   const h = fs.mkdtempSync(path.join(os.tmpdir(), "vs-rc-"));
+  homes.push(h);
   fs.writeFileSync(path.join(h, "token"), "t");
   return h;
 };

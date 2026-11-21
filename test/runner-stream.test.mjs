@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -16,7 +16,9 @@ import { RunnerBackend, toAgent } from '../server/backend/runner-backend.mjs';
 import { handleRunnerApi } from '../server/runner-api.mjs';
 import { watchRunnerTransitions } from '../server/push.mjs';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-stream-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-stream-')); tmpDirs.push(d); return d; };
 const TOKEN = 'tok';
 const until = async (fn, ms = 2000) => {
   const end = Date.now() + ms;

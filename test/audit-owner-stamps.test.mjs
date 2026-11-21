@@ -131,6 +131,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+const dirs = [];
+test.after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+
 const FIX_OFFERS = [
   'Gemini passed it and @usa is OK with it. **It needs your OK**, then it merges after the sky fix.\n\nThe deadlock is a VibeSquad bug: a Buddy can\'t replace a live lead. Want me to send it to @bug?',
   'The bug: when needs-you is set or cleared, the time it was set isn\'t recorded. It also skews the oldest-first order in the queue we just shipped.\n\nOne screenshot caught a setup checklist instead of the menu. That\'s only the evidence file; the fix itself isn\'t affected.\n\nShould I send the timestamp fix to the lead?',
@@ -162,7 +165,7 @@ test('offersFix skips real choices, owner approvals and risky steps', () => {
   NOT_FIX_OFFERS.forEach((t, i) => assert.equal(offersFix(t), false, `near-miss ${i}`));
 });
 test('fixOfferBucket counts per lane and role', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fo-')); dirs.push(dir);
   const ev = (o) => JSON.stringify(o);
   fs.writeFileSync(path.join(dir, 'rn-a.jsonl'), [
     ev({ type: 'created', ts: 1, meta: { lane: 'ui-bois', role: 'brainstorm' } }),
@@ -203,7 +206,7 @@ test('leanAsk skips no-lean, scope/public/money/delete asks and plain fix-offers
   NOT_LEAN_ASKS.forEach((t, i) => assert.equal(leanAsk(t), false, `near-miss ${i}`));
 });
 test('fixOfferBucket counts lean-asks into the total with a kind tag', () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'la-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'la-')); dirs.push(dir);
   fs.writeFileSync(path.join(dir, 'rn-l.jsonl'), [
     JSON.stringify({ type: 'created', ts: 1, meta: { lane: 'bug-chaser', role: 'brainstorm' } }),
     JSON.stringify({ type: 'output', ts: 2, text: LEAN_ASKS[1] }),

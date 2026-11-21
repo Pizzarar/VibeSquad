@@ -19,6 +19,7 @@ process.env.VIBESQUAD_HOME = vsHome;
 const ev = (seq, type, o = {}) => JSON.stringify({ seq, ts: 1000 + seq, type, ...o }) + "\n";
 const writeAgent = (id, cwd, extra = "") => fs.writeFileSync(path.join(dir, `${id}.jsonl`), ev(0, "created", { provider: "claude", cwd, meta: {} }) + ev(1, "status", { status: "idle" }) + extra);
 const mkcwd = (n) => { const d = path.join(tmp, "wt", n); fs.mkdirSync(d, { recursive: true }); return d; };
+test.after(() => { try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} });
 
 test("H1: startRunnerLifecycle waits for the catch-up baseline before attaching hooks", async () => {
   const order = [];

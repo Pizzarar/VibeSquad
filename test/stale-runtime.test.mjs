@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { computeStale, getStale, packagedStamp, readBuildStamp, resetStaleCache, staleWarning } from "../server/stale-runtime.mjs";
 
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(join(tmpdir(), "vs-stale-")); tmpDirs.push(d); return d; };
 const runtimeWith = (stamp) => {
-  const dir = mkdtempSync(join(tmpdir(), "vs-stale-"));
+  const dir = tmp();
   if (stamp) writeFileSync(join(dir, "build-stamp.json"), JSON.stringify(stamp));
   return dir;
 };
@@ -39,7 +42,7 @@ test("packaged stamp has no repo path; a repo-less stamp reads fine and is never
 });
 
 test("getStale caches for a minute and staleWarning reads the published file", () => {
-  const home = mkdtempSync(join(tmpdir(), "vs-stale-home-"));
+  const home = tmp();
   const env = { VIBESQUAD_HOME: home };
   resetStaleCache();
   let calls = 0;
@@ -55,7 +58,7 @@ test("getStale caches for a minute and staleWarning reads the published file", (
 
 test("refreshStale never blocks the loop on git and is single-flight (idea-225)", async () => {
   const { refreshStale, peekStale, computeStaleAsync } = await import("../server/stale-runtime.mjs");
-  const home = mkdtempSync(join(tmpdir(), "vs-stale-home-"));
+  const home = tmp();
   const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo: "/r" });
   resetStaleCache();
   let calls = 0;
@@ -83,7 +86,7 @@ test("/health source never calls the sync getStale", async () => {
 test("peekStale drops a cached value once a sync rewrote the build stamp (idea-276)", async () => {
   const { writeFileSync } = await import("node:fs");
   const { refreshStale, peekStale } = await import("../server/stale-runtime.mjs");
-  const home = mkdtempSync(join(tmpdir(), "vs-stale-home-"));
+  const home = tmp();
   const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo: "/r" });
   resetStaleCache();
   await refreshStale({ rootDir, env: { VIBESQUAD_HOME: home }, now: 1000, compute: async () => ({ built: "aaaaaaa", head: "bbbbbbb", behind: 2 }) });

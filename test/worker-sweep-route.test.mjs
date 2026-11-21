@@ -3,6 +3,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { handleRunnerApi } from "../server/runner-api.mjs";
 import { requestWorkerSweep, commandAgentVerb } from "../cli/vs.mjs";
+import { rmSync } from "node:fs";
+
+const dirs = [];
+test.after(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 
 const call = async (body, host) => {
   const seen = [];
@@ -34,7 +38,9 @@ test("vs archive --sweep posts apply flag with the local token and prints the re
   const { mkdtempSync, writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const { join } = await import("node:path");
-  const file = join(mkdtempSync(join(tmpdir(), "vs-sweep-")), "local-token");
+  const dir = mkdtempSync(join(tmpdir(), "vs-sweep-"));
+  dirs.push(dir);
+  const file = join(dir, "local-token");
   writeFileSync(file, "a".repeat(64) + "\n");
   const { localProof } = await import("../server/auth.mjs");
   const proofs = [];

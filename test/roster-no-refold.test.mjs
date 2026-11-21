@@ -36,7 +36,7 @@ function mkHome(prefix) {
   fs.mkdirSync(dir, { recursive: true });
   return { root, vsHome, rhome, dir, env: { VIBESQUAD_HOME: vsHome } };
 }
-after(() => { for (const h of homes) fs.rmSync(h, { recursive: true, force: true, maxRetries: 3 }); });
+after(() => { for (const h of homes) { try { fs.rmSync(h, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 const line = (seq, type, o = {}) => JSON.stringify({ seq, ts: OLD + seq, type, ...o }) + "\n";
 const created = (id, lane = "l1", role = "worker", extra = {}) =>
   line(0, "created", { provider: "claude", model: "m", cwd: `/w/${id}`, meta: { title: `T ${id}`, labels: { team: "t", lane, role, ...extra } } });

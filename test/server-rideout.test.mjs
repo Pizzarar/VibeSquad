@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const src = (f) => readFileSync(new URL(`../${f}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
+const homes = [];
+test.after(() => { for (const h of homes) { try { rmSync(h, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+
 test("logServerStart appends a metric server-start line with pid, version and reason", async () => {
-  const home = mkdtempSync(join(tmpdir(), "vs-start-"));
+  const home = mkdtempSync(join(tmpdir(), "vs-start-")); homes.push(home);
   process.env.VIBESQUAD_HOME = home;
   const { logServerStart } = await import("../server/server-start.mjs");
   const root = new URL("..", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");

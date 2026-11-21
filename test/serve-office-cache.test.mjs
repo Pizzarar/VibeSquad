@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 
 const { sendFile } = await import("../server/serve.mjs");
 
+const dirs = [];
+test.after(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+
 test("office art revalidates with ETag/304; index.html stays no-store", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "vs-cache-"));
+  const dir = mkdtempSync(join(tmpdir(), "vs-cache-")); dirs.push(dir);
   mkdirSync(join(dir, "office"));
   const png = join(dir, "office", "x.png");
   const html = join(dir, "index.html");

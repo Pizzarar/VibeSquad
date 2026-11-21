@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,8 +11,12 @@ import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
 
 const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
 
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(join(tmpdir(), "vs-sync-")); tmpDirs.push(d); return d; };
+
 function repo() {
-  const dir = mkdtempSync(join(tmpdir(), "vs-sync-"));
+  const dir = tmp();
   git(dir, "init", "-q", "-b", "master");
   git(dir, "config", "user.email", "t@t");
   git(dir, "config", "user.name", "t");
@@ -36,7 +40,7 @@ test("sync skipped on a unit branch, dirty tree, and linked worktree; force over
   assert.equal(syncSkipReason(dir, { force: true }), null);
   git(dir, "add", ".");
   git(dir, "commit", "-qm", "b");
-  const wt = join(mkdtempSync(join(tmpdir(), "vs-wt-")), "wt");
+  const wt = join(tmp(), "wt");
   git(dir, "worktree", "add", "-q", wt, "-b", "unit-x", "master");
   assert.match(syncSkipReason(wt), /linked worktree/);
   git(dir, "checkout", "-q", "-b", "unit-y");
@@ -45,7 +49,7 @@ test("sync skipped on a unit branch, dirty tree, and linked worktree; force over
 });
 
 test("CLI prints a one-line skip and exits 0 for a non-master checkout", () => {
-  const out = execFileSync(process.execPath, ["server/sync-runtime.mjs"], { encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(join(tmpdir(), "vs-sync-lad-")) } });
+  const out = execFileSync(process.execPath, ["server/sync-runtime.mjs"], { encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: tmp() } });
   assert.ok(out.split("\n").filter(Boolean).length <= 1);
 });
 
@@ -134,11 +138,11 @@ test("idea-401: runSync with an untracked docs/x.md and an edited tracked doc sy
   git(dir, "commit", "-qm", "server + docs");
   writeFileSync(join(dir, "docs", "x.md"), "untracked");
   writeFileSync(join(dir, "docs", "SPEC.md"), "v2");
-  const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
+  const lad = tmp();
   const runtime = join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
   const lines = [];
-  const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: mkdtempSync(join(tmpdir(), "vs-sync-home-")) };
+  const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp() };
   const res = runSync({ repoRoot: dir, env, log: (l) => lines.push(l) });
   assert.equal(res.synced, true, lines.join("\n"));
   assert.equal(readFileSync(join(runtime, "server", "a.mjs"), "utf8"), "export const a = 1;\n");
@@ -176,10 +180,10 @@ function trackedRepo() {
 /** dist/ is gitignored build output here; a no-op build lets runSync stamp it as the build of HEAD. */
 const okBuild = () => ({ ok: true });
 function fakeInstall() {
-  const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
+  const lad = tmp();
   const runtime = join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
-  return { runtime, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: mkdtempSync(join(tmpdir(), "vs-sync-home-")) } };
+  return { runtime, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp() } };
 }
 
 test("idea-404: untracked files in server/, cli/, runner/, public/ never reach the runtime; tracked ones and dist/ do", () => {
@@ -223,7 +227,7 @@ test("idea-404: content comes from the synced commit, not the working tree (forc
 });
 
 test("idea-404: a source that is not a git repo (or an unknown sha) refuses with a clear reason and leaves the runtime alone", () => {
-  const plain = mkdtempSync(join(tmpdir(), "vs-sync-plain-"));
+  const plain = tmp();
   put(plain, "server/a.mjs", "not tracked anywhere");
   const { runtime, env } = fakeInstall();
   put(runtime, "server/a.mjs", "live");

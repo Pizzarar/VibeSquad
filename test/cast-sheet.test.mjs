@@ -1,14 +1,16 @@
 // Cast sheet wiring: role -> row mapping and seed -> variant determinism.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { transformSync } from "rolldown/utils";
 
 const root = resolve(import.meta.dirname, "..");
-const tmp = join(mkdtempSync(join(tmpdir(), "vs-cast-")), "cast.mjs");
+const tmpDir = mkdtempSync(join(tmpdir(), "vs-cast-"));
+test.after(() => { try { rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} });
+const tmp = join(tmpDir, "cast.mjs");
 writeFileSync(tmp, transformSync("cast.ts", readFileSync(join(root, "src", "cast.ts"), "utf8"), { lang: "ts" }).code);
 const { CAST_ROWS, CAST_VARIANTS, castRow, castVariant, castCell } = await import(pathToFileURL(tmp).href);
 

@@ -3,13 +3,15 @@ import "./helpers/clean-env.mjs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeFs from 'node:fs';
-import { mkdtempSync, appendFileSync, writeFileSync, truncateSync } from 'node:fs';
+import { mkdtempSync, appendFileSync, writeFileSync, truncateSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { LogStore } from '../runner/log.mjs';
 import { Runner } from '../runner/runner.mjs';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-il-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-il-')); tmpDirs.push(d); return d; };
 const mkRunner = () => new Runner({ dir: path.join(tmp(), 'agents'), adapters: {}, maxLive: 4 });
 
 // Writes a realistic log: created + n events of ~`pad` bytes.
