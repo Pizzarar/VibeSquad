@@ -684,10 +684,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const hw = m.core.deskWorkers;
     return (
       <div key="trinity" className="boring-trinity-card" data-testid={suffix(v, "boring-trinity")}>
-        <div className="boring-trinity-head">Core</div>
+        <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Core</span>{badge(m.hubNeedsYou, m.deskErr)}</div>
         {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId))}
-        {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
         {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
+        {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
         {bugsRow(v, m)}
       </div>
     );

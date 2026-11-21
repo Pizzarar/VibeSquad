@@ -149,6 +149,23 @@ test("2. All projects collapsed: project badges sum to the Needs-you count", gua
   assert.equal(badges.reduce((s, b) => s + b.n, 0), count, `badges ${JSON.stringify(badges)} vs Needs-you ${count}`);
 }));
 
+test("2b. Expanding a project keeps its Needs-you total: Core header + Bugs + lane badges equal the collapsed project badge", guard("inv2b", async () => {
+  await load();
+  const bad = [];
+  for (const t of REGISTRY.teams) {
+    const hdr = page.locator(tid(`boring-project-header-${t.id}`));
+    const toggle = page.locator(tid(`boring-project-toggle-${t.id}`));
+    if ((await hdr.getAttribute("aria-expanded")) === "true") { await toggle.click(); await sleep(200); }
+    const collapsed = (await hdr.locator(".boring-badge").count()) ? Number(await hdr.locator(".boring-badge").first().innerText()) : 0;
+    if (collapsed === 0) continue;
+    await toggle.click(); await sleep(200);
+    const inner = await page.evaluate((id) => [...(document.querySelector(`[data-testid="boring-project-lanes-${id}"]`)?.querySelectorAll(".boring-badge") ?? [])].reduce((s, b) => s + Number(b.textContent?.trim() || 0), 0), t.id);
+    if (inner !== collapsed) { bad.push(`${t.id}: collapsed ${collapsed} vs expanded ${inner}`); await shot(`inv2b-${t.id}`); }
+    await toggle.click(); await sleep(200);
+  }
+  assert.deepEqual(bad, [], bad.join("\n"));
+}));
+
 test("3. Exactly one selected sidebar row in every state", guard("inv3", async () => {
   const bad = [];
   for (const s of STATES) {

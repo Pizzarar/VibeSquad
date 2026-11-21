@@ -1221,7 +1221,7 @@ html[data-vibe="boring"] .boring-opening { margin: auto; color: var(--muted, #88
 
 /* B8a: always-visible Trinity card (Overlord, RiffBot, Bugs) set apart from the feature lanes. */
 html[data-vibe="boring"] .boring-trinity-card { display: flex; flex-direction: column; gap: 1px; padding: 6px 8px 6px 6px; margin: 4px 0 6px; background: var(--surface-2); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 8px; }
-html[data-vibe="boring"] .boring-trinity-head { padding: 2px 4px 4px; font-size: var(--t-caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
-html[data-vibe="boring"] .boring-trinity-card .boring-row-label { font-weight: 500; color: var(--text-1); }
-html[data-vibe="boring"] .boring-trinity-card .boring-worker-list { padding-left: 0; }
+html[data-vibe="boring"] .boring-trinity-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 4px; font-size: var(--t-caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+html[data-vibe="boring"] .boring-trinity-card .boring-core-row .boring-row-label,
+html[data-vibe="boring"] .boring-trinity-card > .boring-conv-row .boring-conv-title .boring-row-label { font-weight: 500; color: var(--text-1); }
 html[data-vibe="boring"] .boring-lanes-divider { padding: 6px 4px 2px; font-size: var(--t-caption); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); border-top: 1px solid var(--border); margin-top: 2px; }

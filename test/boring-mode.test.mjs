@@ -767,6 +767,10 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
   const bad = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 1 }, riffbot: zone(mem("rb", "idle", ago(2), { tone: "error" })), overlord: zone(mem("ov")) } });
   assert.equal(boringSidebarModel(bad, NOW).deskErr, true);
   assert.equal(boringSidebarModel(bad, NOW).projectErr, true);
+  // R8-1: the expanded Core header carries the hub count (amber), red when a member errored.
+  assert.match(JSON.stringify(byId(render(props(bad)), "boring-trinity-head").props.children), /boring-badge err/);
+  assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /boring-badge"/);
+  assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /"children":2/);
 });
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
