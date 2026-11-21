@@ -52,6 +52,8 @@ export interface WatchSet {
   cancelledBy?: string;
   /** W4: timestamp of the set's one Flash merge spawn (at most one per set). */
   digestSpawnedAt?: string;
+  /** idea-418: earlier owners, oldest first (lead handoff or the retired-owner delivery fallback moved the set). */
+  reowned?: Array<{ from: string; at: string; reason?: string }>;
 }
 
 export interface WatchDelivery {
@@ -89,6 +91,8 @@ export function addWatchAsync(
 ): Promise<{ id: string }>;
 export function listWatches(filter?: { owner?: string; team?: string; all?: boolean }, opts?: { home?: string }): Array<WatchSet & { status: "armed" | "fired" | "cancelled" }>;
 export function cancelWatch(id: string, callerId: string, opts?: { home?: string; now?: number; allow?: (set: WatchSet) => boolean }): { ok: boolean; id: string; error?: string; already?: boolean; refused?: boolean };
+export function reownWatches(spec: { from: string; to: string; ids?: string[]; reason?: string }, opts?: { home?: string; now?: number }): { reowned: string[] };
+export function reownWatchesAsync(spec: { from: string; to: string; ids?: string[]; reason?: string }, opts?: { home?: string; now?: number }): Promise<{ reowned: string[] }>;
 export function cancelWatchAsync(id: string, callerId: string, opts?: { home?: string; now?: number; allow?: (set: WatchSet) => boolean }): Promise<{ ok: boolean; id: string; error?: string; already?: boolean; refused?: boolean }>;
 
 export function classifyItem(item: WatchItem, set: WatchSet, ctx: any): { phase: string; phaseSince?: string; state: WatchItemState; reason?: string; report?: string };
@@ -125,6 +129,8 @@ export interface WatchEngine {
   isCancelled(key: string): boolean;
   markDelivered(keys: string[], to: string): Promise<void>;
   markFailed(keys: string[], error: string): Promise<void>;
+  /** idea-418: adopt set `setId` from retired owner `from` for `to` (no-op unless `from` still owns it); never rejects. */
+  reown(setId: string, from: string, to: string, reason?: string): Promise<{ reowned: string[] }>;
   get(id: string): WatchSet | null;
   list(): WatchSet[];
 }

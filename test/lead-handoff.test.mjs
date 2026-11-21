@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { createPlugin } from "../server/hooks/agent-duties.ts";
-import { isStalePredecessor } from "../server/lead-handoff.mjs";
+import { handoffLogText, isStalePredecessor } from "../server/lead-handoff.mjs";
+import { addWatch, cancelWatch, listWatches } from "../server/watch-sets.mjs";
 import { scanLogProgress } from "../server/backend/runner-backend.mjs";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
@@ -821,6 +822,166 @@ test("HTTP handoff with a real-shaped daemon client re-points the open workers t
     else process.env.VIBESQUAD_HOME = prevHome;
     env.cleanup();
   }
+});
+
+test("idea-418: the handoff re-owns the predecessor's armed watch sets to the successor and logs the count", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const oldLead = {
+      id: "lead-watch-1",
+      title: "★ SITE POLISH ord3",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-01T00:00:00.000Z",
+      labels: { team: "site", lane: "site-polish", role: "lead", ord: "3", profile: "Lead - Claude" },
+    };
+    const w1 = { id: "w1", title: "SITE POLISH · w1", provider: "claude", model: "claude-sonnet-5-5", cwd: env.dir, status: "running", labels: { team: "site", lane: "site-polish", role: "worker", job: "w1", "vs.parent": oldLead.id } };
+    const opts = { home: env.vsHome };
+    const armed = addWatch({ owner: oldLead.id, team: "site", lane: "site-polish", items: [{ kind: "agent", ref: "w1" }] }, opts).id;
+    const suite = addWatch({ owner: oldLead.id, team: "site", lane: "site-polish", items: [{ kind: "suite" }] }, opts).id;
+    const gone = addWatch({ owner: oldLead.id, team: "site", lane: "site-polish", items: [{ kind: "agent", ref: "w9" }] }, opts).id;
+    cancelWatch(gone, oldLead.id, opts);
+    const others = addWatch({ owner: "lead-elsewhere", team: "site", lane: "other", items: [{ kind: "agent", ref: "w5" }] }, opts).id;
+
+    const agents = new Map([oldLead, w1].map((a) => [a.id, a]));
+    const client = fakeDaemonClient(agents, 2);
+    const res = await performLeadHandoffHttp({ trigger: "self", agentClient: client, oldLead, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir);
+    const succId = res?.successor?.id ?? res?.successorId;
+    assert.ok(succId, JSON.stringify(res));
+    assert.deepEqual([...(res.reownedWatches ?? [])].sort(), [armed, suite].sort());
+
+    const all = new Map(listWatches({ all: true }, opts).map((s) => [s.id, s]));
+    assert.equal(all.get(armed).owner, succId);
+    assert.equal(all.get(suite).owner, succId);
+    assert.equal(all.get(armed).status, "armed", "re-owned, not closed");
+    assert.match(all.get(armed).reowned?.[0]?.reason ?? "", /^handoff trigger=self$/);
+    assert.equal(all.get(gone).owner, oldLead.id, "a cancelled set stays history");
+    assert.equal(all.get(others).owner, "lead-elsewhere");
+    assert.equal(listWatches({ owner: oldLead.id }, opts).length, 0, "the retired lead owns nothing armed");
+    // The successor passes the verb's owner rule (owner or same-Squad Overlord).
+    assert.equal(cancelWatch(armed, succId, { ...opts, allow: (s) => s.owner === succId }).ok, true);
+
+    const log = readFileSync(join(env.vsHome, "teams", "site", "log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const handoff = log.find((e) => e.type === "handoff" && e.text.includes(`lead ${oldLead.id} -> ${succId}`));
+    assert.ok(handoff, JSON.stringify(log));
+    assert.match(handoff.text, /; 2 watches re-owned/);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("idea-418: a corrupt watches.json does not stop the handoff, and the registry is left byte-for-byte untouched", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const oldLead = {
+      id: "lead-corrupt-1",
+      title: "★ SITE POLISH ord3",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-01T00:00:00.000Z",
+      labels: { team: "site", lane: "site-polish", role: "lead", ord: "3", profile: "Lead - Claude" },
+    };
+    const w1 = { id: "w1", title: "SITE POLISH · w1", provider: "claude", model: "claude-sonnet-5-5", cwd: env.dir, status: "running", labels: { team: "site", lane: "site-polish", role: "worker", job: "w1", "vs.parent": oldLead.id } };
+    const file = join(env.vsHome, "watches.json");
+    mkdirSync(dirname(file), { recursive: true });
+    const corrupt = '{"version":1,"sets":[{"id":"w-1","owner":"lead-corrupt-1"'; // truncated mid-write
+    writeFileSync(file, corrupt, "utf8");
+
+    const agents = new Map([oldLead, w1].map((a) => [a.id, a]));
+    const client = fakeDaemonClient(agents, 2);
+    const res = await performLeadHandoffHttp({ trigger: "self", agentClient: client, oldLead, baseHome: env.vsHome, profilesPath: env.profilesPath }, env.dir);
+    const succId = res?.successor?.id ?? res?.successorId;
+    assert.ok(res?.ok && succId, JSON.stringify(res));
+    assert.deepEqual(res.reownedWatches, []);
+    assert.equal(agents.get("w1").labels["vs.parent"], succId, "workers are still re-pointed");
+    assert.equal(readFileSync(file, "utf8"), corrupt, "a corrupt registry is never overwritten");
+    const log = readFileSync(join(env.vsHome, "teams", "site", "log.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    const handoff = log.find((e) => e.type === "handoff" && e.text.includes(`lead ${oldLead.id} -> ${succId}`));
+    assert.ok(handoff, JSON.stringify(log));
+    assert.doesNotMatch(handoff.text, /re-owned/);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("idea-418: a reownWatches that throws does not stop the handoff (successor spawned, workers re-pointed, handoff logged)", async () => {
+  const env = makeTempEnv();
+  const prevHome = process.env.VIBESQUAD_HOME;
+  process.env.VIBESQUAD_HOME = env.vsHome;
+  try {
+    const oldLead = {
+      id: "lead-throw-1",
+      title: "★ SITE POLISH ord5",
+      provider: "claude",
+      model: "claude-opus-5-5",
+      cwd: env.dir,
+      status: "idle",
+      createdAt: "2026-11-01T00:00:00.000Z",
+      labels: { team: "site", lane: "site-polish", role: "lead", ord: "5", profile: "Lead - Claude" },
+    };
+    const worker = { id: "w-run-1", title: "SITE POLISH · job", provider: "claude", model: "claude-sonnet-5-5", cwd: env.dir, status: "running", labels: { team: "site", lane: "site-polish", role: "worker", job: "job", "vs.parent": oldLead.id } };
+    const agents = new Map([oldLead, worker].map((a) => [a.id, a]));
+    const logEntries = [];
+    const reownCalls = [];
+    const coordinator = createLeadHandoffCoordinator({
+      rootDir: env.dir,
+      baseHome: env.vsHome,
+      profilesPath: env.profilesPath,
+      listAgents: async () => [...agents.values()],
+      getAgent: async (id) => agents.get(id) ?? null,
+      setLabels: async (id, labels, name) => {
+        const cur = agents.get(id);
+        if (cur) {
+          cur.labels = { ...(cur.labels ?? {}), ...labels };
+          if (name) cur.title = name;
+        }
+      },
+      sendMessage: async () => {},
+      createAgent: async (payload) => {
+        const created = { id: "succ-throw", title: payload.title, cwd: payload.cwd, status: "running", labels: { ...payload.labels } };
+        agents.set(created.id, created);
+        return created;
+      },
+      deleteHeartbeat: async () => {},
+      appendLog: (teamId, entry) => void logEntries.push({ teamId, ...entry }),
+      reownWatches: async (spec) => {
+        reownCalls.push(spec);
+        throw new Error("watches.json lock timeout");
+      },
+    });
+    const res = await coordinator.triggerSelfHandoff(oldLead);
+    assert.equal(res?.ok, true, JSON.stringify(res));
+    assert.equal(res.successorId, "succ-throw");
+    assert.deepEqual(reownCalls, [{ from: oldLead.id, to: "succ-throw", reason: "handoff trigger=self" }]);
+    assert.deepEqual(res.reownedWatches, []);
+    assert.equal(agents.get(worker.id).labels["vs.parent"], "succ-throw");
+    const handoff = logEntries.find((e) => e.type === "handoff" && e.text.includes(`lead ${oldLead.id} -> succ-throw`));
+    assert.ok(handoff, JSON.stringify(logEntries));
+    assert.doesNotMatch(handoff.text, /re-owned/);
+  } finally {
+    if (prevHome === undefined) delete process.env.VIBESQUAD_HOME;
+    else process.env.VIBESQUAD_HOME = prevHome;
+    env.cleanup();
+  }
+});
+
+test("idea-418: handoffLogText names the re-owned watch count (singular/plural) and omits it at zero", () => {
+  const base = { oldId: "a1", successorId: "b2", oldOrd: 1, nextOrd: 2, trigger: "self" };
+  assert.match(handoffLogText({ ...base, watchesReowned: 1 }), /\(trigger=self\); 1 watch re-owned$/);
+  assert.match(handoffLogText({ ...base, watchesReowned: 3, idleRepointed: 2 }), /; 3 watches re-owned; 2 idle workers re-pointed/);
+  assert.doesNotMatch(handoffLogText(base), /re-owned/);
 });
 
 test("HTTP self-handoff without oldLead resolves Hub8 from daemon, titles successor ★ Hub9, and dedupes retries per (team, lane, ord)", async () => {

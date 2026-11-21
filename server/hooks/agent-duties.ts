@@ -3199,6 +3199,21 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     }
 
     /**
+     * idea-418: a ping for a retired owner was routed to the lane's live lead (resolveWatchTarget): that lead adopts the set, so
+     * it can cancel it and later pings go to it directly. Heals sets orphaned before the lead handoff re-owned them. True when
+     * `target` owns the set afterwards (just adopted, or a concurrent offer adopted it first). Needs a positive retired read of
+     * the owner: a refresh hiccup (snap null) only reroutes this one ping, it never moves a live owner's set.
+     */
+    async function adoptRetiredWatch(paseo: Paseo, set: WatchSet, target: AgentSnap): Promise<boolean> {
+      if (!watch || !set?.owner || target.id === set.owner) return false;
+      const owner = await snap(paseo, set.owner);
+      if (!owner || isLiveAgent(owner)) return watch.get(set.id)?.owner === target.id;
+      const { reowned } = await watch.reown(set.id, set.owner, target.id, "retired-owner delivery");
+      if (reowned.length) log(`watch ${set.id}: re-owned ${set.owner} -> ${target.id} (owner retired)`);
+      return reowned.length > 0 || watch.get(set.id)?.owner === target.id;
+    }
+
+    /**
      * idea-160: the Squad Overlord (the team's hub-lane Lead) for an escalation-2 ping. Never null while anyone is live: a Squad
      * without a hub lane/Lead falls back to the home Squad's Overlord (`vs who lead --lane vibesquad`), then to the watch
      * owner's own target, and logs which fallback was used (the real teams.json flags every Squad's hub, so this is a safety net).
@@ -3267,7 +3282,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const target = toOverlord ? await resolveWatchOverlord(paseo, d.set) : await resolveWatchTarget(paseo, d.set);
       if (!target) return log(`watch ${d.setId}: no live ${toOverlord ? "Overlord" : "owner or lead"} for ${d.team}/${d.lane}; ping held`);
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
-      const text = toOverlord ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)` : target.id === d.owner ? d.text : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
+      const adopted = !toOverlord && target.id !== d.owner && (await adoptRetiredWatch(paseo, d.set, target));
+      if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer while the re-own write waited on the lock
+      const text = toOverlord
+        ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)`
+        : target.id === d.owner
+          ? d.text
+          : adopted
+            ? `${d.text}\n(Watch owner ${d.owner} is retired; the watch is now yours as the lane's lead: \`vs watch cancel ${d.setId}\` stops it.)`
+            : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
       const detail = d.detail ? await redactReportText(d.detail) : "";
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
@@ -3287,6 +3310,7 @@ ${detail}` : text, refs: [d.setId] };
           log(`watch ${d.setId}: no live owner or lead for ${d.team}/${d.lane}; cannot spawn merge`);
           return false;
         }
+        await adoptRetiredWatch(paseo, d.set, target);
         const where = teamOf(target.labels, target.cwd);
         const team = d.team || where?.team || target.labels?.team || "";
         const lane = d.lane || where?.lane || target.labels?.lane || "";
