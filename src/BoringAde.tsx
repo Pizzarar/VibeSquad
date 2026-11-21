@@ -142,7 +142,7 @@ export type ActiveSelection = { teamId: string | null; mode: Mode; laneId: strin
  * In chat it follows the agent actually on screen (resolved across every project, so Ctrl+J / Needs-you jumps land right);
  * the lane/role state is only the fallback while no agent is shown (Start card). rowKey = `${teamId}|project|desk:lead|desk:brainstorm|lane:<id>|worker:<id>`.
  */
-export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId: string | null; agentId: string | null; agentTitle?: string | null; laneId: string | null; role: Role; workerId: string | null }): ActiveSelection {
+export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId: string | null; agentId: string | null; laneId: string | null; role: Role; workerId: string | null }): ActiveSelection {
   const base = { teamId: o.teamId, mode: o.mode, laneId: null, role: null, workerId: null, agentLabel: null, rowKey: null } as ActiveSelection;
   if (o.mode === "usage") return base;
   if (o.mode === "project") return { ...base, rowKey: o.teamId ? `${o.teamId}|project` : null };
@@ -539,7 +539,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
 
-  const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, agentTitle: agent?.title, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
+  const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
@@ -626,12 +626,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const workerRow = (v: TeamView, pin: Pin, laneId: string, w: Pin["workers"][number]) => (
     <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
       <span className={`boring-dot ${w.agent.status} ${glyphCls(w.agent.status, w.attention?.tone)}`} />
-      {/* idea-271: the open worker is already named in the Needs-you strip and the agent header; keep the selected row but do not repeat the title a third time */}
-      <span className="boring-row-label">{isOn(v, "worker:" + w.agent.id) && workerNeedsYou(w) ? "Worker" : w.agent.title ?? w.agent.id.slice(0, 8)}</span>
+      <span className="boring-row-label">{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
     </button>
   );
-  /** R3.1: under Desk / a lane the tree shows only the on-screen worker and workers that need you (one line, no reason); the rest folds into "▸ N running · M idle", which opens the right panel's Workers tab. */
+  /** R3.1: under Desk / a lane the tree shows only the on-screen worker row (B7a); all other workers, alerting ones included, fold into "▸ N running · M idle", which opens the right panel's Workers tab. */
   const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], listId: string, foldId: string, onScreen: boolean, open: () => void) => {
     const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id));
     const rest = workers.filter((w) => !shown.includes(w));

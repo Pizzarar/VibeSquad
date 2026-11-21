@@ -207,6 +207,8 @@ test("6. No agent title appears more than twice in the visible viewport", guard(
       const out = {};
       for (const e of document.querySelectorAll("body *")) {
         if (e.children.length || !inView(e)) continue;
+        // The open agent header is the chat pane itself, not a duplicate list entry: the 2 allowed navigation hits are Needs you + the selected tree row.
+        if (e.closest('[data-testid="boring-agent-header"]')) continue;
         const t = e.textContent.trim();
         if (titles.has(t)) out[t] = (out[t] ?? 0) + 1;
       }
