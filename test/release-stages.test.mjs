@@ -191,6 +191,19 @@ describe("signing env (F1)", () => {
     assert.equal(envs["build-android.mjs"].OTHER, "kept");
   });
 
+  test("Authenticode preflight (sign-windows --check) child env has no password; build-desktop child does", () => {
+    const { exec } = fakeExec();
+    const envs = {};
+    const wrapped = (cmd, args, opts) => {
+      envs[basename(String(args[0]))] = opts?.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD], { rootDir: makeRoot(), exec: wrapped, env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "env-pw", OTHER: "kept" }, log: () => {}, resolveTauriCli: () => "t.js", readSecret: noStore });
+    assert.equal("TAURI_SIGNING_PRIVATE_KEY_PASSWORD" in envs["sign-windows.mjs"], false);
+    assert.equal(envs["sign-windows.mjs"].OTHER, "kept");
+    assert.equal(envs["build-desktop.mjs"].TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "env-pw");
+  });
+
   test("build stage: an explicitly empty env var means no password and the store is not read", () => {
     const { exec } = fakeExec();
     let reads = 0;
@@ -502,5 +515,62 @@ describe("review fixes", () => {
     assert.throws(() => parseArgs(["build", "--unsigned", "--no-authenticode"]), /cannot be combined/);
     assert.equal(parseArgs(["build", "--unsigned"]).unsigned, true);
     assert.equal(parseArgs(["build", "--no-authenticode"]).noAuthenticode, true);
+  });
+});
+
+// Source scan: every child-process call, with the text of its argument list (string/template literals skipped).
+function childCalls(src, callee) {
+  const out = [];
+  let i = 0;
+  while ((i = src.indexOf(`${callee}(`, i)) !== -1) {
+    if (/[\w.]/.test(src[i - 1] || "")) {
+      i += callee.length;
+      continue;
+    }
+    let j = i + callee.length + 1;
+    let depth = 1;
+    let quote = null;
+    for (; j < src.length && depth; j++) {
+      const c = src[j];
+      if (quote) {
+        if (c === "\\") j++;
+        else if (c === quote) quote = null;
+      } else if (c === '"' || c === "'" || c === "`") quote = c;
+      else if (c === "(") depth++;
+      else if (c === ")") depth--;
+    }
+    out.push({ at: i, text: src.slice(i, j) });
+    i = j;
+  }
+  return out;
+}
+
+describe("updater key password never leaks to other children (source scan)", () => {
+  const serverDir = join(import.meta.dirname, "..", "server");
+  test("build-desktop: password detached from process.env before any child; every spawn passes an explicit allowed env", () => {
+    const src = readFileSync(join(serverDir, "build-desktop.mjs"), "utf8");
+    assert.doesNotMatch(src, /\b(spawn|spawnSync|execSync|execFile|exec)\(/, "only execFileSync spawns children here");
+    const calls = childCalls(src, "execFileSync");
+    assert.ok(calls.length >= 5, `found ${calls.length} execFileSync calls`);
+    const detachAt = src.indexOf("detachUpdaterKeyPassword()");
+    assert.ok(detachAt > 0 && detachAt < calls[0].at && detachAt < src.indexOf("ensureTls()"), "detach runs before the first child and ensureTls");
+    for (const { text } of calls) {
+      assert.match(text, /[{,]\s*env\s*[,}]|[{,]\s*env:\s*(tauriEnv|signerEnv)\s*[,}]/, `child without an explicit password-free env: ${text.slice(0, 80)}`);
+    }
+    // exactly the tauri build and signer sign children get the password-carrying envs
+    assert.equal(calls.filter((c) => /env:\s*tauriEnv/.test(c.text)).length, 1);
+    assert.equal(calls.filter((c) => /env:\s*signerEnv/.test(c.text)).length, 1);
+    assert.match(src, /const env = withoutUpdaterKeyPassword\(baseEnv\);/);
+  });
+
+  test("release.mjs: main detaches the password; node children get only stripped or signing envs", () => {
+    const src = readFileSync(join(serverDir, "release.mjs"), "utf8");
+    assert.match(src, /if \(isMain\) \{[\s\S]*?const env = detachUpdaterKeyPassword\(\);[\s\S]*?runRelease\(process\.argv\.slice\(2\), \{ env \}\);/);
+    const nodeChildren = childCalls(src, "exec").filter((c) => c.text.startsWith("exec(process.execPath"));
+    assert.equal(nodeChildren.length, 4, nodeChildren.map((c) => c.text.slice(0, 60)).join("\n"));
+    for (const { text } of nodeChildren) {
+      assert.doesNotMatch(text, /[{,]\s*env\s*[,}]/, `raw env passed to: ${text.slice(0, 80)}`);
+      assert.match(text, /env:\s*(withoutUpdaterKeyPassword\((env|buildEnv)\)|buildEnv|updaterSigningEnv\()/, text.slice(0, 80));
+    }
   });
 });

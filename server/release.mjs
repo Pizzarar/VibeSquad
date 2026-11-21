@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readCredential, resolveUpdaterKeyPassword, withoutUpdaterKeyPassword } from "./secrets.mjs";
+import { detachUpdaterKeyPassword, readCredential, resolveUpdaterKeyPassword, withoutUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -489,7 +489,7 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
     if (!opts.unsigned && !opts.noAuthenticode) {
       // Authenticode (tauri signCommand overlay) runs inside the build, before the minisign updater .sig below.
       try {
-        exec(process.execPath, [join(root, "scripts", "sign-windows.mjs"), "--check"], { cwd: root, env, stdio: "inherit" });
+        exec(process.execPath, [join(root, "scripts", "sign-windows.mjs"), "--check"], { cwd: root, env: withoutUpdaterKeyPassword(env), stdio: "inherit" });
       } catch {
         throw new Error("Windows signing is not set up (see the sign-windows --check output above). Fix it, or pass --unsigned for a test build.");
       }
@@ -567,5 +567,8 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
-  runRelease(process.argv.slice(2));
+  // git/gh children here inherit process.env: take the updater key password out of it first. runRelease gets the
+  // snapshot and hands the password only to tauri build (build-desktop.mjs) and tauri signer sign.
+  const env = detachUpdaterKeyPassword();
+  runRelease(process.argv.slice(2), { env });
 }

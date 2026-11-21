@@ -5,16 +5,19 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { ensureTls, tlsDir } from "./auth.mjs";
 import { packagedStamp } from "./stale-runtime.mjs";
-import { updaterKeyChildEnvs, withoutUpdaterKeyPassword } from "./secrets.mjs";
+import { detachUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
 const cargoBin = join(homedir(), ".cargo", "bin");
+// Before any child runs: take the updater key password out of process.env (release.mjs passes it in), so nothing
+// spawned here or in imported helpers (ensureTls -> openssl/icacls) inherits it by default.
+const inheritedEnv = detachUpdaterKeyPassword();
 const baseEnv = {
-  ...process.env,
-  PATH: `${process.env.PATH || ""};${cargoBin}`,
+  ...inheritedEnv,
+  PATH: `${inheritedEnv.PATH || ""};${cargoBin}`,
 };
-// Every child (npm, git, taskkill) gets `env`, which never carries the updater key password. Only `tauri build`
+// Every child (npm, git, taskkill) gets `env` explicitly, which never carries the password. Only `tauri build`
 // (tauriEnv) and `tauri signer sign` (signerEnv) below get it.
 const env = withoutUpdaterKeyPassword(baseEnv);
 
@@ -34,7 +37,7 @@ if (pinLocalCa) {
 
 if (process.platform === "win32") {
   try {
-    execFileSync("taskkill", ["/F", "/IM", "VibeSquad.exe"], { stdio: "ignore", windowsHide: true });
+    execFileSync("taskkill", ["/F", "/IM", "VibeSquad.exe"], { env, stdio: "ignore", windowsHide: true });
   } catch {}
 }
 
@@ -88,7 +91,7 @@ copyFileSync(join(rootDir, "docs", "profiles", "DEFAULT_PACK.md"), join(runtimeD
 copyFileSync(join(rootDir, "package.json"), join(runtimeDir, "package.json"));
 copyFileSync(join(rootDir, "teams.example.json"), join(runtimeDir, "teams.example.json"));
 try {
-  const gitOut = (...args) => execFileSync("git", ["-C", rootDir, ...args], { encoding: "utf8" }).trim();
+  const gitOut = (...args) => execFileSync("git", ["-C", rootDir, ...args], { env, encoding: "utf8" }).trim();
   const stamp = packagedStamp({ commit: gitOut("rev-parse", "HEAD"), builtAt: new Date().toISOString() });
   writeFileSync(join(runtimeDir, "build-stamp.json"), JSON.stringify(stamp));
   console.log(`[build:desktop] stamped runtime with commit ${stamp.commit.slice(0, 7)}`);

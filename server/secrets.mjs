@@ -94,6 +94,17 @@ export function resolveUpdaterKeyPassword({ env = process.env, read = readCreden
   return resolveSecret(UPDATER_KEY_PASSWORD, { env, read }) ?? "";
 }
 
+/**
+ * Entry points call this first: returns a snapshot of `procEnv` (password included, for the resolver) and deletes
+ * the password from `procEnv` itself, so a child spawned without an explicit env (git, gh, taskkill, openssl...)
+ * can never inherit it.
+ */
+export function detachUpdaterKeyPassword(procEnv = process.env) {
+  const snapshot = { ...procEnv };
+  delete procEnv[UPDATER_KEY_PASSWORD.envVar];
+  return snapshot;
+}
+
 /** Copy of env without the updater key password: for every child except `tauri build` and `tauri signer sign`. */
 export function withoutUpdaterKeyPassword(env) {
   const out = { ...env };

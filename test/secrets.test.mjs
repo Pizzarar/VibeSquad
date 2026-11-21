@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
-import { readCredential, resolveSecret, resolveUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword, withSecretEnv } from "../server/secrets.mjs";
+import { detachUpdaterKeyPassword, readCredential, resolveSecret, resolveUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword, withSecretEnv } from "../server/secrets.mjs";
 import { ensureAndroidKeystore, signAndVerifyApk } from "../server/build-android.mjs";
 
 const SECRET = "s3cr3t-VALUE-xyz";
@@ -100,6 +100,15 @@ describe("updater key password spec", () => {
     assert.equal(reads, 1);
     // other specs keep the old semantics: empty env falls through to the store
     assert.equal(resolveSecret({ envVar: "X", target: "t" }, { env: { X: "" }, read: () => "store" }), "store");
+  });
+
+  test("detachUpdaterKeyPassword removes the password from the live env and returns a full snapshot", () => {
+    const live = { PATH: "p", [PW]: "inherited-pw" };
+    const snap = detachUpdaterKeyPassword(live);
+    assert.equal(PW in live, false);
+    assert.equal(snap[PW], "inherited-pw");
+    assert.equal(snap.PATH, "p");
+    assert.equal(PW in detachUpdaterKeyPassword({ PATH: "p" }), false);
   });
 
   test("child envs: plain never carries the password; tauri build and signer sign do; no key = no store read", () => {
