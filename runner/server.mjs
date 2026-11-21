@@ -160,7 +160,7 @@ export function createServer(runner, { token, maxBodyBytes = MAX_BODY_BYTES, max
         if (req.method === 'DELETE') {
           const cleared = runner.clearDrain();
           console.log(JSON.stringify({ drain: 'cleared', active: cleared }));
-          return json(res, 200, { ok: true, cleared, drain: null });
+          return json(res, 200, { ok: true, cleared, drain: runner.drainState() }); // an open restart request's drain stays (idea-476)
         }
         const b = await readBody(req);
         const drain = runner.setDrain({ ttlMs: b.ttlMs, reason: typeof b.reason === 'string' ? b.reason : '' });

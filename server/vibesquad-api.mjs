@@ -363,7 +363,7 @@ export function agentLogFields(caller, { type, refs }) {
  * drain means drained. The held list and the roster come from the runner; either unreadable refuses too (fail closed:
  * nothing is recorded as drained on a guess). Any other entry, and the owner's shell, pass untouched.
  */
-export async function drainedFeedbackGate(caller, type, text, backend) {
+export async function drainedFeedbackGate(caller, type, text, backend, teams = null) {
   if (!caller || type !== "metric" || !isDrainedFeedback(text)) return;
   const b = backend ?? sharedRunnerBackend();
   let held = null;
@@ -375,7 +375,7 @@ export async function drainedFeedbackGate(caller, type, text, backend) {
   if (held?.ids?.length) {
     try { agents = await b.listAgents(); } catch (e) { console.warn(`[vibesquad] drained gate: agent list failed: ${e?.message ?? e}`); }
   }
-  const why = drainedLogRefusal(caller.id, { held, agents, teams: loadTeamsRegistry() });
+  const why = drainedLogRefusal(caller.id, { held, agents, teams: teams ?? loadTeamsRegistry(), callerTeam: caller.team ?? null, callerLane: caller.lane ?? null });
   if (why) throw Object.assign(new Error(why), { status: 409 });
 }
 

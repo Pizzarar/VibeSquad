@@ -65,18 +65,25 @@ export const isDrainedFeedback = (text) => DRAINED_RE.test(String(text ?? "").tr
  * Fail closed: without a readable held list or agent list nothing is recorded as drained. Returns null (may log) or the
  * refusal reason.
  */
-export function drainedLogRefusal(callerId, { held, agents, teams = loadTeamsRegistry() } = {}) {
+export function drainedLogRefusal(callerId, { held, agents, teams = loadTeamsRegistry(), callerTeam = null, callerLane = null } = {}) {
   const id = String(callerId ?? "");
   if (!held || !Array.isArray(held.ids)) return "not recorded as drained: the runner's held background work could not be read (runner down, booting or too old to report it). Retry once the runner answers; vs restart status shows what it holds.";
   if (!held.ids.length) return null;
   if (!Array.isArray(agents)) return "not recorded as drained: the runner holds background work and its agent list could not be read, so it is unknown whose. Retry in a moment.";
   const list = agents.map((a) => (a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a));
   const byId = new Map(list.map((a) => [a?.id, a]));
+  // A holder's Squad/lane through the registry (aliases resolve); an agent the registry cannot place falls back to its raw
+  // team + lane labels, so an unregistered lane still blocks its own lead rather than reading as nobody's.
   const laneOf = (a) => {
-    const w = a ? resolveAgentIdentity(a, { teams, cwd: a.cwd }) : null;
-    return w && !w.isOrphan && w.teamId && w.laneId ? `${w.teamId}/${w.laneId}` : null;
+    if (!a) return null;
+    const w = resolveAgentIdentity(a, { teams, cwd: a.cwd });
+    if (w && !w.isOrphan && w.teamId && w.laneId) return `${w.teamId}/${w.laneId}`;
+    const team = a.labels?.team ?? a.team;
+    const lane = a.labels?.lane ?? a.lane;
+    return team && lane ? `${team}/${lane}` : null;
   };
-  const mine = laneOf(byId.get(id));
+  // The caller's lane: the server-verified caller identity first (callerTeam/callerLane), else its roster record.
+  const mine = callerTeam && callerLane ? laneOf({ id, cwd: "", labels: { team: callerTeam, lane: callerLane, role: "lead" } }) : laneOf(byId.get(id));
   const blockers = new Set(holderLeads(held.ids, list, teams).leads.filter((l) => l.leadId === id).flatMap((l) => l.heldAgents));
   for (const h of held.ids) {
     const a = byId.get(h);
