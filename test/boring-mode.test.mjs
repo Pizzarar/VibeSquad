@@ -279,7 +279,7 @@ test("Lead pill: no lead running shows the empty card; running lead renders Agen
   reset();
   globalThis.__agents.set("ade-ld", { id: "ade-ld" });
   pickTab(view, "ade", "lead");
-  assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openPinMember").map(([n, pin, id]) => [n, pin.lane.id, id]), [["openPinMember", "ade", "ade-ld"]]);
+  assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "ade-ld") && !globalThis.__calls.some((c) => c[0] === "openPinMember")); // idea-257 R1: Lead opens like Brainstorm, so a split survives
   t = render(props(view));
   assert.equal(byType(t, "AgentDrawer").props.agent.id, "ade-ld");
   assert.equal(byId(t, "boring-empty-card"), null);
@@ -905,7 +905,7 @@ test("D2 BoringApp: clicking a lane opens its most urgent member and the breadcr
   reset();
   const view = squad({ pins: [lanePin("ade", { lead: mem("ade-ld", "idle", ago(1), { tone: "needs-you" }), workers: [wk("w1", "running")] }), lanePin("per")] });
   laneBtn(render(props(view)), "ade").props.onClick();
-  assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["openPinMember"]);
+  assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["openAgent"]);
   const t = render(props(view));
   assert.equal(byId(t, "boring-crumb-project").props.children, "VibeSquad");
   assert.equal(byId(t, "boring-crumb-lane").props.children, "Lane ADE");
@@ -1475,7 +1475,7 @@ test("split: an empty right pane shows the placeholder with Close split", () => 
     const t = render(props(view));
     const empty = byId(t, "boring-split-empty");
     assert.ok(empty);
-    assert.match(JSON.stringify(empty.props.children), /Pick an agent from the sidebar or Shift\+click to open here/);
+    assert.match(JSON.stringify(empty.props.children), /Click an agent in the sidebar or Needs you to open it here\./);
     assert.deepEqual(drawers(t).map((d) => d.props.agent.id), ["zz-l"]);
     byId(t, "boring-split-close").props.onClick();
     assert.deepEqual(globalThis.__calls.at(-1), ["toggleSplit"]);
@@ -1534,4 +1534,76 @@ test("split CSS: grid panes, no width media queries, only new rules; no state li
   assert.ok(!/@media/.test(sect));
   assert.match(ade, /data-testid="boring-split-toggle"/);
   assert.match(ade, /data-testid="boring-split-empty"/);
+});
+
+test("split R1: no pane mounts the context panel, so no :has(.boring-context-panel) composer rule can match inside a pane", () => {
+  const view = squad();
+  intoChat(view);
+  try {
+    globalThis.__panes = splitState();
+    const t = render(props(view));
+    assert.deepEqual(drawers(t).map((d) => d.props.noContextPanel), [true, true]);
+    // The single-pane drawer keeps its panel.
+    globalThis.__panes = undefined;
+    assert.ok(drawers(render(props(view))).every((d) => !d.props.noContextPanel));
+  } finally {
+    globalThis.__panes = undefined;
+  }
+  const drawer = readFileSync(resolve(import.meta.dirname, "..", "src", "AgentDrawer.tsx"), "utf8");
+  assert.match(drawer, /vibe === "boring" && !chatOnly && !noContextPanel && \(\s*<TimelineErrorBoundary fallbackLabel="context panel">/);
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.ok(!/\.boring-pane \.boring-context-panel \{ display: none/.test(css), "display:none leaves the panel mounted for :has()");
+});
+
+test("split R1: the workers fold works in split (folds to the active pane's agent, opens Workers); a Lead click keeps the split", () => {
+  const view = hubView([wk("r1", "running"), wk("i0", "idle")]);
+  reset();
+  const store = {};
+  const events = [];
+  globalThis.localStorage = { setItem: (k, v) => { store[k] = v; }, getItem: (k) => store[k] ?? null };
+  globalThis.window = { dispatchEvent: (e) => events.push(e), addEventListener() {}, removeEventListener() {} };
+  globalThis.CustomEvent = class { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
+  try {
+    globalThis.__panes = splitState({ activePane: "right" });
+    globalThis.__calls = [];
+    byId(withDesk(view), "boring-desk-workers-fold").props.onClick();
+    assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "toggleSplit" || c[0] === "openAgent"), [["toggleSplit"], ["openAgent", "zz-r"]]);
+    assert.equal(store["vs.context-panel.tab"], "Workers");
+    assert.deepEqual(events.map((e) => e.detail.tab), ["Workers"]);
+  } finally {
+    globalThis.__panes = undefined;
+    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+  }
+});
+
+test("split R1: Lead pill opens in the active pane (no toggleSplit) and Shift+click targets the right pane", () => {
+  const view = squad();
+  intoChat(view);
+  const win = (event) => (globalThis.window = { event, addEventListener() {}, removeEventListener() {} });
+  try {
+    globalThis.__panes = splitState();
+    win({ type: "click", shiftKey: false });
+    byId(render(props(view)), "boring-top-lead").props.onClick();
+    assert.ok(!globalThis.__calls.some((c) => c[0] === "toggleSplit"));
+    assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "ade-ld"));
+    globalThis.__calls = [];
+    win({ type: "click", shiftKey: true });
+    byId(render(props(view)), "boring-top-lead").props.onClick();
+    assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openAgentInTab"), [["openAgentInTab", "ade-ld", "right"]]);
+  } finally {
+    globalThis.__panes = undefined;
+    delete globalThis.window;
+  }
+});
+
+test("split R1: entering split from a fallback agent opens it in the left pane first", () => {
+  const view = squad();
+  intoChat(view);
+  globalThis.__panes = { split: false, activePane: "left", leftActiveId: null, rightActiveId: null };
+  try {
+    byId(render(props(view)), "boring-split-toggle").props.onClick();
+    assert.deepEqual(globalThis.__calls.map((c) => c[0]), ["openAgent", "toggleSplit"]);
+  } finally {
+    globalThis.__panes = undefined;
+  }
 });

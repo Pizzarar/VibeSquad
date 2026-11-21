@@ -1233,6 +1233,10 @@ html[data-vibe="boring"] .boring-chat-split { flex: 1 1 0; min-height: 0; displa
 html[data-vibe="boring"] .boring-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg-card); border-top: 2px solid transparent; }
 html[data-vibe="boring"] .boring-pane-active { border-top-color: var(--accent); }
 html[data-vibe="boring"] .boring-pane > .drawer { flex: 1 1 0; height: 100%; min-height: 0; width: 100%; display: flex; flex-direction: column; border: 0; background: var(--bg-card); box-shadow: none !important; }
-html[data-vibe="boring"] .boring-pane .boring-context-panel { display: none; }
+/* The context panel is not mounted inside a pane (AgentDrawer noContextPanel), so none of the :has(.boring-context-panel) composer rules can match here. */
+html[data-vibe="boring"] .boring-pane:not(.boring-pane-active) .boring-agent-name { color: var(--text-dim); }
+html[data-vibe="boring"] .boring-pane-active .boring-agent-header { background: color-mix(in srgb, var(--accent) 8%, var(--surface-1)); box-shadow: inset 3px 0 0 var(--accent); }
 html[data-vibe="boring"] .boring-split-empty { margin: auto; max-width: 360px; padding: 24px; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; color: var(--text-dim); }
 html[data-vibe="boring"] .boring-split-empty p { margin: 0; }
+html[data-vibe="boring"] .boring-split-hint { font-size: 12px; color: var(--text-dim); }
+html[data-vibe="boring"] .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
