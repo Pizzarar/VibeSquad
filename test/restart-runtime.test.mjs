@@ -11,6 +11,12 @@ import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
 import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid } from "../scripts/restart-runtime.mjs";
 
+// idea-471: the vs-rs- runner scratch dirs are created inline and never removed by the Runner. Collect and remove them
+// after the file runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY).
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
+const rsDir = () => { const d = mkdtempSync(path.join(os.tmpdir(), "vs-rs-")); tmpDirs.push(d); return d; };
+
 const listen = (srv, port = 0) => new Promise((r) => srv.listen(port, "127.0.0.1", () => r(srv.address().port)));
 const close = (srv) => new Promise((r) => { srv.closeAllConnections?.(); srv.close(() => r()); });
 const call = (port, method, route, headers = {}) => new Promise((resolve, reject) => {
@@ -61,7 +67,7 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
       return { send() { emit("status", { status: "running" }); }, cancel() {}, kill() { rec.killed += 1; } };
     },
   };
-  const runner = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: adapter } });
+  const runner = new Runner({ dir: rsDir(), adapters: { claude: adapter } });
   let shutdownDone;
   const stopped = new Promise((r) => { shutdownDone = r; });
   const srv = createRunnerServer(runner, { token: "t0k", hash: "h", onShutdown: () => { runner.shutdown({ keepResumable: true }); shutdownDone(); } });
@@ -92,7 +98,7 @@ test("runner POST /shutdown keeps agents resumable: cut agent reads lost, idle r
     assert.equal(await status(idle), "idle", "a prompt-less resume settles to idle once the adapter is up (never `starting` forever: idea-109)");
   } finally { await close(srv); }
   // Contrast (the old behaviour this replaces): a plain shutdown() exits every agent for good.
-  const r2 = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: adapter } });
+  const r2 = new Runner({ dir: rsDir(), adapters: { claude: adapter } });
   const id2 = r2.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta: {} });
   await new Promise((r) => setTimeout(r, 30));
   r2.shutdown();
@@ -486,7 +492,8 @@ test("vs restart: --timeout must be a positive integer; unsafe launch args rejec
   await assert.rejects(run({}, { env: { VIBESQUAD_HOME: 'C:\\x" --evil "' } }), /quote or control/);
   await assert.rejects(run({}, { env: { VIBESQUAD_HOME: "C:\\x\ny" } }), /quote or control/);
   // WMI drops our env, so the values travel as flags
-  const home = path.join(os.tmpdir(), "vs-home-x");
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-home-"));
+  tmpDirs.push(home); // commandRestart creates <home>/logs; clean it up (idea-471)
   const env = await run({}, { env: { VIBESQUAD_HOME: home, VIBESQUAD_DESKTOP_CONFIG_DIR: path.join(os.tmpdir(), "cfg-x"), VIBESQUAD_PORT: "4999" } });
   const a = env.seen[0];
   for (const f of ["--vs-home", "--home", "--out-dir", "--config-dir", "--port"]) assert.ok(a.includes(f), f);
@@ -498,10 +505,10 @@ test("vs restart: --timeout must be a positive integer; unsafe launch args rejec
   await assert.rejects(assertRestartCaller(null, teams, {}), /no owner proof/, "a scrubbed shell is not the owner");
   await assert.rejects(run({}, { hasOwnerProof: undefined, env: {} }), /no owner proof/);
   const ownerHome = mkdtempSync(path.join(os.tmpdir(), "vs-owner-"));
+  tmpDirs.push(ownerHome); // cleaned by test.after even if an assert below throws
   writeFileSync(path.join(ownerHome, "local-token"), "a".repeat(64) + "\n");
   await assert.doesNotReject(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome }), "owner shell: the local token is the proof");
   await assert.rejects(assertRestartCaller(null, teams, { VIBESQUAD_HOME: ownerHome, VS_AGENT_ID: "rn-abcdef123456" }), /403/, "an agent id is never the owner, whatever it can read; without a token it is refused outright (X1d)");
-  rmSync(ownerHome, { recursive: true, force: true });
   await assert.rejects(assertRestartCaller(as("worker", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/);
   await assert.rejects(assertRestartCaller(as("lead", "bug-chaser"), teams, agentEnv), /only the owner or the Overlord/, "a non-hub lead");
   await assert.rejects(assertRestartCaller(as("brainstorm", "vibesquad"), teams, agentEnv), /only the owner/);
@@ -1723,7 +1730,7 @@ test("drainTtlMs: wait + stop + 120 s, floored at 1 s, capped at the runner's 2 
 
 // Real Runner + real runner HTTP server + the real restart flow's /drain calls against it (only the provider is fake).
 test("drain end to end: the restart's POST/DELETE against a real runner server set and clear Runner.drainState and /health", async () => {
-  const runner = new Runner({ dir: mkdtempSync(path.join(os.tmpdir(), "vs-rs-")), adapters: { claude: { canPark: true, start() { return { send() {}, cancel() {}, kill() {} }; } } } });
+  const runner = new Runner({ dir: rsDir(), adapters: { claude: { canPark: true, start() { return { send() {}, cancel() {}, kill() {} }; } } } });
   const srv = createRunnerServer(runner, { token: "t0k", hash: "h" });
   const port = await listen(srv);
   try {
