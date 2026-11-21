@@ -8,7 +8,7 @@ import { after, describe, test } from "node:test";
 
 import { findLaneInRegistry } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
-import { checkHead, checkPush, evaluatePush, formatRefusal, parseIncludes, parseLaneTag, parsePrePushLines } from "../server/push-guard.mjs";
+import { activeDefaultHooks, checkHead, checkPush, evaluatePush, formatRefusal, installHooks, parseIncludes, parseLaneTag, parsePrePushLines } from "../server/push-guard.mjs";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const HOOKS = join(ROOT, ".githooks").replace(/\\/g, "/");
@@ -18,7 +18,7 @@ const TEAMS = [
     name: "Squad A",
     lanes: [
       { id: "squad-a", name: "Squad A", hub: true, code: "Hub" },
-      { id: "lane-alpha", name: "Alpha Lane", code: "Alp" },
+      { id: "lane-alpha", name: "Alpha Lane", code: "Alp", aliases: ["alpha-old"] },
       { id: "lane-beta", name: "Beta Lane", code: "Bet" },
     ],
   },
@@ -160,20 +160,25 @@ function ok(cwd, args, env) {
 }
 
 let n = 0;
-function freshRepo() {
+function freshRepo({ push = true, dev = false, hooks = true } = {}) {
   const dir = join(tmp, `r${++n}`);
   const origin = join(dir, "origin.git");
+  const devRemote = join(dir, "dev.git");
   const work = join(dir, "work");
   mkdirSync(dir, { recursive: true });
   ok(dir, ["init", "-q", "--bare", "-b", "master", origin]);
+  if (dev) ok(dir, ["init", "-q", "--bare", "-b", "master", devRemote]);
   ok(dir, ["init", "-q", "-b", "master", work]);
-  for (const [k, v] of [["user.name", "Test Agent"], ["user.email", "agent@example.invalid"], ["commit.gpgsign", "false"], ["core.hooksPath", HOOKS], ["core.autocrlf", "false"]]) ok(work, ["config", k, v]);
+  for (const [k, v] of [["user.name", "Test Agent"], ["user.email", "agent@example.invalid"], ["commit.gpgsign", "false"], ["core.autocrlf", "false"]]) ok(work, ["config", k, v]);
+  if (hooks) ok(work, ["config", "core.hooksPath", HOOKS]);
   ok(work, ["remote", "add", "origin", origin]);
+  if (dev) ok(work, ["remote", "add", "dev", devRemote]);
   writeFileSync(join(work, "a.txt"), "base\n");
   ok(work, ["add", "a.txt"]);
   ok(work, ["commit", "-q", "-m", "base"]);
-  ok(work, ["push", "-q", "origin", "master"]); // no merges: passes even with no identity
-  return { work, origin };
+  if (push) ok(work, ["push", "-q", "origin", "master"]); // no merges: passes even with no identity
+  if (push && dev) ok(work, ["push", "-q", "dev", "master"]);
+  return { work, origin, dev: devRemote };
 }
 function merge(work, branch, subject, { inner = false } = {}) {
   ok(work, ["checkout", "-q", "-b", branch, "master"]);
@@ -269,5 +274,112 @@ describe("push-guard: pre-push hook on a real push", () => {
     assert.equal(res.results[0].result.refused[0].reason, "other-lane");
     const mine = await checkHead({ cwd: work, env: { VS_LANE: "lane-beta" }, registry });
     assert.equal(mine.ok, true);
+  });
+
+  test("dev mirror: master that origin already has pushes to a lagging dev; an unpushed foreign merge does not", () => {
+    const { work, origin, dev } = freshRepo({ dev: true });
+    // Lane beta's merge lands on origin (pushed by beta); dev now lags origin by that @bet merge.
+    const theirs = merge(work, "unit-theirs", "Merge branch 'unit-theirs': x (@bet idea-2)");
+    assert.equal(run(work, ["push", "origin", "master"], lane("lane-beta")).code, 0);
+    assert.equal(remoteTip(origin), theirs);
+    const mirror = run(work, ["push", "dev", "master"], lane("lane-alpha"));
+    assert.equal(mirror.code, 0, mirror.err);
+    assert.equal(remoteTip(dev), theirs);
+    // A second @bet merge not on origin yet: refused for dev too (compared against origin/master).
+    const unpushed = merge(work, "unit-theirs-2", "Merge branch 'unit-theirs-2': y (@bet idea-5)");
+    const r = run(work, ["push", "dev", "master"], lane("lane-alpha"));
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, new RegExp(unpushed.slice(0, 8)));
+    assert.doesNotMatch(r.err, new RegExp(theirs.slice(0, 8)));
+    assert.equal(remoteTip(dev), theirs);
+    // Pushing to origin by URL instead of by name is still the shared remote.
+    const byUrl = run(work, ["push", origin, "master"], lane("lane-alpha"));
+    assert.notEqual(byUrl.code, 0);
+    assert.match(byUrl.err, /refusing to push refs\/heads\/master/);
+  });
+
+  test("new remote branch (all-zero remote sha) carrying merges is checked like any other push", () => {
+    const { work, origin } = freshRepo({ push: false });
+    const theirs = merge(work, "unit-theirs", "Merge branch 'unit-theirs': x (@bet idea-2)");
+    const r = run(work, ["push", "origin", "master"], lane("lane-alpha"));
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, new RegExp(`${theirs.slice(0, 8)} Merge branch 'unit-theirs'`));
+    assert.notEqual(run(origin, ["rev-parse", "--verify", "--quiet", "master"]).code, 0);
+    const own = run(work, ["push", "origin", "master"], lane("lane-beta"));
+    assert.equal(own.code, 0, own.err);
+    assert.equal(remoteTip(origin), theirs);
+  });
+
+  test("non-fast-forward force push of master checks <old remote tip>..<new tip>", () => {
+    const { work, origin } = freshRepo();
+    const first = merge(work, "unit-first", "Merge branch 'unit-first': x (@alp idea-1)");
+    assert.equal(run(work, ["push", "origin", "master"], lane("lane-alpha")).code, 0);
+    ok(work, ["reset", "-q", "--hard", "HEAD~1"]);
+    merge(work, "unit-theirs", "Merge branch 'unit-theirs': y (@bet idea-2)");
+    const r = run(work, ["push", "-f", "origin", "master"], lane("lane-alpha"));
+    assert.notEqual(r.code, 0);
+    assert.match(r.err, /unit-theirs/);
+    assert.equal(remoteTip(origin), first);
+    ok(work, ["reset", "-q", "--hard", "HEAD~1"]);
+    const mine = merge(work, "unit-redo", "Merge branch 'unit-redo': z (@alp idea-3)");
+    const f = run(work, ["push", "-f", "origin", "master"], lane("lane-alpha"));
+    assert.equal(f.code, 0, f.err);
+    assert.equal(remoteTip(origin), mine);
+  });
+});
+
+describe("push-guard: aliases, install and the vs verb", () => {
+  test("a lane alias in the tag resolves to the pusher's lane", () => {
+    const r = evaluatePush({ merges: [{ sha: SHA("a"), subject: "Merge 'u' (@alpha-old idea-1)" }], pusherLane: "lane-alpha", ...registry });
+    assert.equal(r.ok, true);
+    assert.equal(r.own[0].lane, "lane-alpha");
+  });
+
+  test("installHooks sets core.hooksPath once, refuses to replace another hooksPath without force", () => {
+    const { work } = freshRepo({ push: false, hooks: false });
+    assert.deepEqual(installHooks({ cwd: work }), { changed: true, hooksPath: ".githooks", previous: "" });
+    assert.equal(ok(work, ["config", "core.hooksPath"]), ".githooks");
+    assert.equal(installHooks({ cwd: work }).changed, false);
+    ok(work, ["config", "core.hooksPath", "other-hooks"]);
+    assert.throws(() => installHooks({ cwd: work }), /already other-hooks; pass --force/);
+    assert.equal(installHooks({ cwd: work, force: true }).previous, "other-hooks");
+  });
+
+  test("installHooks refuses when active .git/hooks would be silenced, unless forced", () => {
+    const { work } = freshRepo({ push: false, hooks: false });
+    writeFileSync(join(work, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n");
+    assert.deepEqual(activeDefaultHooks({ cwd: work }), ["pre-commit"]);
+    assert.throws(() => installHooks({ cwd: work }), /active hooks in \.git\/hooks would stop running.*pre-commit/);
+    assert.notEqual(run(work, ["config", "core.hooksPath"]).code, 0);
+    assert.equal(installHooks({ cwd: work, force: true }).changed, true);
+  });
+
+  test("vs push-guard check prints the own/included summary on OK and the refusal otherwise; install works", async () => {
+    process.env.VIBESQUAD_HOME ??= join(tmp, "home");
+    process.env.VIBESQUAD_TEAMS_FILE = teamsFile;
+    const { commandPushGuard } = await import("../cli/vs.mjs");
+    const { work } = freshRepo();
+    ok(work, ["fetch", "-q", "origin"]);
+    merge(work, "unit-mine", "Merge branch 'unit-mine': y (@alp idea-3)");
+    const theirs = merge(work, "unit-theirs", "Merge branch 'unit-theirs': x (@bet idea-2)");
+    writeFileSync(join(work, "notes.md"), "direct\n");
+    ok(work, ["add", "notes.md"]);
+    ok(work, ["commit", "-q", "-m", "docs: direct commit on master"]);
+    let text = "";
+    const out = (s) => (text += s);
+    const refused = await commandPushGuard({ _: ["check"] }, { cwd: work, env: { VS_LANE: "lane-alpha" }, out, registry });
+    assert.equal(refused, 1);
+    assert.match(text, /refusing to push/);
+    text = "";
+    const passed = await commandPushGuard({ _: ["check"] }, { cwd: work, env: { VS_LANE: "lane-alpha", VS_PUSH_INCLUDE: theirs.slice(0, 8) }, out, registry });
+    assert.equal(passed, 0);
+    assert.match(text, /OK to push HEAD to origin\/master/);
+    assert.match(text, /own\s+\w{8} Merge branch 'unit-mine'/);
+    assert.match(text, /included\s+\w{8} Merge branch 'unit-theirs'/);
+    assert.match(text, /direct \(non-merge\) commit/);
+    const bare = freshRepo({ push: false, hooks: false });
+    text = "";
+    assert.equal(await commandPushGuard({ _: ["install"] }, { cwd: bare.work, out }), 0);
+    assert.match(text, /core\.hooksPath=\.githooks/);
   });
 });

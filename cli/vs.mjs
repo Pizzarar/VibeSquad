@@ -3003,21 +3003,19 @@ function commandWorktree(flags) {
 }
 
 /** idea-452 shared-master push guard: `vs push-guard check [remote]` dry-runs the pre-push hook for HEAD; `install` sets core.hooksPath. */
-export async function commandPushGuard(flags, { cwd = process.cwd(), out = (s) => process.stdout.write(s) } = {}) {
+export async function commandPushGuard(flags, { cwd = process.cwd(), env = process.env, out = (s) => process.stdout.write(s), registry } = {}) {
   const sub = String(flags._[0] ?? "check").toLowerCase();
   const guard = await import("../server/push-guard.mjs");
   if (sub === "check") {
     const remote = String(flags._[1] ?? "origin");
-    const res = await guard.checkHead({ remote, cwd });
-    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master
-` : res.message);
+    const res = await guard.checkHead({ remote, cwd, env, registry });
+    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master\n${guard.summarize(res.results)}` : res.message);
     return res.ok ? 0 : 1;
   }
   if (sub === "install") {
     const res = guard.installHooks({ cwd, force: Boolean(flags.force) });
-    out(res.changed ? `vs push-guard: core.hooksPath=${res.hooksPath}${res.previous ? ` (was ${res.previous})` : ""}
-` : `vs push-guard: already installed (core.hooksPath=${res.hooksPath})
-`);
+    const was = res.previous ? ` (was ${res.previous})` : "";
+    out(res.changed ? `vs push-guard: core.hooksPath=${res.hooksPath}${was}\n` : `vs push-guard: already installed (core.hooksPath=${res.hooksPath})\n`);
     return 0;
   }
   throw new Error(`unknown push-guard subcommand "${sub}". Use: vs push-guard check [remote] | install [--force]`);

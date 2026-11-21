@@ -11,13 +11,17 @@
 // Pusher lane: VS_PUSH_LANE / `git -c vs.pushLane=<lane>`, else VS_LANE (set by VS on every agent).
 // Include:     VS_PUSH_INCLUDE=<sha>[,<sha>] / `git -c vs.pushInclude=<sha>[,<sha>] push ...` (one-shot).
 // Only refs/heads/master and refs/heads/main are guarded: unit branches and tags (release.mjs pushes
-// refs/tags/beta) pass untouched.
+// refs/tags/beta) pass untouched. The shared remote is origin: a push there is checked against the tip origin
+// reports; a push of master to any other remote (the dev mirror lags origin) is checked against the local
+// origin/<branch> tip instead, so mirroring what origin already has never trips the guard.
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 export const GUARDED_REFS = Object.freeze(["refs/heads/master", "refs/heads/main"]);
 export const HOOKS_PATH = ".githooks";
+export const SHARED_REMOTE = "origin";
 const ZERO = /^0+$/;
 const SEP = "\x1f";
 
@@ -124,9 +128,35 @@ export function parsePrePushLines(text) {
     .map(([localRef, localSha, remoteRef, remoteSha]) => ({ localRef, localSha, remoteRef, remoteSha }));
 }
 
-/** First-parent merges in the push range, newest first. remoteSha all-zero (new remote branch): everything not on the remote. */
-export function listPushMerges({ localSha, remoteSha, remote = "origin", cwd = process.cwd(), git = defaultGit }) {
-  const range = remoteSha && !ZERO.test(remoteSha) ? [`${remoteSha}..${localSha}`] : [localSha, "--not", `--remotes=${remote}`];
+/** True when the push goes to the shared remote, by name or by its URL (`git push <url> master`). */
+export function isSharedRemote(remote, url = "", { cwd = process.cwd(), git = defaultGit } = {}) {
+  if (remote === SHARED_REMOTE) return true;
+  let sharedUrl = "";
+  try {
+    sharedUrl = git(["remote", "get-url", SHARED_REMOTE], cwd).trim();
+  } catch { /* no origin remote */ }
+  return Boolean(sharedUrl) && (url === sharedUrl || remote === sharedUrl);
+}
+
+/**
+ * The revisions to exclude for one push. Shared remote: its real tip (all-zero = new branch: everything not on any
+ * origin ref). Other remote: the local origin/<branch> tip, so only what origin has not got yet must be yours; with
+ * no such ref it falls back to the target remote's own tip.
+ */
+export function pushBase({ remoteSha, remote = SHARED_REMOTE, shared = remote === SHARED_REMOTE, branch = "master", cwd = process.cwd(), git = defaultGit }) {
+  if (!shared) {
+    try {
+      const tip = git(["rev-parse", "--verify", "--quiet", `refs/remotes/${SHARED_REMOTE}/${branch}^{commit}`], cwd).trim();
+      if (tip) return { exclude: [tip], label: `${SHARED_REMOTE}/${branch}` };
+    } catch { /* no origin tracking ref */ }
+  }
+  if (remoteSha && !ZERO.test(remoteSha)) return { exclude: [remoteSha], label: `${remote} ${branch}` };
+  return { exclude: [`--remotes=${remote}`], label: `${remote} (new branch)` };
+}
+
+/** First-parent merges in the push range, newest first; `exclude` comes from pushBase. */
+export function listPushMerges({ localSha, exclude, cwd = process.cwd(), git = defaultGit }) {
+  const range = [localSha, "--not", ...exclude];
   const fmt = `--format=%H${SEP}%P${SEP}%s`;
   const out = git(["log", "--first-parent", fmt, ...range, "--"], cwd);
   const merges = [];
@@ -164,19 +194,22 @@ async function defaultTeams() {
  * Check every guarded ref update of one push. Returns { ok, message, results: [{ ref, result, direct }] }.
  * A range git cannot walk (remote tip not fetched) fails closed.
  */
-export async function checkPush({ updates, remote = "origin", cwd = process.cwd(), env = process.env, git = defaultGit, registry } = {}) {
+export async function checkPush({ updates, remote = SHARED_REMOTE, url = "", cwd = process.cwd(), env = process.env, git = defaultGit, registry } = {}) {
   const guarded = updates.filter((u) => GUARDED_REFS.includes(u.remoteRef) && !ZERO.test(u.localSha));
   if (!guarded.length) return { ok: true, message: "", results: [] };
   const { teams, findLane } = registry ?? (await defaultTeams());
   const who = pusherFromEnv({ env, cwd, git });
+  const shared = isSharedRemote(remote, url, { cwd, git });
   const results = [];
   let message = "";
   for (const u of guarded) {
+    const branch = u.remoteRef.replace("refs/heads/", "");
     let listed;
     try {
-      listed = listPushMerges({ localSha: u.localSha, remoteSha: u.remoteSha, remote, cwd, git });
+      const base = pushBase({ remoteSha: u.remoteSha, remote, shared, branch, cwd, git });
+      listed = listPushMerges({ localSha: u.localSha, exclude: base.exclude, cwd, git });
     } catch (err) {
-      message += `vs push-guard: cannot read ${remote} ${u.remoteRef}..${u.localSha.slice(0, 8)} (${String(err?.message ?? err).split("\n")[0]}). Run \`git fetch ${remote}\`, read \`git log ${remote}/${u.remoteRef.replace("refs/heads/", "")}..HEAD\`, then push again.\n`;
+      message += `vs push-guard: cannot read ${remote} ${u.remoteRef}..${u.localSha.slice(0, 8)} (${String(err?.message ?? err).split("\n")[0]}). Run \`git fetch ${remote}\`, read \`git log ${SHARED_REMOTE}/${branch}..HEAD\`, then push again.\n`;
       results.push({ ref: u.remoteRef, result: null, direct: [] });
       continue;
     }
@@ -189,7 +222,7 @@ export async function checkPush({ updates, remote = "origin", cwd = process.cwd(
 }
 
 /** `vs push-guard check`: what the hook would decide for pushing HEAD to <remote>/<branch> now. */
-export async function checkHead({ remote = "origin", branch = "master", cwd = process.cwd(), env = process.env, git = defaultGit, registry } = {}) {
+export async function checkHead({ remote = SHARED_REMOTE, branch = "master", cwd = process.cwd(), env = process.env, git = defaultGit, registry } = {}) {
   const localSha = git(["rev-parse", "HEAD"], cwd).trim();
   let remoteSha = "0".repeat(40);
   try {
@@ -198,16 +231,36 @@ export async function checkHead({ remote = "origin", branch = "master", cwd = pr
   return checkPush({ updates: [{ localRef: "HEAD", localSha, remoteRef: `refs/heads/${branch}`, remoteSha }], remote, cwd, env, git, registry });
 }
 
+/** Active (non-.sample) hooks in the repo's default hooks dir; core.hooksPath would silently disable them. */
+export function activeDefaultHooks({ cwd = process.cwd(), git = defaultGit } = {}) {
+  let dir = "";
+  try {
+    dir = path.resolve(cwd, git(["rev-parse", "--git-common-dir"], cwd).trim(), "hooks");
+  } catch {
+    return [];
+  }
+  try {
+    return fs.readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && !e.name.endsWith(".sample")).map((e) => e.name).sort();
+  } catch {
+    return [];
+  }
+}
+
 /** Point the repo's hooks at the tracked .githooks dir (relative: each worktree runs its own checkout's hook). */
 export function installHooks({ cwd = process.cwd(), git = defaultGit, force = false } = {}) {
   const current = gitConfigAll("core.hooksPath", cwd, git).at(-1) ?? "";
   if (current === HOOKS_PATH) return { changed: false, hooksPath: current };
   if (current && !force) throw new Error(`core.hooksPath is already ${current}; pass --force to replace it with ${HOOKS_PATH}`);
+  const active = current ? [] : activeDefaultHooks({ cwd, git });
+  if (active.length && !force) {
+    throw new Error(`active hooks in .git/hooks would stop running once core.hooksPath=${HOOKS_PATH}: ${active.join(", ")}. Move them into ${HOOKS_PATH}/ or pass --force`);
+  }
   git(["config", "core.hooksPath", HOOKS_PATH], cwd);
   return { changed: true, hooksPath: HOOKS_PATH, previous: current };
 }
 
-function summarize(results) {
+/** The OK-path listing: own/included merges plus the direct-commit note. */
+export function summarize(results) {
   const lines = [];
   for (const { ref, result, direct } of results) {
     if (!result) continue;
@@ -225,10 +278,10 @@ async function readStdin() {
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const [mode, remoteName = "origin"] = argv;
+  const [mode, remoteName = SHARED_REMOTE, url = ""] = argv;
   if (mode === "pre-push") {
     const updates = parsePrePushLines(await readStdin());
-    const res = await checkPush({ updates, remote: remoteName });
+    const res = await checkPush({ updates, remote: remoteName, url });
     if (!res.ok) {
       process.stderr.write(res.message);
       return 1;
