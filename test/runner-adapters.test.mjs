@@ -595,3 +595,17 @@ test('opencode: cancel() mid-turn then the aborted prompt failing + exit 1 is no
   const e = await t.exit();
   assert.notEqual(e.upstream, true);
 });
+
+test('opencode: a queued prompt starting right after the failing one does not drop the exit reason (R2 Low)', async () => {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    (c, m) => { upstreamErr(c, m); },
+    () => {}, // the queued second prompt never answers: the child dies
+  ]);
+  runner.send(id, 'queued behind the first');
+  await tick(); await tick(); await tick();
+  spawnImpl.last.emit('exit', 1, null);
+  await tick(); await tick();
+  const e = runner.timeline(id).find((x) => x.type === 'exit');
+  assert.equal(e.upstream, true);
+  assert.match(e.error, /Internal service failure/);
+});

@@ -76,3 +76,55 @@ test('spawn failover reads caps through dropExpiredCaps (expired entries gone, f
   assert.ok(src.includes("live(normalizeCappedProviders(JSON.parse"));
   assert.ok(src.includes("live(normalizeCappedProviders(deps.cappedProviders))"));
 });
+
+test('lastAssistantText: a verdict followed by a later user_message is still the last message (R2 High)', () => {
+  const tl = toTimeline([
+    { seq: 1, ts: 1, type: 'input', text: 'review' },
+    { seq: 2, ts: 2, type: 'output', text: 'PASS 0/0/0 abc1234' },
+    { seq: 3, ts: 3, type: 'turn_done' },
+    { seq: 4, ts: 4, type: 'input', text: 'follow-up question' },
+  ]);
+  assert.equal(lastAssistantText(tl), 'PASS 0/0/0 abc1234');
+});
+
+test('lastAssistantText: error fallback stops at the turn boundary, is clipped by cap, and a newer turn failure is returned', () => {
+  const old = [
+    { seq: 1, ts: 1, type: 'input', text: 'a' }, { seq: 2, ts: 2, type: 'error', message: 'old failure' },
+    { seq: 3, ts: 3, type: 'input', text: 'b' }, { seq: 4, ts: 4, type: 'output', text: 'fine' }, { seq: 5, ts: 5, type: 'turn_done' },
+    { seq: 6, ts: 6, type: 'input', text: 'c' },
+  ];
+  assert.equal(lastAssistantText(toTimeline(old)), 'fine'); // the old error is not this turn's
+  assert.equal(lastAssistantText(toTimeline(old.slice(0, 2).concat({ seq: 3, ts: 3, type: 'input', text: 'b' }))), ''); // no reply, older error hidden
+  const long = toTimeline([{ seq: 1, ts: 1, type: 'input', text: 'a' }, { seq: 2, ts: 2, type: 'error', message: 'x'.repeat(5000) }]);
+  assert.ok(lastAssistantText(long, 600).length <= 600);
+  // failed newer turn after an older reply: the failure, not the stale reply
+  const newer = toTimeline([...old.slice(2, 5), { seq: 6, ts: 6, type: 'input', text: 'c' }, { seq: 7, ts: 7, type: 'exit', code: 1, error: 'boom' }]);
+  assert.equal(lastAssistantText(newer), '[agent error] boom');
+});
+
+test('read-only expiry: an expired cap is gone on read, no second write; other providers stay uncapped', async () => {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-cap-ro-')), 'capped.json');
+  const now = Date.now();
+  setProviderCapped('opencode', true, { cappedProvidersPath: file, reason: 'x', ttlMs: 600000, now });
+  const fresh = readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true, now: now + 1000 });
+  assert.ok(fresh.opencode);
+  assert.equal(fresh.codex, undefined);
+  const { dropExpiredCaps } = await import('../server/provider-failover.mjs');
+  assert.equal(dropExpiredCaps(fresh, now + 700000).opencode, undefined);
+});
+
+test('failover: a capped opencode routes Work Order - DSP to Implement - Sonnet; a quota entry for the same family cannot shadow the cap when capped entries come first', async () => {
+  const { resolveProfileWithFailover } = await import('../server/provider-failover.mjs');
+  const profiles = [
+    { name: 'Work Order - DSP', role: 'worker', provider: 'opencode', model: 'deepseek/deepseek-v4-pro' },
+    { name: 'Implement - Sonnet', role: 'worker', provider: 'claude', model: 'claude-sonnet-5-5' },
+    { name: 'Lead - Gemini', role: 'lead', provider: 'antigravity-cli', model: 'gemini-x' },
+  ];
+  const capped = { id: 'opencode', status: 'exhausted', usedPct: 100 };
+  const quotaOk = { id: 'opencode', status: 'ok', usedPct: 3 };
+  const r = resolveProfileWithFailover('Work Order - DSP', profiles, [capped, quotaOk]); // currentUsageList order: caps first
+  assert.equal(r.failedOver, true);
+  assert.equal(r.profile.name, 'Implement - Sonnet');
+  assert.equal(resolveProfileWithFailover('Work Order - DSP', profiles, [quotaOk]).failedOver, false); // uncapped: stays
+  assert.equal(resolveProfileWithFailover('Implement - Sonnet', profiles, [capped]).failedOver, false); // other providers unaffected
+});

@@ -1676,16 +1676,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * `exhausted` entry. Shared by before(agent.create), enforceProfileAfterSpawn and agent.created (P5c).
      */
     const currentUsageList = (): any[] => {
-      const list: any[] = [
+      // Capped families FIRST: isProviderOverQuota reads the first entry that matches a family, so a quota report for the
+      // same provider (antigravity-cli, codex) must not shadow its cap.
+      const list: any[] = Object.keys(readCappedProviderMap()).map((family) => ({ id: family, status: "exhausted", usedPct: 100 }));
+      list.push(
         ...(typeof deps.usageProviders === "function"
           ? deps.usageProviders()
           : Array.isArray(deps.usageProviders)
             ? deps.usageProviders
             : []),
-      ];
-      for (const family of Object.keys(readCappedProviderMap())) {
-        list.push({ id: family, status: "exhausted", usedPct: 100 });
-      }
+      );
       return list;
     };
 
@@ -2775,12 +2775,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 20 });
         let last = "";
         let failure = "";
+        let replied = false; // the current turn already produced a reply
         for (const { item } of page.entries) {
-          if (item.type === "assistant_message" && item.text?.trim()) last = item.text.trim();
+          if (item.type === "assistant_message" && item.text?.trim()) { last = item.text.trim(); replied = true; }
           else if (item.type === "error" && item.message) failure = `[agent error] ${item.message}`;
-          else if (item.type === "user_message") { failure = ""; if (strict) last = ""; }
+          else if (item.type === "user_message") { failure = ""; replied = false; if (strict) last = ""; }
         }
-        return last || failure; // an agent that died with a reason is never a silent empty message (idea-442)
+        // a failed newer turn beats an older turn's reply; a reply in the failing turn itself still wins
+        return failure && !replied ? failure : last; // an agent that died with a reason is never a silent empty message (idea-442)
       } catch {
         return "";
       }

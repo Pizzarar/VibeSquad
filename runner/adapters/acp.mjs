@@ -248,7 +248,6 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         dropOrphanSteers();
         if (!queue.length) return;
         promptInFlight = true;
-        lastError = null; // only a failure of the turn that is ending the process may read as its cause
         cancelling = false;
         const steers = [];
         while (queue[0]?.steerOnly) steers.push(queue.shift());
