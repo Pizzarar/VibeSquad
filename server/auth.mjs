@@ -13,6 +13,56 @@ import { downloadArtifactSha256s, downloadArtifactSha256sAsync, resolveAndroidAp
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 
 export const DEVICE_COOKIE = "vs_device";
+
+// ---- E6a scoped device roles (docs/PLAN_E6_TESTER_ROLES.md) ----
+// A paired device is the "owner" (every record from before E6a: a missing role means owner) or a "bug-tester" scoped to
+// `allowedTeams`. Only an owner device is owner proof; a tester is its own caller kind and the API allowlists it (deny by
+// default). Non-browser clients (the in-game tester build) present the device token in DEVICE_TOKEN_HEADER or as
+// `Authorization: Bearer <token>` instead of the vs_device cookie.
+export const DEVICE_ROLES = Object.freeze(["owner", "bug-tester"]);
+export const DEVICE_TOKEN_HEADER = "x-vs-device-token";
+const TEAM_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const DEVICE_TOKEN_RE = /^[A-Za-z0-9_-]{16,256}$/; // base64url, like randomBytes(32).toString("base64url")
+const MAX_ALLOWED_TEAMS = 32;
+
+/** True iff `dev` is a device record with owner rights: no role (pre-E6a record) or role "owner". Unknown roles are not. */
+export const isOwnerDevice = (dev) => Boolean(dev) && (!dev.role || dev.role === "owner");
+
+const badScope = (msg) => Object.assign(new Error(msg), { status: 400 });
+
+/**
+ * The pairing scope a code / device carries: `{ role: "owner", allowedTeams: null }` (the default) or
+ * `{ role: "bug-tester", allowedTeams: [<team id>, ...] }` (non-empty, lowercased, deduped). Throws a 400 Error otherwise.
+ */
+export function normalizePairScope({ role, allowedTeams } = {}) {
+  const r = role === undefined || role === null ? "owner" : role;
+  if (typeof r !== "string" || !DEVICE_ROLES.includes(r)) throw badScope(`unknown role (expected one of: ${DEVICE_ROLES.join(", ")})`);
+  if (r === "owner") return { role: "owner", allowedTeams: null };
+  if (!Array.isArray(allowedTeams) || allowedTeams.length === 0) throw badScope("a bug-tester needs allowedTeams: a non-empty list of Squad ids");
+  if (allowedTeams.length > MAX_ALLOWED_TEAMS) throw badScope(`allowedTeams: at most ${MAX_ALLOWED_TEAMS} Squads`);
+  const out = [];
+  for (const t of allowedTeams) {
+    const id = typeof t === "string" ? t.trim().toLowerCase() : "";
+    if (!TEAM_ID_RE.test(id)) throw badScope("allowedTeams: every entry must be a Squad id (a-z, 0-9, _ or -, max 64 chars)");
+    if (!out.includes(id)) out.push(id);
+  }
+  return { role: "bug-tester", allowedTeams: out };
+}
+
+/** The role a stored device record has (pre-E6a records have none: owner). An unknown stored role is kept as-is (no rights). */
+const deviceRoleOf = (d) => (typeof d?.role === "string" && d.role ? d.role : "owner");
+
+/** A stored record's allowedTeams: null for an owner, else only the entries that are still valid Squad ids (fail closed). */
+function deviceAllowedTeamsOf(d) {
+  if (isOwnerDevice(d)) return null;
+  if (!Array.isArray(d?.allowedTeams)) return [];
+  const out = [];
+  for (const t of d.allowedTeams) {
+    const id = typeof t === "string" ? t.trim().toLowerCase() : "";
+    if (TEAM_ID_RE.test(id) && !out.includes(id)) out.push(id);
+  }
+  return out;
+}
 const CODE_TTL_MS = 300_000;
 const DEFAULT_MESHNET_IP = "";
 const DEFAULT_MESHNET_HOST = "";
@@ -571,6 +621,8 @@ const publicDevice = (d, currentId) => ({
   createdAt: d.createdAt,
   lastSeenAt: d.lastSeenAt,
   mintedByDeviceId: typeof d.mintedByDeviceId === "string" ? d.mintedByDeviceId : null,
+  role: deviceRoleOf(d),
+  allowedTeams: deviceAllowedTeamsOf(d),
   current: d.id === currentId,
 });
 
@@ -641,21 +693,52 @@ export function deviceActive(id) {
   return Boolean(list?.some((d) => d.id === id));
 }
 
+const firstHeader = (h, name) => {
+  const v = h?.[name];
+  return Array.isArray(v) ? v[0] : v;
+};
+
+/**
+ * The device token a request presents: the x-vs-device-token header or `Authorization: Bearer <token>` first
+ * (`fromHeader: true`; non-browser clients such as the in-game tester build), else the vs_device cookie. A header that is
+ * present but malformed yields `{ token: null, fromHeader: true }`: it never falls back to the cookie. Never logged.
+ */
+export function extractDeviceToken(req) {
+  const h = req?.headers ?? {};
+  const x = firstHeader(h, DEVICE_TOKEN_HEADER);
+  if (typeof x === "string" && x.trim() !== "") {
+    const t = x.trim();
+    return { token: DEVICE_TOKEN_RE.test(t) ? t : null, fromHeader: true };
+  }
+  const a = firstHeader(h, "authorization");
+  if (typeof a === "string" && /^\s*bearer\b/i.test(a)) {
+    const m = /^\s*bearer\s+(\S+)\s*$/i.exec(a);
+    return { token: m && DEVICE_TOKEN_RE.test(m[1]) ? m[1] : null, fromHeader: true };
+  }
+  const c = parseCookies(h.cookie)[DEVICE_COOKIE];
+  return { token: c || null, fromHeader: false };
+}
+
 /**
  * The paired, non-revoked device behind this request, or null. Two kinds of request:
- *  - LAN / loopback: the vs_device cookie, hashed and matched in constant time.
+ *  - LAN / loopback: the device token (x-vs-device-token / Bearer header, else the vs_device cookie), hashed and matched
+ *    in constant time. Only a cookie needs the same-site proof for writes: a browser never attaches a custom header or
+ *    Authorization to a cross-site request without a CORS preflight, which this server never grants.
  *  - E5 relay (req.relayDevice, set only by the in-process dispatcher after the device authenticated inside the E2EE
  *    channel): the device id itself, looked up in devices.json again so a revoke lands on the very next request. Any
  *    cookie or token header such a request carries is ignored: the channel identity is the only credential.
  */
 export function authenticate(req) {
   if (isRelayRequest(req)) return authenticateRelayDevice(req);
-  const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+  const { token, fromHeader } = extractDeviceToken(req);
   if (!token) return null;
   // X1-E4b L4: a cookie-authenticated write must also prove it came from this site (Origin / Sec-Fetch-Site), not rest on
   // SameSite=Strict alone. Refused before the hash lookup: no devices.json read, no last-seen, no tracked socket. Nothing is
   // recorded on the request (Gemini R1 L1): originRefusal() recomputes the same answer when a gate wants the reason.
-  if (cookieWriteRefusal(req)) return null;
+  // E6a: a header token (x-vs-device-token / Bearer) is not a CSRF vector, so only the cookie path takes this proof.
+  if (!fromHeader) {
+    if (cookieWriteRefusal(req)) return null;
+  }
   const dev = deviceByTokenHash(sha256Hex(token));
   if (!dev) return null;
   const now = Date.now();
@@ -865,12 +948,28 @@ const headerValue = (req, name) => {
 /** True when the request names an agent (a non-empty x-vs-agent-id). Such a request is never the owner. */
 export const hasAgentHeaders = (req) => headerValue(req, AGENT_ID_HEADER) !== "";
 
-/** Owner proof: a paired device cookie, or the loopback local token (header or vs_local cookie). Never for an agent request. */
+/**
+ * Owner proof: an owner-role paired device (cookie / device token header), or the loopback local token (header or vs_local
+ * cookie). Never for an agent request, never for a bug-tester device (E6a).
+ */
 export function ownerProof(req) {
   if (hasAgentHeaders(req)) return false;
   // Local owner first (Gemini R1 L1, same order as handlePairStart): a proven PC owner never runs the cookie path, so a
   // stray vs_device cookie neither touches devices.json / last-seen nor registers the socket for a device revoke.
-  return isLocalOwner(req) || Boolean(authenticate(req));
+  return isLocalOwner(req) || isOwnerDevice(authenticate(req));
+}
+
+/** E6a: the caller record for a bug-tester device. allowedTeams is a fresh copy (only valid Squad ids; [] = none). */
+const testerCaller = (dev) => ({ kind: "tester", id: dev.id, name: dev.name, role: "bug-tester", allowedTeams: deviceAllowedTeamsOf(dev) ?? [] });
+
+/** owner | tester | unknown for a request without agent headers, with a single authenticate() pass. */
+function nonAgentCaller(req) {
+  if (hasAgentHeaders(req)) return { kind: "unknown" }; // defensive: an agent-naming request is never resolved here
+  if (isLocalOwner(req)) return { kind: "owner" };
+  const dev = authenticate(req);
+  if (isOwnerDevice(dev)) return { kind: "owner" };
+  if (dev?.role === "bug-tester") return testerCaller(dev);
+  return { kind: "unknown" };
 }
 
 async function defaultVerifyAgent(caller) {
@@ -882,7 +981,7 @@ const denied = (status, error) => ({ kind: "denied", status, error });
 
 async function resolveCaller(req, verifyAgent) {
   const id = headerValue(req, AGENT_ID_HEADER);
-  if (!id) return ownerProof(req) ? { kind: "owner" } : { kind: "unknown" };
+  if (!id) return nonAgentCaller(req);
   const token = headerValue(req, AGENT_TOKEN_HEADER);
   const bad = "agent token invalid (x-vs-agent-id does not match x-vs-agent-token, or the agent is gone/retired)";
   if (!AGENT_ID_RE.test(id) || !token) return denied(403, bad);
@@ -918,10 +1017,10 @@ export function callerFromRequest(req, { verifyAgent = defaultVerifyAgent } = {}
 /** The already-resolved caller of `req` (set by callerFromRequest / the middleware), or null before resolution. */
 export const callerOf = (req) => req?.[CALLER_VALUE] ?? null;
 
-/** Synchronous resolution for a request without agent headers (owner | unknown); cached like callerFromRequest. */
+/** Synchronous resolution for a request without agent headers (owner | tester | unknown); cached like callerFromRequest. */
 export function resolveNonAgentCaller(req) {
   if (req[CALLER_VALUE]) return req[CALLER_VALUE];
-  const c = ownerProof(req) ? { kind: "owner" } : { kind: "unknown" };
+  const c = nonAgentCaller(req);
   req[CALLER_VALUE] = c;
   req[CALLER_PROMISE] = Promise.resolve(c);
   return c;
@@ -1051,7 +1150,7 @@ export function revokeAllDevices() {
 
 // ---- One-time pairing codes ----
 
-const codes = new Map(); // code -> { expiresAt, mintedBy } (mintedBy: paired device id that minted it, null = PC / CLI)
+const codes = new Map(); // code -> { expiresAt, mintedBy, role, allowedTeams } (mintedBy: paired device id that minted it, null = PC / CLI)
 const PAIR_WINDOW_MS = 60_000;
 
 // ---- E4b two-step confirm: devices redeemed from a phone-minted code wait here, never in devices.json ----
@@ -1059,7 +1158,7 @@ const PAIR_WINDOW_MS = 60_000;
 // authenticates nothing (HTTP, SSE, relay, CLI list) until the minting device approves it, which appends the device
 // with mintedByDeviceId under the lock. Deny, the TTL, a server restart, or revoking the minter all discard it.
 export const PENDING_TTL_MS = 60_000;
-const pendingDevices = new Map(); // pendingId -> { id, tokenHash, name, ip, mintedBy, createdAt, expiresAt }
+const pendingDevices = new Map(); // pendingId -> { id, tokenHash, name, ip, mintedBy, role, allowedTeams, createdAt, expiresAt }
 
 function sweepPending(now = Date.now()) {
   for (const [pid, p] of pendingDevices) if (p.expiresAt <= now) pendingDevices.delete(pid);
@@ -1081,7 +1180,7 @@ function pendingForToken(token) {
   return null;
 }
 
-const publicPending = (p, now = Date.now()) => ({ pendingId: p.id, name: p.name, ip: p.ip, createdAt: p.createdAt, expiresInMs: Math.max(0, p.expiresAt - now) });
+const publicPending = (p, now = Date.now()) => ({ pendingId: p.id, name: p.name, ip: p.ip, role: deviceRoleOf(p), allowedTeams: deviceAllowedTeamsOf(p), createdAt: p.createdAt, expiresInMs: Math.max(0, p.expiresAt - now) });
 
 /** Pending tickets minted by `deviceId` (what the minting phone's sheet shows). */
 export function listPendingMintedBy(deviceId) {
@@ -1139,14 +1238,17 @@ function recordPairFailure(ip, now = Date.now()) {
  * X1 E4b L2 / plan guard 2: one active unredeemed code per minter. Minting again *replaces* the minter's previous live
  * code (the sheet's "New code" button; the old QR is dead at once), so a device can't stack codes for a LAN guesser.
  * The PC / CLI (mintedBy null) is one minter too: `vs pair` and the desktop dialog share a single live code.
+ * E6a: `scope` ({ role, allowedTeams }, normalizePairScope; throws a 400 Error when invalid) rides on the code and lands on
+ * the device record (or pending ticket) it redeems into. Default: owner.
  */
-export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null) {
+export function createPairCode(ttlMs = CODE_TTL_MS, mintedBy = null, scope = { role: "owner", allowedTeams: null }) {
+  const { role, allowedTeams } = normalizePairScope(scope ?? {});
   sweepCodes();
   const minter = typeof mintedBy === "string" ? mintedBy : null;
   for (const [c, v] of codes) if (v.mintedBy === minter) codes.delete(c);
   let code = String(randomInt(100_000, 1_000_000));
   while (codes.has(code)) code = String(randomInt(100_000, 1_000_000));
-  codes.set(code, { expiresAt: Date.now() + ttlMs, mintedBy: minter });
+  codes.set(code, { expiresAt: Date.now() + ttlMs, mintedBy: minter, role, allowedTeams });
   for (const fn of pairCodeMintedListeners) {
     try {
       fn();
@@ -1345,7 +1447,13 @@ export function pairFpQuery() {
   return full ? `&fp=${full.replace(/:/g, "").toLowerCase()}` : "";
 }
 
-export async function handlePairStart(req, res) {
+/** True when the request declares a body (content-length > 0 or a transfer-encoding). */
+const declaresBody = (req) => {
+  const h = req?.headers ?? {};
+  return h["transfer-encoding"] !== undefined || Number(h["content-length"] ?? 0) > 0;
+};
+
+export async function handlePairStart(req, res, readBody) {
   if (req.method !== "POST") {
     res.statusCode = 405;
     return res.end();
@@ -1358,8 +1466,21 @@ export async function handlePairStart(req, res) {
   // approval-required codes.
   const localOwner = !hasAgentHeaders(req) && isLocalOwner(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
   const minter = localOwner || hasAgentHeaders(req) ? null : authenticate(req);
-  if (!localOwner && !minter) {
-    return sendJson(res, 403, { error: "pairing can only be started from the PC (local token) or an already paired device" });
+  // E6a: only the owner mints (PC local token or an owner-role device). A bug-tester device can never mint any code.
+  if (!localOwner && !isOwnerDevice(minter)) {
+    return sendJson(res, 403, { error: "pairing can only be started from the PC (local token) or an already paired owner device" });
+  }
+  // E6a: optional JSON body { role, allowedTeams } (default owner). A body the router can't hand us is refused, never
+  // silently read as "owner": a tester invite must not turn into a full-owner code.
+  let scope;
+  try {
+    let body = {};
+    if (typeof readBody === "function") body = (await readBody(req)) ?? {};
+    else if (declaresBody(req)) return sendJson(res, 400, { error: "pair/start: request body not supported by this route" });
+    if (typeof body !== "object" || Array.isArray(body)) throw badScope("pair/start body must be a JSON object");
+    scope = normalizePairScope({ role: body.role, allowedTeams: body.allowedTeams });
+  } catch (e) {
+    return sendJson(res, e?.status === 413 ? 413 : 400, { error: e?.status === 400 ? e.message : "bad request body" });
   }
   const { port, meshnetIp, meshnetHost, lanIp } = netConfig();
   if (!meshnetIp && !lanIp) {
@@ -1367,7 +1488,7 @@ export async function handlePairStart(req, res) {
   }
   const effectiveMeshnetIp = meshnetIp || DEFAULT_MESHNET_IP;
   getTls();
-  const code = createPairCode(CODE_TTL_MS, minter?.id ?? null);
+  const code = createPairCode(CODE_TTL_MS, minter?.id ?? null, scope);
   const expiresAt = codes.get(code).expiresAt;
   // `fp` (CA SHA-256, hex) lets the Android app pin this PC's VS CA at pairing (see src-tauri/android/VsTrust.kt).
   const fpQuery = pairFpQuery();
@@ -1402,19 +1523,29 @@ export async function handlePairStart(req, res) {
     // E4b: a device-minted code needs the minting device's Approve tap after redeem (the sheet polls /pair/pending).
     requiresApproval: Boolean(minter),
     mintedByDeviceId: minter?.id ?? null,
+    role: scope.role,
+    allowedTeams: scope.allowedTeams,
     qrSvg: await qrSvg(pairUrl),
     qrSvgIp: await qrSvg(pairIpUrl),
   });
 }
+
+/** E6a: the redeem answer is JSON for `?format=json` or an `Accept: application/json` client (the in-game tester build). */
+const wantsJsonRedeem = (req, q) => q.get("format") === "json" || String(req.headers?.accept ?? "").includes("application/json");
 
 export async function handlePairRedeem(req, res) {
   if (req.method !== "GET") {
     res.statusCode = 405;
     return res.end();
   }
+  const q = new URL(req.url ?? "/", "http://x").searchParams;
+  const json = wantsJsonRedeem(req, q);
   // X1 E4b L1: a device that is already paired keeps its live cookie. A device-minted link opened on the owner's phone
   // must not downgrade that phone to a pending token (and then make it a child of whoever minted). Spend nothing.
-  if (parseCookies(req.headers.cookie)[DEVICE_COOKIE] && authenticate(req)) {
+  // E6a: only an owner device short-circuits here. A bug-tester device redeems normally (a new record + token, e.g. the
+  // owner re-scoping or upgrading it); it never passes as "already paired" owner.
+  if (parseCookies(req.headers.cookie)[DEVICE_COOKIE] && isOwnerDevice(authenticate(req))) {
+    if (json) return sendJson(res, 409, { ok: false, state: "already-paired", error: "this device is already paired with this PC; the code was left untouched" });
     const app = appOrigin(req);
     const href = app ? `/__vibesquad/enter?${new URLSearchParams({ vs_app: app }).toString()}` : "/__vibesquad/enter";
     return sendHtml(res, 200, "Already paired", "This device is already paired with this PC, so the pairing code was left untouched for the device it was meant for.", { href, label: "Open VibeSquad" });
@@ -1423,23 +1554,26 @@ export async function handlePairRedeem(req, res) {
   const lockedMs = pairLockRemainingMs(ip);
   if (lockedMs > 0 || pairRateLimited(ip)) {
     const retrySecs = Math.max(60, Math.ceil(lockedMs / 1000));
-    res.statusCode = 429;
     res.setHeader("retry-after", String(retrySecs));
+    if (json) return sendJson(res, 429, { ok: false, state: "rate-limited", error: lockedMs > 0 ? "too many failed pairing attempts" : "too many pairing attempts", retryAfterSecs: retrySecs });
+    res.statusCode = 429;
     res.setHeader("content-type", "text/plain; charset=utf-8");
     return res.end(lockedMs > 0 ? `Too many failed pairing attempts. Try again in ${Math.ceil(retrySecs / 60)} min.` : "Too many pairing attempts. Try again in a minute.");
   }
-  const q = new URL(req.url, "http://x").searchParams;
   const rawCode = (q.get("code") ?? "").trim();
   if (!rawCode) {
+    if (json) return sendJson(res, 400, { ok: false, state: "invalid", error: "no pairing code" });
     return sendHtml(res, 400, "No pairing code", "Scan the QR code on your PC (it opens an https:// link with the code).");
   }
   const name = (q.get("name") || deviceNameFromUa(String(req.headers["user-agent"] ?? ""))).slice(0, 40);
   const r = await redeemPairCode({ rawCode, ip, name });
   if (r.state === "invalid") {
+    if (json) return sendJson(res, 401, { ok: false, state: "invalid", error: "pairing code invalid, already used, or expired" });
     return sendHtml(res, 401, "Pairing failed", "This pairing code is invalid, already used, or expired. Generate a new QR code on your PC.", null, apkRecoveryHtml(req));
   }
   if (r.state === "busy") {
     // devices.json locked or unreadable: the code is spent, nothing was written, and no cookie goes out.
+    if (json) return sendJson(res, 503, { ok: false, state: "busy", error: "the PC could not record this device; generate a new code", retryable: false });
     return sendHtml(res, 503, "Pairing failed", "The PC could not record this device (its device list is locked or unreadable). Generate a new code and try again.");
   }
   const app = appOrigin(req);
@@ -1447,6 +1581,11 @@ export async function handlePairRedeem(req, res) {
   const token = r.token;
   res.setHeader("set-cookie", `${DEVICE_COOKIE}=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=31536000`);
   res.setHeader("cache-control", "no-store, no-cache, must-revalidate");
+  if (json) {
+    // E6a: non-browser clients keep the token themselves and send it as x-vs-device-token / Bearer. A pending token opens
+    // nothing until the minter approves; GET /pair/status with the header tells the client when it did.
+    return sendJson(res, 200, { ok: true, state: r.state, token, role: r.role, allowedTeams: r.allowedTeams, hostId: getHostId() });
+  }
   if (r.state === "pending") {
     // E4b two-step confirm: the cookie's token is not in devices.json yet, so it opens nothing. This page polls the public
     // /pair/status (same-site fetch, so the Strict cookie is sent) and hops to /enter only once the minting device approved.
@@ -1491,21 +1630,24 @@ export async function redeemPairCode({ rawCode, ip = "unknown", name = "Device" 
   const nowMs = Date.now();
   const now = new Date(nowMs).toISOString();
   const id = randomUUID();
+  // E6a: a code minted before scopes existed (or by an old caller) is an owner code.
+  const { role, allowedTeams } = normalizePairScope({ role: entry.role, allowedTeams: entry.allowedTeams });
   if (entry.mintedBy) {
     // The minter must still be paired right now; a revoked minter's codes are dead (fail closed on an unreadable list).
     const list = loadDevices();
     const minter = list?.find((d) => d.id === entry.mintedBy);
-    if (!minter) return { state: "invalid" };
+    // E6a: only an owner device's code can still be redeemed (a minter re-scoped to tester since then mints nothing).
+    if (!minter || !isOwnerDevice(minter)) return { state: "invalid" };
     sweepPending(nowMs);
-    pendingDevices.set(id, { id, tokenHash, name, ip, mintedBy: minter.id, createdAt: now, expiresAt: nowMs + PENDING_TTL_MS });
-    return { state: "pending", token, pendingId: id, mintedByDeviceId: minter.id, mintedByName: minter.name };
+    pendingDevices.set(id, { id, tokenHash, name, ip, mintedBy: minter.id, role, allowedTeams, createdAt: now, expiresAt: nowMs + PENDING_TTL_MS });
+    return { state: "pending", token, pendingId: id, mintedByDeviceId: minter.id, mintedByName: minter.name, role, allowedTeams };
   }
   try {
-    await mutateDevicesAsync((list) => list.push({ id, name, createdAt: now, lastSeenAt: now, tokenHash, mintedByDeviceId: null }), { timeoutMs: REQUEST_LOCK_MS });
+    await mutateDevicesAsync((list) => list.push({ id, name, createdAt: now, lastSeenAt: now, tokenHash, mintedByDeviceId: null, role, allowedTeams }), { timeoutMs: REQUEST_LOCK_MS });
   } catch {
     return { state: "busy" };
   }
-  return { state: "paired", token, deviceId: id };
+  return { state: "paired", token, deviceId: id, role, allowedTeams };
 }
 
 /**
@@ -1522,10 +1664,13 @@ export function handlePairStatus(req, res) {
     res.statusCode = 405;
     return res.end();
   }
-  const token = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+  // E6a: the device token header (x-vs-device-token / Bearer) works too, so a non-browser client can poll its approval.
+  const { token } = extractDeviceToken(req);
   if (!token) return sendJson(res, 200, { state: "gone" });
-  if (pendingForToken(token)) return sendJson(res, 200, { state: "pending" });
-  if (authenticate(req)) return sendJson(res, 200, { state: "approved" });
+  const p = pendingForToken(token);
+  if (p) return sendJson(res, 200, { state: "pending", role: deviceRoleOf(p), allowedTeams: deviceAllowedTeamsOf(p) });
+  const dev = authenticate(req);
+  if (dev) return sendJson(res, 200, { state: "approved", role: deviceRoleOf(dev), allowedTeams: deviceAllowedTeamsOf(dev) });
   return sendJson(res, 200, { state: deniedTokenHashes.has(sha256Hex(token)) ? "denied" : "gone" });
 }
 
@@ -1536,7 +1681,7 @@ export function handlePairPending(req, res) {
     return res.end();
   }
   const dev = hasAgentHeaders(req) ? null : authenticate(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
-  if (!dev) return sendJson(res, 403, { error: "only a paired device sees the approvals it minted" });
+  if (!isOwnerDevice(dev)) return sendJson(res, 403, { error: "only a paired owner device sees the approvals it minted" }); // E6a: never a tester
   sendJson(res, 200, { pending: listPendingMintedBy(dev.id), ttlMs: PENDING_TTL_MS });
 }
 
@@ -1551,7 +1696,7 @@ export async function handlePairApprove(req, res, readBody) {
     return res.end();
   }
   const dev = hasAgentHeaders(req) ? null : authenticate(req); // an agent (x-vs-agent-id) is never the owner (ownerProof)
-  if (!dev) return sendJson(res, 403, { error: "only the paired device that minted the code can approve it" });
+  if (!isOwnerDevice(dev)) return sendJson(res, 403, { error: "only the paired owner device that minted the code can approve it" }); // E6a: never a tester
   let body;
   try {
     body = await readBody(req);
@@ -1576,8 +1721,10 @@ export async function handlePairApprove(req, res, readBody) {
   try {
     await mutateDevicesAsync(
       (list) => {
-        if (!list.some((d) => d.id === dev.id)) throw new Error("minter is no longer paired");
-        list.push({ id: p.id, name: p.name, createdAt: p.createdAt, lastSeenAt: p.createdAt, tokenHash: p.tokenHash, mintedByDeviceId: dev.id });
+        // E6a: the minter must still be an owner device on disk (a record re-scoped to tester since then decides nothing).
+        if (!list.some((d) => d.id === dev.id && isOwnerDevice(d))) throw new Error("minter is no longer paired");
+        const scope = normalizePairScope({ role: p.role, allowedTeams: p.allowedTeams });
+        list.push({ id: p.id, name: p.name, createdAt: p.createdAt, lastSeenAt: p.createdAt, tokenHash: p.tokenHash, mintedByDeviceId: dev.id, role: scope.role, allowedTeams: scope.allowedTeams });
       },
       { timeoutMs: REQUEST_LOCK_MS },
     );

@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { createAgentClient } from "./brainstorm.mjs";
 import { getBackend } from "./backend/index.mjs";
 import { AUDIT_LANE_FALLBACK_IDS, BUG_LANE_FALLBACK_IDS, findLaneInRegistry, resolveLeadWinner, whoCandidate } from "./identity.mjs";
-import { isHubLane } from "./lane-pure.mjs";
+import { findBugLane, isHubLane } from "./lane-pure.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 import { clearConfigWarning, readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
@@ -495,6 +495,10 @@ export function addInboxCards(body = {}, rootDir = REPO_ROOT, scope = {}) {
  * `scope.teamId` (idea-176; never from the body: the server passes the verified agent's Squad) pins every card to that
  * Squad: the body's teamId must be it, an explicit/default lane must be one of its lanes (403 otherwise), and a card the
  * domain sorter would route to another Squad stays in this one (its default lane, else `_unassigned` = its Overlord).
+ * E6a: server handlers may also force `scope.source` (wins over body.source), `scope.laneId` (wins over body.laneId /
+ * defaultLaneId; still validated against scope.teamId) and `scope.meta` (a plain object of server-owned fields such as
+ * `telemetry`, `testerDeviceId`, `testerDeviceName`, merged onto every card after the built-in fields, so a client body
+ * can never set or spoof them, and they can never overwrite the card's own id/text/team/lane/status).
  */
 export async function addInboxCardsAsync(body = {}, rootDir = REPO_ROOT, scope = {}) {
   return addInboxCardsWith(updateInboxCards, body, rootDir, scope);
@@ -514,14 +518,17 @@ function addInboxCardsWith(update, body, rootDir, scope = {}) {
     throw new Error("No idea text provided");
   }
 
-  const explicitLaneRaw = typeof body.laneId === "string" && body.laneId.trim() ? body.laneId.trim() : "";
-  const defaultLaneRaw = typeof body.defaultLaneId === "string" && body.defaultLaneId.trim() ? body.defaultLaneId.trim() : "";
+  const scopeLane = typeof scope?.laneId === "string" && scope.laneId.trim() ? scope.laneId.trim() : "";
+  const explicitLaneRaw = scopeLane || (typeof body.laneId === "string" && body.laneId.trim() ? body.laneId.trim() : "");
+  const defaultLaneRaw = scopeLane ? "" : typeof body.defaultLaneId === "string" && body.defaultLaneId.trim() ? body.defaultLaneId.trim() : "";
+  const scopeMeta = forcedCardMeta(scope?.meta);
   const bodyTeam = typeof body.teamId === "string" && body.teamId.trim() ? body.teamId.trim() : "";
   if (scopeTeam && bodyTeam && !sameTeamId(bodyTeam, scopeTeam)) {
     throw Object.assign(new Error(`teamId "${bodyTeam}" is not your Squad "${scopeTeam}": an agent parks ideas in its own Squad only`), { status: 403 });
   }
   const explicitTeam = scopeTeam || bodyTeam;
-  const source = typeof body.source === "string" && body.source.trim() ? body.source.trim() : "ui";
+  const scopeSource = typeof scope?.source === "string" && scope.source.trim() ? scope.source.trim() : "";
+  const source = scopeSource || (typeof body.source === "string" && body.source.trim() ? body.source.trim() : "ui");
   const explicitLane = explicitLaneRaw ? assertKnownLane(explicitLaneRaw, teams, scopeTeam) : "";
   const defaultLane = scopeTeam && defaultLaneRaw ? assertKnownLane(defaultLaneRaw, teams, scopeTeam) : defaultLaneRaw;
 
@@ -562,6 +569,7 @@ function addInboxCardsWith(update, body, rootDir, scope = {}) {
         createdAt: now,
         updatedAt: now,
       };
+      for (const [k, v] of Object.entries(scopeMeta)) if (!(k in card)) card[k] = v;
       working.push(card);
       added.push(card);
     }
@@ -570,6 +578,19 @@ function addInboxCardsWith(update, body, rootDir, scope = {}) {
   });
 
   return thenMaybe(written, (cards) => ({ ok: true, added, cards, summary: `parked ${added.length} ideas → Inbox` }));
+}
+
+const RESERVED_META_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+/** scope.meta as a plain own-key copy (JSON-cloned so later mutation of the caller's object can't reach a stored card). */
+function forcedCardMeta(meta) {
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) return {};
+  const out = {};
+  for (const [k, v] of Object.entries(meta)) {
+    if (RESERVED_META_KEYS.has(k) || v === undefined) continue;
+    out[k] = v === null || typeof v !== "object" ? v : JSON.parse(JSON.stringify(v));
+  }
+  return out;
 }
 
 function toBulletLines(text) {
@@ -814,6 +835,24 @@ function pickLiveAgent(agents, { role, teamId, laneId, teams }) {
   const topicOf = (a) => String(a.labels?.topic ?? a.labels?.["vs.inbox-card-id"] ?? "").trim();
   const main = role === "brainstorm" ? matches.filter((a) => !topicOf(a)) : matches;
   return resolveLeadWinner(main.length ? main : matches).winner;
+}
+
+/** E6a: the id of `team`'s bug lane (`findBugLane`: kind "bug", else the bug-runner / bug-chaser fallback ids), or null. */
+export function resolveBugLaneId(team) {
+  const id = findBugLane(team)?.id;
+  return typeof id === "string" && id.trim() ? id.trim() : null;
+}
+
+/**
+ * E6a: the agent an alpha tester's bug report / thread goes to in `team`: the live front-door Buddy (role brainstorm,
+ * no topic) on the Squad's bug lane, else that lane's live Lead, else null. Never creates an agent. `teams` is the
+ * registry used for lane alias / cwd resolution (defaults to just `team`).
+ */
+export function pickBugIntakeAgent(agents, team, teams = team ? [team] : []) {
+  const laneId = resolveBugLaneId(team);
+  const teamId = String(team?.id ?? "").trim();
+  if (!laneId || !teamId || !Array.isArray(agents)) return null;
+  return pickLiveAgent(agents, { role: "brainstorm", teamId, laneId, teams }) || pickLiveAgent(agents, { role: "lead", teamId, laneId, teams }) || null;
 }
 
 function buildDeliveryText(card, { toOverlord }) {
