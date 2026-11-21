@@ -101,6 +101,7 @@ export const AUTOSWEEP_HEAVY = {
           targetRefs: def.refs,
           now,
           only: (wt) => heads.has(wt.head) || Boolean(wt.branch && names.has(wt.branch)),
+          heartbeat: apply ? release.beat : null,
         });
         for (const r of res.results) {
           const via = (heads.get(r.head) ?? names.get(r.branch) ?? "").slice(0, 8);
@@ -166,6 +167,9 @@ export function createWorktreeAutoSweep({
   async function tick() {
     if (now() - repoCache.at > CACHE_TTL_MS) repoCache = { at: now(), repos: await heavy("repos", { root }) };
     const byRepo = new Map(); // repoRoot -> { repo, def, moves }
+    // Moved tips are committed only after a sweep ran: a skipped (roster unreadable, lock busy) or failed tick retries the
+    // same prev..tip range next time.
+    const pending = [];
     for (const { repo, def } of repoCache.repos) {
       if (!def.refs.length) continue;
       const out = await gitAsync(["for-each-ref", "--format=%(refname)%09%(objectname)", ...def.refs], repo.repoRoot);
@@ -175,8 +179,9 @@ export function createWorktreeAutoSweep({
         if (!ref || !tip) continue;
         const key = `${repo.repoRoot.toLowerCase()}|${ref}`;
         const prev = tips.get(key);
-        tips.set(key, tip);
+        if (!prev) tips.set(key, tip); // baseline
         if (!prev || prev === tip) continue;
+        pending.push([key, tip]);
         if (!byRepo.has(repo.repoRoot)) byRepo.set(repo.repoRoot, { repo, def, moves: [] });
         byRepo.get(repo.repoRoot).moves.push({ ref, prev, tip });
       }
@@ -199,6 +204,7 @@ export function createWorktreeAutoSweep({
       say("worktree-autosweep skipped: another sweep holds the sanctuary lock");
       return { skipped: "sweep-busy" };
     }
+    for (const [key, tip] of pending) tips.set(key, tip);
     for (const r of res.results) {
       const unit = r.branch ?? r.head?.slice(0, 8) ?? "?";
       say(

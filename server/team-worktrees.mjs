@@ -3,7 +3,8 @@
 // refuses a dirty worktree and `git branch -d` refuses an unmerged branch, and both come back as "kept"
 // with git's reason so the dialog can say why.
 import { execFileSync } from "node:child_process";
-import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, linkSync, rmdirSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 
@@ -488,37 +489,50 @@ function removeTreeNoFollow(abs) {
   rmdirSync(abs);
 }
 
-/**
- * Detach untracked build-output links at the worktree root and one level down (e.g. src-tauri/target): `git worktree
- * remove` must not walk them. A link git tracks is left alone (it is content, and git removes a symlink without following
- * it); a git error throws, so the caller removes nothing.
- */
-function detachBuildOutputLinks(wtPath, git) {
-  const tops = [wtPath];
+/** Unlink a symlink or junction itself (never its target); throws when neither works. */
+function unlinkLinkOnly(p) {
   try {
-    for (const d of readdirSync(wtPath, { withFileTypes: true })) if (d.isDirectory() && !d.isSymbolicLink() && d.name !== ".git") tops.push(join(wtPath, d.name));
-  } catch {}
-  const links = [];
-  for (const dir of tops) {
-    for (const name of BUILD_OUTPUT_DIRS) {
-      const p = join(dir, name);
-      try {
-        if (lstatSync(p).isSymbolicLink()) links.push(p);
-      } catch {}
-    }
+    unlinkSync(p);
+  } catch {
+    rmdirSync(p); // a junction: non-recursive, removes only the link
   }
-  if (!links.length) return;
-  const rels = links.map((p) => relative(wtPath, p).replace(/\\/g, "/"));
-  const tracked = new Set(String(git(["ls-files", "-z", "--", ...rels], wtPath) ?? "").split("\0").filter(Boolean));
-  for (const [i, p] of links.entries()) {
-    if (tracked.has(rels[i])) continue;
-    try {
-      unlinkSync(p);
-    } catch {
-      try {
-        rmdirSync(p); // a junction: non-recursive, removes only the link
-      } catch {}
+}
+
+/**
+ * Detach every untracked link (symlink or junction) anywhere in the worktree, e.g. a gitignored node_modules junction into
+ * the main checkout, which worktreeDirt never lists: `git worktree remove` deletes ignored content and must never reach a
+ * link's target. Walks without following links. A link git tracks (mode 120000) is left alone: git removes a symlink
+ * without following it. Fails closed: a read error, a git error, an unlink that fails or a link still present afterwards
+ * throws, so the caller removes nothing.
+ */
+function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly } = {}) {
+  const links = [];
+  const walk = (dir) => {
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, d.name);
+      if (dir === wtPath && d.name === ".git") continue;
+      if (d.isSymbolicLink()) links.push(p);
+      else if (d.isDirectory()) walk(p);
+      else if (!d.isFile() && lstatSync(p).isSymbolicLink()) links.push(p);
     }
+  };
+  walk(wtPath);
+  if (!links.length) return;
+  const tracked = new Set();
+  for (const e of String(git(["ls-files", "-s", "-z"], wtPath) ?? "").split("\0")) {
+    const tab = e.indexOf("\t");
+    if (tab > 0 && e.startsWith("120000 ")) tracked.add(e.slice(tab + 1));
+  }
+  for (const p of links) {
+    if (tracked.has(relative(wtPath, p).replace(/\\/g, "/"))) continue;
+    unlinkLink(p);
+    let still = true;
+    try {
+      lstatSync(p);
+    } catch (e) {
+      if (e?.code === "ENOENT") still = false;
+    }
+    if (still) throw Object.assign(new Error(`link still attached: ${p}`), { code: "ELINK" });
   }
 }
 
@@ -544,15 +558,15 @@ function buildOutputTarget(wtPath, rel) {
  * then plain `git worktree remove` (no --force), which refuses anything that turned dirty since the check.
  * Returns { removed: true } or { removed: false, reason }.
  */
-export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildOutput = [] } = {}) {
+export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildOutput = [], unlinkLink } = {}) {
   try {
-    detachBuildOutputLinks(wtPath, git);
     for (const rel of buildOutput) {
       // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
       // before `git worktree remove` could walk it.
       const abs = buildOutputTarget(wtPath, rel);
       if (abs) removeTreeNoFollow(abs);
     }
+    detachUntrackedLinks(resolve(wtPath), { git, unlinkLink });
   } catch (e) {
     return { removed: false, reason: `build output not removed (${e?.code ?? "error"})` };
   }
@@ -588,6 +602,8 @@ export function dirBytesNoFollow(abs) {
 
 export const SWEEP_LOCK_FILE = ".vs-sweep.lock";
 const SWEEP_LOCK_STALE_MS = 2 * 60 * 60_000;
+const SWEEP_LOCK_BEAT_MS = 60_000;
+const TAKEOVER_STALE_MS = 60_000;
 
 const pidAlive = (pid) => {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -600,38 +616,109 @@ const pidAlive = (pid) => {
 };
 
 /**
- * The sanctuary-wide apply lock (`<root>/.vs-sweep.lock`, { pid, at }), shared by `vs worktree sweep --apply` and the
- * auto-sweep, so two removers never race on `git worktree remove`. A lock whose pid is gone or older than staleMs is taken
- * over. Returns a release function, or null when another live sweep holds it (or the lock can't be written).
+ * The sanctuary-wide apply lock (`<root>/.vs-sweep.lock`, { pid, at, nonce }), shared by `vs worktree sweep --apply` and
+ * the auto-sweep, so two removers never race on `git worktree remove`.
+ * - Create is atomic with full content: a private temp file is hard-linked into place (EEXIST when held), so no reader
+ *   ever sees an empty or half-written lock.
+ * - The holder heartbeats (`release.beat()`, called through the sweep; it bumps the file's mtime at most once a minute).
+ *   Stale = the holder's pid is gone, or no heartbeat for staleMs (a hung holder or a reused pid). An unparseable lock is
+ *   stale only after staleMs without a heartbeat.
+ * - Takeover of a stale lock runs under a second exclusive file (`.takeover`), re-checks staleness there, and only then
+ *   unlinks, so two takers never both win. A leftover `.takeover` older than a minute is cleared (that attempt still fails).
+ * Returns a release function (with `.beat()` -> false once the lock is no longer ours), or null when another live sweep
+ * holds it or the lock can't be written.
  */
-export function acquireSweepLock(root = resolveManagedWorktreeRoot(), { pid = process.pid, now = Date.now(), staleMs = SWEEP_LOCK_STALE_MS, alive = pidAlive } = {}) {
-  const file = join(resolve(root), SWEEP_LOCK_FILE);
-  const body = JSON.stringify({ pid, at: now });
-  for (let attempt = 0; attempt < 2; attempt++) {
+export function acquireSweepLock(root = resolveManagedWorktreeRoot(), { pid = process.pid, clock = Date.now, staleMs = SWEEP_LOCK_STALE_MS, alive = pidAlive } = {}) {
+  const dir = resolve(root);
+  const file = join(dir, SWEEP_LOCK_FILE);
+  const nonce = randomUUID();
+  const body = JSON.stringify({ pid, at: clock(), nonce });
+  const ours = () => {
     try {
-      mkdirSync(resolve(root), { recursive: true });
-      writeFileSync(file, body, { flag: "wx" });
-      return () => {
-        try {
-          if (readFileSync(file, "utf8") === body) unlinkSync(file);
-        } catch {}
-      };
+      return readFileSync(file, "utf8") === body;
+    } catch {
+      return false;
+    }
+  };
+  const create = () => {
+    const tmp = join(dir, `${SWEEP_LOCK_FILE}.${nonce}.tmp`);
+    writeFileSync(tmp, body, { flag: "wx" });
+    try {
+      linkSync(tmp, file);
+      return true;
     } catch (e) {
-      if (e?.code !== "EEXIST" || attempt) return null;
-      let held = null;
+      if (e?.code === "EEXIST") return false;
+      throw e;
+    } finally {
       try {
-        held = JSON.parse(readFileSync(file, "utf8"));
+        unlinkSync(tmp);
       } catch {}
-      const stale = !held || !alive(held.pid) || !(now - Number(held.at) < staleMs);
-      if (!stale) return null;
+    }
+  };
+  const staleness = () => {
+    let st;
+    try {
+      st = statSync(file);
+    } catch (e) {
+      return e?.code === "ENOENT" ? "gone" : false;
+    }
+    let held = null;
+    try {
+      held = JSON.parse(readFileSync(file, "utf8"));
+    } catch {}
+    const quiet = !(clock() - st.mtimeMs < staleMs);
+    return held ? !alive(held.pid) || quiet : quiet;
+  };
+  const takeOver = () => {
+    const t = `${file}.takeover`;
+    try {
+      writeFileSync(t, nonce, { flag: "wx" });
+    } catch (e) {
       try {
-        unlinkSync(file);
+        if (e?.code === "EEXIST" && !(clock() - statSync(t).mtimeMs < TAKEOVER_STALE_MS)) unlinkSync(t);
+      } catch {}
+      return false;
+    }
+    try {
+      const s = staleness();
+      if (s === "gone") return true;
+      if (!s) return false;
+      unlinkSync(file);
+      return true;
+    } catch {
+      return false;
+    } finally {
+      try {
+        unlinkSync(t);
+      } catch {}
+    }
+  };
+  try {
+    mkdirSync(dir, { recursive: true });
+    if (!create() && !(takeOver() && create())) return null;
+  } catch {
+    return null;
+  }
+  let lastBeat = clock();
+  const release = () => {
+    try {
+      if (ours()) unlinkSync(file);
+    } catch {}
+  };
+  release.beat = () => {
+    if (!ours()) return false;
+    if (clock() - lastBeat >= SWEEP_LOCK_BEAT_MS) {
+      try {
+        const t = new Date(clock());
+        utimesSync(file, t, t);
+        lastBeat = clock();
       } catch {
-        return null;
+        return false;
       }
     }
-  }
-  return null;
+    return true;
+  };
+  return release;
 }
 
 /**
@@ -666,6 +753,8 @@ export function throttledLiveCwds(readAgents, { intervalMs = 30_000, clock = Dat
  *   sizes          adds `bytes` to each would-remove/removed result.
  *   refreshLiveCwds  optional () => cwds | null, called right before each removal (see throttledLiveCwds); null or a
  *                  throw keeps the worktree ("live-cwd-unknown").
+ *   heartbeat      optional () => bool (the sweep lock's beat): called per worktree; false before a removal keeps it
+ *                  ("sweep-lock-lost").
  * Returns { repoRoot, apply, defaultBranch, refs, results }. Branch refs are never deleted.
  */
 export function sweepMergedWorktrees(
@@ -682,6 +771,7 @@ export function sweepMergedWorktrees(
     freshGraceMs = FRESH_GRACE_MS,
     now = Date.now(),
     refreshLiveCwds = null,
+    heartbeat = null,
   } = {},
 ) {
   const repoRootAbs = resolve(repoRoot);
@@ -696,6 +786,7 @@ export function sweepMergedWorktrees(
     // Skip the main checkout: it is listed first, and its path is the repo root.
     if (i === 0 || wt.bare || normPath(wt.path) === normPath(repoRootAbs)) return;
     if (only && !only(wt)) return;
+    if (heartbeat) heartbeat(); // keep a long sweep's lock fresh (ownership is re-checked before removing)
     const r = { path: wt.path, branch: wt.branch || null, head: wt.head || null };
     results.push(r);
     const keep = (reason) => Object.assign(r, { action: "kept", reason });
@@ -722,6 +813,7 @@ export function sweepMergedWorktrees(
       return;
     }
     if (!liveKnown) return keep("live-cwd-unknown");
+    if (heartbeat && !heartbeat()) return keep("sweep-lock-lost");
     if (refreshLiveCwds) {
       // Re-read the roster right before removing: a long sweep must not act on a roster taken minutes ago.
       let fresh;
@@ -805,7 +897,7 @@ export function sweepAllRepos(opts = {}) {
   const release = acquireSweepLock(root);
   if (!release) return { root: resolve(root), apply, busy: true, repos: [], orphans: [], dangling: [], summary: {} };
   try {
-    return sweepAllReposUnlocked(opts);
+    return sweepAllReposUnlocked({ ...opts, heartbeat: release.beat });
   } finally {
     release();
   }

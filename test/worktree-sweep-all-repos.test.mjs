@@ -3,7 +3,7 @@
 // output is not dirt; live-cwd guard; every sanctuary repo; branch refs are never deleted; links are never followed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -452,9 +452,11 @@ test("M4 sanctuary lock: one remover at a time across processes; a dead holder's
     const r2 = acquireSweepLock(sanct, { alive: () => false });
     assert.equal(typeof r2, "function", "dead holder's lock taken over");
     r2();
-    writeFile(sanct, SWEEP_LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() - 3 * 60 * 60_000 }));
+    writeFile(sanct, SWEEP_LOCK_FILE, JSON.stringify({ pid: process.pid, at: Date.now() }));
+    const longAgo = new Date(Date.now() - 3 * 60 * 60_000);
+    utimesSync(join(sanct, SWEEP_LOCK_FILE), longAgo, longAgo); // live pid, no heartbeat for 3h (hung holder or reused pid)
     const r3 = acquireSweepLock(sanct);
-    assert.equal(typeof r3, "function", "lock older than the stale limit taken over");
+    assert.equal(typeof r3, "function", "no heartbeat past the stale limit: taken over");
     r3();
   }));
 
@@ -488,6 +490,121 @@ test("M4 + L2 auto-sweep in a worker thread: off the event loop, lock-aware, one
     assert.deepEqual(t2, { skipped: "sweep-busy" });
     assert.ok(existsSync(done));
     held();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---- Tier A review R2 rn-a307a2468120 (PASS 0/3/2 on 440794d4): one test per Medium ----
+
+test("R2 M-a heartbeat: a beating live holder keeps the lock past 2h; without beats it is taken over and the old holder's beat reports the loss", () =>
+  withTmp((root) => {
+    const sanct = join(root, "sanct");
+    mkdirSync(sanct, { recursive: true });
+    const lock = join(sanct, SWEEP_LOCK_FILE);
+    let t = Date.now();
+    const rel = acquireSweepLock(sanct, { clock: () => t });
+    const longAgo = new Date(Date.now() - 3 * 60 * 60_000);
+    utimesSync(lock, longAgo, longAgo); // a 3h sweep: the creation time is long past
+    t += 61_000;
+    assert.equal(rel.beat(), true);
+    assert.equal(acquireSweepLock(sanct), null, "live pid + recent heartbeat: never stolen, however old the lock");
+    utimesSync(lock, longAgo, longAgo); // now no beat for 3h
+    const thief = acquireSweepLock(sanct);
+    assert.equal(typeof thief, "function");
+    assert.equal(rel.beat(), false, "the old holder learns it lost the lock");
+    rel(); // its release must not delete the new holder's lock (nonce differs)
+    assert.ok(existsSync(lock));
+    thief();
+
+    // the sweep stops removing once its lock is lost
+    const repo = join(root, "repo");
+    initRepo(repo);
+    const wt = addWorktree(repo, join(root, "sanct2"), "repo", "unit-lock-lost");
+    let beats = 0;
+    const res = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], heartbeat: () => (beats++, false) }));
+    assert.equal(res["unit-lock-lost"].reason, "sweep-lock-lost");
+    assert.ok(beats >= 1 && existsSync(wt));
+  }));
+
+test("R2 M-b links: a gitignored junction deep in the tree is detached before git worktree remove; a link that will not detach fails closed", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const shared = join(root, "main-node-modules");
+    writeFile(shared, "pkg/index.js", "precious");
+    initRepo(repo);
+    commitFile(repo, ".gitignore", "node_modules");
+    const wt = addWorktree(repo, sanct, "repo", "unit-ignored-link");
+    mkdirSync(join(wt, "packages", "x"), { recursive: true });
+    symlinkSync(shared, join(wt, "packages", "x", "node_modules"), "junction");
+    assert.equal(worktreeDirt(wt).clean, true, "ignored: not dirt, not in buildOutput");
+    const ok = removeSweptWorktree(repo, wt);
+    assert.equal(ok.removed, true, JSON.stringify(ok));
+    assert.equal(readFileSync(join(shared, "pkg", "index.js"), "utf8"), "precious");
+
+    const wt2 = addWorktree(repo, sanct, "repo", "unit-stuck-link");
+    symlinkSync(shared, join(wt2, "node_modules"), "junction");
+    const stuck = removeSweptWorktree(repo, wt2, { unlinkLink: () => {} }); // the unlink silently does nothing
+    assert.equal(stuck.removed, false);
+    assert.match(stuck.reason, /ELINK/);
+    assert.ok(existsSync(wt2));
+    assert.equal(readFileSync(join(shared, "pkg", "index.js"), "utf8"), "precious");
+    const thrown = removeSweptWorktree(repo, wt2, {
+      unlinkLink: () => {
+        throw Object.assign(new Error("busy"), { code: "EBUSY" });
+      },
+    });
+    assert.equal(thrown.removed, false);
+    assert.match(thrown.reason, /EBUSY/);
+    assert.ok(existsSync(wt2));
+  }));
+
+test("R2 M-c lock races: an empty or half-written lock is not stale; a concurrent takeover blocks a second taker; create leaves no temp files", () =>
+  withTmp((root) => {
+    const sanct = join(root, "sanct");
+    mkdirSync(sanct, { recursive: true });
+    const lock = join(sanct, SWEEP_LOCK_FILE);
+    writeFileSync(lock, ""); // what a non-atomic create looks like mid-write
+    assert.equal(acquireSweepLock(sanct), null);
+    assert.equal(readFileSync(lock, "utf8"), "", "untouched");
+    rmSync(lock);
+
+    writeFileSync(lock, JSON.stringify({ pid: 999999, at: 0, nonce: "dead" }));
+    writeFileSync(lock + ".takeover", "someone"); // another taker is mid-takeover
+    assert.equal(acquireSweepLock(sanct, { alive: () => false }), null);
+    assert.match(readFileSync(lock, "utf8"), /dead/, "the other taker's decision stands");
+    const old = new Date(Date.now() - 5 * 60_000);
+    utimesSync(lock + ".takeover", old, old); // that taker crashed
+    assert.equal(acquireSweepLock(sanct, { alive: () => false }), null, "leftover cleared, this attempt still yields");
+    const rel = acquireSweepLock(sanct, { alive: () => false });
+    assert.equal(typeof rel, "function");
+    assert.deepEqual(readdirSync(sanct).sort(), [SWEEP_LOCK_FILE]);
+    const body = JSON.parse(readFileSync(lock, "utf8"));
+    assert.equal(body.pid, process.pid);
+    assert.match(body.nonce, /^[0-9a-f-]{36}$/);
+    rel();
+    assert.deepEqual(readdirSync(sanct), []);
+  }));
+
+test("R2 L tips: a skipped tick does not advance tips, so the merge is swept on the next tick", async () => {
+  const root = mkdtempSync(join(tmpdir(), "vs-w1-tips-"));
+  try {
+    const sanct = join(root, "sanct");
+    const repo = join(root, "repo");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-retry");
+    commitFile(wt, "r.txt", "r");
+    let agents = null;
+    const sweep = createWorktreeAutoSweep({ root: sanct, listAgents: async () => agents, log: () => {} });
+    await sweep.tick();
+    git(["merge", "-q", "--no-ff", "-m", "Merge branch 'unit-retry'", "unit-retry"], repo);
+    assert.deepEqual(await sweep.tick(), { skipped: "agents-unreadable" });
+    agents = [{ id: "other", status: "running", cwd: join(root, "elsewhere") }];
+    const res = await sweep.tick();
+    assert.equal(res.results.length, 1);
+    assert.equal(res.results[0].action, "would-remove");
+    assert.deepEqual((await sweep.tick()).results, [], "committed after the successful sweep");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
