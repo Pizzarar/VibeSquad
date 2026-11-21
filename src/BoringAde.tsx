@@ -402,7 +402,16 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const e = typeof window === "undefined" ? undefined : (window.event as MouseEvent | undefined);
     return !!e && e.type === "click" && e.shiftKey;
   };
-  const openHere = (id: string) => (shiftHeld() ? openAgentInTab(id, "right") : openAgent(id));
+  // Normal mode shows no tab strip, so per-pane tab history is invisible: with split on, a plain click lands in the ACTIVE pane
+  // (or just focuses the other pane when that agent is already its visible one), never in a pane that merely remembers the agent.
+  const openHere = (id: string) => {
+    if (shiftHeld()) return openAgentInTab(id, "right");
+    if (!panes.split) return openAgent(id);
+    const otherSide = panes.activePane === "left" ? "right" : "left";
+    const otherVisible = otherSide === "left" ? panes.leftActiveId : panes.rightActiveId;
+    if (id === otherVisible) return setActivePane(otherSide);
+    return openAgentInTab(id, panes.activePane);
+  };
   const allViews = views.length > 0 ? views : view ? [view] : [];
   // S8: the active agent owns the sidebar selection + breadcrumb. Keyed on the agent only, so switching project never snaps back.
   // R5-1: also when it becomes landable: a deep-linked agent can reach the roster after the first render.
@@ -544,14 +553,17 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
 
-  const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
+  const selRaw = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
+  // An empty active pane names nobody: no row is selected and the breadcrumb says so, instead of echoing the other pane's agent.
+  const splitEmptyActive = mode === "chat" && panes.split && !activeAgentId;
+  const sel = splitEmptyActive ? { ...selRaw, rowKey: null, laneId: null, role: null, workerId: null, agentLabel: null } : selRaw;
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
     sel.laneId === "_overlord" || sel.laneId === "_riffbot" || sel.laneId === "_desk" ? "Desk" : sel.laneId === "_bugs" ? "Bugs" : selModel.conversations.find((c) => c.laneId === sel.laneId)?.name ?? null;
   // R7-1: a deep link waiting on the roster shows a bare breadcrumb + "Opening agent…", never the default project's Overview.
   const opening = boringDeepLinkPending({ rosterLoaded: !!rosterLoaded, activeAgentId });
-  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
+  const crumbs = opening ? [{ key: "project" as const, label: "Opening…" }] : boringBreadcrumb({ project: selView?.team.name ?? "", mode, laneLabel: splitEmptyActive ? "Split · pick an agent" : sel.laneId ? laneLabel : null, agentLabel: sel.agentLabel });
   const onCrumb = (key: Crumb["key"]) => {
     if (key === "project") setMode("project");
     else if (key === "lane" && mode === "chat") {
@@ -678,7 +690,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         {fold && (
           <button type="button" className="boring-idle-toggle boring-worker-idle boring-worker-fold" data-testid={foldId} title="Open the Workers tab" onClick={() => {
             // Split panes mount no context panel: fold the split down to the active pane's agent, then open its Workers tab.
-            if (panes.split) { const id = activeAgentId; toggleSplit(); if (id) openAgent(id); } else if (!onScreen) open();
+            if (panes.split) { const id = activeAgentId; toggleSplit(); if (!onScreen) open(); else if (id) openAgent(id); } else if (!onScreen) open();
             openWorkersTab();
           }}>
             <span className="boring-idle-chev" aria-hidden="true">▸</span>{fold}

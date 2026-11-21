@@ -777,9 +777,10 @@ html[data-vibe="boring"] .boring-project-row:hover { background: var(--surface-3
 html[data-vibe="boring"] .boring-project-row.on { background: transparent; }
 html[data-vibe="boring"] .boring-project-row.on .boring-project-name { font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-sidebar .boring-footer-btn { color: var(--text-2); }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { min-height: 28px; padding: 2px 10px; font-size: var(--t-small); background: var(--surface-2) !important; color: var(--text-2) !important; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:hover { background: var(--surface-3) !important; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill.on { background: var(--surface-3) !important; color: var(--text-1) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { min-height: 28px; padding: 2px 10px; font-size: var(--t-small); }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"]) { background: var(--surface-2) !important; color: var(--text-2) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"]):hover { background: var(--surface-3) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"]).on { background: var(--surface-3) !important; color: var(--text-1) !important; }
 
 /* Surfaces: flat tone steps. Your message = surface-2 + 2px accent rule; agent text sits on the canvas. */
 html[data-vibe="boring"] .tl-user,
@@ -1239,4 +1240,5 @@ html[data-vibe="boring"] .boring-pane-active .boring-agent-header { background: 
 html[data-vibe="boring"] .boring-split-empty { margin: auto; max-width: 360px; padding: 24px; text-align: center; display: flex; flex-direction: column; gap: 16px; align-items: center; color: var(--text-dim); }
 html[data-vibe="boring"] .boring-split-empty p { margin: 0; }
 html[data-vibe="boring"] .boring-split-hint { font-size: 12px; color: var(--text-dim); }
-html[data-vibe="boring"] .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+/* The topbar-actions pill rules (!important) exclude this toggle, so its pressed accent fill is not beaten. */
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill[data-testid="boring-split-toggle"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
