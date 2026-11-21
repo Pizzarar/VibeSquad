@@ -62,7 +62,7 @@ import {
 } from "../spawn-route.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine } from "../watch-sets.mjs";
-import { redactHostPaths } from "../redact-host-paths.mjs";
+import { redactHostPathTokens } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
@@ -72,6 +72,8 @@ import {
   readJsonFileWithBom,
 } from "../user-settings.mjs";
 import { LESSONS_BEGIN, LESSONS_END, readLessons } from "../lessons.mjs";
+/** idea-419: stands in for forwarded text when the host-path redactor throws (never forward raw). */
+const REDACTION_WITHHELD = "(message withheld: host-path redaction failed; see the server log; run 'vs log --since-me')";
 
 type Labels = Record<string, string>;
 
@@ -3282,17 +3284,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       const target = toOverlord ? await resolveWatchOverlord(paseo, d.set) : await resolveWatchTarget(paseo, d.set);
       if (!target) return log(`watch ${d.setId}: no live ${toOverlord ? "Overlord" : "owner or lead"} for ${d.team}/${d.lane}; ping held`);
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer meanwhile
+      // idea-419: the ping text carries raw item reports (watch-sets.mjs itemLine) or a W4 merged digest: redacted like the finals.
+      const head = (await redactReportText(d.text, [target.cwd])) || REDACTION_WITHHELD;
       const adopted = !toOverlord && target.id !== d.owner && (await adoptRetiredWatch(paseo, d.set, target));
       if (watchQueuedAt(d.key) !== null) return; // queued by a concurrent offer while the re-own write waited on the lock
       const text = toOverlord
-        ? `${d.text}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)`
+        ? `${head}\n(Escalated to you as the Squad Overlord; watch owner ${d.owner}.)`
         : target.id === d.owner
-          ? d.text
+          ? head
           : adopted
-            ? `${d.text}\n(Watch owner ${d.owner} is retired; the watch is now yours as the lane's lead: \`vs watch cancel ${d.setId}\` stops it.)`
-            : `${d.text}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
+            ? `${head}\n(Watch owner ${d.owner} is retired; the watch is now yours as the lane's lead: \`vs watch cancel ${d.setId}\` stops it.)`
+            : `${head}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
-      const detail = d.detail ? await redactReportText(d.detail) : "";
+      const detail = d.detail ? await redactReportText(d.detail, [target.cwd]) : "";
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
 
 ${detail}` : text, refs: [d.setId] };
@@ -3324,7 +3328,7 @@ ${detail}` : text, refs: [d.setId] };
           `Output ONLY the merged digest text. Do not run any commands, do not send messages, and do not modify files.`,
           ``,
           `--- watch ${d.setId} report ---`,
-          d.text,
+          (await redactReportText(d.text, [target.cwd])) || REDACTION_WITHHELD, // idea-419: the merge worker is an agent too
         ].join("\n");
         const handle = await paseo.agents.create({
           config: { provider, modeId, thinkingOptionId, featureValues },
@@ -3749,10 +3753,15 @@ ${detail}` : text, refs: [d.setId] };
       deferredWakeTimers.set(leadId, t);
     }
 
-    /** idea-352: redact host paths from forwarded worker text (server/redact-host-paths.mjs, per line). "" if the redactor can't load: never forward raw. */
-    async function redactReportText(text: string): Promise<string> {
+    /**
+     * idea-352/idea-419: redact host paths from forwarded worker text token by token (server/redact-host-paths.mjs): a path
+     * becomes repo-relative (inside a worktree or under one of `cwds`) or <host-path>, and the rest of the line stays. Not the
+     * error-text redactor: that cut every path-bearing report line to "request failed (detail names a host path; …)".
+     * "" if the redactor throws: never forward raw.
+     */
+    async function redactReportText(text: string, cwds: (string | undefined)[] = []): Promise<string> {
       try {
-        return text.split(/\r?\n/).map((l) => (redactHostPaths({ error: l }) as { error: string }).error).join("\n");
+        return redactHostPathTokens(text, { repoRoots: cwds.filter((c): c is string => typeof c === "string" && c.length > 0) });
       } catch (e) {
         log(`report redaction unavailable, forwarded text dropped: ${e}`);
         return "";
@@ -3794,7 +3803,7 @@ ${detail}` : text, refs: [d.setId] };
       const w = await snap(paseo, worker);
       const where = w ? teamOf(w.labels, w.cwd) : null;
       if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return "";
-      const clean = await redactReportText(text);
+      const clean = await redactReportText(text, [w?.cwd]);
       if (!clean) return "";
       const body = clean.length > budget ? `${clean.slice(0, budget)}… (truncated; vs status ${worker} for the rest)` : clean;
       return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
@@ -3897,7 +3906,8 @@ ${detail}` : text, refs: [d.setId] };
           }
           parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}.${body} Run 'vs log --since-me' if more context is needed.`);
         }
-        const text = parts.join("\n\n");
+        // idea-419: the whole wake is redacted at the send: the relayed [done]/log line (last.text) is raw worker text too.
+        const text = (await redactReportText(parts.join("\n\n"), [liveLead.cwd])) || REDACTION_WITHHELD;
         for (const k of watchKeys) watchSending.add(k);
         try {
           if (watchKeys.length) await watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
