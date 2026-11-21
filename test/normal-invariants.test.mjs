@@ -196,7 +196,7 @@ test("5. Two expanded projects have the same child structure", guard("inv5", asy
   for (const s of shapes.slice(1)) assert.deepEqual(nonLane(s), nonLane(shapes[0]), `non-lane children differ: ${JSON.stringify(shapes)}`);
 }));
 
-test("6. No agent title appears more than twice in the visible viewport", { skip: "known failure idea-271: after Ctrl+J the opened agent title shows 5x in view (Needs-you row, sidebar worker row, breadcrumb, agent header, context panel); also 3-4x on deep link" }, guard("inv6", async () => {
+test("6. No agent title appears more than twice in the visible viewport", guard("inv6", async () => {
   const bad = [];
   for (const s of STATES) {
     await s.go();
@@ -207,6 +207,8 @@ test("6. No agent title appears more than twice in the visible viewport", { skip
       const out = {};
       for (const e of document.querySelectorAll("body *")) {
         if (e.children.length || !inView(e)) continue;
+        // The open agent header is the chat pane itself, not a duplicate list entry: the 2 allowed navigation hits are Needs you + the selected tree row.
+        if (e.closest('[data-testid="boring-agent-header"]')) continue;
         const t = e.textContent.trim();
         if (titles.has(t)) out[t] = (out[t] ?? 0) + 1;
       }

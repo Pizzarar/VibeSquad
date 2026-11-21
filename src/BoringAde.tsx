@@ -142,7 +142,7 @@ export type ActiveSelection = { teamId: string | null; mode: Mode; laneId: strin
  * In chat it follows the agent actually on screen (resolved across every project, so Ctrl+J / Needs-you jumps land right);
  * the lane/role state is only the fallback while no agent is shown (Start card). rowKey = `${teamId}|project|desk:lead|desk:brainstorm|lane:<id>|worker:<id>`.
  */
-export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId: string | null; agentId: string | null; agentTitle?: string | null; laneId: string | null; role: Role; workerId: string | null }): ActiveSelection {
+export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId: string | null; agentId: string | null; laneId: string | null; role: Role; workerId: string | null }): ActiveSelection {
   const base = { teamId: o.teamId, mode: o.mode, laneId: null, role: null, workerId: null, agentLabel: null, rowKey: null } as ActiveSelection;
   if (o.mode === "usage") return base;
   if (o.mode === "project") return { ...base, rowKey: o.teamId ? `${o.teamId}|project` : null };
@@ -158,7 +158,7 @@ export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId
     }
   }
   const workerId = role === "worker" ? o.agentId : null;
-  const agentLabel = !laneId ? null : role === "worker" ? roleLabel || o.agentTitle || "Worker" : laneId === "_overlord" ? "Overlord" : laneId === "_riffbot" ? "RiffBot" : role === "lead" ? "Lead" : "Brainstorm";
+  const agentLabel = !laneId ? null : role === "worker" ? roleLabel || "Worker" : laneId === "_overlord" ? "Overlord" : laneId === "_riffbot" ? "RiffBot" : role === "lead" ? "Lead" : "Brainstorm";
   const rowKey = !teamId || !laneId ? null : workerId ? `${teamId}|worker:${workerId}` : laneId === "_overlord" ? `${teamId}|desk:lead` : laneId === "_riffbot" ? `${teamId}|desk:brainstorm` : `${teamId}|lane:${laneId}`;
   return { teamId, mode: "chat", laneId, role, workerId, agentLabel, rowKey };
 }
@@ -538,12 +538,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   useEffect(() => () => setBoringShownAgent(undefined), []);
   const topRole = currentPin ? selectedRole : boringActiveRole(currentPin ?? { brainstorm: null, lead: null }, agentId);
   const onWorker = Boolean(selectedWorkerId && agentId === selectedWorkerId);
-  const liveWorkers = (currentPin?.workers ?? []).filter(boringWorkerIsLive);
-  // Header tabs stay short so Check in never leaves the screen: the selected worker plus the first live ones, the rest summarised.
-  const tabWorkers = [...liveWorkers.filter((w) => w.agent.id === selectedWorkerId), ...liveWorkers.filter((w) => w.agent.id !== selectedWorkerId)].slice(0, 3);
-  const moreWorkers = liveWorkers.length - tabWorkers.length;
 
-  const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, agentTitle: agent?.title, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
+  const sel = boringActiveSelection({ mode, views: allViews, teamId: activeTeamId, agentId: agent?.id ?? null, laneId: selectedLaneId, role: selectedRole, workerId: selectedWorkerId });
   const selView = allViews.find((v) => v.team.id === sel.teamId) ?? view;
   const selModel = selView === view ? model : boringSidebarModel(selView, now);
   const laneLabel =
@@ -634,9 +630,9 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
     </button>
   );
-  /** R3.1: under Desk / a lane the tree shows only the on-screen worker and workers that need you (one line, no reason); the rest folds into "▸ N running · M idle", which opens the right panel's Workers tab. */
+  /** R3.1: under Desk / a lane the tree shows only the on-screen worker row (B7a); all other workers, alerting ones included, fold into "▸ N running · M idle", which opens the right panel's Workers tab. */
   const workerList = (v: TeamView, pin: Pin, laneId: string, workers: Pin["workers"], listId: string, foldId: string, onScreen: boolean, open: () => void) => {
-    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id) || workerNeedsYou(w) || memberErr(w));
+    const shown = workers.filter((w) => isOn(v, "worker:" + w.agent.id));
     const rest = workers.filter((w) => !shown.includes(w));
     const fold = boringWorkerFold(rest);
     return (
@@ -804,13 +800,6 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
                 <span className={`boring-dot ${leadStatus} ${glyphCls(leadStatus, currentPin?.lead?.attention?.tone)}`} />
                 <span className="boring-tab-label">Lead · {leadStatus}</span>
               </button>
-              {tabWorkers.map((w) => (
-                <button key={w.agent.id} type="button" className={`boring-switch-pill boring-worker-tab ${selectedWorkerId === w.agent.id ? "on" : ""}`} data-testid={`boring-top-worker-${w.agent.id}`} title={w.agent.title ?? w.agent.id} onClick={() => currentPin && selectedLaneId && openTarget(view!, currentPin, selectedLaneId, { role: "worker", agentId: w.agent.id })}>
-                  <span className={`boring-dot ${w.agent.status} ${glyphCls(w.agent.status, w.attention?.tone)}`} />
-                  <span className="boring-tab-label">{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
-                </button>
-              ))}
-              {moreWorkers > 0 && <span className="boring-tab-more" data-testid="boring-top-workers-more" title="More live workers are listed under this lane in the sidebar">+{moreWorkers} live</span>}
               <button type="button" className="boring-checkin-btn" data-testid="boring-checkin-btn" disabled={!currentPin?.lead} onClick={() => currentPin && void runCheckin(currentPin, { open: openAgent, send: sendMessage })}>
                 Check in
               </button>

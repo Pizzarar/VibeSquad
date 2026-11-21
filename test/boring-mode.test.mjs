@@ -909,14 +909,15 @@ test("D2 BoringApp: clicking a lane opens its most urgent member and the breadcr
   assert.equal(byId(t, "boring-crumb-project").props.children, "VibeSquad");
   assert.equal(byId(t, "boring-crumb-lane").props.children, "Lane ADE");
   assert.equal(byId(t, "boring-crumb-agent").props.children, "Lead");
-  // Header tabs: Brainstorm, Lead and the live worker; the lane's sidebar row no longer has role pills.
-  assert.ok(byId(t, "boring-top-brainstorm") && byId(t, "boring-top-lead") && byId(t, "boring-top-worker-w1"));
-  byId(t, "boring-top-worker-w1").props.onClick();
+  // Header tabs: Brainstorm and Lead only (B7a: worker pills live in the sidebar tree / Workers tab, not the topbar).
+  assert.ok(byId(t, "boring-top-brainstorm") && byId(t, "boring-top-lead"));
+  assert.equal(byId(t, "boring-top-worker-w1"), null, "no topbar worker pill");
+  byType(t, "BoringInbox").props.onOpen({ teamId: "vs", view, item: { id: "w1" } });
   assert.deepEqual(globalThis.__calls.at(-1), ["openAgent", "w1"]);
   globalThis.__agents.set("w1", { id: "w1", title: "W1" });
   const t2 = render(props(view));
   assert.equal(byType(t2, "AgentDrawer").props.agent.id, "w1");
-  assert.equal(byId(t2, "boring-crumb-agent").props.children, "W1");
+  assert.equal(byId(t2, "boring-crumb-agent").props.children, "Worker"); // role, never the title (idea-271)
 });
 
 test("D2 BoringApp: a lane expands to a one-line '▸ N running · M idle' fold (R3.1); other projects can stay expanded", () => {
@@ -1071,10 +1072,10 @@ test("R2.1 boringActiveSelection: follows the agent on screen across projects; w
   assert.equal(boringActiveSelection({ ...base, mode: "project" }).rowKey, "vs|project");
   assert.equal(boringActiveSelection({ ...base, mode: "usage" }).rowKey, null);
   const w = boringActiveSelection({ ...base, agentId: "w1", agentTitle: "W1", laneId: "ade", workerId: "w1" });
-  assert.deepEqual([w.rowKey, w.agentLabel, w.role], ["vs|worker:w1", "W1", "worker"]);
+  assert.deepEqual([w.rowKey, w.agentLabel, w.role], ["vs|worker:w1", "Worker", "worker"]);
   // Ctrl+J into another project while state still points at the old one: the agent wins (team, lane, role).
   const j = boringActiveSelection({ ...base, agentId: "e1", agentTitle: "Fixer", laneId: "ade" });
-  assert.deepEqual([j.teamId, j.laneId, j.rowKey, j.agentLabel], ["efi", "arc", "efi|worker:e1", "Fixer"]);
+  assert.deepEqual([j.teamId, j.laneId, j.rowKey, j.agentLabel], ["efi", "arc", "efi|worker:e1", "Worker"]);
   assert.equal(boringActiveSelection({ ...base, agentId: "ov", laneId: "x" }).rowKey, "vs|desk:lead");
   assert.equal(boringActiveSelection({ ...base, agentId: "ade-ld" }).agentLabel, "Lead");
   // No agent on screen (Start card): lane state is the fallback.
@@ -1090,12 +1091,12 @@ test("R2.1 sidebar: exactly one row is .on and the breadcrumb agrees (Overview, 
   assert.match(JSON.stringify(byId(t, "boring-crumb-lane").props.children), /Overview/);
   byId(t, "boring-conv-toggle-ade").props.onClick();
   laneBtn(render(props(view)), "ade").props.onClick();
-  byId(render(props(view)), "boring-top-worker-w1").props.onClick();
+  byType(render(props(view)), "BoringInbox").props.onOpen({ teamId: "vs", view, item: { id: "w1" } });
   t = render(props(view));
   const on = onRows(t);
   assert.equal(on.length, 1);
   assert.match(String(on[0].props.className), /boring-worker-row/);
-  assert.match(JSON.stringify(byId(t, "boring-crumb-agent").props.children), /Worker One/);
+  assert.match(JSON.stringify(byId(t, "boring-crumb-agent").props.children), /Worker/);
   assert.doesNotMatch(JSON.stringify(byId(t, "boring-breadcrumb")), /Brainstorm/);
 });
 
@@ -1138,7 +1139,7 @@ test("R2 M1: Needs-you jump selects the worker and re-opens collapsed project / 
   const on = onRows(t);
   assert.equal(on.length, 1);
   assert.match(String(on[0].props.className), /boring-worker-row/); // idle worker revealed in the idle bucket
-  assert.match(JSON.stringify(byId(t, "boring-crumb-agent").props.children), /Worker One/);
+  assert.match(JSON.stringify(byId(t, "boring-crumb-agent").props.children), /Worker/);
   assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "w1"));
 });
 
@@ -1196,13 +1197,13 @@ test("R3.1: Desk lists only lead / brainstorm / alerting workers; running + idle
   const hw = [wk("r1", "running"), wk("a1", "idle", "permission"), ...Array.from({ length: 18 }, (_, i) => wk(`i${i}`, "idle"))];
   const t = withDesk(hubView(hw));
   assert.ok(byId(t, "boring-core-overlord") && byId(t, "boring-core-riffbot"));
-  assert.ok(byId(t, "boring-worker-a1"), "alerting worker inline");
+  assert.equal(byId(t, "boring-worker-a1"), null, "alerting worker folded (Needs you strip + Workers tab list it)");
   assert.equal(byId(t, "boring-worker-r1"), null, "running worker folded");
   assert.equal(byId(t, "boring-worker-i0"), null, "idle workers folded");
-  assert.equal(walk(byId(t, "boring-desk-workers"), (n) => /boring-worker-row/.test(String(n.props?.className ?? ""))).length, 1);
+  assert.equal(walk(byId(t, "boring-desk-workers"), (n) => /boring-worker-row/.test(String(n.props?.className ?? ""))).length, 0);
   assert.equal(byId(t, "boring-worker-why-a1"), null, "no reason text in the tree");
   const fold = byId(t, "boring-desk-workers-fold");
-  assert.match(JSON.stringify(fold.props.children), /1 running · 18 idle/);
+  assert.match(JSON.stringify(fold.props.children), /2 running · 18 idle/);
   assert.equal(fold.props.className.includes("boring-idle-toggle"), true);
 });
 
