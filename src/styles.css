@@ -5356,9 +5356,11 @@ button.sq-floor-char:focus-visible { outline: none !important; box-shadow: none 
 }
 .btn.ghost:hover, .squads-pager-btn:hover, .sidebar-cog-btn:hover { background: var(--panel-hi); color: var(--text); border-color: var(--violet); box-shadow: var(--bevel); }
 .btn.ok:not(.confirm) { background: var(--cyan-fill); color: var(--on-cyan-fill); border-color: var(--shadow-hard); }
-.btn.bad, .btn.confirm.danger:not(.armed), .bad-btn { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); }
-.btn.warn, .btn.confirm.warn:not(.armed) { background: var(--pastel-amber); color: var(--text); border: 1px solid var(--amber); }
-.btn.confirm.cool:not(.armed) { background: var(--pastel-teal); color: var(--text); border: 1px solid var(--cyan); }
+.btn.bad, .bad-btn { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.danger:not(.armed) { background: var(--pastel-pink); color: var(--text); border: 1px solid var(--hot-pink); }
+.btn.warn { background: var(--pastel-amber); color: var(--text); border: 1px solid var(--amber); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.warn:not(.armed) { background: var(--pastel-amber); color: var(--text); border: 1px solid var(--amber); }
+:where(html:not([data-vibe="boring"])) .btn.confirm.cool:not(.armed) { background: var(--pastel-teal); color: var(--text); border: 1px solid var(--cyan); }
 .btn.hot { background: var(--pink-fill); color: var(--on-cyan-fill); border: 1px solid var(--shadow-hard); }
 .btn.confirm.armed { border: 1px solid var(--shadow-hard); }
 .btn.successor.warn { background: var(--pastel-amber); }
