@@ -12,6 +12,8 @@ import { resolve, type Member } from "./teams";
 import { findPinnedTodo, type Entry } from "./Timeline";
 import { Ago } from "./ui";
 import { condenseReason } from "./condenseReason";
+import { glyphStatusOf } from "./attentionItems";
+import { useNowTick } from "./useNowTick";
 import { isLive } from "./pins";
 import type { OpenRightDockDetail } from "./RightDock";
 
@@ -56,6 +58,7 @@ const TAB_FOR_DOCK: Partial<Record<string, ContextTab>> = { Changes: "Changes", 
 
 function WorkersTab({ agent, laneId }: { agent?: PaseoAgent; laneId: string }) {
   const { agents } = usePaseo();
+  const now = useNowTick();
   const laneWorkers = useMemo(
     () => resolve(agents).filter((m) => m.kind === "worker" && isLive(m) && (m.laneId ?? "").toLowerCase() === laneId.toLowerCase()),
     [agents, laneId],
@@ -71,7 +74,7 @@ function WorkersTab({ agent, laneId }: { agent?: PaseoAgent; laneId: string }) {
       {showIdle ? "▾" : "▸"} {idle} idle worker{idle === 1 ? "" : "s"}
     </button>
   );
-  const idleList = showIdle && idleMembers.map((m) => renderWorker(m, agent, true));
+  const idleList = showIdle && idleMembers.map((m) => renderWorker(m, agent, true, now));
   if (live.length === 0)
     return (
       <div className="boring-ctx-list" data-testid="boring-ctx-workers">
@@ -82,17 +85,17 @@ function WorkersTab({ agent, laneId }: { agent?: PaseoAgent; laneId: string }) {
     );
   return (
     <div className="boring-ctx-list" data-testid="boring-ctx-workers">
-      {live.map((m) => renderWorker(m, agent, false))}
+      {live.map((m) => renderWorker(m, agent, false, now))}
       {idleToggle}
       {idleList}
     </div>
   );
 }
 
-function renderWorker(m: Member, agent: PaseoAgent | undefined, idle: boolean) {
+function renderWorker(m: Member, agent: PaseoAgent | undefined, idle: boolean, now: number) {
   {
     {
-        const glyph = boringStateGlyph(m.agent.status, m.attention?.tone);
+        const glyph = boringStateGlyph(glyphStatusOf(m.agent, now), m.attention?.tone);
         return (
           <button type="button" key={m.agent.id} className={`boring-ctx-worker${idle ? " idle" : ""}`} data-testid={`boring-ctx-worker-${m.agent.id}`} onClick={() => openAgent(m.agent.id)}>
             <span className={`boring-dot st-${glyph}`} aria-hidden />

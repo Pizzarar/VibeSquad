@@ -115,7 +115,7 @@ globalThis.setInterval = (...a) => { const t = realSetInterval(...a); t?.unref?.
 stub("useNowTick.mjs", "export const useNowTick = () => Date.now();");
 stub("demo.mjs", "export const demoLog = () => [];");
 stub("demoFlag.mjs", "export const DEMO = false;");
-stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length;`);
+stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length; export const isInNeedsYou = (m) => Boolean(m.stalled) || Boolean(m.attention && m.attention.tone !== "finished"); export const glyphStatusOf = (a) => a.glyph ?? a.status;`);
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
@@ -149,7 +149,7 @@ const adeCode = transformSync("BoringAde.tsx", ade, { lang: "tsx", jsx: { runtim
   .replace(/from "\.\/attentionItems"/, `from "./attentionItemsBoring"`)
   .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
 writeFileSync(join(dir, "BoringAde.mjs"), adeCode);
-const { BoringApp, boringAgentLanding, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringActiveSelection, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
+const { BoringApp, boringAgentLanding, boringSelectionForAgent, boringLaneTarget, boringBreadcrumb, boringActiveSelection, boringLaneLabel, boringWorkerIsLive, boringConversationAge, boringActiveRole, boringSidebarModel, boringLaneTableRows, boringStateGlyph, boringWorkerFold, boringStartBrainstorm, boringStartBugs } = await import(pathToFileURL(join(dir, "BoringAde.mjs")).href);
 
 const NOW = Date.parse("2026-11-11T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -979,6 +979,29 @@ test("D2 BoringApp: a lane expands to a one-line '▸ N running · M idle' fold 
 });
 
 // ---- D2 fix round: M2 deep links, L1 unread-on-open, permission reason, M1 no double count ------------------
+test("idea-493 BoringApp: every worker Needs-you counts (permission, pick, error, stalled) gets its own row, with the right dot; the fold counts the rest incl. quiet", () => {
+  reset();
+  const quiet = { ...wk("wq", "running"), agent: { ...wk("wq", "running").agent, glyph: "quiet" } };
+  const stalled = { ...wk("w2", "running"), stalled: true, agent: { ...wk("w2", "running").agent, glyph: "stalled" } };
+  const ws = [wk("w1", "running"), stalled, quiet, wk("wp", "running", "permission"), wk("wk", "running", "needs-you"), wk("we", "error", "error"), wk("wd", "idle"), wk("wf", "idle", "finished")];
+  const view = squad({ pins: [lanePin("ade", { workers: ws }), lanePin("per")] });
+  byId(render(props(view)), "boring-conv-toggle-ade").props.onClick();
+  const t = render(props(view));
+  const dot = (id) => byId(t, `boring-worker-${id}`).props.children[0].props.className;
+  for (const id of ["w2", "wp", "wk", "we"]) assert.ok(byId(t, `boring-worker-${id}`), `${id} has its own row`);
+  for (const id of ["w1", "wq", "wd", "wf"]) assert.equal(byId(t, `boring-worker-${id}`), null, `${id} folds`);
+  assert.match(dot("w2"), /st-stalled/);
+  assert.match(dot("wp"), /st-attn/);
+  assert.match(dot("we"), /st-err/);
+  assert.equal(JSON.stringify(byId(t, "boring-workers-fold-ade").props.children).includes("1 running · 1 quiet · 2 idle"), true);
+});
+
+test("idea-493: boringWorkerFold omits zero parts and counts quiet separately", () => {
+  const ws = [{ agent: { status: "running", updatedAt: ago(0) } }, { agent: { status: "idle" } }];
+  assert.equal(boringWorkerFold(ws, Date.now()), "1 running · 1 idle");
+  assert.equal(boringWorkerFold([], Date.now()), null);
+});
+
 test("D2 M2 boringAgentLanding: an agent outside every pinned lane (hub worker) still lands in chat; unknown agents do not", () => {
   const v = squad({ pins: [lanePin("ade", { lead: mem("ade-ld"), workers: [wk("w1")] })] });
   assert.equal(boringAgentLanding([v], "ade-ld", () => true).mode, "chat");
@@ -1287,18 +1310,18 @@ test("R2: sidebar Search opens the Command Palette (Ctrl+K); idle toggle sits on
 // ---- R2 fix round 2: Desk workers render like lane workers; Desk row/table honest -----------------------------
 const hubView = (hubWorkers, extra = {}) => squad({ zones: { hub: { lane: { id: "hub" }, workers: hubWorkers }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")), ...extra } });
 
-test("R3.1: Desk lists only lead / brainstorm / alerting workers; running + idle fold into one row", () => {
+test("R3.1: Desk lists lead / brainstorm / workers that need you (idea-493: own rows == badge); running + idle fold into one row", () => {
   reset();
   const hw = [wk("r1", "running"), wk("a1", "idle", "permission"), ...Array.from({ length: 18 }, (_, i) => wk(`i${i}`, "idle"))];
   const t = withDesk(hubView(hw));
   assert.ok(byId(t, "boring-core-overlord") && byId(t, "boring-core-riffbot"));
-  assert.equal(byId(t, "boring-worker-a1"), null, "alerting worker folded (Needs you strip + Workers tab list it)");
+  assert.ok(byId(t, "boring-worker-a1"), "alerting worker gets its own 1-line row (idea-493)");
   assert.equal(byId(t, "boring-worker-r1"), null, "running worker folded");
   assert.equal(byId(t, "boring-worker-i0"), null, "idle workers folded");
-  assert.equal(walk(byId(t, "boring-desk-workers"), (n) => /boring-worker-row/.test(String(n.props?.className ?? ""))).length, 0);
+  assert.equal(walk(byId(t, "boring-desk-workers"), (n) => /boring-worker-row/.test(String(n.props?.className ?? ""))).length, 1);
   assert.equal(byId(t, "boring-worker-why-a1"), null, "no reason text in the tree");
   const fold = byId(t, "boring-desk-workers-fold");
-  assert.match(JSON.stringify(fold.props.children), /2 running · 18 idle/);
+  assert.match(JSON.stringify(fold.props.children), /1 running · 18 idle/);
   assert.equal(fold.props.className.includes("boring-idle-toggle"), true);
 });
 
