@@ -1,6 +1,6 @@
 import { appendFileSync, copyFileSync, createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { loopLagStats } from "../runner/loop-lag.mjs";
-import { handleRunnerApi } from "./runner-api.mjs";
+import { fetchTesterTimeline, handleRunnerApi, sendTesterInput, testerTeamRecords } from "./runner-api.mjs";
 import { forceRestartRunner, unstick } from "./unstick.mjs";
 import { tailLines } from "./log-tail.mjs";
 import { handleSchedulesApi } from "./schedules.mjs";
@@ -21,13 +21,13 @@ import { realpathSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { redactHostPaths } from "./redact-host-paths.mjs";
+import { redactHostPathTokens, redactHostPaths } from "./redact-host-paths.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { isServerSideFsError } from "./file-lock.mjs";
 import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
-import { contentRevision, createWindowLimiter } from "./write-guards.mjs";
+import { contentRevision, createWindowLimiter, defangPromptFences } from "./write-guards.mjs";
 import { ADE_GATED_READ_PATHS, isUnsafeRoot, handleFileList, handleFsList, handleFsMutation, handleFsWatch, handleFsRead, handleFsResolve, handleSearch } from "./file-search.mjs";
 import { handleSecretInputRequest } from "./secret-input.mjs";
 import {
@@ -43,7 +43,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isOwnerDevice, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -62,7 +62,10 @@ import {
   INBOX_MEDIA_MAX_BYTES,
   getInboxPath,
   listInboxCards,
+  loadTeamsForInbox,
+  pickBugIntakeAgent,
   readInboxCards,
+  resolveBugLaneId,
   sendInboxCard,
   sortIdeaCard,
   assertInboxTriageCaller,
@@ -310,9 +313,28 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
 
 // Trusted = may read. Owner = may also change things: a paired device, or a loopback caller with the local token.
 // X1c: a request that names an agent (x-vs-agent-id) is never the owner, whatever else it carries (auth.mjs ownerProof).
-const isTrusted = (req) => isLocalBrowserSafe(req) || Boolean(authenticate(req));
+// E6a: a paired device is trusted only as an owner device or a bug-tester; a bug-tester is then held to TESTER_ROUTE_ALLOWLIST
+// by gated() (never the read-only all-GET view), and a record with any other role is not trusted at all (fail closed).
+const isTrusted = (req) => isLocalBrowserSafe(req) || trustedDevice(authenticate(req));
+const trustedDevice = (dev) => isOwnerDevice(dev) || dev?.role === "bug-tester";
 const isOwner = (req) => ownerProof(req);
-const localAccess = (req) => (isOwner(req) ? "owner" : "read-only");
+/** E6a: the bug-tester device record behind `req` (header token, cookie or relay channel), or null. Owner proof wins. */
+const testerDeviceOf = (req) => {
+  if (isOwner(req)) return null;
+  const dev = authenticate(req);
+  return dev?.role === "bug-tester" ? dev : null;
+};
+const localAccess = (req) => (isOwner(req) ? "owner" : testerDeviceOf(req) ? "bug-tester" : "read-only");
+/** E6a: { role, allowedTeams, deviceName } for /health and /auth/status (role null for a non-device read-only caller). */
+function deviceFields(req) {
+  const tester = testerDeviceOf(req);
+  if (tester) return { role: "bug-tester", allowedTeams: testerAllowedTeams(tester), deviceName: String(tester.name ?? "") };
+  if (!isOwner(req)) return { role: null, allowedTeams: null, deviceName: null };
+  const dev = authenticate(req);
+  return { role: "owner", allowedTeams: null, deviceName: dev ? String(dev.name ?? "") : null };
+}
+const TEAM_ID_OK = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const testerAllowedTeams = (dev) => (Array.isArray(dev?.allowedTeams) ? dev.allowedTeams : []).map((t) => String(t ?? "").trim().toLowerCase()).filter((t) => TEAM_ID_OK.test(t));
 
 // ---- X1c: what a verified agent may write (docs/PLAN_X1_IDENTITY.md "Server middleware is default-deny") ----
 // Every non-GET/HEAD and every gated read needs the owner, except these routes for a verified agent; each handler then
@@ -331,6 +353,38 @@ export const AGENT_WRITE_ALLOWLIST = Object.freeze([
   "/__vibesquad/runner/spawn",
   /^\/__vibesquad\/runner\/agents\/[^/]+\/(input|cancel|meta|archive|unarchive|resume)$/,
 ]);
+// ---- E6a: what a bug-tester device may reach (deny-by-default; docs/PLAN_E6_TESTER_ROLES.md) ----
+// A tester is never the owner and never gets the read-only all-GET view: only these method + path pairs, on a canonical
+// path, reach a handler, and every handler re-scopes to the caller's allowedTeams (runner-api.mjs handleTesterRunnerApi,
+// handleTester* below). Anything else is 403 before routing.
+const TESTER_RUNNER_AGENT_RE = /^\/__vibesquad\/runner\/agents\/rn-[A-Za-z0-9_-]{1,64}(\/timeline)?$/;
+const TESTER_RUNNER_INPUT_RE = /^\/__vibesquad\/runner\/agents\/rn-[A-Za-z0-9_-]{1,64}\/input$/;
+export const TESTER_ROUTE_ALLOWLIST = Object.freeze([
+  Object.freeze({ methods: Object.freeze(["GET", "HEAD"]), path: "/api/auth/status" }),
+  Object.freeze({ methods: Object.freeze(["GET", "HEAD"]), path: "/__vibesquad/auth/status" }),
+  Object.freeze({ methods: Object.freeze(["GET"]), path: "/api/teams" }),
+  Object.freeze({ methods: Object.freeze(["GET"]), path: "/__vibesquad/teams" }),
+  Object.freeze({ methods: Object.freeze(["GET"]), path: "/__vibesquad/runner/status" }),
+  Object.freeze({ methods: Object.freeze(["GET"]), path: "/__vibesquad/runner/events" }),
+  Object.freeze({ methods: Object.freeze(["GET"]), path: "/__vibesquad/runner/agents" }),
+  Object.freeze({ methods: Object.freeze(["GET"]), path: TESTER_RUNNER_AGENT_RE }),
+  Object.freeze({ methods: Object.freeze(["POST"]), path: TESTER_RUNNER_INPUT_RE }),
+  Object.freeze({ methods: Object.freeze(["POST"]), path: "/__vibesquad/tester/report" }),
+  Object.freeze({ methods: Object.freeze(["GET", "POST"]), path: "/__vibesquad/tester/thread" }),
+  Object.freeze({ methods: Object.freeze(["GET", "POST"]), path: "/__vibesquad/inbox" }),
+  Object.freeze({ methods: Object.freeze(["POST"]), path: "/__vibesquad/inbox/attachment" }),
+  Object.freeze({ methods: Object.freeze(["POST"]), path: "/__vibesquad/inbox/send" }),
+]);
+export const testerRouteAllowed = (method, path) =>
+  TESTER_ROUTE_ALLOWLIST.some((r) => r.methods.includes(String(method ?? "").toUpperCase()) && (r.path instanceof RegExp ? r.path.test(path) : r.path === path));
+/** A path a tester route may be matched against: plain ASCII segments, no dot segments, encoding, doubled or back slashes, NUL. */
+export const isCanonicalTesterPath = (path) =>
+  typeof path === "string" &&
+  /^\/[A-Za-z0-9\/_.-]*$/.test(path) &&
+  !path.includes("//") &&
+  !path.split("/").some((seg) => seg === "." || seg === "..") &&
+  !/[%\\\u0000]/.test(path);
+
 export const agentWriteAllowed = (path) => AGENT_WRITE_ALLOWLIST.some((r) => (r instanceof RegExp ? r.test(path) : r === path));
 
 const forbidden = (why) => Object.assign(new Error(why), { status: 403 });
@@ -504,11 +558,14 @@ export function handleHealth(req, res, rootDir = REPO_ROOT) {
   }
   const distReady = hasDistIndex(rootDir);
   if (!isTrusted(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady });
+  // E6a: a bug-tester gets liveness and its own scope only: no port, LAN IPs, loop stats, stale paths or config warnings.
+  if (testerDeviceOf(req)) return sendJson(res, distReady ? 200 : 503, { ok: distReady, distReady, localAccess: "bug-tester", ...deviceFields(req) });
   const { port } = netConfig();
   const warnings = getConfigWarnings();
   const send = (stale) => {
     const extra = {
       localAccess: localAccess(req),
+      ...deviceFields(req),
       port,
       lanEnabled: exposure.lanEnabled,
       exposedIps: exposure.exposedIps,
@@ -543,11 +600,15 @@ export function handleAuthStatus(req, res, rootDir = REPO_ROOT) {
   }
   const full = getAuthStatus(rootDir);
   if (!isTrusted(req)) return sendJson(res, 200, { ok: true, paired: false, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint });
+  // E6a: a bug-tester sees that it is paired and its scope; never the LAN / Meshnet addresses, installer links or relay detail.
+  if (testerDeviceOf(req)) {
+    return sendJson(res, 200, { ok: true, paired: true, hostId: full.hostId, distReady: full.distReady, caFingerprint: full.caFingerprint, localAccess: "bug-tester", ...deviceFields(req) });
+  }
   let relay = null;
   try {
     relay = relayStatus?.() ?? null;
   } catch {}
-  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req), relay });
+  return sendJson(res, 200, { ...full, paired: true, localAccess: localAccess(req), ...deviceFields(req), relay });
 }
 
 export { teamsRevision, validateTeamsBody, writeTeamsRegistry };
@@ -1865,6 +1926,342 @@ async function handleWorkspacePackageScripts(req, res, rootDir, opts = {}) {
   }
 }
 
+// ---- E6a: bug-tester handlers (docs/PLAN_E6_TESTER_ROLES.md) ----
+// Reached only through testerGated (TESTER_ROUTE_ALLOWLIST). Every one re-scopes to caller.allowedTeams and the Squad's bug
+// lane, stamps the tester server-side, and answers with the tester's own data only (never the owner's inbox, registry
+// paths, other Squads' cards or agent internals); free text going back out is host-path redacted.
+const TESTER_REPORT_MAX_BYTES = Math.ceil(INBOX_MEDIA_MAX_BYTES / 3) * 4 + MAX_BODY_BYTES; // base64 screenshot + the JSON around it
+const TESTER_TEXT_MAX_CHARS = 8000;
+const TESTER_SOURCE = "alpha-tester";
+const TESTER_THREAD_DEFAULT = 50;
+const TESTER_THREAD_MAX = 200;
+const TESTER_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+const testerStatus = (msg, status) => Object.assign(new Error(msg), { status });
+const redactTester = (t) => redactHostPathTokens(String(t ?? ""));
+const isPlainObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
+const testerName = (caller) => String(caller?.name ?? "").replace(/[\r\n\]]/g, " ").trim() || "tester";
+/** The card header every tester card starts with (server-stamped). */
+const testerStamp = (caller) => `[Alpha Tester: ${testerName(caller)}]`;
+
+/** The registry records of the caller's allowedTeams (runner-api testerTeamRecords over teams.json). */
+function testerTeamsOf(caller, rootDir) {
+  return testerTeamRecords(caller, loadTeamsForInbox(rootDir));
+}
+
+/** The allowed Squad a tester request names (`teamId`, default its first): 403 outside allowedTeams, 404 gone, 409 no bug lane. */
+function testerTeamFor(caller, teamId, rootDir) {
+  const allowed = (caller?.allowedTeams ?? []).map((t) => String(t).trim().toLowerCase());
+  const want = typeof teamId === "string" && teamId.trim() ? teamId.trim().toLowerCase() : allowed[0] ?? "";
+  if (!want || !allowed.includes(want)) throw testerStatus("forbidden: that Squad is not on this tester's invite", 403);
+  const team = testerTeamsOf(caller, rootDir).find((t) => String(t.id).trim().toLowerCase() === want);
+  if (!team) throw testerStatus(`Squad "${want}" not found`, 404);
+  const laneId = resolveBugLaneId(team);
+  if (!laneId) throw testerStatus(`Squad "${team.id}" has no bug lane`, 409);
+  return { team, laneId };
+}
+
+/** The live bug-intake agent of `team` (bug lane Buddy, else its Lead), or null. Never creates one. */
+async function testerIntakeAgentFor(backend, team) {
+  const agents = await backend.listAgents().catch(() => []);
+  const a = pickBugIntakeAgent(Array.isArray(agents) ? agents : [], team);
+  return a && !a.archivedAt ? a : null;
+}
+
+function sendTesterError(res, e, what) {
+  const status = [400, 403, 404, 405, 409, 413, 429].includes(e?.status) ? e.status : null;
+  if (status) return sendJson(res, status, { ok: false, error: redactTester(e?.message ?? e) });
+  if (sendServerFsError(res, e, what, INBOX_BUSY)) return;
+  return sendServerError(res, e, what); // idea-249: detail to the log only
+}
+
+/** readBody for a tester route: a JSON object or a 400 (a bad body is the client's fault, never a 500). */
+async function readTesterBody(req, limit = MAX_BODY_BYTES) {
+  let body;
+  try {
+    body = await readBody(req, limit);
+  } catch (e) {
+    throw e?.status ? e : testerStatus("invalid JSON body", 400);
+  }
+  if (!isPlainObj(body)) throw testerStatus("body must be a JSON object", 400);
+  return body;
+}
+
+/** The tester's free text: non-empty, at most TESTER_TEXT_MAX_CHARS, control characters and prompt fences defanged. */
+function testerText(v) {
+  const t = stripControl(String(typeof v === "string" ? v : "")).trim();
+  if (!t) throw testerStatus("text is required", 400);
+  if (t.length > TESTER_TEXT_MAX_CHARS) throw testerStatus(`text too long (${TESTER_TEXT_MAX_CHARS} chars max)`, 413);
+  return defangPromptFences(t);
+}
+const stripControl = (s) => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ""); // keeps \t and \n
+/** One telemetry value: control chars out, capped, prompt fences defanged, code fences broken, one line. */
+function clipTelemetry(v, max) {
+  let t = stripControl(String(v)).replace(/\s*\n\s*/g, " ⏎ ").trim();
+  if (t.length > max) t = `${t.slice(0, max)}…`;
+  return defangPromptFences(t).replace(/`{3,}/g, (m) => "ʼ".repeat(m.length));
+}
+function safeJsonText(v) {
+  try {
+    return JSON.stringify(v) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** The telemetry a report may carry, sanitized and capped: clickedPoint {x,y}, cursorNode, scene, state, buildHash, logLines. */
+export function sanitizeTesterTelemetry(src) {
+  const t = isPlainObj(src) ? src : {};
+  const out = {};
+  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? Math.round(v * 100) / 100 : null);
+  if (isPlainObj(t.clickedPoint)) {
+    const x = num(t.clickedPoint.x);
+    const y = num(t.clickedPoint.y);
+    if (x !== null && y !== null) out.clickedPoint = { x, y };
+  }
+  for (const [k, max] of [["cursorNode", 300], ["scene", 300], ["buildHash", 120]]) {
+    if (typeof t[k] === "string" && t[k].trim()) out[k] = clipTelemetry(t[k], max);
+  }
+  if (t.state !== undefined && t.state !== null) {
+    const raw = typeof t.state === "string" ? t.state : safeJsonText(t.state).slice(0, 4000);
+    if (raw.trim()) out.state = clipTelemetry(raw, 2000);
+  }
+  if (Array.isArray(t.logLines)) {
+    const lines = t.logLines.filter((l) => typeof l === "string").slice(-50).map((l) => clipTelemetry(l, 500));
+    if (lines.length) out.logLines = lines;
+  }
+  return out;
+}
+
+/** The card text of a tester report: the server stamp, the tester's words, then the telemetry as a fixed markdown block. */
+function testerReportMarkdown(caller, text, tel) {
+  const facts = [];
+  if (tel.scene) facts.push(`- Scene: ${tel.scene}`);
+  if (tel.state) facts.push(`- State: ${tel.state}`);
+  if (tel.buildHash) facts.push(`- Build: ${tel.buildHash}`);
+  if (tel.clickedPoint) facts.push(`- Clicked point: x=${tel.clickedPoint.x}, y=${tel.clickedPoint.y}`);
+  if (tel.cursorNode) facts.push(`- Cursor node: ${tel.cursorNode}`);
+  if (tel.logLines?.length) facts.push(`- Log (last ${tel.logLines.length} lines):`, "```text", ...tel.logLines, "```");
+  return [testerStamp(caller), text, ...(facts.length ? ["", "**Telemetry**", ...facts] : [])].join("\n");
+}
+
+function sniffTesterImage(b) {
+  if (b.length > 8 && b[0] === 0x89 && b.toString("latin1", 1, 4) === "PNG") return "image/png";
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+  if (b.length > 12 && b.toString("latin1", 0, 4) === "RIFF" && b.toString("latin1", 8, 12) === "WEBP") return "image/webp";
+  return "";
+}
+
+/** body.screenshotBase64 (plain or a data: URL; optional screenshotMime) -> { mime, bytes }, or null when absent. */
+function decodeTesterScreenshot(body) {
+  let b64 = typeof body.screenshotBase64 === "string" ? body.screenshotBase64.trim() : "";
+  if (!b64) return null;
+  let mime = typeof body.screenshotMime === "string" ? body.screenshotMime.split(";")[0].trim().toLowerCase() : "";
+  const m = /^data:([a-z0-9.+/-]{1,64});base64,/i.exec(b64);
+  if (m) {
+    mime = m[1].toLowerCase();
+    b64 = b64.slice(m[0].length);
+  }
+  b64 = b64.replace(/\s+/g, "");
+  if (!/^[A-Za-z0-9+/_-]+={0,2}$/.test(b64)) throw testerStatus("screenshotBase64 is not base64", 400);
+  if (Math.floor((b64.length * 3) / 4) > INBOX_MEDIA_MAX_BYTES + 2) throw testerStatus("screenshot too large (8 MB max)", 413);
+  const bytes = Buffer.from(b64, /[-_]/.test(b64) ? "base64url" : "base64");
+  if (!bytes.length) throw testerStatus("empty screenshot", 400);
+  if (!mime) mime = sniffTesterImage(bytes);
+  if (!TESTER_IMAGE_TYPES.includes(mime)) throw testerStatus("screenshot must be png, jpeg or webp", 400);
+  return { mime, bytes };
+}
+
+/** Park one tester card on `team`'s bug lane: forced source, lane and tester meta (addInboxCardsAsync scope). */
+async function parkTesterCard(caller, team, laneId, text, rootDir, telemetry = null) {
+  const meta = { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller), ...(telemetry ? { telemetry } : {}) };
+  // `ideas: [text]`: one card whatever the line count (a plain multi-line `text` would be split into one card per line).
+  const r = await addInboxCardsAsync({ ideas: [text], teamId: team.id }, rootDir, { teamId: team.id, laneId, source: TESTER_SOURCE, meta });
+  const card = r?.added?.[0];
+  if (!card) throw new Error("tester card was not parked");
+  return card;
+}
+
+/** A card as its tester sees it: no attachment paths, delivery target or other owner-side fields; text redacted. */
+function testerCardView(c) {
+  return {
+    id: c.id,
+    text: redactTester(c.text),
+    teamId: c.teamId ?? null,
+    laneId: c.laneId ?? null,
+    status: c.status ?? "parked",
+    source: c.source ?? TESTER_SOURCE,
+    createdAt: c.createdAt ?? null,
+    updatedAt: c.updatedAt ?? null,
+    delivered: Boolean(c.deliveredAt),
+    deliveredAt: c.deliveredAt ?? null,
+    attachments: Array.isArray(c.attachments) ? c.attachments.length : 0,
+  };
+}
+
+/** The caller's own card `cardId` (testerDeviceId === caller.id, on an allowed Squad), else 403 (also for a missing card). */
+function ownTesterCard(caller, cardId) {
+  const id = String(cardId ?? "").trim();
+  const allowed = (caller?.allowedTeams ?? []).map((t) => String(t).toLowerCase());
+  const card = /^idea-\d+$/.test(id) ? readInboxCards().find((c) => c?.id === id) : null;
+  if (!card || card.testerDeviceId !== caller.id || !allowed.includes(String(card.teamId ?? "").toLowerCase())) {
+    throw testerStatus("forbidden: not one of this tester's cards", 403);
+  }
+  return card;
+}
+
+/** Deliver a tester card to its bug lane: { delivered, deliveryError?, agentId }. A delivery failure is not a request error. */
+async function deliverTesterCard(cardId, rootDir) {
+  try {
+    const r = await sendInboxCard({ cardId }, rootDir);
+    return { delivered: true, agentId: r?.agentId ?? r?.card?.deliveredTo ?? null };
+  } catch (e) {
+    return { delivered: false, deliveryError: redactTester(e?.message ?? e), agentId: null };
+  }
+}
+
+/** GET /api/teams, /__vibesquad/teams for a tester: its Squads only, each with just its bug lane; no paths, no other lanes. */
+function handleTesterTeams(req, res, { rootDir, caller }) {
+  if (req.method !== "GET") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  try {
+    const str = (v) => (typeof v === "string" && v.trim() ? redactTester(v) : undefined);
+    const teams = testerTeamsOf(caller, rootDir).map((team) => {
+      const laneId = resolveBugLaneId(team);
+      const lane = (Array.isArray(team.lanes) ? team.lanes : []).find((l) => l?.id === laneId);
+      const pick = (o, keys) => Object.fromEntries(keys.map((k) => [k, str(o?.[k])]).filter(([, v]) => v !== undefined));
+      return { id: String(team.id), ...pick(team, ["name", "title"]), lanes: laneId ? [{ id: laneId, ...pick(lane, ["name", "title", "code"]), kind: "bug" }] : [] };
+    });
+    return sendJson(res, 200, { teams, hostId: getHostId() });
+  } catch (e) {
+    return sendTesterError(res, e, "tester teams");
+  }
+}
+
+/**
+ * POST /__vibesquad/tester/report: { teamId?, text, telemetry? | clickedPoint/cursorNode/scene/state/buildHash/logLines,
+ * screenshotBase64?, screenshotMime? } -> one card on the Squad's bug lane (source alpha-tester, tester meta), its screenshot
+ * attached, delivered to the bug-intake agent. Answers { ok, cardId, delivered, deliveryError?, laneId, threadAgentId }.
+ */
+async function handleTesterReport(req, res, { rootDir, caller, backend }) {
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  try {
+    const body = await readTesterBody(req, TESTER_REPORT_MAX_BYTES);
+    const { team, laneId } = testerTeamFor(caller, body.teamId, rootDir);
+    const text = testerText(body.text);
+    const telemetry = sanitizeTesterTelemetry(isPlainObj(body.telemetry) ? body.telemetry : body);
+    const shot = decodeTesterScreenshot(body); // validated before the card exists: a bad screenshot parks nothing
+    const card = await parkTesterCard(caller, team, laneId, testerReportMarkdown(caller, text, telemetry), rootDir, telemetry);
+    const out = { ok: true, cardId: card.id, laneId };
+    if (shot) {
+      try {
+        await attachInboxMedia({ cardId: card.id, mime: shot.mime, bytes: shot.bytes });
+        out.screenshotAttached = true;
+      } catch (e) {
+        out.screenshotAttached = false;
+        out.screenshotError = redactTester(e?.message ?? e);
+      }
+    }
+    const d = await deliverTesterCard(card.id, rootDir);
+    out.delivered = d.delivered;
+    if (d.deliveryError) out.deliveryError = d.deliveryError;
+    out.threadAgentId = d.agentId ?? (await testerIntakeAgentFor(backend, team))?.id ?? null;
+    return sendJson(res, 200, out);
+  } catch (e) {
+    return sendTesterError(res, e, "tester report");
+  }
+}
+
+/**
+ * GET /__vibesquad/tester/thread?teamId=&limit= -> { ok, teamId, laneId, agent: { id, title, status } | null, messages };
+ * POST { teamId?, text } -> the line goes to the bug-intake agent, prefixed and non-owner -> { ok, agentId }.
+ */
+async function handleTesterThread(req, res, { rootDir, caller, backend }) {
+  try {
+    if (req.method === "GET") {
+      const q = new URL(req.url, "http://x").searchParams;
+      const { team, laneId } = testerTeamFor(caller, q.get("teamId") || q.get("team") || "", rootDir);
+      const limit = Math.min(Math.max(Number(q.get("limit")) || TESTER_THREAD_DEFAULT, 1), TESTER_THREAD_MAX);
+      const a = await testerIntakeAgentFor(backend, team);
+      if (!a) return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: null, messages: [] });
+      const t = await fetchTesterTimeline(backend, a.id, { limit });
+      const messages = t.entries.map((e) => ({
+        id: `${a.id}:${e.seqStart ?? ""}`,
+        role: e.item.type === "user_message" ? "user" : "assistant",
+        text: e.item.text,
+        ts: e.timestamp ?? null,
+      }));
+      return sendJson(res, 200, { ok: true, teamId: String(team.id), laneId, agent: { id: a.id, title: redactTester(a.title ?? ""), status: String(a.status ?? "unknown") }, messages });
+    }
+    if (req.method === "POST") {
+      const body = await readTesterBody(req);
+      const { team } = testerTeamFor(caller, body.teamId, rootDir);
+      const text = testerText(body.text);
+      const a = await testerIntakeAgentFor(backend, team);
+      if (!a) throw testerStatus(`no live bug-intake agent in Squad "${team.id}"; your report is parked in the inbox`, 409);
+      await sendTesterInput(backend, caller, a.id, text);
+      return sendJson(res, 200, { ok: true, agentId: a.id });
+    }
+    return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  } catch (e) {
+    return sendTesterError(res, e, "tester thread");
+  }
+}
+
+/** GET/POST /__vibesquad/inbox for a tester: list its own cards; park a plain text card on an allowed Squad's bug lane. */
+async function handleTesterInbox(req, res, { rootDir, caller }) {
+  try {
+    if (req.method === "GET") {
+      const q = new URL(req.url, "http://x").searchParams;
+      const want = (q.get("teamId") || q.get("team") || "").trim().toLowerCase();
+      const allowed = (caller.allowedTeams ?? []).map((t) => String(t).toLowerCase());
+      if (want && want !== "all" && !allowed.includes(want)) throw testerStatus("forbidden: that Squad is not on this tester's invite", 403);
+      const cards = readInboxCards()
+        .filter((c) => c?.testerDeviceId === caller.id && allowed.includes(String(c.teamId ?? "").toLowerCase()))
+        .filter((c) => !want || want === "all" || String(c.teamId).toLowerCase() === want)
+        .filter((c) => c.status !== "archived")
+        .map(testerCardView);
+      return sendJson(res, 200, { ok: true, cards });
+    }
+    if (req.method === "POST") {
+      const body = await readTesterBody(req);
+      const { team, laneId } = testerTeamFor(caller, body.teamId, rootDir);
+      const card = await parkTesterCard(caller, team, laneId, `${testerStamp(caller)}\n${testerText(body.text)}`, rootDir);
+      return sendJson(res, 200, { ok: true, cardId: card.id, laneId, card: testerCardView(card) });
+    }
+    return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  } catch (e) {
+    return sendTesterError(res, e, `tester inbox ${req.method === "GET" ? "list" : "add"}`);
+  }
+}
+
+/** POST /__vibesquad/inbox/attachment?cardId= for a tester: raw image body onto one of its own undelivered cards. */
+async function handleTesterInboxAttachment(req, res, { caller }) {
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  try {
+    const card = ownTesterCard(caller, new URL(req.url, "http://x").searchParams.get("cardId"));
+    const mime = String(req.headers["content-type"] || "");
+    const bytes = await readRawBody(req, INBOX_MEDIA_MAX_BYTES);
+    const r = await attachInboxMedia({ cardId: card.id, mime, bytes });
+    return sendJson(res, 200, { ok: true, cardId: card.id, attachment: { mime: r?.attachment?.mime ?? null, bytes: r?.attachment?.bytes ?? bytes.length } });
+  } catch (e) {
+    if (!e?.status && e instanceof Error && !isServerSideFsError(e)) e.status = 400; // attachInboxMedia's validation errors
+    return sendTesterError(res, e, "tester inbox attachment");
+  }
+}
+
+/** POST /__vibesquad/inbox/send { cardId } for a tester: deliver one of its own cards to its bug lane. */
+async function handleTesterInboxSend(req, res, { rootDir, caller }) {
+  if (req.method !== "POST") return sendJson(res, 405, { ok: false, error: "method not allowed" });
+  try {
+    const body = await readTesterBody(req);
+    const card = ownTesterCard(caller, body.cardId);
+    if (card.deliveredAt) return sendJson(res, 200, { ok: true, cardId: card.id, delivered: true, already: true });
+    const d = await deliverTesterCard(card.id, rootDir);
+    return sendJson(res, 200, { ok: true, cardId: card.id, delivered: d.delivered, ...(d.deliveryError ? { deliveryError: d.deliveryError } : {}), agentId: d.agentId });
+  } catch (e) {
+    return sendTesterError(res, e, "tester inbox send");
+  }
+}
+
 // Connect-style middleware: handles /__vibesquad/* and /api/*, calls next() for everything else.
 // Everything except health, /ca.crt, /pair and /__vibesquad/local-login needs a paired device or a same-origin loopback
 // caller. The caller is resolved once per request (auth.mjs callerFromRequest: owner | agent | unknown); every write and
@@ -1901,6 +2298,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   };
 
   function gated(req, res, next, path, isApi, caller) {
+    if (caller.kind === "tester") return testerGated(req, res, path, caller); // E6a: first, before any owner/read-only rule
     const owner = caller.kind === "owner";
     const write = req.method !== "GET" && req.method !== "HEAD";
     if (caller.kind === "denied") return sendJson(res, caller.status, { error: caller.error });
@@ -1928,7 +2326,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       return handleDesktopUpdateJson(req, res, rootDir);
     }
     if (!path.startsWith("/__vibesquad/")) return next?.();
-    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, caller, ...(opts.backend ? { backend: opts.backend } : {}) });
+    if (path.startsWith("/__vibesquad/runner/")) return handleRunnerApi(req, res, { readBody: (r) => readBody(r, bodyLimit), sendJson, caller, testerTeams: null, ...(opts.backend ? { backend: opts.backend } : {}) });
     if (path === "/__vibesquad/schedules" || path.startsWith("/__vibesquad/schedules/")) return handleSchedulesApi(req, res, { readBody, sendJson });
     // idea-343: gh-repos / gh-clone (git-api NO_CWD_ACTIONS) need the owner, by the same gate as every git route and as runner
     // spawn above: GET gh-repos is a gated read (isGatedRead -> isGitPath), POST gh-clone a write, so a local-token owner,
@@ -1940,7 +2338,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     if (path === "/__vibesquad/providers" || path.startsWith("/__vibesquad/providers/")) return handleProvidersApi(req, res, { sendJson: (r, status, data) => sendFor(req, r, status, data, rootDir), readBody: readCleanBody });
     switch (path) {
       case "/__vibesquad/pair/start":
-        return handlePairStart(req, res);
+        return handlePairStart(req, res, readBody);
       case "/__vibesquad/pair/pending": // E4b: tickets waiting on this paired device's Approve
         return handlePairPending(req, res);
       case "/__vibesquad/pair/approve": // E4b: minting device only (owner-gated as non-GET above, re-checked inside)
@@ -2039,5 +2437,27 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
       default:
         return next?.();
     }
-  };
+  }
+
+  /** E6a: the whole route table for a bug-tester device (deny-by-default: TESTER_ROUTE_ALLOWLIST on a canonical path). */
+  function testerGated(req, res, path, caller) {
+    if (!isCanonicalTesterPath(path) || !testerRouteAllowed(req.method, path)) {
+      return sendJson(res, 403, { error: "forbidden: bug-tester device cannot access this route" });
+    }
+    const limit = path === "/__vibesquad/tester/report" ? TESTER_REPORT_MAX_BYTES : path === "/__vibesquad/inbox/attachment" ? INBOX_MEDIA_MAX_BYTES : MAX_BODY_BYTES;
+    if (Number(req.headers["content-length"] ?? 0) > limit) return sendJson(res, 413, { error: "payload too large" });
+    const backend = opts.backend ?? sharedRunnerBackend();
+    const ctx = { rootDir, caller, backend };
+    if (path === "/api/auth/status" || path === "/__vibesquad/auth/status") return handleAuthStatus(req, res, rootDir);
+    if (path === "/api/teams" || path === "/__vibesquad/teams") return handleTesterTeams(req, res, ctx);
+    if (path.startsWith("/__vibesquad/runner/")) {
+      return handleRunnerApi(req, res, { readBody: (r) => readBody(r, MAX_BODY_BYTES), sendJson, caller, backend, testerTeams: () => testerTeamsOf(caller, rootDir) });
+    }
+    if (path === "/__vibesquad/tester/report") return handleTesterReport(req, res, ctx);
+    if (path === "/__vibesquad/tester/thread") return handleTesterThread(req, res, ctx);
+    if (path === "/__vibesquad/inbox") return handleTesterInbox(req, res, ctx);
+    if (path === "/__vibesquad/inbox/attachment") return handleTesterInboxAttachment(req, res, ctx);
+    if (path === "/__vibesquad/inbox/send") return handleTesterInboxSend(req, res, ctx);
+    return sendJson(res, 403, { error: "forbidden: bug-tester device cannot access this route" }); // unreachable: allowlist above
+  }
 }

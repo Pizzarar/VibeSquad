@@ -14,10 +14,12 @@ const HEARTBEAT_MS = 15000;
  * GET /__vibesquad/runner/events: SSE of roster upserts, timeline appends and status transitions (RunnerBackend.subscribeEvents).
  * The backend starts it with the full roster; the listener, heartbeat and runner stream are released when the client goes away.
  */
-function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS) {
+function streamEvents(req, res, backend, heartbeatMs = HEARTBEAT_MS, filter = null) {
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", connection: "keep-alive", "x-accel-buffering": "no" });
   res.write(": ok\n\n");
-  const send = (ev) => { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); };
+  const write = (ev) => { if (!res.writableEnded && !res.destroyed) res.write(`data: ${JSON.stringify(ev)}\n\n`); };
+  // E6a: a filter maps one backend event to the events this client may see (0..n); without one every event goes out as is.
+  const send = filter ? (ev) => { for (const out of filter(ev)) write(out); } : write;
   let off = null;
   let closed = false;
   const beat = setInterval(() => { if (!res.writableEnded && !res.destroyed) res.write(': hb\n\ndata: {"kind":"hb"}\n\n'); }, heartbeatMs); // comment for proxies; data event so the browser watchdog sees activity
@@ -124,5 +126,191 @@ export async function handleRunnerApi(req, res, { readBody, sendJson, backend = 
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {
     return sendJson(res, err?.status && err.status >= 400 ? err.status : 500, { error: String(err?.message ?? err) });
+  }
+}
+
+// ---- E6a: the bug-tester's window onto the runner (docs/PLAN_E6_TESTER_ROLES.md) ----
+// A bug-tester device sees exactly the bug-intake agent (pickBugIntakeAgent: the bug lane's front-door Buddy, else its Lead)
+// of each Squad on its allowedTeams, as a stripped record; reads only messages; writes only plain, non-owner input to that
+// agent. Every other runner route is 403. Deny-by-default: a route is answered only when it matches a case below exactly.
+
+export const TESTER_MESSAGE_TYPES = Object.freeze(["user_message", "assistant_message"]);
+const TESTER_INPUT_MAX_CHARS = 8000;
+const TESTER_TIMELINE_MAX = 200;
+const testerForbidden = (why = "forbidden: bug-tester device cannot access this route") => Object.assign(new Error(why), { status: 403 });
+
+/** The chat prefix every tester message carries (server-stamped; a body can never drop or change it). */
+export const testerChatPrefix = (name) => `[Alpha Tester · ${String(name ?? "").trim() || "tester"}] `;
+
+/** `text` with the caller's prefix in front (once). */
+export function stampTesterText(caller, text) {
+  const prefix = testerChatPrefix(caller?.name);
+  const t = String(text ?? "").trim();
+  return t.startsWith(prefix) ? t : `${prefix}${t}`;
+}
+
+/** The team records a tester may reach: `testerTeams` (array or () => array), filtered again to caller.allowedTeams. */
+export function testerTeamRecords(caller, testerTeams) {
+  let list = typeof testerTeams === "function" ? testerTeams() : testerTeams;
+  if (!Array.isArray(list)) list = [];
+  const allowed = new Set((caller?.allowedTeams ?? []).map((t) => String(t).trim().toLowerCase()));
+  return list.filter((t) => t && allowed.has(String(t.id ?? "").trim().toLowerCase()));
+}
+
+/** id -> agent record of the allowed bug-intake agent(s) among `agents`, one per allowed Squad at most. */
+export function testerIntakeAgents(agents, teams) {
+  const out = new Map();
+  const list = Array.isArray(agents) ? agents.map((a) => a?.agent ?? a).filter(Boolean) : [];
+  for (const team of teams) {
+    const a = pickBugIntakeAgent(list, team);
+    if (a?.id && !a.archivedAt) out.set(a.id, a);
+  }
+  return out;
+}
+
+const redactText = (t) => redactHostPathTokens(String(t ?? ""));
+
+/** The only agent fields a tester sees: id, title, status, team/lane/role labels, timestamps. No cwd, prompt, provider, paths. */
+export function testerAgentView(a) {
+  if (!a || typeof a !== "object") return null;
+  const labels = {};
+  for (const k of ["team", "lane", "role"]) if (typeof a.labels?.[k] === "string") labels[k] = a.labels[k];
+  return {
+    id: String(a.id ?? ""),
+    title: redactText(a.title ?? ""),
+    status: typeof a.status === "string" ? a.status : "unknown",
+    labels,
+    ...(typeof a.createdAt === "string" ? { createdAt: a.createdAt } : {}),
+    ...(typeof a.updatedAt === "string" ? { updatedAt: a.updatedAt } : {}),
+  };
+}
+
+/** Timeline entries a tester may read: user/assistant messages only, text redacted, no images or other item fields. */
+export function testerTimelineEntries(entries) {
+  return (Array.isArray(entries) ? entries : [])
+    .filter((e) => TESTER_MESSAGE_TYPES.includes(e?.item?.type))
+    .map((e) => ({
+      ...(typeof e.timestamp === "string" ? { timestamp: e.timestamp } : {}),
+      ...(Number.isFinite(e.seqStart) ? { seqStart: e.seqStart } : {}),
+      ...(Number.isFinite(e.seqEnd) ? { seqEnd: e.seqEnd } : {}),
+      item: { type: e.item.type, text: redactText(e.item.text) },
+    }));
+}
+
+/** A tester-safe window of `id`'s timeline: `{ entries, hasOlder, lastSeq?, startCursor }`, messages only. */
+export async function fetchTesterTimeline(backend, id, { limit, before } = {}) {
+  const n = Math.min(Math.max(Number(limit) || 0, 0), TESTER_TIMELINE_MAX) || TESTER_TIMELINE_MAX;
+  const opts = Number.isFinite(before) ? { limit: n, direction: "before", cursor: { epoch: "runner", seq: before } } : { limit: n };
+  const t = (await backend.fetchAgentTimeline(id, opts)) ?? {};
+  return {
+    entries: testerTimelineEntries(t.entries),
+    hasOlder: t.hasOlder === true,
+    ...(Number.isFinite(t.lastSeq) ? { lastSeq: t.lastSeq } : {}),
+    startCursor: t.startCursor && Number.isFinite(t.startCursor.seq) ? { epoch: "runner", seq: t.startCursor.seq } : null,
+  };
+}
+
+/** Send a tester's chat line to an allowed agent: prefixed, never owner, never interrupt / steer-only, no images. */
+export async function sendTesterInput(backend, caller, id, text) {
+  const t = String(text ?? "").trim();
+  if (!t) throw Object.assign(new Error("text is required"), { status: 400 });
+  if (t.length > TESTER_INPUT_MAX_CHARS) throw Object.assign(new Error(`text too long (${TESTER_INPUT_MAX_CHARS} chars max)`), { status: 413 });
+  await backend.sendAgentPrompt(id, stampTesterText(caller, t), { owner: false });
+}
+
+const TESTER_PASS_EVENTS = new Set(["connected", "disconnected", "hb"]);
+const TESTER_TIMELINE_TYPES = new Set(["input", "output"]); // runner event types that become user/assistant messages
+
+/**
+ * The SSE filter for a tester: keeps its own id -> agent map from roster/agent/remove, re-derives the allowed bug-intake
+ * set after each, and emits a fresh filtered roster whenever that set changes. Forwards connected/disconnected/hb, and
+ * agent/remove/created/status/timeline only for an allowed id; drops permission, tools and any kind it does not know.
+ */
+export function createTesterEventFilter(teamsOf) {
+  const all = new Map();
+  let allowed = new Map();
+  let key = null;
+  const recompute = () => {
+    allowed = testerIntakeAgents([...all.values()], teamsOf());
+    const k = [...allowed.keys()].sort().join(",");
+    const changed = k !== key;
+    key = k;
+    return changed;
+  };
+  const roster = () => ({ kind: "roster", agents: [...allowed.values()].map(testerAgentView) });
+  return (ev) => {
+    const kind = ev?.kind;
+    if (TESTER_PASS_EVENTS.has(kind)) return [{ kind }];
+    if (kind === "roster") {
+      all.clear();
+      for (const a of Array.isArray(ev.agents) ? ev.agents : []) if (a?.id) all.set(a.id, a);
+      recompute();
+      return [roster()];
+    }
+    if (kind === "agent") {
+      const a = ev.agent;
+      if (!a?.id) return [];
+      all.set(a.id, a);
+      if (recompute()) return [roster()];
+      return allowed.has(a.id) ? [{ kind: "agent", agent: testerAgentView(a) }] : [];
+    }
+    if (kind === "remove") {
+      const id = ev.agentId;
+      const was = allowed.has(id);
+      all.delete(id);
+      const changed = recompute();
+      const out = was ? [{ kind: "remove", agentId: id }] : [];
+      return changed ? [...out, roster()] : out;
+    }
+    if (kind === "created" || kind === "status") {
+      if (!allowed.has(ev.agentId)) return [];
+      const agent = testerAgentView(allowed.get(ev.agentId));
+      return [kind === "status" ? { kind, agentId: ev.agentId, from: ev.from, to: ev.to, agent } : { kind, agentId: ev.agentId, agent }];
+    }
+    if (kind === "timeline") {
+      if (!allowed.has(ev.agentId) || !TESTER_TIMELINE_TYPES.has(ev.type)) return [];
+      return [{ kind, agentId: ev.agentId, ...(Number.isFinite(ev.seq) ? { seq: ev.seq } : {}), type: ev.type }];
+    }
+    return [];
+  };
+}
+
+/** E6a: handleRunnerApi for a bug-tester caller (see the block comment above). Never reaches the owner/agent branches. */
+async function handleTesterRunnerApi(req, res, { readBody, sendJson, backend, caller, testerTeams }) {
+  try {
+    const path = (req.url ?? "").split("?")[0];
+    if (!path.startsWith(PREFIX)) throw testerForbidden();
+    const parts = path.slice(PREFIX.length).split("/"); // exact shape: an empty segment never matches below
+    const url = new URL(req.url, "http://x");
+    const teamsOf = () => testerTeamRecords(caller, testerTeams);
+    const allowedNow = async () => testerIntakeAgents(await backend.listAgents().catch(() => []), teamsOf());
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "status") return sendJson(res, 200, { enabled: true });
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "events") return streamEvents(req, res, backend, HEARTBEAT_MS, createTesterEventFilter(teamsOf));
+    if (req.method === "GET" && parts.length === 1 && parts[0] === "agents") {
+      if (url.searchParams.has("archived")) throw testerForbidden("forbidden: bug-tester device cannot list archived agents");
+      return sendJson(res, 200, { enabled: true, agents: [...(await allowedNow()).values()].map(testerAgentView) });
+    }
+    if (parts[0] === "agents" && ID_RE.test(parts[1] ?? "") && parts.length <= 3) {
+      const id = parts[1];
+      const action = parts[2];
+      const isRead = req.method === "GET" && (parts.length === 2 || action === "timeline");
+      const isInput = req.method === "POST" && action === "input";
+      if (!isRead && !isInput) throw testerForbidden();
+      const allowed = await allowedNow();
+      if (!allowed.has(id)) throw testerForbidden("forbidden: not a bug-intake agent of your Squads");
+      if (parts.length === 2) return sendJson(res, 200, { agent: testerAgentView(allowed.get(id)) });
+      if (action === "timeline") {
+        const before = url.searchParams.get("direction") === "before" ? Number(url.searchParams.get("cursor")) : NaN;
+        return sendJson(res, 200, await fetchTesterTimeline(backend, id, { limit: url.searchParams.get("limit"), before }));
+      }
+      const body = (await readBody(req)) ?? {};
+      await sendTesterInput(backend, caller, id, body?.text); // only `text` is read: owner / interrupt / steerOnly / images never pass
+      return sendJson(res, 200, { ok: true });
+    }
+    throw testerForbidden();
+  } catch (err) {
+    const status = err?.status && err.status >= 400 && err.status < 600 ? err.status : 500;
+    if (status === 500) console.warn(`[vibesquad] tester runner request failed: ${err?.message ?? err}`);
+    return sendJson(res, status, { error: status === 500 ? "runner request failed; see the server log" : redactText(err?.message ?? err) });
   }
 }
