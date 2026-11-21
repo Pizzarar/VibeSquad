@@ -1,35 +1,44 @@
 // K1 (PLAN_INBOX_TOP3_1121, idea-416): idle-lane kick. A lane whose live lead (or its Buddy, when the lane has no lead) has sat idle past
 // idleMs with NO running workers, NO armed watch, NO open needs-you / permission prompt, but OPEN work, gets ONE steer naming the top item.
-// A second idle episode on the same item within escalateMs goes to the Squad Overlord instead (never a second kick). Reuses the watch-sets
+// A second idle episode on the same item within escalateMs goes to the Squad Overlord instead; at most 1 kick + 1 escalation per item. Reuses the watch-sets
 // plumbing: listWatches (armed check), findOpenWorkersForLead's worker rule, readLaneLogEntries. All I/O is injected so tests use fake clocks.
-import { existsSync, readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import { effectiveAgentRole, isLiveAgent, loadTeamsRegistry, resolveAgentIdentity, isDigestAgent } from "./identity.mjs";
 import { isHubLane } from "./lane-pure.mjs";
-import { listWatches } from "./watch-sets.mjs";
-import { findOpenWorkersForLead, readLaneLogEntries } from "./lead-handoff.mjs";
+import { watchesPath } from "./watch-sets.mjs";
+import { findOpenWorkersForLead } from "./lead-handoff.mjs";
 import { briefRootFor } from "./brief-path.mjs";
-import { listInboxCards } from "./inbox.mjs";
+import { getInboxPath } from "./inbox.mjs";
 import { appendVsLogEntry } from "./brainstorm.mjs";
 
 export const IDLE_KICK_MIN = 10;
 export const IDLE_KICK_ESCALATE_MIN = 30;
 export const IDLE_KICK_TICK_MS = 60_000;
-const DONE_UNIT = new Set(["done", "merged", "closed", "cancelled", "canceled", "blocked", "archived"]);
+// Allowlist: a unit is open work only in a live state. done/superseded/dropped/blocked/deferred/anything unknown is not.
+const OPEN_UNIT = new Set(["todo", "running", "ready", "open", "pending", "queued", "in-progress", "in_progress", "inprogress"]);
+export const IDLE_KICK_WORK_TTL_MS = 5 * 60_000;
+const LOG_TAIL_BYTES = 256 * 1024;
+const NEEDS_YOU_MAX_AGE_MS = 7 * 24 * 3_600_000;
 const BUSY = new Set(["running", "queued", "initializing", "starting", "working"]);
 
 export const kickText = (item) => `You are idle with open work: ${item}. Pick the next and go (R13); if blocked, log needs-you.`;
 export const escalateText = (lane, item, mins) => `Lane ${lane} went idle again on "${item}" within ${mins} min of an idle-kick and has not moved. Unblock it or re-route it.`;
 
 /** Open TASKS.json units (todo/running/ready; done and blocked excluded) -> "unit-id: goal" strings. */
-export function openTaskUnits(tasksPath) {
+async function readJsonAsync(file, fallback) {
   try {
-    if (!existsSync(tasksPath)) return [];
-    const j = JSON.parse(readFileSync(tasksPath, "utf8").replace(/^﻿/, ""));
-    return (j.units ?? []).filter((u) => !DONE_UNIT.has(String(u.status ?? "todo").toLowerCase())).map((u) => `${u.id}${u.goal ? `: ${String(u.goal).slice(0, 100)}` : ""}`);
+    return JSON.parse((await readFile(file, "utf8")).replace(/^﻿/, ""));
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+/** Open TASKS.json units (live states only) -> "unit-id: goal" strings. Async: never blocks the server loop. */
+export async function openTaskUnits(tasksPath) {
+  const j = await readJsonAsync(tasksPath, {});
+  return (j.units ?? []).filter((u) => OPEN_UNIT.has(String(u.status ?? "todo").toLowerCase())).map((u) => `${u.id}${u.goal ? `: ${String(u.goal).slice(0, 100)}` : ""}`);
 }
 
 /** Plan blocks in the lane brief not PASS: list lines starting with a block id (K1, T2a ...) that say todo/open/pending/not started/running. */
@@ -43,26 +52,56 @@ export function openPlanBlocks(briefText) {
   return out;
 }
 
-/** An open needs-you: the lane's newest needs-you entry (last 24h) is newer than its newest decision/you answer. */
-export function laneHasOpenNeedsYou({ teamId, laneId, baseHome, nowMs = Date.now() }) {
+/** Tail of one file (last LOG_TAIL_BYTES), async. */
+async function tailText(file) {
   try {
-    const entries = readLaneLogEntries({ teamId, laneId, sinceIso: new Date(nowMs - 24 * 3_600_000).toISOString(), baseHome }).filter((e) => String(e.lane ?? laneId).toLowerCase() === String(laneId).toLowerCase());
-    const ts = (types) => Math.max(0, ...entries.filter((e) => types.includes(e.type)).map((e) => Date.parse(e.ts) || 0));
-    return ts(["needs-you"]) > ts(["decision", "you"]);
+    const t = await readFile(file, "utf8");
+    return t.length > LOG_TAIL_BYTES ? t.slice(-LOG_TAIL_BYTES) : t;
   } catch {
-    return false;
+    return "";
   }
 }
 
-/** Open work in priority order: TASKS.json units, parked inbox cards, plan blocks not PASS in the brief. */
-export function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
+const homeOf = (baseHome) => baseHome || process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
+const seg = (x) => String(x ?? "").replace(/[^A-Za-z0-9._-]/g, "_");
+
+/** Open needs-you: a lane agent carries the needs-you label, or the lane log (tail, last 7d) has a needs-you newer than its newest decision/you. */
+export async function laneHasOpenNeedsYou({ teamId, laneId, baseHome, agents = [], nowMs = Date.now() }) {
+  if (agents.some((a) => a?.labels?.["needs-you"])) return true;
+  const text = await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`));
+  let need = 0, answer = 0;
+  for (const line of text.split(/\r?\n/)) {
+    if (!line) continue;
+    try {
+      const e = JSON.parse(line);
+      const ts = Date.parse(e.ts) || 0;
+      if (e.type === "needs-you" && nowMs - ts <= NEEDS_YOU_MAX_AGE_MS) need = Math.max(need, ts);
+      else if (e.type === "decision" || e.type === "you") answer = Math.max(answer, ts);
+    } catch {}
+  }
+  return need > answer;
+}
+
+/** Owners with an armed (open) watch set, one async read of watches.json. */
+export async function armedWatchOwners(baseHome) {
+  const doc = await readJsonAsync(watchesPath({ home: baseHome }), { sets: [] });
+  return new Set((doc.sets ?? []).filter((s) => !s.firedAt && !s.cancelledAt).map((s) => s.owner));
+}
+
+/** Open work in priority order: TASKS.json live units, parked cards of THIS Squad+lane, plan blocks not PASS in the brief. */
+export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const root = briefRootFor(teamId, laneId, rootDir);
-  const items = openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
+  const items = await openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
+  const inbox = await readJsonAsync(getInboxPath(baseHome), []);
+  const cards = Array.isArray(inbox) ? inbox : Array.isArray(inbox?.cards) ? inbox.cards : [];
+  const sameId = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
+  for (const c of cards) {
+    if ((c.status && c.status !== "parked") || !sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
+    items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
+  }
   try {
-    for (const c of listInboxCards({ laneId, status: "parked", baseHome }, rootDir)) items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
+    items.push(...openPlanBlocks(await readFile(join(root, "docs", "brainstorm", `${laneId}.md`), "utf8")));
   } catch {}
-  const brief = join(root, "docs", "brainstorm", `${laneId}.md`);
-  if (existsSync(brief)) items.push(...openPlanBlocks(readFileSync(brief, "utf8")));
   return items;
 }
 
@@ -76,21 +115,26 @@ export function createIdleLaneKick({
   idleMs = IDLE_KICK_MIN * 60_000,
   escalateMs = IDLE_KICK_ESCALATE_MIN * 60_000,
   teams = () => loadTeamsRegistry(rootDir),
-  armedWatch = (id) => listWatches({ owner: id }, { home: baseHome }).length > 0,
-  openNeedsYou = (teamId, laneId) => laneHasOpenNeedsYou({ teamId, laneId, baseHome }),
+  armedOwners = () => armedWatchOwners(baseHome), // async: ONE read of watches.json per tick
+  openNeedsYou = (teamId, laneId, agents) => laneHasOpenNeedsYou({ teamId, laneId, baseHome, agents, nowMs: now() }),
   openWork = (teamId, laneId) => laneOpenWork({ teamId, laneId, rootDir, baseHome }),
+  workTtlMs = IDLE_KICK_WORK_TTL_MS,
   log = ({ teamId, laneId, text }) => appendVsLogEntry({ teamId, laneId, agent: "vibesquad-server", type: "metric", text }),
 } = {}) {
   const idleSince = new Map(); // agent id -> ms first seen idle (or its lastProgressAt)
-  const episode = new Map(); // lane key -> { kicked, escalated }
-  const lastKick = new Map(); // `${laneKey}|${item}` -> ms of the kick
+  const episode = new Map(); // lane key -> { acted } (one action per idle episode)
+  const itemState = new Map(); // `${laneKey}|${item}` -> { at, escalated }: at most 1 kick + 1 escalation per item until the item changes
+  const workCache = new Map(); // lane key -> { at, items } (TASKS/inbox/brief reads cached for workTtlMs)
+  let regCache = { at: -Infinity, reg: [] };
   const keyOf = (t, l) => `${t}/${l}`.toLowerCase();
   const sameId = (a, b) => String(a).toLowerCase() === String(b).toLowerCase();
 
   async function tick() {
     const t0 = now();
     const agents = ((await listAgents()) ?? []).filter((a) => a && isLiveAgent(a) && !isDigestAgent(a));
-    const reg = teams();
+    if (t0 - regCache.at > workTtlMs) regCache = { at: t0, reg: teams() };
+    const reg = regCache.reg;
+    let owners = null;
     const byLane = new Map();
     for (const a of agents) {
       const id = resolveAgentIdentity(a, { teams: reg, cwd: a.cwd });
@@ -127,21 +171,27 @@ export function createIdleLaneKick({
         continue;
       }
       if (t0 - idleSince.get(target.id) < idleMs) continue;
-      const ep = episode.get(k) ?? { kicked: false, escalated: false };
+      const ep = episode.get(k) ?? { acted: false };
       episode.set(k, ep);
-      if (ep.kicked || ep.escalated) continue; // never twice per episode
+      if (ep.acted) continue; // never twice per episode
       // no running workers (lane workers, per findOpenWorkersForLead's rule)
       if (findOpenWorkersForLead(agents.filter((a) => a.id !== target.id), target, lane.teamId, lane.laneId).some((w) => BUSY.has(String(w.status ?? "").toLowerCase()))) continue;
-      if (lane.agents.some(({ a }) => armedWatch(a.id))) continue;
       if (lane.agents.some(({ a }) => (a.pendingPermissions?.length ?? 0) > 0 || a.requiresAttention === true)) continue;
-      if (openNeedsYou(lane.teamId, lane.laneId)) continue;
-      const items = openWork(lane.teamId, lane.laneId);
-      if (!items.length) continue;
-      const item = items[0];
+      owners ??= await armedOwners();
+      if (lane.agents.some(({ a }) => owners.has(a.id))) continue;
+      if (await openNeedsYou(lane.teamId, lane.laneId, lane.agents.map((x) => x.a))) continue;
+      let wc = workCache.get(k);
+      if (!wc || t0 - wc.at > workTtlMs) workCache.set(k, (wc = { at: t0, items: await openWork(lane.teamId, lane.laneId) }));
+      if (!wc.items.length) continue;
+      const item = wc.items[0];
+      for (const key of [...itemState.keys()]) if (key.startsWith(`${k}|`) && key !== `${k}|${item}`) itemState.delete(key); // item changed: reset
       const fresh = await freshAgent(target.id);
       if (fresh && String(fresh.status ?? "").toLowerCase() !== "idle") continue; // never kick mid-turn
-      const prev = lastKick.get(`${k}|${item}`);
-      if (prev != null && t0 - prev <= escalateMs) {
+      const st = itemState.get(`${k}|${item}`);
+      if (st) {
+        if (st.escalated || t0 - st.at > escalateMs) continue; // 1 kick + 1 escalation per item; no re-kick
+        ep.acted = true;
+        st.escalated = true;
         const ov = agents.find((a) => {
           if (effectiveAgentRole(a) !== "lead") return false;
           const i = resolveAgentIdentity(a, { teams: reg, cwd: a.cwd });
@@ -149,14 +199,13 @@ export function createIdleLaneKick({
           const ld = (team?.lanes ?? []).find((l) => sameId(l.id, i.laneId));
           return !!ld && isHubLane(team, ld);
         });
-        ep.escalated = true;
         if (ov) await send(ov.id, escalateText(lane.laneId, item, Math.round(escalateMs / 60_000)));
         log({ teamId: lane.teamId, laneId: lane.laneId, text: `idle-escalate lane=${lane.laneId} item=${item}` });
         results.push({ lane: lane.laneId, action: "escalate", item });
         continue;
       }
-      ep.kicked = true;
-      lastKick.set(`${k}|${item}`, t0);
+      ep.acted = true;
+      itemState.set(`${k}|${item}`, { at: t0, escalated: false });
       await send(target.id, kickText(item));
       log({ teamId: lane.teamId, laneId: lane.laneId, text: `idle-kick lane=${lane.laneId} item=${item}` });
       results.push({ lane: lane.laneId, action: "kick", item });
