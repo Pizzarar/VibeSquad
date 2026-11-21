@@ -166,6 +166,25 @@ test("2b. Expanding a project keeps its Needs-you total: Core header + Bugs + la
   assert.deepEqual(bad, [], bad.join("\n"));
 }));
 
+test("2c. Expanded-vs-collapsed project badge sum also holds after the clock passes the stall threshold (stalled Overlord, R8-6)", guard("inv2c", async () => {
+  await loadClocked();
+  await page.clock.fastForward(66 * 60_000);
+  await sleep(600);
+  const bad = [];
+  for (const t of REGISTRY.teams) {
+    const hdr = page.locator(tid(`boring-project-header-${t.id}`));
+    const toggle = page.locator(tid(`boring-project-toggle-${t.id}`));
+    if ((await hdr.getAttribute("aria-expanded")) === "true") { await toggle.click(); await sleep(200); }
+    const collapsed = (await hdr.locator(".boring-badge").count()) ? Number(await hdr.locator(".boring-badge").first().innerText()) : 0;
+    if (collapsed === 0) continue;
+    await toggle.click(); await sleep(200);
+    const inner = await page.evaluate((id) => [...(document.querySelector(`[data-testid="boring-project-lanes-${id}"]`)?.querySelectorAll(".boring-badge") ?? [])].reduce((s, b) => s + Number(b.textContent?.trim() || 0), 0), t.id);
+    if (inner !== collapsed) { bad.push(`${t.id}: collapsed ${collapsed} vs expanded ${inner}`); await shot(`inv2c-${t.id}`); }
+    await toggle.click(); await sleep(200);
+  }
+  assert.deepEqual(bad, [], bad.join("\n"));
+}));
+
 test("3. Exactly one selected sidebar row in every state", guard("inv3", async () => {
   const bad = [];
   for (const s of STATES) {

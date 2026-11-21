@@ -767,10 +767,33 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
   const bad = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 1 }, riffbot: zone(mem("rb", "idle", ago(2), { tone: "error" })), overlord: zone(mem("ov")) } });
   assert.equal(boringSidebarModel(bad, NOW).deskErr, true);
   assert.equal(boringSidebarModel(bad, NOW).projectErr, true);
-  // R8-1: the expanded Core header carries the hub count (amber), red when a member errored.
-  assert.match(JSON.stringify(byId(render(props(bad)), "boring-trinity-head").props.children), /boring-badge err/);
+  // R8-1: the expanded Core header carries the Desk-worker count (amber). R8-6: Overlord/RiffBot own their badges, so an errored RiffBot tints its own row, not the header.
+  const tb = render(props(bad));
+  assert.match(JSON.stringify(byId(tb, "boring-core-riffbot").props.children), /boring-badge err/);
+  assert.doesNotMatch(JSON.stringify(byId(tb, "boring-trinity-head").props.children), /boring-badge/);
   assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /boring-badge"/);
   assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /"children":2/);
+});
+
+test("R8-6: Overlord/RiffBot needs-you is badged once on its own row; Core header counts only Desk workers; rows + header == hubNeedsYou", () => {
+  reset();
+  const ovNeeds = mem("ov", "idle", ago(2), { tone: "needs-you" });
+  const deskW = mem("dw", "running", ago(2), { tone: "permission" });
+  const v = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 2, workers: [deskW] }, riffbot: zone(mem("rb")), overlord: zone(ovNeeds) }, needsYou: 2 });
+  const m = boringSidebarModel(v, NOW);
+  assert.equal(m.hubNeedsYou, 2);
+  assert.equal(m.core.overlord.needsYou, 1);
+  assert.equal(m.deskWorkersNeedsYou, 1);
+  assert.equal(m.core.overlord.needsYou + m.core.riffbot.needsYou + m.deskWorkersNeedsYou, m.hubNeedsYou);
+  const t = render(props(v));
+  assert.match(JSON.stringify(byId(t, "boring-core-overlord").props.children), /"children":1/);
+  assert.match(JSON.stringify(byId(t, "boring-trinity-head").props.children), /"children":1/);
+  // Stalled Overlord (R3.2): the stall joins hubNeedsYou once, on the Overlord row only.
+  const stalledOv = { ...mem("ov", "running", ago(30)), stalled: true };
+  const s = boringSidebarModel(squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 0, workers: [], lead: stalledOv }, riffbot: zone(mem("rb")), overlord: zone(stalledOv) } }), NOW);
+  assert.equal(s.hubNeedsYou, 1);
+  assert.equal(s.core.overlord.needsYou + s.core.riffbot.needsYou + s.deskWorkersNeedsYou, s.hubNeedsYou);
+  assert.equal(s.deskWorkersNeedsYou, 0);
 });
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------

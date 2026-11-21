@@ -198,6 +198,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
     label,
     agentId: z.agentId,
     status: z.member?.agent.status ?? "none",
+    err: memberErr(z.member),
     needsYou: z.member ? (z.member.attention && z.member.attention.tone !== "finished" ? 1 : 0) + stalledCount([z.member], now) : 0,
     age: formatTimestamp(z.member?.agent.updatedAt, "relative", now),
     updatedAt: z.member?.agent.updatedAt ?? null,
@@ -248,7 +249,10 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   // Worst state per container (R2.5): red if anything inside errored, else amber. Only collapsed containers show a badge.
   const deskErr = pinErr(zones.hub) || deskPins.some(pinErr) || memberErr(zones.overlord.member) || memberErr(zones.riffbot.member);
   const projectErr = deskErr || core.bugs.err || conversations.some((c) => c.err);
-  return { core, conversations, hubNeedsYou, totalNeedsYou, deskErr, projectErr };
+  // R8-6: Overlord and RiffBot render their own badges on always-visible rows, so the Core header counts only the remaining Desk workers (header + rows == hubNeedsYou).
+  const deskWorkersNeedsYou = Math.max(0, hubNeedsYou - core.overlord.needsYou - core.riffbot.needsYou);
+  const deskWorkersErr = deskWorkers.some(memberErr);
+  return { core, conversations, hubNeedsYou, totalNeedsYou, deskErr, projectErr, deskWorkersNeedsYou, deskWorkersErr };
 }
 
 /**
@@ -666,14 +670,14 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       </div>
     );
   };
-  const coreRow = (v: TeamView, testid: string, key: string, label: string, status: string, needsYou: number, age: string, onClick: () => void, agentObj?: typeof agent) => (
+  const coreRow = (v: TeamView, testid: string, key: string, label: string, status: string, needsYou: number, age: string, onClick: () => void, agentObj?: typeof agent, err = false) => (
     <div key={testid} className="boring-conv-line">
       {chevronCol(false, null, label)}
       <button type="button" className={`boring-core-row ${isOn(v, key) ? "on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick}>
         {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status} ${glyphCls(status, needsYou > 0 ? "needs-you" : null)}`} />}
         <span className="boring-row-label">{label}</span>
         <span className="boring-conv-age">{age}</span>
-        {badge(needsYou, memberErr(agentObj ? { agent: agentObj } : null))}
+        {badge(needsYou, err)}
       </button>
     </div>
   );
@@ -684,10 +688,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const hw = m.core.deskWorkers;
     return (
       <div key="trinity" className="boring-trinity-card" data-testid={suffix(v, "boring-trinity")}>
-        <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Core</span>{badge(m.hubNeedsYou, m.deskErr)}</div>
-        {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId))}
+        <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Core</span>{badge(m.deskWorkersNeedsYou, m.deskWorkersErr)}</div>
+        {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId), m.core.overlord.err)}
         {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
-        {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId))}
+        {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId), m.core.riffbot.err)}
         {bugsRow(v, m)}
       </div>
     );
