@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, test } from "node:test";
 import { checkSetup, runCheck, signFile } from "../scripts/sign-windows.mjs";
 import { parseArgs, runRelease } from "../server/release.mjs";
 
 const SECRET = "client-S3CRET-value";
+const UPDATER_PW = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD";
 const HOME = "/h";
 const FILES = {
   "/h/.vibesquad/signing/metadata.json": JSON.stringify({ Endpoint: "https://wus2.codesigning.azure.net", CodeSigningAccountName: "acct", CertificateProfileName: "prof", ExcludeCredentials: ["ManagedIdentityCredential"] }),
@@ -58,6 +61,69 @@ describe("sign-windows", () => {
     assert.ok(!logs.join("\n").includes(SECRET));
     assert.equal(deps.env.AZURE_CLIENT_SECRET, undefined);
     assert.equal(process.env.AZURE_CLIENT_SECRET, undefined);
+  });
+
+  test("signtool never gets the updater key password, in any case variant", () => {
+    const { deps, calls } = rig();
+    Object.assign(deps.env, { [UPDATER_PW]: "updater-pw", tauri_signing_private_key_password: "updater-pw2" });
+    signFile("C:/out/app.exe", deps);
+    assert.equal(calls.length, 2);
+    for (const c of calls) {
+      assert.deepEqual(Object.keys(c.env).filter((k) => k.toUpperCase() === UPDATER_PW), []);
+      assert.equal(c.env.AZURE_CLIENT_SECRET, SECRET);
+    }
+    assert.equal(deps.env[UPDATER_PW], "updater-pw"); // caller's env not mutated
+  });
+
+  test("as tauri's signCommand (real process): no child inherits the updater key password", () => {
+    // signtool = this node binary with a --require preload that records the env it was started with; the AZURE_*
+    // values come from the env (dummy), so no credential store is read. The updater key password is a dummy too.
+    const dir = mkdtempSync(join(tmpdir(), "vs-signwin-"));
+    try {
+      const dump = join(dir, "dump.jsonl");
+      const preload = join(dir, "fake-signtool.cjs");
+      writeFileSync(
+        preload,
+        `const a = process.argv;
+if (a.includes("/dmdf") || a.includes("/pa")) {
+  const leaked = Object.keys(process.env).filter((k) => k.toUpperCase() === "${UPDATER_PW}");
+  require("fs").appendFileSync(process.env.VS_TEST_DUMP, JSON.stringify({ verb: a.includes("/pa") ? "verify" : "sign", leaked, secret: process.env.AZURE_CLIENT_SECRET === "dummy-secret" }) + "\\n");
+  process.exit(0);
+}`,
+      );
+      writeFileSync(join(dir, "metadata.json"), JSON.stringify({ Endpoint: "e", CodeSigningAccountName: "a", CertificateProfileName: "p" }));
+      writeFileSync(join(dir, "dlib.dll"), "");
+      const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.toUpperCase() !== UPDATER_PW && !/^AZURE_|^VS_SIGN/i.test(k) && k.toUpperCase() !== "NODE_OPTIONS"));
+      Object.assign(env, {
+        [UPDATER_PW]: "dummy-updater-pw",
+        NODE_OPTIONS: `--require "${preload.replaceAll("\\", "/")}"`,
+        VS_TEST_DUMP: dump,
+        VS_SIGNTOOL: process.execPath,
+        VS_SIGN_DLIB: join(dir, "dlib.dll"),
+        VS_SIGN_DIR: dir,
+        AZURE_TENANT_ID: "t",
+        AZURE_CLIENT_ID: "c",
+        AZURE_CLIENT_SECRET: "dummy-secret",
+      });
+      const script = join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "sign-windows.mjs");
+      const r = spawnSync(process.execPath, [script, join(dir, "app.exe")], { env, encoding: "utf8", windowsHide: true });
+      assert.equal(r.status, 0, r.stderr + r.stdout);
+      assert.ok(existsSync(dump), r.stdout);
+      const rows = readFileSync(dump, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      assert.deepEqual(rows.map((x) => x.verb), ["sign", "verify"]);
+      for (const row of rows) {
+        assert.deepEqual(row.leaked, [], `${row.verb} inherited the updater key password`);
+        assert.equal(row.secret, true);
+      }
+      assert.ok(!(r.stdout + r.stderr).includes("dummy-updater-pw"));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("main entry detaches the updater key password before any work", () => {
+    const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "scripts", "sign-windows.mjs"), "utf8");
+    assert.match(src, /if \(isMain\) \{\s*(\/\/[^\n]*\n\s*)*detachUpdaterKeyPassword\(\);/);
   });
 
   test("a failing signtool sign propagates and verify never runs", () => {

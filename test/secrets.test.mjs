@@ -111,6 +111,27 @@ describe("updater key password spec", () => {
     assert.equal(PW in detachUpdaterKeyPassword({ PATH: "p" }), false);
   });
 
+  test("password stripping is case-insensitive (Windows env names): every variant goes, input copy untouched", () => {
+    const variants = { [PW]: "a", tauri_signing_private_key_password: "b", Tauri_Signing_Private_Key_Password: "c" };
+    const hasAny = (env) => Object.keys(env).filter((k) => k.toUpperCase() === PW);
+    const base = { PATH: "p", ...variants };
+    const plain = withoutUpdaterKeyPassword(base);
+    assert.deepEqual(hasAny(plain), []);
+    assert.equal(plain.PATH, "p");
+    assert.deepEqual(hasAny(base).sort(), Object.keys(variants).sort()); // input not mutated
+    const live = { PATH: "p", ...variants };
+    const snap = detachUpdaterKeyPassword(live);
+    assert.deepEqual(hasAny(live), []);
+    assert.deepEqual(hasAny(snap).sort(), Object.keys(variants).sort());
+    // look-alikes that are not the password survive
+    assert.equal(withoutUpdaterKeyPassword({ TAURI_SIGNING_PRIVATE_KEY_PASSWORD_X: "1" }).TAURI_SIGNING_PRIVATE_KEY_PASSWORD_X, "1");
+    // child envs: plain has no variant; tauri/signer carry exactly the canonical name
+    const { plain: p2, tauri, signer } = updaterKeyChildEnvs({ PATH: "p", ...variants }, { keyPath: "/k/key", read: () => null });
+    assert.deepEqual(hasAny(p2), []);
+    assert.deepEqual(hasAny(tauri), [PW]);
+    assert.deepEqual(hasAny(signer), [PW]);
+  });
+
   test("child envs: plain never carries the password; tauri build and signer sign do; no key = no store read", () => {
     const base = { PATH: "p", [PW]: "inherited-pw", OTHER: "1" };
     assert.equal(PW in withoutUpdaterKeyPassword(base), false);

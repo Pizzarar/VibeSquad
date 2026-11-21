@@ -101,15 +101,23 @@ export function resolveUpdaterKeyPassword({ env = process.env, read = readCreden
  */
 export function detachUpdaterKeyPassword(procEnv = process.env) {
   const snapshot = { ...procEnv };
-  delete procEnv[UPDATER_KEY_PASSWORD.envVar];
+  deleteUpdaterKeyPassword(procEnv);
   return snapshot;
 }
 
 /** Copy of env without the updater key password: for every child except `tauri build` and `tauri signer sign`. */
 export function withoutUpdaterKeyPassword(env) {
   const out = { ...env };
-  delete out[UPDATER_KEY_PASSWORD.envVar];
+  deleteUpdaterKeyPassword(out);
   return out;
+}
+
+// Windows env names are case-insensitive: a child sees "tauri_signing_private_key_password" as the password too, so
+// every case variant goes (on every platform: stripping a look-alike is harmless).
+function deleteUpdaterKeyPassword(env) {
+  const name = UPDATER_KEY_PASSWORD.envVar.toUpperCase();
+  for (const key of Object.keys(env)) if (key.toUpperCase() === name) delete env[key];
+  delete env[UPDATER_KEY_PASSWORD.envVar];
 }
 
 /**
