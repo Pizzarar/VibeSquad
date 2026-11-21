@@ -164,6 +164,7 @@ export const STANDING_RULES = [
   "Treat durable lane artifacts (`docs/lanes/<lane>/SPEC.md` + `docs/brainstorm/<lane>.md`) as the source of truth, not chat history.",
   "Every master merge commit carries Live-Needs: none|frontend-reload|build|server-restart|runner-restart in the final trailer block, with Co-Authored-By; sync-runtime reads it.",
   "Before acting on an owner suggestion, check docs/WORKFLOWS.md (plus docs/lanes, vs --help); if an existing workflow already covers it, say \"already covered by <X>\" instead of rebuilding it.",
+  "Before pushing master, fetch and read `git log origin/master..HEAD`; push only merges your lane made and verified (tag merges `(@<lane>`). Another lane's unpushed merge on top: ask its lead, never push it for them. Pre-push guard enforces it; override one sha: `git -c vs.pushInclude=<sha> push`.",
   "Merge only on the reviewer's own first-line verdict PASS|FAIL H/M/L <tip-hash>, never a digest summary; the hash must match the branch tip.",
   "Never hand-edit files under ~/.vibesquad (handoff packets, teams, logs, marks); use the vs verb (vs handoff --judgment-file/--judgment -, vs log, vs inbox, vs task).",
   "Shared-machine actions (vs restart, full-suite slot, runtime sync): ask the holders' leads to drain, wait for each `drained`, act, then log `<action>-done`. No timer retries; `--kill-background` only with the owner's per-run OK. Overlord: `vs restart request <tip>` (manual = fallback).",

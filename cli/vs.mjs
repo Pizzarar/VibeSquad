@@ -540,6 +540,7 @@ Usage:
   vs logs <agent> [--limit <N>]   agent timeline entries
   vs inspect <agent>   full agent record
   vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]   merge gate: exit 0 only if the reviewer's own FIRST line is "PASS H/M/L <hash>" and <hash> prefixes git rev-parse <branch>; else non-zero (1 FAIL, 2 no verdict line, 3 hash mismatch/stale review, 4 not a reviewer, 5 branch unresolved)
+  vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ...
   vs stop <agent> [--background]   interrupt an agent's current turn; --background instead stops an IDLE agent's held background shells (whole process trees; it gets a notice on its next input)
   vs archive <agent>   archive a single agent
   vs archive --sweep [--apply]   long-done worker sweep across all Squads (same predicate as the 5-min sweep): dry run by default, --apply archives; needs the running server
@@ -3001,6 +3002,25 @@ function commandWorktree(flags) {
   throw new Error(`unknown worktree subcommand "${sub}". Use: vs worktree create | sweep | cleanup-projects | root`);
 }
 
+/** idea-452 shared-master push guard: `vs push-guard check [remote]` dry-runs the pre-push hook for HEAD; `install` sets core.hooksPath. */
+export async function commandPushGuard(flags, { cwd = process.cwd(), env = process.env, out = (s) => process.stdout.write(s), registry } = {}) {
+  const sub = String(flags._[0] ?? "check").toLowerCase();
+  const guard = await import("../server/push-guard.mjs");
+  if (sub === "check") {
+    const remote = String(flags._[1] ?? "origin");
+    const res = await guard.checkHead({ remote, cwd, env, registry });
+    out(res.ok ? `vs push-guard: OK to push HEAD to ${remote}/master\n${guard.summarize(res.results)}` : res.message);
+    return res.ok ? 0 : 1;
+  }
+  if (sub === "install") {
+    const res = guard.installHooks({ cwd, force: Boolean(flags.force) });
+    const was = res.previous ? ` (was ${res.previous})` : "";
+    out(res.changed ? `vs push-guard: core.hooksPath=${res.hooksPath}${was}\n` : `vs push-guard: already installed (core.hooksPath=${res.hooksPath})\n`);
+    return 0;
+  }
+  throw new Error(`unknown push-guard subcommand "${sub}". Use: vs push-guard check [remote] | install [--force]`);
+}
+
 function commandLesson(flags) {
   const sub = String(flags._[0] ?? "list").toLowerCase();
   if (sub === "add") {
@@ -3158,6 +3178,7 @@ export function main(argv) {
     if (command === "lesson" || command === "lessons") return commandLesson(flags);
     if (command === "wait") return commandWait(flags);
     if (command === "verdict") return commandVerdict(flags);
+    if (command === "push-guard") return commandPushGuard(flags);
     if (
       command === "spawn" ||
       command === "send" ||

@@ -1,0 +1,5 @@
+#!/bin/sh
+# VibeSquad shared-master push guard (idea-452). Installed by `vs push-guard install` (core.hooksPath=.githooks).
+# Refuses a master/main push that carries another lane's, or an untagged, merge; see server/push-guard.mjs.
+here=$(cd "$(dirname "$0")" && pwd) || exit 1
+exec node "$here/../server/push-guard.mjs" pre-push "$@"
