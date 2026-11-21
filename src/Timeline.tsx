@@ -52,8 +52,7 @@ export class TimelineErrorBoundary extends Component<
           {this.state.error.message}
           <button
             type="button"
-            className="btn ghost"
-            style={{ marginLeft: 8, padding: "1px 6px", fontSize: 10 }}
+            className="btn ghost tl-retry-btn"
             onClick={() => this.setState({ error: null })}
           >
             Retry
@@ -387,10 +386,10 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <div className="tl-code-block" style={{ position: "relative" }}>
+    <div className="tl-code-block">
       <button
         data-testid="code-copy-btn"
-        style={{ position: "absolute", top: 4, right: 4, fontSize: "0.75em", userSelect: "none" }}
+        className="tl-code-copy"
         onClick={copy}
       >
         {copied ? "✓ Copied" : "Copy"}
@@ -562,14 +561,14 @@ function useBoringTimeline(): boolean {
 const KIND_GLYPH: Record<string, string> = { shell: "$", edit: "±", read: "≡", search: "⌕", web: "↗", agent: "◈", other: "•" };
 
 /** Tool output that folds at 12 lines behind a "Show N more lines" toggle (Normal mode only). */
-function FoldedPre({ text, style }: { text: string; style?: React.CSSProperties }) {
+function FoldedPre({ text }: { text: string }) {
   const boring = useBoringTimeline();
   const [all, setAll] = useState(false);
-  if (!boring) return <pre className="tl-tool-output" style={style}>{text}</pre>;
+  if (!boring) return <pre className="tl-tool-output tl-tool-scroll">{text}</pre>;
   const { head, hidden } = foldLines(text, TOOL_OUTPUT_FOLD_LINES);
   return (
     <>
-      <pre className="tl-tool-output boring-tool-output" style={style}>{all || !hidden ? text : head}</pre>
+      <pre className="tl-tool-output boring-tool-output tl-tool-scroll">{all || !hidden ? text : head}</pre>
       {hidden > 0 && (
         <button type="button" className="boring-tool-fold" data-testid="boring-tool-fold" onClick={(ev) => { ev.stopPropagation(); setAll((v) => !v); }}>
           {all ? "Show fewer lines" : `Show all ${TOOL_OUTPUT_FOLD_LINES + hidden} lines`}
@@ -614,9 +613,9 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
           </div>
         )}
         {output && (
-          <FoldedPre text={String(output)} style={{ maxHeight: 240, overflow: "auto" }} />
+          <FoldedPre text={String(output)} />
         )}
-        {it.error && <div className="tl-tool-error" style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
+        {it.error && <div className="tl-tool-error">{formatToolError(it.error)}</div>}
       </div>
     );
   }
@@ -626,7 +625,7 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
       return (
         <div data-testid="tl-tool-detail" className="tl-tool-detail">
           <DiffView diff={diffText} />
-          {it.error && <div style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
+          {it.error && <div className="tl-tool-error">{formatToolError(it.error)}</div>}
         </div>
       );
     }
@@ -634,8 +633,8 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
     const content = d.content ?? d.newString ?? d.oldString ?? "";
     return (
       <div data-testid="tl-tool-detail" className="tl-tool-detail">
-        <pre style={{ maxHeight: 240, overflow: "auto" }}>{String(content).slice(0, 2000)}</pre>
-        {it.error && <div style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
+        <pre className="tl-tool-scroll">{String(content).slice(0, 2000)}</pre>
+        {it.error && <div className="tl-tool-error">{formatToolError(it.error)}</div>}
       </div>
     );
   }
@@ -644,11 +643,11 @@ function ToolDetail({ it, d }: { it: any; d: any }) {
   return (
     <div data-testid="tl-tool-detail" className="tl-tool-detail">
       {preview != null ? (
-        <pre style={{ maxHeight: 240, overflow: "auto" }}>{String(preview).slice(0, 2000)}</pre>
+        <pre className="tl-tool-scroll">{String(preview).slice(0, 2000)}</pre>
       ) : (
-        <pre style={{ maxHeight: 240, overflow: "auto" }}>{JSON.stringify(d ?? it.input, null, 2)}</pre>
+        <pre className="tl-tool-scroll">{JSON.stringify(d ?? it.input, null, 2)}</pre>
       )}
-      {it.error && <div style={{ color: "var(--pink-t)" }}>{formatToolError(it.error)}</div>}
+      {it.error && <div className="tl-tool-error">{formatToolError(it.error)}</div>}
     </div>
   );
 }
@@ -673,7 +672,7 @@ function SubAgentBody({ agentId, subagentKey, d }: { agentId: string; subagentKe
   const previewText = d.output ?? d.prompt ?? d.result;
 
   return (
-    <div data-testid="tl-subagent-body" style={{ paddingLeft: 20, borderLeft: "2px solid var(--line)", marginTop: 4 }}>
+    <div data-testid="tl-subagent-body" className="tl-subagent-body">
       {previewText && <div className="muted">{String(previewText).slice(0, 200)}</div>}
       {loading && <div className="muted">Loading…</div>}
       {entries?.map((e, i) => (
@@ -777,7 +776,7 @@ export function TimelineItem({
 
   if (isCompaction(it) || (it.type === "notification" && typeof it.message === "string" && it.message.includes("compacted"))) {
     return (
-      <div data-testid="tl-compaction-row" className="tl tl-compaction" style={{ textAlign: "center", color: "var(--muted)", borderTop: "1px dashed var(--line)", borderBottom: "1px dashed var(--line)", padding: "2px 0", fontSize: "0.85em" }}>
+      <div data-testid="tl-compaction-row" className="tl tl-compaction">
         ✂ Context compacted{(it.summary || it.detail) ? ` — ${it.summary ?? it.detail}` : ""}
       </div>
     );
@@ -850,12 +849,11 @@ export function TimelineItem({
         <div
           data-testid="tl-reasoning-row"
           className="tl tl-reasoning"
-          style={{ cursor: "pointer", color: "var(--muted)", fontSize: "0.9em" }}
           onClick={() => setExpanded(!open)}
         >
           {open ? "▾" : "▸"} Thinking…{!open && preview ? ` ${preview}${txt.length > 80 ? "…" : ""}` : ""}
           {open && (
-            <div className="tl-reasoning-body" style={{ marginTop: 4, whiteSpace: "pre-wrap" }}>
+            <div className="tl-reasoning-body">
               {txt}
             </div>
           )}
@@ -880,11 +878,11 @@ export function TimelineItem({
             onClick={() => setExpanded((v) => !v)}
           >
             <div className="tl-sub-summary">
-              <span style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+              <span className="tl-cursor">{expanded ? "▾" : "▸"}</span>{" "}
               <b>◈ sub-agent</b> {d.subAgentType ? `[${d.subAgentType}] ` : ""}
               {summary} <span className="muted">· {it.status}</span>
             </div>
-            {failed && errText && <div style={{ color: "var(--pink-t)", fontSize: "0.85em" }}>{errText}</div>}
+            {failed && errText && <div className="tl-sub-err">{errText}</div>}
             {expanded && (
               <SubAgentBody agentId={agentId} subagentKey={subagentKey} d={d} />
             )}
@@ -928,10 +926,10 @@ export function TimelineItem({
           style={failed ? { borderLeft: "3px solid #ff4d6d" } : undefined}
           onClick={() => setExpanded(!open)}
         >
-          <span style={{ cursor: "pointer" }}>{open ? "▾" : "▸"}</span>{" "}
+          <span className="tl-cursor">{open ? "▾" : "▸"}</span>{" "}
           <span className="tool-name">{it.name}</span>{" "}
           <SummaryWithLinks text={summaryStr} />
-          {failed && errText && <span style={{ color: "var(--pink-t)", marginLeft: 4 }}>{errText}</span>}
+          {failed && errText && <span className="tl-tool-err">{errText}</span>}
           {open && <ToolDetail it={it} d={d} />}
         </div>
       );
@@ -957,7 +955,7 @@ export function TimelineItem({
 
     case "provider_switch":
       return (
-        <div data-testid="tl-provider-switch-row" className="tl tl-compaction tl-provider-switch" style={{ textAlign: "center", color: "var(--muted)", borderTop: "1px dashed var(--line)", borderBottom: "1px dashed var(--line)", padding: "2px 0", fontSize: "0.85em" }}>
+        <div data-testid="tl-provider-switch-row" className="tl tl-compaction tl-provider-switch">
           ── Switched to {it.label || "new provider"} ──
         </div>
       );
@@ -1200,12 +1198,12 @@ function PinnedTodo({ entry }: { entry: Entry }) {
   return (
     <div
       data-testid="tl-pinned-todo"
-      style={{ background: "var(--bg, #1e1e1e)", borderBottom: "1px solid var(--line)", padding: "4px 8px", cursor: "pointer" }}
+      className="tl-pinned-todo"
       onClick={() => setOpen((v) => !v)}
     >
       {open ? "▾" : "▸"} <span className="emoji-glyph">📋 </span>Plan / Tasks ({done}/{total})
       {open && (
-        <div style={{ marginTop: 4, fontSize: "0.9em" }}>
+        <div className="tl-pinned-todo-body">
           {items.map((t, i) => (
             <div key={i}>
               {t.completed || t.status === "completed" ? "☑" : t.status === "in_progress" ? "◐" : "☐"} {t.text}
@@ -1262,8 +1260,7 @@ function ToolRunRow({
         role="button"
         tabIndex={0}
         aria-expanded={expanded}
-        className="tl tl-tool"
-        style={{ cursor: "pointer" }}
+        className="tl tl-tool tl-cursor"
         onClick={onToggle}
         onKeyDown={(ev) => {
           if (toolRunToggleKey(ev.key)) {
@@ -1272,7 +1269,7 @@ function ToolRunRow({
           }
         }}
       >
-        <span aria-hidden="true" style={{ cursor: "pointer" }}>{expanded ? "▾" : "▸"}</span>{" "}
+        <span aria-hidden="true" className="tl-cursor">{expanded ? "▾" : "▸"}</span>{" "}
         {boring ? (
           <span className="boring-toolgroup-summary" data-testid="boring-toolgroup-summary">
             {run.entries.some((x) => isFailedTool(x.item, x.item?.detail ?? {})) ? null : <span className="bt-sum-ok" aria-label="all ok">✓ </span>}
@@ -1616,7 +1613,7 @@ export function Timeline({
       {slowFirstLoad && <TimelineSkeleton />}
       <SubagentList agentId={agentId} entries={entries} isSubAgent={isSubAgentTool} renderBody={(id) => <SubAgentBody agentId={agentId} subagentKey={id} d={{}} />} />
       {shouldShowLoadOlder(entries, hasMore) && (
-        <div style={{ textAlign: "center", padding: "4px 0" }}>
+        <div className="tl-load-older">
           <button
             data-testid="tl-load-older-btn"
             disabled={loadingMore}
