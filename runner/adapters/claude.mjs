@@ -5,7 +5,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { killTree, spawnNoShell } from '../spawn.mjs';
+import { killTree, spawnNoShell, spawnErrorMessage } from '../spawn.mjs';
 import { lineReader } from './lines.mjs';
 import { mcpServerSpec, mcpServerPath } from './mcp.mjs';
 import { parseClaudeRateLimit } from '../limits.mjs';
@@ -159,7 +159,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         }
       });
       lineReader(child.stderr, (line) => emit('stderr', { line }));
-      child.on('error', (err) => onExit({ code: null, error: String(err.message) }));
+      child.on('error', (err) => onExit({ code: null, error: spawnErrorMessage(command, err) }));
       child.on('exit', (code, signal) => onExit({ code, signal }));
       let settled = false;
       const ready = new Promise((resolve, reject) => {

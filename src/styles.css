@@ -6590,3 +6590,22 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   flex-wrap: wrap;
   margin-bottom: 8px;
 }
+
+/* ---- E6b: Alpha Tester Desk (TesterCockpit.tsx) + owner ALPHA TESTER inbox chip ---- */
+.tester-cockpit { display: flex; flex-direction: column; height: 100vh; height: 100dvh; background: var(--bg); color: var(--text); }
+.tester-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: calc(8px + env(safe-area-inset-top, 0px)) 12px 8px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.tester-title { font-size: 15px; }
+.tester-spacer { flex: 1 1 auto; }
+.tester-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); display: inline-block; }
+.tester-dot.connected { background: #2fbf71; }
+.tester-dot.disconnected { background: #d64545; }
+.tester-squad, .tester-squad-badge { font-size: 13px; padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px; background: transparent; color: inherit; }
+.tester-head .btn { min-height: 40px; }
+.tester-body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.tester-offline { margin: 16px; padding: 16px; border: 1px dashed var(--line); border-radius: 10px; color: var(--muted); line-height: 1.5; }
+.tester-bug-sheet textarea { width: 100%; font-size: 16px; }
+.tester-bug-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.tester-bug-row.end { justify-content: flex-end; }
+.tester-bug-err { color: #c0123f; }
+.inbox-tester-badge { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--text); border: 1px solid var(--line); background: rgba(47, 191, 113, 0.18); padding: 1px 6px; border-radius: 999px; }
+.tester-body > * { flex: 1; min-height: 0; }

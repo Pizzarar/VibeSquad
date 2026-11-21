@@ -113,12 +113,60 @@ export function useStaleBuildDismissed(): boolean {
 // Loopback without the local token (a plain browser tab) is read-only; the server says so in /health.
 let localReadOnly = false;
 
-export function setLocalAccess(access: unknown): void {
-  const next = !isRemote() && access === "read-only";
-  if (next !== localReadOnly) {
-    localReadOnly = next;
-    listeners.forEach((l) => l());
-  }
+export type DeviceRole = "owner" | "bug-tester" | "read-only";
+let deviceRole: DeviceRole = "owner";
+let allowedTeams: string[] = [];
+let deviceName: string | null = null;
+
+/**
+ * Fed from /api/health & /api/auth/status. `access` is the `localAccess` string; `extra` carries the E6a scoped-device
+ * fields ({ role, allowedTeams, deviceName }). A "bug-tester" is never "owner" and never counts as local read-only.
+ */
+export function setLocalAccess(access: unknown, extra?: { role?: unknown; allowedTeams?: unknown; deviceName?: unknown } | null): void {
+  const role: DeviceRole = access === "bug-tester" || extra?.role === "bug-tester" ? "bug-tester" : access === "read-only" ? "read-only" : "owner";
+  const teams = role === "bug-tester" && Array.isArray(extra?.allowedTeams) ? (extra!.allowedTeams as unknown[]).map(String).filter(Boolean) : role === "bug-tester" ? allowedTeams : [];
+  const name = role === "bug-tester" && typeof extra?.deviceName === "string" && extra.deviceName.trim() ? extra.deviceName.trim() : role === "bug-tester" ? deviceName : null;
+  const nextReadOnly = !isRemote() && role === "read-only";
+  const changed = nextReadOnly !== localReadOnly || role !== deviceRole || teams.join(",") !== allowedTeams.join(",") || name !== deviceName;
+  localReadOnly = nextReadOnly;
+  deviceRole = role;
+  if (teams.join(",") !== allowedTeams.join(",")) allowedTeams = teams;
+  deviceName = name;
+  if (changed) listeners.forEach((l) => l());
+}
+
+export const getDeviceRole = (): DeviceRole => deviceRole;
+export const getAllowedTeams = (): string[] => allowedTeams;
+export const getDeviceName = (): string | null => deviceName;
+
+export function useDeviceRole(): DeviceRole {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getDeviceRole,
+  );
+}
+
+export function useAllowedTeams(): string[] {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getAllowedTeams,
+  );
+}
+
+export function useDeviceName(): string | null {
+  return useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    getDeviceName,
+  );
 }
 
 export function useLocalReadOnly() {
