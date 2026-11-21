@@ -154,6 +154,14 @@ export function startTokenWatcher({
     await runner.sendAgentPrompt(agent.id, BRAINSTORM_WARN_NUDGE);
   }
 
+  // G1: Buddies over the cap whose restart waits for the open turn to end (turn_ended re-evaluates them, even if the idle upsert
+  // landed while an earlier evaluation of the same agent was still running and was skipped by `busy`).
+  const restartWaiting = new Set();
+  const isMidTurn = (a) => {
+    const s = String(a?.status ?? "").toLowerCase();
+    return s === "running" || s === "initializing";
+  };
+
   async function evaluateBuddy(agent) {
     const labels = agent.labels ?? {};
     if (labels["vs.restarted-into"] || restarted.has(agent.id)) return;
@@ -174,6 +182,30 @@ export function startTokenWatcher({
         const res = await compact.run(agent, { focus: BUDDY_COMPACT_FOCUS, cap: restartTokens, kind: "buddy", teamId, laneId });
         if (res.outcome === "ok") return; // same id, smaller context: no restart
       }
+      // G1 (unit-buddy-midturn-restart): never restart a Buddy mid-turn, any provider. The Claude branch above only compacts when
+      // idle; a non-Claude Buddy (agy: 21k->158k in ONE turn) used to fall straight through to here and be killed mid-reply, the
+      // owner's message lost. The turn's end (idle upsert / turn_ended) re-evaluates. The snapshot can lag, so the runner's
+      // status now decides too; an unreadable status keeps the snapshot's answer.
+      const now = isMidTurn(agent) || typeof runner.fetchAgent !== "function" ? null : (await runner.fetchAgent(agent.id).catch(() => null))?.agent;
+      if (isMidTurn(agent) || isMidTurn(now)) {
+        restartWaiting.add(agent.id);
+        return;
+      }
+      // G1 R2: a Buddy that jumped past the warn in one turn (agy 21k->158k) updates its brief first, now that it is idle; the restart
+      // follows that brief turn's end (turn_ended), or briefWaitMs if the turn never comes. The Claude branch above already nudged.
+      if (labels[WARN_LABEL] !== "1" && !warned.has(agent.id)) {
+        restartWaiting.add(agent.id);
+        await sendBriefNudge(agent, labels);
+        armBriefTimer(agent.id);
+        return;
+      }
+      const briefAt = briefPending.get(agent.id);
+      if (briefAt !== undefined && Date.now() - briefAt < briefWaitMs) {
+        restartWaiting.add(agent.id);
+        return;
+      }
+      briefPending.delete(agent.id);
+      restartWaiting.delete(agent.id);
       restarted.add(agent.id);
       await restartBuddy({ agentId: agent.id, reason: "auto-token-limit", usedTokens: used, oldAgent: agent });
       return;
@@ -195,9 +227,45 @@ export function startTokenWatcher({
     return { role };
   }
 
+  const recheck = new Set(); // waiting Buddies whose event landed while their evaluation was busy: re-run on the latest snapshot
+  function runEvaluate(agent, source) {
+    busy.add(agent.id);
+    evaluate(agent, { source })
+      .catch((e) => console.warn(`[vibesquad] token watch ${agent.id}: ${e?.message ?? e}`))
+      .finally(() => {
+        busy.delete(agent.id);
+        const next = recheck.delete(agent.id) && restartWaiting.has(agent.id) ? live.get(agent.id) : null;
+        if (next) runEvaluate(next, "agent");
+      });
+  }
+  // The brief turn may never come (nudge dropped, Buddy parked): re-check once briefWaitMs is up.
+  const briefTimers = new Map();
+  function armBriefTimer(id) {
+    clearTimeout(briefTimers.get(id));
+    const t = setTimeout(() => {
+      briefTimers.delete(id);
+      const a = live.get(id);
+      if (!a || !restartWaiting.has(id)) return;
+      if (busy.has(id)) recheck.add(id);
+      else runEvaluate(a, "agent");
+    }, briefWaitMs + 50);
+    t.unref?.();
+    briefTimers.set(id, t);
+  }
+
   const stop = runner.subscribeEvents((ev) => {
-    const agents = ev.kind === "roster" ? ev.agents ?? [] : ev.kind === "agent" && ev.agent ? [ev.agent] : [];
-    if (ev.kind === "remove") live.delete(ev.agentId);
+    const agents =
+      ev.kind === "roster"
+        ? ev.agents ?? []
+        : ev.kind === "agent" && ev.agent
+          ? [ev.agent]
+          : ev.kind === "turn_ended" && ev.agent?.id && restartWaiting.has(ev.agent.id) // G1: the deferred restart's turn is over
+            ? [ev.agent]
+            : [];
+    if (ev.kind === "remove") {
+      live.delete(ev.agentId);
+      restartWaiting.delete(ev.agentId);
+    }
     if (ev.kind === "turn_ended" && ev.agentId) {
       briefPending.delete(ev.agentId);
       workers.endEpisode(ev.agentId); // not gated by `busy`: a dropped idle upsert must not carry the soft rung into the next turn
@@ -208,17 +276,18 @@ export function startTokenWatcher({
       live.set(agent.id, agent);
       if (busy.has(agent.id)) {
         if (source === "roster") workers.observeWorker(agent); // still baseline a worker whose upsert is mid-evaluation (sync, never sends)
+        // G1 R2: a turn's idle upsert and its turn_ended arrive back to back; a waiting restart must not lose the second one.
+        if (restartWaiting.has(agent.id)) recheck.add(agent.id);
         continue; // one evaluation per agent at a time; the next usage event re-checks
       }
-      busy.add(agent.id);
-      evaluate(agent, { source })
-        .catch((e) => console.warn(`[vibesquad] token watch ${agent.id}: ${e?.message ?? e}`))
-        .finally(() => busy.delete(agent.id));
+      runEvaluate(agent, source);
     }
   });
   const stopAll = () => {
     for (const t of noticeTimers.values()) clearTimeout(t);
     noticeTimers.clear();
+    for (const t of briefTimers.values()) clearTimeout(t);
+    briefTimers.clear();
     return stop();
   };
   return { stop: stopAll, evaluate, coordinator: coord, workerGuard: workers };

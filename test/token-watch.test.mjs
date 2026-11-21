@@ -224,6 +224,7 @@ test("buddy: the default performBrainstormRestart wiring restarts once (reason a
   resetBrainstormRestartState();
   const r = makeRunner();
   r.agents.set("rn-bud", buddy("rn-bud"));
+  r.agents.get("rn-bud").labels[WARN_LABEL] = "1"; // warned at 80k: this test is the restart wiring
   const creates = [];
   const updates = [];
   const agentClient = {
@@ -354,4 +355,142 @@ test("idea-353: idle lead with an armed watch: notice held (no wake), then steer
   assert.deepEqual(r2.sent, [{ id: "rn-lead", text: SOFT_FLAG_NUDGE }]);
   w2.stop();
   void id;
+});
+
+// G1 (unit-buddy-midturn-restart): Usage's agy Buddy went 21k->158k in ONE turn and was restarted mid-reply 3x in 26 min.
+// Warned at 80k already (the usual path); the jump-past-the-warn case is its own test below.
+const agyBuddy = (id, status = "running") => { const b = { ...buddy(id), provider: "antigravity-cli", status }; b.labels = { ...b.labels, [WARN_LABEL]: "1" }; return b; };
+
+test("G1: a non-Claude Buddy over the cap mid-turn is NOT restarted until its turn ends, then exactly once", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  r.usage("rn-agy", 21_000);
+  r.usage("rn-agy", 158_000);
+  await tick();
+  r.usage("rn-agy", 170_000); // still the same turn
+  await tick();
+  assert.equal(restarts.length, 0, "never restarted mid-turn");
+  r.agents.get("rn-agy").status = "idle"; // the turn ends: the runner's idle upsert
+  r.emit({ kind: "agent", agent: { ...r.agents.get("rn-agy"), labels: { ...r.agents.get("rn-agy").labels } } });
+  await tick();
+  assert.equal(restarts.length, 1);
+  assert.equal(restarts[0].agentId, "rn-agy");
+  assert.equal(restarts[0].reason, "auto-token-limit");
+  r.usage("rn-agy", 171_000);
+  await tick();
+  assert.equal(restarts.length, 1, "one restart per Buddy");
+  w.stop();
+});
+
+test("G1: a stale idle snapshot does not restart a Buddy the runner reports running; its turn_ended does", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  const a = r.agents.get("rn-agy");
+  a.lastUsage = { contextWindowUsedTokens: 160_000, inputTokens: 160_000 };
+  r.emit({ kind: "agent", agent: { ...a, status: "idle", labels: { ...a.labels } } }); // replayed / lagging snapshot
+  await tick();
+  assert.equal(restarts.length, 0, "the runner's status now (running) wins over the snapshot");
+  a.status = "idle";
+  r.emit({ kind: "turn_ended", agentId: "rn-agy", turnId: "9", outcome: { kind: "completed" }, agent: { ...a, labels: { ...a.labels } } });
+  await tick();
+  assert.equal(restarts.length, 1, "the deferred restart runs at turn end without another usage event");
+  w.stop();
+});
+
+test("G1: an errored (not running) non-Claude Buddy over the cap still restarts", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy", "error"));
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  r.usage("rn-agy", 160_000);
+  await tick();
+  assert.equal(restarts.length, 1);
+  w.stop();
+});
+
+test("G1: an unrelated turn_ended (no deferred restart) evaluates nothing", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", agyBuddy("rn-agy", "idle"));
+  r.agents.get("rn-agy").lastUsage = { contextWindowUsedTokens: 160_000, inputTokens: 160_000 };
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (b) => { restarts.push(b); } });
+  const a = r.agents.get("rn-agy");
+  r.emit({ kind: "turn_ended", agentId: "rn-agy", turnId: "1", outcome: { kind: "completed" }, agent: { ...a, labels: { ...a.labels } } });
+  await tick();
+  assert.equal(restarts.length, 0, "turn_ended alone only re-checks a Buddy whose restart is waiting");
+  w.stop();
+});
+
+test("G1: a Claude Buddy already compacted once and still over the cap waits for its turn to end too (no second /compact)", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  const b = { ...buddy("rn-cl"), provider: "claude", status: "running" };
+  b.labels = { ...b.labels, [WARN_LABEL]: "1", "vs.compacted-at": "2026-11-19T00:00:00Z" };
+  r.agents.set("rn-cl", b);
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (x) => { restarts.push(x); } });
+  r.usage("rn-cl", 160_000);
+  await tick();
+  assert.equal(restarts.length, 0);
+  r.agents.get("rn-cl").status = "idle";
+  r.usage("rn-cl", 160_500);
+  await tick();
+  assert.equal(restarts.length, 1);
+  assert.equal(r.sent.filter((s) => s.text.startsWith("/compact")).length, 0);
+  w.stop();
+});
+
+test("G1 R2: an agy Buddy that jumps past the warn in ONE turn gets the brief nudge at turn end, then restarts after that brief turn", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  const b = { ...buddy("rn-agy"), provider: "antigravity-cli", status: "running" };
+  r.agents.set("rn-agy", b);
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, restartBuddy: async (x) => { restarts.push(x); } });
+  const snap = () => ({ ...r.agents.get("rn-agy"), labels: { ...r.agents.get("rn-agy").labels } });
+  r.usage("rn-agy", 21_000);
+  r.usage("rn-agy", 158_000); // same turn: 21k -> 158k, past warn and cap
+  await tick();
+  assert.equal(r.sent.length, 0, "no nudge into the running turn");
+  assert.equal(restarts.length, 0);
+  r.agents.get("rn-agy").status = "idle"; // the owner's turn ends
+  r.emit({ kind: "agent", agent: snap() });
+  r.emit({ kind: "turn_ended", agentId: "rn-agy", turnId: "1", outcome: { kind: "completed" }, agent: snap() });
+  await tick();
+  assert.deepEqual(r.sent.map((s) => s.text), [BRAINSTORM_WARN_NUDGE]);
+  assert.equal(restarts.length, 0, "the brief update comes first");
+  r.agents.get("rn-agy").status = "running"; // the brief turn
+  r.emit({ kind: "agent", agent: snap() });
+  await tick();
+  assert.equal(restarts.length, 0);
+  r.agents.get("rn-agy").status = "idle"; // brief turn ends: idle upsert and turn_ended back to back (the busy gate must not drop it)
+  r.emit({ kind: "agent", agent: snap() });
+  r.emit({ kind: "turn_ended", agentId: "rn-agy", turnId: "2", outcome: { kind: "completed" }, agent: snap() });
+  await tick();
+  assert.equal(restarts.length, 1);
+  assert.equal(r.sent.length, 1, "one nudge");
+  w.stop();
+});
+
+test("G1 R2: the brief turn never comes -> the restart still runs once briefWaitMs is up (idle)", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy", { ...buddy("rn-agy"), provider: "antigravity-cli", status: "idle" });
+  const restarts = [];
+  const w = startTokenWatcher({ runner: r, rootDir, briefWaitMs: 60, restartBuddy: async (x) => { restarts.push(x); } });
+  r.usage("rn-agy", 160_000);
+  await tick();
+  assert.deepEqual(r.sent.map((s) => s.text), [BRAINSTORM_WARN_NUDGE]);
+  assert.equal(restarts.length, 0);
+  await new Promise((res) => setTimeout(res, 200));
+  assert.equal(restarts.length, 1);
+  w.stop();
 });
