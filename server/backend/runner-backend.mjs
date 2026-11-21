@@ -1179,6 +1179,7 @@ export class RunnerBackend {
    *   { kind: 'timeline', agentId, seq, type }        a timeline entry was appended
    *   { kind: 'created' | 'turn_started', agentId, agent }
    *   { kind: 'turn_ended', agentId, agent, turnId, outcome }   outcome: { kind: 'completed' | 'cancelled' } | { kind: 'failed', error: { message } }
+   *   { kind: 'upstream_exit', agentId, agent, error, ts }   the agent exited on an upstream model-API failure (idea-442/504)
    * Returns the unsubscribe.
    */
   subscribeEvents(listener) {
@@ -1596,7 +1597,12 @@ export class RunnerBackend {
     if (lifecycle) this.emitEvent({ ...lifecycle, agentId: id, agent: shown });
     if (from !== undefined && from !== to) this.emitEvent({ kind: "status", agentId: id, from, to, agent: shown });
     if (e.type === "permission" && e.phase === "request") this.emitEvent({ kind: "permission", agentId: id, agent: shown, request: { id: e.id, toolName: e.toolName } }); // snapshot lets watch-sets see an already auto-resolved request (ACP) is not pending
-    if (e.type === "exit") capProviderOnUpstreamExit(agent.provider, e);
+    if (e.type === "exit") {
+      capProviderOnUpstreamExit(agent.provider, e);
+      // idea-504: after the cap (so spawn failover already routes around the provider), tell the hooks: a worker that died on
+      // an upstream failure in its first turn is re-spawned once on the alternate provider (agent-duties). A cancel never is.
+      if (e.upstream === true && !t?.cancelled) this.emitEvent({ kind: "upstream_exit", agentId: id, agent: shown, error: String(e.error ?? ""), ts: e.ts });
+    }
     if (e.type === "exit") await this.refreshLaneWhosHere(agent.labels?.lane);
   }
 

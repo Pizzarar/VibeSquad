@@ -5,7 +5,12 @@
 import { sharedRunnerBackend } from "./index.mjs";
 import { isRunnerId, logHooksUnavailable } from "./runner-backend.mjs";
 
-const HOOK_FOR = { created: "agent.created", turn_started: "agent.turn_started", turn_ended: "agent.turn_ended" };
+const HOOK_FOR = {
+  created: "agent.created",
+  turn_started: "agent.turn_started",
+  turn_ended: "agent.turn_ended",
+  upstream_exit: "agent.upstream_exit", // idea-504: one-time respawn of a worker that died on an upstream model-API failure
+};
 
 let active = null;
 
@@ -34,6 +39,7 @@ export async function startRunnerLifecycle({ runner = sharedRunnerBackend(), sta
     if (!hook || !isRunnerId(ev.agentId)) return;
     const payload = { agent: ev.agent };
     if (ev.kind === "turn_ended") Object.assign(payload, { turnId: ev.turnId, outcome: ev.outcome });
+    if (ev.kind === "upstream_exit") Object.assign(payload, { error: ev.error, ts: ev.ts });
     if (host) dispatch([hook, payload]);
     else buffer.push([hook, payload]);
   });
