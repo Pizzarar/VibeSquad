@@ -308,7 +308,7 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
     const modelOptions = await page
       .locator('[data-testid="drawer-model-select"] option')
       .evaluateAll((opts) => opts.map((o) => o.value));
-    assert.ok(modelOptions.some((v) => v === "gemini-4-argon"), "Model options should show Gemini models");
+    assert.ok(modelOptions.some((v) => v === "gemini-4-neon"), "Model options should show Gemini models");
     const timelineStillThere = await page
       .locator(".timeline")
       .first()
@@ -353,7 +353,7 @@ test("U11: live click-through of the 5 core UI flows", { timeout: 180000 }, asyn
 
     const model = page.locator('[data-testid="drawer-model-select"]');
     await model.waitFor({ timeout: 15000 });
-    assert.equal(await model.inputValue(), "gemini-4-argon", "staged model should default to gemini-4-argon");
+    assert.equal(await model.inputValue(), "gemini-4-neon", "staged model should default to gemini-4-neon");
 
     await model.selectOption("gemini-3.8-flash");
     await waitFor(async () => (await model.inputValue()) === "gemini-3.8-flash", 10000, "model to update");

@@ -76,8 +76,8 @@ function resolveNpx() {
 export const PROVIDER_ALIASES = { agy: 'antigravity-cli', antigravity: 'antigravity-cli' };
 export const acpProviderIds = () => Object.keys(ACP_PROVIDERS);
 
-// Profiles name models loosely ("gemini-4-argon", "deepseek/deepseek-flash"); ACP agents advertise exact ids
-// ("gemini-4-argon-medium"). Exact id wins, else the first advertised id that extends it with a variant suffix.
+// Profiles name models loosely ("gemini-4-neon", "deepseek/deepseek-flash"); ACP agents advertise exact ids
+// ("gemini-4-neon-medium"). Exact id wins, else the first advertised id that extends it with a variant suffix.
 export function pickModel(want, available = []) {
   const ids = available.map((m) => m?.modelId ?? m?.id).filter(Boolean);
   if (ids.includes(want)) return want;

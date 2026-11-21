@@ -6,7 +6,8 @@ export const MODEL_PRICES = {
   'deepseek-v4-pro': { input: 0.55, output: 2.2, cachedRead: 0.055 },
   'deepseek-v4-flash': { input: 0.14, output: 0.28, cachedRead: 0.014 },
   'deepseek-flash': { input: 0.14, output: 0.28, cachedRead: 0.014 },
-  'gemini-4-argon': { input: 2, output: 12, cachedRead: 0.2 },
+  'gemini-4-argon': { input: 2, output: 12, cachedRead: 0.2 }, // retired by N1; kept so old runs still price
+  'gemini-4-neon': { input: 3, output: 15, cachedRead: 0.15 }, // N1 2026-11-21: launch list price (secondary sources, 11-18)
   'gemini-3.8-flash': { input: 0.5, output: 3, cachedRead: 0.05 },
 };
 

@@ -12,17 +12,17 @@ export const O = "opencode";
 // (trial)" exists only in the user file.
 export const GOLDEN = [
   ["Lead - Claude", "lead", C, "claude-opus-5-5", "medium", "auto"],
-  ["Lead - Gemini", "lead", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Lead - Gemini", "lead", A, "gemini-4-neon", "medium", "accept-edits"],
   ["Brainstorm - Claude", "brainstorm", C, "claude-opus-5-5", "medium", "auto"],
-  ["Brainstorm - Gemini", "brainstorm", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Brainstorm - Gemini", "brainstorm", A, "gemini-4-neon", "medium", "accept-edits"],
   ["Implement - Sonnet", "worker", C, "claude-sonnet-5-5", "medium", "auto"],
   ["Work Order - DSP", "worker", O, "deepseek/deepseek-v4-pro", "high", "build"],
-  ["Review - Gemini", "worker", A, "gemini-4-argon", "medium", "default"],
+  ["Review - Gemini", "worker", A, "gemini-4-neon", "medium", "default"],
   ["Review - Sonnet", "worker", C, "claude-sonnet-5-5", "medium", "auto"],
   ["Pre-check - Flash", "worker", A, "gemini-3.8-flash", "low", "default"],
-  ["Art Director - Gemini", "worker", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Art Director - Gemini", "worker", A, "gemini-4-neon", "medium", "accept-edits"],
   ["Art Painter - Opus", "worker", C, "claude-opus-5-5", "medium", "auto"],
-  ["Implement - Gemini (trial)", "worker", A, "gemini-4-argon", "medium", "accept-edits"],
+  ["Implement - Gemini (trial)", "worker", A, "gemini-4-neon", "medium", "accept-edits"],
 ].map(([name, role, provider, model, effort, modeId]) => ({ name, role, provider, model, effort, modeId }));
 
 // Today's stored profile list (the effective list resolveProfileWithFailover walks; hop profiles outside it come from

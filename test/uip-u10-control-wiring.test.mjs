@@ -88,7 +88,7 @@ async function runRestart(env, body, oldAgent) {
 
 // ─── 1. SpinUpCard → performBrainstormRestart (quick-start) honours profileName over conflicting labels/lastProfile ───
 
-test("quick-start spawns gemini-4-argon for 'Brainstorm - Gemini' even with a conflicting old profile and lane.lastProfile", async () => {
+test("quick-start spawns gemini-4-neon for 'Brainstorm - Gemini' even with a conflicting old profile and lane.lastProfile", async () => {
   const env = makeEnv("art-direction", "Brainstorm - Claude");
   const { created } = await runRestart(
     env,
@@ -112,7 +112,7 @@ test("quick-start spawns gemini-4-argon for 'Brainstorm - Gemini' even with a co
   try {
     assert.equal(created.length, 1);
     assert.equal(created[0].config.provider, "antigravity-cli");
-    assert.equal(created[0].config.model, "gemini-4-argon");
+    assert.equal(created[0].config.model, "gemini-4-neon");
     assert.equal(created[0].labels.profile, "Brainstorm - Gemini");
     // No caller model/mode/thinking override → the profile stays authoritative (no profile-override flag).
     assert.equal(created[0].labels["profile-override"], undefined);
@@ -181,7 +181,7 @@ test("performBrainstormRestart spawns the staged model/modeId/thinkingOptionId i
   try {
     assert.equal(created.length, 1);
     assert.equal(created[0].config.provider, "antigravity-cli");
-    // The profile's default is gemini-4-argon / accept-edits / medium; the staged values must win.
+    // The profile's default is gemini-4-neon / accept-edits / medium; the staged values must win.
     assert.equal(created[0].config.model, "gemini-3.8-flash");
     assert.equal(created[0].config.modeId, "default");
     assert.equal(created[0].config.thinkingOptionId, "high");
@@ -300,7 +300,7 @@ test("snap-back source guards: optimistic helpers, staged map, offered models, p
   assert.match(drawerSrc, /applyConfigOptimistically\(agent, \{ model: modelId \}/);
   assert.match(drawerSrc, /applyConfigOptimistically\(agent, \{ currentModeId: modeId \}/);
   assert.match(drawerSrc, /applyConfigOptimistically\(agent, \{ thinkingOptionId: optionId \}/);
-  assert.match(drawerSrc, /"antigravity-cli": \["gemini-4-argon", "gemini-3\.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"\]/);
+  assert.match(drawerSrc, /"antigravity-cli": \[GEMINI_TOP_MODEL, "gemini-3\.8-flash", "claude-opus-5-5", "claude-sonnet-5-5"\]/);
   assert.match(drawerSrc, /if \(modelBusy\) return;/);
   assert.match(drawerSrc, /\{effectiveProv\.symbol\} \{effectiveProv\.name\}/);
   assert.doesNotMatch(drawerSrc, /\{prov\.symbol\} \{prov\.name\}/);

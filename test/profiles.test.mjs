@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 import {
   DEFAULT_PACK_PROFILES,
   addInboxCards,
@@ -531,7 +532,8 @@ test("8. DEFAULT_PROFILES in src/profiles.ts has all 20 default pack profiles ma
   assert.ok(startIdx > 0 && endIdx > startIdx, "Expected DEFAULT_PROFILES block in src/profiles.ts");
   const jsSlice = stripTypeScriptTypes(tsRaw.slice(startIdx, endIdx))
     .replace(/^export\s+/gm, "");
-  const evaluated = new Function(`${jsSlice}\nreturn { DEFAULT_PROFILES, LEGACY_PROFILE_ALIASES };`)();
+  // src/profiles.ts imports GEMINI_TOP_MODEL from server/model-ids.mjs: pass the same value into the evaluated slice.
+  const evaluated = new Function("GEMINI_TOP_MODEL", `${jsSlice}\nreturn { DEFAULT_PROFILES, LEGACY_PROFILE_ALIASES };`)(GEMINI_TOP_MODEL);
 
   assert.equal(evaluated.DEFAULT_PROFILES.length, 20);
   assert.equal(DEFAULT_PACK_PROFILES.length, 20);

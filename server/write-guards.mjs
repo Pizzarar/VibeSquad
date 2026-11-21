@@ -32,6 +32,6 @@ export function createWindowLimiter({ max, windowMs = 60_000, now = Date.now }) 
   };
 }
 
-// Provider ids ("claude", "antigravity-cli") and model ids ("claude-opus-5-5", "gemini-4-argon").
+// Provider ids ("claude", "antigravity-cli") and model ids ("claude-opus-5-5", "gemini-4-neon").
 const SPAWN_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/;
 export const isSpawnId = (s) => typeof s === "string" && SPAWN_ID.test(s);

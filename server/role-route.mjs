@@ -6,6 +6,7 @@
 // Legacy profile names (Workaround, removed in P5f) do NOT use the tier ladder: they replay today's routing exactly
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
 import { LEGACY_PROFILE_ALIASES, LEGACY_PROFILE_ROLES } from "./profiles.mjs";
+import { GEMINI_TOP_MODEL } from "./model-ids.mjs";
 import {
   DEFAULT_STAKES_LADDER,
   DEFAULT_TIER_LADDER,
@@ -114,16 +115,16 @@ export const ROLE_TABLE = deepFreeze({
  */
 export const LEGACY_HOP_PROFILES = deepFreeze({
   "Lead - Claude": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
-  "Lead - Gemini": { provider: "antigravity-cli", model: "gemini-4-argon", effort: "medium", modeId: "accept-edits" },
+  "Lead - Gemini": { provider: "antigravity-cli", model: GEMINI_TOP_MODEL, effort: "medium", modeId: "accept-edits" },
   "Brainstorm - Claude": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
-  "Brainstorm - Gemini": { provider: "antigravity-cli", model: "gemini-4-argon", effort: "medium", modeId: "accept-edits" },
+  "Brainstorm - Gemini": { provider: "antigravity-cli", model: GEMINI_TOP_MODEL, effort: "medium", modeId: "accept-edits" },
   "Implement - Sonnet": { provider: "claude", model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" },
-  "Implement - Gemini (trial)": { provider: "antigravity-cli", model: "gemini-4-argon", effort: "medium", modeId: "accept-edits" },
+  "Implement - Gemini (trial)": { provider: "antigravity-cli", model: GEMINI_TOP_MODEL, effort: "medium", modeId: "accept-edits" },
   "Work Order - DSP": { provider: "opencode", model: "deepseek/deepseek-v4-pro", effort: "high", modeId: "build" },
-  "Review - Gemini": { provider: "antigravity-cli", model: "gemini-4-argon", effort: "medium", modeId: "default" },
+  "Review - Gemini": { provider: "antigravity-cli", model: GEMINI_TOP_MODEL, effort: "medium", modeId: "default" },
   "Review - Sonnet": { provider: "claude", model: "claude-sonnet-5-5", effort: "medium", modeId: "auto" },
   "Pre-check - Flash": { provider: "antigravity-cli", model: "gemini-3.8-flash", effort: "low", modeId: "default" },
-  "Art Director - Gemini": { provider: "antigravity-cli", model: "gemini-4-argon", effort: "medium", modeId: "accept-edits" },
+  "Art Director - Gemini": { provider: "antigravity-cli", model: GEMINI_TOP_MODEL, effort: "medium", modeId: "accept-edits" },
   "Art Painter - Opus": { provider: "claude", model: "claude-opus-5-5", effort: "medium", modeId: "auto" },
   "Check - Haiku": { provider: "claude", model: "claude-haiku-5-5", effort: "low", modeId: "auto" },
   "Audit - DSF": { provider: "opencode", model: "deepseek/deepseek-flash", effort: "default", modeId: "plan" },

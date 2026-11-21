@@ -1,5 +1,6 @@
 // Sky-gods hub (docs/PLAN_SKY_GODS_C2B.md G1): the pure zone→agent mapping. RiffBot is the hub Buddy (left),
 // the Overlord is the hub lead (right). No React here so it is unit-testable under node.
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 import { dormantBuddyId, hubPinForSquad, type Pin } from "./pins.ts";
 import { isCssColor, poseFor, type FaceBot, type FaceMode, type FacesModel, type Pose } from "./squadFloorLogic.ts";
 import { ordOf, type Member, type TeamView } from "./teams.ts";
@@ -136,7 +137,7 @@ async function doSpinUp(view: TeamView, hub: Pin, deps: Parameters<typeof spinUp
   const prompt = `You are the Overlord (hub lead) of the ${view.team.name ?? squad} Squad. Read AGENTS.md and your role pack, then run \`vs log --since-me\` and \`vs who all\` to catch up on every lane.`;
   const r = await deps.spawn({
     provider: p?.provider ?? (gemini ? "antigravity-cli" : "claude"),
-    model: p?.model ?? (gemini ? "gemini-4-argon" : "claude-opus-5-5"),
+    model: p?.model ?? (gemini ? GEMINI_TOP_MODEL : "claude-opus-5-5"),
     modeId: p?.modeId ?? deps.defaults?.modeId,
     thinkingOptionId: p?.thinkingOptionId,
     featureValues: p?.featureValues,

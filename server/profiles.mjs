@@ -16,6 +16,7 @@ import {
   setProviderCapped,
 } from "./provider-failover.mjs";
 import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
+import { GEMINI_TOP_MODEL, migrateModelId } from "./model-ids.mjs";
 
 export {
   COUNTERPART_PROFILES,
@@ -213,7 +214,7 @@ export const DEFAULT_PACK_PROFILES = [
     icon: "brain",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: {
@@ -241,7 +242,7 @@ export const DEFAULT_PACK_PROFILES = [
     icon: "flask",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: {
@@ -366,7 +367,7 @@ export const DEFAULT_PACK_PROFILES = [
     icon: "search",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "default",
     thinkingOptionId: "medium",
     featureValues: {
@@ -422,7 +423,7 @@ export const DEFAULT_PACK_PROFILES = [
     icon: "palette",
     color: "emerald",
     provider: "antigravity-cli",
-    model: "gemini-4-argon",
+    model: GEMINI_TOP_MODEL,
     modeId: "accept-edits",
     thinkingOptionId: "medium",
     featureValues: {
@@ -804,6 +805,22 @@ export function upgradeStaleDefaultNotes(profiles) {
   return changed;
 }
 
+/**
+ * N1 (2026-11-21): stored profiles naming a retired model (server/model-ids.mjs RETIRED_MODEL_IDS, e.g. gemini-4-argon)
+ * move to its replacement, effort suffix kept. Runs on every load next to upgradeStaleDefaultNotes, so the user file is
+ * rewritten once (atomic, via writeProfilesFile) and later loads find nothing to change. Mutates; true = changed.
+ */
+export function migrateRetiredProfileModels(profiles) {
+  let changed = false;
+  for (const p of profiles) {
+    const next = migrateModelId(p.model);
+    if (next === p.model) continue;
+    p.model = next;
+    changed = true;
+  }
+  return changed;
+}
+
 export function loadProfiles(profilesPath, options = {}) {
   const targetPath = getProfilesPath(profilesPath);
   const paseoInfo =
@@ -830,6 +847,7 @@ export function loadProfiles(profilesPath, options = {}) {
       providerOverrides = normalizeProviderOverrides(parsed);
       if (profiles.length > 0) {
         let dirty = upgradeStaleDefaultNotes(profiles);
+        if (migrateRetiredProfileModels(profiles)) dirty = true;
         const normalizedPaseo = paseoInfo.agentProfiles.map(normalizeProfile).filter(Boolean);
         if (
           options.mergePaseoIntoExisting === true &&

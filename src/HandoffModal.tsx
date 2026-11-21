@@ -1,3 +1,4 @@
+import { GEMINI_TOP_MODEL } from "../server/model-ids.mjs";
 import { useEffect, useMemo, useState } from "react";
 import { defaultSpawnConfigFor } from "./antigravity";
 import { useDraft } from "./drafts";
@@ -65,7 +66,7 @@ export function HandoffModal({ view, lead, onClose, onCreated }: { view: TeamVie
   const [targetProfileName, setTargetProfileName] = useState<string>(initialLeadProfile);
   const profile = findProfile(targetProfileName, profiles) ?? findProfile(fallbackLeadProfile, profiles);
   const targetProvider = profile?.provider ?? (targetProfileName === "Lead - Gemini" ? "antigravity-cli" : "claude");
-  const targetModel = profile?.model ?? (targetProfileName === "Lead - Gemini" ? "gemini-4-argon" : "claude-opus-5-5");
+  const targetModel = profile?.model ?? (targetProfileName === "Lead - Gemini" ? GEMINI_TOP_MODEL : "claude-opus-5-5");
   const defaults = defaultSpawnConfigFor(targetProvider);
   const next = buildName({
     team: team.id,

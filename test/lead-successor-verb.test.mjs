@@ -633,7 +633,7 @@ test("idea-359: profile switches the successor's provider/model/mode; default st
   try {
     const r = await callTool(t.ctx, "handoff_lead", { profile: "Lead - Gemini" });
     const req = t.calls.createAgent[0];
-    assert.deepEqual([req.config.provider, req.config.model, req.config.modeId], ["antigravity-cli", "gemini-4-argon", "accept-edits"]);
+    assert.deepEqual([req.config.provider, req.config.model, req.config.modeId], ["antigravity-cli", "gemini-4-neon", "accept-edits"]);
     assert.equal(req.labels.profile, "Lead - Gemini");
     assert.equal(req.env.VS_PROFILE, "Lead - Gemini");
     assert.equal(t.agents.get("rn-lead").labels.role, "former-lead");

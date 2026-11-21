@@ -23,7 +23,7 @@
 ### Gotchas
 - **`uip-u7-topbar-provider.test.mjs` 900-char window:** `test/uip-u7-topbar-provider.test.mjs` slices 900 chars starting at `data-testid="drawer-head-compact"` and checks that `{providerSelect}`, `{modelControl}`, `{thinkingSelect}`, `{modeSelect}`, and `<WorkingChip` appear in order. Keep `compactIdentity` extracted outside `drawer-head-compact` so the JSX block stays `< 900` chars.
 - **`uip-u11-playwright-smoke.test.mjs` serves `dist/`:** Always run `npm run build` before `test/uip-u11-playwright-smoke.test.mjs` when modifying `src/` so the static `dist/` server serves the updated bundle.
-- **Claude quota cap:** Claude is currently capped (`vs cap list`); use `antigravity-cli/gemini-4-argon` (`Review - Gemini` / `Lead - Gemini`) or `antigravity-cli/gemini-3.8-flash` (`Pre-check - Flash`).
+- **Claude quota cap:** Claude is currently capped (`vs cap list`); use `antigravity-cli/gemini-4-neon` (`Review - Gemini` / `Lead - Gemini`) or `antigravity-cli/gemini-3.8-flash` (`Pre-check - Flash`).
 
 ### Next 3 Steps
 1. All units U1–U17 in `docs/PLAN_UI_POLISH.md` are complete, merged to `master` (`745a4e6`), synced to local runtime, and pushed to `origin/master`, `origin/beta`, `dev/master`, and `dev/beta`.
