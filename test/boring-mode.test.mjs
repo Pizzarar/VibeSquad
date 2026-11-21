@@ -196,10 +196,9 @@ const props = (view, extra = {}) => ({
 const render = (p) => ((hs.i = 0), BoringApp(p));
 const laneBtn = (t, lane) => walk(byId(t, `boring-conv-${lane}`), (n) => n.props?.className === "boring-conv-title")[0];
 // Header tabs replace the old sidebar role pills: select the lane first, then pick the member tab.
-// R2.1: the Desk is one collapsed row; its Lead · Overlord / Brainstorm · RiffBot rows appear once it is expanded.
+// B8a: Overlord / RiffBot are always visible in the Trinity card (no Desk toggle).
 const withDesk = (view) => {
   let t = render(props(view));
-  if (!byId(t, "boring-core-overlord")) { byId(t, "boring-desk-toggle").props.onClick(); t = render(props(view)); }
   return t;
 };
 const pickTab = (view, lane, tab) => { laneBtn(render(props(view)), lane).props.onClick(); byId(render(props(view)), `boring-top-${tab}`).props.onClick(); };
@@ -616,7 +615,9 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.match(ade, /data-testid="boring-project-tree"/);
   assert.match(ade, /boring-project-header-\$\{v\.team\.id\}/);
   // R2.1: one tree shape; the detached bottom Project desk / Lanes sections are gone.
-  assert.match(ade, /boring-desk-block/);
+  assert.match(ade, /boring-trinity-card/);
+  assert.match(ade, /boring-lanes-divider/);
+  assert.doesNotMatch(ade, /deskOpen|boring-desk-toggle|boring-desk-row/);
   assert.doesNotMatch(ade, /boring-core-group|boring-conv-list|boring-lanes-label|boring-project-overview-btn|>Project desk</);
   assert.doesNotMatch(ade, /TRINITY/);
   assert.doesNotMatch(ade, /<select/);
@@ -707,7 +708,7 @@ test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid
   }
   const src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const ade = src("BoringAde.tsx");
-  for (const text of ["+ New lane", "Brainstorm · RiffBot", "Lead · Overlord", ">Desk<"]) assert.ok(ade.includes(text), text);
+  for (const text of ["+ New lane", "Brainstorm · RiffBot", "Lead · Overlord", ">Core<", ">Lanes<"]) assert.ok(ade.includes(text), text);
   for (const gone of ["New Conversation", "TRINITY", "📊", "🔍"]) assert.ok(!ade.includes(gone), gone);
   for (const id of ["boring-new-conv-btn", "boring-sidebar-search-btn", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
   for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(id), id);
@@ -755,18 +756,21 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
   reset();
   const v = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 2 }, riffbot: zone(mem("rb")), overlord: zone(mem("ov")) }, needsYou: 5 });
   let t = render(props(v));
-  // Collapsed Desk carries the hub count; the expanded project row carries none.
-  assert.match(JSON.stringify(byId(t, "boring-desk-row").props.children), /"children":2/);
+  // B8a: the Trinity card is always open, so hub rows are visible and carry no collapsed badge; the project row carries none either.
+  assert.ok(byId(t, "boring-core-overlord") && byId(t, "boring-core-riffbot") && byId(t, "boring-core-bugs"));
+  assert.ok(byId(t, "boring-trinity") && byId(t, "boring-lanes-divider"));
+  assert.equal(byId(t, "boring-desk-toggle"), null);
+  assert.equal(byId(t, "boring-desk-row"), null);
   assert.doesNotMatch(JSON.stringify(byId(t, "boring-project-header-vs").props.children), /"children":5/);
-  byId(t, "boring-desk-toggle").props.onClick();
-  t = render(props(v));
-  assert.doesNotMatch(JSON.stringify(byId(t, "boring-desk-row").props.children), /badge/);
-  // Worst state: an errored member turns the collapsed container red (err), otherwise amber.
+  // Worst state: an errored member still tints the collapsed project row red (err), otherwise amber.
   reset();
   const bad = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 1 }, riffbot: zone(mem("rb", "idle", ago(2), { tone: "error" })), overlord: zone(mem("ov")) } });
   assert.equal(boringSidebarModel(bad, NOW).deskErr, true);
-  assert.match(JSON.stringify(byId(render(props(bad)), "boring-desk-row").props.children), /boring-badge err/);
-  assert.match(JSON.stringify(byId(render(props(v)), "boring-desk-row").props.children), /boring-badge"/);
+  assert.equal(boringSidebarModel(bad, NOW).projectErr, true);
+  // R8-1: the expanded Core header carries the hub count (amber), red when a member errored.
+  assert.match(JSON.stringify(byId(render(props(bad)), "boring-trinity-head").props.children), /boring-badge err/);
+  assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /boring-badge"/);
+  assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /"children":2/);
 });
 
 // ---- D2 2.2: NEEDS YOU strip (src/BoringInbox.tsx) with the real attentionItems logic ------------------------
@@ -1254,18 +1258,15 @@ test("R2 fix2 L1/N2: Overview Desk row counts folded running workers and their a
   assert.notEqual(boringLaneTableRows(newer, [])[0].age, "");
 });
 
-test("R2 fix2 N3/N4: Desk sub-label lists only who is live; hidden when neither; dot tinted worst-state", () => {
+test("B8a: Overlord and RiffBot rows are always rendered inside the Trinity card, even when neither agent is live", () => {
   reset();
-  const both = withDesk(hubView([]));
-  assert.match(JSON.stringify(byId(both, "boring-desk-row").props.children), /Overlord · RiffBot/);
-  const none = withDesk(squad({ zones: { hub: { lane: { id: "hub" }, workers: [] }, riffbot: zone(null), overlord: zone(null) } }));
-  assert.doesNotMatch(JSON.stringify(byId(none, "boring-desk-row").props.children), /Overlord|RiffBot/);
-  const one = withDesk(squad({ zones: { hub: { lane: { id: "hub" }, workers: [] }, riffbot: zone(null), overlord: zone(mem("ov")) } }));
-  const txt = JSON.stringify(byId(one, "boring-desk-row").props.children);
-  assert.match(txt, /Overlord/);
-  assert.doesNotMatch(txt, /RiffBot/);
-  const err = withDesk(hubView([], { overlord: zone(mem("ov", "error")) }));
-  assert.match(JSON.stringify(byId(err, "boring-desk-row").props.children), /st-err/);
+  for (const v of [hubView([]), squad({ zones: { hub: { lane: { id: "hub" }, workers: [] }, riffbot: zone(null), overlord: zone(null) } })]) {
+    const t = render(props(v));
+    const card = byId(t, "boring-trinity");
+    assert.ok(card);
+    for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(walk(card, (n) => n.props?.["data-testid"] === id).length > 0, id);
+  }
+  assert.match(JSON.stringify(byId(render(props(hubView([], { overlord: zone(mem("ov", "error")) }))), "boring-core-overlord").props.children), /st-err/);
 });
 
 // ---- Desk R2 Unit 2: Needs you = 2-line rows, cap 5 + more, Done recently, hub "Desk", clean titles -------
