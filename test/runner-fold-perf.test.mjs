@@ -5,7 +5,7 @@
 import "./helpers/clean-env.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Runner } from "../runner/runner.mjs";
@@ -13,6 +13,10 @@ import { MAX_OPEN_TOOLS, applyToolEvent, oldestOpenTool } from "../runner/open-t
 
 const N = 50_000;
 const BOUND_MS = 2000; // generous: shared CI / a loaded dev box; the linear fold is ~20-50x under it
+
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), "vs-foldperf-")); tmpDirs.push(d); return d; };
 
 // One long-lived agent: turns of tool call / output / result, a turn edge every ~600 events, and the worst case for the reducer
 // in every turn: MAX_OPEN_TOOLS - 1 timestamp-less calls that never get a result (oldestOpenId walks past all of them).
@@ -52,7 +56,7 @@ test(`perf guard: the open-tool reducer folds ${N} events well under ${BOUND_MS}
 });
 
 test(`perf guard: Runner._fold (the boot pass) over a ${N}-event log well under ${BOUND_MS} ms, open tool correct`, () => {
-  const dir = path.join(mkdtempSync(path.join(os.tmpdir(), "vs-foldperf-")), "agents");
+  const dir = path.join(tmp(), "agents");
   mkdirSync(dir, { recursive: true });
   const events = syntheticEvents(N);
   writeFileSync(path.join(dir, "rn-perf.jsonl"), events.map((e) => JSON.stringify(e)).join("\n") + "\n");

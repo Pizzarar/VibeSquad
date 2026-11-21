@@ -5,7 +5,9 @@ import os from "node:os";
 import path from "node:path";
 import { createSchedulesStore, nextCronRun, handleSchedulesApi } from "../server/schedules.mjs";
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "vs-sch-"));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), "vs-sch-")); tmpDirs.push(d); return d; };
 const fakeBackend = () => {
   const calls = [];
   return {
@@ -344,7 +346,7 @@ test("update: extending a completed schedule reactivates it; shrinking an active
 });
 
 // Realistic shape: registry paths are folder names under the project roots, not absolute repo roots.
-const auditRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vs-audit-"));
+const auditRoot = tmp();
 const repoDir = path.join(auditRoot, "VibeSquadX");
 fs.mkdirSync(repoDir);
 const auditTeams = [

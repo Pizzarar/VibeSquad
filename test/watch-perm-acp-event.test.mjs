@@ -8,8 +8,11 @@ import path from "node:path";
 import { RunnerBackend } from "../server/backend/runner-backend.mjs";
 import { createWatchEngine, addWatch } from "../server/watch-sets.mjs";
 
+const dirs = [];
+test.after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+
 test("runner-backend permission event carries the snapshot; an auto-resolved ACP request leaves attention false", async () => {
-  const vs = fs.mkdtempSync(path.join(os.tmpdir(), "vs-perm-"));
+  const vs = fs.mkdtempSync(path.join(os.tmpdir(), "vs-perm-")); dirs.push(vs);
   const rc = { vs, home: path.join(vs, "runner"), request: async () => { throw new Error("unused"); }, stream: () => ({ close() {} }) };
   const b = new RunnerBackend({ client: rc, buildPrefix: async () => "" });
   b.live.hwm = new Map();
@@ -27,7 +30,7 @@ test("runner-backend permission event carries the snapshot; an auto-resolved ACP
   assert.ok(perm.agent, "it carries the agent snapshot");
   assert.deepEqual(perm.agent.pendingPermissions, []);
 
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vs-perm-w-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vs-perm-w-")); dirs.push(dir);
   const home = path.join(dir, "vs");
   const tmp = path.join(dir, "tmp");
   fs.mkdirSync(home, { recursive: true });

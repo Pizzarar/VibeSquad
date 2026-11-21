@@ -7,6 +7,9 @@ import { createIdleLaneKick, openPlanBlocks, openTaskUnits, laneHasOpenNeedsYou,
 
 const TEAMS = [{ id: "vs", name: "VS", lanes: [{ id: "vs", hub: true }, { id: "bug" }, { id: "art" }] }];
 const MIN = 60_000;
+
+const dirs = [];
+test.after(() => { for (const d of dirs) { try { fs.rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 const ag = (id, role, lane, extra = {}) => ({ id, status: "idle", labels: { role, team: "vs", lane }, ...extra });
 
 function setup(over = {}) {
@@ -120,14 +123,14 @@ test("multi-Squad: escalation goes to the SAME Squad's Overlord, never another's
 });
 
 test("openTaskUnits: only live states are open work (superseded/dropped/done/blocked are not)", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(dir);
   const f = path.join(dir, "TASKS.json");
   fs.writeFileSync(f, JSON.stringify({ units: ["todo", "running", "done", "superseded", "dropped", "blocked", "weird"].map((st) => ({ id: st, status: st })) }));
   assert.deepEqual(await openTaskUnits(f), ["todo", "running"]);
 });
 
 test("laneHasOpenNeedsYou: label, log tail, answered by a later decision", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
   fs.mkdirSync(path.join(home, "logs"));
   const f = path.join(home, "logs", "vs--bug.jsonl");
   const line = (type, ts) => JSON.stringify({ ts: new Date(ts).toISOString(), type, text: "x" }) + "\n";
@@ -141,7 +144,7 @@ test("laneHasOpenNeedsYou: label, log tail, answered by a later decision", async
 });
 
 test("laneOpenWork: parked cards are scoped to the Squad AND lane", async () => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
   fs.writeFileSync(path.join(home, "inbox.json"), JSON.stringify([
     { id: "idea-1", title: "mine", teamId: "vs", laneId: "bug", status: "parked" },
     { id: "idea-2", title: "other squad", teamId: "efi", laneId: "bug", status: "parked" },

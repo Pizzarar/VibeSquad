@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnNoShell } from '../runner/spawn.mjs';
@@ -11,7 +11,9 @@ import { Runner } from '../runner/runner.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { createAcpAdapter } from '../runner/adapters/acp.mjs';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-runner-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-runner-')); tmpDirs.push(d); return d; };
 const tick = () => new Promise((r) => setTimeout(r, 15));
 
 // Fake child process: captures stdin lines, lets the test push stdout lines.

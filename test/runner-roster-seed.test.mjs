@@ -3,7 +3,7 @@
 import './helpers/clean-env.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner } from '../runner/runner.mjs';
@@ -11,7 +11,9 @@ import { createServer, writeDiscovery } from '../runner/server.mjs';
 import { RunnerClient } from '../server/backend/runner-client.mjs';
 import { RunnerBackend } from '../server/backend/runner-backend.mjs';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-rs-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-rs-')); tmpDirs.push(d); return d; };
 const until = async (fn, ms = 4000) => {
   const t = Date.now();
   while (!fn()) {
@@ -119,6 +121,7 @@ test('runner GET /agents?full=1 returns every agent status in one request, with 
     assert.equal(again.meta.title, 'renamed');
     assert.equal((await rc.request('GET', '/agents')).agents, undefined, 'plain GET /agents stays names-only');
   } finally {
+    runner.shutdown();
     server.close();
     server.closeAllConnections?.();
   }

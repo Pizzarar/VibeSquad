@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,6 +11,8 @@ import { loadProfiles, saveProfiles } from "../server/vibesquad-api.mjs";
 const src = readFileSync(resolve(import.meta.dirname, "..", "src", "pixel.tsx"), "utf8");
 const code = transformSync("pixel.tsx", src, { lang: "tsx", jsx: { runtime: "classic" } }).code.replace('"./cast"', '"./cast.mjs"').replace('"./uiScale"', '"./uiScale.mjs"').replace('"./useBotFace"', '"./useBotFace.mjs"');
 const dir = mkdtempSync(join(tmpdir(), "vs-provider-icons-"));
+const dirs = [dir];
+test.after(() => { for (const d of dirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
 const file = join(dir, "pixel.mjs");
 writeFileSync(file, code);
 writeFileSync(
@@ -103,7 +105,7 @@ test("setProviderOverrides changes color, dim, symbol and name", () => {
 });
 
 test("profiles.json providers block is loaded and survives saves", () => {
-  const root = mkdtempSync(join(tmpdir(), "vs-provider-profiles-"));
+  const root = mkdtempSync(join(tmpdir(), "vs-provider-profiles-")); dirs.push(root);
   const path = join(root, ".vibesquad", "profiles.json");
   mkdirSync(join(root, ".vibesquad"), { recursive: true });
   const profile = { name: "Impl - Test", provider: "claude", model: "m", modeId: "default", notes: "" };

@@ -1,12 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { capProviderOnUpstreamExit, UPSTREAM_CAP_TTL_MS, toTimeline } from '../server/backend/runner-backend.mjs';
 import { lastAssistantText } from '../server/mcp/tools.mjs';
 import { UPSTREAM_FAILURE_RE } from '../runner/adapters/acp.mjs';
 import { readCappedProviders, setProviderCapped, isProviderOverQuota } from '../server/provider-failover.mjs';
+
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-cap-')); tmpDirs.push(d); return d; };
 
 test('upstream exit caps the provider briefly (idea-442)', () => {
   const calls = []; const logs = [];
@@ -26,7 +30,7 @@ test('non-upstream exits and other events cap nothing', () => {
 });
 
 test('setProviderCapped ttlMs writes resetsAt so the cap expires on its own', () => {
-  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-cap-')), 'capped.json');
+  const file = path.join(tmp(), 'capped.json');
   const now = Date.now();
   setProviderCapped('opencode', true, { cappedProvidersPath: file, reason: 'x', ttlMs: 600000, now });
   assert.equal(readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true, now }).opencode?.resetsAt, now + 600000);
@@ -103,7 +107,7 @@ test('lastAssistantText: error fallback stops at the turn boundary, is clipped b
 });
 
 test('read-only expiry: an expired cap is gone on read, no second write; other providers stay uncapped', async () => {
-  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'vs-cap-ro-')), 'capped.json');
+  const file = path.join(tmp(), 'capped.json');
   const now = Date.now();
   setProviderCapped('opencode', true, { cappedProvidersPath: file, reason: 'x', ttlMs: 600000, now });
   const fresh = readCappedProviders({ cappedProvidersPath: file, useDiskCaps: true, now: now + 1000 });

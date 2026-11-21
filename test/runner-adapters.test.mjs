@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, existsSync, mkdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { Runner, defaultAdapters } from '../runner/runner.mjs';
@@ -13,7 +13,9 @@ import { ACP_PROVIDERS, createAcpAdapter, pickModel, parseAcpUsage } from '../ru
 import { priceFor, estimateCostUsd } from '../runner/adapters/pricing.mjs';
 import { resolveExecutable } from '../runner/spawn.mjs';
 
-const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-adapters-'));
+const tmpDirs = [];
+test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-adapters-')); tmpDirs.push(d); return d; };
 const tick = () => new Promise((r) => setTimeout(r, 15));
 
 function fakeSpawn(onStdin) {
