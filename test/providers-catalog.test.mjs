@@ -2561,6 +2561,129 @@ test('usage compaction: /compact arriving mid-turn is not charged the prior turn
   assert.equal(cp.tokensSaved, 138000);
 });
 
+// ---- usa-38: compaction vs handoff decision metric (idea-381) ----
+
+test('usa-38: compact-step vs-log outcomes fold into compaction (okRate, medians, meanOkCostUsd, failedCostUsd)', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  const step = (at, agent, text) => writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + at, agent, 'usage', 'metric', text));
+  step(1, 'rn-a', 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000');
+  step(2, 'rn-b', 'compact-step agent agent=rn-b outcome=ok before=100000 after=20000 cap=150000 ms=60000 costUsd=0.20 tokens=10000');
+  step(3, 'rn-c', 'compact-step agent agent=rn-c outcome=ok before=120000 after=24000 cap=150000 ms=50000'); // no costUsd field
+  step(4, 'rn-d', 'compact-step agent agent=rn-d outcome=failed before=158000 after=? cap=150000 ms=2500 costUsd=0.10 tokens=2000 -> falling through to handoff');
+  step(5, 'rn-e', 'compact-step agent agent=rn-e outcome=timeout before=152000 after=? cap=150000 ms=125000 -> falling through to handoff');
+  step(6, 'rn-f', 'compact-step agent agent=rn-f outcome=still-over before=160000 after=155000 cap=150000 ms=60000 costUsd=0.20 tokens=5000 -> falling through to handoff');
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 6);
+  assert.equal(cp.okCount, 3);
+  assert.equal(cp.failedCount, 1);
+  assert.equal(cp.timeoutCount, 1);
+  assert.equal(cp.stillOverCount, 1);
+  assert.equal(cp.okRate, 0.5);
+  assert.equal(cp.medianBeforeTokens, 120000);
+  assert.equal(cp.medianAfterTokens, 20000);
+  assert.equal(cp.medianDropPct, 0.8);
+  assert.equal(cp.meanOkCostUsd, 0.2); // mean over the 2 ok events that logged costUsd (0.20+0.20)/2
+  assert.equal(cp.failedCostUsd, 0.3); // failed 0.10 + still-over 0.20
+  // existing fields intact when there are no agent logs
+  assert.equal(cp.runs, 0);
+  assert.equal(cp.avgCostUsd, null);
+  assert.equal(cp.handoffRuns, 0);
+});
+
+test('usa-38: successor first-turn + predecessor wrap-up costs fold into handoff overhead', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeAgent(home, 'rn-pred', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead' } },
+    { ts: T0 + 1, type: 'input', text: 'work' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 1.0 },
+    { ts: T0 + 3, type: 'input', text: 'Wrap up: stop dispatching new blocks, let in-flight workers finish' },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 1.3 },
+    { ts: T0 + 5, type: 'input', text: 'Wrap up: stop dispatching new blocks, run vs handoff' },
+    { ts: T0 + 6, type: 'turn_done', costUsd: 1.8 },
+  ]);
+  writeAgent(home, 'rn-succ1', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.4 },
+    { ts: T0 + 3, type: 'input', text: 'more work' },
+    { ts: T0 + 4, type: 'turn_done', costUsd: 0.9 },
+  ]);
+  writeAgent(home, 'rn-succ2', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred2' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.6 },
+  ]);
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.handoffRuns, 2);
+  assert.equal(cp.meanSuccessorFirstTurnCostUsd, 0.5); // (0.4 + 0.6) / 2
+  assert.equal(cp.predecessorWrapUpTurns, 2);
+  assert.equal(cp.predecessorWrapUpCostUsd, 0.8); // 0.3 + 0.5
+  assert.equal(cp.meanPredecessorWrapUpCostUsd, 0.4); // 0.8 / 2 turns
+  assert.equal(cp.meanHandoffOverheadCostUsd, 0.9); // 0.5 + 0.4
+});
+
+test('usa-38: no compactions or handoffs yields null EXP3 fields', () => {
+  const home = tmp();
+  clearUsageCache();
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 0);
+  assert.equal(cp.okRate, null);
+  assert.equal(cp.medianBeforeTokens, null);
+  assert.equal(cp.medianAfterTokens, null);
+  assert.equal(cp.medianDropPct, null);
+  assert.equal(cp.meanOkCostUsd, null);
+  assert.equal(cp.failedCostUsd, 0);
+  assert.equal(cp.meanSuccessorFirstTurnCostUsd, null);
+  assert.equal(cp.predecessorWrapUpTurns, 0);
+  assert.equal(cp.predecessorWrapUpCostUsd, 0);
+  assert.equal(cp.meanPredecessorWrapUpCostUsd, null);
+  assert.equal(cp.meanHandoffOverheadCostUsd, null);
+});
+
+test('usa-38: markdown export prints compaction outcomes and handoff overhead', async () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + 1, 'rn-a', 'usage', 'metric', 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000'));
+  writeLog(home, 'logs/usage--compaction.jsonl', L_ENTRY(T0 + 2, 'rn-b', 'usage', 'metric', 'compact-step agent agent=rn-b outcome=failed before=158000 after=? cap=150000 ms=2500 costUsd=0.10 tokens=2000 -> falling through to handoff'));
+  writeAgent(home, 'rn-succ', [
+    { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', labels: { 'vs.handoff-from': 'rn-pred' } } },
+    { ts: T0 + 1, type: 'input', text: 'takeover' },
+    { ts: T0 + 2, type: 'turn_done', costUsd: 0.4 },
+  ]);
+  const call = async (url) => {
+    let out;
+    await handleProvidersApi({ method: 'GET', url }, {}, {
+      home, ...probeOpts, git: noGit,
+      readBody: async () => ({}),
+      sendJson: (_r, code, data) => { out = { code, data }; },
+    });
+    return out;
+  };
+  const md = await call('/__vibesquad/providers/usage-export?format=md');
+  assert.equal(md.code, 200);
+  assert.match(md.data.markdown, /## Compaction vs handoff/);
+  assert.match(md.data.markdown, /outcomes: 2 attempts \(50% ok\) \| ok 1 \/ failed 1 \/ timeout 0 \/ still-over 0/);
+  assert.match(md.data.markdown, /token drop \(ok\): median 150000 -> 15000 \(90%\)/);
+  assert.match(md.data.markdown, /successor 1st turn: \$0\.4 \| predecessor wrap-up: \$- \| handoff overhead \$0\.4/);
+});
+
+test('usa-38: compact-step lines landing in both logs/*.jsonl and teams/<t>/log.jsonl are deduped', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 11, 12);
+  const text = 'compact-step agent agent=rn-a outcome=ok before=150000 after=15000 cap=150000 ms=56000 costUsd=0.20 tokens=12000';
+  writeLog(home, 'logs/vibesquad--usage.jsonl', L_ENTRY(T0, 'rn-a', 'usage', 'metric', text));
+  writeLog(home, 'teams/vibesquad/log.jsonl', L_ENTRY(T0, 'rn-a', 'usage', 'metric', text));
+  const cp = getUsage({ home, git: noGit }).compaction;
+  assert.equal(cp.attempts, 1);
+  assert.equal(cp.okCount, 1);
+});
+
 test('usage ready-time: a queued status after the first response (follow-up turn behind the cap) does not redefine the spawn queue wait', () => {
   const home = tmp();
   clearUsageCache();
