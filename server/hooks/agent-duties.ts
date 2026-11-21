@@ -4111,8 +4111,8 @@ ${detail}` : text, refs: [d.setId] };
     const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
     /** The newest done entry attributed to a worker. */
     type DoneIndex = Map<string, LogEntry>;
-    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", "NO-VERDICT: …". */
-    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL|NO-VERDICT)\b/;
+    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", "NO-VERDICT: …", plus a `VERDICT:` prefix or bold markers. */
+    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:\*\*|__)?\s*(?:VERDICT\s*:\s*)?(?:PASS|FAIL|NO-VERDICT)\b/;
     /**
      * One pass over a team log: per worker, the NEWEST `done` entry that belongs to it. Workers cannot `vs log`, so the report
      * is normally the digest's `{agent: digest, refs: [worker]}`. An entry belongs to worker W when its author is W, or when it

@@ -42,12 +42,12 @@ const SNAP_REFRESH_MS = 60_000; // re-read a watched agent this often, so a miss
 const BACKFILL_TAIL_BYTES = 4 * 1024 * 1024;
 /** A suite item with one of these refs (or none) matches any run; any other ref must equal the run's agentId. */
 const ANY_SUITE = new Set(["", "*", "any", "suite", "npm-test"]);
-/** Same shape as agent-duties' VERDICT_RE: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …". */
-const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL)\b/;
+/** Same shape as agent-duties' VERDICT_RE: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", plus a `VERDICT:` prefix or bold. */
+const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:\*\*|__)?\s*(?:VERDICT\s*:\s*)?(?:PASS|FAIL)\b/;
 /** idea-351: a set that completed this recently still covers a late digest PASS/done for its agents (the digest race). */
 export const COVER_AFTER_FIRE_MS = 120_000;
 /** Same set as agent-duties' FAIL_RE (`\b(?:FAIL(?:ED)?|NO-VERDICT)\b`): a NO-VERDICT reviewer report is not a covered PASS. */
-const FAIL_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:FAIL|NO-VERDICT)\b/;
+const FAIL_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:\*\*|__)?\s*(?:VERDICT\s*:\s*)?(?:FAIL|NO-VERDICT)\b/;
 const MANAGER_ROLES = new Set(["lead", "brainstorm", "buddy", "overlord"]);
 
 const vsHome = (home) => path.resolve(home || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));

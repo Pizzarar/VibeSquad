@@ -32,7 +32,7 @@ const { RunnerClient } = await import("../server/backend/runner-client.mjs");
 const { RunnerBackend } = await import("../server/backend/runner-backend.mjs");
 const { createVibesquadMiddleware, verbatimDigestText } = await import("../server/vibesquad-api.mjs");
 const { STANDING_RULES, renderLessonsDigest } = await import("../server/lessons.mjs");
-const { extractVerdictLine, digestVerdictText, evaluateVerdictGate, isReviewerAgent, GATE_EXIT } = await import("../server/verdict.mjs");
+const { extractVerdictLine, digestVerdictText, evaluateVerdictGate, isReviewerAgent, GATE_EXIT, parseVerdictLine } = await import("../server/verdict.mjs");
 const { commandVerdict } = await import("../cli/vs.mjs");
 const { unverifiedDigestText } = await import("../server/hooks/agent-duties.ts").catch(() => ({})); // .ts loads under tsx only
 
@@ -99,6 +99,12 @@ test("extractVerdictLine: the whole PASS/FAIL line byte-for-byte (any line of th
   assert.equal(extractVerdictLine("PASS: looks good 74/74"), null, "no H/M/L + hash shape");
   assert.equal(extractVerdictLine("I would say PASS 0/0/0 ecba323"), null, "must start a line");
   assert.equal(extractVerdictLine(""), null);
+});
+
+test("extractVerdictLine: VERDICT: prefix, letter form and bold markers are returned byte-for-byte", () => {
+  assert.equal(extractVerdictLine("VERDICT: PASS 0/1/2 abc1234"), "VERDICT: PASS 0/1/2 abc1234");
+  assert.equal(extractVerdictLine("**PASS H abc1234**"), "**PASS H abc1234**");
+  assert.equal(extractVerdictLine("done\n**FAIL 2/0/1 deadbeef** trailing"), "**FAIL 2/0/1 deadbeef** trailing");
 });
 
 test("digestVerdictText: PASS kept, FAIL copied verbatim, inverted digest word -> the code's line wins and is marked", () => {
@@ -168,7 +174,7 @@ test("unverifiedDigestText (agent-duties fallback): the verdict line verbatim, N
 
 // ---------------------------------------------------------------------------- (3) merge gate
 
-test("evaluateVerdictGate: PASS on the tip -> 0; FAIL, stale hash, no first-line verdict, not a reviewer -> non-zero", () => {
+test("evaluateVerdictGate: PASS on the tip -> 0; FAIL, stale hash, no verdict, not a reviewer -> non-zero", () => {
   const tip = "ecba3231f00dfeedbeefcafe0123456789abcdef";
   const rev = { id: "rn-r", title: "Review - Gemini", labels: { profile: "Review - Gemini" } };
   assert.equal(evaluateVerdictGate({ agent: rev, lastMessage: "PASS 0/0/0 ecba323\nnotes", tip }).code, GATE_EXIT.pass);
@@ -176,10 +182,51 @@ test("evaluateVerdictGate: PASS on the tip -> 0; FAIL, stale hash, no first-line
   const stale = evaluateVerdictGate({ agent: rev, lastMessage: "PASS 0/0/0 3528a4c", tip, branch: "unit-x" });
   assert.equal(stale.code, GATE_EXIT.staleHash);
   assert.match(stale.reason, /stale review/);
-  assert.equal(evaluateVerdictGate({ agent: rev, lastMessage: "Notes first\nPASS 0/0/0 ecba323", tip }).code, GATE_EXIT.noVerdict, "only the FIRST line counts");
+  assert.equal(evaluateVerdictGate({ agent: rev, lastMessage: "Notes first\nPASS 0/0/0 ecba323", tip }).code, GATE_EXIT.pass, "the verdict on the last line counts");
   assert.equal(evaluateVerdictGate({ agent: rev, lastMessage: "", tip }).code, GATE_EXIT.noVerdict);
   assert.equal(evaluateVerdictGate({ agent: { id: "rn-i", title: "Implement", labels: { profile: "Implement - Sonnet" } }, lastMessage: "PASS 0/0/0 ecba323", tip }).code, GATE_EXIT.notReviewer);
   assert.equal(evaluateVerdictGate({ agent: rev, lastMessage: "PASS 0/0/0 ecba323", tip: "" }).code, GATE_EXIT.noBranch);
+});
+
+// idea-427/437/444/449: accept the canonical numeric counts, a highest-severity letter, a `VERDICT:` prefix,
+// markdown bold, and a verdict on the first OR last non-empty line; a bare PASS (no hash) stays unverified.
+test("evaluateVerdictGate accepts every verdict form and still rejects no-hash / in-prose FAIL", () => {
+  const tip = "abc1234def5678abc1234def5678abc1234def56";
+  const rev = { id: "rn-r", title: "Review - Gemini", labels: { profile: "Review - Gemini" } };
+  const code = (msg) => evaluateVerdictGate({ agent: rev, lastMessage: msg, tip }).code;
+  assert.equal(code("PASS 0/1/2 abc1234"), GATE_EXIT.pass, "canonical numeric counts");
+  assert.equal(code("PASS H abc1234"), GATE_EXIT.pass, "highest-severity letter H");
+  assert.equal(code("PASS M abc1234"), GATE_EXIT.pass, "highest-severity letter M");
+  assert.equal(code("PASS L abc1234"), GATE_EXIT.pass, "highest-severity letter L");
+  assert.equal(code("VERDICT: PASS 0/1/2 abc1234"), GATE_EXIT.pass, "VERDICT: prefix");
+  assert.equal(code("**PASS 0/1/2 abc1234**"), GATE_EXIT.pass, "markdown bold");
+  assert.equal(code("Findings first.\nPASS 0/1/2 abc1234"), GATE_EXIT.pass, "verdict on the last line");
+  const fail = evaluateVerdictGate({ agent: rev, lastMessage: "FAIL H abc1234", tip });
+  assert.equal(fail.code, GATE_EXIT.fail);
+  assert.match(fail.reason, /highest severity H/);
+  assert.equal(code("PASS"), GATE_EXIT.noVerdict, "bare PASS has no hash");
+  assert.equal(code("VERDICT: PASS 0/1/2"), GATE_EXIT.noVerdict, "VERDICT: prefix without a hash");
+  assert.equal(code("The review FAILed because of a stale lock"), GATE_EXIT.noVerdict, "FAIL inside prose is not a verdict line");
+});
+
+test("parseVerdictLine: canonical numeric, letter form, VERDICT: prefix, bold; negatives return null", () => {
+  assert.deepEqual(parseVerdictLine("PASS 0/1/2 abc1234"), { verdict: "PASS", high: 0, medium: 1, low: 2, severity: null, hash: "abc1234" });
+  assert.deepEqual(parseVerdictLine("FAIL 1/0/0 deadbeef"), { verdict: "FAIL", high: 1, medium: 0, low: 0, severity: null, hash: "deadbeef" });
+  assert.deepEqual(parseVerdictLine("PASS H abc1234"), { verdict: "PASS", high: null, medium: null, low: null, severity: "H", hash: "abc1234" });
+  assert.deepEqual(parseVerdictLine("FAIL m 4f110d9"), { verdict: "FAIL", high: null, medium: null, low: null, severity: "M", hash: "4f110d9" });
+  assert.deepEqual(parseVerdictLine("VERDICT: PASS 0/1/2 abc1234"), { verdict: "PASS", high: 0, medium: 1, low: 2, severity: null, hash: "abc1234" });
+  assert.deepEqual(parseVerdictLine("**PASS 0/1/2 abc1234**"), { verdict: "PASS", high: 0, medium: 1, low: 2, severity: null, hash: "abc1234" });
+  assert.equal(parseVerdictLine("PASS 0/1/2"), null);
+  assert.equal(parseVerdictLine("FAIL"), null);
+  assert.equal(parseVerdictLine("the build FAILed for a reason"), null);
+});
+
+test("digestVerdictText: new forms are copied byte-for-byte and the word is still recognized", () => {
+  assert.equal(digestVerdictText({ workerText: "VERDICT: PASS 0/1/2 abc1234", digestText: "PASS: ok", reviewer: true }).text, "VERDICT: PASS 0/1/2 abc1234 — ok");
+  const bold = digestVerdictText({ workerText: "**FAIL 1/0/0 deadbeef**", digestText: "PASS: fine", reviewer: true });
+  assert.equal(bold.mismatch, true);
+  assert.ok(bold.text.startsWith("**FAIL 1/0/0 deadbeef** — VERDICT-MISMATCH: digest said PASS"), bold.text);
+  assert.equal(digestVerdictText({ workerText: "PASS H abc1234", digestText: "FAIL: no", reviewer: true }).mismatch, true);
 });
 
 test("vs verdict <reviewer> --branch <b>: real runner + real git: PASS on the tip exits 0; FAIL, stale hash, missing verdict, not a reviewer exit non-zero", async () => {
@@ -254,5 +301,5 @@ test("evaluateVerdictGate skips transport-noise lines but still needs PASS H/M/L
   assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}PASS 0/0/0 abc1234`, tip }).code, 0);
   assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}PASS 0/0/0 ffff111`, tip }).code, 3);
   assert.equal(evaluateVerdictGate({ agent, lastMessage: `${noise}VERDICT: PASS 0/0/0`, tip }).code, 2);
-  assert.equal(evaluateVerdictGate({ agent, lastMessage: `Some prose\nPASS 0/0/0 abc1234`, tip }).code, 2);
+  assert.equal(evaluateVerdictGate({ agent, lastMessage: `Some prose\nPASS 0/0/0 abc1234`, tip }).code, 0, "the verdict on the last line counts");
 });
