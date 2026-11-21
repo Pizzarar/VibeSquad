@@ -1,5 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
-import { agoLabel, cascadeWarning, descendantsOf, formatPairCode, mintedByLabel, secondsLeft, type PendingPair, type PhoneDevice } from "./phonePairLogic";
+import {
+  OWNER_ROLE_LABEL,
+  TESTER_ROLE_LABEL,
+  agoLabel,
+  cascadeWarning,
+  defaultTesterTeams,
+  descendantsOf,
+  formatDeviceRoleBadge,
+  formatPairCode,
+  mintedByLabel,
+  pairStartInit,
+  secondsLeft,
+  type DeviceRole,
+  type PendingPair,
+  type PhoneDevice,
+} from "./phonePairLogic";
 
 // E4b (docs/PLAN_ANDROID_END_STATE.md): the phone `⋯` drawer's "Pair another device / Devices" sheet. Mounted by App.tsx
 // through PhoneCockpit's pairSlot. Same routes as the desktop PairDeviceModal, plus the two-step confirm: a code minted
@@ -28,6 +43,36 @@ export function PhonePairSheet() {
   const [confirm, setConfirm] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [now, setNow] = useState(() => Date.now());
+  // E6c: DEVICE ACCESS ROLE. Switching role or toggling a Squad clears the shown code, so an owner code is never handed out as a tester invite.
+  const [role, setRole] = useState<DeviceRole>("owner");
+  const [squads, setSquads] = useState<Array<{ id: string; name?: string }>>([]);
+  const [testerTeams, setTesterTeams] = useState<string[]>([]);
+  const testerBlocked = role === "bug-tester" && testerTeams.length === 0;
+
+  const loadSquads = useCallback(async () => {
+    try {
+      const r = await fetch("/api/teams", { cache: "no-store" });
+      if (!r.ok) return;
+      const data = await json<{ teams?: Array<{ id: string; name?: string }> }>(r);
+      const list = (data.teams ?? []).filter((t) => t && typeof t.id === "string");
+      setSquads(list);
+      setTesterTeams((cur) => (cur.length ? cur : defaultTesterTeams(list, null)));
+    } catch {
+      /* no squads list: tester invites stay blocked */
+    }
+  }, []);
+
+  const changeRole = (next: DeviceRole) => {
+    if (next === role) return;
+    setRole(next);
+    setPair(null);
+    setErr("");
+  };
+
+  const toggleSquad = (id: string) => {
+    setTesterTeams((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
+    setPair(null);
+  };
 
   const loadDevices = useCallback(async () => {
     try {
@@ -57,19 +102,20 @@ export function PhonePairSheet() {
     if (!open) return;
     void loadDevices();
     void loadPending();
+    void loadSquads();
     const poll = setInterval(() => void loadPending(), 2000);
     const tick = setInterval(() => setNow(Date.now()), 1000);
     return () => {
       clearInterval(poll);
       clearInterval(tick);
     };
-  }, [open, loadDevices, loadPending]);
+  }, [open, loadDevices, loadPending, loadSquads]);
 
   const mint = async () => {
     setBusy(true);
     setErr("");
     try {
-      const r = await fetch("/__vibesquad/pair/start", { method: "POST" });
+      const r = await fetch("/__vibesquad/pair/start", pairStartInit(role, testerTeams));
       const data = await json<PairStart>(r);
       if (!r.ok) {
         setErr(data.error ?? `HTTP ${r.status}`);
@@ -141,8 +187,31 @@ export function PhonePairSheet() {
       </button>
       {open && (
         <div className="phone-pair-sheet" data-testid="phone-pair-sheet">
-          <button type="button" className="btn phone-pair-mint" data-testid="phone-pair-mint" disabled={busy} onClick={() => void mint()}>
-            {busy ? "Minting…" : pair ? "New code" : "Pair another device"}
+          <div className="phone-pair-role" data-testid="phone-pair-role">
+            <div className="field-label">DEVICE ACCESS ROLE</div>
+            <div className="seg">
+              <button type="button" className={role === "owner" ? "on" : ""} data-testid="phone-pair-role-owner" onClick={() => changeRole("owner")}>
+                {OWNER_ROLE_LABEL}
+              </button>
+              <button type="button" className={role === "bug-tester" ? "on" : ""} data-testid="phone-pair-role-tester" onClick={() => changeRole("bug-tester")}>
+                {TESTER_ROLE_LABEL}
+              </button>
+            </div>
+            {role === "bug-tester" && (
+              <div data-testid="phone-pair-tester-squads">
+                <div className="muted small">Squads this tester may report bugs to:</div>
+                {squads.map((t) => (
+                  <label key={t.id} className="small phone-pair-squad">
+                    <input type="checkbox" data-testid={`phone-pair-squad-${t.id}`} checked={testerTeams.includes(t.id)} onChange={() => toggleSquad(t.id)} /> {t.name || t.id}
+                  </label>
+                ))}
+                {squads.length === 0 && <div className="muted small">No Squads found.</div>}
+                {testerBlocked && <div className="small">Check at least one Squad to generate a tester invite.</div>}
+              </div>
+            )}
+          </div>
+          <button type="button" className="btn phone-pair-mint" data-testid="phone-pair-mint" disabled={busy || testerBlocked} onClick={() => void mint()}>
+            {busy ? "Minting…" : pair ? "New code" : role === "bug-tester" ? "Generate tester invite" : "Pair another device"}
           </button>
           {pair && !expired && (
             <div className="phone-pair-code-card" data-testid="phone-pair-code-card">
@@ -171,6 +240,7 @@ export function PhonePairSheet() {
                 <div key={p.pendingId} className="phone-pair-pending-item" data-testid="phone-pair-pending-item">
                   <div className="phone-pair-pending-who">
                     <b>{p.name}</b>
+                    {formatDeviceRoleBadge(p) && <span className="badge" data-testid="phone-pair-role-badge">{formatDeviceRoleBadge(p)}</span>}
                     <span className="muted small">
                       {" "}
                       from {p.ip} · {Math.ceil(p.expiresInMs / 1000)} s left
@@ -205,6 +275,7 @@ export function PhonePairSheet() {
                   <div className="phone-pair-device-main">
                     <b>{d.name}</b>
                     {d.current && <span className="badge">THIS DEVICE</span>}
+                    {formatDeviceRoleBadge(d) && <span className="badge" data-testid="phone-pair-role-badge">{formatDeviceRoleBadge(d)}</span>}
                     <span className="muted small"> seen {agoLabel(d.lastSeenAt, now)}</span>
                     {via && <span className="muted small phone-pair-via"> · via {via}</span>}
                   </div>

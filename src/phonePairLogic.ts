@@ -9,9 +9,12 @@ export type PhoneDevice = {
   /** The paired device that minted this one's code (E4b), or null for PC / CLI-minted devices. */
   mintedByDeviceId: string | null;
   current?: boolean;
+  /** E6a: owner (default / older servers) or bug-tester scoped to allowedTeams. */
+  role?: "owner" | "bug-tester";
+  allowedTeams?: string[] | null;
 };
 
-export type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number };
+export type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number; role?: "owner" | "bug-tester"; allowedTeams?: string[] | null };
 
 /** Every device whose minting chain leads back to `id` (not `id` itself). Cycle-safe; order = list order. */
 export function descendantsOf(devices: PhoneDevice[], id: string): PhoneDevice[] {
@@ -61,3 +64,40 @@ export function mintedByLabel(devices: PhoneDevice[], d: PhoneDevice): string | 
   if (!d.mintedByDeviceId) return null;
   return devices.find((x) => x.id === d.mintedByDeviceId)?.name ?? "a revoked device";
 }
+
+// E6c (docs/PLAN_E6_TESTER_ROLES.md): scoped alpha-tester invites. Pure so test/tester-invite.test.mjs can run them directly.
+
+export type DeviceRole = "owner" | "bug-tester";
+
+/** Role fields E6a adds to every device / pending-ticket record (older servers omit them = owner). */
+export type RoleScoped = { role?: DeviceRole | string | null; allowedTeams?: string[] | null };
+
+/** Squads pre-checked for a new tester invite: `efi` when it exists, else the active Squad, else the first one, else none. */
+export function defaultTesterTeams(teams: Array<{ id: string }>, activeTeamId?: string | null): string[] {
+  if (teams.some((t) => t.id === "efi")) return ["efi"];
+  if (activeTeamId && teams.some((t) => t.id === activeTeamId)) return [activeTeamId];
+  return teams.length ? [teams[0].id] : [];
+}
+
+/** "TESTER · efi, vs" for a bug-tester device or ticket; null for owners (no badge). */
+export function formatDeviceRoleBadge(dev: RoleScoped | null | undefined): string | null {
+  if (!dev || dev.role !== "bug-tester") return null;
+  const teams = Array.isArray(dev.allowedTeams) ? dev.allowedTeams.filter((t) => typeof t === "string" && t) : [];
+  return teams.length ? `TESTER · ${teams.join(", ")}` : "TESTER";
+}
+
+/** JSON body for POST /__vibesquad/pair/start. A tester invite must name at least one Squad (throws otherwise). */
+export function buildPairStartBody(role: DeviceRole, allowedTeams: string[] = []): { role: DeviceRole; allowedTeams?: string[] } {
+  if (role !== "bug-tester") return { role: "owner" };
+  const teams = [...new Set(allowedTeams.filter((t) => typeof t === "string" && t.trim()))];
+  if (!teams.length) throw new Error("Pick at least one Squad for an Alpha Tester invite.");
+  return { role: "bug-tester", allowedTeams: teams };
+}
+
+/** Fetch init for pair/start: always JSON, so owner and tester mints share one path. */
+export function pairStartInit(role: DeviceRole, allowedTeams: string[] = []): RequestInit {
+  return { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(buildPairStartBody(role, allowedTeams)) };
+}
+
+export const TESTER_ROLE_LABEL = "Alpha Tester (Log Bug + Bug Desk chat only)";
+export const OWNER_ROLE_LABEL = "Owner (full access)";

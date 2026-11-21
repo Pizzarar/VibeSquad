@@ -347,6 +347,7 @@ export function parseArgs(argv) {
     }
     if (key === "ref") flags.ref.push(value);
     else flags[key] = value;
+    if (key === "team") (flags.teamList ??= []).push(value); // E6c: `vs pair --team a --team b,c`
   }
   return flags;
 }
@@ -564,7 +565,7 @@ Usage:
   vs mcp alias-report [--since <30m|12h|7d>] [--json]   Paseo-name alias hits per alias + caller
   vs install-shim [--bin-dir <dir>] [--force]
   vs open [--print]   open the local web UI with owner access (sets the vs_local cookie); --print shows a one-time URL (60 s)
-  vs pair [--json]   mint a pairing code on the running local server (headless/SSH): prints the link, 6-digit code, CA fingerprint and an ASCII QR
+  vs pair [--role <owner|bug-tester>] [--team <id[,id]>] [--json]   mint a pairing code on the running local server (headless/SSH): prints the link, 6-digit code, CA fingerprint and an ASCII QR; --role bug-tester --team <squad> mints a scoped alpha-tester invite (Log Bug + Bug Desk chat only)
   vs devices list [--json] | vs devices revoke <id|--all>   paired devices in ~/.vibesquad/devices.json; revoke drops the token (lost phone)
   vs host-key show [--json] | vs host-key rotate [--keep-devices]   E5 relay host key (~/.vibesquad/host-keypair.json): show id + fingerprint; rotate replaces it (relay clients need a new link) and revokes every paired device unless --keep-devices
 
@@ -2310,6 +2311,7 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
   const lines = [];
   const code = String(p.code ?? "");
   lines.push(`Pairing code:   ${code.slice(0, 3)} ${code.slice(3)}   (expires ${p.expiresAt ? new Date(p.expiresAt).toLocaleTimeString() : "in 5 min"})`);
+  if (p.role === "bug-tester") lines.push(`Role:           bug-tester [${(p.allowedTeams ?? []).join(", ")}]  (Log Bug + Bug Desk chat only)`);
   lines.push(`Pairing link:   ${p.pairUrl}`);
   if (p.lanPairUrl && p.lanPairUrl !== p.pairUrl) lines.push(`LAN link:       ${p.lanPairUrl}`);
   if (p.pairIpUrl && p.pairIpUrl !== p.pairUrl && p.pairIpUrl !== p.lanPairUrl) lines.push(`IP link:        ${p.pairIpUrl}`);
@@ -2325,19 +2327,40 @@ export function formatPairOutput(p, qr = "", { port = 4180 } = {}) {
 }
 
 /** Mints a code on the running local server. Throws when the server is down or has no LAN/Meshnet address. */
-export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl } = {}) {
+export async function requestPairStart({ port = Number(process.env.VIBESQUAD_PORT || 4180), file = localTokenPath(BASE_DIR), fetchImpl, role, allowedTeams } = {}) {
   // X1 E4a L3: whatever listens on the port must prove it holds this install's token before the token leaves this process.
-  const res = await fetchWithLocalToken("/__vibesquad/pair/start", { method: "POST", port, file, fetchImpl, timeoutMs: 15_000 });
+  const scoped = role === "bug-tester" || role === "owner";
+  const res = await fetchWithLocalToken("/__vibesquad/pair/start", {
+    method: "POST",
+    port,
+    file,
+    fetchImpl,
+    timeoutMs: 15_000,
+    ...(scoped ? { headers: { "content-type": "application/json" }, body: JSON.stringify(role === "bug-tester" ? { role, allowedTeams } : { role }) } : {}),
+  });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(`pairing refused (${res.status}): ${body?.error ?? "is the server running this version?"}`);
   if (typeof body?.code !== "string" || typeof body?.pairUrl !== "string") throw new Error("unexpected pair/start response");
   return body;
 }
 
+const PAIR_USAGE = "usage: vs pair [--role <owner|bug-tester>] [--team <teamId[,teamId...]>] [--json]   (--role bug-tester needs --team)";
+
+/** `vs pair` role/scope flags -> { role, allowedTeams }. Pure, for tests; throws the usage error. */
+export function parsePairScope(flags) {
+  const role = flags.role === undefined ? undefined : String(flags.role).trim().toLowerCase();
+  if (role !== undefined && role !== "owner" && role !== "bug-tester") throw new Error(`unknown --role "${flags.role}". ${PAIR_USAGE}`);
+  const teams = [...new Set((flags.teamList ?? (flags.team ? [flags.team] : [])).flatMap((v) => String(v).split(",")).map((t) => t.trim()).filter(Boolean))];
+  if (role === "bug-tester" && !teams.length) throw new Error(`--role bug-tester needs --team <teamId[,teamId...]>. ${PAIR_USAGE}`);
+  if (role !== "bug-tester" && teams.length) throw new Error(`--team only applies with --role bug-tester. ${PAIR_USAGE}`);
+  return role === "bug-tester" ? { role, allowedTeams: teams } : role ? { role } : {};
+}
+
 async function commandPair(flags) {
-  if (flags._.length) throw new Error("usage: vs pair [--json]");
+  if (flags._.length) throw new Error(PAIR_USAGE);
+  const scope = parsePairScope(flags);
   const port = Number(process.env.VIBESQUAD_PORT || 4180);
-  const p = await requestPairStart({ port });
+  const p = await requestPairStart({ port, ...scope });
   // Never echo the SVGs; the terminal gets its own rendering of the same link.
   const { qrSvg: _svg, qrSvgIp: _svgIp, lanQrSvg: _svgLan, ...plain } = p;
   if (flags.json) {
@@ -2359,7 +2382,8 @@ export function foldDevicesArgv(argv) {
 
 function formatDeviceLine(d) {
   const seen = d.lastSeenAt ? d.lastSeenAt.replace("T", " ").slice(0, 16) : "never";
-  return `${d.id}  ${String(d.name ?? "").padEnd(24).slice(0, 24)}  paired ${String(d.createdAt ?? "").slice(0, 10)}  seen ${seen}`;
+  const scope = d.role === "bug-tester" ? `  bug-tester [${(d.allowedTeams ?? []).join(",")}]` : "";
+  return `${d.id}  ${String(d.name ?? "").padEnd(24).slice(0, 24)}  paired ${String(d.createdAt ?? "").slice(0, 10)}  seen ${seen}${scope}`;
 }
 
 async function commandDevices(flags) {
