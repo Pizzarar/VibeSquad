@@ -101,7 +101,7 @@ import { HubBar } from "./HubBar";
 import { BugButton } from "./BugButton";
 import { PinFocusHeader, PinRail } from "./PinRail";
 import { PIN_RAIL_SESSION_KEY, railCollapsed, SIDEBAR_SESSION_KEY, useNarrowViewport, useRailOverride } from "./railCollapse";
-import { PinToast } from "./PinIdeas";
+import { PinToast, showPinToast } from "./PinIdeas";
 import { NewSquadModal } from "./NewSquadModal";
 import { AddBuddyModal, Modal, NewAgentModal, ProfileImportModal, useProfiles } from "./TeamActions";
 import { AgentTitleEdit, TeamNameEdit, useAttentionTitle, useRestorePrune } from "./QuickWinsUi";
@@ -114,7 +114,7 @@ import { Avatar, TeamEmblem, TokenMeter, providerSpec } from "./pixel";
 import { playAlertChime } from "./notifications";
 import { claimAlert } from "./paseoAttention";
 import { SettingsHome, requestSettingsTarget } from "./SettingsHome";
-import { alertEnabled, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
+import { alertEnabled, consumeVibeMigratedToast, getPrefs, getPref , getRestoreLastView, setPref, usePref } from "./prefs";
 import { setCloseGuard } from "./drafts";
 import {
   applyUiScaleToDom,
@@ -1477,6 +1477,9 @@ export function App() {
   const mobileTeamView = useMobileTeamView();
   const phoneShell = usePhoneShell();
   const [vibe] = usePref("app.vibe");
+  useEffect(() => {
+    if (consumeVibeMigratedToast()) showPinToast("Normal is now the default. Psycho lives in Settings › About › Legacy: Psycho mode.");
+  }, []);
   const uiScale = useUiScale();
   const uiScaleHud = useUiScaleHud();
   const chatScale = useChatScale();
@@ -2241,6 +2244,17 @@ export function App() {
       )}
       {pinFocusView && pinFocus && !hubHome && <PinRail view={pinFocusView} focus={pinFocus} onPick={onRailPick} collapsed={pinRailCollapsed} onToggleCollapsed={() => setPinRailOverride(!pinRailCollapsed)} />}
       <MobileBar />
+      {(focus || pinFocused) && (
+        <button
+          className="tchip"
+          data-testid="psycho-focus-normal-btn"
+          title="Switch to Normal mode"
+          style={{ position: "fixed", left: 8, bottom: 8, zIndex: 50, opacity: 0.8 }}
+          onClick={() => setPref("app.vibe", "boring")}
+        >
+          Normal mode
+        </button>
+      )}
       {uiScaleHud && (
         <div className="ui-scale-hud" data-testid="ui-scale-hud" role="status" aria-live="polite">
           UI SCALE · {Math.round(uiScale * 100)}%
