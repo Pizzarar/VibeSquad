@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { readCredential, resolveUpdaterKeyPassword } from "./secrets.mjs";
+import { readCredential, resolveUpdaterKeyPassword, withoutUpdaterKeyPassword } from "./secrets.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
 const require = createRequire(import.meta.url);
@@ -509,7 +509,8 @@ export function runRelease(argv, { rootDir: root = rootDir, exec = execFileSync,
       rmSync(join(distDir, NO_AUTHENTICODE_MARKER), { force: true });
     }
     if (opts.withAndroid) {
-      exec(process.execPath, [join(root, "server", "build-android.mjs")], { cwd: root, env: buildEnv, stdio: "inherit" });
+      // Android (npm, Gradle, apksigner) never needs the updater key password: only tauri build / signer sign get it.
+      exec(process.execPath, [join(root, "server", "build-android.mjs")], { cwd: root, env: withoutUpdaterKeyPassword(buildEnv), stdio: "inherit" });
       mkdirSync(distDir, { recursive: true });
       writeFileSync(join(distDir, ANDROID_MARKER), JSON.stringify({ version: targetVersion, commit }, null, 2) + "\n");
     }

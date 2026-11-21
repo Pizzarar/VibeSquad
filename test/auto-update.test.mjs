@@ -104,7 +104,13 @@ describe("auto-update config & release helpers", () => {
     assert.equal(DEFAULT_RELEASE_REPO, "Pizzarar/VibeSquad");
 
     const buildDesktopSrc = readFileSync(join(rootDir, "server", "build-desktop.mjs"), "utf8");
-    assert.match(buildDesktopSrc, /TAURI_SIGNING_PRIVATE_KEY_PASSWORD/);
+    // Only `tauri build` (tauriEnv) and `tauri signer sign` (signerEnv) get the updater key password; npm/git/taskkill
+    // get `env`, built by withoutUpdaterKeyPassword (env shapes unit-tested in secrets.test.mjs).
+    assert.match(buildDesktopSrc, /const env = withoutUpdaterKeyPassword\(baseEnv\);/);
+    assert.match(buildDesktopSrc, /"npm\.cmd run build"\] : \["run", "build"\], \{\s*cwd: rootDir,\s*env,\s/);
+    assert.match(buildDesktopSrc, /"build", "--bundles", "nsis", \.\.\.tauriConfigArgs\], \{\s*cwd: rootDir,\s*env: tauriEnv,/);
+    assert.match(buildDesktopSrc, /"signer", "sign", "-f", signingKeyPath, destInstaller\], \{\s*cwd: rootDir,\s*env: signerEnv,/);
+    assert.doesNotMatch(buildDesktopSrc, /env\.TAURI_SIGNING_PRIVATE_KEY(_PASSWORD)? =/);
     assert.match(buildDesktopSrc, /"signer",\s*"sign",\s*"-f"/);
     assert.doesNotMatch(buildDesktopSrc, /"-p"/);
 

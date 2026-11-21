@@ -59,8 +59,8 @@ function main(argv) {
     return 2;
   }
   const env = updaterSigningEnv(process.env, keyPath);
-  const source = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD
-    ? "env TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+  const source = process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD !== undefined
+    ? `env TAURI_SIGNING_PRIVATE_KEY_PASSWORD${process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD ? "" : " (set empty: no password)"}`
     : env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD
       ? "Credential Manager vibesquad/updater-key"
       : "none (unpassworded key)";

@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, test } from "node:test";
-import { readCredential, resolveSecret, withSecretEnv } from "../server/secrets.mjs";
+import { readCredential, resolveSecret, resolveUpdaterKeyPassword, updaterKeyChildEnvs, withoutUpdaterKeyPassword, withSecretEnv } from "../server/secrets.mjs";
 import { ensureAndroidKeystore, signAndVerifyApk } from "../server/build-android.mjs";
 
 const SECRET = "s3cr3t-VALUE-xyz";
@@ -88,3 +88,38 @@ describe("build-android keystore secrets", () => {
 
 import { readFileSync, writeFileSync } from "node:fs";
 function require_src() { return readFileSync(new URL("../server/build-android.mjs", import.meta.url), "utf8"); }
+
+describe("updater key password spec", () => {
+  const PW = "TAURI_SIGNING_PRIVATE_KEY_PASSWORD";
+  test("a set-but-empty env var means no password: the store is not read", () => {
+    let reads = 0;
+    const read = () => (reads++, "store-pw");
+    assert.equal(resolveUpdaterKeyPassword({ env: { [PW]: "" }, read }), "");
+    assert.equal(reads, 0);
+    assert.equal(resolveUpdaterKeyPassword({ env: {}, read }), "store-pw");
+    assert.equal(reads, 1);
+    // other specs keep the old semantics: empty env falls through to the store
+    assert.equal(resolveSecret({ envVar: "X", target: "t" }, { env: { X: "" }, read: () => "store" }), "store");
+  });
+
+  test("child envs: plain never carries the password; tauri build and signer sign do; no key = no store read", () => {
+    const base = { PATH: "p", [PW]: "inherited-pw", OTHER: "1" };
+    assert.equal(PW in withoutUpdaterKeyPassword(base), false);
+    assert.equal(base[PW], "inherited-pw"); // input not mutated
+    const read = () => "store-pw";
+    const { plain, tauri, signer } = updaterKeyChildEnvs(base, { keyPath: "/k/key", read });
+    assert.equal(PW in plain, false);
+    assert.equal(plain.OTHER, "1");
+    assert.equal(tauri[PW], "inherited-pw");
+    assert.equal(tauri.TAURI_SIGNING_PRIVATE_KEY, "/k/key");
+    assert.equal(signer[PW], "inherited-pw");
+    assert.equal(signer.TAURI_SIGNING_PRIVATE_KEY_PATH, "/k/key");
+    assert.equal("TAURI_SIGNING_PRIVATE_KEY" in signer, false);
+    assert.equal(updaterKeyChildEnvs({ PATH: "p" }, { keyPath: "/k/key", read }).tauri[PW], "store-pw");
+    let reads = 0;
+    const none = updaterKeyChildEnvs(base, { read: () => (reads++, "store-pw") });
+    assert.equal(PW in none.tauri, false);
+    assert.equal(none.signer, null);
+    assert.equal(reads, 0);
+  });
+});

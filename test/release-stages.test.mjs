@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { describe, test } from "node:test";
 import {
   assertFrozenCommit,
@@ -170,8 +170,49 @@ describe("signing env (F1)", () => {
     assert.ok(!calls.flat().some((a) => String(a).includes("store-pw")));
   });
 
+  test("--with-android: only the desktop build child gets the password; the android child env has none", () => {
+    const { exec } = fakeExec();
+    const envs = {};
+    const wrapped = (cmd, args, opts) => {
+      const name = basename(String(args[0]));
+      if (name.startsWith("build-")) envs[name] = opts.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD, "--no-authenticode", "--with-android"], {
+      rootDir: makeRoot(),
+      exec: wrapped,
+      env: { TAURI_SIGNING_PRIVATE_KEY_PATH: "/k/key", OTHER: "kept" },
+      log: () => {},
+      resolveTauriCli: () => "t.js",
+      readSecret: () => "store-pw",
+    });
+    assert.equal(envs["build-desktop.mjs"].TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "store-pw");
+    assert.equal("TAURI_SIGNING_PRIVATE_KEY_PASSWORD" in envs["build-android.mjs"], false);
+    assert.equal(envs["build-android.mjs"].OTHER, "kept");
+  });
+
+  test("build stage: an explicitly empty env var means no password and the store is not read", () => {
+    const { exec } = fakeExec();
+    let reads = 0;
+    let buildEnv;
+    const wrapped = (cmd, args, opts) => {
+      if (String(args[0]).endsWith("build-desktop.mjs")) buildEnv = opts.env;
+      return exec(cmd, args, opts);
+    };
+    runRelease(["build", "--commit", HEAD, "--no-authenticode"], {
+      rootDir: makeRoot(),
+      exec: wrapped,
+      env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "" },
+      log: () => {},
+      resolveTauriCli: () => "t.js",
+      readSecret: () => (reads++, "store-pw"),
+    });
+    assert.equal(buildEnv.TAURI_SIGNING_PRIVATE_KEY_PASSWORD, "");
+    assert.equal(reads, 0);
+  });
+
   test("resolveUpdaterKeyPassword: shared spec, env wins, store fallback, empty when absent", () => {
-    assert.deepEqual({ ...UPDATER_KEY_PASSWORD }, { envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false });
+    assert.deepEqual({ ...UPDATER_KEY_PASSWORD }, { envVar: "TAURI_SIGNING_PRIVATE_KEY_PASSWORD", target: "vibesquad/updater-key", required: false, emptyEnvWins: true });
     const read = (t) => (t === "vibesquad/updater-key" ? "store-pw" : null);
     assert.equal(resolveUpdaterKeyPassword({ env: {}, read }), "store-pw");
     assert.equal(resolveUpdaterKeyPassword({ env: { TAURI_SIGNING_PRIVATE_KEY_PASSWORD: "env-pw" }, read }), "env-pw");
