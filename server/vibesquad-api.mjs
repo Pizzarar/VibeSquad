@@ -22,6 +22,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { redactHostPathTokens, redactHostPaths } from "./redact-host-paths.mjs";
+import { isRelayRequest } from "./relay-tunnel.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
 import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
@@ -43,7 +44,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
+import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, extractDeviceToken, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -1947,14 +1948,20 @@ const testerName = (caller) => String(caller?.name ?? "").replace(/[\r\n\]]/g, "
 const testerStamp = (caller) => `[Alpha Tester: ${testerName(caller)}]`;
 
 // ---- PTO-B1: the local owner on the same report/thread handlers (docs/lanes/playtest-overlay/PLAN_V1.md) ----
-// The owner's in-game playtest dock (loopback + the per-install local token, auth.mjs isLocalOwner) files reports and reads
-// the reply thread through the handlers below with a synthetic caller. Differences from a tester: `teamId` is required
+// The owner's in-game playtest dock (loopback + the per-install local token, auth.mjs isLocalOwner; PTO-B1b: or a paired
+// owner device that authenticated with a header token) files reports and reads the reply thread through the handlers below
+// with a synthetic caller that carries only its principal ("local-owner" or "device:<id>", never a secret). Differences from a tester: `teamId` is required
 // (400 missing, 404 unknown; no default Squad), the card is stamped `[Owner playtest]` with source `owner-playtest` and the
-// server-only meta `ownerPlaytest: true` (never testerDeviceId), clientReportId dedupes per (owner, Squad), a thread POST
+// server-only meta `ownerPlaytest: true` + `ownerPlaytestBy: <principal>` (never testerDeviceId), clientReportId dedupes per
+// (owner principal, Squad), a thread POST
 // may tag only an owner-playtest card of that Squad and is sent as an owner line `[Owner playtest(· card:<id>)] `.
 const OWNER_PLAYTEST_SOURCE = "owner-playtest";
 const OWNER_PLAYTEST_STAMP = "[Owner playtest]";
-const OWNER_PLAYTEST_CALLER = Object.freeze({ kind: "owner-playtest" });
+const OWNER_PLAYTEST_LOCAL = "local-owner";
+/** The synthetic handler caller for one owner principal: OWNER_PLAYTEST_LOCAL or `device:<device id>`. */
+const ownerPlaytestCaller = (principal) => Object.freeze({ kind: "owner-playtest", principal });
+/** The principal that filed an owner-playtest card. A B1 card (before ownerPlaytestBy existed) was the local owner's. */
+const ownerPlaytestByOf = (c) => (typeof c?.ownerPlaytestBy === "string" ? c.ownerPlaytestBy : OWNER_PLAYTEST_LOCAL);
 const isOwnerPlaytest = (caller) => caller?.kind === "owner-playtest";
 /** True for an owner-playtest report card (server meta only: a body can never set ownerPlaytest, see addInboxCardsAsync). */
 const isOwnerPlaytestCard = (c) => c?.ownerPlaytest === true && c.source === OWNER_PLAYTEST_SOURCE && !c.testerDeviceId;
@@ -2171,7 +2178,7 @@ function decodeTesterScreenshot(body) {
 /** Park one tester card on `team`'s bug lane: forced source, lane and tester meta (addInboxCardsAsync scope). */
 async function parkTesterCard(caller, team, laneId, text, rootDir, telemetry = null, clientReportId = null) {
   const owner = isOwnerPlaytest(caller);
-  const who = owner ? { ownerPlaytest: true } : { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller) };
+  const who = owner ? { ownerPlaytest: true, ownerPlaytestBy: caller.principal } : { testerDeviceId: String(caller.id), testerDeviceName: testerName(caller) };
   const meta = { ...who, ...(telemetry ? { telemetry } : {}), ...(clientReportId ? { clientReportId } : {}) };
   // `ideas: [text]`: one card whatever the line count (a plain multi-line `text` would be split into one card per line).
   const r = await addInboxCardsAsync({ ideas: [text], teamId: team.id }, rootDir, { teamId: team.id, laneId, source: owner ? OWNER_PLAYTEST_SOURCE : TESTER_SOURCE, meta });
@@ -2191,7 +2198,9 @@ function testerClientReportId(v) {
 }
 /** The card this caller already filed for (team, clientReportId), or null. Scoped to the caller: another tester's id never matches. */
 function findTesterReport(caller, teamId, clientReportId) {
-  if (isOwnerPlaytest(caller)) return readInboxCards().find((c) => isOwnerPlaytestCard(c) && sameId(c.teamId, teamId) && c.clientReportId === clientReportId) ?? null;
+  if (isOwnerPlaytest(caller)) {
+    return readInboxCards().find((c) => isOwnerPlaytestCard(c) && ownerPlaytestByOf(c) === caller.principal && sameId(c.teamId, teamId) && c.clientReportId === clientReportId) ?? null;
+  }
   return readInboxCards().find((c) => c?.testerDeviceId === caller.id && sameId(c.teamId, teamId) && c.clientReportId === clientReportId) ?? null;
 }
 /** In-flight reports keyed by (caller.id, teamId, clientReportId): a concurrent resend waits for the first instead of parking twice. */
@@ -2283,8 +2292,9 @@ async function handleTesterReport(req, res, { rootDir, caller, backend, delivery
     const shot = decodeTesterScreenshot(body); // validated before the card exists: a bad screenshot parks nothing
     if (!clientReportId) return sendJson(res, 200, await fileTesterReport({ caller, team, laneId, text, telemetry, shot, rootDir, backend, deliveryClient }));
     // Idempotent resend: scoped to (caller.id, teamId, clientReportId), so one tester can never probe another's ids.
-    // PTO-B1: the owner's key has another shape (4 items), so it can never collide with a tester device's key.
-    const key = JSON.stringify(isOwnerPlaytest(caller) ? [OWNER_PLAYTEST_SOURCE, "", String(team.id).toLowerCase(), clientReportId] : [String(caller.id), String(team.id).toLowerCase(), clientReportId]);
+    // PTO-B1: the owner's key has another shape (4 items), so it can never collide with a tester device's key; PTO-B1b: it
+    // carries the owner principal, so the local owner and each owner device dedupe only their own retries.
+    const key = JSON.stringify(isOwnerPlaytest(caller) ? [OWNER_PLAYTEST_SOURCE, String(caller.principal), String(team.id).toLowerCase(), clientReportId] : [String(caller.id), String(team.id).toLowerCase(), clientReportId]);
     for (let pending = testerReportsInFlight.get(key); pending; pending = testerReportsInFlight.get(key)) await pending.catch(() => {});
     const prior = findTesterReport(caller, team.id, clientReportId);
     if (prior) {
@@ -2612,14 +2622,35 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
   }
 
   /**
-   * PTO-B1: the E6a report/thread routes for a non-tester caller. Only the local owner (no agent headers, and auth.mjs
-   * isLocalOwner: loopback socket + loopback Host/Origin + the per-install local token) reaches them. A paired owner device
-   * (LAN / Meshnet / relay), an agent and a read-only caller get 403 here: no new primitive, no remote relaxation.
+   * PTO-B1 / B1b: the owner principal allowed on the E6a report/thread routes, or null. Never with agent headers. Either
+   *  - the local owner (auth.mjs isLocalOwner: loopback socket + loopback Host/Origin + the per-install local token), or
+   *  - B1b: a paired device with role owner that authenticated by a HEADER token (x-vs-device-token / Authorization:
+   *    Bearer; extractDeviceToken fromHeader). A cookie-only owner device is refused: the cookie is the browser's ambient
+   *    credential, so these game-facing routes stay closed to CSRF; a header can't be attached cross-site without a CORS
+   *    preflight this server never grants. Revoked/unknown tokens never get here (isTrusted: 401 remote, 403 loopback).
+   *  - An E5 relay request is refused: its only credential is the channel identity (auth.mjs authenticate ignores any
+   *    header on it) and relay-tunnel.mjs drops authorization / x-vs-device-token before dispatch, so it is never a
+   *    header-token caller; the game talks plain HTTP to the server's Tailscale address instead (PLAN_V1: relay out of scope).
+   */
+  function ownerPlaytestPrincipal(req, caller) {
+    if (caller.kind !== "owner" || hasAgentHeaders(req)) return null;
+    if (isLocalOwner(req)) return OWNER_PLAYTEST_LOCAL;
+    if (isRelayRequest(req)) return null;
+    const { token, fromHeader } = extractDeviceToken(req);
+    if (!token || !fromHeader) return null;
+    const dev = authenticate(req); // header path: the same lookup isTrusted / resolveNonAgentCaller already passed
+    return isOwnerDevice(dev) && dev.id ? `device:${dev.id}` : null;
+  }
+
+  /**
+   * PTO-B1: the E6a report/thread routes for a non-tester caller. Only an owner principal (ownerPlaytestPrincipal above)
+   * reaches them. A cookie-only or relayed owner device, an agent and a read-only caller get 403 here.
    */
   function ownerPlaytestGated(req, res, path, caller) {
-    if (caller.kind !== "owner" || hasAgentHeaders(req) || !isLocalOwner(req)) {
+    const principal = ownerPlaytestPrincipal(req, caller);
+    if (!principal) {
       if (caller.kind !== "agent" && originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4, as gated()
-      return sendJson(res, 403, { ok: false, error: "forbidden: the playtest report/thread routes need a bug-tester device or the local owner token" });
+      return sendJson(res, 403, { ok: false, error: "forbidden: the playtest report/thread routes need a bug-tester device, the local owner token or an owner device token header" });
     }
     if (path === "/__vibesquad/tester/report" ? req.method !== "POST" : req.method !== "GET" && req.method !== "POST") {
       return sendJson(res, 405, { ok: false, error: "method not allowed" });
@@ -2627,7 +2658,7 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     const limit = path === "/__vibesquad/tester/report" ? TESTER_REPORT_MAX_BYTES : MAX_BODY_BYTES;
     if (Number(req.headers["content-length"] ?? 0) > limit) return sendJson(res, 413, { error: "payload too large" });
     const backend = opts.backend ?? sharedRunnerBackend();
-    const ctx = { rootDir, caller: OWNER_PLAYTEST_CALLER, backend, deliveryClient: opts.backend ?? null };
+    const ctx = { rootDir, caller: ownerPlaytestCaller(principal), backend, deliveryClient: opts.backend ?? null };
     return path === "/__vibesquad/tester/report" ? handleTesterReport(req, res, ctx) : handleTesterThread(req, res, ctx);
   }
 
