@@ -119,7 +119,8 @@ stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => membe
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
-stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
+stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => ["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove)]; export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); };`);
+stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
@@ -2001,4 +2002,20 @@ test("normal agent menu: the Archive ConfirmButton rule out-specifies .btn.confi
   assert.ok(ge(mine, spec(".btn.confirm.warn.armed")), `archive ${mine} >= .btn.confirm.warn.armed`);
   assert.ok(ge(mine, spec('html[data-vibe="boring"] .btn:hover:not(:disabled)')), `archive ${mine} >= boring .btn:hover`);
   assert.ok(ge(mine, spec(".btn.confirm.warn.armed:hover")));
+});
+
+test("idea-519: project ⋯ opens teamCtxItems; lane ⋯ opens laneCtxItems; Kill/remove only for non-hub, non-Bugs lanes", () => {
+  reset();
+  const t = withDesk(squad());
+  const projBtn = [...(function* walk(n) { if (!n || typeof n !== "object") return; if (Array.isArray(n)) { for (const c of n) yield* walk(c); return; } yield n; yield* walk(n.props?.children); })(t)].find((n) => String(n.props?.["data-testid"] ?? "").startsWith("boring-project-menu-"));
+  assert.ok(projBtn, "project ⋯ button");
+  projBtn.props.onClick({});
+  assert.equal(globalThis.__calls.at(-1)[1][0], "team");
+  const laneBtn = byId(t, "boring-lane-menu-ade");
+  assert.ok(laneBtn, "lane ⋯ button");
+  laneBtn.props.onClick({});
+  const li = globalThis.__calls.at(-1)[1];
+  assert.deepEqual([li[0], li[2], li[3]], ["lane", "ade", true]);
+  const bugs = byId(t, "boring-lane-menu-_bugs");
+  if (bugs) { bugs.props.onClick({}); assert.equal(globalThis.__calls.at(-1)[1][3], false, "Bugs lane has no Kill/remove"); }
 });

@@ -5,7 +5,8 @@ import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
 import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
-import { openOverlay } from "./CommandPalette";
+import { laneCtxItems, openContextMenu, openOverlay, teamCtxItems } from "./CommandPalette";
+import { RemoveTeamDialog } from "./PinRemove";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
@@ -385,6 +386,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
+  const [removingPin, setRemovingPin] = useState<Pin | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
@@ -748,9 +750,11 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const expandable = workers.length > 0 || Boolean(lead);
     // idea-500: a collapsed lane hides its selected Lead/worker row, so the lane row carries the selected state (derived from sel, no second source).
     const laneCls = "boring-conv-row" + (isOn(v, `lane:${c.laneId}`) || (!open && sel.teamId === v.team.id && sel.laneId === c.laneId && sel.rowKey !== null) ? " on" : "");
+    const lanePin = c.pin;
+    const laneMenu = lanePin ? () => laneCtxItems(v, lanePin, { onRemove: !isHubPin(lanePin) && c.laneId !== "_bugs" ? () => setRemovingPin(lanePin) : undefined }) : null;
     return (
       <div key={c.laneId} className={laneCls} data-testid={`boring-conv-${c.laneId}`}>
-        <div className="boring-conv-line">
+        <div className="boring-conv-line" onContextMenu={laneMenu ? (e) => openContextMenu(e, laneMenu()) : undefined}>
           <button type="button" className="boring-chevron-btn" data-testid={`boring-conv-toggle-${c.laneId}`} aria-expanded={open} aria-label={open ? "Collapse lane" : "Expand lane"} disabled={!expandable} onClick={() => setLaneOpen((o) => ({ ...o, [key]: !open }))}>
             {!expandable ? "" : open ? "▾" : "▸"}
           </button>
@@ -761,6 +765,9 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             <span className="boring-conv-age">{c.age}</span>
             {!open && badge(c.needsYou, c.err)}
           </button>
+          {laneMenu && (
+            <button type="button" className="boring-row-menu-btn" data-testid={`boring-lane-menu-${c.laneId}`} aria-haspopup="menu" aria-label={`${c.name} lane actions`} title="Lane actions" onClick={(e) => openContextMenu(e, laneMenu())}>⋯</button>
+          )}
         </div>
         {open && c.pin && lead && (
           <button type="button" className={workerRowCls(isOn(v, leadKey), lead)} data-testid={`boring-lead-${c.laneId}`} onClick={() => pickRoleIn(v, c.pin!, c.laneId, "lead")}>
@@ -807,6 +814,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
 
   return (
     <div className="boring-app" data-testid="boring-app">
+      {removingPin && <RemoveTeamDialog pin={removingPin} onClose={() => setRemovingPin(null)} />}
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <div className="boring-sidebar-head" data-testid="boring-sidebar-head">
           <span className="boring-sidebar-title" data-testid="boring-sidebar-title">{APP_NAME}</span>
@@ -827,13 +835,14 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             const projectRowCls = isOn(v, "project") ? "boring-project-row on" : "boring-project-row";
             return (
               <div key={v.team.id} className="boring-project-block">
-                <div className="boring-conv-line boring-project-line">
+                <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
                   {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
                   <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
                     <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
                     <span className="boring-project-name">{v.team.name}</span>
                     {!open && badge(m.totalNeedsYou, m.projectErr)}
                   </button>
+                  <button type="button" className="boring-row-menu-btn" data-testid={`boring-project-menu-${v.team.id}`} aria-haspopup="menu" aria-label={`${v.team.name} actions`} title="Project actions" onClick={(e) => openContextMenu(e, teamCtxItems(v))}>⋯</button>
                   {active && (
                     <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>
                   )}

@@ -6,6 +6,7 @@ import { DEMO } from "./demoFlag";
 import { scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
+import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
 import { settingsPaletteItems, useKeyBindings } from "./prefs";
 import { FIXED_SHORTCUTS, KEY_COMMANDS, bindingLabel, comboFromEvent, firesWhileTyping, resolveCommand, type Bindings, type KeyScope } from "./keymap";
@@ -273,6 +274,24 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
       },
     },
   ];
+}
+
+/** Lane ⋯ menu: Stop All Running scoped to one lane (labels.lane), plus Kill / remove lane when the caller allows it (non-hub feature lanes). */
+export function laneCtxItems(view: TeamView, pin: Pin, opts?: { onRemove?: () => void }): CtxItem[] {
+  const targets = bulkStopTargets(
+    view.members.map((m) => ({ agent: m.agent, teamId: view.team.id })),
+    { teamId: view.team.id, laneId: pin.lane.id },
+  );
+  const items: CtxItem[] = [
+    {
+      label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
+      run: () => {
+        if (targets.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${pin.lane.name}?`, agents: targets });
+      },
+    },
+  ];
+  if (opts?.onRemove) items.push({ label: "Kill / remove lane…", run: opts.onRemove });
+  return items;
 }
 
 // ---- shortcut cheat sheet -----------------------------------------------------------------

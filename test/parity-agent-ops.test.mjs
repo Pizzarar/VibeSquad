@@ -25,6 +25,14 @@ test("bulkStopTargets: team scope takes only running, non-archived members of th
   assert.deepEqual(bulkStopTargets(c, { teamId: "t1" }).map((a) => a.id), ["a"]);
 });
 
+test("bulkStopTargets: laneId narrows a team scope by labels.lane, case-insensitively", () => {
+  const mk = (id, lane, status = "running") => ({ agent: { id, status, labels: lane ? { lane } : {} }, teamId: "t1" });
+  const c = [mk("a", "Feat-X"), mk("b", "feat-x"), mk("c", "other"), mk("d", null), mk("e", "feat-x", "idle")];
+  assert.deepEqual(bulkStopTargets(c, { teamId: "t1", laneId: "feat-x" }).map((a) => a.id), ["a", "b"]);
+  assert.deepEqual(bulkStopTargets(c, { teamId: "t1" }).map((a) => a.id), ["a", "b", "c", "d"]);
+  assert.deepEqual(bulkStopTargets(c, { teamId: "t2", laneId: "feat-x" }), []);
+});
+
 test("bulkStopTargets: cwd scope ignores slash style, case and trailing slash", () => {
   const c = [
     { agent: ag("a", { status: "running", cwd: "C:\\W\\A\\" }) },
