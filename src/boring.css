@@ -1044,7 +1044,8 @@ html[data-vibe="boring"] .boring-needs-you-wrap .you-flag, html[data-vibe="borin
 html[data-vibe="boring"] .boring-agent-panel { padding: 8px 14px; background: var(--surface-1); border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
 html[data-vibe="boring"] .boring-agent-panel-head { display: flex; align-items: center; gap: 10px; justify-content: space-between; }
 html[data-vibe="boring"] .boring-agent-panel textarea { width: 100%; background: var(--surface-sunken); color: var(--text-1); border: 1px solid var(--border); padding: 6px 8px; font: inherit; }
-html[data-vibe="boring"] .boring-agent-menu-archive .btn { background: transparent; background-image: none; border: 1px solid var(--border); color: var(--st-err); border-radius: 6px; width: 100%; text-align: left; }
+/* ConfirmButton is .btn.confirm; the doubled .btn keeps this above styles.css .btn.confirm.warn.armed (0,4,0) and the shared .btn:hover rule (0,4,1) for idle, armed and hover. test/boring-mode.test.mjs pins the specificity. */
+html[data-vibe="boring"] .boring-agent-menu-archive .btn.confirm.btn { background: transparent; background-image: none; border: 1px solid var(--border); color: var(--st-err); border-radius: 6px; width: 100%; text-align: left; }
 
 /* D3a fix round: restored config/session controls inside the ⋯ menu + bars under the header */
 html[data-vibe="boring"] .boring-agent-menu { max-height: min(78vh, 720px); overflow-y: auto; min-width: 280px; }

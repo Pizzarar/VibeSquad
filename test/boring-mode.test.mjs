@@ -1810,3 +1810,24 @@ test("split R4: the Unsplit pill keeps the active pane's agent; the Split pill s
     globalThis.__panes = undefined;
   }
 });
+
+test("normal agent menu: the Archive ConfirmButton rule out-specifies .btn.confirm.warn.armed and the shared .btn:hover rule", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  const spec = (sel) => {
+    let s = sel.trim(), a = 0, b = 0, c = 0;
+    s = s.replace(/:not\(([^)]*)\)/g, (_, inner) => { const r = spec(inner); a += r[0]; b += r[1]; c += r[2]; return ""; });
+    s = s.replace(/\[[^\]]*\]/g, () => { b++; return ""; }).replace(/#[\w-]+/g, () => { a++; return ""; });
+    s = s.replace(/\.[\w-]+/g, () => { b++; return ""; }).replace(/::[\w-]+/g, () => { c++; return ""; }).replace(/:[\w-]+/g, () => { b++; return ""; });
+    c += (s.match(/(^|[\s>+~])[a-zA-Z][\w-]*/g) || []).length;
+    return [a, b, c];
+  };
+  const ge = (x, y) => x[0] !== y[0] ? x[0] > y[0] : x[1] !== y[1] ? x[1] > y[1] : x[2] >= y[2];
+  const m = css.match(/^(html\[data-vibe="boring"\] \.boring-agent-menu-archive [^{]*\.btn[^{]*)\{([^}]*)\}/m);
+  assert.ok(m, "archive rule exists");
+  assert.match(m[2], /background: transparent/);
+  assert.doesNotMatch(m[2], /!important/);
+  const mine = spec(m[1]);
+  assert.ok(ge(mine, spec(".btn.confirm.warn.armed")), `archive ${mine} >= .btn.confirm.warn.armed`);
+  assert.ok(ge(mine, spec('html[data-vibe="boring"] .btn:hover:not(:disabled)')), `archive ${mine} >= boring .btn:hover`);
+  assert.ok(ge(mine, spec(".btn.confirm.warn.armed:hover")));
+});
