@@ -11,9 +11,10 @@ const rootDir = resolve(import.meta.dirname, "..");
 /** Tracked files the build itself rewrites (`npm run build` runs generate-licenses first): never "dirty" for the guard. */
 const GENERATED = new Set(["public/THIRD-PARTY-LICENSES.txt"]);
 /**
- * idea-401: tracked edits the guard ignores. docs/ and artifacts/ are never copied into the runtime (RUNTIME_ENTRIES) nor
+ * idea-401: tracked edits the guard ignores. docs/ and artifacts/ are never copied into the runtime (TRACKED_ENTRIES) nor
  * built (isUiInput), so lane docs other agents leave uncommitted on master no longer make every sync need --force.
- * Untracked files were already ignored (statusPaths "no"). Anything else dirty (server/, cli/, src/, package.json) refuses.
+ * Untracked files are ignored too (statusPaths "no"): since idea-404 the copy reads only git-tracked files at the synced
+ * commit, so they can't reach the runtime. Anything else dirty (server/, cli/, src/, package.json) refuses.
  */
 const DIRT_IGNORED_DIRS = ["docs/", "artifacts/"];
 export const guardIgnoresDirt = (p) => GENERATED.has(p) || DIRT_IGNORED_DIRS.some((d) => p.startsWith(d));
@@ -56,47 +57,125 @@ const readJson = (file) => { try { return JSON.parse(readFileSync(file, "utf8"))
 const short = (sha) => String(sha ?? "").slice(0, 7);
 const firstLine = (err) => String(err?.message ?? err).split("\n")[0];
 
-const RUNTIME_ENTRIES = ["dist", "public", "server", "cli", "runner"];
+/**
+ * idea-404 (PLAN_INBOX_TOP3_1121 I1): the runtime gets exactly the files git tracks at the synced commit, read from the object
+ * store (never the working tree), so untracked scratch files, and uncommitted edits made by other agents between the guard and
+ * the copy, never reach it. `scripts/restart-runtime.mjs`: `vs restart` launches it, so the runtime cli/ needs it beside it.
+ */
+const TRACKED_ENTRIES = ["public", "server", "cli", "runner", "scripts/restart-runtime.mjs"];
+/** Build output, untracked by design (gitignored): copied from the working tree; distStatus vouches that it matches HEAD. */
+const BUILT_ENTRIES = ["dist"];
+/**
+ * Runtime dirs that mirror git: a file in them that is not tracked at the synced commit is stale (deleted or renamed in git,
+ * or an untracked file an older sync copied) and is removed. node_modules is never touched; neither is anything outside
+ * these dirs (the installer's plugin/, docs/, node_modules/, scripts/ extras, the stamps and the lock).
+ */
+const MIRRORED_DIRS = ["public", "server", "cli", "runner"];
+const isVendored = (rel) => rel.split("/").includes("node_modules");
+// Case-folded on every platform: the stale scan runs before the swap, so on a case-insensitive disk (Windows, macOS) a file
+// renamed only by case would otherwise be pruned right after its new spelling was placed. A case-only leftover on a
+// case-sensitive disk is harmless; deleting a live file is not.
+const pathKey = (rel) => rel.toLowerCase();
 
-/** Every file under `dir`, as `/`-separated paths relative to it. */
-function listFiles(dir, base = dir, out = []) {
+/** Every file under `dir`, as `/`-separated paths relative to `base`; skips node_modules when asked. */
+function listFiles(dir, base = dir, out = [], { skipVendored = false } = {}) {
   for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (skipVendored && e.isDirectory() && e.name === "node_modules") continue;
     const p = join(dir, e.name);
-    if (e.isDirectory()) listFiles(p, base, out);
+    if (e.isDirectory()) listFiles(p, base, out, { skipVendored });
     else out.push(relative(base, p).replace(/\\/g, "/"));
   }
   return out;
 }
 
+function gitExec(repoRoot, args, { input, env } = {}) {
+  return execFileSync("git", ["-C", repoRoot, ...args], {
+    encoding: "utf8", windowsHide: true, maxBuffer: 256 << 20, input, env: env ? { ...process.env, ...env } : process.env,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+  });
+}
+
+/** The blob paths git tracks under TRACKED_ENTRIES at `commit` (submodule links skipped). */
+export function trackedRuntimeFiles(repoRoot, commit) {
+  const out = gitExec(repoRoot, ["ls-tree", "-r", "-z", "--full-tree", commit, "--", ...TRACKED_ENTRIES]);
+  const files = [];
+  for (const rec of out.split("\0")) {
+    const tab = rec.indexOf("\t");
+    if (tab < 0) continue;
+    const [, type] = rec.slice(0, tab).split(" ");
+    if (type === "blob") files.push(rec.slice(tab + 1));
+  }
+  return files.sort();
+}
+
 /**
- * Copy the repo's runtime entries into the live runtime without ever leaving it half-updated: stage the copy beside it,
- * verify the staged sizes, then swap file by file with rename (each replaced file kept in a backup dir). Any failure rolls
- * the swapped files back, leaves build-stamp.json at the old commit and returns `{synced: false, error}`.
- * `ops.rename` is injectable for tests.
+ * Write `files` as they are at `commit` under `stage`, through a throwaway index (the repo's own index and working tree are
+ * never read or touched). checkout-index applies .gitattributes (eol=lf) the way a clean checkout would.
  */
-export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {} } = {}) {
+function stageFromCommit(repoRoot, commit, files, stage, indexFile) {
+  if (!files.length) return;
+  const env = { GIT_INDEX_FILE: indexFile };
+  gitExec(repoRoot, ["read-tree", commit], { env });
+  const prefix = `${stage.replace(/\\/g, "/")}/`;
+  // core.autocrlf pinned off: the machine-wide Git for Windows default (true) must not decide the runtime's bytes; the
+  // repo's .gitattributes (eol=lf) still applies, so this writes what a clean checkout of this repo holds.
+  gitExec(repoRoot, ["-c", "core.autocrlf=false", "checkout-index", "-f", "-z", "--stdin", `--prefix=${prefix}`], { env, input: `${files.join("\0")}\0` });
+}
+
+const describeErr = (err) => String(err?.stderr || "").trim().split("\n")[0] || firstLine(err);
+
+/**
+ * Copy the synced commit's runtime files into the live runtime without ever leaving it half-updated: stage them beside it
+ * (tracked entries from git at `commit`, dist/ from the working tree), verify the stage, then swap file by file with rename
+ * (each replaced file kept in a backup dir), then move stale mirrored files into the same backup. Any failure rolls every
+ * step back, leaves build-stamp.json at the old commit and returns `{synced: false, error}`.
+ * `commit` defaults to HEAD; runSync passes the sha it guarded. `ops.rename` is injectable for tests.
+ */
+export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}, commit = null } = {}) {
   const rename = ops.rename ?? renameSync;
   const runtimeDir = runtimeDirFor(env);
   if (!existsSync(runtimeDir)) return { synced: false, runtimeDir };
 
+  let sha;
+  let tracked;
+  try {
+    sha = gitExec(repoRoot, ["rev-parse", "--verify", `${commit ?? "HEAD"}^{commit}`]).trim();
+    tracked = trackedRuntimeFiles(repoRoot, sha);
+  } catch (err) {
+    return { synced: false, runtimeDir, error: `cannot read the git-tracked file list at ${commit ? short(commit) : "HEAD"} (${describeErr(err)}); only tracked files are synced, the live runtime was kept` };
+  }
+
   const stage = join(runtimeDir, `.sync-stage-${process.pid}`);
   const backup = join(runtimeDir, `.sync-backup-${process.pid}`);
-  const clean = () => { for (const d of [stage, backup]) rmSync(d, { recursive: true, force: true }); };
+  const indexFile = join(runtimeDir, `.sync-index-${process.pid}`);
+  const clean = () => { for (const d of [stage, backup, indexFile]) rmSync(d, { recursive: true, force: true }); };
   clean();
+  let pruned = [];
   try {
-    for (const entry of RUNTIME_ENTRIES) {
+    try {
+      stageFromCommit(repoRoot, sha, tracked, stage, indexFile);
+    } catch (err) {
+      throw new Error(`cannot write the tracked files at ${short(sha)} (${describeErr(err)})`);
+    }
+    for (const entry of BUILT_ENTRIES) {
       const src = join(repoRoot, entry);
       if (existsSync(src)) cpSync(src, join(stage, entry), { recursive: true });
     }
-    // `vs restart` launches this self-contained script; the runtime copy of cli/ needs it beside it.
-    const restartScript = join(repoRoot, "scripts", "restart-runtime.mjs");
-    if (existsSync(restartScript)) {
-      mkdirSync(join(stage, "scripts"), { recursive: true });
-      copyFileSync(restartScript, join(stage, "scripts", "restart-runtime.mjs"));
-    }
     const files = existsSync(stage) ? listFiles(stage).sort() : [];
+    const trackedKeys = new Set(tracked.map(pathKey));
+    const staged = new Set(files.map(pathKey));
+    for (const rel of tracked) if (!staged.has(pathKey(rel))) throw new Error(`staged copy is missing tracked ${rel}`);
     for (const rel of files) {
+      if (trackedKeys.has(pathKey(rel))) continue;
+      if (!BUILT_ENTRIES.some((e) => rel.startsWith(`${e}/`))) throw new Error(`staged ${rel} is not tracked at ${short(sha)}`);
       if (statSync(join(stage, rel)).size !== statSync(join(repoRoot, rel)).size) throw new Error(`staged ${rel} does not match the repo copy`);
+    }
+    const stale = [];
+    for (const dir of MIRRORED_DIRS) {
+      if (!existsSync(join(runtimeDir, dir))) continue;
+      for (const rel of listFiles(join(runtimeDir, dir), runtimeDir, [], { skipVendored: true })) {
+        if (!isVendored(rel) && !trackedKeys.has(pathKey(rel))) stale.push(rel);
+      }
     }
     const done = [];
     try {
@@ -113,6 +192,12 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
         rename(join(stage, rel), dest);
         step.placed = true;
       }
+      for (const rel of stale.sort()) {
+        mkdirSync(dirname(join(backup, rel)), { recursive: true });
+        rename(join(runtimeDir, rel), join(backup, rel));
+        done.push({ rel, had: true, placed: false });
+      }
+      pruned = stale;
     } catch (err) {
       for (const { rel, had, placed } of done.reverse()) {
         try {
@@ -158,7 +243,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
   try {
     const gitOut = (...args) => execFileSync("git", ["-C", repoRoot, ...args], { encoding: "utf8", windowsHide: true }).trim();
     stamp = {
-      commit: gitOut("rev-parse", "HEAD"),
+      commit: sha, // the commit the files were read from, even if HEAD moved during the copy
       repo: gitOut("rev-parse", "--path-format=absolute", "--git-common-dir"),
       builtAt: new Date().toISOString(),
     };
@@ -175,7 +260,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
     writeFileSync(join(vsHome, "stale.json"), JSON.stringify({ stale: null }), "utf8");
   } catch {}
 
-  return { synced: true, runtimeDir, commit: stamp?.commit ?? null };
+  return { synced: true, runtimeDir, commit: stamp?.commit ?? sha, pruned };
 }
 
 // --- What a merge needs to go live (PLAN_V03_STABILIZE R1) ----------------------------------------------------------
@@ -534,9 +619,10 @@ export function runSync({
       built = true;
     }
 
-    const res = syncRuntimeDir(repoRoot, { env });
+    const res = syncRuntimeDir(repoRoot, { env, commit: head });
     if (!res.synced) return refuse(`${res.error ?? "copy failed"}; build-stamp.json not advanced`, { live, dist });
-    log(`[sync-runtime] synced ${res.runtimeDir} (${res.commit ? short(res.commit) : "no-git"})`);
+    const gone = res.pruned?.length ? `, removed ${res.pruned.length} file(s) no longer tracked: ${res.pruned.slice(0, 5).join(" ")}${res.pruned.length > 5 ? ` +${res.pruned.length - 5} more` : ""}` : "";
+    log(`[sync-runtime] synced ${res.runtimeDir} (${short(res.commit)}, git-tracked files only${gone})`);
 
     // Restart debt survives later syncs (a docs merge after a server merge) until a `vs restart` that started after it.
     const pending = restartDebt(repoRoot, runtimeDir, env, live, at, { git });
