@@ -18,7 +18,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveSecret } from "../server/secrets.mjs";
+import { detachUpdaterKeyPassword, resolveSecret, withoutUpdaterKeyPassword } from "../server/secrets.mjs";
 
 export const CREDENTIAL_TARGET = "vibesquad/artifact-signing";
 export const TIMESTAMP_URL = "http://timestamp.acs.microsoft.com";
@@ -123,7 +123,10 @@ export function runCheck(deps = {}) {
   return 1;
 }
 
-/** Sign then verify one file. Throws on any failure; the secret only reaches the signtool child env. */
+/**
+ * Sign then verify one file. Throws on any failure; the secret only reaches the signtool child env. signtool never
+ * gets the updater key password (`tauri build` runs this as signCommand with that password in its env).
+ */
 export function signFile(file, deps = {}) {
   const d = { ...defaults(), ...deps };
   if (!file) throw new Error("usage: sign-windows.mjs <file> | --check");
@@ -132,7 +135,7 @@ export function signFile(file, deps = {}) {
   const signtool = findSigntool(d);
   const dlib = findDlib(d);
   const ids = azureIds(d);
-  const env = { ...d.env, AZURE_TENANT_ID: ids.tenantId, AZURE_CLIENT_ID: ids.clientId, AZURE_CLIENT_SECRET: clientSecret(d) };
+  const env = { ...withoutUpdaterKeyPassword(d.env), AZURE_TENANT_ID: ids.tenantId, AZURE_CLIENT_ID: ids.clientId, AZURE_CLIENT_SECRET: clientSecret(d) };
   const opts = { env, stdio: "inherit", windowsHide: true };
   d.log(`[sign-windows] signing ${file}`);
   d.exec(signtool, ["sign", "/v", "/fd", "SHA256", "/tr", TIMESTAMP_URL, "/td", "SHA256", "/dlib", dlib, "/dmdf", metadataPath(d), file], opts);
@@ -143,6 +146,9 @@ export function signFile(file, deps = {}) {
 const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
 
 if (isMain) {
+  // `tauri build` (signCommand) hands us its env, updater key password included; we never need it, so no child
+  // (signtool sign/verify, the powershell credential read) may inherit it.
+  detachUpdaterKeyPassword();
   const arg = process.argv[2];
   try {
     if (arg === "--check") process.exitCode = runCheck();
