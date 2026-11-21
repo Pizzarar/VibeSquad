@@ -61,7 +61,7 @@ import {
   routeTierOf,
 } from "../spawn-route.mjs";
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
-import { createWatchEngine } from "../watch-sets.mjs";
+import { createWatchEngine, finalsTextFor } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
 import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
@@ -3097,6 +3097,64 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const AUTO_ARCHIVED_LABEL = "vs.auto-archived";
     const WORKER_CLOSE_GRACE_MS = 3000;
 
+    /**
+     * idea-450: which (recipient, worker, finalHash) already received a worker's final this completion, so a second path
+     * never re-sends the SAME final to the SAME recipient. Keyed by recipient so an Overlord's watch ping does not suppress
+     * the lane lead's own `[done]` relay (each recipient gets one copy). Marked only AFTER the send succeeds (mark on
+     * delivery), and bounded by a cap + TTL (a new final has a new hash, so it is never suppressed).
+     */
+    const forwardedFinals = new Map<string, number>(); // `${recipient}\n${worker}\n${hash}` -> deliveredAt ms
+    const FINALS_FORWARDED_MAX = 2000;
+    const FINALS_FORWARDED_TTL_MS = 6 * 60 * 60_000;
+    /** idea-450: dedupe keys for a duplicate `[done]` relay (same worker + verdict within a window), so a digest re-run
+     *  (or a second digest agent, or a reworded retry) wakes the lead once, not once per write. key -> last seen epoch ms. */
+    const relayedDone = new Map<string, number>();
+    const DONE_RELAY_DEDUPE_MS = 5 * 60_000;
+
+    /** A stable hash of a final message: distinguishes one completion's final from the next turn's (same bytes => same hash). */
+    function finalHashOf(text: string): string {
+      let h1 = 0x811c9dc5;
+      let h2 = 0x1000193;
+      const s = String(text ?? "");
+      for (let i = 0; i < s.length; i++) {
+        const c = s.charCodeAt(i);
+        h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+        h2 = Math.imul(h2 ^ c, 0x85ebca6b) >>> 0;
+      }
+      return `${h1.toString(16)}-${h2.toString(16)}-${s.length}`;
+    }
+
+    function finalForwardKey(recipient: string, worker: string, hash: string): string {
+      return `${recipient}\n${worker}\n${hash}`;
+    }
+
+    function isFinalForwarded(recipient: string, worker: string, hash: string, now = Date.now()): boolean {
+      const key = finalForwardKey(recipient, worker, hash);
+      const at = forwardedFinals.get(key);
+      if (at === undefined) return false;
+      if (now - at >= FINALS_FORWARDED_TTL_MS) {
+        forwardedFinals.delete(key);
+        return false;
+      }
+      return true;
+    }
+
+    /** idea-450: mark a final as delivered to `recipient` (LRU: re-insert last so the oldest evicts first; cap + TTL). */
+    function markFinalForwarded(recipient: string, worker: string, hash: string, now = Date.now()): void {
+      const key = finalForwardKey(recipient, worker, hash);
+      forwardedFinals.delete(key);
+      forwardedFinals.set(key, now);
+      for (const [k, v] of forwardedFinals) {
+        if (now - v < FINALS_FORWARDED_TTL_MS) break; // Map iterates in insertion order: older entries come first
+        forwardedFinals.delete(k);
+      }
+      while (forwardedFinals.size > FINALS_FORWARDED_MAX) {
+        const oldest = forwardedFinals.keys().next().value;
+        if (oldest === undefined) break;
+        forwardedFinals.delete(oldest);
+      }
+    }
+
     async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
       if (!doneReported.has(agentId)) return;
       const s = await snap(paseo, agentId);
@@ -3146,11 +3204,35 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    /**
+     * idea-450: true when this `[done]` is a duplicate of one read within the dedupe window — the same worker + verdict, even
+     * from a different digest agent or a reworded retry. Marks the line as seen otherwise. Applied in noteEntry (one call per
+     * log line): the re-route of a held wake through queueWake never re-runs this, so a retired lead's re-routed `[done]` is
+     * still delivered once to the successor.
+     */
+    function duplicateDoneRelay(entry: LogEntry): boolean {
+      const worker = String(entry.refs?.[0] ?? entry.agent ?? "").trim();
+      if (!worker) return false;
+      const verdict = /^(PASS|FAIL) \d+\/\d+\/\d+ [0-9a-f]{7,40}/m.exec(String(entry.text ?? ""))?.[0] ?? "";
+      // Same worker + verdict is one completion; without a verdict line fall back to the exact text (non-reviewer worker).
+      const key = verdict ? `${worker}\n${verdict}` : `${worker}\n${String(entry.text ?? "").trim()}`;
+      const now = Date.now();
+      const at = relayedDone.get(key) ?? 0;
+      if (now - at < DONE_RELAY_DEDUPE_MS) return true;
+      relayedDone.set(key, now);
+      if (relayedDone.size > 500) {
+        for (const [k, v] of relayedDone) if (now - v >= DONE_RELAY_DEDUPE_MS) relayedDone.delete(k);
+      }
+      return false;
+    }
+
     function noteEntry(team: string, entry: LogEntry) {
       if (entry.type === "done") noteWorkerDone(entry);
       const taken = watch?.onLogEntry(team, entry) ?? [];
       if (taken.length) watchTaken.set(entry, taken);
       if (!WAKE_TYPES.has(entry.type)) return;
+      // idea-450: a duplicate [done] line (a digest re-running `vs log done`) must not wake the lead a second time.
+      if (entry.type === "done" && duplicateDoneRelay(entry)) return;
       queueWake(team, entry);
     }
 
@@ -3161,6 +3243,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     const watchTaken = new WeakMap<LogEntry, string[]>(); // log entry -> open watch sets that took it over
     const watchKeyOf = new WeakMap<LogEntry, string>(); // queued wake entry -> the watch ping it carries
+    /** idea-450: queued watch-ping entry -> the (worker, hash) finals it carries, marked forward only after the send succeeds. */
+    const watchEntryFinals = new WeakMap<LogEntry, Array<{ worker: string; hash: string }>>();
     const watchSending = new Set<string>(); // ping keys inside an in-flight flushWake send
     const watchOpts =
       deps.watchSets === false ? null : (deps.watchSets ?? (deps.startWatcher && deps.subscribeRunnerEvents ? {} : null));
@@ -3296,11 +3380,27 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             ? `${head}\n(Watch owner ${d.owner} is retired; the watch is now yours as the lane's lead: \`vs watch cancel ${d.setId}\` stops it.)`
             : `${head}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
-      const detail = d.detail ? await redactReportText(d.detail, [target.cwd]) : "";
+      // idea-450: only finals actually delivered by this ping (finalRefs) are candidates to mark; a final already sent to this
+      // recipient (relay-first) is dropped from the detail so it is never sent twice.
+      let detail = d.detail ? await redactReportText(d.detail, [target.cwd]) : "";
+      const finals: Array<{ worker: string; hash: string }> = [];
+      for (const ref of d.finalRefs ?? []) {
+        const item = (d.set?.items ?? []).find((i) => i.ref === ref);
+        const final = String((item as any)?.final ?? "").trim();
+        if (!final) continue;
+        finals.push({ worker: ref, hash: finalHashOf(final) });
+      }
+      const already = finals.filter((f) => isFinalForwarded(target.id, f.worker, f.hash));
+      const keep = finals.filter((f) => !isFinalForwarded(target.id, f.worker, f.hash));
+      if (already.length) {
+        const rebuilt = finalsTextFor(d.set, already.map((f) => f.worker));
+        detail = rebuilt ? await redactReportText(rebuilt, [target.cwd]) : "";
+      }
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
 
 ${detail}` : text, refs: [d.setId] };
       watchKeyOf.set(entry, d.key);
+      if (keep.length) watchEntryFinals.set(entry, keep); // marked forward after the send (flushWake)
       pendingWake.set(target.id, [...(pendingWake.get(target.id) ?? []), entry]);
       void flushWake(paseo, target.id);
     }
@@ -3793,20 +3893,32 @@ ${detail}` : text, refs: [d.setId] };
       }
     }
 
-    /** idea-352: "\nWorker … final message: …" for ONE digest-authored [done] verdict (author is not the ref'd worker), else "". */
-    async function workerReportBody(paseo: Paseo, entry: LogEntry, budget = AUTO_REPORT_MAX): Promise<string> {
-      if (entry.type !== "done" || budget <= 0) return "";
+    /**
+     * idea-352/idea-450: the auto-forwarded report body for ONE digest-authored `[done]` verdict, plus the (worker, hash) to
+     * mark once the send succeeds (mark on delivery). Returns null when there is nothing to forward (author is the worker,
+     * the worker sent its own report, or the final already reached this recipient via the watch ping or a prior relay).
+     */
+    async function workerReportBody(
+      paseo: Paseo,
+      recipient: string,
+      entry: LogEntry,
+      budget = AUTO_REPORT_MAX,
+    ): Promise<{ text: string; worker: string; hash: string } | null> {
+      if (entry.type !== "done" || budget <= 0) return null;
       const worker = String(entry.refs?.[0] ?? "").trim();
-      if (!worker || worker === entry.agent || worker === "plugin" || worker === "you") return "";
+      if (!worker || worker === entry.agent || worker === "plugin" || worker === "you") return null;
       const text = await lastAssistantText(paseo, worker);
-      if (!text) return "";
+      if (!text) return null;
+      const hash = finalHashOf(text);
+      // idea-450: this recipient already got this exact final (watch ping first, or a prior relay): never send it twice.
+      if (isFinalForwarded(recipient, worker, hash)) return null;
       const w = await snap(paseo, worker);
       const where = w ? teamOf(w.labels, w.cwd) : null;
-      if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return "";
+      if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return null;
       const clean = await redactReportText(text, [w?.cwd]);
-      if (!clean) return "";
+      if (!clean) return null;
       const body = clean.length > budget ? `${clean.slice(0, budget)}… (truncated; vs status ${worker} for the rest)` : clean;
-      return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
+      return { text: `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`, worker, hash };
     }
 
     async function flushWake(paseo: Paseo, leadId: string, recheck = false) {
@@ -3891,6 +4003,12 @@ ${detail}` : text, refs: [d.setId] };
         const watchKeys = queue.map((e) => watchKeyOf.get(e)).filter((k): k is string => Boolean(k));
         const plain = queue.filter((e) => !watchKeyOf.has(e));
         const parts = queue.filter((e) => watchKeyOf.has(e)).map((e) => e.text);
+        // idea-450: the (worker, hash) finals this wake forwards, marked forward only after the send succeeds.
+        const wakeFinals: Array<{ worker: string; hash: string }> = [];
+        for (const e of queue) {
+          const wf = watchEntryFinals.get(e);
+          if (wf) wakeFinals.push(...wf);
+        }
         if (plain.length) {
           const last = plain[plain.length - 1]!;
           const more = plain.length > 1 ? ` (+${plain.length - 1} more)` : "";
@@ -3900,9 +4018,11 @@ ${detail}` : text, refs: [d.setId] };
           let budget = AUTO_REPORT_TOTAL_MAX;
           let body = "";
           for (const e of plain) {
-            const b = await workerReportBody(paseo, e, Math.min(AUTO_REPORT_MAX, budget));
-            budget -= b.length;
-            body += b;
+            const b = await workerReportBody(paseo, leadId, e, Math.min(AUTO_REPORT_MAX, budget));
+            if (!b) continue;
+            budget -= b.text.length;
+            body += b.text;
+            wakeFinals.push({ worker: b.worker, hash: b.hash });
           }
           parts.push(`New team log event in lane ${last.lane}: [${last.type}] ${last.text}${more}.${body} Run 'vs log --since-me' if more context is needed.`);
         }
@@ -3913,6 +4033,8 @@ ${detail}` : text, refs: [d.setId] };
           if (watchKeys.length) await watch?.markAttempted(watchKeys, leadId); // persisted before the send: never sent twice
           await paseo.agents.ref(leadId).send(text);
           if (watchKeys.length) await watch?.markDelivered(watchKeys, leadId);
+          // idea-450: mark on delivery — only after the send succeeded is a final "forwarded" (a failed send must not suppress it).
+          for (const f of wakeFinals) markFinalForwarded(leadId, f.worker, f.hash);
         } catch (e) {
           log(`wakeup send failed: ${e}`);
           if (watchKeys.length) await watch?.markFailed(watchKeys, String(e));

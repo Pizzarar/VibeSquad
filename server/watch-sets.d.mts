@@ -31,6 +31,8 @@ export interface WatchPing {
   /** idea-160: "overlord" = deliver to the Squad's hub Lead; "owner" (or absent) = the watch owner */
   target?: "owner" | "overlord";
   error?: string;
+  /** idea-450: worker refs whose FULL final is delivered by this completion ping (detail or item line). */
+  finalRefs?: string[];
 }
 
 export interface WatchSet {
@@ -63,6 +65,8 @@ export interface WatchDelivery {
   text: string;
   /** idea-352: watched workers' final messages (completion ping only), delivered after the text. */
   detail?: string;
+  /** idea-450: worker refs whose FULL final is delivered by this completion ping (detail or item line). */
+  finalRefs?: string[];
   owner: string;
   team: string;
   lane: string;
@@ -97,6 +101,10 @@ export function cancelWatchAsync(id: string, callerId: string, opts?: { home?: s
 
 export function classifyItem(item: WatchItem, set: WatchSet, ctx: any): { phase: string; phaseSince?: string; state: WatchItemState; reason?: string; report?: string };
 export function stepSet(set: WatchSet, ctx: any): WatchPing | null;
+/** idea-352/idea-450: the finals detail text ("" when none) and the refs whose FULL final is delivered. */
+export function finalsBlock(set: WatchSet): { text: string; refs: string[] };
+/** idea-450: the finals detail with `skipRefs` omitted (already delivered to this recipient). */
+export function finalsTextFor(set: WatchSet, skipRefs: string[]): string;
 
 export interface WatchEngineOptions {
   home?: string;

@@ -368,21 +368,45 @@ function itemLine(item) {
   return `- ${itemLabel(item)}: ${item.phase || "waiting"}`;
 }
 
-/** idea-352: the watched workers' final messages (those not already carried whole as the item's report), capped; "" when none. */
-export function finalsBlock(set) {
+/**
+ * idea-352: the watched workers' final messages (those not already carried whole as the item's report), capped.
+ * idea-450: returns BOTH the detail text and the refs whose FULL final is actually delivered, so the plugin can mark
+ * exactly those forwarded (short finals ride the item line, overflow workers past FINAL_TOTAL_CAP are dropped, so neither
+ * is a "full final in the detail" — only the refs here are). `skipRefs` drops a worker whose final was already delivered
+ * to this recipient (two-way coordination).
+ */
+function finalsDetail(set, skipRefs) {
+  const skip = new Set((skipRefs ?? []).map(String));
   let left = FINAL_TOTAL_CAP;
   const out = [];
+  const refs = [];
   for (const i of set.items) {
-    if (i.kind !== "agent" || i.state !== "done" || !i.final || left <= 0) continue;
+    if (i.kind !== "agent" || i.state !== "done" || !i.final) continue;
     const t = String(i.final).trim();
-    // Skip only when the item line already carries the whole text (one line, under REPORT_CAP); a longer final is truncated there.
-    if (!t || (t === String(i.report ?? "").trim() && oneLine(t, Infinity).length <= REPORT_CAP)) continue;
+    if (!t) continue;
+    // Short final: the item line already carries the whole text, so it is delivered there (no detail block), but still counts as forwarded.
+    if (t === String(i.report ?? "").trim() && oneLine(t, Infinity).length <= REPORT_CAP) {
+      refs.push(i.ref);
+      continue;
+    }
+    if (left <= 0 || skip.has(String(i.ref))) continue; // overflow (or already delivered): the full final is not in the detail
     const cap = Math.min(FINAL_CAP, left);
     const body = t.length > cap ? `${t.slice(0, cap - 1)}… (truncated; \`vs status ${i.ref}\` for the rest)` : t;
     left -= body.length;
     out.push(`Final message of ${i.ref} (auto-forwarded report):\n${body}`);
+    refs.push(i.ref);
   }
-  return out.join("\n\n");
+  return { text: out.join("\n\n"), refs };
+}
+
+/** idea-352/idea-450: the finals detail + the refs whose full final is delivered (for the plugin's delivery mark). */
+export function finalsBlock(set) {
+  return finalsDetail(set, []);
+}
+
+/** idea-450: the finals detail with `skipRefs` omitted (already delivered to this recipient). */
+export function finalsTextFor(set, skipRefs) {
+  return finalsDetail(set, skipRefs).text;
 }
 
 function completionText(set) {
@@ -443,8 +467,8 @@ export function stepSet(set, ctx) {
   // its one ping, also when every item is stalled or the siblings finished before the stall ping.
   const escalated = set.items.some((i) => i.esc1At || i.esc2At);
   if (set.items.every(settled) && !set.items.some(escPending) && (progressed || escalated)) {
-    const detail = finalsBlock(set);
-    const ping = { key: "done", at, text: completionText(set), ...(detail ? { detail } : {}) };
+    const finals = finalsBlock(set);
+    const ping = { key: "done", at, text: completionText(set), ...(finals.text ? { detail: finals.text } : {}), ...(finals.refs.length ? { finalRefs: finals.refs } : {}) };
     set.pings.push(ping);
     set.firedAt = at;
     set.lastPingAt = at;
@@ -919,7 +943,7 @@ export function createWatchEngine({
         const key = pingKeyOf(set, ping);
         if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue;
         lastOffer.set(key, t);
-        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, ...(ping.detail ? { detail: ping.detail } : {}), owner: set.owner, team: set.team, lane: set.lane, ...(ping.target ? { target: ping.target } : {}), set: structuredClone(set) };
+        const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, ...(ping.detail ? { detail: ping.detail } : {}), ...(ping.finalRefs ? { finalRefs: ping.finalRefs } : {}), owner: set.owner, team: set.team, lane: set.lane, ...(ping.target ? { target: ping.target } : {}), set: structuredClone(set) };
         if (spawnDigest && ping.text.length > DIGEST_MERGE_MAX) {
           // W4: a too-long ping is merged by one Pre-check - Flash worker, which sends the digest to the owner. The one-ping
           // guarantee holds: attemptedAt is persisted BEFORE the spawn, so the ping is never offered (spawned) twice. At most
