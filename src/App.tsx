@@ -4,7 +4,7 @@ import { statusDot } from "./daemonOverlay";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type { PaseoAgent } from "./agentTypes";
 import type { ProviderQuotaView } from "./antigravity";
-import { dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
+import { dismissStaleBuild, dismissUpdateBanner, loadUpdaterStatus, setLanExposureState, setLocalAccess, setServerConfigWarnings, setStaleBuild, triggerUpdateInstall, useDeviceRole, useLocalReadOnly, useStaleBuild, useStaleBuildDismissed, useConfigWarnings, useExposedIpsStore, useUpdaterStatus } from "./userName";
 import { archiveAgent, detachAgent, getPaseoState, loadArchived, retireAgent, spawnTeamAgent, updateAgent, upsertLocalAgent, usePaseo } from "./paseo";
 import { defaultSpawnConfigFor } from "./antigravity";
 import { findProfile, getProfiles } from "./profiles";
@@ -53,6 +53,7 @@ import { BoringApp } from "./BoringAde";
 import { PhoneCockpit, usePhoneShell } from "./PhoneCockpit";
 import { PhonePairSheet } from "./PhonePairSheet";
 import { PhoneBugPill } from "./PhoneBugSheet";
+import { TesterCockpit } from "./TesterCockpit";
 import { FocusRail } from "./FocusRail";
 import { topNeedsYouId } from "./needsYouTop";
 import { nowTickValue, useNowTick } from "./useNowTick";
@@ -1405,7 +1406,15 @@ function useExposedIps(): string[] {
           setServerConfigWarnings(h.configWarnings);
         }
         if (alive) setStaleBuild(h?.stale);
-        if (alive) setLocalAccess(h?.localAccess);
+        if (alive) setLocalAccess(h?.localAccess, h);
+        // E6b: a scoped bug-tester device learns its role/allowedTeams/deviceName from /api/auth/status too.
+        if (alive && (h?.localAccess === "bug-tester" || h?.role === "bug-tester") && !Array.isArray(h?.allowedTeams)) {
+          return fetch("/api/auth/status")
+            .then((r) => r.json())
+            .then((s) => {
+              if (alive) setLocalAccess(s?.localAccess ?? "bug-tester", s);
+            });
+        }
       })
       .catch(() => {});
     return () => {
@@ -1499,6 +1508,7 @@ export function App() {
   const staleBuild = useStaleBuild();
   const staleBuildDismissed = useStaleBuildDismissed();
   const localReadOnly = useLocalReadOnly();
+  const deviceRole = useDeviceRole();
   useEffect(() => {
     void loadUpdaterStatus();
     const id = setInterval(() => void loadUpdaterStatus(), 60_000);
@@ -1972,6 +1982,11 @@ export function App() {
       )}
     </>
   );
+
+  // E6b: a scoped bug-tester device gets the Alpha Tester Desk on desktop AND phone: no IDE chrome, owner menus or pairing modals.
+  if (deviceRole === "bug-tester") {
+    return <TesterCockpit views={sidebarViews} view={view} onSquad={onTeam} runnerConn={runnerConn} />;
+  }
 
   // E1: on a phone nothing else mounts. No desktop panels, no sidebar, no escape hatch (E3 passes bugSlot, E4b pairSlot).
   if (phoneShell) {
