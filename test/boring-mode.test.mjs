@@ -1066,6 +1066,67 @@ test("D3a fix: every testid DrawerHeader exposed is present in the Normal path (
   for (const c of ["NeedsYouControls", "HardeningBar", "SessionActions", "AttachFiles"]) assert.match(normal, new RegExp(`<${c} `));
 });
 
+// ---- idea-455: the running header has exactly one turn control: [Interrupt] (no duplicate [Stop]) -----------
+const hdrDir = mkdtempSync(join(tmpdir(), "vs-boring-hdr-"));
+after(() => rmSync(hdrDir, { recursive: true, force: true }));
+const stubHdr = (name, body) => writeFileSync(join(hdrDir, name), `import React from ${JSON.stringify(reactUrl)};\n${body}\n`);
+globalThis.__hdrStops = [];
+stubHdr("paseo.mjs", "export const stopAgent = async (id) => globalThis.__hdrStops.push(id);\nexport const archiveAgent = async () => {};\nexport const markAgentRead = async () => {};\nexport const markAgentUnread = async () => {};\nexport const sendMessage = async () => {};");
+stubHdr("demoFlag.mjs", "export const DEMO = false;");
+stubHdr("attentionLocal.mjs", "export const isLocallyHidden = () => false;\nexport const isMarkedUnread = () => false;");
+stubHdr("runnerBridge.mjs", "export const runnerReloadTimeline = () => {};");
+stubHdr("QuickWinsUi.mjs", "export const AgentTitleEdit = ({ children }) => React.createElement('span', null, children);");
+stubHdr("IdeaInbox.mjs", "export const isImeComposing = () => false;\nexport const shouldComposerSubmit = () => false;");
+stubHdr("ui.mjs", "export const ConfirmButton = (p) => React.createElement('button', { className: p.className, 'data-stub': 'confirm', 'data-label': p.label }, p.label);\nexport const ago = () => 'now';\nexport const shortPath = (p) => p;\nexport const useTick = () => 0;");
+stubHdr("userName.mjs", "export const LEGACY_NEEDS_LABEL = 'needs-you-legacy';");
+stubHdr("teams.mjs", "export const AGENT_TYPE_LABEL = { worker: 'Worker', lead: 'Lead', brainstorm: 'Brainstorm' };\nexport const TEAMS = [];\nexport const isHubLaneId = () => false;\nexport const kindOf = (a) => a.labels?.role ?? 'worker';");
+stubHdr("identity.mjs", "export const findLaneInRegistry = () => null;\nexport const formatDisplayTitle = () => '';\nexport const isRetiredAgent = () => false;");
+stubHdr("boringLocation.mjs", "export const laneCode = (_t, l) => `@${l}`;\nexport const laneDisplayName = (_t, l) => l;");
+stubHdr("pixel.mjs", "export const providerSpec = () => ({ name: 'Test' });");
+stubHdr("BoringAde.mjs", "export const boringStateGlyph = (status) => (status === 'running' ? 'run' : 'idle');");
+stubHdr("DrawerHeader.mjs", "export const AttachFiles = () => null;\nexport const HardeningBar = () => null;\nexport const NeedsYouControls = () => null;\nexport const SessionActions = () => null;\nexport const formatCostUsd = (n) => `$${n}`;");
+stubHdr("useAgentConfig.mjs", "export const useAgentConfig = () => ({ providerSelect: null, modelControl: null, modeSelect: null, thinkingSelect: null, providerSwitchBtn: null, staged: null, modelError: '', reloadError: '', setReloadError() {}, effectiveProv: { name: 'Test' } });");
+stubHdr("FeaturesMenu.mjs", "export const FeaturesMenu = () => null;");
+stubHdr("SandboxView.mjs", "export const SandboxView = () => null;");
+stubHdr("antigravity.mjs", "export const CANCEL_AND_RESUME_PROMPT = (n) => `resume ${n}`;\nexport const auditAntigravityAgent = () => ({ a5ReadBlocked: false, a3HungTool: null });");
+stubHdr("pinActions.mjs", "export const openBriefEditor = () => {};");
+stubHdr("boringHeaderStrip.mjs", "export const BORING_CTX_WARN_PCT = 72;\nexport const boringHeaderStrip = () => [];\nexport const boringNeedsYouStall = () => null;\nexport const formatToolMinutes = (s) => `${s}`;\nexport const shortToolName = (n) => n;");
+stubHdr("attentionItems.mjs", "export const openToolOf = () => null;");
+const hdrCode = transformSync("BoringAgentHeader.tsx", d3src("BoringAgentHeader.tsx"), { lang: "tsx", jsx: { runtime: "classic" } })
+  .code.replace(/^/, `import React from ${JSON.stringify(reactUrl)};\n`)
+  .replace(/from "react"/g, `from ${JSON.stringify(reactUrl)}`)
+  .replace(/from "\.\/(\w+)"/g, (_m, n) => `from "./${n}.mjs"`);
+writeFileSync(join(hdrDir, "BoringAgentHeader.mjs"), hdrCode);
+const { BoringAgentHeader } = await import(pathToFileURL(join(hdrDir, "BoringAgentHeader.mjs")).href);
+
+const runningHeaderProps = {
+  agent: { id: "rn-hdr1", status: "running", title: "W1", cwd: "C:/x", updatedAt: "2026-01-01T00:00:00Z", labels: { role: "worker", lane: "ade" }, pendingPermissions: [] },
+  agentType: "worker", used: 0, budget: undefined, isBs: false, bsPct: 0, warnTokens: 1000, bsUsedTokens: 0,
+  restarting: false, planHandedOff: false, doRestart: async () => {}, toggleSummary() {}, summaryOpen: false,
+  setInboxPopoverOpen() {}, inboxPopoverOpen: false, inboxDumpText: "", setInboxDumpText() {}, inboxParking: false,
+  inboxToast: "", parkToInbox() {}, summaryText: "", setSummaryText() {}, summaryPath: "", summaryLoading: false,
+  summarySaving: false, saveSummary: async () => {}, laneId: "ade", att: null, dockOpen: false, onToggleDock() {},
+  onClose() {}, chatOnly: true, entries: [], active: true, restartedFrom: "", feedbackDismissed: true, onFeedback: async () => {},
+};
+
+test("idea-455: a running Normal header renders exactly one turn control, [Interrupt], and no [Stop]", () => {
+  const html = renderToStaticMarkup(React.createElement(BoringAgentHeader, runningHeaderProps));
+  assert.equal((html.match(/data-testid="boring-interrupt-btn"/g) ?? []).length, 1, "one Interrupt button");
+  assert.match(html, /title="Stop the current turn \(keeps the agent\)"[^>]*>Interrupt</);
+  assert.equal((html.match(/>Interrupt</g) ?? []).length, 1);
+  assert.doesNotMatch(html, />Stop</);
+  assert.doesNotMatch(html, /Tap to stop|Stopping|data-label="Stop"|boring-hdr-stop/);
+  // The single turn control is wired to stopAgent (turn-only cancel that keeps the agent alive).
+  const hdr = d3src("BoringAgentHeader.tsx");
+  const block = hdr.slice(hdr.indexOf("        {running && ("), hdr.indexOf("        {!p.chatOnly && ("));
+  assert.equal((block.match(/<button/g) ?? []).length, 1, "one button element in the running block");
+  assert.match(block, /data-testid="boring-interrupt-btn"/);
+  assert.match(block, /onClick=\{\(\) => void stopAgent\(agent\.id\)/);
+  assert.ok(!/ConfirmButton|label="Stop"/.test(block), "no Stop ConfirmButton left in the running block");
+  assert.ok(!hdr.includes("boring-hdr-stop"), "class removed from source");
+  assert.ok(!d3src("boring.css").includes("boring-hdr-stop"), "unused CSS rule removed");
+});
+
 // ---- R2.1: one derived selection feeds the sidebar `.on` row and the breadcrumb ---------------------------
 const onRows = (t) => walk(t, (n) => /(^|\s)on(\s|$)/.test(String(n.props?.className ?? "")) && /boring-(project-row|core-row|conv-row|worker-row)/.test(String(n.props?.className ?? "")));
 
