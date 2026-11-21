@@ -10,6 +10,14 @@ const rootDir = resolve(import.meta.dirname, "..");
 
 /** Tracked files the build itself rewrites (`npm run build` runs generate-licenses first): never "dirty" for the guard. */
 const GENERATED = new Set(["public/THIRD-PARTY-LICENSES.txt"]);
+/**
+ * idea-401: tracked edits the guard ignores. docs/ and artifacts/ are never copied into the runtime (RUNTIME_ENTRIES) nor
+ * built (isUiInput), so lane docs other agents leave uncommitted on master no longer make every sync need --force.
+ * Untracked files were already ignored (statusPaths "no"). Anything else dirty (server/, cli/, src/, package.json) refuses.
+ */
+const DIRT_IGNORED_DIRS = ["docs/", "artifacts/"];
+export const guardIgnoresDirt = (p) => GENERATED.has(p) || DIRT_IGNORED_DIRS.some((d) => p.startsWith(d));
+const guardDirt = (repoRoot, git) => statusPaths(repoRoot, git, "no").filter((p) => !guardIgnoresDirt(p));
 
 /** Paths changed vs HEAD (staged or not, renames as delete+add), plus untracked non-ignored files when asked. */
 function statusPaths(repoRoot, git, untracked) {
@@ -30,7 +38,8 @@ export function syncSkipReason(repoRoot = rootDir, { force = false, git = defaul
     if (gitDir.toLowerCase() !== common.toLowerCase()) return "linked worktree, not the main checkout";
     const branch = git(repoRoot, "rev-parse", "--abbrev-ref", "HEAD");
     if (branch !== "master") return `on branch ${branch}, not master`;
-    if (statusPaths(repoRoot, git, "no").some((p) => !GENERATED.has(p))) return "working tree not clean";
+    const dirt = guardDirt(repoRoot, git);
+    if (dirt.length) return `working tree not clean (${dirt[0]}${dirt.length > 1 ? ` +${dirt.length - 1} more` : ""})`;
   } catch (err) {
     return `cannot verify git state (${String(err?.message ?? err).split("\n")[0]})`;
   }
@@ -359,7 +368,7 @@ export function distStatus(repoRoot, head, { git = defaultGit, graph = importGra
 }
 
 function writeDistStamp(repoRoot, head, git, graph) {
-  const dirty = statusPaths(repoRoot, git, "no").some((p) => !GENERATED.has(p));
+  const dirty = guardDirt(repoRoot, git).length > 0;
   const ui = uiTreeFingerprint(repoRoot, git, graph);
   writeFileSync(join(repoRoot, "dist", DIST_STAMP), JSON.stringify({ commit: head, dirty, ui, builtAt: new Date().toISOString() }), "utf8");
 }
@@ -568,6 +577,7 @@ function report({ log, range, live, built, dist, pending, dryRun = false }) {
 }
 
 const FLAGS = ["--force", "--no-build", "--dry-run", DRAIN_OVERRIDE_FLAG];
+export const SYNC_RESULT_ENV = "VIBESQUAD_SYNC_RESULT";
 
 if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   const argv = process.argv.slice(2);
@@ -583,5 +593,11 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(import.meta.filename
       ignoreDrain: drainOverrideRequested(argv),
     });
     if (res.refused) process.exitCode = 1;
+    // idea-398: the restart-request loop runs this script and reads the outcome here instead of parsing log lines.
+    const out = process.env[SYNC_RESULT_ENV];
+    if (out) {
+      const { synced = false, skipped = null, refused = null, commit = null, built = false } = res;
+      try { writeFileSync(out, JSON.stringify({ synced, skipped, refused, commit, built }), "utf8"); } catch {}
+    }
   }
 }

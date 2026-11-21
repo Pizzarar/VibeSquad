@@ -12,6 +12,9 @@
 // counts too; another tip does not). The fire runs the existing `vs restart` path as the owner's shell (the same path and
 // identity scripts/restart-runtime.mjs uses for its done broadcast); this module never restarts anything itself.
 // idea-369: each ask and `vs restart status` carry the runner's held background work (/health heldAgents + heldWork) per lead.
+// idea-398: a request with `--needs build` (the Live-Needs token) runs the source repo's sync-runtime (it rebuilds a stale
+// dist, then copies the runtime) right before the `vs restart` launch, once the leads have drained. A sync that does not
+// happen is never silent: the request logs `sync-skipped reason=...` (restart-feedback) and fires on the runtime as last synced.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -380,6 +383,8 @@ export function formatRequestStatus(req, now = Date.now()) {
   if (req.held?.unresolved?.length) lines.push(`  held with no lead resolved: ${req.held.unresolved.map((u) => `${heldLine([u])} (${u.reason})`).join("; ")}`);
   if (req.held === null && !TERMINAL.has(req.state)) lines.push("  runner held list: unknown (runner unreachable or older)");
   if (req.laggards?.length) lines.push(`  fired at the deadline without: ${req.laggards.map((l) => `${leadName(l)} [${l.reason}]`).join("; ")}`);
+  if (req.sync) lines.push(req.sync.ok ? `  synced ${req.sync.at}: runtime at ${String(req.sync.commit ?? "?").slice(0, 7)}${req.sync.built ? " (dist rebuilt)" : ""}` : `  sync-skipped reason=${req.sync.reason} (${req.sync.at})`);
+  else if (needsBuild(req.needs) && !TERMINAL.has(req.state)) lines.push("  needs build: sync-runtime (build if stale) runs right before the fire");
   if (req.firedAt) lines.push(`  fired ${req.firedAt}${req.launch ? (req.launch.ok ? " (vs restart launched)" : ` (launch failed: ${req.launch.error})`) : ""}`);
   if (req.result?.file) lines.push(`  result: ${req.result.file}`);
   if (req.abortReason) lines.push(`  aborted: ${req.abortReason}`);
@@ -388,6 +393,75 @@ export function formatRequestStatus(req, now = Date.now()) {
 }
 
 // ---- the driver -----------------------------------------------------------------------------------------------------
+
+/** idea-398: does the request's --needs list carry the Live-Needs `build` token? */
+export function needsBuild(needs) {
+  return String(needs ?? "").toLowerCase().split(/[\s,]+/).includes("build");
+}
+
+/**
+ * The source checkout the live runtime was synced from: the runtime's build-stamp.json records its git common dir
+ * (`<repo>/.git`). null when there is no stamp or it names no main checkout.
+ */
+export function syncRepoRoot(env = process.env) {
+  const runtime = path.join(env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+  try {
+    const repo = JSON.parse(fs.readFileSync(path.join(runtime, "build-stamp.json"), "utf8"))?.repo;
+    if (typeof repo !== "string" || path.basename(repo).toLowerCase() !== ".git") return null;
+    return path.dirname(path.resolve(repo));
+  } catch { return null; }
+}
+
+const SYNC_TIMEOUT_MS = 20 * 60_000; // sync-runtime's own lock staleMs: it outlasts a vite build
+/**
+ * Run `<repo>/server/sync-runtime.mjs` (its git guard, drain guard, build-if-stale and copy) async, so the loop never
+ * blocks. Never --force and never the owner's drain override: a guard that says no is reported, not bypassed.
+ * Returns { ok: true, commit, built } | { ok: false, reason }.
+ */
+export function runSyncAsync({ env = process.env, repoRoot = syncRepoRoot(env), timeoutMs = SYNC_TIMEOUT_MS } = {}) {
+  if (!repoRoot) return Promise.resolve({ ok: false, reason: "the live runtime has no build-stamp.json naming its source checkout" });
+  const script = path.join(repoRoot, "server", "sync-runtime.mjs");
+  if (!fs.existsSync(script)) return Promise.resolve({ ok: false, reason: `no server/sync-runtime.mjs in ${repoRoot}` });
+  const resultFile = path.join(os.tmpdir(), `vs-sync-result-${process.pid}-${randomBytes(4).toString("hex")}.json`);
+  const e = { ...env, VIBESQUAD_SYNC_RESULT: resultFile, VIBESQUAD_SYNC_FORCE: "", VIBESQUAD_IGNORE_DRAIN: "" };
+  for (const k of AGENT_ENV_KEYS) delete e[k];
+  return new Promise((resolve) => {
+    let out = "";
+    let child;
+    const done = (r) => { try { fs.rmSync(resultFile, { force: true }); } catch {} resolve(r); };
+    try {
+      child = spawn(process.execPath, [script], { env: e, cwd: repoRoot, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+    } catch (err) { done({ ok: false, reason: `sync-runtime did not start: ${clean(err?.message ?? err, 200)}` }); return; }
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch {} }, timeoutMs);
+    timer.unref?.();
+    child.stdout.on("data", (b) => { out = (out + b).slice(-4000); });
+    child.stderr.on("data", (b) => { out = (out + b).slice(-4000); });
+    child.on("error", (err) => { clearTimeout(timer); done({ ok: false, reason: `sync-runtime did not start: ${clean(err?.message ?? err, 200)}` }); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      let res = null;
+      try { res = JSON.parse(fs.readFileSync(resultFile, "utf8")); } catch {}
+      if (res?.synced) return done({ ok: true, commit: res.commit ?? null, built: Boolean(res.built) });
+      const why = timedOut ? `sync-runtime timed out after ${Math.round(timeoutMs / 60_000)} min`
+        : res?.skipped ? `skipped: ${res.skipped}`
+        : res?.refused ? `refused: ${res.refused}`
+        : res ? "no live runtime dir to sync into"
+        : `sync-runtime exited ${code} without a result (${out.trim().split(/\r?\n/).pop() ?? ""})`;
+      done({ ok: false, reason: why });
+    });
+  });
+}
+
+/** The restart-feedback line for a pre-fire sync outcome (idea-398). */
+export function syncFeedbackText(req, r) {
+  if (r?.ok) {
+    const sha = String(r.commit ?? "").slice(0, 7) || "?";
+    const off = r.commit && /^[0-9a-f]{7,40}$/i.test(req.tip) && !tipMatches(req.tip, r.commit) ? `; HEAD ${sha} is not the requested tip ${req.tip}` : "";
+    return `restart-request ${req.id} synced the runtime to ${sha}${r.built ? " (dist rebuilt)" : ""} before vs restart (needs build)${off}`;
+  }
+  return `sync-skipped reason=${clean(r?.reason ?? "unknown", 300)} (restart-request ${req.id}, tip ${req.tip}, needs build): firing vs restart on the runtime as last synced`;
+}
 
 const VS_CLI = path.resolve(import.meta.dirname, "..", "cli", "vs.mjs");
 const AGENT_ENV_KEYS = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_LANE", "VS_TEAM", "VS_ORD", "VS_PROFILE"];
@@ -426,6 +500,7 @@ export function createRestartRequestLoop({
   heldList = async () => null,
   runVs = (args) => runVsAsync(args),
   fire = () => runVsAsync(["restart"], { timeoutMs: 120_000 }),
+  sync = () => runSyncAsync(),
   teams = () => loadTeamsRegistry(),
   now = () => Date.now(),
   tickMs = TICK_MS,
@@ -468,6 +543,21 @@ export function createRestartRequestLoop({
     const outcomes = {};
     for (const a of actions) {
       if (a.kind === "fire") {
+        // idea-398: --needs build syncs (and rebuilds) first. firedAt is already on disk, so a crash here never fires twice.
+        if (needsBuild(req.needs)) {
+          let s;
+          try { s = await sync(req); } catch (e) { s = { ok: false, reason: String(e?.message ?? e) }; }
+          const text = syncFeedbackText(req, s);
+          await mutateAsync(home, (doc) => {
+            if (doc.current?.id !== req.id) return;
+            const at = iso(now());
+            doc.current.sync = s?.ok ? { ok: true, at, commit: s.commit ?? null, built: Boolean(s.built) } : { ok: false, at, reason: clean(s?.reason ?? "unknown", 300) };
+            event(doc.current, at, s?.ok ? `synced the runtime to ${String(s.commit ?? "?").slice(0, 7)}` : `sync-skipped reason=${clean(s?.reason ?? "unknown", 200)}`);
+          });
+          log(text);
+          const lr = await runVs(logArgs(req, text)).catch((e) => ({ ok: false, error: String(e?.message ?? e) }));
+          if (!lr?.ok) log(`restart-request ${req.id}: sync log failed: ${lr?.error}`);
+        }
         let r;
         try { r = await fire(req); } catch (e) { r = { ok: false, error: String(e?.message ?? e) }; }
         await mutateAsync(home, (doc) => {

@@ -11,7 +11,11 @@ import {
   createRestartRequestLoop,
   formatRequestStatus,
   readRestartRequest,
+  needsBuild,
   requestPath,
+  runSyncAsync,
+  syncFeedbackText,
+  syncRepoRoot,
   stepRequest,
   tipMatches,
 } from "../server/restart-request.mjs";
@@ -385,4 +389,99 @@ test("idea-371 L1: vs restart request --team-only records scope=team", async () 
     await commandRestartRequest({ _: ["request", TIP], teamOnly: true }, { teams: TEAMS, env: { VIBESQUAD_HOME: home }, hasOwnerProof: () => true, now: () => T0 });
   } finally { process.stdout.write = out; }
   assert.equal(readRestartRequest(home).scope, "team");
+});
+
+// idea-398 (PLAN_INBOX_TOP3_1120 T2): --needs build syncs (and rebuilds) right before the fire, or logs sync-skipped visibly.
+function buildWorld(home, syncResult) {
+  const w = { now: T0, order: [], calls: [], syncs: 0 };
+  w.loop = createRestartRequestLoop({
+    home,
+    teams: () => TEAMS,
+    now: () => w.now,
+    listAgents: async () => [OVE, BUG],
+    heldList: async () => null,
+    runVs: async (args) => { w.calls.push(args); return { ok: true }; },
+    sync: async () => { w.syncs++; w.order.push("sync"); if (syncResult instanceof Error) throw syncResult; return syncResult; },
+    fire: async () => { w.order.push("fire"); return { ok: true }; },
+  });
+  w.logs = () => w.calls.filter((c) => c[0] === "log").map((c) => c[2]);
+  return w;
+}
+async function driveToFire(home, w) {
+  await w.loop.tick();
+  w.now = T0 + MIN;
+  logLine(home, "rn-bug", `drained restart ${TIP}`, w.now);
+  await w.loop.tick();
+}
+
+test("idea-398: --needs build syncs once, after the drain and right before the fire, and logs it", async () => {
+  const home = tmp();
+  const w = buildWorld(home, { ok: true, commit: `${TIP}0000`, built: true });
+  request(home, { needs: "build, server-restart" });
+  await w.loop.tick();
+  assert.equal(w.syncs, 0, "no sync while leads are still draining");
+  await driveToFire(home, w);
+  assert.deepEqual(w.order, ["sync", "fire"]);
+  const req = readRestartRequest(home);
+  assert.equal(req.state, "firing");
+  assert.equal(req.sync.ok, true);
+  assert.equal(req.sync.built, true);
+  const line = w.logs().find((t) => /synced the runtime/.test(t));
+  assert.ok(line.startsWith(`restart-request ${req.id} synced the runtime to ${TIP.slice(0, 7)} (dist rebuilt) before vs restart (needs build)`), line);
+  assert.ok(!/not the requested tip/.test(line));
+  assert.match(formatRequestStatus(req, w.now), /synced .*runtime at abc1234 \(dist rebuilt\)/);
+  w.now += MIN;
+  await w.loop.tick();
+  assert.equal(w.syncs, 1, "never synced twice");
+});
+
+test("idea-398: a sync that does not run logs sync-skipped reason=... and still fires once", async () => {
+  for (const [res, why] of [
+    [{ ok: false, reason: "skipped: working tree not clean (server/a.mjs)" }, /sync-skipped reason=skipped: working tree not clean \(server\/a\.mjs\)/],
+    [new Error("spawn EPERM"), /sync-skipped reason=spawn EPERM/],
+  ]) {
+    const home = tmp();
+    const w = buildWorld(home, res);
+    request(home, { needs: "build" });
+    await driveToFire(home, w);
+    assert.deepEqual(w.order, ["sync", "fire"]);
+    const line = w.logs().find((t) => /sync-skipped/.test(t));
+    assert.match(line ?? "", why);
+    assert.match(line, /firing vs restart on the runtime as last synced/);
+    const req = readRestartRequest(home);
+    assert.equal(req.sync.ok, false);
+    assert.match(formatRequestStatus(req, w.now), /sync-skipped reason=/);
+    assert.ok(req.events.some((e) => /sync-skipped reason=/.test(e.text)));
+  }
+});
+
+test("idea-398: without the build token no sync runs; a synced HEAD that is not the requested tip is named", async () => {
+  const home = tmp();
+  const w = buildWorld(home, { ok: true, commit: "fffffff1234", built: false });
+  request(home, { needs: "server-restart,runner-restart" });
+  await driveToFire(home, w);
+  assert.deepEqual(w.order, ["fire"]);
+  assert.equal(readRestartRequest(home).sync, undefined);
+  assert.equal(needsBuild("server-restart build"), true);
+  assert.equal(needsBuild("rebuild,frontend-reload"), false);
+  const req = { id: "rr-x", tip: TIP };
+  assert.match(syncFeedbackText(req, { ok: true, commit: "fffffff1234" }), /HEAD fffffff is not the requested tip abc1234def/);
+  assert.ok(!/not the requested tip/.test(syncFeedbackText({ id: "rr-x", tip: "master" }, { ok: true, commit: "fffffff1234" })), "a branch tip is not compared");
+});
+
+test("idea-398: runSyncAsync reads the real sync-runtime outcome; syncRepoRoot comes from the runtime build-stamp", async () => {
+  const lad = tmp();
+  assert.equal(syncRepoRoot({ LOCALAPPDATA: lad }), null);
+  assert.match((await runSyncAsync({ env: { LOCALAPPDATA: lad } })).reason, /no build-stamp\.json/);
+  const runtime = path.join(lad, "VibeSquad", "runtime");
+  mkdirSync(runtime, { recursive: true });
+  const repo = path.resolve(import.meta.dirname, "..");
+  writeFileSync(path.join(runtime, "build-stamp.json"), JSON.stringify({ commit: TIP, repo: path.join(repo, ".git") }));
+  assert.equal(syncRepoRoot({ LOCALAPPDATA: lad }), repo);
+  // The real script, run as a child against this checkout. A linked worktree or a dirty tree is skipped by the guard; a
+  // clean main checkout reaches the copy step and finds no runtime under the temp LOCALAPPDATA it was given. Never synced.
+  const env = { ...process.env, LOCALAPPDATA: tmp(), VIBESQUAD_HOME: tmp(), npm_lifecycle_event: "" };
+  const r = await runSyncAsync({ env, repoRoot: repo });
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /^(skipped: .+|no live runtime dir to sync into)$/);
 });

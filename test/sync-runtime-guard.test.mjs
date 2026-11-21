@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { syncSkipReason } from "../server/sync-runtime.mjs";
+import { guardIgnoresDirt, runSync, syncSkipReason } from "../server/sync-runtime.mjs";
 import { guardHandler } from "../server/safe-handler.mjs";
 import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
 
@@ -88,4 +88,66 @@ test("/api/desktop/update.json answers JSON, and a failing handler behind the gu
   } finally {
     boom.server.close();
   }
+});
+
+// idea-401 (PLAN_INBOX_TOP3_1120 T2): docs/-only, artifacts/-only and untracked-only dirt no longer needs --force.
+test("idea-401: docs/, artifacts/ and untracked dirt don't block the sync; a dirty server/*.mjs still does", () => {
+  const dir = repo();
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  mkdirSync(join(dir, "artifacts"), { recursive: true });
+  mkdirSync(join(dir, "server"), { recursive: true });
+  writeFileSync(join(dir, "docs", "SPEC.md"), "v1");
+  writeFileSync(join(dir, "artifacts", "shot.txt"), "v1");
+  writeFileSync(join(dir, "server", "a.mjs"), "export const a = 1;\n");
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "tracked docs, artifacts, server");
+
+  writeFileSync(join(dir, "docs", "x.md"), "untracked");
+  assert.equal(syncSkipReason(dir), null, "untracked docs/x.md");
+  writeFileSync(join(dir, "docs", "SPEC.md"), "v2 (another lane's uncommitted edit)");
+  assert.equal(syncSkipReason(dir), null, "tracked docs/ edit");
+  writeFileSync(join(dir, "artifacts", "shot.txt"), "v2");
+  git(dir, "add", "artifacts/shot.txt");
+  assert.equal(syncSkipReason(dir), null, "staged artifacts/ edit");
+  writeFileSync(join(dir, "server", "b.mjs"), "untracked");
+  assert.equal(syncSkipReason(dir), null, "untracked-only outside docs/ is ignored as before");
+
+  writeFileSync(join(dir, "server", "a.mjs"), "export const a = 2;\n");
+  assert.match(syncSkipReason(dir), /^working tree not clean \(server\/a\.mjs\)$/, "a dirty server/*.mjs still refuses, mixed with docs dirt");
+  git(dir, "checkout", "-q", "--", "server/a.mjs");
+  assert.equal(syncSkipReason(dir), null);
+  git(dir, "rm", "-q", "--cached", "docs/SPEC.md");
+  assert.equal(syncSkipReason(dir), null, "a staged docs/ delete");
+  git(dir, "mv", "a.txt", "docs/a.txt");
+  assert.match(syncSkipReason(dir), /not clean \(a\.txt\)/, "a rename out of the root counts its source side");
+  assert.equal(guardIgnoresDirt("docsx/a.md"), false, "a prefix, not a substring");
+  assert.equal(guardIgnoresDirt("public/THIRD-PARTY-LICENSES.txt"), true);
+});
+
+test("idea-401: runSync with an untracked docs/x.md and an edited tracked doc syncs into the runtime", () => {
+  const dir = repo();
+  mkdirSync(join(dir, "server"), { recursive: true });
+  mkdirSync(join(dir, "docs"), { recursive: true });
+  writeFileSync(join(dir, "server", "a.mjs"), "export const a = 1;\n");
+  writeFileSync(join(dir, "docs", "SPEC.md"), "v1");
+  git(dir, "add", ".");
+  git(dir, "commit", "-qm", "server + docs");
+  writeFileSync(join(dir, "docs", "x.md"), "untracked");
+  writeFileSync(join(dir, "docs", "SPEC.md"), "v2");
+  const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
+  const runtime = join(lad, "VibeSquad", "runtime");
+  mkdirSync(runtime, { recursive: true });
+  const lines = [];
+  const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: mkdtempSync(join(tmpdir(), "vs-sync-home-")) };
+  const res = runSync({ repoRoot: dir, env, log: (l) => lines.push(l) });
+  assert.equal(res.synced, true, lines.join("\n"));
+  assert.equal(readFileSync(join(runtime, "server", "a.mjs"), "utf8"), "export const a = 1;\n");
+  assert.ok(!existsSync(join(runtime, "docs")), "docs/ is never copied into the runtime");
+  assert.ok(!lines.some((l) => /skipped/.test(l)), lines.join("\n"));
+
+  writeFileSync(join(dir, "server", "a.mjs"), "export const a = 2;\n");
+  const res2 = runSync({ repoRoot: dir, env, log: (l) => lines.push(l) });
+  assert.equal(res2.synced, false);
+  assert.match(res2.skipped, /not clean \(server\/a\.mjs\)/);
+  assert.equal(readFileSync(join(runtime, "server", "a.mjs"), "utf8"), "export const a = 1;\n", "the live runtime keeps the committed copy");
 });
