@@ -88,7 +88,10 @@ export async function armedWatchOwners(baseHome) {
   return new Set((doc.sets ?? []).filter((s) => !s.firedAt && !s.cancelledAt).map((s) => s.owner));
 }
 
-/** Open work in priority order: TASKS.json live units, parked cards of THIS Squad+lane, plan blocks not PASS in the brief. */
+/** Open work in priority order: TASKS.json live units, then plan blocks not PASS in the brief.
+ * Inbox cards are triage items, not lane work, EXCEPT a plain new card (status "parked", no parkedAt marker)
+ * and an "accepted" card (Review L1: accepted is actionable), which still count. An explicitly parked card
+ * (triage --park stamps parkedAt) and archived/handed-off/rejected cards are skipped (idea-481). */
 export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const root = briefRootFor(teamId, laneId, rootDir);
   const items = await openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
@@ -96,7 +99,12 @@ export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const cards = Array.isArray(inbox) ? inbox : Array.isArray(inbox?.cards) ? inbox.cards : [];
   const sameId = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
   for (const c of cards) {
-    if ((c.status && c.status !== "parked") || !sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
+    // idea-481: an explicitly parked card (triage --park stamps parkedAt) waits for triage; and any non-parked
+    // status except "accepted" (archived/handed-off/rejected) is not open lane work. A plain new card (status
+    // "parked", no marker) and an accepted card still count.
+    if (c.parkedAt) continue;
+    if (c.status && c.status !== "parked" && c.status !== "accepted") continue;
+    if (!sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
     items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
   }
   try {

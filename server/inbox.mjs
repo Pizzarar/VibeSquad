@@ -789,6 +789,10 @@ function triageInboxCardsWith(update, body, rootDir) {
         }
       }
       card.updatedAt = now;
+      // idea-481: an explicit park (triage --park / --set-status parked) is distinguishable from a new card's
+      // default "parked": stamp parkedAt so the idle nudger skips it. Re-triaging away from parked clears it.
+      if (patch.status === "parked") card.parkedAt = now;
+      else if (patch.status !== undefined && patch.status !== null) delete card.parkedAt;
       if (card.status === "archived") removeInboxMedia(cardId, baseHome);
 
       result = { action: "update", card };
