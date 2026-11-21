@@ -2,7 +2,7 @@
 // name -> role map. All file work happens in temp dirs; the fixture is a copy of ~/.vibesquad/profiles.json on
 // 2026-11-17 (12 profiles, v1).
 import assert from "node:assert/strict";
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -383,4 +383,37 @@ test("the 9 names P5b adds route exactly as today (real user file) for every cap
     }
   }
   assert.equal(n, 9 * 8 * 6);
+});
+
+test("P5c L4: a schemaVersion 2 body without a roles object (or an empty one) is rebuilt, not returned as-is", (t) => {
+  const list = JSON.parse(readFileSync(FIXTURE, "utf8")).profiles;
+  for (const roles of [undefined, null, [], "x", {}]) {
+    const res = migrateProfilesData({ version: 1, schemaVersion: 2, ...(roles === undefined ? {} : { roles }), profiles: list });
+    assert.deepEqual([res.ok, res.changed, res.fromVersion], [true, true, 2], `roles=${JSON.stringify(roles)}`);
+    assert.equal(Object.keys(res.data.roles).length, 8);
+  }
+  const good = migrateProfilesData(migrateProfilesData({ profiles: list }).data);
+  assert.deepEqual([good.ok, good.changed], [true, false], "a real v2 body stays idempotent");
+  const dir = tmp(t);
+  const f = join(dir, "profiles.json");
+  writeFileSync(f, JSON.stringify({ version: 1, schemaVersion: 2, profiles: list }), "utf8");
+  const r = migrateProfilesFile(f);
+  assert.deepEqual([r.ok, r.changed, r.roleCount], [true, true, 8]);
+  assert.equal(migrateProfilesFile(f).reason, "already-v2");
+});
+
+test("P5c L1: the migrate CLI prints FAIL <reason> backup=<path>, never a raw stack", (t) => {
+  const dir = tmp(t);
+  const f = fixtureCopy(dir);
+  const out = [];
+  writeFileSync(f, "{nope", "utf8");
+  assert.equal(migrateCli(["--path", f], (l) => out.push(l)), 1);
+  assert.match(out.at(-1), /^migrate-profiles-v2: FAIL invalid JSON: .* path=.*profiles\.json backup=none$/);
+  // A throw inside the migration (here: the backup slot is a directory) is caught and reported the same way.
+  copyFileSync(FIXTURE, f);
+  mkdirSync(`${f}.bak-p5`);
+  assert.equal(migrateCli(["--path", f], (l) => out.push(l)), 1);
+  assert.match(out.at(-1), /^migrate-profiles-v2: FAIL .* path=.*profiles\.json backup=none$/);
+  assert.doesNotMatch(out.at(-1), /\n\s+at /);
+  assert.ok(readFileSync(f).equals(FIXTURE_BYTES), "the file is untouched");
 });

@@ -52,7 +52,9 @@ import {
   whoCandidate,
 } from "../server/identity.mjs";
 import { drainGuard as restartDrainGuard, drainGuardMessage, drainSkippedNote } from "../server/restart-coord.mjs";
-import { findProfile, loadProfiles } from "../server/profiles.mjs";
+import { findProfile, legacyProfileRole, loadProfiles } from "../server/profiles.mjs";
+import { liveRoles, roleProfileLabel } from "../server/spawn-route.mjs";
+import { loadTierLadder } from "../server/stakes-ladder.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
 import { fetchWithLocalToken, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
@@ -286,6 +288,7 @@ export function parseArgs(argv) {
     "splitDump",
     "json",
     "notes",
+    "roles",
     "dryRun",
     "noForce",
     "killBackground",
@@ -511,7 +514,7 @@ const USAGE = `vs — VibeSquad team log, live roster, profiles, handoff packet,
 Usage:
   vs whoami [--agent <id>] [--lane <lane>] [--json]
   vs who [lead|brainstorm|buddy|workers|all] [--team <team>] [--lane <lane>] [--json]
-  vs profiles [--role <role>] [--name <name>] [--notes] [--json]
+  vs profiles [--roles] [--role <role>] [--name <name>] [--notes] [--json]  (no filter: roles + tier ladder, then old names as aliases)
   vs log <type> "<text>" [--ref <ref>...]
   vs log --since-me [--limit <N>] [--peek]
   vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
@@ -1408,11 +1411,31 @@ function commandProfiles(flags) {
   const wantName = flags.name ? String(flags.name).trim().toLowerCase() : "";
   const includeNotes = Boolean(flags.notes);
 
+  // P5c (idea-77): the 8 roles (built live from the profiles, as the spawn hook routes them) + the tier ladder. Old
+  // profile names stay listed as aliases (Workaround until P5f). Filtered and --json output keep today's profile shape.
+  const roles = liveRoles(profiles);
+  const roleRows = Object.entries(roles).map(([key, r]) => ({
+    key,
+    name: r.name,
+    label: roleProfileLabel(key, roles),
+    tier: r.tier,
+    providers: [...(r.providers ?? [])],
+  }));
+  if (flags.roles) {
+    if (flags.json) {
+      process.stdout.write(JSON.stringify({ roles: roleRows, ladder: loadTierLadder() }, null, 2) + "\n");
+      return 0;
+    }
+    writeRoleRows(roleRows);
+    return 0;
+  }
+
   const matched = profiles.filter((p) => {
     if (wantRole && String(p.role ?? "").toLowerCase() !== wantRole) return false;
     if (wantName && !String(p.name ?? "").toLowerCase().includes(wantName)) return false;
     return true;
   });
+  const aliasOf = (p) => legacyProfileRole(p.name)?.role ?? "";
 
   if (flags.json) {
     const out = matched.map((p) => {
@@ -1424,6 +1447,7 @@ function commandProfiles(flags) {
         model: p.model,
         modeId: p.modeId ?? "default",
         ...(p.thinkingOptionId ? { thinkingOptionId: p.thinkingOptionId } : {}),
+        ...(aliasOf(p) ? { aliasOf: aliasOf(p) } : {}),
         ...(includeNotes ? { notes: p.notes ?? "" } : {}),
       };
       return item;
@@ -1432,20 +1456,40 @@ function commandProfiles(flags) {
     return matched.length > 0 ? 0 : 1;
   }
 
+  const unfiltered = !wantRole && !wantName;
+  if (unfiltered) {
+    writeRoleRows(roleRows);
+    process.stdout.write("\nAliases (old profile names, routed as today until P5f):\n");
+  }
+
   if (matched.length === 0) {
     process.stdout.write("NONE\n");
-    return 1;
+    return unfiltered ? 0 : 1;
   }
 
   for (const p of matched) {
     const id = p.id || "-";
     const mode = p.modeId || "default";
-    process.stdout.write(`${p.name} · ${id} · ${p.provider}/${p.model} · mode=${mode}\n`);
+    const alias = unfiltered && aliasOf(p) ? ` · alias of ${aliasOf(p)}` : "";
+    process.stdout.write(`${p.name} · ${id} · ${p.provider}/${p.model} · mode=${mode}${alias}\n`);
     if (includeNotes && p.notes) {
       process.stdout.write(`  notes: ${p.notes}\n`);
     }
   }
   return 0;
+}
+
+/** `vs profiles` roles block: one line per role (label, default tier, provider order), then the tier ladder. */
+function writeRoleRows(roleRows) {
+  process.stdout.write("Roles (spawn with profile=<label>; stakes tierA-* -> top, mechanical -> cheap):\n");
+  for (const r of roleRows) {
+    process.stdout.write(`${r.name} · label=${r.label} · tier=${r.tier} · providers=${r.providers.join(">")}\n`);
+  }
+  process.stdout.write("\nTier ladder (provider: top | mid | cheap):\n");
+  const rung = (x) => (x?.model ? `${x.model}${x.effort ? `/${x.effort}` : ""}` : "-");
+  for (const [fam, rungs] of Object.entries(loadTierLadder())) {
+    process.stdout.write(`${fam}: ${rung(rungs.top)} | ${rung(rungs.mid)} | ${rung(rungs.cheap)}\n`);
+  }
 }
 
 /**

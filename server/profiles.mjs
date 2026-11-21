@@ -15,6 +15,7 @@ import {
   resolveProfileWithFailover,
   setProviderCapped,
 } from "./provider-failover.mjs";
+import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
 
 export {
   COUNTERPART_PROFILES,
@@ -473,22 +474,8 @@ export const DEFAULT_PROFILES = DEFAULT_PACK_PROFILES;
 
 registerDefaultFailoverProfiles(DEFAULT_PACK_PROFILES);
 
-export const LEGACY_PROFILE_ALIASES = {
-  "Lead - Opus": "Lead - Claude",
-  "Brainstorm - Opus": "Brainstorm - Claude",
-  "Art - Gemini": "Art Director - Gemini",
-  "Art - Opus": "Art Painter - Opus",
-  "Builder - Gemini": "Lead - Gemini",
-  "Reviewer - Gemini": "Review - Gemini",
-  Lead: "Lead - Claude",
-  Brainstorm: "Brainstorm - Claude",
-  Buddy: "Brainstorm - Claude",
-  RiffBot: "Brainstorm - Claude",
-  Worker: "Implement - Sonnet",
-  Coder: "Work Order - DSP",
-  Reviewer: "Review - Gemini",
-  Fast: "Pre-check - Flash",
-};
+// The one legacy alias table lives in profile-aliases.mjs (P5c dedupe: provider-failover.mjs + the spawn hook read it too).
+export { LEGACY_PROFILE_ALIASES };
 
 /**
  * Role-only profiles (docs/PLAN_PROFILES_ROLE_ONLY.md P5b, idea-77): every old profile name -> its schema-v2 role key
@@ -523,8 +510,10 @@ export const LEGACY_PROFILE_ROLES = Object.freeze({
 
 /**
  * Old profile name or alias -> {name, alias, role}: `name` = the canonical old profile name, `alias` = the alias used
- * (null for a direct name). Exact name, exact alias, then the name case-insensitively: the same order as role-route.mjs
- * lookupRole, so lowercase "lead" is not an old name (it is the new role). null = not an old name.
+ * (null for a direct name). Order: exact name, exact alias (case-sensitive), then the name case-insensitively.
+ * role-route.mjs lookupRole tries role keys/names between the alias and the case-insensitive step; no role name equals
+ * an old name, so the two agree. Lowercase "lead" is neither an old name nor an alias here (it is the new role); bare
+ * "Lead" is the alias for "Lead - Claude". null = not an old name.
  */
 export function legacyProfileRole(nameInput) {
   const raw = String(nameInput ?? "").trim();

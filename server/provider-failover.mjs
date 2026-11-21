@@ -2,9 +2,12 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { updateJsonFileSync } from "./file-lock.mjs";
+import { LEGACY_PROFILE_ALIASES } from "./profile-aliases.mjs";
 
 export const QUOTA_FAILOVER_THRESHOLD = 95;
 
+// Legacy failover tables (COUNTERPART_PROFILES, ROLE_FAILOVER_CHAINS): read-only for old profile names until P5f.
+// Role names (server/role-route.mjs ROLE_TABLE) fail over along their role's provider list instead (P5c).
 export const COUNTERPART_PROFILES = {
   "Lead - Claude": "Lead - Gemini",
   "Lead - Gemini": "Lead - Claude",
@@ -26,22 +29,8 @@ export const COUNTERPART_PROFILES = {
   "Senior Reasoning - DSP": "Lead - Gemini",
 };
 
-const BUILTIN_ALIASES = {
-  "Lead - Opus": "Lead - Claude",
-  "Brainstorm - Opus": "Brainstorm - Claude",
-  "Art - Gemini": "Art Director - Gemini",
-  "Art - Opus": "Art Painter - Opus",
-  "Builder - Gemini": "Lead - Gemini",
-  "Reviewer - Gemini": "Review - Gemini",
-  "Lead": "Lead - Claude",
-  "Brainstorm": "Brainstorm - Claude",
-  "Buddy": "Brainstorm - Claude",
-  "RiffBot": "Brainstorm - Claude",
-  "Worker": "Implement - Sonnet",
-  "Coder": "Work Order - DSP",
-  "Reviewer": "Review - Gemini",
-  "Fast": "Pre-check - Flash",
-};
+// Old/short names -> canonical old profile name: the one table in profile-aliases.mjs (P5c dedupe). Removed in P5f.
+const BUILTIN_ALIASES = LEGACY_PROFILE_ALIASES;
 
 const BUILTIN_FALLBACK_PROFILES = [
   { name: "Lead - Claude", role: "lead", provider: "claude", model: "claude-opus-5-5", modeId: "auto", thinkingOptionId: "medium" },

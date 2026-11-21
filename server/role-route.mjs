@@ -1,7 +1,7 @@
 // Role-only routing (docs/PLAN_PROFILES_ROLE_ONLY.md P5a, idea-77): a profile names a ROLE; the model + effort come from
 // one ladder: role default tier x stakes -> tier -> provider rung (server/stakes-ladder.mjs DEFAULT_TIER_LADDER).
 // Pure: no file reads, no globals written. The caller passes the ladders (loadTierLadder()/loadStakesLadder() for the
-// user override) and the capped providers. Not wired into the spawn hook yet (P5c). Stored roles (profiles.json schema
+// user override) and the capped providers. Wired into the spawn hook by P5c (server/spawn-route.mjs). Stored roles (profiles.json schema
 // v2, P5b) come in as opts.roles from server/profiles-v2.mjs loadRoles(); ROLE_TABLE is the default.
 // Legacy profile names (Workaround, removed in P5f) do NOT use the tier ladder: they replay today's routing exactly
 // (failover hop profiles + the old per-stakes ladder), so existing callers see no change during the window.
@@ -238,7 +238,8 @@ const REASON_ORDER = ["explicit-capped", "explicit", "legacy-name", "all-capped"
  * @param {object} [input.ladder]       tier ladder (role names); default DEFAULT_TIER_LADDER. Pass loadTierLadder().
  * @param {object} [input.stakesLadder] old per-stakes ladder (legacy names); default DEFAULT_STAKES_LADDER. Pass loadStakesLadder().
  * @param {object} [opts]           {roles, legacy, hops, aliases} table overrides (tests, P5b)
- * @returns {null | {provider, model, effort, modeId, tier, reason, reasons, capped, stakes, role, legacy, alias}}
+ * @returns {null | {provider, model, effort, modeId, tier, reason, reasons, capped, stakes, role, legacy, alias, hop}}
+ *   hop = the legacy profile name the walk landed on (legacy names only, else null).
  *   null = unknown role and no explicit provider (caller keeps its request). `reason` is the primary one, in precedence
  *   explicit-capped > explicit > legacy-name > all-capped > failover > stakes > default; `reasons` lists all that
  *   applied. `capped` = the returned provider is capped: "all-capped" (every hop capped, so the first is kept, as today)
@@ -266,7 +267,7 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
   if (forced) reasons.push("stakes");
 
   // Walk order: a legacy name's hop profiles (first hop per provider), else the role's provider list.
-  const hops = legacy ? legacy.via.map((n) => hopProfiles[n]).filter((h) => h?.provider) : [];
+  const hops = legacy ? legacy.via.map((n) => hopProfiles[n] && { ...hopProfiles[n], name: n }).filter((h) => h?.provider) : [];
   const order = [];
   for (const p of legacy ? hops.map((h) => routeProviderFamily(h.provider)) : (roleDef?.providers ?? [])) {
     if (p && !order.includes(p)) order.push(p);
@@ -328,5 +329,6 @@ export function resolveRoute({ role, stakes, explicit, caps, ladder, stakesLadde
     role: found?.key ?? null,
     legacy: legacy?.name ?? null,
     alias: legacy?.alias ?? null,
+    hop: hop?.name ?? null,
   };
 }

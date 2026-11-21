@@ -29,7 +29,8 @@ import { sharedSchedules } from "./schedules.mjs";
 // Re-exported: the HTTP handoff used `backend.listAgents`, which DaemonClient lacks, so workers were never re-pointed.
 export { listDaemonAgents };
 import { LEGACY_NEEDS_LABEL, LEGACY_USER_TYPE, readJsonFileWithBom } from "./user-settings.mjs";
-import { DEFAULT_PACK_PROFILES, findProfile, loadProfiles, toPaseoSpawnConfig } from "./profiles.mjs";
+import { DEFAULT_PACK_PROFILES, findProfile, loadProfiles, readCappedProviders, toPaseoSpawnConfig } from "./profiles.mjs";
+import { roleSpawnConfig } from "./spawn-route.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
 import { defangPromptFences } from "./write-guards.mjs";
 
@@ -513,18 +514,46 @@ export function validateLeadProfile(requested, profilesPath) {
   return profile;
 }
 
-export function resolveLeadProfile(oldLead, profilesPath, requestedProfile = "") {
-  if (String(requestedProfile ?? "").trim()) {
-    const profile = validateLeadProfile(requestedProfile, profilesPath);
-    return { profileName: profile.name, profile, spawnCfg: toPaseoSpawnConfig(profile) };
-  }
+/**
+ * Arg 3: the idea-359 requested successor profile (string), or P5c cap options
+ * { requestedProfile?, cappedProviders?, cappedProvidersPath?, usageProviders? }.
+ * An explicit profile is validated (400 unless role=lead) and then resolved like a label: a stored name resolves to that
+ * profile; a role name ("lead") takes the P5c role route.
+ */
+export function resolveLeadProfile(oldLead, profilesPath, opts = {}) {
+  const { requestedProfile = "", ...capOpts } = typeof opts === "string" ? { requestedProfile: opts } : (opts ?? {});
+  const requested = String(requestedProfile ?? "").trim();
+  if (requested) validateLeadProfile(requested, profilesPath);
   const oldLabels = oldLead?.labels ?? {};
   const rawProvider = String(oldLead?.provider || "claude");
   const isAgy = rawProvider.startsWith("antigravity");
   const fallbackProfileName = isAgy ? "Lead - Gemini" : "Lead - Claude";
-  const desiredKey = String(oldLabels.profile || fallbackProfileName).trim();
+  const desiredKey = (requested || String(oldLabels.profile || fallbackProfileName)).trim();
 
   const { profiles } = loadProfiles(profilesPath, { autoSeed: false });
+  // P5c (idea-77): a role-name label ("lead", from a role-name spawn) with no stored profile of that name respawns from
+  // the role route (provider list skipping capped providers, tier rung model + effort), as the spawn hook routes it.
+  // Checked before findProfile: its alias lookup would map "lead" to "Lead - Claude". No stakes: the role's default tier.
+  const storedHit = profiles.some((p) => String(p?.name ?? "").toLowerCase() === desiredKey.toLowerCase());
+  // Over-quota providers (usageProviders, >=95%) are skipped like capped ones, as brainstorm.mjs respawns do.
+  const roleHit = storedHit
+    ? null
+    : roleSpawnConfig(desiredKey, {
+        profiles,
+        usageList: [
+          ...(Array.isArray(capOpts.usageProviders) ? capOpts.usageProviders : []),
+          ...Object.keys(
+            readCappedProviders({
+              useDiskCaps: true,
+              ...(capOpts.cappedProviders !== undefined ? { cappedProviders: capOpts.cappedProviders } : {}),
+              ...(capOpts.cappedProvidersPath ? { cappedProvidersPath: capOpts.cappedProvidersPath } : {}),
+            }),
+          ).map((id) => ({ id, status: "exhausted", usedPct: 100 })),
+        ],
+      });
+  // Only the lead role: a worker/Buddy role name here ("Implement") falls back like any unknown profile.
+  const roleCfg = roleHit?.profile?.role === "lead" ? roleHit : null;
+  if (roleCfg) return { profileName: roleCfg.profileName, profile: roleCfg.profile, spawnCfg: roleCfg.spawnCfg };
   const profile =
     findProfile(desiredKey, profiles) || findProfile(fallbackProfileName, profiles);
   const spawnCfg = profile
@@ -792,7 +821,13 @@ export function createLeadHandoffCoordinator(deps = {}) {
     const summary = readBrainstormSummary(laneId, rootDir);
     const cwd = oldLead?.cwd || rootDir;
     const latestPlan = findLanePlanFile(cwd, rootDir, laneId, summary.content);
-    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath, requestedProfile);
+    const { profileName, spawnCfg } = resolveLeadProfile(oldLead, deps.profilesPath, {
+      requestedProfile,
+      ...(deps.cappedProviders !== undefined ? { cappedProviders: deps.cappedProviders } : {}),
+      ...(deps.cappedProvidersPath ? { cappedProvidersPath: deps.cappedProvidersPath } : {}),
+      // Quota reports (deps.usageProviders: a list, or a function returning the live list, as the spawn hook takes it).
+      ...((u) => (Array.isArray(u) ? { usageProviders: u } : {}))(typeof deps.usageProviders === "function" ? deps.usageProviders() : deps.usageProviders),
+    });
 
     const prompt = buildSuccessorPrompt({
       laneId,

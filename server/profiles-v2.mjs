@@ -13,7 +13,8 @@
 // (loadProfiles, providers-catalog, agent-duties) only read `profiles`.
 //
 // This module is pure except migrateProfilesFile() / loadRoles(), which take an explicit path (tests use temp dirs).
-// Not wired into the spawn hook (P5c) or the UI (P5d).
+// Spawn hook (P5c, server/spawn-route.mjs) builds roles LIVE from the v1 profiles (buildRolesFromProfiles) and does not
+// read stored `roles` until P5d's role editor ships (P5b review M). Not wired into the UI (P5d).
 import { copyFileSync, existsSync, readFileSync } from "node:fs";
 import {
   DEFAULT_PACK_PROFILES,
@@ -253,6 +254,11 @@ export function profilesSchemaVersion(data) {
  *            unmapped: string[], sources?: object}}
  *   unmapped = stored profiles that are not an old name (custom profiles): they stay in `profiles`, no role is made.
  */
+/** A `roles` block with at least one role (an empty object is no roles). */
+function hasRoles(roles) {
+  return isObj(roles) && Object.keys(roles).length > 0;
+}
+
 export function migrateProfilesData(data) {
   const fromVersion = profilesSchemaVersion(data);
   if (fromVersion > PROFILES_SCHEMA_VERSION) {
@@ -263,7 +269,9 @@ export function migrateProfilesData(data) {
     return { ok: false, changed: false, fromVersion, unmapped: [], error: "no profiles list" };
   }
   const unmapped = list.filter((p) => isObj(p) && !legacyProfileRole(p.name)).map((p) => String(p.name ?? ""));
-  if (fromVersion === PROFILES_SCHEMA_VERSION) {
+  // A v2 body without a usable `roles` object (hand-edited, a save that dropped it, or an empty `{}`) is rebuilt, not
+  // trusted as-is. A build is never empty (every role falls back to the shipped pack), so this stays idempotent.
+  if (fromVersion === PROFILES_SCHEMA_VERSION && hasRoles(data?.roles)) {
     return { ok: true, changed: false, fromVersion, unmapped, data };
   }
   const { roles, sources } = buildRolesFromProfiles(list);
@@ -306,10 +314,16 @@ export function migrateProfilesFile(filePath, { dryRun = false } = {}) {
   if (dryRun) return { ...summary, dryRun: true, backupPath: null };
   const backupPath = pickBackupPath(path, raw);
   if (backupPath && !existsSync(backupPath)) copyFileSync(path, backupPath);
-  writeSettingsAtomic(path, res.data);
-  const back = readFileSync(path, "utf8");
-  const check = JSON.parse(back);
-  if (back.charCodeAt(0) === 0xfeff || profilesSchemaVersion(check) !== PROFILES_SCHEMA_VERSION || check.profiles?.length !== res.data.profiles.length) {
+  let back;
+  let check;
+  try {
+    writeSettingsAtomic(path, res.data);
+    back = readFileSync(path, "utf8");
+    check = JSON.parse(back);
+  } catch (err) {
+    return { ...summary, ok: false, backupPath, error: `${err?.code || "write error"}: ${err?.message ?? err}; restore from the backup` };
+  }
+  if (back.charCodeAt(0) === 0xfeff || profilesSchemaVersion(check) !== PROFILES_SCHEMA_VERSION || !hasRoles(check.roles) || check.profiles?.length !== res.data.profiles.length) {
     return { ...summary, ok: false, backupPath, error: "read-back check failed; restore from the backup" };
   }
   return { ...summary, backupPath, bytes: Buffer.byteLength(back) };
@@ -342,7 +356,7 @@ export function loadRoles(filePath) {
     parsed = null;
   }
   const version = parsed ? profilesSchemaVersion(parsed) : 0;
-  if (version >= PROFILES_SCHEMA_VERSION && isObj(parsed.roles)) {
+  if (version >= PROFILES_SCHEMA_VERSION && hasRoles(parsed.roles)) {
     return { schemaVersion: version, roles: normalizeRoles(parsed.roles), source: "v2" };
   }
   const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.profiles) ? parsed.profiles : null;

@@ -87,7 +87,7 @@ test(
       const out = await h.spawn({ provider: "claude" }, { labels: LABELS({ stakes: "tierA-security" }) });
       assert.equal(out.config.model, "claude-opus-5-5");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder+legacy-name tier=top role=implement"]);
     } finally {
       h.stop?.();
     }
@@ -168,7 +168,7 @@ test(
       }
       const m = routeMetrics(vsHome);
       assert.equal(m.length, 2);
-      assert.ok(m.every((t) => t === "route: stakes=normal model=claude-sonnet-5-5 effort=medium reason=default"));
+      assert.ok(m.every((t) => t === "route: stakes=normal model=claude-sonnet-5-5 effort=medium reason=legacy-name tier=mid role=implement"));
     } finally {
       h.stop?.();
     }
@@ -271,7 +271,7 @@ test(
       const out = await viaSpawnWorker(h, { stakes: "tierA-security" });
       assert.equal(out.config.model, "claude-opus-5-5");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-opus-5-5 effort=high reason=ladder+legacy-name tier=top role=implement"]);
     } finally {
       h.stop?.();
     }
@@ -286,7 +286,7 @@ test(
       const out = await viaSpawnWorker(h, { stakes: "tierA-invariant", provider: "claude", model: "claude-haiku-5-5", thinkingOptionId: "high" });
       assert.equal(out.config.model, "claude-haiku-5-5");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-invariant model=claude-haiku-5-5 effort=high reason=explicit"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-invariant model=claude-haiku-5-5 effort=high reason=explicit+legacy-name tier=top role=implement"]);
     } finally {
       h.stop?.();
     }
@@ -301,7 +301,7 @@ test(
       const out = await viaSpawnWorker(h, {});
       assert.equal(out.config.model, "claude-sonnet-5-5");
       assert.equal(out.config.thinkingOptionId, "medium");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=normal model=claude-sonnet-5-5 effort=medium reason=default"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=normal model=claude-sonnet-5-5 effort=medium reason=legacy-name tier=mid role=implement"]);
     } finally {
       h.stop?.();
     }
@@ -333,7 +333,7 @@ test(
       const out = await viaSpawnWorker(h, { stakes: "tierA-security", provider: "claude", model: "claude-haiku-5-5" });
       assert.equal(out.config.model, "claude-haiku-5-5");
       assert.equal(out.config.thinkingOptionId, "high");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-haiku-5-5 effort=high reason=explicit+ladder"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-haiku-5-5 effort=high reason=explicit+ladder+legacy-name tier=top role=implement"]);
     } finally {
       h.stop?.();
     }
@@ -348,7 +348,7 @@ test(
       const out = await viaSpawnWorker(h, { stakes: "tierA-invariant", thinkingOptionId: "low" });
       assert.equal(out.config.model, "claude-opus-5-5");
       assert.equal(out.config.thinkingOptionId, "low");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-invariant model=claude-opus-5-5 effort=low reason=explicit+ladder"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-invariant model=claude-opus-5-5 effort=low reason=explicit+ladder+legacy-name tier=top role=implement"]);
     } finally {
       h.stop?.();
     }
@@ -369,7 +369,7 @@ test(
       });
       assert.equal(out.config.model, "claude-haiku-5-5");
       assert.equal(out.config.thinkingOptionId, "low");
-      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-haiku-5-5 effort=low reason=explicit"]);
+      assert.deepEqual(routeMetrics(vsHome), ["route: stakes=tierA-security model=claude-haiku-5-5 effort=low reason=explicit+legacy-name tier=top role=implement"]);
     } finally {
       h.stop?.();
     }

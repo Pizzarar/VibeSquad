@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadProfiles, profileMcpExtras } from "../profiles.mjs";
+import { roleMcpExtras } from "../spawn-route.mjs";
 import { RunnerClient, RunnerHttpError, readDiscovery, runnerHome } from "./runner-client.mjs";
 import { protectedMetaIn } from "../../runner/runner.mjs";
 import { isForbiddenRealHome } from "../test-guard.mjs";
@@ -737,7 +738,13 @@ export class RunnerBackend {
       // Opt-in MCP extras (e.g. playwright for UI live checks) come from the profile; an explicit vs.mcp label wins.
       if (meta.profile && meta.labels["vs.mcp"] === undefined) {
         let stored; try { stored = loadProfiles(undefined, { autoSeed: false }).profiles; } catch { /* defaults only */ }
-        const extras = profileMcpExtras(meta.profile, stored);
+        let extras = profileMcpExtras(meta.profile, stored);
+        // P5c (idea-77): a ROLE-name spawn (profile=Implement / Review / Art Director, no stored profile of that name)
+        // takes the role's tools for the provider it landed on.
+        const wantName = String(meta.profile).trim().toLowerCase();
+        if (!extras.length && !(stored ?? []).some((p) => String(p?.name ?? "").trim().toLowerCase() === wantName)) {
+          extras = roleMcpExtras(meta.profile, stored, config.provider) ?? [];
+        }
         if (extras.length) meta.labels["vs.mcp"] = extras.join(",");
       }
       // Claude permission modes only mean something to claude; for ACP providers modeId is the agent's own ACP mode.

@@ -211,8 +211,19 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
       const { loadProfiles } = await import("../profiles.mjs");
       return loadProfiles(undefined, { autoSeed: false }).profiles;
     },
-    async resolveProfile(name, profiles) {
+    async resolveProfile(name, profiles, { stakes } = {}) {
       const { findProfile, toPaseoSpawnConfig } = await import("../profiles.mjs");
+      // P5c (idea-77): a ROLE name ("Implement", "Review", lowercase "lead") with no stored profile of that name spawns
+      // as the role (labels.profile = the role, which the spawn hook routes through resolveRoute). Checked before
+      // findProfile, whose alias lookup maps "lead" to "Lead - Claude" (same order as lead-handoff resolveLeadProfile).
+      // Old names + aliases ("Lead", "Implement - Sonnet") are never role hits: they keep today's findProfile path.
+      const key = clean(name).toLowerCase();
+      const stored = (Array.isArray(profiles) ? profiles : []).some((p) => clean(p?.name).toLowerCase() === key || (p?.id && p.id === clean(name)));
+      if (!stored) {
+        const { roleSpawnConfig } = await import("../spawn-route.mjs");
+        const roleCfg = roleSpawnConfig(name, { profiles, stakes });
+        if (roleCfg) return { profile: roleCfg.profile, spawn: toPaseoSpawnConfig(roleCfg.profile, {}, profiles) };
+      }
       const profile = findProfile(name, profiles);
       if (!profile) return null;
       return { profile, spawn: toPaseoSpawnConfig(profile, {}, profiles) };
@@ -314,7 +325,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   let profile = null;
   if (profileName) {
     const profiles = await ctx.loadProfiles();
-    const hit = await ctx.resolveProfile(profileName, profiles);
+    const hit = await ctx.resolveProfile(profileName, profiles, { stakes: clean(args.labels?.stakes) || clean(args.stakes) });
     if (!hit) {
       const known = profiles.map((p) => p.name).join(", ");
       throw new Error(`unknown profile "${profileName}". Known: ${known}`);
@@ -378,7 +389,8 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
       throw new Error(`cannot spawn a lead: target lane "${requestedLane}" is not the caller's lane "${canonLane}"`);
     }
     if (requestedTeam && findTeamInRegistry(requestedTeam, teams)?.id !== canonTeam) throw new Error(`cannot spawn a lead: target team "${requestedTeam}" is not the caller's team "${canonTeam}"`);
-    if (!clean(profile?.name).startsWith(LEAD_PROFILE_PREFIX)) throw new Error(`cannot spawn a lead: profile "${clean(profile?.name) || profileName || "none"}" is not a "${LEAD_PROFILE_PREFIX}" profile`);
+    // A "Lead - …" profile, or the lead ROLE (P5c: profile "lead", routed by the spawn hook).
+    if (!clean(profile?.name).startsWith(LEAD_PROFILE_PREFIX) && profile?.roleKey !== LEAD_ROLE) throw new Error(`cannot spawn a lead: profile "${clean(profile?.name) || profileName || "none"}" is not a "${LEAD_PROFILE_PREFIX}" profile`);
     const leaseKey = `${canonTeam}:${canonLane}`;
     if (leadSpawnLeases.has(leaseKey)) throw new Error(`cannot spawn a lead: a lead spawn for lane "${canonLane}" is already in flight`);
     leadSpawnLeases.add(leaseKey);
@@ -437,8 +449,14 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
 }
 
 // Art duet: spawning one half of Painter + Director starts the other (same job) unless that job already has a live partner.
-const ART_DUET = { "Art Painter - Opus": "Art Director - Gemini", "Art Director - Gemini": "Art Painter - Opus" };
-const ART_PAINTER = "Art Painter - Opus";
+// Old names pair with old names; P5c role names ("Art Painter" / "Art Director") pair with role names.
+const ART_DUET = {
+  "Art Painter - Opus": "Art Director - Gemini",
+  "Art Director - Gemini": "Art Painter - Opus",
+  "Art Painter": "Art Director",
+  "Art Director": "Art Painter",
+};
+const ART_PAINTERS = new Set(["Art Painter - Opus", "Art Painter"]);
 
 async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job, lane }) {
   const live = await ctx.withBackend({ lane, requireRunner: true }, (b) => (b.fetchAgents ?? b.listAgents).call(b, {})).catch(() => null);
@@ -446,7 +464,7 @@ async function spawnArtPartner(ctx, args, { partnerName, self, selfProfile, job,
   const taken = entriesOf(live).map((e) => e?.agent ?? e).some((a) => a && !a.archivedAt && !dead.has(a.status) && a.id !== self.id
     && clean(a.labels?.profile) === partnerName && clean(a.labels?.job) === job && clean(a.labels?.lane).toLowerCase() === clean(lane).toLowerCase());
   if (taken) return null;
-  const painterId = selfProfile === ART_PAINTER ? self.id : null;
+  const painterId = ART_PAINTERS.has(selfProfile) ? self.id : null;
   const brief = clean(args.prompt ?? args.initialPrompt);
   const prompt = painterId
     ? `You are the Art Director in a Painter + Director duet. Your Painter is agent ${painterId}; it will send you gallery PNG paths via \`send\`. Reply with numbered fixes or PASS (max round 4).\n\nBrief:\n${brief}`
