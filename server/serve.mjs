@@ -48,6 +48,7 @@ import { startTokenWatcher } from "./token-watch.mjs";
 import { startIdleLaneKick } from "./idle-lane-kick.mjs";
 import { startTempScratchTtl } from "./disk-dedupe.mjs";
 import { underTestRunner } from "./test-guard.mjs";
+import { startDiskAlarm } from "./disk-alarm.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
@@ -571,6 +572,7 @@ if (isMain) {
     if (process.env.VS_TOKEN_WATCH !== "0") {
       try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
     }
+    if (process.env.VS_DISK_ALARM !== "0") { try { const da = startDiskAlarm({ rootDir }); server.once("close", () => da.stop()); } catch (err) { console.warn("disk alarm not started:", err?.message ?? err); } }
     if (process.env.VS_IDLE_KICK !== "0") { try { const ik = startIdleLaneKick({ runner: sharedRunnerBackend(), rootDir }); server.once("close", () => ik.stop()); } catch (err) { console.warn("idle lane kick not started:", err?.message ?? err); } }
     // B1 (PLAN_DISK_LIFECYCLE_1121): slow-tick TTL on VS's own "vs-<name>-XXXXXX" Temp scratch dirs; never under a test runner.
     if (process.env.VS_TEMP_TTL !== "0" && !underTestRunner()) {

@@ -298,6 +298,12 @@ function ShortcutSheet({ onClose, bindings, onEdit }: { onClose: () => void; bin
                 <td>{d}</td>
               </tr>
             ))}
+            <tr data-testid="shortcut-shift-click">
+              <td>
+                <kbd>Shift+click</kbd>
+              </td>
+              <td>open an agent in the right pane (Normal mode split)</td>
+            </tr>
           </tbody>
         </table>
         <button className="btn ghost small" data-testid="shortcut-sheet-edit" onClick={onEdit}>

@@ -44,7 +44,7 @@ import { defangPromptFences } from "../write-guards.mjs";
 import { detachLiveChildren } from "../detach-children.mjs";
 import { briefRootFor } from "../brief-path.mjs";
 import { DEFAULT_PACK_PROFILES, LEGACY_PROFILE_ALIASES, deriveRole, legacyProfileRole } from "../profiles.mjs";
-import { normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
+import { dropExpiredCaps, normalizeProviderFamily, resolveProfileWithFailover } from "../provider-failover.mjs";
 import { normalizeStakes, resolveStakesRoute } from "../stakes-ladder.mjs";
 import { migrateModelId } from "../model-ids.mjs";
 import { WF_LABEL, deriveWfArm, normalizeWfLabel, resolveWfLabel } from "../wf-label.mjs";
@@ -63,7 +63,7 @@ import {
 import { leanApplies, leanProviderOptions } from "../lean-tools.mjs";
 import { createWatchEngine, finalsTextFor } from "../watch-sets.mjs";
 import { redactHostPathTokens } from "../redact-host-paths.mjs";
-import { extractVerdictLine, isReviewerAgent } from "../verdict.mjs";
+import { extractVerdictLine, isReviewerAgent, VERDICT_PREFIX_SRC } from "../verdict.mjs";
 import type { WatchDelivery, WatchEngine, WatchEngineOptions, WatchSet } from "../watch-sets.mjs";
 import {
   LEGACY_NEEDS_LABEL,
@@ -1655,15 +1655,17 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * empty map means no provider is capped, so spawns are left alone when nothing declares one.
      */
     const readCappedProviderMap = (): Record<string, any> => {
+      // Drop expired caps (resetsAt / updatedAt + 5 h), exactly like provider-failover's readers: a 10-minute upstream cap must lapse here too.
+      const live = (m: Record<string, any>): Record<string, any> => dropExpiredCaps(m);
       if (deps.cappedProviders !== undefined && deps.cappedProviders !== null) {
-        return normalizeCappedProviders(deps.cappedProviders);
+        return live(normalizeCappedProviders(deps.cappedProviders));
       }
       const file = process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH
         ? path.resolve(process.env.VIBESQUAD_CAPPED_PROVIDERS_PATH)
         : path.join(baseDir(), "capped-providers.json");
       if (!fs.existsSync(file)) return {};
       try {
-        return normalizeCappedProviders(JSON.parse(fs.readFileSync(file, "utf8")));
+        return live(normalizeCappedProviders(JSON.parse(fs.readFileSync(file, "utf8"))));
       } catch {
         return {};
       }
@@ -1674,16 +1676,16 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
      * `exhausted` entry. Shared by before(agent.create), enforceProfileAfterSpawn and agent.created (P5c).
      */
     const currentUsageList = (): any[] => {
-      const list: any[] = [
+      // Capped families FIRST: isProviderOverQuota reads the first entry that matches a family, so a quota report for the
+      // same provider (antigravity-cli, codex) must not shadow its cap.
+      const list: any[] = Object.keys(readCappedProviderMap()).map((family) => ({ id: family, status: "exhausted", usedPct: 100 }));
+      list.push(
         ...(typeof deps.usageProviders === "function"
           ? deps.usageProviders()
           : Array.isArray(deps.usageProviders)
             ? deps.usageProviders
             : []),
-      ];
-      for (const family of Object.keys(readCappedProviderMap())) {
-        list.push({ id: family, status: "exhausted", usedPct: 100 });
-      }
+      );
       return list;
     };
 
@@ -2772,11 +2774,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       try {
         const page = await paseo.agents.ref(id).timeline.refetch({ direction: "tail", limit: 20 });
         let last = "";
+        let failure = "";
+        let replied = false; // the current turn already produced a reply
         for (const { item } of page.entries) {
-          if (item.type === "assistant_message" && item.text?.trim()) last = item.text.trim();
-          else if (strict && item.type === "user_message") last = "";
+          if (item.type === "assistant_message" && item.text?.trim()) { last = item.text.trim(); replied = true; }
+          else if (item.type === "error" && item.message) failure = `[agent error] ${item.message}`;
+          else if (item.type === "user_message") { failure = ""; replied = false; if (strict) last = ""; }
         }
-        return last;
+        // a failed newer turn beats an older turn's reply; a reply in the failing turn itself still wins
+        return failure && !replied ? failure : last; // an agent that died with a reason is never a silent empty message (idea-442)
       } catch {
         return "";
       }
@@ -4111,8 +4117,8 @@ ${detail}` : text, refs: [d.setId] };
     const isExplicitWorker = (labels: Labels) => String(labels?.role ?? "").trim().toLowerCase() === "worker";
     /** The newest done entry attributed to a worker. */
     type DoneIndex = Map<string, LogEntry>;
-    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", "NO-VERDICT: …". */
-    const VERDICT_RE = /^\s*(?:UNVERIFIED\b.*?:\s*)?(?:PASS|FAIL|NO-VERDICT)\b/;
+    /** A verdict-shaped text: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", "NO-VERDICT: …", plus a `VERDICT:` prefix or bold markers. */
+    const VERDICT_RE = new RegExp(`^\\s*(?:UNVERIFIED\\b.*?:\\s*)?${VERDICT_PREFIX_SRC}(?:PASS|FAIL|NO-VERDICT)\\b`);
     /**
      * One pass over a team log: per worker, the NEWEST `done` entry that belongs to it. Workers cannot `vs log`, so the report
      * is normally the digest's `{agent: digest, refs: [worker]}`. An entry belongs to worker W when its author is W, or when it
