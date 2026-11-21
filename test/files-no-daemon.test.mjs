@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, realpathSync, readFileSync, lstatSync, readdirSync, unlinkSync, rmdirSync, rmSync } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { join, parse } from "node:path";
 import { fsList, fsRead, resolveInCwd, resolveBareName, handleFsRead, handleFsList, handleFsResolve, isUnsafeRoot, confineReq, _resetRescan, listFiles } from "../server/file-search.mjs";
@@ -10,8 +10,29 @@ import { vsReadFile, vsListDirectory, VsFilesError } from "../src/vsFiles.ts";
 const src = (p) => readFileSync(new URL(`../${p}`, import.meta.url), "utf8");
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255, 1, 2]);
 
-const root = realpathSync(mkdtempSync(join(tmpdir(), "vs-fs-")));
-const outside = realpathSync(mkdtempSync(join(tmpdir(), "vs-out-")));
+const tmpDirs = [];
+function rmSafe(root) {
+  const links = [];
+  const walk = (p) => {
+    let st; try { st = lstatSync(p); } catch { return; }
+    if (st.isSymbolicLink()) { links.push(p); return; }
+    if (!st.isDirectory()) return;
+    let es; try { es = readdirSync(p); } catch { return; }
+    for (const e of es) walk(join(p, e));
+  };
+  walk(root);
+  let survived = false;
+  for (const p of links) {
+    try { unlinkSync(p); } catch { try { rmdirSync(p); } catch {} }
+    try { lstatSync(p); survived = true; } catch {}
+  }
+  if (survived) return;
+  try { rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}
+}
+test.after(() => { for (const d of tmpDirs) rmSafe(d); });
+
+const root = realpathSync(mkdtempSync(join(tmpdir(), "vs-fs-"))); tmpDirs.push(root);
+const outside = realpathSync(mkdtempSync(join(tmpdir(), "vs-out-"))); tmpDirs.push(outside);
 mkdirSync(join(root, "docs/art"), { recursive: true });
 mkdirSync(join(root, ".git"));
 writeFileSync(join(root, "docs/art/pingrid-menu-500.png"), PNG);
@@ -137,7 +158,7 @@ test("agentCwdFor: rn- id resolves via the runner record (API first, then its on
   const fake = { fetchAgent: async (id) => ({ agent: { id, cwd: wt } }) };
   assert.equal(await agentCwdFor("rn-abc123", repoRoot, { runner: fake }), wt);
   // 2. runner API down → on-disk runner log (VIBESQUAD_HOME/runner/agents/<id>.jsonl)
-  const home = mk(join(tmpdir(), "vs-home-"));
+  const home = mk(join(tmpdir(), "vs-home-")); tmpDirs.push(home);
   mkdirSync(join(home, "runner/agents"), { recursive: true });
   writeFileSync(join(home, "runner/agents/rn-disk1.jsonl"), JSON.stringify({ type: "created", ts: 1, provider: "p", model: "m", cwd: wt, meta: {} }) + "\n");
   const prev = process.env.VIBESQUAD_HOME;
@@ -154,7 +175,7 @@ test("agentCwdFor: rn- id resolves via the runner record (API first, then its on
 });
 
 test("fs/resolve uses the runner agent's worktree, not the repo root", async () => {
-  const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt-")));
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt-"))); tmpDirs.push(wt);
   writeFileSync(join(wt, "only-in-worktree.png"), PNG);
   const res = mkRes();
   await handleFsResolve({ method: "GET", url: "/x?agentId=rn-abc123&name=only-in-worktree.png" }, res, (id) => agentCwdFor(id, root, { runner: { fetchAgent: async () => ({ agent: { cwd: wt } }) } }), sendJson, [wt]);
@@ -162,7 +183,7 @@ test("fs/resolve uses the runner agent's worktree, not the repo root", async () 
 });
 
 test("junction/symlink escape (worktree node_modules) is blocked for read, list and nested paths", () => {
-  const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt2-")));
+  const wt = realpathSync(mkdtempSync(join(tmpdir(), "vs-wt2-"))); tmpDirs.push(wt);
   writeFileSync(join(outside, "stolen.txt"), "x");
   mkdirSync(join(outside, "pkg"), { recursive: true });
   writeFileSync(join(outside, "pkg/a.js"), "x");
@@ -189,7 +210,7 @@ test("browse roots: home dir and drive/filesystem roots are unsafe, a normal wor
 });
 
 test("resolveInCwd refuses ~/.ssh, ~/.vibesquad, ~/.paseo contents but allows a workspace that lives inside ~/.paseo", () => {
-  const fakeHome = realpathSync(mkdtempSync(join(tmpdir(), "vs-home2-")));
+  const fakeHome = realpathSync(mkdtempSync(join(tmpdir(), "vs-home2-"))); tmpDirs.push(fakeHome);
   mkdirSync(join(fakeHome, ".ssh"));
   writeFileSync(join(fakeHome, ".ssh/id_rsa"), "k");
   mkdirSync(join(fakeHome, ".paseo/worktrees/w1"), { recursive: true });
@@ -234,7 +255,7 @@ test("fs/resolve confines the agent cwd (outside every root -> 403) and listFile
 
 test("agentCwdFor prefers the on-disk runner record over the HTTP API", async () => {
   const wt = join(root, "wt-disk");
-  const home = mkdtempSync(join(tmpdir(), "vs-home3-"));
+  const home = mkdtempSync(join(tmpdir(), "vs-home3-")); tmpDirs.push(home);
   mkdirSync(join(home, "runner/agents"), { recursive: true });
   writeFileSync(join(home, "runner/agents/rn-first.jsonl"), JSON.stringify({ type: "created", ts: 1, provider: "p", model: "m", cwd: wt, meta: {} }) + "\n");
   const prev = process.env.VIBESQUAD_HOME;
