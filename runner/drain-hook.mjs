@@ -13,6 +13,11 @@ export const DRAIN_TOOLS = new Set(['Bash', 'PowerShell']);
 
 /** The refusal text an agent sees for a background launch while draining. */
 export function drainRefusalText(drain) {
+  if (drain?.kind === 'request') { // idea-476: a server-side restart request is open (runner setRequestDrain); vs restart has not started yet
+    const what = drain.request?.id ? `restart request ${drain.request.id}${drain.request.tip ? `, tip ${drain.request.tip}` : ''}` : 'a restart request';
+    return `restart drain open (${what}): new background commands are refused so the restart is not held up. ` +
+      'Run it in the foreground, or wait for restart-done and start it in the background then. Already-running background work keeps running.';
+  }
   const until = Number.isFinite(drain?.until) ? new Date(drain.until).toISOString() : 'shortly';
   return `VibeSquad is draining for a runtime restart (${drain?.reason || 'vs restart'}; drain ends by ${until} at the latest): ` +
     'new background commands are refused so the restart is not held up. Already-running background work keeps running. ' +
@@ -27,8 +32,19 @@ export function drainHookDecision(input, drain, now = Date.now()) {
   return drainRefusalText(drain);
 }
 
-function readDrain(file) {
-  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+// idea-476: an unreadable drain file fails OPEN (a broken file must never block every background command), but not
+// silently: anything but "no file" (no drain, the common case) leaves a line on stderr, which the CLI keeps in its hook
+// output, so the agent and the transcript show that the drain could not be checked.
+export function readDrain(file, warn = (m) => process.stderr.write(`${m}\n`)) {
+  let raw;
+  try { raw = readFileSync(file, 'utf8'); } catch (e) {
+    if (e?.code !== 'ENOENT') warn(`vs drain-hook: drain file unreadable (${e?.code ?? e?.message ?? e}); background commands are allowed`);
+    return null;
+  }
+  try { return JSON.parse(raw); } catch (e) {
+    warn(`vs drain-hook: drain file is not valid JSON (${e?.message ?? e}); background commands are allowed`);
+    return null;
+  }
 }
 
 const norm = (p) => (process.platform === 'win32' ? path.resolve(p).toLowerCase() : path.resolve(p));

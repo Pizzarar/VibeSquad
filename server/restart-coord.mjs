@@ -53,6 +53,48 @@ export function holderLeads(heldIds, rawAgents, teams = loadTeamsRegistry()) {
   return { leads: [...leads.values()], unresolved };
 }
 
+/** A 'drained restart [<tip>]' self-report as the log stores it (the CLI prefixes the restart-feedback subtype). */
+export const isDrainedFeedback = (text) => DRAINED_RE.test(String(text ?? "").trim());
+
+/**
+ * idea-476 (2): may `callerId` log 'drained restart' now? The runner's held list ({ ids, work }, its /health, checked
+ * against live pids) is the truth, not the self-report: while any agent of the caller's lane holds background work the
+ * drain is refused, naming each holder and its pids. "The caller's lane" is every held agent that holderLeads gives to
+ * the caller (what the restart request's pendingLeads counts), the caller's own children (vs.parent), the caller itself,
+ * and any holder whose Squad + lane resolve to the caller's (a retired predecessor lead and its workers included).
+ * Fail closed: without a readable held list or agent list nothing is recorded as drained. Returns null (may log) or the
+ * refusal reason.
+ */
+export function drainedLogRefusal(callerId, { held, agents, teams = loadTeamsRegistry(), callerTeam = null, callerLane = null } = {}) {
+  const id = String(callerId ?? "");
+  if (!held || !Array.isArray(held.ids)) return "not recorded as drained: the runner's held background work could not be read (runner down, booting or too old to report it). Retry once the runner answers; vs restart status shows what it holds.";
+  if (!held.ids.length) return null;
+  if (!Array.isArray(agents)) return "not recorded as drained: the runner holds background work and its agent list could not be read, so it is unknown whose. Retry in a moment.";
+  const list = agents.map((a) => (a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a));
+  const byId = new Map(list.map((a) => [a?.id, a]));
+  // A holder's Squad/lane through the registry (aliases resolve); an agent the registry cannot place falls back to its raw
+  // team + lane labels, so an unregistered lane still blocks its own lead rather than reading as nobody's.
+  const laneOf = (a) => {
+    if (!a) return null;
+    const w = resolveAgentIdentity(a, { teams, cwd: a.cwd });
+    if (w && !w.isOrphan && w.teamId && w.laneId) return `${w.teamId}/${w.laneId}`;
+    const team = a.labels?.team ?? a.team;
+    const lane = a.labels?.lane ?? a.lane;
+    return team && lane ? `${team}/${lane}` : null;
+  };
+  // The caller's lane: the server-verified caller identity first (callerTeam/callerLane), else its roster record.
+  const mine = callerTeam && callerLane ? laneOf({ id, cwd: "", labels: { team: callerTeam, lane: callerLane, role: "lead" } }) : laneOf(byId.get(id));
+  const blockers = new Set(holderLeads(held.ids, list, teams).leads.filter((l) => l.leadId === id).flatMap((l) => l.heldAgents));
+  for (const h of held.ids) {
+    const a = byId.get(h);
+    if (h === id || (a && String(a.labels?.["vs.parent"] ?? "") === id) || (mine && laneOf(a) === mine)) blockers.add(h);
+  }
+  if (!blockers.size) return null;
+  const ids = [...blockers];
+  return `not drained: the runner still holds background work in your lane: ${ids.map((h) => { const w = workLine(held.work, h); return w ? `${h} (${w})` : h; }).join("; ")}. ` +
+    `Let it finish, or stop it (${ids.map((h) => `vs stop ${h} --background`).join("; ")}; idle agents only), then log the drain again.`;
+}
+
 /** The ask a restarter sends a holder lead (no double quotes or backticks: it pastes into `vs send <id> "..."` in any shell). */
 export function drainAskText(lead, at) {
   const holders = lead.heldAgents.map((id) => { const w = workLine(lead.heldWork, id); return w ? `${id} (${w})` : id; }).join(", ");
