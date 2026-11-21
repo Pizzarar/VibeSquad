@@ -5,7 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { addWatch, cancelWatch } from "../server/watch-sets.mjs";
 import { startTokenWatcher, BRAINSTORM_WARN_NUDGE, WARN_LABEL } from "../server/token-watch.mjs";
-import { SOFT_FLAG_NUDGE, LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT } from "../server/lead-handoff.mjs";
+import { SOFT_FLAG_NUDGE, LEAD_FLAG_DEFAULT, LEAD_HARD_CAP_DEFAULT, PROVIDER_PREAMBLE_TOKENS, NON_CLAUDE_LEAD_CAP_RULES, buildSuccessorPrompt } from "../server/lead-handoff.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 
@@ -493,4 +493,24 @@ test("G1 R2: the brief turn never comes -> the restart still runs once briefWait
   await new Promise((res) => setTimeout(res, 200));
   assert.equal(restarts.length, 1);
   w.stop();
+});
+
+test("G2: an agy lead is measured in working tokens (meter minus the fixed preamble)", async () => {
+  const rootDir = makeRoot();
+  const r = makeRunner();
+  r.agents.set("rn-agy-lead", { ...lead("rn-agy-lead"), provider: "antigravity-cli" });
+  const w = startTokenWatcher({ runner: r, rootDir });
+  r.usage("rn-agy-lead", LEAD_FLAG_DEFAULT + 10); // raw over the flag, working tokens under it: no nudge
+  await tick();
+  assert.equal(r.sent.length, 0, "agy lead under the preamble-adjusted flag is not nudged");
+  r.usage("rn-agy-lead", LEAD_FLAG_DEFAULT + PROVIDER_PREAMBLE_TOKENS["antigravity-cli"] + 10);
+  await tick();
+  assert.deepEqual(r.sent.map((s) => s.text), [SOFT_FLAG_NUDGE], "nudged once working tokens pass the flag");
+  w.stop();
+});
+
+test("G2: the non-Claude lead cap rules ride the successor prompt, claude's does not", () => {
+  const base = { laneId: "x", nextOrd: 2, oldLead: { id: "a" }, trigger: "auto-250", packetPath: "p", summaryPath: "s", latestPlan: "l" };
+  assert.ok(buildSuccessorPrompt({ ...base, provider: "antigravity-cli" }).includes(NON_CLAUDE_LEAD_CAP_RULES));
+  assert.ok(!buildSuccessorPrompt({ ...base, provider: "claude" }).includes(NON_CLAUDE_LEAD_CAP_RULES));
 });

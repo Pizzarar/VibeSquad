@@ -314,10 +314,12 @@ test('send / wait / status / cancel / list route by id and lane; status caps las
   assert.deepEqual(paseoBackend.calls[0], ['send', 'uuid-1', 'yo']);
   const w = await callTool(ctx, 'wait', { id: 'rn-1', timeoutSec: 7 });
   assert.equal(w.status, 'idle');
-  assert.equal(w.lastMessage.length, 2000);
+  assert.equal(w.lastMessage.length, 600, 'G2: compact by default');
+  assert.equal((await callTool(ctx, 'wait', { id: 'rn-1', full: true })).lastMessage.length, 2000);
   assert.deepEqual(runnerBackend.calls[1], ['wait', 'rn-1', 7000]);
   const s = await callTool(ctx, 'status', { id: 'rn-1' });
-  assert.deepEqual([s.status, s.title, s.lastMessage.length], ['idle', 'T', 2000]);
+  assert.deepEqual([s.status, s.title, s.lastMessage.length], ['idle', 'T', 600]);
+  assert.equal((await callTool(ctx, 'status', { id: 'rn-1', full: true })).lastMessage.length, 2000);
   await callTool(ctx, 'cancel', { id: 'rn-1' });
   assert.deepEqual(runnerBackend.calls.at(-1), ['cancel', 'rn-1']);
   const l = await callTool(ctx, 'list', {});
@@ -372,7 +374,7 @@ test('vs spawn / send / status run the shared tools against a fake backend', asy
   assert.deepEqual(runnerBackend.calls.at(-1), ['send', 'rn-1', 'hello there']);
   const st = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
   assert.equal(st.status, 'idle');
-  assert.equal(st.lastMessage.length, 2000);
+  assert.equal(st.lastMessage.length, 600);
 });
 
 test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --role/--lane/--team/--agent cannot spoof', async () => {
