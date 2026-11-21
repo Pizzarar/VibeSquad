@@ -1,0 +1,161 @@
+{
+  "laneId": "boring-mode",
+  "updatedAt": "2026-11-21T03:41:05.452Z",
+  "units": [
+    {
+      "id": "unit-bor-theme",
+      "goal": "B1: app.vibe (fun|boring) pref, pre-paint index.html, and standalone src/boring.css skin (zero edits to src/styles.css)",
+      "files": [
+        "src/theme.ts",
+        "src/prefs.ts",
+        "index.html",
+        "src/main.tsx",
+        "src/boring.css",
+        "test/ui-theme.test.mjs",
+        "test/prefs.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/ui-theme.test.mjs test/prefs.test.mjs",
+      "status": "done"
+    },
+    {
+      "id": "unit-bor-perfection",
+      "goal": "B3: Perfection compact corporate header in AngelBezel when data-vibe=boring",
+      "files": [
+        "src/AngelBezel.tsx",
+        "test/boring-mode.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs",
+      "status": "done"
+    },
+    {
+      "id": "unit-bor-ade",
+      "goal": "B2: Antigravity-style whole-app <BoringApp> shell (left sidebar: + New Conversation, Projects > conversations with age, Overlord/RiffBot/Bugs core rows, Brainstorm|Lead pills; centered chat with model picker & composer + plain Project/Usage dashboards; iOS-guided big tap targets; HELD for @ui-bois U1)",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/boring.css",
+        "src/App.tsx",
+        "test/boring-mode.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs",
+      "status": "done"
+    },
+    {
+      "id": "unit-bor-vibespace-copy",
+      "goal": "B1b: Change app.vibe option label and hint in src/prefs.ts:112 from Hypnospace to Vibespace (UI must never say Hypnospace)",
+      "files": [
+        "src/prefs.ts",
+        "test/prefs.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/prefs.test.mjs test/ui-theme.test.mjs",
+      "status": "done"
+    },
+    {
+      "id": "unit-bor-4k-polish",
+      "goal": "B2b 4K polish follow-ups (idea-125): system font tokens (--arcade/--display), 4K card grid & fluid type, 40px+ tap targets, TeamFeed non-JSON guard, live :4180 4K reshoot",
+      "files": [
+        "src/boring.css",
+        "src/TeamFeed.tsx",
+        "test/prefs.test.mjs",
+        "test/boring-mode.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/prefs.test.mjs test/boring-mode.test.mjs test/css-classes.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-4k-polish"
+    },
+    {
+      "id": "unit-bor-b2r",
+      "goal": "B2r: Aub live 4K refine round 1 (full-height scrollable transcript + bottom composer, plain DrawerHeader with 1 context bar & details/overflow disclosure, 1-row-per-lane sidebar expanding Brainstorm|Lead only when active, distinct card/tool surface segregation, attachment x/name, empty state, TeamFeed JSON guard; reshoot LIVE :4180 at 4K@120% for Hub7 gate before merge)",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/boring.css",
+        "test/boring-mode.test.mjs",
+        "test/prefs.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/prefs.test.mjs test/css-classes.test.mjs test/ui-theme.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-b2r"
+    },
+    {
+      "id": "unit-bor-b4-vibe-picker",
+      "goal": "B4 (folds idea-128 B4+B5 + B2r2): Rename user-facing vibe labels everywhere (Normal/Psycho) + first-launch 2-card Normal vs Psycho picker across desktop/web/phone + B2r2 4K plain header, solid Send, base font bump & dropdown sizing",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/FirstRunModal.tsx",
+        "src/prefs.ts",
+        "src/App.tsx",
+        "src/boring.css",
+        "test/prefs.test.mjs",
+        "test/boring-mode.test.mjs",
+        "test/settings-home.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/prefs.test.mjs test/boring-mode.test.mjs test/settings-home.test.mjs test/ui-theme.test.mjs test/css-classes.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-b4-vibe-picker"
+    },
+    {
+      "id": "unit-bor-provider-model-snapback",
+      "goal": "Fix provider/model/mode/thinking picker snap-back in Boring (Normal) and Psycho modes under 1-4s server stalls (sync runnerBridge roster with local upserts/retirements, optimistic config updates in DrawerHeader, persist stagedSwitch across remounts, surface modelError in Boring Mode, align antigravity-cli model hints)",
+      "files": [
+        "src/runnerBridge.ts",
+        "src/paseo.ts",
+        "src/DrawerHeader.tsx",
+        "src/AgentDrawer.tsx",
+        "src/BoringAde.tsx",
+        "src/boring.css",
+        "test/uip-u9-seamless-provider-switch.test.mjs",
+        "test/uip-u10-control-wiring.test.mjs",
+        "test/boring-mode.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/uip-u7-topbar-provider.test.mjs test/uip-u9-seamless-provider-switch.test.mjs test/uip-u10-control-wiring.test.mjs test/boring-mode.test.mjs test/css-classes.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-provider-model-snapback"
+    },
+    {
+      "id": "unit-bor-u14-reload-error",
+      "goal": "Restore compact-gated modelError/reloadError spans into DrawerHeader primaryUtils (u14) and remove duplicate lines from compact moreOpen .drawer-meta-line",
+      "files": [
+        "src/DrawerHeader.tsx"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/uip-u14-sidebar-audit.test.mjs test/uip-u10-control-wiring.test.mjs test/boring-mode.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-u14-reload-error"
+    },
+    {
+      "id": "unit-bor-sleek-dashboard",
+      "goal": "B5 + B5f (B5a-B5f, cfb1423..48f4038, merged 85f41e2): Native VibeSquad palette, borderless tone-stepped surfaces (!important 14/10/999px/50% radii beating styles.css * reset, one --cyan accent, no buttons inside cards), quiet sidebar + drop duplicate topbar Settings/Psycho buttons, Overview A+B segmented tabs with preloaded Inbox/Feed counts on BoringApp mount (Overview | Idea Inbox (n) | Standup Feed (n); 1600px width, 4K type scale, core strip + Needs-you/Active cards + collapsed idle lanes), 9px round .boring-dot/.signal dots, calmer 1-line chat header + body-size decision cards, and 6 reshot 4K@120% screenshots in artifacts/boring-b5-4k/",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/boring.css",
+        "test/boring-mode.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/prefs.test.mjs test/ui-theme.test.mjs test/css-classes.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-sleek-dashboard"
+    },
+    {
+      "id": "unit-bor-b6-vibe-os",
+      "goal": "B6 Corporate Vibe-OS (docs/PLAN_BORING_MODE_B6.md, B6a-B6e): Restore RightDock & VS feature parity (Dock toggle, Brainstorm Summary/Inbox/Handoff, Search/Reload/Mark-read, pinDecisions, topbar Search/Shortcuts, top-level banners, full-width chat when dock open), Sidebar 1a collapsible multi-project tree + sunset-tinted Trinity card, Overview 2a Cards|Map toggle + interactive BoringLaneMap node web (pulse/filled/hollow/faint), pastel airbrushed sunsets + U4 spray-paint wash + light surreal horizon/eye motif, and 4K@120% screenshot gate in artifacts/boring-b6-4k/",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/boring.css",
+        "src/App.tsx",
+        "test/boring-mode.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/prefs.test.mjs test/ui-theme.test.mjs test/css-classes.test.mjs",
+      "status": "done",
+      "branch": "unit-bor-b6-vibe-os"
+    },
+    {
+      "id": "unit-bor-inv6-title-dedup",
+      "goal": "B7 (idea-271): Deduplicate open/alerting agent titles in Normal mode (role breadcrumb, drop topbar worker pills, fold non-selected workers in sidebar tree, omit open agent from BoringContextPanel WorkersTab) and un-skip invariant #6 in test/normal-invariants.test.mjs",
+      "files": [
+        "src/BoringAde.tsx",
+        "src/BoringContextPanel.tsx",
+        "test/boring-mode.test.mjs",
+        "test/normal-invariants.test.mjs"
+      ],
+      "doneCheck": "npx tsc --noEmit && node --test test/boring-mode.test.mjs test/desk-d3c-context-panel.test.mjs test/desk-d4-polish.test.mjs test/normal-invariants.test.mjs",
+      "status": "done"
+    }
+  ]
+}
