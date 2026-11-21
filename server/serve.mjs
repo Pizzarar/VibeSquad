@@ -46,6 +46,7 @@ import { requestLocalLoginUrl } from "./local-token.mjs";
 import { startPushWatcher } from "./push.mjs";
 import { startTokenWatcher } from "./token-watch.mjs";
 import { startIdleLaneKick } from "./idle-lane-kick.mjs";
+import { startWorktreeAutoSweep } from "./worktree-autosweep.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { shouldSuperviseRunner, superviseRunner } from "./runner-supervisor.mjs";
 import { startRunnerLifecycle } from "./backend/runner-lifecycle.mjs";
@@ -570,6 +571,9 @@ if (isMain) {
       try { const tw = startTokenWatcher({ rootDir }); server.once("close", () => tw.stop()); } catch (err) { console.warn("token watcher not started:", err?.message ?? err); }
     }
     if (process.env.VS_IDLE_KICK !== "0") { try { const ik = startIdleLaneKick({ runner: sharedRunnerBackend(), rootDir }); server.once("close", () => ik.stop()); } catch (err) { console.warn("idle lane kick not started:", err?.message ?? err); } }
+    // W1 (PLAN_DISK_LIFECYCLE_1121): when a unit's merge lands on the default branch, report (default) or, with
+    // VS_WORKTREE_AUTOSWEEP=apply, remove its worktree (merged + clean + no live cwd; branch kept). =0 turns the tick off.
+    if (process.env.VS_WORKTREE_AUTOSWEEP !== "0") { try { const ws = startWorktreeAutoSweep({ runner: sharedRunnerBackend(), apply: process.env.VS_WORKTREE_AUTOSWEEP === "apply" }); server.once("close", () => ws.stop()); } catch (err) { console.warn("worktree auto-sweep not started:", err?.message ?? err); } }
 
     if (wantOpen) void openBrowser(servedOpenUrl());
   });
