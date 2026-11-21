@@ -1,4 +1,4 @@
-// The Gemini model ids routing and pickers use (N1, Aub 2026-11-21): ONE place to change when Google ships the next one.
+// The Gemini model ids routing and pickers use (N1, 2026-11-21): ONE place to change when Google ships the next one.
 // A leaf module (no imports) so provider-failover, stakes-ladder, profile-aliases and src/ can all read it without cycles.
 //
 // `agy models` ids carry the effort as a suffix (gemini-4-neon-{low,medium,high,xhigh}); profiles + ladders name the bare
