@@ -419,3 +419,20 @@ test("run-tests.mjs: the watchdog fires when the hung file is passed as a relati
   try { process.kill(Number(readFileSync(pidFile, "utf8")), 0); } catch { alive = false; }
   assert.equal(alive, false, "child killed");
 });
+
+test("run-tests.mjs: caps node --test file concurrency (idea-412); VS_TEST_CONCURRENCY=1 serialises files", { timeout: 60000 }, (t) => {
+  const dir = tmp(t);
+  const log = path.join(dir, "spans.log");
+  const mk = (n) => {
+    const f = path.join(dir, `span${n}.test.mjs`);
+    writeFileSync(f, `import test from "node:test";\nimport { appendFileSync } from "node:fs";\ntest("s${n}", async () => { appendFileSync(${JSON.stringify(log)}, "start\n"); await new Promise((r) => setTimeout(r, 600)); appendFileSync(${JSON.stringify(log)}, "end\n"); });\n`);
+    return f;
+  };
+  const files = [mk(1), mk(2), mk(3)];
+  const r = spawnSync(process.execPath, [RUN_TESTS, ...files], { cwd: root, env: cleanEnv({ VIBESQUAD_TEST_LOCK_DIR: dir, VS_TEST_CONCURRENCY: "1" }), encoding: "utf8" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(readFileSync(log, "utf8"), "start\nend\n".repeat(3), "one file at a time");
+  const src = readFileSync(RUN_TESTS, "utf8");
+  assert.match(src, /Math\.min\(8, cpus - 1\)/, "default cap is 8");
+  assert.match(src, /--test-concurrency=\$\{testConcurrency\(\)\}/);
+});
