@@ -16,7 +16,10 @@ const u3 = css.slice(0, U4_START);
 const rules = (src) => {
   const clean = src.replace(/\/\*[\s\S]*?\*\//g, (m) => ' '.repeat(m.length)); // keep offsets
   const out = []; const re = /([^{}]+)\{([^{}]*)\}/g; let m;
-  while ((m = re.exec(clean))) out.push({ sel: m[1].trim(), body: m[2], at: m.index });
+  // The idea-255 cut scopes Psycho-only rules off Normal with zero-specificity `:where(... [data-vibe="boring"])` prefixes; strip them so
+  // the selectors read (and compare) as the pre-cut text. They add no specificity, so the guards below are unchanged by them.
+  const unscope = (s) => s.replace(/:where\(html:not\(\[data-vibe="boring"\]\)\) ?/g, '').replace(/:where\(:not\(\[data-vibe="boring"\]\)\)/g, '');
+  while ((m = re.exec(clean))) out.push({ sel: unscope(m[1].trim()), body: m[2], at: m.index });
   return out;
 };
 const u4rules = rules(u4);
@@ -147,7 +150,7 @@ test('rows that dimmed with opacity use the muted token; unselected Inbox and as
 test('sky CRT chat drawer rides the U4b tool-surface scope; light provider pills drop neon for P0', () => {
   // .sky-crt-body sits alongside .agent-panes:not(:has(.sky-zones)) in every shared tool-surface scope
   const scoped = u4rules.filter((r) => /^:is\(\.sidebar, \.agent-panes:not\(:has\(\.sky-zones\)\), \.sky-crt-body, \.pin-focus-bar\)/.test(r.sel));
-  assert.equal(scoped.length, 18, '18 shared tool-surface scope rules now include .sky-crt-body');
+  assert.equal(scoped.length, 19, '19 shared tool-surface scope rules now include .sky-crt-body (18 + the .btn.warn rule split off .btn.confirm.warn by the Normal scoping, idea-255)');
   // the composer is scoped to the sky drawer too
   const composer = u4rules.find((r) => r.sel === ':is(.agent-panes:not(:has(.sky-zones)), .sky-crt-body) .composer');
   assert.ok(composer && /background: var\(--panel\)/.test(composer.body), 'composer rule scoped to the sky drawer');
