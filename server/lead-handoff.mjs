@@ -234,6 +234,22 @@ export function leadUsedTokens(lead, overrideTokens) {
 }
 
 /**
+ * G2 (idea-358): tokens every session of a provider carries before any work (system prompt + tool defs), measured not guessed.
+ * antigravity-cli (agy): 35,339 at call 1 of Art33, 35,089 for Art32 (g2-bloat-1121). A lead cannot shed it, so the handoff ladder
+ * counts WORKING tokens (meter minus this). Providers not listed (claude, ...) are 0: their meter already behaves.
+ */
+export const PROVIDER_PREAMBLE_TOKENS = Object.freeze({ "antigravity-cli": 35_000 });
+export function providerPreambleTokens(agent) {
+  return PROVIDER_PREAMBLE_TOKENS[String(agent?.provider ?? "").toLowerCase()] ?? 0;
+}
+/** The meter minus the provider's fixed preamble; an explicit override (tests, forced handoffs) is taken as-is. */
+export function leadWorkingTokens(lead, overrideTokens) {
+  const used = leadUsedTokens(lead, overrideTokens);
+  if (typeof overrideTokens === "number" && Number.isFinite(overrideTokens)) return used;
+  return used > 0 ? Math.max(0, used - providerPreambleTokens(lead)) : 0;
+}
+
+/**
  * O6 floor for the Overlord trigger: a HEALTHY lead under LEAD_HANDOFF_MIN_TOKENS is refused ("steer first (ladder 1-2)").
  * Healthy = not errored, not wedged (isStalePredecessor), no pending permission. Unknown tokens (none of the usage fields
  * reported, leadUsedTokens() === 0) FAIL OPEN: we cannot show the lead is small, so the handoff is allowed.
@@ -439,6 +455,17 @@ export function synthesizeHandoffPacket({
   };
 }
 
+/**
+ * G2 (idea-358): non-Claude (agy) leads cannot cap tool results themselves; uncapped reads, images and status polls were ~49% of a
+ * bloated Gemini lead's context. Appended to the successor prompt of any non-Claude lead.
+ */
+export const NON_CLAUDE_LEAD_CAP_RULES =
+  "Context budget (your provider cannot cap tool output): read files with ranges (offset/limit), never whole large files; no image reads unless the task is visual QA; cap shell output (`| head -50`); wait on workers with one `vs watch add <ids...>` and end your turn, not repeated status/list polls (status returns a compact last message; pass full:true only when you need it).";
+export const isNonClaudeProvider = (provider) => {
+  const p = String(provider ?? "").trim().toLowerCase();
+  return p !== "" && p !== "claude";
+};
+
 export function buildSuccessorPrompt({
   laneId,
   laneName,
@@ -455,6 +482,7 @@ export function buildSuccessorPrompt({
   openWorkers = [],
   steer = "",
   alreadyRetired = false,
+  provider = "",
 }) {
   const laneUpper = (laneName || laneId).toUpperCase();
   const workerLines = openWorkers.length
@@ -489,6 +517,7 @@ export function buildSuccessorPrompt({
       ? ["", "--- BEGIN OVERLORD STEER ---", defangPromptFences(String(steer).trim().slice(0, 2000)), "--- END OVERLORD STEER ---"]
       : []),
     "",
+    ...(isNonClaudeProvider(provider) ? ["", NON_CLAUDE_LEAD_CAP_RULES] : []),
     ...(alreadyRetired ? [] : [TAKEOVER_CONFIRM_INSTRUCTION]),
   ].join("\n");
 }
@@ -846,6 +875,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
       openWorkers,
       steer,
       alreadyRetired: retireNow,
+      provider: spawnCfg?.provider,
     });
 
     const newLabels = {
@@ -1376,7 +1406,12 @@ export function createLeadHandoffCoordinator(deps = {}) {
         ? deps.getThresholds(teamDef || teamId, rootDir)
         : loadLeadThresholds(teamDef || teamId, rootDir));
 
-    const used = leadUsedTokens(lead, options.usedTokens);
+    // G2: working tokens (meter minus the provider's fixed preamble) so an agy lead is not handed off for a cost it cannot shed.
+    // Idle seam: the 150k nudge is steerOnly, the 250k stage writes the packet and waits for idle, only the 300k hard cap
+    // (used >= hardCapTokens) may act on a running lead, unchanged.
+    // The hard cap is a safety net on the RAW meter: the subtraction applies to the soft stages (compact, 150k, 250k) only.
+    const used = leadWorkingTokens(lead, options.usedTokens);
+    const rawUsed = leadUsedTokens(lead, options.usedTokens);
     const { flagTokens, autoHandoffTokens, hardCapTokens } = thresholds;
 
     // K2: before any stage, a Claude lead at the soft threshold is compacted in place once (idle only, tracked by vs.compacted-at).
@@ -1386,15 +1421,15 @@ export function createLeadHandoffCoordinator(deps = {}) {
       if (res?.outcome === "ok") return { stage: "compact", triggered: true, usedTokens: res.after, beforeTokens: used };
       // Mid-turn: usage upserts arrive with status=running. Wait for the idle upsert instead of nudging or handing off now (no stamp, no
       // nudge). The hard cap is the exception: past it a running lead still goes to the forced handoff below.
-      if (res?.outcome === "skipped" && res.reason === "busy" && used < hardCapTokens) {
+      if (res?.outcome === "skipped" && res.reason === "busy" && rawUsed < hardCapTokens) {
         return { stage: "compact-deferred", triggered: false, usedTokens: used };
       }
     }
 
     // Stage 4: >= 300k Hard Ceiling Forced Handoff (fires at most once per lead).
-    if (used >= hardCapTokens) {
+    if (rawUsed >= hardCapTokens) {
       if (forced300.has(lead.id) || labels["handoff-hard-300"] === "1") {
-        return { stage: "hard-300", triggered: false, usedTokens: used };
+        return { stage: "hard-300", triggered: false, usedTokens: rawUsed };
       }
       forced300.add(lead.id);
       const packetPath = getHandoffPacketPath(teamId, laneId, getBase());
@@ -1416,7 +1451,7 @@ export function createLeadHandoffCoordinator(deps = {}) {
         retireImmediately: false,
         forceSynthesize: needsSynthesis,
       });
-      return { stage: "hard-300", triggered: true, usedTokens: used, ...spawned };
+      return { stage: "hard-300", triggered: true, usedTokens: rawUsed, ...spawned };
     }
 
     // Stage 3: >= 250k and < 300k VS Auto-Handoff.

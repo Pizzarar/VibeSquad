@@ -12,9 +12,12 @@ import { fetchWithLocalToken, localTokenPath, readLocalToken } from "../local-to
 import { coalesceReplies } from "../reply-coalesce.mjs";
 import { effectiveAgentRole, findLaneInRegistry, findTeamInRegistry, isHubLane, isLiveAgent, isRetiredAgent, loadTeamsRegistry, resolveLeadWinner, whoCandidate } from "../identity.mjs";
 import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
+import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
+/** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` restores MAX_LAST_MESSAGE. */
+export const COMPACT_LAST_MESSAGE = 600;
 export const REPORT_TYPES = ["done", "decision", "blocker"];
 const WORKER_ROLE = "worker";
 const LEAD_ROLE = "lead";
@@ -271,6 +274,18 @@ export function createContext({ env = process.env, identity, ...overrides } = {}
 
 const entriesOf = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entries) ? res.entries : Array.isArray(res?.agents) ? res.agents : []);
 
+/**
+ * Clip to `cap` chars. At the full cap: tail only (conclusions sit at the end). At the compact cap: head + tail, because a
+ * line-1 verdict or report header is dropped by a tail-only clip (G2 review H1).
+ */
+const COMPACT_ELLIPSIS = " ...[clipped; full:true for more]... ";
+export function clipText(t, cap) {
+  if (cap > COMPACT_LAST_MESSAGE) return t.slice(-cap);
+  const head = Math.round(cap * 0.42); // ~250 of 600
+  const tail = cap - head - COMPACT_ELLIPSIS.length;
+  return t.slice(0, head) + COMPACT_ELLIPSIS + t.slice(-tail);
+}
+
 /** Last assistant text from a timeline, tail-capped (conclusions sit at the end). */
 export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
   const entries = coalesceReplies(entriesOf(timeline)); // Paseo projections can split one reply around a thought
@@ -278,7 +293,7 @@ export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
     const item = entries[i]?.item ?? entries[i];
     if (item?.type === "assistant_message" && item.text) {
       const t = String(item.text);
-      return t.length > cap ? t.slice(-cap) : t;
+      return t.length > cap ? clipText(t, cap) : t;
     }
   }
   return "";
@@ -286,11 +301,11 @@ export function lastAssistantText(timeline, cap = MAX_LAST_MESSAGE) {
 
 const agentOf = (res) => res?.agent ?? res;
 
-async function snapshot(ctx, id) {
+async function snapshot(ctx, id, { full = false } = {}) {
   return ctx.withBackend({ id }, async (b) => {
     const agent = agentOf(await b.fetchAgent(id));
     const tl = await (b.fetchAgentTimeline ?? b.getAgentTimeline)?.call(b, id, { direction: "tail", limit: 50, projection: "projected" });
-    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl) };
+    return { id, status: agent?.status ?? "unknown", title: agent?.title ?? "", lastMessage: lastAssistantText(tl, full ? MAX_LAST_MESSAGE : COMPACT_LAST_MESSAGE) };
   });
 }
 
@@ -429,7 +444,10 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
         ...(thinkingOptionId ? { thinkingOptionId } : {}),
         ...(spawn.systemPrompt ? { systemPrompt: spawn.systemPrompt } : {}),
       },
-      initialPrompt: prompt,
+      // G2: a non-Claude lead cannot cap its own tool output; first boot gets the rule line the successor prompt carries.
+      initialPrompt: asLead && isNonClaudeProvider(provider) ? `${prompt}
+
+${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
       labels,
       env,
     }),
@@ -495,12 +513,12 @@ async function waitTool(ctx, args = {}) {
   const id = need(args, "id", "agentId");
   const sec = Number(pick(args, "timeoutSec", "timeout") ?? 0);
   const res = await ctx.withBackend({ id }, (b) => b.waitForFinish(id, sec > 0 ? Math.round(sec * 1000) : 0));
-  const snap = await snapshot(ctx, id).catch(() => null);
+  const snap = await snapshot(ctx, id, { full: args.full === true }).catch(() => null);
   return { id, status: res?.status ?? "error", ...(res?.error ? { error: String(res.error) } : {}), lastMessage: snap?.lastMessage ?? "" };
 }
 
 async function statusTool(ctx, args = {}) {
-  return snapshot(ctx, need(args, "id", "agentId"));
+  return snapshot(ctx, need(args, "id", "agentId"), { full: args.full === true });
 }
 
 async function cancelTool(ctx, args = {}) {
@@ -988,11 +1006,11 @@ export const VS_TOOLS = {
   },
   send: { description: "Send a follow-up message to an agent.", inputSchema: obj({ id: S, text: S }, ["id", "text"]), run: sendTool },
   wait: {
-    description: "Block until an agent is idle, errored or the timeout hits. Returns {status, lastMessage}.",
-    inputSchema: obj({ id: S, timeoutSec: { type: "number" } }, ["id"]),
+    description: "Block until an agent is idle, errored or the timeout hits. Returns {status, lastMessage} (lastMessage ~600 chars; full:true for ~2k).",
+    inputSchema: obj({ id: S, timeoutSec: { type: "number" }, full: { type: "boolean" } }, ["id"]),
     run: waitTool,
   },
-  status: { description: "Agent status, title and its last assistant message (capped ~2k chars).", inputSchema: obj({ id: S }, ["id"]), run: statusTool },
+  status: { description: "Agent status, title and its last assistant message (compact ~600 chars by default; full:true for ~2k). To wait on many agents use watch, not repeated status.", inputSchema: obj({ id: S, full: { type: "boolean" } }, ["id"]), run: statusTool },
   report: {
     description: "Write a done/decision/blocker entry to your team log as yourself. The VS server attributes it from your verified token (X1): a worker may only log done/blocker (refs forced to itself), a digest worker done (refs forced to the worker it digests), a lead/Buddy any type; decision from a worker is a 403. Returns {logged, type, agent, refs} as recorded.",
     inputSchema: obj({ type: { type: "string", enum: REPORT_TYPES }, text: S }, ["type", "text"]),
@@ -1038,10 +1056,10 @@ const AGENT_ID = { agentId: S, id: S };
 const ALIAS_SCHEMAS = {
   create_agent: obj({ title: S, provider: S, model: S, modeId: S, mode: S, initialPrompt: S, prompt: S, cwd: S, labels: { type: "object" }, profile: S, thinkingOptionId: S, thinking: S, stakes: STAKES_PARAM }),
   send_agent_prompt: obj({ ...AGENT_ID, prompt: S, text: S }),
-  get_agent_status: obj(AGENT_ID),
+  get_agent_status: obj({ ...AGENT_ID, full: { type: "boolean" } }),
   list_agents: obj({}),
   cancel_agent: obj(AGENT_ID),
-  wait_for_agent: obj({ ...AGENT_ID, timeout: { type: "number" }, timeoutSec: { type: "number" } }),
+  wait_for_agent: obj({ ...AGENT_ID, timeout: { type: "number" }, timeoutSec: { type: "number" }, full: { type: "boolean" } }),
 };
 
 export const ALL_TOOLS = Object.fromEntries([
