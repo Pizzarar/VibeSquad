@@ -87,7 +87,12 @@ export function digestVerdictText({ workerText, digestText, reviewer = false, pr
   if (line) {
     const stamped = stampReviewer(line, profile);
     const word = line.slice(0, 4);
-    if (digest.startsWith(line)) return { text: digest, verdictLine: line, mismatch: false, noVerdict: false };
+    if (digest.startsWith(line)) {
+      // idea-300: a digest that already copies the verdict line verbatim (the prompt's happy path) must still carry the
+      // reviewer stamp; stamp it here (guarding against double-stamp) so every path emits `reviewer=<profile>`.
+      const text = !/\breviewer=/.test(digest) ? stampReviewer(digest, profile) : digest;
+      return { text, verdictLine: line, mismatch: false, noVerdict: false };
+    }
     const mismatch = Boolean(digestWord && digestWord !== word);
     const rest = mismatch ? `VERDICT-MISMATCH: digest said ${digestWord}, the reviewer's line wins${summary ? `; ${summary}` : ""}` : summary;
     return { text: rest ? `${stamped} — ${rest}` : stamped, verdictLine: line, mismatch, noVerdict: false };

@@ -3,7 +3,7 @@ export function extractVerdictLine(text: unknown): string | null;
 export function parseVerdictLine(line: unknown): { verdict: "PASS" | "FAIL"; high: number; medium: number; low: number; hash: string } | null;
 export function firstLine(text: unknown): string;
 export function isReviewerAgent(agent: { id?: string; title?: string | null; profile?: string; labels?: Record<string, unknown> } | null | undefined): boolean;
-export function digestVerdictText(args: { workerText: unknown; digestText: unknown; reviewer?: boolean }): {
+export function digestVerdictText(args: { workerText: unknown; digestText: unknown; reviewer?: boolean; profile?: string | null }): {
   text: string;
   verdictLine: string | null;
   mismatch: boolean;

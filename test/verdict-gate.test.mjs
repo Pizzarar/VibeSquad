@@ -137,6 +137,12 @@ test("digestVerdictText stamps reviewer=<profile> after the verdict prefix; the 
   // trailing text on the same line: the stamp goes right after the hash, before the trailing text
   const trail = digestVerdictText({ workerText: "FAIL 1/0/1 3528a4c stale lock\nH1", digestText: "FAIL: 1 high", reviewer: true, profile: "Review - Sonnet" });
   assert.equal(trail.text, "FAIL 1/0/1 3528a4c reviewer=Review - Sonnet stale lock — 1 high");
+  // idea-300 M1: a digest that already copies the verdict line verbatim (the prompt's happy path) still gets the stamp
+  const copied = digestVerdictText({ workerText: "PASS 0/0/0 ecba323", digestText: "PASS 0/0/0 ecba323 — all clean", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(copied.text, "PASS 0/0/0 ecba323 reviewer=Review - Gemini — all clean");
+  // ...and it is never double-stamped when the digest already carries a reviewer= stamp
+  const restamped = digestVerdictText({ workerText: "PASS 0/0/0 ecba323", digestText: "PASS 0/0/0 ecba323 reviewer=Review - Gemini — all clean", reviewer: true, profile: "Review - Gemini" });
+  assert.equal(restamped.text, "PASS 0/0/0 ecba323 reviewer=Review - Gemini — all clean");
   // the merge gate's strict parser still reads PASS|FAIL H/M/L <hash> off the stamped line's front
   assert.deepEqual(parseVerdictLine("PASS 0/0/0 ecba323 reviewer=Review - Gemini"), { verdict: "PASS", high: 0, medium: 0, low: 0, hash: "ecba323" });
   assert.deepEqual(parseVerdictLine("FAIL 1/0/1 3528a4c reviewer=Review - Sonnet stale lock"), { verdict: "FAIL", high: 1, medium: 0, low: 1, hash: "3528a4c" });

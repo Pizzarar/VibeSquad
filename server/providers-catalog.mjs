@@ -1628,10 +1628,9 @@ function attributeReviewerAgent(unit, implementer, index) {
 /** Reviewer family for a merged unit: the attributed reviewer run's provider -> `${providerFamily}-review`. No reviewer found:
  * "gemini-review" when the unit was reviewed (reviewRounds > 0) or the implementer is known (Review-Gemini is the default loop),
  * else "no-review". */
-function attributeReviewerFamily(unit, implementer, index) {
-  const rev = attributeReviewerAgent(unit, implementer, index);
-  if (rev) {
-    const fam = providerFamily(rev.provider);
+function attributeReviewerFamily(unit, implementer, reviewer) {
+  if (reviewer) {
+    const fam = providerFamily(reviewer.provider);
     if (fam) return `${fam}-review`;
   }
   return (unit.reviewRounds ?? 0) > 0 || implementer ? "gemini-review" : "no-review";
@@ -2652,7 +2651,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     const mergedAtMs = tsMs(u.mergedAt);
     const implementer = attributeImplementer(u, agents, workerIndex);
     const reviewer = attributeReviewerAgent(u, implementer, workerIndex);
-    const reviewerFamily = attributeReviewerFamily(u, implementer, workerIndex);
+    const reviewerFamily = attributeReviewerFamily(u, implementer, reviewer);
     const workflow = classifyWorkflow(u, implementer, reviewerFamily);
     const startMs = implementer?.createdAt ?? u.firstBranchCtMs ?? null;
     const unitCycleMs = startMs !== null && startMs !== undefined && mergedAtMs !== null ? Math.max(0, mergedAtMs - startMs) : null;
@@ -2749,10 +2748,10 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       reviewedUnits: isReviewer ? g.reviewedUnits : 0,
       mergedUnits,
       firstTryCount: g.firstTryCount,
-      reviewRounds: g.reviewRounds,
+      reviewRounds: isReviewer ? g.reviewedReviewRounds : g.reviewRounds,
       avgReviewRounds: mergedUnits ? Math.round(((isReviewer ? g.reviewedReviewRounds : g.reviewRounds) / mergedUnits) * 100) / 100 : 0,
       costPerMergedUnit: mergedUnits ? g.costUsd / mergedUnits : null,
-      fixAfterMergeCount: g.fixAfterMergeCount,
+      fixAfterMergeCount: isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount,
       fixAfterMergeRate: mergedUnits ? Math.round(((isReviewer ? g.reviewedFixAfterMergeCount : g.fixAfterMergeCount) / mergedUnits) * 1000) / 1000 : 0,
       avgUnitCycleMs: g.unitCycleCount ? Math.round(g.unitCycleSum / g.unitCycleCount) : null,
     };
