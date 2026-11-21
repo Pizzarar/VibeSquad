@@ -48,10 +48,18 @@ the unit is the only launch path.
 
 ## Clients: server_url (MagicDNS)
 
-Owner clients (VS app, phone) use `http://forge.example.ts.net:<port>`. The unit sets `VIBESQUAD_LAN=1`,
+Owner clients (VS app, phone, Playtest Overlay addon) use `https://forge.example.ts.net:<port>`. Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http answers 301/426 and burns a `/pair` code. The unit sets `VIBESQUAD_LAN=1`,
 `VIBESQUAD_MESHNET_IP` (tailnet IPv4) and `VIBESQUAD_MESHNET_HOST` (MagicDNS name) so the listener binds the tailnet address
 and the Host check accepts the name (R7; the `tailscale0` interface match lands in A4). Pair a device via `/pair?format=json`
 and check `/pair/status`. `tailscale serve` https is optional, not required.
+
+### Trust the VS CA (every client, once per host)
+
+The VS CA is self-signed, so each client pins it (same flow as E6/idea-384 phone pairing and `docs/lanes/playtest-overlay/PLAN_V1.md:70`). The only plain-http call allowed is the `/ca.crt` bootstrap GET (`http://forge.example.ts.net:<port>/ca.crt`). Confirm the SHA-256 fingerprint shown on the client matches the one in the VS pair dialog before accepting; never skip the compare.
+
+- **VS app:** pair via `https://...`; the app downloads `/ca.crt`, shows its fingerprint, and pins it per host on confirm.
+- **Phone (Android app):** same: download `/ca.crt`, compare the fingerprint to the pair dialog, pin per paired host.
+- **Playtest Overlay addon:** it GETs `/ca.crt`, shows the fingerprint in its dock, and after you confirm pins the CA (`$VIBESQUAD_HOME/playtest-ca.crt`, override `vs_playtest/ca_cert_path`). No pin means no device token is sent; the system trust store is not a fallback for ts.net. Unpair deletes the pin.
 
 ## Godot and Windows-only jobs: SSH stdio bridge
 
