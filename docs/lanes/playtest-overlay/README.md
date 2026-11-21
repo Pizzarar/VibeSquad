@@ -8,7 +8,7 @@ Implemented runtime debug bridge — Thanks to godot-mcp-runtime by Erodenn
 - Owner-only, localhost-only, dev machine only.
 - The bridge token is an accident guard, not a security boundary. Any process of the same user can read it.
 - Call `stop_project` (detach) before every commit in the game repo. Attach edits the tracked `project.godot`.
-- Call `stop_project` before any export. An export made while attached keeps a dangling `McpBridge` autoload in the pack.
+- Call `stop_project` before any export. The export plugin removes the `McpBridge` autoload from every export and logs an error, but detach anyway.
 - Do not save in the Godot editor while attached. The edit of `project.godot` has no file lock.
 - Never run attach on a project that already has its own `McpBridge` autoload. The server refuses.
 - Attach-mode script errors are invisible. Have `VSPlaytestAdapter` methods return JSON-safe values or error dicts, not throw.
