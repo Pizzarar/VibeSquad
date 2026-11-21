@@ -37,7 +37,7 @@ Autoload: `VSPlaytest` (only in the editor or `vs_playtest` builds; otherwise `V
   - `run_cheat(id: String, args: Array) -> Variant`
 - Project settings: `vs_playtest/team_id` (required), `vs_playtest/server_url`, `vs_playtest/hotkey_dock` (default F8), `vs_playtest/hotkey_bug` (default F9).
 - Signals: `report_sent(card_id)`, `reply_received(message)`.
-- Capture payload: `{teamId, text, screenshotBase64, screenshotMime, clientReportId, telemetry:{clickedPoint, viewport, cursorNode, scene, state, seed, adapter, buildHash, engine, platform, logLines(last 200)}}`.
+- Capture payload: `{teamId, text, screenshotBase64, screenshotMime, clientReportId, telemetry:{clickedPoint, viewport, cursorNode, scene, state, seed, adapter, buildHash, engine, platform, logLines(last 200 lines, each clipped to 300 chars)}}`.
 - Agent helpers on the autoload, reached through the bridge: `VSPlaytest.state()`, `.seed()`, `.cheats()`, `.cheat(id, args)`. They are safe no-ops when disabled or without an adapter.
 
 Example adapter:
