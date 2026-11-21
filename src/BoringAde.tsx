@@ -7,7 +7,7 @@ import { openOverlay } from "./CommandPalette";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
-import { closeTab, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
+import { closeTab, getPanes, openAgent, openAgentInTab, setActivePane, toggleSplit, usePanes } from "./panes";
 import { sendMessage, usePaseo } from "./paseo";
 import { createQuickBugsPin } from "./pinActions";
 import { setBoringShownAgent, spinUpPin } from "./pinFocus";
@@ -405,11 +405,13 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   // (or just focuses the other pane when that agent is already its visible one), never in a pane that merely remembers the agent.
   const openHere = (id: string) => {
     if (shiftHeld()) return openAgentInTab(id, "right");
-    if (!panes.split) return openAgent(id);
-    const otherSide = panes.activePane === "left" ? "right" : "left";
-    const otherVisible = otherSide === "left" ? panes.leftActiveId : panes.rightActiveId;
+    // Live state, not the render closure: the workers fold calls toggleSplit() right before this, so `panes` is stale there.
+    const live = getPanes();
+    if (!live.split) return openAgent(id);
+    const otherSide = live.activePane === "left" ? "right" : "left";
+    const otherVisible = otherSide === "left" ? live.leftActiveId : live.rightActiveId;
     if (id === otherVisible) return setActivePane(otherSide);
-    return openAgentInTab(id, panes.activePane);
+    return openAgentInTab(id, live.activePane);
   };
   const allViews = views.length > 0 ? views : view ? [view] : [];
   // S8: the active agent owns the sidebar selection + breadcrumb. Keyed on the agent only, so switching project never snaps back.

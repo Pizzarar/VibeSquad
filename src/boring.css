@@ -776,9 +776,9 @@ html[data-vibe="boring"] .boring-project-row.on { background: transparent; }
 html[data-vibe="boring"] .boring-project-row.on .boring-project-name { font-weight: 600; color: var(--text-1); }
 html[data-vibe="boring"] .boring-sidebar .boring-footer-btn { color: var(--text-2); }
 html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill { min-height: 28px; padding: 2px 10px; font-size: var(--t-small); }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"]) { background: var(--surface-2) !important; color: var(--text-2) !important; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"]):hover { background: var(--surface-3) !important; }
-html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"]).on { background: var(--surface-3) !important; color: var(--text-1) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]) { background: var(--surface-2) !important; color: var(--text-2) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]):hover { background: var(--surface-3) !important; }
+html[data-vibe="boring"] .boring-topbar-actions .boring-switch-pill:not([data-testid="boring-split-toggle"][aria-pressed="true"]).on { background: var(--surface-3) !important; color: var(--text-1) !important; }
 
 /* Surfaces: flat tone steps. Your message = surface-2 + 2px accent rule; agent text sits on the canvas. */
 html[data-vibe="boring"] .tl-user,
