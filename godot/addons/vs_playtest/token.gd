@@ -44,10 +44,16 @@ static func server_url(setting: String, getenv: Callable = OS.get_environment) -
 	return "http://127.0.0.1:%d" % (port if port > 0 else DEFAULT_PORT)
 
 
-## The token is only ever sent to a loopback server.
+## The token is only ever sent to a loopback server. Strict parse of the whole URL:
+## scheme http, host exactly 127.0.0.1 | localhost | [::1] (case-insensitive, no trailing dot), optional port 1-65535,
+## optional path; no userinfo (`@`), query or fragment. Anything else (https, other schemes, `http://127.0.0.1:1@evil.com`) is refused.
 static func is_loopback(url: String) -> bool:
-	var u := url.to_lower()
-	for pre in ["http://127.0.0.1", "http://localhost", "http://[::1]"]:
-		if u.begins_with(pre) and (u.length() == pre.length() or u[pre.length()] in [":", "/"]):
-			return true
-	return false
+	var re := RegEx.new()
+	re.compile(r"^http://(127\.0\.0\.1|localhost|\[::1\])(?::(\d{1,5}))?(/[^\s?#@\\]*)?$")
+	var m := re.search(url.strip_edges().to_lower())
+	if m == null:
+		return false
+	var port := m.get_string(2)
+	if port != "" and (int(port) < 1 or int(port) > 65535):
+		return false
+	return true

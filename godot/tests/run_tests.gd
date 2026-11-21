@@ -6,6 +6,7 @@ const Token := preload("res://addons/vs_playtest/token.gd")
 const Payload := preload("res://addons/vs_playtest/payload.gd")
 const ReportClient := preload("res://addons/vs_playtest/report_client.gd")
 const AutoloadScript := preload("res://addons/vs_playtest/vs_playtest.gd")
+const Picker := preload("res://addons/vs_playtest/picker.gd")
 
 var _pass := 0
 var _fail := 0
@@ -35,6 +36,10 @@ func _initialize() -> void:
 	_test_gate()
 	await _test_retry()
 	await _test_autoload_disabled_and_forwarding()
+	_test_loopback_strict()
+	_test_ring_math()
+	await _test_picker()
+	await _test_capture_flow()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -191,3 +196,169 @@ func _test_autoload_disabled_and_forwarding() -> void:
 	on.report_sent.emit("idea-1")
 	check(got == ["idea-1"], "autoload: report_sent signal")
 	on.queue_free()
+
+
+func _test_loopback_strict() -> void:
+	for u in ["http://127.0.0.1", "http://127.0.0.1:4180", "http://127.0.0.1:1/", "http://127.0.0.1:65535", "http://localhost:4180/x/y", "http://[::1]:4180", "http://LOCALHOST:4180", "HTTP://127.0.0.1:80"]:
+		check(Token.is_loopback(u), "loopback: accepts %s" % u)
+	for u in ["http://127.0.0.1:4180@evil.com", "http://127.0.0.1@evil.com", "http://localhost:80@evil.com/", "http://user:pw@127.0.0.1:4180", "http://127.0.0.1.evil.com", "http://localhost.evil.com",
+			"http://localhost.", "http://127.0.0.1.", "http://127.0.0.1:0", "http://127.0.0.1:65536", "http://127.0.0.1:99999", "http://127.0.0.1:", "http://127.0.0.1:abc",
+			"https://127.0.0.1:4180", "ftp://127.0.0.1", "file://127.0.0.1", "//127.0.0.1", "127.0.0.1", "", "http://127.0.0.1:4180?x=1", "http://127.0.0.1:4180#f", "http://127.0.0.1\\@evil.com",
+			"http://127.0.0.1:4180/a@evil.com", "http://0.0.0.0:4180", "http://127.0.0.2", "http://[::1", "http://evil.com/http://127.0.0.1"]:
+		check(not Token.is_loopback(u), "loopback: refuses '%s'" % u)
+
+
+func _test_ring_math() -> void:
+	check(Payload.point_to_image(Vector2(100, 50), Vector2(1280, 720), Vector2(3840, 2160)) == Vector2(300, 150), "ring: canvas_items 1280x720 -> 3840x2160 triples the point")
+	check(Payload.point_to_image(Vector2(100, 50), Vector2(1920, 1080), Vector2(1920, 1080)) == Vector2(100, 50), "ring: identity when sizes match")
+	check(Payload.point_to_image(Vector2(10, 10), Vector2.ZERO, Vector2(100, 100)) == Vector2(10, 10), "ring: zero viewport guarded")
+
+
+func _add_control(parent: Node, pos: Vector2, sz: Vector2, filter: int = Control.MOUSE_FILTER_STOP) -> Control:
+	var c := Control.new()
+	c.position = pos
+	c.size = sz
+	c.mouse_filter = filter as Control.MouseFilter
+	parent.add_child(c)
+	return c
+
+
+func _sprite(pos: Vector2, z: int) -> Sprite2D:
+	var s := Sprite2D.new()
+	s.texture = ImageTexture.create_from_image(Image.create_empty(40, 40, false, Image.FORMAT_RGBA8))
+	s.position = pos
+	s.z_index = z
+	root.add_child(s)
+	return s
+
+
+func _test_picker() -> void:
+	var holder := Node.new()
+	root.add_child(holder)
+	# Control: topmost wins, IGNORE skipped, outside -> not that control
+	var a := _add_control(holder, Vector2(10, 10), Vector2(200, 100))
+	var b := _add_control(holder, Vector2(10, 10), Vector2(200, 100))
+	check(Picker.pick_in(root, Vector2(50, 50)) == b, "pick/control: later sibling (drawn on top) wins")
+	b.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	check(Picker.pick_in(root, Vector2(50, 50)) == a, "pick/control: MOUSE_FILTER_IGNORE is skipped")
+	b.mouse_filter = Control.MOUSE_FILTER_STOP
+	b.visible = false
+	check(Picker.pick_in(root, Vector2(50, 50)) == a, "pick/control: hidden control skipped")
+	b.visible = true
+	check(Picker.pick_in(root, Vector2(900, 900)) == null, "pick/control: miss returns null")
+	# hidden CanvasLayer must not intercept
+	var layer := CanvasLayer.new()
+	holder.add_child(layer)
+	var hud := _add_control(layer, Vector2(0, 0), Vector2(1000, 1000))
+	check(Picker.pick_in(root, Vector2(50, 50)) == hud, "pick/layer: visible CanvasLayer control is on top")
+	layer.visible = false
+	check(Picker.pick_in(root, Vector2(50, 50)) == b, "pick/layer: hidden CanvasLayer is skipped")
+	layer.visible = true
+	# nested SubViewport content is another coordinate space: skipped
+	hud.queue_free()
+	layer.queue_free()
+	await process_frame
+	var sv := SubViewport.new()
+	holder.add_child(sv)
+	_add_control(sv, Vector2(0, 0), Vector2(1000, 1000))
+	check(Picker.pick_in(root, Vector2(50, 50)) == b, "pick/viewport: controls inside a nested SubViewport are skipped")
+	# our own UI group is skipped
+	var ours := CanvasLayer.new()
+	ours.add_to_group(Picker.UI_GROUP)
+	holder.add_child(ours)
+	_add_control(ours, Vector2(0, 0), Vector2(1000, 1000))
+	check(Picker.pick_in(root, Vector2(50, 50)) == b, "pick/ui-group: vs_playtest layers are skipped")
+	holder.queue_free()
+	await process_frame
+	check(Picker.pick_in(root, Vector2(50, 50)) == null, "pick/freed: freed controls are gone")
+
+	# 2D physics
+	var body := StaticBody2D.new()
+	body.position = Vector2(500, 500)
+	body.z_index = 1
+	var cs := CollisionShape2D.new()
+	var rect := RectangleShape2D.new()
+	rect.size = Vector2(60, 60)
+	cs.shape = rect
+	body.add_child(cs)
+	root.add_child(body)
+	await physics_frame
+	await physics_frame
+	check(Picker.pick_in(root, Vector2(505, 495)) == body, "pick/2d-physics: point query hits the body")
+	check(Picker.pick_in(root, Vector2(560, 560)) == null, "pick/2d-physics: miss returns null")
+	body.queue_free()
+	await physics_frame
+
+	# 2D sprite fallback: topmost (higher z, else later in tree) wins
+	var s1 := _sprite(Vector2(700, 700), 0)
+	var s2 := _sprite(Vector2(700, 700), 0)
+	check(Picker.pick_in(root, Vector2(705, 705)) == s2, "pick/2d-sprite: later sprite at equal z is on top")
+	s1.z_index = 5
+	check(Picker.pick_in(root, Vector2(705, 705)) == s1, "pick/2d-sprite: higher z_index wins over tree order")
+	s1.queue_free()
+	s2.queue_free()
+
+	# 3D ray
+	var cam := Camera3D.new()
+	cam.position = Vector3(0, 0, 5)
+	root.add_child(cam)
+	cam.make_current()
+	var b3 := StaticBody3D.new()
+	var cs3 := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(2, 2, 2)
+	cs3.shape = box
+	b3.add_child(cs3)
+	root.add_child(b3)
+	await physics_frame
+	await physics_frame
+	var center := Vector2(root.get_visible_rect().size) / 2.0
+	check(Picker.pick_in(root, center) == b3, "pick/3d: camera ray hits the body at screen center")
+	check(Picker.pick_in(root, Vector2(1, 1)) == null, "pick/3d: ray that misses returns null")
+	b3.queue_free()
+	cam.queue_free()
+	await process_frame
+
+
+func _test_capture_flow() -> void:
+	var on: Node = AutoloadScript.new()
+	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+	root.add_child(on)
+	await process_frame
+	on.register_adapter(FullAdapter.new())
+	var mock := MockTransport.new()
+	mock.queue = [{"ok": true, "status": 200, "data": {"ok": true, "cardId": "idea-77"}, "error": ""}]
+	on._client = ReportClient.new(mock)
+	on._team_id = "sample"
+	on.grab_fn = func() -> Image: return null # headless dummy renderer has no viewport image
+	# cancel path resets the guard
+	on.start_capture()
+	await process_frame
+	check(on._capturing == true, "capture: guard set while picking")
+	on._overlay.pick_done.emit(false, Vector2.ZERO)
+	await process_frame
+	check(on._capturing == false, "capture: cancel resets _capturing")
+	# click on a transient node that is freed while the note is typed
+	var victim := _add_control(root, Vector2(20, 20), Vector2(100, 100))
+	victim.name = "Victim"
+	on.start_capture()
+	await process_frame
+	on._overlay.pick_done.emit(true, Vector2(50, 50))
+	for i in 4:
+		await process_frame
+	victim.free() # freed mid-note
+	on._overlay.note_done.emit(true, "boom")
+	await process_frame
+	await process_frame
+	check(mock.calls.size() == 1, "capture: report sent after the clicked node was freed")
+	var tel: Dictionary = mock.calls[0]["body"]["telemetry"] if mock.calls.size() == 1 else {}
+	check(str(tel.get("cursorNode", "")) == "/root/Victim" and tel.get("clickedPoint") == {"x": 50.0, "y": 50.0}, "capture: cursorNode snapshotted at click time (%s)" % str(tel.get("cursorNode", "")))
+	check(tel.get("state") == {"hp": 3} and tel.get("seed") == "s1", "capture: telemetry snapshot includes state/seed")
+	check(on._capturing == false, "capture: success resets _capturing")
+	check(_describe_freed(on), "capture: _describe_node(null / non-Node) is safe and empty")
+	on.queue_free()
+	await process_frame
+
+
+func _describe_freed(on: Node) -> bool:
+	return on._describe_node(null) == "" and on._describe_node(RefCounted.new()) == ""

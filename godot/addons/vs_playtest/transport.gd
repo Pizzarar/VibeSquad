@@ -16,6 +16,7 @@ func request(method: String, path: String, body: Variant = null) -> Dictionary:
 		return _fail(-1, "no VibeSquad local token at %s (is VibeSquad installed and started?)" % Token.token_path())
 	var http := HTTPRequest.new()
 	http.timeout = timeout_sec
+	http.max_redirects = 0 # never follow a redirect with the token attached
 	add_child(http)
 	var headers := PackedStringArray(["Content-Type: application/json", "%s: %s" % [Token.HEADER, token]])
 	var m := HTTPClient.METHOD_POST if method == "POST" else HTTPClient.METHOD_GET

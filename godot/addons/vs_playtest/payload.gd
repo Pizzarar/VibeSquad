@@ -133,3 +133,10 @@ static func strip_owner_prefix(text: String) -> String:
 	re.compile(r"^\[Owner playtest(?: · card:idea-\d{1,12})?\] ")
 	var m := re.search(text)
 	return text.substr(m.get_end()) if m else text
+
+
+## A click in viewport (logical) coordinates -> pixel coordinates of the captured image (they differ under stretch modes).
+static func point_to_image(point: Vector2, viewport_size: Vector2, image_size: Vector2) -> Vector2:
+	if viewport_size.x <= 0.0 or viewport_size.y <= 0.0:
+		return point
+	return point * (image_size / viewport_size)

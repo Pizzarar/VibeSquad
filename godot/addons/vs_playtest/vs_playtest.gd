@@ -22,6 +22,8 @@ const SCREENSHOT_PNG_MAX := 6 * 1024 * 1024 # server cap is 8 MB decoded; fall b
 var enabled: bool = false
 ## Test seam: replace before add_child() to simulate feature tags.
 var feature_probe: Callable = Callable()
+## Test seam: Callable() -> Image (may be a coroutine); replaces the real viewport grab.
+var grab_fn: Callable = Callable()
 var ui_scale: float = 1.0
 
 var _adapter: VSPlaytestAdapter = null
@@ -154,35 +156,43 @@ func set_ui_scale(s: float) -> void:
 
 
 ## Click-to-point capture -> note -> screenshot already taken -> report (retried with one clientReportId).
+## Every exit path (cancel, error, success) goes through here, so `_capturing` always resets.
 func start_capture() -> void:
 	if not enabled or _capturing:
 		return
 	_capturing = true
+	await _capture_flow()
+	_overlay.hide_all()
+	_capturing = false
+
+
+func _capture_flow() -> void:
 	var dock_was_open := _dock.visible
 	_overlay.begin_pick()
 	var pick: Array = await _overlay.pick_done
 	if not bool(pick[0]):
-		_overlay.hide_all()
-		_capturing = false
 		return
 	var point: Vector2 = pick[1]
 	var has_point := point.x >= 0.0
+	var where: Variant = point if has_point else null
+	# Snapshot everything at click time: the game keeps running while the owner types the note.
 	var node: Node = Picker.pick(get_tree(), point) if has_point else null
+	var tel := Payload.clean_telemetry(_telemetry(_describe_node(node), where))
 	# clean screenshot: hide our UI for two frames
 	_overlay.visible = false
 	_dock.visible = false
-	await get_tree().process_frame
-	await RenderingServer.frame_post_draw
-	var img: Image = get_tree().root.get_texture().get_image()
-	var shot := _encode(img, point if has_point else null)
+	var img: Image = null
+	if grab_fn.is_valid():
+		img = await grab_fn.call()
+	else:
+		img = await _grab()
+	var shot := _encode(img, where)
 	_dock.visible = dock_was_open
-	_overlay.begin_note(point if has_point else null)
+	_overlay.begin_note(where)
 	var note: Array = await _overlay.note_done
-	_overlay.hide_all()
 	if not bool(note[0]):
-		_capturing = false
 		return
-	var body := Payload.build(_team_id, str(note[1]), Payload.new_uuid(), shot, _telemetry(node, point if has_point else null))
+	var body := Payload.build(_team_id, str(note[1]), Payload.new_uuid(), shot, tel)
 	_dock.set_status("Sending report…")
 	var res: Dictionary = await _client.send_report(body)
 	if bool(res.get("ok", false)):
@@ -194,12 +204,33 @@ func start_capture() -> void:
 			_poll()
 	else:
 		_dock.set_status("Report failed after %d tries: %s" % [int(res.get("attempts", 1)), str(res.get("error", "?"))])
-	_capturing = false
 
 
 # ---------------------------------------------------------------- internals
 
-func _telemetry(node: Node, point: Variant) -> Dictionary:
+func _exit_tree() -> void:
+	if _logs != null:
+		_logs.uninstall()
+
+
+## The viewport image after our UI is hidden. A real renderer is required (the headless dummy renderer has no image).
+func _grab() -> Image:
+	await get_tree().process_frame
+	await RenderingServer.frame_post_draw
+	return get_tree().root.get_texture().get_image()
+
+
+## The node description, "" for a null/freed node. Called at click time.
+func _describe_node(node: Object) -> String:
+	if node == null or not is_instance_valid(node) or not (node is Node):
+		return ""
+	var n := node as Node
+	if _adapter != null:
+		return _adapter.describe_node(n)
+	return str(n.get_path()) if n.is_inside_tree() else str(n.name)
+
+
+func _telemetry(cursor_node: String, point: Variant) -> Dictionary:
 	var vp := get_tree().root.get_visible_rect().size
 	var scene := get_tree().current_scene
 	var info: Dictionary = _adapter.get_info() if _adapter != null else {}
@@ -216,8 +247,8 @@ func _telemetry(node: Node, point: Variant) -> Dictionary:
 	}
 	if point is Vector2:
 		t["clickedPoint"] = {"x": (point as Vector2).x, "y": (point as Vector2).y}
-	if node != null:
-		t["cursorNode"] = _adapter.describe_node(node) if _adapter != null else (str(node.get_path()) if node.is_inside_tree() else str(node.name))
+	if cursor_node != "":
+		t["cursorNode"] = cursor_node
 	return t
 
 
@@ -226,7 +257,8 @@ func _encode(img: Image, point: Variant) -> Dictionary:
 	if img == null or img.is_empty():
 		return {}
 	if point is Vector2:
-		_mark(img, point as Vector2, int(18 * ui_scale))
+		var k := Vector2(img.get_size()) / maxf(get_tree().root.get_visible_rect().size.x, 1.0)
+		_mark(img, Payload.point_to_image(point as Vector2, get_tree().root.get_visible_rect().size, Vector2(img.get_size())), int(18 * ui_scale * k.x))
 	var png := img.save_png_to_buffer()
 	if png.size() > 0 and png.size() <= SCREENSHOT_PNG_MAX:
 		return {"bytes": png, "mime": "image/png"}
