@@ -316,7 +316,9 @@ func _poll() -> void:
 	for m: Dictionary in fresh:
 		# our own replies/reports were already echoed locally; show only the Squad's lines (and the owner's from elsewhere on first load)
 		if str(m.get("role", "")) == "assistant" or not _first_poll_done:
-			_dock.append_message(m)
+			var shown: Dictionary = m.duplicate()
+			shown["text"] = Payload.strip_owner_prefix(str(m.get("text", "")))
+			_dock.append_message(shown)
 		if str(m.get("role", "")) == "assistant" and _first_poll_done:
 			reply_received.emit(m)
 	_first_poll_done = true

@@ -125,3 +125,11 @@ static func build(team_id: String, text: String, client_report_id: String, scree
 		body["screenshotMime"] = str(screenshot.get("mime", "image/png"))
 	body["telemetry"] = clean_telemetry(telemetry)
 	return body
+
+
+## Thread lines the owner sent come back as "[Owner playtest( · card:<id>)] text" (B1); show just the text.
+static func strip_owner_prefix(text: String) -> String:
+	var re := RegEx.new()
+	re.compile(r"^\[Owner playtest(?: · card:idea-\d{1,12})?\] ")
+	var m := re.search(text)
+	return text.substr(m.get_end()) if m else text

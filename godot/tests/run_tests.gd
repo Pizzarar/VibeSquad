@@ -99,6 +99,7 @@ func _test_payload_shape() -> void:
 	var bare := Payload.build("t", "", "cid-2", {}, {})
 	check(not bare.has("screenshotBase64") and bare["text"] == Payload.DEFAULT_TEXT and bare["telemetry"] == {}, "payload: no screenshot keys when none; default text when note empty")
 	check(JSON.parse_string(JSON.stringify(body)) is Dictionary, "payload: round-trips as JSON")
+	check(Payload.strip_owner_prefix("[Owner playtest · card:idea-12] hi there") == "hi there" and Payload.strip_owner_prefix("[Owner playtest] yo") == "yo" and Payload.strip_owner_prefix("plain") == "plain", "payload: owner chat prefix stripped for display")
 	var id := Payload.new_uuid()
 	var parts := id.split("-")
 	check(parts.size() == 5 and id.length() == 36 and id[14] == "4" and id != Payload.new_uuid(), "payload: uuid v4 shape, unique")
