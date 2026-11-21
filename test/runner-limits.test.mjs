@@ -9,6 +9,7 @@ import path from 'node:path';
 import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller, runAgyUsage } from '../runner/limits.mjs';
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { Runner } from '../runner/runner.mjs';
+import { until } from './helpers/load-budget.mjs';
 
 const fx = (n) => readFileSync(new URL(`./fixtures/limits/${n}`, import.meta.url), 'utf8');
 const tmp = () => mkdtempSync(path.join(os.tmpdir(), 'vs-limits-'));
@@ -63,7 +64,7 @@ test('claude adapter emits a normalized limit event from the real stream line', 
   const events = [];
   createClaudeAdapter({ spawnImpl: fakeClaude([fx('claude-rate-limit-event.jsonl').trim()]), mcp: false })
     .start({ cwd: '.', emit: (t, d) => events.push([t, d]), onExit() {} });
-  await new Promise((r) => setTimeout(r, 30));
+  await until(() => events.some(([t]) => t === 'limit')); // fixed 30ms raced the setImmediate+stream under load
   assert.deepEqual(events.filter(([t]) => t === 'limit'), [['limit', { provider: 'claude', window: 'weekly', usedPct: 16, resetsAt: '2026-11-12T07:00:00.000Z', source: 'provider' }]]);
 });
 
@@ -72,7 +73,7 @@ test('Runner persists claude limit events to limits.jsonl beside the agents dir,
   const adapters = { claude: createClaudeAdapter({ spawnImpl: fakeClaude([fx('claude-rate-limit-event.jsonl').trim()]), mcp: false }) };
   const runner = new Runner({ dir: path.join(home, 'agents'), adapters });
   const id = runner.create({ provider: 'claude', cwd: home });
-  await new Promise((r) => setTimeout(r, 30));
+  await until(() => existsSync(path.join(home, 'limits.jsonl')));
   const [rec] = lines(path.join(home, 'limits.jsonl'));
   assert.equal(rec.agentId, id);
   assert.equal(rec.provider, 'claude');

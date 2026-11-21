@@ -7,7 +7,11 @@ export function killTree(pid, { sync = false } = {}) {
   if (process.platform === "win32") {
     const args = ["/PID", String(pid), "/T", "/F"];
     if (sync) {
-      try { spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore", timeout: 5000 }); } catch {}
+      // taskkill is a separate process: under heavy CPU load its startup alone can pass a few seconds, and a spawnSync timeout kills it
+      // mid-job and leaves the tree alive. Allow a generous ceiling, and if it still didn't finish, at least take down the root.
+      let r;
+      try { r = spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore", timeout: 30000 }); } catch {}
+      if (!r || r.error || r.signal) { try { process.kill(pid, "SIGKILL"); } catch {} }
     } else {
       try { spawn("taskkill", args, { windowsHide: true, stdio: "ignore" }).on("error", () => {}).unref(); } catch {}
     }

@@ -50,6 +50,9 @@ const ADMIN = "adm1n-t0k";
 const runnerHome = path.join(HOME, "runner");
 const runner = new Runner({ dir: path.join(runnerHome, "agents"), adapters: { claude: fakeAdapter() }, parkGraceMs: 60_000, bgProbe: null });
 const runnerSrv = createRunnerServer(runner, { token: ADMIN, hash: "h" });
+// The runner server shares this process with spawnSync(git): under load the loop stalls past node's 5s keep-alive, the server then
+// reaps an idle socket the client's pool is about to reuse -> ECONNRESET -> RunnerClient 504. Never reap idle sockets here.
+runnerSrv.keepAliveTimeout = 0;
 writeDiscovery(runnerHome, { port: await listen(runnerSrv), token: ADMIN });
 const backend = new RunnerBackend({ client: new RunnerClient({ home: runnerHome, env: {}, requestTimeoutMs: budget(15000) }), hooks: false, buildPrefix: async () => "", whosHere: async () => {} });
 const api = createVibesquadMiddleware(ROOT, { backend });
