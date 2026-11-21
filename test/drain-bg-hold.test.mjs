@@ -226,6 +226,23 @@ test("(1) drain hook: a request drain refuses background Bash with the request's
   assert.match(r.stderr, /restart request rr-9/);
 });
 
+test("(1) drain hook end-to-end: drain.json present + background Bash exits 2 with the message; no drain.json passes (exit 0, silent)", () => {
+  const dir = tmp();
+  const bg = { tool_name: "Bash", tool_input: { command: "npm test", run_in_background: true } };
+  const drain = { since: Date.now() - 1000, until: Date.now() + 60_000, kind: "restart", reason: "vs restart" };
+  const file = path.join(dir, "drain.json");
+  writeFileSync(file, JSON.stringify(drain));
+  const refused = spawnSync(process.execPath, [DRAIN_HOOK_SCRIPT, file], { input: JSON.stringify(bg), encoding: "utf8", timeout: 10_000 });
+  assert.equal(refused.status, 2, `expected exit 2, got ${refused.status}: ${refused.stderr}`);
+  assert.match(refused.stderr, /VibeSquad is draining for a runtime restart/);
+  assert.match(refused.stderr, /new background commands are refused/);
+  // No drain file: the hook exits 0 without reading stdin (the common case) and stays silent.
+  const absent = path.join(dir, "no-drain.json");
+  const pass = spawnSync(process.execPath, [DRAIN_HOOK_SCRIPT, absent], { input: JSON.stringify(bg), encoding: "utf8", timeout: 10_000 });
+  assert.equal(pass.status, 0, `expected exit 0, got ${pass.status}: ${pass.stderr}`);
+  assert.equal(pass.stderr, "", "no drain is silent");
+});
+
 test("(1) unreadable drain.json fails OPEN with a warning (the runner's turn-end refusal is the backstop); no file is silent", () => {
   const dir = tmp();
   const warns = [];
