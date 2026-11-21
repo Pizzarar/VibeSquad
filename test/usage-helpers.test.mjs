@@ -464,3 +464,27 @@ test("mergedCoverageNote only when in-coverage differs from merged", () => {
   assert.equal(n.text, "(in-cov 3)");
   assert.match(n.title, /inside log coverage/);
 });
+
+import { filterProfilesByKind, parseProfileKind, costCellText, compactionOkText, PROFILE_KIND_FILTERS } from "../src/usageHelpers.ts";
+
+test("usa-39: kind filter buckets, parse fallback", () => {
+  const rows = [{ jobKind: "implementer", role: "worker" }, { jobKind: "reviewer", role: "worker" }, { jobKind: "digest", role: "x" }, { jobKind: "scout", role: "x" }, { jobKind: "lead", role: "lead" }, { jobKind: "brainstorm", role: "b" }, { jobKind: null, role: "worker" }, { jobKind: null, role: "weird" }];
+  assert.equal(filterProfilesByKind(rows, "all").length, 8);
+  assert.equal(filterProfilesByKind(rows, "implementers").length, 2);
+  assert.equal(filterProfilesByKind(rows, "reviewers").length, 1);
+  assert.equal(filterProfilesByKind(rows, "digests").length, 2);
+  assert.equal(filterProfilesByKind(rows, "coord").length, 2);
+  assert.equal(parseProfileKind("bogus"), "all");
+  assert.equal(parseProfileKind(null), "all");
+  assert.equal(parseProfileKind("reviewers"), "reviewers");
+  assert.equal(PROFILE_KIND_FILTERS.length, 5);
+});
+
+test("usa-39: cost cell + compaction ok text tolerate absent fields", () => {
+  assert.equal(costCellText({ mergedUnits: 2, costPerMergedUnit: 1.5, costPerRun: null }), "$1.50");
+  assert.equal(costCellText({ mergedUnits: 0, costPerMergedUnit: null, costPerRun: 0.25 }), "$0.25/run");
+  assert.equal(costCellText({ mergedUnits: 0, costPerMergedUnit: null, costPerRun: null }), "—");
+  assert.equal(costCellText({ mergedUnits: 0, costPerMergedUnit: null }), "—");
+  assert.equal(compactionOkText({}), "ok — · ok — vs successor 1st turn —");
+  assert.match(compactionOkText({ okRate: 0.8, meanOkCostUsd: 0.25, meanSuccessorFirstTurnCostUsd: 1.5 }), /ok 80%.*\$0\.25 vs successor 1st turn \$1\.50/);
+});

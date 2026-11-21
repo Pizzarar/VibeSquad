@@ -6512,3 +6512,10 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 :is(.sidebar) .team-head-line > .badge.alert.team-needs.attn { background: var(--amber); color: var(--on-amber) !important; border-color: var(--shadow-hard); }
 :is(.sidebar) .team-head-line > .badge.alert.team-needs.err { background: var(--pink-fill); color: var(--on-pink-fill) !important; border-color: var(--shadow-hard); }
 .sidebar.collapsed .sidebar-needs-spine { display: none; }
+
+.usage-kind-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
