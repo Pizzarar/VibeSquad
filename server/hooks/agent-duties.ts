@@ -1860,6 +1860,28 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
     const alternateDigestProfile = (failedProviders: string[]): StoredProfile | null => alternateProfileFor(DIGEST_PROFILE, failedProviders);
+    /**
+     * idea-504: the profile a worker that died upstream on `failedProvider` is re-spawned on. A P5c role-name profile
+     * ("Implement", "Work Order": R2 M2) routes through roleSpawnProfile with the failed family, capped and over-quota families
+     * as caps (the legacy failover returns null for role names); an old/stored profile name uses the idea-218 failover order.
+     * null when nothing off the failed family is available.
+     */
+    const alternateWorkerProfile = (fromProfile: string, failedProvider: string, stakes: string): StoredProfile | null => {
+      const stored = loadStoredProfiles();
+      const roles = liveRoles(stored);
+      const failedFam = normalizeProviderFamily(failedProvider);
+      if (roleNameHit(fromProfile, roles)) {
+        const exhausted = (id: string) => ({ id, status: "exhausted", usedPct: 100 });
+        const quota = typeof deps.usageProviders === "function" ? deps.usageProviders() : Array.isArray(deps.usageProviders) ? deps.usageProviders : [];
+        const usage: any[] = [...(failedFam ? [exhausted(failedFam)] : []), ...Object.keys(readCappedProviderMap()).map(exhausted), ...quota];
+        const route = roleSpawnProfile(fromProfile, { stakes: stakes || undefined, caps: cappedFamilies(usage, failedFam ? [failedFam] : []), roles });
+        const p = (route?.profile ?? null) as StoredProfile | null;
+        const fam = normalizeProviderFamily(p?.provider);
+        return p?.provider && fam && fam !== failedFam ? p : null;
+      }
+      const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());
+      return alternateProfileFor(fromProfile, [failedProvider], own ? digestCanExecute(own) : true);
+    };
 
     // ---- Hook 1: before agent.create ---------------------------------------
 
@@ -2920,6 +2942,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // ONCE on the alternate provider (the idea-218 failover order, failed + capped providers skipped), with the same title, cwd,
     // labels and prompt. Runner-only: the event comes from RunnerBackend (server/backend/runner-lifecycle.mjs), once, in the server.
     const upstreamRespawnSeen = new Set<string>(); // dead ids this process already handled (the labels below survive a restart)
+    // R2 H1: one follow-up run per upstream death. The A4 transient retry (handleFailure, from the same exit's failed turn_ended)
+    // owns any death it scheduled a resend for: the respawn yields to it. A dead worker the respawn claimed (right before its
+    // create) is never resent by A4. Lifecycle hooks run serially (turn_ended before upstream_exit), and both claims are taken
+    // synchronously, so the two can never both act on one exit in either order.
+    const upstreamRespawnClaimed = new Set<string>();
 
     async function respawnAfterUpstreamExit(paseo: Paseo, agent: any, { error = "", ts }: { error?: string; ts?: number } = {}) {
       const deadId = String(agent?.id ?? "").trim();
@@ -2946,7 +2973,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // A lead/user cancel or archive never respawns (acp.mjs already drops upstream on cancel/kill; this covers a late archive).
       if (me?.archivedAt || labels[AUTO_ARCHIVED_LABEL] === "1") return skip("archived");
       if (isWorkerBusy(me)) return skip(`revived(${me?.status})`); // someone already sent it a new prompt
-      const ageMs = Number.isFinite(ts) ? Math.max(0, Date.now() - Number(ts)) : 0;
+      // R2 L1: no (or a bad) exit time can't prove the exit is fresh: NaN -> upstreamRespawnPlan's stale-exit.
+      const ageMs = typeof ts === "number" && Number.isFinite(ts) ? Math.max(0, Date.now() - ts) : Number.NaN;
       let entries: any[] = [];
       try {
         entries = (await paseo.agents.ref(deadId).timeline.refetch({ direction: "tail", limit: UPSTREAM_RESPAWN_TIMELINE_LIMIT })).entries ?? [];
@@ -2957,7 +2985,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if ("skip" in plan) return skip(plan.skip);
       // At most once per task, across restarts: a replacement already carrying respawnOf=<dead> ends it.
       try {
-        const { entries: all } = await paseo.agents.list();
+        // R2 M1: archived agents too: a replacement that already finished and was archived still counts.
+        const { entries: all } = await paseo.agents.list({ filter: { includeArchived: true } });
         const prior = (all ?? []).map((e: any) => e?.agent ?? e).find((a: any) => a?.labels?.[RESPAWN_OF_LABEL] === deadId);
         if (prior) return skip(`already-respawned(${prior.id})`);
       } catch {
@@ -2965,10 +2994,11 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
       const fromProfile = String(labels.profile ?? "").trim();
       if (!fromProfile) return skip("no-profile");
-      const stored = loadStoredProfiles();
-      const own = [...stored, ...(DEFAULT_PACK_PROFILES as StoredProfile[])].find((p) => p?.name?.toLowerCase() === fromProfile.toLowerCase());
-      const alt = alternateProfileFor(fromProfile, [fromProvider], own ? digestCanExecute(own) : true);
+      const alt = alternateWorkerProfile(fromProfile, fromProvider, String(labels.stakes ?? ""));
       if (!alt?.provider) return skip("no-alternate");
+      // R2 H1: the claim, synchronously before the create (no await since the A4 check).
+      if (retries.has(deadId) || digestRetryPending.has(deadId)) return skip("a4-retry-scheduled");
+      upstreamRespawnClaimed.add(deadId);
       const title = String(me?.title ?? agent?.title ?? "").trim() || `respawn of ${deadId}`;
       const newLabels = respawnLabels(labels, alt.name, deadId);
       let newId = "";
@@ -3308,6 +3338,10 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     // A4: transient network error retry with exponential backoff.
     async function handleFailure(paseo: Paseo, agent: any, message: string) {
       if (!TRANSIENT_ERROR.test(message)) return;
+      if (upstreamRespawnClaimed.has(agent.id)) {
+        log(`transient error on ${agent.id}: no A4 retry, it was re-spawned after an upstream failure (idea-504)`);
+        return;
+      }
       const n = retries.get(agent.id) ?? 0;
       if (n >= MAX_RETRIES) {
         log(`transient error on ${agent.id} persisted after ${n} retries: ${message}`);

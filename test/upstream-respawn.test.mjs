@@ -43,6 +43,7 @@ function fakeRunner({ id = "rn-dead", labels = LABELS, timeline, status = "close
   const timelines = new Map();
   const created = [];
   const labelWrites = [];
+  const sends = [];
   let seq = 0;
   const rows = (items) => items.map((item) => ({ item, seqStart: ++seq, seqEnd: seq, timestamp: new Date().toISOString() }));
   const backend = {
@@ -55,7 +56,11 @@ function fakeRunner({ id = "rn-dead", labels = LABELS, timeline, status = "close
       const all = timelines.get(aid) ?? [];
       return { entries: Number(opts.limit) > 0 ? all.slice(-Number(opts.limit)) : all.slice() };
     },
-    async listAgents() { return [...agents.values()].map((a) => ({ ...a, labels: { ...a.labels } })); },
+    async listAgents(opts) {
+      // Like RunnerBackend.fetchAgents: archived agents only with filter.includeArchived.
+      const all = [...agents.values()].filter((a) => opts?.filter?.includeArchived || !a.archivedAt);
+      return all.map((a) => ({ ...a, labels: { ...a.labels } }));
+    },
     async createAgent({ config, prompt, labels: l, env }) {
       const nid = `rn-new-${created.length + 1}`;
       const a = { id: nid, title: config.title, cwd: config.cwd, provider: config.provider, modeId: config.modeId, status: "running", labels: { ...l }, archivedAt: null };
@@ -64,7 +69,7 @@ function fakeRunner({ id = "rn-dead", labels = LABELS, timeline, status = "close
       created.push({ ...a, prompt, env });
       return { ...a };
     },
-    async sendAgentPrompt() { return { queued: false }; },
+    async sendAgentPrompt(aid, text) { sends.push({ id: aid, text }); return { queued: false }; },
     async archiveAgent(aid) { const a = agents.get(aid); if (a) a.archivedAt = new Date().toISOString(); },
     async updateAgent(aid, { labels: l } = {}) {
       labelWrites.push({ id: aid, labels: l });
@@ -76,15 +81,18 @@ function fakeRunner({ id = "rn-dead", labels = LABELS, timeline, status = "close
   };
   agents.set(id, { id, title: "Bug1 · CI timeout", cwd: CWD, provider: "opencode", status, labels: { ...labels }, archivedAt });
   timelines.set(id, rows(timeline ?? [{ type: "user_message", text: PROMPT }, { type: "error", message: "Internal error: Internal service failure" }, { type: "error", message: ERR }]));
-  return { backend, agents, created, labelWrites };
+  return { backend, agents, created, labelWrites, sends };
 }
 
-async function withHost(f, fn) {
-  const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { cappedProviders: [] }, pollMs: 20 });
+async function withHost(f, fn, deps = {}) {
+  const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { cappedProviders: [], retryBaseMs: 30, ...deps }, pollMs: 20 });
   try { return await fn(host); } finally { host.dispose(); }
 }
-const emitExit = async (host, f, id = "rn-dead", { ts = Date.now() } = {}) =>
-  host.emit("agent.upstream_exit", { agent: await f.backend.getAgent(id), error: ERR, ts });
+const emitExit = async (host, f, id = "rn-dead", { ts = Date.now(), error = ERR } = {}) =>
+  host.emit("agent.upstream_exit", { agent: await f.backend.getAgent(id), error, ...(ts === null ? {} : { ts }) }); // ts null = an exit event with no ts
+const emitFailedTurn = async (host, f, id, message) =>
+  host.emit("agent.turn_ended", { agent: await f.backend.getAgent(id), turnId: "3", outcome: { kind: "failed", error: { message } } });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const metrics = (id) => teamLog().filter((e) => e.type === "metric" && /^upstream-respawn /.test(e.text) && e.text.includes(`agent=${id} `));
 
 test("first-turn upstream death -> respawned ONCE on another provider: same title, cwd, prompt, job/ord/stakes; decision + metric", async () => {
@@ -224,4 +232,91 @@ test("upstreamRespawnPlan / respawnLabels (pure)", () => {
   assert.deepEqual(upstreamRespawnPlan(tl, {}, { role: "worker", ageMs: Number.NaN }), { skip: "stale-exit" });
   const l = respawnLabels({ team: "t", job: "j", ord: "2", stakes: "high", wf: "dsf", tier: "cheap", [RESPAWNED_AS_LABEL]: "rn-z", digestTurn: "9" }, "Implement - Sonnet", "rn-d");
   assert.deepEqual(l, { team: "t", job: "j", ord: "2", stakes: "high", profile: "Implement - Sonnet", [RESPAWN_OF_LABEL]: "rn-d" });
+});
+
+// ---- R2 (Tier A review FAIL 1/2/1 on 2e3b9f49) ----
+
+const EOF_ERR = "opencode exited (code 1) after: API Error: unexpected EOF"; // TRANSIENT_ERROR (A4) and upstream at once
+
+test("R2 H1: turn_ended(failed) + upstream_exit for one transient exit -> exactly one follow-up run (the A4 resend), no respawn", async () => {
+  const f = fakeRunner({ id: "rn-h1a" });
+  await withHost(f, async (host) => {
+    // Lifecycle order: the exit's failed turn_ended is dispatched (and awaited) before upstream_exit.
+    await emitFailedTurn(host, f, "rn-h1a", EOF_ERR);
+    await emitExit(host, f, "rn-h1a", { error: EOF_ERR });
+    await sleep(150); // past the 30 ms A4 backoff
+  });
+  assert.equal(f.sends.filter((s) => s.id === "rn-h1a").length, 1, "one A4 resend");
+  assert.equal(f.created.length, 0, "no respawn next to it");
+  assert.match(metrics("rn-h1a").at(-1).text, /reason=a4-retry-scheduled/);
+});
+
+test("R2 H1: reverse order (upstream_exit first) -> the respawn claims it and A4 never resends the dead worker", async () => {
+  const f = fakeRunner({ id: "rn-h1b" });
+  await withHost(f, async (host) => {
+    await emitExit(host, f, "rn-h1b", { error: EOF_ERR });
+    await emitFailedTurn(host, f, "rn-h1b", EOF_ERR);
+    await sleep(150);
+  });
+  assert.equal(f.created.length, 1, "one respawn");
+  assert.equal(f.sends.filter((s) => s.id === "rn-h1b").length, 0, "no A4 resend to the dead worker");
+});
+
+test("R2 H1: a non-transient upstream failure (Internal service failure) with both hooks -> A4 does nothing, one respawn", async () => {
+  const f = fakeRunner({ id: "rn-h1c" });
+  await withHost(f, async (host) => {
+    await emitFailedTurn(host, f, "rn-h1c", ERR);
+    await emitExit(host, f, "rn-h1c");
+    await sleep(150);
+  });
+  assert.equal(f.created.length, 1);
+  assert.equal(f.sends.filter((s) => s.id === "rn-h1c").length, 0);
+});
+
+test("R2 M1: a replacement that already finished and was archived still blocks a second respawn (restart, label write lost)", async () => {
+  const f = fakeRunner({ id: "rn-m1" });
+  await withHost(f, (host) => emitExit(host, f, "rn-m1"));
+  assert.equal(f.created.length, 1);
+  delete f.agents.get("rn-m1").labels[RESPAWNED_AS_LABEL];
+  f.agents.get("rn-new-1").archivedAt = new Date().toISOString();
+  await withHost(f, (host) => emitExit(host, f, "rn-m1"));
+  assert.equal(f.created.length, 1, "the archived replacement is found");
+  assert.match(metrics("rn-m1").at(-1).text, /reason=already-respawned\(rn-new-1\)/);
+});
+
+test("R2 M2: a P5c role-name worker (profile=Implement) is respawned off the failed family, not skipped as no-alternate", async () => {
+  const f = fakeRunner({ id: "rn-m2", labels: { ...LABELS, profile: "Implement" } });
+  await withHost(f, (host) => emitExit(host, f, "rn-m2"));
+  assert.equal(f.created.length, 1, metrics("rn-m2").at(-1)?.text);
+  const n = f.created[0];
+  assert.notEqual(n.provider.split("/")[0], "opencode");
+  assert.equal(n.labels.profile, "Implement", "still the role name: the spawn hook routes it");
+  assert.equal(n.labels[RESPAWN_OF_LABEL], "rn-m2");
+});
+
+test("R2 L1: capped providers are skipped, everything capped -> no-alternate, unknown/missing tool kinds block, no ts -> stale-exit", async () => {
+  // claude capped: the alternate is neither opencode (failed) nor claude.
+  const f1 = fakeRunner({ id: "rn-l1-cap" });
+  await withHost(f1, (host) => emitExit(host, f1, "rn-l1-cap"), { cappedProviders: ["claude"] });
+  assert.equal(f1.created.length, 1, metrics("rn-l1-cap").at(-1)?.text);
+  assert.ok(!["opencode", "claude"].includes(f1.created[0].provider.split("/")[0]), f1.created[0].provider);
+  // Every family capped: nothing to respawn on.
+  const all = ["claude", "codex", "gemini", "opencode", "antigravity", "copilot", "cursor", "qwen", "kimi", "deepseek"];
+  const f2 = fakeRunner({ id: "rn-l1-none" });
+  await withHost(f2, (host) => emitExit(host, f2, "rn-l1-none"), { cappedProviders: all });
+  assert.equal(f2.created.length, 0);
+  assert.match(metrics("rn-l1-none").at(-1).text, /reason=no-alternate/);
+  // A tool call with no kind (Claude adapter) or an unknown/other kind counts as a possible edit.
+  for (const [name, detail] of [["nokind", {}], ["other", { kind: "other" }], ["weird", { kind: "frobnicate" }]]) {
+    const id = `rn-l1-${name}`;
+    const f = fakeRunner({ id, timeline: [{ type: "user_message", text: PROMPT }, { type: "tool_call", name: "mcp tool", detail }, { type: "error", message: ERR }] });
+    await withHost(f, (host) => emitExit(host, f, id));
+    assert.equal(f.created.length, 0, name);
+    assert.match(metrics(id).at(-1).text, /reason=tool-edits\(mcp tool\)/, name);
+  }
+  // An exit with no ts can't prove it is fresh.
+  const f3 = fakeRunner({ id: "rn-l1-nots" });
+  await withHost(f3, (host) => emitExit(host, f3, "rn-l1-nots", { ts: null }));
+  assert.equal(f3.created.length, 0);
+  assert.match(metrics("rn-l1-nots").at(-1).text, /reason=stale-exit/);
 });
