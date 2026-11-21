@@ -535,6 +535,12 @@ export const IdeaInbox = memo(function IdeaInbox({ team, view, onOpenLane }: { t
                         {card.scope}
                       </span>
                       <strong className="inbox-card-title">{card.title}</strong>
+                      {(card as { source?: string }).source === "alpha-tester" && (
+                        <span className="inbox-tester-badge" data-testid="inbox-tester-badge" title="Submitted by an alpha tester device">
+                          ALPHA TESTER
+                          {(card as { meta?: { testerDeviceName?: unknown } }).meta?.testerDeviceName ? ` · ${String((card as { meta?: { testerDeviceName?: unknown } }).meta?.testerDeviceName)}` : ""}
+                        </span>
+                      )}
                       {card.status === "accepted" && <span className="inbox-merged-badge">accepted</span>}
                       {card.mergedFromIds && card.mergedFromIds.length > 0 && (
                         <span className="inbox-merged-badge" title={`Merged from: ${card.mergedFromIds.join(", ")}`}>
