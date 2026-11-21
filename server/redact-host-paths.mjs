@@ -55,7 +55,7 @@ export function redactHostPaths(value, rootDir = REPO_ROOT, roots = hostRoots(ro
 /** What ends a path token in prose/markdown: whitespace, quotes, backticks, brackets, markdown emphasis, table pipes. */
 const TOKEN_TAIL = String.raw`[^\s"'\`<>()\[\]{}|*]*`;
 /**
- * A path with spaces under an unknown root (C:\Users\Jo  Smith\…, C:/Program Files/My App/…): after one or more spaces, a
+ * A path with spaces under an unknown root (C:\Users\<first  last>\…, C:/Program Files/My App/…): after one or more spaces, a
  * word that starts with a letter and goes on with a path separator stays in the token. A token that ends in sentence
  * punctuation ("…/Proj: 41/41 pass") or a word that starts with a digit ("3/4 tests") ends it.
  */
