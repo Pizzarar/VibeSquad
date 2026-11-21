@@ -3097,6 +3097,19 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
     const AUTO_ARCHIVED_LABEL = "vs.auto-archived";
     const WORKER_CLOSE_GRACE_MS = 3000;
 
+    /**
+     * idea-450: worker ids whose final message was already forwarded to the lead this completion, so it is never sent twice.
+     * A watched worker's final rides the watch completion ping (`deliverWatchPing` detail / `finalsBlock`); a digest-filed
+     * `[done]` verdict would otherwise forward the SAME final again through `workerReportBody` (the relay), and every
+     * duplicate `[done]` the digest re-runs would forward it again. One final per completion, whether by watch ping or relay.
+     * Cleared on the worker's next `turn_started` (a new turn is a new completion with a new final).
+     */
+    const finalsForwarded = new Set<string>();
+    /** idea-450: dedupe keys for an exact duplicate `[done]` relay (same author, refs and text within a window), so a digest
+     *  that re-runs `vs log done` wakes the lead once, not once per re-run. key -> last relayed epoch ms. */
+    const relayedDone = new Map<string, number>();
+    const DONE_RELAY_DEDUPE_MS = 5 * 60_000;
+
     async function closeFinishedWorker(paseo: Paseo, agentId: string, opts: { turnEnded?: boolean } = {}) {
       if (!doneReported.has(agentId)) return;
       const s = await snap(paseo, agentId);
@@ -3146,11 +3159,31 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     }
 
+    /**
+     * idea-450: true when this `[done]` is an exact duplicate of one read within the dedupe window (a digest agent that
+     * re-ran `vs log done` for the same worker, producing a second identical log line). Marks the line as seen otherwise.
+     * Applied in noteEntry (one call per log line): the re-route of a held wake through queueWake never re-runs this, so a
+     * retired lead's re-routed `[done]` is still delivered once to the successor.
+     */
+    function duplicateDoneRelay(entry: LogEntry): boolean {
+      const key = `${String(entry.agent ?? "")}\n${(entry.refs ?? []).join(",")}\n${String(entry.text ?? "").trim()}`;
+      const now = Date.now();
+      const at = relayedDone.get(key) ?? 0;
+      if (now - at < DONE_RELAY_DEDUPE_MS) return true;
+      relayedDone.set(key, now);
+      if (relayedDone.size > 500) {
+        for (const [k, v] of relayedDone) if (now - v >= DONE_RELAY_DEDUPE_MS) relayedDone.delete(k);
+      }
+      return false;
+    }
+
     function noteEntry(team: string, entry: LogEntry) {
       if (entry.type === "done") noteWorkerDone(entry);
       const taken = watch?.onLogEntry(team, entry) ?? [];
       if (taken.length) watchTaken.set(entry, taken);
       if (!WAKE_TYPES.has(entry.type)) return;
+      // idea-450: a duplicate [done] line (a digest re-running `vs log done`) must not wake the lead a second time.
+      if (entry.type === "done" && duplicateDoneRelay(entry)) return;
       queueWake(team, entry);
     }
 
@@ -3297,6 +3330,12 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
             : `${head}\n(Watch owner ${d.owner} is retired; delivered to you as the lane's lead.)`;
       // idea-352: the watched workers' final messages ride the completion ping once, redacted; they sit outside the W4 merge text.
       const detail = d.detail ? await redactReportText(d.detail, [target.cwd]) : "";
+      // idea-450: those finals are now delivered by this ping: mark them so the later [done] relay does not forward them again.
+      if (d.detail) {
+        for (const item of d.set?.items ?? []) {
+          if (item.kind === "agent" && item.state === "done" && (item as any).final) finalsForwarded.add(String(item.ref));
+        }
+      }
       const entry: LogEntry = { ts: new Date().toISOString(), agent: "watch", lane: d.lane, type: "watch", text: detail ? `${text}
 
 ${detail}` : text, refs: [d.setId] };
@@ -3658,6 +3697,7 @@ ${detail}` : text, refs: [d.setId] };
           markTurnSeen(agent?.id);
           if (agent?.id) {
             doneReported.delete(agent.id); // a new turn after a report: the worker is working again, do not close it
+            finalsForwarded.delete(String(agent.id)); // idea-450: a new turn is a new completion; its final may be forwarded again
             turnEpoch.set(agent.id, (turnEpoch.get(agent.id) ?? 0) + 1);
             persistDigestedTurn(String(agent.id), null); // a live new turn: its own end must digest
             void cancelStaleDigests(paseo, String(agent.id));
@@ -3798,6 +3838,8 @@ ${detail}` : text, refs: [d.setId] };
       if (entry.type !== "done" || budget <= 0) return "";
       const worker = String(entry.refs?.[0] ?? "").trim();
       if (!worker || worker === entry.agent || worker === "plugin" || worker === "you") return "";
+      // idea-450: this worker's final already rode a watch completion ping (or a prior [done] relay): never send it a second time.
+      if (finalsForwarded.has(worker)) return "";
       const text = await lastAssistantText(paseo, worker);
       if (!text) return "";
       const w = await snap(paseo, worker);
@@ -3805,6 +3847,7 @@ ${detail}` : text, refs: [d.setId] };
       if (where && (await workerSentOwnReport(paseo, worker, teamIdOf(where.team, currentTeams()), Date.parse(entry.ts) || Date.now()))) return "";
       const clean = await redactReportText(text, [w?.cwd]);
       if (!clean) return "";
+      finalsForwarded.add(worker); // idea-450: forwarded here; a duplicate [done] must not forward it again
       const body = clean.length > budget ? `${clean.slice(0, budget)}… (truncated; vs status ${worker} for the rest)` : clean;
       return `\nWorker ${worker} final message (auto-forwarded report):\n${body}\n`;
     }

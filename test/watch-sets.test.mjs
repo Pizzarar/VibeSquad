@@ -2260,3 +2260,74 @@ test(
     }
   }),
 );
+
+// ---- idea-450: a worker's final message reaches its lead exactly once (watch ping OR [done] relay, never both / N times) ----
+
+test(
+  "idea-450: a watched worker's final rides the completion ping once, and a late digest [done] relay does not send it a second time",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const final = "PASS 0/0/0 deadbeef\n" + "fidelity-detail ".repeat(50); // > REPORT_CAP so it rides the ping's detail
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: final } }] : []),
+      watchSets: { now: () => clock.t },
+    });
+    try {
+      // The reviewer finishes its turn (idle + final message): the watch fires on finalText alone, before any digest [done].
+      h.watch.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+      h.watch.onRunnerEvent(agentEv("w-1", "running"));
+      clock.t += MIN;
+      h.watch.onRunnerEvent(agentEv("w-1", "idle"));
+      h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+      clock.t += 20 * MIN;
+      await h.watch.tick();
+      await wait(250);
+      const pings = h.sent.filter((s) => s.to === "lead-1" && s.text.includes(`Watch ${id}`));
+      assert.equal(pings.length, 1, JSON.stringify(h.sent));
+      assert.match(pings[0].text, /Final message of w-1 \(auto-forwarded report\):/);
+      // The digest's [done] lands > COVER_AFTER_FIRE_MS after the fire: the watch no longer holds it, so it relays.
+      clock.t += 121_000;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 deadbeef: w1 digest verdict", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      const leadText = h.sent.filter((s) => s.to === "lead-1").map((s) => s.text).join("\n");
+      assert.equal(leadText.split("auto-forwarded report").length - 1, 1, leadText);
+      assert.ok(!leadText.includes("Worker w-1 final message"), "the relay must not re-forward the final: " + leadText);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-450: a digest re-running `vs log done` writes a duplicate [done], but the lead is woken once (deduped relay, one forwarded final)",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([
+      ["lead-1", mk("lead-1", "lead")],
+      ["w-1", mk("w-1", "worker")],
+    ]);
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: "PASS: w1 final body" } }] : []),
+    });
+    try {
+      const now = Date.now();
+      const done = { ts: iso(now), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 done", refs: ["w-1"] };
+      writeLog(sb, [done, { ...done, ts: iso(now + 10) }]);
+      h.scanLogs(false);
+      await wait(250);
+      const toLead = h.sent.filter((s) => s.to === "lead-1");
+      const relays = toLead.filter((s) => s.text.startsWith("New team log event"));
+      assert.equal(relays.length, 1, JSON.stringify(toLead));
+      assert.match(toLead[0].text, /Worker w-1 final message \(auto-forwarded report\):/);
+      assert.equal(toLead.map((s) => s.text).join("\n").split("auto-forwarded report").length - 1, 1, JSON.stringify(toLead));
+    } finally {
+      h.stop();
+    }
+  }),
+);
