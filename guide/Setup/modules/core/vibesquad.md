@@ -36,8 +36,7 @@ below looks for Claude Code or Gemini on this PC when it opens.
    clean-PC confirmation.)
 3. Open VibeSquad. On a clean machine it first asks "How will you use VibeSquad on this PC?" Choose
    **💻 Run agents on this PC** (`src-tauri/src/ui_pages.rs:177,185`; shown first while no mode is saved,
-   `src-tauri/src/main.rs:2351-2360`). Do not choose "Connect to another PC". Then **Choose your layout**
-   (**Normal** or **Psycho**) and the **Setup Checklist** can show (`src/FirstRunModal.tsx:120-260`); follow them
+   `src-tauri/src/main.rs:2351-2360`). Do not choose "Connect to another PC". Then the **Setup Checklist** can show; follow it
    (see "First run" below). How this looks on a real machine needs a clean-PC confirmation.
 
 What the installer puts on the PC (read from the source, not from a run):
@@ -83,9 +82,8 @@ Skip it, or run `%APPDATA%\npm\vs.cmd --help`.
 
    Buttons: **Check again** (`:213-215`) and **Continue** (`:216`).
 
-   The checklist also shows two cards, **Normal** and **Psycho**, to choose how VibeSquad looks. A
-   **Choose your layout** window with the same cards appears once on first launch. Pick either; you can
-   switch later (see [Normal and Psycho](../../../Concepts/Modes.md)).
+   VibeSquad opens in **Normal**; the old pixel-art **Psycho** layout is a legacy toggle in Settings > About
+   (see [Normal and Psycho](../../../Concepts/Modes.md)).
 2. **Continue** stays grey until Claude Code or Gemini is detected (`canContinue`, `:199`). The checklist does
    not list Codex or OpenCode. If your provider is one of those, close the checklist with **✕**: closing it
    also marks it done (`FIRST_RUN_DONE_KEY`, `:210`). Then pick your provider under **⚙ SETTINGS**, **Profiles**.

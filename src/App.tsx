@@ -1,4 +1,4 @@
-import { FIRST_RUN_DONE_KEY, FirstLaunchVibePicker, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
+import { FIRST_RUN_DONE_KEY, FirstRunModal, fetchFirstRunStatus, type FirstRunStatus } from "./FirstRunModal";
 import { clearSession, isAndroidUserAgent, isRemote } from "./remoteSession";
 import { statusDot } from "./daemonOverlay";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -1946,7 +1946,6 @@ export function App() {
       {modal === "about" && <AboutLicensesModal onClose={() => setModal(null)} onChecklist={() => setModal("first-run")} />}
       {modal === "help" && <HelpModal onClose={() => setModal(null)} onTour={() => setModal("first-run")} />}
       {modal === "diagnostics" && <DiagnosticsModal onClose={() => setModal(null)} />}
-      {modal !== "first-run" && <FirstLaunchVibePicker />}
       {modal === "first-run" && <FirstRunModal initial={firstRunStatus} onClose={() => setModal(null)} />}
       {modal === "new-squad" && (
         <NewSquadModal

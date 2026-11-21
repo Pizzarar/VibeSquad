@@ -10,11 +10,11 @@
     <script>
       // U1: set data-theme before first paint (mirrors theme.ts themeFromPrefsBlob; test/ui-theme.test.mjs keeps them in sync).
       (function () {
-        var p = "system", v = "fun";
-        try { var b = JSON.parse(localStorage.getItem("vs.prefs.v1")); p = b["app.theme"]; v = b["app.vibe"]; } catch (e) {}
+        var p = "system", v = "boring";
+        try { var b = JSON.parse(localStorage.getItem("vs.prefs.v1")); p = b["app.theme"]; v = b["app.vibe"]; if (localStorage.getItem("vs.vibeMigratedNormal") !== "1") v = "boring"; } catch (e) {}
         var dark = !window.matchMedia || matchMedia("(prefers-color-scheme: dark)").matches;
         document.documentElement.dataset.theme = p === "dark" || p === "light" ? p : dark ? "dark" : "light";
-        document.documentElement.dataset.vibe = v === "boring" ? "boring" : "fun";
+        document.documentElement.dataset.vibe = v === "fun" ? "fun" : "boring";
       })();
     </script>
     <title>VibeSquad</title>

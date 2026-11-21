@@ -11,7 +11,7 @@ This is the Riff part of [ROLO](../ROLO.md). Time: about 20 to 40 minutes.
 
 ## 1. Open a Buddy
 
-The first time VibeSquad opens, a **Choose your layout** window asks you to pick **Normal** (plain chat and cards) or **Psycho** (a pixel-art office). Either works for this guide, and you can switch later; see [Normal and Psycho](../Concepts/Modes.md).
+VibeSquad opens in **Normal** (plain chat and cards). If you prefer the pixel-art office, turn on **Legacy: Psycho mode** in Settings > About; see [Normal and Psycho](../Concepts/Modes.md).
 
 A [Buddy](../Concepts/Buddy.md) is a chat for thinking.
 

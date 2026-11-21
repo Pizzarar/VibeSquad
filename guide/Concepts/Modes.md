@@ -2,24 +2,14 @@
 
 VibeSquad has two looks. Both run the same Squads, Buddies, Leads and workers. Only the screen changes, so you can swap whenever you like and lose nothing.
 
-- **Normal:** a clean, plain layout. A sidebar on the left, a centered chat, and your projects as cards. Pick this if you want it to feel like any other work app.
-- **Psycho:** a pixel-art office (the Vibespace) with retro screens, a pixel tower and animated characters for your agents. Pick this if you want it to feel like a game.
+- **Normal** (the default): a clean, plain layout. A sidebar on the left, a centered chat, and your projects as cards.
+- **Psycho** (legacy): a pixel-art office (the Vibespace) with retro screens, a pixel tower and animated characters for your agents.
 
-## The first-launch picker
+There is no layout picker on first launch: VibeSquad opens in Normal. If you used Psycho before, the first launch after this change moves you to Normal once; you can turn Psycho back on and it stays on.
 
-The first time you open VibeSquad (on the desktop app, in a browser, or on a phone) a window titled **Choose your layout** shows two big cards:
+## Turning Psycho on or off
 
-- **Normal** — "Clean corporate ADE — left sidebar, centered chat & project cards".
-- **Psycho** — "Full retro sky CRTs, pixel tower & animated sprites".
+- Open **Settings**, the **About** tab, and switch **Legacy: Psycho mode** on or off. You can also find it by searching Settings for "psycho" or "legacy".
+- From Psycho, you can also click **Normal mode** in the toolbar at the top to return to Normal in one click.
 
-![The Choose your layout window: a Normal card, a Psycho card marked Selected, and a Continue button](../assets/screenshots/01b-layout-picker.png)
-
-Click a card to choose. The window stays open so you can see your pick; press **Continue** (or Escape, or click outside it) to close it. It shows once, and closing it without choosing will not bring it back. The same two cards also sit at the top of the **Setup Checklist**, above the provider rows.
-
-## Switching later
-
-- From Psycho: click **Normal mode** in the toolbar at the top.
-- From Normal: click **✦ Switch to Psycho** in the footer of the left sidebar.
-- Or open **Settings**, the **App** tab, and change **Layout vibe** to **Psycho** or **Normal**.
-
-See [Settings](../Reference/Settings.md) for the rest of the App tab.
+See [Settings](../Reference/Settings.md) for the rest of the tabs.

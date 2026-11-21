@@ -407,6 +407,23 @@ function RestartRunnerButton() {
   );
 }
 
+function LegacyPsychoToggle() {
+  const [vibe, setVibe] = usePref("app.vibe");
+  return (
+    <div className="settings-row" data-setting-id="legacy-psycho">
+      <div className="settings-row-text">
+        <label className="settings-row-label" htmlFor="legacy-psycho-toggle">
+          Legacy: Psycho mode
+        </label>
+        <div className="muted small">Normal mode is the default. Turn this on to switch to the legacy pixel-art Vibespace layout.</div>
+      </div>
+      <div className="settings-row-control">
+        <input id="legacy-psycho-toggle" data-testid="settings-legacy-psycho-toggle" type="checkbox" checked={vibe === "fun"} onChange={(e) => setVibe(e.target.checked ? "fun" : "boring")} />
+      </div>
+    </div>
+  );
+}
+
 function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChecklist: () => void; onClose: () => void }) {
   const updaterStatus = useUpdaterStatus();
   const [upd, setUpd] = useState<UpdateCheck["state"]>("idle");
@@ -418,6 +435,7 @@ function About(props: { onDiagnostics: () => void; onLicenses: () => void; onChe
       <div data-setting-id="update-channel">
         <TeamSettingsModal embedded parts={["update"]} onClose={props.onClose} />
       </div>
+      <LegacyPsychoToggle />
       {!isRemote() && <UnstickButton />}
       {!isRemote() && <RestartRunnerButton />}
       <p style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
