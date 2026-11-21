@@ -1841,6 +1841,59 @@ test("idea-468 m1: no-agent lane with an idle Lead offers 'Open the Lead'", () =
   assert.equal(act.need, "the Lead open");
 });
 
+// ---- idea-494: an idle Lead with no Buddy is the lane's Lead (default selection, tree row, breadcrumb, one selected row) ----
+test("idea-494: boringLaneTarget prefers a live/idle Lead over an absent or closed Brainstorm; exited Lead falls back", () => {
+  assert.deepEqual(boringLaneTarget({ brainstorm: null, lead: mem("ld", "idle"), workers: [] }), { role: "lead", agentId: "ld" });
+  assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs", "closed"), lead: mem("ld", "idle"), workers: [] }), { role: "lead", agentId: "ld" });
+  assert.deepEqual(boringLaneTarget({ brainstorm: mem("bs", "idle"), lead: mem("ld", "idle"), workers: [] }), { role: "brainstorm", agentId: "bs" });
+  assert.deepEqual(boringLaneTarget({ brainstorm: null, lead: mem("ld", "closed"), workers: [] }), { role: "brainstorm", agentId: null });
+});
+
+test("idea-494 pure: a Lead on screen selects its own row key; with no agent the lane row stays selected", () => {
+  const base = { mode: "chat", views: [], teamId: "vs", agentId: null, laneId: "per", role: "lead", workerId: null };
+  assert.equal(boringActiveSelection(base).rowKey, "vs|lane:per");
+  assert.equal(boringActiveSelection({ ...base, role: "brainstorm", agentId: "x" }).rowKey, "vs|lane:per");
+  assert.equal(boringActiveSelection({ ...base, agentId: "x" }).rowKey, "vs|lane:per:lead");
+});
+
+test("idea-494: idle-Lead lane opens the Lead, tree shows a selected Lead row, breadcrumb matches, exactly one row on", () => {
+  reset();
+  globalThis.__agents.set("per-ld", { id: "per-ld" });
+  const view = squad({ pins: [lanePin("per", { brainstorm: null, lead: mem("per-ld", "idle") }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })] });
+  laneBtn(render(props(view)), "per").props.onClick();
+  assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "per-ld"));
+  assert.ok(!globalThis.__calls.some((c) => c[0] === "onOpenPin"));
+  const t = render(props(view));
+  assert.equal(byType(t, "AgentDrawer").props.agent.id, "per-ld");
+  assert.equal(byId(t, "boring-empty-card"), null);
+  const row = byId(t, "boring-lead-per");
+  assert.ok(row, "Lead row under the lane");
+  assert.match(row.props.className, /\bon\b/);
+  assert.match(JSON.stringify(row.props.children), /"boring-dot idle/); // existing idle glyph
+  assert.doesNotMatch(byId(t, "boring-conv-per").props.className, /\bon\b/); // the lane row is NOT the selected one
+  assert.equal(walk(t, (n) => /\bon\b/.test(String(n.props?.className ?? "")) && /boring-(conv-row|worker-row|core-row|project-row)/.test(n.props.className)).length, 1);
+  const crumbs = JSON.stringify(byId(t, "boring-breadcrumb").props.children);
+  assert.match(crumbs, /Lane per/);
+  assert.match(crumbs, /Lead/);
+  assert.doesNotMatch(crumbs, /Brainstorm/);
+});
+
+test("idea-494: a lane with neither Lead nor Brainstorm keeps the no-agent page; Lead pill with an idle Lead still selects the Lead row", () => {
+  reset();
+  const none = squad({ pins: [lanePin("per", { brainstorm: null }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })] });
+  laneBtn(render(props(none)), "per").props.onClick();
+  const t = render(props(none, { agents: new Map() }));
+  assert.ok(byId(t, "boring-lane-no-agent"));
+  assert.equal(byId(t, "boring-lead-per"), null);
+  reset();
+  globalThis.__agents.set("per-ld", { id: "per-ld" });
+  const view = squad({ pins: [lanePin("per", { lead: mem("per-ld", "idle") }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })] });
+  pickTab(view, "per", "lead");
+  const t2 = render(props(view));
+  assert.match(byId(t2, "boring-lead-per").props.className, /\bon\b/);
+  assert.doesNotMatch(byId(t2, "boring-conv-per").props.className, /\bon\b/);
+});
+
 test("idea-468: no-agent Bugs lane passes the Bugs pin's real lane id, never the _bugs sentinel", () => {
   reset();
   const view = squad({ bugs: { pin: lanePin("bug-chaser", { brainstorm: null }), leadRunning: false, needsYou: 0 } });

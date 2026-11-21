@@ -118,6 +118,8 @@ export function boringLaneTarget(pin: Pick<Pin, "brainstorm" | "lead" | "workers
   for (const w of pin.workers ?? []) add("worker", w);
   const best = cands.filter((c) => c.rank < 99).sort((a, b) => a.rank - b.rank)[0];
   if (best) return { role: best.role, agentId: best.m.agent.id };
+  // idea-494: an idle (not closed) Lead is the lane's Lead; prefer it over an absent / closed Brainstorm instead of the empty Start card.
+  if (!isLive(pin.brainstorm) && isLive(pin.lead)) return { role: "lead", agentId: pin.lead.agent.id };
   return { role: "brainstorm", agentId: pin.brainstorm?.agent.id ?? null };
 }
 
@@ -161,7 +163,9 @@ export function boringActiveSelection(o: { mode: Mode; views: TeamView[]; teamId
   }
   const workerId = role === "worker" ? o.agentId : null;
   const agentLabel = !laneId ? null : role === "worker" ? roleLabel || "Worker" : laneId === "_overlord" ? "Overlord" : laneId === "_riffbot" ? "RiffBot" : role === "lead" ? "Lead" : "Brainstorm";
-  const rowKey = !teamId || !laneId ? null : workerId ? `${teamId}|worker:${workerId}` : laneId === "_overlord" ? `${teamId}|desk:lead` : laneId === "_riffbot" ? `${teamId}|desk:brainstorm` : `${teamId}|lane:${laneId}`;
+  // idea-494: a Lead on screen owns its own tree row (`lane:<id>:lead`); without an agent (empty card) the lane row stays selected, so exactly one row is on.
+  const leadOnScreen = Boolean(o.agentId) && role === "lead" && laneId !== "_desk";
+  const rowKey = !teamId || !laneId ? null : workerId ? `${teamId}|worker:${workerId}` : laneId === "_overlord" ? `${teamId}|desk:lead` : laneId === "_riffbot" ? `${teamId}|desk:brainstorm` : leadOnScreen ? `${teamId}|lane:${laneId}:lead` : `${teamId}|lane:${laneId}`;
   return { teamId, mode: "chat", laneId, role, workerId, agentLabel, rowKey };
 }
 
@@ -467,6 +471,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     pickRole(pin, laneId, target.role === "worker" ? "brainstorm" : target.role);
   };
   const openLane = (v: TeamView, c: { pin: Pin; laneId: string }) => openTarget(v, c.pin, c.laneId, boringLaneTarget(c.pin));
+  const pickRoleIn = (v: TeamView, pin: Pin, laneId: string, role: Role) => {
+    if (v.team.id !== view?.team.id) onSelectSquad(v.team.id);
+    pickRole(pin, laneId, role);
+  };
   const pickRole = (pin: Pin, laneId: string, role: Role) => {
     setSelectedLaneId(laneId);
     setSelectedRole(role);
@@ -725,11 +733,14 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const isSel = sel.teamId === v.team.id && sel.laneId === c.laneId;
     const open = laneOpen[key] ?? isSel;
     const workers = c.pin?.workers ?? [];
+    const lead = c.pin && isLive(c.pin.lead) ? c.pin.lead : null; // idea-494: a live OR idle Lead gets its own row (never for the hub's Overlord)
+    const leadKey = ["lane", c.laneId, "lead"].join(":");
+    const expandable = workers.length > 0 || Boolean(lead);
     return (
       <div key={c.laneId} className={`boring-conv-row ${isOn(v, `lane:${c.laneId}`) ? "on" : ""}`} data-testid={`boring-conv-${c.laneId}`}>
         <div className="boring-conv-line">
-          <button type="button" className="boring-chevron-btn" data-testid={`boring-conv-toggle-${c.laneId}`} aria-expanded={open} aria-label={open ? "Collapse workers" : "Expand workers"} disabled={workers.length === 0} onClick={() => setLaneOpen((o) => ({ ...o, [key]: !open }))}>
-            {workers.length === 0 ? "" : open ? "▾" : "▸"}
+          <button type="button" className="boring-chevron-btn" data-testid={`boring-conv-toggle-${c.laneId}`} aria-expanded={open} aria-label={open ? "Collapse workers" : "Expand workers"} disabled={!expandable} onClick={() => setLaneOpen((o) => ({ ...o, [key]: !open }))}>
+            {!expandable ? "" : open ? "▾" : "▸"}
           </button>
           <button type="button" className="boring-conv-title" data-testid={c.titleTestId} title={c.topicLabel || undefined} onClick={c.onOpen}>
             <span className={`boring-dot ${c.status} ${glyphCls(c.status, c.err ? "error" : c.needsYou > 0 ? "needs-you" : null)}`} />
@@ -739,6 +750,13 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             {!open && badge(c.needsYou, c.err)}
           </button>
         </div>
+        {open && c.pin && lead && (
+          <button type="button" className={workerRowCls(isOn(v, leadKey), lead)} data-testid={`boring-lead-${c.laneId}`} onClick={() => pickRoleIn(v, c.pin!, c.laneId, "lead")}>
+            <span className={`boring-dot ${lead.agent.status} ${glyphCls(lead.agent.status, lead.attention?.tone)}`} />
+            <span className="boring-row-label">Lead</span>
+            <span className="boring-conv-age">{formatTimestamp(lead.agent.updatedAt, "relative")}</span>
+          </button>
+        )}
         {open && c.pin && workers.length > 0 && workerList(v, c.pin, c.laneId, workers, `boring-workers-${c.laneId}`, `boring-workers-fold-${c.laneId}`, isSel, c.onOpen)}
       </div>
     );
