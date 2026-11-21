@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
 import { BoringContextPanel } from "./BoringContextPanel";
+import { TimelineErrorBoundary } from "./Timeline";
 import { stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { openOverlay } from "./CommandPalette";
@@ -450,6 +451,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const currentConv = conversations.find((c) => c.laneId === selectedLaneId) ?? null;
   const currentPin: Pin | null = selectedLaneId === "_bugs" ? core.bugs.pin : currentConv?.pin ?? null;
   const inLane = Boolean(currentPin);
+  // idea-468: Desk selections (_overlord/_riffbot/_desk) have no lane pin of their own; their workers live on the hub pin.
+  const panelPin: Pin | null = currentPin ?? (selectedLaneId === "_overlord" || selectedLaneId === "_riffbot" || selectedLaneId === "_desk" ? hubPin : null);
   const leadStatus = currentPin?.lead?.agent.status ?? "none";
 
   /** Open a lane member from any project: switches project first, then the lane, then the member. */
@@ -922,9 +925,10 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
         )}
         {!opening && mode === "chat" && (
           <div className={`boring-chat-column${detailsOpen ? " boring-details-open" : ""}`} data-testid="boring-chat-column">
-            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : currentPin && selectedLaneId ? (
-              // idea-468: a lane with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
-              <div className="drawer-shell" data-testid="boring-lane-no-agent"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><BoringContextPanel entries={[]} teamId={activeTeamId} laneId={selectedLaneId} /></div>
+            {panes.split ? splitPanes : agent ? <AgentDrawer key={agent.id} agent={agent} onClose={() => setMode("project")} onSuccessor={() => onSuccessor(agent.id)} active pinDecisions /> : panelPin ? (
+              // idea-468: a lane (or the Desk) with only workers has no agent to host the drawer, but its Workers fold must still open the panel.
+              // The panel matches workers/feed by the REAL lane id (Bugs and the hub use sentinel selection ids), hence panelPin.lane.id.
+              <div className="drawer-shell" data-testid="boring-lane-no-agent"><div style={{ flex: "1 1 0", minWidth: 0, display: "flex" }}>{emptyCard()}</div><TimelineErrorBoundary fallbackLabel="context panel"><BoringContextPanel key={panelPin.lane.id} entries={[]} teamId={activeTeamId} laneId={panelPin.lane.id} /></TimelineErrorBoundary></div>
             ) : emptyCard()}
           </div>
         )}

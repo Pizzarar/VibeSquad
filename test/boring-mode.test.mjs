@@ -118,6 +118,7 @@ stub("demoFlag.mjs", "export const DEMO = false;");
 stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length;`);
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
+stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")};`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
@@ -1804,4 +1805,43 @@ test("split R4: the Unsplit pill keeps the active pane's agent; the Split pill s
   } finally {
     globalThis.__panes = undefined;
   }
+});
+
+// ---- idea-468: no-agent lane / Desk pages still mount the context panel with the REAL lane id ------------------------
+test("idea-468: no-agent feature lane mounts BoringContextPanel (keyed, in an error boundary) with the lane id", () => {
+  reset();
+  const view = squad();
+  laneBtn(render(props(view)), "per").props.onClick();
+  const t = render(props(view, { agents: new Map() }));
+  assert.equal(byType(t, "AgentDrawer"), null);
+  assert.ok(byId(t, "boring-lane-no-agent"));
+  const panel = byType(t, "BoringContextPanel");
+  assert.equal(panel.props.laneId, "per");
+  assert.equal(panel.key, "per");
+  assert.equal(panel.props.agent, undefined);
+  assert.equal(byType(t, "TimelineErrorBoundary").props.fallbackLabel, "context panel");
+});
+
+test("idea-468: no-agent Bugs lane passes the Bugs pin's real lane id, never the _bugs sentinel", () => {
+  reset();
+  const view = squad({ bugs: { pin: lanePin("bug-chaser", { brainstorm: null }), leadRunning: false, needsYou: 0 } });
+  byId(render(props(view)), "boring-core-bugs").props.onClick();
+  const panel = byType(render(props(view, { agents: new Map() })), "BoringContextPanel");
+  assert.equal(panel.props.laneId, "bug-chaser");
+});
+
+test("idea-468: Desk with no Overlord falls back to the hub pin's lane id", () => {
+  reset();
+  const view = squad({ zones: { hub: { lane: { id: "hub" } }, riffbot: zone(null), overlord: zone(null) } });
+  byId(withDesk(view), "boring-core-overlord").props.onClick();
+  const t = render(props(view));
+  assert.match(JSON.stringify(byId(t, "boring-empty-card").props.children), /No Overlord is running/);
+  assert.equal(byType(t, "BoringContextPanel").props.laneId, "hub");
+});
+
+test("idea-468: no pin at all (no hub, project selected) mounts no panel", () => {
+  reset();
+  const view = squad({ zones: { hub: null, riffbot: zone(null), overlord: zone(null) } });
+  byId(withDesk(view), "boring-core-overlord").props.onClick();
+  assert.equal(byType(render(props(view)), "BoringContextPanel"), null);
 });
