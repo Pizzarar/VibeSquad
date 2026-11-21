@@ -333,3 +333,73 @@ test("vs temp-ttl --catch-up: dry run by default; --apply is refused from an age
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("catch-up sample mode: exact counts from top-level mtimes, bytes estimated from walked samples, guard-kept trees reported", async () => {
+  const root = makeRoot();
+  const outside = makeRoot();
+  try {
+    writeFileSync(join(outside, "big.bin"), "x".repeat(5000));
+    for (const s of ["Aa11Bb", "Cc22Dd", "Ee33Ff", "Gg44Hh"]) scratch(root, `vs-smp-${s}`, { files: { "f.bin": "x".repeat(100) } });
+    scratch(root, "vs-smp-Ii55Jj", { old: false, files: { "f.bin": "x".repeat(40) } });
+    // Old top dir, fresh deep entry: counted past-TTL by top mtime, but if sampled the guard keeps it.
+    const guard = scratch(root, "vs-grd-Kk66Ll", { files: { "a.txt": "x".repeat(10) } });
+    mkdirSync(join(guard, "in"));
+    ageTree(guard);
+    writeFileSync(join(guard, "in", "new.txt"), "n");
+    utimesSync(guard, OLD, OLD);
+    const withLink = scratch(root, "vs-lnk-Mm77Nn", { files: { "a.txt": "x".repeat(3) } });
+    symlinkSync(outside, join(withLink, "node_modules"), "junction");
+    ageTree(withLink);
+    scratch(root, "other-app-Ab12Cd");
+
+    const r = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW, sample: 2 });
+    assert.equal(r.estimated, true);
+    assert.equal(r.removed, 0);
+    assert.equal(readdirSync(root).length, 8, "sample mode deletes nothing");
+    assert.equal(r.matched, 7);
+    const smp = r.byPrefix["vs-smp"];
+    assert.equal(smp.count, 5);
+    assert.equal(smp.eligible, 4);
+    assert.equal(smp.eligibleBytes, 400, "2 of 4 sampled at 100 bytes each, scaled to 4");
+    assert.deepEqual(smp.ages["<1d"], { count: 1, bytes: 40 });
+    assert.equal(r.byPrefix["vs-lnk"].bytes, 3, "a link inside a sampled tree is never followed");
+    assert.equal(r.sampledTrees, 5);
+    assert.equal(r.guardKept, 1);
+    assert.match(formatCatchUpReport(r), /SAMPLED: .* kept 1 of 4 sampled past-TTL trees/);
+    await assert.rejects(catchUpTempScratch({ tempDir: root, sample: 2, apply: true }), /dry run only/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("catch-up checkpoint: a time budget stops the scan, the next call resumes and the totals match one full pass", async () => {
+  const root = makeRoot();
+  const ckDir = makeRoot();
+  try {
+    const names = ["Aa11Bb", "Cc22Dd", "Ee33Ff", "Gg44Hh", "Ii55Jj"];
+    for (const s of names) scratch(root, `vs-ck-${s}`, { files: { "f.bin": "x".repeat(10) } });
+    const full = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW });
+    const checkpoint = join(ckDir, "ck.json");
+    let t = 0;
+    const clock = () => (t += 10);
+    const chunks = [];
+    for (let i = 0; i < 10; i++) {
+      const r = await catchUpTempScratch({ tempDir: root, ttlDays: 3, now: NOW + i, checkpoint, budgetMs: 35, clock });
+      chunks.push(r);
+      if (r.complete) break;
+    }
+    assert.ok(chunks.length > 1, "the budget split the scan");
+    assert.equal(chunks[0].complete, false);
+    assert.match(formatCatchUpReport(chunks[0]), /PARTIAL/);
+    const last = chunks.at(-1);
+    assert.equal(last.complete, true);
+    assert.deepEqual(last.byPrefix, full.byPrefix);
+    assert.equal(last.eligible, 5);
+    assert.equal(readdirSync(root).length, 5, "dry run chunks delete nothing");
+    await assert.rejects(catchUpTempScratch({ tempDir: root, ttlDays: 4, checkpoint }), /another run/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(ckDir, { recursive: true, force: true });
+  }
+});

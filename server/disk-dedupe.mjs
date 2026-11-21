@@ -12,7 +12,7 @@
 // crate by its path relative to the workspace root, so two worktrees map to the same unit: in a test, worktree A's
 // `cargo build` reported Finished without compiling and `cargo run` ran worktree B's binary. So spawns get no shared
 // CARGO_TARGET_DIR. Per-worktree target dirs stay, and reclaiming them is a retention question (R1), not this module's.
-import { lstat, opendir, readdir, rmdir, unlink } from "node:fs/promises";
+import { lstat, opendir, readdir, readFile, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -273,18 +273,72 @@ async function treeStats(dir, dirMtime, fs) {
   return { newest, bytes };
 }
 
+const emptyRow = () => ({ count: 0, bytes: 0, eligible: 0, eligibleBytes: 0, ages: Object.fromEntries(AGE_BUCKETS.map((b) => [b, { count: 0, bytes: 0 }])) });
+
+async function readCheckpoint(file) {
+  try {
+    return JSON.parse(await readFile(file, "utf8"));
+  } catch (e) {
+    if (e?.code === "ENOENT") return null;
+    throw new Error(`checkpoint ${file} is unreadable: ${e?.message ?? e}`);
+  }
+}
+
+async function writeCheckpoint(file, data) {
+  const tmp = `${file}.tmp`;
+  await writeFile(tmp, JSON.stringify(data), "utf8");
+  await rename(tmp, file);
+}
+
 /**
  * One-time catch-up over the whole temp dir (`vs temp-ttl --catch-up`). Same guards as the sweep: strict name match,
- * real top-level dirs only, links never followed, and a tree with any entry inside the TTL is kept. No per-pass cap:
- * each candidate tree is walked in full so the report has exact bytes. DRY RUN unless `apply: true`.
- * byPrefix[prefix] = { count, bytes, eligible, eligibleBytes, ages: { [bucket]: { count, bytes } } }; a tree's age is
- * `now` minus its newest mtime.
+ * real top-level dirs only, links never followed, and a tree with any entry inside the TTL is kept. DRY RUN unless
+ * `apply: true`. byPrefix[prefix] = { count, bytes, eligible, eligibleBytes, ages: { [bucket]: { count, bytes } } }.
+ *
+ * Exact mode walks every candidate tree in full; a tree's age is `now` minus its newest mtime. With `checkpoint` (a file
+ * path) progress is saved every 500 trees and when `budgetMs` runs out (complete: false); the next call with the same
+ * file resumes where it stopped, so a long scan survives restarts in bounded chunks.
+ *
+ * Sample mode (`sample: N`, dry run only) is cheap: one top-level pass classifies every dir by its own lstat mtime
+ * (exact counts), and only up to N trees per (prefix, age bucket, past-TTL) stratum are walked; bytes are the stratum
+ * mean times its count (estimated: true). `guardKept` counts sampled past-TTL trees that the fresh-file guard keeps.
  */
-export async function catchUpTempScratch({ tempDir = tmpdir(), ttlDays = TEMP_TTL_DAYS, now = Date.now(), apply = false, fs = defaultFs, onProgress } = {}) {
+export async function catchUpTempScratch({
+  tempDir = tmpdir(),
+  ttlDays = TEMP_TTL_DAYS,
+  now = Date.now(),
+  apply = false,
+  sample = 0,
+  checkpoint = null,
+  budgetMs = Infinity,
+  clock = Date.now,
+  fs = defaultFs,
+  onProgress,
+} = {}) {
   const { root, days } = await checkedRoot(tempDir, ttlDays, fs);
+  const sampleN = Number(sample) || 0;
+  if (sampleN && apply === true) throw new Error("sample mode is a dry run only; --apply always walks every tree");
+  if (sampleN && checkpoint) throw new Error("sample mode needs no checkpoint");
+  const started = clock();
+  const out = { tempDir: root, ttlDays: days, apply: apply === true, estimated: sampleN > 0, complete: true, scanned: 0, vsNamed: 0, nameMismatch: 0, notDir: 0, matched: 0, eligible: 0, removed: 0, errors: 0, bytesFreed: 0, byPrefix: {}, ms: 0 };
+  let done = new Set();
+  if (checkpoint) {
+    const ck = await readCheckpoint(checkpoint);
+    if (ck) {
+      if (ck.tempDir !== root || ck.ttlDays !== days || ck.apply !== out.apply) throw new Error(`checkpoint ${checkpoint} is for another run (tempDir/ttlDays/apply differ); delete it to start over`);
+      now = ck.now; // keep the age buckets of the first chunk
+      Object.assign(out, { eligible: ck.eligible, removed: ck.removed, bytesFreed: ck.bytesFreed, byPrefix: ck.byPrefix });
+      done = new Set(ck.done);
+    }
+  }
   const cutoff = now - days * DAY_MS;
-  const started = Date.now();
-  const out = { tempDir: root, ttlDays: days, apply: apply === true, scanned: 0, vsNamed: 0, nameMismatch: 0, notDir: 0, matched: 0, eligible: 0, removed: 0, errors: 0, bytesFreed: 0, byPrefix: {}, ms: 0 };
+  const save = () => writeCheckpoint(checkpoint, { tempDir: root, ttlDays: days, apply: out.apply, now, eligible: out.eligible, removed: out.removed, bytesFreed: out.bytesFreed, byPrefix: out.byPrefix, done: [...done] });
+  const strata = new Map(); // sample mode: `${prefix}|${bucket}|${pastTtl}` -> { pre, bucket, past, count, sampled, sampledBytes }
+  out.guardKept = 0;
+  out.sampledPastTtl = 0;
+  out.sampledTrees = 0;
+  let sinceSave = 0;
+
   const dh = await fs.opendir(root);
   for await (const ent of dh) {
     out.scanned++;
@@ -307,33 +361,85 @@ export async function catchUpTempScratch({ tempDir = tmpdir(), ttlDays = TEMP_TT
       continue;
     }
     out.matched++;
+    const pre = scratchPrefix(ent.name);
+
+    if (sampleN) {
+      const bucket = ageBucket(now - st.mtimeMs);
+      const past = st.mtimeMs < cutoff;
+      const key = `${pre}|${bucket}|${past}`;
+      const s = strata.get(key) ?? { pre, bucket, past, count: 0, sampled: 0, sampledBytes: 0 };
+      strata.set(key, s);
+      s.count++;
+      if (s.sampled >= sampleN) continue;
+      try {
+        const t = await treeStats(p, st.mtimeMs, fs);
+        s.sampled++;
+        s.sampledBytes += t.bytes;
+        out.sampledTrees++;
+        if (past) {
+          out.sampledPastTtl++;
+          if (t.newest >= cutoff) out.guardKept++;
+        }
+      } catch {
+        out.errors++;
+      }
+      continue;
+    }
+
+    if (done.has(ent.name)) continue;
+    if (clock() - started >= budgetMs) {
+      out.complete = false;
+      break; // leaving a for-await closes the Dir handle
+    }
     let t;
     try {
       t = await treeStats(p, st.mtimeMs, fs);
     } catch {
-      out.errors++;
+      out.errors++; // not marked done: a resumed chunk retries it
       continue;
     }
-    const pre = scratchPrefix(ent.name);
-    const row = (out.byPrefix[pre] ??= { count: 0, bytes: 0, eligible: 0, eligibleBytes: 0, ages: Object.fromEntries(AGE_BUCKETS.map((b) => [b, { count: 0, bytes: 0 }])) });
+    done.add(ent.name);
+    const row = (out.byPrefix[pre] ??= emptyRow());
     row.count++;
     row.bytes += t.bytes;
     const bucket = row.ages[ageBucket(now - t.newest)];
     bucket.count++;
     bucket.bytes += t.bytes;
-    if (t.newest >= cutoff) continue; // fresh-file guard
-    out.eligible++;
-    row.eligible++;
-    row.eligibleBytes += t.bytes;
-    if (out.apply !== true) continue;
-    try {
-      out.bytesFreed += await removeTree(p, fs);
-      out.removed++;
-    } catch {
-      out.errors++;
+    if (t.newest < cutoff) {
+      // past the TTL with no fresh entry anywhere in the tree
+      out.eligible++;
+      row.eligible++;
+      row.eligibleBytes += t.bytes;
+      if (out.apply === true) {
+        try {
+          out.bytesFreed += await removeTree(p, fs);
+          out.removed++;
+        } catch {
+          out.errors++;
+        }
+      }
+    }
+    if (checkpoint && ++sinceSave >= 500) {
+      sinceSave = 0;
+      await save();
     }
   }
-  out.ms = Date.now() - started;
+
+  for (const s of strata.values()) {
+    const est = s.sampled ? Math.round((s.sampledBytes / s.sampled) * s.count) : 0;
+    const row = (out.byPrefix[s.pre] ??= emptyRow());
+    row.count += s.count;
+    row.bytes += est;
+    row.ages[s.bucket].count += s.count;
+    row.ages[s.bucket].bytes += est;
+    if (s.past) {
+      out.eligible += s.count;
+      row.eligible += s.count;
+      row.eligibleBytes += est;
+    }
+  }
+  if (checkpoint) await save();
+  out.ms = Math.max(0, Math.round(clock() - started));
   return out;
 }
 
@@ -356,8 +462,12 @@ export function formatCatchUpReport(r, { limit = 30 } = {}) {
   const lines = [
     `temp-ttl catch-up ${r.apply ? "APPLY" : "DRY RUN (nothing removed; add --apply to delete)"} tempDir=${r.tempDir} ttlDays=${r.ttlDays} ms=${r.ms}`,
     `scanned=${r.scanned} vs-named=${r.vsNamed} nameMismatch=${r.nameMismatch} notDir=${r.notDir} matched=${r.matched} errors=${r.errors}`,
+    ...(r.estimated
+      ? [`SAMPLED: counts and ages from each top dir's own mtime (exact); GiB estimated from ${r.sampledTrees} walked trees. Fresh-file guard kept ${r.guardKept} of ${r.sampledPastTtl} sampled past-TTL trees, so past-TTL is an upper bound.`]
+      : []),
+    ...(r.complete === false ? ["PARTIAL: time budget reached; rerun with the same --checkpoint to continue."] : []),
     `total ${tot.count} dirs ${gib(tot.bytes)} GiB; past TTL: ${r.eligible} dirs ${gib(tot.eligibleBytes)} GiB${r.apply ? `; removed=${r.removed} freed=${gib(r.bytesFreed)} GiB` : ""}`,
-    `age (newest mtime in tree) count/GiB: ${AGE_BUCKETS.map((b) => `${b}=${cell(tot.ages[b])}`).join(" ")}`,
+    `age (${r.estimated ? "top dir mtime" : "newest mtime in tree"}) count/GiB: ${AGE_BUCKETS.map((b) => `${b}=${cell(tot.ages[b])}`).join(" ")}`,
     `prefix | count | GiB | pastTTL count/GiB | ${AGE_BUCKETS.join(" | ")}`,
   ];
   for (const [pre, row] of rows.slice(0, limit)) {
