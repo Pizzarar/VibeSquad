@@ -1,6 +1,6 @@
 // The append-only FIFO waiter line shared by the `npm test` slot (scripts/suite-lock.mjs) and the named slot pools
 // (cli/slot-pool.mjs, `vs slot run`). It lives under cli/ because the runtime ships cli/ but not scripts/.
-// One JSON line per event: {op:"join", id, pid, agentId, at} | {op:"beat", id, at} | {op:"done", id}.
+// One JSON line per event: {op:"join", id, pid, agentId, [squad,] at} | {op:"beat", id, at} | {op:"done", id}.
 import { appendFileSync, readFileSync } from "node:fs";
 import { pidAlive } from "../runner/lock.mjs";
 
@@ -46,7 +46,8 @@ export function readQueue(paths, { alive = pidAlive, now = Date.now(), beatStale
       continue; // blank or torn line
     }
     if (!rec || typeof rec.id !== "string") continue;
-    if (rec.op === "join" && !joined.has(rec.id)) joined.set(rec.id, { id: rec.id, pid: rec.pid, agentId: rec.agentId ?? null, at: rec.at, beat: rec.at });
+    // squad: written only by a slot pool with reservations (idea-578); the npm-test slot's entries never carry it.
+    if (rec.op === "join" && !joined.has(rec.id)) joined.set(rec.id, { id: rec.id, pid: rec.pid, agentId: rec.agentId ?? null, ...(rec.squad ? { squad: rec.squad } : {}), at: rec.at, beat: rec.at });
     else if (rec.op === "beat" && joined.has(rec.id)) joined.get(rec.id).beat = rec.at;
     else if (rec.op === "done") joined.delete(rec.id);
   }
