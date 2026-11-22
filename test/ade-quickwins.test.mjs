@@ -39,7 +39,7 @@ test("57: tab title carries the needs-you count; zero clears it", () => {
 });
 
 test("57: wired to the same per-team needsYou that already skips archived/closed agents", () => {
-  assert.match(read("src/App.tsx"), /useAttentionTitle\(views\)/);
+  assert.match(read("src/App.tsx"), /useAttentionTitle\((?:views|filterAwakeViews\(views, getFolders\(\)\))\)/);
   assert.match(read("src/QuickWinsUi.tsx"), /canvas/i);
   assert.match(read("src/attentionItems.ts"), /archivedAt \|\| m\.agent\.status === "closed"/);
 });

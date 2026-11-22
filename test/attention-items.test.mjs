@@ -175,7 +175,7 @@ test("R6-2: Ctrl+J reads the Needs-you list (not the rail); railAlerts and the h
   const { readFileSync } = await import("node:fs");
   const read = (p) => readFileSync(new URL(p, import.meta.url), "utf8");
   const app = read("../src/App.tsx");
-  assert.match(app, /topNeedsYouId\(derived\(\)\.views, nowTickValue\(\)\)/);
+  assert.match(app, /topNeedsYouId\((?:derived\(\)\.views|filterAwakeViews\(derived\(\)\.views, getFolders\(\)\)), nowTickValue\(\)\)/);
   assert.match(app, /vs:boring-open-agent/);
   const top = read("../src/needsYouTop.ts");
   assert.match(top, /needsYouRows\(views, now\)\.filter\(\(r\) => r\.item\.kind !== "finished"\)/);
