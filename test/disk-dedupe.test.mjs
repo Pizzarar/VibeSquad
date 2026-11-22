@@ -557,3 +557,26 @@ test("catch-up checkpointed apply: a failed removal is not marked done, so the r
     rmSync(ckDir, { recursive: true, force: true });
   }
 });
+
+test("idea-473 lows: a filesystem root is refused; young dirs never report truncated; a vanished dir mid-removal is not an error", async () => {
+  await assert.rejects(sweepTempScratch({ tempDir: resolve("/") }), /filesystem root/);
+
+  const root = makeRoot();
+  try {
+    scratch(root, "vs-old-Aa11Bb");
+    scratch(root, "vs-new-Cc22Dd", { old: false });
+    // maxRemove 1: the old dir fills the quota; the only remaining match is young, so nothing is left to do.
+    const r = await sweepTempScratch({ tempDir: root, now: NOW, maxRemove: 1 });
+    assert.equal(r.removed, 1);
+    assert.equal(r.young, 1);
+    assert.equal(r.truncated, false);
+    assert.equal(r.errors, 0);
+
+    scratch(root, "vs-gone-Ee33Ff");
+    const fs = { ...fsp, opendir: fsp.opendir, readdir: async (d) => { await fsp.rm(d, { recursive: true, force: true }); return fsp.readdir(d); } };
+    const r2 = await sweepTempScratch({ tempDir: root, now: NOW, fs: { ...fs, readdir: (d, ...a) => (d.includes("vs-gone-") ? fs.readdir(d) : fsp.readdir(d, ...a)) } });
+    assert.equal(r2.errors, 0);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

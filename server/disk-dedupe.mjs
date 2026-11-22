@@ -91,7 +91,13 @@ async function removeTree(dir, fs, cutoff = Infinity) {
   if (!isDirNotLink(dirSt)) throw Object.assign(new Error(`not a real directory, refused: ${dir}`), { code: "VS_TTL_NOT_DIR" });
   if (dirSt.mtimeMs >= cutoff) throw freshError(dir);
   let freed = 0;
-  const names = await fs.readdir(dir);
+  let names;
+  try {
+    names = await fs.readdir(dir);
+  } catch (e) {
+    if (e?.code === "ENOENT") return freed; // a concurrent remover got here first
+    throw e;
+  }
   for (const name of names) {
     const p = join(dir, name);
     let st;
@@ -108,7 +114,11 @@ async function removeTree(dir, fs, cutoff = Infinity) {
         await fs.unlink(p);
       } catch (e) {
         if (e?.code === "ENOENT") continue;
-        await fs.rmdir(p);
+        try {
+          await fs.rmdir(p);
+        } catch (e2) {
+          if (e2?.code !== "ENOENT") throw e2;
+        }
       }
     } else if (st.isDirectory()) {
       freed += await removeTree(p, fs, cutoff); // re-lstat's p at entry
@@ -152,6 +162,7 @@ async function checkedRoot(tempDir, ttlDays, fs) {
   if (!Number.isFinite(days) || days < 1) throw new Error(`temp TTL must be at least 1 day (got ${ttlDays})`);
   if (typeof tempDir !== "string" || !isAbsolute(tempDir)) throw new Error("tempDir must be an absolute path");
   const root = resolve(tempDir);
+  if (resolve(root, "..") === root) throw new Error("tempDir must not be a filesystem root");
   const rootSt = await fs.lstat(root);
   if (!isDirNotLink(rootSt)) throw new Error("tempDir must be a real directory");
   return { root, days };
@@ -191,16 +202,16 @@ export async function sweepTempScratch({
     }
     if (!isDirNotLink(st)) continue;
     out.matched++;
+    if (st.mtimeMs >= cutoff) {
+      out.young++; // cheap check first: a young dir is never backlog, so it must not trip the truncation below
+      continue;
+    }
     if (out.removed >= maxRemove || clock() - started >= maxMs) {
       out.truncated = true;
       out.stop = out.removed >= maxRemove ? "count" : "time";
       break; // leaving a for-await closes the Dir handle
     }
     try {
-      if (st.mtimeMs >= cutoff) {
-        out.young++;
-        continue;
-      }
       const age = await treeAge(p, cutoff, fs);
       if (age.young) {
         out.young++;

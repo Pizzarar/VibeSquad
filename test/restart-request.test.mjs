@@ -14,6 +14,7 @@ import {
   formatRequestStatus,
   readRestartRequest,
   needsBuild,
+  requestAskText,
   requestPath,
   notUpdatedNote,
   fitLog,
@@ -580,4 +581,9 @@ test("idea-398: runSyncAsync reads the real sync-runtime outcome; syncRepoRoot c
   assert.equal(r.ok, false);
   assert.match(r.reason, /^skipped: .+/);
   assert.ok(!existsSync(env.VIBESQUAD_RUNTIME_DIR), "a skipped sync creates no runtime dir");
+});
+
+test("idea-477: the ask text says the runner already refuses new background shells until restart-done", () => {
+  const req = { id: "rr-1", tip: "abc1234", requestedBy: "lead", deadline: new Date(Date.now() + 600000).toISOString() };
+  assert.match(requestAskText(req, { leadId: "l1" }, []), /runner already refuses new background shells until the restart is done/);
 });

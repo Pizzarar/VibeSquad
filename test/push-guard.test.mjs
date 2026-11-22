@@ -199,6 +199,9 @@ function freshRepo({ push = true, dev = false, hooks = true } = {}) {
     ok(dir, ["init", "-q", "--bare", "--template=", "-b", "master", origin]);
     ok(dir, ["clone", "-q", "--template=", SEED, work]);
     ok(work, ["remote", "set-url", "origin", origin]);
+    // The clone's origin/* refs track SEED, not this empty origin: drop them so the repo has no stale remote-tracking state.
+    ok(work, ["update-ref", "-d", "refs/remotes/origin/master"]);
+    ok(work, ["remote", "set-head", "origin", "-d"]);
   }
   if (hooks) ok(work, ["config", "core.hooksPath", HOOKS]);
   let devRemote = null;

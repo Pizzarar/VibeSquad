@@ -17,6 +17,8 @@ import {
   HUB_BUDDY_RULES,
   BRAINSTORM_PACK,
   EVERYONE_LAYER,
+  gitHelperStats,
+  _resetGitHelperCaches,
 } from "./agent-duties.ts";
 import type { AgentSettingsPatch } from "./agent-duties.ts";
 
@@ -1819,6 +1821,78 @@ test(
     assert.equal(payloads[1].labels.digestFor, "w-alt");
     assert.equal(payloads[1].labels.digestTurn, "t-A", "the alternate carries the turn label (a restart adopts it, idea-123)");
     assert.deepEqual(h.archivedIds, ["dig-a1", "dig-a2"], "each archived exactly once");
+    const lines = logLines();
+    assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0);
+    assert.equal(lines.filter((l) => l.includes("alternate verdict")).length, 1);
+  }),
+);
+
+test(
+  "idea-562: agent.create takes the git spawn snapshot only when it will inject it (a prompt that already carries EVERYONE_LAYER skips it)",
+  withEnv(async ({ briefRoot }) => {
+    const repo = mkdtempSync(join(tmpdir(), "vs-gitskip-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: repo });
+      const h = harness(new Map(), { briefRoot });
+      try {
+        _resetGitHelperCaches();
+        const skipped = await h.beforeCreate({
+          config: { cwd: repo, provider: "claude", model: "claude-opus-5-5", title: "W", systemPrompt: `${EVERYONE_LAYER}
+
+caller text` },
+          labels: { role: "worker", lane: "bug-chaser" },
+        });
+        assert.equal(gitHelperStats.spawnStateGit, 0, "no git child when the snapshot would be discarded");
+        assert.ok(!(skipped.config.systemPrompt ?? "").includes("Starting git state (snapshot at spawn"));
+
+        _resetGitHelperCaches();
+        const injected = await h.beforeCreate({
+          config: { cwd: repo, provider: "claude", model: "claude-opus-5-5", title: "W" },
+          labels: { role: "worker", lane: "bug-chaser" },
+        });
+        assert.ok(gitHelperStats.spawnStateGit > 0, "the snapshot is taken when it is injected");
+        assert.ok(injected.config.systemPrompt.includes("Starting git state (snapshot at spawn"));
+      } finally {
+        h.stop?.();
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }),
+);
+
+test(
+  "idea-495 (idea-218 L1): a digest that stays queued and times out every round is respawned once on the alternate (the status:timeout path of failedOutcome)",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = { id: "w-alt-to", title: "Bug1 · alt to", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "altto" } };
+    const agents = new Map<string, any>([["w-alt-to", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-alt-to", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    const payloads: any[] = [];
+    (h.paseo.agents as any).create = async (payload: any) => {
+      payloads.push(payload);
+      const id = `dig-t${payloads.length}`;
+      const first = payloads.length === 1;
+      agents.set(id, { id, ...payload, status: first ? "queued" : "idle", ...(first ? { queued: { ahead: 3 } } : {}), archivedAt: null });
+      return {
+        id,
+        agent: { id },
+        waitForFinish: async () => {
+          if (first) return { status: "timeout" }; // never starts
+          appendVerdict(id, "w-alt-to", "PASS: alternate verdict");
+          return { status: "idle" };
+        },
+      };
+    };
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-T");
+      await wait(300);
+    } finally {
+      h.stop?.();
+    }
+    assert.equal(payloads.length, 2, "respawned exactly once");
+    assert.equal(payloads[1].labels.profile, "Check - Haiku");
+    assert.deepEqual(h.archivedIds, ["dig-t1", "dig-t2"], "each archived exactly once");
     const lines = logLines();
     assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0);
     assert.equal(lines.filter((l) => l.includes("alternate verdict")).length, 1);

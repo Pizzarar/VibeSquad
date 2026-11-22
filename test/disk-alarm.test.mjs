@@ -16,8 +16,8 @@ function setup(pctRef) {
 }
 
 test("driveOf normalizes to uppercase X: for backslash, forward-slash and mixed-case roots", () => {
-  assert.equal(driveOf("C:\a\b"), "C:");
-  assert.equal(driveOf("c:\a\b"), "C:");
+  assert.equal(driveOf("C:\\a\\b"), "C:");
+  assert.equal(driveOf("c:\\a\\b"), "C:");
   assert.equal(driveOf("c:/a/b"), "C:");
   assert.equal(driveOf("D:\\"), "D:");
   assert.equal(driveOf("D:"), "D:");
@@ -80,7 +80,7 @@ test("paths on one drive (any case/slash) give one reading", async () => {
   const logs = [];
   let stats = 0;
   const alarm = createDiskAlarm({
-    targets: ["C:\data\sanctuary", "c:\work\projects", "C:/other"],
+    targets: ["C:\\data\\sanctuary", "c:\\work\\projects", "C:/other"],
     stat: async () => { stats++; return { total: 1000, free: 500 }; },
     log: async (type, text) => logs.push({ type, text }),
   });
@@ -94,7 +94,7 @@ test("a failed needs-you write is retried next tick (alarmed only set after succ
   let fail = true;
   const logs = [];
   const alarm = createDiskAlarm({
-    targets: ["C:\data"],
+    targets: ["C:\\data"],
     stat: async () => ({ total: 1000, free: 100 }),
     now: () => 1,
     log: async (type, text) => {
@@ -110,7 +110,7 @@ test("a failed needs-you write is retried next tick (alarmed only set after succ
 
 test("enabled startDiskAlarm ticks at start and stop() clears the interval", async () => {
   let called = 0;
-  const h = startDiskAlarm({ env: {}, tickMs: 5, targets: ["C:\data"], stat: async () => { called++; return { free: 900, total: 1000 }; }, log: async () => {} });
+  const h = startDiskAlarm({ env: {}, tickMs: 5, targets: ["C:\\data"], stat: async () => { called++; return { free: 900, total: 1000 }; }, log: async () => {} });
   assert.notEqual(h.disabled, true);
   await new Promise((r) => setTimeout(r, 40));
   h.stop();

@@ -31,7 +31,7 @@ const pending = new Map(); // id -> { w, resolve, guard }
 const GUARD_SLACK_MS = 5_000; // the worker's own execFile timer can't fire if its thread is wedged in a sync CreateProcess
 
 /** Worker spawn counter for tests and diagnostics: how many worker threads this module started. */
-export const gitSpawnStats = { workerSpawns: 0 };
+export const gitSpawnStats = { workerSpawns: 0, dispatches: 0 }; // dispatches: git children actually posted to the worker (a deduped call adds none)
 
 /** A failed call's answer: never a wrong guess, always "ask git again / keep / null" in the callers' terms. */
 const FAILED = { ok: false, out: "", code: null };
@@ -94,6 +94,7 @@ export function gitExecOffLoop(cwd, args, timeoutMs) {
       guard.unref?.();
       pending.set(id, { w, resolve, guard });
       w.ref();
+      gitSpawnStats.dispatches++;
       w.postMessage({ id, cwd, args: args ?? [], timeoutMs: t });
     } catch {
       // Synchronous constructor/postMessage failure: still resolve (never reject).
@@ -110,6 +111,7 @@ export function gitExecOffLoop(cwd, args, timeoutMs) {
 export function _resetGitSpawn() {
   INFLIGHT.clear();
   gitSpawnStats.workerSpawns = 0;
+  gitSpawnStats.dispatches = 0;
   const w = worker;
   worker = null;
   if (w) w.terminate().catch(() => {});

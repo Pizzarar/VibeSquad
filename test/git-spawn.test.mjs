@@ -67,6 +67,7 @@ test("gitExecOffLoop is single-flight per repo+args: concurrent identical calls 
     gitExecOffLoop(r.repo, ["rev-parse", "HEAD"], 30_000),
     gitExecOffLoop(r.repo, ["rev-parse", "HEAD"], 30_000),
   ]);
+  assert.equal(gitSpawnStats.dispatches, 1, "three identical calls dispatch one git child (deduped, not just one persistent worker)");
   assert.equal(gitSpawnStats.workerSpawns, 1, "three identical calls spawn one worker");
   assert.deepEqual(a, b);
   assert.deepEqual(b, c);
