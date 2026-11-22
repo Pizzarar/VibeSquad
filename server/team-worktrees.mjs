@@ -517,14 +517,30 @@ export function toLongPath(p) {
   return "\\\\?\\" + abs;
 }
 
-/** Delete `abs` without ever following a symlink or junction (a link is unlinked, never recursed into). */
-function removeTreeNoFollow(abs) {
+/** Throw (code EESCAPE) unless `p` resolves (realpath) inside the normalized worktree root `wtRoot`; unresolvable = escape. */
+function assertRealInside(p, wtRoot) {
+  const real = normPath(p);
+  if (!wtRoot || !real || !(real === wtRoot || real.startsWith(wtRoot + "/"))) {
+    throw Object.assign(new Error(`removal escaped the worktree: ${p}`), { code: "EESCAPE" });
+  }
+}
+
+/**
+ * Delete `abs` without ever following a symlink or junction (a link is unlinked, never recursed into). `wtRoot` is the
+ * worktree root as normalized by normPath (realpath). Before acting on any entry its parent folder must resolve inside
+ * `wtRoot`, and before a directory is read the directory itself must too: a folder swapped for a junction mid-walk
+ * (between a readdir and the descent into a child) resolves outside, so the walk aborts (throws EESCAPE) instead of
+ * following it. `onListed(abs, names)` is a test seam called right after each readdir.
+ */
+function removeTreeNoFollow(abs, wtRoot, onListed) {
   abs = toLongPath(abs);
+  assertRealInside(dirname(abs), wtRoot);
   let st;
   try {
     st = lstatSync(abs);
-  } catch {
-    return;
+  } catch (e) {
+    if (e?.code === "ENOENT") return;
+    throw e;
   }
   if (st.isSymbolicLink()) {
     unlinkLinkOnly(abs);
@@ -539,16 +555,11 @@ function removeTreeNoFollow(abs) {
     }
     return;
   }
-  // Re-lstat right before reading: a directory swapped for a junction between the lstat above and this
-  // readdir would otherwise be followed (deleting its target). Every child is re-lstat'd at its own
-  // removeTreeNoFollow entry right before descending, so a link swapped in mid-walk is unlinked, never followed.
-  try {
-    st = lstatSync(abs);
-  } catch {
-    return;
-  }
-  if (st.isSymbolicLink() || !st.isDirectory()) return removeTreeNoFollow(abs);
-  for (const name of readdirSync(abs)) removeTreeNoFollow(join(abs, name));
+  assertRealInside(abs, wtRoot); // a directory swapped for a junction since the lstat resolves outside here
+  const names = readdirSync(abs);
+  onListed?.(abs, names);
+  // Each child re-checks its parent (`abs`) at its own entry, so `abs` swapped for a junction now aborts the walk.
+  for (const name of names) removeTreeNoFollow(join(abs, name), wtRoot, onListed);
   rmdirSync(abs);
 }
 
@@ -622,13 +633,18 @@ function buildOutputTarget(wtPath, rel) {
  * then plain `git worktree remove` (no --force), which refuses anything that turned dirty since the check.
  * Returns { removed: true } or { removed: false, reason }.
  */
-export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildOutput = [], unlinkLink, force = false } = {}) {
+export function removeSweptWorktree(
+  repoRoot,
+  wtPath,
+  { git = defaultGit, buildOutput = [], unlinkLink, force = false, onListed } = {},
+) {
   try {
+    const wtRoot = normPath(wtPath);
     for (const rel of buildOutput) {
       // Lexical containment, not realpath: a nested build-output link pointing outside must still be unlinked here,
       // before `git worktree remove` could walk it.
       const abs = buildOutputTarget(wtPath, rel);
-      if (abs) removeTreeNoFollow(abs);
+      if (abs) removeTreeNoFollow(abs, wtRoot, onListed); // `onListed`: test seam only
     }
     detachUntrackedLinks(resolve(wtPath), { git, unlinkLink });
   } catch (e) {

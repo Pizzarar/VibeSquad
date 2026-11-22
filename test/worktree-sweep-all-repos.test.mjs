@@ -3,7 +3,7 @@
 // output is not dirt; live-cwd guard; every sanctuary repo; branch refs are never deleted; links are never followed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -530,6 +530,53 @@ test("M2 removal: a build-output link two levels down that points outside is unl
     symlinkSync(shared, join(wt2, "lnk"), "junction");
     removeSweptWorktree(repo, wt2, { buildOutput: ["lnk/dist"] });
     assert.equal(readFileSync(join(shared, "dist", "keep2.txt"), "utf8"), "precious2");
+  }));
+
+test("R3 H1 TOCTOU: a build-output dir swapped for a junction mid-walk aborts the removal; the outside victim survives", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const victim = join(root, "victim");
+    writeFile(victim, "z_sub/sentinel.txt", "precious");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-toctou");
+    writeFile(wt, "dist/a_file.js", "built");
+    writeFile(wt, "dist/z_sub/out.js", "built");
+    const dist = join(wt, "dist");
+    let swapped = false;
+    // After dist is listed (a_file.js, z_sub) and before the walk descends into z_sub: dist -> junction to victim.
+    const onListed = (abs) => {
+      if (swapped || !/[\\/]dist$/i.test(abs)) return;
+      renameSync(dist, join(wt, "dist-aside"));
+      symlinkSync(victim, dist, "junction");
+      swapped = true;
+    };
+    const res = removeSweptWorktree(repo, wt, { buildOutput: ["dist/"], onListed });
+    assert.equal(swapped, true, "the swap hook ran");
+    assert.notEqual(res.removed, true, JSON.stringify(res));
+    assert.match(res.reason, /EESCAPE/, JSON.stringify(res));
+    assert.equal(readFileSync(join(victim, "z_sub", "sentinel.txt"), "utf8"), "precious");
+    assert.equal(existsSync(wt), true, "worktree left in place after the abort");
+
+    // Same swap before the descent into a nested dir's readdir: dist/z_sub listed, then z_sub -> junction.
+    const wt2 = addWorktree(repo, sanct, "repo", "unit-toctou-2");
+    writeFile(wt2, "dist/z_sub/deeper/out.js", "built");
+    writeFile(victim, "deeper/sentinel2.txt", "precious2");
+    const sub = join(wt2, "dist", "z_sub");
+    let swapped2 = false;
+    const res2 = removeSweptWorktree(repo, wt2, {
+      buildOutput: ["dist/"],
+      onListed: (abs) => {
+        if (swapped2 || !/[\\/]z_sub$/i.test(abs)) return;
+        renameSync(sub, join(wt2, "z_sub-aside"));
+        symlinkSync(victim, sub, "junction");
+        swapped2 = true;
+      },
+    });
+    assert.equal(swapped2, true, "the second swap hook ran");
+    assert.notEqual(res2.removed, true, JSON.stringify(res2));
+    assert.equal(readFileSync(join(victim, "deeper", "sentinel2.txt"), "utf8"), "precious2");
+    assert.equal(readFileSync(join(victim, "z_sub", "sentinel.txt"), "utf8"), "precious");
   }));
 
 test("M3 live-cwd refresh: the roster is re-read right before each removal; unreadable at that point keeps the worktree", () =>
