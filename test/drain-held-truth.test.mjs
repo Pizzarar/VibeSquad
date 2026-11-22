@@ -201,6 +201,31 @@ test('/health reports held agents with their live shells (heldWork) after the re
   } finally { await new Promise((r) => srv.close(r)); h.runner.shutdown(); }
 });
 
+test('idea-475: /health heldWork dates each shell (createdMs) and shows its command without Claude\'s Bash wrapper (shellCmdTail)', async () => {
+  const h = harness();
+  const id = h.create();
+  const createdMs = Date.now() - 14 * 60_000;
+  const wrapped = { pid: 31001, name: 'bash', createdMs, cmd: `/usr/bin/bash -c -l "source /c/Users/x/.claude/shell-snapshots/snap.sh && eval 'npm test > logs/p5.log 2>&1; echo rc=$? >> logs/p5.log' < /dev/null && pwd -P >| /c/Users/x/AppData/Local/Temp/claude-ccc6-cwd"` };
+  const undated = { pid: 31002, name: 'bash', cmd: `echo ${'w '.repeat(120)}done` };
+  h.shells(id, [wrapped, undated]);
+  h.endTurn(id);
+  await until(() => types(h.runner, id).includes('park-held'));
+  const srv = createRunnerServer(h.runner, { token: 't0k', hash: 'h' });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  try {
+    const hb = await fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: 'Bearer t0k' } }).then((r) => r.json());
+    const [a, b] = hb.heldWork[id];
+    assert.equal(a.pid, 31001);
+    assert.equal(a.createdMs, createdMs, 'the probe\'s createdMs reaches /health');
+    assert.match(a.cmd, /echo rc=\$\? >> logs\/p5\.log$/, 'the command, not the wrapper tail');
+    assert.ok(!/pwd -P|claude-ccc6-cwd/.test(a.cmd), a.cmd);
+    assert.ok(a.cmd.length <= 160);
+    assert.equal('createdMs' in b, false, 'no createdMs when the probe had none');
+    assert.ok(b.cmd.length <= 160 && b.cmd.endsWith('done') && /^w /.test(b.cmd), `tail kept, cut word dropped: ${b.cmd}`);
+  } finally { await new Promise((r) => srv.close(r)); h.runner.shutdown(); }
+});
+
 // ---- (3) drained is cross-checked against the runner's held list ---------------------------------------------------
 
 function deferredHome() {

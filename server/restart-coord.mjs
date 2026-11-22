@@ -10,6 +10,8 @@ import { toAgent } from "./backend/runner-backend.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
 import { loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { localTokenPath, readLocalToken } from "./local-token.mjs";
+import { shellCmdTail } from "../runner/background.mjs";
+import { redactHostPathTokens } from "./redact-host-paths.mjs";
 
 export const DRAIN_WINDOW_MS = 30 * 60000; // D2: a rerun this soon after a deferral needs every named lead's drain
 export const DONE_CHAIN_MAX_MS = 24 * 3600000; // D3: deferrals older than this are not a live hold any more
@@ -18,9 +20,24 @@ export const DONE_TEXT = "restart-done";
 const DRAINED_RE = /^restart-feedback:\s*drained restart\b/i;
 
 /**
+ * idea-475: why a held agent's owner record no longer counts as live: "archived" (archivedAt), "exited" (an exit, or a
+ * closed/lost record that cannot resume), else null. A missing record is not "gone" here (the list may be partial):
+ * holderLeads reports it as having no owner record, and it keeps blocking.
+ */
+export function ownerGone(a) {
+  if (!a || typeof a !== "object") return null;
+  if (a.archivedAt || a.archived) return "archived";
+  if (a.exit || a.status === "exited" || ((a.status === "closed" || a.status === "lost") && a.resumable !== true)) return "exited";
+  return null;
+}
+
+/**
  * Group held agent ids by their lane's live lead, the `vs who lead` way: the holder's Squad/lane from its labels
  * (resolveAgentIdentity), the lane's lead candidates through whoCandidate, the winner through resolveLeadWinner.
- * Returns { leads: [{ team, lane, leadId, leadTitle, heldAgents }], unresolved: [{ agentId, reason }] }.
+ * Returns { leads: [{ team, lane, leadId, leadTitle, heldAgents }], unresolved: [{ agentId, reason }],
+ * gone: [{ agentId, reason }], owners: { id: { agentId, title, team, lane, role, state } } }.
+ * idea-475: `owners` is each holder's own record (state live | archived | exited | missing) so a deferral names the agent
+ * behind every shell; a holder whose owner is archived or exited goes to `gone` (no lead is asked to drain it).
  */
 export function holderLeads(heldIds, rawAgents, teams = loadTeamsRegistry()) {
   // The restart script hands over the runner's raw GET /agents?full=1 records (identity under meta.labels, no top-level labels);
@@ -30,10 +47,22 @@ export function holderLeads(heldIds, rawAgents, teams = loadTeamsRegistry()) {
   const byId = new Map(list.map((a) => [a?.id, a]));
   const leads = new Map();
   const unresolved = [];
+  const gone = [];
+  const owners = {};
   for (const id of heldIds ?? []) {
     const a = byId.get(id);
-    if (!a) { unresolved.push({ agentId: id, reason: "not in the runner's agent list" }); continue; }
+    if (!a) { owners[id] = { agentId: id, title: null, team: null, lane: null, role: null, state: "missing" }; unresolved.push({ agentId: id, reason: "not in the runner's agent list" }); continue; }
     const who = resolveAgentIdentity(a, { teams, cwd: a.cwd });
+    const dead = ownerGone(a);
+    owners[id] = {
+      agentId: id,
+      title: String(a.title ?? a.name ?? "").trim().slice(0, 80) || null,
+      team: (!who.isOrphan && who.teamId) || a.labels?.team || null,
+      lane: (!who.isOrphan && who.laneId) || a.labels?.lane || null,
+      role: a.labels?.role ?? null,
+      state: dead ?? "live",
+    };
+    if (dead) { gone.push({ agentId: id, reason: `owner ${dead}` }); continue; }
     if (who.isOrphan || !who.teamId || !who.laneId) { unresolved.push({ agentId: id, reason: "no Squad/lane label" }); continue; }
     // The holder's spawner (vs.parent) first: a live lead of the holder's lane is its owner by construction. Then the Squad/lane lookup.
     let winner = null;
@@ -50,7 +79,55 @@ export function holderLeads(heldIds, rawAgents, teams = loadTeamsRegistry()) {
     if (!leads.has(key)) leads.set(key, { team: who.teamId, lane: who.laneId, leadId: winner.id, leadTitle: String(winner.title ?? winner.name ?? "").split(" · ")[0].trim() || null, heldAgents: [] });
     leads.get(key).heldAgents.push(id);
   }
-  return { leads: [...leads.values()], unresolved };
+  return { leads: [...leads.values()], unresolved, gone, owners };
+}
+
+const ageText = (ms) => {
+  if (!Number.isFinite(ms) || ms < 0) return "age unknown";
+  const s = Math.round(ms / 1000);
+  if (s < 90) return `${s}s old`;
+  const m = Math.round(s / 60);
+  return m < 90 ? `${m}m old` : `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}m old`;
+};
+
+/**
+ * idea-475 R2: a held shell's command fit for a message (deferral, abort reason, drain ask, team log, vs send to leads in
+ * other Squads): Claude's Bash wrapper stripped, then every host-path token redacted (redactHostPathTokens) on the WHOLE
+ * text, before any character filter (which drops backslashes and would hide a drive path) or cut (which could half-keep one).
+ */
+export function heldCmdRedacted(cmd) {
+  return redactHostPathTokens(shellCmdTail(cmd, Infinity));
+}
+/** The last `max` chars of `t` with a cut-into first word dropped, so no fragment of a word or path heads the text. */
+const tailWords = (t, max) => (t.length > max ? t.slice(-max).replace(/^\S*\s*/, "") : t);
+
+/** Display text for one held shell's command: host paths redacted, no quote, backtick or newline (it pastes into vs send "..."), tail kept. */
+const cmdText = (w, max = 80) => {
+  const t = heldCmdRedacted(w?.cmd || w?.name).replace(/\\/g, "/").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$-]+/g, " ").replace(/\s+/g, " ").trim();
+  return t.length > max ? `...${tailWords(t, max)}` : t;
+};
+
+/**
+ * idea-475: one line per held agent naming its owner and every shell it holds, owner FIRST so any head-keeping cut still
+ * says whose it is: `rn-x [title] team/lane role: pid 123 bash, 14m old: <cmd>; ...`. With no owner record or no
+ * Squad/lane it says so (NO OWNER ...) and still gives each pid; an archived/exited owner is marked as counted drainable.
+ */
+export function blockingLines(heldAgents, { owners = {}, heldWork = {}, unresolved = [], now = Date.now() } = {}) {
+  const why = new Map((unresolved ?? []).map((u) => [u.agentId, u.reason]));
+  return (heldAgents ?? []).map((id) => {
+    const o = owners?.[id];
+    const shells = (heldWork?.[id] ?? []).map((w) => `pid ${w.pid} ${w.name ?? "shell"}, ${ageText(Number.isFinite(w.createdMs) ? now - w.createdMs : NaN)}: ${cmdText(w)}`);
+    const work = shells.length ? shells.join("; ") : "no shell listed yet (held until its first probe)";
+    let who;
+    if (!o || o.state === "missing") who = `${id} NO OWNER (${why.get(id) ?? "not in the runner's agent list"})`;
+    else {
+      const title = o.title ? ` [${o.title.replace(/[^\w .,:;=/@%+~#()\-]+/g, " ").replace(/\s+/g, " ").trim()}]` : "";
+      const place = o.team && o.lane ? ` ${o.team}/${o.lane}` : " NO OWNER LANE (no Squad/lane label)";
+      const gone = o.state !== "live" ? `, owner ${o.state.toUpperCase()}: counted drainable` : "";
+      who = `${id}${title}${place}${o.role ? ` ${o.role}` : ""}${gone}`;
+    }
+    return `${who}: ${work}`;
+  });
 }
 
 /** A 'drained restart [<tip>]' self-report as the log stores it (the CLI prefixes the restart-feedback subtype). */
@@ -87,6 +164,7 @@ export function drainedLogRefusal(callerId, { held, agents, teams = loadTeamsReg
   const blockers = new Set(holderLeads(held.ids, list, teams).leads.filter((l) => l.leadId === id).flatMap((l) => l.heldAgents));
   for (const h of held.ids) {
     const a = byId.get(h);
+    if (ownerGone(a)) continue; // idea-475: an archived/exited owner's shell is counted drainable, not held against the lane
     if (h === id || (a && String(a.labels?.["vs.parent"] ?? "") === id) || (mine && laneOf(a) === mine)) blockers.add(h);
   }
   if (!blockers.size) return null;
@@ -105,8 +183,8 @@ export function drainAskText(lead, at) {
 
 /** "pid 4242: bash tools/run_suite.sh ..." for one agent's held shells (the runner's /health heldWork), "" when unknown. */
 function workLine(heldWork, id) {
-  const clean = (t) => String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$'-]+/g, " ").trim().slice(-80); // no quote, backtick or newline: it pastes into vs send "..."
-  return (heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${clean(w.cmd ?? w.name)}`).join(", ");
+  const clean = (t) => tailWords(String(t ?? "").replace(/[^\w .,:;=/@%+~#()[\]{}<>|&*?!$'-]+/g, " ").trim(), 80); // no quote, backtick or newline: it pastes into vs send "..."
+  return (heldWork?.[id] ?? []).map((w) => `pid ${w.pid}: ${clean(heldCmdRedacted(w.cmd || w.name))}`).join(", "); // idea-475 R2: host paths redacted first
 }
 
 export function doneText(at) {
@@ -114,11 +192,15 @@ export function doneText(at) {
 }
 
 /** The deferral's error line: who to ask, what to wait for, no timer retries, the owner gate. */
-export function deferralMessage({ held, heldAgents, waitSec, leads, unresolved, heldWork }) {
+export function deferralMessage({ held, heldAgents, waitSec, leads, unresolved, heldWork, owners = null, gone = [], now = Date.now() }) {
   const hw = (l) => l.heldWork ?? heldWork;
+  // idea-475: who owns each blocking shell comes right after the head (the request's abort line keeps the head).
+  const blocking = owners ? blockingLines(heldAgents, { owners, heldWork, unresolved, now }) : [];
   const ask = leads.map((l) => `${l.lane} lead ${l.leadId}${l.leadTitle ? ` (${l.leadTitle})` : ""} holds ${l.heldAgents.map((id) => { const w = workLine(hw(l), id); return w ? `${id} (${w})` : id; }).join(", ")}`);
   const miss = unresolved.map((u) => `${u.agentId} (${u.reason})`);
   return `deferred: ${held} agent(s) still hold background work after ${waitSec}s (${heldAgents.join(", ") || "ids unknown"}). ` +
+    (blocking.length ? `Blocking: ${blocking.join(" | ")}. ` : "") +
+    (gone?.length ? `Owner gone (counted drainable, not waited on): ${gone.map((g) => `${g.agentId} (${g.reason})`).join("; ")}. ` : "") +
     (ask.length ? `Ask these leads to drain and hold background suites: ${ask.join("; ")}. ` : "") +
     (heldAgents.length ? `Idle holders can be stopped with ${heldAgents.map((id) => `vs stop ${id} --background`).join("; ")} (kills each shell's whole tree). ` : "") +
     (miss.length ? `No lead resolved for: ${miss.join("; ")}; find who owns it. ` : "") +

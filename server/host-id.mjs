@@ -11,7 +11,18 @@ export const HOST_ID_FILE = "host-id";
 // 16 random bytes, base64url: 22 chars, no padding. Older/foreign files up to 64 url-safe chars are accepted as-is.
 const HOST_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
 
-export const hostIdPath = (home = process.env.VIBESQUAD_HOME || join(homedir(), ".vibesquad")) => join(home, HOST_ID_FILE);
+// idea-518: getHostId() runs on every /api/auth/status poll. The default home is resolved once per VIBESQUAD_HOME value
+// (os.homedir() only when it is unset), and the id itself is read from disk once per file (cache below).
+let defaultHomeMemo = null; // { env, home }
+function defaultHome() {
+  const vsHome = process.env.VIBESQUAD_HOME || "";
+  // keyed on the vars os.homedir() reads too, so a test (or tool) that moves HOME/USERPROFILE never gets the old home
+  const env = `${vsHome}\0${process.env.USERPROFILE ?? ""}\0${process.env.HOME ?? ""}`;
+  if (!defaultHomeMemo || defaultHomeMemo.env !== env) defaultHomeMemo = { env, home: vsHome || join(homedir(), ".vibesquad") };
+  return defaultHomeMemo.home;
+}
+
+export const hostIdPath = (home = defaultHome()) => join(home, HOST_ID_FILE);
 
 const cache = new Map(); // file -> id (keyed so a test that moves VIBESQUAD_HOME gets that home's id)
 
@@ -70,4 +81,5 @@ export function getHostId(file = hostIdPath()) {
 
 export function resetHostIdForTest() {
   cache.clear();
+  defaultHomeMemo = null;
 }

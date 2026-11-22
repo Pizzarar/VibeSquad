@@ -8,9 +8,14 @@
 // left to `vs worktree sweep`. Squash merges have no parent link, so they are also left to the manual sweep.
 // Dry run by default (logs would-remove): removal needs `apply: true` (server: VS_WORKTREE_AUTOSWEEP=apply). An apply holds
 // the sanctuary sweep lock (shared with `vs worktree sweep --apply`). In the server the synchronous git work (discovery and
-// the sweep itself) runs in a worker thread, so the event loop is never blocked; a quiet tick is async for-each-ref only.
+// the sweep itself) runs in a worker thread, so the event loop is never blocked.
+// idea-518: a quiet tick spawns no git at all. Each repo's default-branch tips are read from .git with async fs (git-refs-fs.mjs),
+// yielding to the event loop between repos; `git for-each-ref` is only the fallback when .git cannot be parsed. On Windows every
+// git child costs a synchronous CreateProcess on the server loop (11-21: one per sanctuary repo every 2 min, ~5% of stall
+// time), and a sweep is not latency-critical, so ticks are every 10 min and repo discovery is refreshed hourly.
 import { execFile } from "node:child_process";
 import { Worker } from "node:worker_threads";
+import { gitDirsFs, resolveRefsFs } from "./git-refs-fs.mjs";
 import {
   acquireSweepLock,
   defaultGit,
@@ -21,8 +26,9 @@ import {
   sweepMergedWorktrees,
 } from "./team-worktrees.mjs";
 
-export const AUTOSWEEP_TICK_MS = 2 * 60_000;
-const CACHE_TTL_MS = 30 * 60_000;
+export const AUTOSWEEP_TICK_MS = 10 * 60_000;
+export const AUTOSWEEP_REPO_CACHE_TTL_MS = 60 * 60_000;
+const CACHE_TTL_MS = AUTOSWEEP_REPO_CACHE_TTL_MS;
 const MAX_MERGES_PER_TICK = 200;
 
 /** Async git: resolves stdout, or null on any failure. */
@@ -31,6 +37,13 @@ function defaultGitAsync(args, cwd) {
     execFile("git", args, { cwd, timeout: 15_000, windowsHide: true, maxBuffer: 8 << 20 }, (err, stdout) => done(err ? null : String(stdout)));
   });
 }
+
+/** Default ref reader: Map(ref -> sha) straight from .git (no spawn), or null when .git cannot be parsed (caller falls back). */
+async function defaultReadRefs(refs, repoRoot) {
+  return resolveRefsFs(await gitDirsFs(repoRoot), refs);
+}
+
+const defaultYield = () => new Promise((r) => setImmediate(r));
 
 const tryGit = (git, args, cwd) => {
   try {
@@ -151,6 +164,8 @@ export function createWorktreeAutoSweep({
   log = defaultLog,
   discover = discoverSanctuaryRepos,
   gitAsync = defaultGitAsync,
+  readRefs = defaultReadRefs,
+  yieldLoop = defaultYield,
   now = () => Date.now(),
   apply = false,
   runHeavy = null,
@@ -170,12 +185,25 @@ export function createWorktreeAutoSweep({
     // Moved tips are committed only after a sweep ran: a skipped (roster unreadable, lock busy) or failed tick retries the
     // same prev..tip range next time.
     const pending = [];
+    let first = true;
     for (const { repo, def } of repoCache.repos) {
       if (!def.refs.length) continue;
-      const out = await gitAsync(["for-each-ref", "--format=%(refname)%09%(objectname)", ...def.refs], repo.repoRoot);
-      if (out === null) continue;
-      for (const line of out.split(/\r?\n/).filter(Boolean)) {
-        const [ref, tip] = line.trim().split("\t");
+      if (!first) await yieldLoop(); // one repo per macrotask: a big sanctuary never holds the loop for the whole scan
+      first = false;
+      let pairs = null;
+      try {
+        const m = await readRefs(def.refs, repo.repoRoot);
+        if (m) pairs = [...m];
+      } catch {}
+      if (!pairs) {
+        const out = await gitAsync(["for-each-ref", "--format=%(refname)%09%(objectname)", ...def.refs], repo.repoRoot);
+        if (out === null) continue;
+        pairs = out
+          .split(/\r?\n/)
+          .filter(Boolean)
+          .map((line) => line.trim().split("\t"));
+      }
+      for (const [ref, tip] of pairs) {
         if (!ref || !tip) continue;
         const key = `${repo.repoRoot.toLowerCase()}|${ref}`;
         const prev = tips.get(key);

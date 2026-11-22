@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { assertInboxTriageCaller } from "../server/inbox.mjs";
+import { assertInboxTriageCaller, readInboxCards, triageInboxCards } from "../server/inbox.mjs";
 
 const CLI = fileURLToPath(new URL("../cli/vs.mjs", import.meta.url));
 
@@ -103,4 +103,19 @@ test("--delete is owner-only: the owner can delete (a verified lead is told to u
   const o = run(["--delete", "a"]);
   assert.equal(o.status, 0, o.stderr);
   assert.equal(statuses().a, undefined);
+});
+
+test("idea-481: triage --park stamps parkedAt (explicit park); --accept clears it; a new card stays unmarked", (t) => {
+  const { home } = setup(t);
+  const byId = () => readInboxCards(home).find((c) => c.id === "a");
+  // A new card (seeded status "parked") has no parkedAt marker.
+  assert.equal(byId().parkedAt, undefined);
+  // An explicit park (triage --park -> update status "parked") stamps the marker, keeping status "parked".
+  const parked = triageInboxCards({ action: "update", cardId: "a", patch: { status: "parked" }, baseHome: home });
+  assert.equal(parked.card.status, "parked");
+  assert.ok(parked.card.parkedAt, "explicitly parked card should carry a parkedAt marker");
+  // Re-triaging away from parked (accepted) clears the marker.
+  const accepted = triageInboxCards({ action: "update", cardId: "a", patch: { status: "accepted" }, baseHome: home });
+  assert.equal(accepted.card.status, "accepted");
+  assert.equal(accepted.card.parkedAt, undefined);
 });

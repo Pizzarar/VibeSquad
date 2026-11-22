@@ -72,6 +72,8 @@ import {
   readJsonFileWithBom,
 } from "../user-settings.mjs";
 import { LESSONS_BEGIN, LESSONS_END, readLessons } from "../lessons.mjs";
+import { gitDirsFs, readHeadFs, resolveRefsFs } from "../git-refs-fs.mjs";
+import type { GitDirs } from "../git-refs-fs.mjs";
 /** idea-419: stands in for forwarded text when the host-path redactor throws (never forward raw). */
 const REDACTION_WITHHELD = "(message withheld: host-path redaction failed; see the server log; run 'vs log --since-me')";
 
@@ -1202,9 +1204,65 @@ export function bootSizeMetric(
   );
 }
 
-/** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one. */
-export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: number } = {}): Promise<string | null> {
+/**
+ * idea-518: git spawns cost the server a synchronous CreateProcess on Windows (loop-lag.jsonl 11-21: ~1.3 s p50 each under
+ * load), so both git helpers below are single-flight per cwd and cached. The cache key is an fs fingerprint of the refs the
+ * answer depends on (read from .git without spawning), so a ref move invalidates at once; the TTL only bounds what the
+ * fingerprint cannot see (unstaged edits for the dirty count) or the no-fingerprint fallback.
+ */
+export const GIT_SPAWN_STATE_TTL_MS = 15_000;
+export const UNIT_BRANCH_TTL_MS = 30 * 60_000;
+export const UNIT_BRANCH_FALLBACK_TTL_MS = 5 * 60_000;
+const GIT_CACHE_MAX = 500;
+type CacheEntry<T> = { fp: string; at: number; value: T };
+const spawnStateCache = new Map<string, CacheEntry<string | null>>();
+const spawnStateInflight = new Map<string, Promise<string | null>>();
+const unitBranchCache = new Map<string, CacheEntry<{ unit: string; merged: boolean }>>();
+const unitBranchInflight = new Map<string, Promise<{ unit: string; merged: boolean }>>();
+/** Spawn counters for tests and diagnostics: how many git children each helper started. */
+export const gitHelperStats = { spawnStateGit: 0, unitBranchGit: 0 };
+export function _resetGitHelperCaches(): void {
+  spawnStateCache.clear();
+  spawnStateInflight.clear();
+  unitBranchCache.clear();
+  unitBranchInflight.clear();
+  gitHelperStats.spawnStateGit = 0;
+  gitHelperStats.unitBranchGit = 0;
+}
+function cachePut<T>(m: Map<string, CacheEntry<T>>, key: string, e: CacheEntry<T>): void {
+  if (m.size >= GIT_CACHE_MAX && !m.has(key)) m.delete(m.keys().next().value as string);
+  m.set(key, e);
+}
+function singleFlight<T>(m: Map<string, Promise<T>>, key: string, run: () => Promise<T>): Promise<T> {
+  const hit = m.get(key);
+  if (hit) return hit;
+  const p = run().finally(() => m.delete(key));
+  m.set(key, p);
+  return p;
+}
+const cwdKey = (p: string) => path.resolve(p).toLowerCase();
+
+async function spawnStateFingerprint(dirs: GitDirs | null): Promise<string | null> {
+  if (!dirs) return null;
+  const head = await readHeadFs(dirs);
+  if (!head) return null;
+  const refs = head.branch ? [`refs/heads/${head.branch}`, `refs/remotes/origin/${head.branch}`, "refs/remotes/origin/HEAD"] : ["refs/remotes/origin/HEAD"];
+  const shas = await resolveRefsFs(dirs, refs);
+  if (!shas) return null; // .git unreadable/locked/mid-update: no fingerprint, so no cache hit (git answers)
+  let idx = "";
+  try {
+    const st = await fs.promises.stat(path.join(dirs.gitDir, "index"));
+    idx = `${st.mtimeMs}:${st.size}`;
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") return null; // a locked index is not "no index"
+  }
+  return [head.branch ?? `@${head.sha}`, ...refs.map((r) => shas.get(r) ?? "-"), idx].join("|");
+}
+
+/** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one (none on a cache hit). */
+export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: number; cacheMs?: number } = {}): Promise<string | null> {
   const timeoutMs = opts.timeoutMs ?? 3000; // production keeps 3s (a hung git must not hold the spawn hook); format tests pass more
+  const ttl = opts.cacheMs ?? GIT_SPAWN_STATE_TTL_MS;
   if (!cwd) return null;
   let resolved = "";
   try {
@@ -1213,10 +1271,24 @@ export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: numb
   } catch {
     return null;
   }
+  const key = cwdKey(resolved);
+  return singleFlight(spawnStateInflight, key, async () => {
+    const dirs = await gitDirsFs(resolved).catch(() => null);
+    const fp = await spawnStateFingerprint(dirs).catch(() => null);
+    const hit = spawnStateCache.get(key);
+    if (fp && hit && hit.fp === fp && Date.now() - hit.at < ttl) return hit.value;
+    const value = await inspectGitSpawnStateUncached(resolved, timeoutMs, dirs);
+    if (fp && value !== null) cachePut(spawnStateCache, key, { fp, at: Date.now(), value });
+    return value;
+  });
+}
+
+async function inspectGitSpawnStateUncached(resolved: string, timeoutMs: number, dirs: GitDirs | null): Promise<string | null> {
 
   const runGit = (args: string[]): Promise<string | null> =>
     new Promise((resolve) => {
       try {
+        gitHelperStats.spawnStateGit++;
         execFile(
           "git",
           ["--no-optional-locks", ...args],
@@ -1248,13 +1320,21 @@ export async function inspectGitSpawnState(cwd: string, opts: { timeoutMs?: numb
   }
 
   // No upstream: same fallback chain as before (origin/<branch>, then origin/HEAD), tried in parallel, first win kept.
+  // idea-518: when .git is readable, check which origin ref exists first and spawn only that one rev-list (or none).
   let revOut = upstreamAb;
   if (revOut === null) {
-    const [byBranch, byHead] = await Promise.all([
-      runGit(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`]),
-      runGit(["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]),
-    ]);
-    revOut = byBranch ?? byHead;
+    const want = [`refs/remotes/origin/${branch}`, "refs/remotes/origin/HEAD"];
+    const have = dirs ? await resolveRefsFs(dirs, want).catch(() => null) : null;
+    if (have) {
+      if (have.has(want[0])) revOut = await runGit(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`]);
+      if (revOut === null && have.has(want[1])) revOut = await runGit(["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]);
+    } else {
+      const [byBranch, byHead] = await Promise.all([
+        runGit(["rev-list", "--left-right", "--count", `origin/${branch}...HEAD`]),
+        runGit(["rev-list", "--left-right", "--count", "origin/HEAD...HEAD"]),
+      ]);
+      revOut = byBranch ?? byHead;
+    }
   }
   let behind = 0;
   let ahead = 0;
@@ -1317,26 +1397,78 @@ export interface Deps {
  * unmerged) is merged:false: default to keep.
  */
 export function gitUnitBranchState(cwd: string | undefined): Promise<{ unit: string; merged: boolean }> {
-  const git = (args: string[]) =>
-    new Promise<{ ok: boolean; out: string }>((resolve) => {
-      if (!cwd || !fs.existsSync(cwd)) return resolve({ ok: false, out: "" });
-      try {
-        execFile("git", ["--no-optional-locks", ...args], { cwd, encoding: "utf8", timeout: 5000, windowsHide: true }, (err, stdout) =>
-          resolve({ ok: !err, out: String(stdout ?? "").trim() }),
-        );
-      } catch {
-        resolve({ ok: false, out: "" });
+  if (!cwd || !fs.existsSync(cwd)) return Promise.resolve({ unit: "", merged: false });
+  const key = cwdKey(cwd);
+  return singleFlight(unitBranchInflight, key, () => unitBranchStateCached(cwd, key));
+}
+
+/**
+ * idea-518: the 5-min done-worker sweep asked git about every kept worker's cwd on every pass (rev-parse plus up to two
+ * merge-base spawns each, ~9% of server stall time on 11-21). Now HEAD and the unit/master/main tips are read from .git; the
+ * trivial answers (detached, on master/main, no base branch, tip equal to a base) need no git at all, and the merge-base
+ * answer is cached until one of those tips moves. Only when .git cannot be read does it fall back to the spawn path, cached
+ * for UNIT_BRANCH_FALLBACK_TTL_MS.
+ */
+async function unitBranchStateCached(cwd: string, key: string): Promise<{ unit: string; merged: boolean }> {
+  const now = Date.now();
+  const dirs = await gitDirsFs(cwd).catch(() => null);
+  const head = dirs ? await readHeadFs(dirs).catch(() => null) : null;
+  if (dirs && head) {
+    const unit = head.branch ?? "";
+    if (!unit || ["master", "main"].includes(unit)) return { unit: "", merged: false };
+    const refs = await resolveRefsFs(dirs, [`refs/heads/${unit}`, "refs/heads/master", "refs/heads/main"]).catch(() => null);
+    const tip = refs?.get(`refs/heads/${unit}`);
+    if (refs && tip) {
+      const bases = ["master", "main"].filter((b) => refs.has(`refs/heads/${b}`));
+      if (!bases.length) return { unit, merged: false };
+      if (bases.some((b) => refs.get(`refs/heads/${b}`) === tip)) return { unit, merged: true };
+      const fp = [unit, tip, ...bases.map((b) => `${b}=${refs.get(`refs/heads/${b}`)}`)].join("|");
+      const hit = unitBranchCache.get(key);
+      if (hit && hit.fp === fp && now - hit.at < UNIT_BRANCH_TTL_MS) return hit.value;
+      let merged = false;
+      let failed = false;
+      for (const base of bases) {
+        const r = await unitBranchGit(cwd, ["merge-base", "--is-ancestor", tip, base]);
+        if (r.ok) {
+          merged = true;
+          break;
+        }
+        if (r.code !== 1) failed = true; // 1 = not an ancestor; anything else (timeout, spawn error) is not cacheable
       }
-    });
-  return (async () => {
-    const head = await git(["rev-parse", "--abbrev-ref", "HEAD"]);
-    if (!head.ok || !head.out || ["HEAD", "master", "main"].includes(head.out)) return { unit: "", merged: false };
-    for (const base of ["master", "main"]) {
-      const r = await git(["merge-base", "--is-ancestor", head.out, base]);
-      if (r.ok) return { unit: head.out, merged: true };
+      const value = { unit, merged };
+      if (merged || !failed) cachePut(unitBranchCache, key, { fp, at: Date.now(), value });
+      return value;
     }
-    return { unit: head.out, merged: false };
-  })();
+  }
+  const hit = unitBranchCache.get(key);
+  if (hit && hit.fp === "fallback" && now - hit.at < UNIT_BRANCH_FALLBACK_TTL_MS) return hit.value;
+  const value = await gitUnitBranchStateSpawn(cwd);
+  cachePut(unitBranchCache, key, { fp: "fallback", at: Date.now(), value });
+  return value;
+}
+
+function unitBranchGit(cwd: string, args: string[]): Promise<{ ok: boolean; out: string; code: number | null }> {
+  return new Promise((resolve) => {
+    try {
+      gitHelperStats.unitBranchGit++;
+      execFile("git", ["--no-optional-locks", ...args], { cwd, encoding: "utf8", timeout: 5000, windowsHide: true }, (err, stdout) =>
+        resolve({ ok: !err, out: String(stdout ?? "").trim(), code: err ? (typeof (err as any).code === "number" ? (err as any).code : null) : 0 }),
+      );
+    } catch {
+      resolve({ ok: false, out: "", code: null });
+    }
+  });
+}
+
+/** The pre-idea-518 spawn path: used only when .git cannot be read from the filesystem. */
+async function gitUnitBranchStateSpawn(cwd: string): Promise<{ unit: string; merged: boolean }> {
+  const head = await unitBranchGit(cwd, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (!head.ok || !head.out || ["HEAD", "master", "main"].includes(head.out)) return { unit: "", merged: false };
+  for (const base of ["master", "main"]) {
+    const r = await unitBranchGit(cwd, ["merge-base", "--is-ancestor", head.out, base]);
+    if (r.ok) return { unit: head.out, merged: true };
+  }
+  return { unit: head.out, merged: false };
 }
 
 export interface AgentSettingsPatch {

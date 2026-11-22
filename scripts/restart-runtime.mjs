@@ -646,22 +646,35 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         // retries never drain anything; the holders' leads do (11-12: ~7 timed retries vs one coordinated round).
         let leads = [];
         let unresolved = [];
+        let gone = [];
+        let owners = null;
         let coord = null;
         try {
           coord = await d.coord();
           const agents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1', 30000)).body);
-          ({ leads, unresolved } = coord.holderLeads(heldAgents, agents));
+          ({ leads, unresolved, gone = [], owners = null } = coord.holderLeads(heldAgents, agents));
         } catch (e) { unresolved = heldAgents.map((id) => ({ agentId: id, reason: `lead lookup failed: ${e.message}` })); }
-        const at = new Date(d.now()).toISOString();
-        leads = leads.map((l) => ({ ...l, heldWork: Object.fromEntries(l.heldAgents.filter((id) => heldWork[id]?.length).map((id) => [id, heldWork[id]])) })); // idea-230: what holds it, in the ask and the record
-        leads = leads.map((l) => ({ ...l, ask: coord ? coord.drainAskText(l, at) : null }));
-        result.deferred = { held, heldAgents, heldWork, running, leads, unresolved };
-        step('deferred: background work still running', result.deferred);
-        result.errors.push(coord ? coord.deferralMessage({ held, heldAgents, waitSec: opts.waitTimeoutSec, leads, unresolved, heldWork })
-          : `deferred: ${held} agent(s) still hold background work after ${opts.waitTimeoutSec}s (${heldAgents.join(', ') || 'ids unknown'}); no lead resolved (${unresolved[0]?.reason ?? 'unknown'}): ask the holders' leads to drain, wait for each 'drained', then rerun vs restart. No timer retries; --kill-background needs the owner's per-run OK.`);
-        for (const l of leads) log(`drain ask -> vs send ${l.leadId} "${l.ask}"`);
-        for (const u of unresolved) log(`no lead resolved for ${u.agentId}: ${u.reason}`);
-        throw new Error('abort');
+        const blocking = owners && coord?.blockingLines ? coord.blockingLines(heldAgents, { owners, heldWork, unresolved, now: d.now() }) : [];
+        // idea-475: a shell whose owner agent is archived or exited is nobody's live work: no lead can drain it and nothing
+        // will ever wait on it. When EVERY holder is such a shell (read from a listed record, never a failed lookup or a
+        // missing one), it is counted drainable and logged, and the restart goes on; any live or unknown owner still defers.
+        if (gone.length && gone.length === heldAgents.length) {
+          result.deadOwnerHeld = { heldAgents, heldWork, gone, blocking };
+          step('dead-owner background work counted as drained', result.deadOwnerHeld);
+          log(`dead-owner background work counted as drained (owner archived/exited, not waited on): ${blocking.join(' | ')}`);
+        } else {
+          const at = new Date(d.now()).toISOString();
+          leads = leads.map((l) => ({ ...l, heldWork: Object.fromEntries(l.heldAgents.filter((id) => heldWork[id]?.length).map((id) => [id, heldWork[id]])) })); // idea-230: what holds it, in the ask and the record
+          leads = leads.map((l) => ({ ...l, ask: coord ? coord.drainAskText(l, at) : null }));
+          result.deferred = { held, heldAgents, heldWork, running, leads, unresolved, ...(owners ? { owners, gone, blocking } : {}) };
+          step('deferred: background work still running', result.deferred);
+          result.errors.push(coord ? coord.deferralMessage({ held, heldAgents, waitSec: opts.waitTimeoutSec, leads, unresolved, heldWork, owners, gone, now: d.now() })
+            : `deferred: ${held} agent(s) still hold background work after ${opts.waitTimeoutSec}s (${heldAgents.join(', ') || 'ids unknown'}); no lead resolved (${unresolved[0]?.reason ?? 'unknown'}): ask the holders' leads to drain, wait for each 'drained', then rerun vs restart. No timer retries; --kill-background needs the owner's per-run OK.`);
+          for (const l of leads) log(`drain ask -> vs send ${l.leadId} "${l.ask}"`);
+          for (const u of unresolved) log(`no lead resolved for ${u.agentId}: ${u.reason}`);
+          for (const b of blocking) log(`blocking: ${b}`);
+          throw new Error('abort');
+        }
       }
       if (running !== 0 || held > 0) {
         try { result.cutAgents = agentList((await runnerCall(det, d, 'GET', '/agents?full=1')).body).filter((a) => a.status === 'running').map(brief); } catch (e) { fail('list cut agents', e); }

@@ -143,16 +143,56 @@ test("laneHasOpenNeedsYou: label, log tail, answered by a later decision", async
   assert.equal(await laneHasOpenNeedsYou({ teamId: "vs", laneId: "bug", baseHome: home, nowMs: now }), false);
 });
 
-test("laneOpenWork: parked cards are scoped to the Squad AND lane", async () => {
+test("laneOpenWork: a new parked card counts; explicitly parked (parkedAt) and archived/handed-off/rejected are skipped; accepted counts; scoped to the Squad AND lane (idea-481)", async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
   fs.writeFileSync(path.join(home, "inbox.json"), JSON.stringify([
-    { id: "idea-1", title: "mine", teamId: "vs", laneId: "bug", status: "parked" },
-    { id: "idea-2", title: "other squad", teamId: "efi", laneId: "bug", status: "parked" },
+    { id: "idea-1", title: "new parked", teamId: "vs", laneId: "bug", status: "parked" },
+    { id: "idea-2", title: "explicit park", teamId: "vs", laneId: "bug", status: "parked", parkedAt: "2026-11-21T08:00:00.000Z" },
     { id: "idea-3", title: "archived", teamId: "vs", laneId: "bug", status: "archived" },
+    { id: "idea-4", title: "accepted", teamId: "vs", laneId: "bug", status: "accepted" },
+    { id: "idea-5", title: "handed-off", teamId: "vs", laneId: "bug", status: "handed-off" },
+    { id: "idea-6", title: "rejected", teamId: "vs", laneId: "bug", status: "rejected" },
+    { id: "idea-7", title: "legacy", teamId: "vs", laneId: "bug" },
+    { id: "idea-8", title: "other squad", teamId: "efi", laneId: "bug", status: "parked" },
+    { id: "idea-9", title: "other lane", teamId: "vs", laneId: "art", status: "parked" },
   ]));
   const items = await laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: home, baseHome: home });
-  assert.deepEqual(items, ["idea-1 mine"]);
+  assert.deepEqual(items, ["idea-1 new parked", "idea-4 accepted", "idea-7 legacy"]);
 });
+
+for (const [name, cards, expectKick, expectText] of [
+  ["a new parked card nudges", [{ id: "n1", title: "new", teamId: "vs", laneId: "bug", status: "parked" }], true, /n1 new/],
+  ["an explicitly parked card (parkedAt) does not", [{ id: "p1", title: "parked", teamId: "vs", laneId: "bug", status: "parked", parkedAt: "2026-11-21T08:00:00.000Z" }], false, null],
+  ["an archived card does not", [{ id: "a1", title: "archived", teamId: "vs", laneId: "bug", status: "archived" }], false, null],
+  ["an accepted card nudges", [{ id: "c1", title: "accepted", teamId: "vs", laneId: "bug", status: "accepted" }], true, /c1 accepted/],
+]) {
+  test(`idle-kick (idea-481): ${name}`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
+    fs.writeFileSync(path.join(home, "inbox.json"), JSON.stringify(cards));
+    let t = 1_000_000;
+    const sent = [];
+    const kick = createIdleLaneKick({
+      rootDir: home,
+      baseHome: home,
+      teams: () => TEAMS,
+      listAgents: async () => [ag("L", "lead", "bug"), ag("OV", "lead", "vs")],
+      send: async (id, text) => sent.push({ id, text }),
+      log: () => {},
+      now: () => t,
+    });
+    await kick.tick();
+    t += 11 * MIN;
+    const r = await kick.tick();
+    if (expectKick) {
+      assert.equal(r.length, 1, JSON.stringify(r));
+      assert.equal(sent.length, 1);
+      assert.match(sent[0].text, expectText);
+    } else {
+      assert.deepEqual(r, []);
+      assert.equal(sent.length, 0);
+    }
+  });
+}
 
 test("open work and registry reads are cached across ticks within the TTL", async () => {
   let calls = 0;
