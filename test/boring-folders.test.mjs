@@ -37,6 +37,22 @@ test("isViewAsleep / filterAwakeViews drop asleep-folder projects only", () => {
   assert.deepEqual(F.filterAwakeViews(views, folders).map((v) => v.team.id), ["a", "c", "d"]);
 });
 
+test("R11 fixes (source): Ctrl+J skips asleep projects, honest Wake label, muted badge, a11y, open-folder migration", () => {
+  const app = read("App.tsx");
+  const ade = read("BoringAde.tsx");
+  const css = read("boring.css");
+  // Ctrl+J target = top of the awake-only list: asleep projects are filtered out first.
+  assert.match(app, /topNeedsYouId\(filterAwakeViews\(derived\(\)\.views, getFolders\(\)\)/);
+  assert.deepEqual(F.filterAwakeViews(views, folders).map((v) => v.team.id).filter((id) => id === "b" || id === "e"), []);
+  assert.match(ade, /`Wake \$\{view\.team\.folder/);
+  assert.match(ade, /aria-label=\{`Sleep \$\{g\.folder\.name\}`\} aria-pressed=\{asleep\}/);
+  assert.match(ade, /migrateOpenFolder\(f\.name, n\)/);
+  assert.match(ade, /migrateOpenFolder\(f\.name\)/);
+  assert.ok(!/\.boring-badge\.muted \{[^}]*opacity/.test(css));
+  assert.match(css, /\.boring-badge\.muted \{[^}]*background: transparent[^}]*border: 1px solid var\(--border\)/);
+  assert.match(css, /\[data-theme="light"\] \.boring-badge:not\(\.muted\) \{ color: #ffffff !important/);
+});
+
 test("folderSlug", () => assert.equal(F.folderSlug("Back log!"), "back-log"));
 
 test("patchTeamsFolder PATCHes /api/teams and refreshes; surfaces server errors", async () => {

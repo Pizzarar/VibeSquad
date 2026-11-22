@@ -889,7 +889,7 @@ html[data-vibe="boring"] .boring-core-group,
 html[data-vibe="boring"] .boring-conv-list { gap: 0; }
 html[data-vibe="boring"] .boring-conv-row { padding: 0; }
 html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
-html[data-vibe="boring"][data-theme="light"] .boring-badge { background: #8a5700; color: #ffffff; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { background: #8a5700; color: #ffffff; }
 
 /* Light permission card: amber, not beige-pink. */
 html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00; }
@@ -966,16 +966,17 @@ html[data-vibe="boring"] .boring-project-block.open { background: var(--surface-
 /* ===== B11b: sidebar project folders ===== */
 html[data-vibe="boring"] .boring-folder { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
 html[data-vibe="boring"] .boring-folder-line { gap: 4px; align-items: center; padding-inline: 9px; }
-html[data-vibe="boring"] .boring-folder-row { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 0; background: transparent; border: 0; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
+html[data-vibe="boring"] .boring-folder-row { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; min-height: var(--row-h); padding: 4px 6px 4px 0; background: transparent; border: 0; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
 html[data-vibe="boring"] .boring-folder-row:hover { color: var(--text-1); background: var(--surface-2); }
 html[data-vibe="boring"] .boring-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 html[data-vibe="boring"] .boring-folder-count { color: var(--text-3); font-size: var(--t-small); }
 html[data-vibe="boring"] .boring-folder-zzz { font-size: var(--t-small); }
-html[data-vibe="boring"] .boring-folder .boring-badge.muted { opacity: 0.55; background: var(--surface-3); color: var(--text-2); }
+html[data-vibe="boring"][data-theme] .boring-folder .boring-badge.muted { background: transparent; border: 1px solid var(--border); color: var(--text-2); }
+html[data-vibe="boring"] .boring-folder-row .boring-chevron-btn { display: inline-flex; align-items: center; justify-content: center; height: auto; align-self: center; }
 html[data-vibe="boring"] .boring-folder-sleep { flex: 0 0 auto; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); font: inherit; font-size: var(--t-small); cursor: pointer; }
 html[data-vibe="boring"] .boring-folder-sleep.asleep { color: var(--text-3); background: transparent; }
 html[data-vibe="boring"] .boring-folder-sleep:hover { border-color: var(--accent); }
-html[data-vibe="boring"] .boring-folder-projects { display: flex; flex-direction: column; gap: 4px; }
+html[data-vibe="boring"] .boring-folder-projects { display: flex; flex-direction: column; gap: 4px; padding-left: 12px; margin-left: 9px; border-left: 1px solid var(--border); }
 html[data-vibe="boring"] .boring-folder.asleep .boring-folder-projects { opacity: 0.8; }
 html[data-vibe="boring"] .boring-asleep-bar { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
 html[data-vibe="boring"] .boring-asleep-wake { padding: 1px 10px; border-radius: 999px; border: 1px solid var(--accent); background: transparent; color: var(--text-1); font: inherit; font-size: var(--t-small); cursor: pointer; }
@@ -1177,7 +1178,7 @@ html[data-vibe="boring"] .boring-worker-list > .boring-idle-toggle { display: in
 html[data-vibe="boring"] .boring-idle-toggle .boring-idle-chev { flex: 0 0 16px; width: 16px; text-align: center; }
 html[data-vibe="boring"] .boring-badge.err { background: var(--st-err); color: var(--on-accent); }
 /* U3 survivor: light-mode badge text is white; beats the styles.css `:is(.badge, ...)` on-pastel colour (boring-badge also carries .badge). */
-html[data-vibe="boring"][data-theme="light"] .boring-badge { color: #ffffff !important; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { color: #ffffff !important; }
 
 /* --- D4 polish: composer/panel seam, 36px context tabs, idle disclosure, rail badge, Plan dedup --- */
 /* Composer: the top border + background stop at the panel edge; the panel zone continues the panel surface/border so it reads as running full height. */

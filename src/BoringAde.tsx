@@ -824,14 +824,24 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     try { localStorage.setItem("vs.boringOpenFolders", JSON.stringify(next)); } catch {}
     return next;
   });
+  /** Rename carries the open flag to the new name; delete (no newName) prunes it. */
+  const migrateOpenFolder = (from: string, to?: string) => setOpenFolders((o) => {
+    if (!(from in o)) return o;
+    const next = { ...o };
+    const was = next[from];
+    delete next[from];
+    if (to) next[to] = was;
+    try { localStorage.setItem("vs.boringOpenFolders", JSON.stringify(next)); } catch {}
+    return next;
+  });
   const folderOp = async (op: FolderOp) => {
     const r = await patchTeamsFolder(op);
     if (!r.ok) window.alert(`Folder change failed: ${r.error ?? "unknown error"}`);
     return r.ok;
   };
   const folderCtxItems = (f: FolderDef): CtxItem[] => [
-    { label: "Rename folder…", run: () => { const n = window.prompt("Rename folder", f.name)?.trim(); if (n && n !== f.name) void folderOp({ op: "renameFolder", name: f.name, newName: n }); } },
-    { label: "Delete folder", danger: true, run: () => { if (window.confirm(`Delete folder "${f.name}"? Its projects move back to Active.`)) void folderOp({ op: "deleteFolder", name: f.name }); } },
+    { label: "Rename folder…", run: () => { const n = window.prompt("Rename folder", f.name)?.trim(); if (n && n !== f.name) void folderOp({ op: "renameFolder", name: f.name, newName: n }).then((ok) => { if (ok) migrateOpenFolder(f.name, n); }); } },
+    { label: "Delete folder", danger: true, run: () => { if (window.confirm(`Delete folder "${f.name}"? Its projects move back to Active.`)) void folderOp({ op: "deleteFolder", name: f.name }).then((ok) => { if (ok) migrateOpenFolder(f.name); }); } },
     { label: "New folder…", separatorBefore: true, run: () => { const n = window.prompt("New folder name")?.trim(); if (n) void folderOp({ op: "createFolder", name: n }); } },
   ];
   const stat = (v: TeamView) => { const mm = v.team.id === activeTeamId ? model : boringSidebarModel(v, now); return { needsYou: mm.totalNeedsYou, err: mm.projectErr }; };
@@ -901,7 +911,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                     {asleep && <span className="boring-folder-zzz" role="img" aria-label="Asleep">💤</span>}
                     {g.needsYou > 0 && <span className={`badge boring-badge${g.err ? " err" : ""}${asleep ? " muted" : ""}`} data-testid={`boring-folder-badge-${slug}`}>{g.needsYou}</span>}
                   </button>
-                  <button type="button" className={`boring-folder-sleep${asleep ? " asleep" : ""}`} data-testid={`boring-folder-sleep-${slug}`} aria-pressed={asleep} title={asleep ? "Asleep: automated wake-ups paused. Click to make Active" : "Active: click to put to sleep"} onClick={(e) => { e.stopPropagation(); void folderOp({ op: "setFolderAsleep", name: g.folder.name, asleep: !asleep }); }}>{asleep ? "Asleep" : "Active"}</button>
+                  <button type="button" className={`boring-folder-sleep${asleep ? " asleep" : ""}`} data-testid={`boring-folder-sleep-${slug}`} aria-label={`Sleep ${g.folder.name}`} aria-pressed={asleep} title={asleep ? "Asleep: automated wake-ups paused. Click to make Active" : "Active: click to put to sleep"} onClick={(e) => { e.stopPropagation(); void folderOp({ op: "setFolderAsleep", name: g.folder.name, asleep: !asleep }); }}>{asleep ? "Asleep" : "Active"}</button>
                   <button type="button" className="boring-row-menu-btn" data-testid={`boring-folder-menu-${slug}`} aria-haspopup="menu" aria-label={`${g.folder.name} folder actions`} title="Folder actions" onClick={(e) => openContextMenu(e, folderCtxItems(g.folder))}>⋯</button>
                 </div>
                 {fOpen && (
@@ -972,7 +982,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         {view && activeAsleep && (
           <div className="boring-asleep-bar" data-testid="boring-asleep-bar" role="status">
             <span>Asleep · Automated wake-ups paused</span>
-            <button type="button" className="boring-asleep-wake" data-testid="boring-asleep-wake-btn" onClick={() => view.team.folder && void folderOp({ op: "setFolderAsleep", name: view.team.folder, asleep: false })}>Wake</button>
+            <button type="button" className="boring-asleep-wake" data-testid="boring-asleep-wake-btn" onClick={() => view.team.folder && void folderOp({ op: "setFolderAsleep", name: view.team.folder, asleep: false })}>{`Wake ${view.team.folder ?? "folder"}`}</button>
           </div>
         )}
         {opening && (

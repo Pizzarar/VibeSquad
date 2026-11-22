@@ -1303,7 +1303,7 @@ test("R2: sidebar Search opens the Command Palette (Ctrl+K); idle toggle sits on
   b.props.onClick();
   assert.deepEqual(globalThis.__calls.at(-1), ["openOverlay", "palette"]);
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
-  assert.match(css, /\[data-theme="light"\] \.boring-badge \{ color: #ffffff !important; \}/);
+  assert.match(css, /\[data-theme="light"\] \.boring-badge:not\(\.muted\) \{ color: #ffffff !important; \}/);
   assert.doesNotMatch(css, /\[data-theme="light"\] \.boring-badge\.err/);
   assert.match(css, /\.boring-idle-toggle \.boring-idle-chev \{ flex: 0 0 16px; width: 16px/);
   assert.match(css, /\.boring-worker-row \{ padding-left: 20px;/);
