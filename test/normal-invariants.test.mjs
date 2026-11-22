@@ -149,7 +149,7 @@ test("2. All projects collapsed: project badges sum to the Needs-you count", gua
   assert.equal(badges.reduce((s, b) => s + b.n, 0), count, `badges ${JSON.stringify(badges)} vs Needs-you ${count}`);
 }));
 
-test("2b. Expanding a project keeps its Needs-you total: Core header + Bugs + lane badges equal the collapsed project badge", guard("inv2b", async () => {
+test("2b. Expanding a project keeps its Needs-you total: Desk header + Bugs + lane badges equal the collapsed project badge", guard("inv2b", async () => {
   await load();
   const bad = [];
   for (const t of REGISTRY.teams) {

@@ -961,6 +961,7 @@ html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill { display: 
 html[data-vibe="boring"] .boring-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html[data-vibe="boring"] .boring-tab-more { color: var(--text-3); font-size: var(--t-small); white-space: nowrap; padding: 0 6px; }
 html[data-vibe="boring"] .boring-project-block { display: flex; flex-direction: column; gap: 2px; }
+html[data-vibe="boring"] .boring-project-block.open { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 8px; gap: 4px; }
 
 /* ===== D3b (@desk, UX_REVIEW 2.7): tool-call rows ===== */
 html[data-vibe="boring"] .boring-toolgroup-summary { font-size: 13px; line-height: 20px; color: var(--text-2); font-variant-numeric: tabular-nums; }

@@ -5,7 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { effectiveAgentRole, isLiveAgent, loadTeamsRegistry, resolveAgentIdentity, isDigestAgent } from "./identity.mjs";
+import { asleepTeamIds, effectiveAgentRole, isLiveAgent, loadTeamsRegistry, readTeamsConfig, resolveAgentIdentity, isDigestAgent } from "./identity.mjs";
 import { isHubLane } from "./lane-pure.mjs";
 import { watchesPath } from "./watch-sets.mjs";
 import { findOpenWorkersForLead } from "./lead-handoff.mjs";
@@ -128,6 +128,8 @@ export function createIdleLaneKick({
   openWork = (teamId, laneId) => laneOpenWork({ teamId, laneId, rootDir, baseHome }),
   workTtlMs = IDLE_KICK_WORK_TTL_MS,
   log = ({ teamId, laneId, text }) => appendVsLogEntry({ teamId, laneId, agent: "vibesquad-server", type: "metric", text }),
+  // B11a: lowercased ids of asleep Squads, read EVERY tick (mtime-cached), never via the 5-min regCache, so a wake lands next tick.
+  asleepTeams = () => asleepTeamIds(readTeamsConfig(rootDir)),
 } = {}) {
   const idleSince = new Map(); // agent id -> ms first seen idle (or its lastProgressAt)
   const episode = new Map(); // lane key -> { acted } (one action per idle episode)
@@ -162,7 +164,13 @@ export function createIdleLaneKick({
       } else idleSince.delete(a.id);
     }
     const results = [];
+    const asleep = asleepTeams() ?? new Set();
     for (const [k, lane] of byLane) {
+      // B11a: an asleep Squad gets no kick and no Overlord escalation. The episode resets so a wake can kick on the next tick.
+      if (asleep.has(String(lane.teamId).toLowerCase())) {
+        episode.delete(k);
+        continue;
+      }
       const team = (reg ?? []).find((t) => sameId(t.id, lane.teamId));
       const laneDef = (team?.lanes ?? []).find((l) => sameId(l.id, lane.laneId));
       if (team && laneDef && isHubLane(team, laneDef)) continue;
