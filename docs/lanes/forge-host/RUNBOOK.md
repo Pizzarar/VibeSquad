@@ -10,7 +10,7 @@ Placeholders: `forge.example.ts.net` (MagicDNS name), `devpc` (the dev pp's SSH 
 
 1. Clone VibeSquad and install deps:
    `git clone <repo-url> ~/projects/VibeSquad && cd ~/projects/VibeSquad && npm ci`
-2. Tailscale: install per the Tailscale docs, then `sudo tailscale up`. Enable MagicDNS in the tailnet admin console.
+2. Tailscale: install per the Tailscale docs, then `sudo systemctl enable --now tailscaled` and `sudo tailscale up`. Enable MagicDNS in the tailnet admin console. Owner step: Machines -> the forge machine -> Disable key expiry, so a reboot/expiry does not log it out.
 3. Bootstrap (idempotent, safe to re-run). Preview first with `scripts/forge-bootstrap.sh --dry-run`, then run
    `scripts/forge-bootstrap.sh`. It installs node LTS, git, gh, ripgrep, openssl and chromium; writes the systemd user unit;
    enables linger; sets `fs.inotify.max_user_watches=524288` (R13); masks sleep/suspend/hibernate (R12); puts `TMPDIR` on disk

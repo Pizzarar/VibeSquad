@@ -114,6 +114,12 @@ else
 fi
 
 # 2. tailnet facts (flags win; otherwise detect)
+# tailscaled must survive reboots (warn only; owner enables it)
+if command -v systemctl >/dev/null 2>&1 && command -v tailscale >/dev/null 2>&1; then
+  if [ "$(systemctl is-enabled tailscaled 2>/dev/null || true)" != "enabled" ]; then
+    log "WARNING: tailscaled is not enabled at boot; run: sudo systemctl enable --now tailscaled"
+  fi
+fi
 if [ -z "$MESHNET_IP" ] && command -v tailscale >/dev/null 2>&1; then
   MESHNET_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
 fi
@@ -183,4 +189,4 @@ if [ "$START_UNIT" = 1 ]; then
   run systemctl --user enable --now "${UNIT_NAME}.service"
 fi
 
-log "done. Next: sudo tailscale up; provider logins; see docs/lanes/forge-host/RUNBOOK.md"
+log "done. Next: sudo systemctl enable --now tailscaled; sudo tailscale up (and disable key expiry for this machine in the Tailscale admin console); provider logins; see docs/lanes/forge-host/RUNBOOK.md"
