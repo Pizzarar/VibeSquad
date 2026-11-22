@@ -119,7 +119,7 @@ stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => membe
 stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const refreshInboxCards = () => { globalThis.__refreshInbox?.(); return Promise.resolve([]); }; export const useInboxCards = () => globalThis.__inboxCards ?? [];`);
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
-stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => ["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove)]; export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); };`);
+stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); };`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
@@ -2017,5 +2017,28 @@ test("idea-519: project ⋯ opens teamCtxItems; lane ⋯ opens laneCtxItems; Kil
   const li = globalThis.__calls.at(-1)[1];
   assert.deepEqual([li[0], li[2], li[3]], ["lane", "ade", true]);
   const bugs = byId(t, "boring-lane-menu-_bugs");
-  if (bugs) { bugs.props.onClick({}); assert.equal(globalThis.__calls.at(-1)[1][3], false, "Bugs lane has no Kill/remove"); }
+  assert.ok(bugs, "Bugs lane ⋯ button");
+  bugs.props.onClick({});
+  assert.equal(globalThis.__calls.at(-1)[1][3], false, "Bugs lane has no Kill/remove");
+  // M1: the menu is handed the sidebar row's name, and Remove mounts RemoveTeamDialog (lane wording) under that same name, then unmounts on close.
+  const rowName = walk(byId(t, "boring-conv-ade"), (n) => n.props?.className === "boring-row-label")[0].props.children;
+  assert.equal(li[4], rowName, "laneCtxItems gets the sidebar row name");
+  const dlg = (tree) => walk(tree, (n) => n.type && n.type.name === "RemoveTeamDialog")[0];
+  assert.equal(dlg(render(props(squad()))), undefined, "no dialog before Remove");
+  li.onRemove();
+  const d = dlg(render(props(squad())));
+  assert.ok(d, "RemoveTeamDialog mounted");
+  assert.equal(d.props.noun, "lane");
+  assert.equal(d.props.displayName, rowName);
+  d.props.onClose();
+  assert.equal(dlg(render(props(squad()))), undefined, "dialog unmounts on close");
+});
+
+test("idea-519: Normal dialogs name the lane like the sidebar row; Psycho Remove wording is unchanged", () => {
+  const cp = readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
+  assert.ok(cp.includes("Stop all running agents in ${name}?"));
+  assert.ok(cp.includes("opts?.displayName || pin.lane.name"));
+  const pr = readFileSync(new URL("../src/PinRemove.tsx", import.meta.url), "utf8");
+  assert.ok(pr.includes('noun === "lane" ? `Remove lane ${name}?` : `Remove ${name}?`'));
+  assert.ok(pr.includes('noun = "team"'));
 });

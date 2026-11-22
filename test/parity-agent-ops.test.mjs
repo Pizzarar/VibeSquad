@@ -31,6 +31,7 @@ test("bulkStopTargets: laneId narrows a team scope by labels.lane, case-insensit
   assert.deepEqual(bulkStopTargets(c, { teamId: "t1", laneId: "feat-x" }).map((a) => a.id), ["a", "b"]);
   assert.deepEqual(bulkStopTargets(c, { teamId: "t1" }).map((a) => a.id), ["a", "b", "c", "d"]);
   assert.deepEqual(bulkStopTargets(c, { teamId: "t2", laneId: "feat-x" }), []);
+  assert.deepEqual(bulkStopTargets(c, { teamId: "t1", laneId: "" }), [], "empty laneId never matches unlabeled agents");
 });
 
 test("bulkStopTargets: cwd scope ignores slash style, case and trailing slash", () => {

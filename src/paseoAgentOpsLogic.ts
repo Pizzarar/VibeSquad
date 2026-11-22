@@ -35,9 +35,9 @@ export function bulkStopTargets(cands: StopCandidate[], scope: StopScope): OpAge
       if (agent.archivedAt || agent.status !== "running") return false;
       if ("teamId" in scope) {
         if (teamId !== scope.teamId) return false;
-        return scope.laneId === undefined || String(agent.labels?.lane ?? "").toLowerCase() === scope.laneId.toLowerCase();
+        return scope.laneId === undefined || (scope.laneId !== "" && String(agent.labels?.lane ?? "").toLowerCase() === scope.laneId.toLowerCase());
       }
-      return!!normCwd(scope.cwd) && normCwd(agent.cwd) === normCwd(scope.cwd);
+      return !!normCwd(scope.cwd) && normCwd(agent.cwd) === normCwd(scope.cwd);
     })
     .map((c) => c.agent);
 }
