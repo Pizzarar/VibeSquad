@@ -7,16 +7,15 @@
 //   <dir>/vibesquad-npm-test.queue      append-only JSON lines: join / beat / done, see readQueue
 // <dir> is os.tmpdir(), or VIBESQUAD_TEST_LOCK_DIR (tests point it at a temp dir so they never touch the real slot).
 import { randomBytes } from "node:crypto";
-import { appendFileSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { acquireStartLock, pidAlive, readLock } from "../runner/lock.mjs";
+import { appendQueue, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue, RETRY_CODES, sleepSync } from "../cli/fifo-queue.mjs";
 
+// The waiter line (join/beat/done fold) is shared with the named slot pools (cli/slot-pool.mjs) and lives in cli/fifo-queue.mjs.
+export { QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue };
 export const SUITE_STALE_MS = 2 * 60 * 60 * 1000; // a live holder older than this is stuck and gets taken over
-export const QUEUE_POLL_MS = 500;
-export const QUEUE_BEAT_MS = 30_000;
-// A waiter that has not beaten for this long is gone even if its pid is alive again (Windows reuses pids quickly).
-export const QUEUE_BEAT_STALE_MS = 120_000;
 
 export function suitePaths(dir = process.env.VIBESQUAD_TEST_LOCK_DIR || os.tmpdir()) {
   return {
@@ -33,9 +32,6 @@ export function callerAgentId(env = process.env) {
   return id || null;
 }
 
-const sleepBuf = new Int32Array(new SharedArrayBuffer(4));
-const RETRY_CODES = ["EPERM", "EACCES", "EBUSY"];
-
 /** Write-then-rename so a reader never sees half a file. Windows refuses the rename while a reader has the target open; retry briefly. */
 export function writeJsonAtomic(file, value) {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
@@ -49,7 +45,7 @@ export function writeJsonAtomic(file, value) {
         rmSync(tmp, { force: true });
         throw e;
       }
-      Atomics.wait(sleepBuf, 0, 0, 10 + attempt * 5);
+      sleepSync(10 + attempt * 5);
     }
   }
 }
@@ -106,47 +102,6 @@ export function finishSlot(paths, slot, { tests = null, pass = null, fail = null
     });
   }
   if (ours) rmSync(paths.lock, { force: true });
-}
-
-function appendQueue(paths, rec) {
-  // One short O_APPEND write: atomic against other appenders. EPERM is Windows delete-pending (a claimer just compacted
-  // the file while we opened it); it clears within milliseconds.
-  for (let attempt = 0; ; attempt++) {
-    try {
-      appendFileSync(paths.queue, JSON.stringify(rec) + "\n");
-      return;
-    } catch (e) {
-      if (attempt >= 20 || !RETRY_CODES.includes(e.code)) throw e;
-      Atomics.wait(sleepBuf, 0, 0, 10);
-    }
-  }
-}
-
-/**
- * Fold the queue file. Lines: {op:"join", id, pid, agentId, at} | {op:"beat", id, at} | {op:"done", id}.
- * `known` holds every id still joined (not done). `live` is the FIFO line of waiters whose pid is alive and whose last
- * beat is fresh; dead or silent waiters are skipped so they never block the ones behind them.
- */
-export function readQueue(paths, { alive = pidAlive, now = Date.now(), beatStaleMs = QUEUE_BEAT_STALE_MS } = {}) {
-  let text = "";
-  try {
-    text = readFileSync(paths.queue, "utf8");
-  } catch {}
-  const joined = new Map();
-  for (const line of text.split("\n")) {
-    let rec;
-    try {
-      rec = JSON.parse(line);
-    } catch {
-      continue; // blank or torn line
-    }
-    if (!rec || typeof rec.id !== "string") continue;
-    if (rec.op === "join" && !joined.has(rec.id)) joined.set(rec.id, { id: rec.id, pid: rec.pid, agentId: rec.agentId ?? null, at: rec.at, beat: rec.at });
-    else if (rec.op === "beat" && joined.has(rec.id)) joined.get(rec.id).beat = rec.at;
-    else if (rec.op === "done") joined.delete(rec.id);
-  }
-  const live = [...joined.values()].filter((e) => alive(e.pid) && now - (Number(e.beat) || 0) < beatStaleMs);
-  return { known: new Set(joined.keys()), live };
 }
 
 /**

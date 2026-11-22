@@ -78,6 +78,7 @@ import {
   RETENTION_DAYS,
 } from "../server/team-worktrees.mjs";
 import { appendLesson, readLessons } from "../server/lessons.mjs";
+import * as slotPool from "./slot-pool.mjs";
 import {
   LEGACY_NEEDS_LABEL,
   LEGACY_NEEDS_REASON,
@@ -557,6 +558,8 @@ Usage:
   vs inspect <agent>   full agent record
   vs verdict <reviewerAgentId> --branch <branch> [--cwd <dir>]   merge gate: exit 0 only if the reviewer's own FIRST line is "PASS H/M/L <hash>" and <hash> prefixes git rev-parse <branch>; else non-zero (1 FAIL, 2 no verdict line, 3 hash mismatch/stale review, 4 not a reviewer, 5 branch unresolved)
   vs push-guard check [remote] | install [--force]   shared-master push guard (idea-452): check = would pushing HEAD to <remote>/master pass (exit 1 when it carries another lane's or an untagged merge); install = core.hooksPath=.githooks so every git push of master runs it. Override one merge: git -c vs.pushInclude=<sha> push ...
+  vs slot run --pool <name> [--max <N>] [--timeout <sec>] -- <cmd> [args...]   run <cmd> in a machine-wide N-slot pool (idea-267): waits FIFO for a free slot ("waiting for <pool> slot (N ahead)" every ~30s), passes the exit code through; a dead or silent holder is reclaimed. Godot suites: --pool godot (3 slots; VS_SLOT_MAX_GODOT overrides). --timeout: max wait for a slot, then exit 124
+  vs slot status [--pool <name>] [--json]   holders and waiters of a pool (default godot)
   vs stop <agent> [--background]   interrupt an agent's current turn; --background instead stops an IDLE agent's held background shells (whole process trees; it gets a notice on its next input)
   vs archive <agent>   archive a single agent
   vs temp-ttl --catch-up [--apply] [--days N] [--sample N | --checkpoint <file> [--timeout <sec>]] [--limit N] [--json]   one-time sweep of expired VS scratch dirs (vs-<name>-XXXXXX) in the temp dir: dry run by default (count + bytes by prefix and age); --sample N estimates bytes cheaply, --checkpoint resumes a long exact scan; --apply deletes (owner shell only)
@@ -3233,9 +3236,64 @@ export const KNOWN_VERBS = [
   "mcp",
   "install-shim",
   "temp-ttl",
+  "slot",
   "open",
   "help",
 ];
+
+const SLOT_USAGE = "usage: vs slot run --pool <name> [--max <N>] [--timeout <sec>] -- <cmd> [args...] | vs slot status [--pool <name>] [--json]";
+
+/** `vs slot` argv -> { sub, pool, max, timeout, json, cmd, args }. Options stop at "--" (or the first non-option for run). */
+export function parseSlotArgs(argv) {
+  const [sub, ...rest] = argv;
+  if (sub === "--help" || sub === "-h" || sub === "help") return { sub: "help" };
+  if (sub !== "run" && sub !== "status") throw new Error(SLOT_USAGE);
+  const out = { sub, pool: sub === "status" ? "godot" : undefined, max: undefined, timeout: undefined, json: false, cmd: undefined, args: [] };
+  let i = 0;
+  for (; i < rest.length; i++) {
+    const a = rest[i];
+    if (a === "--") { i++; break; }
+    if (!a.startsWith("--")) break;
+    const eq = a.indexOf("=");
+    const key = eq >= 0 ? a.slice(2, eq) : a.slice(2);
+    if (key === "json" && eq < 0) { out.json = true; continue; }
+    if (key === "help" && eq < 0) return { ...out, sub: "help" };
+    if (!["pool", "max", "timeout"].includes(key)) throw new Error(`unknown option "--${key}" for vs slot (put the command after --). ${SLOT_USAGE}`);
+    const v = eq >= 0 ? a.slice(eq + 1) : rest[++i];
+    if (v === undefined) throw new Error(`--${key} needs a value`);
+    out[key] = v;
+  }
+  if (sub === "run") {
+    [out.cmd, ...out.args] = rest.slice(i);
+    if (!out.pool || !out.cmd) throw new Error(SLOT_USAGE);
+    const secs = Number(out.timeout);
+    if (out.timeout !== undefined && (!String(out.timeout).trim() || !Number.isFinite(secs) || secs < 0)) throw new Error(`--timeout must be seconds >= 0 (got "${out.timeout}")`);
+  } else if (rest.length > i) throw new Error(SLOT_USAGE);
+  return out;
+}
+
+async function commandSlot(argv) {
+  const opts = parseSlotArgs(argv);
+  if (opts.sub === "help") {
+    process.stdout.write(SLOT_USAGE + "\n");
+    return 0;
+  }
+  const pool = slotPool.validatePool(opts.pool);
+  const max = slotPool.poolMax(pool, { flag: opts.max });
+  if (opts.sub === "status") {
+    const st = slotPool.poolStatus(pool, { max });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(st, null, 2) + "\n");
+      return 0;
+    }
+    const held = st.holders.filter((h) => h.fresh);
+    process.stdout.write(`${pool}: ${held.length}/${max} busy, ${st.waiting.length} waiting (${st.dir})\n`);
+    for (const h of held) process.stdout.write(`  slot ${h.index}: pid ${h.pid}${h.agentId ? ` agent ${h.agentId}` : ""} since ${new Date(h.startedAt).toISOString()}  ${h.cmd ?? ""}\n`);
+    for (const [n, w] of st.waiting.entries()) process.stdout.write(`  #${n + 1} waiting: pid ${w.pid}${w.agentId ? ` agent ${w.agentId}` : ""}\n`);
+    return 0;
+  }
+  return slotPool.runInSlot({ pool, max, timeoutSec: Number(opts.timeout ?? 0), cmd: opts.cmd, args: opts.args });
+}
 
 const VERB_HINTS = {
   list: "ls",
@@ -3294,6 +3352,13 @@ export function suggestVerb(raw, verbs = KNOWN_VERBS) {
 }
 
 export function main(argv) {
+  // `vs slot run ... -- <cmd> [args]` parses its own argv: the wrapped command's flags never reach the shared parser.
+  if (argv[0] === "slot") {
+    return commandSlot(argv.slice(1)).catch((err) => {
+      process.stderr.write(`Error: ${err.message}\n`);
+      return 1;
+    });
+  }
   let flags;
   try {
     flags = parseArgs(foldDevicesArgv(argv));
