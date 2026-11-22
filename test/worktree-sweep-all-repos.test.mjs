@@ -11,14 +11,18 @@ import {
   SWEEP_LOCK_FILE,
   acquireSweepLock,
   detectDefaultBranch,
+  dirBytesNoFollow,
   discoverSanctuaryRepos,
   isBuildOutputEntry,
+  isInside,
   liveAgentCwds,
   mergedStatus,
+  normPath,
   removeSweptWorktree,
   sweepAllRepos,
   sweepMergedWorktrees,
   throttledLiveCwds,
+  toLongPath,
   worktreeDirt,
 } from "../server/team-worktrees.mjs";
 import { createWorktreeAutoSweep, mergeSubjectBranches, runHeavyInWorker } from "../server/worktree-autosweep.mjs";
@@ -262,6 +266,83 @@ test("W2 deep >260-char non-ignored build output is deleted by the sweep's own f
     const res = removeSweptWorktree(repo, wt, { buildOutput: [deepRel.replace(/\\/g, "/") + "/"] });
     assert.equal(res.removed, true, JSON.stringify(res));
     assert.equal(existsSync(wt), false);
+  }));
+
+// ---- W2 round 2 (Tier A review rn-3fe2bedaae5f: FAIL 2/1/2): one test per finding ----
+
+test("H1 dirt: an untracked file past 260 chars is still dirt (git status/ls-files run with core.longpaths)", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-dirt");
+    const seg = "d".repeat(60);
+    const deepDir = join(wt, "deep", seg, seg, seg, seg);
+    mkdirSync(toLong(deepDir), { recursive: true });
+    writeFileSync(toLong(join(deepDir, "notes.txt")), "keep me");
+    assert.ok(join(deepDir, "notes.txt").length > 260, `fixture path is only ${join(deepDir, "notes.txt").length} chars`);
+    // The deep untracked file is non-build-output dirt: a dry run must keep the worktree, not say "would-remove".
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }));
+    assert.equal(r["unit-deep-dirt"].action, "kept", JSON.stringify(r["unit-deep-dirt"]));
+    assert.equal(r["unit-deep-dirt"].reason, "dirty", JSON.stringify(r["unit-deep-dirt"]));
+  }));
+
+test("H2 normPath/isInside fail closed: an unresolvable path is not inside (so it is never deleted)", () =>
+  withTmp((root) => {
+    const missing = join(root, "does-not-exist");
+    // realpath fails -> normPath returns null, never a lexical fallback.
+    assert.equal(normPath(missing), null);
+    // isInside reads an unresolvable child or parent as "not inside".
+    assert.equal(isInside(join(missing, "sub"), missing), false);
+    assert.equal(isInside(missing, missing), false);
+  }));
+
+test("M1 toLongPath: a \\\\.\\ device path passes through unchanged; empty input is rejected", () => {
+  if (process.platform === "win32") {
+    assert.equal(toLongPath("\\\\.\\C:\\foo"), "\\\\.\\C:\\foo");
+    assert.equal(toLongPath("C:\\tmp\\x"), "\\\\?\\C:\\tmp\\x");
+    assert.equal(toLongPath("\\\\?\\C:\\tmp\\x"), "\\\\?\\C:\\tmp\\x", "idempotent");
+  }
+  assert.throws(() => toLongPath(""), /empty path/);
+});
+
+test("L1 removeSweptWorktree: removed:true only when the dir is really gone; a leftover folder reports an orphan", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-leftover");
+    // git drops the metadata but leaves the folder (the partial-removal failure mode idea-514 describes).
+    const fakeGit = (args, cwd) => (args.includes("worktree") && args.includes("remove") ? "" : git(args, cwd));
+    const res = removeSweptWorktree(repo, wt, { git: fakeGit });
+    assert.equal(res.removed, false, JSON.stringify(res));
+    assert.equal(res.reason, "orphan", JSON.stringify(res));
+    assert.ok(existsSync(wt), "the leftover folder is left for the next sweep to report");
+  }));
+
+test("L2 dirBytesNoFollow + splitUntrackedDir use long paths: deep >260 content is sized and classified, not lost", () =>
+  withTmp((root) => {
+    // dirBytesNoFollow: a deep file's bytes are counted, not silently skipped (0).
+    const seg = "z".repeat(60);
+    const deep = join(root, "sized", seg, seg, seg, seg);
+    mkdirSync(toLong(deep), { recursive: true });
+    writeFileSync(toLong(join(deep, "blob.bin")), Buffer.alloc(5000, 7));
+    assert.ok(join(deep, "blob.bin").length > 260);
+    assert.equal(dirBytesNoFollow(deep), 5000);
+
+    // splitUntrackedDir (via worktreeDirt): a deep >260 build-output dir still reads as clean, not dirt.
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-build");
+    const b = "b".repeat(60);
+    const deepDist = join(wt, "gen", "deep", b, b, b, b, "dist");
+    mkdirSync(toLong(deepDist), { recursive: true });
+    writeFileSync(toLong(join(deepDist, "app.js")), "x");
+    assert.ok(join(deepDist, "app.js").length > 260);
+    const d = worktreeDirt(wt);
+    assert.equal(d.clean, true, JSON.stringify(d));
+    assert.ok(d.buildOutput.some((x) => x.endsWith("/dist/")), JSON.stringify(d.buildOutput));
   }));
 
 test("live-cwd guard: an agent cwd inside the worktree keeps it; apply with no roster removes nothing", () =>

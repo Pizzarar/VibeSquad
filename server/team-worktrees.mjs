@@ -270,17 +270,31 @@ const tryGitRaw = (git, args, cwd, env) => {
     return null;
   }
 };
-const normPath = (p) => {
-  let s = resolve(String(p));
+export const normPath = (p) => {
+  let s;
   try {
-    s = realpathSync.native(s);
-  } catch {}
+    s = realpathSync.native(resolve(String(p)));
+  } catch {
+    return null; // unresolvable (missing / through a dangling link): fail closed — not inside anything, so never deleted
+  }
   s = s.replace(/\\/g, "/").replace(/\/+$/, "");
   return process.platform === "win32" ? s.toLowerCase() : s;
 };
-const isInside = (child, parent) => {
+/** Lexical containment (no realpath): the conservative fallback for keep-guards, where a cwd that does not
+ *  resolve yet (an agent's not-yet-created subfolder) must still read as inside the worktree. */
+const lexKey = (p) => {
+  const s = resolve(String(p)).replace(/\\/g, "/").replace(/\/+$/, "");
+  return process.platform === "win32" ? s.toLowerCase() : s;
+};
+const lexInside = (child, parent) => {
+  const c = lexKey(child);
+  const p = lexKey(parent);
+  return c === p || c.startsWith(p + "/");
+};
+export const isInside = (child, parent) => {
   const c = normPath(child);
   const p = normPath(parent);
+  if (!c || !p) return false; // an unresolvable path is not inside
   return c === p || c.startsWith(p + "/");
 };
 
@@ -312,7 +326,7 @@ function splitUntrackedDir(wtPath, rel) {
   const other = [];
   let seen = 0;
   const walk = (relDir) => {
-    for (const d of readdirSync(resolve(wtPath, relDir), { withFileTypes: true })) {
+    for (const d of readdirSync(toLongPath(resolve(wtPath, relDir)), { withFileTypes: true })) {
       if (++seen > UNTRACKED_DIR_SCAN_MAX) throw new Error("too many entries");
       const childRel = `${relDir}${d.name}`;
       if (d.isDirectory() && !d.isSymbolicLink() && isBuildOutputEntry(wtPath, `${childRel}/`)) build.push(`${childRel}/`);
@@ -333,8 +347,11 @@ function splitUntrackedDir(wtPath, rel) {
  * (dirty). `clean` is false when git can't read the tree.
  */
 export function worktreeDirt(wtPath, { git = defaultGit } = {}) {
-  const tracked = tryGit(git, ["status", "--porcelain", "--untracked-files=no"], wtPath);
-  const others = tryGit(git, ["ls-files", "-z", "--others", "--exclude-standard", "--directory", "--no-empty-directory"], wtPath);
+  // core.longpaths=true: a >260-char untracked file must not read as clean (idea-514); without it
+  // `ls-files --others` silently omits deep paths and a dry-run sweep would say "would-remove".
+  const longpaths = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
+  const tracked = tryGit(git, [...longpaths, "status", "--porcelain", "--untracked-files=no"], wtPath);
+  const others = tryGit(git, [...longpaths, "ls-files", "-z", "--others", "--exclude-standard", "--directory", "--no-empty-directory"], wtPath);
   if (tracked === null || others === null) return { clean: false, error: true, tracked: 0, untracked: [], buildOutput: [] };
   const trackedCount = tracked.split(/\r?\n/).filter((l) => l.trim()).length;
   const buildOutput = [];
@@ -430,8 +447,9 @@ export function liveAgentCwds(agents) {
   return out;
 }
 
-/** True when some cwd in `cwds` is `wtPath` or inside it. */
-export const cwdHoldsWorktree = (wtPath, cwds) => (cwds ?? []).some((c) => c && isInside(c, wtPath));
+/** True when some cwd in `cwds` is `wtPath` or inside it. Conservative: a cwd that cannot be resolved yet
+ *  (realpath fails) but is lexically inside still holds the tree, so a live agent's worktree is never removed. */
+export const cwdHoldsWorktree = (wtPath, cwds) => (cwds ?? []).some((c) => c && (isInside(c, wtPath) || lexInside(c, wtPath)));
 
 /**
  * `refs` minus any ref at the same commit as an earlier one (local master == origin/master: test it once). A ref that
@@ -486,10 +504,13 @@ function isFreshWorktree(wtPath, now, graceMs) {
 /**
  * Windows: prefix an absolute path with `\\?\` so node's fs APIs handle paths beyond MAX_PATH (~260 chars) — deep build
  * output like `src-tauri/gen/android/app/build/intermediates/...` (idea-514). The prefix also disables `..` normalization
- * (irrelevant here: every caller passes an already-resolved absolute path). Idempotent; a no-op on other platforms.
+ * (irrelevant here: every caller passes an already-resolved absolute path). A `\\.\` device path is passed through unchanged
+ * (it is already absolute and long-path safe); empty input is rejected. Idempotent; a no-op on other platforms.
  */
-function toLongPath(p) {
+export function toLongPath(p) {
+  if (typeof p !== "string" || p.trim() === "") throw new TypeError("toLongPath: empty path");
   if (process.platform !== "win32") return p;
+  if (p.startsWith("\\\\.\\")) return p; // Win32 device namespace
   const abs = resolve(p);
   if (abs.startsWith("\\\\?\\")) return abs;
   if (abs.startsWith("\\\\")) return "\\\\?\\UNC\\" + abs.slice(2);
@@ -506,11 +527,7 @@ function removeTreeNoFollow(abs) {
     return;
   }
   if (st.isSymbolicLink()) {
-    try {
-      unlinkSync(abs);
-    } catch {
-      rmdirSync(abs); // a junction: non-recursive, removes only the link
-    }
+    unlinkLinkOnly(abs);
     return;
   }
   if (!st.isDirectory()) {
@@ -522,6 +539,15 @@ function removeTreeNoFollow(abs) {
     }
     return;
   }
+  // Re-lstat right before reading: a directory swapped for a junction between the lstat above and this
+  // readdir would otherwise be followed (deleting its target). Every child is re-lstat'd at its own
+  // removeTreeNoFollow entry right before descending, so a link swapped in mid-walk is unlinked, never followed.
+  try {
+    st = lstatSync(abs);
+  } catch {
+    return;
+  }
+  if (st.isSymbolicLink() || !st.isDirectory()) return removeTreeNoFollow(abs);
   for (const name of readdirSync(abs)) removeTreeNoFollow(join(abs, name));
   rmdirSync(abs);
 }
@@ -616,10 +642,13 @@ export function removeSweptWorktree(repoRoot, wtPath, { git = defaultGit, buildO
       [...(process.platform === "win32" ? ["-c", "core.longpaths=true"] : []), "worktree", "remove", ...(force ? ["--force"] : []), wtPath],
       repoRoot,
     );
-    return { removed: true };
   } catch (e) {
     return { removed: false, reason: gitError(e) };
   }
+  // git may drop the worktree's metadata but leave the folder behind (a partial removal). Claim success
+  // only when the directory is actually gone; otherwise report an orphan for the next sweep.
+  if (existsSync(toLongPath(wtPath))) return { removed: false, reason: "orphan" };
+  return { removed: true };
 }
 
 /** Bytes under `abs`, never following links (a node_modules junction counts as 0). */
@@ -627,7 +656,7 @@ export function dirBytesNoFollow(abs) {
   let total = 0;
   const stack = [abs];
   while (stack.length) {
-    const p = stack.pop();
+    const p = toLongPath(stack.pop());
     let st;
     try {
       st = lstatSync(p);
@@ -920,7 +949,7 @@ export function discoverSanctuaryRepos(root = resolveManagedWorktreeRoot()) {
         common = resolve(gd, "..", "..");
       }
       const repoRoot = basename(common).toLowerCase() === ".git" ? dirname(common) : common;
-      const key = normPath(repoRoot);
+      const key = normPath(repoRoot) ?? lexKey(repoRoot);
       if (!repos.has(key)) repos.set(key, { repoRoot, name: basename(repoRoot), sanctuaryWorktrees: 0 });
       repos.get(key).sanctuaryWorktrees++;
     }
@@ -1113,7 +1142,8 @@ export function indexAgentCwds(agents) {
   const out = [];
   for (const a of agents) {
     const cwd = String(a?.cwd ?? a?.config?.cwd ?? "").trim();
-    if (cwd) out.push({ agent: a, cwd: normPath(cwd) });
+    if (!cwd) continue;
+    out.push({ agent: a, cwd: normPath(cwd) ?? lexKey(cwd) }); // an unresolvable cwd still counts (lexically) as a holder
   }
   return out;
 }
@@ -1125,8 +1155,8 @@ export function indexAgentCwds(agents) {
  */
 export function worktreeOwner(wtPath, index) {
   if (!index) return { state: "unknown", agents: [] };
-  const p = normPath(wtPath);
-  const holders = index.filter((x) => x.cwd === p || x.cwd.startsWith(p + "/")).map((x) => x.agent);
+  const p = normPath(wtPath) ?? lexKey(wtPath);
+  const holders = index.filter((x) => x.cwd && (x.cwd === p || x.cwd.startsWith(p + "/"))).map((x) => x.agent);
   const ids = holders.map((a) => a.id ?? null).filter(Boolean).slice(0, 8);
   if (!holders.length) return { state: "lost", detail: "no-record", agents: [] };
   if (holders.some((a) => liveAgentCwds([a]).length)) return { state: "live", agents: ids };
@@ -1676,7 +1706,8 @@ export function restoreArchivedWorktree(unit, { root = resolveManagedWorktreeRoo
   if (!name || /[\\/]/.test(name) || tryGit(git, ["check-ref-format", ref], repoRoot ?? root) === null) return fail("bad-unit-name");
   const seen = new Map();
   const consider = (p) => {
-    if (p && !seen.has(normPath(p))) seen.set(normPath(p), p);
+    const k = normPath(p) ?? lexKey(p);
+    if (!seen.has(k)) seen.set(k, p);
   };
   if (repoRoot) consider(resolve(repoRoot));
   else {
