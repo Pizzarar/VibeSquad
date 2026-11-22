@@ -83,14 +83,16 @@ function writeChildren(home, list) {
 
 // Runs once at boot, before listening. Returns { killed: [pid], skipped: [pid] }.
 // Pass inspect (per pid) or inspectMany (batched, the default) to override the process lookup.
-export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, kill = (pid) => killTree({ pid, exitCode: null, kill: () => process.kill(pid) }), alive = pidAlive } = {}) {
+// The default kill is the tree kill: taskkill /T /F on win32; off win32 the recorded child led its own process group
+// (spawnNoShell detached), so its whole group gets SIGTERM then SIGKILL after the grace (audit R4). killOpts reaches killTree (tests).
+export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, killOpts = {}, kill = (pid) => killTree({ pid, exitCode: null, kill: () => process.kill(pid) }, killOpts), alive = pidAlive } = {}) {
   const killed = [];
   const skipped = [];
   const live = readChildren(home).filter((rec) => rec.pid !== process.pid && alive(rec.pid));
   const infos = inspect ? null : inspectMany(live.map((rec) => rec.pid));
   for (const rec of live) {
     if (!matchesRecord(rec, inspect ? inspect(rec.pid) : infos.get(rec.pid) ?? null)) { skipped.push(rec.pid); continue; }
-    try { kill(rec.pid); killed.push(rec.pid); } catch { skipped.push(rec.pid); }
+    try { (kill(rec.pid) === false ? skipped : killed).push(rec.pid); } catch { skipped.push(rec.pid); } // false: refused (POSIX guard), nothing signalled
   }
   writeChildren(home, []);
   return { killed, skipped };

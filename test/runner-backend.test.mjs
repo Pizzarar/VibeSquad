@@ -309,7 +309,7 @@ test('discovery token file is 0600 on posix', () => {
   assert.equal(new RunnerClient({ home }).conn, null);
 });
 
-test('killTree on win32 runs taskkill /T /F without a shell; elsewhere kills the child', () => {
+test('killTree on win32 runs taskkill /T /F without a shell; elsewhere never signals pid 1 (refused)', () => {
   const calls = [];
   const spawnImpl = (cmd, args, opts) => { calls.push({ cmd, args, opts }); return { on() {}, unref() {} }; };
   assert.ok(killTree({ pid: 42, exitCode: null, kill() { throw new Error('should not'); } }, { platform: 'win32', spawnImpl }));
@@ -317,8 +317,10 @@ test('killTree on win32 runs taskkill /T /F without a shell; elsewhere kills the
   assert.equal(calls[0].cmd, 'taskkill');
   assert.equal(calls[0].opts.shell, false);
   let killed = 0;
-  killTree({ pid: 1, exitCode: null, kill() { killed++; } }, { platform: 'linux', spawnImpl });
-  assert.equal(killed, 1);
+  // forge-host A2 review M1: POSIX refuses pid <= 1 and must not fall through to child.kill() (the POSIX tree kill is in
+  // test/proc-groups.test.mjs).
+  assert.equal(killTree({ pid: 1, exitCode: null, kill() { killed++; } }, { platform: 'linux', spawnImpl }), false);
+  assert.equal(killed, 0);
   assert.equal(killTree({ pid: 1, exitCode: 0 }, { platform: 'win32', spawnImpl }), false);
 });
 
