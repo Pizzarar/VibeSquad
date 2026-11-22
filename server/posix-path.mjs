@@ -2,7 +2,7 @@
 // claude/agy/opencode vanish. Off win32 only: source the login-shell PATH once per process and probe the usual node-manager
 // bin dirs (nvm, fnm, volta, then `npm prefix -g` run with the widened PATH). Two runners share the planning code: a sync one
 // (restart-runtime's spawn path) and an async one (HTTP request path: must never block the event loop). Everything is
-// injectable (platform/env/home/exists/readdir/readFile/exec) so POSIX branches are testable on Windows. Never throws;
+// injectable (platform, env, home, exists, readdir, readFile, exec) so POSIX branches are testable on Windows. Never throws;
 // win32 always returns inputs untouched.
 import { execFile, execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Detached, one-shot restart of the VS runner + VS server (idea-78). Every agent, the Overlord included, runs ON the
-// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs, server/proc-tree.mjs and server/posix-path.mjs (all built-ins only) (the coordinated-drain helpers,
+// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs, server/proc-tree.mjs and server/posix-path.mjs and server/listener-pid.mjs (all built-ins only) (the coordinated-drain helpers,
 // server/restart-coord.mjs, load lazily on a deferral or after a success; a load failure only loses the lead names). It is meant to
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.
@@ -39,6 +39,7 @@ import { fileURLToPath } from 'node:url';
 import { runtimeDir as sharedRuntimeDir } from '../server/runtime-dir.mjs';
 import { posixKillTree } from '../server/proc-tree.mjs';
 import { augmentedPath } from '../server/posix-path.mjs';
+import { posixListenerPid } from '../server/listener-pid.mjs';
 
 const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -254,9 +255,9 @@ export function readLiveServerPid(file, { info = procInfo, remove = (f) => rmSyn
 }
 
 /** Pid listening on a TCP port (the VS server), or null. */
-export function listenerPid(port) {
+export function listenerPid(port, { win = IS_WIN, posix = {} } = {}) {
   try {
-    if (IS_WIN) {
+    if (win) {
       const r = spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true, timeout: 15000 });
       for (const line of String(r.stdout ?? '').split(/\r?\n/)) {
         const m = /^\s*TCP\s+\S+:(\d+)\s+\S+\s+LISTENING\s+(\d+)/i.exec(line);
@@ -264,9 +265,7 @@ export function listenerPid(port) {
       }
       return null;
     }
-    const r = spawnSync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { encoding: 'utf8', timeout: 5000 });
-    const n = Number(String(r.stdout ?? '').split(/\s+/)[0]);
-    return n > 0 ? n : null;
+    return posixListenerPid(port, posix);
   } catch { return null; }
 }
 
