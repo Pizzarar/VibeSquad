@@ -27,7 +27,7 @@ import { acquireStartLock, pidAlive, readLock, releaseLock } from "../runner/loc
 import { appendQueue, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue } from "./fifo-queue.mjs";
 
 export const DEFAULT_POOL_MAX = Object.freeze({ godot: 3 });
-// idea-578 (Aub 11-22): 2 of the 3 godot slots are reserved for Squad efi; the 3rd is shared by every Squad.
+// idea-578 (owner 11-22): 2 of the 3 godot slots are reserved for Squad efi; the 3rd is shared by every Squad.
 export const DEFAULT_POOL_RESERVE = Object.freeze({ godot: "efi:2" });
 // The claim mutex is held for one readdir plus a few lock creates; a live holder silent this long is wedged.
 export const CLAIM_STALE_MS = 10_000;
