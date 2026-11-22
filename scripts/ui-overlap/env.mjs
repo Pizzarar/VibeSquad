@@ -41,17 +41,39 @@ export function resolvePlaywright() {
   return null;
 }
 
-export function findBrowser() {
-  const l = process.env.LOCALAPPDATA;
-  return [
-    process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
-    "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
-    "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
-    l && `${l}/Microsoft/Edge/Application/msedge.exe`,
-    "C:/Program Files/Google/Chrome/Application/chrome.exe",
-    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
-    l && `${l}/Google/Chrome/Application/chrome.exe`,
-  ].filter(Boolean).find((p) => { try { return fs.existsSync(p); } catch { return false; } }) ?? null;
+// Linux browser names, looked up on PATH and in the standard install dirs (forge audit R8).
+const LINUX_BROWSER_NAMES = ["chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge"];
+const LINUX_BROWSER_DIRS = ["/usr/bin", "/snap/bin", "/usr/local/bin", "/opt/google/chrome", "/opt/microsoft/msedge"];
+
+/** First existing browser executable. Windows candidates are unchanged; off win32 the Linux list is tried instead. */
+export function findBrowser({ platform = process.platform, env = process.env, exists } = {}) {
+  const has = exists ?? ((p) => { try { return fs.existsSync(p); } catch { return false; } });
+  const override = env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  if (platform === "win32") {
+    const l = env.LOCALAPPDATA;
+    return [
+      override,
+      "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+      "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
+      l && `${l}/Microsoft/Edge/Application/msedge.exe`,
+      "C:/Program Files/Google/Chrome/Application/chrome.exe",
+      "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+      l && `${l}/Google/Chrome/Application/chrome.exe`,
+    ].filter(Boolean).find(has) ?? null;
+  }
+  const pathDirs = (env.PATH || "").split(":").filter(Boolean);
+  const dirs = [...pathDirs, ...LINUX_BROWSER_DIRS.filter((d) => !pathDirs.includes(d))];
+  const names = platform === "darwin" ? ["Google Chrome", "chromium", "microsoft-edge"] : LINUX_BROWSER_NAMES;
+  const found = [];
+  for (const d of dirs) for (const n of names) found.push(`${d}/${n}`);
+  if (platform === "darwin") found.push("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge");
+  return [override, ...found].filter(Boolean).find(has) ?? null;
+}
+
+/** Why browser-gated tests cannot run, or false when they can. Used for a loud, counted skip. */
+export function browserSkipReason({ pw, exe }) {
+  if (pw && exe) return false;
+  return `no ${[!pw && "Playwright", !exe && "Chromium/Chrome/Edge"].filter(Boolean).join(" and ")} found (set PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH / PLAYWRIGHT_DIR)`;
 }
 
 /** Newest mtime (ms) among the given files and, for directories, every file beneath them. 0 when none exist. */
