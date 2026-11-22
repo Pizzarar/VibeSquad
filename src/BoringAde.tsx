@@ -5,7 +5,7 @@ import { BoringContextPanel } from "./BoringContextPanel";
 import { TimelineErrorBoundary } from "./Timeline";
 import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
-import { laneCtxItems, openContextMenu, openOverlay, teamCtxItems } from "./CommandPalette";
+import { laneCtxItems, openContextMenu, type CtxItem, openOverlay, teamCtxItems } from "./CommandPalette";
 import { RemoveTeamDialog } from "./PinRemove";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
@@ -20,7 +20,8 @@ import { isHubPin, isLive, liveBuddyId, perfectionPin, pinsForSquad, quickBugsCh
 import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
 import { skyZonesFor } from "./skyZonesLogic";
-import type { Member, TeamView } from "./teams";
+import type { FolderDef, Member, TeamView } from "./teams";
+import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, patchTeamsFolder, type FolderOp } from "./boringFolders";
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { StatusDot } from "./ui";
@@ -362,6 +363,8 @@ export function boringLaneTableRows(
 
 type Props = {
   views: TeamView[];
+  /** B11b: project folders from GET /api/teams. */
+  folders?: FolderDef[];
   view: TeamView | undefined;
   onSelectSquad: (id: string) => void;
   onOpenPin: PinHandler;
@@ -379,7 +382,7 @@ type Props = {
 };
 
 
-export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
+export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
   const [mode, setMode] = useState<Mode>("project");
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
@@ -710,7 +713,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const workerRow = (v: TeamView, pin: Pin, laneId: string, w: Pin["workers"][number]) => (
     <button key={w.agent.id} type="button" className={workerRowCls(isOn(v, "worker:" + w.agent.id), w)} data-testid={`boring-worker-${w.agent.id}`} onClick={() => openTarget(v, pin, laneId, { role: "worker", agentId: w.agent.id })}>
       <span className={`boring-dot ${w.agent.status} ${glyphCls(glyphStatusOf(w.agent, now), w.attention?.tone)}`} />
-      <span className="boring-row-label">{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
+      <span className="boring-row-label" title={w.agent.title ?? w.agent.id.slice(0, 8)}>{w.agent.title ?? w.agent.id.slice(0, 8)}</span>
       <span className="boring-conv-age">{formatTimestamp(w.agent.updatedAt, "relative")}</span>
     </button>
   );
@@ -760,7 +763,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
           </button>
           <button type="button" className="boring-conv-title" data-testid={c.titleTestId} title={c.topicLabel || undefined} onClick={c.onOpen}>
             <span className={`boring-dot ${c.status} ${glyphCls(c.status, c.err ? "error" : c.needsYou > 0 ? "needs-you" : null)}`} />
-            <span className="boring-row-label">{c.name}</span>
+            <span className="boring-row-label" title={c.name}>{c.name}</span>
             {c.code && <code className="boring-conv-code">{c.code}</code>}
             <span className="boring-conv-age">{c.age}</span>
             {!open && badge(c.needsYou, c.err)}
@@ -785,7 +788,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
       {chevronCol(false, null, label)}
       <button type="button" className={`boring-core-row ${isOn(v, key) ? "on" : ""}`} data-testid={suffix(v, testid)} onClick={onClick}>
         {agentObj ? <StatusDot agent={agentObj} /> : <span className={`boring-dot ${status} ${glyphCls(status, needsYou > 0 ? "needs-you" : null)}`} />}
-        <span className="boring-row-label">{label}</span>
+        <span className="boring-row-label" title={label}>{label}</span>
         <span className="boring-conv-age">{age}</span>
         {badge(needsYou, err)}
       </button>
@@ -812,6 +815,61 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     return laneRow(v, { laneId: "_bugs", name: b.label, code: "", pin: b.pin, status: b.pin?.running ? "running" : b.pin?.brainstorm?.agent.status ?? "none", needsYou: b.needsYou, err: b.err, age: b.age, titleTestId: suffix(v, "boring-core-bugs"), onOpen: openBugs });
   };
 
+  /** B11b: sidebar project folders. Open state persists in localStorage; unfoldered projects stay on top. */
+  const [openFolders, setOpenFolders] = useState<Record<string, boolean>>(() => {
+    try { const p = JSON.parse(localStorage.getItem("vs.boringOpenFolders") || "{}"); return p && typeof p === "object" && !Array.isArray(p) ? p : {}; } catch { return {}; }
+  });
+  const toggleFolder = (name: string) => setOpenFolders((o) => {
+    const next = { ...o, [name]: !o[name] };
+    try { localStorage.setItem("vs.boringOpenFolders", JSON.stringify(next)); } catch {}
+    return next;
+  });
+  const folderOp = async (op: FolderOp) => {
+    const r = await patchTeamsFolder(op);
+    if (!r.ok) window.alert(`Folder change failed: ${r.error ?? "unknown error"}`);
+    return r.ok;
+  };
+  const folderCtxItems = (f: FolderDef): CtxItem[] => [
+    { label: "Rename folder…", run: () => { const n = window.prompt("Rename folder", f.name)?.trim(); if (n && n !== f.name) void folderOp({ op: "renameFolder", name: f.name, newName: n }); } },
+    { label: "Delete folder", danger: true, run: () => { if (window.confirm(`Delete folder "${f.name}"? Its projects move back to Active.`)) void folderOp({ op: "deleteFolder", name: f.name }); } },
+    { label: "New folder…", separatorBefore: true, run: () => { const n = window.prompt("New folder name")?.trim(); if (n) void folderOp({ op: "createFolder", name: n }); } },
+  ];
+  const stat = (v: TeamView) => { const mm = v.team.id === activeTeamId ? model : boringSidebarModel(v, now); return { needsYou: mm.totalNeedsYou, err: mm.projectErr }; };
+  const partition = partitionViews(allViews, folders, stat);
+  const awakeViews = filterAwakeViews(allViews, folders);
+  const activeAsleep = view ? isViewAsleep(view, folders) : false;
+  const renderProject = (v: TeamView) => {
+    const active = v.team.id === activeTeamId;
+    const open = projectIsOpen(v.team.id);
+    const m = active ? model : boringSidebarModel(v, now);
+    // idea-523: a collapsed project hides every row of its subtree, so it carries the selected state when the selection lives inside it (derived from sel only: exactly one .on row).
+    const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
+    return (
+      <div key={v.team.id} className={open ? "boring-project-block open" : "boring-project-block"}>
+        <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>
+          {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
+          <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
+            <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
+            <span className="boring-project-name" title={v.team.name}>{v.team.name}</span>
+            {!open && badge(m.totalNeedsYou, m.projectErr)}
+          </button>
+          <button type="button" className="boring-row-menu-btn" data-testid={`boring-project-menu-${v.team.id}`} aria-haspopup="menu" aria-label={`${v.team.name} actions`} title="Project actions" onClick={(e) => openContextMenu(e, teamCtxItems(v, { folders }))}>⋯</button>
+          {active && (
+            <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>
+          )}
+        </div>
+        {open && (
+          <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
+            {trinityCard(v, m)}
+            <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
+            {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
+            {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="boring-app" data-testid="boring-app">
       {removingPin && <RemoveTeamDialog pin={removingPin.pin} displayName={removingPin.name} noun="lane" onClose={() => setRemovingPin(null)} />}
@@ -822,38 +880,34 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             <span aria-hidden="true">⌕</span><span>Search</span><kbd className="boring-kbd">Ctrl+K</kbd>
           </button>
         </div>
-        <BoringInbox views={views.length > 0 ? views : view ? [view] : []} onOpen={openNeedsYou} now={now} />
+        <BoringInbox views={awakeViews} onOpen={openNeedsYou} now={now} />
         <div className="boring-section-head" data-testid="boring-projects-head">
           <span className="boring-section-label">Projects</span>
           <button type="button" className="boring-icon-btn" data-testid="boring-new-project-btn" title="New project" aria-label="New project" onClick={onNewSquad}>+</button>
         </div>
         <div className="boring-project-tree" data-testid="boring-project-tree">
-          {allViews.map((v) => {
-            const active = v.team.id === activeTeamId;
-            const open = projectIsOpen(v.team.id);
-            const m = active ? model : boringSidebarModel(v, now);
-            // idea-523: a collapsed project hides every row of its subtree, so it carries the selected state when the selection lives inside it (derived from sel only: exactly one .on row).
-            const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
+          {partition.activeViews.map(renderProject)}
+          {partition.folderGroups.map((g) => {
+            const slug = folderSlug(g.folder.name);
+            const fOpen = openFolders[g.folder.name] === true;
+            const asleep = g.folder.asleep;
             return (
-              <div key={v.team.id} className={open ? "boring-project-block open" : "boring-project-block"}>
-                <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
-                  {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
-                  <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
-                    <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
-                    <span className="boring-project-name">{v.team.name}</span>
-                    {!open && badge(m.totalNeedsYou, m.projectErr)}
+              <div key={`folder:${g.folder.name}`} className={`boring-folder${fOpen ? " open" : ""}${asleep ? " asleep" : ""}`} data-testid={`boring-folder-${slug}`}>
+                <div className="boring-conv-line boring-folder-line" onContextMenu={(e) => openContextMenu(e, folderCtxItems(g.folder))}>
+                  <button type="button" className="boring-folder-row" data-testid={`boring-folder-row-${slug}`} aria-expanded={fOpen} onClick={() => toggleFolder(g.folder.name)}>
+                    <span className="boring-chevron-btn" aria-hidden="true">{fOpen ? "▾" : "▸"}</span>
+                    <span className="boring-folder-name" title={g.folder.name}>{g.folder.name}</span>
+                    <span className="boring-folder-count">{`· ${g.count}`}</span>
+                    {asleep && <span className="boring-folder-zzz" role="img" aria-label="Asleep">💤</span>}
+                    {g.needsYou > 0 && <span className={`badge boring-badge${g.err ? " err" : ""}${asleep ? " muted" : ""}`} data-testid={`boring-folder-badge-${slug}`}>{g.needsYou}</span>}
                   </button>
-                  <button type="button" className="boring-row-menu-btn" data-testid={`boring-project-menu-${v.team.id}`} aria-haspopup="menu" aria-label={`${v.team.name} actions`} title="Project actions" onClick={(e) => openContextMenu(e, teamCtxItems(v))}>⋯</button>
-                  {active && (
-                    <button type="button" className="boring-lane-add" data-testid="boring-new-conv-btn" title="New lane" aria-label="New lane" onClick={onAddBuddy}>+ lane</button>
-                  )}
+                  <button type="button" className={`boring-folder-sleep${asleep ? " asleep" : ""}`} data-testid={`boring-folder-sleep-${slug}`} aria-pressed={asleep} title={asleep ? "Asleep: automated wake-ups paused. Click to make Active" : "Active: click to put to sleep"} onClick={(e) => { e.stopPropagation(); void folderOp({ op: "setFolderAsleep", name: g.folder.name, asleep: !asleep }); }}>{asleep ? "Asleep" : "Active"}</button>
+                  <button type="button" className="boring-row-menu-btn" data-testid={`boring-folder-menu-${slug}`} aria-haspopup="menu" aria-label={`${g.folder.name} folder actions`} title="Folder actions" onClick={(e) => openContextMenu(e, folderCtxItems(g.folder))}>⋯</button>
                 </div>
-                {open && (
-                  <div className="boring-project-lanes" data-testid={`boring-project-lanes-${v.team.id}`}>
-                    {trinityCard(v, m)}
-                    <div className="boring-lanes-divider" data-testid={suffix(v, "boring-lanes-divider")}>Lanes</div>
-                    {m.conversations.map((c) => laneRow(v, { laneId: c.laneId, name: c.name, topicLabel: c.topicLabel, code: c.code, pin: c.pin, status: c.running > 0 ? "running" : c.brainstormStatus, needsYou: c.needsYou, err: c.err, age: c.age, onOpen: () => openLane(v, c) }))}
-                    {active && m.conversations.length === 0 && <p className="boring-muted">No lanes yet.</p>}
+                {fOpen && (
+                  <div className="boring-folder-projects" data-testid={`boring-folder-projects-${slug}`}>
+                    {g.views.map(renderProject)}
+                    {g.views.length === 0 && <p className="boring-muted">No projects.</p>}
                   </div>
                 )}
               </div>
@@ -915,6 +969,12 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             )}
           </div>
         </header>
+        {view && activeAsleep && (
+          <div className="boring-asleep-bar" data-testid="boring-asleep-bar" role="status">
+            <span>Asleep · Automated wake-ups paused</span>
+            <button type="button" className="boring-asleep-wake" data-testid="boring-asleep-wake-btn" onClick={() => view.team.folder && void folderOp({ op: "setFolderAsleep", name: view.team.folder, asleep: false })}>Wake</button>
+          </div>
+        )}
         {opening && (
           <div className="boring-opening" data-testid="boring-opening" role="status">Opening agent…</div>
         )}

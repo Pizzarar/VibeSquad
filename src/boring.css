@@ -960,8 +960,26 @@ html[data-vibe="boring"] .boring-worker-tab { max-width: 200px; }
 html[data-vibe="boring"] .boring-topbar-switcher .boring-switch-pill { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 28px; border-radius: 999px; }
 html[data-vibe="boring"] .boring-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 html[data-vibe="boring"] .boring-tab-more { color: var(--text-3); font-size: var(--t-small); white-space: nowrap; padding: 0 6px; }
-html[data-vibe="boring"] .boring-project-block { display: flex; flex-direction: column; gap: 2px; }
+html[data-vibe="boring"] .boring-project-block { display: flex; flex-direction: column; gap: 2px; padding-inline: 9px; } /* R10-1: 9px = open card border 1 + padding 8, so the chevron/name do not jump on toggle */
 html[data-vibe="boring"] .boring-project-block.open { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; padding: 8px; gap: 4px; }
+
+/* ===== B11b: sidebar project folders ===== */
+html[data-vibe="boring"] .boring-folder { display: flex; flex-direction: column; gap: 2px; margin-top: 4px; }
+html[data-vibe="boring"] .boring-folder-line { gap: 4px; align-items: center; padding-inline: 9px; }
+html[data-vibe="boring"] .boring-folder-row { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 4px 6px 4px 0; background: transparent; border: 0; color: var(--text-2); font: inherit; text-align: left; cursor: pointer; border-radius: 8px; }
+html[data-vibe="boring"] .boring-folder-row:hover { color: var(--text-1); background: var(--surface-2); }
+html[data-vibe="boring"] .boring-folder-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+html[data-vibe="boring"] .boring-folder-count { color: var(--text-3); font-size: var(--t-small); }
+html[data-vibe="boring"] .boring-folder-zzz { font-size: var(--t-small); }
+html[data-vibe="boring"] .boring-folder .boring-badge.muted { opacity: 0.55; background: var(--surface-3); color: var(--text-2); }
+html[data-vibe="boring"] .boring-folder-sleep { flex: 0 0 auto; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-2); font: inherit; font-size: var(--t-small); cursor: pointer; }
+html[data-vibe="boring"] .boring-folder-sleep.asleep { color: var(--text-3); background: transparent; }
+html[data-vibe="boring"] .boring-folder-sleep:hover { border-color: var(--accent); }
+html[data-vibe="boring"] .boring-folder-projects { display: flex; flex-direction: column; gap: 4px; }
+html[data-vibe="boring"] .boring-folder.asleep .boring-folder-projects { opacity: 0.8; }
+html[data-vibe="boring"] .boring-asleep-bar { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 4px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); color: var(--text-2); font-size: var(--t-small); }
+html[data-vibe="boring"] .boring-asleep-wake { padding: 1px 10px; border-radius: 999px; border: 1px solid var(--accent); background: transparent; color: var(--text-1); font: inherit; font-size: var(--t-small); cursor: pointer; }
+html[data-vibe="boring"] .boring-asleep-wake:hover { background: var(--surface-3); }
 
 /* ===== D3b (@desk, UX_REVIEW 2.7): tool-call rows ===== */
 html[data-vibe="boring"] .boring-toolgroup-summary { font-size: 13px; line-height: 20px; color: var(--text-2); font-variant-numeric: tabular-nums; }

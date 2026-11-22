@@ -42,7 +42,8 @@ import {
   type Member,
   type TeamView,
 } from "./teams";
-import { isHubLaneId, titleFor } from "./teams";
+import { getFolders, isHubLaneId, titleFor } from "./teams";
+import { filterAwakeViews } from "./boringFolders";
 import { agentDisplayName } from "./identity";
 import { AgentPanes } from "./AgentPanes";
 import { hubOpenAgent } from "./ctxMenuLogic";
@@ -1547,7 +1548,7 @@ export function App() {
     setCloseGuard(() => !DEMO && getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
     return () => setCloseGuard(null);
   }, []);
-  useAttentionTitle(views);
+  useAttentionTitle(filterAwakeViews(views, getFolders())); // B11b: asleep projects stay out of the tab-title badge
   useRestorePrune(agents, rosterLoaded);
   useEffect(() => {
     perfEndPainted("switch-team", teamId, `agents=${agents.size}`);
@@ -2130,6 +2131,7 @@ export function App() {
     return (
       <BoringApp
         views={sidebarViews}
+        folders={getFolders()}
         view={view}
         onSelectSquad={onTeam}
         onOpenPin={onQuickStart}

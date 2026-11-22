@@ -5,7 +5,8 @@ import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { ctxTabAction, markCtxAnchor, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
-import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
+import { AGENT_TYPE_LABEL, type FolderDef, type Member, type TeamView } from "./teams";
+import { patchTeamsFolder } from "./boringFolders";
 import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
 import { settingsPaletteItems, useKeyBindings } from "./prefs";
@@ -285,12 +286,12 @@ function AgentOpConfirmHost() {
 }
 
 /** Team ⋯ menu entries (stop / interrupt all running agents in the team, each with a confirm). Both cancel the current turn through stopAgents: the runner has no bare-interrupt route. */
-export function teamCtxItems(view: TeamView): CtxItem[] {
+export function teamCtxItems(view: TeamView, opts?: { folders?: FolderDef[] }): CtxItem[] {
   const targets = bulkStopTargets(
     view.members.map((m) => ({ agent: m.agent, teamId: view.team.id })),
     { teamId: view.team.id },
   );
-  return [
+  const items: CtxItem[] = [
     {
       label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
       disabled: !targets.length,
@@ -306,6 +307,28 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
       },
     },
   ];
+  if (opts?.folders) {
+    // B11b: folder actions (Normal sidebar). Current folder is shown checked and inert.
+    const fail = (r: { ok: boolean; error?: string }) => { if (!r.ok) window.alert(`Folder change failed: ${r.error ?? "unknown error"}`); };
+    const cur = view.team.folder;
+    opts.folders.forEach((f, i) => items.push({
+      label: f.name === cur ? `✓ In ${f.name}` : `Move to ${f.name}`,
+      disabled: f.name === cur,
+      separatorBefore: i === 0,
+      run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: f.name }).then(fail),
+    }));
+    items.push({
+      label: "New folder…",
+      separatorBefore: opts.folders.length === 0,
+      run: () => {
+        const name = window.prompt("New folder name")?.trim();
+        if (!name) return;
+        void patchTeamsFolder({ op: "createFolder", name }).then((r) => (r.ok ? patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: name }) : r)).then(fail);
+      },
+    });
+    if (cur) items.push({ label: "Remove from folder", run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: null }).then(fail) });
+  }
+  return items;
 }
 
 /** Lane ⋯ menu: Stop All Running scoped to one lane (labels.lane), plus Kill / remove lane when the caller allows it (non-hub feature lanes). `displayName` is the name the sidebar row shows (laneDisplayName), never the pin/topic name. */

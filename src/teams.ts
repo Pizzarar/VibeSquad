@@ -163,6 +163,8 @@ const notifyTeams = () => {
 };
 
 export const getTeams = (): TeamDef[] => TEAMS;
+/** B11b: the project folders from the last registry GET (seeded Backlog when the file has none). */
+export const getFolders = (): FolderDef[] => foldersOf(registryFile as { folders?: unknown });
 export const getDiskTeams = diskTeams;
 
 const cacheTeams = (next: TeamDef[]) => {
@@ -254,11 +256,14 @@ export async function refreshTeams(): Promise<boolean> {
     if (!r.ok) return false;
     const data = await r.json();
     if (!Array.isArray(data?.teams) || seq !== saveSeq) return false;
+    const foldersChanged = JSON.stringify(foldersOf(registryFile as { folders?: unknown })) !== JSON.stringify(foldersOf(data));
     registryFile = data;
     if (typeof data.revision === "string") teamsRevision = data.revision;
     if (JSON.stringify(data.teams) === JSON.stringify(TEAMS)) {
       cacheTeams(TEAMS);
-      return false;
+      // B11b: a folder-only change (rename, Active/Asleep) still has to repaint the sidebar.
+      if (foldersChanged) notifyTeams();
+      return foldersChanged;
     }
     TEAMS = data.teams;
     cacheTeams(TEAMS);
