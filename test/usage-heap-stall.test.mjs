@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { clearUsageCache, getUsage, getUsageAsync, readBootSizes, usageStats, usageTestHooks } from '../server/providers-catalog.mjs';
+import { gitSpawnStats, _resetGitSpawn } from '../server/git-spawn.mjs';
 
 const tmpDirs = [];
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-heapstall-')); tmpDirs.push(d); return d; };
@@ -169,30 +170,32 @@ test('heap-stall (a): getUsageAsync (async pooled git, sliced steps) equals sync
   assert.ok(ticks >= 3, `event loop ran ${ticks} setImmediate turns during getUsageAsync (git, stats and log slices are async)`);
 });
 
-test('heap-stall (a2): getUsageAsync refreshes pooled git with async execFile only (zero execFileSync on the request path)', async () => {
+test('heap-stall (a2): getUsageAsync refreshes pooled git off-loop only (zero execFileSync on the request path)', async () => {
   const { home3, repo1 } = sharedFixture();
-  // A fresh repo copy: its merged units are not cached, so getUsageAsync must spawn rev-parse + 2x log.
+  // A fresh repo copy: its merged units are not cached, so getUsageAsync must refresh HEAD (from the .git files, no
+  // spawn) + 2x log — all of it off the event loop (idea-572), never a main-thread child_process call.
   const repo3 = path.join(path.dirname(path.dirname(repo1)), 'r3', 'proj');
   fs.cpSync(repo1, repo3, { recursive: true });
-  // Spy on the server's named child_process imports (builtin ESM bindings follow the CJS object after syncBuiltinESMExports).
-  const calls = { sync: 0, async: 0 };
+  // Spy on the server's named execFileSync import (builtin ESM bindings follow the CJS object after syncBuiltinESMExports).
+  // idea-572 moved the async git child into the off-loop worker (server/git-spawn.mjs), so the "git refreshed async" half
+  // of this regression is asserted on gitSpawnStats.dispatches instead of a main-thread cp.execFile count.
+  const calls = { sync: 0 };
   const realSync = cp.execFileSync;
-  const realAsync = cp.execFile;
   cp.execFileSync = function (file, ...rest) { if (file === 'git') calls.sync += 1; return realSync.call(this, file, ...rest); };
-  cp.execFile = function (file, ...rest) { if (file === 'git') calls.async += 1; return realAsync.call(this, file, ...rest); };
   syncBuiltinESMExports();
-  const reset = () => { calls.sync = 0; calls.async = 0; };
+  const reset = () => { calls.sync = 0; _resetGitSpawn(); };
   try {
     clearUsageCache();
+    _resetGitSpawn();
     let stop = tickCounter();
     let res = await withRoot(repo3, () => getUsageAsync({ home: home3, now: NOW, cacheMs: 0 }));
     let ticks = stop();
     assert.equal(res.merged.units.filter((u) => !u.fromLedger).length, 8);
     assert.equal(calls.sync, 0, 'cold: no synchronous git spawn');
-    assert.equal(calls.async, 2, `cold: log + numstat ran async; HEAD is read from the .git files, no rev-parse (idea-518) (${calls.async})`);
+    assert.equal(gitSpawnStats.dispatches, 2, `cold: log + numstat ran off-loop; HEAD is read from the .git files, no rev-parse (idea-518) (${gitSpawnStats.dispatches})`);
     assert.ok(ticks >= 3, `cold: loop turned ${ticks} times`);
 
-    // A new merge, then a request past the 15 s HEAD-check TTL: the new HEAD is rebuilt, still with async git only.
+    // A new merge, then a request past the 15 s HEAD-check TTL: the new HEAD is rebuilt, still off-loop only.
     addMerge(repo3, 8);
     const later = () => NOW() + 60_000;
     reset();
@@ -201,7 +204,7 @@ test('heap-stall (a2): getUsageAsync refreshes pooled git with async execFile on
     ticks = stop();
     assert.equal(res.merged.units.filter((u) => !u.fromLedger).length, 9, 'new HEAD picked up');
     assert.equal(calls.sync, 0, 'TTL lapse: no synchronous git spawn');
-    assert.equal(calls.async, 2, `TTL lapse, new HEAD: log + numstat async only (${calls.async})`);
+    assert.equal(gitSpawnStats.dispatches, 2, `TTL lapse, new HEAD: log + numstat off-loop only (${gitSpawnStats.dispatches})`);
     assert.ok(ticks >= 3, `TTL lapse: loop turned ${ticks} times`);
     reset();
     const sync = withRoot(repo3, () => getUsage({ home: home3, now: later }));
@@ -216,7 +219,6 @@ test('heap-stall (a2): getUsageAsync refreshes pooled git with async execFile on
     assert.ok(calls.sync >= 3, `sync getUsage past the TTL spawns git synchronously (${calls.sync})`);
   } finally {
     cp.execFileSync = realSync;
-    cp.execFile = realAsync;
     syncBuiltinESMExports();
   }
 });
