@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
+import { augmentedPath } from "./posix-path.mjs";
 
 const IS_WIN = process.platform === "win32";
 
@@ -47,7 +48,10 @@ function findGemini(env) {
 }
 
 export async function inspectFirstRunStatus(opts = {}) {
-  const env = opts.env ?? process.env;
+  const baseEnv = opts.env ?? process.env;
+  // A6: off win32 a thin PATH (systemd user unit) is widened with the login-shell PATH + nvm/fnm/volta/npm-prefix dirs.
+  const widen = opts.augmentPath ?? ((e) => augmentedPath(e));
+  const env = IS_WIN ? baseEnv : { ...baseEnv, PATH: widen(baseEnv) };
   const probe = opts.probeVersions !== false;
 
   const claudeBin = findClaude(env);

@@ -37,6 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runtimeDir as sharedRuntimeDir } from '../server/runtime-dir.mjs';
+import { augmentedPath } from '../server/posix-path.mjs';
 
 const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -149,10 +150,16 @@ export function insertGitBin(list, root) {
 /**
  * A runtime relaunched from an agent tool shell inherits a stripped env (no Git bin on PATH, HOME=''), and every restart
  * compounds it (idea-178). Win32: PATH = registry machine+user entries first, then inherited extras (dedupe, nothing
- * lost); empty HOME/SHELL removed; exactly one Path key. Never throws. Non-win32: unchanged.
+ * lost); empty HOME/SHELL removed; exactly one Path key. Never throws. Non-win32 (A6): login-shell PATH + nvm/fnm/volta/npm-prefix dirs appended to PATH.
  */
-export function repairShellEnv(env = process.env, { regQuery, exists, which, platform = process.platform, log = () => {} } = {}) {
-  if (platform !== 'win32') return env;
+export function repairShellEnv(env = process.env, { regQuery, exists, which, platform = process.platform, log = () => {}, posixOpts = {} } = {}) {
+  if (platform !== 'win32') { // A6: thin systemd/agent PATH -> login-shell PATH + node-manager dirs, merged (nothing dropped)
+    try {
+      const cur = env.PATH ?? '';
+      const next = augmentedPath(env, { ...posixOpts, platform });
+      return next === cur ? env : { ...env, PATH: next };
+    } catch { return env; }
+  }
   const out = { ...env };
   for (const k of EMPTY_DROP_KEYS) if (out[k] === '') delete out[k];
   const pathKeys = Object.keys(out).filter((k) => k.toLowerCase() === 'path');
