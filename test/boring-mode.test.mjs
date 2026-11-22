@@ -2068,7 +2068,7 @@ test("idea-528: ctx menu marks its open row, Tab returns focus to the trigger, d
   const cp = readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
   assert.ok(cp.includes("markCtxAnchor(s.anchor)") && cp.includes("unmarkAnchor()") && cp.includes("ctxTabAction(s.anchor)"), "host uses the tested helpers");
   assert.ok(cp.includes('e.key === "Tab"'));
-  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8").replace(/\r\n/g, "\n"); // CRLF checkouts: the regex asserts below match on \n
   const rule = (sel) => css.split("\n").filter((l) => l.startsWith(sel));
   assert.ok(rule('html[data-vibe="boring"] .ctx-menu button:disabled')[0].includes("background: transparent"));
   assert.ok(rule('html[data-vibe="boring"] .boring-row-menu-btn[data-ctx-open]').length > 0 || css.includes('.boring-row-menu-btn[data-ctx-open]'));
