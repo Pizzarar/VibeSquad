@@ -3,21 +3,36 @@
 // The `npm test` slot (scripts/suite-lock.mjs) stays a single slot with its own files; a pool is its N-slot sibling built
 // from the same parts: an O_EXCL lock per slot with dead/stale holder takeover (runner/lock.mjs acquireStartLock) and the
 // FIFO waiter line (cli/fifo-queue.mjs). Files, in os.tmpdir() or VIBESQUAD_TEST_LOCK_DIR (tests point it at a temp dir):
-//   <dir>/vibesquad-slot-<pool>-<i>.lock   {pid, startedAt, pool, index, agentId, cmd}  slot i of 0..max-1, held for the run
+//   <dir>/vibesquad-slot-<pool>-<i>.lock   {pid, startedAt, pool, index, agentId, squad, cmd}  slot i of 0..max-1, held for the run
 //   <dir>/vibesquad-slot-<pool>.queue      join / beat / done lines (cli/fifo-queue.mjs)
+//   <dir>/vibesquad-slot-<pool>.claim      only under reservations: held for the instant of one take (see below)
 // Liveness: a holder whose pid is dead is reclaimed at once. A holder touches its lock's mtime every HOLD_BEAT_MS, so one
 // whose pid was reused by another process (Windows recycles pids fast) goes stale after HOLD_STALE_MS without a beat and
 // is reclaimed too. A waiter judges that only after it has itself been awake for HOLD_STALE_MS, so a machine that just woke
 // from sleep (every holder's beat looks old) does not steal live slots.
+// Reservations (idea-578): VS_SLOT_RESERVE_<POOL>=<squad>:<n>[,<squad>:<n>] (default godot efi:2; "none" turns them off)
+// guarantee a Squad n slots. A caller takes a slot only if every OTHER reserved Squad still finds the unused part of its
+// reservation free afterwards: free - 1 >= sum over other reserved R of max(0, n_R - held_R). With godot's 3 slots and
+// efi:2, efi may use all 3 and every other Squad together at most 1. The caller's Squad is its agent's `team` label
+// (cli/vs.mjs slotCallerSquad); an unresolved caller is shared-only. Waiters are served by walking the line in join order:
+// each waiter the rule lets take a slot is handed one, a waiter it does not is skipped (no head-of-line blocking), so the
+// order is FIFO within each class. Under reservations every take re-checks the rule against the lock files while holding
+// the claim mutex, so two racing takers cannot both use the last unreserved slot.
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readdirSync, rmSync, statSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { acquireStartLock, pidAlive, readLock } from "../runner/lock.mjs";
+import { acquireStartLock, pidAlive, readLock, releaseLock } from "../runner/lock.mjs";
 import { appendQueue, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue } from "./fifo-queue.mjs";
 
 export const DEFAULT_POOL_MAX = Object.freeze({ godot: 3 });
+// idea-578 (Aub 11-22): 2 of the 3 godot slots are reserved for Squad efi; the 3rd is shared by every Squad.
+export const DEFAULT_POOL_RESERVE = Object.freeze({ godot: "efi:2" });
+// The claim mutex is held for one readdir plus a few lock creates; a live holder silent this long is wedged.
+export const CLAIM_STALE_MS = 10_000;
+const SHARED = "*shared";
+const SQUAD_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 export const HOLD_BEAT_MS = 30_000;
 export const HOLD_STALE_MS = 120_000;
 export const WAIT_NOTICE_MS = 30_000;
@@ -43,11 +58,120 @@ export function poolMax(pool, { flag, env = process.env } = {}) {
   return DEFAULT_POOL_MAX[pool] ?? 1;
 }
 
+/** A Squad id as the pool compares it (lowercase), or null for none. */
+export function normSquad(squad) {
+  const s = String(squad ?? "").trim().toLowerCase();
+  return s || null;
+}
+
+/**
+ * "<squad>:<n>[,<squad>:<n>]" -> { squad: n }; "none" -> {}. Throws (naming `src`) on a malformed entry, a Squad listed
+ * twice, or reservations adding up to more than `max` slots.
+ */
+export function parseReserveSpec(raw, { max, src = "reservation" } = {}) {
+  const text = String(raw ?? "").trim();
+  if (!text || text.toLowerCase() === "none") return {};
+  const out = {};
+  for (const part of text.split(",")) {
+    const m = /^\s*([^:\s]+)\s*:\s*(\d+)\s*$/.exec(part);
+    const squad = normSquad(m?.[1]);
+    const n = Number(m?.[2]);
+    if (!m || !SQUAD_RE.test(squad) || n < 1 || n > 64) {
+      throw new Error(`${src}: bad reservation "${part.trim()}" in "${text}"; use <squad>:<n>[,<squad>:<n>] with n 1-64 (e.g. efi:2), or none`);
+    }
+    if (out[squad] !== undefined) throw new Error(`${src}: Squad "${squad}" is reserved twice in "${text}"`);
+    out[squad] = n;
+  }
+  const total = Object.values(out).reduce((a, b) => a + b, 0);
+  if (max !== undefined && total > max) throw new Error(`${src}: "${text}" reserves ${total} slots but the pool has only ${max}`);
+  return out;
+}
+
+/**
+ * The pool's reservations: VS_SLOT_RESERVE_<POOL> (godot -> VS_SLOT_RESERVE_GODOT), else DEFAULT_POOL_RESERVE, else none.
+ * An env spec must fit in `max`; the default is trimmed to fit (VS_SLOT_MAX_GODOT=1 leaves efi:1).
+ */
+export function poolReserve(pool, { max, env = process.env } = {}) {
+  const envKey = `VS_SLOT_RESERVE_${pool.toUpperCase().replace(/-/g, "_")}`;
+  const raw = env[envKey];
+  if (raw !== undefined && raw !== null && String(raw).trim() !== "") return parseReserveSpec(raw, { max, src: envKey });
+  const def = parseReserveSpec(DEFAULT_POOL_RESERVE[pool], { src: "default reservation" });
+  let room = max ?? Infinity;
+  for (const k of Object.keys(def)) {
+    def[k] = Math.min(def[k], room);
+    room -= def[k];
+    if (!def[k]) delete def[k];
+  }
+  return def;
+}
+
+/** "efi:2,foo:1", or "none". */
+export function formatReserve(reserve) {
+  const parts = Object.entries(reserve ?? {}).map(([k, n]) => `${k}:${n}`);
+  return parts.length ? parts.join(",") : "none";
+}
+
+/** The class a caller competes in: its Squad when that Squad holds a reservation, else the shared class. */
+const classOf = (squad, reserve) => {
+  const s = normSquad(squad);
+  return s && reserve[s] ? s : SHARED;
+};
+
+/**
+ * The reservation rule: may a caller of `squad` take one more slot while `free` slots are free and classes hold `held`
+ * ({squad | "*shared": n})? Only if every other reserved Squad keeps the unused part of its reservation free.
+ */
+export function mayTake(squad, { free, held, reserve }) {
+  if (free < 1) return false;
+  const mine = classOf(squad, reserve);
+  let owed = 0;
+  for (const [r, n] of Object.entries(reserve)) if (r !== mine) owed += Math.max(0, n - (held[r] ?? 0));
+  return free - 1 >= owed;
+}
+
+/** {busy, free, held} over the fresh holders of slots 0..max-1. */
+function occupancy(holders, max, reserve) {
+  const held = {};
+  let busy = 0;
+  for (const h of holders) {
+    if (!h.fresh || h.index >= max) continue;
+    busy++;
+    const c = classOf(h.squad, reserve);
+    held[c] = (held[c] ?? 0) + 1;
+  }
+  return { busy, free: Math.max(0, max - busy), held };
+}
+
+/**
+ * Walk the live line in join order against the current occupancy: a waiter the rule lets take a slot is handed one (it
+ * comes off `free` and onto its class's count), a waiter it does not is skipped and blocks nobody. Returns, for the
+ * waiter at `idx`, whether it is handed a slot now, and `ahead`: the waiters before it that can block it (those of its
+ * own class, plus any other handed a slot first). With no reservations this is idea-267's rule: handed iff idx < free.
+ */
+export function lineTurn(live, idx, { max, holders, reserve }) {
+  const occ = occupancy(holders, max, reserve);
+  let { free } = occ;
+  const held = { ...occ.held };
+  const mine = classOf(live[idx]?.squad, reserve);
+  let ahead = 0;
+  for (let i = 0; i < idx; i++) {
+    const c = classOf(live[i].squad, reserve);
+    const handed = mayTake(live[i].squad, { free, held, reserve });
+    if (handed) {
+      free--;
+      held[c] = (held[c] ?? 0) + 1;
+    }
+    if (handed || c === mine) ahead++;
+  }
+  return { handed: mayTake(live[idx]?.squad, { free, held, reserve }), ahead };
+}
+
 export function poolPaths(pool, dir = process.env.VIBESQUAD_TEST_LOCK_DIR || os.tmpdir()) {
   return {
     dir,
     pool,
     queue: path.join(dir, `vibesquad-slot-${pool}.queue`),
+    claim: path.join(dir, `vibesquad-slot-${pool}.claim`),
     slot: (i) => path.join(dir, `vibesquad-slot-${pool}-${i}.lock`),
   };
 }
@@ -79,13 +203,13 @@ export function poolHolders(paths, { alive = pidAlive, now = Date.now(), holdSta
     }
     const info = readLock(file);
     const fresh = info ? alive(info.pid) && (!judgeBeat || now - mtime < holdStaleMs) : now - mtime < 1000; // unreadable: mid-create
-    out.push({ index, file, pid: info?.pid ?? null, startedAt: info?.startedAt ?? null, agentId: info?.agentId ?? null, cmd: info?.cmd ?? null, fresh });
+    out.push({ index, file, pid: info?.pid ?? null, startedAt: info?.startedAt ?? null, agentId: info?.agentId ?? null, squad: normSquad(info?.squad), cmd: info?.cmd ?? null, fresh });
   }
   return out.sort((a, b) => a.index - b.index);
 }
 
 /** One try at any of slots 0..max-1. Returns {index, file, pid, startedAt} or null when all are held by live holders. */
-export function tryAcquirePoolSlot(paths, { max, pid = process.pid, alive = pidAlive, staleMs = HOLD_STALE_MS, agentId = agentIdOf(), cmd = null, onSteal } = {}) {
+export function tryAcquirePoolSlot(paths, { max, pid = process.pid, alive = pidAlive, staleMs = HOLD_STALE_MS, agentId = agentIdOf(), squad = null, cmd = null, onSteal } = {}) {
   for (let index = 0; index < max; index++) {
     const file = paths.slot(index);
     const startedAt = Date.now();
@@ -93,12 +217,28 @@ export function tryAcquirePoolSlot(paths, { max, pid = process.pid, alive = pidA
       staleMs,
       alive,
       pid,
-      body: { startedAt, pool: paths.pool, index, agentId, cmd },
+      body: { startedAt, pool: paths.pool, index, agentId, squad: normSquad(squad), cmd },
       onSteal: (old, reason) => onSteal?.({ ...old, index, reason }),
     });
     if (ok) return { index, file, pid, startedAt };
   }
   return null;
+}
+
+/**
+ * One take under reservations: holding the pool's claim mutex, re-read the lock files, apply the reservation rule for
+ * `squad`, and only then try the slots. Null when the claim is busy (the caller retries next poll) or the rule says no.
+ */
+export function tryClaimPoolSlot(paths, { max, reserve, squad = null, holdStaleMs = HOLD_STALE_MS, judgeBeat = true, pid = process.pid, alive = pidAlive, ...take } = {}) {
+  if (!acquireStartLock(paths.claim, { staleMs: CLAIM_STALE_MS, alive, pid })) return null;
+  try {
+    const holders = poolHolders(paths, { alive, holdStaleMs, judgeBeat });
+    const { free, held } = occupancy(holders, max, reserve);
+    if (!mayTake(squad, { free, held, reserve })) return null;
+    return tryAcquirePoolSlot(paths, { ...take, max, squad, pid, alive });
+  } finally {
+    releaseLock(paths.claim, pid);
+  }
 }
 
 const ours = (slot) => {
@@ -125,7 +265,8 @@ export function releasePoolSlot(slot) {
 /**
  * Wait FIFO for a slot. Joins the queue; the waiter at live position idx (0-based) tries the locks only while idx is
  * below the number of free slots (the head always tries), so arrivals are served in order while the locks alone keep
- * the count at max. `onWait({ahead, waiting, busy, max, holders})` fires on the first wait, on a change, and every
+ * the count at max. With `reserve` ({squad: n}) the turn comes from lineTurn (FIFO per class, the reservation rule) and
+ * the take from tryClaimPoolSlot. `onWait({ahead, waiting, busy, max, reserve, squad, holders})` fires on the first wait, on a change, and every
  * noticeMs. `onJoin({id, leave})` hands a signal handler the way out of the line. Resolves with the slot, or null after
  * timeoutMs (the waiter has left the line).
  */
@@ -133,6 +274,8 @@ export async function waitForPoolSlot(
   paths,
   {
     max,
+    reserve = {},
+    squad = null,
     pid = process.pid,
     agentId = agentIdOf(),
     cmd = null,
@@ -149,7 +292,10 @@ export async function waitForPoolSlot(
   } = {},
 ) {
   const id = `${pid}-${Date.now()}-${randomBytes(4).toString("hex")}`;
-  const join = () => appendQueue(paths, { op: "join", id, pid, agentId, at: Date.now() });
+  squad = normSquad(squad);
+  const reserved = Object.keys(reserve).length > 0;
+  // squad goes on the line only under reservations: a reservation-free pool writes idea-267's lines unchanged.
+  const join = () => appendQueue(paths, { op: "join", id, pid, agentId, ...(reserved ? { squad } : {}), at: Date.now() });
   let left = false;
   const leave = () => {
     if (left) return;
@@ -194,20 +340,23 @@ export async function waitForPoolSlot(
       const judgeBeat = now - awakeSince >= holdStaleMs;
       const holders = poolHolders(paths, { alive, now, holdStaleMs, judgeBeat });
       const busy = holders.filter((h) => h.fresh && h.index < max).length;
-      const free = Math.max(0, max - busy);
-      if (idx === 0 || idx < free) {
-        const slot = tryAcquirePoolSlot(paths, { max, pid, alive, agentId, cmd, staleMs: judgeBeat ? holdStaleMs : Infinity, onSteal });
+      const { handed, ahead } = lineTurn(live, idx, { max, holders, reserve });
+      // Without reservations the head always tries (idea-267). With them only a handed waiter does: a head the rule
+      // refuses would just churn the claim mutex, and a reclaimable holder already counts as free in lineTurn.
+      if (handed || (idx === 0 && !reserved)) {
+        const take = { max, pid, alive, agentId, squad, cmd, staleMs: judgeBeat ? holdStaleMs : Infinity, onSteal };
+        const slot = reserved ? tryClaimPoolSlot(paths, { ...take, reserve, holdStaleMs, judgeBeat }) : tryAcquirePoolSlot(paths, take);
         if (slot) {
           leave();
           if (live.length === 1) rmSync(paths.queue, { force: true }); // nobody behind us: compact (a racing joiner re-joins)
           return slot;
         }
       }
-      const key = `${idx}|${busy}`;
+      const key = `${ahead}|${busy}`;
       if (key !== shownKey || Date.now() - shownAt >= noticeMs) {
         shownKey = key;
         shownAt = Date.now();
-        onWait?.({ ahead: idx, waiting: live.length, busy, max, holders: holders.filter((h) => h.fresh && h.pid) });
+        onWait?.({ ahead, waiting: live.length, busy, max, reserve, squad, holders: holders.filter((h) => h.fresh && h.pid) });
       }
       if (Date.now() - lastBeat >= beatMs) beat();
       await new Promise((r) => setTimeout(r, pollMs));
@@ -289,15 +438,21 @@ function spawnChild(cmd, args, opts, { platform = process.platform } = {}) {
   });
 }
 
-const who = (h) => `pid ${h.pid}${h.agentId ? ` (agent ${h.agentId})` : ""}`;
+const who = (h) => {
+  const tags = [h.agentId && `agent ${h.agentId}`, h.squad].filter(Boolean);
+  return `pid ${h.pid}${tags.length ? ` (${tags.join(", ")})` : ""}`;
+};
 
 /**
  * `vs slot run`: wait for a slot of `pool`, run cmd with inherited stdio, release the slot, resolve with the child's exit
  * code (128+signal number when it died by a signal). 124: no slot within timeoutSec. 127: the command could not start.
  * 130/143: interrupted while waiting (the waiter leaves the line first).
  */
-export async function runInSlot({ pool, max, timeoutSec = 0, cmd, args = [], env = process.env, dir, stderr = process.stderr, pollMs, noticeMs } = {}) {
+export async function runInSlot({ pool, max, reserve, squad = null, timeoutSec = 0, cmd, args = [], env = process.env, dir, stderr = process.stderr, pollMs, noticeMs } = {}) {
   pool = validatePool(pool);
+  reserve ??= poolReserve(pool, { max, env });
+  squad = normSquad(squad);
+  const mine = Object.keys(reserve).length ? `; reserved ${formatReserve(reserve)}, you: ${squad && reserve[squad] ? squad : `${squad ?? "no squad"}, shared`}` : "";
   const paths = poolPaths(pool, dir ?? (env.VIBESQUAD_TEST_LOCK_DIR || os.tmpdir()));
   const label = [cmd, ...args].join(" ").slice(0, 200);
   const say = (s) => stderr.write(`vs slot: ${s}\n`);
@@ -322,13 +477,15 @@ export async function runInSlot({ pool, max, timeoutSec = 0, cmd, args = [], env
   try {
     slot = await waitForPoolSlot(paths, {
       max,
+      reserve,
+      squad,
       cmd: label,
       timeoutMs: Math.max(0, Number(timeoutSec) || 0) * 1000,
       ...(pollMs ? { pollMs } : {}),
       ...(noticeMs ? { noticeMs } : {}),
       onJoin: (t) => (leave = t.leave),
       onWait: ({ ahead, busy, max: m, holders }) =>
-        say(`waiting for ${pool} slot (${ahead} ahead; ${busy}/${m} busy${holders.length ? `: ${holders.map(who).join(", ")}` : ""})`),
+        say(`waiting for ${pool} slot (${ahead} ahead; ${busy}/${m} busy${holders.length ? `: ${holders.map(who).join(", ")}` : ""}${mine})`),
       onSteal: (old) => say(`reclaimed ${pool} slot ${old.index} from ${old.reason} holder pid ${old.pid}`),
     });
   } finally {
@@ -375,10 +532,10 @@ export async function runInSlot({ pool, max, timeoutSec = 0, cmd, args = [], env
 }
 
 /** `vs slot status`: the pool's holders and waiters. */
-export function poolStatus(pool, { dir, max, alive = pidAlive } = {}) {
+export function poolStatus(pool, { dir, max, reserve = {}, alive = pidAlive } = {}) {
   pool = validatePool(pool);
   const paths = poolPaths(pool, dir);
   const holders = poolHolders(paths, { alive });
   const { live } = readQueue(paths, { alive });
-  return { pool, max, dir: paths.dir, holders, waiting: live.map((e) => ({ pid: e.pid, agentId: e.agentId, since: e.at })) };
+  return { pool, max, reserve, dir: paths.dir, holders, waiting: live.map((e) => ({ pid: e.pid, agentId: e.agentId, squad: normSquad(e.squad), since: e.at })) };
 }
