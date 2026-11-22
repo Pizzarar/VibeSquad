@@ -1067,6 +1067,26 @@ test('usage review: oneShotReviewRun promptFile mode keeps the prompt out of arg
   assert.equal(fs.existsSync(rec.cwd), false, 'temp dir removed');
 });
 
+test('usage review: promptFile temp dir is removed when spawnImpl throws', async () => {
+  const rec = {};
+  const res = await oneShotReviewRun('agy', ['-p'], { promptFile: true })({ prompt: 'p', spawnImpl: (f, a, o) => { rec.cwd = o.cwd; rec.had = fs.existsSync(path.join(o.cwd, 'prompt.md')); throw new Error('spawn boom'); } });
+  assert.equal(res.ok, false);
+  assert.ok(rec.had);
+  assert.equal(fs.existsSync(rec.cwd), false);
+});
+
+test('usage review: promptFile timeout cleans up, retrying on close if the dir was held', async () => {
+  const rec = {};
+  const res = await oneShotReviewRun('agy', ['-p'], { promptFile: true })({ prompt: 'p', timeoutMs: 20, spawnImpl: (f, a, o) => {
+    const c = reviewSpawn(() => {})(f, a, o); rec.child = c; rec.cwd = o.cwd; return c;
+  } });
+  assert.equal(res.timedOut, true);
+  {
+    rec.child.emit('close', 1);
+  }
+  assert.equal(fs.existsSync(rec.cwd), false);
+});
+
 test('usage review: oneShotReviewRun stdin EPIPE resolves ok:false without crashing', async () => {
   const rec = {};
   const res = await oneShotReviewRun('claude', ['-p'])({ prompt: 'hi', spawnImpl: stdinSpawn(rec, (c) => c.stdin.emit('error', new Error('write EPIPE'))) });

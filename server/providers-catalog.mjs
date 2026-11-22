@@ -2336,7 +2336,8 @@ export function oneShotReviewRun(cmd, args, { promptFile = false } = {}) {
       if (!spawnImpl && underTestRunner()) return resolve({ ok: false, error: `refusing to spawn the real ${cmd} under a test runner`, ms: 0 });
       const started = Date.now();
       let dir = null;
-      const cleanup = () => { if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } dir = null; } };
+      // Windows: the killed child can still hold its cwd (EPERM/EBUSY) -> keep dir and retry on the child's exit/close.
+      const cleanup = () => { if (dir) { try { rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); dir = null; } catch { /* retried on exit/close */ } } };
       let child;
       try {
         let childArgs = args;
@@ -2362,6 +2363,8 @@ export function oneShotReviewRun(cmd, args, { promptFile = false } = {}) {
       child.stderr?.on("data", (d) => { err = (err + d).slice(-2000); }); // bounded tail: an unread stderr pipe can stall the child
       child.on("error", (e) => finish({ ok: false, error: String(e?.message ?? e) }));
       child.on("exit", (code) => finish(code === 0 ? { ok: true, text: out.trim() } : { ok: false, error: err || `exit ${code}` }));
+      child.on("exit", cleanup);
+      child.on("close", cleanup);
       if (child.stdin) {
         child.stdin.on?.("error", (e) => finish({ ok: false, error: `stdin: ${String(e?.message ?? e)}` })); // EPIPE: child exited before reading
         try { child.stdin.end(promptFile ? undefined : String(prompt ?? "")); } catch (e) { finish({ ok: false, error: `stdin: ${String(e?.message ?? e)}` }); }
