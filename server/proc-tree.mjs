@@ -160,7 +160,8 @@ export function flushTreeKills() {
  *   'pid'     - walk: false (restart script): no group, so only pid itself.
  *   'gone'    - nothing to kill (ESRCH on the group and on pid).
  *   'pending' - a kill of this pid is already in its grace: nothing new sent, no second timer.
- *   'refused' - pid <= 1, this process, or (walk) one of its ancestors.
+ *   'escalated' - signal SIGKILL while a grace was pending: the pending escalation ran now and its timer was dropped.
+ *   'refused' - pid <= 1, this process, or (walk) one of its ancestors (checked before any signal). Nothing was signalled.
  * ESRCH anywhere counts as already dead. Never signals pid 0/1, this process, or this process's own group.
  * graceMs null: no escalation (the caller escalates itself). signal SIGKILL: nothing to escalate.
  */
@@ -176,7 +177,15 @@ export function posixKillTree(pid, {
   clearTimer = clearTimeout,
 } = {}) {
   if (!Number.isInteger(pid) || pid <= 1 || pid === selfPid) return { mode: "refused" };
-  if (pendingKills.has(pid)) return { mode: "pending" };
+  const pending = pendingKills.get(pid);
+  if (pending) {
+    if (signal !== "SIGKILL") return { mode: "pending" };
+    // An explicit SIGKILL while a SIGTERM grace runs: escalate now (same liveness + pid-reuse checks), drop the timer.
+    pendingKills.delete(pid);
+    pending.clear(pending.timer);
+    try { pending.fire(); } catch { /* best effort */ }
+    return { mode: "escalated" };
+  }
   const myGroup = selfPgid !== undefined ? selfPgid
     : selfPid === process.pid && readTable === readProcTable ? (cachedPgid ??= ownPgid()) // a process never changes its own group here
     : ownPgid({ selfPid, readTable });
@@ -194,17 +203,36 @@ export function posixKillTree(pid, {
     if (!exitHooked) { exitHooked = true; process.once("exit", flushTreeKills); }
   };
 
+  // walk (a tree kill of something we started): read the table first and refuse our own ancestors BEFORE any signal, group
+  // included: an ancestor that leads its own group (the server that spawned the runner) must not get kill(-pid) either.
+  // walk: false (the restart script) skips this: its target, the server, may legitimately be its ancestor (vs restart chain).
+  let table = null;
+  if (walk) {
+    try { table = readTable(); } catch { /* unknown: no ancestor check possible, pid alone in the walk */ }
+    if (table && isSelfOrAncestor(pid, selfPid, table)) return { mode: "refused" };
+  }
   const groupRes = sig(-pid, signal);
   if (groupRes === "ok") {
-    if (escalate) schedule(() => { if (sig(-pid, 0) !== "gone") sig(-pid, "SIGKILL"); });
+    // Escalation pid-reuse check: Linux never hands out pid N while a process group N exists (the pgid pins the pid), so a group
+    // still alive at the probe is ours unless it emptied and N was reused within the grace; then N runs with a new start time.
+    const leaderStart = table?.get(pid)?.start ?? null;
+    if (escalate) {
+      schedule(() => {
+        if (sig(-pid, 0) === "gone") return;
+        if (leaderStart !== null) {
+          let now = null;
+          try { now = readTable(); } catch { /* unknown: liveness alone */ }
+          const is = now?.get(pid)?.start ?? null;
+          if (is !== null && is !== leaderStart) return; // pid N reused by a stranger leading its own group N
+        }
+        sig(-pid, "SIGKILL");
+      });
+    }
     return { mode: "group" };
   }
   // No group led by pid (ESRCH), or not ours to signal (EPERM / our own group): is pid itself still there?
   if (groupRes === "gone" && sig(pid, 0) === "gone") return { mode: "gone" };
   if (!walk) return { mode: sig(pid, signal) === "gone" ? "gone" : "pid" };
-  let table = null;
-  try { table = readTable(); } catch { /* unknown: pid alone below */ }
-  if (table && isSelfOrAncestor(pid, selfPid, table)) return { mode: "refused" };
   const targets = [...(table ? descendantsLeafFirst(pid, table) : []).filter((p) => p > 1 && p !== selfPid), pid];
   const started = new Map(targets.map((p) => [p, table?.get(p)?.start ?? null]));
   for (const p of targets) sig(p, signal);

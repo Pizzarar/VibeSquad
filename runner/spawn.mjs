@@ -81,7 +81,11 @@ export function killTree(child, { platform = process.platform, spawnImpl = spawn
     } catch { /* fall through */ }
   }
   if (platform !== 'win32' && child.pid) {
-    try { if (posixKillTree(child.pid, posix).mode !== 'refused') return true; } catch { /* fall through */ }
+    // 'refused' (pid <= 1, this process, or one of its ancestors) means nothing may be signalled: no child.kill() either.
+    // Only a throw falls through to child.kill().
+    let r = null;
+    try { r = posixKillTree(child.pid, posix); } catch { /* fall through */ }
+    if (r) return r.mode !== 'refused';
   }
   try { child.kill(); } catch { /* already gone */ }
   return true;
@@ -89,10 +93,16 @@ export function killTree(child, { platform = process.platform, spawnImpl = spawn
 
 // Kill a process by pid AND its descendants (ideas 228 + 229): a held agent's background shell (bash run_godot.sh ->
 // timeout.exe -> Godot). Killing only the shell on Windows leaves its native children running, orphaned out of the agent's
-// tree where nothing counts or kills them. Windows: taskkill /pid <pid> /T /F (no shell, fixed args). POSIX: the process
-// group (a background shell is usually its leader), else the pid. Callers pass only pids a fresh probe saw under the agent.
-export function killPidTree(pid, { platform = process.platform, spawnImpl = spawn, killImpl = process.kill.bind(process) } = {}) {
+// tree where nothing counts or kills them. Windows: taskkill /pid <pid> /T /F (no shell, fixed args). POSIX (audit R4):
+// posixKillTree with SIGKILL: the process group (a background shell is usually its leader), else a leaf-first /proc
+// descendant walk; never pid <= 1, this process or its ancestors ('refused' -> false). A pending SIGTERM grace on the same pid
+// escalates now. Callers pass only pids a fresh probe saw under the agent. posix holds test overrides (readTable, selfPid, ...).
+export function killPidTree(pid, { platform = process.platform, spawnImpl = spawn, killImpl = process.kill.bind(process), posix = {} } = {}) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (platform !== 'win32') {
+    if (pid <= 1) return false; // never kill(-1) (every process we may signal) or init
+    try { return posixKillTree(pid, { ...posix, signal: 'SIGKILL', graceMs: null, killImpl }).mode !== 'refused'; } catch { /* fall through */ }
+  }
   if (platform === 'win32') {
     try {
       const k = spawnImpl('taskkill', ['/pid', String(pid), '/T', '/F'], { shell: false, windowsHide: true, stdio: 'ignore' });

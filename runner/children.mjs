@@ -92,7 +92,7 @@ export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, ki
   const infos = inspect ? null : inspectMany(live.map((rec) => rec.pid));
   for (const rec of live) {
     if (!matchesRecord(rec, inspect ? inspect(rec.pid) : infos.get(rec.pid) ?? null)) { skipped.push(rec.pid); continue; }
-    try { kill(rec.pid); killed.push(rec.pid); } catch { skipped.push(rec.pid); }
+    try { (kill(rec.pid) === false ? skipped : killed).push(rec.pid); } catch { skipped.push(rec.pid); } // false: refused (POSIX guard), nothing signalled
   }
   writeChildren(home, []);
   return { killed, skipped };

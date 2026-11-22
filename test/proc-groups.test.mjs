@@ -10,7 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
-import { killTree, spawnNoShell } from "../runner/spawn.mjs";
+import { killPidTree, killTree, spawnNoShell } from "../runner/spawn.mjs";
 import { CHILDREN_FILE, sweepOrphans } from "../runner/children.mjs";
 import { descendantsLeafFirst, flushTreeKills, parseProcStat, pendingTreeKills, posixKillTree, readProcTable } from "../server/proc-tree.mjs";
 import { killHard, termGracefully } from "../scripts/restart-runtime.mjs";
@@ -171,11 +171,18 @@ test("inv3: walk guards: never pid 1 or the runner even in a malformed table; re
   assert.deepEqual(r.targets, [221, 220], "pid 1 dropped from the walk");
   for (const [t] of w.calls) { assert.notEqual(t, 1); assert.notEqual(t, SELF); assert.notEqual(t, -SELF); }
   w.fire();
-  // A table where the target is the runner's ancestor (the runner would be a descendant): refused, nothing signalled.
+  // L1: the target is the runner's ancestor AND leads its own live group (the server that spawned the runner): with walk the
+  // ancestor check runs before any signal, so not even kill(-225) goes out. (Before R1 fix: kill(-225, SIGTERM) -> 'group'.)
   const a = world([...base, [225, 1, 225]]);
   a.table.get(5).ppid = 225;
-  assert.deepEqual(posixKillTree(225, a.posix({ killImpl: (t, s) => { if (t < 0) throw eperm(); return a.killImpl(t, s); } })), { mode: "refused" });
-  assert.deepEqual(signalled(a.calls).filter(([t]) => t > 0), []);
+  assert.deepEqual(posixKillTree(225, a.posix()), { mode: "refused" });
+  assert.deepEqual(a.calls, [], "no signal of any kind, group included");
+  assert.equal(killTree({ pid: 225, exitCode: null, kill() { throw new Error("refused must not fall through to child.kill"); } }, { platform: "linux", posix: a.posix() }), false);
+  assert.deepEqual(a.calls, []);
+  assert.equal(a.alive(225) && a.alive(5) && a.alive(SELF), true);
+  // walk: false (restart script) keeps signalling the group: its target, the server, may legitimately be its ancestor.
+  assert.deepEqual(posixKillTree(225, a.posix({ walk: false, graceMs: null, readTable: () => { throw new Error("walk:false never reads the table"); } })), { mode: "group" });
+  assert.deepEqual(signalled(a.calls), [[-225, "SIGTERM"]]);
   // A sane table: the runner, its parent (ancestor) and init are refused outright.
   const s = world([...base]);
   assert.deepEqual(posixKillTree(SELF, s.posix()), { mode: "refused" });
@@ -305,6 +312,100 @@ test("inv5: a second killTree during the grace does not throw, re-signal, or add
   w2.fire();
   assert.equal(pendingTreeKills(), 0);
   assert.equal(posixKillTree(281, w2.posix()).mode, "gone");
+});
+
+// ---- review R1 (Opus): M1, M2, L2 ------------------------------------------------------------------------------------------
+
+test("R1 M1: a refused pid is never signalled via child.kill(): killTree returns false, sweepOrphans counts it skipped", () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-procgroups-m1-"));
+  try {
+    // The ledger names the runner's parent (5, an ancestor): the walk-mode guard refuses it before any signal.
+    writeFileSync(path.join(home, CHILDREN_FILE), JSON.stringify([{ pid: 5, name: "node", startedAt: 1000 }]));
+    const w = world([...base]);
+    const raw = [];
+    const realKill = process.kill;
+    process.kill = (pid, sig) => { raw.push([pid, sig]); return true; }; // the sweep handle's kill: () => process.kill(pid)
+    let r;
+    try {
+      r = sweepOrphans(home, { inspect: () => ({ name: "node", createdMs: 1000 }), alive: () => true, killOpts: { platform: "linux", posix: w.posix() } });
+    } finally { process.kill = realKill; }
+    assert.deepEqual(r, { killed: [], skipped: [5] });
+    assert.deepEqual(raw, [], "process.kill(pid) fallback never ran");
+    assert.deepEqual(w.calls, [], "nothing signalled");
+  } finally { rmSync(home, { recursive: true, force: true }); }
+  // A throw inside the POSIX kill still falls through to child.kill() (the only fall-through).
+  let killed = 0;
+  const posix = { readTable: () => { throw new Error("x"); }, killImpl: () => { throw new Error("boom"); }, selfPid: SELF, get selfPgid() { throw new Error("posix path broke"); } };
+  assert.equal(killTree({ pid: 290, exitCode: null, kill() { killed++; } }, { platform: "linux", posix }), true);
+  assert.equal(killed, 1);
+});
+
+test("R1 M2: killPidTree POSIX = posixKillTree SIGKILL: group, else leaf-first walk; never pid <= 1 or an ancestor", () => {
+  // pid 1 / 0 / -1: no signal at all (old code sent kill(-1, SIGKILL)).
+  const z = world([...base]);
+  for (const p of [1, 0, -1]) assert.equal(killPidTree(p, { platform: "linux", killImpl: z.killImpl, posix: z.posix() }), false);
+  assert.deepEqual(z.calls, []);
+  // Group leader: one SIGKILL to the group, no grace timer.
+  const g = world([...base, [300, SELF, 300], [301, 300, 300]]);
+  assert.equal(killPidTree(300, { platform: "linux", killImpl: g.killImpl, posix: g.posix() }), true);
+  assert.deepEqual(signalled(g.calls), [[-300, "SIGKILL"]]);
+  assert.equal(g.timers.length, 0);
+  assert.equal(g.alive(301), false);
+  // Not a group leader (bash run_godot.sh -> timeout -> Godot in the agent's group): SIGKILL walk, leaves first.
+  const k = world([...base, [310, SELF, SELF], [311, 310, SELF], [312, 311, SELF]]);
+  assert.equal(killPidTree(310, { platform: "linux", killImpl: k.killImpl, posix: k.posix() }), true);
+  assert.deepEqual(signalled(k.calls).filter(([t]) => t > 0), [[312, "SIGKILL"], [311, "SIGKILL"], [310, "SIGKILL"]]);
+  assert.equal(k.timers.length, 0);
+  // An ancestor of this process: refused before any signal.
+  const a = world([...base, [320, 1, 320]]);
+  a.table.get(5).ppid = 320;
+  assert.equal(killPidTree(320, { platform: "linux", killImpl: a.killImpl, posix: a.posix() }), false);
+  assert.deepEqual(a.calls, []);
+  // win32 unchanged: taskkill, and still false only for pid <= 0.
+  const spawned = [];
+  const spawnImpl = (cmd, args, o) => { spawned.push([cmd, args, o]); return { on() {}, unref() {} }; };
+  assert.equal(killPidTree(1, { platform: "win32", spawnImpl, killImpl: () => { throw new Error("no POSIX kill on win32"); } }), true);
+  assert.deepEqual(spawned, [["taskkill", ["/pid", "1", "/T", "/F"], { shell: false, windowsHide: true, stdio: "ignore" }]]);
+});
+
+test("R1 L2: an explicit SIGKILL during a pending SIGTERM grace escalates now (not 'pending') and drops the timer", () => {
+  const w = world([...base, [330, SELF, 330, { stubborn: true }], [331, 330, 330, { stubborn: true }]]);
+  assert.equal(posixKillTree(330, w.posix()).mode, "group");
+  assert.equal(pendingTreeKills(), 1);
+  assert.deepEqual(posixKillTree(330, w.posix()), { mode: "pending" }, "a second SIGTERM still waits");
+  assert.deepEqual(posixKillTree(330, w.posix({ signal: "SIGKILL", graceMs: null })), { mode: "escalated" });
+  assert.equal(pendingTreeKills(), 0);
+  assert.equal(w.timers[0].cleared, true);
+  assert.equal(w.alive(330) || w.alive(331), false, "SIGKILL reached the group now, not after the grace");
+  assert.deepEqual(signalled(w.calls), [[-330, "SIGTERM"], [-330, "SIGKILL"]]);
+  w.fire();
+  assert.deepEqual(signalled(w.calls), [[-330, "SIGTERM"], [-330, "SIGKILL"]], "the dropped timer sends nothing more");
+  // Same through killPidTree (Runner.stopBackground) after a killTree (park) of the same pid.
+  const v = world([...base, [335, SELF, 335, { stubborn: true }]]);
+  killTree({ pid: 335, exitCode: null, kill() {} }, { platform: "linux", posix: v.posix() });
+  assert.equal(killPidTree(335, { platform: "linux", killImpl: v.killImpl, posix: v.posix() }), true);
+  assert.equal(v.alive(335), false);
+  assert.equal(pendingTreeKills(), 0);
+});
+
+test("R1 L2: group escalation skips a group whose leader pid was reused (new start time) during the grace", () => {
+  const w = world([...base, [340, SELF, 340, { stubborn: true, start: "1000" }]]);
+  assert.equal(posixKillTree(340, w.posix()).mode, "group");
+  w.table.get(340).start = "2000"; // the old group emptied and pid 340 now leads a stranger's group 340
+  w.fire();
+  assert.deepEqual(signalled(w.calls), [[-340, "SIGTERM"]], "no SIGKILL to the stranger's group");
+  // Same start time: still ours, escalated.
+  const s = world([...base, [341, SELF, 341, { stubborn: true, start: "1000" }]]);
+  posixKillTree(341, s.posix());
+  s.fire();
+  assert.deepEqual(signalled(s.calls), [[-341, "SIGTERM"], [-341, "SIGKILL"]]);
+  // Leader gone but members left in its group: the pid cannot be reused while group 341 exists, so escalate.
+  const m = world([...base, [342, SELF, 342, { start: "1000" }], [343, 342, 342, { stubborn: true }]]);
+  posixKillTree(342, m.posix());
+  m.fire();
+  assert.deepEqual(signalled(m.calls), [[-342, "SIGTERM"], [-342, "SIGKILL"]]);
+  assert.equal(m.alive(343), false);
+  assert.equal(pendingTreeKills(), 0);
 });
 
 // ---- real processes (POSIX only) -------------------------------------------------------------------------------------------
