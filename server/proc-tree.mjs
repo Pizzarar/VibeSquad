@@ -4,25 +4,62 @@ import { spawn, spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 
 /** Best-effort; synchronous when `sync` (needed inside a process "exit" handler). */
-export function killTree(pid, { sync = false } = {}) {
-  if (!pid || pid < 2) return;
-  if (process.platform === "win32") {
-    const args = ["/PID", String(pid), "/T", "/F"];
+export function killTree(pid, opts = {}) {
+  killTrees([pid], opts);
+}
+
+// One taskkill takes many /PID args; cap a batch well under the 32K command-line limit.
+const TASKKILL_BATCH = 200;
+const TASKKILL_CEILING_MS = 30000;
+
+/**
+ * Tree-kill many pids (idea-408). win32 batches them into one taskkill per TASKKILL_BATCH pids, so a server-exit sweep of
+ * N terminals costs one taskkill startup (bounded by one 30s ceiling), not N. A missing pid only fails its own /PID entry.
+ * `onDone` runs once every tree kill was attempted: right away when `sync` or off win32, else when the async taskkill
+ * exits, fails to spawn, or passes the ceiling. `platform`/`run` are test seams.
+ */
+export function killTrees(pids, { sync = false, onDone, platform = process.platform, run = { spawn, spawnSync } } = {}) {
+  let doneCalled = false;
+  const done = () => { if (doneCalled) return; doneCalled = true; try { onDone?.(); } catch {} };
+  const list = [...new Set((pids ?? []).map(Number).filter((p) => Number.isInteger(p) && p >= 2))];
+  if (!list.length) return done();
+  if (platform === "win32") {
+    const batches = [];
+    for (let i = 0; i < list.length; i += TASKKILL_BATCH) batches.push(list.slice(i, i + TASKKILL_BATCH));
+    const argsFor = (batch) => [...batch.flatMap((p) => ["/PID", String(p)]), "/T", "/F"];
     if (sync) {
       // taskkill is a separate process: under heavy CPU load its startup alone can pass a few seconds, and a spawnSync timeout kills it
-      // mid-job and leaves the tree alive. Allow a generous ceiling, and if it still didn't finish, at least take down the root.
-      let r;
-      try { r = spawnSync("taskkill", args, { windowsHide: true, stdio: "ignore", timeout: 30000 }); } catch {}
-      if (!r || r.error || r.signal) { try { process.kill(pid, "SIGKILL"); } catch {} }
-    } else {
-      try { spawn("taskkill", args, { windowsHide: true, stdio: "ignore" }).on("error", () => {}).unref(); } catch {}
+      // mid-job and leaves the tree alive. Allow a generous ceiling, and if it still didn't finish, at least take down the roots.
+      for (const batch of batches) {
+        let r;
+        try { r = run.spawnSync("taskkill", argsFor(batch), { windowsHide: true, stdio: "ignore", timeout: TASKKILL_CEILING_MS }); } catch {}
+        if (!r || r.error || r.signal) for (const p of batch) { try { process.kill(p, "SIGKILL"); } catch {} }
+      }
+      return done();
+    }
+    let pending = batches.length;
+    const settle = () => { if (--pending === 0) done(); };
+    for (const batch of batches) {
+      let settled = false;
+      const once = () => { if (settled) return; settled = true; clearTimeout(timer); settle(); };
+      const timer = setTimeout(once, TASKKILL_CEILING_MS);
+      timer.unref?.();
+      try {
+        const child = run.spawn("taskkill", argsFor(batch), { windowsHide: true, stdio: "ignore" });
+        child.on("error", once);
+        child.on("exit", once);
+        child.unref?.();
+      } catch { once(); }
     }
     return;
   }
   // POSIX: children are started detached (own process group), so signal the group, then the pid itself.
-  for (const target of [-pid, pid]) {
-    try { process.kill(target, "SIGKILL"); } catch {}
+  for (const pid of list) {
+    for (const target of [-pid, pid]) {
+      try { process.kill(target, "SIGKILL"); } catch {}
+    }
   }
+  done();
 }
 
 const exitHooks = new Set();

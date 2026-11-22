@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { killTree, onServerExit } from "./proc-tree.mjs";
+import { killTree, killTrees, onServerExit } from "./proc-tree.mjs";
 import { withoutTokens } from "./terminals.mjs";
 
 const LOG_CHARS = 200_000;
@@ -103,7 +103,8 @@ export class ScriptManager {
   }
 
   stopAll({ sync = false } = {}) {
-    for (const r of this.runs.values()) if (!r.exited) killTree(r.pid, { sync });
+    // One batched taskkill for every live script (idea-408), not a sync taskkill per pid on server exit.
+    killTrees([...this.runs.values()].filter((r) => !r.exited).map((r) => r.pid), { sync });
   }
 }
 

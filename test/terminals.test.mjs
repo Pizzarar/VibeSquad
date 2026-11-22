@@ -7,6 +7,9 @@ import { test } from "node:test";
 import { TerminalManager, loadNodePty } from "../server/terminals.mjs";
 import { ScriptManager, listPackageScripts } from "../server/workspace-scripts.mjs";
 import { handleTerminalsApi } from "../server/terminals-api.mjs";
+import { killTrees } from "../server/proc-tree.mjs";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 
 const alive = (pid) => {
   try { process.kill(pid, 0); return true; } catch { return false; }
@@ -100,6 +103,78 @@ test("terminal: killAll (the server-exit path) leaves no process behind; limits 
     assert.ok(await until(() => !alive(a.pid) && !alive(b.pid)));
     assert.deepEqual(m.list(), []);
   } finally { m.killAll(); rmq(dir); }
+});
+
+test("idea-408: killTrees batches every pid into one taskkill (sync and async) and calls onDone once", () => {
+  const syncCalls = [];
+  const run = {
+    spawnSync: (cmd, args, opts) => { syncCalls.push({ cmd, args, timeout: opts.timeout }); return { status: 0 }; },
+    spawn: () => { throw new Error("sync path must not spawn async"); },
+  };
+  let done = 0;
+  killTrees([101, 102, 0, 1, 101, 103], { sync: true, platform: "win32", run, onDone: () => done++ });
+  assert.deepEqual(syncCalls, [{ cmd: "taskkill", args: ["/PID", "101", "/PID", "102", "/PID", "103", "/T", "/F"], timeout: 30000 }]);
+  assert.equal(done, 1);
+
+  // Async: one child, onDone only after it exits (not at call time), and only once even if error follows exit.
+  const kids = [];
+  const runAsync = {
+    spawnSync: () => { throw new Error("async path must not block"); },
+    spawn: (cmd, args) => { const c = new EventEmitter(); c.unref = () => {}; c.args = args; kids.push(c); return c; },
+  };
+  let asyncDone = 0;
+  killTrees([201, 202], { platform: "win32", run: runAsync, onDone: () => asyncDone++ });
+  assert.equal(kids.length, 1);
+  assert.deepEqual(kids[0].args, ["/PID", "201", "/PID", "202", "/T", "/F"]);
+  assert.equal(asyncDone, 0, "the PTY close must wait for the tree kill");
+  kids[0].emit("exit", 0);
+  kids[0].emit("error", new Error("late"));
+  assert.equal(asyncDone, 1);
+
+  // A taskkill that can't spawn still reports done; nothing to kill reports done without spawning.
+  let failDone = 0;
+  killTrees([301], { platform: "win32", run: { spawn: () => { throw new Error("ENOENT"); } }, onDone: () => failDone++ });
+  assert.equal(failDone, 1);
+  let emptyDone = 0;
+  killTrees([0, null, undefined], { platform: "win32", run: { spawn: () => { throw new Error("no"); }, spawnSync: () => { throw new Error("no"); } }, onDone: () => emptyDone++ });
+  assert.equal(emptyDone, 1);
+
+  // Over the batch cap: one taskkill per 200 pids.
+  const big = [];
+  killTrees(Array.from({ length: 450 }, (_, i) => 1000 + i), { sync: true, platform: "win32", run: { spawnSync: (c, a) => { big.push(a.length); return { status: 0 }; } } });
+  assert.deepEqual(big, [402, 402, 102]);
+});
+
+test("idea-408: PTY kill and killAll run the tree kill first, then close each PTY, and kill(id) does not block", async () => {
+  const dir = tmp();
+  const kids = [];
+  const closed = [];
+  // A fake node-pty whose "shell" is a real process with a grandchild, so the tree kill is real.
+  const fakePty = {
+    spawn() {
+      const c = spawn(process.execPath, ["-e", SHELL_JS], { stdio: ["pipe", "pipe", "ignore"], windowsHide: true, detached: process.platform !== "win32" });
+      kids.push(c);
+      const p = { pid: c.pid, onData: (fn) => c.stdout.on("data", (d) => fn(d.toString("utf8"))), onExit: (fn) => c.on("exit", (code) => fn({ exitCode: code })), write: (d) => c.stdin.write(d.replace(/\r/g, "\n")), resize() {}, kill: () => closed.push({ pid: c.pid, rootAlive: alive(c.pid) }) };
+      return p;
+    },
+  };
+  const m = new TerminalManager({ pty: fakePty, shell: fakeShell });
+  try {
+    const a = await m.create({ cwd: dir });
+    const b = await m.create({ cwd: dir });
+    const c = await m.create({ cwd: dir });
+    m.input(a.id, "grandchild\r");
+    assert.ok(await until(() => /GC:\d+/.test(m.output(a.id))));
+    const gc = Number(/GC:(\d+)/.exec(m.output(a.id))[1]);
+    m.kill(a.id);
+    if (process.platform === "win32") assert.equal(closed.length, 0, "taskkill runs async on the DELETE path; the PTY closes after it");
+    assert.ok(await until(() => closed.length === 1));
+    assert.ok(await until(() => !alive(a.pid) && !alive(gc)), "the grandchild went with the tree");
+    m.killAll({ sync: true });
+    assert.deepEqual(closed.slice(1).map((x) => x.pid).sort(), [b.pid, c.pid].sort());
+    assert.ok(closed.slice(1).every((x) => !x.rootAlive), "sync killAll closes each PTY only after the batched tree kill");
+    assert.deepEqual(m.list(), []);
+  } finally { for (const k of kids) { try { k.kill(); } catch {} } m.killAll(); rmq(dir); }
 });
 
 test("terminal: real PTY when node-pty is available", async (ctx) => {

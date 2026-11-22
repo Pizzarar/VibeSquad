@@ -4,7 +4,7 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { killTree, onServerExit } from "./proc-tree.mjs";
+import { killTrees, onServerExit } from "./proc-tree.mjs";
 
 const SCROLLBACK_CHARS = 200_000;
 export const MAX_TERMINALS = 16;
@@ -84,9 +84,9 @@ export class TerminalManager {
       p.onExit((e) => finish(e?.exitCode));
       t.write = (d) => p.write(d);
       t.resize = (c, r) => { try { p.resize(c, r); } catch {} };
-      // Tree first: once the root shell is gone, taskkill /PID can no longer find its children.
-      t.kill = () => { killTree(p.pid, { sync: true }); try { p.kill(); } catch {} };
-      t.killSync = t.kill;
+      // Tree first: once the root shell is gone, taskkill /PID can no longer find its children. So the PTY close waits for
+      // the tree kill, which is async on the HTTP DELETE path (idea-408: a sync taskkill there blocked the event loop).
+      t.afterTree = () => { try { p.kill(); } catch {} };
     } else {
       const child = spawn(this.shell.file, this.shell.args, {
         cwd, env: shellEnv(), stdio: ["pipe", "pipe", "pipe"], windowsHide: true, detached: process.platform !== "win32",
@@ -112,8 +112,6 @@ export class TerminalManager {
         }
       };
       t.resize = () => {};
-      t.kill = () => killTree(child.pid);
-      t.killSync = () => killTree(child.pid, { sync: true });
     }
     this.terms.set(id, t);
     return this.info(t);
@@ -190,15 +188,20 @@ export class TerminalManager {
   kill(id) {
     const t = this.get(id);
     this.terms.delete(id);
-    if (!t.exited) t.kill();
+    if (!t.exited) killTerms([t]);
   }
+  /** Server exit passes sync (inside a process "exit" handler): one batched taskkill for every live terminal (idea-408). */
   killAll({ sync = false } = {}) {
-    for (const t of this.terms.values()) {
-      if (t.exited) continue;
-      try { sync ? t.killSync() : t.kill(); } catch {}
-    }
+    const live = [...this.terms.values()].filter((t) => !t.exited);
     this.terms.clear();
+    killTerms(live, { sync });
   }
+}
+
+function killTerms(terms, { sync = false } = {}) {
+  if (!terms.length) return;
+  const after = () => { for (const t of terms) { try { t.afterTree?.(); } catch {} } };
+  killTrees(terms.map((t) => t.pid), { sync, onDone: after });
 }
 
 let shared;
