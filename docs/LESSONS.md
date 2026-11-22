@@ -163,7 +163,8 @@ compact `<!-- vibesquad:lessons:begin -->` digest into prompts.
   workspace **by folder** (`a.cwd` under `workspaceDirectory`) rather than by workspace id, so every
   agent in `projects/VibeSquad` claimed all 19 live + 142 archived agents as "in use".
 - **Rule / Fix:** All unit worktrees belong in
-  `%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>` (the "worktree sanctuary"), with automatic merge
+  `vs worktree create <unit>` (the "worktree sanctuary"): Windows `%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>`,
+  POSIX `~/.vibesquad/worktrees/<repo>/<unit>`, with automatic merge
   sweeps. Match workspace membership by `workspaceId` (fall back to cwd only when the protocol omits it),
   and treat "in use" as a live, non-archived agent active within `STALE_DAYS`.
 - **Evidence:** `docs/PLAN_WORKSPACES_CLEANUP.md` (Cause, Decided);
@@ -432,7 +433,8 @@ Aub (the owner) talks fast, tersely, with typos, and often while an agent is alr
 
 1. Find the lead with `vs who lead` (labels `role`/`lane`/`ord`), never agent-list JSON scraping or
    title-prefix regex.
-2. Run unit work in `%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>`; never
+2. Create unit worktrees with `vs worktree create <unit>` and run unit work in Windows
+   `%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>` or POSIX `~/.vibesquad/worktrees/<repo>/<unit>`; never
    `git worktree add ../<repo>-<unit>` into `projects/`.
 3. Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File`
    (UTF-8 BOM breaks parsers).
