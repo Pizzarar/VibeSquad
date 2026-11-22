@@ -359,8 +359,9 @@ export class Runner {
   // registry rule when no lane is flagged hub (server/lane-pure.mjs isHubLane); the real server reads teams.json.
   // drainFile: where the restart drain is mirrored for the claude PreToolUse hook (runner/drain-hook.mjs); the real server
   // passes <runner home>/drain.json. Null (tests): the drain lives in memory only and no hook is installed.
-  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
+  constructor({ dir, drainFile = null, adapters = defaultAdapters({ promptsDir: path.join(path.dirname(dir), 'prompts'), drainFile }), maxLive = maxLiveFromEnv(), turnCaps = turnCapsFromEnv(), parkGraceMs = parkGraceFromEnv(), archiveKillMs = archiveKillFromEnv(), quietMs = quietFromEnv(), limitsFile = path.join(path.dirname(dir), 'limits.jsonl'), pollAgy = false, agyUsage, queueMaxAgeMs = queueMaxAgeFromEnv(), parkHoldMaxMs = parkHoldMaxFromEnv(), parkHoldYieldMs = parkHoldYieldFromEnv(), parkHoldPollMs = parkHoldPollFromEnv(), parkHoldSlowAfterMs = DEFAULT_PARK_HOLD_SLOW_AFTER_MS, parkHoldSlowPollMs = 4 * parkHoldPollMs, bgProbe, pidAlive, killPid = killPidTree, reaper = null, reapDelayMs = 3000, onReap = null, hubLane = (team) => team, digestReserve = digestReserveFromEnv(), foldIndexFile = null }) {
     this.store = new LogStore(dir);
+    this._tokenAt = new Map(); // id -> when its token was minted: nothing older can carry it (the reap's lower bound)
     this.tokensById = new Map(); // id -> per-agent token, memory only (see agentEnv / verifyAgent); minted once per id per runner lifetime
     this.store.secrets = () => this.tokensById.values(); // every append (and SSE tail) is scrubbed of every live token
     this.hubLane = hubLane;
@@ -390,6 +391,12 @@ export class Runner {
     this.pidAlive = pidAlive !== undefined ? pidAlive : (bgProbe === undefined ? defaultPidAlive : null);
     this.killPid = killPid; // (pid) -> tree kill of one background shell (stopBackground): taskkill /pid <pid> /T /F on Windows
     this.archiveKillMs = archiveKillMs;
+    // idea-515 (Z1): (job) -> Promise<{ reaped, skipped, error? }> (runner/reap.mjs createDevServerReaper); null = off (tests,
+    // unsupported hosts). Run reapDelayMs after a WORKER's process ends (park, archive stop, exit) so the tree kill has landed;
+    // onReap(report) gets what was reaped/skipped (runner.log line + team-log metric in runner/server.mjs).
+    this.reaper = reaper;
+    this.reapDelayMs = reapDelayMs;
+    this.onReap = onReap;
     this.queueMaxAgeMs = queueMaxAgeMs; // recoverQueued ignores inputs queued longer ago than this (0 = no bound)
     this.quietMs = quietMs;
     this._quietSweep = setInterval(() => this._sweepQuiet(), Math.max(25, Math.min(this.quietMs, 1000)));
@@ -560,7 +567,7 @@ export class Runner {
   // later turn reuse it, so a running `vs` shell keeps working across turns). Never persisted.
   tokenFor(id) {
     let t = this.tokensById.get(id);
-    if (!t) { t = randomBytes(32).toString('hex'); this.tokensById.set(id, t); }
+    if (!t) { t = randomBytes(32).toString('hex'); this.tokensById.set(id, t); this._tokenAt.set(id, Date.now()); }
     return t;
   }
 
@@ -627,7 +634,7 @@ export class Runner {
   _start(id, { provider, model, cwd, meta, systemPrompt, resume }) {
     // inflight: OPEN TURNS, not prompts (each adapter emits one idle per finished turn); > 0 means this agent holds a
     // turn slot. A steer into a turn already running merges into it (one idle), so it must not open a second slot.
-    const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null, progress: 0, idleProgress: 0, turnGen: 0, work: null, heldSince: null };
+    const entry = { status: 'starting', handle: null, provider, family: providerFamily(provider), systemPrompt, sessionId: resume ?? null, parked: false, lastActive: Date.now(), lastEvent: Date.now(), quiet: false, inflight: 0, turns: resume ? 1 : 0, perms: new Set(), parkTimer: null, progress: 0, idleProgress: 0, turnGen: 0, work: null, heldSince: null, role: roleOf(meta), team: meta?.team ?? meta?.labels?.team ?? null, lane: meta?.lane ?? meta?.labels?.lane ?? null };
     this.live.set(id, entry);
     const emit = (type, data) => {
       // A late event from a child that was just parked/killed (killTree is async on Windows) must not touch a dead
@@ -683,6 +690,7 @@ export class Runner {
           this._clearArchive(entry);
           this.store.append(id, 'exit', info);
           if (this.live.get(id) === entry) this.live.delete(id);
+          this._reapAfterEnd(id, entry, 'exit');
           this._pump();
         },
       });
@@ -1092,6 +1100,7 @@ export class Runner {
     this.store.append(id, 'status', { status: 'parked' });
     this.live.delete(id);
     entry.handle.kill();
+    this._reapAfterEnd(id, entry, 'park');
     if ((PROVIDER_ALIASES[entry.provider] ?? entry.provider) === 'antigravity-cli') this._pollAgy?.(id); // idea-349: the retry a busy turn_done poll was refused for
   }
 
@@ -1101,6 +1110,30 @@ export class Runner {
     entry.archiveWhenIdle = false;
     clearTimeout(entry.archiveTimer);
     entry.archiveTimer = null;
+  }
+
+  // idea-515 (Z1): a worker's process just ended (park, archive stop, exit). Listeners it leaked out of its tree (a dev server
+  // started with `&` / Start-Process: the tool shell died, so the tree kill never reached it) are reaped reapDelayMs later by
+  // this.reaper (runner/reap.mjs: env-token proof, never held work, never another agent's, fail closed). Protected: every live
+  // agent's last-probed shells (held or not) and this entry's own last hold, the runner and its parent. Nothing is killed once
+  // the agent is live again or the runner is shutting down. One reap per process (entry.reapArmed).
+  _reapAfterEnd(id, entry, why) {
+    if (!this.reaper || entry.reapArmed || entry.role !== 'worker' || this._shutDown) return;
+    const token = this.tokensById.get(id);
+    if (!token) return;
+    entry.reapArmed = true;
+    const endedAt = Date.now();
+    const cliPid = Number.isInteger(entry.handle?.pid) ? entry.handle.pid : null;
+    const shellPids = (e) => [e.heldNow, e.heldWork, e.work].flatMap((w) => (Array.isArray(w) ? w : [])).map((w) => w?.pid);
+    const own = shellPids(entry);
+    const stillOk = () => !this._shutDown && !this.live.has(id);
+    const report = (res) => { if (res.reaped?.length || res.skipped?.length || res.error) { try { this.onReap?.({ id, why, team: entry.team, lane: entry.lane, reaped: res.reaped ?? [], skipped: res.skipped ?? [], ...(res.error ? { error: res.error } : {}) }); } catch { /* reporting is best effort */ } } };
+    const t = setTimeout(() => {
+      if (!stillOk()) return; // resumed (its new process owns the tree now) or shutting down: nothing to reap
+      const protectedPids = [...own, ...[...this.live.values()].flatMap(shellPids), process.pid, process.ppid].filter((p) => Number.isInteger(p) && p > 0);
+      Promise.resolve().then(() => this.reaper({ agentId: id, token, since: this._tokenAt.get(id) ?? 0, endedAt, protectedPids, cliPid, stillOk })).then(report, (err) => report({ error: String(err?.message ?? err) }));
+    }, this.reapDelayMs);
+    t.unref?.();
   }
 
   // Ends an agent's process for good measure but leaves it resumable: with a session it is logged as parked (so unarchive + send
@@ -1116,7 +1149,8 @@ export class Runner {
       this.store.append(id, 'status', { status: 'parked' });
       this.live.delete(id);
       entry.handle.kill();
-    } else entry.handle.kill(); // onExit logs the exit and frees the slot
+      this._reapAfterEnd(id, entry, 'stop');
+    } else entry.handle.kill(); // onExit logs the exit and frees the slot (and arms the reap)
   }
 
   // The current fold of a log for the resume paths (idea-307): _parkedSpec / _lostSpec / _unstartedPlan / _cutTurn used to parse
