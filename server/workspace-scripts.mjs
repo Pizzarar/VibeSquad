@@ -104,7 +104,9 @@ export class ScriptManager {
 
   stopAll({ sync = false } = {}) {
     // One batched taskkill for every live script (idea-408), not a sync taskkill per pid on server exit.
-    killTrees([...this.runs.values()].filter((r) => !r.exited).map((r) => r.pid), { sync });
+    const live = [...this.runs.values()].filter((r) => !r.exited).map((r) => r.pid);
+    this.runs.clear(); // like TerminalManager.killAll: a SIGTERM then the exit hook must not kill the same pids twice
+    killTrees(live, { sync });
   }
 }
 
