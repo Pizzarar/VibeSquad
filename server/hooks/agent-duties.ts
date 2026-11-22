@@ -1197,12 +1197,15 @@ async function spawnStateFingerprint(dirs: GitDirs | null): Promise<string | nul
   if (!head) return null;
   const refs = head.branch ? [`refs/heads/${head.branch}`, `refs/remotes/origin/${head.branch}`, "refs/remotes/origin/HEAD"] : ["refs/remotes/origin/HEAD"];
   const shas = await resolveRefsFs(dirs, refs);
+  if (!shas) return null; // .git unreadable/locked/mid-update: no fingerprint, so no cache hit (git answers)
   let idx = "";
   try {
     const st = await fs.promises.stat(path.join(dirs.gitDir, "index"));
     idx = `${st.mtimeMs}:${st.size}`;
-  } catch {}
-  return [head.branch ?? `@${head.sha}`, ...refs.map((r) => shas?.get(r) ?? "-"), idx].join("|");
+  } catch (e: any) {
+    if (e?.code !== "ENOENT") return null; // a locked index is not "no index"
+  }
+  return [head.branch ?? `@${head.sha}`, ...refs.map((r) => shas.get(r) ?? "-"), idx].join("|");
 }
 
 /** Async so the daemon event loop is never blocked: git runs in child processes, the common case needs one (none on a cache hit). */
