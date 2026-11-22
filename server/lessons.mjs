@@ -163,7 +163,7 @@ export function sanctuaryRuleDir({ env = process.env, platform = process.platfor
     if (la && root.toLowerCase().startsWith(la.toLowerCase())) return "%LOCALAPPDATA%" + root.slice(la.length);
     return root;
   }
-  const h = resolve(home);
+  const h = String(home).replace(/[/]+$/, "");
   const sep = root[h.length];
   return root.startsWith(h) && (sep === "/" || sep === undefined) ? "~" + root.slice(h.length) : root;
 }
