@@ -14,7 +14,7 @@ import { createAcpAdapter } from '../runner/adapters/acp.mjs';
 import { toAgent, readRunnerAgentSync } from '../server/backend/runner-backend.mjs';
 import { ALIASES, callTool, createContext, VS_TOOLS } from '../server/mcp/tools.mjs';
 import { handleMessage, toolList } from '../server/mcp/server.mjs';
-import { commandAgentVerb, resolveIdentity, runAgentVerb } from '../cli/vs.mjs';
+import { commandAgentVerb, parseArgs, resolveIdentity, runAgentVerb } from '../cli/vs.mjs';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const MCP_SERVER = path.join(ROOT, 'server', 'mcp', 'server.mjs');
@@ -304,7 +304,7 @@ test('spawn_worker: a Buddy without a lead request still gets a worker; role smu
   for (const [, req] of runnerBackend.calls) assert.deepEqual([req.labels.role, req.env.VS_ROLE], ['worker', 'worker']);
 });
 
-test('send / wait / status / cancel / list route by id and lane; status caps lastMessage', async () => {
+test('send / wait / status / cancel / list route by id and lane; status caps lastMessage by default, full returns it all', async () => {
   const runnerBackend = fakeBackend('rn');
   const paseoBackend = fakeBackend('ps');
   const ctx = fakeCtx({ runnerBackend, paseoBackend });
@@ -315,11 +315,11 @@ test('send / wait / status / cancel / list route by id and lane; status caps las
   const w = await callTool(ctx, 'wait', { id: 'rn-1', timeoutSec: 7 });
   assert.equal(w.status, 'idle');
   assert.equal(w.lastMessage.length, 600, 'G2: compact by default');
-  assert.equal((await callTool(ctx, 'wait', { id: 'rn-1', full: true })).lastMessage.length, 2000);
+  assert.equal((await callTool(ctx, 'wait', { id: 'rn-1', full: true })).lastMessage.length, 5000);
   assert.deepEqual(runnerBackend.calls[1], ['wait', 'rn-1', 7000]);
   const s = await callTool(ctx, 'status', { id: 'rn-1' });
   assert.deepEqual([s.status, s.title, s.lastMessage.length], ['idle', 'T', 600]);
-  assert.equal((await callTool(ctx, 'status', { id: 'rn-1', full: true })).lastMessage.length, 2000);
+  assert.equal((await callTool(ctx, 'status', { id: 'rn-1', full: true })).lastMessage.length, 5000);
   await callTool(ctx, 'cancel', { id: 'rn-1' });
   assert.deepEqual(runnerBackend.calls.at(-1), ['cancel', 'rn-1']);
   const l = await callTool(ctx, 'list', {});
@@ -375,6 +375,37 @@ test('vs spawn / send / status run the shared tools against a fake backend', asy
   const st = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
   assert.equal(st.status, 'idle');
   assert.equal(st.lastMessage.length, 600);
+});
+
+test('vs spawn --stakes parses and the stakes value reaches the spawn request (idea-461)', async () => {
+  assert.equal(parseArgs(['--stakes', 'mechanical']).stakes, 'mechanical');
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x', stakes: 'mechanical' }, ctx);
+  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' });
+  assert.equal(runnerBackend.calls[0][1].labels.stakes, 'mechanical');
+  await assert.rejects(runAgentVerb('spawn', { _: [], title: 't', profile: 'Implement - Sonnet', prompt: 'p', stakes: 'bogus' }, ctx), /unknown stakes/);
+});
+
+test('vs status --full returns the whole lastMessage; the default stays capped (idea-466)', async () => {
+  const runnerBackend = fakeBackend('rn');
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const full = await runAgentVerb('status', { _: ['rn-1'], full: true }, ctx);
+  assert.equal(full.lastMessage.length, 5000, '--full returns the whole message under 64KB (fakeBackend timeline is 5000 chars)');
+  const compact = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
+  assert.equal(compact.lastMessage.length, 600, 'default stays compact');
+});
+
+test('vs status --full caps at 64KB keeping the head plus a truncation marker (idea-466 M1)', async () => {
+  const head = 'ROOT-CAUSE: ' + 'a'.repeat(70000); // > 64KB
+  const runnerBackend = { ...fakeBackend('rn'), fetchAgentTimeline: async () => ({ entries: [{ item: { type: 'assistant_message', text: head } }] }) };
+  const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
+  const full = await runAgentVerb('status', { _: ['rn-1'], full: true }, ctx);
+  assert.ok(full.lastMessage.length <= 65536, `capped at 64KB (got ${full.lastMessage.length})`);
+  assert.ok(full.lastMessage.startsWith('ROOT-CAUSE: '), 'keeps the head');
+  assert.ok(full.lastMessage.endsWith('…[truncated at 64KB]'), 'clear truncation marker');
+  const compact = await runAgentVerb('status', { _: ['rn-1'] }, ctx);
+  assert.equal(compact.lastMessage.length, 600, 'default stays compact');
 });
 
 test('vs spawn with VS_AGENT_ID derives caller identity from runner labels; --role/--lane/--team/--agent cannot spoof', async () => {
