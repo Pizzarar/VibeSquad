@@ -1109,7 +1109,7 @@ test("repairShellEnv (win32): registry PATH first, inherited extras kept, dedupe
   const bad = repairShellEnv({ PATH: "C:/a", HOME: "" }, { regQuery: () => { throw new Error("boom"); }, platform: "win32", log: (l) => lines.push(l) });
   assert.equal(bad.PATH, "C:/a"); assert.ok(!("HOME" in bad)); assert.equal(lines.length, 1);
   const posix = { PATH: "/bin", HOME: "" };
-  assert.equal(repairShellEnv(posix, { platform: "linux", regQuery }), posix);
+  assert.equal(repairShellEnv(posix, { platform: "linux", regQuery, posixOpts: { home: "/nohome", exists: () => false, shellExec: () => "", npmExec: () => { throw new Error("x"); } } }), posix);
   assert.deepEqual(stripAgentEnv({ VS_AGENT_ID: "x", VS_AGENT_TOKEN: "t", KEEP: "1" }), { KEEP: "1" });
 });
 

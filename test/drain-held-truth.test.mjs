@@ -63,7 +63,8 @@ test('killPidTree: Windows kills the whole tree with taskkill /pid <pid> /T /F (
   assert.deepEqual(calls[0].args, ['/pid', '4242', '/T', '/F'], 'tree (/T) + force (/F), not only the direct child');
   assert.equal(calls[0].o.shell, false);
   const sigs = [];
-  assert.equal(killPidTree(4243, { platform: 'linux', killImpl: (pid, sig) => sigs.push([pid, sig]) }), true);
+  // posix pins an empty proc table + group so the POSIX path never reads this machine's real process table.
+  assert.equal(killPidTree(4243, { platform: 'linux', killImpl: (pid, sig) => sigs.push([pid, sig]), posix: { readTable: () => new Map(), selfPid: 10, selfPgid: 10 } }), true);
   assert.deepEqual(sigs[0], [-4243, 'SIGKILL'], 'POSIX: the process group first');
   assert.equal(killPidTree(0, { platform: 'win32', spawnImpl }), false, 'no pid: nothing to kill');
   assert.equal(killPidTree(-5, { platform: 'win32', spawnImpl }), false);
