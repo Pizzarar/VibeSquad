@@ -13,7 +13,10 @@
 // created after the parent (as background.mjs), and every pid is re-dated right before its kill (children.mjs rule).
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
+import { mkdtemp, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { spawnCaptureOffLoop } from './spawn-off-loop.mjs';
 import { shellCmdTail } from './background.mjs';
 import { redactHostPathTokens } from '../server/redact-host-paths.mjs';
@@ -26,9 +29,9 @@ const SYSTEM_PIDS = new Set([0, 4]);
 // process that looks like it is never reaped either.
 const VS_RUNTIME = /(?:^|[\\/\s"'])(?:scripts[\\/]serve|scripts[\\/]restart-runtime|runner[\\/]server|runner[\\/]runner)\.mjs\b/i;
 
-/** A reaped command fit for runner.log and the team log: Claude's wrapper stripped, host paths redacted, tail kept. */
+/** A reaped command fit for runner.log and the team log: Claude's wrapper stripped, host paths redacted to their script name, tail kept. */
 export function reapCmdText(cmd, max = 160) {
-  const t = redactHostPathTokens(shellCmdTail(cmd, Infinity)).replace(/\\/g, '/').replace(/[\r\n\t`"]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const t = redactHostPathTokens(shellCmdTail(cmd, Infinity), { keepBasename: true }).replace(/\\/g, '/').replace(/[\r\n\t`"]+/g, ' ').replace(/\s+/g, ' ').trim();
   return t.length > max ? `...${t.slice(-max).replace(/^\S*\s*/, '')}` : t;
 }
 
@@ -259,6 +262,41 @@ public static class VsReapEnv {
   }
 }`;
 
+const ENV_PROBE_LOOP = "foreach ($x in ($in[1] -split ',')) { if ($x -match '^\\d+$') { try { [VsReapEnv]::Probe([int]$x) } catch { \"$x|err|probe\" } } }";
+const ENV_INLINE_PS = "$ErrorActionPreference='Stop'; $in = [Console]::In.ReadToEnd() -split '\\n---PIDS---\\n'; Add-Type -TypeDefinition $in[0] -Language CSharp; " + ENV_PROBE_LOOP;
+const ENV_LOAD_PS = "$ErrorActionPreference='Stop'; $in = [Console]::In.ReadToEnd() -split '\\n---PIDS---\\n'; Add-Type -Path $in[0]; " + ENV_PROBE_LOOP;
+const ENV_COMPILE_PS = "$ErrorActionPreference='Stop'; $in = [Console]::In.ReadToEnd() -split '\\n---OUT---\\n'; Add-Type -TypeDefinition $in[0] -Language CSharp -OutputAssembly $in[1] -OutputType Library";
+const sha256Bytes = (buf) => createHash('sha256').update(buf).digest('hex');
+
+// idea-526 (idea-515 review M1): Add-Type -TypeDefinition runs csc (~2 s of CPU) in every PowerShell that uses it, and every
+// park with a young host listener used it. The helper is now compiled once per runner process into a fresh mkdtemp dir
+// (nothing pre-planted there can be picked up), its sha256 kept in memory and re-checked before each load; later probes
+// only load the DLL (~0.6 s). Any compile/load failure falls back to the inline compile for good. The dir goes on exit.
+let envReader = null; // null | Promise<{ path, sha } | null> | { failed: true }
+async function envReaderDll(spawnImpl) {
+  if (envReader?.failed) return null;
+  envReader ??= (async () => {
+    let dir;
+    try {
+      dir = await mkdtemp(join(tmpdir(), 'vs-reap-env-'));
+      const path = join(dir, 'VsReapEnv.dll');
+      await runPs(ENV_COMPILE_PS, { spawnImpl, stdin: `${WIN_ENV_CS}\n---OUT---\n${path}` });
+      const sha = sha256Bytes(await readFile(path));
+      const made = dir;
+      process.once('exit', () => { try { rmSync(made, { recursive: true, force: true }); } catch { /* best effort */ } });
+      return { path, sha };
+    } catch {
+      if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } }
+      envReader = { failed: true };
+      return null;
+    }
+  })();
+  const r = await envReader;
+  return envReader?.failed ? null : r;
+}
+/** Test seam: forget the compiled env reader (the next win32 probe compiles it again). */
+export function resetEnvReaderCache() { envReader = null; }
+
 export function parseMarkers(text) {
   const out = new Map();
   for (const line of String(text).split(/\r?\n/)) {
@@ -275,9 +313,19 @@ export async function readEnvMarkers(pids, { platform = process.platform, spawnI
   const ok = [...new Set(pids)].filter((p) => Number.isInteger(p) && p > 0);
   if (!ok.length) return new Map();
   if (platform === 'win32') {
+    const pidList = ok.join(',');
+    const dll = await envReaderDll(spawnImpl);
+    if (dll) {
+      try {
+        // Load the helper compiled once for this runner, after checking it is still the bytes we compiled.
+        if (sha256Bytes(await readFile(dll.path)) !== dll.sha) throw new Error('env reader changed on disk');
+        return parseMarkers(await runPs(ENV_LOAD_PS, { spawnImpl, stdin: `${dll.path}\n---PIDS---\n${pidList}` }));
+      } catch {
+        envReader = { failed: true }; // a missing, changed or unloadable helper: compile inline from now on (the old path)
+      }
+    }
     // The C# source and pid list go over stdin (no argv length limit; pids are not secret either way).
-    const script = "$ErrorActionPreference='Stop'; $in = [Console]::In.ReadToEnd() -split '\\n---PIDS---\\n'; Add-Type -TypeDefinition $in[0] -Language CSharp; foreach ($x in ($in[1] -split ',')) { if ($x -match '^\\d+$') { try { [VsReapEnv]::Probe([int]$x) } catch { \"$x|err|probe\" } } }";
-    return parseMarkers(await runPs(script, { spawnImpl, stdin: `${WIN_ENV_CS}\n---PIDS---\n${ok.join(',')}` }));
+    return parseMarkers(await runPs(ENV_INLINE_PS, { spawnImpl, stdin: `${WIN_ENV_CS}\n---PIDS---\n${pidList}` }));
   }
   if (platform === 'linux') {
     const out = new Map();

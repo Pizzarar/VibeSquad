@@ -77,6 +77,44 @@ test("GET on the same port after a timeout is not retried", async () => {
   } finally { rmSync(home, { recursive: true, force: true }); }
 });
 
+// idea-409: a pooled keep-alive socket the runner closed under load (verdict-gate 504 flake) is not a hung runner.
+const reset = (code) => { throw new TypeError("fetch failed", { cause: { code } }); };
+
+test("GET on the same port retries once after a keep-alive reset (ECONNRESET / UND_ERR_SOCKET); POST does not", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-rt-"));
+  try {
+    disco(home, 1111);
+    for (const code of ["ECONNRESET", "UND_ERR_SOCKET"]) {
+      let n = 0;
+      const rc = new RunnerClient({ home, fetchImpl: async () => (++n === 1 ? reset(code) : ok({ ids: [code] })), requestTimeoutMs: 1000 });
+      assert.deepEqual(await rc.request("GET", "/agents"), { ids: [code] });
+      assert.equal(n, 2, `${code}: one retry on the same port`);
+      assert.equal(rc.conn.port, 1111);
+    }
+    // Reset twice: the retry is single, the second error surfaces.
+    let n = 0;
+    const twice = new RunnerClient({ home, fetchImpl: async () => { n++; reset("ECONNRESET"); }, requestTimeoutMs: 1000 });
+    await assert.rejects(twice.request("GET", "/agents"), (e) => e.status === 504 && e.transport && /ECONNRESET/.test(e.message));
+    assert.equal(n, 2);
+    // A write the reset may have reached is never resent.
+    let posts = 0;
+    const write = new RunnerClient({ home, fetchImpl: async () => { posts++; reset("ECONNRESET"); }, requestTimeoutMs: 1000 });
+    await assert.rejects(write.request("POST", "/agents/a/input", {}), { status: 504 });
+    assert.equal(posts, 1);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("GET on the same port is not retried on a refused connect (the runner is down, not a dropped socket)", async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), "vs-rt-"));
+  try {
+    disco(home, 1111);
+    let n = 0;
+    const rc = new RunnerClient({ home, fetchImpl: async () => { n++; reset("ECONNREFUSED"); }, requestTimeoutMs: 1000 });
+    await assert.rejects(rc.request("GET", "/agents"), { status: 504 });
+    assert.equal(n, 1);
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
 const hangUnlessHealth = (healthOk) => (url, { signal } = {}) => {
   if (url.endsWith("/health")) return healthOk ? Promise.resolve(ok({ ok: true })) : Promise.reject(new Error("ECONNREFUSED"));
   return new Promise((res, rej) => signal.addEventListener("abort", () => rej(new Error("aborted"))));

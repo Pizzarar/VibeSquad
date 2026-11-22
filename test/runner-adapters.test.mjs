@@ -611,3 +611,20 @@ test('opencode: a queued prompt starting right after the failing one does not dr
   assert.equal(e.upstream, true);
   assert.match(e.error, /Internal service failure/);
 });
+
+test('opencode: an idle gap clears a stale error, so a later non-zero exit with no JSON-RPC error is not upstream', async () => {
+  const { runner, id, spawnImpl } = usageHarness('opencode', 'deepseek/deepseek-v4-pro', [
+    upstreamErr, // Turn 1 fails with an upstream error but the child stays up
+    () => {},     // Turn 2 never answers: the child crashes with no JSON-RPC error
+  ]);
+  await tick(); await tick(); await tick(); // Turn 1 completes (error -> idle)
+  assert.equal(runner.status(id).status, 'idle');
+  runner.send(id, 'again'); // a fresh turn after the idle gap
+  await tick(); await tick(); // Turn 2's session/prompt is sent
+  spawnImpl.last.emit('exit', 1, null);
+  await tick(); await tick();
+  const e = runner.timeline(id).find((x) => x.type === 'exit');
+  assert.equal(e.code, 1);
+  assert.equal(e.error, undefined);   // Turn 1's stale error must not leak into Turn 2's crash
+  assert.equal(e.upstream, undefined);
+});

@@ -257,6 +257,9 @@ export function createAcpAdapter({ spawnImpl, provider = 'opencode', name, comma
         if (pendingSystem) { text = `${pendingSystem}\n\n${text}`; pendingSystem = ''; } // ACP has no system slot: lead the first turn with it
         if (!running) {
           running = true;
+          // A fresh turn after an idle gap: a prior turn's failure must not be read as this turn's cause. A queued
+          // prompt pumped with running already true keeps lastError (the immediately-preceding failure is the cause).
+          lastError = null;
           emit('status', { status: 'running' });
         }
         // ACP image content blocks need the agent's promptCapabilities.image; without it say so instead of dropping silently.

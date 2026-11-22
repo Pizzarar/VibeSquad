@@ -579,11 +579,19 @@ function unlinkLinkOnly(p) {
  * link's target. Walks without following links. A link git tracks (mode 120000) is left alone: git removes a symlink
  * without following it. Fails closed: a read error, a git error, an unlink that fails or a link still present afterwards
  * throws, so the caller removes nothing.
+ * Containment (idea-544, the removeTreeNoFollow pattern): each directory must resolve (realpath) inside the worktree right
+ * before it is read, and each link's parent right before it is unlinked. A folder swapped for a junction after the readdir
+ * that listed it resolves outside, so the walk throws EESCAPE instead of collecting (and later unlinking) links outside.
+ * `onListed(dir, entries)` is a test seam called right after each readdir.
  */
-function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly } = {}) {
+function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly, onListed } = {}) {
+  const wtRoot = normPath(wtPath);
   const links = [];
   const walk = (dir) => {
-    for (const d of readdirSync(toLongPath(dir), { withFileTypes: true })) {
+    assertRealInside(toLongPath(dir), wtRoot);
+    const entries = readdirSync(toLongPath(dir), { withFileTypes: true });
+    onListed?.(dir, entries);
+    for (const d of entries) {
       const p = join(dir, d.name);
       if (dir === wtPath && d.name === ".git") continue;
       if (d.isSymbolicLink()) links.push(p);
@@ -600,6 +608,7 @@ function detachUntrackedLinks(wtPath, { git, unlinkLink = unlinkLinkOnly } = {})
   }
   for (const p of links) {
     if (tracked.has(relative(wtPath, p).replace(/\\/g, "/"))) continue;
+    assertRealInside(dirname(toLongPath(p)), wtRoot); // an ancestor swapped for a junction since the walk resolves outside
     unlinkLink(p);
     let still = true;
     try {
@@ -636,7 +645,7 @@ function buildOutputTarget(wtPath, rel) {
 export function removeSweptWorktree(
   repoRoot,
   wtPath,
-  { git = defaultGit, buildOutput = [], unlinkLink, force = false, onListed } = {},
+  { git = defaultGit, buildOutput = [], unlinkLink, force = false, onListed, onLinkWalkListed } = {},
 ) {
   try {
     const wtRoot = normPath(wtPath);
@@ -646,7 +655,7 @@ export function removeSweptWorktree(
       const abs = buildOutputTarget(wtPath, rel);
       if (abs) removeTreeNoFollow(abs, wtRoot, onListed); // `onListed`: test seam only
     }
-    detachUntrackedLinks(resolve(wtPath), { git, unlinkLink });
+    detachUntrackedLinks(resolve(wtPath), { git, unlinkLink, onListed: onLinkWalkListed });
   } catch (e) {
     return { removed: false, reason: `build output not removed (${e?.code ?? "error"})` };
   }

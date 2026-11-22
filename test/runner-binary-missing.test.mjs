@@ -49,7 +49,7 @@ test('spawnErrorMessage: ENOENT reads as "<cmd> binary not found at <path>"; oth
 
 test('claude: resolve-time missing binary ends the run cleanly (exited, clear message, slot released)', async () => {
   const missing = path.join(tmp(), 'no-such-claude.exe');
-  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ command: missing, mcp: false }) } });
+  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ command: missing, mcp: false }) }, maxLive: 1 });
   const id = runner.create({ provider: 'claude', cwd: '.', prompt: 'hi' });
   await tick(); await tick();
   assert.equal(runner.status(id).status, 'exited');
@@ -60,11 +60,14 @@ test('claude: resolve-time missing binary ends the run cleanly (exited, clear me
   assert.match(exit.error, /not found/);
   assert.match(exit.error, /no-such-claude\.exe/);
   assert.throws(() => runner.send(id, 'retry'), /not running/);
-  // A fresh run can start: the failed agent did not wedge the runner.
-  const again = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ command: missing, mcp: false }) } });
-  const id2 = again.create({ provider: 'claude', cwd: '.', prompt: 'hi' });
-  await tick();
-  assert.equal(again.status(id2).status, 'exited');
+  // A second run on the SAME runner (maxLive: 1) must start, not queue: the failed agent did not wedge its only live slot.
+  const id2 = runner.create({ provider: 'claude', cwd: '.', prompt: 'hi' });
+  await tick(); await tick();
+  assert.equal(runner.status(id2).status, 'exited');
+  assert.equal(runner.live.size, 0, 'live slot released after the second run');
+  const exit2 = runner.timeline(id2).find((e) => e.type === 'exit');
+  assert.ok(exit2, 'exit event logged for the second run');
+  assert.match(exit2.error, /not found/);
 });
 
 test('claude: spawn-time ENOENT (file vanished after resolve) ends the run with the same clear message', async () => {
@@ -108,6 +111,7 @@ test('acp: resolve-time missing binary ends the run cleanly', async () => {
   const id = runner.create({ provider: 'opencode', cwd: '.', prompt: 'hi' });
   await tick(); await tick();
   assert.equal(runner.status(id).status, 'exited');
+  assert.equal(runner.live.size, 0, 'live slot released');
   const exit = runner.timeline(id).find((e) => e.type === 'exit');
   assert.ok(exit, 'exit event logged');
   assert.match(exit.error, /not found/);
