@@ -13,7 +13,7 @@ Placeholders: `forge.example.ts.net` (MagicDNS name), `devpc` (the dev pp's SSH 
 2. Tailscale: install per the Tailscale docs, then `sudo systemctl enable --now tailscaled` and `sudo tailscale up`. Enable MagicDNS in the tailnet admin console. Owner step: Machines -> the forge machine -> Disable key expiry, so a reboot/expiry does not log it out.
 3. Bootstrap (idempotent, safe to re-run). Preview first with `scripts/forge-bootstrap.sh --dry-run`, then run
    `scripts/forge-bootstrap.sh`. It installs node LTS, git, gh, ripgrep, openssl and chromium; writes the systemd user unit;
-   enables linger; sets `fs.inotify.max_user_watches=524288` (R13); masks sleep/suspend/hibernate (R12); puts `TMPDIR` on disk
+   enables linger; sets `fs.inotify.max_user_watches=524288` (R13); masks sleep/suspend/hibernate (R12); sets lid close to ignore via `/etc/systemd/logind.conf.d/forge-lid.conf` so the laptop forge runs lid-closed; puts `TMPDIR` on disk
    and out of systemd-tmpfiles cleanup (R15). The tailnet IP and MagicDNS name are detected from `tailscale`; override with
    `--meshnet-ip` / `--meshnet-host`. Run it after `tailscale up` so detection works.
 4. Provider logins, as the VS user (credentials live in that user's home): `claude`, `agy`, `opencode`, `gh auth login`.
