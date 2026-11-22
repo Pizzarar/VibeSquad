@@ -2513,3 +2513,59 @@ test("idea-450 unit: finalsBlock refs = full finals delivered (short-in-itemline
   assert.ok(filtered.includes("w-l2"));
 });
 
+
+test("idea-572: offerPending consults the teams registry (asleep) only for sets with an unsent ping", async () => {
+  const sb = sandbox();
+  try {
+    for (let i = 0; i < 25; i++) addWatch({ owner: "lead-1", team: "quiet", lane: "quiet", items: [{ kind: "agent", ref: `q-${i}` }] }, { home: sb.home, now: T0 });
+    const { id } = addWatch({ owner: "lead-1", team: "game", lane: "game", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const asked = [];
+    let sleepy = true;
+    const { engine, delivered } = engineFor(sb, { asleep: (team) => { asked.push(team); return sleepy && team === "game"; } });
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-1", T0 + 1000));
+    await engine.tick();
+    assert.ok(engine.get(id).pings.length >= 1 && engine.get(id).pings.every((p) => !p.attemptedAt), "fired and held (asleep)");
+    asked.length = 0;
+    await engine.tick();
+    assert.equal(delivered.length, 0, "asleep: still held");
+    assert.ok(asked.length >= 1, "the set with an unsent ping is checked");
+    assert.deepEqual([...new Set(asked)], ["game"], "the 25 sets with nothing to offer never touch the registry");
+    sleepy = false;
+    await engine.tick();
+    assert.equal(delivered.length, 1, "delivered on the first tick after the wake");
+    asked.length = 0;
+    await engine.tick();
+    assert.deepEqual(asked, [], "nothing unsent anywhere: zero registry reads per tick");
+    assert.equal(delivered.length, 1);
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("idea-572: isCancelled re-reads the registry only when the file changed, and still sees a cancel at once", async () => {
+  const sb = sandbox();
+  const fsMod = (await import("node:fs")).default;
+  const realRead = fsMod.readFileSync;
+  let reads = 0;
+  try {
+    const { id } = addWatch({ owner: "lead-1", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: T0 });
+    const { engine } = engineFor(sb, { attempt: false, deliver: () => {} });
+    engine.onRunnerEvent(agentEv("w-1", "idle"));
+    engine.onLogEntry("vibesquad", doneEntry("w-1", T0 + 1000));
+    await engine.tick();
+    const key = `${id}#${engine.get(id).pings[0].key}`;
+    const wp = watchesPath({ home: sb.home });
+    fsMod.readFileSync = function (p, ...rest) { if (String(p) === wp) reads++; return realRead.call(this, p, ...rest); };
+    for (let i = 0; i < 5; i++) assert.equal(engine.isCancelled(key), false);
+    assert.equal(reads, 0, "an unchanged registry is not re-parsed per check");
+    assert.deepEqual(cancelWatch(id, "lead-1", { home: sb.home, now: T0 + 5 }), { ok: true, id });
+    reads = 0;
+    assert.equal(engine.isCancelled(key), true, "the cancel is seen on the very next check");
+    assert.equal(engine.isCancelled(key), true);
+    assert.equal(reads, 1, "one re-read for the one change");
+  } finally {
+    fsMod.readFileSync = realRead;
+    sb.cleanup();
+  }
+});

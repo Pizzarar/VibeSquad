@@ -18,6 +18,7 @@ process.env.PASEO_HOME = path.join(HOME, "paseo");
 test.after(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true, maxRetries: 3 }); });
 
 const catalog = await import("../server/providers-catalog.mjs");
+const { gitSpawnStats } = await import("../server/git-spawn.mjs");
 const auth = await import("../server/auth.mjs");
 const hostId = await import("../server/host-id.mjs");
 const fileSearch = await import("../server/file-search.mjs");
@@ -55,7 +56,10 @@ function spyChildProcess() {
   cp.execFile = function (file, ...rest) { if (file === "git") calls.async += 1; return real.execFile.call(this, file, ...rest); };
   cp.spawnSync = function (file, ...rest) { if (file === "git") calls.spawnSync += 1; return real.spawnSync.call(this, file, ...rest); };
   syncBuiltinESMExports();
-  calls.reset = () => { calls.sync = 0; calls.async = 0; calls.spawnSync = 0; };
+  // idea-572: providers-catalog's async git runs in the off-loop worker (server/git-spawn.mjs): count its dispatches too.
+  let offBase = gitSpawnStats.dispatches;
+  Object.defineProperty(calls, "off", { get: () => gitSpawnStats.dispatches - offBase });
+  calls.reset = () => { calls.sync = 0; calls.async = 0; calls.spawnSync = 0; offBase = gitSpawnStats.dispatches; };
   calls.restore = () => { Object.assign(cp, real); syncBuiltinESMExports(); };
   return calls;
 }
@@ -111,22 +115,24 @@ test("518: pooled merged units warm with async git only, then serve the cache (s
       clearUsageCache();
       await hooks.warm(home, now);
       assert.equal(calls.sync, 0, "cold warm: no execFileSync");
-      assert.equal(calls.async, 2, `cold warm: log + numstat only, HEAD read from .git (${calls.async})`);
+      assert.equal(calls.async, 0, "cold warm: no git child created on the server loop (idea-572)");
+      assert.equal(calls.off, 2, `cold warm: log + numstat only, off-loop, HEAD read from .git (${calls.off})`);
       assert.equal(hooks.read(home, now, { spawn: false }).length, 1);
 
       calls.reset();
       t += 60_000; // the 15 s HEAD-check TTL lapsed
       assert.equal(hooks.read(home, now, { spawn: false }).length, 1, "spawn:false serves the stale entry");
-      assert.equal(calls.sync + calls.async, 0, "spawn:false never runs git, even past the TTL (the old ~9 s execFileSync)");
+      assert.equal(calls.sync + calls.async + calls.off, 0, "spawn:false never runs git, even past the TTL (the old ~9 s execFileSync)");
       await hooks.warm(home, now);
-      assert.equal(calls.sync + calls.async, 0, "TTL lapsed, HEAD unchanged: re-stamped from the .git files, no spawn");
+      assert.equal(calls.sync + calls.async + calls.off, 0, "TTL lapsed, HEAD unchanged: re-stamped from the .git files, no spawn");
 
       addMerge(repo);
       calls.reset();
       t += 1_000; // inside the TTL: the fs HEAD check still sees the new merge
       await hooks.warm(home, now);
       assert.equal(calls.sync, 0);
-      assert.equal(calls.async, 2, "new HEAD: log + numstat, async");
+      assert.equal(calls.async, 0);
+      assert.equal(calls.off, 2, "new HEAD: log + numstat, off-loop");
       assert.equal(hooks.read(home, now, { spawn: false }).length, 2, "new merge picked up");
 
       calls.reset();
@@ -151,14 +157,16 @@ test("518: concurrent warms share one refresh per repo (single-flight); a HEAD t
       assert.equal(hooks.inflight(), 1, "one refresh in flight for the repo");
       await Promise.all([a, b]);
       assert.equal(hooks.inflight(), 0);
-      assert.equal(calls.async, 2, `two warms, one log + numstat (${calls.async})`);
+      assert.equal(calls.async, 0);
+      assert.equal(calls.off, 2, `two warms, one log + numstat (${calls.off})`);
       assert.equal(hooks.read(home, now, { spawn: false }).length, 1);
 
       clearUsageCache();
       calls.reset();
       await hooks.warm(home, now, { readHead: () => null });
       assert.equal(calls.sync, 0);
-      assert.equal(calls.async, 1, "cached units reused: only the rev-parse fallback ran (async)");
+      assert.equal(calls.async, 0);
+      assert.equal(calls.off, 1, "cached units reused: only the rev-parse fallback ran (off-loop)");
       assert.equal(hooks.read(home, now, { spawn: false }).length, 1);
     });
   } finally {

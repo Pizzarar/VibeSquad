@@ -106,9 +106,11 @@ test('sweep tolerates a missing or corrupt ledger', () => {
 
 test('spawnNoShell records the child and drops it on exit', async () => {
   const home = tmp();
-  setChildLedger(createChildLedger(home));
+  const ledger = createChildLedger(home);
+  setChildLedger(ledger);
   const c = spawnNoShell(process.execPath, ['-e', 'setTimeout(() => {}, 700)']);
   pids.add(c.pid);
+  await ledger.settled(); // idea-572: the add write is async (off the loop); settled() = on disk
   const [rec] = readChildren(home);
   assert.equal(rec.pid, c.pid);
   assert.equal(rec.name, path.basename(process.execPath).toLowerCase());
@@ -121,7 +123,7 @@ test('spawnNoShell records the child and drops it on exit', async () => {
   setChildLedger(null);
 });
 
-test('ledger: exits coalesce into async writes, add stays synchronous and is never lost to a stale write (idea-545)', async () => {
+test('ledger: add never writes synchronously, removals coalesce, final file matches the live set (idea-545, idea-572)', async () => {
   const home = tmp();
   const ledger = createChildLedger(home);
   const { EventEmitter } = await import('node:events');
@@ -129,36 +131,115 @@ test('ledger: exits coalesce into async writes, add stays synchronous and is nev
   const a = mk(910001); const b = mk(910002);
   ledger.add(a, 'node.exe');
   ledger.add(b, 'node.exe');
-  assert.deepEqual(readChildren(home).map((r) => r.pid).sort(), [910001, 910002]); // sync
+  assert.equal(existsSync(path.join(home, CHILDREN_FILE)), false, 'add returned before any file write: no sync fs on the spawn path');
+  await ledger.settled();
+  assert.deepEqual(readChildren(home).map((r) => r.pid).sort(), [910001, 910002]);
   a.emit('exit');
-  assert.deepEqual(readChildren(home).map((r) => r.pid).sort(), [910001, 910002]); // removal not yet written: off the sync path
+  assert.deepEqual(readChildren(home).map((r) => r.pid).sort(), [910001, 910002]); // removal not yet written: coalesced
   const c = mk(910003);
   ledger.add(c, 'node.exe'); // an add between the exit and its write
   b.emit('exit');
-  for (let i = 0; i < 100 && readChildren(home).map((r) => r.pid).join() !== '910003'; i++) await sleep(50);
+  await ledger.settled();
   assert.deepEqual(readChildren(home).map((r) => r.pid), [910003]);
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
 });
 
-test('ledger race: an add landing while an async removal write is in flight is on disk on return and never dropped (idea-545 R1)', async () => {
+test('ledger: an add is written promptly, not held behind the 50 ms removal window (idea-572)', async () => {
+  const home = tmp();
+  const ledger = createChildLedger(home);
+  const { EventEmitter } = await import('node:events');
+  const mk = (pid) => Object.assign(new EventEmitter(), { pid });
+  const old = mk(915001);
+  ledger.add(old, 'node.exe');
+  await ledger.settled();
+  old.emit('exit'); // arms the coalescing timer
+  const c = mk(915002);
+  ledger.add(c, 'node.exe');
+  for (let i = 0; i < 40 && !readChildren(home).some((r) => r.pid === 915002); i++) await new Promise((r) => setImmediate(r));
+  assert.ok(readChildren(home).some((r) => r.pid === 915002), 'add landed within a few I/O turns');
+  await ledger.settled();
+  assert.deepEqual(readChildren(home).map((r) => r.pid), [915002]);
+});
+
+test('ledger race: adds interleaved with in-flight removal writes are never dropped; every observed file is a valid snapshot (idea-545 R1, idea-572)', async () => {
   const home = tmp();
   const ledger = createChildLedger(home);
   const { EventEmitter } = await import('node:events');
   const mk = (pid) => Object.assign(new EventEmitter(), { pid });
   const pidsOnDisk = () => readChildren(home).map((r) => r.pid);
   const live = new Set();
+  const ever = new Set();
   let n = 920000;
   for (let i = 0; i < 40; i++) {
     const old = mk(n++);
-    ledger.add(old, 'node.exe'); live.add(old.pid);
+    ledger.add(old, 'node.exe'); live.add(old.pid); ever.add(old.pid);
     old.emit('exit'); live.delete(old.pid);
     await sleep(40 + (i % 5) * 5); // straddles the 50 ms removal timer: before, at and after the async write starts
     const c = mk(n++);
-    ledger.add(c, 'node.exe'); live.add(c.pid);
-    assert.ok(pidsOnDisk().includes(c.pid), 'add durable on return (iter ' + i + ')');
-    for (let k = 0; k < 4; k++) { await new Promise((r) => setImmediate(r)); assert.ok(pidsOnDisk().includes(c.pid), 'add survives an in-flight async write (iter ' + i + ', tick ' + k + ')'); }
+    ledger.add(c, 'node.exe'); live.add(c.pid); ever.add(c.pid);
+    for (let k = 0; k < 4; k++) {
+      await new Promise((r) => setImmediate(r));
+      const raw = readFileSync(path.join(home, CHILDREN_FILE), 'utf8');
+      const list = JSON.parse(raw); // never torn: the rename swaps whole files
+      assert.ok(list.every((r) => ever.has(r.pid)), 'only recorded pids (iter ' + i + ')');
+    }
+    await ledger.settled();
+    assert.ok(pidsOnDisk().includes(c.pid), 'add durable once settled (iter ' + i + ')');
   }
-  await sleep(300);
+  await sleep(120);
+  await ledger.settled();
   assert.deepEqual(pidsOnDisk().sort(), [...live].sort());
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
+});
+
+test('ledger: a stale async rename that lands after a sync clear() is re-asserted, deterministic (idea-572)', async () => {
+  const home = tmp();
+  const fsp = await import('node:fs/promises');
+  let release;
+  const held = new Promise((r) => { release = r; });
+  let renameCalled;
+  const renameStarted = new Promise((r) => { renameCalled = r; });
+  let first = true;
+  const afs = { writeFile: fsp.writeFile, rm: fsp.rm, rename: async (a, b) => { if (first) { first = false; renameCalled(); await held; } return fsp.rename(a, b); } };
+  const ledger = createChildLedger(home, { afs });
+  const { EventEmitter } = await import('node:events');
+  ledger.add(Object.assign(new EventEmitter(), { pid: 940001 }), 'node.exe');
+  await renameStarted; // the [940001] rename is issued (past the generation pre-check) and held
+  ledger.clear(); // sync: [] on disk now
+  assert.deepEqual(readChildren(home), []);
+  release(); // the stale [940001] rename lands over the clear
+  await ledger.settled();
+  assert.deepEqual(readChildren(home), [], 'the writer noticed its rename was stale and re-wrote the current state');
+});
+
+test('ledger: a failed async write falls back to the sync writer and loses nothing (idea-572)', async () => {
+  const home = tmp();
+  const fsp = await import('node:fs/promises');
+  let fail = true;
+  const afs = { writeFile: fsp.writeFile, rm: fsp.rm, rename: async (a, b) => { if (fail) { fail = false; throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' }); } return fsp.rename(a, b); } };
+  const ledger = createChildLedger(home, { afs });
+  const { EventEmitter } = await import('node:events');
+  ledger.add(Object.assign(new EventEmitter(), { pid: 950001 }), 'node.exe');
+  await ledger.settled();
+  assert.deepEqual(readChildren(home).map((r) => r.pid), [950001]);
+  assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
+});
+
+test('ledger: a sync clear() racing an in-flight async write is never undone by the stale rename (idea-572)', async () => {
+  const home = tmp();
+  const ledger = createChildLedger(home);
+  const { EventEmitter } = await import('node:events');
+  const mk = (pid) => Object.assign(new EventEmitter(), { pid });
+  for (let i = 0; i < 30; i++) {
+    ledger.add(mk(930000 + i), 'node.exe'); // starts an async write
+    if (i % 3) await new Promise((r) => setImmediate(r)); // let some writes reach the rename step
+    ledger.clear(); // sync: the file is [] on return
+    assert.deepEqual(readChildren(home), [], 'clear is durable on return (iter ' + i + ')');
+    await ledger.settled();
+    assert.deepEqual(readChildren(home), [], 'a stale async rename was re-asserted over (iter ' + i + ')');
+  }
+  const keep = mk(939999);
+  ledger.add(keep, 'node.exe');
+  await ledger.settled();
+  assert.deepEqual(readChildren(home).map((r) => r.pid), [939999]);
 });

@@ -19,6 +19,7 @@ import { normalizeStakes } from "./stakes-ladder.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import { addInboxCardsAsync, readInboxCards, significantTokenOverlap } from "./inbox.mjs";
 import { BUG_LANE_FALLBACK_IDS } from "./lane-pure.mjs";
+import { gitExecOffLoop } from "./git-spawn.mjs";
 import { isForbiddenRealHome, underTestRunner } from "./test-guard.mjs";
 import { readJsonFileWithBom, vibesquadHome, writeSettingsAtomic } from "./user-settings.mjs";
 import { normalizeWfLabel } from "./wf-label.mjs";
@@ -1036,9 +1037,13 @@ function readPooledMergedUnits(home, laneOf, now = Date.now, { spawn = true } = 
   return out;
 }
 
-const gitAsyncIn = (root) => (args) => new Promise((ok, fail) => {
-  execFile("git", args, { cwd: root, encoding: "utf8", timeout: 15_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true }, (err, out) => (err ? fail(err) : ok(out)));
-});
+// idea-572: the git child is created in the off-loop worker (server/git-spawn.mjs): execFile here still paid a synchronous
+// CreateProcess on the server loop (loop-lag 11-22: 15 stalls, max 2.8s). Same contract: stdout on exit 0, else a rejection.
+const gitAsyncIn = (root) => async (args) => {
+  const r = await gitExecOffLoop(root, args, 15_000, { maxBuffer: 64 * 1024 * 1024 });
+  if (!r.ok) throw new Error(`git ${args[0] ?? ""} failed in ${root} (exit ${r.code ?? "none"})`);
+  return r.out;
+};
 
 const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 /**

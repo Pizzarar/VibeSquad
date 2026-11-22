@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { gitExecOffLoop, gitSpawnStats, _resetGitSpawn } from "../server/git-spawn.mjs";
+import { execOffLoop, gitExecOffLoop, gitSpawnStats, _resetGitSpawn } from "../server/git-spawn.mjs";
 
 const git = (cwd, ...args) => execFileSync("git", args, { cwd, encoding: "utf8", windowsHide: true }).trim();
 
@@ -71,4 +71,37 @@ test("gitExecOffLoop is single-flight per repo+args: concurrent identical calls 
   assert.equal(gitSpawnStats.workerSpawns, 1, "three identical calls spawn one worker");
   assert.deepEqual(a, b);
   assert.deepEqual(b, c);
+});
+
+test("idea-572: execOffLoop runs any child in the worker: stdout, stderr, exit code, explicit env, never rejects", async () => {
+  _resetGitSpawn();
+  const script = "process.stdout.write('out:' + (process.env.VS572 ?? 'none')); process.stderr.write('err'); process.exit(Number(process.argv[1] ?? 0))";
+  const ok = await execOffLoop(process.execPath, ["-e", script, "0"], { env: { ...process.env, VS572: "yes" }, timeoutMs: 30_000 });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.out, "out:yes");
+  assert.equal(ok.err, "err");
+  assert.equal(ok.code, 0);
+  const bad = await execOffLoop(process.execPath, ["-e", script, "3"], { timeoutMs: 30_000 });
+  assert.equal(bad.ok, false);
+  assert.equal(bad.code, 3);
+  assert.equal(bad.out, "out:none", "no env passed: the worker's own env");
+  const missing = await execOffLoop(path.join(os.tmpdir(), "vs-572-no-such-binary.exe"), [], { timeoutMs: 30_000 });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.code, null);
+  assert.equal(gitSpawnStats.workerSpawns, 1, "one persistent worker for all three");
+  assert.equal(gitSpawnStats.dispatches, 3, "no dedupe for generic children");
+});
+
+test("idea-572: gitExecOffLoop maxBuffer lifts the 1 MiB stdout cap (big git log reads)", async (t) => {
+  const r = makeRepo();
+  t.after(r.cleanup);
+  _resetGitSpawn();
+  fs.writeFileSync(path.join(r.repo, "big.txt"), "x".repeat(1_300_000) + "\n");
+  git(r.repo, "add", "big.txt");
+  git(r.repo, "commit", "-q", "-m", "big");
+  const capped = await gitExecOffLoop(r.repo, ["show", "HEAD:big.txt"], 30_000);
+  assert.equal(capped.ok, false, "default cap: over 1 MiB fails closed");
+  const big = await gitExecOffLoop(r.repo, ["show", "HEAD:big.txt"], 30_000, { maxBuffer: 8 * 1024 * 1024 });
+  assert.equal(big.ok, true);
+  assert.equal(big.out.length, 1_300_001);
 });
