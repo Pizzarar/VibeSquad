@@ -12,7 +12,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { resolvePlaywright, findBrowser, ensureDist, serveDist, installRoutes } from "../scripts/ui-overlap/env.mjs";
+import { resolvePlaywright, findBrowser, browserSkipReason, ensureDist, serveDist, installRoutes } from "../scripts/ui-overlap/env.mjs";
 
 const on = process.env.UI_OVERLAP === "1";
 const skip = on ? false : "set UI_OVERLAP=1 (fails until V1b + @art U4b land)";
@@ -69,6 +69,14 @@ ${describeHits(bad)}`);
 // synthetic page and stay quiet on a compact one, at the thresholds documented in page-audit.js (scroll 2x + 1 viewport, menu 40%).
 const AUDIT_SRC = fs.readFileSync(new URL("../scripts/ui-overlap/page-audit.js", import.meta.url), "utf8");
 const pw = resolvePlaywright(), exe = findBrowser();
+// Forge audit R8: a missing browser must never pass silently. Every browser-gated test carries this reason as its skip
+// (node:test counts and prints skips), a stderr line says so once, and a dedicated test below is a counted skip, or a
+// hard failure under UI_OVERLAP_REQUIRE_BROWSER=1.
+const browserSkip = browserSkipReason({ pw, exe });
+if (browserSkip) console.warn(`[ui-overlap] SKIPPED all browser-gated tests: ${browserSkip}`);
+test("ui-overlap browser harness is available (a skip here means the geometry/click guards did NOT run)", { skip: browserSkip && process.env.UI_OVERLAP_REQUIRE_BROWSER !== "1" ? browserSkip : false }, () => {
+  assert.ok(pw && exe, browserSkip || "browser harness missing");
+});
 // idea-309: every always-on browser test is bounded (node:test has no default timeout, so a wedged launch/page wait held the suite slot 30+ min).
 // Budget: ensureDist lock wait 60s + vite build 150s (killed, lock released) + launch 60s < 300s, so a slow build fails with its own error first.
 const CLICK_TEST_MS = 300000;
@@ -79,7 +87,7 @@ const SMALL_LIST = `<div id="p" style="position:absolute;left:0;top:0;width:300p
 const BIG_MENU = `<div role="menu" id="m" style="position:absolute;left:0;top:0;width:90vw;height:80vh;background:#ccc">menu</div>`;
 const SMALL_MENU = `<div role="menu" id="m" style="position:absolute;left:0;top:0;width:200px;height:240px;background:#ccc">menu</div>`;
 
-test("compact guard: geometry checks fire on massive scrolls / overbearing menus and not on compact ones", { skip: pw && exe ? false : "no Playwright / Edge / Chrome", timeout: CLICK_TEST_MS }, async () => {
+test("compact guard: geometry checks fire on massive scrolls / overbearing menus and not on compact ones", { skip: browserSkip, timeout: CLICK_TEST_MS }, async () => {
   const browser = await pw.chromium.launch({ executablePath: exe, headless: true, timeout: 60000 });
   try {
     const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
@@ -102,7 +110,7 @@ test("compact guard: geometry checks fire on massive scrolls / overbearing menus
 
 // Click audit 1109 (docs/PLAN_CLICK_AUDIT_1109.md, block A3): one test per FAIL row from A1 (17 rows).
 // Clicks the control in takeover / hub / compact and asserts the view is unchanged and the menu/popover is open and unclipped.
-const clickSkip = pw && exe ? false : "no Playwright / Edge / Chrome";
+const clickSkip = browserSkip;
 let clickEnvPromise = null;
 const clickPartial = {}; // server/browser as soon as they exist, so after() can close them even when getClickEnv rejects
 async function getClickEnv() {

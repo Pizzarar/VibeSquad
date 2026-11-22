@@ -1527,7 +1527,7 @@ export function resolveMainCheckout(dir) {
   return start;
 }
 
-export function installVsShim({ binDirs, targetScript, baseHome, force = false } = {}) {
+export function installVsShim({ binDirs, targetScript, baseHome, force = false, platform = process.platform } = {}) {
   const resolvedBaseHome = path.resolve(
     baseHome || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"),
   );
@@ -1659,6 +1659,16 @@ export function installVsShim({ binDirs, targetScript, baseHome, force = false }
     const cmdFile = path.join(dir, "vs.cmd");
     const ps1File = path.join(dir, "vs.ps1");
     fs.writeFileSync(shFile, shContent, "utf8");
+    // The .cmd/.ps1 launchers are Windows-only; off win32 only the POSIX `vs` script is written (audit R9).
+    if (platform !== "win32") {
+      try {
+        fs.chmodSync(shFile, 0o755);
+      } catch {
+        // best effort
+      }
+      files.push(shFile);
+      continue;
+    }
     fs.writeFileSync(cmdFile, cmdContent, "utf8");
     fs.writeFileSync(ps1File, ps1Content, "utf8");
     try {

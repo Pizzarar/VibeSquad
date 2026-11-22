@@ -5,6 +5,7 @@ import { createServer as createHttpsServer } from "node:https";
 import { createServer as createTcpServer } from "node:net";
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { openUrlPosix } from "./open-url.mjs";
 import { startLoopLagMonitor } from "../runner/loop-lag.mjs";
 import { sharedSchedules } from "./schedules.mjs";
 import { loadTeamsRegistry } from "./identity.mjs";
@@ -154,6 +155,7 @@ function launchApp(exe, target) {
 async function openBrowser(target) {
   // Test hook: report the URL instead of focusing or launching a browser.
   if (process.env.VIBESQUAD_TEST_OPEN_PRINT === "1") return void process.stdout.write(`VIBESQUAD_OPEN_URL=${target}\n`);
+  if (process.platform !== "win32") return void openUrlPosix(target);
   if (await focusExistingWindow()) return;
   const pf = process.env["ProgramFiles"] ?? "C:\\Program Files";
   const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
