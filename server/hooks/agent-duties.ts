@@ -3512,6 +3512,9 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       }
     };
 
+    /** B11a: the owner's own lines (`you` / legacy user) are the only wakes that reach an asleep Squad's lead. */
+    const isOwnerWake = (e: LogEntry): boolean => e.type === "you" || e.type === LEGACY_USER_TYPE;
+
     /** Queue a wakeup for the current lead in (team, lane) after the debounce window. */
     function queueWake(team: string, entry: LogEntry) {
       wakeQueue.push({ team, entry });
@@ -3670,7 +3673,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       // idea-450: a duplicate [done] line (a digest re-running `vs log done`) must not wake the lead a second time.
       if (entry.type === "done" && duplicateDoneRelay(entry)) return;
       // B11a: an asleep Squad's lead is not woken by agent log lines; the owner's own `you` lines still wake it.
-      if (entry.type !== "you" && entry.type !== LEGACY_USER_TYPE && teamAsleep(team)) return;
+      if (!isOwnerWake(entry) && teamAsleep(team)) return;
       queueWake(team, entry);
     }
 
@@ -3934,6 +3937,8 @@ ${detail}` : text, refs: [d.setId] };
         text: `relay-old: date=${dateStr} count=${dailyCount} target=${targetId}`,
         refs: agent.id ? [String(agent.id)] : [],
       });
+      // B11a: an asleep Squad's lead is not woken by a former lead's children finishing.
+      if (teamAsleep(where.team)) return;
       queueWake(where.team, {
         ts: new Date().toISOString(),
         agent: String(agent.id ?? "former-lead"),
@@ -4254,8 +4259,11 @@ ${detail}` : text, refs: [d.setId] };
         slot.entries.push(entry);
         byKey.set(k, slot);
       }
-      for (const { team, lane, entries } of byKey.values()) {
+      for (const { team, lane, entries: queued } of byKey.values()) {
         try {
+          // B11a: events buffered before the Squad went to sleep no longer wake its lead; owner lines still do.
+          const entries = teamAsleep(team) ? queued.filter(isOwnerWake) : queued;
+          if (!entries.length) continue;
           const lead = await findLead(paseo, team, lane);
           if (!lead) continue;
           const fresh: LogEntry[] = [];
@@ -4406,6 +4414,22 @@ ${detail}` : text, refs: [d.setId] };
             }
           }
           if (!keep.length) return;
+        }
+
+        // B11a: the Squad went to sleep while these waited. Non-owner events are dropped; a watch ping is dropped WITHOUT
+        // markAttempted, so the watch engine (which holds asleep Squads) re-offers it after the wake.
+        const sleepTeam = teamOf(liveLead.labels, liveLead.cwd)?.team;
+        if (sleepTeam && teamAsleep(sleepTeam)) {
+          const held = pendingWake.get(leadId) ?? [];
+          const owner = held.filter(isOwnerWake);
+          if (owner.length !== held.length) {
+            log(`wake for ${leadId}: dropped ${held.length - owner.length} queued event(s); Squad ${sleepTeam} asleep`);
+            if (owner.length) pendingWake.set(leadId, owner);
+            else {
+              pendingWake.delete(leadId);
+              return;
+            }
+          }
         }
 
         // Mid-turn: hold. At most one re-check per hold — turn_ended handles normal

@@ -17,7 +17,6 @@ const LEAD_AUTO_HANDOFF_DEFAULT = 250_000;
 const LEAD_HARD_CAP_DEFAULT = 300_000;
 const MAX_FOLDERS = 64;
 const MAX_FOLDER_NAME = 64;
-const MAX_TEAM_FOLDER = 128;
 let teamsTmpSeq = 0;
 
 // ---- B11a: project folders + Active/Asleep (docs/lanes/boring-mode) ----
@@ -153,7 +152,7 @@ export function validateTeamsBody(teams) {
     if (!t || typeof t !== "object" || Array.isArray(t)) throw new Error("each team must be an object");
     if (typeof t.id !== "string" || !TEAM_ID.test(t.id)) throw new Error("bad team id");
     checkPaths(t, `team ${t.id}`);
-    if (t.folder !== undefined && (typeof t.folder !== "string" || !t.folder.trim() || t.folder.length > MAX_TEAM_FOLDER)) {
+    if (t.folder !== undefined && (typeof t.folder !== "string" || !t.folder.trim() || t.folder !== t.folder.trim() || t.folder.length > MAX_FOLDER_NAME)) {
       throw new Error(`team ${t.id}: bad folder`);
     }
     if (t.quickLanes !== undefined) {
@@ -343,6 +342,8 @@ function commitRegistry(lock, { rootDir, file, parsed, cur, teams, folders }) {
     // the newer writer's teams.json. Checked last, right before the rename; the catch below drops the temp file.
     lock.assertOwned();
     fs.renameSync(tmp, file);
+    // Drop the read cache now: an in-process write must never depend on the stat key (NTFS may reuse an ino) changing.
+    teamsConfigCache.delete(file);
   } catch (e) {
     fs.rmSync(tmp, { force: true });
     throw e;

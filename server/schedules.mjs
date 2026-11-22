@@ -264,7 +264,9 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
           const cur = fresh.find((x) => x.id === id);
           if (cur) {
             log(id, { ok: true, trigger, skipped: "asleep", message: `${trigger}: skipped: Squad ${team} asleep` });
-            if (cur.status === "active") cur.nextRunAt = nextRunFor(cur.cadence, now());
+            const t = now();
+            if (cur.status === "active") cur.nextRunAt = nextRunFor(cur.cadence, t);
+            finishIfDone(cur, t); // past expiresAt while asleep: finish, don't stay active skipping forever
             save(fresh);
           }
           return { skipped: "asleep" };

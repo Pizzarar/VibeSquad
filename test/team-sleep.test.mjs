@@ -1,7 +1,7 @@
 // B11a (docs/lanes/boring-mode): project folders + Active/Asleep. Folder model + validation, PATCH /api/teams folder ops, and
 // the automated-waker gates (idle-lane kick, schedules, token watch, watch sets, restart-request drain asks, tester cards).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +25,10 @@ import { createSchedulesStore } from "../server/schedules.mjs";
 import { startTokenWatcher } from "../server/token-watch.mjs";
 import { addWatch, createWatchEngine } from "../server/watch-sets.mjs";
 import { dropAsleepLeads, stepRequest } from "../server/restart-request.mjs";
-import { createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+import { _deliverTesterCardForTest, createVibesquadMiddleware } from "../server/vibesquad-api.mjs";
+import { readInboxCards, writeInboxCards } from "../server/inbox.mjs";
+import { createPlugin } from "../server/hooks/agent-duties.ts";
+import { LEGACY_USER_TYPE } from "../server/user-settings.mjs";
 import { ownerHeaders } from "./helpers/local-owner.mjs";
 
 const ENV_KEYS = ["VIBESQUAD_HOME", "VIBESQUAD_TEAMS_FILE", "VIBESQUAD_IGNORE_HOME_TEAMS"];
@@ -101,7 +104,10 @@ test("validation: team.folder and folders[]", () => {
   validateTeamsBody([{ id: "a", folder: "Backlog" }]);
   assert.throws(() => validateTeamsBody([{ id: "a", folder: 3 }]), /bad folder/);
   assert.throws(() => validateTeamsBody([{ id: "a", folder: "" }]), /bad folder/);
-  assert.throws(() => validateTeamsBody([{ id: "a", folder: "x".repeat(129) }]), /bad folder/);
+  assert.throws(() => validateTeamsBody([{ id: "a", folder: " " }]), /bad folder/);
+  assert.throws(() => validateTeamsBody([{ id: "a", folder: " A" }]), /bad folder/, "untrimmed, like a folder name");
+  validateTeamsBody([{ id: "a", folder: "x".repeat(64) }]);
+  assert.throws(() => validateTeamsBody([{ id: "a", folder: "x".repeat(65) }]), /bad folder/, "same 64 cap as a folder name");
   validateFoldersBody([{ name: "A", asleep: false }, { name: "B", asleep: true }]);
   assert.throws(() => validateFoldersBody({}), /array/);
   assert.throws(() => validateFoldersBody([{ name: "A", asleep: "no" }]), /boolean/);
@@ -357,3 +363,236 @@ test("restart-request: asleep leads with nothing running get no drain ask and no
   const sends = stepRequest(closed, { now, asleep }).filter((a) => a.kind === "send").map((a) => a.leadId);
   assert.deepEqual(sends, ["L-vs"]);
 });
+
+test("schedules: an asleep skip that lands past expiresAt finishes the schedule at once", async () => {
+  const home = mkdtempSync(join(tmpdir(), "vs-team-sleep-exp-"));
+  try {
+    const clock = { t: Date.UTC(2026, 0, 1) };
+    const calls = [];
+    const backend = { async createAgent(a) { calls.push(a); return { id: "rn-1" }; }, async sendAgentPrompt() {} };
+    const cfg = { teams: [{ id: "game", folder: "Backlog" }] };
+    let lateBy = 0; // the clock moves while fire() resolves the target team (tick's own expiry sweep already ran)
+    const resolveIdentity = async () => {
+      clock.t += lateBy;
+      return { team: "game", lane: "l" };
+    };
+    const store = createSchedulesStore({ home, backend, now: () => clock.t, resolveIdentity, teamsConfig: () => cfg });
+    const s = store.create({
+      prompt: "go",
+      cadence: { type: "every", everyMs: MIN },
+      expiresAt: new Date(clock.t + 150_000).toISOString(),
+      target: { type: "new-agent", config: { provider: "claude", cwd: "/x" } },
+    });
+    clock.t += MIN;
+    await store.tick();
+    assert.equal(store.get(s.id).status, "active", "not yet expired: still active");
+    clock.t += MIN; // due again (t=120s), still before expiresAt (150s) when tick() sweeps
+    lateBy = 40_000; // ...but past it by the time the asleep skip is written
+    await store.tick();
+    const after = store.get(s.id);
+    assert.equal(after.status, "completed", "skip past expiresAt: finished, not left active");
+    assert.equal(after.nextRunAt, null);
+    assert.equal(calls.length, 0, "asleep: never ran");
+    store.stop();
+  } finally {
+    rmSync(home, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  }
+});
+
+test(
+  "tester cards: an asleep Squad's tester report is parked undelivered; the owner's own playtest report still delivers",
+  withEnv(async ({ repo, teamsFile }) => {
+    const TEAMS = [{ id: "game", name: "Game", folder: "Parked", lanes: [{ id: "game", hub: true }, { id: "game-bugs", name: "Bugs", kind: "bug" }] }];
+    writeJson(teamsFile, { teams: TEAMS, folders: [{ name: "Parked", asleep: true }] });
+    const card = (id) => ({ id, teamId: "game", laneId: "game-bugs", title: `report ${id}`, text: "door clips", scope: "other", status: "parked" });
+    writeInboxCards([card("idea-1"), card("idea-2")]);
+    const buddy = { id: "rn-buddy", title: "Buddy", status: "idle", cwd: repo, labels: { team: "game", lane: "game-bugs", role: "brainstorm" } };
+    const prompts = [];
+    const client = { async fetchAgents() { return [buddy]; }, async listAgents() { return [buddy]; }, async sendAgentPrompt(id, text) { prompts.push({ id, text }); } };
+
+    const parked = await _deliverTesterCardForTest("idea-1", repo, client, { teamId: "game" });
+    assert.deepEqual(parked, { delivered: false, reason: "Squad asleep", agentId: null });
+    assert.equal(prompts.length, 0, "nothing sent");
+    assert.equal(readInboxCards().find((c) => c.id === "idea-1").deliveredAt, undefined, "card kept undelivered");
+
+    const owner = await _deliverTesterCardForTest("idea-2", repo, client, { teamId: "game", ownerPlaytest: true });
+    assert.equal(owner.delivered, true, JSON.stringify(owner));
+    assert.equal(owner.reason, undefined);
+    assert.equal(owner.agentId, "rn-buddy");
+    assert.deepEqual(prompts.map((p) => p.id), ["rn-buddy"]);
+    assert.ok(readInboxCards().find((c) => c.id === "idea-2").deliveredAt, "owner playtest card delivered");
+  }),
+);
+
+// ---- agent-duties lead wakes (server/hooks/agent-duties.ts) -----------------------------------------------------------
+
+const DUTIES_CWD = "/projects/VibeSquad";
+const dutyAgent = (id, role, extra = {}) => ({ id, title: id, cwd: DUTIES_CWD, status: "idle", provider: "claude", labels: { team: "vibesquad", lane: "vibesquad", role, ...extra } });
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function withDutiesEnv(fn) {
+  return async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vs-team-sleep-duties-"));
+    const home = join(dir, "home");
+    const tmp = join(dir, "tmp");
+    mkdirSync(home, { recursive: true });
+    mkdirSync(tmp, { recursive: true });
+    const teamsFile = join(home, "teams.json");
+    writeJson(teamsFile, { teams: [{ id: "vibesquad", name: "VibeSquad", lanes: [{ id: "vibesquad", name: "VibeSquad", paths: ["VibeSquad"] }], paths: ["VibeSquad"] }] });
+    const prev = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
+    process.env.VIBESQUAD_HOME = home;
+    process.env.VIBESQUAD_TEAMS_FILE = teamsFile;
+    try {
+      await fn({ dir, home, tmp });
+    } finally {
+      for (const [k, v] of Object.entries(prev)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  };
+}
+
+function dutiesHarness(sb, agents, sleep) {
+  const sent = [];
+  const on = new Map();
+  const server = { before: () => () => {}, on: (name, fn) => (on.set(name, fn), () => on.delete(name)) };
+  const stop = createPlugin({
+    startWatcher: false,
+    briefRoot: sb.dir,
+    debounceMs: 20,
+    retryBaseMs: 10,
+    leadWakeCooldownMs: 40,
+    firstPromptRedeliverMs: 60_000,
+    setLabels: async () => {},
+    archiveAgent: async () => {},
+    teamAsleep: (team) => sleep.asleep && team === "vibesquad",
+    watchSets: { home: sb.home, tmpdir: sb.tmp, retryMs: 0 },
+  })(server);
+  const paseo = {
+    agents: {
+      ref: (id) => ({
+        refresh: async () => (agents.has(id) ? { agent: agents.get(id) } : null),
+        send: async (text) => void sent.push({ to: id, text }),
+        archive: async () => {},
+        detach: async () => {},
+        timeline: { refetch: async () => ({ entries: [] }) },
+      }),
+      list: async () => ({ entries: [...agents.values()].map((agent) => ({ agent })) }),
+    },
+  };
+  stop.setPaseo(paseo);
+  let n = 0;
+  const writeLog = (entries) => {
+    mkdirSync(join(sb.home, "teams", "vibesquad"), { recursive: true });
+    const lines = entries.map((e) => JSON.stringify({ ts: new Date(Date.now() + ++n).toISOString(), lane: "vibesquad", refs: [], ...e }) + "\n");
+    appendFileSync(join(sb.home, "teams", "vibesquad", "log.jsonl"), lines.join(""));
+    stop.scanLogs(false);
+  };
+  const turnEnded = (agent, kind = "completed") => on.get("agent.turn_ended")({ agent, turnId: `t-${++n}`, outcome: { kind } }, { paseo });
+  return { stop, sent, on, paseo, watch: stop.watchSets, writeLog, turnEnded };
+}
+
+test(
+  "agent-duties: an asleep Squad's lead gets no log-line wake and no former-lead relay; owner you/legacy lines still wake it",
+  withDutiesEnv(async (sb) => {
+    const sleep = { asleep: true };
+    const agents = new Map([["lead-1", dutyAgent("lead-1", "lead")], ["old-1", dutyAgent("old-1", "former-lead")]]);
+    const h = dutiesHarness(sb, agents, sleep);
+    try {
+      h.writeLog([
+        { agent: "w-1", type: "done", text: "PASS: asleep done" },
+        { agent: "w-2", type: "blocker", text: "asleep blocker" },
+        { agent: "w-3", type: "needs-you", text: "asleep needs-you" },
+      ]);
+      await h.turnEnded(agents.get("old-1")); // relayFromFormerLead
+      await wait(150);
+      assert.deepEqual(h.sent, [], "asleep: no agent log wake, no relay");
+
+      h.writeLog([{ agent: "owner", type: "you", text: "owner ping" }, { agent: "owner", type: LEGACY_USER_TYPE, text: "legacy ping" }]);
+      await wait(150);
+      assert.equal(h.sent.length, 1, JSON.stringify(h.sent));
+      assert.equal(h.sent[0].to, "lead-1");
+      assert.match(h.sent[0].text, /legacy ping \(\+1 more\)/, "both owner lines, nothing else");
+      assert.doesNotMatch(h.sent[0].text, /asleep/);
+
+      sleep.asleep = false; // control: the same relay wakes an awake Squad's lead
+      await h.turnEnded(agents.get("old-1"));
+      await wait(150);
+      assert.equal(h.sent.length, 2, JSON.stringify(h.sent));
+      assert.match(h.sent[1].text, /Relayed from former lead/);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "agent-duties: wakes buffered before the Squad fell asleep (debounce queue, held for a running lead) are dropped; owner lines pass",
+  withDutiesEnv(async (sb) => {
+    const sleep = { asleep: false };
+    const lead = dutyAgent("lead-1", "lead");
+    const agents = new Map([["lead-1", lead]]);
+    const h = dutiesHarness(sb, agents, sleep);
+    try {
+      // dispatchWakes: the entry is in the debounce queue when the folder goes to sleep.
+      h.writeLog([{ agent: "w-1", type: "done", text: "PASS: debounced" }]);
+      sleep.asleep = true;
+      await wait(150);
+      assert.deepEqual(h.sent, [], "debounce-queued wake dropped");
+
+      // flushWake: held in pendingWake while the lead runs, then the folder sleeps before the lead goes idle.
+      sleep.asleep = false;
+      lead.status = "running";
+      h.writeLog([{ agent: "w-2", type: "done", text: "PASS: held while running" }]);
+      await wait(150);
+      assert.deepEqual(h.sent, [], "lead running: held");
+      sleep.asleep = true;
+      lead.status = "idle";
+      h.writeLog([{ agent: "owner", type: "you", text: "owner while asleep" }]);
+      await wait(150);
+      assert.equal(h.sent.length, 1, JSON.stringify(h.sent));
+      assert.match(h.sent[0].text, /\[you\] owner while asleep\./, "only the owner line, no (+N more)");
+      assert.doesNotMatch(h.sent[0].text, /held while running/);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "agent-duties: a watch ping held for a running lead when the Squad sleeps is dropped unattempted and re-offered after the wake",
+  withDutiesEnv(async (sb) => {
+    const sleep = { asleep: false };
+    const lead = dutyAgent("lead-1", "lead");
+    lead.status = "running";
+    const agents = new Map([["lead-1", lead], ["w-1", dutyAgent("w-1", "worker")]]);
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: Date.now() - 1000 });
+    const h = dutiesHarness(sb, agents, sleep);
+    try {
+      h.writeLog([{ agent: "w-1", type: "done", text: "PASS: w1 shipped" }]);
+      await h.watch.tick();
+      await wait(100);
+      assert.deepEqual(h.sent, [], "lead running: ping held in pendingWake");
+      assert.ok(h.watch.get(id).pings.length >= 1, "the set fired its ping");
+
+      sleep.asleep = true;
+      lead.status = "idle";
+      await h.turnEnded(lead, "canceled"); // the lead's turn ends: flushWake runs while asleep
+      await h.watch.tick();
+      await wait(150);
+      assert.deepEqual(h.sent, [], "asleep: not sent");
+      assert.ok(h.watch.get(id).pings.every((p) => !p.attemptedAt), "dropped WITHOUT markAttempted");
+
+      sleep.asleep = false;
+      await h.watch.tick();
+      await wait(150);
+      const pings = h.sent.filter((s) => s.to === "lead-1" && s.text.includes(`Watch ${id}`));
+      assert.equal(pings.length, 1, JSON.stringify(h.sent));
+      assert.ok(h.watch.get(id).pings[0].attemptedAt, "attempted once delivered after the wake");
+    } finally {
+      h.stop();
+    }
+  }),
+);

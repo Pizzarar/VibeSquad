@@ -2284,6 +2284,9 @@ async function deliverTesterCard(cardId, rootDir, agentClient = null, { teamId =
   }
 }
 
+/** Test hook (B11a): the tester-card delivery gate. */
+export const _deliverTesterCardForTest = (...a) => deliverTesterCard(...a);
+
 /** GET /api/teams, /__vibesquad/teams for a tester: its Squads only, each with just its bug lane; no paths, no other lanes. */
 function handleTesterTeams(req, res, { rootDir, caller }) {
   if (req.method !== "GET") return sendJson(res, 405, { ok: false, error: "method not allowed" });
