@@ -1,12 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { NetworkInterfaceInfo } from "node:os";
 import type { Duplex } from "node:stream";
 
 export const DEVICE_COOKIE: string;
 export const UNPAIRED_MESSAGE: string;
 
 export function tlsDir(): string;
-export function detectLanIp(): string | null;
-export function detectMeshnetIp(): string | null;
+/** A networkInterfaces()-shaped snapshot (netConfig passes one, idea-518). */
+export type NetInterfaces = NodeJS.Dict<NetworkInterfaceInfo[]>;
+export function detectLanIp(interfaces?: NetInterfaces | null, env?: NodeJS.ProcessEnv): string | null;
+export function detectMeshnetIp(interfaces?: NetInterfaces | null, env?: NodeJS.ProcessEnv): string | null;
 export function netConfig(): {
   port: number;
   meshnetIp: string | null;
