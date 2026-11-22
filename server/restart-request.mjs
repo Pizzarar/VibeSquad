@@ -312,7 +312,7 @@ export function requestAskText(req, lead, held, now = Date.now()) {
   // idea-371 L2: minutes LEFT at ask time (a lead asked later in the drain window is not told the full initial duration).
   const left = Math.max(0, Math.round((Date.parse(req.deadline) - now) / 60000));
   return `Restart request ${req.id} (tip ${req.tip}${req.needs ? `, needs ${req.needs}` : ""}) from ${req.requestedBy}${req.team ? ` (Squad ${req.team}${req.scope === "team" ? " only" : ", all Squads are asked: the restart is machine-wide"})` : ""}: the server restarts the runtime once every live lead has drained, or at ${req.deadline} (~${left} min) regardless. ` +
-    `Please drain: let running suites finish or stop what is not needed (vs stop <agent> --background, idle agents only), hold new background suites, then run: vs log restart-feedback '${DRAINED_TEXT} ${req.tip}'. ` +
+    `Please drain: let running suites finish or stop what is not needed (vs stop <agent> --background, idle agents only), hold new background suites (the runner already refuses new background shells until the restart is done), then run: vs log restart-feedback '${DRAINED_TEXT} ${req.tip}'. ` +
     (held?.length ? `The runner holds background work in your lane right now: ${heldLine(held)}; it must finish or be stopped before your drain counts. ` : "") +
     `You get '${DONE_TEXT}' after the restart; lift the hold then. Progress: vs restart status.`;
 }
