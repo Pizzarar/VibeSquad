@@ -1100,7 +1100,7 @@ test(
   withEnv(async ({ briefRoot }) => {
     const h = harness(new Map(), {
       briefRoot,
-      cappedProviders: { capped: { claude: { reason: "cli cap", updatedAt: "2026-11-05T00:00:00Z" } } },
+      cappedProviders: { capped: { claude: { reason: "cli cap" } } },
     });
     try {
       const out = await h.beforeCreate({
