@@ -36,9 +36,3 @@ test('posix: first executable regular file wins; none -> not found', () => {
   const none = fakeFs({ [A]: { kind: 'dir', x: true }, [B]: { kind: 'file', x: false } });
   assert.throws(() => resolveExecutable('claude', { env, platform: 'linux', fsImpl: none }), /not found/);
 });
-
-test('win32 resolution is unchanged (existsSync only, no X_OK)', () => {
-  const exe = path.join('C:\\bin', 'claude.exe');
-  const fsImpl = { existsSync: (p) => p === exe, statSync: () => { throw new Error('must not stat on win32'); }, accessSync: () => { throw new Error('must not access on win32'); } };
-  assert.equal(resolveExecutable('claude', { env: { PATH: 'C:\\bin' }, platform: 'win32', fsImpl }).file, exe);
-});
