@@ -570,8 +570,17 @@ export function createWatchEngine({
   nudge,
   log = () => {},
   retryMs = 10_000,
+  // B11a: (team) -> true when that Squad is in an asleep folder. Its pings and nudges wait (NOT marked attempted) until a wake.
+  asleep = () => false,
 } = {}) {
   const file = watchesPath({ home });
+  const isAsleep = (team) => {
+    try {
+      return Boolean(team) && Boolean(asleep(team));
+    } catch {
+      return false;
+    }
+  };
   const startedAt = now();
   let cache = emptyDoc();
   let cacheStamp = "";
@@ -909,6 +918,7 @@ export function createWatchEngine({
     if (!nudge) return;
     const due = openSets().flatMap((s) => s.items.filter((i) => i.nudgeDueAt && !i.nudgeSentAt).map((i) => ({ set: s, item: i })));
     for (const { set, item } of due) {
+      if (isAsleep(set.team)) continue; // B11a: unclaimed, so the nudge still goes after a wake
       let claimed = false;
       try {
         await mutateDocAsync(file, (doc) => {
@@ -938,6 +948,7 @@ export function createWatchEngine({
     const t = now();
     for (const set of cache.sets) {
       if (set.cancelledAt) continue; // the owner disarmed it: drop what was not sent yet
+      if (isAsleep(set.team)) continue; // B11a: held, not attempted; delivered on the first tick after a wake
       for (const ping of set.pings ?? []) {
         if (ping.attemptedAt) continue;
         if (isCancelled(pingKeyOf(set, ping))) break; // cancelled while an earlier offer awaited: the cache is stale

@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { redactHostPathTokens, redactHostPaths } from "./redact-host-paths.mjs";
 import { isRelayRequest } from "./relay-tunnel.mjs";
 import { inspectFirstRunStatus } from "./first-run.mjs";
-import { resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
+import { foldersOf, isTeamAsleep, patchTeamsRegistryAsync, readTeamsConfig, resolveTeamsFilePath, resolveTeamsWritePath, teamsRevision, validateFoldersBody, validateTeamsBody, writeTeamsRegistry, writeTeamsRegistryAsync } from "./teams-file.mjs";
 import { seedHubBriefs } from "./hub-seed.mjs";
 import { isServerSideFsError } from "./file-lock.mjs";
 import { primaryProjectsDir, resolveProjectPath } from "./brief-path.mjs";
@@ -626,12 +626,13 @@ function handleTeams(req, res, rootDir) {
     const r = readJsonFileWithBom(file, { label: "teams.json", fallback: null, recordWarning: true });
     if (r.ok && r.data) {
       // hostId rides on the envelope only (never inside the lane/agent records; Overlord decision, E4a).
-      return sendJson(res, 200, { ...r.data, revision: teamsRevision(file), hostId: getHostId() });
+      return sendJson(res, 200, { ...r.data, folders: foldersOf(r.data), revision: teamsRevision(file), hostId: getHostId() });
     }
     // idea-242 L1: the read/parse detail (Node's fs message names the path) goes to the server log only.
     console.warn(`[vibesquad] GET teams: ${file}: ${r.detail || r.error || "no registry data"}`);
     return sendJson(res, 500, { error: "teams.json is unreadable or invalid; see the server log" });
   }
+  if (req.method === "PATCH") return handleTeamsPatch(req, res, rootDir);
   if (req.method !== "POST" && req.method !== "PUT") {
     res.statusCode = 405;
     return res.end();
@@ -639,6 +640,7 @@ function handleTeams(req, res, rootDir) {
   readBody(req).then(async (parsed) => {
     try {
       validateTeamsBody(Array.isArray(parsed) ? parsed : parsed?.teams); // the caller's fault: 400 with the reason
+      if (!Array.isArray(parsed) && parsed?.folders !== undefined) validateFoldersBody(parsed.folders); // B11a
     } catch (e) {
       res.statusCode = 400;
       return res.end(String(e));
@@ -658,6 +660,24 @@ function handleTeams(req, res, rootDir) {
       } catch (e) {
         console.warn(`[vibesquad] hub brief seed failed after a teams write: ${e?.message ?? e}`); // the write landed
       }
+    }
+    sendJson(res, result.status, result.body);
+  }, (e) => {
+    res.statusCode = e?.status === 413 ? 413 : 400;
+    res.end(String(e?.message ?? e));
+  });
+}
+
+// B11a: PATCH /api/teams — one folder op (createFolder | renameFolder | deleteFolder | setFolderAsleep | setTeamFolder),
+// applied to the current registry under the teams.json lock. Owner-only like PUT (not in AGENT_WRITE_ALLOWLIST; testers GET only).
+function handleTeamsPatch(req, res, rootDir) {
+  readBody(req).then(async (op) => {
+    let result;
+    try {
+      result = await patchTeamsRegistryAsync(op, rootDir);
+    } catch (e) {
+      console.warn(`[vibesquad] teams.json folder write failed: ${e?.message ?? e}`);
+      return sendJson(res, 503, { error: "teams registry busy or unwritable; retry", retryable: true });
     }
     sendJson(res, result.status, result.body);
   }, (e) => {
@@ -2250,7 +2270,12 @@ function ownerPlaytestCard(cardId, team) {
  * Deliver a tester card to its bug lane: { delivered, deliveryError?, agentId }. A delivery failure is not a request error.
  * `agentClient`: the injected backend (createVibesquadMiddleware opts.backend, tests); null = sendInboxCard's own runner client.
  */
-async function deliverTesterCard(cardId, rootDir, agentClient = null) {
+async function deliverTesterCard(cardId, rootDir, agentClient = null, { teamId = null, ownerPlaytest = false } = {}) {
+  // B11a: a tester card for an asleep Squad stays parked (undelivered) until the owner wakes the folder or sends it by hand.
+  // The owner's own playtest report is owner-typed and always goes through.
+  if (!ownerPlaytest && teamId && isTeamAsleep(String(teamId), readTeamsConfig(rootDir))) {
+    return { delivered: false, reason: "Squad asleep", agentId: null };
+  }
   try {
     const r = await sendInboxCard({ cardId, ...(agentClient ? { agentClient } : {}) }, rootDir);
     return { delivered: true, agentId: r?.agentId ?? r?.card?.deliveredTo ?? null };
@@ -2258,6 +2283,9 @@ async function deliverTesterCard(cardId, rootDir, agentClient = null) {
     return { delivered: false, deliveryError: redactTester(e?.message ?? e), agentId: null };
   }
 }
+
+/** Test hook (B11a): the tester-card delivery gate. */
+export const _deliverTesterCardForTest = (...a) => deliverTesterCard(...a);
 
 /** GET /api/teams, /__vibesquad/teams for a tester: its Squads only, each with just its bug lane; no paths, no other lanes. */
 function handleTesterTeams(req, res, { rootDir, caller }) {
@@ -2327,9 +2355,10 @@ async function fileTesterReport({ caller, team, laneId, text, telemetry, shot, r
       out.screenshotError = redactTester(e?.message ?? e);
     }
   }
-  const d = await deliverTesterCard(card.id, rootDir, deliveryClient);
+  const d = await deliverTesterCard(card.id, rootDir, deliveryClient, { teamId: team.id, ownerPlaytest: isOwnerPlaytest(caller) });
   out.delivered = d.delivered;
   if (d.deliveryError) out.deliveryError = d.deliveryError;
+  if (d.reason) out.reason = d.reason;
   out.threadAgentId = d.agentId ?? (await testerIntakeAgentFor(backend, team))?.id ?? null;
   return out;
 }
@@ -2433,8 +2462,8 @@ async function handleTesterInboxSend(req, res, { rootDir, caller, deliveryClient
     const body = await readTesterBody(req);
     const card = ownTesterCard(caller, body.cardId);
     if (card.deliveredAt) return sendJson(res, 200, { ok: true, cardId: card.id, delivered: true, already: true });
-    const d = await deliverTesterCard(card.id, rootDir, deliveryClient);
-    return sendJson(res, 200, { ok: true, cardId: card.id, delivered: d.delivered, ...(d.deliveryError ? { deliveryError: d.deliveryError } : {}), agentId: d.agentId });
+    const d = await deliverTesterCard(card.id, rootDir, deliveryClient, { teamId: card.teamId });
+    return sendJson(res, 200, { ok: true, cardId: card.id, delivered: d.delivered, ...(d.deliveryError ? { deliveryError: d.deliveryError } : {}), ...(d.reason ? { reason: d.reason } : {}), agentId: d.agentId });
   } catch (e) {
     return sendTesterError(res, e, "tester inbox send");
   }
