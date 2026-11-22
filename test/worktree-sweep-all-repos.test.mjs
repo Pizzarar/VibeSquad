@@ -747,6 +747,62 @@ test("R2 M-b links: a gitignored junction deep in the tree is detached before gi
     assert.ok(existsSync(wt2));
   }));
 
+test("idea-544 TOCTOU: a dir swapped for a junction during the untracked-link walk aborts; links outside the worktree stay attached", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const shared = join(root, "main-node-modules");
+    writeFile(shared, "pkg/index.js", "precious");
+    // Outside the worktree: a folder holding its own untracked link (what the swapped junction would lead the walk to).
+    const victim = join(root, "victim");
+    mkdirSync(join(victim, "sub"), { recursive: true });
+    symlinkSync(shared, join(victim, "nm"), "junction");
+    symlinkSync(shared, join(victim, "sub", "nm"), "junction");
+    const victimLinked = () => existsSync(join(victim, "nm", "pkg", "index.js")) && existsSync(join(victim, "sub", "nm", "pkg", "index.js"));
+    initRepo(repo);
+    commitFile(repo, ".gitignore", "node_modules\nnm");
+
+    // (1) deps is listed (sub), then deps/sub -> junction to victim before the walk reads it.
+    const wt = addWorktree(repo, sanct, "repo", "unit-walk-swap");
+    mkdirSync(join(wt, "deps", "sub"), { recursive: true });
+    symlinkSync(shared, join(wt, "deps", "sub", "node_modules"), "junction");
+    const sub = join(wt, "deps", "sub");
+    let swapped = false;
+    const res = removeSweptWorktree(repo, wt, {
+      onLinkWalkListed: (dir) => {
+        if (swapped || !/[\\/]deps$/i.test(dir)) return;
+        renameSync(sub, join(wt, "sub-aside"));
+        symlinkSync(victim, sub, "junction");
+        swapped = true;
+      },
+    });
+    assert.equal(swapped, true, "the swap hook ran");
+    assert.notEqual(res.removed, true, JSON.stringify(res));
+    assert.match(res.reason, /EESCAPE/, JSON.stringify(res));
+    assert.ok(victimLinked(), "the outside links were never unlinked");
+    assert.ok(existsSync(wt), "worktree left in place after the abort");
+
+    // (2) the walk finished inside (deps/sub/nm collected), then deps -> junction to victim before the unlink.
+    const wt2 = addWorktree(repo, sanct, "repo", "unit-unlink-swap");
+    mkdirSync(join(wt2, "deps", "sub"), { recursive: true });
+    symlinkSync(shared, join(wt2, "deps", "sub", "nm"), "junction");
+    const deps = join(wt2, "deps");
+    let swapped2 = false;
+    const res2 = removeSweptWorktree(repo, wt2, {
+      onLinkWalkListed: (dir) => {
+        if (swapped2 || !/[\\/]deps[\\/]sub$/i.test(dir)) return; // the last folder the walk reads
+        renameSync(deps, join(wt2, "deps-aside"));
+        symlinkSync(victim, deps, "junction");
+        swapped2 = true;
+      },
+    });
+    assert.equal(swapped2, true, "the second swap hook ran");
+    assert.notEqual(res2.removed, true, JSON.stringify(res2));
+    assert.match(res2.reason, /EESCAPE/, JSON.stringify(res2));
+    assert.ok(victimLinked(), "the outside link under the swapped ancestor was never unlinked");
+    assert.equal(readFileSync(join(shared, "pkg", "index.js"), "utf8"), "precious");
+  }));
+
 test("R2 M-c lock races: an empty or half-written lock is not stale; a concurrent takeover blocks a second taker; create leaves no temp files", () =>
   withTmp((root) => {
     const sanct = join(root, "sanct");
