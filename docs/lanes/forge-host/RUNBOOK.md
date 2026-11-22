@@ -74,7 +74,7 @@ no second runner. Fallback only if SSH stdio is flaky in B3: a dev pp runner. He
 
 ## Rollback notes (C3)
 
-- After cutover the dev pp VS stays installed but **stopped and not autostarting**; retire it after 2 weeks clean.
+- After cutover only the dev pp STANDBY copy (the stopped server instance + its ~/.vibesquad standby copy) is retired after 2 weeks clean; the Windows install/run/release path stays first-class (C3 retires only that standby copy).
 - Rollback: drain agents, `systemctl --user stop vibesquad` on the forge, copy the forge `~/.vibesquad` (minus `runtime/` and
   `worktrees/`) back to the dev pp, start dev pp VS, point clients' `server_url` back.
 - One writer at a time: never run both servers against the same copy of `~/.vibesquad`.
