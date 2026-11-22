@@ -19,6 +19,13 @@ The env var `VS_PLAYTEST_UI_SCALE` sets the dock scale. Without it the addon use
 - `F9` starts a bug capture. Click the node you mean, write a note, and send.
 - Reports retry with one `clientReportId`, so a retry never makes a second card.
 
+## Remote VS (owner device pairing)
+For a VS server that is not on this machine, set `vs_playtest/server_url` to `https://<host>:<port>`, then use "Pair with VS" in the dock: compare the CA fingerprint with the one in the VS pair dialog, confirm, and type the 6-digit owner pairing code. Plain http is refused for remote hosts (only the `/ca.crt` bootstrap fetch uses it), and the device token is sent only over TLS pinned to the confirmed VS CA. "Unpair" deletes both files.
+
+- `vs_playtest/device_token_path`: absolute path of the device token file. Default `$VIBESQUAD_HOME/playtest-device-token`, else `~/.vibesquad/playtest-device-token`.
+- `vs_playtest/ca_cert_path`: absolute path of the pinned VS CA. Default `$VIBESQUAD_HOME/playtest-ca.crt`, else `~/.vibesquad/playtest-ca.crt`.
+- Both must be absolute filesystem paths such as `<host-path>/playtest-device-token`. `res://`, `user://` and relative paths are refused (the token never enters the project), and the addon then does not pair or send.
+
 ## Export gate
 The dock and the bridge hooks run only in the editor, or in a build whose preset carries the feature tag `vs_playtest`. In any other build `VSPlaytest.enabled` is `false`, and the autoload does nothing and makes no network calls.
 
@@ -54,10 +61,11 @@ Autoload: `VSPlaytest` (only in the editor or `vs_playtest` builds; otherwise `V
   - `describe_node(node: Node) -> String`; the default is `node.get_path()`, goes into `telemetry.cursorNode`
   - `get_cheats() -> Array[Dictionary]`, each `{id, label, args?: Array}`
   - `run_cheat(id: String, args: Array) -> Variant`
-- Project settings: `vs_playtest/team_id` (required), `vs_playtest/server_url`, `vs_playtest/adapter_dir`, `vs_playtest/hotkey_dock` (default F8), `vs_playtest/hotkey_bug` (default F9).
+- Project settings: `vs_playtest/team_id` (required), `vs_playtest/server_url`, `vs_playtest/adapter_dir`, `vs_playtest/hotkey_dock` (default F8), `vs_playtest/hotkey_bug` (default F9), `vs_playtest/device_token_path`, `vs_playtest/ca_cert_path` (both below).
 - Signals: `report_sent(card_id)`, `reply_received(message)`.
 - Capture payload: `{teamId, text, screenshotBase64, screenshotMime, clientReportId, telemetry:{clickedPoint, viewport, cursorNode, scene, state, seed, adapter, buildHash, engine, platform, logLines(last 200 lines, each clipped to 300 chars)}}`.
 - Agent helpers on the autoload, reached through the bridge: `VSPlaytest.state()`, `.seed()`, `.cheats()`, `.cheat(id, args)`. They are safe no-ops when disabled or without an adapter.
+- Pairing (remote VS, B2b): `is_paired() -> bool` is true when a valid device token file and a pinned CA file are both stored; it is false when the addon is disabled (no I/O). `unpair() -> bool` deletes both files and returns true when neither is left; false when disabled or a delete failed. Both are safe no-ops when disabled.
 - Other helpers: `has_adapter()`, `open_dock()`, `close_dock()`, `toggle_dock()`, `set_ui_scale(s)`.
 
 Example adapter:

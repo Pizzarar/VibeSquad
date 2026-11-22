@@ -41,7 +41,15 @@ On another machine, do the manual recipe: install as above, then `claude mcp add
 
 When the VS server runs on a remote host (forge) and the game runs on the dev PC:
 
-- **Report URL.** Set `vs_playtest/server_url` to `http://<forge>.<tailnet>.ts.net:<VS port>` (Tailscale MagicDNS; a `100.x` tailnet address also works). Pair the game as an owner device (coming: the addon's device-token pairing lands in B2b, not documented here yet).
+- **Report URL.** Set `vs_playtest/server_url` to `https://<forge>.<tailnet>.ts.net:<VS port>` (Tailscale MagicDNS). The forge box needs `VIBESQUAD_MESHNET_HOST` set so VS serves and certifies the MagicDNS name.
+- **Remote is https only.** Plain http is refused for a remote `server_url`; the token and the pairing code never ride on it. The one exception is the `GET /ca.crt` bootstrap fetch, which carries nothing secret. The device token is only sent over TLS pinned to the VS CA the owner confirmed, never the system trust store.
+- **Owner pairing** (the game on the dev PC becomes an owner device):
+  1. Set `vs_playtest/server_url` to the https URL above.
+  2. Click "Pair with VS" in the dock.
+  3. Compare the CA fingerprint shown in the dock with the one in the VS pair dialog, then confirm.
+  4. Type the 6-digit owner pairing code.
+  5. "Unpair" removes both the device token file and the pinned CA file (also revoke the device in VS). The CA is written to disk only after pairing succeeds.
+  Settings and API: `godot/addons/vs_playtest/README.md`.
 - **Bridge for agents on forge.** Agents reach the debug bridge as a stdio MCP server over SSH: `ssh devpc npx godot-mcp-runtime@4.0.1`. The bridge itself stays on loopback on the dev PC and no new port is opened. Set `GODOT_PATH` to the real console `.exe` in the dev PC's environment, as above.
 - **Version pin.** npm `godot-mcp-runtime@4.0.1` is tag `v4.0.1` (`ad386b91`). Our pinned commit `3b8a4f31` is the next commit after it and only changes CI/docs files (`.github/workflows/publish.yml`, `CONTRIBUTING.md`, release-notes script and its test), so the npm 4.0.1 package has the same runtime code. Always pin the exact version; never `@latest`.
 - **SSH setup** (OpenSSH server on the dev PC, forge key, the `devpc` host alias) is in `docs/PLAN_FORGE_CUTOVER.md` stage B (owned by `@forge-host`).
