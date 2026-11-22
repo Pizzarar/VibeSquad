@@ -2,11 +2,12 @@
 // sanctuary/runtime (%LOCALAPPDATA%) and the projects drive. Logs a `metric` 'disk-free drive=<X> free=<GB> pct=<n>' (at most hourly unless pct
 // moves >2 points), and raises ONE needs-you to the Squad Overlord per episode when free < 20%; re-arms once free recovers above 25%.
 // Same shape as idle-lane-kick.mjs: setInterval tick, errors caught, VS_DISK_ALARM=0 opts out. All I/O injectable for tests.
-import { statfs } from "node:fs/promises";
-import { parse } from "node:path";
+import { stat as fsStat, statfs } from "node:fs/promises";
+import { dirname, parse } from "node:path";
 import { homedir } from "node:os";
 import { appendVsLogEntry } from "./brainstorm.mjs";
 import { primaryProjectsDir } from "./brief-path.mjs";
+import { resolveManagedWorktreeRoot } from "./team-worktrees.mjs";
 
 export const DISK_ALARM_TICK_MS = 10 * 60_000;
 export const DISK_LOG_EVERY_MS = 60 * 60_000;
@@ -26,20 +27,49 @@ export function driveOf(p) {
   return parse(str).root.replace(/[\\/]+$/, "") || "/";
 }
 
+/** Walks up to the nearest existing ancestor (a fresh sanctuary root may not exist yet) and returns fn(thatPath). */
+async function viaExisting(p, fn, probe = fsStat) {
+  let cur = String(p);
+  for (;;) {
+    try {
+      await probe(cur);
+      return await fn(cur);
+    } catch (e) {
+      const up = dirname(cur);
+      if (up === cur) throw e;
+      cur = up;
+    }
+  }
+}
+
 async function defaultStat(p) {
-  const s = await statfs(p);
+  const s = await viaExisting(p, (q) => statfs(q));
   return { free: Number(s.bavail) * Number(s.bsize), total: Number(s.blocks) * Number(s.bsize) };
 }
 
-export function defaultTargets(rootDir) {
-  const local = process.env.LOCALAPPDATA || homedir();
-  return [local, primaryProjectsDir(rootDir)];
+/** Off win32 a volume is its device id (`stat.dev`), not a path root: `/` alone would lump every mount into one. */
+export async function defaultVolumeKey(p, platform = process.platform, probe = fsStat) {
+  if (platform === "win32") return driveOf(p);
+  try {
+    return `dev:${await viaExisting(p, async (q) => (await probe(q)).dev, probe)}`;
+  } catch {
+    return driveOf(p);
+  }
+}
+
+export function defaultTargets(rootDir, { platform = process.platform, env = process.env } = {}) {
+  const local = env.LOCALAPPDATA || homedir();
+  const base = [local, primaryProjectsDir(rootDir)];
+  // Off win32 the sanctuary is not under LOCALAPPDATA, so it can sit on its own volume: watch it explicitly.
+  return platform === "win32" ? base : [...base, resolveManagedWorktreeRoot(env)];
 }
 
 export function createDiskAlarm({
   targets,
   rootDir,
   stat = defaultStat,
+  platform = process.platform,
+  volumeKey = (p) => defaultVolumeKey(p, platform),
   now = () => Date.now(),
   log = (type, text) => appendVsLogEntry({ teamId: OVERLORD_TEAM, laneId: OVERLORD_LANE, agent: "vibesquad-server", type, text }),
 } = {}) {
@@ -47,8 +77,8 @@ export function createDiskAlarm({
   async function tick() {
     const results = [];
     const seen = new Set();
-    for (const p of targets ?? defaultTargets(rootDir)) {
-      const drive = driveOf(p);
+    for (const p of targets ?? defaultTargets(rootDir, { platform })) {
+      const drive = platform === "win32" ? driveOf(p) : await volumeKey(p);
       if (seen.has(drive)) continue; // two paths on one drive: one reading
       seen.add(drive);
       let s;
