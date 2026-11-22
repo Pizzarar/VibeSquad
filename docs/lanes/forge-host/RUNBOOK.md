@@ -48,10 +48,18 @@ the unit is the only launch path.
 
 ## Clients: server_url (MagicDNS)
 
-Owner clients (VS app, phone) use `http://forge.example.ts.net:<port>`. The unit sets `VIBESQUAD_LAN=1`,
+Owner clients (VS app, phone, Playtest Overlay addon) use `https://forge.example.ts.net:<port>`. Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http serves only `/ca.crt`, `/__vibesquad/desktop/update.json`, `/api/health` and `/api/auth/status`; `/pair` answers 302 to https and burns the code, other GET/HEAD get 301, non-GET gets 426 (`server/serve.mjs:381-396`). The unit sets `VIBESQUAD_LAN=1`,
 `VIBESQUAD_MESHNET_IP` (tailnet IPv4) and `VIBESQUAD_MESHNET_HOST` (MagicDNS name) so the listener binds the tailnet address
 and the Host check accepts the name (R7; the `tailscale0` interface match lands in A4). Pair a device via `/pair?format=json`
 and check `/pair/status`. `tailscale serve` https is optional, not required.
+
+### Trust the VS CA (every client, once per host)
+
+The VS CA is self-signed, so each client pins it (E6/idea-384 flow; addon design in `docs/lanes/playtest-overlay/PLAN_V1.md:70-71`). Clients bootstrap by GETting `/ca.crt` (`http://forge.example.ts.net:<port>/ca.crt`), so the pin is only as safe as that first fetch. Compare the CA SHA-256 fingerprint against the one in the VS pair dialog (out-of-band) before trusting it. How each client behaves differs:
+
+- **Desktop VS app:** trust-on-first-use. It GETs `http://<host>/ca.crt` over plain http, checks only that the body is PEM, writes `trusted-cas/<host>.crt` and reloads TLS (`src-tauri/src/main.rs:771-804`). It does NOT show or verify a fingerprint. Owner step: right after pairing, run `openssl x509 -in trusted-cas/<host>.crt -noout -fingerprint -sha256` on the pinned file and compare it by hand to the VS pair dialog. If it differs, delete the file and do not pair.
+- **Phone (Android app):** it fetches `https://<host>:<port>/ca.crt` over a not-yet-trusted TLS socket and enforces that the CA's fingerprint starts with the fingerprint from the scanned pair QR (or typed on the pair screen); it refuses to pin on mismatch. No manual compare is needed when you scan the QR.
+- **Playtest Overlay addon** (the `vs_playtest` Godot addon lives outside this repo; this is its design per PLAN_V1): it GETs `/ca.crt`, shows the fingerprint in its dock, and after you confirm pins the CA (`$VIBESQUAD_HOME/playtest-ca.crt`, override `vs_playtest/ca_cert_path`). No pin means no device token is sent; the system trust store is not a fallback for ts.net. Unpair deletes the pin.
 
 ## Godot and Windows-only jobs: SSH stdio bridge
 
