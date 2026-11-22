@@ -3,7 +3,7 @@ import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
-import { captureFocusReturn, clearCtxAnchor, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
+import { clearCtxAnchor, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import type { Pin } from "./pins";
@@ -194,7 +194,7 @@ function ContextMenuHost() {
           onClick={() => {
             setCtx(null);
             it.run();
-            setTimeout(clearCtxAnchor, 0); // a confirm opened by the item has captured the trigger by now; anything else must not keep it
+            clearCtxAnchor(); // a confirm requested by the item captured the trigger synchronously inside run(); anything else must not keep it
           }}
         >
           {it.label}
@@ -214,17 +214,12 @@ function AgentOpConfirmHost() {
     setBusy(false);
     setErr("");
   }, [req]);
-  const returnTo = useRef<unknown>(null);
   useEffect(() => {
-    if (!req) {
-      returnTo.current = null;
-      return;
-    }
-    returnTo.current = captureFocusReturn(document.activeElement);
+    if (!req) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       requestAgentOp(null);
-      restoreFocusReturn(returnTo.current);
+      restoreFocusReturn(req.returnTo);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -233,7 +228,7 @@ function AgentOpConfirmHost() {
   const close = () => requestAgentOp(null);
   const cancel = () => {
     close();
-    restoreFocusReturn(returnTo.current);
+    restoreFocusReturn(req.returnTo);
   };
   const isDelete = req.kind === "delete";
   const warning = req.kind === "delete" ? deleteGuard(req.agent).warning : null;

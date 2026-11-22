@@ -9,21 +9,20 @@ import { removeTeamPlan, type WorktreeResult } from "./pinRemoveLogic";
 import { loadArchived, usePaseo } from "./paseo";
 import { getTeams, resolve } from "./teams";
 import { Modal } from "./TeamActions";
-import { captureFocusReturn, restoreFocusReturn } from "./ctxMenuLogic";
+import { restoreFocusReturn } from "./ctxMenuLogic";
 
 type Phase = { kind: "confirm" } | { kind: "busy" } | { kind: "error"; message: string } | { kind: "kept"; kept: WorktreeResult[] };
 
 /** `displayName` + `noun="lane"` (Normal mode): name the dialog after the sidebar row and say "lane" instead of "team". Default wording (Psycho) is unchanged. */
-export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team" }: { pin: Pin; onClose: () => void; displayName?: string; noun?: "team" | "lane" }) {
+export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team", returnTo }: { pin: Pin; onClose: () => void; displayName?: string; noun?: "team" | "lane"; returnTo?: unknown }) {
   const name = displayName || pin.lane.name;
   const { agents, workspaces, archivedAgents, archivedStatus } = usePaseo();
   const [deleteWorktrees, setDeleteWorktrees] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
-  // idea-543: Cancel / Escape hands focus back to the ⋯ (or row) that opened the menu.
-  const [returnTo] = useState(() => ({ current: captureFocusReturn(typeof document === "undefined" ? null : document.activeElement) }));
+  // idea-543: Cancel / Escape hands focus back to the ⋯ (or row) that opened the menu (Normal mode passes returnTo; Psycho's Modal restores its own opener).
   const dismiss = () => {
     onClose();
-    restoreFocusReturn(returnTo.current);
+    restoreFocusReturn(returnTo);
   };
   // Archived agents can point at worktrees the live ones have left.
   useEffect(() => void (archivedStatus === "idle" && loadArchived()), [archivedStatus]);

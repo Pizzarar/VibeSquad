@@ -121,6 +121,7 @@ for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFee
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); };`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
+writeFileSync(join(dir, "ctxMenuLogic.mjs"), transformSync("ctxMenuLogic.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "ctxMenuLogic.ts"), "utf8"), { lang: "ts" }).code);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
 stub("paseo.mjs", `export const sendMessage = ${rec("sendMessage")}; export const usePaseo = () => ({ agents: globalThis.__agents, rosterLoaded: globalThis.__rosterLoaded });`);
 stub("pinActions.mjs", `export const createQuickBugsPin = (id) => { globalThis.__calls.push(["createQuickBugsPin", id]); return Promise.resolve({ lane: { id: "bug" } }); };`);
@@ -2105,8 +2106,8 @@ test("idea-543: badged collapsed project line reserves the ⋯ slot; confirms ha
   assert.ok(/boring-project-line\$\{!open && m\.totalNeedsYou > 0 \? " has-badge" : ""\}/.test(ade), "line carries has-badge exactly when the badge renders");
   assert.ok(css.includes('html[data-vibe="boring"] .boring-project-line.has-badge .boring-row-menu-btn { margin-left: 0; }'));
   const cp = fs.readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
-  assert.ok(cp.includes("rememberCtxAnchor(anchor)") && cp.includes("restoreFocusReturn(returnTo.current)"), "stop/kill confirm restores focus");
-  assert.ok(fs.readFileSync(new URL("../src/PinRemove.tsx", import.meta.url), "utf8").includes("restoreFocusReturn(returnTo.current)"), "remove dialog restores focus");
+  assert.ok(cp.includes("rememberCtxAnchor(anchor)") && cp.includes("restoreFocusReturn(req.returnTo)"), "stop/kill confirm restores focus");
+  assert.ok(fs.readFileSync(new URL("../src/PinRemove.tsx", import.meta.url), "utf8").includes("restoreFocusReturn(returnTo)"), "remove dialog restores focus");
   const { markCtxAnchor, rememberCtxAnchor, captureFocusReturn, restoreFocusReturn } = await import("../src/ctxMenuLogic.ts");
   assert.doesNotThrow(() => markCtxAnchor({ setAttribute() {}, removeAttribute() {} })(), "no getAttribute: ignored, not thrown");
   rememberCtxAnchor(null);
@@ -2143,6 +2144,35 @@ test("idea-543 R1: the remembered menu anchor is used once, cleared on dismiss, 
   }
   assert.equal(hit, "menu", "non-focusable row hands focus to its ⋯ button");
   const cp = (await import("node:fs")).readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
-  assert.ok(cp.includes("clearCtxAnchor()") && cp.includes("setTimeout(clearCtxAnchor, 0)"), "dismiss and non-confirm items clear the anchor");
+  assert.ok(cp.includes("clearCtxAnchor()") && !cp.includes("setTimeout(clearCtxAnchor"), "dismiss and non-confirm items clear the anchor synchronously, no timer");
   assert.ok(/modal-back" onMouseDown=\{cancel\}/.test(cp), "backdrop click restores focus too");
+});
+
+test("idea-543 R2: the confirm captures its focus target synchronously at request time; body counts as nothing; Ctrl+K Cancel moves nothing", async () => {
+  const { rememberCtxAnchor, clearCtxAnchor, captureFocusReturn, restoreFocusReturn } = await import("../src/ctxMenuLogic.ts");
+  const { withFocusReturn } = await import("../src/ctxMenuLogic.ts");
+  const fsm = await import("node:fs");
+  assert.ok(fsm.readFileSync(new URL("../src/paseoAgentOps.ts", import.meta.url), "utf8").includes("pending = withFocusReturn(r,"), "requestAgentOp stamps the target itself");
+  let pending = null;
+  const getOpRequest = () => pending;
+  const requestAgentOp = (r, active = null) => (pending = withFocusReturn(r, active));
+  const body = { tagName: "BODY", focus() { throw new Error("body must never be focused"); }, isConnected: true };
+  assert.equal(captureFocusReturn(body), null, "body is nothing");
+  assert.equal(captureFocusReturn({ tagName: "HTML", focus() {}, isConnected: true }), null, "documentElement is nothing");
+  rememberCtxAnchor(body);
+  assert.equal(captureFocusReturn(null), null, "a body anchor is nothing");
+  assert.equal(restoreFocusReturn(body), false, "restore never focuses body");
+  // menu item path: anchor remembered, item run requests the op, anchor is on the request before any timer/effect runs
+  const trigger = { tagName: "BUTTON", focus() {}, isConnected: true };
+  rememberCtxAnchor(trigger);
+  requestAgentOp({ kind: "stop", title: "t", agents: [] }, null);
+  assert.equal(getOpRequest().returnTo, trigger, "captured synchronously on the request");
+  clearCtxAnchor(); // ContextMenuHost, right after it.run()
+  requestAgentOp(null);
+  // Ctrl+K path: nothing remembered, body focused -> no target, Cancel leaves focus alone
+  requestAgentOp({ kind: "stop", title: "t", agents: [] }, body);
+  assert.equal(getOpRequest().returnTo, null);
+  assert.equal(restoreFocusReturn(getOpRequest().returnTo), false, "Cancel moves nothing");
+  requestAgentOp(null);
+  assert.equal(getOpRequest(), null);
 });
