@@ -235,6 +235,15 @@ it("sanctuaryRuleDir derives from the managed root: %LOCALAPPDATA% on win32, ~ e
     String.raw`%LOCALAPPDATA%\VibeSquad\worktrees`,
   );
   assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/home/u/.vibesquad/worktrees" }), "~/.vibesquad/worktrees");
+  // Prefix collision: C:\App2 must not be treated as being under C:\App.
+  assert.equal(
+    sanctuaryRuleDir({ platform: "win32", env: { LOCALAPPDATA: String.raw`C:\App` }, root: String.raw`C:\App2\worktrees` }),
+    String.raw`C:\App2\worktrees`,
+  );
+  assert.equal(
+    sanctuaryRuleDir({ platform: "win32", env: { LOCALAPPDATA: String.raw`C:\App` }, root: String.raw`C:\App` }),
+    "%LOCALAPPDATA%",
+  );
   assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/srv/wt" }), "/srv/wt");
   assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/home/user2/wt" }), "/home/user2/wt");
   const rule = STANDING_RULES.find((r) => r.startsWith("Run unit work in"));

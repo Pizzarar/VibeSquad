@@ -160,7 +160,8 @@ export function readLessons({ category, query, limit = 50, storePath, rootDir } 
 export function sanctuaryRuleDir({ env = process.env, platform = process.platform, home = homedir(), root = resolveManagedWorktreeRoot(env) } = {}) {
   if (platform === "win32") {
     const la = env.LOCALAPPDATA ? resolve(env.LOCALAPPDATA) : "";
-    if (la && root.toLowerCase().startsWith(la.toLowerCase())) return "%LOCALAPPDATA%" + root.slice(la.length);
+    const next = root[la.length];
+    if (la && root.toLowerCase().startsWith(la.toLowerCase()) && (next === undefined || next === "\\" || next === "/")) return "%LOCALAPPDATA%" + root.slice(la.length);
     return root;
   }
   const h = String(home).replace(/[/]+$/, "");
