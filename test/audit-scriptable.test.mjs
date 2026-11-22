@@ -47,6 +47,17 @@ test('normalizeInputHead strips ids, hashes, numbers, times, paths', () => {
   assert.equal(normalizeInputHead('Run rn-0123456789ab at 2026-11-10T10:00:00Z in C:\\a\\b abcdef1234 x 42'), 'run at in x');
 });
 
+test('normalizeInputHead strips rr- restart ids and tips to the same signature', () => {
+  const a = 'restart request rr-20261122021414-dbda for 2765d601 (draining)';
+  const b = 'restart request rr-20261121075958-0bb3 for 31ef0a4d (draining)';
+  assert.equal(normalizeInputHead(a), normalizeInputHead(b));
+  assert.equal(normalizeInputHead(a), 'restart request for (draining)');
+
+  const c = 'restart request rr-20261122021414-dbda, tip 2765d601 (draining)';
+  const d = 'restart request rr-20261121075958-0bb3, tip 31ef0a4d (draining)';
+  assert.equal(normalizeInputHead(c), normalizeInputHead(d));
+});
+
 test('one cluster: n=6, summed usage tokens, cost = sum of deltas, vs watch hint, one-off not listed', () => {
   const dir = fixture();
   const r = scriptableTurnsBucket(dir, {});
