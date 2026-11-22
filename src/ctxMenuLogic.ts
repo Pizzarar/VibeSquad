@@ -59,14 +59,24 @@ let lastCtxAnchor: unknown = null;
 export function rememberCtxAnchor(anchor: unknown): void {
   lastCtxAnchor = anchor ?? null;
 }
-/** Snapshot of where focus should return to (the remembered trigger, else the focused element). Call when a confirm opens. */
+/** Forget the remembered trigger (menu dismissed, or an item ran that opened no confirm). */
+export function clearCtxAnchor(): void {
+  lastCtxAnchor = null;
+}
+/** Where focus should return to when a confirm closes: the remembered trigger when it is still attached, else the focused element. Consumes the trigger, so it is used once. */
 export function captureFocusReturn(active?: unknown): unknown {
-  return lastCtxAnchor ?? active ?? null;
+  const a = lastCtxAnchor as { isConnected?: boolean } | null;
+  lastCtxAnchor = null;
+  return a && a.isConnected !== false ? a : active ?? null;
 }
 /** Focus `target` when it is still attached; returns whether it did. A removed row (confirmed delete) is skipped. */
 export function restoreFocusReturn(target: unknown): boolean {
   const t = target as Partial<Focusable> | null | undefined;
   if (!t || typeof t.focus !== "function" || t.isConnected === false) return false;
   t.focus();
+  // A right-clicked row is a plain div (focus() is a no-op): fall back to its ⋯ / first button.
+  const d = typeof document === "undefined" ? null : document;
+  const q = t as { querySelector?: (s: string) => Partial<Focusable> | null };
+  if (d && d.activeElement !== (t as unknown) && typeof q.querySelector === "function") (q.querySelector(".boring-row-menu-btn") ?? q.querySelector("button"))?.focus?.();
   return true;
 }

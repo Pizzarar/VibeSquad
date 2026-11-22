@@ -1,7 +1,7 @@
 // Remove team (docs/PLAN_BUGS_BATCH1.md block 1): the Team ⋯ menu's confirm dialog.
 // Lists the agents that will be archived and the worktrees/branches; "Also delete worktrees + branches"
 // is off by default and disabled when another live team shares the folders.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Pin } from "./pins";
 import { removePin } from "./pinActions";
@@ -20,7 +20,7 @@ export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team" }: {
   const [deleteWorktrees, setDeleteWorktrees] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
   // idea-543: Cancel / Escape hands focus back to the ⋯ (or row) that opened the menu.
-  const returnTo = useRef<unknown>(captureFocusReturn(typeof document === "undefined" ? null : document.activeElement));
+  const [returnTo] = useState(() => ({ current: captureFocusReturn(typeof document === "undefined" ? null : document.activeElement) }));
   const dismiss = () => {
     onClose();
     restoreFocusReturn(returnTo.current);

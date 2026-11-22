@@ -3,7 +3,7 @@ import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
-import { captureFocusReturn, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
+import { captureFocusReturn, clearCtxAnchor, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import type { Pin } from "./pins";
@@ -137,7 +137,13 @@ function ContextMenuHost() {
   );
   useEffect(() => {
     if (!s) return;
-    const close = () => setCtx(null);
+    const close = () => {
+      setCtx(null);
+      clearCtxAnchor(); // dismissed without an item: a later confirm must not return focus here
+    };
+    const onWinClick = (e: MouseEvent) => {
+      if (!(e.target as Element | null)?.closest?.('[data-testid="custom-context-menu"]')) close();
+    };
     const menuItems = () => [...document.querySelectorAll<HTMLButtonElement>('[data-testid="custom-context-menu"] [role="menuitem"]:not(:disabled)')];
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -162,14 +168,14 @@ function ContextMenuHost() {
     if (s.kbd) menuItems()[0]?.focus();
     // idea-528 m6: the trigger (or right-clicked row) stays marked while its menu is open.
     const unmarkAnchor = markCtxAnchor(s.anchor);
-    window.addEventListener("click", close);
+    window.addEventListener("click", onWinClick);
     const onScroll = (e: Event) => scrollClosesCtxMenu(e.target, s.anchor) && close();
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("blur", close);
     window.addEventListener("keydown", onKey);
     return () => {
       unmarkAnchor();
-      window.removeEventListener("click", close);
+      window.removeEventListener("click", onWinClick);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("blur", close);
       window.removeEventListener("keydown", onKey);
@@ -188,6 +194,7 @@ function ContextMenuHost() {
           onClick={() => {
             setCtx(null);
             it.run();
+            setTimeout(clearCtxAnchor, 0); // a confirm opened by the item has captured the trigger by now; anything else must not keep it
           }}
         >
           {it.label}
@@ -209,7 +216,10 @@ function AgentOpConfirmHost() {
   }, [req]);
   const returnTo = useRef<unknown>(null);
   useEffect(() => {
-    if (!req) return;
+    if (!req) {
+      returnTo.current = null;
+      return;
+    }
     returnTo.current = captureFocusReturn(document.activeElement);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -247,7 +257,7 @@ function AgentOpConfirmHost() {
     }
   };
   return (
-    <div className="modal-back" onMouseDown={close}>
+    <div className="modal-back" onMouseDown={cancel}>
       <div className="shortcut-modal" data-testid={isDelete ? "agent-delete-confirm" : "bulk-stop-confirm"} role="alertdialog" aria-label={isDelete ? "Delete agent" : `${req.verb ?? "Stop"} agents`} onMouseDown={(e) => e.stopPropagation()}>
         {req.kind === "delete" ? (
           <>

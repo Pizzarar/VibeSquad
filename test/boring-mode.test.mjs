@@ -2120,3 +2120,29 @@ test("idea-543: badged collapsed project line reserves the ⋯ slot; confirms ha
   assert.equal(restoreFocusReturn(null), false);
   rememberCtxAnchor(null);
 });
+
+test("idea-543 R1: the remembered menu anchor is used once, cleared on dismiss, skipped when detached, and a row falls back to its ⋯", async () => {
+  const { rememberCtxAnchor, clearCtxAnchor, captureFocusReturn, restoreFocusReturn } = await import("../src/ctxMenuLogic.ts");
+  const active = { focus() {}, isConnected: true };
+  const el = { focus() {}, isConnected: true };
+  rememberCtxAnchor(el);
+  clearCtxAnchor(); // menu dismissed without an item
+  assert.equal(captureFocusReturn(active), active, "a later palette confirm keeps its own focus target");
+  rememberCtxAnchor(el);
+  assert.equal(captureFocusReturn(active), el, "item-opened confirm gets the trigger");
+  assert.equal(captureFocusReturn(active), active, "consumed: used once");
+  rememberCtxAnchor({ focus() {}, isConnected: false });
+  assert.equal(captureFocusReturn(active), active, "detached anchor falls back to the active element");
+  let hit = "";
+  const row = { focus() {}, isConnected: true, querySelector: (s) => (s === ".boring-row-menu-btn" ? { focus: () => (hit = "menu") } : null) };
+  globalThis.document = { activeElement: null };
+  try {
+    assert.equal(restoreFocusReturn(row), true);
+  } finally {
+    delete globalThis.document;
+  }
+  assert.equal(hit, "menu", "non-focusable row hands focus to its ⋯ button");
+  const cp = (await import("node:fs")).readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
+  assert.ok(cp.includes("clearCtxAnchor()") && cp.includes("setTimeout(clearCtxAnchor, 0)"), "dismiss and non-confirm items clear the anchor");
+  assert.ok(/modal-back" onMouseDown=\{cancel\}/.test(cp), "backdrop click restores focus too");
+});
