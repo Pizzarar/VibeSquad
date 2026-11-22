@@ -6,6 +6,7 @@ import { DEMO } from "./demoFlag";
 import { scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
+import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
 import { settingsPaletteItems, useKeyBindings } from "./prefs";
 import { FIXED_SHORTCUTS, KEY_COMMANDS, bindingLabel, comboFromEvent, firesWhileTyping, resolveCommand, type Bindings, type KeyScope } from "./keymap";
@@ -75,8 +76,8 @@ export function snippetAround(text: string, q: string, radius = 50): string | nu
   return `${s > 0 ? "…" : ""}${text.slice(s, e).replace(/\s+/g, " ")}${e < text.length ? "…" : ""}`;
 }
 
-export type CtxItem = { label: string; run: () => void };
-export type CtxMenuState = { x: number; y: number; items: CtxItem[]; anchor?: Element | null } | null;
+export type CtxItem = { label: string; run: () => void; /** Rendered inert (e.g. "(none running)"). */ disabled?: boolean; /** Danger styling (destructive entry). */ danger?: boolean; /** Draw a separator above this entry. */ separatorBefore?: boolean };
+export type CtxMenuState = { x: number; y: number; items: CtxItem[]; anchor?: Element | null; kbd?: boolean } | null;
 
 export function agentCtxItems(m: { id: string; cwd?: string | null; title?: string | null; status?: string | null; archivedAt?: string | null; labels?: Record<string, string> | null }, a: { open: () => void; split: () => void; archive: () => void }): CtxItem[] {
   return [
@@ -121,7 +122,11 @@ const setCtx = (s: CtxMenuState) => {
 export function openContextMenu(e: { clientX: number; clientY: number; currentTarget?: unknown; preventDefault: () => void; stopPropagation: () => void }, items: CtxItem[]) {
   e.preventDefault();
   e.stopPropagation();
-  setCtx({ x: e.clientX, y: e.clientY, items, anchor: (e.currentTarget as Element | null) ?? null });
+  const anchor = (e.currentTarget as Element | null) ?? null;
+  // A keyboard-fired click reports (0,0): anchor under the trigger instead and let the host move focus into the menu.
+  const kbd = e.clientX === 0 && e.clientY === 0 && typeof anchor?.getBoundingClientRect === "function";
+  const r = kbd ? anchor!.getBoundingClientRect() : null;
+  setCtx({ x: r ? r.left : e.clientX, y: r ? r.bottom : e.clientY, items, anchor: (e.currentTarget as Element | null) ?? null, kbd });
 }
 
 function ContextMenuHost() {
@@ -132,7 +137,21 @@ function ContextMenuHost() {
   useEffect(() => {
     if (!s) return;
     const close = () => setCtx(null);
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    const menuItems = () => [...document.querySelectorAll<HTMLButtonElement>('[data-testid="custom-context-menu"] [role="menuitem"]:not(:disabled)')];
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        close();
+        if (s.kbd && s.anchor instanceof HTMLElement) s.anchor.focus();
+      } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        const its = menuItems();
+        if (!its.length) return;
+        e.preventDefault();
+        const i = its.indexOf(document.activeElement as HTMLButtonElement);
+        const next = e.key === "ArrowDown" ? (i + 1) % its.length : i <= 0 ? its.length - 1 : i - 1;
+        its[next].focus();
+      }
+    };
+    if (s.kbd) menuItems()[0]?.focus();
     window.addEventListener("click", close);
     const onScroll = (e: Event) => scrollClosesCtxMenu(e.target, s.anchor) && close();
     window.addEventListener("scroll", onScroll, true);
@@ -153,6 +172,8 @@ function ContextMenuHost() {
         <button
           key={it.label}
           role="menuitem"
+          disabled={it.disabled}
+          className={[it.danger ? "ctx-danger" : "", it.separatorBefore ? "ctx-sep" : ""].filter(Boolean).join(" ") || undefined}
           onClick={() => {
             setCtx(null);
             it.run();
@@ -262,17 +283,39 @@ export function teamCtxItems(view: TeamView): CtxItem[] {
   return [
     {
       label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
+      disabled: !targets.length,
       run: () => {
         if (targets.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${view.team.name}?`, agents: targets });
       },
     },
     {
       label: targets.length ? `Interrupt All Running (${targets.length})…` : "Interrupt All Running (none running)",
+      disabled: !targets.length,
       run: () => {
         if (targets.length) requestAgentOp({ kind: "stop", verb: "Interrupt", title: `Interrupt all running agents in ${view.team.name}?`, agents: targets });
       },
     },
   ];
+}
+
+/** Lane ⋯ menu: Stop All Running scoped to one lane (labels.lane), plus Kill / remove lane when the caller allows it (non-hub feature lanes). `displayName` is the name the sidebar row shows (laneDisplayName), never the pin/topic name. */
+export function laneCtxItems(view: TeamView, pin: Pin, opts?: { onRemove?: () => void; displayName?: string }): CtxItem[] {
+  const name = opts?.displayName || pin.lane.name;
+  const targets = bulkStopTargets(
+    view.members.map((m) => ({ agent: m.agent, teamId: view.team.id })),
+    { teamId: view.team.id, laneId: pin.lane.id },
+  );
+  const items: CtxItem[] = [
+    {
+      label: targets.length ? `Stop All Running (${targets.length})…` : "Stop All Running (none running)",
+      disabled: !targets.length,
+      run: () => {
+        if (targets.length) requestAgentOp({ kind: "stop", title: `Stop all running agents in ${name}?`, agents: targets });
+      },
+    },
+  ];
+  if (opts?.onRemove) items.push({ label: "Kill / remove lane…", run: opts.onRemove, danger: true, separatorBefore: true });
+  return items;
 }
 
 // ---- shortcut cheat sheet -----------------------------------------------------------------

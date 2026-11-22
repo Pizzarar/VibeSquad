@@ -23,7 +23,7 @@ export function deleteGuard(a: OpAgent): { warning: string | null } {
   return { warning: null };
 }
 
-export type StopScope = { teamId: string } | { cwd: string };
+export type StopScope = { teamId: string; laneId?: string } | { cwd: string };
 export type StopCandidate = { agent: OpAgent; teamId?: string | null };
 
 const normCwd = (p: string | null | undefined) => String(p ?? "").replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
@@ -33,7 +33,11 @@ export function bulkStopTargets(cands: StopCandidate[], scope: StopScope): OpAge
   return cands
     .filter(({ agent, teamId }) => {
       if (agent.archivedAt || agent.status !== "running") return false;
-      return "teamId" in scope ? teamId === scope.teamId : !!normCwd(scope.cwd) && normCwd(agent.cwd) === normCwd(scope.cwd);
+      if ("teamId" in scope) {
+        if (teamId !== scope.teamId) return false;
+        return scope.laneId === undefined || (scope.laneId !== "" && String(agent.labels?.lane ?? "").toLowerCase() === scope.laneId.toLowerCase());
+      }
+      return !!normCwd(scope.cwd) && normCwd(agent.cwd) === normCwd(scope.cwd);
     })
     .map((c) => c.agent);
 }

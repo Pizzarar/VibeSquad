@@ -12,7 +12,9 @@ import { Modal } from "./TeamActions";
 
 type Phase = { kind: "confirm" } | { kind: "busy" } | { kind: "error"; message: string } | { kind: "kept"; kept: WorktreeResult[] };
 
-export function RemoveTeamDialog({ pin, onClose }: { pin: Pin; onClose: () => void }) {
+/** `displayName` + `noun="lane"` (Normal mode): name the dialog after the sidebar row and say "lane" instead of "team". Default wording (Psycho) is unchanged. */
+export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team" }: { pin: Pin; onClose: () => void; displayName?: string; noun?: "team" | "lane" }) {
+  const name = displayName || pin.lane.name;
   const { agents, workspaces, archivedAgents, archivedStatus } = usePaseo();
   const [deleteWorktrees, setDeleteWorktrees] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
@@ -58,17 +60,17 @@ export function RemoveTeamDialog({ pin, onClose }: { pin: Pin; onClose: () => vo
           Cancel
         </button>
         <button className="btn bad small" onClick={() => void confirm()} disabled={busy} data-testid={`pin-remove-confirm-${pin.lane.id}`}>
-          {busy ? "Removing…" : "Remove team"}
+          {busy ? "Removing…" : `Remove ${noun}`}
         </button>
       </>
     );
 
   return createPortal(
-    <Modal title={`Remove ${pin.lane.name}?`} onClose={busy ? () => {} : onClose} footer={footer}>
+    <Modal title={noun === "lane" ? `Remove lane ${name}?` : `Remove ${name}?`} onClose={busy ? () => {} : onClose} footer={footer}>
       <div className="pin-remove" data-testid={`pin-remove-${pin.lane.id}`}>
         {phase.kind === "kept" ? (
           <>
-            <p>{pin.lane.name} is removed. Some worktrees or branches were kept:</p>
+            <p>{name} is removed. Some worktrees or branches were kept:</p>
             <ul className="pin-remove-list">
               {phase.kept.map((w) => (
                 <li key={w.path}>
@@ -81,7 +83,7 @@ export function RemoveTeamDialog({ pin, onClose }: { pin: Pin; onClose: () => vo
           </>
         ) : (
           <>
-            <p className="muted small">The team is hidden from pins, the sidebar, the Done shelf and counts. Its brief and teams.json entry stay.</p>
+            <p className="muted small">The {noun} is hidden from pins, the sidebar, the Done shelf and counts. Its brief and teams.json entry stay.</p>
             <div className="pin-remove-section">
               {plan.agents.length ? `Archives ${plan.agents.length} agent${plan.agents.length === 1 ? "" : "s"}:` : "No agents to archive."}
             </div>
