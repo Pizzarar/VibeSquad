@@ -729,3 +729,11 @@ test('G2 review H1: compact status/wait keeps a long reply line-1 verdict and it
   }
   assert.ok((await callTool(ctx, 'status', { id: 'rn-1', full: true })).lastMessage.endsWith('TAIL-MARK'));
 });
+
+test('idea-527: clipText names the real cap in the truncation marker', async () => {
+  const { clipText } = await import('../server/mcp/tools.mjs');
+  const long = 'x'.repeat(100000);
+  assert.ok(clipText(long, 2000).endsWith('…[truncated at 2000 chars]'));
+  assert.equal(clipText(long, 2000).length, 2000);
+  assert.ok(clipText(long, 65536).endsWith('…[truncated at 64KB]'));
+});

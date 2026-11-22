@@ -282,9 +282,12 @@ const entriesOf = (res) => (Array.isArray(res) ? res : Array.isArray(res?.entrie
  * verdict or report header is dropped by a tail-only clip (G2 review H1).
  */
 const COMPACT_ELLIPSIS = " ...[clipped; full:true for more]... ";
-const FULL_TRUNCATION_MARKER = "…[truncated at 64KB]";
+const truncationMarker = (cap) => `…[truncated at ${cap >= 1024 && cap % 1024 === 0 ? `${cap / 1024}KB` : `${cap} chars`}]`;
 export function clipText(t, cap) {
-  if (cap > COMPACT_LAST_MESSAGE) return t.slice(0, cap - FULL_TRUNCATION_MARKER.length) + FULL_TRUNCATION_MARKER;
+  if (cap > COMPACT_LAST_MESSAGE) {
+    const marker = truncationMarker(cap); // the real cap, not a fixed "64KB" (lastAssistantText's default cap is 2000)
+    return t.slice(0, cap - marker.length) + marker;
+  }
   const head = Math.round(cap * 0.42); // ~250 of 600
   const tail = cap - head - COMPACT_ELLIPSIS.length;
   return t.slice(0, head) + COMPACT_ELLIPSIS + t.slice(-tail);
