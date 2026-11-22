@@ -18,7 +18,10 @@ let cached; // sync login-shell PATH, once per process (default exec only)
 let cachedAsync; // async login-shell PATH promise
 
 const defaultExec = (file, args, o) => execFileSync(file, args, { encoding: "utf8", timeout: o.timeout, env: o.env, stdio: ["ignore", "pipe", "ignore"], windowsHide: true });
-const defaultExecAsync = (file, args, o) => new Promise((ok, no) => execFile(file, args, { encoding: "utf8", timeout: o.timeout, env: o.env, windowsHide: true }, (e, out) => (e ? no(e) : ok(out))));
+const defaultExecAsync = (file, args, o) => new Promise((ok, no) => {
+  const child = execFile(file, args, { encoding: "utf8", timeout: o.timeout, env: o.env, windowsHide: true }, (e, out) => (e ? no(e) : ok(out)));
+  child.stdin?.end(); // a login-shell probe must not wait on input
+});
 const defaultExistsAsync = (p) => access(p).then(() => true, () => false);
 
 const shellArgs = () => ["-lc", `printf '${MARK}%s${MARK}' "$PATH"`];
