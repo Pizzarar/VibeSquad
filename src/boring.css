@@ -1141,6 +1141,8 @@ html[data-vibe="boring"] .boring-row-menu-btn:focus-visible { opacity: 1; }
 /* idea-528 m6: the row whose menu is open keeps the hover look. */
 /* idea-528 mi1: lane rows keep a real 22px slot (the right-aligned "Nm ago" must stay readable); only the project row overlays its ⋯. */
 html[data-vibe="boring"] .boring-conv-line:not(.boring-project-line) .boring-row-menu-btn { margin-left: 0; }
+/* idea-543 mi4: a collapsed project line that renders a Needs-you badge keeps a real 22px slot so the ⋯ never covers the count. */
+html[data-vibe="boring"] .boring-project-line.has-badge .boring-row-menu-btn { margin-left: 0; }
 html[data-vibe="boring"] .boring-conv-line:has([data-ctx-open]), html[data-vibe="boring"] .boring-conv-line[data-ctx-open] { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-row-menu-btn:hover { background: var(--surface-3); color: var(--text-1); }
 html[data-vibe="boring"] .boring-row-menu-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

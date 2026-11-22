@@ -7,6 +7,7 @@ import { glyphStatusOf, isInNeedsYou, stalledCount } from "./attentionItems";
 import { BoringInbox, type NeedsYouRow } from "./BoringInbox";
 import { laneCtxItems, openContextMenu, openOverlay, teamCtxItems } from "./CommandPalette";
 import { RemoveTeamDialog } from "./PinRemove";
+import { captureFocusReturn } from "./ctxMenuLogic";
 import { demoLog } from "./demo";
 import { DEMO } from "./demoFlag";
 import { IdeaInbox, refreshInboxCards, useInboxCards } from "./IdeaInbox";
@@ -386,7 +387,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const [projectOpen, setProjectOpen] = useState<Record<string, boolean>>({});
   const [laneOpen, setLaneOpen] = useState<Record<string, boolean>>({});
-  const [removingPin, setRemovingPin] = useState<{ pin: Pin; name: string } | null>(null);
+  const [removingPin, setRemovingPin] = useState<{ pin: Pin; name: string; returnTo: unknown } | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [overviewTab, setOverviewTab] = useState<OverviewTab>("overview");
   const [startState, setStartState] = useState<{ laneKey: string; busy: boolean; error: string | null } | null>(null);
@@ -751,7 +752,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     // idea-500: a collapsed lane hides its selected Lead/worker row, so the lane row carries the selected state (derived from sel, no second source).
     const laneCls = "boring-conv-row" + (isOn(v, `lane:${c.laneId}`) || (!open && sel.teamId === v.team.id && sel.laneId === c.laneId && sel.rowKey !== null) ? " on" : "");
     const lanePin = c.pin;
-    const laneMenu = lanePin ? () => laneCtxItems(v, lanePin, { displayName: c.name, onRemove: !isHubPin(lanePin) && c.laneId !== "_bugs" ? () => setRemovingPin({ pin: lanePin, name: c.name }) : undefined }) : null;
+    const laneMenu = lanePin ? () => laneCtxItems(v, lanePin, { displayName: c.name, onRemove: !isHubPin(lanePin) && c.laneId !== "_bugs" ? () => setRemovingPin({ pin: lanePin, name: c.name, returnTo: captureFocusReturn(typeof document === "undefined" ? null : document.activeElement) }) : undefined }) : null;
     return (
       <div key={c.laneId} className={laneCls} data-testid={`boring-conv-${c.laneId}`}>
         <div className="boring-conv-line" onContextMenu={laneMenu ? (e) => openContextMenu(e, laneMenu()) : undefined}>
@@ -814,7 +815,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
 
   return (
     <div className="boring-app" data-testid="boring-app">
-      {removingPin && <RemoveTeamDialog pin={removingPin.pin} displayName={removingPin.name} noun="lane" onClose={() => setRemovingPin(null)} />}
+      {removingPin && <RemoveTeamDialog pin={removingPin.pin} displayName={removingPin.name} noun="lane" returnTo={removingPin.returnTo} onClose={() => setRemovingPin(null)} />}
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <div className="boring-sidebar-head" data-testid="boring-sidebar-head">
           <span className="boring-sidebar-title" data-testid="boring-sidebar-title">{APP_NAME}</span>
@@ -836,7 +837,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
             return (
               <div key={v.team.id} className={open ? "boring-project-block open" : "boring-project-block"}>
-                <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
+                <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}`} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
                   {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
                   <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
                     <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
