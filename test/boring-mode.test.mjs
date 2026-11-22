@@ -2042,3 +2042,38 @@ test("idea-519: Normal dialogs name the lane like the sidebar row; Psycho Remove
   assert.ok(pr.includes('noun === "lane" ? `Remove lane ${name}?` : `Remove ${name}?`'));
   assert.ok(pr.includes('noun = "team"'));
 });
+
+test("idea-523: collapsing a whole project while one of its agents is selected puts .on on the project row (exactly one on); expanding restores the agent row", () => {
+  reset();
+  globalThis.__agents.set("per-ld", { id: "per-ld" });
+  const view = squad({ pins: [lanePin("per", { brainstorm: null, lead: mem("per-ld", "idle") }), lanePin("hub", { lane: { id: "hub", name: "RiffBot", hub: true } })] });
+  laneBtn(render(props(view)), "per").props.onClick();
+  let t = render(props(view));
+  assert.match(byId(t, "boring-lead-per").props.className, /\bon\b/);
+  const projToggle = walk(t, (n) => String(n.props?.["data-testid"] ?? "").startsWith("boring-project-toggle-"))[0];
+  const projHeader = (tree) => walk(tree, (n) => String(n.props?.["data-testid"] ?? "").startsWith("boring-project-header-"))[0];
+  assert.doesNotMatch(projHeader(t).props.className, /\bon\b/, "open project: the agent row is the selected one");
+  projToggle.props.onClick(); // collapse the project
+  t = render(props(view));
+  assert.equal(byId(t, "boring-lead-per"), null, "subtree hidden");
+  assert.match(projHeader(t).props.className, /\bon\b/, "collapsed project holding the selection is selected");
+  assert.equal(walk(t, (n) => /\bon\b/.test(String(n.props?.className ?? "")) && /boring-(conv-row|worker-row|core-row|project-row)/.test(n.props.className)).length, 1, "exactly one .on row");
+  walk(t, (n) => String(n.props?.["data-testid"] ?? "").startsWith("boring-project-toggle-"))[0].props.onClick(); // expand
+  t = render(props(view));
+  assert.match(byId(t, "boring-lead-per").props.className, /\bon\b/);
+  assert.doesNotMatch(projHeader(t).props.className, /\bon\b/);
+});
+
+test("idea-528: ctx menu marks its open row, Tab returns focus to the trigger, disabled items and Normal modals are skinned without !important", () => {
+  const cp = readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
+  assert.ok(cp.includes('setAttribute("data-ctx-open", "true")') && cp.includes('removeAttribute("data-ctx-open")'));
+  assert.ok(cp.includes('e.key === "Tab"') && /Tab[\s\S]{0,400}s\.anchor\.focus\(\)/.test(cp));
+  const css = readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  const rule = (sel) => css.split("\n").filter((l) => l.startsWith(sel));
+  assert.ok(rule('html[data-vibe="boring"] .ctx-menu button:disabled')[0].includes("background: transparent"));
+  assert.ok(rule('html[data-vibe="boring"] .boring-row-menu-btn[data-ctx-open]').length + css.includes('.boring-row-menu-btn[data-ctx-open]') > 0);
+  assert.ok(css.includes('html[data-vibe="boring"] .modal-head {') && css.includes('html[data-vibe="boring"] .modal .btn.bad {'));
+  // idea-528 added no !important: the marked rules and the Normal modal block are clean.
+  assert.doesNotMatch(css.slice(css.indexOf("/* idea-519/528"), css.indexOf("html[data-vibe=\"boring\"] .boring-lane-add:hover")), /!important/);
+  assert.doesNotMatch(css.slice(css.indexOf("/* idea-528 m8")), /!important/);
+});

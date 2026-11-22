@@ -142,6 +142,13 @@ function ContextMenuHost() {
       if (e.key === "Escape") {
         close();
         if (s.kbd && s.anchor instanceof HTMLElement) s.anchor.focus();
+      } else if (e.key === "Tab") {
+        // idea-528 m7: Tab never drops focus to the document: close the menu and hand focus back to its trigger.
+        close();
+        if (s.anchor instanceof HTMLButtonElement) {
+          e.preventDefault();
+          s.anchor.focus();
+        }
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         const its = menuItems();
         if (!its.length) return;
@@ -152,12 +159,18 @@ function ContextMenuHost() {
       }
     };
     if (s.kbd) menuItems()[0]?.focus();
+    // idea-528 m6: the trigger (or right-clicked row) stays marked while its menu is open.
+    const anchorEl = s.anchor instanceof HTMLElement ? s.anchor : null;
+    anchorEl?.setAttribute("data-ctx-open", "true");
+    if (anchorEl?.getAttribute("aria-haspopup")) anchorEl.setAttribute("aria-expanded", "true");
     window.addEventListener("click", close);
     const onScroll = (e: Event) => scrollClosesCtxMenu(e.target, s.anchor) && close();
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("blur", close);
     window.addEventListener("keydown", onKey);
     return () => {
+      anchorEl?.removeAttribute("data-ctx-open");
+      if (anchorEl?.getAttribute("aria-haspopup")) anchorEl.removeAttribute("aria-expanded");
       window.removeEventListener("click", close);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("blur", close);

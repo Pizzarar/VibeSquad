@@ -832,7 +832,8 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             const active = v.team.id === activeTeamId;
             const open = projectIsOpen(v.team.id);
             const m = active ? model : boringSidebarModel(v, now);
-            const projectRowCls = isOn(v, "project") ? "boring-project-row on" : "boring-project-row";
+            // idea-523: a collapsed project hides every row of its subtree, so it carries the selected state when the selection lives inside it (derived from sel only: exactly one .on row).
+            const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
             return (
               <div key={v.team.id} className="boring-project-block">
                 <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
