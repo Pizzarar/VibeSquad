@@ -573,8 +573,15 @@ test("idea-473 lows: a filesystem root is refused; young dirs never report trunc
     assert.equal(r.errors, 0);
 
     scratch(root, "vs-gone-Ee33Ff");
-    const fs = { ...fsp, opendir: fsp.opendir, readdir: async (d) => { await fsp.rm(d, { recursive: true, force: true }); return fsp.readdir(d); } };
-    const r2 = await sweepTempScratch({ tempDir: root, now: NOW, fs: { ...fs, readdir: (d, ...a) => (d.includes("vs-gone-") ? fs.readdir(d) : fsp.readdir(d, ...a)) } });
+    // Delete the dir on the SECOND readdir of it: the first is treeAge's walk, the second is removeTree's, so its ENOENT catch runs.
+    let goneReads = 0;
+    const fs = { ...fsp, readdir: async (d, ...a) => {
+      if (String(d).includes("vs-gone-") && ++goneReads === 2) await fsp.rm(d, { recursive: true, force: true });
+      return fsp.readdir(d, ...a);
+    } };
+    const r2 = await sweepTempScratch({ tempDir: root, now: NOW, fs });
+    assert.ok(goneReads >= 2, `removeTree read the dir (${goneReads} readdirs)`);
+    assert.equal(r2.removed, 1);
     assert.equal(r2.errors, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });
