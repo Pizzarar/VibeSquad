@@ -1036,6 +1036,44 @@ test('usage review: oneShotReviewRun nonzero exit with no stderr -> "exit <code>
   assert.equal(res.error, 'exit 2');
 });
 
+// spawnImpl whose child has a stdin sink; records argv/opts/cwd contents.
+const stdinSpawn = (rec, emit) => (file, args, opts) => {
+  const child = reviewSpawn(emit)(file, args, opts);
+  rec.args = args; rec.opts = opts; rec.stdin = '';
+  child.stdin = new EventEmitter();
+  child.stdin.end = (d) => { rec.stdin += d ?? ''; };
+  if (opts?.cwd) { try { rec.fileInCwd = fs.readFileSync(path.join(opts.cwd, 'prompt.md'), 'utf8'); rec.cwd = opts.cwd; } catch { /* none */ } }
+  return child;
+};
+
+test('usage review: oneShotReviewRun sends a >32k prompt on stdin, never argv', async () => {
+  const rec = {};
+  const prompt = 'x'.repeat(40_000);
+  const res = await oneShotReviewRun('claude', ['-p'])({ prompt, spawnImpl: stdinSpawn(rec, (c) => { c.stdout.emit('data', 'ok'); c.emit('exit', 0); }) });
+  assert.equal(res.ok, true);
+  assert.equal(rec.stdin, prompt);
+  assert.deepEqual(rec.args, ['-p']);
+  assert.ok(!rec.args.some((a) => a.includes(prompt)));
+});
+
+test('usage review: oneShotReviewRun promptFile mode keeps the prompt out of argv, in prompt.md, and cleans up', async () => {
+  const rec = {};
+  const prompt = 'y'.repeat(40_000);
+  const res = await oneShotReviewRun('agy', ['-p'], { promptFile: true })({ prompt, spawnImpl: stdinSpawn(rec, (c) => { c.stdout.emit('data', 'ok'); c.emit('exit', 0); }) });
+  assert.equal(res.ok, true);
+  assert.equal(rec.fileInCwd, prompt);
+  assert.ok(rec.args.every((a) => a.length < 500));
+  assert.equal(rec.args[0], '-p');
+  assert.equal(fs.existsSync(rec.cwd), false, 'temp dir removed');
+});
+
+test('usage review: oneShotReviewRun stdin EPIPE resolves ok:false without crashing', async () => {
+  const rec = {};
+  const res = await oneShotReviewRun('claude', ['-p'])({ prompt: 'hi', spawnImpl: stdinSpawn(rec, (c) => c.stdin.emit('error', new Error('write EPIPE'))) });
+  assert.equal(res.ok, false);
+  assert.match(res.error, /EPIPE/);
+});
+
 test('usage review: POST runNow only accepts exactly true', async () => {
   const home = tmp();
   const call = async (method, url, body, opts = {}) => {

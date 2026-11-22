@@ -3,7 +3,8 @@
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
 import { execFile, execFileSync } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, mkdtempSync, writeFileSync, statSync } from "node:fs";
 import { readdir as readdirAsync, stat as statAsync } from "node:fs/promises";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2324,32 +2325,51 @@ export function buildUsageReviewPrompt(usage, { home, sinceMs, previousReview, p
   return out.join("\n");
 }
 
-/** One-shot CLI run: prompt as the trailing arg (as runAgyUsage does), stdin not used, stdout captured, killTree timeout (default 60s; runUsageReview passes runner.usageReview.timeoutMs). */
-export function oneShotReviewRun(cmd, args) {
+/** One-shot CLI run, stdout captured, killTree timeout (default 60s; runUsageReview passes runner.usageReview.timeoutMs).
+ * The prompt never rides argv (Windows caps a command line near 32k chars -> spawn ENAMETOOLONG on a 33k usage-review prompt).
+ * Default: the prompt is written to the child's stdin (`claude -p` reads it). promptFile mode (`agy -p` requires an argument and
+ * ignores stdin): the prompt is written to prompt.md in a private temp dir, the child runs with that dir as cwd and a short argv
+ * instruction to read it; the dir is removed when the run finishes. */
+export function oneShotReviewRun(cmd, args, { promptFile = false } = {}) {
   return ({ prompt, spawnImpl, timeoutMs = 60_000 }) =>
     new Promise((resolve) => {
       if (!spawnImpl && underTestRunner()) return resolve({ ok: false, error: `refusing to spawn the real ${cmd} under a test runner`, ms: 0 });
       const started = Date.now();
+      let dir = null;
+      const cleanup = () => { if (dir) { try { rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ } dir = null; } };
       let child;
       try {
-        child = spawnNoShell(cmd, [...args, prompt], { env: process.env, ...(spawnImpl ? { resolved: { file: cmd, args: [] } } : {}) }, spawnImpl);
+        let childArgs = args;
+        let cwd;
+        if (promptFile) {
+          dir = mkdtempSync(join(tmpdir(), "vs-review-"));
+          writeFileSync(join(dir, "prompt.md"), String(prompt ?? ""));
+          childArgs = [...args, "Read the file prompt.md in the current directory and follow its instructions exactly. Output only your answer."];
+          cwd = dir;
+        }
+        child = spawnNoShell(cmd, childArgs, { env: process.env, ...(cwd ? { cwd } : {}), ...(spawnImpl ? { resolved: { file: cmd, args: [] } } : {}) }, spawnImpl);
       } catch (e) {
+        cleanup();
         return resolve({ ok: false, error: String(e?.message ?? e), ms: Date.now() - started });
       }
       let out = "";
       let err = "";
       let done = false;
-      const finish = (r) => { if (done) return; done = true; clearTimeout(timer); resolve({ ...r, ms: Date.now() - started }); };
+      const finish = (r) => { if (done) return; done = true; clearTimeout(timer); cleanup(); resolve({ ...r, ms: Date.now() - started }); };
       const timer = setTimeout(() => { killTree(child); finish({ ok: false, timedOut: true, error: `timed out after ${timeoutMs}ms` }); }, timeoutMs);
       timer.unref?.();
       child.stdout?.on("data", (d) => { out += d; });
       child.stderr?.on("data", (d) => { err = (err + d).slice(-2000); }); // bounded tail: an unread stderr pipe can stall the child
       child.on("error", (e) => finish({ ok: false, error: String(e?.message ?? e) }));
       child.on("exit", (code) => finish(code === 0 ? { ok: true, text: out.trim() } : { ok: false, error: err || `exit ${code}` }));
+      if (child.stdin) {
+        child.stdin.on?.("error", (e) => finish({ ok: false, error: `stdin: ${String(e?.message ?? e)}` })); // EPIPE: child exited before reading
+        try { child.stdin.end(promptFile ? undefined : String(prompt ?? "")); } catch (e) { finish({ ok: false, error: `stdin: ${String(e?.message ?? e)}` }); }
+      }
     });
 }
 const defaultRunOpus = oneShotReviewRun("claude", ["-p", "--model", "claude-opus-5-5"]);
-const defaultRunGemini = oneShotReviewRun("agy", ["-p"]);
+const defaultRunGemini = oneShotReviewRun("agy", ["-p"], { promptFile: true });
 
 // ---------------------------------------------------------------- usa-15 / usa-19: auto-route review bullets to perfection inbox
 
