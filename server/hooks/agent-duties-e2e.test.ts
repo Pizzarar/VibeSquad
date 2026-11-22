@@ -1826,6 +1826,44 @@ test(
 );
 
 test(
+  "idea-495 (idea-218 L1): a digest that stays queued and times out every round is respawned once on the alternate (the status:timeout path of failedOutcome)",
+  withEnv(async ({ briefRoot }) => {
+    const w: any = { id: "w-alt-to", title: "Bug1 · alt to", cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", labels: { team: "vibesquad", lane: "bug-chaser", role: "worker", job: "altto" } };
+    const agents = new Map<string, any>([["w-alt-to", w]]);
+    const timelineByAgent = new Map<string, any[]>([["w-alt-to", [{ item: { type: "assistant_message", text: "PASS: done" } }]]]);
+    const h = harness(agents, { briefRoot, timelineByAgent });
+    const payloads: any[] = [];
+    (h.paseo.agents as any).create = async (payload: any) => {
+      payloads.push(payload);
+      const id = `dig-t${payloads.length}`;
+      const first = payloads.length === 1;
+      agents.set(id, { id, ...payload, status: first ? "queued" : "idle", ...(first ? { queued: { ahead: 3 } } : {}), archivedAt: null });
+      return {
+        id,
+        agent: { id },
+        waitForFinish: async () => {
+          if (first) return { status: "timeout" }; // never starts
+          appendVerdict(id, "w-alt-to", "PASS: alternate verdict");
+          return { status: "idle" };
+        },
+      };
+    };
+    try {
+      await h.onTurnEnded(w, { kind: "completed" }, "t-T");
+      await wait(300);
+    } finally {
+      h.stop?.();
+    }
+    assert.equal(payloads.length, 2, "respawned exactly once");
+    assert.equal(payloads[1].labels.profile, "Check - Haiku");
+    assert.deepEqual(h.archivedIds, ["dig-t1", "dig-t2"], "each archived exactly once");
+    const lines = logLines();
+    assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0);
+    assert.equal(lines.filter((l) => l.includes("alternate verdict")).length, 1);
+  }),
+);
+
+test(
   "idea-204 L1: a NO-VERDICT ref entry from a non-digest, non-manager author is credited as the worker report (kept as fail, not no-done-report)",
   withEnv(async ({ vsHome, briefRoot }) => {
     const base = { cwd: CWD, status: "idle", provider: "claude", model: "claude-opus-5-5", resumable: true };
