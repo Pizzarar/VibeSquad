@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runtimeDir } from "../server/runtime-dir.mjs";
+import { childEnv } from "../scripts/test-child-env.mjs";
 import { runSync, syncRuntimeDir } from "../server/sync-runtime.mjs";
 
 const winHome = () => "C:\Users\someone";
@@ -68,5 +69,34 @@ test("runSync dry run and guard refusals create no runtime dir", () => {
     git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a");
     runSync({ repoRoot: repo, env: { VIBESQUAD_RUNTIME_DIR: rt, VIBESQUAD_HOME: base }, force: true, dryRun: true, log: () => {} });
     assert.ok(!existsSync(rt), "dry run creates nothing");
+  } finally { rmSync(base, { recursive: true, force: true }); }
+});
+
+test("hermetic preload + childEnv keep the live runtime out of test children", () => {
+  const live = path.join(tmpdir(), "vs-pretend-live-runtime");
+  assert.equal(childEnv({ VIBESQUAD_RUNTIME_DIR: live, KEEP: "1" }).VIBESQUAD_RUNTIME_DIR, undefined);
+  assert.equal(childEnv({ VIBESQUAD_RUNTIME_DIR: live, KEEP: "1" }).KEEP, "1");
+  // Even run directly (no run-tests.mjs scrub), the preload replaces an inherited live pointer with a fresh temp dir.
+  const out = execFileSync(process.execPath, ["--import", "./test/setup/hermetic.mjs", "-e", "console.log(process.env.VIBESQUAD_RUNTIME_DIR)"],
+    { cwd: path.resolve(import.meta.dirname, ".."), encoding: "utf8", env: { ...process.env, VIBESQUAD_RUNTIME_DIR: live } }).trim();
+  assert.notEqual(out, live);
+  assert.ok(path.relative(tmpdir(), out).startsWith("vs-test-runtime-"), out);
+});
+
+test("sync --no-build on a stale dist is refused before anything creates the runtime dir", () => {
+  const base = mkdtempSync(path.join(tmpdir(), "vs-rtdir-"));
+  try {
+    const rt = path.join(base, "rt");
+    const repo = path.join(base, "repo");
+    mkdirSync(path.join(repo, "src"), { recursive: true });
+    git(repo, "init", "-q", "-b", "master");
+    writeFileSync(path.join(repo, "package.json"), "{}");
+    writeFileSync(path.join(repo, "src", "App.tsx"), "x");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "add", ".");
+    git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a");
+    const res = runSync({ repoRoot: repo, env: { VIBESQUAD_RUNTIME_DIR: rt, VIBESQUAD_HOME: base }, noBuild: true, log: () => {} });
+    assert.equal(res.synced, false);
+    assert.match(String(res.refused), /dist is stale/);
+    assert.ok(!existsSync(rt), "refusal created no runtime dir");
   } finally { rmSync(base, { recursive: true, force: true }); }
 });

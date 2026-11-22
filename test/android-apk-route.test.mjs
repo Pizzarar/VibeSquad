@@ -604,55 +604,47 @@ describe("APK sha256 sidecar / runtime sync (B2, B11)", () => {
 
   test("syncRuntimeDir copies the staged APK + sidecar into runtime/dist-desktop, and tolerates their absence", () => {
     const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
-    const prev = process.env.LOCALAPPDATA;
-    const prevHome = process.env.VIBESQUAD_HOME;
-    process.env.LOCALAPPDATA = lad;
-    process.env.VIBESQUAD_HOME = join(lad, ".vibesquad");
+    // Explicit env, never process.env: this shell's VIBESQUAD_RUNTIME_DIR is the LIVE runtime and must not be a sync target.
+    const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: join(lad, ".vibesquad"), VIBESQUAD_RUNTIME_DIR: join(lad, "VibeSquad", "runtime") };
     const runtime = join(lad, "VibeSquad", "runtime");
     mkdirSync(runtime, { recursive: true });
     try {
       const empty = gitRoot();
-      assert.equal(syncRuntimeDir(empty).synced, true);
+      assert.equal(syncRuntimeDir(empty, { env }).synced, true);
       assert.equal(existsSync(join(runtime, "dist-desktop", "VibeSquad.apk")), false);
       const repo = gitRoot();
       const file = writeApk(repo);
       writeApkSidecar(file);
-      syncRuntimeDir(repo);
+      syncRuntimeDir(repo, { env });
       assert.deepEqual(readFileSync(join(runtime, "dist-desktop", "VibeSquad.apk")), APK_BYTES);
       assert.equal(readFileSync(join(runtime, "dist-desktop", "VibeSquad.apk.sha256"), "utf8").trim(), APK_SHA);
     } finally {
-      if (prev === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prev;
-      if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
       rmSync(lad, { recursive: true, force: true });
     }
   });
 
   test("syncRuntimeDir does not copy without a sidecar or with a mismatched one, and keeps the live pair", () => {
     const lad = mkdtempSync(join(tmpdir(), "vs-sync-lad-"));
-    const prev = process.env.LOCALAPPDATA;
-    const prevHome = process.env.VIBESQUAD_HOME;
-    process.env.LOCALAPPDATA = lad;
-    process.env.VIBESQUAD_HOME = join(lad, ".vibesquad");
+    // Explicit env, never process.env: this shell's VIBESQUAD_RUNTIME_DIR is the LIVE runtime and must not be a sync target.
+    const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: join(lad, ".vibesquad"), VIBESQUAD_RUNTIME_DIR: join(lad, "VibeSquad", "runtime") };
     const live = join(lad, "VibeSquad", "runtime", "dist-desktop");
     mkdirSync(live, { recursive: true });
     writeFileSync(join(live, "VibeSquad.apk"), "live-old");
     try {
       const repo = gitRoot();
       const file = writeApk(repo);
-      syncRuntimeDir(repo); // no sidecar
+      syncRuntimeDir(repo, { env }); // no sidecar
       assert.equal(readFileSync(join(live, "VibeSquad.apk"), "utf8"), "live-old");
       writeFileSync(`${file}.sha256`, `${"0".repeat(64)}
 `); // mismatched
-      syncRuntimeDir(repo);
+      syncRuntimeDir(repo, { env });
       assert.equal(readFileSync(join(live, "VibeSquad.apk"), "utf8"), "live-old");
       assert.equal(existsSync(join(live, "VibeSquad.apk.sha256")), false);
       writeApkSidecar(file); // now valid
-      syncRuntimeDir(repo);
+      syncRuntimeDir(repo, { env });
       assert.deepEqual(readFileSync(join(live, "VibeSquad.apk")), APK_BYTES);
       assert.deepEqual(readdirSync(live).sort(), ["VibeSquad.apk", "VibeSquad.apk.sha256"]);
     } finally {
-      if (prev === undefined) delete process.env.LOCALAPPDATA; else process.env.LOCALAPPDATA = prev;
-      if (prevHome === undefined) delete process.env.VIBESQUAD_HOME; else process.env.VIBESQUAD_HOME = prevHome;
       rmSync(lad, { recursive: true, force: true });
     }
   });

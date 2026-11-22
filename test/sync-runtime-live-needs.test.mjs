@@ -49,7 +49,7 @@ function install(lastSynced) {
   mkdirSync(runtime, { recursive: true });
   if (lastSynced) writeFileSync(join(runtime, "build-stamp.json"), JSON.stringify({ commit: lastSynced, repo: "x", builtAt: "t" }));
   const home = tmp();
-  return { runtime, home, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: home } };
+  return { runtime, home, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: home, VIBESQUAD_RUNTIME_DIR: runtime } };
 }
 
 const quiet = () => {
@@ -455,7 +455,7 @@ test("L: viteBuild reads output as utf8 and falls back to stdout for the error l
 });
 
 test("L: an unknown flag exits non-zero before touching anything", () => {
-  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--dryrun"], { encoding: "utf8", env: { ...process.env, LOCALAPPDATA: tmp() } });
+  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--dryrun"], { encoding: "utf8", env: { ...process.env, LOCALAPPDATA: tmp(), VIBESQUAD_RUNTIME_DIR: tmp() } });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /unknown flag --dryrun/);
 });

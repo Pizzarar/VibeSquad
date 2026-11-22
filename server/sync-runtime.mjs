@@ -593,7 +593,8 @@ export function runSync({
     return { synced: false, skipped: skip };
   }
   const runtimeDir = runtimeDirFor(env);
-  // The runtime dir is created by syncRuntimeDir, only after the git and drain guards above/below have said yes.
+  // The runtime dir is created only once the git and drain guards and the --no-build check have passed (the sync lock or
+  // syncRuntimeDir, whichever runs first); a failed vite build still leaves the empty dir the lock made.
   const refuse = (why, extra = {}) => {
     log(`[sync-runtime] refused: ${why}; the live runtime is unchanged`);
     return { synced: false, refused: why, ...extra };
@@ -654,6 +655,11 @@ export function runSync({
   };
 
   if (dryRun) return body();
+  // --no-build with a stale dist is refused before the lock: the lock file lives in the runtime dir and would create it.
+  if (noBuild) {
+    const early = distStatus(repoRoot, head, { git, graph });
+    if (early.stale) return refuse(`dist is stale (${early.reason}) and --no-build was given`, { dist: early });
+  }
   let entered = false;
   try {
     // staleMs outlasts a vite build; a dead holder is still taken over at once (pid liveness).

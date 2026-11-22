@@ -222,7 +222,7 @@ function syncRepo(t) {
   const lad = tmp(t, "vs-drain-lad-");
   const runtime = path.join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
-  return { dir, runtime, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp(t, "vs-drain-home-") } };
+  return { dir, runtime, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp(t, "vs-drain-home-"), VIBESQUAD_RUNTIME_DIR: runtime } };
 }
 
 test("runSync: refused during a pending drain (even with --force), a dry run still reports, and it syncs once the restart went through", (t) => {

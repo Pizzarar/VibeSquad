@@ -151,7 +151,7 @@ test("idea-401: runSync with an untracked docs/x.md and an edited tracked doc sy
   const runtime = join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
   const lines = [];
-  const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp() };
+  const env = { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp(), VIBESQUAD_RUNTIME_DIR: runtime };
   const res = runSync({ repoRoot: dir, env, log: (l) => lines.push(l) });
   assert.equal(res.synced, true, lines.join("\n"));
   assert.equal(readFileSync(join(runtime, "server", "a.mjs"), "utf8"), "export const a = 1;\n");
@@ -192,7 +192,7 @@ function fakeInstall() {
   const lad = tmp();
   const runtime = join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
-  return { runtime, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp() } };
+  return { runtime, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: tmp(), VIBESQUAD_RUNTIME_DIR: runtime } };
 }
 
 test("idea-404: untracked files in server/, cli/, runner/, public/ never reach the runtime; tracked ones and dist/ do", () => {
