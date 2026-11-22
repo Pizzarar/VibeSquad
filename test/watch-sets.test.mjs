@@ -2291,7 +2291,7 @@ test(
       assert.equal(pings.length, 1, JSON.stringify(h.sent));
       assert.match(pings[0].text, /Final message of w-1 \(auto-forwarded report\):/);
       // The digest's [done] lands > COVER_AFTER_FIRE_MS after the fire: the watch no longer holds it, so it relays.
-      clock.t += 121_000;
+      clock.t += 601_000;
       writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 deadbeef: w1 digest verdict", refs: ["w-1"] }]);
       h.scanLogs(false);
       await h.watch.tick();
@@ -2443,13 +2443,125 @@ test(
       await wait(250);
       assert.equal(h.sent.filter((s) => s.to === "lead-1" && s.text.includes(`Watch ${id}`)).length, 1);
       // The digest's [done] lands > COVER_AFTER_FIRE_MS after the fire, so it relays (not held) — but must not re-send the short final.
-      clock.t += 121_000;
+      clock.t += 601_000;
       writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 done", refs: ["w-1"] }]);
       h.scanLogs(false);
       await h.watch.tick();
       await wait(250);
       const leadText = h.sent.filter((s) => s.to === "lead-1").map((s) => s.text).join("\n");
       assert.equal(leadText.split(short).length - 1, 1, "the short final appears once (item line), not again in the relay: " + leadText);
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+// ---- idea-366: a fired watch covers the subject agent's late notices for ~10 min; decision-bearing events still wake ----
+
+/** Fire a one-item watch on w-1 for lead-1, then return the harness and the (advanceable) clock. */
+async function firedWatchHarness(sb, extraAgents = []) {
+  const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", mk("w-1", "worker")], ...extraAgents]);
+  const clock = { t: Date.now() };
+  const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+  const h = await pluginHarness(sb, agents, {
+    timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: "PASS: w1 shipped" } }] : []),
+    watchSets: { now: () => clock.t },
+  });
+  h.watch.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+  h.watch.onRunnerEvent(agentEv("w-1", "running"));
+  clock.t += MIN;
+  h.watch.onRunnerEvent(agentEv("w-1", "idle"));
+  h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+  clock.t += MIN;
+  await h.watch.tick();
+  await wait(250);
+  assert.equal(h.sent.filter((s) => s.to === "lead-1" && s.text.includes(`Watch ${id}`)).length, 1, JSON.stringify(h.sent));
+  return { h, clock, id };
+}
+const relaysTo = (h, to) => h.sent.filter((s) => s.to === to && s.text.startsWith("New team log event"));
+const logLines = (sb) => readFileSync(join(sb.home, "teams", "vibesquad", "log.jsonl"), "utf8");
+
+test(
+  "idea-366: a [done] for a watched agent 5 min after its watch completed is suppressed (still logged)",
+  withPluginEnv(async (sb) => {
+    const { h, clock } = await firedWatchHarness(sb);
+    try {
+      clock.t += 5 * MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 digest verdict", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await h.watch.tick();
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 0, JSON.stringify(h.sent));
+      assert.match(logLines(sb), /w1 digest verdict/, "the event stays in the team log");
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-366: an UNVERIFIED (digest logged nothing) [done] for a recently watched agent is suppressed",
+  withPluginEnv(async (sb) => {
+    const { h, clock } = await firedWatchHarness(sb);
+    try {
+      clock.t += 5 * MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "UNVERIFIED (digest logged nothing): w1 report unread", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 0, JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-366: a [done] for an UNWATCHED agent still wakes the lead",
+  withPluginEnv(async (sb) => {
+    const { h, clock } = await firedWatchHarness(sb, [["w-2", mk("w-2", "worker")]]);
+    try {
+      clock.t += MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-2", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w2 done", refs: ["w-2"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 1, JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-366: a FAIL verdict for a watched agent after its watch ping, and a needs-you, still wake the lead",
+  withPluginEnv(async (sb) => {
+    const { h, clock } = await firedWatchHarness(sb);
+    try {
+      clock.t += 3 * MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "FAIL 1/0/0 abc: w1 regressed", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 1, "late FAIL wakes: " + JSON.stringify(h.sent));
+      clock.t += MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "w-1", lane: "vibesquad", type: "needs-you", text: "w1 needs a decision", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 2, "needs-you wakes: " + JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-366: a [done] for a watched agent more than 10 min after the watch completed relays again",
+  withPluginEnv(async (sb) => {
+    const { h, clock } = await firedWatchHarness(sb);
+    try {
+      clock.t += 11 * MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 late", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 1, JSON.stringify(h.sent));
     } finally {
       h.stop();
     }
