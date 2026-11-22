@@ -6,7 +6,7 @@ import { DEMO } from "./demoFlag";
 import { clearCtxAnchor, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type FolderDef, type Member, type TeamView } from "./teams";
-import { patchTeamsFolder } from "./boringFolders";
+import { getLastFolder, patchTeamsFolder, setLastFolder } from "./boringFolders";
 import type { Pin } from "./pins";
 import { Ago, cleanTitle } from "./ui";
 import { settingsPaletteItems, useKeyBindings } from "./prefs";
@@ -327,22 +327,30 @@ export function teamCtxItems(view: TeamView, opts?: { folders?: FolderDef[] }): 
     // B11b: folder actions (Normal sidebar). Current folder is shown checked and inert.
     const fail = (r: { ok: boolean; error?: string }) => { if (!r.ok) window.alert(`Folder change failed: ${r.error ?? "unknown error"}`); };
     const cur = view.team.folder;
-    opts.folders.forEach((f, i) => items.push({
+    const last = !cur ? getLastFolder(view.team.id) : undefined;
+    const back = last && opts.folders.some((f) => f.name === last) ? last : undefined;
+    if (back) items.push({
+      label: `Back to ${back}`,
+      separatorBefore: true,
+      run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: back }).then((r) => { if (r.ok) setLastFolder(view.team.id, null); fail(r); }),
+    });
+    const rows = opts.folders.filter((f) => f.name !== back);
+    rows.forEach((f, i) => items.push({
       label: f.name === cur ? `✓ In ${f.name}` : `Move to ${f.name}`,
       disabled: f.name === cur,
-      separatorBefore: i === 0,
-      run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: f.name }).then(fail),
+      separatorBefore: i === 0 && !back,
+      run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: f.name }).then((r) => { if (r.ok) setLastFolder(view.team.id, null); fail(r); }),
     }));
     items.push({
       label: "New folder…",
-      separatorBefore: opts.folders.length === 0,
+      separatorBefore: rows.length === 0 && !back,
       run: () => {
         const name = window.prompt("New folder name")?.trim();
         if (!name) return;
-        void patchTeamsFolder({ op: "createFolder", name }).then((r) => (r.ok ? patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: name }) : r)).then(fail);
+        void patchTeamsFolder({ op: "createFolder", name }).then((r) => (r.ok ? patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: name }) : r)).then((r) => { if (r.ok) setLastFolder(view.team.id, null); fail(r); });
       },
     });
-    if (cur) items.push({ label: "Remove from folder", run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: null }).then(fail) });
+    if (cur) items.push({ label: "Remove from folder", run: () => void patchTeamsFolder({ op: "setTeamFolder", teamId: view.team.id, folder: null }).then((r) => { if (r.ok) setLastFolder(view.team.id, cur); fail(r); }) });
   }
   return items;
 }
