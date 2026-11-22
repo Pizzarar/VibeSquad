@@ -17,6 +17,8 @@ import {
   HUB_BUDDY_RULES,
   BRAINSTORM_PACK,
   EVERYONE_LAYER,
+  gitHelperStats,
+  _resetGitHelperCaches,
 } from "./agent-duties.ts";
 import type { AgentSettingsPatch } from "./agent-duties.ts";
 
@@ -1822,6 +1824,40 @@ test(
     const lines = logLines();
     assert.equal(lines.filter((l) => l.includes("UNVERIFIED")).length, 0);
     assert.equal(lines.filter((l) => l.includes("alternate verdict")).length, 1);
+  }),
+);
+
+test(
+  "idea-562: agent.create takes the git spawn snapshot only when it will inject it (a prompt that already carries EVERYONE_LAYER skips it)",
+  withEnv(async ({ briefRoot }) => {
+    const repo = mkdtempSync(join(tmpdir(), "vs-gitskip-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: repo });
+      const h = harness(new Map(), { briefRoot });
+      try {
+        _resetGitHelperCaches();
+        const skipped = await h.beforeCreate({
+          config: { cwd: repo, provider: "claude", model: "claude-opus-5-5", title: "W", systemPrompt: `${EVERYONE_LAYER}
+
+caller text` },
+          labels: { role: "worker", lane: "bug-chaser" },
+        });
+        assert.equal(gitHelperStats.spawnStateGit, 0, "no git child when the snapshot would be discarded");
+        assert.ok(!(skipped.config.systemPrompt ?? "").includes("Starting git state (snapshot at spawn"));
+
+        _resetGitHelperCaches();
+        const injected = await h.beforeCreate({
+          config: { cwd: repo, provider: "claude", model: "claude-opus-5-5", title: "W" },
+          labels: { role: "worker", lane: "bug-chaser" },
+        });
+        assert.ok(gitHelperStats.spawnStateGit > 0, "the snapshot is taken when it is injected");
+        assert.ok(injected.config.systemPrompt.includes("Starting git state (snapshot at spawn"));
+      } finally {
+        h.stop?.();
+      }
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   }),
 );
 

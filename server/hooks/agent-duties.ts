@@ -2546,13 +2546,14 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
         st.lane = explicitLane;
         const prefix = injectedPrefix(role, cwd, vibeMode, isHubBuddy || isHubLead);
         const profileNotes = isHubBuddy ? "" : dedupeNotesAgainst((matchedProfile?.notes ?? "").trim(), prefix);
-        const gitState = await inspectGitSpawnState(cwd, { timeoutMs: deps.gitSpawnTimeoutMs });
-        st.mark("git-spawn-state");
         let bootPluginChars = 0;
         let bootBriefChars = 0;
         let bootArtifactChars = 0;
         if (prefix && !rawSysPrompt.includes(EVERYONE_LAYER)) {
           bootPluginChars = prefix.length;
+          // idea-562: the git snapshot is only injected here, so it is only taken here.
+          const gitState = await inspectGitSpawnState(cwd, { timeoutMs: deps.gitSpawnTimeoutMs });
+          st.mark("git-spawn-state");
           const parts = composeSpawnPromptParts(prefix, profileNotes, rawSysPrompt, gitState);
           next.systemPrompt = parts.join("\n\n");
           changed = true;
