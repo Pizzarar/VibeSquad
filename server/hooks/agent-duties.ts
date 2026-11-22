@@ -13,7 +13,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
 import {
   LEAD_AUTO_HANDOFF_DEFAULT,
   LEAD_FLAG_DEFAULT,
@@ -76,6 +75,7 @@ import {
 import { LESSONS_BEGIN, LESSONS_END, readLessons } from "../lessons.mjs";
 import { gitDirsFs, readHeadFs, resolveRefsFs } from "../git-refs-fs.mjs";
 import type { GitDirs } from "../git-refs-fs.mjs";
+import { gitExecOffLoop } from "../git-spawn.mjs";
 /** idea-419: stands in for forwarded text when the host-path redactor throws (never forward raw). */
 const REDACTION_WITHHELD = "(message withheld: host-path redaction failed; see the server log; run 'vs log --since-me')";
 
@@ -1291,11 +1291,9 @@ async function inspectGitSpawnStateUncached(resolved: string, timeoutMs: number,
     new Promise((resolve) => {
       try {
         gitHelperStats.spawnStateGit++;
-        execFile(
-          "git",
-          ["--no-optional-locks", ...args],
-          { cwd: resolved, encoding: "utf8", timeout: timeoutMs, windowsHide: true },
-          (err, stdout) => resolve(err ? null : String(stdout ?? "")),
+        gitExecOffLoop(resolved, args, timeoutMs).then(
+          (r) => resolve(r.ok ? String(r.out ?? "") : null),
+          () => resolve(null),
         );
       } catch {
         resolve(null);
@@ -1455,8 +1453,9 @@ function unitBranchGit(cwd: string, args: string[]): Promise<{ ok: boolean; out:
   return new Promise((resolve) => {
     try {
       gitHelperStats.unitBranchGit++;
-      execFile("git", ["--no-optional-locks", ...args], { cwd, encoding: "utf8", timeout: 5000, windowsHide: true }, (err, stdout) =>
-        resolve({ ok: !err, out: String(stdout ?? "").trim(), code: err ? (typeof (err as any).code === "number" ? (err as any).code : null) : 0 }),
+      gitExecOffLoop(cwd, args, 5000).then(
+        (r) => resolve({ ok: r.ok, out: String(r.out ?? "").trim(), code: r.code }),
+        () => resolve({ ok: false, out: "", code: null }),
       );
     } catch {
       resolve({ ok: false, out: "", code: null });
