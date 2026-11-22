@@ -142,6 +142,14 @@ sudo_run sysctl --system >/dev/null
 
 # 5. never sleep (R12)
 sudo_run systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.target
+# lid close must not suspend a laptop forge: logind ignores the lid switch
+sudo_run mkdir -p /etc/systemd/logind.conf.d
+write_file /etc/systemd/logind.conf.d/forge-lid.conf "[Login]
+HandleLidSwitch=ignore
+HandleLidSwitchExternalPower=ignore
+HandleLidSwitchDocked=ignore" 1
+# reload logind config without restarting it (a restart can kill the desktop session); HUP is harmless when unchanged
+sudo_run systemctl kill -s HUP systemd-logind
 
 # 6. systemd user unit (R5, R6, R7, R15)
 NODE_BIN="$(command -v node || echo /usr/bin/node)"
