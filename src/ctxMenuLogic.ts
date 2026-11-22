@@ -32,3 +32,23 @@ export function hubOpenAgent(focusAgentId: string | null | undefined, activeId: 
 export function focusDrawerOpen(focusAgentId: string | null | undefined, activeId: string | null | undefined, laneMemberIds: ReadonlySet<string>, zoneIds: readonly string[]): boolean {
   return !!focusAgentId || (!!activeId && laneMemberIds.has(activeId) && !zoneIds.includes(activeId));
 }
+
+type Attrs = { setAttribute(n: string, v: string): void; getAttribute(n: string): string | null; removeAttribute(n: string): void };
+const isAttrs = (a: unknown): a is Attrs => !!a && typeof (a as Attrs).setAttribute === "function" && typeof (a as Attrs).removeAttribute === "function";
+
+/** idea-528 m6: mark the trigger (or right-clicked row) while its menu is open; the returned cleanup unmarks it. */
+export function markCtxAnchor(anchor: unknown): () => void {
+  if (!isAttrs(anchor)) return () => {};
+  const popup = Boolean(anchor.getAttribute("aria-haspopup"));
+  anchor.setAttribute("data-ctx-open", "true");
+  if (popup) anchor.setAttribute("aria-expanded", "true");
+  return () => {
+    anchor.removeAttribute("data-ctx-open");
+    if (popup) anchor.removeAttribute("aria-expanded");
+  };
+}
+
+/** idea-528 m7: Tab in an open menu always closes it; a button trigger also takes focus back (and Tab is swallowed) so focus never drops to the document. */
+export function ctxTabAction(anchor: unknown): { refocusAnchor: boolean } {
+  return { refocusAnchor: !!anchor && (anchor as { tagName?: string }).tagName === "BUTTON" };
+}

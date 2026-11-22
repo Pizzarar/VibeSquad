@@ -1138,6 +1138,8 @@ html[data-vibe="boring"] .boring-conv-line:hover .boring-row-menu-btn,
 html[data-vibe="boring"] .boring-row-menu-btn[data-ctx-open],
 html[data-vibe="boring"] .boring-row-menu-btn:focus-visible { opacity: 1; }
 /* idea-528 m6: the row whose menu is open keeps the hover look. */
+/* idea-528 mi1: lane rows keep a real 22px slot (the right-aligned "Nm ago" must stay readable); only the project row overlays its ⋯. */
+html[data-vibe="boring"] .boring-conv-line:not(.boring-project-line) .boring-row-menu-btn { margin-left: 0; }
 html[data-vibe="boring"] .boring-conv-line:has([data-ctx-open]), html[data-vibe="boring"] .boring-conv-line[data-ctx-open] { background: var(--surface-3); }
 html[data-vibe="boring"] .boring-row-menu-btn:hover { background: var(--surface-3); color: var(--text-1); }
 html[data-vibe="boring"] .boring-row-menu-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
@@ -1281,6 +1283,8 @@ html[data-vibe="boring"] .ctx-menu button.ctx-sep { border-top: 1px solid var(--
 
 /* idea-528 m8: Normal-mode modals (stop confirm, Remove lane): no Psycho pixel stripe/gradient, readable title, danger button distinct from Cancel. */
 html[data-vibe="boring"] .modal { background-image: none; padding-top: 0; border-color: var(--border); border-radius: 10px; }
+html[data-vibe="boring"] .shortcut-modal { background-image: none; padding-top: 16px; border-color: var(--border); border-radius: 10px; }
 html[data-vibe="boring"] .modal-head { background: var(--surface-2); background-image: none; color: var(--text-1); font-family: inherit; letter-spacing: 0; border-bottom: 1px solid var(--border); }
-html[data-vibe="boring"] .modal .btn.bad { background: var(--st-err); background-image: none; border-color: var(--st-err); color: #fff; }
-html[data-vibe="boring"] .modal .btn.bad:hover:not(:disabled) { filter: brightness(1.08); }
+html[data-vibe="boring"] :is(.modal, .shortcut-modal) .btn.bad { background: var(--st-err); background-image: none; border-color: var(--st-err); color: #fff; }
+html[data-vibe="boring"][data-theme="dark"] :is(.modal, .shortcut-modal) .btn.bad { color: #1a1624; } /* dark --st-err is a light tint (text-on-dark): dark label keeps >= 4.5:1 */
+html[data-vibe="boring"] :is(.modal, .shortcut-modal) .btn.bad:hover:not(:disabled) { filter: brightness(1.08); }

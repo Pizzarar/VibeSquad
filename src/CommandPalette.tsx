@@ -3,7 +3,7 @@ import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
-import { scrollClosesCtxMenu } from "./ctxMenuLogic";
+import { ctxTabAction, markCtxAnchor, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import type { Pin } from "./pins";
@@ -145,9 +145,9 @@ function ContextMenuHost() {
       } else if (e.key === "Tab") {
         // idea-528 m7: Tab never drops focus to the document: close the menu and hand focus back to its trigger.
         close();
-        if (s.anchor instanceof HTMLButtonElement) {
+        if (ctxTabAction(s.anchor).refocusAnchor) {
           e.preventDefault();
-          s.anchor.focus();
+          (s.anchor as HTMLElement).focus();
         }
       } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         const its = menuItems();
@@ -160,17 +160,14 @@ function ContextMenuHost() {
     };
     if (s.kbd) menuItems()[0]?.focus();
     // idea-528 m6: the trigger (or right-clicked row) stays marked while its menu is open.
-    const anchorEl = s.anchor instanceof HTMLElement ? s.anchor : null;
-    anchorEl?.setAttribute("data-ctx-open", "true");
-    if (anchorEl?.getAttribute("aria-haspopup")) anchorEl.setAttribute("aria-expanded", "true");
+    const unmarkAnchor = markCtxAnchor(s.anchor);
     window.addEventListener("click", close);
     const onScroll = (e: Event) => scrollClosesCtxMenu(e.target, s.anchor) && close();
     window.addEventListener("scroll", onScroll, true);
     window.addEventListener("blur", close);
     window.addEventListener("keydown", onKey);
     return () => {
-      anchorEl?.removeAttribute("data-ctx-open");
-      if (anchorEl?.getAttribute("aria-haspopup")) anchorEl.removeAttribute("aria-expanded");
+      unmarkAnchor();
       window.removeEventListener("click", close);
       window.removeEventListener("scroll", onScroll, true);
       window.removeEventListener("blur", close);
