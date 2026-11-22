@@ -1,7 +1,7 @@
 // Server-side context watcher for runner agents (PLAN_PLUGIN_DUTIES_PORT T1). The same duty the Paseo plugin ran in
 // server/hooks/agent-duties.ts (lead 150k nudge / 300k successor, Buddy warn / hard-limit retire), now driven by the runner's
 // usage-bearing "agent" upserts. Idempotent through labels, so a server restart or an event replay never repeats a send.
-import { effectiveAgentRole } from "./identity.mjs";
+import { asleepTeamIds, effectiveAgentRole, readTeamsConfig } from "./identity.mjs";
 import { sharedRunnerBackend } from "./backend/index.mjs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -55,6 +55,12 @@ export function startTokenWatcher({
   baseHome,
   profilesPath,
   noticeRecheckMs = 15_000,
+  // B11a: true when the agent's Squad is in an asleep folder. Cheap when nothing sleeps (mtime-cached config, empty set).
+  isAsleep = (agent) => {
+    const asleep = asleepTeamIds(readTeamsConfig(rootDir));
+    if (!asleep.size) return false;
+    return asleep.has(String(resolveTeamAndLane(agent, rootDir).teamId ?? "").toLowerCase());
+  },
 } = {}) {
   const live = new Map(); // id -> latest agent snapshot (for the coordinator's lane/worker lookups)
   const busy = new Set();
@@ -218,6 +224,9 @@ export function startTokenWatcher({
   // source "roster": a startup / reconnect seed. Leads and Buddies evaluate it as before; workers only observe it (old usage, idea-162 P0).
   async function evaluate(agent, { source = "agent" } = {}) {
     if (!agent?.id || agent.archivedAt || agent.status === "closed") return { role: "skip" };
+    // B11a: an asleep Squad gets no automated nudge, handoff, compaction or Buddy restart (nothing is killed); the next usage
+    // event after a wake evaluates it as usual.
+    if (isAsleep(agent)) return { role: "skip", asleep: true };
     const role = effectiveAgentRole(agent);
     if (role === "lead") return { role, result: await coord.evaluateLead(agent) };
     if (role === "brainstorm") return { role, result: await evaluateBuddy(agent) };

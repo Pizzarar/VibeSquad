@@ -716,7 +716,7 @@ test("D1: boringStateGlyph maps status + attention; copy pass keeps every testid
   }
   const src = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
   const ade = src("BoringAde.tsx");
-  for (const text of ["+ New lane", "Brainstorm · RiffBot", "Lead · Overlord", ">Core<", ">Lanes<"]) assert.ok(ade.includes(text), text);
+  for (const text of ["+ New lane", "Brainstorm · RiffBot", "Lead · Overlord", ">Desk<", ">Lanes<"]) assert.ok(ade.includes(text), text);
   for (const gone of ["New Conversation", "TRINITY", "📊", "🔍"]) assert.ok(!ade.includes(gone), gone);
   for (const id of ["boring-new-conv-btn", "boring-sidebar-search-btn", "boring-project-tree", "boring-global-search-btn", "boring-shortcuts-btn", "boring-usage-btn"]) assert.ok(ade.includes(`data-testid="${id}"`), id);
   for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(id), id);
@@ -775,7 +775,7 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
   const bad = squad({ zones: { hub: { lane: { id: "hub" }, needsYou: 1 }, riffbot: zone(mem("rb", "idle", ago(2), { tone: "error" })), overlord: zone(mem("ov")) } });
   assert.equal(boringSidebarModel(bad, NOW).deskErr, true);
   assert.equal(boringSidebarModel(bad, NOW).projectErr, true);
-  // R8-1: the expanded Core header carries the Desk-worker count (amber). R8-6: Overlord/RiffBot own their badges, so an errored RiffBot tints its own row, not the header.
+  // R8-1: the expanded Desk header carries the Desk-worker count (amber). R8-6: Overlord/RiffBot own their badges, so an errored RiffBot tints its own row, not the header.
   const tb = render(props(bad));
   assert.match(JSON.stringify(byId(tb, "boring-core-riffbot").props.children), /boring-badge err/);
   assert.doesNotMatch(JSON.stringify(byId(tb, "boring-trinity-head").props.children), /boring-badge/);
@@ -783,7 +783,7 @@ test("D2 2.1 / R2.5 BoringApp: badges sit on collapsed containers only, tinted b
   assert.match(JSON.stringify(byId(render(props(v)), "boring-trinity-head").props.children), /"children":2/);
 });
 
-test("R8-6: Overlord/RiffBot needs-you is badged once on its own row; Core header counts only Desk workers; rows + header == hubNeedsYou", () => {
+test("R8-6: Overlord/RiffBot needs-you is badged once on its own row; Desk header counts only Desk workers; rows + header == hubNeedsYou", () => {
   reset();
   const ovNeeds = mem("ov", "idle", ago(2), { tone: "needs-you" });
   const deskW = mem("dw", "running", ago(2), { tone: "permission" });
@@ -2096,4 +2096,17 @@ test("idea-528: markCtxAnchor marks/unmarks the open row; ctxTabAction refocuses
   assert.deepEqual(ctxTabAction(btn), { refocusAnchor: true });
   assert.deepEqual(ctxTabAction(row), { refocusAnchor: false }, "right-click row: Tab just closes and proceeds");
   assert.deepEqual(ctxTabAction(null), { refocusAnchor: false });
+});
+
+test("B10: expanded project is a container card (.open, --surface-1, 14px); collapsed stays flat; Trinity header says Desk", () => {
+  const rd = (f) => readFileSync(resolve(import.meta.dirname, "..", "src", f), "utf8");
+  const ade = rd("BoringAde.tsx"), css = rd("boring.css");
+  assert.ok(ade.includes('open ? "boring-project-block open" : "boring-project-block"'));
+  assert.ok(ade.includes("<span>Desk</span>{badge(m.deskWorkersNeedsYou") && !ade.includes("<span>Core</span>"));
+  const rule = css.match(/^html\[data-vibe="boring"\] \.boring-project-block\.open \{([^}]*)\}/m);
+  assert.ok(rule, ".open rule");
+  for (const t of ["background: var(--surface-1)", "border: 1px solid var(--border)", "border-radius: 14px", "padding: 8px"]) assert.ok(rule[1].includes(t), t);
+  const flat = css.match(/^html\[data-vibe="boring"\] \.boring-project-block \{([^}]*)\}/m);
+  assert.ok(flat && !/background|border|padding/.test(flat[1]), "collapsed stays flat");
+  assert.ok(!/!important/.test(rule[0]));
 });

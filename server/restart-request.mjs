@@ -26,7 +26,7 @@ import { writeFileAtomic } from "./brief-write.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
 import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, holderLeads } from "./restart-coord.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
-import { isLiveAgent, loadTeamsRegistry, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
+import { asleepTeamIds, isLiveAgent, loadTeamsRegistry, readTeamsConfig, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { toAgent } from "./backend/runner-backend.mjs";
 
 export const REQUEST_FILE = "restart-request.json";
@@ -211,6 +211,27 @@ export function liveLeads(agents, teams = loadTeamsRegistry()) {
   return out;
 }
 
+const RUNNING = new Set(["running", "initializing", "starting", "working", "queued"]);
+/**
+ * B11a: `leads` minus the leads of asleep Squads whose lane has nothing running (no running agent, no runner-held work), so
+ * a sleeping Squad gets no drain ask (it counts as drained / gone) and is not woken to lift a hold. An asleep lane that still
+ * runs something keeps its lead: sleep never kills, so that work must still drain before the restart.
+ */
+export function dropAsleepLeads(leads, agents, teams, asleep, held = null) {
+  if (!Array.isArray(leads) || !asleep?.size) return leads;
+  const list = (Array.isArray(agents) ? agents : []).map((a) => (a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a));
+  const busy = new Set();
+  for (const a of list) {
+    if (!a || !isLiveAgent(a) || !RUNNING.has(String(a.status ?? "").toLowerCase())) continue;
+    const who = resolveAgentIdentity(a, { teams, cwd: a.cwd });
+    if (who.teamId && who.laneId) busy.add(`${who.teamId}/${who.laneId}`.toLowerCase());
+  }
+  return leads.filter((l) => {
+    if (!asleep.has(String(l.team ?? "").toLowerCase())) return true;
+    return busy.has(`${l.team}/${l.lane}`.toLowerCase()) || (held?.byLead?.[l.leadId]?.length ?? 0) > 0;
+  });
+}
+
 /** The runner's held list ({ ids, work }) grouped by the holders' live leads (restart-coord holderLeads). */
 export function heldByLead(held, agents, teams = loadTeamsRegistry()) {
   if (!held || !Array.isArray(held.ids)) return null;
@@ -314,13 +335,14 @@ export function pendingLeads(req) {
  * read while firing). Returns the side effects for the driver, which persists `req` BEFORE running any of them:
  * { kind: "ask", leadId, text } | { kind: "log", text } | { kind: "fire" } | { kind: "send", leadId, text }.
  */
-export function stepRequest(req, { now = Date.now(), leads = null, drained = null, held = undefined, results = [] } = {}) {
+export function stepRequest(req, { now = Date.now(), leads = null, drained = null, held = undefined, results = [], asleep = null } = {}) {
   const actions = [];
   const at = iso(now);
   req.asked ??= {};
   req.drained ??= {};
   req.gone ??= {};
-  if (TERMINAL.has(req.state)) return notifyClosed(req, at, actions);
+  const close = () => notifyClosed(req, at, actions, asleep);
+  if (TERMINAL.has(req.state)) return close();
   if (held !== undefined) req.held = held ? { at, ...held } : null;
 
   if (req.state === "requested" || req.state === "draining") {
@@ -350,7 +372,7 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
     if (req.state === "requested") {
       if (!past) return actions;
       abort(req, at, "deadline passed before the runner listed any lead: no drain asks went out, nothing fired");
-      return notifyClosed(req, at, actions);
+      return close();
     }
     const pend = pendingLeads(req);
     if (!pend.length) {
@@ -397,13 +419,13 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
         abort(req, at, `no restart result within ${FIRING_TIMEOUT_MS / 3600_000}h of the fire`);
       }
     }
-    if (TERMINAL.has(req.state)) return notifyClosed(req, at, actions);
+    if (TERMINAL.has(req.state)) return close();
   }
   return actions;
 }
 
 /** Once per finished request: log the outcome and tell every asked lead still live to lift its hold. */
-function notifyClosed(req, at, actions) {
+function notifyClosed(req, at, actions, asleep = null) {
   if (req.notifiedAt) return actions;
   req.notifiedAt = at;
   const done = req.state === "done";
@@ -412,7 +434,11 @@ function notifyClosed(req, at, actions) {
   actions.push({ kind: "log", text: done ? `${DONE_TEXT} ${req.tip} (restart-request ${req.id})${stale}` : `restart-request ${req.id} aborted: ${req.abortReason}${stale}` });
   const text = done ? `${doneText(at)} (restart-request ${req.id}, tip ${req.tip})${stale}`
     : `Restart request ${req.id} (tip ${req.tip}) was aborted: ${req.abortReason}${stale}. No restart is pending from it; lift your background-suite hold.`;
-  for (const id of Object.keys(req.asked ?? {})) if (!req.gone?.[id]) actions.push({ kind: "send", leadId: id, text });
+  for (const id of Object.keys(req.asked ?? {})) {
+    if (req.gone?.[id]) continue;
+    if (asleep?.has?.(String(req.asked[id]?.team ?? "").toLowerCase())) continue; // B11a: an asleep Squad is not woken
+    actions.push({ kind: "send", leadId: id, text });
+  }
   return actions;
 }
 
@@ -598,6 +624,8 @@ export function createRestartRequestLoop({
   sync = () => runSyncAsync(),
   runtimeLag = (req) => runtimeLagAsync(req),
   teams = () => loadTeamsRegistry(),
+  // B11a: lowercased ids of asleep Squads, read each tick (mtime-cached).
+  asleepTeams = () => asleepTeamIds(readTeamsConfig()),
   now = () => Date.now(),
   tickMs = TICK_MS,
   log = () => {},
@@ -641,6 +669,8 @@ export function createRestartRequestLoop({
     let held;
     let drained = null;
     let results = [];
+    let asleep = null;
+    try { asleep = asleepTeams(); } catch { asleep = null; }
     const scanAt = now();
     if (open) {
       let agents = null;
@@ -655,13 +685,14 @@ export function createRestartRequestLoop({
           try { const all = await listAgentsWithArchived(); if (Array.isArray(all)) holders = all; } catch (e) { log(`restart-request: archived agent list failed: ${e?.message ?? e}`); }
         }
         held = h ? heldByLead(h, holders, reg) : null;
+        leads = dropAsleepLeads(leads, agents, reg, asleep, held);
       }
       const sinceMs = Date.parse(cur.createdAt);
       drained = drainedSince(home, { sinceMs, stopMs: scanned?.id === cur.id ? scanned.at : sinceMs, tip: cur.tip });
     } else if (cur.state === "firing") results = restartResults(home);
     const { req, actions } = await mutateAsync(home, (doc) => {
       if (!doc.current || doc.current.id !== cur.id) return { req: doc.current, actions: [] };
-      return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results }) };
+      return { req: doc.current, actions: stepRequest(doc.current, { now: now(), leads, drained, held, results, asleep }) };
     });
     if (open) scanned = { id: cur.id, at: scanAt };
     // The drain follows the stepped state (requestHoldsDrain): held while the request is open and until its vs restart

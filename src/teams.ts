@@ -71,8 +71,30 @@ export type TeamDef = {
   vibeMode?: boolean;
   /** Per-Squad standing lane pointers for header quick-chips (docs/PLAN_PROJECT_CHIPS_WORKFLOWS.md). */
   quickLanes?: { bugs?: string; workflows?: string };
+  /** B11a: the project folder this Squad sits in (a `FolderDef.name`); none = unfoldered (always awake). */
+  folder?: string;
 };
 export type TeamConfig = TeamDef;
+
+/** B11a: a project folder. An asleep folder's Squads get no automated wakes (server/teams-file.mjs isTeamAsleep). */
+export type FolderDef = { name: string; asleep: boolean };
+/** No `folders` key in teams.json = one asleep Backlog (mirrors server/teams-file.mjs). */
+export const DEFAULT_FOLDERS: readonly FolderDef[] = Object.freeze([Object.freeze({ name: "Backlog", asleep: true })]);
+export function foldersOf(data: { folders?: unknown } | null | undefined): FolderDef[] {
+  if (Array.isArray(data?.folders)) return data.folders as FolderDef[];
+  return DEFAULT_FOLDERS.map((f) => ({ ...f }));
+}
+/** True when the team sits in an asleep folder; no folder, an unknown folder or an unknown team id = awake. */
+export function isTeamAsleep(
+  teamOrId: Pick<TeamDef, "id" | "folder"> | string | null | undefined,
+  cfg: { teams?: Pick<TeamDef, "id" | "folder">[]; folders?: FolderDef[] } = {},
+): boolean {
+  const lc = (v: unknown) => String(v ?? "").trim().toLowerCase();
+  const team = typeof teamOrId === "string" ? (lc(teamOrId) ? cfg.teams?.find((t) => lc(t?.id) === lc(teamOrId)) : undefined) : teamOrId;
+  const name = typeof team?.folder === "string" ? team.folder : "";
+  if (!name) return false;
+  return Boolean(foldersOf(cfg).find((f) => f?.name === name)?.asleep);
+}
 
 export const BRAINSTORM_WARN_DEFAULT = 80_000;
 export const BRAINSTORM_RESTART_DEFAULT = 150_000;
