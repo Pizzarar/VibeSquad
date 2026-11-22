@@ -598,7 +598,7 @@ export function createWatchEngine({
     let stamp = "";
     try {
       const st = fs.statSync(file);
-      stamp = `${st.mtimeMs}:${st.size}`;
+      stamp = `${st.mtimeMs}:${st.size}:${st.ino}`; // ino: every atomic write (tmp + rename) is a new file, so a rewrite always moves the stamp
     } catch {
       stamp = "missing";
     }
@@ -948,12 +948,15 @@ export function createWatchEngine({
     const t = now();
     for (const set of cache.sets) {
       if (set.cancelledAt) continue; // the owner disarmed it: drop what was not sent yet
+      // idea-572: nothing unsent = nothing to offer. Checked BEFORE isAsleep: that reads the teams registry (stat + path
+      // resolution) and ran for every open set every tick (567 sets on 11-22: 31 stalls / 0.5-1.9s of CPU each).
+      if (!(set.pings ?? []).some((p) => !p.attemptedAt)) continue;
       if (isAsleep(set.team)) continue; // B11a: held, not attempted; delivered on the first tick after a wake
       for (const ping of set.pings ?? []) {
         if (ping.attemptedAt) continue;
-        if (isCancelled(pingKeyOf(set, ping))) break; // cancelled while an earlier offer awaited: the cache is stale
         const key = pingKeyOf(set, ping);
-        if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue;
+        if (t - (lastOffer.get(key) ?? -Infinity) < retryMs) continue; // not offered this tick: no cancel re-check needed
+        if (isCancelled(key)) break; // cancelled while an earlier offer awaited: the cache is stale
         lastOffer.set(key, t);
         const d = { key, setId: set.id, pingKey: ping.key, text: ping.text, ...(ping.detail ? { detail: ping.detail } : {}), ...(ping.finalRefs ? { finalRefs: ping.finalRefs } : {}), owner: set.owner, team: set.team, lane: set.lane, ...(ping.target ? { target: ping.target } : {}), set: structuredClone(set) };
         if (spawnDigest && ping.text.length > DIGEST_MERGE_MAX) {
@@ -1033,9 +1036,13 @@ export function createWatchEngine({
     return out;
   }
 
-  /** idea-219: true when the ping's set was cancelled (fresh read from disk). The plugin checks it right before the send. */
+  /**
+   * idea-219: true when the ping's set was cancelled (fresh from disk). The plugin checks it right before the send.
+   * idea-572: fresh = reload()'s stat check (mtime + size + inode), not a forced re-parse of the whole registry (5 MB on 11-22,
+   * 0.5-1s per parse under load, once per pending ping per tick). A cancel is a writeFileAtomic rename (new inode, new size),
+   * so it always moves the stamp; an unchanged stamp means the cached doc IS the file.
+   */
   function isCancelled(key) {
-    cacheStamp = "";
     const id = String(key).split("#")[0];
     return Boolean(reload().sets.find((x) => x.id === id)?.cancelledAt);
   }

@@ -23,6 +23,7 @@ import { randomBytes } from "node:crypto";
 import { withFileLock, withFileLockSync } from "./file-lock.mjs";
 import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
+import { execOffLoop } from "./git-spawn.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
 import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, holderLeads } from "./restart-coord.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
@@ -584,27 +585,24 @@ export function notUpdatedNeedsYouText(req, note) {
 const VS_CLI = path.resolve(import.meta.dirname, "..", "cli", "vs.mjs");
 const AGENT_ENV_KEYS = ["VS_AGENT_ID", "PASEO_AGENT_ID", "VS_AGENT_TOKEN", "VS_ROLE", "VS_LANE", "VS_TEAM", "VS_ORD", "VS_PROFILE"];
 
-/** One `vs` call as the owner's shell (agent identity stripped, as restart-runtime's runVs), async: the server loop never blocks. */
-export function runVsAsync(args, { env = process.env, timeoutMs = 60_000 } = {}) {
+/**
+ * One `vs` call as the owner's shell (agent identity stripped, as restart-runtime's runVs), async: the server loop never blocks.
+ * idea-572: the `node vs.mjs` child is created in the off-loop worker (server/git-spawn.mjs execOffLoop). A plain spawn() here
+ * still paid the synchronous CreateProcess on the server loop: loop-lag 11-22 08:23-09:38Z, 34 stalls / 52s (max 4.8s) during
+ * one restart drain's asks and logs. Same contract: { ok, out } on exit 0, else { ok:false, error } (last 300 chars of
+ * stdout+stderr, or the exit/failure reason); killed at timeoutMs; never rejects. `exec` is a test seam.
+ */
+export function runVsAsync(args, { env = process.env, timeoutMs = 60_000, exec = execOffLoop } = {}) {
   const e = { ...env };
   for (const k of AGENT_ENV_KEYS) delete e[k];
-  return new Promise((resolve) => {
-    let out = "";
-    let child;
-    try {
-      child = spawn(process.execPath, [VS_CLI, ...args], { env: e, cwd: path.dirname(path.dirname(VS_CLI)), windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    } catch (err) { resolve({ ok: false, error: String(err?.message ?? err).slice(0, 300) }); return; }
-    const timer = setTimeout(() => { try { child.kill(); } catch {} }, timeoutMs);
-    timer.unref?.();
-    child.stdout.on("data", (b) => { out += b; });
-    child.stderr.on("data", (b) => { out += b; });
-    child.on("error", (err) => { clearTimeout(timer); resolve({ ok: false, error: String(err?.message ?? err).slice(0, 300) }); });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      const text = out.trim().slice(-300);
-      resolve(code === 0 ? { ok: true, out: text } : { ok: false, error: text || `exit ${code}` });
-    });
-  });
+  return Promise.resolve()
+    .then(() => exec(process.execPath, [VS_CLI, ...args], { cwd: path.dirname(path.dirname(VS_CLI)), env: e, timeoutMs, maxBuffer: 8 * 1024 * 1024 }))
+    .then((r) => {
+      const text = `${r?.out ?? ""}${r?.err ?? ""}`.trim().slice(-300);
+      if (r?.ok) return { ok: true, out: text };
+      return { ok: false, error: text || (typeof r?.code === "number" ? `exit ${r.code}` : String(r?.msg || "failed").slice(0, 300)) };
+    })
+    .catch((err) => ({ ok: false, error: String(err?.message ?? err).slice(0, 300) }));
 }
 
 /**

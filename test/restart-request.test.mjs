@@ -20,6 +20,7 @@ import {
   fitLog,
   LOG_MAX,
   runSyncAsync,
+  runVsAsync,
   runtimeLagAsync,
   syncFeedbackText,
   syncRepoRoot,
@@ -586,4 +587,24 @@ test("idea-398: runSyncAsync reads the real sync-runtime outcome; syncRepoRoot c
 test("idea-477: the ask text says the runner already refuses new background shells until restart-done", () => {
   const req = { id: "rr-1", tip: "abc1234", requestedBy: "lead", deadline: new Date(Date.now() + 600000).toISOString() };
   assert.match(requestAskText(req, { leadId: "l1" }, []), /runner already refuses new background shells until the restart is done/);
+});
+
+test("idea-572: runVsAsync runs `node vs.mjs` through the off-loop exec with agent identity stripped; same result contract", async () => {
+  const seen = [];
+  const exec = async (file, args, opts) => {
+    seen.push({ file, args, opts });
+    return seen.length === 1 ? { ok: true, out: "  sent\n", err: "", code: 0 } : seen.length === 2 ? { ok: false, out: "", err: "boom", code: 2 } : seen.length === 3 ? { ok: false, out: "", err: "", code: null, msg: "spawn EPERM" } : Promise.reject(new Error("worker gone"));
+  };
+  const env = { PATH: "x", VS_AGENT_ID: "a1", PASEO_AGENT_ID: "p1", VS_AGENT_TOKEN: "t", VS_ROLE: "lead", KEEP: "1" };
+  assert.deepEqual(await runVsAsync(["send", "lead-1", "hi"], { env, exec }), { ok: true, out: "sent" });
+  assert.equal(seen[0].file, process.execPath);
+  assert.equal(path.basename(seen[0].args[0]), "vs.mjs");
+  assert.deepEqual(seen[0].args.slice(1), ["send", "lead-1", "hi"]);
+  assert.equal(seen[0].opts.timeoutMs, 60_000);
+  assert.deepEqual(Object.keys(seen[0].opts.env).sort(), ["KEEP", "PATH"], "agent identity stripped, the rest kept");
+  assert.equal(env.VS_AGENT_ID, "a1", "caller env untouched");
+  assert.deepEqual(await runVsAsync(["log"], { env, exec, timeoutMs: 5 }), { ok: false, error: "boom" });
+  assert.equal(seen[1].opts.timeoutMs, 5);
+  assert.deepEqual(await runVsAsync(["log"], { env, exec }), { ok: false, error: "spawn EPERM" });
+  assert.deepEqual(await runVsAsync(["log"], { env, exec }), { ok: false, error: "worker gone" }, "never rejects");
 });
