@@ -4,6 +4,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
+import { linkNodeModules, runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "./restart-coord.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -51,7 +52,7 @@ function defaultGit(cwd, ...args) {
   return execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true, maxBuffer: 64 << 20, stdio: ["ignore", "pipe", "ignore"] }).trim();
 }
 
-const runtimeDirFor = (env) => join(env.LOCALAPPDATA || join(homedir(), "AppData", "Local"), "VibeSquad", "runtime");
+const runtimeDirFor = (env) => runtimeDirOf(env);
 const vsHomeFor = (env) => env.VIBESQUAD_HOME || join(homedir(), ".vibesquad");
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, "utf8")); } catch { return null; } };
 const short = (sha) => String(sha ?? "").slice(0, 7);
@@ -151,7 +152,6 @@ const describeErr = (err) => String(err?.stderr || "").trim().split("\n")[0] || 
 export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}, commit = null } = {}) {
   const rename = ops.rename ?? renameSync;
   const runtimeDir = runtimeDirFor(env);
-  if (!existsSync(runtimeDir)) return { synced: false, runtimeDir };
 
   let sha;
   let tracked;
@@ -162,6 +162,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
     return { synced: false, runtimeDir, error: `cannot read the git-tracked file list at ${commit ? short(commit) : "HEAD"} (${describeErr(err)}); only tracked files are synced, the live runtime was kept` };
   }
 
+  mkdirSync(runtimeDir, { recursive: true }); // first sync on a fresh machine (Linux/forge): create + seed, once the source is readable the runtime
   const stage = join(runtimeDir, `.sync-stage-${process.pid}`);
   const backup = join(runtimeDir, `.sync-backup-${process.pid}`);
   const indexFile = join(runtimeDir, `.sync-index-${process.pid}`);
@@ -230,6 +231,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
   }
   clean();
   removeEmptiedDirs(runtimeDir, pruned);
+  linkNodeModules(repoRoot, runtimeDir); // a first sync into a fresh dir needs the deps too (no-op when the runtime has them)
 
   // The live server serves runtime/dist-desktop/VibeSquad.apk. Ship the staged build only as a verified pair
   // (sidecar present and equal to the apk's hash), via temp file + rename, apk first and sidecar last.
@@ -591,7 +593,8 @@ export function runSync({
     return { synced: false, skipped: skip };
   }
   const runtimeDir = runtimeDirFor(env);
-  if (!existsSync(runtimeDir)) return { synced: false, runtimeDir };
+  // The runtime dir is created only once the git and drain guards and the --no-build check have passed (the sync lock or
+  // syncRuntimeDir, whichever runs first); a failed vite build still leaves the empty dir the lock made.
   const refuse = (why, extra = {}) => {
     log(`[sync-runtime] refused: ${why}; the live runtime is unchanged`);
     return { synced: false, refused: why, ...extra };
@@ -652,6 +655,11 @@ export function runSync({
   };
 
   if (dryRun) return body();
+  // --no-build with a stale dist is refused before the lock: the lock file lives in the runtime dir and would create it.
+  if (noBuild) {
+    const early = distStatus(repoRoot, head, { git, graph });
+    if (early.stale) return refuse(`dist is stale (${early.reason}) and --no-build was given`, { dist: early });
+  }
   let entered = false;
   try {
     // staleMs outlasts a vite build; a dead holder is still taken over at once (pid liveness).

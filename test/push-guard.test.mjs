@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { after, describe, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 
 import { findLaneInRegistry } from "../server/identity.mjs";
 import { STANDING_RULES } from "../server/lessons.mjs";
@@ -144,10 +144,35 @@ after(() => rmSync(tmp, { recursive: true, force: true }));
 const teamsFile = join(tmp, "teams.json");
 writeFileSync(teamsFile, JSON.stringify({ teams: TEAMS }), "utf8");
 
+// One read-only seed repo (base commit), built once. Each test clones it into its own private bare origin + work repo,
+// instead of re-initing + configuring + committing + pushing per test. The origin is per-test because tests push merges to it.
+const SEED = join(tmp, "seed");
+before(() => {
+  ok(tmp, ["init", "-q", "--template=", "-b", "master", SEED]);
+  writeFileSync(join(SEED, "a.txt"), "base\n");
+  ok(SEED, ["add", "a.txt"]);
+  ok(SEED, ["commit", "-q", "-m", "base"]);
+});
+
 function baseEnv(extra = {}) {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) if (!/^(VS_|GIT_|PASEO_)/.test(k)) env[k] = v;
-  return { ...env, VIBESQUAD_HOME: join(tmp, "home"), VIBESQUAD_TEAMS_FILE: teamsFile, ...extra };
+  return {
+    ...env,
+    VIBESQUAD_HOME: join(tmp, "home"),
+    VIBESQUAD_TEAMS_FILE: teamsFile,
+    // git identity + gpgsign/autocrlf via env, so `git commit` needs no per-repo `git config` (and no extra spawns).
+    GIT_AUTHOR_NAME: "Test Agent",
+    GIT_AUTHOR_EMAIL: "agent@example.invalid",
+    GIT_COMMITTER_NAME: "Test Agent",
+    GIT_COMMITTER_EMAIL: "agent@example.invalid",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "commit.gpgsign",
+    GIT_CONFIG_VALUE_0: "false",
+    GIT_CONFIG_KEY_1: "core.autocrlf",
+    GIT_CONFIG_VALUE_1: "false",
+    ...extra,
+  };
 }
 function run(cwd, args, env = baseEnv()) {
   const r = spawnSync("git", args, { cwd, env, encoding: "utf8" });
@@ -162,22 +187,27 @@ function ok(cwd, args, env) {
 let n = 0;
 function freshRepo({ push = true, dev = false, hooks = true } = {}) {
   const dir = join(tmp, `r${++n}`);
-  const origin = join(dir, "origin.git");
-  const devRemote = join(dir, "dev.git");
   const work = join(dir, "work");
   mkdirSync(dir, { recursive: true });
-  ok(dir, ["init", "-q", "--bare", "-b", "master", origin]);
-  if (dev) ok(dir, ["init", "-q", "--bare", "-b", "master", devRemote]);
-  ok(dir, ["init", "-q", "-b", "master", work]);
-  for (const [k, v] of [["user.name", "Test Agent"], ["user.email", "agent@example.invalid"], ["commit.gpgsign", "false"], ["core.autocrlf", "false"]]) ok(work, ["config", k, v]);
+  const origin = join(dir, "origin.git");
+  if (push) {
+    // A private bare origin per test (clone of the seed): tests push merges to it, so it must not be shared.
+    ok(dir, ["clone", "-q", "--bare", "--template=", SEED, origin]);
+    ok(dir, ["clone", "-q", "--template=", origin, work]);
+  } else {
+    // A fresh empty origin (no master yet) so the push reads an all-zero remote sha.
+    ok(dir, ["init", "-q", "--bare", "--template=", "-b", "master", origin]);
+    ok(dir, ["clone", "-q", "--template=", SEED, work]);
+    ok(work, ["remote", "set-url", "origin", origin]);
+  }
   if (hooks) ok(work, ["config", "core.hooksPath", HOOKS]);
-  ok(work, ["remote", "add", "origin", origin]);
-  if (dev) ok(work, ["remote", "add", "dev", devRemote]);
-  writeFileSync(join(work, "a.txt"), "base\n");
-  ok(work, ["add", "a.txt"]);
-  ok(work, ["commit", "-q", "-m", "base"]);
-  if (push) ok(work, ["push", "-q", "origin", "master"]); // no merges: passes even with no identity
-  if (push && dev) ok(work, ["push", "-q", "dev", "master"]);
+  let devRemote = null;
+  if (dev) {
+    devRemote = join(dir, "dev.git");
+    ok(dir, ["init", "-q", "--bare", "--template=", "-b", "master", devRemote]);
+    ok(work, ["remote", "add", "dev", devRemote]);
+    ok(work, ["push", "-q", "dev", "master"]); // base only, no merges: passes even with no identity
+  }
   return { work, origin, dev: devRemote };
 }
 function merge(work, branch, subject, { inner = false } = {}) {
@@ -347,6 +377,7 @@ describe("push-guard: aliases, install and the vs verb", () => {
 
   test("installHooks refuses when active .git/hooks would be silenced, unless forced", () => {
     const { work } = freshRepo({ push: false, hooks: false });
+    mkdirSync(join(work, ".git", "hooks"), { recursive: true }); // a --template= clone has no hooks dir
     writeFileSync(join(work, ".git", "hooks", "pre-commit"), "#!/bin/sh\nexit 0\n");
     assert.deepEqual(activeDefaultHooks({ cwd: work }), ["pre-commit"]);
     assert.throws(() => installHooks({ cwd: work }), /active hooks in \.git\/hooks would stop running.*pre-commit/);

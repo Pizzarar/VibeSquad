@@ -8,7 +8,18 @@ import * as sync from "../server/sync-runtime.mjs";
 
 const { DIST_STAMP, liveNeedsSince, parseLiveNeeds, readLiveNeeds, recordServerStart, runSync, syncRuntimeDir, syncSkipReason, viteBuild } = sync;
 
-const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+const GIT_ENV = {
+  ...process.env,
+  // Identity + gpgsign via env, so `git commit` needs no per-repo `git config` (and a cloned repo needs none either).
+  GIT_AUTHOR_NAME: "t",
+  GIT_AUTHOR_EMAIL: "t@t",
+  GIT_COMMITTER_NAME: "t",
+  GIT_COMMITTER_EMAIL: "t@t",
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "commit.gpgsign",
+  GIT_CONFIG_VALUE_0: "false",
+};
+const git = (cwd, ...a) => execFileSync("git", ["-C", cwd, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: GIT_ENV }).trim();
 
 const tmpDirs = [];
 test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
@@ -32,13 +43,17 @@ const merge = (dir, branch, msg, files) => {
   return git(dir, "rev-parse", "HEAD");
 };
 
+// One seed repo built once; each test clones it (1 spawn) instead of init + 3 config + commit (~6 spawns).
+let SEED = null;
+test.before(() => {
+  SEED = tmp();
+  git(SEED, "init", "-q", "-b", "master");
+  commit(SEED, "init", { "src/App.tsx": "v1", "server/serve.mjs": "s1", "runner/runner.mjs": "r1", "docs/a.md": "a", ".gitignore": "dist/\n" });
+});
+
 function repo() {
   const dir = tmp();
-  git(dir, "init", "-q", "-b", "master");
-  git(dir, "config", "user.email", "t@t");
-  git(dir, "config", "user.name", "t");
-  git(dir, "config", "commit.gpgsign", "false");
-  commit(dir, "init", { "src/App.tsx": "v1", "server/serve.mjs": "s1", "runner/runner.mjs": "r1", "docs/a.md": "a", ".gitignore": "dist/\n" });
+  git(dir, "clone", "-q", "--template=", SEED, ".");
   return dir;
 }
 
@@ -49,7 +64,7 @@ function install(lastSynced) {
   mkdirSync(runtime, { recursive: true });
   if (lastSynced) writeFileSync(join(runtime, "build-stamp.json"), JSON.stringify({ commit: lastSynced, repo: "x", builtAt: "t" }));
   const home = tmp();
-  return { runtime, home, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: home } };
+  return { runtime, home, env: { LOCALAPPDATA: lad, VIBESQUAD_HOME: home, VIBESQUAD_RUNTIME_DIR: runtime } };
 }
 
 const quiet = () => {
@@ -455,7 +470,7 @@ test("L: viteBuild reads output as utf8 and falls back to stdout for the error l
 });
 
 test("L: an unknown flag exits non-zero before touching anything", () => {
-  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--dryrun"], { encoding: "utf8", env: { ...process.env, LOCALAPPDATA: tmp() } });
+  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--dryrun"], { encoding: "utf8", env: { ...process.env, LOCALAPPDATA: tmp(), VIBESQUAD_RUNTIME_DIR: tmp() } });
   assert.equal(r.status, 2);
   assert.match(r.stderr, /unknown flag --dryrun/);
 });

@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "../server/restart-coord.mjs";
+import { childEnv } from "./test-child-env.mjs";
 import { startWatchdog, DEFAULT_FILE_IDLE_MS } from "./test-watchdog.mjs";
 import { finishSlot, suitePaths, tryAcquireSlot, waitForSlot } from "./suite-lock.mjs";
 
@@ -105,7 +106,8 @@ const child = spawn(
     `--test-reporter=${progressReporter}`, `--test-reporter-destination=${progressFile}`,
     ...(files.length ? files : ["test/*.test.mjs"]),
   ],
-  { cwd: root, stdio: "inherit" },
+  // The live runtime (VIBESQUAD_RUNTIME_DIR in agent shells) must never reach test children; hermetic.mjs then sets a temp one.
+  { cwd: root, stdio: "inherit", env: childEnv(process.env) },
 );
 
 // idea-309: one wedged file must not hold the slot forever. A file with a test running and no test event for
