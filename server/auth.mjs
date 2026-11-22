@@ -167,8 +167,8 @@ export function setNetInterfacesForTest(ifaces, at = Date.now()) {
 }
 
 /** Home/office LAN IPv4: env override, else first physical RFC-1918 interface. */
-export function detectLanIp(interfaces = netInterfaces()) {
-  if (process.env.VIBESQUAD_LAN_IP) return process.env.VIBESQUAD_LAN_IP.trim();
+export function detectLanIp(interfaces = netInterfaces(), env = process.env) {
+  if (env.VIBESQUAD_LAN_IP) return env.VIBESQUAD_LAN_IP.trim();
   const ifaces = Object.entries(interfaces ?? {});
   const v4 = (list) => (list ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => a.address);
 
@@ -192,12 +192,22 @@ export function detectLanIp(interfaces = netInterfaces()) {
   return null;
 }
 
-/** NordVPN Meshnet IPv4: env override, else the NordLynx interface, else any 100.64.0.0/10 address. */
-export function detectMeshnetIp(interfaces = netInterfaces()) {
-  if (process.env.VIBESQUAD_MESHNET_IP) return process.env.VIBESQUAD_MESHNET_IP;
+// Forge cutover A4: Tailscale's interface (Linux `tailscale0`, the Windows "Tailscale" adapter). Name alone never picks it.
+const TAILSCALE_IFACE_RE = /^tailscale\d*$/i;
+
+/**
+ * Meshnet / Tailscale IPv4 (one transport slot): env override, else the NordLynx interface, else the Tailscale interface's
+ * 100.64.0.0/10 address, else any 100.64.0.0/10 address.
+ */
+export function detectMeshnetIp(interfaces = netInterfaces(), env = process.env) {
+  if (env.VIBESQUAD_MESHNET_IP) return env.VIBESQUAD_MESHNET_IP;
   const ifaces = Object.entries(interfaces ?? {});
   const v4 = (list) => (list ?? []).filter((a) => a.family === "IPv4" && !a.internal).map((a) => a.address);
   for (const [name, list] of ifaces) if (/NordLynx/i.test(name) && v4(list)[0]) return v4(list)[0];
+  for (const [name, list] of ifaces) {
+    const hit = TAILSCALE_IFACE_RE.test(name) && v4(list).find(inCgnat);
+    if (hit) return hit;
+  }
   for (const [, list] of ifaces) {
     const hit = v4(list).find(inCgnat);
     if (hit) return hit;

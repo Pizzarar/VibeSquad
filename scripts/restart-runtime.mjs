@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Detached, one-shot restart of the VS runner + VS server (idea-78). Every agent, the Overlord included, runs ON the
-// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs and server/proc-tree.mjs (both built-ins only) (the coordinated-drain helpers,
+// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs, server/proc-tree.mjs and server/posix-path.mjs (all built-ins only) (the coordinated-drain helpers,
 // server/restart-coord.mjs, load lazily on a deferral or after a success; a load failure only loses the lead names). It is meant to
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.
@@ -38,6 +38,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runtimeDir as sharedRuntimeDir } from '../server/runtime-dir.mjs';
 import { posixKillTree } from '../server/proc-tree.mjs';
+import { augmentedPath } from '../server/posix-path.mjs';
 
 const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -150,10 +151,16 @@ export function insertGitBin(list, root) {
 /**
  * A runtime relaunched from an agent tool shell inherits a stripped env (no Git bin on PATH, HOME=''), and every restart
  * compounds it (idea-178). Win32: PATH = registry machine+user entries first, then inherited extras (dedupe, nothing
- * lost); empty HOME/SHELL removed; exactly one Path key. Never throws. Non-win32: unchanged.
+ * lost); empty HOME/SHELL removed; exactly one Path key. Never throws. Non-win32 (A6): login-shell PATH + nvm/fnm/volta/npm-prefix dirs appended to PATH.
  */
-export function repairShellEnv(env = process.env, { regQuery, exists, which, platform = process.platform, log = () => {} } = {}) {
-  if (platform !== 'win32') return env;
+export function repairShellEnv(env = process.env, { regQuery, exists, which, platform = process.platform, log = () => {}, posixOpts = {} } = {}) {
+  if (platform !== 'win32') { // A6: thin systemd/agent PATH -> login-shell PATH + node-manager dirs, merged (nothing dropped)
+    try {
+      const cur = env.PATH ?? '';
+      const next = augmentedPath(env, { ...posixOpts, platform });
+      return next === cur ? env : { ...env, PATH: next };
+    } catch { return env; }
+  }
   const out = { ...env };
   for (const k of EMPTY_DROP_KEYS) if (out[k] === '') delete out[k];
   const pathKeys = Object.keys(out).filter((k) => k.toLowerCase() === 'path');
