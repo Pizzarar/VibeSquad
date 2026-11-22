@@ -53,6 +53,15 @@ test("R11 fixes (source): Ctrl+J skips asleep projects, honest Wake label, muted
   assert.match(css, /\[data-theme="light"\] \.boring-badge:not\(\.muted\) \{ color: #ffffff !important/);
 });
 
+test("R11-6/R11-2 (source): light .err badge stays red; muted folder badge drops legacy .badge", () => {
+  const css = read("boring.css");
+  const ade = read("BoringAde.tsx");
+  assert.match(css, /\[data-theme="light"\] \.boring-badge:not\(\.muted\):not\(\.err\) \{ background: #8a5700/);
+  assert.match(css, /\.boring-badge\.err \{ background: var\(--st-err\)/);
+  assert.doesNotMatch(css, /\.boring-badge:not\(\.muted\) \{ background: #8a5700/);
+  assert.match(ade, /asleep \? `boring-badge\$\{g\.err \? " err" : ""\} muted` : `badge boring-badge/);
+});
+
 test("folderSlug", () => assert.equal(F.folderSlug("Back log!"), "back-log"));
 
 test("patchTeamsFolder PATCHes /api/teams and refreshes; surfaces server errors", async () => {

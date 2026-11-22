@@ -909,7 +909,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                     <span className="boring-folder-name" title={g.folder.name}>{g.folder.name}</span>
                     <span className="boring-folder-count">{`· ${g.count}`}</span>
                     {asleep && <span className="boring-folder-zzz" role="img" aria-label="Asleep">💤</span>}
-                    {g.needsYou > 0 && <span className={`badge boring-badge${g.err ? " err" : ""}${asleep ? " muted" : ""}`} data-testid={`boring-folder-badge-${slug}`}>{g.needsYou}</span>}
+                    {g.needsYou > 0 && <span className={asleep ? `boring-badge${g.err ? " err" : ""} muted` : `badge boring-badge${g.err ? " err" : ""}`} data-testid={`boring-folder-badge-${slug}`}>{g.needsYou}</span>}
                   </button>
                   <button type="button" className={`boring-folder-sleep${asleep ? " asleep" : ""}`} data-testid={`boring-folder-sleep-${slug}`} aria-label={`Sleep ${g.folder.name}`} aria-pressed={asleep} title={asleep ? "Asleep: automated wake-ups paused. Click to make Active" : "Active: click to put to sleep"} onClick={(e) => { e.stopPropagation(); void folderOp({ op: "setFolderAsleep", name: g.folder.name, asleep: !asleep }); }}>{asleep ? "Asleep" : "Active"}</button>
                   <button type="button" className="boring-row-menu-btn" data-testid={`boring-folder-menu-${slug}`} aria-haspopup="menu" aria-label={`${g.folder.name} folder actions`} title="Folder actions" onClick={(e) => openContextMenu(e, folderCtxItems(g.folder))}>⋯</button>

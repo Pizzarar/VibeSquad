@@ -889,7 +889,7 @@ html[data-vibe="boring"] .boring-core-group,
 html[data-vibe="boring"] .boring-conv-list { gap: 0; }
 html[data-vibe="boring"] .boring-conv-row { padding: 0; }
 html[data-vibe="boring"] .boring-badge { color: var(--on-accent); font-weight: 600; }
-html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted) { background: #8a5700; color: #ffffff; }
+html[data-vibe="boring"][data-theme="light"] .boring-badge:not(.muted):not(.err) { background: #8a5700; color: #ffffff; }
 
 /* Light permission card: amber, not beige-pink. */
 html[data-vibe="boring"][data-theme="light"] .perm-card { background: color-mix(in srgb, #a86a00 8%, #ffffff); border: 1px solid #a86a00; }
