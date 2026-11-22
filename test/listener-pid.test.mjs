@@ -5,7 +5,7 @@ import { posixListenerPid, parseSs, parseProcNetTcp } from "../server/listener-p
 import { listenerPid } from "../scripts/restart-runtime.mjs";
 
 const enoent = () => { const e = new Error("spawn ENOENT"); e.code = "ENOENT"; throw e; };
-const PORT = 4180; // 0x1064
+const PORT = 4180; // 0x1054
 const HDR = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n";
 const row = (hexPort, st, inode) => `   0: 00000000:${hexPort} 00000000:0000 ${st} 00000000:00000000 00:00000000 00000000  1000        0 ${inode} 1 0000000000000000 100 0 0 10 0\n`;
 const procFs = (tcp, tcp6, links) => ({
@@ -34,7 +34,7 @@ test("lsof empty and timeout fall through to ss", () => {
 
 test("malformed ss line is ignored (falls to /proc)", () => {
   const exec = (f) => { if (f === "lsof") enoent(); return "garbage pid=notanumber\nLISTEN users:((pid=)\n"; };
-  const fs = procFs(HDR + row("1064", "0A", "5555"), null, { 77: { 3: "socket:[5555]" } });
+  const fs = procFs(HDR + row("1054", "0A", "5555"), null, { 77: { 3: "socket:[5555]" } });
   assert.equal(posixListenerPid(PORT, { exec, ...fs }), 77);
   assert.equal(parseSs("junk\nLISTEN 0 1 *:4180 *:* users:((\"x\",pid=0,fd=1))\n", PORT), null);
 });
@@ -44,13 +44,13 @@ test("ss row for another port is ignored", () => {
 });
 
 test("ss missing -> /proc/net/tcp hit", () => {
-  const fs = procFs(HDR + row("1064", "0A", "5555"), HDR, { 77: { 3: "socket:[1]", 4: "socket:[5555]" }, 88: { 3: "socket:[9]" } });
+  const fs = procFs(HDR + row("1054", "0A", "5555"), HDR, { 77: { 3: "socket:[1]", 4: "socket:[5555]" }, 88: { 3: "socket:[9]" } });
   assert.equal(posixListenerPid(PORT, { exec: enoent, ...fs }), 77);
 });
 
 test("/proc/net/tcp6 hit; non-LISTEN and other ports ignored", () => {
-  const tcp = HDR + row("1064", "01", "111") + row("1065", "0A", "222");
-  const tcp6 = HDR + row("1064", "0A", "6666");
+  const tcp = HDR + row("1054", "01", "111") + row("1055", "0A", "222");
+  const tcp6 = HDR + row("1054", "0A", "6666");
   const fs = procFs(tcp, tcp6, { 77: { 3: "socket:[111]", 4: "socket:[222]" }, 88: { 5: "socket:[6666]" } });
   assert.equal(posixListenerPid(PORT, { exec: enoent, ...fs }), 88);
   assert.deepEqual(parseProcNetTcp(tcp, PORT), []);
@@ -60,7 +60,7 @@ test("all missing -> null without throwing", () => {
   const boom = () => { throw new Error("nope"); };
   assert.equal(posixListenerPid(PORT, { exec: enoent, readFile: boom, readdir: boom, readlink: boom }), null);
   // inode found but no process owns it
-  const fs = procFs(HDR + row("1064", "0A", "5555"), null, { 77: { 3: "socket:[1]" } });
+  const fs = procFs(HDR + row("1054", "0A", "5555"), null, { 77: { 3: "socket:[1]" } });
   assert.equal(posixListenerPid(PORT, { exec: enoent, ...fs }), null);
   assert.equal(posixListenerPid(NaN, { exec: enoent }), null);
 });

@@ -18,7 +18,7 @@ export function parseSs(out, port) {
   for (const line of String(out ?? "").split(/\r?\n/)) {
     const m = /pid=(\d+)/.exec(line);
     if (!m) continue;
-    if (!new RegExp(`[:\]]${port}\s`).test(`${line} `)) continue; // only this port's row
+    if (!new RegExp("[:\\]]" + port + "\\s").test(line + " ")) continue; // only this port's row
     const n = pidOf(m[1]);
     if (n) return n;
   }
