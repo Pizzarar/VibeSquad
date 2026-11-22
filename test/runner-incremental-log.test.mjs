@@ -10,9 +10,13 @@ import { LogStore } from '../runner/log.mjs';
 import { Runner } from '../runner/runner.mjs';
 
 const tmpDirs = [];
-test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const runners = [];
+test.after(() => {
+  for (const r of runners) r.closeRosterWatch?.(); // before the dirs go: a watched dir is busy on Windows (idea-571)
+  for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
+});
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-il-')); tmpDirs.push(d); return d; };
-const mkRunner = () => new Runner({ dir: path.join(tmp(), 'agents'), adapters: {}, maxLive: 4 });
+const mkRunner = () => { const r = new Runner({ dir: path.join(tmp(), 'agents'), adapters: {}, maxLive: 4 }); runners.push(r); return r; };
 
 // Writes a realistic log: created + n events of ~`pad` bytes.
 function seed(store, id, n, pad = 200) {
@@ -84,7 +88,7 @@ test('bench: GET /agents/:id p95 < 20 ms on ~476 KB log; 453-agent roster seed <
   const size = nodeFs.statSync(r.store.file('rn-big')).size;
   assert.ok(size > 400_000 && size < 560_000, `size ${size}`);
   // fresh runner on the same dir = cold start; every status after an append is a fold miss
-  const cold = new Runner({ dir: r.store.dir, adapters: {}, maxLive: 4 });
+  const cold = new Runner({ dir: r.store.dir, adapters: {}, maxLive: 4 }); runners.push(cold);
   const ms = [];
   for (let i = 0; i < 200; i++) {
     cold.store.append('rn-big', 'text', { text: 'y' });
@@ -107,7 +111,7 @@ test('bench: GET /agents/:id p95 < 20 ms on ~476 KB log; 453-agent roster seed <
     writeFileSync(seedStore.file(`rn-${i}`), lines.join('\n') + '\n');
     total += nodeFs.statSync(seedStore.file(`rn-${i}`)).size;
   }
-  const fresh = new Runner({ dir: path.join(home, 'agents'), adapters: {}, maxLive: 4 });
+  const fresh = new Runner({ dir: path.join(home, 'agents'), adapters: {}, maxLive: 4 }); runners.push(fresh);
   const t = performance.now();
   const all = fresh.statusAll();
   const took = performance.now() - t;
