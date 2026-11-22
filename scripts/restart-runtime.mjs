@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Detached, one-shot restart of the VS runner + VS server (idea-78). Every agent, the Overlord included, runs ON the
-// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs, server/proc-tree.mjs and server/posix-path.mjs and server/listener-pid.mjs (all built-ins only) (the coordinated-drain helpers,
+// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs, server/proc-tree.mjs, server/posix-path.mjs and server/listener-pid.mjs (all built-ins only) (the coordinated-drain helpers,
 // server/restart-coord.mjs, load lazily on a deferral or after a success; a load failure only loses the lead names). It is meant to
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.

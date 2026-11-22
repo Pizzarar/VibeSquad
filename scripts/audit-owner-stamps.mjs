@@ -451,7 +451,7 @@ export const SCRIPTABLE_TOP = 10;
 export const SCRIPTABLE_HEAD_CHARS = 60;
 const SHORT_LINE = /^\W*(yes|no|ok|done|pass|fail|still running|nothing new|no change|waiting)\b/i;
 export const normalizeInputHead = (text) => String(text ?? '')
-  .replace(/\brn-[0-9a-f]{6,}\b/gi, '').replace(/\b[0-9a-f]{7,40}\b/gi, '')
+  .replace(/\brn-[0-9a-f]{6,}\b/gi, '').replace(/\brr-\d{8,14}-[0-9a-f]{3,6}\b/gi, '').replace(/\b[0-9a-f]{7,40}\b/gi, '')
   .replace(/\d{4}-\d{2}-\d{2}[T ][\d:.]+Z?/g, '').replace(/(?:[A-Za-z]:)?[\\/][\w.\\/-]+/g, '')
   .replace(/\d+/g, '').replace(/\s+/g, ' ').trim().toLowerCase().slice(0, SCRIPTABLE_HEAD_CHARS);
 export function toolVerb(e) {

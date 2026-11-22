@@ -5,6 +5,7 @@ import { runnerReloadTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
 import { closeTab } from "./panes";
 import type { OpAgent } from "./paseoAgentOpsLogic.ts";
+import { withFocusReturn } from "./ctxMenuLogic.ts";
 
 export { bulkStopTargets, deleteGuard, runningCwds } from "./paseoAgentOpsLogic.ts";
 export type { OpAgent, StopCandidate, StopScope } from "./paseoAgentOpsLogic.ts";
@@ -33,14 +34,15 @@ export async function reloadAgent(id: string): Promise<void> {
 // ---- pending confirm (rendered by the host in CommandPalette.tsx) ----------------------------
 
 export type OpRequest =
-  | { kind: "delete"; agent: OpAgent }
-  | { kind: "stop"; title: string; agents: OpAgent[]; verb?: "Stop" | "Interrupt" };
+  | { kind: "delete"; agent: OpAgent; returnTo?: unknown }
+  | { kind: "stop"; title: string; agents: OpAgent[]; verb?: "Stop" | "Interrupt"; returnTo?: unknown };
 
 let pending: OpRequest | null = null;
 const subs = new Set<() => void>();
 export const getOpRequest = () => pending;
 export const subscribeOpRequest = (l: () => void) => (subs.add(l), () => void subs.delete(l));
 export function requestAgentOp(r: OpRequest | null) {
-  pending = r;
+  // idea-543: capture where focus returns when the confirm closes, synchronously at request time (the menu anchor if a menu item asked, else the focused element; body counts as nothing).
+  pending = withFocusReturn(r, typeof document === "undefined" ? null : document.activeElement);
   subs.forEach((l) => l());
 }
