@@ -240,7 +240,7 @@ test("Desk Psycho U2: the cross-squad Needs-you spine mounts above SQUADS with P
   assert.match(route, /openPinMember\(pin, agentId\)/);
   assert.match(route, /return onAgent\(v\.team\.id, agentId\)/);
   assert.match(route, /vibe === "boring"\) return/); // Normal keeps BoringApp's own routing
-  assert.match(app, /topNeedsYouId\(derived\(\)\.views, nowTickValue\(\)\)/);
+  assert.match(app, /topNeedsYouId\((?:derived\(\)\.views|filterAwakeViews\(derived\(\)\.views, getFolders\(\)\)), nowTickValue\(\)\)/);
   // collapsed Squad badge: needsYouCount, worst state colour, hidden when expanded
   assert.match(app, /const needs = needsYouCount\(v\.members, now\)/);
   assert.match(app, /some\(\(i\) => i\.kind === "error"\) \? "err" : "attn"/);

@@ -120,6 +120,7 @@ stub("IdeaInbox.mjs", `export function IdeaInbox() { return null; } export const
 for (const n of ["AgentDrawer", "BoringContextPanel", "UsageDashboard", "TeamFeed"]) stub(`${n}.mjs`, `export function ${n}() { return null; }` + (n === "TeamFeed" ? " export const fetchLog = () => Promise.resolve([]);" : ""));
 stub("Timeline.mjs", `export function TimelineErrorBoundary(p) { return p.children; }`);
 stub("CommandPalette.mjs", `export const openOverlay = ${rec("openOverlay")}; export const teamCtxItems = (v) => ["team", v.team.id]; export const laneCtxItems = (v, p, o) => Object.assign(["lane", v.team.id, p.lane.id, Boolean(o && o.onRemove), o && o.displayName], { onRemove: o && o.onRemove }); export const openContextMenu = (e, items) => { globalThis.__calls.push(["openContextMenu", items]); };`);
+stub("boringFolders.mjs", `export const folderSlug = (n) => n.toLowerCase(); export const isViewAsleep = () => false; export const filterAwakeViews = (v) => v; export const partitionViews = (views) => ({ activeViews: views, folderGroups: [] }); export const patchTeamsFolder = async () => ({ ok: true });`);
 stub("PinRemove.mjs", `export function RemoveTeamDialog() { return null; }`);
 writeFileSync(join(dir, "ctxMenuLogic.mjs"), transformSync("ctxMenuLogic.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "ctxMenuLogic.ts"), "utf8"), { lang: "ts" }).code);
 stub("panes.mjs", `export const openAgent = ${rec("openAgent")}; export const openAgentInTab = ${rec("openAgentInTab")}; export const toggleSplit = (...a) => { globalThis.__calls.push(["toggleSplit", ...a]); if (globalThis.__panes) globalThis.__panes = { ...globalThis.__panes, split: !globalThis.__panes.split }; }; export const collapseSplit = (...a) => { globalThis.__calls.push(["collapseSplit", ...a]); const p = globalThis.__panes; if (p) { const r = a[0] === "active" && p.activePane === "right"; const keep = (r ? p.rightActiveId : p.leftActiveId) ?? (r ? p.leftActiveId : p.rightActiveId); globalThis.__panes = { ...p, split: false, activePane: "left", leftActiveId: keep, rightActiveId: null }; } }; export const getPanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false }; export const setActivePane = ${rec("setActivePane")}; export const closeTab = ${rec("closeTab")}; export const usePanes = () => globalThis.__panes ?? { activePane: "left", leftActiveId: null, rightActiveId: null, split: false };`);
@@ -1303,7 +1304,7 @@ test("R2: sidebar Search opens the Command Palette (Ctrl+K); idle toggle sits on
   b.props.onClick();
   assert.deepEqual(globalThis.__calls.at(-1), ["openOverlay", "palette"]);
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
-  assert.match(css, /\[data-theme="light"\] \.boring-badge \{ color: #ffffff !important; \}/);
+  assert.match(css, /\[data-theme="light"\] \.boring-badge:not\(\.muted\) \{ color: #ffffff !important; \}/);
   assert.doesNotMatch(css, /\[data-theme="light"\] \.boring-badge\.err/);
   assert.match(css, /\.boring-idle-toggle \.boring-idle-chev \{ flex: 0 0 16px; width: 16px/);
   assert.match(css, /\.boring-worker-row \{ padding-left: 20px;/);
@@ -2186,6 +2187,6 @@ test("B10: expanded project is a container card (.open, --surface-1, 14px); coll
   assert.ok(rule, ".open rule");
   for (const t of ["background: var(--surface-1)", "border: 1px solid var(--border)", "border-radius: 14px", "padding: 8px"]) assert.ok(rule[1].includes(t), t);
   const flat = css.match(/^html\[data-vibe="boring"\] \.boring-project-block \{([^}]*)\}/m);
-  assert.ok(flat && !/background|border|padding/.test(flat[1]), "collapsed stays flat");
+  assert.ok(flat && !/background|border|padding(?!-inline)/.test(flat[1]), "collapsed stays flat (R10-1: only the 9px inline inset that matches the open card)");
   assert.ok(!/!important/.test(rule[0]));
 });

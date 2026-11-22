@@ -42,7 +42,8 @@ import {
   type Member,
   type TeamView,
 } from "./teams";
-import { isHubLaneId, titleFor } from "./teams";
+import { getFolders, isHubLaneId, titleFor } from "./teams";
+import { filterAwakeViews } from "./boringFolders";
 import { agentDisplayName } from "./identity";
 import { AgentPanes } from "./AgentPanes";
 import { hubOpenAgent } from "./ctxMenuLogic";
@@ -1381,7 +1382,7 @@ function onShortcut(e: KeyboardEvent) {
 
 function openTopNeedsYou() {
   // Row 0 of the SAME list that renders boring-needs-you-count (R6-2), in Normal and in the Psycho sidebar spine; empty = no-op.
-  const id = topNeedsYouId(derived().views, nowTickValue());
+  const id = topNeedsYouId(filterAwakeViews(derived().views, getFolders()), nowTickValue()); // R11-1: asleep projects are not in the visible Needs-you list
   if (!id) return;
   // Normal mode opens it like a Needs-you click (keeps ?agent= in step); otherwise the plain open.
   const handled = !window.dispatchEvent(new CustomEvent("vs:boring-open-agent", { detail: { agentId: id }, cancelable: true }));
@@ -1547,7 +1548,7 @@ export function App() {
     setCloseGuard(() => !DEMO && getPref("app.confirmClose") && membersRef.current.some((m) => m.agent.status === "running"));
     return () => setCloseGuard(null);
   }, []);
-  useAttentionTitle(views);
+  useAttentionTitle(filterAwakeViews(views, getFolders())); // B11b: asleep projects stay out of the tab-title badge
   useRestorePrune(agents, rosterLoaded);
   useEffect(() => {
     perfEndPainted("switch-team", teamId, `agents=${agents.size}`);
@@ -2130,6 +2131,7 @@ export function App() {
     return (
       <BoringApp
         views={sidebarViews}
+        folders={getFolders()}
         view={view}
         onSelectSquad={onTeam}
         onOpenPin={onQuickStart}
