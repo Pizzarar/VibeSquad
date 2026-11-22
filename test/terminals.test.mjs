@@ -145,6 +145,37 @@ test("idea-408: killTrees batches every pid into one taskkill (sync and async) a
   assert.deepEqual(big, [402, 402, 102]);
 });
 
+test("idea-570 L1: killTrees never targets this process; the async win32 path SIGKILLs roots when taskkill fails to spawn or errors", () => {
+  const killed = [];
+  const realKill = process.kill;
+  process.kill = (p, s) => { killed.push([p, s]); return true; };
+  try {
+    const calls = [];
+    let doneSelf = 0;
+    killTrees([process.pid], { platform: "win32", run: { spawn: (c, a) => { calls.push(a); throw new Error("no"); } }, onDone: () => doneSelf++ });
+    assert.deepEqual(calls, [], "own pid filtered out, nothing spawned");
+    assert.deepEqual(killed, []);
+    assert.equal(doneSelf, 1);
+
+    let d1 = 0;
+    killTrees([501, 502], { platform: "win32", run: { spawn: () => { throw new Error("ENOENT"); } }, onDone: () => d1++ });
+    assert.deepEqual(killed, [[501, "SIGKILL"], [502, "SIGKILL"]]);
+    assert.equal(d1, 1);
+
+    killed.length = 0;
+    const kid = new EventEmitter(); kid.unref = () => {};
+    killTrees([601], { platform: "win32", run: { spawn: () => kid } });
+    kid.emit("error", new Error("spawn failed"));
+    assert.deepEqual(killed, [[601, "SIGKILL"]]);
+
+    killed.length = 0;
+    const ok = new EventEmitter(); ok.unref = () => {};
+    killTrees([701], { platform: "win32", run: { spawn: () => ok } });
+    ok.emit("exit", 0);
+    assert.deepEqual(killed, [], "a clean taskkill exit needs no fallback");
+  } finally { process.kill = realKill; }
+});
+
 test("idea-408: PTY kill and killAll run the tree kill first, then close each PTY, and kill(id) does not block", async () => {
   const dir = tmp();
   const kids = [];
@@ -240,6 +271,19 @@ test("scripts: stop kills the script's whole process tree; a running script can'
     assert.ok(await until(() => m.list(dir)[0].lifecycle === "stopped"));
     m.start(dir, "dev"); // restartable after a stop
     m.stopAll({ sync: true });
+  } finally { m.stopAll(); rmq(dir); }
+});
+
+test("idea-570 L2: ScriptManager.stopAll clears runs, so a second stopAll (exit hook after SIGTERM) kills nothing again", async () => {
+  const dir = pkgDir({ dev: "x" });
+  const m = new ScriptManager({ runner: nodeRunner("setInterval(()=>{},1000)") });
+  try {
+    const { pid } = m.start(dir, "dev");
+    assert.ok(alive(pid));
+    m.stopAll({ sync: true });
+    assert.equal(m.runs.size, 0);
+    assert.ok(await until(() => !alive(pid)));
+    assert.equal(m.list(dir)[0].lifecycle, "stopped");
   } finally { m.stopAll(); rmq(dir); }
 });
 

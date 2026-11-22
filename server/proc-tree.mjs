@@ -21,7 +21,7 @@ const TASKKILL_CEILING_MS = 30000;
 export function killTrees(pids, { sync = false, onDone, platform = process.platform, run = { spawn, spawnSync } } = {}) {
   let doneCalled = false;
   const done = () => { if (doneCalled) return; doneCalled = true; try { onDone?.(); } catch {} };
-  const list = [...new Set((pids ?? []).map(Number).filter((p) => Number.isInteger(p) && p >= 2))];
+  const list = [...new Set((pids ?? []).map(Number).filter((p) => Number.isInteger(p) && p >= 2 && p !== process.pid))];
   if (!list.length) return done();
   if (platform === "win32") {
     const batches = [];
@@ -41,15 +41,21 @@ export function killTrees(pids, { sync = false, onDone, platform = process.platf
     const settle = () => { if (--pending === 0) done(); };
     for (const batch of batches) {
       let settled = false;
-      const once = () => { if (settled) return; settled = true; clearTimeout(timer); settle(); };
-      const timer = setTimeout(once, TASKKILL_CEILING_MS);
+      // A failed spawn or the ceiling means taskkill may not have finished: at least take down the roots (as the sync path does).
+      const once = (fallback) => {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        if (fallback === true) for (const p of batch) { try { process.kill(p, "SIGKILL"); } catch {} }
+        settle();
+      };
+      const timer = setTimeout(() => once(true), TASKKILL_CEILING_MS);
       timer.unref?.();
       try {
         const child = run.spawn("taskkill", argsFor(batch), { windowsHide: true, stdio: "ignore" });
-        child.on("error", once);
-        child.on("exit", once);
+        child.on("error", () => once(true));
+        child.on("exit", () => once(false));
         child.unref?.();
-      } catch { once(); }
+      } catch { once(true); }
     }
     return;
   }

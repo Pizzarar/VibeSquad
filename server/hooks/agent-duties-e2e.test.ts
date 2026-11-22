@@ -1125,6 +1125,33 @@ test(
 );
 
 test(
+  "Stage 9a2 (idea-570 L3): a cap with updatedAt = now still fails over; one with updatedAt 6h ago (past the 5h default TTL) does not",
+  withEnv(async ({ briefRoot }) => {
+    const spawnWith = async (updatedAt: string) => {
+      const h = harness(new Map(), {
+        briefRoot,
+        cappedProviders: { capped: { claude: { reason: "cli cap", updatedAt } } },
+      });
+      try {
+        return await h.beforeCreate({
+          config: { cwd: CWD, provider: "claude", model: "claude-opus-5-5", title: "RiffBot" },
+          labels: { role: "brainstorm", lane: "vibesquad", profile: "Brainstorm - Claude" },
+          env: { VS_PROFILE: "Brainstorm - Claude" },
+        });
+      } finally {
+        h.stop?.();
+      }
+    };
+    const fresh = await spawnWith(new Date().toISOString());
+    assert.equal(fresh.config.provider, "antigravity-cli", "a just-written cap fails over");
+    assert.equal(fresh.labels?.profile, "Brainstorm - Gemini");
+    const stale = await spawnWith(new Date(Date.now() - 6 * 3600_000).toISOString());
+    assert.equal(stale.config.provider, "claude", "an expired cap is dropped: no failover");
+    assert.equal(stale.labels?.profile, "Brainstorm - Claude");
+  }),
+);
+
+test(
   "Stage 9b: enforceProfileAfterSpawn does not call applyAgentSettings when before(agent.create) already configured the spawn or when status is running on turn 1",
   withEnv(async ({ briefRoot }) => {
     const agents = new Map<string, any>();
