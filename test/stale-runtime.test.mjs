@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -93,4 +94,40 @@ test("peekStale drops a cached value once a sync rewrote the build stamp (idea-2
   assert.equal(peekStale(rootDir).behind, 2);
   writeFileSync(join(rootDir, "build-stamp.json"), JSON.stringify({ commit: "bbbbbbb2222", repo: "/r" }));
   assert.equal(peekStale(rootDir), null);
+});
+
+test("reset --keep back to the built commit is not stale and never names the dropped commit (idea-377)", () => {
+  const gitEnv = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+  const repo = tmp();
+  const git = (...a) => execFileSync("git", ["-c", "commit.gpgsign=false", "-C", repo, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env: gitEnv }).trim();
+  git("init", "-q", "-b", "master");
+  git("commit", "-q", "--allow-empty", "-m", "A");
+  const A = git("rev-parse", "HEAD");
+  const commonDir = git("rev-parse", "--path-format=absolute", "--git-common-dir");
+
+  const runtime = tmp();
+  writeFileSync(join(runtime, "build-stamp.json"), JSON.stringify({ commit: A, repo: commonDir, builtAt: "t" }));
+
+  // Not stale while HEAD is the built commit.
+  assert.equal(computeStale({ rootDir: runtime }), null);
+
+  // Commit B -> 1 behind.
+  git("commit", "-q", "--allow-empty", "-m", "B");
+  const B = git("rev-parse", "HEAD");
+  assert.deepEqual(computeStale({ rootDir: runtime }), { built: A.slice(0, 7), head: B.slice(0, 7), behind: 1 });
+
+  // The cached/warning path reports B while it is HEAD.
+  const home = tmp();
+  const env = { VIBESQUAD_HOME: home };
+  resetStaleCache();
+  assert.equal(getStale({ rootDir: runtime, env, now: 1000 }).behind, 1);
+  assert.match(staleWarning(env), /1 commit behind/);
+
+  // reset --keep back to A: not behind, and the message must not name B.
+  git("reset", "-q", "--keep", "HEAD~1");
+  assert.equal(git("rev-parse", "HEAD"), A);
+  assert.equal(computeStale({ rootDir: runtime }), null);
+  // The cache is keyed on HEAD too, so a reset within the 60s window forces a recompute (not the dropped commit B).
+  assert.equal(getStale({ rootDir: runtime, env, now: 2000 }), null);
+  assert.equal(staleWarning(env), null);
 });
