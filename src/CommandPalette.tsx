@@ -3,7 +3,7 @@ import { paletteWindow } from "./paletteWindow";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { runnerFetchTimeline } from "./runnerBridge";
 import { DEMO } from "./demoFlag";
-import { ctxTabAction, markCtxAnchor, scrollClosesCtxMenu } from "./ctxMenuLogic";
+import { captureFocusReturn, ctxTabAction, markCtxAnchor, rememberCtxAnchor, restoreFocusReturn, scrollClosesCtxMenu } from "./ctxMenuLogic";
 import { getPanes, openAgent, subscribePanes } from "./panes";
 import { AGENT_TYPE_LABEL, type Member, type TeamView } from "./teams";
 import type { Pin } from "./pins";
@@ -123,6 +123,7 @@ export function openContextMenu(e: { clientX: number; clientY: number; currentTa
   e.preventDefault();
   e.stopPropagation();
   const anchor = (e.currentTarget as Element | null) ?? null;
+  rememberCtxAnchor(anchor);
   // A keyboard-fired click reports (0,0): anchor under the trigger instead and let the host move focus into the menu.
   const kbd = e.clientX === 0 && e.clientY === 0 && typeof anchor?.getBoundingClientRect === "function";
   const r = kbd ? anchor!.getBoundingClientRect() : null;
@@ -206,14 +207,24 @@ function AgentOpConfirmHost() {
     setBusy(false);
     setErr("");
   }, [req]);
+  const returnTo = useRef<unknown>(null);
   useEffect(() => {
     if (!req) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && requestAgentOp(null);
+    returnTo.current = captureFocusReturn(document.activeElement);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      requestAgentOp(null);
+      restoreFocusReturn(returnTo.current);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [req]);
   if (!req) return null;
   const close = () => requestAgentOp(null);
+  const cancel = () => {
+    close();
+    restoreFocusReturn(returnTo.current);
+  };
   const isDelete = req.kind === "delete";
   const warning = req.kind === "delete" ? deleteGuard(req.agent).warning : null;
   const run = async () => {
@@ -272,7 +283,7 @@ function AgentOpConfirmHost() {
           </p>
         )}
         <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-          <button className="btn" onClick={close} disabled={busy}>
+          <button className="btn" onClick={cancel} disabled={busy}>
             Cancel
           </button>
           <button className="btn bad" data-testid="agent-op-confirm" onClick={() => void run()} disabled={busy}>

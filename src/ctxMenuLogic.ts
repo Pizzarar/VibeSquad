@@ -34,7 +34,7 @@ export function focusDrawerOpen(focusAgentId: string | null | undefined, activeI
 }
 
 type Attrs = { setAttribute(n: string, v: string): void; getAttribute(n: string): string | null; removeAttribute(n: string): void };
-const isAttrs = (a: unknown): a is Attrs => !!a && typeof (a as Attrs).setAttribute === "function" && typeof (a as Attrs).removeAttribute === "function";
+const isAttrs = (a: unknown): a is Attrs => !!a && typeof (a as Attrs).setAttribute === "function" && typeof (a as Attrs).getAttribute === "function" && typeof (a as Attrs).removeAttribute === "function";
 
 /** idea-528 m6: mark the trigger (or right-clicked row) while its menu is open; the returned cleanup unmarks it. */
 export function markCtxAnchor(anchor: unknown): () => void {
@@ -51,4 +51,22 @@ export function markCtxAnchor(anchor: unknown): () => void {
 /** idea-528 m7: Tab in an open menu always closes it; a button trigger also takes focus back (and Tab is swallowed) so focus never drops to the document. */
 export function ctxTabAction(anchor: unknown): { refocusAnchor: boolean } {
   return { refocusAnchor: !!anchor && (anchor as { tagName?: string }).tagName === "BUTTON" };
+}
+
+// idea-543 mi5: the last menu trigger, so a confirm opened from a menu item (Stop all / Kill / Remove lane) can hand focus back on Cancel / Escape.
+type Focusable = { focus(): void; isConnected?: boolean };
+let lastCtxAnchor: unknown = null;
+export function rememberCtxAnchor(anchor: unknown): void {
+  lastCtxAnchor = anchor ?? null;
+}
+/** Snapshot of where focus should return to (the remembered trigger, else the focused element). Call when a confirm opens. */
+export function captureFocusReturn(active?: unknown): unknown {
+  return lastCtxAnchor ?? active ?? null;
+}
+/** Focus `target` when it is still attached; returns whether it did. A removed row (confirmed delete) is skipped. */
+export function restoreFocusReturn(target: unknown): boolean {
+  const t = target as Partial<Focusable> | null | undefined;
+  if (!t || typeof t.focus !== "function" || t.isConnected === false) return false;
+  t.focus();
+  return true;
 }

@@ -2097,3 +2097,26 @@ test("idea-528: markCtxAnchor marks/unmarks the open row; ctxTabAction refocuses
   assert.deepEqual(ctxTabAction(row), { refocusAnchor: false }, "right-click row: Tab just closes and proceeds");
   assert.deepEqual(ctxTabAction(null), { refocusAnchor: false });
 });
+
+test("idea-543: badged collapsed project line reserves the ⋯ slot; confirms hand focus back; isAttrs checks getAttribute", async () => {
+  const fs = await import("node:fs");
+  const ade = fs.readFileSync(new URL("../src/BoringAde.tsx", import.meta.url), "utf8");
+  const css = fs.readFileSync(new URL("../src/boring.css", import.meta.url), "utf8");
+  assert.ok(/boring-project-line\$\{!open && m\.totalNeedsYou > 0 \? " has-badge" : ""\}/.test(ade), "line carries has-badge exactly when the badge renders");
+  assert.ok(css.includes('html[data-vibe="boring"] .boring-project-line.has-badge .boring-row-menu-btn { margin-left: 0; }'));
+  const cp = fs.readFileSync(new URL("../src/CommandPalette.tsx", import.meta.url), "utf8");
+  assert.ok(cp.includes("rememberCtxAnchor(anchor)") && cp.includes("restoreFocusReturn(returnTo.current)"), "stop/kill confirm restores focus");
+  assert.ok(fs.readFileSync(new URL("../src/PinRemove.tsx", import.meta.url), "utf8").includes("restoreFocusReturn(returnTo.current)"), "remove dialog restores focus");
+  const { markCtxAnchor, rememberCtxAnchor, captureFocusReturn, restoreFocusReturn } = await import("../src/ctxMenuLogic.ts");
+  assert.doesNotThrow(() => markCtxAnchor({ setAttribute() {}, removeAttribute() {} })(), "no getAttribute: ignored, not thrown");
+  rememberCtxAnchor(null);
+  let focused = 0;
+  const el = { focus: () => focused++, isConnected: true };
+  rememberCtxAnchor(el);
+  assert.equal(captureFocusReturn({ focus() {} }), el, "remembered trigger wins over activeElement");
+  assert.equal(restoreFocusReturn(el), true);
+  assert.equal(focused, 1);
+  assert.equal(restoreFocusReturn({ focus: () => focused++, isConnected: false }), false, "detached row skipped");
+  assert.equal(restoreFocusReturn(null), false);
+  rememberCtxAnchor(null);
+});

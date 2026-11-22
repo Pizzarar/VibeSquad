@@ -1,7 +1,7 @@
 // Remove team (docs/PLAN_BUGS_BATCH1.md block 1): the Team ⋯ menu's confirm dialog.
 // Lists the agents that will be archived and the worktrees/branches; "Also delete worktrees + branches"
 // is off by default and disabled when another live team shares the folders.
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Pin } from "./pins";
 import { removePin } from "./pinActions";
@@ -9,6 +9,7 @@ import { removeTeamPlan, type WorktreeResult } from "./pinRemoveLogic";
 import { loadArchived, usePaseo } from "./paseo";
 import { getTeams, resolve } from "./teams";
 import { Modal } from "./TeamActions";
+import { captureFocusReturn, restoreFocusReturn } from "./ctxMenuLogic";
 
 type Phase = { kind: "confirm" } | { kind: "busy" } | { kind: "error"; message: string } | { kind: "kept"; kept: WorktreeResult[] };
 
@@ -18,6 +19,12 @@ export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team" }: {
   const { agents, workspaces, archivedAgents, archivedStatus } = usePaseo();
   const [deleteWorktrees, setDeleteWorktrees] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: "confirm" });
+  // idea-543: Cancel / Escape hands focus back to the ⋯ (or row) that opened the menu.
+  const returnTo = useRef<unknown>(captureFocusReturn(typeof document === "undefined" ? null : document.activeElement));
+  const dismiss = () => {
+    onClose();
+    restoreFocusReturn(returnTo.current);
+  };
   // Archived agents can point at worktrees the live ones have left.
   useEffect(() => void (archivedStatus === "idle" && loadArchived()), [archivedStatus]);
 
@@ -56,7 +63,7 @@ export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team" }: {
     ) : (
       <>
         {phase.kind === "error" && <span className="stat-alert small">{phase.message}</span>}
-        <button className="btn ghost small" onClick={onClose} disabled={busy}>
+        <button className="btn ghost small" onClick={dismiss} disabled={busy}>
           Cancel
         </button>
         <button className="btn bad small" onClick={() => void confirm()} disabled={busy} data-testid={`pin-remove-confirm-${pin.lane.id}`}>
@@ -66,7 +73,7 @@ export function RemoveTeamDialog({ pin, onClose, displayName, noun = "team" }: {
     );
 
   return createPortal(
-    <Modal title={noun === "lane" ? `Remove lane ${name}?` : `Remove ${name}?`} onClose={busy ? () => {} : onClose} footer={footer}>
+    <Modal title={noun === "lane" ? `Remove lane ${name}?` : `Remove ${name}?`} onClose={busy ? () => {} : dismiss} footer={footer}>
       <div className="pin-remove" data-testid={`pin-remove-${pin.lane.id}`}>
         {phase.kind === "kept" ? (
           <>

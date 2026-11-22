@@ -836,7 +836,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
             return (
               <div key={v.team.id} className="boring-project-block">
-                <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
+                <div className={`boring-conv-line boring-project-line${!open && m.totalNeedsYou > 0 ? " has-badge" : ""}`} onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
                   {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
                   <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
                     <span className={`boring-dot ${(v.running ?? 0) > 0 ? "running" : "idle"} ${glyphCls((v.running ?? 0) > 0 ? "running" : "idle", m.projectErr ? "error" : m.totalNeedsYou > 0 ? "needs-you" : null)}`} />
