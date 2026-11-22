@@ -19,6 +19,7 @@ import { Runner, agentMay, crossSquadInput, protectedMetaIn, spawnMetaForAgent }
 import { FOLD_INDEX_FILE } from './fold-index.mjs';
 import { createChildLedger, sweepOrphans } from './children.mjs';
 import { setChildLedger } from './spawn.mjs';
+import { createDevServerReaper } from './reap.mjs';
 import { acquireRunnerLock, holdsLock, readLock, readPublished, releaseLock } from './lock.mjs';
 
 export const MAX_BODY_BYTES = 1024 * 1024;
@@ -383,6 +384,18 @@ export function teamLogWriter(vsHome) {
   };
 }
 
+// idea-515 (Z1): what a worker's reap did, as one runner.log line ({ reap: ... }) and, per reaped listener, a team-log metric
+// in the worker's lane (agent id, pid, port, redacted command). Skips are runner.log only (fail-closed reasons, no kill).
+export function reapReporter(teamLog, log = (o) => console.log(JSON.stringify(o))) {
+  return ({ id, why, team, lane, reaped = [], skipped = [], error }) => {
+    log({ reap: { agent: id, why, reaped: reaped.map((r) => ({ pid: r.pid, port: r.port, root: r.root, pids: r.pids, cmd: r.cmd })), ...(skipped.length ? { skipped } : {}), ...(error ? { error } : {}) } });
+    for (const r of reaped) {
+      try { teamLog({ team: team || 'vibesquad', lane, agent: 'runner', type: 'metric', text: `reap: worker ${id} left a listener after its process ended (${why}): killed pid ${r.pid} port ${r.port} (tree root ${r.root}, ${r.pids.length} pids): ${r.cmd}`, refs: [id] }); } catch (err) { console.error('reap team log failed', err); }
+    }
+  };
+}
+export const reapSupported = (platform = process.platform, env = process.env) => (platform === 'win32' || platform === 'linux') && env.VS_RUNNER_REAP !== '0';
+
 // lockStartedAt = the startedAt of the runner.lock this runner holds: it ties runner.json to that exact holder, so a stale
 // runner.json whose pid the OS reused never reads as the new holder's (lock.mjs publishedBy).
 export function writeDiscovery(home, { port, token, lockStartedAt }) {
@@ -442,8 +455,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   phase('sweepOrphans');
   setChildLedger(createChildLedger(home));
   const token = randomBytes(32).toString('hex');
-  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE) });
-  const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog: teamLogWriter(path.dirname(home)) });
+  const teamLog = teamLogWriter(path.dirname(home));
+  const runner = new Runner({ dir, drainFile: path.join(home, 'drain.json'), limitsFile: path.join(home, 'limits.jsonl'), pollAgy: true, hubLane: hubLaneReader(path.dirname(home)), foldIndexFile: path.join(home, FOLD_INDEX_FILE), reaper: reapSupported() ? createDevServerReaper() : null, onReap: reapReporter(teamLog) });
+  const server = createServer(runner, { token, onShutdown: () => stop({ keepResumable: true }), teamLog });
   phase('init');
   // A cold fold (no fold-index entry: first boot, a fold-code change) runs on worker threads first; the boot pass then serves
   // those logs from their entries (runner/fold-cold.mjs). Part of the 'fold' phase; foldIndex.cold says what it did.
