@@ -73,6 +73,9 @@ export class RunnerDownError extends RunnerHttpError {
   }
 }
 
+// Transport errors where the runner closed a reused keep-alive socket (undici reports "other side closed" as UND_ERR_SOCKET).
+const KEEPALIVE_RESET_CODES = new Set(["ECONNRESET", "UND_ERR_SOCKET", "EPIPE"]);
+
 export class RunnerClient {
   /**
    * caller: who this client is by default. undefined = resolved from the process env on every request (agentCallerFromEnv:
@@ -169,9 +172,11 @@ export class RunnerClient {
       if (!err?.transport || method !== "GET") throw err;
       // The owner's hard-kill restart reset it (writes are never resent: the old runner may have taken them): wait for it first.
       if (waitRestart) await this._awaitRestart();
-      // Idempotent read: one retry, but only if re-discovery found a different runner (a timeout on the same port would just hang again).
+      // Idempotent read: one retry, if re-discovery found a different runner, or (idea-409) the same runner reset a pooled
+      // keep-alive socket under load (the request never reached it alive). A timeout on the same port would just hang again.
       const next = readDiscovery(this.home);
-      if (!next || next.port === err.port) throw err;
+      if (!next) throw err;
+      if (next.port === err.port && (err.timedOut || !KEEPALIVE_RESET_CODES.has(err.code))) throw err;
       this.conn = next;
       return this._requestOnce(method, route, body, opts);
     }
@@ -219,6 +224,8 @@ export class RunnerClient {
       const err = new RunnerHttpError(504, ac.signal.aborted ? `runner not responding (no answer in ${Math.round(this.requestTimeoutMs / 1000)}s)` : `runner not responding (${e?.cause?.code || e?.message || "connection failed"})`);
       err.transport = true;
       err.port = port;
+      err.timedOut = ac.signal.aborted;
+      err.code = e?.cause?.code;
       throw err;
     } finally {
       done = true;
