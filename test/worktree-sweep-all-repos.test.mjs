@@ -3,28 +3,35 @@
 // output is not dirt; live-cwd guard; every sanctuary repo; branch refs are never deleted; links are never followed.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import {
   SWEEP_LOCK_FILE,
   acquireSweepLock,
   detectDefaultBranch,
+  dirBytesNoFollow,
   discoverSanctuaryRepos,
   isBuildOutputEntry,
+  isInside,
   liveAgentCwds,
   mergedStatus,
+  normPath,
   removeSweptWorktree,
   sweepAllRepos,
   sweepMergedWorktrees,
   throttledLiveCwds,
+  toLongPath,
   worktreeDirt,
 } from "../server/team-worktrees.mjs";
 import { createWorktreeAutoSweep, mergeSubjectBranches, runHeavyInWorker } from "../server/worktree-autosweep.mjs";
 
 const git = (args, cwd) =>
   execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 30_000 }).trim();
+
+/** Build the >260-char test fixtures with the `\\?\` prefix (no MAX_PATH limit), mirroring the sweep's own long-path handling. */
+const toLong = (p) => (process.platform === "win32" ? "\\\\?\\" + resolve(p) : p);
 
 function initRepo(dir, branch = "master") {
   mkdirSync(dir, { recursive: true });
@@ -203,6 +210,139 @@ test("removal never follows links: a junction in node_modules or nested in dist 
     assert.equal(res["unit-links"].action, "removed");
     assert.equal(existsSync(wt), false);
     assert.equal(readFileSync(join(shared, "pkg", "index.js"), "utf8"), "precious");
+  }));
+
+test("W2 deep >260-char ignored build path (Android Gradle dirs) sweeps cleanly", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    commitFile(repo, ".gitignore", "gen/\n");
+    const wt = addWorktree(repo, sanct, "repo", "unit-android-deep");
+    const seg = "intermediates-".repeat(5).slice(0, 60);
+    const deepRel = join("gen", "android", "app", "build", seg, seg, seg, seg, "res.txt");
+    const abs = join(wt, deepRel);
+    mkdirSync(toLong(dirname(abs)), { recursive: true });
+    writeFileSync(toLong(abs), "deep");
+    assert.ok(abs.length > 260, `fixture path is only ${abs.length} chars`);
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], sanctuaryRoot: sanct }));
+    assert.equal(r["unit-android-deep"].action, "removed", JSON.stringify(r["unit-android-deep"]));
+    assert.equal(existsSync(wt), false);
+  }));
+
+test("W2 junction buried past 260 chars is detached, never followed; the outside target's sentinel survives", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const shared = join(root, "shared-store");
+    writeFile(shared, "sentinel.txt", "precious");
+    initRepo(repo);
+    commitFile(repo, ".gitignore", "gen/\n");
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-junction");
+    const seg = "x".repeat(60);
+    const deepDir = join(wt, "gen", "deep", seg, seg, seg, seg);
+    mkdirSync(toLong(deepDir), { recursive: true });
+    const link = join(deepDir, "target");
+    symlinkSync(shared, toLong(link), "junction");
+    assert.ok(link.length > 260, `junction path is only ${link.length} chars`);
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, apply: true, liveCwds: [], sanctuaryRoot: sanct }));
+    assert.equal(r["unit-deep-junction"].action, "removed", JSON.stringify(r["unit-deep-junction"]));
+    assert.equal(existsSync(wt), false);
+    assert.equal(readFileSync(join(shared, "sentinel.txt"), "utf8"), "precious");
+  }));
+
+test("W2 deep >260-char non-ignored build output is deleted by the sweep's own fs removal, never by following a link", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-godot-deep");
+    const seg = "y".repeat(60);
+    const deepRel = join(".godot", "editor", seg, seg, seg, seg);
+    const deepAbs = join(wt, deepRel);
+    mkdirSync(toLong(deepAbs), { recursive: true });
+    writeFileSync(toLong(join(deepAbs, "shader.cache")), "cache");
+    assert.ok(join(deepAbs, "shader.cache").length > 260, "build output path past MAX_PATH");
+    const res = removeSweptWorktree(repo, wt, { buildOutput: [deepRel.replace(/\\/g, "/") + "/"] });
+    assert.equal(res.removed, true, JSON.stringify(res));
+    assert.equal(existsSync(wt), false);
+  }));
+
+// ---- W2 round 2 (Tier A review rn-3fe2bedaae5f: FAIL 2/1/2): one test per finding ----
+
+test("H1 dirt: an untracked file past 260 chars is still dirt (git status/ls-files run with core.longpaths)", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-dirt");
+    const seg = "d".repeat(60);
+    const deepDir = join(wt, "deep", seg, seg, seg, seg);
+    mkdirSync(toLong(deepDir), { recursive: true });
+    writeFileSync(toLong(join(deepDir, "notes.txt")), "keep me");
+    assert.ok(join(deepDir, "notes.txt").length > 260, `fixture path is only ${join(deepDir, "notes.txt").length} chars`);
+    // The deep untracked file is non-build-output dirt: a dry run must keep the worktree, not say "would-remove".
+    const r = byBranch(sweepMergedWorktrees(repo, { ...OPTS, sanctuaryRoot: sanct }));
+    assert.equal(r["unit-deep-dirt"].action, "kept", JSON.stringify(r["unit-deep-dirt"]));
+    assert.equal(r["unit-deep-dirt"].reason, "dirty", JSON.stringify(r["unit-deep-dirt"]));
+  }));
+
+test("H2 normPath/isInside fail closed: an unresolvable path is not inside (so it is never deleted)", () =>
+  withTmp((root) => {
+    const missing = join(root, "does-not-exist");
+    // realpath fails -> normPath returns null, never a lexical fallback.
+    assert.equal(normPath(missing), null);
+    // isInside reads an unresolvable child or parent as "not inside".
+    assert.equal(isInside(join(missing, "sub"), missing), false);
+    assert.equal(isInside(missing, missing), false);
+  }));
+
+test("M1 toLongPath: a \\\\.\\ device path passes through unchanged; empty input is rejected", () => {
+  if (process.platform === "win32") {
+    assert.equal(toLongPath("\\\\.\\C:\\foo"), "\\\\.\\C:\\foo");
+    assert.equal(toLongPath("C:\\tmp\\x"), "\\\\?\\C:\\tmp\\x");
+    assert.equal(toLongPath("\\\\?\\C:\\tmp\\x"), "\\\\?\\C:\\tmp\\x", "idempotent");
+  }
+  assert.throws(() => toLongPath(""), /empty path/);
+});
+
+test("L1 removeSweptWorktree: removed:true only when the dir is really gone; a leftover folder reports an orphan", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-leftover");
+    // git drops the metadata but leaves the folder (the partial-removal failure mode idea-514 describes).
+    const fakeGit = (args, cwd) => (args.includes("worktree") && args.includes("remove") ? "" : git(args, cwd));
+    const res = removeSweptWorktree(repo, wt, { git: fakeGit });
+    assert.equal(res.removed, false, JSON.stringify(res));
+    assert.equal(res.reason, "orphan", JSON.stringify(res));
+    assert.ok(existsSync(wt), "the leftover folder is left for the next sweep to report");
+  }));
+
+test("L2 dirBytesNoFollow + splitUntrackedDir use long paths: deep >260 content is sized and classified, not lost", () =>
+  withTmp((root) => {
+    // dirBytesNoFollow: a deep file's bytes are counted, not silently skipped (0).
+    const seg = "z".repeat(60);
+    const deep = join(root, "sized", seg, seg, seg, seg);
+    mkdirSync(toLong(deep), { recursive: true });
+    writeFileSync(toLong(join(deep, "blob.bin")), Buffer.alloc(5000, 7));
+    assert.ok(join(deep, "blob.bin").length > 260);
+    assert.equal(dirBytesNoFollow(deep), 5000);
+
+    // splitUntrackedDir (via worktreeDirt): a deep >260 build-output dir still reads as clean, not dirt.
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-deep-build");
+    const b = "b".repeat(60);
+    const deepDist = join(wt, "gen", "deep", b, b, b, b, "dist");
+    mkdirSync(toLong(deepDist), { recursive: true });
+    writeFileSync(toLong(join(deepDist, "app.js")), "x");
+    assert.ok(join(deepDist, "app.js").length > 260);
+    const d = worktreeDirt(wt);
+    assert.equal(d.clean, true, JSON.stringify(d));
+    assert.ok(d.buildOutput.some((x) => x.endsWith("/dist/")), JSON.stringify(d.buildOutput));
   }));
 
 test("live-cwd guard: an agent cwd inside the worktree keeps it; apply with no roster removes nothing", () =>
@@ -390,6 +530,53 @@ test("M2 removal: a build-output link two levels down that points outside is unl
     symlinkSync(shared, join(wt2, "lnk"), "junction");
     removeSweptWorktree(repo, wt2, { buildOutput: ["lnk/dist"] });
     assert.equal(readFileSync(join(shared, "dist", "keep2.txt"), "utf8"), "precious2");
+  }));
+
+test("R3 H1 TOCTOU: a build-output dir swapped for a junction mid-walk aborts the removal; the outside victim survives", () =>
+  withTmp((root) => {
+    const repo = join(root, "repo");
+    const sanct = join(root, "sanct");
+    const victim = join(root, "victim");
+    writeFile(victim, "z_sub/sentinel.txt", "precious");
+    initRepo(repo);
+    const wt = addWorktree(repo, sanct, "repo", "unit-toctou");
+    writeFile(wt, "dist/a_file.js", "built");
+    writeFile(wt, "dist/z_sub/out.js", "built");
+    const dist = join(wt, "dist");
+    let swapped = false;
+    // After dist is listed (a_file.js, z_sub) and before the walk descends into z_sub: dist -> junction to victim.
+    const onListed = (abs) => {
+      if (swapped || !/[\\/]dist$/i.test(abs)) return;
+      renameSync(dist, join(wt, "dist-aside"));
+      symlinkSync(victim, dist, "junction");
+      swapped = true;
+    };
+    const res = removeSweptWorktree(repo, wt, { buildOutput: ["dist/"], onListed });
+    assert.equal(swapped, true, "the swap hook ran");
+    assert.notEqual(res.removed, true, JSON.stringify(res));
+    assert.match(res.reason, /EESCAPE/, JSON.stringify(res));
+    assert.equal(readFileSync(join(victim, "z_sub", "sentinel.txt"), "utf8"), "precious");
+    assert.equal(existsSync(wt), true, "worktree left in place after the abort");
+
+    // Same swap before the descent into a nested dir's readdir: dist/z_sub listed, then z_sub -> junction.
+    const wt2 = addWorktree(repo, sanct, "repo", "unit-toctou-2");
+    writeFile(wt2, "dist/z_sub/deeper/out.js", "built");
+    writeFile(victim, "deeper/sentinel2.txt", "precious2");
+    const sub = join(wt2, "dist", "z_sub");
+    let swapped2 = false;
+    const res2 = removeSweptWorktree(repo, wt2, {
+      buildOutput: ["dist/"],
+      onListed: (abs) => {
+        if (swapped2 || !/[\\/]z_sub$/i.test(abs)) return;
+        renameSync(sub, join(wt2, "z_sub-aside"));
+        symlinkSync(victim, sub, "junction");
+        swapped2 = true;
+      },
+    });
+    assert.equal(swapped2, true, "the second swap hook ran");
+    assert.notEqual(res2.removed, true, JSON.stringify(res2));
+    assert.equal(readFileSync(join(victim, "deeper", "sentinel2.txt"), "utf8"), "precious2");
+    assert.equal(readFileSync(join(victim, "z_sub", "sentinel.txt"), "utf8"), "precious");
   }));
 
 test("M3 live-cwd refresh: the roster is re-read right before each removal; unreadable at that point keeps the worktree", () =>
