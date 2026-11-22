@@ -218,15 +218,37 @@ export async function waitForPoolSlot(
   }
 }
 
-/** Windows: a .cmd/.bat (npm, npx, most shims) or an extensionless name only cmd.exe resolves needs a shell. */
-function quoteForCmd(a) {
-  return /^[\w\-.:\\/=@+,]+$/.test(a) ? a : `"${String(a).replace(/"/g, '""')}"`;
+// Windows batch files (.cmd/.bat: npm, npx, most shims) run only under cmd.exe, which parses the command line twice: once
+// for `cmd /c <line>`, and again where the batch forwards %* to the real program. Plain "..." quoting is not enough there:
+// %VAR% still expands, a trailing backslash eats the closing quote, and = and , split %1 (review M1). This is cross-spawn's
+// escaping (lib/util/escape.js; Node's CVE-2024-27980 fix closes the same hole), and it never goes through shell:true:
+//   1. MSVCRT argv rules: double each backslash run before a " or the end, escape the ", wrap the arg in "...";
+//   2. caret-escape every cmd metacharacter, the quotes included, so cmd's quote mode never switches on;
+//   3. escape once more for the second parse (the batch's %*); this keeps %VAR% literal.
+// Spawned as cmd.exe /d /s /c "<line>" with windowsVerbatimArguments, so Node adds no quoting of its own.
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
+
+export function escapeCmdArg(arg) {
+  let a = String(arg);
+  a = a.replace(/(\\*)"/g, '$1$1\\"');
+  a = a.replace(/(\\*)$/, "$1$1");
+  a = `"${a}"`;
+  return a.replace(CMD_META, "^$1").replace(CMD_META, "^$1");
+}
+
+/** [file, args, spawn options] that run the batch file `bat` with `args` arriving intact. */
+export function batchSpawnArgs(bat, args, env = process.env) {
+  const line = [String(bat).replace(CMD_META, "^$1"), ...args.map(escapeCmdArg)].join(" ");
+  return [env.ComSpec || env.COMSPEC || "cmd.exe", ["/d", "/s", "/c", `"${line}"`], { windowsVerbatimArguments: true }];
 }
 
 /** Windows PATH lookup for a bare name (godot -> C:\...\godot.exe, npm -> ...\npm.cmd); null when nothing matches. */
 export function resolveWinCommand(cmd, env = process.env) {
-  if (/[\\/]/.test(cmd) || path.extname(cmd)) return cmd;
   const exts = String(env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+  if (/[\\/]/.test(cmd)) return cmd;
+  // Only a PATHEXT extension counts as one: godot-4.3 still gets .exe/.cmd appended (review L1).
+  const ext = path.extname(cmd).toLowerCase();
+  if (ext && exts.some((e) => e.toLowerCase() === ext)) return cmd;
   const pathKey = Object.keys(env).find((k) => k.toUpperCase() === "PATH");
   for (const d of String((pathKey && env[pathKey]) || "").split(";").filter(Boolean)) {
     for (const ext of exts) {
@@ -242,8 +264,8 @@ export function resolveWinCommand(cmd, env = process.env) {
 function spawnChild(cmd, args, opts, { platform = process.platform } = {}) {
   return new Promise((resolve) => {
     const tryShell = (c) => {
-      const line = [c, ...args].map(quoteForCmd).join(" ");
-      const child = spawn(line, { ...opts, shell: true });
+      const [file, argv, extra] = batchSpawnArgs(c, args, opts.env);
+      const child = spawn(file, argv, { ...opts, ...extra });
       child.once("spawn", () => resolve({ child }));
       child.on("error", (err) => resolve({ err })); // after spawn: a failed kill; resolve() is a no-op by then
     };

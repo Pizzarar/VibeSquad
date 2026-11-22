@@ -3266,7 +3266,8 @@ export function parseSlotArgs(argv) {
   if (sub === "run") {
     [out.cmd, ...out.args] = rest.slice(i);
     if (!out.pool || !out.cmd) throw new Error(SLOT_USAGE);
-    if (out.timeout !== undefined && !(Number(out.timeout) >= 0)) throw new Error(`--timeout must be seconds >= 0 (got "${out.timeout}")`);
+    const secs = Number(out.timeout);
+    if (out.timeout !== undefined && (!String(out.timeout).trim() || !Number.isFinite(secs) || secs < 0)) throw new Error(`--timeout must be seconds >= 0 (got "${out.timeout}")`);
   } else if (rest.length > i) throw new Error(SLOT_USAGE);
   return out;
 }

@@ -4,11 +4,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { poolHolders, poolMax, poolPaths, releasePoolSlot, tryAcquirePoolSlot, validatePool, waitForPoolSlot } from "../cli/slot-pool.mjs";
+import { poolHolders, poolMax, poolPaths, releasePoolSlot, resolveWinCommand, runInSlot, tryAcquirePoolSlot, validatePool, waitForPoolSlot } from "../cli/slot-pool.mjs";
 import { readQueue } from "../cli/fifo-queue.mjs";
 import { parseSlotArgs } from "../cli/vs.mjs";
 
@@ -103,6 +103,33 @@ test("pool name, max resolution and vs slot argv parsing", () => {
   assert.throws(() => parseSlotArgs(["run", "--", "godot"]), /usage: vs slot run/);
   assert.throws(() => parseSlotArgs(["go"]), /usage: vs slot run/);
   assert.equal(parseSlotArgs(["status"]).pool, "godot");
+  // review L2: an empty, infinite or negative --timeout is refused, not read as "wait forever"
+  for (const bad of ["", " ", "Infinity", "-1", "abc"]) {
+    assert.throws(() => parseSlotArgs(["run", "--pool", "godot", `--timeout=${bad}`, "--", "x"]), /--timeout must be seconds >= 0/, `--timeout=${bad}`);
+  }
+  assert.equal(parseSlotArgs(["run", "--pool", "godot", "--timeout", "0", "--", "x"]).timeout, "0");
+});
+
+test("Windows: resolveWinCommand treats only PATHEXT extensions as extensions (godot-4.3 -> godot-4.3.cmd)", { skip: process.platform !== "win32" }, (t) => {
+  const dir = tmp(t);
+  writeFileSync(path.join(dir, "godot-4.3.cmd"), "@exit /b 0\r\n");
+  const env = { PATH: dir, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+  assert.equal(resolveWinCommand("godot-4.3", env), path.join(dir, "godot-4.3.cmd"));
+  assert.equal(resolveWinCommand("godot-4.3.cmd", env), "godot-4.3.cmd", "a real extension is left to cmd/CreateProcess");
+  assert.equal(resolveWinCommand("nope-4.3", env), null);
+});
+
+test("Windows: args round-trip byte-identical through a .cmd wrapper that forwards %* (review M1)", { skip: process.platform !== "win32", timeout: 30000 }, async (t) => {
+  // A wrapper dir whose own path needs escaping too (space, &, parens).
+  const dir = path.join(tmp(t), "wrap dir & (x)");
+  mkdirSync(dir);
+  const out = path.join(dir, "argv.json");
+  writeFileSync(path.join(dir, "argv.js"), `require("node:fs").writeFileSync(process.env.ARGV_OUT, JSON.stringify(process.argv.slice(2)));\n`);
+  writeFileSync(path.join(dir, "wrap.cmd"), `@"${process.execPath}" "%~dp0argv.js" %*\r\n`);
+  const args = ["--foo=bar", "a,b", "C:\\dir\\", "next", "%USERNAME%", "a b", 'q"x', "", "^&|<>", "!x!", "C:\\my dir\\", '\\\\"', "x;y", "%PATH"];
+  const code = await runInSlot({ pool: "argv", max: 1, dir: tmp(t), cmd: path.join(dir, "wrap.cmd"), args, env: { ...process.env, ARGV_OUT: out }, stderr: { write: () => true } });
+  assert.equal(code, 0);
+  assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), args);
 });
 
 test("4 runs on a 3-slot pool: never more than 3 at once, all 4 finish, slots and queue cleaned up", { timeout: 60000 }, async (t) => {
