@@ -22,7 +22,7 @@ import { formatTimestamp, setPref } from "./prefs";
 import { runCheckin } from "./railCheckin";
 import { skyZonesFor } from "./skyZonesLogic";
 import type { FolderDef, Member, TeamView } from "./teams";
-import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, patchTeamsFolder, type FolderOp } from "./boringFolders";
+import { filterAwakeViews, folderSlug, isViewAsleep, partitionViews, migrateLastFolder, patchTeamsFolder, setLastFolder, type FolderOp } from "./boringFolders";
 import { TeamFeed } from "./TeamFeed";
 import type { PinHandler } from "./PinGrid";
 import { StatusDot } from "./ui";
@@ -841,8 +841,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     return r.ok;
   };
   const folderCtxItems = (f: FolderDef): CtxItem[] => [
-    { label: "Rename folder…", run: () => { const n = window.prompt("Rename folder", f.name)?.trim(); if (n && n !== f.name) void folderOp({ op: "renameFolder", name: f.name, newName: n }).then((ok) => { if (ok) migrateOpenFolder(f.name, n); }); } },
-    { label: "Delete folder", danger: true, run: () => { if (window.confirm(`Delete folder "${f.name}"? Its projects move back to Active.`)) void folderOp({ op: "deleteFolder", name: f.name }).then((ok) => { if (ok) migrateOpenFolder(f.name); }); } },
+    { label: "Rename folder…", run: () => { const n = window.prompt("Rename folder", f.name)?.trim(); if (n && n !== f.name) void folderOp({ op: "renameFolder", name: f.name, newName: n }).then((ok) => { if (ok) { migrateOpenFolder(f.name, n); migrateLastFolder(f.name, n); } }); } },
+    { label: "Delete folder", danger: true, run: () => { if (window.confirm(`Delete folder "${f.name}"? Its projects move back to Active.`)) void folderOp({ op: "deleteFolder", name: f.name }).then((ok) => { if (ok) { migrateOpenFolder(f.name); migrateLastFolder(f.name); } }); } },
     { label: "New folder…", separatorBefore: true, run: () => { const n = window.prompt("New folder name")?.trim(); if (n) void folderOp({ op: "createFolder", name: n }); } },
   ];
   const stat = (v: TeamView) => { const mm = v.team.id === activeTeamId ? model : boringSidebarModel(v, now); return { needsYou: mm.totalNeedsYou, err: mm.projectErr }; };
@@ -907,6 +907,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
                 <div className="boring-conv-line boring-folder-line" onContextMenu={(e) => openContextMenu(e, folderCtxItems(g.folder))}>
                   <button type="button" className="boring-folder-row" data-testid={`boring-folder-row-${slug}`} aria-expanded={fOpen} onClick={() => toggleFolder(g.folder.name)}>
                     <span className="boring-chevron-btn" aria-hidden="true">{fOpen ? "▾" : "▸"}</span>
+                    <span className="boring-folder-dot-spacer" aria-hidden="true" />
                     <span className="boring-folder-name" title={g.folder.name}>{g.folder.name}</span>
                     <span className="boring-folder-count">{`· ${g.count}`}</span>
                     {asleep && <span className="boring-folder-zzz" role="img" aria-label="Asleep">💤</span>}
@@ -983,7 +984,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         {view && activeAsleep && (
           <div className="boring-asleep-bar" data-testid="boring-asleep-bar" role="status">
             <span>Asleep · Automated wake-ups paused</span>
-            <button type="button" className="boring-asleep-wake" data-testid="boring-asleep-wake-btn" onClick={() => view.team.folder && void folderOp({ op: "setFolderAsleep", name: view.team.folder, asleep: false })}>{`Wake ${view.team.folder ?? "folder"}`}</button>
+            <button type="button" className="boring-asleep-wake" data-testid="boring-asleep-wake-btn" title={`Move ${view.team.name} out of ${view.team.folder ?? "its folder"} to Active (other projects in ${view.team.folder ?? "it"} stay asleep)`} onClick={() => { const prev = view.team.folder; void folderOp({ op: "setTeamFolder", teamId: view.team.id, folder: null }).then((ok) => { if (ok) setLastFolder(view.team.id, prev ?? null); }); }}>Wake project</button>
           </div>
         )}
         {opening && (

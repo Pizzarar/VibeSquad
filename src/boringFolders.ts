@@ -48,3 +48,36 @@ export async function patchTeamsFolder(op: FolderOp, revision?: string): Promise
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** B11d: remembered "previous folder" per project (teamId -> folder name), so a woken/removed project can go Back in one click. */
+export const LAST_FOLDER_KEY = "vs.boringLastFolder";
+function readLastFolders(): Record<string, string> {
+  try {
+    if (typeof localStorage === "undefined") return {};
+    const p = JSON.parse(localStorage.getItem(LAST_FOLDER_KEY) || "{}");
+    return p && typeof p === "object" && !Array.isArray(p) ? p : {};
+  } catch { return {}; }
+}
+function writeLastFolders(m: Record<string, string>): void {
+  try { if (typeof localStorage !== "undefined") localStorage.setItem(LAST_FOLDER_KEY, JSON.stringify(m)); } catch {}
+}
+export function getLastFolder(teamId: string): string | undefined {
+  const v = readLastFolders()[teamId];
+  return typeof v === "string" && v ? v : undefined;
+}
+export function setLastFolder(teamId: string, folder: string | null): void {
+  const m = readLastFolders();
+  if (folder) m[teamId] = folder; else delete m[teamId];
+  writeLastFolders(m);
+}
+/** Folder rename carries remembered values to the new name; delete (no `to`) drops them. */
+export function migrateLastFolder(from: string, to?: string): void {
+  const m = readLastFolders();
+  let changed = false;
+  for (const k of Object.keys(m)) {
+    if (m[k] !== from) continue;
+    changed = true;
+    if (to) m[k] = to; else delete m[k];
+  }
+  if (changed) writeLastFolders(m);
+}

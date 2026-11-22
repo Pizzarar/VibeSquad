@@ -44,7 +44,8 @@ test("R11 fixes (source): Ctrl+J skips asleep projects, honest Wake label, muted
   // Ctrl+J target = top of the awake-only list: asleep projects are filtered out first.
   assert.match(app, /topNeedsYouId\(filterAwakeViews\(derived\(\)\.views, getFolders\(\)\)/);
   assert.deepEqual(F.filterAwakeViews(views, folders).map((v) => v.team.id).filter((id) => id === "b" || id === "e"), []);
-  assert.match(ade, /`Wake \$\{view\.team\.folder/);
+  assert.match(ade, /Wake project/);
+  assert.match(ade, /op: "setTeamFolder", teamId: view\.team\.id, folder: null/);
   assert.match(ade, /aria-label=\{`Sleep \$\{g\.folder\.name\}`\} aria-pressed=\{asleep\}/);
   assert.match(ade, /migrateOpenFolder\(f\.name, n\)/);
   assert.match(ade, /migrateOpenFolder\(f\.name\)/);
@@ -104,4 +105,57 @@ test("sidebar wiring (source): folder rows, toggle, asleep bar, awake-only inbox
   const added = css.slice(css.indexOf("B11b: sidebar project folders"));
   assert.ok(!/!important|@media/.test(added.slice(0, 3000)));
   assert.ok(!/Hypnospace/.test(ade.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, "")));
+});
+
+function withStore(fn) {
+  const m = new Map();
+  const prev = globalThis.localStorage;
+  globalThis.localStorage = { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => void m.set(k, String(v)), removeItem: (k) => void m.delete(k) };
+  try { fn(m); } finally { if (prev === undefined) delete globalThis.localStorage; else globalThis.localStorage = prev; }
+}
+
+test("B11d lastFolder helpers: set/get/clear, rename, delete, corrupt JSON, no localStorage", () => {
+  assert.equal(F.LAST_FOLDER_KEY, "vs.boringLastFolder");
+  assert.equal(F.getLastFolder("a"), undefined);
+  F.setLastFolder("a", "x");
+  withStore((m) => {
+    assert.equal(F.getLastFolder("a"), undefined);
+    F.setLastFolder("a", "Backlog");
+    F.setLastFolder("b", "Backlog");
+    F.setLastFolder("c", "Ideas");
+    assert.equal(F.getLastFolder("a"), "Backlog");
+    F.migrateLastFolder("Backlog", "Later");
+    assert.equal(F.getLastFolder("a"), "Later");
+    assert.equal(F.getLastFolder("b"), "Later");
+    assert.equal(F.getLastFolder("c"), "Ideas");
+    F.migrateLastFolder("Later");
+    assert.equal(F.getLastFolder("a"), undefined);
+    assert.equal(F.getLastFolder("c"), "Ideas");
+    F.setLastFolder("c", null);
+    assert.equal(F.getLastFolder("c"), undefined);
+    m.set("vs.boringLastFolder", "{not json");
+    assert.equal(F.getLastFolder("a"), undefined);
+    F.setLastFolder("a", "Z");
+    assert.equal(F.getLastFolder("a"), "Z");
+    m.set("vs.boringLastFolder", "[1]");
+    assert.equal(F.getLastFolder("a"), undefined);
+  });
+});
+
+test("B11d (source): Back to <lastFolder>, Remove/Wake remember folder, R11-5/R11-7 CSS", () => {
+  const cp = read("CommandPalette.tsx");
+  const ade = read("BoringAde.tsx");
+  const css = read("boring.css");
+  assert.match(cp, /getLastFolder\(view\.team\.id\)/);
+  assert.match(cp, /label: `Back to \$\{back\}`/);
+  assert.match(cp, /f\.name !== back/);
+  assert.match(cp, /if \(r\.ok\) setLastFolder\(view\.team\.id, cur\)/);
+  assert.match(cp, /if \(r\.ok\) setLastFolder\(view\.team\.id, null\)/);
+  assert.match(ade, /setLastFolder\(view\.team\.id, prev \?\? null\)/);
+  assert.match(ade, /migrateLastFolder\(f\.name, n\)/);
+  assert.match(ade, /migrateLastFolder\(f\.name\)/);
+  assert.ok(!/\.boring-folder\.asleep \.boring-folder-projects \{[^}]*opacity/.test(css));
+  assert.match(css, /\.boring-folder\.asleep \.boring-folder-projects \.boring-project-name \{ color: var\(--text-2\)/);
+  assert.match(ade, /boring-folder-dot-spacer/);
+  assert.match(css, /\.boring-folder-dot-spacer \{ width: 8px/);
 });
