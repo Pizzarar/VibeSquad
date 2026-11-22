@@ -44,6 +44,8 @@ var _first_poll_done := false
 var _polling := false
 var _capturing := false
 var _pairing := false
+var _pending_code := "" # typed pairing code, held while the owner compares the CA fingerprint
+var _pending_fp := ""
 
 
 static func gate(has_editor: bool, has_tag: bool) -> bool:
@@ -67,6 +69,7 @@ func _ready() -> void:
 	_transport = Transport.new()
 	_transport.server_url = Token.server_url(Settings.get_str(Settings.SERVER_URL))
 	_transport.device_token_path = Settings.get_str(Settings.DEVICE_TOKEN_PATH)
+	_transport.ca_cert_path = Settings.get_str(Settings.CA_CERT_PATH)
 	_transport.sleep_fn = func(sec: float) -> void: await get_tree().create_timer(sec).timeout
 	add_child(_transport)
 	_client = ReportClient.new(_transport)
@@ -84,6 +87,7 @@ func _ready() -> void:
 	_dock.reply_submitted.connect(_on_reply)
 	_dock.pair_submitted.connect(_on_pair)
 	_dock.unpair_pressed.connect(unpair)
+	_dock.ca_confirmed.connect(_on_ca_confirmed)
 	_layer_overlay = CanvasLayer.new()
 	_layer_overlay.layer = 110
 	_layer_overlay.add_to_group(Picker.UI_GROUP)
@@ -129,21 +133,23 @@ func cheat(id: String, args: Array = []) -> Variant:
 	return _adapter.run_cheat(id, args) if enabled and _adapter != null else null
 
 
-## B2b: true when a valid owner device token file is stored (used when server_url is not loopback).
-## false when disabled (no I/O).
+## B2b: true when a valid owner device token file AND the pinned VibeSquad CA file are stored (used when server_url is
+## not loopback; a token without a pin is never sent). false when disabled (no I/O).
 func is_paired() -> bool:
 	return enabled and _transport != null and _transport.is_paired()
 
 
-## B2b: deletes the device token file (revoke the device in VibeSquad too). true when no token file is left.
-## false when disabled (no I/O).
+## B2b: deletes the device token file and the pinned CA file (revoke the device in VibeSquad too). true when neither
+## file is left. false when disabled (no I/O).
 func unpair() -> bool:
 	if not enabled or _transport == null:
 		return false
 	var gone: bool = _transport.unpair()
+	_pending_code = ""
+	_pending_fp = ""
 	_reset_thread()
 	_refresh_pairing()
-	_dock.set_status("Unpaired: the device token file was deleted. Also revoke this device in VibeSquad." if gone else "Could not delete the device token file.")
+	_dock.set_status("Unpaired: the device token and pinned CA files were deleted. Also revoke this device in VibeSquad." if gone else "Could not delete the device token or pinned CA file.")
 	return gone
 
 
@@ -347,7 +353,8 @@ func _on_reply(text: String) -> void:
 		_poll()
 
 
-## Pair row state: hidden for a loopback server (local token), else Pair with VS / Unpair; a refused URL or path says why.
+## Pair row state: hidden for a loopback server (local token), else Pair with VS / Unpair; a refused URL or path, or a
+## device token without a pinned CA, says why.
 func _refresh_pairing() -> void:
 	if _dock == null:
 		return
@@ -359,31 +366,71 @@ func _refresh_pairing() -> void:
 		_dock.set_pairing(Dock.PAIR_HIDDEN)
 		_dock.set_status(refusal)
 		return
-	if _transport.resolved_device_token_path() == "":
-		_dock.set_pairing(Dock.PAIR_HIDDEN)
-		_dock.set_status("vs_playtest/device_token_path must be an absolute file path outside the project (not res:// or user://).")
-		return
+	for row: Array in [[_transport.resolved_device_token_path(), "device_token_path"], [_transport.resolved_ca_cert_path(), "ca_cert_path"]]:
+		if String(row[0]) == "":
+			_dock.set_pairing(Dock.PAIR_HIDDEN)
+			_dock.set_status("vs_playtest/%s must be an absolute file path outside the project (not res:// or user://)." % row[1])
+			return
 	var paired: bool = _transport.is_paired()
 	_dock.set_pairing(Dock.PAIR_PAIRED if paired else Dock.PAIR_UNPAIRED)
-	if not paired:
-		_dock.set_status("Not paired with VibeSquad. Mint an owner pairing code in VibeSquad (Pair Device, or vs pair), type the 6 digits and press Pair with VS.")
+	if paired:
+		return
+	if Token.read_device_token(_transport.resolved_device_token_path()) != "":
+		_dock.set_status("No pinned VibeSquad CA, so the device token is not sent. Pair with VS again: it fetches the CA and asks you to confirm its fingerprint.")
+	else:
+		_dock.set_status("Not paired with VibeSquad. Mint an owner pairing code in VibeSquad (Pair Device, or vs pair), type the 6 digits and press Pair with VS; you then confirm the VS CA fingerprint.")
 
 
+## Step 1: owner typed a code. Fetch the VS CA (plain-http bootstrap, no token) and show its fingerprint to confirm.
 func _on_pair(code: String) -> void:
 	if _pairing:
 		return
+	if Transport.normalize_code(code) == "":
+		_dock.set_status("Enter the 6-digit pairing code from VibeSquad.")
+		return
 	_pairing = true
 	_dock.set_pair_busy(true)
-	_dock.set_status("Pairing… (if the code came from a phone, approve this device there)")
-	var res: Dictionary = await _transport.pair(code)
+	_dock.set_status("Fetching the VibeSquad CA…")
+	var res: Dictionary = await _transport.fetch_ca()
+	_pairing = false
+	_dock.set_pair_busy(false)
+	if not bool(res.get("ok", false)):
+		_refresh_pairing()
+		_dock.set_status(str(res.get("error", "could not fetch the VibeSquad CA")))
+		return
+	_pending_code = code
+	_pending_fp = str(res["fingerprint"].get("full", ""))
+	_dock.set_status("")
+	_dock.show_ca_fingerprint(res["fingerprint"])
+
+
+## Step 2: owner compared fingerprints. Matches -> pin the CA and redeem the code over https; Cancel -> drop both.
+func _on_ca_confirmed(matches: bool) -> void:
+	if _pairing:
+		return
+	var code := _pending_code
+	var fp := _pending_fp
+	_pending_code = ""
+	_pending_fp = ""
+	if not matches or code == "" or fp == "":
+		_transport.cancel_ca()
+		_refresh_pairing()
+		if not matches:
+			_dock.set_status("Pairing cancelled: the CA was not trusted. If the fingerprints differ, check vs_playtest/server_url (something else may be answering).")
+		return
+	_pairing = true
+	_dock.set_pair_busy(true)
+	_dock.set_status("Pairing over https… (if the code came from a phone, approve this device there)")
+	var res: Dictionary = await _transport.pair(code, fp)
 	_pairing = false
 	_dock.set_pair_busy(false)
 	if bool(res.get("ok", false)):
 		_reset_thread()
 		_refresh_pairing()
-		_dock.set_status("Paired with VibeSquad.")
+		_dock.set_status("Paired with VibeSquad (CA pinned).")
 		_poll()
 	else:
+		_transport.cancel_ca()
 		_refresh_pairing()
 		_dock.set_status(str(res.get("error", "pairing failed")))
 

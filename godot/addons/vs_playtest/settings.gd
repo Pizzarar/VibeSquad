@@ -10,12 +10,16 @@ const ADAPTER_DIR := "vs_playtest/adapter_dir" # game adapter scripts; dropped f
 ## B2b: absolute path of the owner device token file (remote server_url). "" = $VIBESQUAD_HOME/playtest-device-token,
 ## else ~/.vibesquad/playtest-device-token. res:// and user:// paths are refused (the token never enters the project).
 const DEVICE_TOKEN_PATH := "vs_playtest/device_token_path"
+## B2b: absolute path of the pinned VibeSquad CA (remote https server_url). "" = $VIBESQUAD_HOME/playtest-ca.crt, else
+## ~/.vibesquad/playtest-ca.crt. Same refusals as device_token_path.
+const CA_CERT_PATH := "vs_playtest/ca_cert_path"
 
 ## [name, default, type, hint]. server_url "" = auto: http://127.0.0.1:$VIBESQUAD_PORT (else 4180).
 const ALL: Array = [
 	[TEAM_ID, "", TYPE_STRING],
 	[SERVER_URL, "", TYPE_STRING],
 	[DEVICE_TOKEN_PATH, "", TYPE_STRING],
+	[CA_CERT_PATH, "", TYPE_STRING],
 	[HOTKEY_DOCK, "F8", TYPE_STRING],
 	[HOTKEY_BUG, "F9", TYPE_STRING],
 	[ADAPTER_DIR, "res://vs_playtest_adapter/", TYPE_STRING],

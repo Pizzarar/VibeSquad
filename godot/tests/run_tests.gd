@@ -15,6 +15,24 @@ const Dock := preload("res://addons/vs_playtest/dock.gd")
 ## B2b fixtures: never real tokens.
 const DEV_TOKEN := "Tk3n_B2b-test0123456789abcdefGHIJKLmnopqrstu"
 const DEV_TOKEN_2 := "Second_B2b-tok3n9876543210ZYXWVUTSrqponmlkj"
+## B2b CA pin fixture: a throwaway self-signed P-256 CA (public cert only; its key was deleted). Expected fingerprints
+## computed outside Godot, the way server/auth.mjs caFingerprint does it:
+##   node: createHash("sha256").update(new X509Certificate(pem).raw).digest("hex").toUpperCase() -> pairs joined by ":"
+##   openssl x509 -noout -fingerprint -sha256  ->  the same 32 pairs
+const CA_PEM := """-----BEGIN CERTIFICATE-----
+MIIBnzCCAUWgAwIBAgIUQC8zfKbmH0xQKwtnrtfAdKNezd0wCgYIKoZIzj0EAwIw
+JDEiMCAGA1UEAwwZVmliZVNxdWFkIHRlc3QgZml4dHVyZSBDQTAgFw0yNjExMjEy
+MzU0MzJaGA8yMTI2MTAyODIzNTQzMlowJDEiMCAGA1UEAwwZVmliZVNxdWFkIHRl
+c3QgZml4dHVyZSBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABL+8voesZUXx
+tMtUtur3EkUQ5CNBzq2Wa/e5w24MIPA8f6BCsDqgz6YRPjBVTf6Ti5s2L5FN9F8P
+qMUbVeGosTGjUzBRMB0GA1UdDgQWBBQQmSDwgz09ZlM6z8KYGaQrvOvGbDAfBgNV
+HSMEGDAWgBQQmSDwgz09ZlM6z8KYGaQrvOvGbDAPBgNVHRMBAf8EBTADAQH/MAoG
+CCqGSM49BAMCA0gAMEUCIQC1+FPKXPJ4YVKE5wUfQynJ3lixPAdSLuL/D3xZEbuJ
+DwIgMOSfC/VTjignJKv5JN8fPboxrEG7Mfuk0ijkIVTrcZQ=
+-----END CERTIFICATE-----
+"""
+const CA_FP_FULL := "6A:17:46:3B:49:3B:2F:87:67:34:EF:4D:EE:B9:33:E0:67:8D:F0:BE:78:19:72:BC:A1:11:28:48:6C:4A:7D:F5"
+const CA_FP_SHORT := "6A:17:46:3B:49:3B:2F:87"
 
 var _pass := 0
 var _fail := 0
@@ -32,11 +50,13 @@ class MockTransport extends RefCounted:
 class MockHttp extends RefCounted:
 	var queue: Array = []
 	var calls: Array = []
-	func handle(url: String, headers: PackedStringArray, method: int, body: String) -> Dictionary:
-		calls.append({"url": url, "headers": headers, "method": method, "body": body})
+	func handle(url: String, headers: PackedStringArray, method: int, body: String, tls: Variant = null) -> Dictionary:
+		calls.append({"url": url, "headers": headers, "method": method, "body": body, "tls": tls})
 		return queue.pop_front() if not queue.is_empty() else {"result": HTTPRequest.RESULT_SUCCESS, "code": 200, "text": "{}"}
 	static func json(code: int, data: Dictionary) -> Dictionary:
 		return {"result": HTTPRequest.RESULT_SUCCESS, "code": code, "text": JSON.stringify(data)}
+	static func text(code: int, body: String) -> Dictionary:
+		return {"result": HTTPRequest.RESULT_SUCCESS, "code": code, "text": body}
 
 
 class FullAdapter extends VSPlaytestAdapter:
@@ -64,9 +84,11 @@ func _initialize() -> void:
 	_test_auth_mode_selection()
 	_test_device_token_path()
 	_test_device_token_file()
+	_test_ca_fingerprint_and_pem()
 	await _test_device_transport()
 	await _test_pairing()
 	await _test_autoload_pairing_api()
+	await _test_real_tls_pin()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -431,17 +453,18 @@ func _tmp_dir(tag: String) -> String:
 func _test_device_egress_table() -> void:
 	var BS := String.chr(92)
 	var allow := [
-		"http://127.0.0.1:4180", "http://localhost:4180", "http://[::1]:4180", "HTTP://LOCALHOST",
-		"http://100.64.0.1:4180", "http://100.127.255.255", "http://100.100.100.100:4180/", "http://100.64.0.0",
-		"http://[fd7a:115c:a1e0::1]:4180", "http://[FD7A:115C:A1E0:ab12::5]", "http://[fd7a:115c:a1e0:0:0:0:0:1]",
-		"http://forge.tail1234.ts.net:4180", "http://FORGE.Tail1234.TS.NET:4180", "http://a.ts.net",
-		"https://example.com", "https://vs.example.com:8443/", "https://forge.tail1234.ts.net", "https://100.64.0.1:4180",
+		"https://example.com", "https://vs.example.com:8443/", "https://forge.tail1234.ts.net", "https://forge.tail1234.ts.net:4180",
+		"HTTPS://FORGE.Tail1234.TS.NET:4180", "https://100.64.0.1:4180", "https://[fd7a:115c:a1e0::1]:4180",
 		"https://192.168.1.5:4180", "https://[2001:db8::1]:443", "https://127.0.0.1:4180",
 	]
 	for u: String in allow:
 		check(Token.is_device_egress_allowed(u), "egress: allows %s" % u)
 	var deny := [
-		# plain http to anything that is not loopback / tailnet
+		# Remote is https only (PLAN_V1): plain http never carries the device token, tailnet and loopback included
+		"http://127.0.0.1:4180", "http://localhost:4180", "http://[::1]:4180", "HTTP://LOCALHOST",
+		"http://100.64.0.1:4180", "http://100.127.255.255", "http://100.100.100.100:4180/", "http://100.64.0.0",
+		"http://[fd7a:115c:a1e0::1]:4180", "http://[FD7A:115C:A1E0:ab12::5]", "http://[fd7a:115c:a1e0:0:0:0:0:1]",
+		"http://forge.tail1234.ts.net:4180", "http://FORGE.Tail1234.TS.NET:4180", "http://a.ts.net",
 		"http://example.com", "http://192.168.1.5:4180", "http://10.0.0.1", "http://100.63.255.255", "http://100.128.0.1", "http://99.64.0.1",
 		"http://127.0.0.2", "http://0.0.0.0:4180",
 		# lookalike hosts
@@ -467,6 +490,13 @@ func _test_device_egress_table() -> void:
 	]
 	for u: String in deny:
 		check(not Token.is_device_egress_allowed(u), "egress: refuses '%s'" % u.c_escape())
+	# the one plain-http remote call: /ca.crt on the same host:port as the https server_url
+	check(Token.ca_bootstrap_url("https://forge.tail1234.ts.net:4180") == "http://forge.tail1234.ts.net:4180/ca.crt", "bootstrap: same host and port, /ca.crt")
+	check(Token.ca_bootstrap_url("https://Forge.Tail1234.ts.net:4180/vs/") == "http://forge.tail1234.ts.net:4180/ca.crt", "bootstrap: path dropped, host lower-cased")
+	check(Token.ca_bootstrap_url("https://100.64.0.1") == "http://100.64.0.1:443/ca.crt", "bootstrap: no port -> the https port 443")
+	check(Token.ca_bootstrap_url("https://[fd7a:115c:a1e0::1]:4180") == "http://[fd7a:115c:a1e0::1]:4180/ca.crt", "bootstrap: IPv6 keeps brackets")
+	for u in ["http://forge.ts.net:4180", "https://user@forge.ts.net", "https://evil.com@forge.ts.net", "", "ftp://x.ts.net", "https://forge.ts.net?x=1"]:
+		check(Token.ca_bootstrap_url(u) == "", "bootstrap: '%s' -> none" % u)
 
 
 func _test_auth_mode_selection() -> void:
@@ -500,6 +530,19 @@ func _test_device_token_path() -> void:
 	for o in ["res://tok", "user://tok", "uid://abc", "tok", "./tok", "~/.vibesquad/tok", "/dir/", "C:tok", "http://x/tok"]:
 		check(Token.device_token_path(o, getenv) == "", "device path: override '%s' refused (not swapped for the default)" % o)
 	check(Token.token_path(getenv) == "/tmp/vsh/local-token", "device path: local-token path unchanged")
+	# pinned CA file: same defaults beside the token, same refusals
+	check(Token.ca_cert_path("", getenv) == "/tmp/vsh/playtest-ca.crt", "ca path: $VIBESQUAD_HOME wins")
+	check(Token.ca_cert_path("", func(k: String) -> String: return win.get(k, "")) == "C:/Users/x/.vibesquad/playtest-ca.crt", "ca path: Windows home fallback")
+	check(Token.ca_cert_path("", func(k: String) -> String: return nix.get(k, "")) == "/home/x/.vibesquad/playtest-ca.crt", "ca path: HOME fallback")
+	check(Token.ca_cert_path("", func(_k: String) -> String: return "") == "", "ca path: no home -> empty")
+	for o in ["/abs/dir/ca.crt", "C:/t/ca.crt", "C:" + BS + "t" + BS + "ca.crt", "  /abs/ca.crt  "]:
+		check(Token.ca_cert_path(o, getenv) == o.strip_edges(), "ca path: setting override '%s' wins" % o.c_escape())
+	for o in ["res://playtest-ca.crt", "user://playtest-ca.crt", "uid://abc", "ca.crt", "./ca.crt", "../ca.crt", "~/.vibesquad/ca.crt", "/dir/", "C:ca.crt", "http://x/ca.crt"]:
+		check(Token.ca_cert_path(o, getenv) == "", "ca path: override '%s' refused (not swapped for the default)" % o)
+	var der := Token.pem_single_cert_der(CA_PEM)
+	for o in ["res://playtest-ca.crt", "user://playtest-ca.crt", "ca.crt"]:
+		check(Token.write_ca_cert(o, der) == ERR_FILE_BAD_PATH and not FileAccess.file_exists(o), "ca file: write to '%s' refused" % o)
+		check(Token.read_ca_der(o).is_empty(), "ca file: read from '%s' refused" % o)
 
 
 func _test_device_token_file() -> void:
@@ -525,12 +568,48 @@ func _test_device_token_file() -> void:
 		DirAccess.remove_absolute(q)
 	var t := Transport.new()
 	t.device_token_path = p
-	check(t.is_paired(), "unpair: paired before")
-	check(t.unpair() and not FileAccess.file_exists(p) and not t.is_paired(), "unpair: removes the token file")
+	var cp := p.get_base_dir().path_join("playtest-ca.crt")
+	t.ca_cert_path = cp
+	check(not t.is_paired(), "unpair: a token without a pinned CA is not paired")
+	check(Token.write_ca_cert(cp, Token.pem_single_cert_der(CA_PEM)) == OK, "ca file: written")
+	check(Token.read_ca_der(cp) == Token.pem_single_cert_der(CA_PEM) and FileAccess.get_file_as_string(cp) == Token.der_to_pem(Token.pem_single_cert_der(CA_PEM)), "ca file: reads back as one canonical PEM cert")
+	if not (OS.get_name() in ["Windows", "Web"]):
+		check((FileAccess.get_unix_permissions(cp) & 63) == 0, "ca file: owner-only permissions")
+	check(t.is_paired() and t.pinned_fingerprint().get("full") == CA_FP_FULL, "unpair: token + pin -> paired, pin fingerprint readable")
+	check(t.unpair() and not FileAccess.file_exists(p) and not FileAccess.file_exists(cp) and not t.is_paired(), "unpair: removes BOTH the token and the CA file")
 	check(t.unpair(), "unpair: idempotent when already gone")
+	# a CA file alone (token deleted by hand) is removed too
+	Token.write_ca_cert(cp, Token.pem_single_cert_der(CA_PEM))
+	check(t.unpair() and not FileAccess.file_exists(cp), "unpair: removes a CA file left without a token")
 	t.free()
 	DirAccess.remove_absolute(p.get_base_dir())
 	DirAccess.remove_absolute(dir)
+
+
+func _test_ca_fingerprint_and_pem() -> void:
+	var der := Token.pem_single_cert_der(CA_PEM)
+	check(not der.is_empty(), "ca: fixture PEM parses to DER")
+	var fp := Token.ca_fingerprint(der)
+	check(fp.get("full") == CA_FP_FULL, "ca: full fingerprint matches server/auth.mjs caFingerprint (node) and openssl: %s" % fp.get("full"))
+	check(fp.get("short") == CA_FP_SHORT, "ca: short fingerprint = first 8 pairs, as the VS pair dialog shows it")
+	check(Token.pem_single_cert_der(CA_PEM.replace("\n", "\r\n")) == der, "ca: CRLF PEM gives the same DER")
+	check(Token.pem_single_cert_der(Token.der_to_pem(der)) == der, "ca: canonical PEM round-trips")
+	var tls := Token.pinned_tls(der)
+	check(tls != null and not tls.is_server() and not tls.is_unsafe_client() and _chain_der(tls) == der, "ca: pinned TLS options trust exactly the fixture CA, with verification on")
+	check(Token.pinned_tls(PackedByteArray()) == null, "ca: no DER -> no TLS options")
+	var body := CA_PEM.split("-----BEGIN CERTIFICATE-----")[1].split("-----END CERTIFICATE-----")[0]
+	var bad := {
+		"two certificates (an extra anchor riding along)": CA_PEM + CA_PEM,
+		"trailing text": CA_PEM + "hello",
+		"leading text": "hello\n" + CA_PEM,
+		"a private key block": "-----BEGIN PRIVATE KEY-----" + body + "-----END PRIVATE KEY-----\n",
+		"broken base64": CA_PEM.replace("MIIBnz", "MIIB!z"),
+		"truncated body": CA_PEM.replace("DwIgMOSfC/VTjignJKv5JN8fPboxrEG7Mfuk0ijkIVTrcZQ=", ""),
+		"empty": "",
+		"html error page": "<html>404</html>",
+	}
+	for k: String in bad:
+		check(Token.pem_single_cert_der(str(bad[k])).is_empty(), "ca: refuses %s" % k)
 
 
 func _has_header(headers: PackedStringArray, name: String) -> bool:
@@ -543,38 +622,63 @@ func _has_header(headers: PackedStringArray, name: String) -> bool:
 func _test_device_transport() -> void:
 	var dir := _tmp_dir("devtr")
 	var dpath := dir.path_join("playtest-device-token")
+	var cpath := dir.path_join("playtest-ca.crt")
 	var lpath := dir.path_join("local-token")
 	var local_tok := "0123456789abcdef".repeat(4)
 	var lf := FileAccess.open(lpath, FileAccess.WRITE)
 	lf.store_string(local_tok)
 	lf.close()
 	Token.write_device_token(dpath, DEV_TOKEN)
+	var der := Token.pem_single_cert_der(CA_PEM)
 	var t := Transport.new()
 	var mock := MockHttp.new()
 	t.http_fn = Callable(mock, "handle")
 	t.device_token_path = dpath
+	t.ca_cert_path = cpath
 	t.local_token_path = lpath
-	# loopback -> local token only, never the device token
+	# loopback -> local token only, never the device token; loopback mode is unchanged (plain http, no pin)
 	t.server_url = "http://127.0.0.1:4180"
 	var r: Dictionary = await t.request("GET", "/__vibesquad/tester/thread?teamId=s", null)
 	var h: PackedStringArray = mock.calls[-1]["headers"] if mock.calls.size() > 0 else PackedStringArray()
-	check(r["ok"] and h.has("x-vibesquad-token: " + local_tok), "transport: loopback sends x-vibesquad-token")
+	check(r["ok"] and h.has("x-vibesquad-token: " + local_tok) and mock.calls[-1]["tls"] == null, "transport: loopback sends x-vibesquad-token over plain http, unchanged")
 	check(not _has_header(h, "x-vs-device-token") and not _has_header(h, "authorization") and not _has_header(h, "cookie") and not ("|".join(h)).contains(DEV_TOKEN), "transport: loopback never sends the device token or a cookie")
-	# remote tailnet / https -> device token header only
-	for url in ["http://forge.tail1234.ts.net:4180", "https://vs.example.com", "http://100.64.0.7:4180", "http://[fd7a:115c:a1e0::9]:4180"]:
+	# remote https but NO pinned CA -> no token, no request, dock-ready reason
+	for url in ["https://forge.tail1234.ts.net:4180", "https://vs.example.com"]:
+		t.server_url = url
+		var n0 := mock.calls.size()
+		r = await t.request("POST", "/__vibesquad/tester/report", {"teamId": "s"})
+		check(mock.calls.size() == n0 and r["status"] == -1 and str(r["error"]).contains("no pinned VibeSquad CA") and not str(r).contains(DEV_TOKEN), "transport: %s without a CA pin -> no request, no token" % url)
+	t.ca_cert_path = "res://playtest-ca.crt"
+	r = await t.request("GET", "/x", null)
+	check(r["status"] == -1 and str(r["error"]).contains("ca_cert_path"), "transport: res:// ca_cert_path refused, no fallback to the default file")
+	t.ca_cert_path = cpath
+	var junk := FileAccess.open(cpath, FileAccess.WRITE)
+	junk.store_string(CA_PEM + CA_PEM)
+	junk.close()
+	var n1 := mock.calls.size()
+	r = await t.request("GET", "/x", null)
+	check(mock.calls.size() == n1 and str(r["error"]).contains("no pinned VibeSquad CA"), "transport: a CA file with two certs is not a pin")
+	# remote https + pin -> device token header only, over TLS options that trust only the pinned CA
+	Token.write_ca_cert(cpath, der)
+	for url in ["https://forge.tail1234.ts.net:4180", "https://vs.example.com", "https://100.64.0.7:4180", "https://[fd7a:115c:a1e0::9]:4180"]:
 		t.server_url = url
 		var n := mock.calls.size()
 		r = await t.request("POST", "/__vibesquad/tester/report", {"teamId": "s"})
 		var c: Dictionary = mock.calls[-1] if mock.calls.size() > n else {}
 		var hh: PackedStringArray = c.get("headers", PackedStringArray())
 		check(r["ok"] and str(c.get("url", "")) == url + "/__vibesquad/tester/report" and hh.has("x-vs-device-token: " + DEV_TOKEN), "transport: %s sends x-vs-device-token" % url)
+		var tls: TLSOptions = c.get("tls")
+		check(_chain_der(tls) == der, "transport: %s pinned to the stored CA (no system trust store)" % url)
 		check(not _has_header(hh, "x-vibesquad-token") and not _has_header(hh, "cookie") and not ("|".join(hh)).contains(local_tok), "transport: %s never gets the local token or a cookie" % url)
-	# egress refused -> no request at all
-	for url in ["http://evil.example.com:4180", "http://evil.ts.net.attacker.com", "http://100.64.0.1.nip.io", "http://user@forge.ts.net", "http://1681915905"]:
+	# egress refused -> no request at all (plain http to a remote, tailnet included, even with a pin)
+	for url in ["http://forge.tail1234.ts.net:4180", "http://100.64.0.7:4180", "http://[fd7a:115c:a1e0::9]:4180", "http://evil.example.com:4180", "http://evil.ts.net.attacker.com", "http://user@forge.ts.net", "http://1681915905"]:
 		t.server_url = url
 		var n2 := mock.calls.size()
 		r = await t.request("GET", "/x", null)
-		check(mock.calls.size() == n2 and not r["ok"] and r["status"] == -1 and str(r["error"]).begins_with("refusing to send the device token"), "transport: %s refused before any request" % url)
+		check(mock.calls.size() == n2 and not r["ok"] and r["status"] == -1 and str(r["error"]).begins_with("refusing to send the device token") and str(r["error"]).contains("https://"), "transport: %s refused before any request" % url)
+	# an https call can never go out without pin options, even from inside the transport
+	var raw: Dictionary = await t._send("https://vs.example.com/x", PackedStringArray(), HTTPClient.METHOD_GET, "", null)
+	check(raw.has("start_error") and mock.calls.size() == n1 + 4, "transport: _send refuses https without pinned TLS options")
 	# unpaired -> refused locally with how-to
 	t.server_url = "https://vs.example.com"
 	t.device_token_path = dir.path_join("missing-token")
@@ -593,8 +697,8 @@ func _test_device_transport() -> void:
 	r = await t.request("GET", "/x", null)
 	check(r["status"] == -1 and str(r["error"]).contains("redirect"), "transport: a raw 3xx is refused too")
 	mock.queue = [{"result": HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR, "code": 0, "text": ""}]
-	r = await t.request("GET", "/x", null)
-	check(r["status"] == -1 and str(r["error"]).contains("TLS"), "transport: TLS failure explained, not retried")
+	r = await t.request("POST", "/__vibesquad/tester/report", {"teamId": "s"})
+	check(r["status"] == -1 and str(r["error"]).begins_with("TLS/CA problem") and str(r["error"]).contains("pinned VibeSquad CA"), "transport: TLS failure on a report says TLS/CA problem, not retried")
 	mock.queue = [MockHttp.json(401, {"error": "unauthorized"})]
 	r = await t.request("GET", "/x", null)
 	check(r["status"] == 401 and str(r["error"]).contains("Unpair"), "transport: 401 in device mode says re-pair")
@@ -605,98 +709,163 @@ func _test_device_transport() -> void:
 	DirAccess.remove_absolute(dir)
 
 
+## Queues the /ca.crt bootstrap answer and runs fetch_ca(); returns its result.
+func _fetch_ca(t: Node, mock: MockHttp, pem: String = CA_PEM) -> Dictionary:
+	mock.queue.push_front(MockHttp.text(200, pem))
+	return await t.fetch_ca()
+
+
 func _test_pairing() -> void:
 	var logs := LogCapture.new()
 	logs.install()
 	var outputs: Array = [] # every result / error string the flows produce
 	var dir := _tmp_dir("pair")
 	var dpath := dir.path_join("playtest-device-token")
+	var cpath := dir.path_join("playtest-ca.crt")
+	var der := Token.pem_single_cert_der(CA_PEM)
 	var t := Transport.new()
 	var mock := MockHttp.new()
 	t.http_fn = Callable(mock, "handle")
 	t.sleep_fn = func(_s: float) -> void: pass
 	t.device_token_path = dpath
+	t.ca_cert_path = cpath
 	t.server_url = "https://forge.tail1234.ts.net:4180"
-	# 1. PC-minted code: paired at once
+	# 0. bootstrap: plain GET /ca.crt, no token / code / cookie, nothing trusted or stored yet
+	var f: Dictionary = await _fetch_ca(t, mock)
+	outputs.append(f)
+	var cb: Dictionary = mock.calls[0] if mock.calls.size() > 0 else {}
+	var hb: PackedStringArray = cb.get("headers", PackedStringArray())
+	check(f["ok"] and str(cb.get("url", "")) == "http://forge.tail1234.ts.net:4180/ca.crt" and cb.get("method") == HTTPClient.METHOD_GET and cb.get("body") == "" and cb.get("tls") == null, "bootstrap: plain GET http://<host>:<port>/ca.crt")
+	check(not _has_header(hb, "x-vs-device-token") and not _has_header(hb, "x-vibesquad-token") and not _has_header(hb, "authorization") and not _has_header(hb, "cookie") and not str(cb.get("url")).contains("code="), "bootstrap: carries no token, no code, no cookie")
+	check(f["fingerprint"].get("full") == CA_FP_FULL and f["fingerprint"].get("short") == CA_FP_SHORT, "bootstrap: returns the pair-dialog fingerprint to confirm")
+	check(not FileAccess.file_exists(cpath) and not t.is_paired(), "bootstrap: the fetched CA is not stored or trusted before confirmation")
+	# Even with a token file on disk, an unconfirmed fetched CA is not a pin
+	Token.write_device_token(dpath, DEV_TOKEN)
+	var n0 := mock.calls.size()
+	var rq: Dictionary = await t.request("GET", "/x", null)
+	check(mock.calls.size() == n0 and str(rq["error"]).contains("no pinned VibeSquad CA"), "bootstrap: no token is sent until the CA is confirmed and pinned")
+	Token.remove_file(dpath)
+	# bad bootstrap answers
+	for bad: Array in [[MockHttp.text(200, CA_PEM + CA_PEM), "single PEM"], [MockHttp.text(200, "<html></html>"), "single PEM"], [MockHttp.text(404, "{\"error\":\"no CA yet\"}"), "HTTP 404"], [{"result": HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED, "code": 301, "text": ""}, "network error"], [{"result": HTTPRequest.RESULT_CANT_CONNECT, "code": 0, "text": ""}, "network error"]]:
+		mock.queue = [bad[0]]
+		var fb: Dictionary = await t.fetch_ca()
+		check(not fb["ok"] and str(fb["error"]).contains(bad[1]) and fb["fingerprint"].is_empty(), "bootstrap: bad answer refused (%s)" % bad[1])
+	var r: Dictionary = await t.pair("123456", CA_FP_FULL)
+	check(not r["ok"] and r["state"] == "unconfirmed", "pair: a failed fetch leaves nothing to confirm")
+	# 1. confirmation gate: no pair request without the confirmed fingerprint of THIS fetched CA
+	await _fetch_ca(t, mock)
+	var n1 := mock.calls.size()
+	for wrong in ["", CA_FP_SHORT, CA_FP_FULL.replace("6A:17", "6A:18"), CA_FP_FULL.to_lower()]:
+		r = await t.pair("123456", wrong)
+		check(not r["ok"] and r["state"] == "unconfirmed" and mock.calls.size() == n1, "pair: fingerprint '%s' not confirmed -> no request" % wrong.left(11))
+	t.cancel_ca()
+	r = await t.pair("123456", CA_FP_FULL)
+	check(not r["ok"] and r["state"] == "unconfirmed" and mock.calls.size() == n1, "pair: cancelled CA -> no request")
+	# 2. PC-minted code: paired at once, redeemed over https pinned to the confirmed CA
+	mock.calls.clear()
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "owner", "allowedTeams": null, "hostId": "h"})]
-	var r: Dictionary = await t.pair(" 123-456 ")
+	r = await t.pair(" 123-456 ", CA_FP_FULL)
 	outputs.append(r)
-	var c0: Dictionary = mock.calls[0] if mock.calls.size() > 0 else {}
-	check(str(c0.get("url", "")) == "https://forge.tail1234.ts.net:4180/pair?code=123456&format=json&name=Godot%20playtest" and c0.get("method") == HTTPClient.METHOD_GET, "pair: GET /pair?code=…&format=json (code normalized)")
+	var c0: Dictionary = mock.calls[1] if mock.calls.size() > 1 else {}
+	check(str(c0.get("url", "")) == "https://forge.tail1234.ts.net:4180/pair?code=123456&format=json&name=Godot%20playtest" and c0.get("method") == HTTPClient.METHOD_GET, "pair: GET https …/pair?code=…&format=json (code normalized)")
+	var tls0: TLSOptions = c0.get("tls")
+	check(_chain_der(tls0) == der, "pair: redeem pinned to the confirmed CA")
 	var h0: PackedStringArray = c0.get("headers", PackedStringArray())
 	check(not _has_header(h0, "x-vs-device-token") and not _has_header(h0, "x-vibesquad-token") and not _has_header(h0, "cookie"), "pair: redeem carries no token and no cookie")
-	check(r["ok"] and r["state"] == "paired" and t.is_paired() and Token.read_device_token(dpath) == DEV_TOKEN, "pair: paired -> token stored")
+	check(r["ok"] and r["state"] == "paired" and t.is_paired() and Token.read_device_token(dpath) == DEV_TOKEN and Token.read_ca_der(cpath) == der, "pair: paired -> token AND CA stored")
 	check(not r.has("token") and not str(r).contains(DEV_TOKEN), "pair: result never carries the token")
-	check(t.unpair() and not t.is_paired(), "pair: unpair after pairing")
-	# 2. phone-minted code: pending -> pending -> blip -> approved, polled with the token header
+	check(t.unpair() and not t.is_paired() and not FileAccess.file_exists(dpath) and not FileAccess.file_exists(cpath), "pair: unpair after pairing removes both files")
+	# 3. phone-minted code: pending -> pending -> blip -> approved, polled over the pin with the token header
 	mock.calls.clear()
+	await _fetch_ca(t, mock)
 	mock.queue = [
 		MockHttp.json(200, {"ok": true, "state": "pending", "token": DEV_TOKEN_2, "role": "owner"}),
 		MockHttp.json(200, {"state": "pending", "role": "owner"}),
 		MockHttp.json(503, {"error": "blip"}),
 		MockHttp.json(200, {"state": "approved", "role": "owner"}),
 	]
-	r = await t.pair("654321")
+	r = await t.pair("654321", CA_FP_FULL)
 	outputs.append(r)
-	check(r["ok"] and mock.calls.size() == 4 and str(mock.calls[1]["url"]).ends_with("/pair/status") and (mock.calls[1]["headers"] as PackedStringArray).has("x-vs-device-token: " + DEV_TOKEN_2), "pair: pending polls /pair/status with the header token")
-	check(Token.read_device_token(dpath) == DEV_TOKEN_2, "pair: approved -> token stored")
+	check(r["ok"] and mock.calls.size() == 5 and str(mock.calls[2]["url"]).begins_with("https://") and str(mock.calls[2]["url"]).ends_with("/pair/status") and (mock.calls[2]["headers"] as PackedStringArray).has("x-vs-device-token: " + DEV_TOKEN_2) and mock.calls[2]["tls"] != null, "pair: pending polls https /pair/status with the header token, pinned")
+	check(Token.read_device_token(dpath) == DEV_TOKEN_2 and Token.read_ca_der(cpath) == der, "pair: approved -> token and CA stored")
 	t.unpair()
-	# 3. denied / never approved
+	# 4. denied / never approved
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(200, {"ok": true, "state": "pending", "token": DEV_TOKEN, "role": "owner"}), MockHttp.json(200, {"state": "denied"})]
-	r = await t.pair("111111")
+	r = await t.pair("111111", CA_FP_FULL)
 	outputs.append(r)
-	check(not r["ok"] and r["state"] == "denied" and str(r["error"]).contains("denied") and not FileAccess.file_exists(dpath), "pair: denied -> nothing stored")
+	check(not r["ok"] and r["state"] == "denied" and str(r["error"]).contains("denied") and not FileAccess.file_exists(dpath) and not FileAccess.file_exists(cpath), "pair: denied -> nothing stored")
 	t.pair_timeout_sec = 6.0
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(200, {"ok": true, "state": "pending", "token": DEV_TOKEN, "role": "owner"})]
 	for i in 5:
 		mock.queue.append(MockHttp.json(200, {"state": "pending"}))
-	r = await t.pair("111112")
+	r = await t.pair("111112", CA_FP_FULL)
 	outputs.append(r)
-	check(not r["ok"] and r["state"] == "timeout" and not FileAccess.file_exists(dpath), "pair: never approved -> times out, nothing stored")
-	# 4. a tester code is not an owner device
+	check(not r["ok"] and r["state"] == "timeout" and not FileAccess.file_exists(dpath) and not FileAccess.file_exists(cpath), "pair: never approved -> times out, nothing stored")
+	# 5. a tester code is not an owner device
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "bug-tester", "allowedTeams": ["x"]})]
-	r = await t.pair("222222")
+	r = await t.pair("222222", CA_FP_FULL)
 	outputs.append(r)
 	check(not r["ok"] and r["state"] == "wrong-role" and not FileAccess.file_exists(dpath), "pair: non-owner role refused, nothing stored")
-	# 5. server refusals
+	# 6. server refusals / TLS
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(401, {"ok": false, "state": "invalid", "error": "pairing code invalid, already used, or expired"})]
-	r = await t.pair("333333")
+	r = await t.pair("333333", CA_FP_FULL)
 	outputs.append(r)
 	check(not r["ok"] and str(r["error"]).contains("invalid, already used"), "pair: invalid code -> server reason shown")
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(429, {"ok": false, "state": "rate-limited", "error": "too many pairing attempts", "retryAfterSecs": 90})]
-	r = await t.pair("333334")
+	r = await t.pair("333334", CA_FP_FULL)
 	outputs.append(r)
 	check(not r["ok"] and str(r["error"]).contains("90 s"), "pair: rate limit -> retry hint")
+	await _fetch_ca(t, mock)
 	mock.queue = [{"result": HTTPRequest.RESULT_REDIRECT_LIMIT_REACHED, "code": 301, "text": ""}]
-	r = await t.pair("333335")
+	r = await t.pair("333335", CA_FP_FULL)
 	outputs.append(r)
-	check(not r["ok"] and str(r["error"]).contains("redirect"), "pair: redirect refused (plain-http listener)")
+	check(not r["ok"] and str(r["error"]).contains("redirect"), "pair: redirect refused")
+	await _fetch_ca(t, mock)
+	mock.queue = [{"result": HTTPRequest.RESULT_TLS_HANDSHAKE_ERROR, "code": 0, "text": ""}]
+	r = await t.pair("333337", CA_FP_FULL)
+	outputs.append(r)
+	check(not r["ok"] and str(r["error"]).contains("TLS/CA problem") and not FileAccess.file_exists(cpath) and not FileAccess.file_exists(dpath), "pair: https redeem TLS failure says TLS/CA problem, nothing stored")
+	await _fetch_ca(t, mock)
 	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": "bad token\r\nX-Evil: 1", "role": "owner"})]
-	r = await t.pair("333336")
+	r = await t.pair("333336", CA_FP_FULL)
 	outputs.append(r)
 	check(not r["ok"] and not FileAccess.file_exists(dpath), "pair: malformed token from the server refused")
-	# 6. refused locally: no request goes out
+	# 7. refused locally: no request goes out
+	await _fetch_ca(t, mock)
 	var n := mock.calls.size()
 	for code in ["12345", "1234567", "abcdef", ""]:
-		r = await t.pair(code)
+		r = await t.pair(code, CA_FP_FULL)
 		outputs.append(r)
 		check(not r["ok"] and mock.calls.size() == n, "pair: bad code '%s' refused before any request" % code)
-	for url in ["http://evil.example.com", "http://evil.ts.net.attacker.com", "http://user@forge.ts.net"]:
+	for url in ["http://forge.tail1234.ts.net:4180", "http://100.64.0.1:4180", "http://evil.example.com", "http://evil.ts.net.attacker.com", "http://user@forge.ts.net"]:
 		t.server_url = url
-		r = await t.pair("123456")
+		r = await t.pair("123456", CA_FP_FULL)
+		var fr: Dictionary = await t.fetch_ca()
 		outputs.append(r)
-		check(not r["ok"] and mock.calls.size() == n and str(r["error"]).contains("pairing code"), "pair: %s refused before any request" % url)
+		check(not r["ok"] and not fr["ok"] and mock.calls.size() == n and str(r["error"]).contains("pairing code") and str(r["error"]).contains("https://"), "pair: %s refused before any request (no bootstrap either)" % url)
 	t.server_url = "http://127.0.0.1:4180"
-	r = await t.pair("123456")
+	r = await t.pair("123456", CA_FP_FULL)
 	check(not r["ok"] and mock.calls.size() == n and str(r["error"]).contains("no pairing needed"), "pair: loopback server needs no pairing")
-	# 7. token never in any error, result or log line
+	t.server_url = "https://forge.tail1234.ts.net:4180"
+	t.ca_cert_path = "user://playtest-ca.crt"
+	var fu: Dictionary = await t.fetch_ca()
+	check(not fu["ok"] and str(fu["error"]).contains("ca_cert_path") and mock.calls.size() == n, "pair: user:// ca_cert_path refused before any request")
+	t.ca_cert_path = cpath
+	# 8. token never in any error, result or log line
 	await process_frame
 	logs.uninstall()
 	var lines: Array = logs.last_lines(LogCapture.CAP)
 	var blob := JSON.stringify(outputs) + "\n" + "\n".join(PackedStringArray(lines))
 	check(not blob.contains(DEV_TOKEN) and not blob.contains(DEV_TOKEN_2), "pair: no token in any error/result/log line (%d log lines)" % lines.size())
 	t.free()
-	DirAccess.remove_absolute(dpath)
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(file))
 	DirAccess.remove_absolute(dir)
 
 
@@ -711,6 +880,7 @@ func _test_autoload_pairing_api() -> void:
 	logs.install()
 	var dir := _tmp_dir("api")
 	var dpath := dir.path_join("playtest-device-token")
+	var cpath := dir.path_join("playtest-ca.crt")
 	var on: Node = AutoloadScript.new()
 	on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
 	root.add_child(on)
@@ -720,24 +890,163 @@ func _test_autoload_pairing_api() -> void:
 	on._transport.http_fn = Callable(mock, "handle")
 	on._transport.sleep_fn = func(_s: float) -> void: pass
 	on._transport.device_token_path = dpath
+	on._transport.ca_cert_path = cpath
 	on._transport.server_url = "https://forge.tail1234.ts.net:4180"
 	on._refresh_pairing()
 	check(not on.is_paired() and on._dock.pair_state == Dock.PAIR_UNPAIRED and on._dock._pair_btn.text == "Pair with VS", "api: remote + no token -> Pair with VS shown")
-	mock.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "owner"})]
+	# step 1: code -> CA fetched, fingerprint shown, nothing paired or stored yet
+	mock.queue = [MockHttp.text(200, CA_PEM)]
 	on._dock.pair_submitted.emit("123456")
 	for i in 3:
 		await process_frame
-	check(on.is_paired() and on._dock.pair_state == Dock.PAIR_PAIRED and on._dock._unpair_btn.visible, "api: dock pairing -> is_paired(), Unpair shown")
+	var shown: String = on._dock._ca_label.text
+	check(on._dock.pair_state == Dock.PAIR_CONFIRM and shown.contains(CA_FP_SHORT) and shown.contains(CA_FP_FULL) and on._dock._ca_yes.visible, "api: dock shows the CA fingerprint (short + full) and asks to confirm")
+	check(not on.is_paired() and not FileAccess.file_exists(cpath) and mock.calls.size() == 1, "api: nothing redeemed or stored before confirmation")
+	# cancel -> back to Pair with VS, nothing trusted
+	on._dock.ca_confirmed.emit(false)
+	await process_frame
+	check(on._dock.pair_state == Dock.PAIR_UNPAIRED and not FileAccess.file_exists(cpath) and mock.calls.size() == 1 and str(on._dock._status.text).contains("cancelled"), "api: Cancel -> no redeem, CA not trusted")
+	# step 2: confirm -> redeemed over https with the pin, both files stored
+	mock.queue = [MockHttp.text(200, CA_PEM), MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN, "role": "owner"})]
+	on._dock.pair_submitted.emit("123456")
+	for i in 3:
+		await process_frame
+	on._dock.ca_confirmed.emit(true)
+	for i in 3:
+		await process_frame
+	check(on.is_paired() and on._dock.pair_state == Dock.PAIR_PAIRED and on._dock._unpair_btn.visible and FileAccess.file_exists(cpath), "api: confirm -> paired, CA pinned, Unpair shown")
+	check(mock.calls.size() >= 3 and str(mock.calls[2]["url"]).begins_with("https://") and mock.calls[2]["tls"] != null, "api: redeem went over https with the pin")
 	var status_paired: String = on._dock._status.text
-	check(on.unpair() and not FileAccess.file_exists(dpath) and not on.is_paired() and on._dock.pair_state == Dock.PAIR_UNPAIRED, "api: unpair() deletes the file, Pair with VS back")
-	var status_unpaired: String = on._dock._status.text
-	on._transport.server_url = "http://evil.example.com"
+	# token without a pin -> not paired, dock explains
+	DirAccess.remove_absolute(cpath)
 	on._refresh_pairing()
-	check(on._dock.pair_state == Dock.PAIR_HIDDEN and str(on._dock._status.text).begins_with("refusing"), "api: refused server_url -> dock says why, no pair row")
+	check(not on.is_paired() and on._dock.pair_state == Dock.PAIR_UNPAIRED and str(on._dock._status.text).contains("No pinned VibeSquad CA"), "api: token without a CA pin -> dock says why, no token sent")
+	Token.write_ca_cert(cpath, Token.pem_single_cert_der(CA_PEM))
+	check(on.unpair() and not FileAccess.file_exists(dpath) and not FileAccess.file_exists(cpath) and not on.is_paired() and on._dock.pair_state == Dock.PAIR_UNPAIRED, "api: unpair() deletes both files, Pair with VS back")
+	var status_unpaired: String = on._dock._status.text
+	on._transport.server_url = "http://forge.tail1234.ts.net:4180"
+	on._refresh_pairing()
+	check(on._dock.pair_state == Dock.PAIR_HIDDEN and str(on._dock._status.text).begins_with("refusing") and str(on._dock._status.text).contains("https://"), "api: plain-http remote server_url -> dock says use https, no pair row")
+	on._transport.server_url = "https://forge.tail1234.ts.net:4180"
+	on._transport.ca_cert_path = "res://playtest-ca.crt"
+	on._refresh_pairing()
+	check(on._dock.pair_state == Dock.PAIR_HIDDEN and str(on._dock._status.text).contains("ca_cert_path"), "api: res:// ca_cert_path -> dock says why")
 	on.queue_free()
 	await process_frame
 	logs.uninstall()
 	var lines: Array = logs.last_lines(LogCapture.CAP)
 	var blob := status_paired + status_unpaired + "\n".join(PackedStringArray(lines))
 	check(not blob.contains(DEV_TOKEN), "api: token never in dock status or log lines")
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(file))
 	DirAccess.remove_absolute(dir)
+
+
+## DER of the one CA in pinned TLS options ([] if none or more than one). save_to_string() ends with a NUL, so cut
+## at the END line.
+func _chain_der(tls: Variant) -> PackedByteArray:
+	if not (tls is TLSOptions) or (tls as TLSOptions).get_trusted_ca_chain() == null:
+		return PackedByteArray()
+	var s := (tls as TLSOptions).get_trusted_ca_chain().save_to_string()
+	var end := s.find("-----END CERTIFICATE-----")
+	if end < 0 or s.count("-----BEGIN CERTIFICATE-----") != 1:
+		return PackedByteArray()
+	return Token.pem_single_cert_der(s.substr(0, end + "-----END CERTIFICATE-----".length()))
+
+
+## Minimal in-process HTTPS server for the real-TLS pin test: one canned JSON answer per request.
+class TlsServer extends Node:
+	var server := TCPServer.new()
+	var opts: TLSOptions
+	var peers: Array = []
+	var bufs: Array = []
+	var served := 0
+	var port := 0
+	func start(key: CryptoKey, cert: X509Certificate) -> bool:
+		opts = TLSOptions.server(key, cert)
+		for i in 20:
+			port = 41000 + randi() % 8000
+			if server.listen(port, "127.0.0.1") == OK:
+				return true
+		return false
+	func _process(_d: float) -> void:
+		while server.is_connection_available():
+			var tls := StreamPeerTLS.new()
+			if tls.accept_stream(server.take_connection(), opts) == OK:
+				peers.append(tls)
+				bufs.append("")
+		for i in peers.size():
+			var p: StreamPeerTLS = peers[i]
+			if p == null:
+				continue
+			p.poll()
+			if p.get_status() != StreamPeerTLS.STATUS_CONNECTED:
+				if p.get_status() != StreamPeerTLS.STATUS_HANDSHAKING:
+					peers[i] = null
+				continue
+			var n := p.get_available_bytes()
+			if n > 0:
+				bufs[i] += p.get_utf8_string(n)
+			if str(bufs[i]).contains("\r\n\r\n"):
+				var body := "{\"ok\":true,\"messages\":[]}"
+				p.put_data(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s" % [body.length(), body]).to_utf8_buffer())
+				p.poll()
+				p.disconnect_from_stream()
+				peers[i] = null
+				served += 1
+	func stop() -> void:
+		server.stop()
+
+
+## Real TLS through the real HTTPRequest path: the pin accepts the server whose cert it holds and refuses one it does not,
+## so a public/system CA can never stand in for the pin.
+func _test_real_tls_pin() -> void:
+	var crypto := Crypto.new()
+	var key := crypto.generate_rsa(2048)
+	var cert := crypto.generate_self_signed_certificate(key, "CN=127.0.0.1,O=VS playtest test,C=US")
+	var srv := TlsServer.new()
+	if not srv.start(key, cert):
+		check(false, "real tls: could not listen on a loopback port")
+		return
+	root.add_child(srv)
+	var dir := _tmp_dir("realtls")
+	var dpath := dir.path_join("playtest-device-token")
+	var cpath := dir.path_join("playtest-ca.crt")
+	Token.write_device_token(dpath, DEV_TOKEN)
+	var t := Transport.new()
+	t.timeout_sec = 5.0
+	t.device_token_path = dpath
+	t.ca_cert_path = cpath
+	t.server_url = "https://127.0.0.1:%d" % srv.port
+	root.add_child(t)
+	# pinned to the server's own CA -> 200
+	var der := _cert_der(cert)
+	check(Token.write_ca_cert(cpath, der) == OK, "real tls: server cert pinned")
+	var r: Dictionary = await t.request("GET", "/__vibesquad/tester/thread?teamId=s", null)
+	check(r["ok"] and r["status"] == 200 and srv.served == 1, "real tls: request over the pinned CA succeeds (%s)" % str(r.get("error", "")))
+	# pinned to a different CA (the fixture) -> handshake refused, nothing served, dock text says TLS/CA
+	Token.write_ca_cert(cpath, Token.pem_single_cert_der(CA_PEM))
+	r = await t.request("GET", "/__vibesquad/tester/thread?teamId=s", null)
+	check(not r["ok"] and str(r["error"]).begins_with("TLS/CA problem") and srv.served == 1, "real tls: a server outside the pin is refused as a TLS/CA problem (%s)" % str(r.get("error", "")).left(40))
+	srv.stop()
+	srv.queue_free()
+	# right (pinned) cert, wrong name -> refused too
+	var cert2 := crypto.generate_self_signed_certificate(key, "CN=wrong.example,O=VS playtest test,C=US")
+	var srv2 := TlsServer.new()
+	srv2.start(key, cert2)
+	root.add_child(srv2)
+	Token.write_ca_cert(cpath, _cert_der(cert2))
+	t.server_url = "https://127.0.0.1:%d" % srv2.port
+	r = await t.request("GET", "/__vibesquad/tester/thread?teamId=s", null)
+	check(not r["ok"] and str(r["error"]).begins_with("TLS/CA problem") and srv2.served == 0, "real tls: host name is verified against the pinned cert (%s)" % str(r.get("error", "")).left(40))
+	srv2.stop()
+	srv2.queue_free()
+	t.queue_free()
+	for file in DirAccess.get_files_at(dir):
+		DirAccess.remove_absolute(dir.path_join(file))
+	DirAccess.remove_absolute(dir)
+
+
+func _cert_der(cert: X509Certificate) -> PackedByteArray:
+	var s := cert.save_to_string()
+	return Token.pem_single_cert_der(s.left(s.find("-----END CERTIFICATE-----") + "-----END CERTIFICATE-----".length()))

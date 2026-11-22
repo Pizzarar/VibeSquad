@@ -8,10 +8,13 @@ signal close_pressed
 ## B2b: owner typed a pairing code / pressed Unpair (vs_playtest.gd does the I/O).
 signal pair_submitted(code: String)
 signal unpair_pressed
+## B2b: owner checked the fetched VS CA fingerprint against the VS Pair Device dialog (true = matches, false = cancel).
+signal ca_confirmed(matches: bool)
 
 const PAIR_HIDDEN := "hidden" # loopback server: the local token is used, nothing to pair
 const PAIR_UNPAIRED := "unpaired"
 const PAIR_PAIRED := "paired"
+const PAIR_CONFIRM := "confirm" # fetched VS CA shown, waiting for the owner to compare fingerprints
 
 const BASE_FONT := 18
 const BASE_WIDTH := 460.0
@@ -34,6 +37,10 @@ var _pair_row: HBoxContainer
 var _pair_code: LineEdit
 var _pair_btn: Button
 var _unpair_btn: Button
+var _ca_box: VBoxContainer
+var _ca_label: Label
+var _ca_yes: Button
+var _ca_no: Button
 var pair_state: String = PAIR_HIDDEN
 
 
@@ -87,6 +94,23 @@ func _init() -> void:
 	_unpair_btn.tooltip_text = "Delete this PC's device token file (also revoke the device in VibeSquad)"
 	_unpair_btn.pressed.connect(func() -> void: unpair_pressed.emit())
 	_pair_row.add_child(_unpair_btn)
+	# B2b CA confirm (PLAN_V1 "Remote is https only"): the owner compares the fetched CA fingerprint with VS's pair dialog.
+	_ca_box = VBoxContainer.new()
+	root.add_child(_ca_box)
+	_ca_label = Label.new()
+	_ca_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ca_box.add_child(_ca_label)
+	var ca_row := HBoxContainer.new()
+	_ca_box.add_child(ca_row)
+	_ca_yes = Button.new()
+	_ca_yes.text = "It matches: pair"
+	_ca_yes.tooltip_text = "Trust this CA for this server only, then redeem the pairing code over https"
+	_ca_yes.pressed.connect(func() -> void: ca_confirmed.emit(true))
+	ca_row.add_child(_ca_yes)
+	_ca_no = Button.new()
+	_ca_no.text = "Cancel"
+	_ca_no.pressed.connect(func() -> void: ca_confirmed.emit(false))
+	ca_row.add_child(_ca_no)
 
 	_log = RichTextLabel.new()
 	_log.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -215,17 +239,31 @@ func _on_submit(text: String) -> void:
 	reply_submitted.emit(t)
 
 
-## mode: PAIR_HIDDEN | PAIR_UNPAIRED (code box + Pair with VS) | PAIR_PAIRED (Unpair only).
+## mode: PAIR_HIDDEN | PAIR_UNPAIRED (code box + Pair with VS) | PAIR_CONFIRM (CA fingerprint + It matches / Cancel)
+## | PAIR_PAIRED (Unpair only).
 func set_pairing(mode: String) -> void:
 	pair_state = mode
-	_pair_row.visible = mode != PAIR_HIDDEN
+	_ca_box.visible = mode == PAIR_CONFIRM
+	_pair_row.visible = mode == PAIR_UNPAIRED or mode == PAIR_PAIRED
 	_pair_code.visible = mode == PAIR_UNPAIRED
 	_pair_btn.visible = mode == PAIR_UNPAIRED
 	_unpair_btn.visible = mode == PAIR_PAIRED
 
 
+## Shows the fetched CA's fingerprint ({full, short}, server/auth.mjs caFingerprint format) for the owner to compare.
+func show_ca_fingerprint(fp: Dictionary) -> void:
+	_ca_label.text = "\n".join(PackedStringArray([
+		"VibeSquad CA fingerprint (SHA-256), fetched over plain http:",
+		str(fp.get("short", "")),
+		"Full: " + str(fp.get("full", "")),
+		"Does it match the fingerprint in VibeSquad's Pair Device dialog? Press \"It matches\" only if every pair is the same.",
+	]))
+	set_pairing(PAIR_CONFIRM)
+
+
 func set_pair_busy(busy: bool) -> void:
 	_pair_btn.disabled = busy
+	_ca_yes.disabled = busy
 	_pair_code.editable = not busy
 
 
