@@ -106,8 +106,21 @@ function tokenRe(roots) {
   re.lastIndex = 0;
   return re;
 }
-/** The stand-in for one path token: the path inside a worktree or under a repo root, else <host-path>. Trailing sentence punctuation is kept. */
-function replaceToken(token, repoRoots) {
+/**
+ * idea-526 L1: the file name a redacted path ends in, when it is a script or program (vite.js, node.exe) or a node_modules
+ * .bin shim: never a directory, never the home folder's own name (a user name), never anything with odd characters.
+ */
+const KEEP_EXT = /\.(?:m?js|cjs|[cm]?ts|jsx|tsx|py|exe|cmd|bat|ps1|sh)$/i;
+function keptBasename(p) {
+  const segs = p.split("/");
+  const base = segs.at(-1);
+  if (!base || !/^[A-Za-z0-9._@+-]{1,64}$/.test(base) || /^\.+$/.test(base)) return null;
+  const user = slashLower(homedir()).replace(/\/+$/, "").split("/").at(-1);
+  if (user && base.toLowerCase() === user) return null;
+  return KEEP_EXT.test(base) || segs.at(-2) === ".bin" ? base : null;
+}
+/** The stand-in for one path token: the path inside a worktree or under a repo root, else <host-path> (+ /<script> with keepBasename). Trailing sentence punctuation is kept. */
+function replaceToken(token, repoRoots, keepBasename = false) {
   const [, core, punct] = /^([\s\S]*?)([.,;:!?]*)$/.exec(token);
   let p = percentDecode(core).replace(/^file:/i, "").replaceAll("\\", "/").replace(/\/{2,}/g, "/");
   p = p.replace(/^\/([a-z]:\/)/i, "$1").replace(/^\/(?:mnt\/)?([a-z])\//i, "$1:/");
@@ -118,7 +131,8 @@ function replaceToken(token, repoRoots) {
     if (low === r || low === `${r}/`) return "<repo-root>" + punct;
     if (low.startsWith(`${r}/`)) return p.slice(r.length + 1) + punct;
   }
-  return "<host-path>" + punct;
+  const base = keepBasename ? keptBasename(p) : null;
+  return (base ? `<host-path>/${base}` : "<host-path>") + punct;
 }
 /** Index of a host path the token pass left behind (the error-text test plus every generic form above), else -1. */
 function leftoverIndex(text, roots) {
@@ -135,13 +149,13 @@ function leftoverIndex(text, roots) {
  * %LOCALAPPDATA%…, home/tmp/VIBESQUAD_HOME, spaced or multi-spaced segments) becomes <host-path>. A final check swaps anything
  * the token pass missed, so no host path survives.
  */
-export function redactHostPathTokens(text, { rootDir = REPO_ROOT, repoRoots = [] } = {}) {
+export function redactHostPathTokens(text, { rootDir = REPO_ROOT, repoRoots = [], keepBasename = false } = {}) {
   const t = String(text ?? "");
   const home = slashLower(homedir()).replace(/\/+$/, "");
   // A repo root at or above home (an agent whose cwd is ~) would turn ~/AppData/… into a relative path: such roots are not repos.
   const repo = [...new Set([rootDir, REPO_ROOT, ...repoRoots].filter(Boolean).map((r) => slashLower(r).replace(/\/+$/, "")))].filter((r) => r.length > 3 && !`${home}/`.startsWith(`${r}/`));
   const roots = [...new Set([...hostRoots(rootDir), ...repo])];
-  let out = t.replace(tokenRe(roots), (tok) => replaceToken(tok, repo));
+  let out = t.replace(tokenRe(roots), (tok) => replaceToken(tok, repo, keepBasename));
   for (let i = 0, at = leftoverIndex(out, roots); at >= 0; i++, at = leftoverIndex(out, roots)) {
     if (i >= 64) return redactErrorText(out, roots);
     const tail = new RegExp(String.raw`^${TOKEN_TAIL}${SPACED_TAIL}`).exec(out.slice(at))[0];

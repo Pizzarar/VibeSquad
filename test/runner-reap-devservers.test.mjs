@@ -6,10 +6,11 @@ import test, { after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createDevServerReaper, liveSubtree, markerPidsFor, parseMarkers, parseSs, parsePsEtimes, planReap, reapCmdText, sha256 } from '../runner/reap.mjs';
+import { createDevServerReaper, liveSubtree, markerPidsFor, parseMarkers, parseSs, parsePsEtimes, planReap, readEnvMarkers, reapCmdText, resetEnvReaderCache, sha256 } from '../runner/reap.mjs';
 import { Runner } from '../runner/runner.mjs';
 import { reapReporter } from '../runner/server.mjs';
 
@@ -118,6 +119,87 @@ test('parsers: env-reader lines, ss, ps etimes; reapCmdText strips Claude\'s wra
   assert.deepEqual(parsePsEtimes('  10   1   5 node node vite --port 1\n', 100_000), [{ pid: 10, ppid: 1, createdMs: 95_000, name: 'node', cmd: 'node vite --port 1' }]);
   const t = reapCmdText(`bash -c -l "source /tmp/snap && eval 'npx vite --port 5199 &' < /dev/null && pwd -P >| /tmp/claude-1-cwd"`);
   assert.ok(!t.includes('pwd -P') && t.includes('npx vite'), t);
+  // idea-526 L1: the redacted path keeps its script name (the metric says which dev server), never the directories.
+  const v = reapCmdText(leak()[4].cmd);
+  assert.equal(v, 'node <host-path>/vite.js --port 5199');
+  assert.equal(reapCmdText('node /home/someone/proj/node_modules/.bin/vite --port 1'), 'node <host-path>/vite --port 1');
+  assert.equal(reapCmdText(`cd ${os.homedir()} && node C:\\Users\\someone\\proj\\dist\\ --x`), 'cd <host-path> && node <host-path> --x', 'a directory or the home folder (a user name) is never kept');
+});
+
+// ---- idea-526 M1: the Windows env reader is compiled once per runner, then only loaded ------------------------------
+
+function fakePs({ onCompile = (out) => writeFileSync(out, 'fake-dll'), loadOut = '12|ok|-|-\n', inlineOut = `12|ok|rn-i|${'b'.repeat(64)}\n` } = {}) {
+  const runs = [];
+  const spawnImpl = (file, args) => {
+    const script = args.at(-1);
+    const kind = script.includes('-OutputAssembly') ? 'compile' : script.includes('Add-Type -Path') ? 'load' : script.includes('-TypeDefinition') ? 'inline' : 'other';
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stdin = { on() {}, end(data) {
+      runs.push({ kind, file, stdin: String(data) });
+      setImmediate(() => {
+        if (kind === 'compile') onCompile(String(data).split('\n---OUT---\n')[1]);
+        if (kind === 'load') child.stdout.emit('data', loadOut);
+        if (kind === 'inline') child.stdout.emit('data', inlineOut);
+        child.emit('close', 0);
+      });
+    } };
+    child.kill = () => {};
+    return child;
+  };
+  return { runs, spawnImpl };
+}
+
+test('idea-526: readEnvMarkers on win32 compiles the C# helper once, then only loads it; the DLL dir is fresh and its bytes re-checked', async () => {
+  resetEnvReaderCache();
+  try {
+    const ps = fakePs();
+    const a = await readEnvMarkers([12], { platform: 'win32', spawnImpl: ps.spawnImpl });
+    const b = await readEnvMarkers([12, 13], { platform: 'win32', spawnImpl: ps.spawnImpl });
+    assert.deepEqual(ps.runs.map((r) => r.kind), ['compile', 'load', 'load']);
+    assert.deepEqual(a.get(12), { agentId: null, tokenSha: null });
+    assert.ok(b.has(12));
+    const dll = ps.runs[0].stdin.split('\n---OUT---\n')[1];
+    assert.match(path.basename(path.dirname(dll)), /^vs-reap-env-/, 'a mkdtemp dir of its own');
+    assert.equal(ps.runs[1].stdin, `${dll}\n---PIDS---\n12`);
+    assert.equal(ps.runs[2].stdin, `${dll}\n---PIDS---\n12,13`);
+    assert.ok(!ps.runs[1].stdin.includes('VsReapEnv {'), 'no C# source on the load path');
+
+    // The DLL changed on disk after compile: never loaded, inline compile from then on.
+    writeFileSync(dll, 'tampered');
+    const c = await readEnvMarkers([12], { platform: 'win32', spawnImpl: ps.spawnImpl });
+    await readEnvMarkers([12], { platform: 'win32', spawnImpl: ps.spawnImpl });
+    assert.deepEqual(ps.runs.slice(3).map((r) => r.kind), ['inline', 'inline']);
+    assert.equal(c.get(12).agentId, 'rn-i');
+  } finally { resetEnvReaderCache(); }
+});
+
+test('idea-526: a failed compile falls back to the inline probe (the old path) without retrying the compile', async () => {
+  resetEnvReaderCache();
+  try {
+    const ps = fakePs({ onCompile: () => {} }); // compile "succeeds" but writes no DLL
+    const a = await readEnvMarkers([12], { platform: 'win32', spawnImpl: ps.spawnImpl });
+    await readEnvMarkers([12], { platform: 'win32', spawnImpl: ps.spawnImpl });
+    assert.deepEqual(ps.runs.map((r) => r.kind), ['compile', 'inline', 'inline']);
+    assert.equal(a.get(12).agentId, 'rn-i');
+  } finally { resetEnvReaderCache(); }
+});
+
+test('idea-526 (real PowerShell): the second probe loads the compiled DLL and reads this process\'s env', { skip: process.platform !== 'win32' && 'win32 only', timeout: 120_000 }, async () => {
+  resetEnvReaderCache();
+  try {
+    const kinds = [];
+    const spy = (file, args, opts) => {
+      const s = args.at(-1);
+      kinds.push(s.includes('-OutputAssembly') ? 'compile' : s.includes('Add-Type -Path') ? 'load' : 'inline');
+      return spawn(file, args, opts);
+    };
+    const first = await readEnvMarkers([process.pid], { platform: 'win32', spawnImpl: spy });
+    const second = await readEnvMarkers([process.pid], { platform: 'win32', spawnImpl: spy });
+    assert.deepEqual(kinds, ['compile', 'load', 'load']);
+    assert.equal(first.get(process.pid)?.error, undefined, JSON.stringify([...first]));
+    assert.deepEqual(second.get(process.pid), first.get(process.pid));
+  } finally { resetEnvReaderCache(); }
 });
 
 // ---- createDevServerReaper (fakes) ---------------------------------------------------------------------------------
