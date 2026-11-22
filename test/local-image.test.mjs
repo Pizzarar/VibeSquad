@@ -10,18 +10,19 @@ import { handleLocalImage, lookupAgentCwd, resolveAllowedImage } from "../server
 const tmpDirs = [];
 function rmSafe(root) {
   const links = [];
+  let unsure = false; // fail closed: any walk error other than ENOENT means a link might be hiding, so rmSync is skipped
   const walk = (p) => {
-    let st; try { st = lstatSync(p); } catch { return; }
+    let st; try { st = lstatSync(p); } catch (e) { if (e?.code !== "ENOENT") unsure = true; return; }
     if (st.isSymbolicLink()) { links.push(p); return; }
     if (!st.isDirectory()) return;
-    let es; try { es = readdirSync(p); } catch { return; }
+    let es; try { es = readdirSync(p); } catch (e) { if (e?.code !== "ENOENT") unsure = true; return; }
     for (const e of es) walk(join(p, e));
   };
   walk(root);
-  let survived = false;
+  let survived = unsure;
   for (const p of links) {
     try { unlinkSync(p); } catch { try { rmdirSync(p); } catch {} }
-    try { lstatSync(p); survived = true; } catch {}
+    try { lstatSync(p); survived = true; } catch (e) { if (e?.code !== "ENOENT") survived = true; }
   }
   if (survived) return;
   try { rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {}

@@ -52,7 +52,7 @@ async function boot(adapter = fakeAdapter()) {
   const rc = new RunnerClient({ home });
   const whos = [];
   const backend = new RunnerBackend({ client: rc, buildPrefix: async () => '', whosHere: (a) => whos.push(a), rootDir: '/root', lanes: () => new Set(['own']) });
-  return { runner, server, port, adapter, rc, backend, whos, close: () => { server.close(); server.closeAllConnections?.(); } };
+  return { runner, server, port, adapter, rc, backend, whos, close: () => { server.close(); server.closeAllConnections?.(); runner.shutdown?.(); } };
 }
 
 const spawnReq = (lane = 'own') => ({ config: { provider: 'claude', cwd: process.cwd(), title: 'T' }, labels: { team: 'vibesquad', lane, role: 'worker' }, env: {} });
