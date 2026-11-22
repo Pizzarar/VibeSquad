@@ -166,6 +166,32 @@ describe("the Meshnet mux serving a Tailscale MagicDNS name", () => {
     assert.equal(r.status, 200);
   });
 
+  test("the CA's name constraints permit exactly the configured MagicDNS name (plus the existing localhost/IP entries)", () => {
+    const caText = auth.openssl(["x509", "-in", join(auth.tlsDir(), "ca.crt"), "-noout", "-text"]);
+    const nc = /X509v3 Name Constraints:[^\n]*\n([\s\S]*?)\n\s*(?:X509v3 |Signature Algorithm)/.exec(caText)?.[1] ?? "";
+    assert.match(nc, new RegExp(`^\\s*DNS:${TS_HOST.replace(/\./g, "\\.")}\\s*$`, "m"), caText);
+    assert.match(nc, /^\s*DNS:localhost\s*$/m);
+    assert.equal((nc.match(/ts\.net/g) ?? []).length, 1, "only the configured ts.net name is permitted");
+  });
+
+  test("negative: without VIBESQUAD_MESHNET_HOST a fresh home's CA and leaf carry no ts.net name at all", () => {
+    const fresh = mkdtempSync(join(tmpdir(), "vs-tailscale-nohost-"));
+    const saved = process.env.VIBESQUAD_HOME;
+    process.env.VIBESQUAD_HOME = fresh;
+    try {
+      auth.ensureTls({ meshnetIp: TS_IP, meshnetHost: "", lanIp: LAN_IP });
+      for (const file of ["ca.crt", "server.crt"]) {
+        const text = auth.openssl(["x509", "-in", join(fresh, "tls", file), "-noout", "-text"]);
+        assert.doesNotMatch(text, /ts\.net/i, file);
+      }
+      const leafSan = new X509Certificate(readFileSync(join(fresh, "tls", "server.crt"))).subjectAltName ?? "";
+      assert.match(leafSan, new RegExp(`IP Address:${TS_IP.replace(/\./g, "\\.")}`), "the transport IP is still covered");
+    } finally {
+      process.env.VIBESQUAD_HOME = saved;
+      rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
   test("negative: a ts.net name that is not configured fails TLS verification (not in the SAN / CA name constraints)", async () => {
     await assert.rejects(tlsCall({ path: "/ca.crt", servername: "other.example.ts.net" }), (e) => /ERR_TLS_CERT_ALTNAME_INVALID/.test(String(e?.code)));
   });
