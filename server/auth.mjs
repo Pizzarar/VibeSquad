@@ -93,7 +93,10 @@ const isPrivateLanIpv4 = (ip) => {
   return false;
 };
 
-const VIRTUAL_IFACE_RE = /vEthernet|WSL|Hyper-V|Docker|VMware|VirtualBox|NordLynx|Tailscale|ZeroTier|Loopback|TAP|TUN/i;
+// Windows-era names (unchanged, unanchored) plus Linux bridges / virtual NICs (audit R22), which are anchored at the
+// start of the name so `eth0`/`enp3s0`/`wlan0` never match. Tailscale stays on the first list (a CGNAT overlay is never
+// a LAN address; detectMeshnetIp / TAILSCALE_IFACE_RE pick it for the meshnet slot). No Linux term matches `tailscale0`.
+export const VIRTUAL_IFACE_RE = /vEthernet|WSL|Hyper-V|Docker|VMware|VirtualBox|NordLynx|Tailscale|ZeroTier|Loopback|TAP|TUN|^(?:docker\d*|br-|veth|virbr|lxc|lxd|cni|flannel|podman)/i;
 
 // idea-518: os.networkInterfaces() is a synchronous GetAdaptersAddresses call. On a Windows box with vEthernet/WSL/VPN
 // adapters it held the server loop ~2 s per call, and netConfig() ran it twice per /api/auth/status poll (~43% of the

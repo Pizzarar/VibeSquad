@@ -121,6 +121,8 @@ export interface WatchEngineOptions {
   lastMessage?: (id: string) => Promise<string> | string;
   log?: (msg: string) => void;
   retryMs?: number;
+  /** B11a: true when the Squad is in an asleep folder; its pings and nudges wait (not marked attempted) until a wake. */
+  asleep?: (team: string) => boolean;
 }
 
 export interface WatchEngine {

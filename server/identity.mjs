@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readJsonFileWithBom } from "./user-settings.mjs";
 import { resolveTeamsFilePath as resolveSharedTeamsFilePath } from "./teams-file.mjs";
+export { DEFAULT_FOLDERS, foldersOf, isTeamAsleep, readTeamsConfig, asleepTeamIds } from "./teams-file.mjs";
 import { isHubLane, BUG_LANE_FALLBACK_IDS, AUDIT_LANE_FALLBACK_IDS, laneKindOf, findBugLane, findAuditLane, isHiddenLane, cleanLaneCode, laneCodeCandidates, laneCodesForTeam, freezeLaneCodes } from "./lane-pure.mjs";
 export { isHubLane, BUG_LANE_FALLBACK_IDS, AUDIT_LANE_FALLBACK_IDS, laneKindOf, findBugLane, findAuditLane, isHiddenLane, cleanLaneCode, laneCodeCandidates, laneCodesForTeam, freezeLaneCodes };
 
