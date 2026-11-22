@@ -139,3 +139,26 @@ test('ledger: exits coalesce into async writes, add stays synchronous and is nev
   assert.deepEqual(readChildren(home).map((r) => r.pid), [910003]);
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
 });
+
+test('ledger race: an add landing while an async removal write is in flight is on disk on return and never dropped (idea-545 R1)', async () => {
+  const home = tmp();
+  const ledger = createChildLedger(home);
+  const { EventEmitter } = await import('node:events');
+  const mk = (pid) => Object.assign(new EventEmitter(), { pid });
+  const pidsOnDisk = () => readChildren(home).map((r) => r.pid);
+  const live = new Set();
+  let n = 920000;
+  for (let i = 0; i < 40; i++) {
+    const old = mk(n++);
+    ledger.add(old, 'node.exe'); live.add(old.pid);
+    old.emit('exit'); live.delete(old.pid);
+    await sleep(40 + (i % 5) * 5); // straddles the 50 ms removal timer: before, at and after the async write starts
+    const c = mk(n++);
+    ledger.add(c, 'node.exe'); live.add(c.pid);
+    assert.ok(pidsOnDisk().includes(c.pid), 'add durable on return (iter ' + i + ')');
+    for (let k = 0; k < 4; k++) { await new Promise((r) => setImmediate(r)); assert.ok(pidsOnDisk().includes(c.pid), 'add survives an in-flight async write (iter ' + i + ', tick ' + k + ')'); }
+  }
+  await sleep(300);
+  assert.deepEqual(pidsOnDisk().sort(), [...live].sort());
+  assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
+});

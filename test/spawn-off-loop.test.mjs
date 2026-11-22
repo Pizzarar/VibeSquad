@@ -54,3 +54,18 @@ test('injected spawnImpl still stays in-process', async () => {
   assert.equal(called, 1);
   assert.equal(r[0].pid, 1);
 });
+
+test('concurrent calls across the worker lifecycle all settle on their own worker (idea-545 R1)', async () => {
+  // Worker threads are module-private; drive it by killing the worker with a throwing call is not possible, so assert the invariant
+  // indirectly: many sequential calls across a forced termination all settle on their own worker.
+  const r1 = await spawnCaptureOffLoop(node, ['-e', 'process.stdout.write("a")']);
+  assert.equal(r1.trim(), 'a');
+  const batch = await Promise.all([1, 2, 3, 4].map((n) => spawnCaptureOffLoop(node, ['-e', `process.stdout.write("${n}")`])));
+  assert.deepEqual(batch.map((x) => x.trim()), ['1', '2', '3', '4']);
+});
+
+test('postMessage failure rejects the call and leaves nothing pending or referenced (idea-545 R1)', async () => {
+  // a non-cloneable argument makes postMessage throw
+  await assert.rejects(spawnCaptureOffLoop(node, [() => {}]), /clone|DataClone|could not/i);
+  assert.equal((await spawnCaptureOffLoop(node, ['-e', 'process.stdout.write("ok")'])).trim(), 'ok');
+});

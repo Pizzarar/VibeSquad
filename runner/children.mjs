@@ -102,19 +102,35 @@ export function sweepOrphans(home, { inspect, inspectMany = inspectProcesses, ki
 // Live ledger for this runner process. add() on spawn, removal on the child's exit (which also covers park).
 export function createChildLedger(home) {
   const entries = new Map();
-  let gen = 0; // bumped on every change; an async write that lands behind a newer change rewrites
+  let gen = 0; // bumped on every change; every write reconciles against it
   let soon = null;
   let writing = null;
-  const flush = () => { gen++; writeChildren(home, [...entries.values()]); }; // add/clear: durable before the child runs (the crash-sweep reads this)
+  const snapshot = () => [...entries.values()];
+  // The ONE sync writer (add/clear, and the repair paths below): durable before the child runs (the crash sweep reads this). It also
+  // cancels a pending removal timer: this write already carries every removal made so far.
+  const flush = () => { gen++; if (soon) { clearTimeout(soon); soon = null; } writeChildren(home, snapshot()); };
   // idea-545: an exit only REMOVES a record; the sync write+rename blocked the runner loop ~1-5s under AV (loop-lag 2026-11-22: 5 stalls / 11s).
   // Removals coalesce (one write per burst) and go through async fs; a stale leftover record is harmless (the sweep checks image + start time).
+  // An add that lands while an async write is in flight cannot be cancelled mid-rename, so the async writer (a) re-checks gen before
+  // its rename, and (b) if gen moved by the time the rename lands, or any step failed, repairs with the sync writer at once: the file
+  // never stays behind an add (the only exposure is the sliver between a stale rename landing and that repair, same tick).
   const writeAsync = async () => {
     const file = path.join(home, CHILDREN_FILE);
     const tmp = `${file}.${process.pid}.async.tmp`; // not the sync writer's tmp: the two can overlap
     for (;;) {
       const snap = gen;
-      try { await writeFile(tmp, JSON.stringify([...entries.values()])); await rename(tmp, file); } catch { try { await rm(tmp, { force: true }); } catch { /* ignore */ } return; }
+      try {
+        await writeFile(tmp, JSON.stringify(snapshot()));
+        if (snap !== gen) continue; // an add/clear wrote the file meanwhile: don't rename a stale snapshot over it
+        await rename(tmp, file);
+      } catch {
+        try { await rm(tmp, { force: true }); } catch { /* ignore */ }
+        flush(); // failed (EPERM/EBUSY under AV): never drop records, fall back to the sync writer
+        return;
+      }
       if (snap === gen) return;
+      flush(); // a change landed during the rename: re-assert the current state
+      return;
     }
   };
   const arm = () => { soon = setTimeout(() => { soon = null; if (writing) arm(); else writing = writeAsync().finally(() => { writing = null; }); }, 50); soon.unref?.(); };
