@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Detached, one-shot restart of the VS runner + VS server (idea-78). Every agent, the Overlord included, runs ON the
-// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs (itself built-ins only) (the coordinated-drain helpers,
+// runner, so whoever stops it cuts their own turn. Its static imports are Node built-ins plus server/runtime-dir.mjs and server/proc-tree.mjs (both built-ins only) (the coordinated-drain helpers,
 // server/restart-coord.mjs, load lazily on a deferral or after a success; a load failure only loses the lead names). It is meant to
 // be started detached (`vs restart`, or `Start-Process -WindowStyle Hidden node scripts/restart-runtime.mjs`), so it
 // outlives both processes and finishes the job alone.
@@ -37,6 +37,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runtimeDir as sharedRuntimeDir } from '../server/runtime-dir.mjs';
+import { posixKillTree } from '../server/proc-tree.mjs';
 
 const IS_WIN = process.platform === 'win32';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -262,15 +263,22 @@ export function listenerPid(port) {
   } catch { return null; }
 }
 
-/** Graceful: SIGTERM on POSIX; plain `taskkill /PID` (no /F) on Windows. */
-export function termGracefully(pid) {
-  if (IS_WIN) { spawnSync('taskkill', ['/PID', String(pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); return; }
-  try { process.kill(pid, 'SIGTERM'); } catch { /* gone */ }
+// POSIX (audit R27): the server and runner are started `detached`, so each leads its own process group; signal the group
+// (-pid) so their non-detached children go too, else the pid alone (one this script did not start). No /proc descendant walk
+// here: a ppid walk from the server would reach the runner it spawned (its own group) and every agent. No escalation timer:
+// stopProc waits and calls killHard itself. `win`/`run`/`posix` are test overrides; the win32 branches are unchanged.
+const posixSignal = (pid, signal, posix) => {
+  try { posixKillTree(pid, { signal, graceMs: null, walk: false, ...posix }); } catch { /* gone */ }
+};
+/** Graceful: SIGTERM on POSIX (to the process group when pid leads one); plain `taskkill /PID` (no /F) on Windows. */
+export function termGracefully(pid, { win = IS_WIN, run = spawnSync, posix = {} } = {}) {
+  if (win) { run('taskkill', ['/PID', String(pid)], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); return; }
+  posixSignal(pid, 'SIGTERM', posix);
 }
 /** Last resort only. */
-export function killHard(pid) {
-  if (IS_WIN) { spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); return; }
-  try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+export function killHard(pid, { win = IS_WIN, run = spawnSync, posix = {} } = {}) {
+  if (win) { run('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 10000 }); return; }
+  posixSignal(pid, 'SIGKILL', posix);
 }
 
 /** Starts a fully detached process whose stdio goes to a log file. Returns the pid. */
