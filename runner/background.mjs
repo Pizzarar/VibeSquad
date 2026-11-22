@@ -5,6 +5,7 @@
 // (conhost.exe on Windows, the vs MCP server, playwright, user MCPs like blender-mcp under agy), and gemini relaunches
 // itself as a node child, so "any descendant" would hold every agent forever. Every agent-run command goes through a shell.
 import { spawn } from 'node:child_process';
+import { spawnCaptureOffLoop } from './spawn-off-loop.mjs';
 
 const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'fish', 'ksh', 'tcsh', 'csh', 'nu', 'cmd', 'powershell', 'pwsh']);
 const imageOf = (name) => String(name ?? '').split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
@@ -65,11 +66,13 @@ const WIN_SCRIPT = "Get-CimInstance Win32_Process -Property ProcessId,ParentProc
 
 // One snapshot of the whole process table (Windows: a single CIM query, not a per-pid loop; POSIX: one ps). Async: the
 // CIM query takes ~0.5-1.5 s and must never block the runner's event loop.
-export function snapshotProcesses({ platform = process.platform, spawnImpl = spawn, timeoutMs = 20_000 } = {}) {
+// idea-545: the default spawn runs in a worker thread (spawn blocks its caller ~0.5-1s+ on Windows); an injected spawnImpl stays in-process.
+export function snapshotProcesses({ platform = process.platform, spawnImpl = null, timeoutMs = 20_000 } = {}) {
   const win = platform === 'win32';
   const [file, args] = win
     ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', WIN_SCRIPT]]
     : ['ps', ['-A', '-o', 'pid=', '-o', 'ppid=', '-o', 'args=']];
+  if (!spawnImpl) return spawnCaptureOffLoop(file, args, { timeoutMs }).then((out) => (win ? parseWin(out) : parsePs(out)));
   return new Promise((resolve, reject) => {
     let out = '';
     let done = false;

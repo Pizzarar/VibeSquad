@@ -14,6 +14,7 @@
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
+import { spawnCaptureOffLoop } from './spawn-off-loop.mjs';
 import { shellCmdTail } from './background.mjs';
 import { redactHostPathTokens } from '../server/redact-host-paths.mjs';
 
@@ -145,7 +146,8 @@ export function planReap({ procs, listeners, markers, agentId, tokenSha, endedAt
 
 // ---- probes ---------------------------------------------------------------------------------------------------------
 
-const runPs = (script, { spawnImpl = spawn, timeoutMs = 30_000, stdin = null } = {}) => new Promise((resolve, reject) => {
+// idea-545: with no injected spawnImpl the spawn runs in a worker thread (it blocks its caller ~0.5-1s+ on Windows).
+const runPs = (script, { spawnImpl = null, timeoutMs = 30_000, stdin = null } = {}) => !spawnImpl ? spawnCaptureOffLoop('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeoutMs, stdin }) : new Promise((resolve, reject) => {
   let out = '';
   let done = false;
   const child = spawnImpl('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { shell: false, windowsHide: true, stdio: [stdin === null ? 'ignore' : 'pipe', 'pipe', 'ignore'] });
@@ -158,7 +160,7 @@ const runPs = (script, { spawnImpl = spawn, timeoutMs = 30_000, stdin = null } =
   if (stdin !== null) { child.stdin.on('error', () => {}); child.stdin.end(stdin); }
 });
 
-const runCmd = (file, args, { spawnImpl = spawn, timeoutMs = 20_000 } = {}) => new Promise((resolve, reject) => {
+const runCmd = (file, args, { spawnImpl = null, timeoutMs = 20_000 } = {}) => !spawnImpl ? spawnCaptureOffLoop(file, args, { timeoutMs }) : new Promise((resolve, reject) => {
   let out = '';
   let done = false;
   const child = spawnImpl(file, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
@@ -202,7 +204,7 @@ export function parseSs(text) {
 }
 
 /** { procs, listeners } for the whole machine. Rejects on an unsupported platform (the caller fails closed). */
-export async function snapshotListeners({ platform = process.platform, spawnImpl = spawn } = {}) {
+export async function snapshotListeners({ platform = process.platform, spawnImpl = null } = {}) {
   if (platform === 'win32') return parseWinTable(await runPs(WIN_TABLE, { spawnImpl }));
   if (platform === 'linux') {
     const now = Date.now();
@@ -269,7 +271,7 @@ export function parseMarkers(text) {
 }
 
 /** Map<pid, { agentId, tokenSha } | { error }> for the given pids. A pid absent from the map was not read. */
-export async function readEnvMarkers(pids, { platform = process.platform, spawnImpl = spawn, readFileImpl = readFile } = {}) {
+export async function readEnvMarkers(pids, { platform = process.platform, spawnImpl = null, readFileImpl = readFile } = {}) {
   const ok = [...new Set(pids)].filter((p) => Number.isInteger(p) && p > 0);
   if (!ok.length) return new Map();
   if (platform === 'win32') {
@@ -313,7 +315,7 @@ export function killPids(pids, { platform = process.platform, spawnImpl = spawn,
 }
 
 /** Async re-date (never spawnSync: the runner's loop must not block): Map<pid, { createdMs }> for the pids still alive. */
-export async function redatePids(pids, { platform = process.platform, spawnImpl = spawn } = {}) {
+export async function redatePids(pids, { platform = process.platform, spawnImpl = null } = {}) {
   const ok = [...new Set(pids)].filter((p) => Number.isInteger(p) && p > 0);
   const out = new Map();
   if (!ok.length) return out;

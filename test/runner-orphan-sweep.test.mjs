@@ -114,7 +114,28 @@ test('spawnNoShell records the child and drops it on exit', async () => {
   assert.equal(rec.name, path.basename(process.execPath).toLowerCase());
   assert.ok(Math.abs(rec.startedAt - Date.now()) < 5000);
   await new Promise((res) => c.once('exit', res));
+  // idea-545: the removal is coalesced + async, so it lands shortly after the exit
+  for (let i = 0; i < 100 && readChildren(home).length; i++) await sleep(50);
   assert.deepEqual(readChildren(home), []);
   assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.tmp')), false);
   setChildLedger(null);
+});
+
+test('ledger: exits coalesce into async writes, add stays synchronous and is never lost to a stale write (idea-545)', async () => {
+  const home = tmp();
+  const ledger = createChildLedger(home);
+  const { EventEmitter } = await import('node:events');
+  const mk = (pid) => Object.assign(new EventEmitter(), { pid });
+  const a = mk(910001); const b = mk(910002);
+  ledger.add(a, 'node.exe');
+  ledger.add(b, 'node.exe');
+  assert.deepEqual(readChildren(home).map((r) => r.pid).sort(), [910001, 910002]); // sync
+  a.emit('exit');
+  assert.deepEqual(readChildren(home).map((r) => r.pid).sort(), [910001, 910002]); // removal not yet written: off the sync path
+  const c = mk(910003);
+  ledger.add(c, 'node.exe'); // an add between the exit and its write
+  b.emit('exit');
+  for (let i = 0; i < 100 && readChildren(home).map((r) => r.pid).join() !== '910003'; i++) await sleep(50);
+  assert.deepEqual(readChildren(home).map((r) => r.pid), [910003]);
+  assert.equal(existsSync(path.join(home, CHILDREN_FILE + '.' + process.pid + '.async.tmp')), false);
 });
