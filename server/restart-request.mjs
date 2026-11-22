@@ -471,7 +471,8 @@ export function runSyncAsync({ env = process.env, repoRoot = syncRepoRoot(env), 
       const why = timedOut ? `sync-runtime timed out after ${Math.round(timeoutMs / 60_000)} min`
         : res?.skipped ? `skipped: ${res.skipped}`
         : res?.refused ? `refused: ${res.refused}`
-        : res ? "no live runtime dir to sync into"
+        : res?.error ? `failed: ${clean(res.error, 200)}`
+        : res ? "sync-runtime reported no sync"
         : `sync-runtime exited ${code} without a result (${out.trim().split(/\r?\n/).pop() ?? ""})`;
       done({ ok: false, reason: why });
     });

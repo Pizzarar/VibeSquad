@@ -2,7 +2,9 @@
 // here touches the real runner, server or ~/.vibesquad, and fire() is a fake (the real one runs `vs restart`).
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+const rtEnv = (lad) => ({ LOCALAPPDATA: lad, VIBESQUAD_RUNTIME_DIR: path.join(lad, "VibeSquad", "runtime") }); // pins the runtime dir on every OS
 import os from "node:os";
 import path from "node:path";
 import {
@@ -539,9 +541,9 @@ test("idea-398: runtimeLagAsync counts the commits between the runtime build-sta
   const lad = tmp();
   mkdirSync(path.join(lad, "VibeSquad", "runtime"), { recursive: true });
   writeFileSync(path.join(lad, "VibeSquad", "runtime", "build-stamp.json"), JSON.stringify({ commit: old, repo: path.join(repo, ".git") }));
-  assert.deepEqual(await runtimeLagAsync({ tip: "master" }, { env: { LOCALAPPDATA: lad } }), { sha: old, behind: 3 });
-  assert.deepEqual(await runtimeLagAsync({ tip: "nope-branch" }, { env: { LOCALAPPDATA: lad } }), { sha: old, behind: null });
-  assert.deepEqual(await runtimeLagAsync({ tip: "master" }, { env: { LOCALAPPDATA: tmp() } }), { sha: null, behind: null });
+  assert.deepEqual(await runtimeLagAsync({ tip: "master" }, { env: rtEnv(lad) }), { sha: old, behind: 3 });
+  assert.deepEqual(await runtimeLagAsync({ tip: "nope-branch" }, { env: rtEnv(lad) }), { sha: old, behind: null });
+  assert.deepEqual(await runtimeLagAsync({ tip: "master" }, { env: rtEnv(tmp()) }), { sha: null, behind: null });
 });
 
 test("idea-398: without the build token no sync runs; a synced HEAD that is not the requested tip is named", async () => {
@@ -560,17 +562,22 @@ test("idea-398: without the build token no sync runs; a synced HEAD that is not 
 
 test("idea-398: runSyncAsync reads the real sync-runtime outcome; syncRepoRoot comes from the runtime build-stamp", async () => {
   const lad = tmp();
-  assert.equal(syncRepoRoot({ LOCALAPPDATA: lad }), null);
-  assert.match((await runSyncAsync({ env: { LOCALAPPDATA: lad } })).reason, /no build-stamp\.json/);
+  assert.equal(syncRepoRoot(rtEnv(lad)), null);
+  assert.match((await runSyncAsync({ env: rtEnv(lad) })).reason, /no build-stamp\.json/);
   const runtime = path.join(lad, "VibeSquad", "runtime");
   mkdirSync(runtime, { recursive: true });
   const repo = path.resolve(import.meta.dirname, "..");
   writeFileSync(path.join(runtime, "build-stamp.json"), JSON.stringify({ commit: TIP, repo: path.join(repo, ".git") }));
-  assert.equal(syncRepoRoot({ LOCALAPPDATA: lad }), repo);
-  // The real script, run as a child against this checkout. A linked worktree or a dirty tree is skipped by the guard; a
-  // clean main checkout reaches the copy step and finds no runtime under the temp LOCALAPPDATA it was given. Never synced.
-  const env = { ...process.env, LOCALAPPDATA: tmp(), VIBESQUAD_HOME: tmp(), npm_lifecycle_event: "" };
-  const r = await runSyncAsync({ env, repoRoot: repo });
+  assert.equal(syncRepoRoot(rtEnv(lad)), repo);
+  // The real script, run as a child. Sync now creates a missing runtime dir (first sync on a fresh machine), so it must never
+  // run against a real checkout here: a copy of server/ + runner/ in a temp repo on a unit branch hits the skip guard on any branch,
+  // and VIBESQUAD_RUNTIME_DIR pins any runtime it could touch to a temp dir (LOCALAPPDATA alone is ignored off win32).
+  const copy = tmp();
+  for (const d of ["server", "runner"]) cpSync(path.join(repo, d), path.join(copy, d), { recursive: true });
+  execFileSync("git", ["-C", copy, "init", "-q", "-b", "unit-x"]);
+  const env = { ...process.env, LOCALAPPDATA: tmp(), VIBESQUAD_HOME: tmp(), VIBESQUAD_RUNTIME_DIR: path.join(tmp(), "runtime"), npm_lifecycle_event: "" };
+  const r = await runSyncAsync({ env, repoRoot: copy });
   assert.equal(r.ok, false);
-  assert.match(r.reason, /^(skipped: .+|no live runtime dir to sync into)$/);
+  assert.match(r.reason, /^skipped: .+/);
+  assert.ok(!existsSync(env.VIBESQUAD_RUNTIME_DIR), "a skipped sync creates no runtime dir");
 });

@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -276,7 +276,11 @@ test("runSync: the owner's ignoreDrain syncs during a pending drain and logs one
 });
 
 test("sync-runtime CLI accepts --ignore-drain (not an unknown flag)", () => {
-  const r = spawnSync(process.execPath, ["server/sync-runtime.mjs", "--ignore-drain"], { cwd: root, encoding: "utf8", env: cleanEnv({ VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(path.join(tmpdir(), "vs-sync-lad-")) }) });
+  // A copy of server/ + runner/ in a temp repo on a unit branch: the skip guard fires, so no sync (or build) runs on any real checkout.
+  const copy = mkdtempSync(path.join(tmpdir(), "vs-sync-copy-"));
+  for (const d of ["server", "runner"]) cpSync(path.join(root, d), path.join(copy, d), { recursive: true });
+  spawnSync("git", ["-C", copy, "init", "-q", "-b", "unit-x"]);
+  const r = spawnSync(process.execPath, [path.join(copy, "server", "sync-runtime.mjs"), "--ignore-drain"], { cwd: copy, encoding: "utf8", env: cleanEnv({ VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: mkdtempSync(path.join(tmpdir(), "vs-sync-lad-")), VIBESQUAD_RUNTIME_DIR: mkdtempSync(path.join(tmpdir(), "vs-sync-rt-")) }) });
   assert.doesNotMatch(r.stdout + r.stderr, /unknown flag/);
   assert.notEqual(r.status, 2);
 });

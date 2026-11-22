@@ -57,6 +57,7 @@ import { liveRoles, roleProfileLabel } from "../server/spawn-route.mjs";
 import { loadTierLadder } from "../server/stakes-ladder.mjs";
 import { readLiveCapDoc, setProviderCapped } from "../server/provider-failover.mjs";
 import { staleWarning } from "../server/stale-runtime.mjs";
+import { linkNodeModules } from "../server/runtime-dir.mjs";
 import { fetchWithLocalToken, localTokenPath, readLocalToken, requestLocalLoginUrl } from "../server/local-token.mjs";
 import {
   readLaneSpec,
@@ -1577,15 +1578,7 @@ export function installVsShim({ binDirs, targetScript, baseHome, force = false }
         // best-effort copy
       }
     }
-    try {
-      const srcNm = path.join(repoRoot, "node_modules");
-      const dstNm = path.join(runtimeDir, "node_modules");
-      if (fs.existsSync(srcNm) && !fs.existsSync(dstNm)) {
-        fs.symlinkSync(srcNm, dstNm, process.platform === "win32" ? "junction" : "dir");
-      }
-    } catch {
-      // non-fatal
-    }
+    linkNodeModules(repoRoot, runtimeDir);
   }
 
   const primaryScript = path.resolve(targetScript || path.join(repoRoot, "cli", "vs.mjs"));

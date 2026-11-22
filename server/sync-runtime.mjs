@@ -4,7 +4,7 @@ import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync,
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { withFileLockSync } from "./file-lock.mjs";
-import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
+import { linkNodeModules, runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { checkDrainGuard, DRAIN_OVERRIDE_FLAG, drainOverrideRequested } from "./restart-coord.mjs";
 
 const rootDir = resolve(import.meta.dirname, "..");
@@ -152,7 +152,6 @@ const describeErr = (err) => String(err?.stderr || "").trim().split("\n")[0] || 
 export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}, commit = null } = {}) {
   const rename = ops.rename ?? renameSync;
   const runtimeDir = runtimeDirFor(env);
-  mkdirSync(runtimeDir, { recursive: true }); // first sync on a fresh machine (Linux/forge): create + seed the runtime
 
   let sha;
   let tracked;
@@ -163,6 +162,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
     return { synced: false, runtimeDir, error: `cannot read the git-tracked file list at ${commit ? short(commit) : "HEAD"} (${describeErr(err)}); only tracked files are synced, the live runtime was kept` };
   }
 
+  mkdirSync(runtimeDir, { recursive: true }); // first sync on a fresh machine (Linux/forge): create + seed, once the source is readable the runtime
   const stage = join(runtimeDir, `.sync-stage-${process.pid}`);
   const backup = join(runtimeDir, `.sync-backup-${process.pid}`);
   const indexFile = join(runtimeDir, `.sync-index-${process.pid}`);
@@ -231,6 +231,7 @@ export function syncRuntimeDir(repoRoot = rootDir, { env = process.env, ops = {}
   }
   clean();
   removeEmptiedDirs(runtimeDir, pruned);
+  linkNodeModules(repoRoot, runtimeDir); // a first sync into a fresh dir needs the deps too (no-op when the runtime has them)
 
   // The live server serves runtime/dist-desktop/VibeSquad.apk. Ship the staged build only as a verified pair
   // (sidecar present and equal to the apk's hash), via temp file + rename, apk first and sidecar last.
@@ -592,7 +593,7 @@ export function runSync({
     return { synced: false, skipped: skip };
   }
   const runtimeDir = runtimeDirFor(env);
-  if (!dryRun) mkdirSync(runtimeDir, { recursive: true }); // first sync seeds the dir; a dry run creates nothing
+  // The runtime dir is created by syncRuntimeDir, only after the git and drain guards above/below have said yes.
   const refuse = (why, extra = {}) => {
     log(`[sync-runtime] refused: ${why}; the live runtime is unchanged`);
     return { synced: false, refused: why, ...extra };

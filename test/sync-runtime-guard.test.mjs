@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -48,8 +48,17 @@ test("sync skipped on a unit branch, dirty tree, and linked worktree; force over
   assert.equal(syncSkipReason(wt, { force: true }), null);
 });
 
+// The CLI syncs the checkout it lives in. Copy server/ + runner/ into a temp repo on a unit branch so the skip guard fires whatever
+// branch the real checkout is on (on clean master it would otherwise create + seed a runtime and build).
+function nonMasterCopy() {
+  const dir = tmp();
+  for (const d of ["server", "runner"]) cpSync(join(import.meta.dirname, "..", d), join(dir, d), { recursive: true });
+  git(dir, "init", "-q", "-b", "unit-x");
+  return join(dir, "server", "sync-runtime.mjs");
+}
+
 test("CLI prints a one-line skip and exits 0 for a non-master checkout", () => {
-  const out = execFileSync(process.execPath, ["server/sync-runtime.mjs"], { encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: tmp() } });
+  const out = execFileSync(process.execPath, [nonMasterCopy()], { encoding: "utf8", env: { ...process.env, VIBESQUAD_SYNC_FORCE: "", LOCALAPPDATA: tmp(), VIBESQUAD_RUNTIME_DIR: tmp() } });
   assert.ok(out.split("\n").filter(Boolean).length <= 1);
 });
 
