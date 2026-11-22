@@ -2073,9 +2073,9 @@ test("idea-528: ctx menu marks its open row, Tab returns focus to the trigger, d
   assert.ok(rule('html[data-vibe="boring"] .ctx-menu button:disabled')[0].includes("background: transparent"));
   assert.ok(rule('html[data-vibe="boring"] .boring-row-menu-btn[data-ctx-open]').length > 0 || css.includes('.boring-row-menu-btn[data-ctx-open]'));
   assert.ok(css.includes('.boring-conv-line:not(.boring-project-line) .boring-row-menu-btn { margin-left: 0; }'), "lane rows keep their slot (timestamp stays readable)");
-  assert.ok(css.includes('html[data-vibe="boring"] .shortcut-modal {') && css.includes(':is(.modal, .shortcut-modal) .btn.bad'), "Stop confirm gets the Normal skin");
-  assert.ok(/data-theme="dark"\] :is\(\.modal, \.shortcut-modal\) \.btn\.bad \{ color: #1a1624/.test(css), "dark danger label is dark");
-  assert.ok(css.includes('html[data-vibe="boring"] .modal-head {') && css.includes('html[data-vibe="boring"] :is(.modal, .shortcut-modal) .btn.bad {'));
+  assert.ok(css.includes('html[data-vibe="boring"] .shortcut-modal {') && /html\[data-vibe="boring"\] \.modal \.btn\.bad,\nhtml\[data-vibe="boring"\] \.shortcut-modal \.btn\.bad \{/.test(css), "Stop confirm gets the Normal skin");
+  assert.ok(/\[data-theme="dark"\] \.modal \.btn\.bad,\nhtml\[data-vibe="boring"\]\[data-theme="dark"\] \.shortcut-modal \.btn\.bad \{ color: #1a1624/.test(css), "dark danger label is dark");
+  assert.ok(css.includes('html[data-vibe="boring"] .modal-head {') && /html\[data-vibe="boring"\] \.modal \.btn\.bad:hover:not\(:disabled\),\nhtml\[data-vibe="boring"\] \.shortcut-modal \.btn\.bad:hover:not\(:disabled\) \{/.test(css));
   // idea-528 added no !important: the marked rules and the Normal modal block are clean.
   assert.doesNotMatch(css.slice(css.indexOf("/* idea-519/528"), css.indexOf("html[data-vibe=\"boring\"] .boring-lane-add:hover")), /!important/);
   assert.doesNotMatch(css.slice(css.indexOf("/* idea-528 m8")), /!important/);

@@ -1285,6 +1285,9 @@ html[data-vibe="boring"] .ctx-menu button.ctx-sep { border-top: 1px solid var(--
 html[data-vibe="boring"] .modal { background-image: none; padding-top: 0; border-color: var(--border); border-radius: 10px; }
 html[data-vibe="boring"] .shortcut-modal { background-image: none; padding-top: 16px; border-color: var(--border); border-radius: 10px; }
 html[data-vibe="boring"] .modal-head { background: var(--surface-2); background-image: none; color: var(--text-1); font-family: inherit; letter-spacing: 0; border-bottom: 1px solid var(--border); }
-html[data-vibe="boring"] :is(.modal, .shortcut-modal) .btn.bad { background: var(--st-err); background-image: none; border-color: var(--st-err); color: #fff; }
-html[data-vibe="boring"][data-theme="dark"] :is(.modal, .shortcut-modal) .btn.bad { color: #1a1624; } /* dark --st-err is a light tint (text-on-dark): dark label keeps >= 4.5:1 */
-html[data-vibe="boring"] :is(.modal, .shortcut-modal) .btn.bad:hover:not(:disabled) { filter: brightness(1.08); }
+html[data-vibe="boring"] .modal .btn.bad,
+html[data-vibe="boring"] .shortcut-modal .btn.bad { background: var(--st-err); background-image: none; border-color: var(--st-err); color: #fff; }
+html[data-vibe="boring"][data-theme="dark"] .modal .btn.bad,
+html[data-vibe="boring"][data-theme="dark"] .shortcut-modal .btn.bad { color: #1a1624; } /* dark --st-err is a light tint (text-on-dark): dark label keeps >= 4.5:1 */
+html[data-vibe="boring"] .modal .btn.bad:hover:not(:disabled),
+html[data-vibe="boring"] .shortcut-modal .btn.bad:hover:not(:disabled) { filter: brightness(1.08); }
