@@ -8,6 +8,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { resolveManagedWorktreeRoot } from "./team-worktrees.mjs";
 
 export const LESSONS_BEGIN = "<!-- vibesquad:lessons:begin -->";
 export const LESSONS_END = "<!-- vibesquad:lessons:end -->";
@@ -154,9 +155,22 @@ export function readLessons({ category, query, limit = 50, storePath, rootDir } 
 // Core standing rules, kept short so the digest stays cheap on prompt tokens. These mirror the
 // top rules of docs/LESSONS.md and are injected verbatim; the detailed symptom/cause/evidence
 // lives in the catalog, not in the prompt.
+// The sanctuary dir as agent-facing rule text, derived from resolveManagedWorktreeRoot(). Windows keeps the
+// %LOCALAPPDATA% token (byte-identical rule text); elsewhere the home prefix is shown as ~ so no user path leaks.
+export function sanctuaryRuleDir({ env = process.env, platform = process.platform, home = homedir(), root = resolveManagedWorktreeRoot(env) } = {}) {
+  if (platform === "win32") {
+    const la = env.LOCALAPPDATA ? resolve(env.LOCALAPPDATA) : "";
+    if (la && root.toLowerCase().startsWith(la.toLowerCase())) return "%LOCALAPPDATA%" + root.slice(la.length);
+    return root;
+  }
+  const h = resolve(home);
+  const sep = root[h.length];
+  return root.startsWith(h) && (sep === "/" || sep === undefined) ? "~" + root.slice(h.length) : root;
+}
+
 export const STANDING_RULES = [
   "Find the lead with `vs who lead` (labels role/lane/ord), never agent-list JSON scraping or title-prefix regex.",
-  "Run unit work in `%LOCALAPPDATA%\\VibeSquad\\worktrees\\<repo>\\<unit>`; never `git worktree add ../<repo>-<unit>` into `projects/`.",
+  `Run unit work in \`${sanctuaryRuleDir()}${process.platform === "win32" ? "\\<repo>\\<unit>" : "/<repo>/<unit>"}\`; never \`git worktree add ../<repo>-<unit>\` into \`projects/\`.`,
   "Write JSON with node `fs.writeFileSync(..., 'utf8')`, never PowerShell `Set-Content`/`Out-File` (UTF-8 BOM breaks parsers).",
   "Never end a turn on a background task with nothing armed: leads/Buddies arm `vs watch add ...`; workers use `vs wait <id> --timeout <s>`.",
   "Route by Role + Tier (from P5c): profile = role; model/effort from the provider x tier ladder; stakes shift the tier; a cap beats an explicit model; failover Claude -> Gemini -> DeepSeek; old names route as today until P5f.",

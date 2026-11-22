@@ -227,3 +227,16 @@ describe("coordinated drain standing rule (PLAN_COORDINATED_DRAIN D0)", () => {
     assert.ok(renderLessonsDigest({ storePath: tempStore() }).includes(`- ${rule}`), "rendered into the injected digest");
   });
 });
+
+it("sanctuaryRuleDir derives from the managed root: %LOCALAPPDATA% on win32, ~ elsewhere (R11)", async () => {
+  const { sanctuaryRuleDir } = await import("../server/lessons.mjs");
+  assert.equal(
+    sanctuaryRuleDir({ platform: "win32", env: { LOCALAPPDATA: String.raw`C:\X\Local` }, root: String.raw`C:\X\Local\VibeSquad\worktrees` }),
+    String.raw`%LOCALAPPDATA%\VibeSquad\worktrees`,
+  );
+  assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/home/u/.vibesquad/worktrees" }), "~/.vibesquad/worktrees");
+  assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/srv/wt" }), "/srv/wt");
+  assert.equal(sanctuaryRuleDir({ platform: "linux", env: {}, home: "/home/u", root: "/home/user2/wt" }), "/home/user2/wt");
+  const rule = STANDING_RULES.find((r) => r.startsWith("Run unit work in"));
+  if (process.platform === "win32") assert.ok(rule.startsWith(String.raw`Run unit work in \`%LOCALAPPDATA%\VibeSquad\worktrees\<repo>\<unit>\`; never`.replaceAll("\\`", "`")));
+});
