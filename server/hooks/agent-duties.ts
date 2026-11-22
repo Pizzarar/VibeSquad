@@ -36,6 +36,8 @@ import {
   resolveAgentIdentity,
   resolveLeadWinner,
   topicOf,
+  isTeamAsleep,
+  readTeamsConfig,
 } from "../identity.mjs";
 import { refreshWhosHere } from "../whos-here.mjs";
 import { tailLinesSync } from "../log-tail.mjs";
@@ -1387,6 +1389,8 @@ export interface Deps {
   unitBranchState?(cwd: string | undefined): Promise<{ unit: string; merged: boolean }>;
   /** Watch sets (server/watch-sets.mjs): engine options, or false for off. Default: on in the watcher host that has runner events. */
   watchSets?: false | Omit<WatchEngineOptions, "getAgent" | "deliver" | "log">;
+  /** B11a: true when the Squad is in an asleep folder (tests inject; default reads teams.json, mtime-cached). */
+  teamAsleep?: (team: string) => boolean;
   /** RunnerBackend.subscribeEvents (passed by the runner hook host): lifecycle events that feed the watch sets. */
   subscribeRunnerEvents?(listener: (ev: any) => void): () => void;
 }
@@ -3499,6 +3503,15 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
 
     // ---- Hook 3: event-driven lead wakeups ---------------------------------
 
+    /** B11a: never throws; an unreadable registry counts as awake so a config fault never silences a Squad. */
+    const teamAsleep = (team: string): boolean => {
+      try {
+        return deps.teamAsleep ? deps.teamAsleep(team) : isTeamAsleep(String(team ?? ""), readTeamsConfig(REPO_ROOT));
+      } catch {
+        return false;
+      }
+    };
+
     /** Queue a wakeup for the current lead in (team, lane) after the debounce window. */
     function queueWake(team: string, entry: LogEntry) {
       wakeQueue.push({ team, entry });
@@ -3656,6 +3669,8 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       if (!WAKE_TYPES.has(entry.type)) return;
       // idea-450: a duplicate [done] line (a digest re-running `vs log done`) must not wake the lead a second time.
       if (entry.type === "done" && duplicateDoneRelay(entry)) return;
+      // B11a: an asleep Squad's lead is not woken by agent log lines; the owner's own `you` lines still wake it.
+      if (entry.type !== "you" && entry.type !== LEGACY_USER_TYPE && teamAsleep(team)) return;
       queueWake(team, entry);
     }
 
@@ -3673,6 +3688,7 @@ export function createPlugin(overrides: Partial<Deps> = {}) {
       deps.watchSets === false ? null : (deps.watchSets ?? (deps.startWatcher && deps.subscribeRunnerEvents ? {} : null));
     const watch: WatchEngine | null = watchOpts
       ? createWatchEngine({
+          asleep: teamAsleep,
           ...watchOpts,
           getAgent: (id: string) => (paseoApi ? snap(paseoApi, id) : Promise.resolve(null)),
           lastMessage: (id: string) => (paseoApi ? lastAssistantText(paseoApi, id, true) : Promise.resolve("")),

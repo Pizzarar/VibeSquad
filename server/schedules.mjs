@@ -6,7 +6,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findAuditLane } from "./identity.mjs";
+import { findAuditLane, isTeamAsleep, readTeamsConfig } from "./identity.mjs";
 import { resolveProjectPath } from "./brief-path.mjs";
 import crypto from "node:crypto";
 
@@ -147,7 +147,7 @@ export const AUDIT_PROMPT = "Read docs/lanes/perfection/AUDIT_BRIEF.md and follo
 export const AUDIT_PROFILE = { name: "Implement - Sonnet", provider: "claude", model: "claude-sonnet-5-5", modeId: "auto", thinkingOptionId: "medium" };
 export const AUDIT_CADENCE = { type: "cron", expression: "17 4 * * *" };
 
-export function createSchedulesStore({ home = vsHome(), backend = null, now = () => Date.now(), tickMs = 15_000, resolveIdentity = null, pruneEveryMs = 60_000 } = {}) {
+export function createSchedulesStore({ home = vsHome(), backend = null, now = () => Date.now(), tickMs = 15_000, resolveIdentity = null, pruneEveryMs = 60_000, teamsConfig = () => readTeamsConfig() } = {}) {
   const file = path.join(home, "schedules.json");
   const logDir = path.join(home, "schedule-logs");
   let timer = null;
@@ -229,6 +229,23 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
     return { agentId: tg.agentId, message: `${trigger}: sent prompt to ${tg.agentId}` };
   }
 
+  /** B11a: the Squad a schedule wakes: its own `team`, else the target cwd's identity, else the target agent's labels. */
+  async function targetTeam(s) {
+    if (s.team) return String(s.team);
+    const tg = s.target ?? {};
+    if (tg.type === "new-agent") {
+      try { return (await resolveIdentity?.(tg.config?.cwd))?.team ?? null; } catch { return null; }
+    }
+    if (tg.agentId && typeof backend?.fetchAgent === "function") {
+      try {
+        const r = await backend.fetchAgent(tg.agentId);
+        const a = r?.agent ?? r;
+        return a?.labels?.team ?? a?.config?.labels?.team ?? null;
+      } catch {}
+    }
+    return null;
+  }
+
   /** Fire a schedule. cadence=true advances runCount/nextRunAt; run-once leaves them alone. */
   async function fire(id, { trigger, cadence }) {
     if (running.has(id)) {
@@ -238,6 +255,21 @@ export function createSchedulesStore({ home = vsHome(), backend = null, now = ()
     running.add(id);
     try {
       const s = getRaw(load(), id);
+      // B11a: a timer fire for an asleep Squad is skipped (not counted as a run) and the cadence moves on. Manual run-once and
+      // run-on-create are the owner's own action and still go through.
+      if (trigger === "schedule") {
+        const team = await targetTeam(s);
+        if (team && isTeamAsleep(team, teamsConfig())) {
+          const fresh = load();
+          const cur = fresh.find((x) => x.id === id);
+          if (cur) {
+            log(id, { ok: true, trigger, skipped: "asleep", message: `${trigger}: skipped: Squad ${team} asleep` });
+            if (cur.status === "active") cur.nextRunAt = nextRunFor(cur.cadence, now());
+            save(fresh);
+          }
+          return { skipped: "asleep" };
+        }
+      }
       let result;
       let entry;
       try {
