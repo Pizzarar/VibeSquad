@@ -40,7 +40,7 @@ Screenshots: `artifacts/boring-b10-4k/` (untracked, in the unit worktree). The t
 
 ### R10-1 · minor · The project chevron and name jump 9px when a project expands or collapses
 - **Job hurt:** monitoring parallel work (job 2), which means flipping projects open and shut.
-- **Evidence:** expanded projects have the chevron at x=21 and the name text at x=58. Collapsed projects have the chevron at x=12 and the name at x=49 (both measured at 4K and 1080). The card's `padding: 8px` plus the 1px border push the header in. So the 16px chevron button moves out from under the pointer after one click, and a second click at the same spot lands 1px outside the button. You can also see project names line up differently in `02` and `03`: the expanded EFI/VibeSquad names start at a different x from rosserlogic.tech and the rows below.
+- **Evidence:** expanded projects have the chevron at x=21 and the name text at x=58. Collapsed projects have the chevron at x=12 and the name at x=49 (both measured at 4K and 1080). The card's `padding: 8px` plus the 1px border push the header in. So the 16px chevron button moves out from under the pointer after one click, and a second click at the same spot lands 1px outside the button. You can also see project names line up differently in `02` and `03`: the expanded EFI/VibeSquad names start at a different x from the collapsed rows below.
 - **Cause:** `src/boring.css:964`. Padding on `.open` only, with no matching offset.
 - **Fix:** keep the header where it is by pulling the card out by the same amount: `.boring-project-block.open { margin-inline: -9px; }`. The sidebar has 12px of side padding, so this fits. Alternatively, put the same inset on collapsed rows with a transparent 1px border and 8px padding, so both states share one box.
 - **Files:** `src/boring.css`. **Effort:** XS. **Lane:** @bor.
@@ -57,7 +57,7 @@ Screenshots: `artifacts/boring-b10-4k/` (untracked, in the unit worktree). The t
 
 ## Owner decisions
 
-None. R8-2 was closed by Aub ("Desk"), and this round confirms the change shipped everywhere.
+None. R8-2 was closed by the owner ("Desk"), and this round confirms the change shipped everywhere.
 
 ## Notes
 - The dark-theme card border is low contrast (about 1.3:1), but the card is a decorative grouping, not a control, and it still reads at 4K. If the owner wants it crisper, use `--border-strong` (or the equivalent token) on `.open` in dark only. That's a polish call, not a finding.
