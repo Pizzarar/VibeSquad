@@ -8,19 +8,22 @@ import { runtimeDir } from "../server/runtime-dir.mjs";
 import { childEnv } from "../scripts/test-child-env.mjs";
 import { runSync, syncRuntimeDir } from "../server/sync-runtime.mjs";
 
-const winHome = () => "C:\Users\someone";
+// String.raw: a plain "C:\Users" literal would silently lose its backslashes.
+const WINHOME = String.raw`C:\Users\someone`;
+const LAD = String.raw`C:\L`;
+const winHome = () => WINHOME;
 const posixHome = () => "/home/someone";
 
 test("override wins on every platform", () => {
-  const env = { VIBESQUAD_RUNTIME_DIR: "/srv/rt", LOCALAPPDATA: "C:\L", VIBESQUAD_HOME: "/h" };
+  const env = { VIBESQUAD_RUNTIME_DIR: "/srv/rt", LOCALAPPDATA: LAD, VIBESQUAD_HOME: "/h" };
   assert.equal(runtimeDir(env, { platform: "win32", homedir: winHome }), "/srv/rt");
   assert.equal(runtimeDir(env, { platform: "linux", homedir: posixHome }), "/srv/rt");
   assert.equal(runtimeDir({ VIBESQUAD_RUNTIME_DIR: "  " }, { platform: "linux", homedir: posixHome }), path.join("/home/someone", ".vibesquad", "runtime"));
 });
 
 test("win32 keeps the LOCALAPPDATA path, falling back to ~/AppData/Local", () => {
-  assert.equal(runtimeDir({ LOCALAPPDATA: "C:\L" }, { platform: "win32", homedir: winHome }), path.join("C:\L", "VibeSquad", "runtime"));
-  assert.equal(runtimeDir({}, { platform: "win32", homedir: winHome }), path.join("C:\Users\someone", "AppData", "Local", "VibeSquad", "runtime"));
+  assert.equal(runtimeDir({ LOCALAPPDATA: LAD }, { platform: "win32", homedir: winHome }), path.join(LAD, "VibeSquad", "runtime"));
+  assert.equal(runtimeDir({}, { platform: "win32", homedir: winHome }), path.join(WINHOME, "AppData", "Local", "VibeSquad", "runtime"));
   // LOCALAPPDATA is ignored off win32 (a stray value must not redirect a Linux runtime)
   assert.equal(runtimeDir({ LOCALAPPDATA: "/x" }, { platform: "linux", homedir: posixHome }), path.join("/home/someone", ".vibesquad", "runtime"));
 });
