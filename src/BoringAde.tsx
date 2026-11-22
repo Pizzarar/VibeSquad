@@ -258,7 +258,7 @@ export function boringSidebarModel(view: TeamView | undefined, now = Date.now())
   // Worst state per container (R2.5): red if anything inside errored, else amber. Only collapsed containers show a badge.
   const deskErr = pinErr(zones.hub) || deskPins.some(pinErr) || memberErr(zones.overlord.member) || memberErr(zones.riffbot.member);
   const projectErr = deskErr || core.bugs.err || conversations.some((c) => c.err);
-  // R8-6: Overlord and RiffBot render their own badges on always-visible rows, so the Core header counts only the remaining Desk workers (header + rows == hubNeedsYou).
+  // R8-6: Overlord and RiffBot render their own badges on always-visible rows, so the Desk header counts only the remaining Desk workers (header + rows == hubNeedsYou).
   const deskWorkersNeedsYou = Math.max(0, hubNeedsYou - core.overlord.needsYou - core.riffbot.needsYou);
   const deskWorkersErr = deskWorkers.some(memberErr);
   return { core, conversations, hubNeedsYou, totalNeedsYou, deskErr, projectErr, deskWorkersNeedsYou, deskWorkersErr };
@@ -798,7 +798,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
     const hw = m.core.deskWorkers;
     return (
       <div key="trinity" className="boring-trinity-card" data-testid={suffix(v, "boring-trinity")}>
-        <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Core</span>{badge(m.deskWorkersNeedsYou, m.deskWorkersErr)}</div>
+        <div className="boring-trinity-head" data-testid={suffix(v, "boring-trinity-head")}><span>Desk</span>{badge(m.deskWorkersNeedsYou, m.deskWorkersErr)}</div>
         {coreRow(v, "boring-core-overlord", "desk:lead", m.core.overlord.label, m.core.overlord.status, m.core.overlord.needsYou, m.core.overlord.age, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id), memberAgent(m.core.overlord.agentId), m.core.overlord.err)}
         {hw.length > 0 && hubPinV && workerList(v, hubPinV, "_desk", hw, suffix(v, "boring-desk-workers"), suffix(v, "boring-desk-workers-fold"), inDesk, () => pickCore("_overlord", m.core.overlord.agentId, v.team.id))}
         {coreRow(v, "boring-core-riffbot", "desk:brainstorm", m.core.riffbot.label, m.core.riffbot.status, m.core.riffbot.needsYou, m.core.riffbot.age, () => pickCore("_riffbot", m.core.riffbot.agentId, v.team.id), memberAgent(m.core.riffbot.agentId), m.core.riffbot.err)}
@@ -835,7 +835,7 @@ export function BoringApp({ views, view, onSelectSquad, onOpenPin, onSpinUpPin, 
             // idea-523: a collapsed project hides every row of its subtree, so it carries the selected state when the selection lives inside it (derived from sel only: exactly one .on row).
             const projectRowCls = isOn(v, "project") || (!open && sel.teamId === v.team.id && sel.rowKey !== null) ? "boring-project-row on" : "boring-project-row";
             return (
-              <div key={v.team.id} className="boring-project-block">
+              <div key={v.team.id} className={open ? "boring-project-block open" : "boring-project-block"}>
                 <div className="boring-conv-line boring-project-line" onContextMenu={(e) => openContextMenu(e, teamCtxItems(v))}>
                   {chevronCol(open, () => toggleProject(v.team.id), v.team.name, `boring-project-toggle-${v.team.id}`)}
                   <button type="button" className={projectRowCls} data-testid={`boring-project-header-${v.team.id}`} aria-expanded={open} onClick={() => openProject(v.team.id)}>
