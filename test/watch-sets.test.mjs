@@ -1166,6 +1166,7 @@ async function pluginHarness(sb, agents, extra = {}) {
     setLabels: async () => {},
     archiveAgent: async () => {},
     watchSets: { home: sb.home, tmpdir: sb.tmp, retryMs: 0, ...(extra.watchSets ?? {}) },
+    ...(extra.deps ?? {}),
   })(server);
   const paseo = {
     agents: {
@@ -2421,6 +2422,74 @@ test(
     } finally {
       h.stop();
     }
+  }),
+);
+
+/**
+ * idea-524: `owner`'s watch on w-1 (feat-alpha) fires on w-1's final through the real watch ping (marked forwarded on delivery);
+ * then (optionally after a later turn with a different final) w-1's digest dg-1 turns up orphaned (a restart left it open past
+ * digestStaleMs) and the sweep runs at `now`. Returns the [done] entries the sweep wrote for w-1.
+ */
+async function orphanSweepAfterWatchPing(sb, owner, { laterFinal = "" } = {}) {
+  const agents = new Map([
+    ["ovl", mk("ovl", "lead", "vibesquad")],
+    ["lead-fa", mk("lead-fa", "lead", "feat-alpha")],
+    ["w-1", mk("w-1", "worker", "feat-alpha")],
+  ]);
+  let current = "PASS 0/0/0 deadbeef: w1 shipped";
+  const clock = { t: Date.now() };
+  const { id } = addWatch({ owner, team: "vibesquad", lane: "feat-alpha", items: [{ kind: "agent", ref: "w-1" }] }, { home: sb.home, now: clock.t });
+  const h = await pluginHarness(sb, agents, {
+    timelineFor: (aid) => (aid === "w-1" ? [{ item: { type: "assistant_message", text: current } }] : []),
+    watchSets: { now: () => clock.t },
+  });
+  try {
+    h.watch.onRunnerEvent({ kind: "turn_started", agentId: "w-1" });
+    h.watch.onRunnerEvent(agentEv("w-1", "running"));
+    clock.t += MIN;
+    h.watch.onRunnerEvent(agentEv("w-1", "idle"));
+    h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+    clock.t += 20 * MIN;
+    await h.watch.tick();
+    await wait(250);
+    const pings = h.sent.filter((s) => s.to === owner && s.text.includes(`Watch ${id}`));
+    assert.equal(pings.length, 1, JSON.stringify(h.sent));
+    assert.match(pings[0].text, /PASS 0\/0\/0 deadbeef: w1 shipped/, "the ping carried w-1's final");
+    if (laterFinal) current = laterFinal;
+    const now = Date.now();
+    agents.set("dg-1", { ...mk("dg-1", "worker", "feat-alpha", { digestFor: "w-1" }), createdAt: iso(now - 20 * MIN) });
+    assert.deepEqual(await h.stop.sweepStaleDigests(now), ["dg-1"], "the orphaned digest is archived");
+    const log = join(sb.home, "teams", "vibesquad", "log.jsonl");
+    const lines = existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l)) : [];
+    return lines.filter((e) => e.type === "done" && (e.refs ?? []).includes("w-1"));
+  } finally {
+    h.stop();
+  }
+}
+
+test(
+  "idea-524: orphan sweep — the lane lead's own watch ping already delivered w-1's final, so no duplicate UNVERIFIED [done]",
+  withPluginEnv(async (sb) => {
+    const done = await orphanSweepAfterWatchPing(sb, "lead-fa");
+    assert.equal(done.length, 0, JSON.stringify(done));
+  }),
+);
+
+test(
+  "idea-524 H1: orphan sweep — an Overlord's watch ping does not suppress the lane lead's UNVERIFIED [done]",
+  withPluginEnv(async (sb) => {
+    const done = await orphanSweepAfterWatchPing(sb, "ovl");
+    assert.equal(done.length, 1, JSON.stringify(done));
+    assert.equal(done[0].text, "UNVERIFIED (digest orphaned): PASS 0/0/0 deadbeef: w1 shipped");
+  }),
+);
+
+test(
+  "idea-524: orphan sweep — a later turn's different final is still written after the lead got the earlier one",
+  withPluginEnv(async (sb) => {
+    const done = await orphanSweepAfterWatchPing(sb, "lead-fa", { laterFinal: "FAIL 1/0/0 cafef00d: w1 round two" });
+    assert.equal(done.length, 1, JSON.stringify(done));
+    assert.equal(done[0].text, "UNVERIFIED (digest orphaned): FAIL 1/0/0 cafef00d: w1 round two");
   }),
 );
 

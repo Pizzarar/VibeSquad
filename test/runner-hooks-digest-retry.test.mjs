@@ -18,10 +18,12 @@ const CWD = path.join(tmp(), 'VibeSquad');
 mkdirSync(CWD, { recursive: true });
 writeFileSync(
   path.join(VS_HOME, 'teams.json'),
-  JSON.stringify({ teams: [{ id: 'vibesquad', name: 'VibeSquad', lanes: [{ id: 'bug-chaser', paths: ['VibeSquad'] }], paths: ['VibeSquad'] }] }),
+  // idea-524: the hub lane 'vibesquad' hosts the Overlord (a watch owner outside the worker's lane); lanes resolve by label.
+  JSON.stringify({ teams: [{ id: 'vibesquad', name: 'VibeSquad', lanes: [{ id: 'vibesquad', hub: true, paths: ['VibeSquad'] }, { id: 'bug-chaser', paths: ['VibeSquad'] }], paths: ['VibeSquad'] }] }),
 );
 
 const { createRunnerHookHost } = await import('../server/backend/runner-hooks.mjs');
+const { addWatch } = await import('../server/watch-sets.mjs');
 
 const LOG = path.join(VS_HOME, 'teams', 'vibesquad', 'log.jsonl');
 const teamLog = () => (existsSync(LOG) ? readFileSync(LOG, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
@@ -44,7 +46,7 @@ const until = async (fn, ms, what) => {
  * Like the runner, a turn shows `running` a couple of polls after its prompt, the status goes idle BEFORE the lifecycle
  * turn_ended reaches the hooks (the A4 retry is scheduled late), and a send to an archived agent throws "is not running".
  */
-function fakeRunner(turns, workerId) {
+function fakeRunner(turns, workerId, { extraAgents = [] } = {}) {
   const agents = new Map();
   const timelines = new Map();
   const archived = [];
@@ -104,7 +106,7 @@ function fakeRunner(turns, workerId) {
       if (!a || a.archivedAt) throw new Error(`agent ${id} is not running`); // runner/runner.mjs send()
       sends.push({ id, text });
       push(id, { type: 'user_message', text });
-      void playTurn(id);
+      if (a.labels?.digestFor) void playTurn(id); // a lead woken by a watch ping plays no digest turn
       return { queued: false };
     },
     async archiveAgent(id) {
@@ -120,8 +122,17 @@ function fakeRunner(turns, workerId) {
   timelines.set(workerId, []);
   push(workerId, { type: 'user_message', text: 'build thing' });
   push(workerId, { type: 'assistant_message', text: 'PASS: built thing' });
+  for (const a of extraAgents) {
+    agents.set(a.id, { ...a, labels: { ...a.labels } });
+    timelines.set(a.id, []);
+  }
   return {
     backend, agents, archived, sends,
+    /** The worker runs another turn that ends with `text` (a later round: a different final). */
+    workerTurn: (text) => {
+      push(workerId, { type: 'user_message', text: 'fix round' });
+      push(workerId, { type: 'assistant_message', text });
+    },
     setHost: (h) => (host = h),
     digestIds: () => [...agents.values()].filter((a) => a.labels.digestFor === workerId).map((a) => a.id),
   };
@@ -211,23 +222,63 @@ test('idea-218: the alternate also fails through its retries -> no third digest,
   assert.deepEqual(r.archived, ids, 'each archived exactly once');
 });
 
-test('idea-524: a digest that fails after the watch already forwarded the worker final logs no duplicate UNVERIFIED [done]', async () => {
-  const workerId = 'rn-w-dup';
-  const f = fakeRunner([...EXHAUST, ...EXHAUST], workerId);
-  const host = await createRunnerHookHost(f.backend, { startWatcher: false, deps: { retryBaseMs: 1200 }, pollMs: 20 });
+// idea-524: the lane lead (lead-1) and the Squad Overlord (ovl, hub lane), both live, for the watch-ping cases below.
+const LEAD = { id: 'lead-1', title: 'Bug lead', cwd: CWD, provider: 'claude', status: 'idle', labels: { team: 'vibesquad', lane: 'bug-chaser', role: 'lead' }, archivedAt: null };
+const OVERLORD = { id: 'ovl', title: 'Overlord', cwd: CWD, provider: 'claude', status: 'idle', labels: { team: 'vibesquad', lane: 'vibesquad', role: 'lead' }, archivedAt: null };
+
+/**
+ * idea-524: `owner`'s watch on the worker fires on its final through the REAL watch engine and wake path (the ping is sent to
+ * the owner, which marks the final forwarded on delivery); then (optionally after a later turn with a different final) the
+ * worker's digest fails through every retry and the alternate, so the UNVERIFIED fallback runs. Returns the worker's [done] entries.
+ */
+async function watchPingThenFailedDigest(workerId, owner, { laterFinal = '' } = {}) {
+  const f = fakeRunner([...EXHAUST, ...EXHAUST], workerId, { extraAgents: [LEAD, OVERLORD] });
+  const clock = { t: Date.now() };
+  const { id: setId } = addWatch({ owner, team: 'vibesquad', lane: 'bug-chaser', items: [{ kind: 'agent', ref: workerId }] }, { home: VS_HOME, now: clock.t });
+  const host = await createRunnerHookHost(f.backend, {
+    startWatcher: false,
+    deps: { retryBaseMs: 1200, debounceMs: 20, leadWakeCooldownMs: 40, watchSets: { home: VS_HOME, retryMs: 0, now: () => clock.t } },
+    pollMs: 20,
+  });
   f.setHost(host);
   try {
-    // The watch ping delivered this exact final to the lead before the digest ran.
-    host.dispose.markFinalForwarded('lead-1', workerId, host.dispose.finalHashOf('PASS: built thing'));
-    await host.emit('agent.turn_ended', { agent: await f.backend.getAgent(workerId), turnId: 't1', outcome: { kind: 'completed' } });
-    // Both digests (primary + idea-218 alternate) are archived after their failed retries; the fallback skipped the write.
+    const watch = host.dispose.watchSets;
+    const ev = (status) => ({ kind: 'status', agentId: workerId, agent: { id: workerId, status, labels: { role: 'worker' } } });
+    watch.onRunnerEvent({ kind: 'turn_started', agentId: workerId });
+    watch.onRunnerEvent(ev('running'));
+    clock.t += 60_000;
+    watch.onRunnerEvent(ev('idle'));
+    watch.onRunnerEvent({ kind: 'turn_ended', agentId: workerId });
+    clock.t += 20 * 60_000;
+    await watch.tick();
+    const ping = await until(() => f.sends.find((s) => s.id === owner && s.text.includes(`Watch ${setId}`)), 5000, 'watch ping delivered');
+    assert.match(ping.text, /PASS: built thing/, 'the ping carried the worker final');
+    if (laterFinal) f.workerTurn(laterFinal);
+    await host.emit('agent.turn_ended', { agent: await f.backend.getAgent(workerId), turnId: laterFinal ? 't2' : 't1', outcome: { kind: 'completed' } });
+    // Both digests (primary + idea-218 alternate) are archived after their failed retries; the fallback ran (or skipped) by then.
     await until(() => f.digestIds().length && f.digestIds().every((id) => f.archived.includes(id)), 30000, 'digest(s) settled');
     await sleep(400); // anything late (a UNVERIFIED fallback) lands here
-    const entries = teamLog().filter((e) => e.type === 'done' && (e.refs ?? []).includes(workerId));
-    assert.equal(entries.length, 0, 'no duplicate UNVERIFIED [done] for a verdict the watch already forwarded');
+    return teamLog().filter((e) => e.type === 'done' && (e.refs ?? []).includes(workerId));
   } finally {
     host.dispose();
   }
+}
+
+test('idea-524: the lane lead\'s own watch ping already delivered the final -> a failed digest logs no duplicate UNVERIFIED [done]', async () => {
+  const entries = await watchPingThenFailedDigest('rn-w-dup', 'lead-1');
+  assert.equal(entries.length, 0, 'no duplicate UNVERIFIED [done] for a verdict the lead already received: ' + JSON.stringify(entries));
+});
+
+test('idea-524 H1: an Overlord\'s watch ping does not suppress the lane lead\'s UNVERIFIED [done] (recipient-scoped)', async () => {
+  const entries = await watchPingThenFailedDigest('rn-w-ovl', 'ovl');
+  assert.equal(entries.length, 1, JSON.stringify(entries));
+  assert.match(entries[0].text, /^UNVERIFIED \(digest failed\): PASS: built thing/);
+});
+
+test('idea-524: a later turn with a different final is not suppressed by the earlier forwarded final', async () => {
+  const entries = await watchPingThenFailedDigest('rn-w-later', 'lead-1', { laterFinal: 'FAIL: second round broke' });
+  assert.equal(entries.length, 1, JSON.stringify(entries));
+  assert.match(entries[0].text, /^UNVERIFIED \(digest failed\): FAIL: second round broke/);
 });
 
 test('idea-218 L1: a plan/read-only pick is swapped for an executing worker profile on its provider, or skipped when it has none', async () => {
