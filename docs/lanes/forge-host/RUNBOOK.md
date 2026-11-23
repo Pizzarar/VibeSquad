@@ -1,8 +1,8 @@
 # Forge runbook: VibeSquad engine room on a Linux box
 
-Owner-facing setup for the forge (Linux, same specs as the dev pp, on Tailscale). Design source of truth:
+Owner-facing setup for the forge (Linux, same specs as the dev pp, on NordVPN Meshnet). Design source of truth:
 `docs/PLAN_FORGE_CUTOVER.md` (Decided, A8, B1-B4). R-numbers refer to rows of `docs/lanes/forge-host/LINUX_AUDIT.md`.
-Placeholders: `forge.example.ts.net` (MagicDNS name), `devpc` (the dev pp's SSH alias), `<port>` (default 4180).
+Placeholders: `<forge mesh ip>` (the forge's Meshnet IPv4), `<forge>.nord` (its Meshnet hostname), `devpc` (the dev pp's SSH alias), `<port>` (default 4180).
 
 ## B1. Owner steps
 
@@ -10,12 +10,12 @@ Placeholders: `forge.example.ts.net` (MagicDNS name), `devpc` (the dev pp's SSH 
 
 1. Clone VibeSquad and install deps:
    `git clone <repo-url> ~/projects/VibeSquad && cd ~/projects/VibeSquad && npm ci`
-2. Tailscale: install per the Tailscale docs, then `sudo systemctl enable --now tailscaled` and `sudo tailscale up`. Enable MagicDNS in the tailnet admin console. Owner step: Machines -> the forge machine -> Disable key expiry, so a reboot/expiry does not log it out.
+2. NordVPN Meshnet: install NordVPN per its Linux docs, then `nordvpn login` and `nordvpn set meshnet on` (the daemon starts at boot). Owner steps: keep it logged in so a reboot does not drop Meshnet, and in the NordVPN app allow the forge to receive connections from your devices (peer permissions: incoming connections). Tailscale is not used: it claims `100.64.0.0/10`, which clashes with Meshnet, so keep `tailscaled` disabled on the forge (`sudo systemctl disable --now tailscaled`).
 3. Bootstrap (idempotent, safe to re-run). Preview first with `scripts/forge-bootstrap.sh --dry-run`, then run
    `scripts/forge-bootstrap.sh`. It installs node 24 (`--node-major N` to change; an existing older node, e.g. a node-22 forge, is upgraded by re-running `scripts/forge-bootstrap.sh --node-major 24`, because it installs whenever the installed major is below the requested one), git, gh, ripgrep, openssl and chromium; writes the systemd user unit;
    enables linger; writes the unit but does **not** start it unless you pass `--start` (step 6 starts it); sets `fs.inotify.max_user_watches=524288` (R13); masks sleep/suspend/hibernate (R12); sets lid close to ignore via `/etc/systemd/logind.conf.d/forge-lid.conf` so the laptop forge runs lid-closed; puts `TMPDIR` on disk
-   and out of systemd-tmpfiles cleanup (R15). The tailnet IP and MagicDNS name are detected from `tailscale`; override with
-   `--meshnet-ip` / `--meshnet-host`. Run it after `tailscale up` so detection works.
+   and out of systemd-tmpfiles cleanup (R15). It also runs `npm ci` and `npm run build` in the checkout so `dist/` exists (without it phone pairing shows "dist/index.html missing"). The Meshnet IP and hostname are detected from `nordvpn meshnet peer list` (Local Peer block), falling back to the `nordlynx` interface for the IP; override with
+   `--meshnet-ip` / `--meshnet-host`. Run it after Meshnet is on so detection works; it only warns if Meshnet is off.
 4. Provider logins, as the VS user (credentials live in that user's home): `claude`, `agy`, `opencode`, `gh auth login`.
    The unit PATH includes `~/.local/bin` and the npm global prefix (R6); confirm each CLI resolves there.
    Linux installs (verified 2026-11-22): agy: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (installs `~/.local/bin/agy`, read from https://antigravity.google/docs/getting-started?tab=cli); opencode: `npm install -g @opencode/cli` (read from https://opencode.ai/docs/).
@@ -47,20 +47,20 @@ resumable agents VS started detached in the same cgroup (R5); `vs restart` depen
 VS first (park agents), then `systemctl --user stop vibesquad`, then check `ps -ef` for leftovers. Do not launch VS from tmux;
 the unit is the only launch path.
 
-## Clients: server_url (MagicDNS)
+## Clients: server_url (Meshnet IP)
 
-Owner clients (VS app, phone, Playtest Overlay addon) use `https://forge.example.ts.net:<port>`. Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http serves only `/ca.crt`, `/__vibesquad/desktop/update.json`, `/api/health` and `/api/auth/status`; `/pair` answers 302 to https and burns the code, other GET/HEAD get 301, non-GET gets 426 (`server/serve.mjs:381-396`). The unit sets `VIBESQUAD_LAN=1`,
-`VIBESQUAD_MESHNET_IP` (tailnet IPv4) and `VIBESQUAD_MESHNET_HOST` (MagicDNS name) so the listener binds the tailnet address
-and the Host check accepts the name (R7; the `tailscale0` interface match lands in A4). Pair a device via `/pair?format=json`
-and check `/pair/status`. `tailscale serve` https is optional, not required.
+Owner clients (VS app, phone, Playtest Overlay addon) pair by IP at `https://<forge mesh ip>:<port>` (the `<forge>.nord` name also works where the client resolves Meshnet names). Off loopback VS is TLS-only (`server/serve.mjs:373-410`); plain http serves only `/ca.crt`, `/__vibesquad/desktop/update.json`, `/api/health` and `/api/auth/status`; `/pair` answers 302 to https and burns the code, other GET/HEAD get 301, non-GET gets 426 (`server/serve.mjs:381-396`). The unit sets `VIBESQUAD_LAN=1`,
+`VIBESQUAD_MESHNET_IP` (`<forge mesh ip>`) and `VIBESQUAD_MESHNET_HOST` (`<forge>.nord`) so the listener binds the Meshnet address
+and the Host check accepts the IP and name (R7; the server also falls back to the `nordlynx` interface when the env is empty). Pair a device via `/pair?format=json`
+and check `/pair/status`.
 
 ### Trust the VS CA (every client, once per host)
 
-The VS CA is self-signed, so each client pins it (E6/idea-384 flow; addon design in `docs/lanes/playtest-overlay/PLAN_V1.md:70-71`). Clients bootstrap by GETting `/ca.crt` (`http://forge.example.ts.net:<port>/ca.crt`), so the pin is only as safe as that first fetch. Compare the CA SHA-256 fingerprint against the one in the VS pair dialog (out-of-band) before trusting it. How each client behaves differs:
+The VS CA is self-signed, so each client pins it (E6/idea-384 flow; addon design in `docs/lanes/playtest-overlay/PLAN_V1.md:70-71`). Clients bootstrap by GETting `/ca.crt` (`http://<forge mesh ip>:<port>/ca.crt`), so the pin is only as safe as that first fetch. Compare the CA SHA-256 fingerprint against the one in the VS pair dialog (out-of-band) before trusting it. How each client behaves differs:
 
 - **Desktop VS app:** trust-on-first-use. It GETs `http://<host>/ca.crt` over plain http, checks only that the body is PEM, writes `trusted-cas/<host>.crt` and reloads TLS (`src-tauri/src/main.rs:771-804`). It does NOT show or verify a fingerprint. Owner step: right after pairing, run `openssl x509 -in trusted-cas/<host>.crt -noout -fingerprint -sha256` on the pinned file and compare it by hand to the VS pair dialog. If it differs, delete the file and do not pair.
 - **Phone (Android app):** it fetches `https://<host>:<port>/ca.crt` over a not-yet-trusted TLS socket and enforces that the CA's fingerprint starts with the fingerprint from the scanned pair QR (or typed on the pair screen); it refuses to pin on mismatch. No manual compare is needed when you scan the QR.
-- **Playtest Overlay addon** (the `vs_playtest` Godot addon lives outside this repo; this is its design per PLAN_V1): it GETs `/ca.crt`, shows the fingerprint in its dock, and after you confirm pins the CA (`$VIBESQUAD_HOME/playtest-ca.crt`, override `vs_playtest/ca_cert_path`). No pin means no device token is sent; the system trust store is not a fallback for ts.net. Unpair deletes the pin.
+- **Playtest Overlay addon** (the `vs_playtest` Godot addon lives outside this repo; this is its design per PLAN_V1): it GETs `/ca.crt`, shows the fingerprint in its dock, and after you confirm pins the CA (`$VIBESQUAD_HOME/playtest-ca.crt`, override `vs_playtest/ca_cert_path`). No pin means no device token is sent; the system trust store is not a fallback for the Meshnet host. Unpair deletes the pin.
 
 ## Godot and Windows-only jobs: SSH stdio bridge
 
@@ -73,7 +73,7 @@ jobs (desktop build/sign, Windows EFI exports by Release Desk): the forge agent 
 no second runner. Fallback only if SSH stdio is flaky in B3: a dev pp runner. Headless Godot on the forge (GNU `timeout`,
 `--headless --path <proj>`) is EFI-side (R17).
 
-**The bridge is LAN-only.** Both machines must be on the home LAN. Do not point `devpc` at the dev pp's Tailscale address: NordVPN Meshnet on the dev pp also uses `100.64.0.0/10`, so forge -> dev pp SSH over Tailscale IPv4 hangs. Working setup, in the forge's `~/.ssh/config`:
+**The bridge is LAN-only.** Both machines must be on the home LAN. Do not point `devpc` at a Meshnet or Tailscale address of the dev pp: both use `100.64.0.0/10` and the routes clash, so forge -> dev pp SSH over them can hang. Use the LAN address. Working setup, in the forge's `~/.ssh/config`:
 
 ```
 Host devpc
@@ -81,7 +81,7 @@ Host devpc
     User <devpc-user>
 ```
 
-(`<devpc-lan-ip>` is the dev pp's LAN address, ideally a DHCP reservation; `<devpc-user>` is its Windows user.) Off-LAN option: Tailscale IPv6 address of the dev pp (UNTESTED).
+(`<devpc-lan-ip>` is the dev pp's LAN address, ideally a DHCP reservation; `<devpc-user>` is its Windows user.)
 
 ## Rollback notes (C3)
 
