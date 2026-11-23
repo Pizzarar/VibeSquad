@@ -424,12 +424,13 @@ test("Done-when #2: Spawn validation handles no team, wrong team, unknown lane +
         "no lane-autofix metric for an explicit lane",
       );
 
-      // Case 4: Unmatched spawn (unknown lane "mystery-lane" + unmatched cwd "C:/tmp/scratch")
-      // -> never rejects, tags orphan="1" and logs orphan metric
+      // Case 4: Unmatched spawn (unknown lane "mystery-lane" + an unmatched ABSOLUTE cwd outside any checkout)
+      // -> never rejects, tags orphan="1" and logs orphan metric. Not "C:/tmp/scratch": off Windows that is relative, so
+      // resolveWorktreeRootPath() walked up from the test's cwd and, in a linked worktree (forge 11-23), matched the repo.
       agents.set("agent-orphan", {
         id: "agent-orphan",
         title: "Scratch Worker",
-        cwd: "C:/tmp/scratch",
+        cwd: resolve(tmpdir(), "vs-unmatched-scratch"),
         status: "idle",
         labels: {
           lane: "mystery-lane",

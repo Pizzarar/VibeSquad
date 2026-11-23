@@ -2,7 +2,7 @@
 //   vs slot run --pool godot [--max 3] [--timeout <s>] -- <cmd> [args...]
 // The `npm test` slot (scripts/suite-lock.mjs) stays a single slot with its own files; a pool is its N-slot sibling built
 // from the same parts: an O_EXCL lock per slot with dead/stale holder takeover (runner/lock.mjs acquireStartLock) and the
-// FIFO waiter line (cli/fifo-queue.mjs). Files, in os.tmpdir() or VIBESQUAD_TEST_LOCK_DIR (tests point it at a temp dir):
+// FIFO waiter line (cli/fifo-queue.mjs). Files, in testLockDir() (fixed machine-wide, not TMPDIR) or VIBESQUAD_TEST_LOCK_DIR (tests point it at a temp dir):
 //   <dir>/vibesquad-slot-<pool>-<i>.lock   {pid, startedAt, pool, index, agentId, squad, cmd}  slot i of 0..max-1, held for the run
 //   <dir>/vibesquad-slot-<pool>.queue      join / beat / done lines (cli/fifo-queue.mjs)
 //   <dir>/vibesquad-slot-<pool>.claim      only under reservations: held for the instant of one take (see below)
@@ -24,7 +24,7 @@ import { readdirSync, rmSync, statSync, utimesSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { acquireStartLock, pidAlive, readLock, releaseLock } from "../runner/lock.mjs";
-import { appendQueue, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue } from "./fifo-queue.mjs";
+import { appendQueue, ensureTestLockDir, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue, testLockDir } from "./fifo-queue.mjs";
 
 export const DEFAULT_POOL_MAX = Object.freeze({ godot: 3 });
 // idea-578 (owner 11-22): 2 of the 3 godot slots are reserved for Squad efi; the 3rd is shared by every Squad.
@@ -166,7 +166,7 @@ export function lineTurn(live, idx, { max, holders, reserve }) {
   return { handed: mayTake(live[idx]?.squad, { free, held, reserve }), ahead };
 }
 
-export function poolPaths(pool, dir = process.env.VIBESQUAD_TEST_LOCK_DIR || os.tmpdir()) {
+export function poolPaths(pool, dir = testLockDir()) {
   return {
     dir,
     pool,
@@ -453,7 +453,7 @@ export async function runInSlot({ pool, max, reserve, squad = null, timeoutSec =
   reserve ??= poolReserve(pool, { max, env });
   squad = normSquad(squad);
   const mine = Object.keys(reserve).length ? `; reserved ${formatReserve(reserve)}, you: ${squad && reserve[squad] ? squad : `${squad ?? "no squad"}, shared`}` : "";
-  const paths = poolPaths(pool, dir ?? (env.VIBESQUAD_TEST_LOCK_DIR || os.tmpdir()));
+  const paths = poolPaths(pool, ensureTestLockDir(dir ?? testLockDir(env)));
   const label = [cmd, ...args].join(" ").slice(0, 200);
   const say = (s) => stderr.write(`vs slot: ${s}\n`);
 

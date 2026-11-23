@@ -5,19 +5,19 @@
 //                                       or {agentId, pid, startedAt, full, files, died:true} written by whoever steals a dead holder's lock
 // full: true only for a whole-suite run (no file args); files: the file args. A watch set's suite item accepts only full runs.
 //   <dir>/vibesquad-npm-test.queue      append-only JSON lines: join / beat / done, see readQueue
-// <dir> is os.tmpdir(), or VIBESQUAD_TEST_LOCK_DIR (tests point it at a temp dir so they never touch the real slot).
+// <dir> is testLockDir() (cli/fifo-queue.mjs): one fixed machine-wide dir independent of TMPDIR, or VIBESQUAD_TEST_LOCK_DIR
+// (tests point it at a temp dir so they never touch the real slot).
 import { randomBytes } from "node:crypto";
 import { renameSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { acquireStartLock, pidAlive, readLock } from "../runner/lock.mjs";
-import { appendQueue, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue, RETRY_CODES, sleepSync } from "../cli/fifo-queue.mjs";
+import { appendQueue, QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue, RETRY_CODES, sleepSync, testLockDir } from "../cli/fifo-queue.mjs";
 
 // The waiter line (join/beat/done fold) is shared with the named slot pools (cli/slot-pool.mjs) and lives in cli/fifo-queue.mjs.
 export { QUEUE_BEAT_MS, QUEUE_BEAT_STALE_MS, QUEUE_POLL_MS, readQueue };
 export const SUITE_STALE_MS = 2 * 60 * 60 * 1000; // a live holder older than this is stuck and gets taken over
 
-export function suitePaths(dir = process.env.VIBESQUAD_TEST_LOCK_DIR || os.tmpdir()) {
+export function suitePaths(dir = testLockDir()) {
   return {
     dir,
     lock: path.join(dir, "vibesquad-npm-test.lock"),

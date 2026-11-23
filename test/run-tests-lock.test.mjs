@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -435,4 +435,77 @@ test("run-tests.mjs: caps node --test file concurrency (idea-412); VS_TEST_CONCU
   const src = readFileSync(RUN_TESTS, "utf8");
   assert.match(src, /Math\.min\(8, cpus - 1\)/, "default cap is 8");
   assert.match(src, /--test-concurrency=\$\{testConcurrency\(\)\}/);
+});
+
+// Forge 11-23: the slot lived in os.tmpdir(), so callers with different TMPDIRs (runner shells' ~/.vibesquad/tmp, the forge unit's
+// ~/.cache/vibesquad-tmp, a plain shell's /tmp) each got their own "machine-wide" lock, and the server's watcher read yet another
+// last-run record. testLockDir() is fixed; only VIBESQUAD_TEST_LOCK_DIR moves it.
+test("the suite slot, the slot pools and the watcher share one lock dir regardless of TMPDIR", async (t) => {
+  const { testLockDir } = await import("../cli/fifo-queue.mjs");
+  assert.equal(testLockDir({}, { platform: "linux", home: "/home/x", uid: 1000 }), "/tmp/vibesquad-test-lock-1000");
+  assert.equal(testLockDir({ TMPDIR: "/home/x/.vibesquad/tmp" }, { platform: "darwin", home: "/home/x", uid: 501 }), "/tmp/vibesquad-test-lock-501");
+  assert.equal(testLockDir({}, { platform: "linux", uid: 1001 }), "/tmp/vibesquad-test-lock-1001", "per OS user (review M1)");
+  assert.equal(testLockDir({ LOCALAPPDATA: String.raw`C:\Users\x\AppData\Local`, TEMP: String.raw`D:\t` }, { platform: "win32", home: String.raw`C:\Users\x` }), String.raw`C:\Users\x\AppData\Local\vibesquad-test-lock`);
+  assert.equal(testLockDir({}, { platform: "win32", home: String.raw`C:\Users\x` }), String.raw`C:\Users\x\AppData\Local\vibesquad-test-lock`);
+  assert.equal(testLockDir({ VIBESQUAD_TEST_LOCK_DIR: "/srv/lk" }, { platform: "linux" }), "/srv/lk", "the env override still wins");
+  assert.equal(testLockDir({ VIBESQUAD_TEST_LOCK_DIR: "  " }, { platform: "linux", home: "/home/x", uid: 7 }), "/tmp/vibesquad-test-lock-7", "blank override = default");
+
+  // Real processes: two different TMPDIRs, no override -> the same lock, last-run record, pool lock and watcher dir.
+  const a = tmp(t);
+  const b = tmp(t);
+  const probe = `
+    const { suitePaths } = await import(${JSON.stringify(SUITE_LOCK)});
+    const { poolPaths } = await import(${JSON.stringify(pathToFileURL(path.join(root, "cli", "slot-pool.mjs")).href)});
+    const os = await import("node:os");
+    const p = suitePaths();
+    console.log(JSON.stringify({ tmp: os.tmpdir(), lock: p.lock, last: p.last, pool: poolPaths("godot").slot(0) }));`;
+  const run = (tmpDir) => {
+    const env = cleanEnv({ TMPDIR: tmpDir, TMP: tmpDir, TEMP: tmpDir });
+    delete env.VIBESQUAD_TEST_LOCK_DIR;
+    const r = spawnSync(process.execPath, ["--input-type=module", "-e", probe], { env, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout);
+  };
+  const ra = run(a);
+  const rb = run(b);
+  assert.notEqual(ra.tmp, rb.tmp, "precondition: the two processes really see different temp dirs");
+  assert.deepEqual({ lock: ra.lock, last: ra.last, pool: ra.pool }, { lock: rb.lock, last: rb.last, pool: rb.pool });
+  const dir = testLockDir({});
+  assert.equal(path.dirname(ra.lock), dir);
+  assert.ok(!ra.lock.startsWith(a) && !ra.lock.startsWith(b), ra.lock);
+  // The server's watcher reads the suite files from the same dir by default.
+  const src = readFileSync(path.join(root, "server", "watch-sets.mjs"), "utf8");
+  assert.match(src, /tmpdir = testLockDir\(\)/);
+});
+
+// Tier A review M1: the default lock dir sits in a shared /tmp, so it must fail closed when it is not provably ours.
+test("ensureTestLockDir creates a private dir and refuses a symlink, a file, an open mode or a foreign owner; npm test exits 1", { skip: process.platform === "win32" && "POSIX owner/mode" }, async (t) => {
+  const { checkTestLockDir, ensureTestLockDir } = await import("../cli/fifo-queue.mjs");
+  const base = tmp(t);
+  const fresh = path.join(base, "fresh");
+  assert.equal(ensureTestLockDir(fresh), fresh);
+  assert.equal(statSync(fresh).mode & 0o777, 0o700, "created owner-only");
+  assert.equal(ensureTestLockDir(fresh), fresh, "an existing private dir is reused");
+  const refused = (dir, re, opts) => assert.throws(() => ensureTestLockDir(dir, opts), (e) => e.code === "EVSLOCKDIR" && re.test(e.message), dir);
+  const target = path.join(base, "target");
+  mkdirSync(target, { mode: 0o700 });
+  const link = path.join(base, "link");
+  symlinkSync(target, link);
+  refused(link, /is a symlink/);
+  const file = path.join(base, "file");
+  writeFileSync(file, "x");
+  refused(file, /is not a directory/);
+  const open = path.join(base, "open");
+  mkdirSync(open);
+  chmodSync(open, 0o777);
+  refused(open, /mode 777 is open to group\/other/);
+  chmodSync(open, 0o750);
+  refused(open, /mode 750/);
+  refused(fresh, /owned by uid \d+, not \d+/, { uid: process.getuid() + 1 });
+  assert.match(checkTestLockDir(path.join(base, "missing")), /cannot stat \(ENOENT\)/);
+  // The launcher refuses before taking the slot, with the reason, and leaves nothing in the dir.
+  const r = spawnSync(process.execPath, [path.join(root, "scripts", "run-tests.mjs"), "test/does-not-matter.test.mjs"], { cwd: root, env: cleanEnv({ VIBESQUAD_TEST_LOCK_DIR: link }), encoding: "utf8", timeout: 60_000 });
+  assert.equal(r.status, 1, r.stderr);
+  assert.match(r.stderr, /npm test: refusing the test lock dir .*link: it is a symlink/);
+  assert.deepEqual(readdirSync(target), [], "nothing written through the link");
 });
