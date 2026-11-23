@@ -24,3 +24,15 @@ Both `--version` outputs match the pinned versions; sha verified; 3 repo `--head
 Repo runner edits (EFI/SBB/ForgeWirk lanes), Windows exports/signing (stay on dev pp), restarting forge VS.
 
 Lead: new forge-host lead (Lead - Claude), spawned by Buddy since lane has none.
+
+## Follow-up R: vs restart through systemd on forge (Buddy 11-23, Linux cutover fallout)
+Found at G-done-check: restart 3d4f9a216335 left `vibesquad.service` inactive (MainPID 0) with serve.mjs pid 254660 + runner 254678 orphaned in its cgroup; env inherited from the old server, so godot.conf never applied and Restart=on-failure supervision is lost. Root: `scripts/restart-runtime.mjs` relaunches via `spawnDetached` (:291).
+
+Decided: on POSIX when the server belongs to the enabled systemd user unit, the relaunch step runs `systemctl --user restart vibesquad` after the existing stop (no double server on 4180); Windows path unchanged. Checked primitives: no existing systemd path in restart-runtime.mjs (grep systemctl/INVOCATION_ID: none); `vs restart` stays the only entry point. Stakes tierA-invariant (restart path); Opus implement + review per Buddy; Overlord 11-23: built-in Implement - Opus exists (server-merged, not in profiles.json), no Review - Opus, so R2 = Review - Gemini gate + Opus second read.
+
+| Block | Touches | Clashes with | Kind |
+|---|---|---|---|
+| R1 systemd branch + unit tests + re-adopt procedure (RUNBOOK) | scripts/restart-runtime.mjs, test/restart-runtime.test.mjs, docs/lanes/forge-host/RUNBOOK.md | other restart-path work (idea-604/402 @bug: check before merge) | Root cause |
+| R2 Review - Gemini (routing gate, Claude work) ∥ Opus second read via Implement - Opus profile (Buddy ask) | none | none | Gate |
+| R3 full suite --queue, merge, push; Overlord re-adopts in a drained window; verify is-active active, MainPID == serve pid, environ has GODOT_4_7/4_8 | master | other merges | Gate |
+Bug card idea-649 points at this block.
