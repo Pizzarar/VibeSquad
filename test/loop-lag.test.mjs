@@ -99,7 +99,7 @@ test("a 1.5s native sync call (execFileSync) shows execFileSync in the stack, wi
   // The capture races real machine load, so a single run may legitimately land late (flagged as captureLate, see the next test).
   // The on-time path — frames starting with the blocker — must be proven by at least one of 4 attempts. A late capture in
   // disguise (the pause lands in the post-block sleep(600) continuation before the heartbeat bumps) is retried; empty or
-  // unrelated frames fail hard (never skip hollow), and all-4-late skips unless VS_TEST_STRICT_TIMING=1.
+  // unrelated frames fail hard (never skip hollow), and all-4-late fails (no skip fallback).
   let proved = false, lateCount = 0;
   for (let i = 0; i < 4 && !proved; i++) {
     const { r, lines } = nativeCallRun();
