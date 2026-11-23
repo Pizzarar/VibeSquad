@@ -9,6 +9,7 @@ export type LimitRow = {
   resetsAt: string | null;
   source?: string;
   at?: string;
+  checkedAt?: string | null;
   burnPctPerHour: number;
   etaToCap: string | null;
   poolAgents?: { count: number; agentIds: string[]; text: string };
@@ -156,6 +157,24 @@ function dayTime(ms: number): string {
 export function etaText(l: LimitRow): string {
   if (l.etaToCap) return `hits cap ~${dayTime(Date.parse(l.etaToCap))}`;
   return l.burnPctPerHour > 0 ? "won't cap before reset" : "idle · no burn";
+}
+
+// ---- usa-45: limit sample age (last *check*, not last *change*)
+
+/** A limit sample is "stale" when the last check is more than this long ago. */
+export const LIMIT_STALE_MS = 2 * 3600_000;
+
+/** True when the last check is older than LIMIT_STALE_MS. Missing checkedAt is never stale (no signal to judge). */
+export function limitIsStale(checkedAt: string | null | undefined, now: number): boolean {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN;
+  return Number.isFinite(t) && now - t > LIMIT_STALE_MS;
+}
+
+/** "sampled Xh ago" line from the last check time; "" when unknown. */
+export function limitSampledText(checkedAt: string | null | undefined, now: number): string {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN;
+  if (!Number.isFinite(t)) return "";
+  return `sampled ${relTime(t, now)}`;
 }
 
 /** Human duration from ms: `42m`, `3.1h`, `1.2d`, or `—` for missing/negative. */

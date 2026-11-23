@@ -884,6 +884,10 @@ export function readLimits(home) {
   if (isForbiddenRealHome(dir)) return [];
   let text = "";
   try { text = readFileSync(join(dir, "runner", "limits.jsonl"), "utf8"); } catch { return []; }
+  // Sidecar: last *check* time per provider/window (updated on every poll, even when the sample didn't change).
+  let checked = {};
+  try { checked = JSON.parse(readFileSync(join(dir, "runner", "limits-checked.json"), "utf8")); } catch { checked = {}; }
+  if (typeof checked !== "object" || checked === null) checked = {};
   const groups = new Map();
   for (const line of text.split("\n")) {
     if (!line.trim()) continue;
@@ -912,10 +916,12 @@ export function readLimits(home) {
       const eta = last.used >= 100 ? last.atMs : last.atMs + ((100 - last.used) / burn) * 3600_000;
       if (last.resetMs === null || eta < last.resetMs) etaToCap = new Date(eta).toISOString();
     }
+    const checkedMs = toMs(checked[`${last.provider}|${last.window}`]) ?? last.atMs;
     out.push({
       provider: last.provider, window: last.window, usedPct: last.used,
       resetsAt: last.resetMs === null ? null : new Date(last.resetMs).toISOString(),
       source: last.source ?? "provider", agentId: last.agentId ?? null, at: new Date(last.atMs).toISOString(),
+      checkedAt: new Date(checkedMs).toISOString(),
       burnPctPerHour: Math.round(burn * 100) / 100, etaToCap,
     });
   }

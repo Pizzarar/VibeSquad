@@ -224,3 +224,29 @@ test('idea-349: Runner._agyBusy: unknown post-turn work, held work and running t
   r.live.set('a', agy({ inflight: 1 })); assert.equal(r._agyBusy(), true);
   r.live.set('a', agy({})); assert.equal(r._agyBusy(), false, 'probed clean');
 });
+
+test('usa-45: unchanged value between two polls still advances the sidecar checkedAt; jsonl does not grow', async () => {
+  const { readLimits } = await import('../server/providers-catalog.mjs');
+  const home = tmp();
+  const f = path.join(home, 'runner', 'limits.jsonl');
+  const s = new LimitStore(f);
+  const rec = { provider: 'antigravity-cli', window: '5h', usedPct: 40, resetsAt: '2026-11-23T20:00:00.000Z' };
+  const t0 = Date.parse('2026-11-23T10:00:00.000Z'), t1 = t0 + 3 * 3600_000;
+  assert.ok(s.record(rec, t0));
+  assert.equal(s.record(rec, t1), null, 'deduped');
+  assert.equal(readFileSync(f, 'utf8').trim().split('\n').length, 1, 'jsonl did not grow');
+  const [row] = readLimits(home);
+  assert.equal(row.at, new Date(t0).toISOString());
+  assert.equal(row.checkedAt, new Date(t1).toISOString());
+});
+
+test('usa-45: readLimits falls back to the latest `at` when there is no sidecar', async () => {
+  const { readLimits } = await import('../server/providers-catalog.mjs');
+  const home = tmp();
+  const f = path.join(home, 'runner', 'limits.jsonl');
+  const s = new LimitStore(f);
+  const t0 = Date.parse('2026-11-23T10:00:00.000Z');
+  s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0);
+  rmSync(path.join(home, 'runner', 'limits-checked.json'));
+  assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString());
+});

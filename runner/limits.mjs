@@ -4,7 +4,7 @@
 //    so the runner polls it after turns (see createAgyUsagePoller).
 // Records land in <runner home>/limits.jsonl, append-only, one line each:
 //   { at, provider, window: "5h"|"weekly", usedPct (0-100), resetsAt (ISO), source: "provider"|"estimate", agentId }
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { spawnNoShell, killTree } from './spawn.mjs';
 import { isForbiddenRealHome, underTestRunner } from '../server/test-guard.mjs';
@@ -51,14 +51,35 @@ export function parseAgyUsage(text) {
 const round1 = (n) => Math.round(n * 10) / 10;
 
 // Append-only limits.jsonl. Skips a record identical (usedPct + resetsAt) to the last one written for its provider/window.
+// A `limits-checked.json` sidecar next to it records the last *check* time per provider/window on every record() call
+// (written or deduped): the jsonl only holds changed samples, so the newest `at` is the last change, not the last poll.
+const CHECKED_FILE = 'limits-checked.json';
+function checkedPath(file) { return path.join(path.dirname(file), CHECKED_FILE); }
+
+// Cheap (called per poll): read the sidecar, set one key, write back atomically (tmp + rename). Bounded: one entry per provider/window.
+function writeChecked(file, key, checkedAt) {
+  const sidecar = checkedPath(file);
+  let map = {};
+  try { map = JSON.parse(readFileSync(sidecar, 'utf8')); } catch { map = {}; }
+  if (typeof map !== 'object' || map === null) map = {};
+  map[key] = checkedAt;
+  mkdirSync(path.dirname(sidecar), { recursive: true });
+  const tmp = `${sidecar}.tmp`;
+  writeFileSync(tmp, JSON.stringify(map));
+  renameSync(tmp, sidecar);
+}
+
 export class LimitStore {
   constructor(file) { this.file = file; this.last = new Map(); }
   record({ provider, window, usedPct, resetsAt, source = 'provider', agentId = null }, now = Date.now()) {
     if (isForbiddenRealHome(this.file)) return null; // a test must never write the developer's real ~/.vibesquad
     const key = `${provider}|${window}`;
     const prev = this.last.get(key);
+    const checkedAt = new Date(now).toISOString();
+    // Record the check on every poll so the UI can show "sampled Xh ago" from the last *check*, not the last *change*.
+    try { writeChecked(this.file, key, checkedAt); } catch { /* sidecar is best-effort */ }
     if (prev && prev.usedPct === usedPct && prev.resetsAt === resetsAt && prev.source === source) return null;
-    const rec = { at: new Date(now).toISOString(), provider, window, usedPct, resetsAt, source, agentId };
+    const rec = { at: checkedAt, provider, window, usedPct, resetsAt, source, agentId };
     mkdirSync(path.dirname(this.file), { recursive: true });
     appendFileSync(this.file, JSON.stringify(rec) + '\n');
     this.last.set(key, rec);

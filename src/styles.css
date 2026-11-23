@@ -6617,3 +6617,8 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
 .tester-bug-err { color: #c0123f; }
 .inbox-tester-badge { font-family: var(--mono); font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--text); border: 1px solid var(--line); background: rgba(47, 191, 113, 0.18); padding: 1px 6px; border-radius: 999px; }
 .tester-body > * { flex: 1; min-height: 0; }
+
+/* usa-45: stale limit sample (last check > 2h). Dim the numbers, keep the head/tag readable. */
+.usage-limit-stale > :not(.usage-limit-head) { opacity: 0.55; }
+.usage-stale-tag { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px solid var(--amber); border-radius: 999px; background: var(--pastel-amber); color: var(--text); text-transform: uppercase; }
+.usage-stale-tag + .usage-estimate { margin-left: 4px; }
