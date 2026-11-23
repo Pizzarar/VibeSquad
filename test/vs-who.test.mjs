@@ -609,8 +609,10 @@ test("Fix 1b: vs install-shim --bin-dir <tempDir> creates vs, vs.cmd, vs.ps1 + r
     assert.equal(parsed.ok, true);
 
     assert.equal(existsSync(join(binDir, "vs")), true, "Expected POSIX vs shim");
-    assert.equal(existsSync(join(binDir, "vs.cmd")), true, "Expected Windows vs.cmd shim");
-    assert.equal(existsSync(join(binDir, "vs.ps1")), true, "Expected PowerShell vs.ps1 shim");
+    // The .cmd/.ps1 launchers are Windows-only: off win32 install-shim writes only the POSIX `vs`.
+    const winShims = process.platform === "win32";
+    assert.equal(existsSync(join(binDir, "vs.cmd")), winShims, winShims ? "Expected Windows vs.cmd shim" : "vs.cmd must not be written off win32");
+    assert.equal(existsSync(join(binDir, "vs.ps1")), winShims, winShims ? "Expected PowerShell vs.ps1 shim" : "vs.ps1 must not be written off win32");
     assert.equal(existsSync(join(env.vsHome, "runtime", "cli", "vs.mjs")), true, "Expected fallback runtime cli/vs.mjs");
     assert.equal(existsSync(join(env.vsHome, "runtime", "teams.json")), true, "Expected fallback runtime teams.json");
 

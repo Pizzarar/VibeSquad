@@ -64,6 +64,10 @@ describe("routes on a temp repo", () => {
     repo = realpathSync(mkdtempSync(join(tmpdir(), "vs-git-")));
     outside = realpathSync(mkdtempSync(join(tmpdir(), "vs-git-out-")));
     sh(repo, "init", "-q", "-b", "main");
+    // Repo-local identity so the server's own commit/stash work on a box with no global git identity.
+    sh(repo, "config", "user.name", "T");
+    sh(repo, "config", "user.email", "t@t");
+    sh(repo, "config", "commit.gpgsign", "false");
     writeFileSync(join(repo, "a.txt"), "one\ntwo\n");
     sh(repo, "add", "-A");
     sh(repo, "commit", "-q", "-m", "first");
