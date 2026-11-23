@@ -2,6 +2,7 @@ export const VERDICT_LINE_RE: RegExp;
 export const VERDICT_PREFIX_SRC: string;
 export function extractVerdictLine(text: unknown): string | null;
 export function parseVerdictLine(line: unknown): { verdict: "PASS" | "FAIL"; high: number | null; medium: number | null; low: number | null; severity: "H" | "M" | "L" | null; hash: string } | null;
+export function isDocsTarget(token: unknown): boolean;
 export function firstLine(text: unknown): string;
 export function isReviewerAgent(agent: { id?: string; title?: string | null; profile?: string; labels?: Record<string, unknown> } | null | undefined): boolean;
 export function digestVerdictText(args: { workerText: unknown; digestText: unknown; reviewer?: boolean; profile?: string | null }): {
