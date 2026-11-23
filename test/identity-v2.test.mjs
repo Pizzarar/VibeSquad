@@ -716,3 +716,12 @@ test("R3.4: readable lead title is '<Lane> · Lead N' (hub stays Overlord)", asy
   assert.equal(formatDisplayTitle({ role: "lead", laneId: "main-game", ord: "ord75", readable: true }), "Main Game · Lead 75");
   assert.equal(formatDisplayTitle({ role: "lead", hub: true, readable: true }), "Overlord");
 });
+
+test("matchPathInRegistry matches whole path segments, not substrings (idea-709)", async () => {
+  const { matchPathInRegistry } = await import("../server/identity.mjs");
+  const teams = [{ id: "t", name: "T", paths: [], lanes: [{ id: "l", paths: ["vibesquad"] }] }];
+  assert.equal(matchPathInRegistry("/home/u/.cache/vibesquad-tmp/x", teams), null);
+  assert.equal(matchPathInRegistry("/home/u/myvibesquad/x", teams), null);
+  assert.equal(matchPathInRegistry("/home/u/projects/VibeSquad/x", teams)?.lane.id, "l");
+  assert.equal(matchPathInRegistry("/home/u/projects/vibesquad", teams)?.lane.id, "l");
+});
