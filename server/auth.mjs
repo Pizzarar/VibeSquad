@@ -1067,7 +1067,7 @@ const testerCaller = (dev) => ({ kind: "tester", id: dev.id, name: dev.name, rol
  * PTO v1.1: the caller record for an owner-playtest device. Its own kind ("playtest"), never "owner" and never the handler-only
  * synthetic owner-playtest caller: vibesquad-api.mjs sends it to playtestGated (PLAYTEST_ROUTE_ALLOWLIST) before any other rule.
  */
-const playtestCaller = (dev) => ({ kind: "playtest", id: dev.id, name: dev.name, role: OWNER_PLAYTEST_ROLE });
+export const playtestCaller = (dev) => ({ kind: "playtest", id: dev?.id, name: dev?.name, role: OWNER_PLAYTEST_ROLE });
 
 /** owner | tester | playtest | unknown for a request without agent headers, with a single authenticate() pass. */
 function nonAgentCaller(req) {
@@ -1076,7 +1076,7 @@ function nonAgentCaller(req) {
   const dev = authenticate(req);
   if (isOwnerDevice(dev)) return { kind: "owner" };
   if (dev?.role === "bug-tester") return testerCaller(dev);
-  if (dev?.role === OWNER_PLAYTEST_ROLE && dev.id) return playtestCaller(dev);
+  if (dev?.role === OWNER_PLAYTEST_ROLE) return playtestCaller(dev); // PTO R1 L1: by role alone; an id-less record still gets gated
   return { kind: "unknown" };
 }
 

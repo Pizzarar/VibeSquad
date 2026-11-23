@@ -5,7 +5,8 @@
 // Cookie-only, relayed and agent-header callers are refused, same as B1b. Every request goes through the real middleware.
 // Attacker cases are marked "attacker:".
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
@@ -410,5 +411,68 @@ describe("attacker: owner-playtest is denied everything else, before routing", (
     assert.equal(rv.status, 200, rv.body);
     assert.equal((await call({ url: `${THREAD}?teamId=efi`, headers: bearer(extra.token) })).status, 401);
     assert.equal((await call({ url: REPORT, method: "POST", headers: bearer(extra.token), body: { teamId: "efi", text: "x" } })).status, 401);
+  });
+});
+
+describe("PTO R1 review fixes (M1 agent headers on non-API paths, L1 id-less record)", () => {
+  const AGENT_HEADER_SETS = [{}, { "x-vs-agent-id": "x" }, { "x-vs-agent-id": "rn-efibuddy", "x-vs-agent-token": "t" }, { "x-vs-agent-id": "rn-efibuddy" }];
+  const STATIC = ["/", "/index.html", "/assets/x.js", "/assets/x", "/some/spa/route", "/favicon.ico"];
+
+  for (const [label, h] of [["Bearer", () => bearer(play)], ["x-vs-device-token", () => xdev(play)], ["cookie", () => ({ cookie: `${auth.DEVICE_COOKIE}=${play}` })]]) {
+    test(`attacker (M1): ${label} + any x-vs-agent-id never reaches the static/SPA tree (403, never next)`, async () => {
+      for (const url of STATIC) {
+        for (const agentH of AGENT_HEADER_SETS) {
+          for (const method of ["GET", "HEAD"]) {
+            for (const local of [false, true]) {
+              const r = await call({ url, method, local, headers: { ...h(), ...agentH } });
+              assert.equal(r.status, 403, `${label} ${local ? "loopback" : "remote"} ${method} ${url} ${JSON.stringify(agentH)} -> ${r.status}`);
+              assert.equal(r.next, false, `${method} ${url} ${JSON.stringify(agentH)} fell through to the static handler`);
+            }
+          }
+        }
+      }
+    });
+
+    test(`attacker (M1): ${label} + agent headers on API paths stays playtest-gated (no agent / read-only route)`, async () => {
+      prompts.length = 0;
+      spawned.length = 0;
+      const before = cards().length;
+      for (const agentH of AGENT_HEADER_SETS.slice(1)) {
+        for (const [method, url, body] of [["GET", "/__vibesquad/teams"], ["GET", "/__vibesquad/settings"], ["POST", "/__vibesquad/log", { text: "x" }], ["POST", "/__vibesquad/runner/spawn", { teamId: "efi" }], ["GET", "/__vibesquad/runner/agents"], ...ALLOWED.map((r) => [r.method, r.url, r.body])]) {
+          const r = await call({ url, method, body, headers: { ...h(), ...agentH } });
+          assert.equal(r.status, 403, `${label} ${method} ${url} ${JSON.stringify(agentH)} -> ${r.status} ${r.body}`);
+        }
+      }
+      assert.equal(spawned.length, 0);
+      assert.equal(prompts.length, 0);
+      assert.equal(cards().length, before);
+    });
+  }
+
+  test("M1 sanity: the local owner (loopback + local token) still gets the static tree; agent headers + local token + playtest header is gated", async () => {
+    assert.equal((await call({ url: "/index.html", local: true, headers: { ...ownerLocal(), ...bearer(play) } })).next, true, "local owner wins");
+    const r = await call({ url: "/index.html", local: true, headers: { ...ownerLocal(), ...bearer(play), "x-vs-agent-id": "x" } });
+    assert.equal(r.status, 403);
+    assert.equal(r.next, false);
+  });
+
+  test("attacker (L1): an id-less owner-playtest record in devices.json is 403 on read-only API GETs and static, never trusted", async () => {
+    const token = "idlessPlaytestToken_0123456789abcdef";
+    const file = join(HOME, "devices.json");
+    const data = JSON.parse(readFileSync(file, "utf8"));
+    data.devices.push({ name: "Id-less dock", role: "owner-playtest", allowedTeams: null, createdAt: new Date().toISOString(), lastSeenAt: new Date().toISOString(), tokenHash: createHash("sha256").update(token).digest("hex") });
+    writeFileSync(file, JSON.stringify(data, null, 2), "utf8");
+    assert.equal(auth.authenticate(mkReq({ url: "/", headers: bearer(token) }))?.name, "Id-less dock", "sanity: the record authenticates");
+    const before = cards().length;
+    for (const [method, url, body] of [["GET", "/api/teams"], ["GET", "/__vibesquad/teams"], ["GET", "/__vibesquad/profiles"], ["GET", "/__vibesquad/runner/agents"], ["GET", "/__vibesquad/settings"], ["GET", "/"], ["GET", "/index.html"], ...ALLOWED.map((r) => [r.method, r.url, r.body])]) {
+      for (const local of [false, true]) {
+        const r = await call({ url, method, body, local, headers: bearer(token) });
+        assert.equal(r.status, 403, `id-less ${local ? "loopback" : "remote"} ${method} ${url} -> ${r.status} ${r.body}`);
+        assert.equal(r.next, false);
+      }
+    }
+    const s = (await call({ url: "/api/auth/status", headers: bearer(token) })).json();
+    assert.equal(s.paired, false, "an id-less record is not a trusted (paired) caller");
+    assert.equal(cards().length, before);
   });
 });

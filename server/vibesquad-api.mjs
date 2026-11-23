@@ -44,7 +44,7 @@ import {
   stripBom,
 } from "./user-settings.mjs";
 import { getHostId } from "./host-id.mjs";
-import { authenticate, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, extractDeviceToken, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, OWNER_PLAYTEST_ROLE, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
+import { authenticate, playtestCaller, callerFromRequest, callerOf, getAuthStatus, handleCaCrt, handleDevices, handleLocalLogin, handleLocalLoginNonce, handleLocalProof, extractDeviceToken, handleEnter, handlePairApprove, handlePairPending, handlePairRedeem, handlePairStart, handlePairStatus, handleRevoke, hasAgentHeaders, hasDistIndex, isLocal, isLocalBrowserSafe, isLocalOwner, isOwnerDevice, netConfig, OWNER_PLAYTEST_ROLE, originRefusal, ownerProof, READ_ONLY_ERROR, resolveNonAgentCaller, sendCrossSiteRefused, setRelayStatusProvider } from "./auth.mjs";
 import {
   appendVsLogEntry,
   authorizeBuddyRestartRequest,
@@ -318,7 +318,8 @@ export function setExposure(lanEnabled, exposedIps, toggleHandler = exposure.tog
 // by gated() (never the read-only all-GET view), and a record with any other role is not trusted at all (fail closed).
 // PTO v1.1: an owner-playtest device is trusted only so gated() can hold it to PLAYTEST_ROUTE_ALLOWLIST (playtestGated).
 const isTrusted = (req) => isLocalBrowserSafe(req) || trustedDevice(authenticate(req));
-const trustedDevice = (dev) => isOwnerDevice(dev) || dev?.role === "bug-tester" || dev?.role === OWNER_PLAYTEST_ROLE;
+// PTO R1 L1: an owner-playtest record is trusted only with an id (an id-less one is still caught by the playtest gate first).
+const trustedDevice = (dev) => isOwnerDevice(dev) || dev?.role === "bug-tester" || (dev?.role === OWNER_PLAYTEST_ROLE && Boolean(dev.id));
 const isOwner = (req) => ownerProof(req);
 /** E6a: the bug-tester device record behind `req` (header token, cookie or relay channel), or null. Owner proof wins. */
 const testerDeviceOf = (req) => {
@@ -326,9 +327,14 @@ const testerDeviceOf = (req) => {
   const dev = authenticate(req);
   return dev?.role === "bug-tester" ? dev : null;
 };
-/** PTO v1.1: the owner-playtest device record behind `req` (header token, cookie or relay channel), or null. Owner proof wins. */
+/**
+ * PTO v1.1: the owner-playtest device record behind `req` (header token, cookie or relay channel), or null. Only the local
+ * owner (loopback + local token, no agent headers) wins over it. Agent headers never hide it (PTO R1 M1): an unverified
+ * x-vs-agent-id must not turn a playtest credential into an "unknown" caller. Same answer as `isOwner ? null : ...`, one
+ * authenticate() pass (an owner-playtest record is never an owner device).
+ */
 const playtestDeviceOf = (req) => {
-  if (isOwner(req)) return null;
+  if (!hasAgentHeaders(req) && isLocalOwner(req)) return null;
   const dev = authenticate(req);
   return dev?.role === OWNER_PLAYTEST_ROLE ? dev : null;
 };
@@ -2521,7 +2527,11 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
     // which is not an API path and would otherwise fall through to next()). Checked only for such paths, so plain static
     // requests pay nothing.
     if (isSuspectPath(path) && testerDeviceOf(req)) return sendJson(res, 403, { error: "forbidden: bug-tester device cannot access this route" });
-    if (isSuspectPath(path) && playtestDeviceOf(req)) return sendJson(res, 403, { error: PLAYTEST_FORBIDDEN });
+    // PTO R1 M1: an owner-playtest device credential is gated on EVERY path (API, static/SPA, suspect spellings), before the
+    // trust check, the agent-header branch and caller resolution, so nothing (an x-vs-agent-id, a non-API path) can route it
+    // around PLAYTEST_ROUTE_ALLOWLIST. Report/thread still refuse agent headers, cookies and relay in ownerPlaytestPrincipal.
+    const playtestDev = playtestDeviceOf(req);
+    if (playtestDev) return playtestGated(req, res, path, playtestCaller(playtestDev));
     if (isApi && !isTrusted(req)) {
       if (originRefusal(req)) return sendCrossSiteRefused(req, res); // X1-E4b L4: a cookie write that failed the same-origin proof
       if (isLocal(req)) return sendJson(res, 403, { error: "forbidden" });
@@ -2534,22 +2544,12 @@ export function createVibesquadMiddleware(rootDir = REPO_ROOT, opts = {}) {
         (e) => sendServerError(res, e, "agent caller check"), // idea-249
       );
     }
-    return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : nonApiCaller(req));
+    return gated(req, res, next, path, isApi, isApi ? resolveNonAgentCaller(req) : { kind: ownerProof(req) ? "owner" : "unknown" });
   };
-
-  /**
-   * The caller of a non-API path (static files, the SPA): owner or unknown as before, except that an owner-playtest device keeps
-   * its own kind so gated() refuses it the static tree too (PTO v1.1 deny-by-default). Same single authenticate() pass as ownerProof.
-   */
-  function nonApiCaller(req) {
-    const c = resolveNonAgentCaller(req);
-    if (c.kind === "owner" || c.kind === "playtest") return c;
-    return { kind: "unknown" };
-  }
 
   function gated(req, res, next, path, isApi, caller) {
     if (caller.kind === "tester") return testerGated(req, res, path, caller); // E6a: first, before any owner/read-only rule
-    if (caller.kind === "playtest") return playtestGated(req, res, path, caller); // PTO v1.1: likewise, before any other rule
+    if (caller.kind === "playtest") return playtestGated(req, res, path, caller); // PTO v1.1: defence in depth (the middleware gates it first)
     const owner = caller.kind === "owner";
     const write = req.method !== "GET" && req.method !== "HEAD";
     if (caller.kind === "denied") return sendJson(res, caller.status, { error: caller.error });
