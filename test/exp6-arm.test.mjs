@@ -224,3 +224,50 @@ test("spawn_worker after verdict, deepseek capped (idea-703): Implement - Sonnet
   assert.deepEqual(res.ab, { arm: "sonnet", swapped: false, counts: null, mode: "default", capped: true });
   assert.match(logs[0].text, /^exp6-default: Implement - Sonnet -> Implement - Sonnet \(kept: winner capped\) wf=sonnet/);
 });
+
+// ---- review r2 ----
+test("readArmCaps: a corrupt or wrong-shape cap file throws, so decideArm keeps Implement - Sonnet (m1)", async () => {
+  for (const body of ["{ torn", "[1,2]", "\"x\""]) {
+    const home = mkdtempSync(join(tmpdir(), "exp6-badcaps-"));
+    writeFileSync(join(home, "capped-providers.json"), body);
+    await assert.rejects(readArmCaps({ env: { VIBESQUAD_HOME: home } }), undefined, body);
+    const r = await decideArm(closed({ capProbe: () => readArmCaps({ env: { VIBESQUAD_HOME: home } }) }));
+    assert.deepEqual([r.swapped, r.profile], [false, "Implement - Sonnet"], body);
+  }
+  const ok = mkdtempSync(join(tmpdir(), "exp6-okcaps-"));
+  writeFileSync(join(ok, "capped-providers.json"), "﻿" + JSON.stringify({ capped: {} }));
+  assert.deepEqual(await readArmCaps({ env: { VIBESQUAD_HOME: ok } }), {});
+});
+
+test("spawn_worker after verdict: corrupt cap file keeps Implement - Sonnet on claude", async () => {
+  const home = closedHome();
+  writeFileSync(join(home, "capped-providers.json"), "{ torn");
+  const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: home, VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+  const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
+  assert.equal(creates[0].labels.profile, "Implement - Sonnet");
+  assert.equal(creates[0].config.provider, "claude");
+  assert.equal(res.ab.capped, true);
+});
+
+test("spawn_worker after verdict: Worker alias -> Work Order - DSP, implement role -> Work Order role (opencode)", async () => {
+  for (const [asked, label] of [["Worker", "Work Order - DSP"], ["implement", "Work Order"], ["Implement", "Work Order"]]) {
+    const logs = [];
+    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
+    assert.equal(creates[0].labels.profile, label, asked);
+    assert.equal(creates[0].config.provider, "opencode", asked);
+    assert.deepEqual([res.ab.mode, res.ab.swapped, res.ab.arm], ["default", true, "dsp"], asked);
+    assert.match(logs[0].text, new RegExp(`^exp6-default: ${asked} -> ${label} wf=dsp`), asked);
+  }
+});
+
+test("spawn_worker: a throwing writeLog never fails the spawn", async () => {
+  for (const writeLog of [async () => { throw new Error("log down"); }, () => { throw new Error("sync throw"); }]) {
+    const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    ctx.writeLog = writeLog;
+    const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
+    assert.equal(res.id, "a1");
+    assert.equal(creates[0].labels.profile, "Work Order - DSP");
+    assert.equal(res.ab.swapped, true);
+  }
+});

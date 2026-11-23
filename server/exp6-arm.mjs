@@ -24,6 +24,8 @@ export const EXP6_WINNER = "dsp";
 const DEFAULT_SOURCES = {
   "implement - sonnet": { wf: "sonnet", to: { dsp: "Work Order - DSP" } },
   worker: { wf: "sonnet", to: { dsp: "Work Order - DSP" } },
+  // The `implement` role also takes the legacy Planner/Spec/Senior Reasoning names (LEGACY_PROFILE_ROLES), but only the
+  // role NAME is a source here: a role-name planning spawn lands on Work Order unless it sets labels.wf or ab=pin.
   implement: { wf: "sonnet", to: { dsp: "Work Order" } },
 };
 // Provider families whose cap blocks a swap to that arm. A deepseek cap is keyed "deepseek" (`vs cap set deepseek`)
@@ -32,12 +34,21 @@ export const ARM_CAP_FAMILIES = { dsp: ["opencode", "deepseek"], sonnet: ["claud
 
 /**
  * Live `vs cap` map (capped-providers.json, expired caps dropped) for the spawn caller's VibeSquad home. Lazy import:
- * the MCP server loads this module at startup. Throws on an unreadable file; decideArm treats that as capped (fail open).
+ * the MCP server loads this module at startup. A missing file = no caps. A file that exists but cannot be read or
+ * parsed THROWS (readCappedProviders would read it as "no caps"): decideArm then treats the arm as capped and keeps the
+ * requested profile, so a corrupt cap file never swaps a spawn onto a dead provider (idea-703). Other callers of
+ * provider-failover.mjs keep their behaviour.
  */
 export async function readArmCaps({ env = process.env } = {}) {
-  const { readCappedProviders } = await import("./provider-failover.mjs");
+  const { readCappedProviders, resolveCappedProvidersPath } = await import("./provider-failover.mjs");
   const cappedProvidersPath = env?.VIBESQUAD_CAPPED_PROVIDERS_PATH || (env?.VIBESQUAD_HOME ? join(env.VIBESQUAD_HOME, "capped-providers.json") : undefined);
-  return readCappedProviders({ useDiskCaps: true, ...(cappedProvidersPath ? { cappedProvidersPath } : {}) });
+  const path = resolveCappedProvidersPath(cappedProvidersPath ? { cappedProvidersPath } : {});
+  if (existsSync(path)) {
+    const doc = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")); // unreadable/torn -> throws
+    const map = doc && typeof doc === "object" && !Array.isArray(doc) ? (doc.capped ?? doc) : null;
+    if (!map || typeof map !== "object" || Array.isArray(map)) throw new Error(`capped-providers.json: unexpected shape at ${path}`);
+  }
+  return readCappedProviders({ useDiskCaps: true, cappedProvidersPath: path });
 }
 
 /** True when any family of `wf` is in the capped map/array. */
