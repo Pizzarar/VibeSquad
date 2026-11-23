@@ -53,7 +53,7 @@ Smoke: `git archive HEAD` export of each repo into a temp dir (live checkouts ha
 
 | Repo @ HEAD | Binary | import | quit |
 |---|---|---|---|
-| Escape-From-Idle `ece4f74b` | godot-4.8-dev7 | 0 | 0 (only `*-VALIDATE errors=0` lines) |
+| EFI `ece4f74b` | godot-4.8-dev7 | 0 | 0 (only `*-VALIDATE errors=0` lines) |
 | ForgeWirk `7bb1bfa` | godot-4.7.2 | 0 | 0 |
 | SportsBallBattles `8235006` | godot-4.7.2 | 0 | 0 |
 
