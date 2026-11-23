@@ -738,7 +738,7 @@ function logLines(file, maxBytes = Infinity) {
       let e;
       try { e = JSON.parse(line); } catch { continue; }
       if (!e || typeof e !== "object") continue;
-      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad }); // t = tsMs(ts), parsed once
+      c.recs.push({ ts: e.ts, t: tsMs(e.ts), lane: e.lane, type: e.type, text: e.text, team: e.team, squad: e.squad, agent: e.agent, role: e.role, plan: e.plan, pass: e.pass }); // t = tsMs(ts), parsed once
     }
     c.offset += lastNl + 1; // a trailing partial line is re-read next time
   }
@@ -1745,6 +1745,78 @@ function readLaneTeams(home) {
   return map;
 }
 
+// ---------------------------------------------------------------- Plan completion score (usa-46, idea-297)
+// getUsage() gains planScores: { pooled, byLane[], byLead[], bySquad[], minN: 5 }. Source: vs-log handoff/done entries with a `plan`
+// field (or `plan=docs/PLAN_*.md` in the text for older lines), grouped by (squad, lane, plan). Started = first Buddy handoff
+// (lead -> lead transfers are not starts; they move credit). Done = latest `done` with pass:true or PASS in the text.
+// Score = done / started over plans started > PLAN_SCORE_FRESH_MS ago; fewer than minN scored plans -> score null, insufficient true.
+export const PLAN_SCORE_MIN_N = 5;
+const PLAN_SCORE_FRESH_MS = 3 * 86400_000;
+const PLAN_SCORE_STALE_MS = 7 * 86400_000;
+const PLAN_TEXT_RE = /\bplan=(docs\/PLAN_[^\s;,)]+\.md)/;
+const LEAD_TRANSFER_RE = /^lead\s+(rn-[\w-]+)\s*->\s*(rn-[\w-]+)/;
+const isBuddyHandoff = (e) => e.role === "brainstorm" || /\bbuddy\s*->\s*lead\b/i.test(e.text ?? "");
+const planOf = (e) => (typeof e.plan === "string" && e.plan ? e.plan : (PLAN_TEXT_RE.exec(e.text ?? "")?.[1] ?? null));
+const medianOf = (xs) => { if (!xs.length) return null; const s = [...xs].sort((a, b) => a - b); const m = s.length >> 1; return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2); };
+
+function planRow(plans, now, extra) {
+  const scored = plans.filter((p) => now - p.startedAt > PLAN_SCORE_FRESH_MS);
+  const scoredDone = scored.filter((p) => p.doneAt !== null).length;
+  const open = plans.filter((p) => p.doneAt === null);
+  const insufficient = scored.length < PLAN_SCORE_MIN_N;
+  const score = insufficient || !scored.length ? null : Math.round((scoredDone / scored.length) * 1000) / 1000;
+  return {
+    ...extra, started: plans.length, done: plans.length - open.length, open: open.length,
+    stale: open.filter((p) => now - p.startedAt > PLAN_SCORE_STALE_MS).length,
+    scored: scored.length, scoredDone, score, insufficient,
+    medianCycleMs: medianOf(plans.filter((p) => p.doneAt !== null).map((p) => Math.max(0, p.doneAt - p.startedAt))),
+    buddy: { handedOff: scored.length, reachedDone: scoredDone, score },
+  };
+}
+
+/** Pure. entries: autonomy-style log entries { ts(ms), lane, type, text, squad, agent, role, plan, pass }. */
+export function buildPlanScores(entries, { now = Date.now(), squad = null } = {}) {
+  const groups = new Map();
+  for (const e of [...entries].sort((a, b) => a.ts - b.ts)) {
+    if (e.type !== "handoff" && e.type !== "done") continue;
+    if (squad && e.squad !== squad) continue;
+    const plan = planOf(e);
+    if (!plan) continue;
+    const key = `${e.squad ?? ""}\u0000${e.lane}\u0000${plan}`;
+    const g = getOrSet(groups, key, () => ({ squad: e.squad ?? null, lane: e.lane, plan, startedAt: null, transfers: [], dones: [], firstLead: null }));
+    if (e.type === "handoff") {
+      const tr = LEAD_TRANSFER_RE.exec(e.text ?? "");
+      if (tr) g.transfers.push({ ts: e.ts, from: tr[1], to: tr[2] });
+      else if (g.startedAt === null && isBuddyHandoff(e)) g.startedAt = e.ts;
+    } else if (e.pass === true || /\bPASS\b/.test(e.text ?? "")) {
+      g.dones.push({ ts: e.ts, agent: e.agent ?? null });
+    }
+  }
+  const plans = [];
+  for (const g of groups.values()) {
+    if (g.startedAt === null) continue;
+    const d = g.dones.filter((x) => x.ts >= g.startedAt).at(-1) ?? null;
+    const tr = d ? g.transfers.filter((t) => t.ts <= d.ts).at(-1) : g.transfers.at(-1);
+    plans.push({
+      squad: g.squad, lane: g.lane, plan: g.plan, startedAt: g.startedAt, doneAt: d ? d.ts : null,
+      startLead: g.transfers[0]?.from ?? d?.agent ?? null,
+      doneLead: d ? (tr?.to ?? d.agent ?? null) : null,
+    });
+  }
+  const group = (keyOf) => { const m = new Map(); for (const p of plans) { const k = keyOf(p); if (k !== null) getOrSet(m, k, () => []).push(p); } return m; };
+  const byLane = [...group((p) => `${p.squad ?? ""}|${p.lane}`).values()].map((ps) => planRow(ps, now, { squad: ps[0].squad, lane: ps[0].lane })).sort((a, b) => b.started - a.started || a.lane.localeCompare(b.lane));
+  const bySquad = [...group((p) => p.squad ?? "unknown").entries()].map(([sq, ps]) => planRow(ps, now, { squad: sq })).sort((a, b) => a.squad.localeCompare(b.squad));
+  // per lead agent: started credited to the first receiving lead, done to the lead holding the plan at done time
+  const leads = new Map();
+  const lead = (id) => getOrSet(leads, id, () => ({ lead: id, lane: null, started: 0, done: 0 }));
+  for (const p of plans) {
+    if (p.startLead) { const l = lead(p.startLead); l.started += 1; l.lane = p.lane; }
+    if (p.doneLead) { const l = lead(p.doneLead); l.done += 1; l.lane = p.lane; }
+  }
+  const byLead = [...leads.values()].sort((a, b) => b.started - a.started || a.lead.localeCompare(b.lead));
+  return { pooled: planRow(plans, now, {}), byLane, byLead, bySquad, minN: PLAN_SCORE_MIN_N };
+}
+
 // ---------------------------------------------------------------- Autonomy scorecard (usa-24, idea-161)
 // getUsage({ squad }) result gains: `squad` (filter or null), `squads` (all known Squad ids), and
 //   autonomy: {
@@ -1788,7 +1860,7 @@ function* autonomyEntriesSteps(home, laneTeams) {
       if (seen.has(key)) continue;
       seen.add(key);
       const own = typeof e.team === "string" && e.team ? e.team : typeof e.squad === "string" && e.squad ? e.squad : null;
-      out.push({ ts: t, lane, type: e.type, text: textStr, squad: squad ?? own ?? laneTeams.get(lane) ?? null });
+      out.push({ ts: t, lane, type: e.type, text: textStr, squad: squad ?? own ?? laneTeams.get(lane) ?? null, agent: typeof e.agent === "string" ? e.agent : null, role: typeof e.role === "string" ? e.role : null, plan: typeof e.plan === "string" ? e.plan : null, pass: e.pass === true });
     }
   }
   return out.sort((a, b) => a.ts - b.ts);
@@ -3022,6 +3094,7 @@ export function getUsage(opts = {}) { return drainSync(usageSteps(opts)); }
 export const usageTestHooks = {
   computeAutonomy: (entries, mergedUnits) => drainSync(autonomySteps(entries, mergedUnits)),
   attributeImplementer,
+  buildPlanScores,
   usageSteps,
 };
 
@@ -3358,6 +3431,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const limitRows = readLimits(home);
   const result = {
     squad, squads, autonomy,
+    planScores: buildPlanScores(entries, { now: now(), squad }),
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
     files: seen.size,
     totals: totalsFinal,

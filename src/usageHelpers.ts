@@ -123,6 +123,7 @@ export type UsageData = {
   squad?: string | null;
   squads?: string[];
   autonomy?: Autonomy;
+  planScores?: PlanScores;
   readyTime?: ReadyTime | null;
   compaction?: CompactionStats | null;
 };
@@ -962,3 +963,24 @@ export function takePendingUsageScroll(): boolean {
   return v;
 }
 export function resetColdUsageForTest(): void { coldUsage = null; scrollPending = false; }
+
+/** usa-46 plan completion score (server/providers-catalog.mjs buildPlanScores). score is null when fewer than minN plans are scored. */
+export type PlanScoreRow = {
+  squad?: string | null; lane?: string; started: number; done: number; open: number; stale: number;
+  scored: number; scoredDone: number; score: number | null; insufficient: boolean; medianCycleMs: number | null;
+  buddy: { handedOff: number; reachedDone: number; score: number | null };
+};
+export type PlanLeadRow = { lead: string; lane: string | null; started: number; done: number };
+export type PlanScores = { pooled: PlanScoreRow; byLane: PlanScoreRow[]; byLead: PlanLeadRow[]; bySquad?: PlanScoreRow[]; minN: number };
+
+/** `73%`, or `n<5 plans` while fewer than minN plans are old enough to score. */
+export function planScoreText(r: Pick<PlanScoreRow, "score" | "insufficient">, minN = 5): string {
+  return r.insufficient || r.score === null || r.score === undefined ? `n<${minN} plans` : `${Math.round(r.score * 100)}%`;
+}
+
+/** Collapsed header for the Plans section. */
+export function plansSummary(p: PlanScores | null | undefined): string {
+  if (!p || !p.pooled.started) return "Plan completion · no plan-tagged handoffs yet";
+  const r = p.pooled;
+  return `Plan completion · ${planScoreText(r, p.minN)} · ${r.done}/${r.started} done · ${r.open} open${r.stale ? ` (${r.stale} stale)` : ""}`;
+}
