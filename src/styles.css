@@ -6060,6 +6060,7 @@ body, :root[data-theme="light"] body { background-color: var(--bg); background-i
 .usage-delta-good { color: var(--mint-t); font-weight: 700; }
 .usage-delta-bad { color: var(--pink-t); font-weight: 700; }
 .usage-floor { display: flex; flex-direction: column; gap: var(--sp-2, 8px); }
+.usage-lead-long-turns { display: flex; flex-direction: column; gap: 2px; margin-top: var(--sp-2, 8px); }
 .usage-floor-bar { display: flex; height: 14px; border-radius: 999px; overflow: hidden; background: var(--panel-alt); }
 .usage-floor-seg { height: 100%; min-width: 2px; }
 .usage-floor-legend { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px) var(--sp-4, 16px); color: var(--muted); }
@@ -6336,7 +6337,14 @@ span.badge.lan-status-dot.warn { color: var(--text) !important; }
   align-items: center;
   justify-content: center;
   gap: 6px;
+  /* idea-463: four tabs (Overlord, RiffBot, Bugs, @lane) must fit a 360px phone without wrapping. */
+  min-width: 0;
+  padding: 0 4px;
+  overflow: hidden;
+  white-space: nowrap;
 }
+.phone-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.phone-tab .phone-badge { flex-shrink: 0; }
 .phone-tab.on { color: var(--text); border-top-color: var(--hot-pink); background: var(--panel-hi); }
 .phone-badge { min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--pink-fill); color: var(--on-pink-fill); font-size: 12px; font-weight: 800; text-align: center; }
 

@@ -67,7 +67,12 @@ export type SpawnStorm = {
   firstAt: string;
   lastAt: string;
   zeroTurnExits: number;
+  countExclRespawns?: number;
 };
+export type LongTurnBucket = { turns: number; costUsd: number };
+export type LongTurnSplit = { productive: LongTurnBucket; loop: LongTurnBucket; other: LongTurnBucket };
+export type LeadLongTurns = { threshold: number; pooled: LongTurnSplit; bySquad?: (Partial<LongTurnSplit> & { teamId: string })[] };
+
 export type ProfileRow = {
   provider: string;
   profile: string;
@@ -108,6 +113,7 @@ export type UsageData = {
   loops?: { threshold: number; flagged: LoopRow[] };
   byProfile?: ProfileRow[];
   spawnStorms?: SpawnStorm[];
+  leadLongTurns?: LeadLongTurns;
   usageReview?: UsageReview;
   cohorts?: Cohorts;
   floor?: Floor;
@@ -178,7 +184,9 @@ export function workIdlePct(workPct: number | null | undefined): string {
 /** One-line spawn-retry storm text: `lane · role · N spawns in Xm` (or `N zero-turn exits`). */
 export function stormText(s: SpawnStorm): string {
   const mins = Math.max(1, Math.round((s.windowMs ?? 0) / 60_000));
-  const tail = s.zeroTurnExits > 0 ? `${s.zeroTurnExits} zero-turn exits` : `${s.count} spawns in ${mins}m`;
+  const m = s.countExclRespawns;
+  const spawns = typeof m === "number" && m !== s.count ? `${s.count} (${m} excl. respawns)` : `${s.count}`; // parenthetical only when it differs
+  const tail = s.zeroTurnExits > 0 ? `${s.zeroTurnExits} zero-turn exits` : `${spawns} spawns in ${mins}m`;
   return `${s.lane} · ${s.role} · ${tail}`;
 }
 
@@ -850,4 +858,17 @@ export function filterProfilesByKind<T extends Pick<ProfileView, "jobKind" | "ro
 export function costCellText(p: Pick<ProfileView, "mergedUnits" | "costPerMergedUnit" | "costPerRun">): string {
   if (p.costPerMergedUnit !== null && p.mergedUnits > 0) return usdText(p.costPerMergedUnit);
   return p.costPerRun !== null && p.costPerRun !== undefined ? `${usdText(p.costPerRun)}/run` : "—";
+}
+
+export type LongTurnRow = { key: "productive" | "loop" | "other"; label: string; turns: number; costUsd: number; pct: number | null };
+
+/** Pick the squad row when a squad filter is set (zeros if absent), else pooled. Missing data -> null (tile hidden). */
+export function leadLongTurnRows(l: LeadLongTurns | undefined, squad: string | null): LongTurnRow[] | null {
+  if (!l || !l.pooled) return null;
+  // Pooled only when no squad filter; a filtered squad with no row shows zero buckets (never another scope's numbers).
+  const src: Partial<LongTurnSplit> = squad ? (l.bySquad?.find((b) => b.teamId === squad) ?? {}) : l.pooled;
+  const keys = [["productive", "Productive"], ["loop", "Loop"], ["other", "Other"]] as const;
+  const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
+  const total = keys.reduce((a, [k]) => a + num(src[k]?.costUsd), 0);
+  return keys.map(([key, label]) => ({ key, label, turns: num(src[key]?.turns), costUsd: num(src[key]?.costUsd), pct: total > 0 ? num(src[key]?.costUsd) / total : null }));
 }

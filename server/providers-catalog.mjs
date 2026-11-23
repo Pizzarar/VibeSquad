@@ -421,6 +421,7 @@ function foldEvent(st, ev) {
       }
     }
   } else if (ev.type === "exit" || ev.type === "error") {
+    st.curTools = undefined; // usa-40 R1 M3: a failed turn's tools must not leak into the next turn
     st.exited = true;
     if (t !== null) st.exitTs = t;
     if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) {
@@ -434,6 +435,7 @@ function foldEvent(st, ev) {
       st.runningSince = undefined;
     }
   } else if (ev.type === "input") {
+    st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL") st.priorPass = false;
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
@@ -461,6 +463,8 @@ function foldEvent(st, ev) {
       st.msgVerdict = messageVerdict(st);
       st.pass = st.msgVerdict === "FAIL" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
+  } else if (ev.type === "tool") {
+    if (st.role === "lead" && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
   } else if (ev.type === "usage") {
     // Adapter usage events (claude: per-call input/output tokens). ACP's contextTokens is a running size, not a delta: ignored.
     const inT = tokenCount(ev.inputTokens);
@@ -502,8 +506,17 @@ function foldEvent(st, ev) {
       st.compactOutputTokens = (st.compactOutputTokens ?? 0) + st.compactPending.outputTokens;
       st.compactPending = undefined;
     }
+    const turnTools = st.curTools ?? [];
+    st.curTools = undefined;
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
+    // usa-40 R1 L5: classified after the invalid-ts guard so longTail turns stay consistent with st.turns.
+    if (st.role === "lead" && st.turns + 1 > LEAD_LONG_TURN_MIN) {
+      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
+      const k = classifyLeadTurn(turnTools, lt.seen);
+      lt[k].turns += 1;
+      lt[k].costUsd += delta;
+    }
     const b = bucketFor(st, day);
     b.turns += 1;
     b.costUsd += delta;
@@ -523,6 +536,7 @@ function foldIdentity(st, m) {
   const rawProfile = typeof m.profile === "string" && m.profile ? m.profile : (typeof m.labels?.profile === "string" && m.labels.profile ? m.labels.profile : undefined);
   if (rawProfile) st.profile = PROFILE_NAME_BY_ID.get(rawProfile) ?? rawProfile;
   const team = m.team ?? m.labels?.team;
+  if (m.labels?.[RESPAWN_OF_LABEL]) st.respawnOf = true;
   if (typeof team === "string" && team) st.team = team;
   // usa-34: workflow arm label (created.meta.labels.wf / meta.patch.labels.wf), stamped at dispatch by wf-label.mjs.
   const wfLabel = typeof m.labels?.wf === "string" ? normalizeWfLabel(m.labels.wf) : "";
@@ -687,6 +701,35 @@ const ROLE_ORDER = ["brainstorm", "lead", "worker"];
 const WORKING_END_STATUSES = new Set(["idle", "parked", "exited"]);
 const SPAWN_BURST_WINDOW_MS = 2 * 60_000;
 const SPAWN_BURST_MIN = 3;
+// usa-40: lead turns past this index are the "long tail"; mirrors RESPAWN_OF_LABEL in server/hooks/agent-duties.ts (a .ts module this .mjs can't import).
+export const LEAD_LONG_TURN_MIN = 80;
+const RESPAWN_OF_LABEL = "respawnOf";
+const LEAD_PRODUCTIVE_CMD_RE = /\bgit\s+(?:commit|merge|push)\b|\bnpm\s+(?:run\s+)?test\b|\brun-tests\b|(?:^|[\s;&|])vs\s+(?:wait|watch|log|spawn)\b/;
+const LEAD_PRODUCTIVE_TOOL_RE = /(?:^|[_./:-])(?:wait(?:_for_agent)?|watch|spawn_worker|report)$/i;
+/** Key-order-independent JSON for tool-call signatures. */
+function stableJson(v) {
+  if (Array.isArray(v)) return `[${v.map(stableJson).join(",")}]`;
+  if (v && typeof v === "object") return `{${Object.keys(v).sort().map((k) => `${JSON.stringify(k)}:${stableJson(v[k])}`).join(",")}}`;
+  return JSON.stringify(v) ?? "null";
+}
+const toolSig = (t) => `${t.name}|${stableJson(t.input)}`;
+function isProductiveTool(t) {
+  const name = String(t.name ?? "");
+  if (LEAD_PRODUCTIVE_TOOL_RE.test(name)) return true;
+  const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
+  // usa-40 R1 H1a: ACP tool events carry no input; the title (our `name`) holds the command text, so test it too.
+  return LEAD_PRODUCTIVE_CMD_RE.test(cmd) || LEAD_PRODUCTIVE_CMD_RE.test(name);
+}
+/** usa-40: classify one long-tail lead turn from its tool calls. Mutates seen (signature -> count over earlier long-tail turns). */
+export function classifyLeadTurn(tools, seen) {
+  // usa-40 R1 H1b: a call with no input (ACP: title only) can't be proven identical to an earlier one, so it never enters the
+  // loop signatures (a bare `title|null` would collapse distinct calls into a false loop).
+  const sigs = tools.filter((t) => t.input !== undefined).map(toolSig);
+  const productive = tools.some(isProductiveTool);
+  const repeated = !productive && sigs.some((g) => (seen.get(g) ?? 0) >= 2);
+  for (const g of sigs) seen.set(g, (seen.get(g) ?? 0) + 1);
+  return productive ? "productive" : repeated ? "loop" : "other";
+}
 const ZERO_TURN_EXIT_WINDOW_MS = 5 * 60_000;
 const ZERO_TURN_EXIT_MIN = 3;
 const FIX_AFTER_MERGE_WINDOW_MS = 24 * 3600_000;
@@ -1169,6 +1212,7 @@ function agentV2(st, agentId) {
     roleOnly: !!st.roleOnly,
     stakes: normalizeStakes(st.stakes),
     wfLabel: st.wfLabel ?? null,
+    respawnOf: !!st.respawnOf,
     jobKind: classifyJobKind(st),
     cwd: st.cwd,
     createdAt: st.createdAt ?? st.firstTs ?? null,
@@ -1725,23 +1769,40 @@ function findStorms(tsList, windowMs, min) {
   return storms.map((s) => ({ firstAt: s.firstAt, lastAt: s.lastAt, count: ts.filter((t) => t >= s.firstAt && t <= s.lastAt).length }));
 }
 
+/** usa-40: lead long-tail (turn > LEAD_LONG_TURN_MIN) split, pooled and per team. Whole-log, unfiltered by squad/day like the other v2 rollups. */
+function buildLeadLongTurns(allAgentSquads) {
+  const zero = () => ({ turns: 0, costUsd: 0 });
+  const mk = () => ({ productive: zero(), loop: zero(), other: zero() });
+  const pooled = mk();
+  const by = new Map();
+  for (const { st, squad } of allAgentSquads) {
+    if (!st.longTail) continue;
+    const row = getOrSet(by, squad ?? "unknown", mk);
+    for (const k of ["productive", "loop", "other"]) {
+      for (const t of [pooled[k], row[k]]) { t.turns += st.longTail[k].turns; t.costUsd += st.longTail[k].costUsd; }
+    }
+  }
+  return { threshold: LEAD_LONG_TURN_MIN, pooled, bySquad: [...by.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([teamId, r]) => ({ teamId, ...r })) };
+}
+
 /** Spawn-retry storms: >=3 created in a 2-min window, or >=3 zero-turn/error exits in a 5-min window, per (lane, role). */
 function computeSpawnStorms(agents) {
   const groups = new Map();
   for (const a of agents) {
     const lane = a.lane || "unknown";
     const role = a.role || "unknown";
-    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], zeroExits: [] }));
-    if (a.createdAt !== null && a.createdAt !== undefined) g.created.push(a.createdAt);
-    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) g.zeroExits.push(a.exitTs);
+    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], createdExclRespawns: [], zeroExits: [], zeroExitsExclRespawns: [] }));
+    if (a.createdAt !== null && a.createdAt !== undefined) { g.created.push(a.createdAt); if (!a.respawnOf) g.createdExclRespawns.push(a.createdAt); }
+    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) { g.zeroExits.push(a.exitTs); if (!a.respawnOf) g.zeroExitsExclRespawns.push(a.exitTs); }
   }
   const entries = [];
   for (const g of groups.values()) {
     for (const s of findStorms(g.created, SPAWN_BURST_WINDOW_MS, SPAWN_BURST_MIN)) {
-      entries.push({ lane: g.lane, role: g.role, count: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
+      const countExclRespawns = g.createdExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length; // usa-40: burst count with the one-time respawns dropped
+      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
     }
     for (const s of findStorms(g.zeroExits, ZERO_TURN_EXIT_WINDOW_MS, ZERO_TURN_EXIT_MIN)) {
-      entries.push({ lane: g.lane, role: g.role, count: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
+      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns: g.zeroExitsExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
     }
   }
   entries.sort((a, b) => a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role) || Date.parse(a.firstAt) - Date.parse(b.firstAt));
@@ -1752,6 +1813,7 @@ function computeSpawnStorms(agents) {
       last.lastAt = e.lastAt;
       last.windowMs = Date.parse(last.lastAt) - Date.parse(last.firstAt);
       last.count = Math.max(last.count, e.count);
+      last.countExclRespawns = Math.max(last.countExclRespawns ?? 0, e.countExclRespawns ?? 0);
       last.zeroTurnExits = (last.zeroTurnExits ?? 0) + (e.zeroTurnExits ?? 0);
     } else {
       merged.push({ ...e });
@@ -3056,6 +3118,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   });
   yield;
   const spawnStorms = computeSpawnStorms(agents);
+  const leadLongTurns = buildLeadLongTurns(allAgentSquads);
   const readyTime = buildReadyTime(agents);
   yield;
   const bootSize = yield* bootSizesSteps(home, { since, until });
@@ -3088,6 +3151,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     loops: { threshold: LOOP_TURN_THRESHOLD, flagged: loops.sort((a, b) => b.turns - a.turns) },
     byProfile,
     spawnStorms,
+    leadLongTurns,
     readyTime,
     compaction: buildCompaction(agents, floor, compactEvents),
     bootSize,

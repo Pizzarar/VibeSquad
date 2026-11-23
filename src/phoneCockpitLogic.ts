@@ -1,5 +1,5 @@
-import { gridPinsForSquad, type Pin } from "./pins.ts";
-import type { TeamView } from "./teams.ts";
+import { gridPinsForSquad, quickBugsChipState, resolveQuickBugsLane, type Pin } from "./pins.ts";
+import type { Member, TeamView } from "./teams.ts";
 // E1 (docs/PLAN_ANDROID_END_STATE.md Phase 2): pure rules for the strict phone cockpit. No React, no DOM: test/phone-cockpit.test.mjs imports this directly.
 
 /** Phone viewport cutoff; matches the existing `@media (max-width: 600px)` mobile rules in styles.css. */
@@ -10,7 +10,7 @@ export function isPhoneShell(isAndroidUa: boolean, viewportWidth: number): boole
   return isAndroidUa || (viewportWidth > 0 && viewportWidth <= PHONE_MAX_WIDTH);
 }
 
-export type PhoneSurface = "overlord" | "riffbot" | "buddy";
+export type PhoneSurface = "overlord" | "riffbot" | "bugs" | "buddy";
 
 /** Overlord is the landing tab only while something needs the owner; otherwise RiffBot (pitch ideas, spin up lanes). */
 export function defaultSurface(needsYou: number): PhoneSurface {
@@ -61,10 +61,30 @@ export function resetBuddyRequest(): void {
 export type PhoneLaneState = "live" | "idle" | "none";
 export type PhoneLaneRow = { pin: Pin; laneId: string; name: string; state: PhoneLaneState };
 
-/** The ⋯ drawer's lane list: every pinned lane of the Squad (no-agent lanes from `vs pin new` included), same data as the desktop sidebar. */
+/**
+ * idea-463 (Trinity audit HIGH #3): the Squad's standing Bugs lane as a permanent bottom tab beside Overlord and RiffBot.
+ * Reuses `quickBugsPinForSquad` via `quickBugsChipState` (src/pins.ts), so the lane match and needs-you count are the desktop Bugs chip's.
+ */
+export type PhoneBugsSurface = { laneId: string | null; aliases: string[]; pin: Pin | null; member: Member | null; needsYou: number };
+
+export function phoneBugsSurface(view: TeamView | undefined): PhoneBugsSurface {
+  const { pin, needsYou } = quickBugsChipState(view);
+  if (!pin) return { laneId: null, aliases: [], pin: null, member: null, needsYou: 0 };
+  return { laneId: pin.lane.id, aliases: pin.lane.aliases ?? [], pin, member: pin.brainstorm ?? pin.lead ?? null, needsYou };
+}
+
+/** True when `laneId` (an `openBuddy` request or a drawer row) names the Squad's Bugs lane, by id or alias, case-insensitive. */
+export function isBugsLane(bugs: Pick<PhoneBugsSurface, "laneId" | "aliases">, laneId: string | null | undefined): boolean {
+  const id = laneId?.trim().replace(/^@/, "").toLowerCase();
+  if (!id || !bugs.laneId) return false;
+  return bugs.laneId.toLowerCase() === id || bugs.aliases.some((a) => a.toLowerCase() === id);
+}
+
+/** The ⋯ drawer's lane list: every pinned feature lane of the Squad (no-agent lanes from `vs pin new` included). The Bugs lane is excluded: it is a Trinity tab, not a feature lane (idea-463). */
 export function phoneLaneRows(view: TeamView | undefined): PhoneLaneRow[] {
   if (!view) return [];
-  return gridPinsForSquad(view).pinned.map((pin) => ({
+  const bugsId = resolveQuickBugsLane(view.team)?.id.toLowerCase();
+  return gridPinsForSquad(view).pinned.filter((pin) => pin.lane.id.toLowerCase() !== bugsId).map((pin) => ({
     pin,
     laneId: pin.lane.id,
     name: pin.lane.name,
