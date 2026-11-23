@@ -369,16 +369,25 @@ func _refresh_pairing() -> void:
 	for row: Array in [[_transport.resolved_device_token_path(), "device_token_path"], [_transport.resolved_ca_cert_path(), "ca_cert_path"]]:
 		if String(row[0]) == "":
 			_dock.set_pairing(Dock.PAIR_HIDDEN)
-			_dock.set_status("vs_playtest/%s must be an absolute file path outside the project (not res:// or user://)." % row[1])
+			_dock.set_status("vs_playtest/%s must be an absolute file path outside the project (not res:// or user://, not inside the project, not a network share)." % row[1])
 			return
 	var paired: bool = _transport.is_paired()
 	_dock.set_pairing(Dock.PAIR_PAIRED if paired else Dock.PAIR_UNPAIRED)
 	if paired:
+		_check_role()
 		return
 	if Token.read_device_token(_transport.resolved_device_token_path()) != "":
 		_dock.set_status("No pinned VibeSquad CA, so the device token is not sent. Pair with VS again: it fetches the CA and asks you to confirm its fingerprint.")
 	else:
-		_dock.set_status("Not paired with VibeSquad. Mint an owner pairing code in VibeSquad (Pair Device, or vs pair), type the 6 digits and press Pair with VS; you then confirm the VS CA fingerprint.")
+		_dock.set_status("Not paired with VibeSquad. Mint a Playtest code in VibeSquad (Pair Device dialog), type the 6 digits and press Pair with VS; you then confirm the VS CA fingerprint.")
+
+
+## Asks the server which role this device token has; a full-owner token gets a one-line dock warning. Quiet on any
+## failure (offline, old server): no warning is better than a wrong one.
+func _check_role() -> void:
+	var role: String = await _transport.fetch_role()
+	if _dock != null:
+		_dock.set_owner_warning(role == Transport.ROLE_OWNER and _dock.pair_state == Dock.PAIR_PAIRED)
 
 
 ## Step 1: owner typed a code. Fetch the VS CA (plain-http bootstrap, no token) and show its fingerprint to confirm.
