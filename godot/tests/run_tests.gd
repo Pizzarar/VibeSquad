@@ -89,6 +89,10 @@ func _initialize() -> void:
 	await _test_pairing()
 	await _test_autoload_pairing_api()
 	await _test_real_tls_pin()
+	_test_override_path_refusals()
+	_test_private_write_failures()
+	_test_pinned_state_single_read()
+	await _test_role_warning()
 	print("---- vs_playtest tests: %d passed, %d failed" % [_pass, _fail])
 	quit(_fail)
 
@@ -525,7 +529,7 @@ func _test_device_token_path() -> void:
 	var nix := {"HOME": "/home/x"}
 	check(Token.device_token_path("", func(k: String) -> String: return nix.get(k, "")) == "/home/x/.vibesquad/playtest-device-token", "device path: HOME fallback")
 	check(Token.device_token_path("", func(_k: String) -> String: return "") == "", "device path: no home -> empty")
-	for o in ["/abs/dir/tok", "C:/t/tok", "C:" + BS + "t" + BS + "tok", BS + BS + "srv" + BS + "share" + BS + "tok", "  /abs/tok  "]:
+	for o in ["/abs/dir/tok", "C:/t/tok", "C:" + BS + "t" + BS + "tok", "  /abs/tok  "]:
 		check(Token.device_token_path(o, getenv) == o.strip_edges(), "device path: setting override '%s' wins" % o.c_escape())
 	for o in ["res://tok", "user://tok", "uid://abc", "tok", "./tok", "~/.vibesquad/tok", "/dir/", "C:tok", "http://x/tok"]:
 		check(Token.device_token_path(o, getenv) == "", "device path: override '%s' refused (not swapped for the default)" % o)
@@ -1050,3 +1054,152 @@ func _test_real_tls_pin() -> void:
 func _cert_der(cert: X509Certificate) -> PackedByteArray:
 	var s := cert.save_to_string()
 	return Token.pem_single_cert_der(s.left(s.find("-----END CERTIFICATE-----") + "-----END CERTIFICATE-----".length()))
+
+
+# ---------------------------------------------------------------- R2: owner-role warning + B2b lows
+
+## L1: an override that lands inside the project root, or on a UNC share, is refused (never swapped for the default).
+func _test_override_path_refusals() -> void:
+	var BS := String.chr(92)
+	var env := {"VIBESQUAD_HOME": "/tmp/vsh"}
+	var getenv := func(k: String) -> String: return env.get(k, "")
+	var root := "/work/game"
+	for o in ["/work/game/tok", "/work/game/sub/dir/tok", "/work/game/sub/../tok", "/WORK/Game/tok", "/work/game/", "/work/game/x/../../game/tok"]:
+		check(Token.device_token_path(o, getenv, root) == "", "L1 device path: inside project root '%s' refused" % o)
+		check(Token.ca_cert_path(o, getenv, root) == "", "L1 ca path: inside project root '%s' refused" % o)
+	for o in ["C:/work/game/tok", "C:" + BS + "work" + BS + "game" + BS + "tok"]:
+		check(Token.device_token_path(o, getenv, "C:/Work/Game") == "", "L1 device path: Windows project-root path '%s' refused" % o.c_escape())
+	for o in ["//srv/share/tok", BS + BS + "srv" + BS + "share" + BS + "tok", "//srv/share/ca.crt", BS + BS + "srv" + BS + "share" + BS + "ca.crt"]:
+		check(Token.device_token_path(o, getenv, root) == "", "L1 device path: UNC '%s' refused" % o.c_escape())
+		check(Token.ca_cert_path(o, getenv, root) == "", "L1 ca path: UNC '%s' refused" % o.c_escape())
+	for o in ["/work/gamex/tok", "/work/other/tok", "/work/tok", "/tmp/elsewhere/tok", "C:/Users/x/tok"]:
+		check(Token.device_token_path(o, getenv, root) == o, "L1 device path: outside the project '%s' still allowed" % o)
+	var real_root := ProjectSettings.globalize_path("res://")
+	check(real_root != "" and Token.device_token_path(real_root.path_join("tok"), getenv) == "", "L1 device path: the real globalized res:// root is used by default")
+	check(Token.ca_cert_path(real_root.path_join("addons/ca.crt"), getenv) == "", "L1 ca path: the real res:// root covers subfolders")
+	check(Token.ca_cert_path(OS.get_temp_dir().path_join("outside-ca.crt"), getenv) != "", "L1 ca path: a temp-dir path is allowed")
+	# the transport resolves through the same rules
+	var t := Transport.new()
+	t.device_token_path = real_root.path_join("tok")
+	t.ca_cert_path = "//srv/share/ca.crt"
+	check(t.resolved_device_token_path() == "" and t.resolved_ca_cert_path() == "", "L1 transport: refused overrides resolve to empty")
+	t.server_url = "https://forge.tail1234.ts.net:4180"
+	check(t._pair_precheck().contains("absolute file path"), "L1 transport: pairing is refused with a path message")
+	t.free()
+
+
+## L3: temp-file write errors are surfaced, the temp is removed, and the temp name is random.
+func _test_private_write_failures() -> void:
+	var dir := _tmp_dir("wfail")
+	check(Token._random_suffix().length() == 32 and Token._random_suffix() != Token._random_suffix(), "L3: temp suffix is 128 random bits (32 hex), different every call")
+	# rename onto a directory fails -> error returned, temp cleaned up, no half file
+	var target := dir.path_join("playtest-device-token")
+	DirAccess.make_dir_recursive_absolute(target)
+	var err := Token.write_device_token(target, DEV_TOKEN)
+	check(err != OK, "L3: rename failure is returned (%s)" % error_string(err))
+	check(DirAccess.get_files_at(dir).is_empty(), "L3: temp file removed after a failed rename (%s)" % ", ".join(DirAccess.get_files_at(dir)))
+	# unwritable directory -> open error returned, nothing left, no token in the error
+	if not (OS.get_name() in ["Windows", "Web"]) and OS.get_environment("USER") != "root":
+		var ro := dir.path_join("ro")
+		DirAccess.make_dir_recursive_absolute(ro)
+		FileAccess.set_unix_permissions(ro, 320) # 0500
+		var rp := ro.path_join("playtest-ca.crt")
+		var cerr := Token.write_ca_cert(rp, Token.pem_single_cert_der(CA_PEM))
+		check(cerr != OK and not str(error_string(cerr)).contains(DEV_TOKEN), "L3: open failure in an unwritable dir is returned (%s)" % error_string(cerr))
+		FileAccess.set_unix_permissions(ro, 448)
+		check(DirAccess.get_files_at(ro).is_empty(), "L3: nothing left behind in the unwritable dir")
+	# success path leaves only the target
+	var ok_path := dir.path_join("good").path_join("playtest-device-token")
+	check(Token.write_device_token(ok_path, DEV_TOKEN) == OK and DirAccess.get_files_at(ok_path.get_base_dir()).size() == 1, "L3: a good write leaves exactly the target file")
+	for d in [dir.path_join("good"), target, dir.path_join("ro")]:
+		for f in DirAccess.get_files_at(d):
+			DirAccess.remove_absolute(d.path_join(f))
+		DirAccess.remove_absolute(d)
+	DirAccess.remove_absolute(dir)
+
+
+## L2: the pinned CA is read once; the fingerprint and the TLS pin come from the same bytes.
+func _test_pinned_state_single_read() -> void:
+	var dir := _tmp_dir("pinstate")
+	var cpath := dir.path_join("playtest-ca.crt")
+	var t := Transport.new()
+	t.ca_cert_path = cpath
+	var none: Dictionary = t.pinned_state()
+	check(none["tls"] == null and none["fingerprint"].is_empty(), "L2: no CA file -> no pin, no fingerprint")
+	Token.write_ca_cert(cpath, Token.pem_single_cert_der(CA_PEM))
+	var st: Dictionary = t.pinned_state()
+	check(st["tls"] != null and st["fingerprint"].get("full") == CA_FP_FULL, "L2: one read gives the pin and its fingerprint")
+	check(_chain_der(st["tls"]) == Token.pem_single_cert_der(CA_PEM) and Token.ca_fingerprint(_chain_der(st["tls"]))["full"] == st["fingerprint"]["full"], "L2: fingerprint is computed from the very cert the pin trusts")
+	# swapping the file afterwards cannot split a result already taken
+	Token.remove_file(cpath)
+	check(st["fingerprint"]["full"] == CA_FP_FULL and t.pinned_tls() == null and t.pinned_fingerprint().is_empty(), "L2: a later swap/removal is seen by the next read as a whole, never half")
+	t.free()
+	DirAccess.remove_absolute(dir)
+
+
+## R2: a full-owner token shows a one-line dock warning; owner-playtest shows nothing; errors stay quiet.
+func _test_role_warning() -> void:
+	var logs := LogCapture.new()
+	logs.install()
+	var dock := Dock.new()
+	check(not dock._role_warn.visible and dock._role_warn.text == "Full owner token: re-pair with a Playtest code", "role: dock warning text, hidden by default")
+	check(dock._pair_btn.tooltip_text == "Playtest pairing code", "role: pair button tooltip says Playtest pairing code")
+	dock.set_pairing(Dock.PAIR_PAIRED)
+	dock.set_owner_warning(true)
+	check(dock._role_warn.visible, "role: set_owner_warning(true) shows it")
+	dock.set_pairing(Dock.PAIR_UNPAIRED)
+	check(not dock._role_warn.visible, "role: leaving the paired state hides it")
+	dock.free()
+
+	var dir := _tmp_dir("role")
+	var dpath := dir.path_join("playtest-device-token")
+	var cpath := dir.path_join("playtest-ca.crt")
+	Token.write_device_token(dpath, DEV_TOKEN)
+	Token.write_ca_cert(cpath, Token.pem_single_cert_der(CA_PEM))
+	var cases := [
+		["owner", MockHttp.json(200, {"role": "owner", "allowedTeams": null, "deviceName": "Godot playtest"}), true],
+		["owner-playtest", MockHttp.json(200, {"role": "owner-playtest", "allowedTeams": null, "deviceName": "Godot playtest"}), false],
+		["network error", {"result": HTTPRequest.RESULT_CANT_CONNECT, "code": 0, "text": ""}, false],
+		["http 500", MockHttp.json(500, {"error": "boom"}), false],
+		["old server (404)", MockHttp.json(404, {"error": "nope"}), false],
+		["garbage body", MockHttp.text(200, "<html>"), false],
+	]
+	for c: Array in cases:
+		var on: Node = AutoloadScript.new()
+		on.feature_probe = func(f: String) -> bool: return f == "vs_playtest"
+		root.add_child(on)
+		await process_frame
+		var mock := MockHttp.new()
+		on._transport.http_fn = Callable(mock, "handle")
+		on._transport.device_token_path = dpath
+		on._transport.ca_cert_path = cpath
+		on._transport.server_url = "https://forge.tail1234.ts.net:4180"
+		mock.queue = [c[1]]
+		on._refresh_pairing()
+		for i in 3:
+			await process_frame
+		var rc: Dictionary = mock.calls[0] if not mock.calls.is_empty() else {}
+		check(on._dock.pair_state == Dock.PAIR_PAIRED and str(rc.get("url", "")) == "https://forge.tail1234.ts.net:4180/__vibesquad/auth/status" and _has_header(rc.get("headers", PackedStringArray()), "x-vs-device-token"), "role[%s]: GET auth/status over https with the device token" % c[0])
+		check(on._dock._role_warn.visible == c[2], "role[%s]: warning visible == %s" % [c[0], str(c[2])])
+		on.queue_free()
+	# a fresh transport accepts an owner-playtest pairing redeem
+	var t := Transport.new()
+	var mock2 := MockHttp.new()
+	t.http_fn = Callable(mock2, "handle")
+	t.server_url = "https://forge.tail1234.ts.net:4180"
+	var dir2 := _tmp_dir("role2")
+	t.device_token_path = dir2.path_join("playtest-device-token")
+	t.ca_cert_path = dir2.path_join("playtest-ca.crt")
+	root.add_child(t)
+	await _fetch_ca(t, mock2)
+	mock2.queue = [MockHttp.json(200, {"ok": true, "state": "paired", "token": DEV_TOKEN_2, "role": "owner-playtest"})]
+	var r: Dictionary = await t.pair("123456", CA_FP_FULL)
+	check(r["ok"] and r["state"] == "paired" and t.is_paired(), "role: pairing with an owner-playtest code is accepted")
+	check(not str(logs.last_lines(1000)).contains(DEV_TOKEN) and not str(logs.last_lines(1000)).contains(DEV_TOKEN_2), "role: no token in any log line")
+	t.unpair()
+	t.queue_free()
+	logs.uninstall()
+	for d in [dir, dir2]:
+		for f in DirAccess.get_files_at(d):
+			DirAccess.remove_absolute(d.path_join(f))
+		DirAccess.remove_absolute(d)
