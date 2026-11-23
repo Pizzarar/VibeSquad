@@ -81,3 +81,73 @@ test('spawn storms: countExclRespawns drops respawned agents, raw count unchange
   assert.equal(storm.countExclRespawns, 2);
   assert.ok(storm.countExclRespawns < storm.count);
 });
+
+// ---- usa-40 R1 ----
+const cu = (i) => Math.round(i * 0.1 * 1e6) / 1e6;
+const tail = (home, id, team, toolsFor, n = LEAD_LONG_TURN_MIN + 5, extra = {}) => {
+  writeAgent(home, id, leadRun(team, n, toolsFor));
+  return getUsage({ home, git: noGit }).leadLongTurns.bySquad.find((r) => r.teamId === team);
+};
+
+test('R1 L4: key-order independence inside one agent -> loop', () => {
+  const home = tmp();
+  const r = tail(home, 'rn-k', 'alpha', (i) => (i === 81 ? [{ name: 'Bash', input: { a: 1, b: 2 } }] : i === 82 ? [{ name: 'Bash', input: { b: 2, a: 1 } }] : i === 83 ? [{ name: 'Bash', input: { a: 1, b: 2 } }] : i === 84 ? [{ name: 'Bash', input: { b: 2, a: 1 } }] : []));
+  assert.equal(r.loop.turns, 2); // turns 83, 84 repeat a sig seen >=2 times
+});
+
+test('R1 H1: ACP-shaped tools (title only, no input): commit title productive; generic titles never loop', () => {
+  const home = tmp();
+  const r = tail(home, 'rn-acp', 'alpha', (i) => (i === 85 ? [{ name: 'git commit -m "x"' }] : i > 80 ? [{ name: 'Run shell command' }] : []));
+  assert.equal(r.productive.turns, 1);
+  assert.equal(r.loop.turns, 0);
+  assert.equal(r.other.turns, 4);
+});
+
+test('R1 L4: MCP productive tool names; result phase ignored', () => {
+  const home = tmp();
+  const evs = leadRun('alpha', 85, (i) => (i === 81 ? [{ name: 'mcp__vibesquad__wait', input: { ids: ['x'] } }] : i === 82 ? [{ name: 'mcp__vibesquad__spawn_worker', input: { a: 1 } }] : []));
+  // a result-phase tool event with a productive-looking name in turn 83 must be ignored
+  const at = evs.findIndex((e) => e.type === 'turn_done' && e.costUsd === cu(83));
+  evs.splice(at, 0, { ts: T0 + 83000, type: 'tool', phase: 'result', id: 'r', name: 'git commit', input: { command: 'git commit' } });
+  writeAgent(home, 'rn-mcp', evs);
+  const r = getUsage({ home, git: noGit }).leadLongTurns.bySquad.find((x) => x.teamId === 'alpha');
+  assert.equal(r.productive.turns, 2);
+  assert.equal(r.other.turns, 3);
+});
+
+test('R1 M3: a failed turn (error, no turn_done) does not leak tools into the next turn', () => {
+  const home = tmp();
+  const evs = leadRun('alpha', 85, (i) => (i === 83 || i === 84 ? [bash('ls')] : []));
+  // tools of a failed turn: two identical calls that never reached turn_done, then an error
+  const at = evs.findIndex((e) => e.type === 'turn_done' && e.costUsd === cu(84));
+  evs.splice(at + 1, 0, { ts: T0 + 84500, type: 'tool', phase: 'call', id: 'f1', name: 'Bash', input: { command: 'ls' } }, { ts: T0 + 84600, type: 'error', message: 'boom' });
+  writeAgent(home, 'rn-err', evs);
+  const r = getUsage({ home, git: noGit }).leadLongTurns.bySquad.find((x) => x.teamId === 'alpha');
+  assert.equal(r.loop.turns, 0, 'only two real ls calls -> no loop; the leaked third would have made turn 85 a loop only if ls repeated');
+});
+
+test('R1 L5: invalid-ts turn_done keeps long-tail turns consistent with st.turns', () => {
+  const home = tmp();
+  const evs = leadRun('alpha', 85, () => []);
+  const bad = evs.findIndex((e) => e.type === 'turn_done' && e.costUsd === cu(83));
+  evs[bad].ts = 1e20;
+  writeAgent(home, 'rn-ts', evs);
+  const u = getUsage({ home, git: noGit });
+  const p = u.leadLongTurns.pooled;
+  assert.equal(p.productive.turns + p.loop.turns + p.other.turns, 4); // 81,82,84,85 (the invalid-ts turn is skipped like st.turns)
+});
+
+test('R1 M2: zero-exit storm drops respawned agents from countExclRespawns', () => {
+  const home = tmp();
+  [0, 20_000, 40_000, 60_000].forEach((off, i) => {
+    writeAgent(home, `rn-x${i}`, [
+      { ts: T0, type: 'created', provider: 'claude', model: 'm', meta: { lane: 'usage', role: 'lead', ...(i >= 3 ? { labels: { respawnOf: 'rn-dead' } } : {}) } },
+      { ts: T0 + 60 * 60_000 + off, type: 'exit', code: 1 },
+    ]);
+  });
+  const s = getUsage({ home, git: noGit }).spawnStorms.filter((x) => x.zeroTurnExits > 0);
+  assert.equal(s.length, 1);
+  assert.equal(s[0].count, 4);
+  assert.equal(s[0].countExclRespawns, 3);
+  assert.ok(s[0].countExclRespawns <= s[0].count);
+});

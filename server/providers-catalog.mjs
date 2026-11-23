@@ -421,6 +421,7 @@ function foldEvent(st, ev) {
       }
     }
   } else if (ev.type === "exit" || ev.type === "error") {
+    st.curTools = undefined; // usa-40 R1 M3: a failed turn's tools must not leak into the next turn
     st.exited = true;
     if (t !== null) st.exitTs = t;
     if (ev.type === "error" || ev.error != null || (ev.code != null && ev.code !== 0)) {
@@ -434,6 +435,7 @@ function foldEvent(st, ev) {
       st.runningSince = undefined;
     }
   } else if (ev.type === "input") {
+    st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL") st.priorPass = false;
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
@@ -504,15 +506,17 @@ function foldEvent(st, ev) {
       st.compactOutputTokens = (st.compactOutputTokens ?? 0) + st.compactPending.outputTokens;
       st.compactPending = undefined;
     }
-    if (st.role === "lead" && st.turns + 1 > LEAD_LONG_TURN_MIN) {
-      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
-      const k = classifyLeadTurn(st.curTools ?? [], lt.seen);
-      lt[k].turns += 1;
-      lt[k].costUsd += delta;
-    }
+    const turnTools = st.curTools ?? [];
     st.curTools = undefined;
     const day = dayOf(ev.ts ?? Date.now());
     if (!day) return; // invalid ts: skip the event (prevCost already advanced so later deltas stay right)
+    // usa-40 R1 L5: classified after the invalid-ts guard so longTail turns stay consistent with st.turns.
+    if (st.role === "lead" && st.turns + 1 > LEAD_LONG_TURN_MIN) {
+      const lt = (st.longTail ??= { seen: new Map(), productive: { turns: 0, costUsd: 0 }, loop: { turns: 0, costUsd: 0 }, other: { turns: 0, costUsd: 0 } });
+      const k = classifyLeadTurn(turnTools, lt.seen);
+      lt[k].turns += 1;
+      lt[k].costUsd += delta;
+    }
     const b = bucketFor(st, day);
     b.turns += 1;
     b.costUsd += delta;
@@ -713,11 +717,14 @@ function isProductiveTool(t) {
   const name = String(t.name ?? "");
   if (LEAD_PRODUCTIVE_TOOL_RE.test(name)) return true;
   const cmd = typeof t.input?.command === "string" ? t.input.command : (typeof t.input === "string" ? t.input : "");
-  return cmd !== "" && LEAD_PRODUCTIVE_CMD_RE.test(cmd);
+  // usa-40 R1 H1a: ACP tool events carry no input; the title (our `name`) holds the command text, so test it too.
+  return LEAD_PRODUCTIVE_CMD_RE.test(cmd) || LEAD_PRODUCTIVE_CMD_RE.test(name);
 }
 /** usa-40: classify one long-tail lead turn from its tool calls. Mutates seen (signature -> count over earlier long-tail turns). */
 export function classifyLeadTurn(tools, seen) {
-  const sigs = tools.map(toolSig);
+  // usa-40 R1 H1b: a call with no input (ACP: title only) can't be proven identical to an earlier one, so it never enters the
+  // loop signatures (a bare `title|null` would collapse distinct calls into a false loop).
+  const sigs = tools.filter((t) => t.input !== undefined).map(toolSig);
   const productive = tools.some(isProductiveTool);
   const repeated = !productive && sigs.some((g) => (seen.get(g) ?? 0) >= 2);
   for (const g of sigs) seen.set(g, (seen.get(g) ?? 0) + 1);
@@ -1784,9 +1791,9 @@ function computeSpawnStorms(agents) {
   for (const a of agents) {
     const lane = a.lane || "unknown";
     const role = a.role || "unknown";
-    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], createdExclRespawns: [], zeroExits: [] }));
+    const g = getOrSet(groups, `${lane}|${role}`, () => ({ lane, role, created: [], createdExclRespawns: [], zeroExits: [], zeroExitsExclRespawns: [] }));
     if (a.createdAt !== null && a.createdAt !== undefined) { g.created.push(a.createdAt); if (!a.respawnOf) g.createdExclRespawns.push(a.createdAt); }
-    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) g.zeroExits.push(a.exitTs);
+    if (a.exited && (a.turns === 0 || a.exitError) && a.exitTs !== null && a.exitTs !== undefined) { g.zeroExits.push(a.exitTs); if (!a.respawnOf) g.zeroExitsExclRespawns.push(a.exitTs); }
   }
   const entries = [];
   for (const g of groups.values()) {
@@ -1795,7 +1802,7 @@ function computeSpawnStorms(agents) {
       entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: 0 });
     }
     for (const s of findStorms(g.zeroExits, ZERO_TURN_EXIT_WINDOW_MS, ZERO_TURN_EXIT_MIN)) {
-      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns: s.count, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
+      entries.push({ lane: g.lane, role: g.role, count: s.count, countExclRespawns: g.zeroExitsExclRespawns.filter((t) => t >= s.firstAt && t <= s.lastAt).length, windowMs: s.lastAt - s.firstAt, firstAt: new Date(s.firstAt).toISOString(), lastAt: new Date(s.lastAt).toISOString(), zeroTurnExits: s.count });
     }
   }
   entries.sort((a, b) => a.lane.localeCompare(b.lane) || a.role.localeCompare(b.role) || Date.parse(a.firstAt) - Date.parse(b.firstAt));
