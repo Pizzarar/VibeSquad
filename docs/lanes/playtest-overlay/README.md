@@ -43,12 +43,15 @@ When the VS server runs on a remote host (forge) and the game runs on the dev PC
 
 - **Report URL.** Set `vs_playtest/server_url` to `https://<forge>.<tailnet>.ts.net:<VS port>` (Tailscale MagicDNS). The forge box needs `VIBESQUAD_MESHNET_HOST` set so VS serves and certifies the MagicDNS name.
 - **Remote is https only.** Plain http is refused for a remote `server_url`; the token and the pairing code never ride on it. The one exception is the `GET /ca.crt` bootstrap fetch, which carries nothing secret. The device token is only sent over TLS pinned to the VS CA the owner confirmed, never the system trust store.
-- **Owner pairing** (the game on the dev PC becomes an owner device):
+- **Owner pairing** (the game on the dev PC becomes a Playtest device; a Playtest code gives the least-privilege `owner-playtest` role, report/thread only):
   1. Set `vs_playtest/server_url` to the https URL above.
-  2. Click "Pair with VS" in the dock.
-  3. Compare the CA fingerprint shown in the dock with the one in the VS pair dialog, then confirm.
-  4. Type the 6-digit owner pairing code.
-  5. "Unpair" removes both the device token file and the pinned CA file (also revoke the device in VS). The CA is written to disk only after pairing succeeds.
+  2. In VibeSquad, open the Pair Device dialog and mint a **Playtest code** (6 digits). The dialog also shows the CA SHA-256 fingerprint.
+  3. In the game's dock, type the code and click "Pair with VS". The addon fetches `/ca.crt` over plain http (nothing secret rides on it) and shows its SHA-256 fingerprint.
+  4. Confirm the fingerprint in the dock matches the one in the VS pair dialog (press "It matches: pair" only if every pair is the same).
+  5. The addon redeems the Playtest code over https, pinned to that CA. The device is now paired.
+  6. "Unpair" removes both the device token file and the pinned CA file (also revoke the device in VS). The CA is written to disk only after pairing succeeds.
+  A device that holds a full-owner token (paired with an old owner code) shows "Full owner token: re-pair with a Playtest code" in the dock.
+  Token and CA override paths must be absolute, outside the project folder, and not a network share (UNC); anything else is refused.
   Settings and API: `godot/addons/vs_playtest/README.md`.
 - **Bridge for agents on forge.** Agents reach the debug bridge as a stdio MCP server over SSH: `ssh devpc npx godot-mcp-runtime@4.0.1`. The bridge itself stays on loopback on the dev PC and no new port is opened. Set `GODOT_PATH` to the real console `.exe` in the dev PC's environment, as above.
 - **Version pin.** npm `godot-mcp-runtime@4.0.1` is tag `v4.0.1` (`ad386b91`). Our pinned commit `3b8a4f31` is the next commit after it and only changes CI/docs files (`.github/workflows/publish.yml`, `CONTRIBUTING.md`, release-notes script and its test), so the npm 4.0.1 package has the same runtime code. Always pin the exact version; never `@latest`.

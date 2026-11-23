@@ -201,20 +201,21 @@ static func redact_url(url: String) -> String:
 ## Explicit `override` (setting vs_playtest/device_token_path) wins when it is an absolute filesystem path outside the
 ## project; a res:// / user:// / other-scheme / relative override is refused (""), so the token never lands in the
 ## project or an export. Else $VIBESQUAD_HOME/playtest-device-token, else <home>/.vibesquad/playtest-device-token.
-static func device_token_path(override: String = "", getenv: Callable = OS.get_environment) -> String:
-	return _secret_path(override, DEVICE_TOKEN_FILE, getenv)
+static func device_token_path(override: String = "", getenv: Callable = OS.get_environment, project_root: String = "") -> String:
+	return _secret_path(override, DEVICE_TOKEN_FILE, getenv, project_root)
 
 
 ## The pinned VS CA file, same rules as device_token_path (setting vs_playtest/ca_cert_path, same refusals).
 ## Default $VIBESQUAD_HOME/playtest-ca.crt, else <home>/.vibesquad/playtest-ca.crt.
-static func ca_cert_path(override: String = "", getenv: Callable = OS.get_environment) -> String:
-	return _secret_path(override, CA_CERT_FILE, getenv)
+static func ca_cert_path(override: String = "", getenv: Callable = OS.get_environment, project_root: String = "") -> String:
+	return _secret_path(override, CA_CERT_FILE, getenv, project_root)
 
 
-static func _secret_path(override: String, file: String, getenv: Callable) -> String:
+## `project_root`: the globalized res:// folder ("" = ask ProjectSettings); injectable for tests.
+static func _secret_path(override: String, file: String, getenv: Callable, project_root: String = "") -> String:
 	var o := override.strip_edges()
 	if o != "":
-		return o if is_allowed_device_token_path(o) else ""
+		return o if is_allowed_override_path(o, project_root) else ""
 	var home := _vs_home(getenv)
 	return "" if home == "" else home.path_join(file)
 
@@ -228,6 +229,88 @@ static func is_allowed_device_token_path(p: String) -> bool:
 	var re := RegEx.new()
 	re.compile(r"^(/|[A-Za-z]:[/\\]|\\\\)")
 	return re.search(p) != null
+
+
+## An override (token / CA file setting) must be an allowed absolute path that is neither a UNC path (\\\\server\\share,
+## //server/share: a network share is not owner-only storage) nor inside the project root (res:// globalized: the file
+## would ride along in the repo or an export).
+static func is_allowed_override_path(p: String, project_root: String = "") -> bool:
+	if not is_allowed_device_token_path(p):
+		return false
+	# Normalise separators FIRST: on Windows `/\srv\share\x` and `/\?\C:\x` become `\\srv\share\x` / `\\?\C:\x`.
+	if p.strip_edges().replace("\\", "/").begins_with("//"):
+		return false
+	var root := project_root if project_root != "" else ProjectSettings.globalize_path("res://")
+	return not is_inside_dir(p, root)
+
+
+## true when `p` is `dir` itself or below it (separator-normalised, dot segments collapsed, symlinks resolved, case-
+## insensitive: refusing a same-named path on a case-sensitive filesystem is the safe side). "" dir -> false. A path
+## whose symlinks cannot be resolved (loop / too deep) counts as inside (fail closed).
+static func is_inside_dir(p: String, dir: String) -> bool:
+	var d := _norm_path(dir)
+	if d == "":
+		return false
+	var n := _norm_path(p)
+	if n == d or n.begins_with(d + "/"):
+		return true
+	var rn := _resolve_links(p)
+	var rd := _resolve_links(dir)
+	if rn == "" or rd == "":
+		return true
+	return rn == rd or rn.begins_with(rd + "/")
+
+
+## Lower-cased, normalised path with every existing symlink component replaced by its target (nearest existing
+## ancestor resolved, the not-yet-existing tail appended). "" when resolution fails (more than 40 hops).
+static func _resolve_links(p: String) -> String:
+	var path := p.strip_edges().replace("\\", "/").simplify_path()
+	for _hop in 40:
+		var prefix := ""
+		var rest := path
+		if path.begins_with("/"):
+			prefix = "/"
+			rest = path.substr(1)
+		elif path.length() >= 2 and path[1] == ":":
+			prefix = path.left(2) + "/"
+			rest = path.substr(3)
+		var cur := prefix.left(prefix.length() - 1) if prefix.length() > 1 else prefix
+		var parts := rest.split("/", false)
+		var changed := false
+		for i in parts.size():
+			var next := cur.path_join(parts[i]) if cur != "" and cur != "/" else (cur + parts[i])
+			if DirAccess.dir_exists_absolute(next) or FileAccess.file_exists(next) or _is_link(next):
+				if _is_link(next):
+					var target := _link_target(next)
+					if not (target.begins_with("/") or (target.length() >= 2 and target[1] == ":")):
+						target = cur.path_join(target) if cur != "" else target
+					var tail := "/".join(parts.slice(i + 1))
+					path = (target.path_join(tail) if tail != "" else target).replace("\\", "/").simplify_path()
+					changed = true
+					break
+				cur = next
+			else:
+				break
+		if not changed:
+			return _norm_path(path)
+	return ""
+
+
+static func _is_link(p: String) -> bool:
+	var d := DirAccess.open(p.get_base_dir())
+	return d != null and d.is_link(p)
+
+
+static func _link_target(p: String) -> String:
+	var d := DirAccess.open(p.get_base_dir())
+	return "" if d == null else d.read_link(p)
+
+
+static func _norm_path(p: String) -> String:
+	var n := p.strip_edges().replace("\\", "/").simplify_path().to_lower()
+	while n.length() > 1 and n.ends_with("/"):
+		n = n.left(n.length() - 1)
+	return n
 
 
 static func is_valid_device_token(t: String) -> bool:
@@ -266,8 +349,8 @@ static func _write_private_file(path: String, content: String) -> Error:
 		if mk != OK:
 			return mk
 		_owner_only(dir, 448) # 0700
-	var tmp := "%s.tmp-%d" % [path, Time.get_ticks_usec()]
-	# Create it empty first and lock it down before the token goes in.
+	var tmp := "%s.tmp-%s" % [path, _random_suffix()]
+	# Create it empty first and lock it down before the secret goes in.
 	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
 		return FileAccess.get_open_error()
@@ -275,10 +358,16 @@ static func _write_private_file(path: String, content: String) -> Error:
 	_owner_only(tmp, 384) # 0600
 	f = FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
+		var oe := FileAccess.get_open_error()
 		DirAccess.remove_absolute(tmp)
-		return FileAccess.get_open_error()
-	f.store_string(content)
+		return oe
+	var stored := f.store_string(content)
+	f.flush()
+	var werr := f.get_error()
 	f.close()
+	if not stored or werr != OK:
+		DirAccess.remove_absolute(tmp)
+		return werr if werr != OK else ERR_FILE_CANT_WRITE
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
 	var mv := DirAccess.rename_absolute(tmp, path)
@@ -361,9 +450,12 @@ static func write_ca_cert(path: String, der: PackedByteArray) -> Error:
 
 ## The pinned CA's DER bytes, or [] when the path is empty/refused or the file is missing/not exactly one certificate.
 static func read_ca_der(path: String) -> PackedByteArray:
-	if path == "" or not is_allowed_device_token_path(path) or not FileAccess.file_exists(path):
+	if path == "" or not is_allowed_device_token_path(path):
 		return PackedByteArray()
-	return pem_single_cert_der(FileAccess.get_file_as_string(path))
+	var f := FileAccess.open(path, FileAccess.READ) # one open + one read: no exists-then-read gap
+	if f == null:
+		return PackedByteArray()
+	return pem_single_cert_der(f.get_as_text())
 
 
 ## TLS client options that trust ONLY the CA in `der` (TLSOptions.client with a trusted chain replaces the system
@@ -375,6 +467,11 @@ static func pinned_tls(der: PackedByteArray) -> TLSOptions:
 	if cert.load_from_string(der_to_pem(der)) != OK:
 		return null
 	return TLSOptions.client(cert)
+
+
+## 128 random bits as hex (Crypto), so a temp file name cannot be predicted or pre-created by another local user.
+static func _random_suffix() -> String:
+	return Crypto.new().generate_random_bytes(16).hex_encode()
 
 
 static func _owner_only(p: String, mode: int) -> void:

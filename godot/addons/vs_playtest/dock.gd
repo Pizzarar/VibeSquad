@@ -16,6 +16,7 @@ const PAIR_UNPAIRED := "unpaired"
 const PAIR_PAIRED := "paired"
 const PAIR_CONFIRM := "confirm" # fetched VS CA shown, waiting for the owner to compare fingerprints
 
+const ROLE_WARNING := "Full owner token: re-pair with a Playtest code"
 const BASE_FONT := 18
 const BASE_WIDTH := 460.0
 const BG := Color("14121c")
@@ -37,6 +38,7 @@ var _pair_row: HBoxContainer
 var _pair_code: LineEdit
 var _pair_btn: Button
 var _unpair_btn: Button
+var _role_warn: Label
 var _ca_box: VBoxContainer
 var _ca_label: Label
 var _ca_yes: Button
@@ -86,7 +88,7 @@ func _init() -> void:
 	_pair_row.add_child(_pair_code)
 	_pair_btn = Button.new()
 	_pair_btn.text = "Pair with VS"
-	_pair_btn.tooltip_text = "Mint an owner pairing code in VibeSquad (Pair Device, or vs pair), then type it here"
+	_pair_btn.tooltip_text = "Playtest pairing code"
 	_pair_btn.pressed.connect(func() -> void: _on_pair(_pair_code.text))
 	_pair_row.add_child(_pair_btn)
 	_unpair_btn = Button.new()
@@ -94,6 +96,12 @@ func _init() -> void:
 	_unpair_btn.tooltip_text = "Delete this PC's device token file (also revoke the device in VibeSquad)"
 	_unpair_btn.pressed.connect(func() -> void: unpair_pressed.emit())
 	_pair_row.add_child(_unpair_btn)
+	_role_warn = Label.new()
+	_role_warn.text = ROLE_WARNING
+	_role_warn.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_role_warn.add_theme_color_override("font_color", THEM)
+	_role_warn.visible = false
+	root.add_child(_role_warn)
 	# B2b CA confirm (PLAN_V1 "Remote is https only"): the owner compares the fetched CA fingerprint with VS's pair dialog.
 	_ca_box = VBoxContainer.new()
 	root.add_child(_ca_box)
@@ -248,6 +256,13 @@ func set_pairing(mode: String) -> void:
 	_pair_code.visible = mode == PAIR_UNPAIRED
 	_pair_btn.visible = mode == PAIR_UNPAIRED
 	_unpair_btn.visible = mode == PAIR_PAIRED
+	if mode != PAIR_PAIRED:
+		_role_warn.visible = false
+
+
+## One line under the pair row while this device holds a full-owner token (not the least-privilege owner-playtest one).
+func set_owner_warning(show_it: bool) -> void:
+	_role_warn.visible = show_it
 
 
 ## Shows the fetched CA's fingerprint ({full, short}, server/auth.mjs caFingerprint format) for the owner to compare.
