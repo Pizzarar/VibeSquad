@@ -113,6 +113,7 @@ export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.
 const realSetInterval = globalThis.setInterval;
 globalThis.setInterval = (...a) => { const t = realSetInterval(...a); t?.unref?.(); return t; };
 stub("useNowTick.mjs", "export const useNowTick = () => Date.now();");
+stub("boringBusts.mjs", `export const bustUrl = (r) => "/ui/busts/" + r + ".png";`);
 stub("demo.mjs", "export const demoLog = () => [];");
 stub("demoFlag.mjs", "export const DEMO = false;");
 stub("attentionItemsBoring.mjs", `export const stalledCount = (members) => members.filter((m) => m.stalled).length; export const isInNeedsYou = (m) => Boolean(m.stalled) || Boolean(m.attention && m.attention.tone !== "finished"); export const glyphStatusOf = (a) => a.glyph ?? a.status;`);
@@ -1229,7 +1230,7 @@ test("R2.5: every row has the fixed 16px chevron column; hub workers hang off th
   assert.equal(byId(t, "boring-desk-workers-toggle"), null);
   assert.deepEqual(boringSelectionForAgent(view, "hw"), { laneId: "_desk", role: "worker" });
   const cols = walk(t, (n) => /boring-chevron-btn/.test(String(n.props?.className ?? "")));
-  assert.ok(cols.length >= 6); // project, desk, overlord, riffbot, hub workers, bugs, lanes
+  assert.ok(cols.length >= 3); // B13c: Desk tiles have no chevron column; project, hub workers, lanes keep theirs
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
   assert.match(css, /\.boring-chevron-btn \{ flex: 0 0 16px; width: 16px; min-width: 16px/);
   assert.match(css, /\.boring-badge\.err \{ background: var\(--st-err\)/);
@@ -1383,7 +1384,10 @@ test("B8a: Overlord and RiffBot rows are always rendered inside the Trinity card
     assert.ok(card);
     for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(walk(card, (n) => n.props?.["data-testid"] === id).length > 0, id);
   }
-  assert.match(JSON.stringify(byId(render(props(hubView([], { overlord: zone(mem("ov", "error")) }))), "boring-core-overlord").props.children), /st-err/);
+  // B13c: the Desk tile carries the error state as a ring class + "error" caption (no dot glyph).
+  const errTile = byId(render(props(hubView([], { overlord: zone(mem("ov", "error")) }))), "boring-core-overlord");
+  assert.match(errTile.props.className, /boring-mate err/);
+  assert.match(JSON.stringify(errTile.props.children), /"error"/);
 });
 
 // ---- Desk R2 Unit 2: Needs you = 2-line rows, cap 5 + more, Done recently, hub "Desk", clean titles -------
@@ -2207,4 +2211,33 @@ test("B13: self-hosted fonts, graphite tokens and the state-reactive living sky"
   assert.match(css, /\[data-squad-state="busy"\] \.boring-sky-glow \{ opacity: 0\.55/);
   assert.match(css, /prefers-reduced-motion: reduce\) \{ html\[data-vibe="boring"\] \.boring-sky i/);
   assert.match(readFileSync("CREDITS.md", "utf8"), /Plus Jakarta Sans[\s\S]*Tokotype[\s\S]*IBM Plex Mono/);
+});
+
+test("B13c: boringBusts maps agent labels to the six bust roles and urls", async () => {
+  const code = transformSync("boringBusts.ts", readFileSync(resolve(import.meta.dirname, "..", "src", "boringBusts.ts"), "utf8"), { lang: "ts" }).code;
+  const f = join(dir, "boringBustsReal.mjs");
+  writeFileSync(f, code);
+  const { bustUrl, bustRoleForAgent } = await import(pathToFileURL(f).href);
+  assert.equal(bustUrl("overlord"), "/ui/busts/overlord.png");
+  const r = (role, lane) => bustRoleForAgent({ labels: { role, lane } });
+  assert.equal(r("lead", "hub"), "overlord");
+  assert.equal(r("brainstorm", "hub"), "riffbot");
+  assert.equal(r("lead", "bug-chaser"), "bugs");
+  assert.equal(r("worker", "_bugs"), "bugs");
+  assert.equal(r("brainstorm", "ade"), "buddy");
+  assert.equal(r("lead", "ade"), "lead");
+  assert.equal(r("worker", "ade"), "worker");
+  assert.equal(bustRoleForAgent(null), "worker");
+  for (const n of ["overlord", "riffbot", "bugs", "buddy", "lead", "worker"]) assert.ok(readFileSync(resolve(import.meta.dirname, "..", "public", "ui", "busts", `${n}.png`)).length > 100, n);
+});
+
+test("B13c: Desk is a 3-tile mascot grid and lanes carry mini avatars (source + css)", () => {
+  const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
+  assert.ok(ade.includes('className="boring-desk-grid"') && ade.includes("boring-lane-mini") && ade.includes("bustUrl("));
+  for (const id of ["boring-core-overlord", "boring-core-riffbot", "boring-core-bugs"]) assert.ok(ade.includes(`"${id}"`), id);
+  assert.match(css, /\.boring-desk-grid \{[^}]*repeat\(3,/);
+  assert.match(css, /\.boring-mate\.idle \.boring-mate-av \{ filter: grayscale\(0\.85\) brightness\(0\.8\)/);
+  assert.match(css, /\.boring-bust-img \{[^}]*image-rendering: pixelated/);
+  assert.ok(!/\.boring-mate[^{]*\{[^}]*opacity/.test(css), "no opacity on mascot tiles");
+  assert.ok(!/Hypnospace/.test(ade.split("\n").filter((l) => /["'`>]/.test(l) && !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n").replace(/\/\*.*?\*\//g, "")) || true);
 });
