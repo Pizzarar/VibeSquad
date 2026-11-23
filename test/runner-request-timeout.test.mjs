@@ -7,6 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { RunnerClient } from "../server/backend/runner-client.mjs";
+import "./helpers/keep-alive.mjs";
 
 const disco = (home, port) => {
   writeFileSync(path.join(home, "runner.json"), JSON.stringify({ port, pid: 1 }));

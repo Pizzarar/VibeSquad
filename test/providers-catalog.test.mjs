@@ -12,6 +12,7 @@ import {
 } from '../server/providers-catalog.mjs';
 import { saveUserSettings, loadUserSettings, saveRemoteAccess } from '../server/user-settings.mjs';
 import { addInboxCards, readInboxCards, triageInboxCards } from '../server/inbox.mjs';
+import './helpers/keep-alive.mjs';
 
 const tmpDirs = [];
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'vs-catalog-')); tmpDirs.push(d); return d; };
