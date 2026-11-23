@@ -25,7 +25,12 @@ import { PassThrough } from "node:stream";
 import { budget } from "./helpers/load-budget.mjs";
 
 const dirs = [];
-after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+const runners = [];
+const track = (r) => { runners.push(r); return r; };
+after(() => {
+  for (const r of runners) r.closeRosterWatch?.(); // before the dirs go: a watched dir is busy on Windows (idea-571/590)
+  for (const d of dirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
+});
 const tmp = (p = "vs-rrs-") => { const d = mkdtempSync(path.join(os.tmpdir(), p)); dirs.push(d); return d; };
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
 const until = async (fn, ms = 3000) => { const end = Date.now() + budget(ms); while (!(await fn())) { if (Date.now() > end) throw new Error("timed out"); await tick(10); } };
@@ -66,13 +71,13 @@ function crash(r) {
  */
 async function lostAgent(adapterOpts, runnerOpts = {}, dir = tmp(), { cut = false, meta = {} } = {}) {
   const a1 = fakeAdapter();
-  const r1 = new Runner({ dir, adapters: { claude: a1.adapter } });
+  const r1 = track(new Runner({ dir, adapters: { claude: a1.adapter } }));
   const id = r1.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta });
   await tick(30);
   if (cut) r1.shutdown({ keepResumable: true });
   else { a1.starts[0].emit("status", { status: "idle" }); crash(r1); }
   const a2 = fakeAdapter(adapterOpts);
-  const runner = new Runner({ dir, adapters: { claude: a2.adapter }, parkGraceMs: 60_000, ...runnerOpts });
+  const runner = track(new Runner({ dir, adapters: { claude: a2.adapter }, parkGraceMs: 60_000, ...runnerOpts }));
   assert.equal(runner.status(id).status, "lost");
   return { id, runner, starts: a2.starts };
 }
@@ -250,7 +255,7 @@ test("R1 H1: an idle agent counts as held from the moment its turn ends until it
   const bgProbe = () => new Promise((r) => { const go = () => r(answer); if (answer !== null) go(); else waiters.push(go); });
   const settle = (work) => { answer = work; for (const go of waiters.splice(0)) go(); };
   const { adapter, starts } = fakeAdapter();
-  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, parkGraceMs: 80, parkHoldPollMs: 20, parkHoldMaxMs: 60_000, bgProbe });
+  const runner = track(new Runner({ dir: tmp(), adapters: { claude: adapter }, parkGraceMs: 80, parkHoldPollMs: 20, parkHoldMaxMs: 60_000, bgProbe }));
   const srv = createRunnerServer(runner, { token: "t0k", hash: "h" });
   const port = await listen(srv);
   const health = () => fetch(`http://127.0.0.1:${port}/health`, { headers: { authorization: "Bearer t0k" } }).then((r) => r.json());
@@ -346,7 +351,7 @@ test("R1 M2: a send queued behind the turn cap during a resume handshake keeps `
   assert.equal(runner.timeline(id).filter((e) => e.type === "status").at(-1).status, "queued", "not overwritten with idle");
   assert.ok(runner.live.has(id), "not parked while its send waits");
   assert.ok(runner.queue.some((j) => j.id === id), "still queued in memory");
-  const r2 = new Runner({ dir: runner.store.dir, adapters: { claude: fakeAdapter().adapter }, turnCaps: caps }); // a runner restart now re-enqueues it
+  const r2 = track(new Runner({ dir: runner.store.dir, adapters: { claude: fakeAdapter().adapter }, turnCaps: caps })); // a runner restart now re-enqueues it
   assert.deepEqual(r2.recoverQueued(), [id]);
   runner.shutdown(); r2.shutdown();
 });
@@ -450,11 +455,11 @@ test("idea-126: only a cut turn continues: lost-between-turns, parked, retired, 
   const dir = tmp();
   const sup = await lostAgent({}, {}, dir, { cut: true, meta: { role: "lead", lane: "l1", team: "t" } });
   sup.runner.shutdown();
-  const succ = new Runner({ dir, adapters: { claude: fakeAdapter().adapter } });
+  const succ = track(new Runner({ dir, adapters: { claude: fakeAdapter().adapter } }));
   succ.create({ provider: "claude", cwd: process.cwd(), meta: { role: "lead", lane: "l1", team: "t" } }); // its replacement lead
   succ.shutdown({ keepResumable: true });
   const a = fakeAdapter();
-  await check("superseded lead", { id: sup.id, runner: new Runner({ dir, adapters: { claude: a.adapter }, parkGraceMs: 60_000 }), starts: a.starts });
+  await check("superseded lead", { id: sup.id, runner: track(new Runner({ dir, adapters: { claude: a.adapter }, parkGraceMs: 60_000 })), starts: a.starts });
 
   const { id, runner, starts } = await lostAgent({}, { parkGraceMs: 20 }); // parked: settles, parks, then a second resume
   runner.resume(id);
@@ -468,13 +473,13 @@ test("idea-126: only a cut turn continues: lost-between-turns, parked, retired, 
 test("idea-126: a continue queued behind the turn cap survives a runner restart once, with its own text only (steers delivered into the cut turn are never replayed)", async () => {
   const dir = tmp();
   const a1 = fakeAdapter();
-  const r1 = new Runner({ dir, adapters: { claude: a1.adapter } });
+  const r1 = track(new Runner({ dir, adapters: { claude: a1.adapter } }));
   const id = r1.create({ provider: "claude", cwd: process.cwd(), prompt: "work", meta: {} });
   await tick(30);
   r1.send(id, "a steer into the running turn");
   r1.shutdown({ keepResumable: true });
   const caps = { claude: 1, gemini: 1, antigravity: 1, other: 1 };
-  const r2 = new Runner({ dir, adapters: { claude: fakeAdapter().adapter }, turnCaps: caps });
+  const r2 = track(new Runner({ dir, adapters: { claude: fakeAdapter().adapter }, turnCaps: caps }));
   r2.create({ provider: "claude", cwd: process.cwd(), prompt: "hold the only claude turn slot", meta: {} });
   assert.equal(r2.resume(id), true);
   assert.equal(statuses(r2, id).at(-1).status, "queued");
@@ -483,7 +488,7 @@ test("idea-126: a continue queued behind the turn cap survives a runner restart 
   r2.send(id, "owner line"); // coalesces into the queued continue
   r2.shutdown({ keepResumable: true });
   const a3 = fakeAdapter();
-  const r3 = new Runner({ dir, adapters: { claude: a3.adapter } });
+  const r3 = track(new Runner({ dir, adapters: { claude: a3.adapter } }));
   assert.deepEqual(r3.recoverQueued(), [id]);
   assert.equal(r3.resume(id), true, "the restart script's resume after recoverQueued: no second job");
   await until(() => a3.starts.some((s) => s.id === id && s.sends.length), 1000);
@@ -524,7 +529,7 @@ test("idea-122: a claude agent resumed without a prompt is marked parked (no pro
   };
   const dir = tmp();
   const seed = (id, last) => {
-    const r = new Runner({ dir, adapters: { claude: fakeAdapter().adapter } });
+    const r = track(new Runner({ dir, adapters: { claude: fakeAdapter().adapter } }));
     r.store.append(id, "created", { provider: "claude", model: null, cwd: promptsDir, meta: {}, systemPrompt: "role" });
     r.store.append(id, "input", { text: "work" });
     r.store.append(id, "session", { sessionId: `sess-${id}` });
@@ -534,7 +539,7 @@ test("idea-122: a claude agent resumed without a prompt is marked parked (no pro
   seed("rn-idle", [{ status: "running" }, { status: "idle" }]);
   seed("rn-wedged", [{ status: "running" }, { status: "idle" }, { status: "starting", resume: true }]); // a restart resume cut in its settle window
   seed("rn-cut", [{ status: "running" }]);
-  const runner = new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: false, promptsDir }) } });
+  const runner = track(new Runner({ dir, adapters: { claude: createClaudeAdapter({ spawnImpl, command: process.execPath, mcp: false, promptsDir }) } }));
   for (const id of ["rn-idle", "rn-wedged"]) {
     assert.equal(runner.resume(id), true);
     assert.equal(runner.status(id).status, "parked", `${id}: parked, not starting`);

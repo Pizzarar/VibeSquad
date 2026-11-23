@@ -9,7 +9,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 const tmpDirs = [];
-test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+const runners = [];
+const track = (r) => { runners.push(r); return r; };
+test.after(() => {
+  for (const r of runners) r.closeRosterWatch?.(); // before the dirs go: a watched dir is busy on Windows (idea-571/590)
+  for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
+});
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-wfrr-')); tmpDirs.push(d); return d; };
 const VS_HOME = tmp();
 const ROOT = tmp();
@@ -46,7 +51,7 @@ function fakeAdapter() {
 }
 
 async function boot() {
-  const runner = new Runner({ dir: tmp(), adapters: { claude: fakeAdapter() } });
+  const runner = track(new Runner({ dir: tmp(), adapters: { claude: fakeAdapter() } }));
   const server = createServer(runner, { token: 't' });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const home = tmp();
