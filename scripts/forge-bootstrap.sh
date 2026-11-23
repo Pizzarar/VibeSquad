@@ -19,8 +19,8 @@ usage() {
 Usage: scripts/forge-bootstrap.sh [options]
   --repo DIR           VibeSquad checkout the unit runs from (default: \$HOME/projects/VibeSquad)
   --port N             server port (default 4180)
-  --meshnet-ip IP      tailnet IPv4 (default: detected via 'tailscale ip -4')
-  --meshnet-host NAME  MagicDNS name, e.g. forge.example.ts.net (default: detected via 'tailscale status --json')
+  --meshnet-ip IP      NordVPN Meshnet IPv4 (default: detected via 'nordvpn meshnet peer list', else the nordlynx interface)
+  --meshnet-host NAME  Meshnet hostname as shown by the peer list (default: detected via 'nordvpn meshnet peer list')
   --no-lan             do not set VIBESQUAD_LAN=1 (loopback only)
   --tmpdir DIR         TMPDIR for the unit, on the real disk (default: \$HOME/.vibesquad/tmp)
   --node-major N       NodeSource LTS major to install when node is missing/old (default 24, matches the dev PC)
@@ -113,21 +113,42 @@ else
   sudo apt-get install -y nodejs
 fi
 
-# 2. tailnet facts (flags win; otherwise detect)
-# tailscaled must survive reboots (warn only; owner enables it)
-if command -v systemctl >/dev/null 2>&1 && command -v tailscale >/dev/null 2>&1; then
-  if [ "$(systemctl is-enabled tailscaled 2>/dev/null || true)" != "enabled" ]; then
-    log "WARNING: tailscaled is not enabled at boot; run: sudo systemctl enable --now tailscaled"
+# 1b. deps + build: dist/ must exist or phone pairing shows "dist/index.html missing"
+if [ "$DRY_RUN" != 1 ] && [ ! -f "$REPO_DIR/package.json" ]; then
+  log "WARNING: $REPO_DIR has no package.json; skipping npm ci / npm run build (clone VibeSquad there first)."
+else
+  run npm --prefix "$REPO_DIR" ci
+  run npm --prefix "$REPO_DIR" run build
+fi
+
+# 2. Meshnet facts (flags win; otherwise detect). Tailscale is not used: it claims 100.64/10, which clashes with Meshnet.
+# Meshnet must be enabled and logged in at boot (warn only; the owner sets it up with the nordvpn CLI)
+if command -v nordvpn >/dev/null 2>&1; then
+  if ! nordvpn settings 2>/dev/null | grep -qiE '^[[:space:]]*meshnet:[[:space:]]*enabled'; then
+    log "WARNING: NordVPN Meshnet is not enabled; run: nordvpn set meshnet on (and nordvpn login)"
   fi
+else
+  log "WARNING: nordvpn CLI not found; install NordVPN, log in and enable Meshnet."
 fi
-if [ -z "$MESHNET_IP" ] && command -v tailscale >/dev/null 2>&1; then
-  MESHNET_IP="$(tailscale ip -4 2>/dev/null | head -n1 || true)"
+# 'nordvpn meshnet peer list' starts with a "Local Peer:" block (Hostname / IP address); read only that block.
+local_peer_field() {
+  nordvpn meshnet peer list 2>/dev/null | awk -v key="$1" '
+    /^[[:space:]]*Local Peer/ {inlocal=1; next}
+    /^[[:space:]]*External Peer/ {inlocal=0}
+    inlocal && index(tolower($0), tolower(key) ":") {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}'
+}
+if [ -z "$MESHNET_IP" ] && command -v nordvpn >/dev/null 2>&1; then
+  MESHNET_IP="$(local_peer_field "IP address" || true)"
 fi
-if [ -z "$MESHNET_HOST" ] && command -v tailscale >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
-  MESHNET_HOST="$(tailscale status --json 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{console.log(String(JSON.parse(s).Self.DNSName||"").replace(/\.$/,""))}catch{}})' || true)"
+if [ -z "$MESHNET_IP" ] && command -v ip >/dev/null 2>&1; then
+  # same interface the server falls back to (server/auth.mjs detectMeshnetIp)
+  MESHNET_IP="$(ip -4 -o addr show dev nordlynx 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
+fi
+if [ -z "$MESHNET_HOST" ] && command -v nordvpn >/dev/null 2>&1; then
+  MESHNET_HOST="$(local_peer_field "Hostname" || true)"
 fi
 if [ -z "$MESHNET_IP" ] || [ -z "$MESHNET_HOST" ]; then
-  log "WARNING: tailnet ip/host not detected (run 'sudo tailscale up' then re-run, or pass --meshnet-ip/--meshnet-host)."
+  log "WARNING: Meshnet ip/host not detected (enable Meshnet and log in, then re-run, or pass --meshnet-ip/--meshnet-host)."
 fi
 log "meshnet ip='${MESHNET_IP}' host='${MESHNET_HOST}'"
 
@@ -160,7 +181,7 @@ LAN_LINE="# VIBESQUAD_LAN not set (--no-lan): loopback only"
 if [ "$LAN" = 1 ]; then LAN_LINE="Environment=VIBESQUAD_LAN=1"; fi
 UNIT="[Unit]
 Description=VibeSquad server and runner
-After=network-online.target tailscaled.service
+After=network-online.target
 Wants=network-online.target
 
 [Service]
@@ -198,4 +219,4 @@ if [ "$START_UNIT" = 1 ]; then
 fi
 
 if [ "$START_UNIT" = 1 ]; then NEXT_START=""; else NEXT_START="systemctl --user enable --now vibesquad (or re-run with --start; the unit is written but NOT started without it); "; fi
-log "done. Next: ${NEXT_START}sudo systemctl enable --now tailscaled; sudo tailscale up (and disable key expiry for this machine in the Tailscale admin console); provider logins; see docs/lanes/forge-host/RUNBOOK.md"
+log "done. Next: ${NEXT_START}confirm Meshnet is on, logged in at boot and allows incoming connections for the forge (nordvpn set meshnet on); provider logins; see docs/lanes/forge-host/RUNBOOK.md"
