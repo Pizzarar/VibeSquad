@@ -82,6 +82,22 @@ export async function laneHasOpenNeedsYou({ teamId, laneId, baseHome, agents = [
   return need > answer;
 }
 
+/** Card ids (idea-N) named by a needs-you entry (text or refs) in the lane log tail, last 7d. A named card counts as held. */
+export async function needsYouCardIds({ teamId, laneId, baseHome, nowMs = Date.now() }) {
+  const ids = new Set();
+  const text = await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`));
+  for (const line of text.split(/\r?\n/)) {
+    if (!line) continue;
+    try {
+      const e = JSON.parse(line);
+      if (e.type !== "needs-you" || nowMs - (Date.parse(e.ts) || 0) > NEEDS_YOU_MAX_AGE_MS) continue;
+      const hay = `${e.text ?? ""} ${[].concat(e.ref ?? [], e.refs ?? []).join(" ")}`;
+      for (const m of hay.matchAll(/\bidea-\d+\b/gi)) ids.add(m[0].toLowerCase());
+    } catch {}
+  }
+  return ids;
+}
+
 /** Owners with an armed (open) watch set, one async read of watches.json. */
 export async function armedWatchOwners(baseHome) {
   const doc = await readJsonAsync(watchesPath({ home: baseHome }), { sets: [] });
@@ -119,12 +135,14 @@ export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
   const items = await openTaskUnits(join(root, "docs", "lanes", laneId, "TASKS.json"));
   const inbox = await readJsonAsync(getInboxPath(baseHome), []);
   const cards = Array.isArray(inbox) ? inbox : Array.isArray(inbox?.cards) ? inbox.cards : [];
+  const heldIds = await needsYouCardIds({ teamId, laneId, baseHome });
   const sameId = (a, b) => String(a ?? "").toLowerCase() === String(b ?? "").toLowerCase();
   for (const c of cards) {
     // idea-481: an explicitly parked card (triage --park stamps parkedAt) waits for triage; and any non-parked
     // status except "accepted" (archived/handed-off/rejected) is not open lane work. A plain new card (status
     // "parked", no marker) and an accepted card still count.
-    if (c.parkedAt) continue;
+    if (c.parkedAt) continue; // held: explicit triage --park marker
+    if (heldIds.has(String(c.id ?? "").toLowerCase())) continue; // held: a needs-you entry in the lane log names this card
     if (c.status && c.status !== "parked" && c.status !== "accepted") continue;
     if (!sameId(c.laneId, laneId) || !sameId(c.teamId, teamId)) continue;
     items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());

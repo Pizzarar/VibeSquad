@@ -545,7 +545,7 @@ Usage:
   vs handoff [--out <path>] [--judgment-file <path> | --judgment -]  (Judgment max 40 lines; never hand-edit the packet)
   vs inbox add "<idea 1>" ["<idea 2>" ...] [--lane <lane>|bug] [--from-brainstorm] [--source <tag>]  (--lane bug = your Squad's Bug Runner lane)
   vs inbox list [--lane <lane>|bug]
-  vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...> (leads/Buddies of the card's Squad + owner)
+  vs inbox triage --merge <targetId> <sourceId...> | --bounce <cardId> --lane <newLane> | --archive|--park <cardId...>  (--park = hold: marks the card held, listed apart, never idle-kicked; --accept/--set-status re-queues) (leads/Buddies of the card's Squad + owner)
   vs pin new "<name>" --brief "<idea>" [--team <squad>] [--force]
   vs pin merge <from-lane> <into-lane> [--note "<shared contract>"] [--team <squad>]
   vs spec [show] [--lane <lane>] [--team <team>]
@@ -947,7 +947,8 @@ async function commandHandoff(flags) {
 
 function formatInboxCardLine(card) {
   const related = card.relatedCardId ? ` (goes with ${card.relatedCardId})` : "";
-  return `[${card.id}] ${card.laneId} · ${card.scope} — ${card.title}${related}`;
+  const held = card.parkedAt ? " [held]" : "";
+  return `[${card.id}] ${card.laneId} · ${card.scope} — ${card.title}${related}${held}`;
 }
 
 /** `--lane bug` means the calling agent's own Squad bug lane (each Squad has its own); any other value is a lane id as typed. Returns { laneId, teamId }: a lane that resolves to a known Squad carries that Squad's id (never a conflicting --team). */
@@ -1006,8 +1007,13 @@ async function commandInbox(flags) {
       process.stdout.write("(0 ideas in Inbox)\n");
       return 0;
     }
-    for (const c of cards) {
-      process.stdout.write(`${formatInboxCardLine(c)}\n`);
+    // Held cards (triage --park stamps parkedAt) are listed after the queued ones, under their own header.
+    const queued = cards.filter((c) => !c.parkedAt);
+    const held = cards.filter((c) => c.parkedAt);
+    for (const c of queued) process.stdout.write(`${formatInboxCardLine(c)}\n`);
+    if (held.length) {
+      process.stdout.write(`-- held (${held.length}): parked on purpose, never kicked --\n`);
+      for (const c of held) process.stdout.write(`${formatInboxCardLine(c)}\n`);
     }
     return 0;
   }
