@@ -102,11 +102,13 @@ test("boring bar: Brainstorm calls onOpen(pin); Lead calls openPinMember(pin, le
 const ade = readFileSync(resolve(import.meta.dirname, "..", "src", "BoringAde.tsx"), "utf8");
 const hs = (globalThis.__hs = { slots: [], i: 0 });
 globalThis.__calls = [];
+globalThis.__defaultWindow = { addEventListener() {}, removeEventListener() {} }; globalThis.window = globalThis.__defaultWindow; // BoringApp (usa-48) subscribes to OPEN_USAGE_EVENT on mount
 globalThis.__agents = new Map();
 const rec = (name) => `(...a) => { globalThis.__calls.push(["${name}", ...a]); }`;
 writeFileSync(
   join(dir, "react-hooks.mjs"),
   `export * from ${JSON.stringify(reactUrl)};
+export const useRef = (init) => { const h = globalThis.__hs; const k = h.i++; if (!h.slots[k]) h.slots[k] = { current: init }; return h.slots[k]; };
 export const useEffect = (fn, deps) => { const h = globalThis.__hs; const k = h.i++; const prev = h.slots[k]; const same = prev && deps && prev.deps && deps.length === prev.deps.length && deps.every((d, j) => Object.is(d, prev.deps[j])); if (same) return; if (prev && typeof prev.cleanup === "function") prev.cleanup(); const cleanup = fn(); h.slots[k] = { deps, cleanup }; }; export const useState = (init) => { const h = globalThis.__hs; const k = h.i++; if (!(k in h.slots)) h.slots[k] = typeof init === "function" ? init() : init; return [h.slots[k], (v) => { h.slots[k] = typeof v === "function" ? v(h.slots[k]) : v; }]; };`,
 );
 // BoringApp now owns a 30s `now` tick (R3 L1); the useEffect stub really runs it, so unref it or node never exits.
@@ -140,6 +142,7 @@ stub(
 export const formatTimestamp = (iso, _f, now) => (iso ? Math.round((now - Date.parse(iso)) / 60000) + "m" : "");`,
 );
 stub("FirstRunModal.mjs", `export const VIBE_PICKED_KEY = "vs.vibePicked"; export const VibePickerCards = () => null; export const FirstLaunchVibePicker = () => null; export const shouldShowFirstLaunchVibePicker = () => false;`);
+stub("usageHelpers.mjs", `export const OPEN_USAGE_EVENT = "vs:open-usage"; export const takeColdUsageFocus = () => false;`);
 stub("railCheckin.mjs", `export const runCheckin = (pin, deps) => { globalThis.__calls.push(["runCheckin", pin.lane.id, typeof deps.open, typeof deps.send]); return Promise.resolve("send"); };`);
 stub("skyZonesBoring.mjs", "export const skyZonesFor = (v) => v.zones;");
 stub("BoringInbox.mjs", `export const BoringInbox = function BoringInbox() { return null; };`);
@@ -1352,7 +1355,7 @@ test("R3.1: the fold opens the Workers tab (does not expand inline); the on-scre
     assert.match(String(onRows(t)[0].props.className), /boring-worker-row/);
     assert.match(JSON.stringify(byId(t, "boring-desk-workers-fold").props.children), /1 idle/);
   } finally {
-    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+    delete globalThis.localStorage; globalThis.window = globalThis.__defaultWindow; delete globalThis.CustomEvent;
   }
 });
 
@@ -1639,7 +1642,7 @@ test("Shift+click on an agent opener opens it in the right pane; a plain click d
     assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openAgentInTab"), []);
     assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent" && c[1] === "ade-bs"));
   } finally {
-    delete globalThis.window;
+    globalThis.window = globalThis.__defaultWindow;
   }
 });
 
@@ -1691,7 +1694,7 @@ test("split R1: the workers fold works in split (folds to the active pane's agen
     assert.deepEqual(events.map((e) => e.detail.tab), ["Workers"]);
   } finally {
     globalThis.__panes = undefined;
-    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+    delete globalThis.localStorage; globalThis.window = globalThis.__defaultWindow; delete globalThis.CustomEvent;
   }
 });
 
@@ -1711,7 +1714,7 @@ test("split R1: Lead pill opens in the active pane (no toggleSplit) and Shift+cl
     assert.deepEqual(globalThis.__calls.filter((c) => c[0] === "openAgentInTab"), [["openAgentInTab", "ade-ld", "right"]]);
   } finally {
     globalThis.__panes = undefined;
-    delete globalThis.window;
+    globalThis.window = globalThis.__defaultWindow;
   }
 });
 
@@ -1742,7 +1745,7 @@ test("split R2: the workers fold off screen (Overview + stale split) opens the D
     assert.ok(globalThis.__calls.some((c) => c[0] === "openAgent")); // the Desk opened plainly (split already exited)
   } finally {
     globalThis.__panes = undefined;
-    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+    delete globalThis.localStorage; globalThis.window = globalThis.__defaultWindow; delete globalThis.CustomEvent;
   }
 });
 
@@ -1764,7 +1767,7 @@ test("split R3: another lane's workers fold in split exits split, then opens tha
     assert.deepEqual(globalThis.__calls.find((c) => c[0] === "collapseSplit"), ["collapseSplit", "active"]);
   } finally {
     globalThis.__panes = undefined;
-    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+    delete globalThis.localStorage; globalThis.window = globalThis.__defaultWindow; delete globalThis.CustomEvent;
   }
 });
 
@@ -1783,7 +1786,7 @@ test("split R2 N1: with the right pane active, a plain click opens in the right 
     assert.deepEqual(globalThis.__calls.filter((c) => /^(openAgent|openAgentInTab|setActivePane)$/.test(c[0])), [["setActivePane", "left"]]);
   } finally {
     globalThis.__panes = undefined;
-    delete globalThis.window;
+    globalThis.window = globalThis.__defaultWindow;
   }
 });
 
@@ -1819,7 +1822,7 @@ test("split R4 N2-r: Review left, Overlord active right, fold of a lane with no 
     assert.ok(!globalThis.__calls.some((c) => c[0] === "toggleSplit"));
   } finally {
     globalThis.__panes = undefined;
-    delete globalThis.localStorage; delete globalThis.window; delete globalThis.CustomEvent;
+    delete globalThis.localStorage; globalThis.window = globalThis.__defaultWindow; delete globalThis.CustomEvent;
   }
 });
 
