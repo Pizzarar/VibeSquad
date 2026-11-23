@@ -12,7 +12,6 @@ import { findOpenWorkersForLead } from "./lead-handoff.mjs";
 import { briefRootFor } from "./brief-path.mjs";
 import { getInboxPath } from "./inbox.mjs";
 import { appendVsLogEntry } from "./brainstorm.mjs";
-import { planPathInText } from "./plan-log.mjs";
 
 export const IDLE_KICK_MIN = 10;
 export const IDLE_KICK_ESCALATE_MIN = 30;
@@ -91,7 +90,9 @@ export async function armedWatchOwners(baseHome) {
 
 /** idea-569: true when the plan the brief names is done: lane log has `done` + pass for it, or the plan file's status says COMPLETE. */
 export async function planIsComplete({ teamId, laneId, brief, root, baseHome }) {
-  const plan = planPathInText(brief);
+  // The ACTIVE plan is the LAST docs/PLAN_*.md the brief names (newer plans are appended); an older done plan must not hide a new open one.
+  const named = String(brief ?? "").match(/(?:^|[^\w./-])docs\/PLAN_[\w.-]+?\.md(?![\w-]|\.\w)/gi) ?? [];
+  const plan = named.length ? named[named.length - 1].replace(/^[^d]*/i, "") : "";
   if (!plan) return false;
   const text = await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`));
   for (const line of text.split(/\r?\n/)) {
@@ -103,7 +104,7 @@ export async function planIsComplete({ teamId, laneId, brief, root, baseHome }) 
   }
   try {
     const head = (await readFile(join(root, plan), "utf8")).slice(0, 2000);
-    return /^\s*(?:#+\s*)?(?:\*\*)?status\b[^\n]*\bCOMPLETE\b/im.test(head);
+    return /^[ \t]*(?:[-*>#]+[ \t]*)?(?:\*\*|__)?[Ss]tatus(?:\*\*|__)?[ \t]*[:—–-]+[ \t]*(?:\*\*|__)?[ \t]*COMPLETE\b/m.test(head);
   } catch {
     return false;
   }

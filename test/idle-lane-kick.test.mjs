@@ -259,3 +259,25 @@ test("laneOpenWork (idea-569): plan blocks drop when the plan has a done PASS lo
   assert.deepEqual(await run(mk(null, [{ type: "done", plan: "docs/PLAN_X.md", pass: true }])), []);
   assert.deepEqual(await run(mk(null, [{ type: "done", plan: "docs/PLAN_X.md" }])), ["plan block G3b"]); // done without PASS is not complete
 });
+
+test("laneOpenWork (idea-569 review): anchored COMPLETE; active plan = last named; a done PASS for a different plan does not suppress", async () => {
+  const mk = (brief, plans, logLines = []) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "ilk-")); dirs.push(home);
+    fs.mkdirSync(path.join(home, "docs", "brainstorm"), { recursive: true });
+    fs.writeFileSync(path.join(home, "docs", "brainstorm", "bug.md"), brief);
+    for (const [n, body] of Object.entries(plans)) fs.writeFileSync(path.join(home, "docs", n), body);
+    fs.mkdirSync(path.join(home, "logs"), { recursive: true });
+    fs.writeFileSync(path.join(home, "logs", "vs--bug.jsonl"), logLines.map((l) => JSON.stringify(l)).join("\n"));
+    return home;
+  };
+  const run = (home) => laneOpenWork({ teamId: "vs", laneId: "bug", rootDir: home, baseHome: home });
+  const one = "Plan: docs/PLAN_X.md\n- G3b todo\n";
+  for (const body of ["Status: NOT COMPLETE\n", "Status: in progress (A1 COMPLETE, A2 todo)\n", "We still need to complete this. Status: open\n", "Status: COMPLETELY wrong\n"]) {
+    assert.deepEqual(await run(mk(one, { "PLAN_X.md": body })), ["plan block G3b"], body);
+  }
+  for (const body of ["**Status:** COMPLETE\n", "- Status — COMPLETE (shipped)\n", "# T\n\nStatus: COMPLETE\n"]) assert.deepEqual(await run(mk(one, { "PLAN_X.md": body })), [], body);
+  // old done plan + new open plan (last named is active)
+  const two = "Old: docs/PLAN_OLD.md\nPlan: docs/PLAN_NEW.md\n- H1 todo\n";
+  assert.deepEqual(await run(mk(two, { "PLAN_OLD.md": "Status: COMPLETE\n", "PLAN_NEW.md": "Status: in progress\n" }, [{ type: "done", plan: "docs/PLAN_OLD.md", pass: true }])), ["plan block H1"]);
+  assert.deepEqual(await run(mk(two, { "PLAN_NEW.md": "Status: COMPLETE\n" })), []);
+});

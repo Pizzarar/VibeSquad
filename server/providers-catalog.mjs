@@ -511,6 +511,9 @@ function foldEvent(st, ev) {
     st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
     else if (st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED") st.priorPass = false;
+    // L4: an env-stop BLOCKED survives follow-up turns that carry no verdict line; any PASS/FAIL verdict clears it.
+    if (st.msgVerdict === "BLOCKED") st.priorBlocked = true;
+    else if (st.msgVerdict === "PASS" || st.msgVerdict === "FAIL") st.priorBlocked = false;
     if (!st.inputSeen) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
@@ -675,7 +678,7 @@ function foldOutputLines(st, chunk) {
 }
 
 /** idea-655: environment stops (missing lupa dependency, GPU golden mismatch) on a FAIL line are BLOCKED. Narrow on purpose. */
-const ENV_STOP_RE = /\b(?:(?:no|missing)\s+lupa|lupa\b[^\n]{0,40}\b(?:missing|not installed|unavailable|not found)|No module named ['"]?lupa|GPU golden(?:s)?\s+(?:mismatch|diff)|golden(?:s)?\s+(?:mismatch|diff)[^\n]{0,30}\bGPU)/i;
+const ENV_STOP_RE = /(?:No module named ['"]?lupa|(?:ModuleNotFound|Import)Error[^\n]{0,40}\blupa|\blupa(?:\s+(?:module|package))?\s+(?:is\s+)?(?:not installed|not found|missing|unavailable)\b|\b(?:no|missing)\s+lupa\s+(?:module|package|dependency|installed)\b|\bGPU golden(?:s)?\s+(?:mismatch|diff)|\bgolden(?:s)?\s+(?:mismatch|diff)[^\n]{0,30}\bGPU)/i;
 
 /** Verdict on a single line: any uppercase \bFAIL\b wins over PASS; uppercase PASS/FAIL only with word boundaries (ignores "passes"/"passed"). */
 function lineVerdict(line) {
@@ -1327,7 +1330,7 @@ function agentV2(st, agentId) {
     inputTokens: stats.inputTokens,
     outputTokens: stats.outputTokens,
     pass: !!st.pass,
-    blocked: st.msgVerdict === "BLOCKED" && !st.pass,
+    blocked: !st.pass && (st.msgVerdict === "BLOCKED" || (st.msgVerdict === null && !!st.priorBlocked)),
     workingMs,
     idleMs: Math.max(0, spanMs - workingMs),
     exited: !!st.exited,
