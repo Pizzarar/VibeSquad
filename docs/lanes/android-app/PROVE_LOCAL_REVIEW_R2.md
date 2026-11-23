@@ -1,6 +1,6 @@
 # Prove-Local Security Review (R2) · `unit-and-prove-local` (`4733052..0e3bfa4`)
 
-- **Worktree:** `C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local`
+- **Worktree:** `C:\Users\<user>\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local`
 - **Commit:** `0e3bfa4` on merge base `4733052`
 - **Verdict:** **PASS** (0 High / 0 Medium / 0 Low)
 - **Cause-vs-Symptom Gate:** **PASS** — Binds the challenge-response proof and the subsequent `x-vibesquad-token` request to a single TCP connection via `singleConnectionClient` (`node:http` `Agent` with `keepAlive: true`, `maxSockets: 1`, and a one-shot `createConnection` dialer that fails closed with `proofFailed: true` on any second dial attempt).
@@ -36,7 +36,7 @@
 
 ## 2. Verification Evidence
 
-Command run in `C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local`:
+Command run in `C:\Users\<user>\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local`:
 ```
 node --test --import ./test/setup/hermetic.mjs test/sec-prove-local.test.mjs test/sec-phone-mint-pair.test.mjs test/cli-devices.test.mjs test/worker-sweep-route.test.mjs test/public-release.test.mjs && npm run typecheck
 ```

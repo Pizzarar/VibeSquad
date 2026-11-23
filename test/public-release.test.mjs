@@ -52,11 +52,12 @@ describe("repo hygiene", () => {
   test("no personal identifiers in tracked or untracked-unignored files", async () => {
     const files = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: rootDir, encoding: "utf8" })
       .split("\n")
-      .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|lanes\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
+      .filter((f) => Boolean(f) && !/^(docs\/(brainstorm\/|PLAN_|audits\/|HANDOFF_|BRAINSTORM_HANDOFF_|art\/|research\/|journey\/|guide\/|FEATURE_COMPLETE\.md|UPSTREAM_ISSUES\.md|LESSONS\.md)|guide\/)/.test(f));
     const parts = [["fu", "gma"], ["au", "bross"], ["gma", "il"], ["escape-from", "-idle"], ["rosser", "logic"], ["192[.]168[.]", "50[.]"], ["100[.]", "83[.]"], ["[.]", "nord"]];
     const personal = new RegExp(parts.map((p) => p.join("")).join("|"), "i");
     const name = new RegExp("\\b" + ["Au", "b"].join("") + "\\b", "i");
     const legacyLabel = new RegExp("needs-" + ["au", "b"].join(""), "i");
+    const hardcodedHomePath = /(?:[A-Za-z]:\\Users\\|\/Users\/|\/home\/)(?!you\b|user\b|alice\b|example\b|<)[A-Za-z0-9._-]+/i;
     const skip = /\.(png|ico|exe|woff2?|icns|jpg|webp)$/i;
     const hits = [];
     for (const f of files) {
@@ -67,7 +68,14 @@ describe("repo hygiene", () => {
       } catch {
         continue;
       }
-      if (personal.test(text) || name.test(text) || legacyLabel.test(text)) hits.push(f);
+      // Lane docs legitimately mention the owner by first name, so skip the bare
+      // first-name check there — but still flag the personal regex and hardcoded
+      // user-profile paths.
+      const isLaneDoc = f.startsWith("docs/lanes/");
+      const hit = isLaneDoc
+        ? personal.test(text) || legacyLabel.test(text) || hardcodedHomePath.test(text)
+        : personal.test(text) || name.test(text) || legacyLabel.test(text);
+      if (hit) hits.push(f);
     }
     assert.deepEqual(hits, []);
   });

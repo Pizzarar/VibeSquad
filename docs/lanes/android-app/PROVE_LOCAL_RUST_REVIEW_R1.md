@@ -2,7 +2,7 @@
 
 VERDICT: PASS 0H / 0M / 1L
 
-- **Worktree:** `C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local-rust`
+- **Worktree:** `C:\Users\<user>\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local-rust`
 - **Branch / Commit:** `unit-and-prove-local-rust` at `3ca7a39` (`git diff master...HEAD`, base `26ce468`)
 - **Files Reviewed:** `src-tauri/src/local_proof.rs`, `src-tauri/src/main.rs`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `art/h1/src/h1b-shot.mjs`, `art/ui/u4b/src/u4b-shot.mjs`, `SECURITY.md`
 - **Cause-vs-Symptom Gate:** **PASS** — Addresses the root causes directly: (a) binds the loopback HMAC-SHA256 challenge-response proof (`GET /__vibesquad/local-proof?c=<nonce>`) and the subsequent `x-vibesquad-token` HTTP/WebSocket request to the same single hand-dialed `TcpStream` per request without caching; (b) explicitly sets `Origin: <scheme>://<host>` on both local (`http`) and remote (`https`) upstream requests so `cookieWriteRefusal` (`server/auth.mjs:724-736`) succeeds via positive `Origin === ownOrigin(req)` match rather than relying on omitted `Origin` + forwarded `Sec-Fetch-Site`; and (c) replaces raw `extraHTTPHeaders: { "x-vibesquad-token": tok }` in the art shot scripts with a single-use `/__vibesquad/local-login?t=<nonce>` hop minted via `fetchWithLocalToken`.
@@ -81,7 +81,7 @@ VERDICT: PASS 0H / 0M / 1L
 
 ## 4. Verification Log
 
-Commands run in `C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local-rust`:
+Commands run in `C:\Users\<user>\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local-rust`:
 - `cargo test --manifest-path src-tauri/Cargo.toml` -> **43 passed; 0 failed; 1 ignored** (`local_proof::tests::*`, `tests::local_token_is_sent_only_after_the_listener_proves_it_holds_it`, `tests::a_rogue_listener_never_sees_the_token_and_the_window_gets_a_plain_error`, `tests::desktop_proxy_requires_desktop_key_and_attaches_local_token_only_to_localhost`).
 - `cargo test --manifest-path src-tauri/Cargo.toml -- --ignored live_server` -> **1 passed; 0 failed** (`local_proof::tests::live_server_passes_the_proof_and_keeps_the_socket_open`).
 - `node --test --import ./test/setup/hermetic.mjs test/sec-prove-local.test.mjs test/sec-origin-check.test.mjs` -> **49 passed; 0 failed**.

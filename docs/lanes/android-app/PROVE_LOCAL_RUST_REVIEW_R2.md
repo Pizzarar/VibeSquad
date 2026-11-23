@@ -2,7 +2,7 @@
 
 VERDICT: PASS 0H / 0M / 0L
 
-- **Worktree:** `C:\Users\Fugma\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local-rust`
+- **Worktree:** `C:\Users\<user>\AppData\Local\VibeSquad\worktrees\VibeSquad\unit-and-prove-local-rust`
 - **Branch / Commit:** `unit-and-prove-local-rust` at `508d97e` (`git diff master...HEAD`: `3ca7a39` + `508d97e`, base `26ce468`)
 - **Files Reviewed:** `src-tauri/src/local_proof.rs`, `src-tauri/src/main.rs`, `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`, `art/h1/src/h1b-shot.mjs`, `art/ui/u4b/src/u4b-shot.mjs`, `SECURITY.md`, `docs/lanes/android-app/PROVE_LOCAL_RUST_REVIEW_R1.md`
 - **Cause-vs-Symptom Gate:** **PASS** — Commit `508d97e` fixes R1 `L1` at the root cause: `read_chunked` (`src-tauri/src/local_proof.rs:190-201`) validates `size > MAX_PROOF_BODY || body.len().checked_add(size).map_or(true, |t| t > MAX_PROOF_BODY)` before performing any arithmetic (`let framed = size + 2`) or slice indexing (`&pending[..size]`, `&pending[size..framed]`). Combined with `3ca7a39`, the unit binds the per-connection loopback HMAC-SHA256 challenge and `x-vibesquad-token` request to the same single `TcpStream`, sets `Origin: <scheme>://<host>` on both local and remote upstream requests, and replaces raw `x-vibesquad-token` browser headers in the art shot scripts with single-use `/__vibesquad/local-login?t=<nonce>` hops.

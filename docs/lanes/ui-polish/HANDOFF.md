@@ -3,7 +3,7 @@
 - **Outgoing Lead:** `★ UIP2 · chat header & scroll polish` (`75d8e490-ab03-4eee-8e29-b4e49d10e40a`, `Lead - Gemini`)
 - **Current Live Brainstorm (`vs who brainstorm`):** `UIP Buddy` (`2bd76275-f64b-4c9d-afab-194c949e57b2`)
 - **Workers in Flight in `@uip`:** **0** (all U9–U17 workers and reviewers have finished and been archived; all `@uip` worktrees have been swept via `vs worktree sweep --apply`).
-- **Git / Release State:** `master`, `origin/master`, `origin/beta`, `dev/master`, and `dev/beta` include U17 (`745a4e6`); local runtime (`C:\Users\Fugma\AppData\Local\VibeSquad\runtime`) is synced; `v0.2.6` stable (`307fa60`) and `v0.2.7-beta.1` (`d33f1ff` / `e358766`) are published on GitHub Releases.
+- **Git / Release State:** `master`, `origin/master`, `origin/beta`, `dev/master`, and `dev/beta` include U17 (`745a4e6`); local runtime (`C:\Users\<user>\AppData\Local\VibeSquad\runtime`) is synced; `v0.2.6` stable (`307fa60`) and `v0.2.7-beta.1` (`d33f1ff` / `e358766`) are published on GitHub Releases.
 
 ## Judgment
 
