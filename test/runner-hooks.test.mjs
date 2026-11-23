@@ -303,11 +303,21 @@ test('ACP-style failure before the first "running" still ends the turn as failed
 
 test('profile ids and names both resolve explicitly; spawn_worker labels carry the name', async () => {
   const { matchStoredProfile, loadStoredProfiles } = await import('../server/hooks/agent-duties.ts');
+  // Hermetic: seed a fixture profile in a temp store (never the live/default one, nor ~/.paseo/config.json).
+  const prev = { pp: process.env.VIBESQUAD_PROFILES_PATH, pc: process.env.PASEO_CONFIG_PATH };
+  const store = path.join(tmp(), 'profiles.json');
+  writeFileSync(store, JSON.stringify([{ id: 'fixture-profile-1', name: 'Fixture Worker', provider: 'claude', model: 'fixture-model', role: 'worker' }]));
+  process.env.VIBESQUAD_PROFILES_PATH = store;
+  process.env.PASEO_CONFIG_PATH = path.join(path.dirname(store), 'no-such-config.json');
+  try {
   const p = loadStoredProfiles().find((x) => x.id);
-  assert.ok(p, 'a stored/default profile with an id exists');
+  assert.equal(p?.id, 'fixture-profile-1', 'the seeded fixture profile is what loads');
   assert.equal(matchStoredProfile(p.name)?.explicit, true);
   assert.equal(matchStoredProfile(p.id)?.explicit, true);
   assert.equal(matchStoredProfile(p.id)?.profile.name, p.name);
+  } finally {
+    for (const [k, v] of [['VIBESQUAD_PROFILES_PATH', prev.pp], ['PASEO_CONFIG_PATH', prev.pc]]) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 });
 
 test('digest: an idle digest that logged nothing triggers the direct-write fallback; rn- prompt uses vs status', async () => {

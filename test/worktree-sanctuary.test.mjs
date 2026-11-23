@@ -41,9 +41,12 @@ test("resolveManagedWorktreeRoot honors VIBESQUAD_WORKTREES_DIR, LOCALAPPDATA, a
     resolveManagedWorktreeRoot({ VIBESQUAD_WORKTREES_DIR: "/custom/worktrees" }),
     resolve("/custom/worktrees"),
   );
+  // LOCALAPPDATA is a win32-only convention: POSIX ignores it and falls back to ~/.vibesquad/worktrees.
   assert.equal(
     resolveManagedWorktreeRoot({ LOCALAPPDATA: "C:\\Users\\me\\AppData\\Local" }),
-    resolve("C:\\Users\\me\\AppData\\Local", "VibeSquad", "worktrees"),
+    process.platform === "win32"
+      ? resolve("C:\\Users\\me\\AppData\\Local", "VibeSquad", "worktrees")
+      : resolve(homedir(), ".vibesquad", "worktrees"),
   );
   assert.equal(resolveManagedWorktreeRoot({}), resolve(homedir(), ".vibesquad", "worktrees"));
 });
@@ -51,7 +54,8 @@ test("resolveManagedWorktreeRoot honors VIBESQUAD_WORKTREES_DIR, LOCALAPPDATA, a
 test("resolveManagedWorktreePath slugs the repo name and branch/unit", () => {
   const env = { VIBESQUAD_WORKTREES_DIR: "/wt" };
   assert.equal(
-    resolveManagedWorktreePath("C:\\repos\\main-project.git", "bug-chaser/unit-1", env),
+    // A drive-letter path is only a path on win32; on POSIX the same repo root is "/repos/main-project.git".
+    resolveManagedWorktreePath(process.platform === "win32" ? "C:\\repos\\main-project.git" : "/repos/main-project.git", "bug-chaser/unit-1", env),
     resolve("/wt", "main-project", "bug-chaser-unit-1"),
   );
   assert.equal(
