@@ -10,6 +10,7 @@ import { parseClaudeRateLimit, parseAgyUsage, LimitStore, createAgyUsagePoller, 
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 import { Runner } from '../runner/runner.mjs';
 import { until } from './helpers/load-budget.mjs';
+import './helpers/keep-alive.mjs';
 
 const fx = (n) => readFileSync(new URL(`./fixtures/limits/${n}`, import.meta.url), 'utf8');
 const tmpDirs = [];

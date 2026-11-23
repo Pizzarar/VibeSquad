@@ -101,10 +101,10 @@ if (queue) {
   }
 }
 
-// Node's default reporter is spec (Node < 23: spec on a TTY, tap otherwise). Naming it keeps the output identical while the
-// silent summary reporter writes the counts to a side file.
-const major = Number(process.versions.node.split(".")[0]);
-const reporter = major >= 23 || process.stdout.isTTY ? "spec" : "tap";
+// Pin the human reporter to spec: Node's default is spec on a TTY (and on every stream from Node 23) but tap on a non-TTY
+// under Node 22, which made the output (and tests matching `ℹ pass N`) differ by Node version. The silent summary reporter
+// writes the counts to a side file.
+const reporter = "spec";
 const summaryFile = path.join(paths.dir, `vibesquad-npm-test-summary-${process.pid}.json`);
 const summaryReporter = pathToFileURL(path.join(root, "scripts", "test-summary-reporter.mjs")).href;
 const progressFile = path.join(paths.dir, `vibesquad-npm-test-progress-${process.pid}.jsonl`);
