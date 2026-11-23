@@ -374,14 +374,18 @@ export class Runner {
     // An id is clean only while a watch on the agents dir is up and no change was seen since its fold was stat-validated;
     // every append through this store, a watch event for its file, a nameless event (overflow) or a watch error drops it.
     this.rosterWatchFactory = (dir, onChange) => fsWatch(dir, { persistent: false }, onChange);
+    this.rosterWatchStat = (dir) => fspStat(dir, { bigint: true }); // overridable in tests (idea-594); bigint: 64-bit NTFS ino is exact
     this._rosterWatch = null;
     this._rosterWatchFailed = false;
     // idea-594: a cheap unref'd guard that stats the agents dir every rosterWatchGuardMs and closes the watcher when the
     // dir is deleted under it (fs.watch on a removed dir spins libuv in kernel mode on Windows and never fires 'error',
-    // idea-571/590) or its identity changed, then reopens it when the dir exists again.
-    this._rosterWatchGuard = null; // the guard interval (started with the watch, cleared on shutdown only)
+    // idea-571/590) or its identity changed, then reopens it when the dir exists again. A self-rescheduling setTimeout
+    // keeps at most one tick in flight, so a stale stat can never act on a dir that was removed meanwhile.
+    this._rosterWatchGuard = null; // the guard setTimeout (null when not scheduled); stopped by closeRosterWatch/shutdown
     this._rosterWatchGuardMs = rosterWatchGuardMs;
-    this._rosterWatchIdentity = null; // `${ino}:${birthtimeMs}` of the watched dir, recorded by the guard's first stat
+    this._rosterWatchGuardGen = 0; // bumped on every guard stop; an in-flight tick bails when it changes (H1/M1)
+    this._rosterWatchIdentity = null; // `${ino}:${birthtimeMs}` (bigint) of the watched dir, captured when the watch opens
+    this._rosterWatchReopen = false; // the guard closed the watch because the dir was missing: reopen it once it returns
     this._foldClean = new Set();
     this.store.onWrite = (id) => this._foldClean.delete(id); // not onAppend: that set is the SSE subscribers
     this.limits = new LimitStore(limitsFile);
@@ -1821,9 +1825,12 @@ export class Runner {
   }
 
   // Starts the agents-dir watch once. The watch must be up BEFORE a fold is stat-validated for that fold to count as clean.
-  // No watch (unsupported fs, a throwing factory) or a failed one: every scan stats, as before.
+  // No watch (unsupported fs, a throwing factory) or a failed one: every scan stats, as before. A missing dir is NOT a
+  // permanent failure: _ensureRosterWatch just returns and the guard retries once the dir is recreated.
   _ensureRosterWatch() {
-    if (this._rosterWatch || this._rosterWatchFailed) return;
+    if (this._rosterWatch || this._rosterWatchFailed || this._shutDown) return;
+    let identity = null;
+    try { const st = statSync(this.store.dir, { bigint: true }); identity = `${st.ino}:${st.birthtimeMs}`; } catch { return; } // dir gone: retry later, not a failure
     let w;
     try {
       w = this.rosterWatchFactory(this.store.dir, (_event, name) => {
@@ -1831,58 +1838,80 @@ export class Runner {
         if (!file) { this._foldClean.clear(); return; } // overflow / unknown file: trust nothing
         if (file.endsWith('.jsonl')) this._foldClean.delete(file.slice(0, -6));
       });
-    } catch { this._rosterWatchFailed = true; return; }
-    if (!w) { this._rosterWatchFailed = true; return; }
+    } catch { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
+    if (!w) { this._rosterWatchFailed = true; this._stopRosterWatchGuard(); return; }
     w.on?.('error', () => { this.closeRosterWatch(); this._rosterWatchFailed = true; });
     this._rosterWatch = w;
-    this._rosterWatchIdentity = null; // recorded on the guard's first stat of this dir
+    this._rosterWatchIdentity = identity; // captured now, not on the first guard tick (M3)
+    this._rosterWatchReopen = false;
     this._ensureRosterWatchGuard();
   }
 
-  // Stops the agents-dir watch and forgets every clean mark (the next scan stats; a later scan may watch again).
-  closeRosterWatch() {
+  // Closes only the fs.watch handle and forgets every clean mark. Used by the guard when it detects a missing/replaced
+  // dir (it keeps polling to reopen), so it does NOT stop the guard or touch the reopen flag.
+  _closeRosterWatchHandle() {
     const w = this._rosterWatch;
     this._rosterWatch = null;
-    this._rosterWatchFailed = false;
-    this._rosterWatchIdentity = null;
     this._foldClean.clear();
     try { w?.close(); } catch { /* already closed */ }
   }
 
-  // Starts the guard once, alongside the watch. Unref'd: it never keeps the process alive (tests exit without clearing it),
-  // and shutdown() clears it. The guard does one async stat per tick — no sync fs on the hot scan path.
+  // Stops the agents-dir watch and forgets every clean mark (the next scan stats; a later scan may watch again).
+  // This is an explicit close (shutdown, a test before rmSync, or the watch's 'error' handler): it stops the guard and
+  // drops the reopen flag, so the guard never reopens a watch the caller closed (M2).
+  closeRosterWatch() {
+    this._closeRosterWatchHandle();
+    this._rosterWatchFailed = false;
+    this._rosterWatchIdentity = null;
+    this._rosterWatchReopen = false;
+    this._stopRosterWatchGuard();
+  }
+
+  // Schedules the next guard stat. Self-rescheduling setTimeout: at most one tick is ever in flight, so a stale stat can
+  // never act on a dir that was removed meanwhile (M1). Unref'd: it never keeps the process alive (tests exit without
+  // clearing it), and closeRosterWatch/shutdown clear it. No sync fs on the hot scan path.
   _ensureRosterWatchGuard() {
-    if (this._rosterWatchGuard) return;
+    if (this._rosterWatchGuard || this._shutDown || !(this._rosterWatch || this._rosterWatchReopen)) return;
     const ms = Number(this._rosterWatchGuardMs);
     const interval = Number.isFinite(ms) && ms >= 25 ? ms : DEFAULT_ROSTER_WATCH_GUARD_MS;
-    this._rosterWatchGuard = setInterval(() => { this._rosterWatchGuardTick(); }, interval);
+    this._rosterWatchGuard = setTimeout(() => { this._rosterWatchGuardTick(); }, interval);
     this._rosterWatchGuard.unref?.();
   }
 
-  // idea-594: the watch must never stay open on a directory that was deleted or replaced under it. Each tick stats the
-  // agents dir once (async): gone -> close; identity (ino/birthtime) changed -> close and reopen on the new dir. When the
-  // guard itself closed the watcher because the dir was gone, reopen it once the dir exists again. A watch that failed
-  // permanently (_rosterWatchFailed) is left alone, exactly like _ensureRosterWatch.
+  // Stops the guard timer and bumps the generation: an in-flight tick that is awaiting its stat bails on the next check
+  // (H1), so it can never resurrect a watch or a timer after a close/shutdown/permanent-failure.
+  _stopRosterWatchGuard() {
+    this._rosterWatchGuardGen++;
+    if (this._rosterWatchGuard) { clearTimeout(this._rosterWatchGuard); this._rosterWatchGuard = null; }
+  }
+
+  // idea-594: the watch must never stay open on a directory that was deleted or replaced under it — fs.watch on a removed
+  // dir spins libuv in kernel mode on Windows and never fires 'error' (idea-571/590). Each tick stats the agents dir once
+  // (async): gone -> close and keep polling; identity (ino/birthtime) changed -> close and reopen on the new dir; gone
+  // then back -> reopen. The poll bounds the spin to at most one interval, it cannot prevent a deletion that already won.
   async _rosterWatchGuardTick() {
+    const gen = this._rosterWatchGuardGen;
+    this._rosterWatchGuard = null; // the timer that fired is gone; the tick reschedules itself at the end
     if (this._shutDown) return;
     let st = null;
-    try { st = await fspStat(this.store.dir); } catch { /* gone or unreadable: treat as gone */ }
+    try { st = await this.rosterWatchStat(this.store.dir); } catch { /* gone or unreadable: treat as gone */ }
+    if (this._shutDown || this._rosterWatchGuardGen !== gen) return; // shutdown/close/error landed mid-stat (H1)
     const identity = st ? `${st.ino}:${st.birthtimeMs}` : null;
     if (this._rosterWatch) {
-      if (!st) { this.closeRosterWatch(); return; } // deleted under the watch: drop it before libuv spins
-      if (this._rosterWatchIdentity !== null && this._rosterWatchIdentity !== identity) {
-        this.closeRosterWatch(); // replaced (new ino/birthtime): watch the new dir instead
+      if (!st) {
+        // deleted under the watch: drop the handle and keep polling so the dir's return reopens it.
+        this._closeRosterWatchHandle();
+        this._rosterWatchIdentity = null;
+        this._rosterWatchReopen = true;
+      } else if (this._rosterWatchIdentity !== identity) {
+        this._closeRosterWatchHandle(); // replaced (new ino/birthtime) under the watch: watch the new dir
         this._ensureRosterWatch();
-        if (this._rosterWatch) this._rosterWatchIdentity = identity;
-        return;
       }
-      if (this._rosterWatchIdentity === null) this._rosterWatchIdentity = identity; // first observation
-      return;
+    } else if (this._rosterWatchReopen && st) {
+      this._rosterWatchReopen = false;
+      this._ensureRosterWatch(); // the dir is back: reopen on it
     }
-    if (st && !this._rosterWatchFailed) {
-      this._ensureRosterWatch(); // closed for a missing dir: reopen once it exists again
-      if (this._rosterWatch) this._rosterWatchIdentity = identity;
-    }
+    this._ensureRosterWatchGuard(); // reschedule only while the watch (or a pending reopen) is still live
   }
 
   // Incremental: the folded state keeps the byte offset it has consumed, so a changed log only folds its new tail.
@@ -2167,9 +2196,7 @@ export class Runner {
     this._coldAbort?.abort(); // a boot's prefold still folding: its worker threads are terminated
     this._coldAbort = null;
     this._pollAgy?.shutdown();
-    this.closeRosterWatch();
-    clearInterval(this._rosterWatchGuard);
-    this._rosterWatchGuard = null;
+    this.closeRosterWatch(); // closes the handle and stops the guard timer (idea-594)
     clearInterval(this._quietSweep);
     if (keepDrainFile) {
       clearTimeout(this._drainTimer);
