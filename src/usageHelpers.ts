@@ -862,10 +862,11 @@ export function costCellText(p: Pick<ProfileView, "mergedUnits" | "costPerMerged
 
 export type LongTurnRow = { key: "productive" | "loop" | "other"; label: string; turns: number; costUsd: number; pct: number | null };
 
-/** Pick the squad row when a squad filter is set (and present), else pooled. Missing data -> null (tile hidden). */
+/** Pick the squad row when a squad filter is set (zeros if absent), else pooled. Missing data -> null (tile hidden). */
 export function leadLongTurnRows(l: LeadLongTurns | undefined, squad: string | null): LongTurnRow[] | null {
   if (!l || !l.pooled) return null;
-  const src: Partial<LongTurnSplit> = (squad ? l.bySquad?.find((b) => b.teamId === squad) : null) ?? l.pooled;
+  // Pooled only when no squad filter; a filtered squad with no row shows zero buckets (never another scope's numbers).
+  const src: Partial<LongTurnSplit> = squad ? (l.bySquad?.find((b) => b.teamId === squad) ?? {}) : l.pooled;
   const keys = [["productive", "Productive"], ["loop", "Loop"], ["other", "Other"]] as const;
   const num = (n: unknown) => (typeof n === "number" && Number.isFinite(n) ? n : 0);
   const total = keys.reduce((a, [k]) => a + num(src[k]?.costUsd), 0);

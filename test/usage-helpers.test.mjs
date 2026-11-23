@@ -512,7 +512,9 @@ test("leadLongTurnRows: pooled, squad pick, pct, missing", () => {
   const p = leadLongTurnRows(l, null);
   assert.deepEqual(p.map((r) => [r.key, r.turns, r.pct]), [["productive", 3, 0.6], ["loop", 1, 0.3], ["other", 1, 0.1]]);
   assert.equal(leadLongTurnRows(l, "efi")[0].turns, 2);
-  assert.equal(leadLongTurnRows(l, "nosuch")[0].turns, 3); // falls back to pooled
+  const none = leadLongTurnRows(l, "nosuch"); // squad set, no row -> zeros, never pooled
+  assert.deepEqual(none.map((r) => [r.turns, r.costUsd, r.pct]), [[0, 0, null], [0, 0, null], [0, 0, null]]);
+  assert.equal(leadLongTurnRows({ threshold: 80, pooled: l.pooled }, "efi")[0].turns, 0);
   assert.equal(leadLongTurnRows(l, "efi")[1].pct, 0);
   assert.equal(leadLongTurnRows({ threshold: 80, pooled: { productive: b(0, 0), loop: b(0, 0), other: b(0, 0) } }, null)[0].pct, null);
   assert.equal(leadLongTurnRows(undefined, null), null);
