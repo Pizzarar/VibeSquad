@@ -15,7 +15,7 @@ import { assertBuddyRestartAllowed } from "../buddy-restart-auth.mjs";
 import { NON_CLAUDE_LEAD_CAP_RULES, isNonClaudeProvider } from "../lead-handoff.mjs";
 import { planPathInText } from "../plan-log.mjs";
 import { STAKES_VALUES } from "../stakes-ladder.mjs";
-import { decideArm, readPerfectionVerdict } from "../exp6-arm.mjs";
+import { decideArm, readArmCaps, readPerfectionVerdict } from "../exp6-arm.mjs";
 
 export const MAX_LAST_MESSAGE = 2000;
 /** G2: status/wait return a compact lastMessage by default (a lead polling 26x paid ~20k tokens); `full: true` returns the whole message up to a hard 64KB cap (idea-466 M1). */
@@ -379,6 +379,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   let spawn = {};
   let profile = null;
   // idea-440: the server alternates EXP6 arms per lane (stakes=normal implementer spawns only; wf/ab=pin opt out).
+  // After the EXP6 verdict the same pick applies the EXP6_WINNER default (DSP); a swap never targets a capped arm (idea-703).
   let ab = null;
   let pickedProfile = profileName;
   // An explicit provider/model is the caller's choice: no pick. VS_STAKES is not forwarded by this tool, so only args stakes count.
@@ -391,6 +392,7 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
       profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
       endIso: ctx.env?.VS_EXP6_END,
       verdictProbe: () => readPerfectionVerdict({ home: ctx.env?.VIBESQUAD_HOME }),
+      capProbe: () => (ctx.readCaps ? ctx.readCaps() : readArmCaps({ env: ctx.env })),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
     });
     if (ab?.swapped) pickedProfile = ab.profile;
@@ -517,8 +519,13 @@ ${NON_CLAUDE_LEAD_CAP_RULES}` : prompt,
   const agent = agentOf(created);
   const result = { id: agent?.id ?? created?.agentId ?? created?.id, title: agent?.title || title };
   if (ab) {
-    result.ab = { arm: ab.arm, swapped: ab.swapped, counts: ab.counts };
-    if (ab.swapped) await ctx.writeLog({ type: "metric", text: `exp6-arm swap: ${profileName} -> ${ab.profile} wf=${ab.arm} lane=${labels.lane ?? ""} counts=sonnet:${ab.counts.sonnet},dsp:${ab.counts.dsp}` }).catch(() => {});
+    result.ab = { arm: ab.arm, swapped: ab.swapped, counts: ab.counts, ...(ab.mode === "default" ? { mode: "default" } : {}), ...(ab.capped ? { capped: true } : {}) };
+    // D3 re-read counts `exp6-default:` lines (swaps and cap-kept spawns); `exp6-arm swap:` stays the alternation metric.
+    // A fail-open keep (swap target not installed) logs nothing, like the alternation.
+    const metric = ab.mode === "default"
+      ? ab.swapped || ab.capped ? `exp6-default: ${profileName} -> ${ab.swapped ? ab.profile : `${profileName} (kept: winner capped)`} wf=${ab.arm} lane=${labels.lane ?? ""}` : ""
+      : ab.swapped ? `exp6-arm swap: ${profileName} -> ${ab.profile} wf=${ab.arm} lane=${labels.lane ?? ""} counts=sonnet:${ab.counts.sonnet},dsp:${ab.counts.dsp}` : "";
+    if (metric) { try { await ctx.writeLog({ type: "metric", text: metric }); } catch { /* metrics are best effort: never fail the spawn */ } }
   }
   if (asLead && clean(ctx.identity.role).toLowerCase() === "brainstorm") await logPlanHandoff(ctx, prompt, "spawn"); // a hub lead spawning another lane's lead is not a Buddy handoff
   const partnerName = !asLead && !args._duetPartner ? ART_DUET[labels.profile] : undefined;

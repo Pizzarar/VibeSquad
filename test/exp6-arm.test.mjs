@@ -6,7 +6,7 @@ import test from "node:test";
 import { callTool, createContext } from "../server/mcp/tools.mjs";
 import { verifiedIdentity } from "./helpers/agent-token.mjs";
 import { USER_PROFILES } from "./helpers/route-golden.mjs";
-import { armOfProfile, countArms, decideArm, experimentOpen, hasVerdictEntry, pickArm, readPerfectionVerdict } from "../server/exp6-arm.mjs";
+import { EXP6_WINNER, armCapped, armOfProfile, countArms, decideArm, experimentOpen, hasVerdictEntry, pickArm, readArmCaps, readPerfectionVerdict } from "../server/exp6-arm.mjs";
 
 process.env.VIBESQUAD_IGNORE_HOME_TEAMS = "1";
 const NOW = Date.parse("2026-11-23T12:00:00Z");
@@ -46,7 +46,8 @@ test("stakes gating, pin opt-out, wf pin, lead, other profiles are untouched", a
   assert.equal(await decideArm(base({ asLead: true, listAgents: skew })), null);
   assert.equal(await decideArm(base({ profile: "Review - Gemini", listAgents: skew })), null);
   assert.equal(await decideArm(base({ stakes: "normal", listAgents: skew })).then((r) => r.swapped), true);
-  assert.equal(await decideArm(base({ verdictProbe: async () => true, listAgents: skew })), null);
+  // Closed: the alternation no longer applies (no counts read); the EXP6_WINNER default does (see the D1 tests below).
+  assert.equal((await decideArm(base({ verdictProbe: async () => true, listAgents: async () => { throw new Error("not read"); } }))).mode, "default");
 });
 
 test("count or verdict-probe failure fails open", async () => {
@@ -115,4 +116,111 @@ test("verdict probe: reads the given home, case-insensitive, cached by mtime+siz
   assert.equal(readPerfectionVerdict({ home }), true);
   writeFileSync(f, JSON.stringify({ type: "metric", text: "x" }) + "\n");
   assert.equal(readPerfectionVerdict({ home }), false);
+});
+
+// ---- D1 (PLAN_EXP6_DSP_DEFAULT): post-verdict default -> EXP6_WINNER; caps checked at the swap (idea-703) ----
+const closed = (extra = {}) => base({ verdictProbe: async () => true, ...extra });
+
+test("D1 closed: normal Implement - Sonnet / Worker alias / implement role -> DSP; DSP request untouched", async () => {
+  assert.equal(EXP6_WINNER, "dsp");
+  const r = await decideArm(closed());
+  assert.deepEqual([r.mode, r.arm, r.requestedArm, r.swapped, r.profile], ["default", "dsp", "sonnet", true, "Work Order - DSP"]);
+  assert.equal((await decideArm(closed({ stakes: "normal" }))).profile, "Work Order - DSP");
+  assert.equal((await decideArm(closed({ profile: "Worker" }))).profile, "Work Order - DSP");
+  assert.equal((await decideArm(closed({ profile: "implement" }))).profile, "Work Order");
+  assert.equal(await decideArm(closed({ profile: "Work Order - DSP" })), null);
+  // End date passed (no verdict) closes it the same way.
+  assert.equal((await decideArm(base({ endIso: "2026-11-22T00:00:00Z" }))).profile, "Work Order - DSP");
+});
+
+test("D1 closed: tierA-*, mechanical, pins, lead, other profiles unchanged", async () => {
+  for (const stakes of ["tierA-invariant", "tierA-security", "mechanical"]) assert.equal(await decideArm(closed({ stakes })), null, stakes);
+  assert.equal(await decideArm(closed({ profile: "Implement - Opus" })), null);
+  assert.equal(await decideArm(closed({ profile: "Mechanical - DSF" })), null);
+  assert.equal(await decideArm(closed({ profile: "Review - Gemini" })), null);
+  assert.equal(await decideArm(closed({ labels: { ab: "pin" } })), null);
+  assert.equal(await decideArm(closed({ labels: { wf: "sonnet" } })), null);
+  assert.equal(await decideArm(closed({ asLead: true })), null);
+  assert.equal(await decideArm(closed({ lane: "" })), null);
+  // Revert switch for the D3 guard: winner "sonnet" or "" -> no swap.
+  assert.equal(await decideArm(closed({ winner: "sonnet" })), null);
+  assert.equal(await decideArm(closed({ winner: "" })), null);
+});
+
+test("D1 caps (idea-703): capped deepseek/opencode keeps Implement - Sonnet, no swap; probe error keeps it too", async () => {
+  for (const caps of [{ deepseek: { reason: "cli cap" } }, { opencode: { reason: "x" } }, ["deepseek"]]) {
+    const r = await decideArm(closed({ capProbe: async () => caps }));
+    assert.deepEqual([r.mode, r.arm, r.swapped, r.capped, r.profile], ["default", "sonnet", false, true, "Implement - Sonnet"], JSON.stringify(caps));
+  }
+  const otherCap = await decideArm(closed({ capProbe: async () => ({ claude: {} }) }));
+  assert.equal(otherCap.profile, "Work Order - DSP");
+  const err = await decideArm(closed({ capProbe: async () => { throw new Error("disk"); } }));
+  assert.deepEqual([err.swapped, err.profile], [false, "Implement - Sonnet"]);
+  assert.equal(armCapped("dsp", { "opencode/deepseek-v4-pro": {} }), true);
+  assert.equal(armCapped("dsp", {}), false);
+});
+
+test("open experiment: alternation unchanged, but never swaps to a capped arm (idea-703)", async () => {
+  const skew = async () => [ag("sonnet"), ag("sonnet")];
+  const r = await decideArm(base({ listAgents: skew }));
+  assert.deepEqual([r.mode, r.swapped, r.profile], ["ab", true, "Work Order - DSP"]);
+  const capped = await decideArm(base({ listAgents: skew, capProbe: async () => ({ deepseek: {} }) }));
+  assert.deepEqual([capped.swapped, capped.capped, capped.profile], [false, true, "Implement - Sonnet"]);
+  // Aliases/role names are not arms while the experiment is open.
+  assert.equal(await decideArm(base({ profile: "Worker", listAgents: skew })), null);
+});
+
+test("readArmCaps reads the caller home's capped-providers.json", async () => {
+  const home = mkdtempSync(join(tmpdir(), "exp6-caps-"));
+  assert.deepEqual(await readArmCaps({ env: { VIBESQUAD_HOME: home } }), {});
+  writeFileSync(join(home, "capped-providers.json"), JSON.stringify({ capped: { deepseek: { reason: "cli cap", updatedAt: new Date().toISOString() } } }));
+  assert.equal(armCapped("dsp", await readArmCaps({ env: { VIBESQUAD_HOME: home } })), true);
+});
+
+function closedHome(caps) {
+  const home = mkdtempSync(join(tmpdir(), "exp6-closed-"));
+  mkdirSync(join(home, "logs"));
+  writeFileSync(join(home, "logs", "vibesquad--perfection.jsonl"), JSON.stringify({ type: "decision", text: "@per EXP6 verdict change: DSP default" }) + "\n");
+  if (caps) writeFileSync(join(home, "capped-providers.json"), JSON.stringify({ capped: caps }));
+  return home;
+}
+
+test("spawn_worker after verdict: normal Implement - Sonnet spawns as Work Order - DSP and logs exp6-default", async () => {
+  const logs = [];
+  const { ctx, creates } = ctxWith([ag("dsp"), ag("dsp"), ag("dsp")], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+  const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
+  assert.equal(creates[0].labels.profile, "Work Order - DSP");
+  assert.equal(creates[0].config.provider, "opencode");
+  assert.equal(creates[0].labels.wf, undefined, "wf is derived by the hook after failover (dsp, or sonnet on a later failover)");
+  assert.deepEqual(res.ab, { arm: "dsp", swapped: true, counts: null, mode: "default" });
+  assert.equal(logs.length, 1);
+  assert.match(logs[0].text, /^exp6-default: Implement - Sonnet -> Work Order - DSP wf=dsp lane=feat$/);
+});
+
+test("spawn_worker after verdict: tierA/mechanical/pin keep the requested profile, no metric", async () => {
+  for (const [args, want] of [
+    [{ profile: "Implement - Sonnet", stakes: "tierA-invariant" }, "Implement - Sonnet"],
+    [{ profile: "Implement - Opus", stakes: "tierA-security" }, "Implement - Opus"],
+    [{ profile: "Mechanical - DSF", stakes: "mechanical" }, "Mechanical - DSF"],
+    [{ profile: "Implement - Sonnet", stakes: "mechanical" }, "Implement - Sonnet"],
+    [{ profile: "Implement - Sonnet", labels: { ab: "pin" } }, "Implement - Sonnet"],
+  ]) {
+    const logs = [];
+    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", ...args });
+    assert.equal(creates[0].labels.profile, want, JSON.stringify(args));
+    assert.equal(res.ab, undefined);
+    assert.equal(logs.length, 0);
+  }
+});
+
+test("spawn_worker after verdict, deepseek capped (idea-703): Implement - Sonnet stays Sonnet, no swap, cap noted", async () => {
+  const logs = [];
+  const env = { VIBESQUAD_HOME: closedHome({ deepseek: { reason: "cli cap", updatedAt: new Date().toISOString() } }), VS_EXP6_END: "2999-01-01T00:00:00Z" };
+  const { ctx, creates } = ctxWith([], logs, { env });
+  const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: "Implement - Sonnet", stakes: "normal" });
+  assert.equal(creates[0].labels.profile, "Implement - Sonnet");
+  assert.equal(creates[0].config.provider, "claude");
+  assert.deepEqual(res.ab, { arm: "sonnet", swapped: false, counts: null, mode: "default", capped: true });
+  assert.match(logs[0].text, /^exp6-default: Implement - Sonnet -> Implement - Sonnet \(kept: winner capped\) wf=sonnet/);
 });

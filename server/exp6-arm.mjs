@@ -1,6 +1,7 @@
 // EXP6 arm pick (idea-440): the server alternates stakes=normal implementer spawns between `Implement - Sonnet` (wf=sonnet) and
 // `Work Order - DSP` (wf=dsp) per lane, so the alternation survives lead handoffs. Pure functions; the caller injects the
 // agent list and the experiment-verdict probe. Everything fails open: any error keeps the requested profile.
+// After the verdict (EXP6_WINNER), the same site applies the post-experiment default instead of the alternation.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,39 @@ export const EXP6_ARMS = {
   "work order - dsp": { profile: "Work Order - DSP", wf: "dsp" },
 };
 const WF_TO_ARM = { sonnet: EXP6_ARMS["implement - sonnet"], dsp: EXP6_ARMS["work order - dsp"] };
+
+// Post-experiment default (PLAN_EXP6_DSP_DEFAULT D1): EXP6 closed with `@per EXP6 verdict change` (2026-11-23, E2 read:
+// DSP within 10 pts first-try at ~45-57% lower $/unit). Once the experiment is closed, a stakes=normal implementer spawn
+// asking for the Sonnet implementer resolves to the winner. Set by hand, never parsed from verdict text: the D3 guard
+// (re-read >=2026-12-07) reverts by setting this to "sonnet" (requests then keep their profile) or "" (no default at all).
+export const EXP6_WINNER = "dsp";
+// Spawn names that mean "the normal implementer" -> the winner-arm name to use instead. Old names (and the `Worker` alias,
+// which resolves to Implement - Sonnet) swap to the old DSP profile; the P5c role name swaps to its role twin.
+const DEFAULT_SOURCES = {
+  "implement - sonnet": { wf: "sonnet", to: { dsp: "Work Order - DSP" } },
+  worker: { wf: "sonnet", to: { dsp: "Work Order - DSP" } },
+  implement: { wf: "sonnet", to: { dsp: "Work Order" } },
+};
+// Provider families whose cap blocks a swap to that arm. A deepseek cap is keyed "deepseek" (`vs cap set deepseek`)
+// while the DSP profile runs on provider "opencode": both count (idea-703: the A/B swap ignored a deepseek cap).
+export const ARM_CAP_FAMILIES = { dsp: ["opencode", "deepseek"], sonnet: ["claude"] };
+
+/**
+ * Live `vs cap` map (capped-providers.json, expired caps dropped) for the spawn caller's VibeSquad home. Lazy import:
+ * the MCP server loads this module at startup. Throws on an unreadable file; decideArm treats that as capped (fail open).
+ */
+export async function readArmCaps({ env = process.env } = {}) {
+  const { readCappedProviders } = await import("./provider-failover.mjs");
+  const cappedProvidersPath = env?.VIBESQUAD_CAPPED_PROVIDERS_PATH || (env?.VIBESQUAD_HOME ? join(env.VIBESQUAD_HOME, "capped-providers.json") : undefined);
+  return readCappedProviders({ useDiskCaps: true, ...(cappedProvidersPath ? { cappedProvidersPath } : {}) });
+}
+
+/** True when any family of `wf` is in the capped map/array. */
+export function armCapped(wf, capped) {
+  const fams = ARM_CAP_FAMILIES[wf] ?? [];
+  const keys = Array.isArray(capped) ? capped : Object.keys(capped ?? {});
+  return keys.some((k) => fams.includes(String(k ?? "").trim().toLowerCase().split("/")[0]));
+}
 
 /** The arm a profile name belongs to, or null (any other profile is never touched). */
 export function armOfProfile(name) {
@@ -79,27 +113,54 @@ export function pickArm(requested, counts) {
   return counts[other.wf] < counts[requested.wf] ? other : requested;
 }
 
+/** Is the swap target capped? A throwing probe counts as capped: the spawn keeps its requested profile (fail open). */
+async function targetCapped(wf, capProbe) {
+  if (!capProbe) return false;
+  try { return armCapped(wf, await capProbe()); } catch { return true; }
+}
+
 /**
- * Decide the arm for a spawn. Returns null when the pick does not apply (not worker/normal/arm profile, pinned, closed),
- * else { arm, swapped, counts, profile }. A throwing agent list or verdict probe fails open: the requested profile, no throw.
+ * Post-experiment default: { mode: "default", arm, requestedArm, swapped, profile, capped? } or null (not a default
+ * source, no winner, or the request already is the winner). A capped winner keeps the requested profile (swapped=false).
  */
-export async function decideArm({ profile, stakes, asLead, labels = {}, lane, team, listAgents, verdictProbe, now = Date.now(), endIso }) {
-  const requested = armOfProfile(profile);
-  if (!requested || asLead || !norm(lane)) return null;
+async function decideDefault(profile, { winner, capProbe }) {
+  const src = DEFAULT_SOURCES[norm(profile)];
+  const to = src?.to?.[winner];
+  if (!src || !to || src.wf === winner) return null;
+  if (await targetCapped(winner, capProbe)) return { mode: "default", arm: src.wf, requestedArm: src.wf, swapped: false, capped: true, counts: null, profile: String(profile) };
+  return { mode: "default", arm: winner, requestedArm: src.wf, swapped: true, counts: null, profile: to };
+}
+
+/**
+ * Decide the arm for a spawn. Returns null when nothing applies (not worker/normal/arm profile, pinned, closed with no
+ * default), else { mode: "ab"|"default", arm, swapped, counts, profile }. While EXP6 is open: per-lane alternation.
+ * Once closed: the EXP6_WINNER default. A swap never targets a capped arm (`capProbe` -> capped map/array, idea-703).
+ * A throwing agent list, verdict probe or cap probe fails open: the requested profile, no throw.
+ */
+export async function decideArm({ profile, stakes, asLead, labels = {}, lane, team, listAgents, verdictProbe, capProbe, now = Date.now(), endIso, winner = EXP6_WINNER }) {
+  if (asLead || !norm(lane)) return null;
   if ((norm(stakes) || "normal") !== "normal") return null;
   if (norm(labels.wf) || norm(labels.ab) === "pin") return null;
+  const requested = armOfProfile(profile);
+  if (!requested && !DEFAULT_SOURCES[norm(profile)]) return null;
+  let open;
   try {
     const verdict = verdictProbe ? await verdictProbe() : false;
-    if (!experimentOpen({ now, endIso, verdict })) return null;
+    open = experimentOpen({ now, endIso, verdict });
   } catch {
     return null;
   }
+  if (!open) return decideDefault(profile, { winner: norm(winner), capProbe });
+  if (!requested) return null; // aliases/role names are not EXP6 arms: alternation stays exactly as before
   let counts;
   try {
     counts = countArms(await listAgents(), { lane, team });
   } catch {
-    return { arm: requested.wf, swapped: false, counts: null, profile: requested.profile, failOpen: true };
+    return { mode: "ab", arm: requested.wf, swapped: false, counts: null, profile: requested.profile, failOpen: true };
   }
   const arm = pickArm(requested, counts);
-  return { arm: arm.wf, requestedArm: requested.wf, swapped: arm !== requested, counts, profile: arm.profile };
+  if (arm !== requested && (await targetCapped(arm.wf, capProbe))) {
+    return { mode: "ab", arm: requested.wf, requestedArm: requested.wf, swapped: false, capped: true, counts, profile: requested.profile };
+  }
+  return { mode: "ab", arm: arm.wf, requestedArm: requested.wf, swapped: arm !== requested, counts, profile: arm.profile };
 }
