@@ -44,7 +44,9 @@ test('a queued create is re-enqueued on boot, runs once, in original order', asy
   const s1 = fakeSpawn();
   const r1 = boot(dir, s1);
   const a = r1.create({ provider: 'claude', cwd: process.cwd(), prompt: 'first' }); // runs, holds the only slot
+  await tick(5); // recovery orders by the input log ts (ms): creates in the same ms tie and boot order falls to readdir order, so space them
   const b = r1.create({ provider: 'claude', cwd: process.cwd(), prompt: 'second' }); // queued
+  await tick(5);
   const c = r1.create({ provider: 'claude', cwd: process.cwd(), prompt: 'third' }); // queued
   await tick();
   assert.equal(r1.queuePosition(b).queued, true);

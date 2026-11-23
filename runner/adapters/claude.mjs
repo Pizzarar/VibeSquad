@@ -98,7 +98,7 @@ export function createClaudeAdapter({ spawnImpl, command = 'claude', mcp = true,
         args.push('--append-system-prompt-file', file);
       }
       let child;
-      try { child = spawnNoShell(command, args, { cwd, ...(env ? { env } : {}) }, spawnImpl); } catch (err) { this.cleanup(id); throw err; } // don't leak the files written above
+      try { child = spawnNoShell(command, args, { cwd, ...(spawnImpl ? { resolved: { file: command, args: [] } } : {}), ...(env ? { env } : {}) }, spawnImpl); } catch (err) { this.cleanup(id); throw err; } // don't leak the files written above
       let pending = 0; // open turns written to stdin whose `result` has not arrived yet
       let interrupted = false; // an interrupt was issued: the next send opens its own turn (it does not merge)
       let stopped = false; // set by kill(): a result that lands after we were stopped must not log a follow-up turn
