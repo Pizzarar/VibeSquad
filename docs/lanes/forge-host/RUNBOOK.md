@@ -85,18 +85,39 @@ Host devpc
 
 ## C2 migrate (`scripts/forge-migrate.mjs`)
 
-Run only after C1 (drained, dev pp VS stopped) and the owner's C go-signal. The script never deletes anything in any mode,
-and only reads the source home (it stays the C3 rollback). Placeholders: `<u>` = Windows user, `<forge-user>` = forge user.
+Run only after C1 (drained, dev pp VS stopped) and the owner's C go-signal. The script never deletes owner data in any
+mode and only reads the source home (it stays the C3 rollback). The only things it removes are its own: a scratch dir in
+the OS temp dir and the private temp refs under `refs/vs-migrate-wip/` it creates for a bundle and drops right after.
+Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` = the forge's ssh host alias.
 
-1. **Unpushed report** (dev pp, read-only: no fetch, prune or index refresh). Walks the worktree sanctuary
-   (`%LOCALAPPDATA%\VibeSquad\worktrees`, `<root>/<repo>/<unit>`) and lists worktrees whose HEAD has commits on no remote,
-   or a dirty tree. The last line is a JSON summary; `safeToDelete` is true only with 0 unpushed, 0 dirty and 0 errors.
-   The owner OKs deleting the sanctuary only when that list is empty or accepted.
+1. **Unpushed report** (dev pp, read-only: no fetch, prune, gc or index refresh).
    `node scripts/forge-migrate.mjs --unpushed-report [--sanctuary <dir>] [--json]`
-2. **Backup** (dev pp): `node scripts/forge-migrate.mjs --from C:\Users\<u>\.vibesquad --backup D:\<backup-dir>`
-   writes `vibesquad-home-<timestamp>.zip` (Windows tar.exe; `.tar.gz` on POSIX) of the full home. Lock files, sockets and
-   links are skipped and listed. Add `--dry-run` to see the file count and skips first.
-3. **Dry run**, then the copy. Allowlist only: `teams.json`, `teams/`, `inbox.json`, `lessons.jsonl`, `profiles.json`,
+   Walks the worktree sanctuary (`%LOCALAPPDATA%\VibeSquad\worktrees`, `<root>/<repo>/<unit>`). Per git common dir:
+   local branches with commits on no remote (`rev-list --branches --not --remotes`) and stash entries; per worktree:
+   dirty files and a detached HEAD with commits on no branch. Folders there that are not git worktrees are listed.
+   The last line is a JSON summary; `safeToDelete` is true only when all of those are 0.
+   **"Pushed" means "on a remote-tracking ref as of the last fetch".** The script never fetches, so a branch deleted on
+   the remote since then still counts as pushed. Fetch by hand first if that matters.
+2. **Bundles** (dev pp): `--bundle --bundle-dir <dir>` (or `--bundle` with `--backup`, see 3) saves the flagged work so
+   deleting the sanctuary loses nothing even if a lead never answers. Per worktree `<repo>__<worktree>.bundle`: its
+   unpushed branches (checked out there or named after it), a detached HEAD, and a WIP commit of its dirty tree (tracked
+   changes + untracked files, .gitignore respected, untracked files over 50 MB skipped and listed). Per repo
+   `<repo>__repo.bundle`: unpushed branches no worktree owns, and every stash entry. Each bundle is `git bundle verify`'d;
+   `manifest.json` lists worktree, branch, sha, counts, file and verified. The worktrees' files, index, HEAD and branch
+   refs are not written. Bundles are thin: restore needs a clone of the remote.
+   Restore:
+   ```
+   git clone <remote> restore && cd restore
+   git fetch <dir>/<repo>__<worktree>.bundle 'refs/*:refs/restored/*'
+   git fetch <dir>/<repo>__<worktree>.bundle HEAD:refs/restored/HEAD   # only if the manifest lists a detached HEAD
+   ```
+   Branches land in `refs/restored/heads/*`, the WIP commit in `refs/restored/vs-migrate-wip/<repo>/<unit>/<ts>/wip`
+   (its parent is the worktree's HEAD), stashes in `.../_repo/<ts>/stash-<n>`.
+3. **Backup** (dev pp): `node scripts/forge-migrate.mjs --from C:\Users\<u>\.vibesquad --backup <dir> [--bundle]`
+   writes `vibesquad-home-<timestamp>.zip` (Windows tar.exe; `.tar.gz` on POSIX) of the full home; with `--bundle` the
+   bundles are staged in `<dir>/vibesquad-bundles-<timestamp>/` and go into the same archive. Lock files, sockets and
+   links are skipped and listed. Add `--dry-run` to see the file count, skips and planned bundles first.
+4. **Dry run**, then the copy. Allowlist only: `teams.json`, `teams/`, `inbox.json`, `lessons.jsonl`, `profiles.json`,
    `settings.json`, `stakes-ladder.json`, `schedules.json`, `capped-providers.json`, `brief-history/`, `reports/`.
    Everything else is printed as "left behind" with its size (runner/, logs, stamps, `*.bak*`, ...); the forge's own
    `tls/`, `devices.json`, `host-id`, `local-token`, `daemon-password`, `vapid.json` are never copied.
@@ -109,10 +130,14 @@ and only reads the source home (it stays the C3 rollback). Placeholders: `<u>` =
    (`--projects-root`, default `<forge-home>/projects`); `%LOCALAPPDATA%\VibeSquad\worktrees` -> `--worktrees-root`
    (default `~/.vibesquad/worktrees`); `%LOCALAPPDATA%\VibeSquad\runtime` -> `~/.vibesquad/runtime`;
    `C:\Users\<u>\.vibesquad` -> `--vs-home-root` (default `<forge-home>/.vibesquad`). Other `C:` paths stay as they are
-   and show in the UNMAPPED list. Drop `--dry-run` to copy. A non-empty `--to` is refused unless `--force`, which
-   overwrites the allowlisted files only and keeps everything else there (the forge's identity and CA).
-   JSON that does not parse, JSONL lines that do not parse and non-UTF-8 text are copied verbatim and reported.
-4. Start the forge unit; leads and Buddies restart fresh from their briefs (C2).
+   and show in the UNMAPPED list, as do `file:///C:/` and `\\?\C:\` forms and any path that would only be half
+   converted (a space or `(` inside it in free text). A JSON key whose rewrite collides with another key keeps its text
+   and is listed as KEY CONFLICT. Drop `--dry-run` to copy. A non-empty `--to` is refused unless `--force`, which
+   overwrites the allowlisted files only and keeps everything else there (the forge's identity and CA). A link or
+   junction on `--to` or under its allowlisted entries is refused, and every write is checked (junctions resolved) to
+   land outside `--from`. JSON that does not parse, JSONL lines that do not parse and non-UTF-8 text are copied
+   verbatim and reported.
+5. Start the forge unit; leads and Buddies restart fresh from their briefs (C2).
 
 ## Rollback notes (C3)
 

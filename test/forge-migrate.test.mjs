@@ -3,12 +3,13 @@ import { describe, test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  ALLOWLIST, backup, buildPathMap, main, migrate, parseArgs, rewriteJsonText, rewriteJsonlText, rewriteText, unpushedReport,
+  ALLOWLIST, LARGE_UNTRACKED_BYTES, WIP_NS, backup, buildPathMap, bundleFlagged, main, migrate, parseArgs, rewriteJsonText, rewriteJsonlText,
+  rewriteString, rewriteText, unpushedReport,
 } from "../scripts/forge-migrate.mjs";
 
 const SCRIPT = fileURLToPath(new URL("../scripts/forge-migrate.mjs", import.meta.url));
@@ -204,13 +205,19 @@ describe("migrate", () => {
     assert.equal(main(["--bogus"], out.log, out.err), 2);
     assert.equal(main(["--from", home], out.log, out.err), 2);
     assert.equal(main(["--from", join(home, "nope"), "--to", tmp("x"), "--win-user", "u", "--forge-home", "/h"], out.log, out.err), 1);
-    assert.deepEqual(parseArgs(["--from=a", "--dry-run", "--to", "b"]), { dryRun: true, force: false, json: false, unpushedReport: false, help: false, from: "a", to: "b" });
+    assert.deepEqual(parseArgs(["--from=a", "--dry-run", "--to", "b"]), { dryRun: true, force: false, json: false, unpushedReport: false, bundle: false, help: false, from: "a", to: "b" });
   });
 
   test("the script never deletes: no delete calls in its source, source hash unchanged after every mode", () => {
     const code = readFileSync(SCRIPT, "utf8");
-    assert.doesNotMatch(code, /\b(unlink|unlinkSync|rmSync|rmdirSync|rmdir|rm|removeSync)\s*\(/);
-    assert.doesNotMatch(code, /\b(prune|fetch|gc|clean|reset)\b"/);
+    assert.doesNotMatch(code, /\b(unlink|unlinkSync|rmdirSync|rmdir|rm|removeSync|truncateSync)\s*\(/);
+    // The two allowed exceptions (both remove only what this run itself created): removeOwnScratch's one rmSync, and
+    // the update-ref -d of the run's own temp refs under WIP_NS (see writeBundle).
+    assert.equal(code.match(/\brmSync\s*\(/g).length, 1);
+    assert.match(code, /function removeOwnScratch\(dir\) \{\n[^\n]*SCRATCH_PREFIX[^\n]*\n\s+rmSync\(dir/);
+    assert.equal(code.match(/"update-ref", "-d"/g).length, 1);
+    assert.doesNotMatch(code, /"(prune|fetch|gc|clean|reset|checkout|switch|push|pull)"/);
+    assert.doesNotMatch(code, /"stash", "(push|save|drop|pop|clear)"/);
     assert.equal(treeHash(home), srcHash);
   });
 });
@@ -237,41 +244,221 @@ describe("backup", () => {
   });
 });
 
+describe("review R1 fixes", () => {
+  const link = (target, path) => symlinkSync(target, path, process.platform === "win32" ? "junction" : "dir");
+
+  test("H1a: a junction under --to pointing into the source is refused (with --force), source untouched", () => {
+    const src = makeHome();
+    const hash = treeHash(src);
+    const to = tmp("h1a");
+    link(join(src, "teams"), join(to, "teams"));
+    assert.throws(() => migrate({ from: src, to, force: true, ...MAP_OPTS }), /link or junction/);
+    const to2 = tmp("h1a-deep");
+    mkdirSync(join(to2, "teams"));
+    link(join(src, "teams", "demo"), join(to2, "teams", "demo"));
+    assert.throws(() => migrate({ from: src, to: to2, force: true, ...MAP_OPTS }), /link or junction/);
+    assert.equal(treeHash(src), hash);
+  });
+
+  test("H1b: a --to under a junction to the source is refused, nothing created in the source", () => {
+    const src = makeHome();
+    const hash = treeHash(src);
+    const j = join(tmp("h1b"), "j");
+    link(src, j);
+    assert.throws(() => migrate({ from: src, to: join(j, "new"), ...MAP_OPTS }), /inside --from/);
+    assert.throws(() => backup({ from: src, backup: join(j, "bak") }), /inside --from/);
+    assert.equal(existsSync(join(src, "new")), false);
+    assert.equal(existsSync(join(src, "bak")), false);
+    assert.equal(treeHash(src), hash);
+  });
+
+  test("M1: a path that would be half converted is left whole and reported; a whole-string path converts fully", () => {
+    for (const s of [`open ${W}\\projects\\My Game\\x now`, `${W}\\projects\\Demo(1)\\x`, `${W}\\projects\\a,b\\x`]) {
+      const r = rewriteText(s, map);
+      assert.deepEqual([r.text, r.count, r.half], [s, 0, 1], s);
+    }
+    assert.equal(rewriteText(`${W}\\projects\\Demo\\a.md:39 and (${W}\\projects\\Demo\\b.md)`, map).text, "/home/forge/projects/Demo/a.md:39 and (/home/forge/projects/Demo/b.md)");
+    assert.equal(rewriteString(`${W}\\projects\\My Game\\x (copy).md`, map).text, "/home/forge/projects/My Game/x (copy).md");
+    const j = rewriteJsonText(JSON.stringify({ a: `see ${W}\\projects\\My Game\\x`, b: `${W}\\projects\\My Game\\x` }), map);
+    assert.deepEqual(JSON.parse(j.text), { a: `see ${W}\\projects\\My Game\\x`, b: "/home/forge/projects/My Game/x" });
+    assert.equal(j.half, 1);
+    const src = tmp("m1");
+    put(src, "teams/n.md", `see ${W}\\projects\\My Game\\x\n`);
+    const s = migrate({ from: src, to: join(tmp("m1-dst"), "h"), dryRun: true, ...MAP_OPTS });
+    assert.equal(s.halfLeft, 1);
+    assert.deepEqual(s.unmapped, [{ path: "C:\\Users\\someone\\projects\\My", count: 1 }]);
+  });
+
+  test("L1: keys that would collide keep their original text and are reported", () => {
+    const src = JSON.stringify({
+      "C:\\Users\\someone\\projects\\Demo": 1, "C:/Users/someone/projects/Demo": 2,
+      "/home/forge/projects/X": 3, "C:/Users/someone/projects/X": 4, nest: { "C:/Users/someone/projects/Y": 5 },
+    });
+    const r = rewriteJsonText(src, map);
+    const out = JSON.parse(r.text);
+    assert.deepEqual(r.conflicts.sort(), ["C:/Users/someone/projects/Demo", "C:/Users/someone/projects/X", "C:\\Users\\someone\\projects\\Demo"]);
+    assert.equal(out["C:\\Users\\someone\\projects\\Demo"], 1);
+    assert.equal(out["C:/Users/someone/projects/Demo"], 2);
+    assert.equal(out["/home/forge/projects/X"], 3);
+    assert.equal(out["C:/Users/someone/projects/X"], 4);
+    assert.deepEqual(out.nest, { "/home/forge/projects/Y": 5 });
+    const home = tmp("l1");
+    put(home, "teams.json", src);
+    const s = migrate({ from: home, to: join(tmp("l1-dst"), "h"), dryRun: true, ...MAP_OPTS });
+    assert.equal(s.keyConflicts.length, 3);
+  });
+
+  test("L2: file:/// and \\\\?\\ prefixes are left alone and reported as unmapped", () => {
+    const s = `file:///C:/Users/someone/projects/Demo/x.md and \\\\?\\C:\\Users\\someone\\projects\\Demo\\y`;
+    assert.equal(rewriteText(s, map).count, 0);
+    assert.equal(rewriteString("\\\\?\\C:\\Users\\someone\\projects\\Demo", map).count, 0);
+    const home = tmp("l2");
+    put(home, "teams/x.md", s);
+    const r = migrate({ from: home, to: join(tmp("l2-dst"), "h"), dryRun: true, ...MAP_OPTS });
+    assert.equal(r.unmappedTotal, 2);
+  });
+});
+
+// ---------------------------------------------------------------- git fixtures
+const g = (args, cwd) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "core.autocrlf=false", ...args], { cwd, stdio: "pipe", windowsHide: true }).toString();
+const refsOf = (cwd) => g(["for-each-ref", "--format=%(refname) %(objectname)"], cwd) + g(["rev-parse", "HEAD"], cwd);
+
+/**
+ * origin.git + Demo (main checkout: unpushed branch unit-loose, one stash) + sanctuary worktrees:
+ * Demo/work (unit-work: 1 unpushed commit, tracked.txt modified, new.txt (+ big.bin) untracked), Demo/pushed (clean),
+ * Demo/det (detached HEAD with a commit), Demo/not-a-worktree (plain folder).
+ */
+function makeSanctuary({ big = false } = {}) {
+  const base = tmp("git");
+  const origin = join(base, "origin.git");
+  const repo = join(base, "Demo");
+  const sanctuary = join(base, "worktrees");
+  execFileSync("git", ["init", "-q", "--bare", "-b", "master", origin], { windowsHide: true });
+  execFileSync("git", ["init", "-q", "-b", "master", repo], { windowsHide: true });
+  writeFileSync(join(repo, "tracked.txt"), "v1\n");
+  writeFileSync(join(repo, ".gitignore"), "ignored.txt\n");
+  g(["add", "-A"], repo);
+  g(["commit", "-q", "-m", "init"], repo);
+  g(["remote", "add", "origin", origin], repo);
+  g(["push", "-q", "-u", "origin", "master"], repo);
+  g(["update-ref", "refs/heads/unit-loose", g(["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "loose"], repo).trim()], repo);
+  writeFileSync(join(repo, "tracked.txt"), "stashed\n");
+  g(["stash", "push", "-q", "-m", "s1"], repo);
+  const work = join(sanctuary, "Demo", "work");
+  g(["worktree", "add", "-q", "-b", "unit-work", work, "master"], repo);
+  g(["worktree", "add", "-q", "-b", "unit-pushed", join(sanctuary, "Demo", "pushed"), "master"], repo);
+  g(["push", "-q", "origin", "unit-pushed"], repo);
+  g(["worktree", "add", "-q", "--detach", join(sanctuary, "Demo", "det"), "master"], repo);
+  g(["commit", "-q", "--allow-empty", "-m", "detached work"], join(sanctuary, "Demo", "det"));
+  writeFileSync(join(work, "committed.txt"), "committed\n");
+  g(["add", "committed.txt"], work);
+  g(["commit", "-q", "-m", "unpushed"], work);
+  writeFileSync(join(work, "tracked.txt"), "v2-dirty\n");
+  writeFileSync(join(work, "new.txt"), "untracked\n");
+  writeFileSync(join(work, "ignored.txt"), "ignored\n");
+  if (big) writeFileSync(join(work, "big.bin"), Buffer.alloc(LARGE_UNTRACKED_BYTES + 1));
+  mkdirSync(join(sanctuary, "Demo", "not-a-worktree"), { recursive: true });
+  return { base, origin, repo, sanctuary, work };
+}
+
 describe("unpushed report", () => {
-  const g = (args, cwd) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, stdio: "pipe", windowsHide: true }).toString();
-
-  test("lists worktrees with unpushed commits or dirty trees, read-only", () => {
-    const base = tmp("git");
-    const origin = join(base, "origin.git");
-    const repo = join(base, "Demo");
-    const sanctuary = join(base, "worktrees");
-    execFileSync("git", ["init", "-q", "--bare", "-b", "master", origin], { windowsHide: true });
-    execFileSync("git", ["init", "-q", "-b", "master", repo], { windowsHide: true });
-    g(["commit", "-q", "--allow-empty", "-m", "init"], repo);
-    g(["remote", "add", "origin", origin], repo);
-    g(["push", "-q", "origin", "master"], repo);
-    for (const unit of ["pushed", "ahead", "dirty"]) g(["worktree", "add", "-q", "-b", `unit-${unit}`, join(sanctuary, "Demo", unit), "master"], repo);
-    g(["commit", "-q", "--allow-empty", "-m", "local only"], join(sanctuary, "Demo", "ahead"));
-    writeFileSync(join(sanctuary, "Demo", "dirty", "new.txt"), "x");
-    mkdirSync(join(sanctuary, "Demo", "not-a-worktree"), { recursive: true });
-    const hash = treeHash(base);
-
-    const s = unpushedReport({ sanctuary });
-    assert.equal(treeHash(base), hash, "report wrote to the repo or worktrees");
-    assert.equal(s.worktrees, 3);
-    assert.equal(s.unpushed, 1);
-    assert.equal(s.dirty, 1);
-    assert.equal(s.clean, 1);
-    assert.equal(s.safeToDelete, false);
-    const by = Object.fromEntries(s.items.map((i) => [i.path, i]));
-    assert.deepEqual([by["Demo/ahead"].branch, by["Demo/ahead"].ahead, by["Demo/ahead"].dirty], ["unit-ahead", 1, 0]);
-    assert.deepEqual([by["Demo/dirty"].ahead, by["Demo/dirty"].dirty], [0, 1]);
-
+  test("per common dir: unpushed branches with owners, stashes, dirty, detached, non-git folders; read-only", () => {
+    const fx = makeSanctuary();
+    const hash = treeHash(fx.base);
+    const s = unpushedReport({ sanctuary: fx.sanctuary });
+    assert.equal(treeHash(fx.base), hash, "report wrote to the repo or worktrees");
+    assert.deepEqual(
+      [s.worktrees, s.repos, s.unpushedCommits, s.unpushedBranches, s.stashes, s.dirty, s.detached, s.notGit, s.errors, s.safeToDelete],
+      [3, 1, 2, 2, 1, 1, 1, ["Demo/not-a-worktree"], 0, false],
+    );
+    const repo = s.repoReports[0];
+    assert.equal(repo.name, "Demo");
+    assert.deepEqual(repo.branches.sort((a, b) => a.name.localeCompare(b.name)), [
+      { name: "unit-loose", ahead: 1, owner: null },
+      { name: "unit-work", ahead: 1, owner: "Demo/work" },
+    ]);
     const out = quiet();
-    assert.equal(main(["--unpushed-report", "--sanctuary", sanctuary], out.log, out.err), 0);
+    assert.equal(main(["--unpushed-report", "--sanctuary", fx.sanctuary], out.log, out.err), 0);
     const last = JSON.parse(out.lines.at(-1));
-    assert.deepEqual([last.worktrees, last.unpushed, last.dirty, last.clean], [3, 1, 1, 1]);
-    assert.match(out.lines.join("\n"), /unit-ahead\s+Demo\/ahead/);
-    assert.equal(treeHash(base), hash);
+    assert.deepEqual([last.unpushedBranches, last.stashes, last.dirty, last.detached, last.notGit, last.safeToDelete], [2, 1, 1, 1, 1, false]);
+    assert.match(out.lines.join("\n"), /as of the last fetch/);
+    assert.match(out.lines.join("\n"), /NOT A GIT WORKTREE: Demo\/not-a-worktree/);
+    assert.equal(treeHash(fx.base), hash);
+  });
+});
+
+describe("bundle", () => {
+  const NOW = new Date("2026-01-02T03:04:05.006Z");
+  const STAMP = "2026-01-02T03-04-05-006Z";
+
+  test("bundles restore unpushed, dirty and untracked work; worktree, index and refs untouched; temp refs gone", () => {
+    const fx = makeSanctuary({ big: true });
+    const indexFile = resolve(fx.work, g(["rev-parse", "--git-path", "index"], fx.work).trim());
+    const before = { status: g(["status", "--porcelain=v2", "--untracked-files=all"], fx.work), index: readFileSync(indexFile), refs: refsOf(fx.repo), tree: treeHash(fx.work), stash: g(["stash", "list"], fx.repo) };
+    const scratchBefore = readdirSync(tmpdir()).filter((n) => n.startsWith("vs-forge-migrate-scratch-")).length;
+    const dir = join(tmp("bundles"), "out");
+    const s = bundleFlagged(unpushedReport({ sanctuary: fx.sanctuary }), { bundleDir: dir }, { now: NOW });
+
+    assert.equal(g(["status", "--porcelain=v2", "--untracked-files=all"], fx.work), before.status);
+    assert.deepEqual(readFileSync(indexFile), before.index);
+    assert.equal(refsOf(fx.repo), before.refs);
+    assert.equal(treeHash(fx.work), before.tree);
+    assert.equal(g(["stash", "list"], fx.repo), before.stash);
+    assert.equal(g(["for-each-ref", WIP_NS], fx.repo), "", "temp ref left behind");
+    assert.equal(readdirSync(tmpdir()).filter((n) => n.startsWith("vs-forge-migrate-scratch-")).length, scratchBefore, "scratch left behind");
+
+    assert.deepEqual(readdirSync(dir).sort(), ["Demo__det.bundle", "Demo__repo.bundle", "Demo__work.bundle", "manifest.json"]);
+    assert.deepEqual([s.bundles, s.verified, s.failed, s.skippedLarge], [3, 3, 0, 1], JSON.stringify(s.entries.map((e) => e.error)));
+    const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+    const work = manifest.bundles.find((b) => b.worktree === "Demo/work");
+    assert.deepEqual([work.branch, work.unpushedCount, work.dirtyCount, work.bundle, work.verified], ["unit-work", 1, 3, "Demo__work.bundle", true]);
+    assert.deepEqual(work.skippedLarge.map((f) => f.path), ["big.bin"]);
+    assert.match(work.sha, /^[0-9a-f]{40}$/);
+
+    // Restore: clone the remote, fetch everything from the bundles.
+    const r = join(tmp("restore"), "r");
+    execFileSync("git", ["clone", "-q", fx.origin, r], { windowsHide: true });
+    for (const b of ["Demo__work.bundle", "Demo__repo.bundle"]) g(["fetch", "-q", join(dir, b), "refs/*:refs/restored/*"], r);
+    g(["fetch", "-q", join(dir, "Demo__det.bundle"), "HEAD:refs/restored/det"], r);
+    assert.equal(g(["show", "refs/restored/heads/unit-work:committed.txt"], r), "committed\n");
+    const wip = `refs/restored/vs-migrate-wip/Demo/work/${STAMP}/wip`;
+    assert.equal(g(["show", `${wip}:tracked.txt`], r), "v2-dirty\n");
+    assert.equal(g(["show", `${wip}:new.txt`], r), "untracked\n");
+    assert.equal(g(["show", `${wip}:committed.txt`], r), "committed\n");
+    assert.throws(() => g(["cat-file", "-e", `${wip}:big.bin`], r));
+    assert.throws(() => g(["cat-file", "-e", `${wip}:ignored.txt`], r));
+    assert.match(g(["log", "-1", "--format=%s", wip], r), /^WIP snapshot Demo\/work /);
+    assert.match(g(["log", "-1", "--format=%s", "refs/restored/heads/unit-loose"], r), /loose/);
+    assert.equal(g(["show", `refs/restored/vs-migrate-wip/Demo/_repo/${STAMP}/stash-0:tracked.txt`], r), "stashed\n");
+    assert.match(g(["log", "-1", "--format=%s", "refs/restored/det"], r), /detached work/);
+  });
+
+  test("refusals, dry run, and --backup --bundle puts the bundles in the archive", () => {
+    const fx = makeSanctuary();
+    const report = unpushedReport({ sanctuary: fx.sanctuary });
+    const full = tmp("full");
+    put(full, "x", "x");
+    assert.throws(() => bundleFlagged(report, { bundleDir: full }), /not empty/);
+    assert.throws(() => bundleFlagged(report, { bundleDir: join(fx.sanctuary, "b") }), /would land in/);
+    const dryDir = join(tmp("dry"), "b");
+    const dry = bundleFlagged(report, { bundleDir: dryDir, dryRun: true });
+    assert.equal(dry.entries.length, 3);
+    assert.equal(existsSync(dryDir), false);
+    const out = quiet();
+    assert.equal(main(["--bundle", "--sanctuary", fx.sanctuary], out.log, out.err), 2);
+
+    const home = makeHome();
+    const homeHash = treeHash(home);
+    const bak = tmp("bak-bundle");
+    const code = main(["--from", home, "--backup", bak, "--bundle", "--sanctuary", fx.sanctuary], out.log, out.err, { now: NOW });
+    assert.equal(code, 0, out.lines.join("\n"));
+    assert.equal(treeHash(home), homeHash);
+    const ext = process.platform === "win32" ? "zip" : "tar.gz";
+    const archive = join(bak, `vibesquad-home-${STAMP}.${ext}`);
+    const tarBin = process.platform === "win32" ? join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar";
+    const names = execFileSync(tarBin, ["-tf", archive], { windowsHide: true }).toString().split(/\r?\n/);
+    for (const b of ["Demo__work.bundle", "Demo__det.bundle", "Demo__repo.bundle", "manifest.json"]) assert.ok(names.includes(`vibesquad-bundles-${STAMP}/${b}`), b);
+    assert.ok(names.includes("teams.json"));
+    assert.match(out.lines.join("\n"), /backup: files=\d+ bundles=4 .*archived=/);
   });
 });
