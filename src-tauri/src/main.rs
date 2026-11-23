@@ -762,11 +762,149 @@ fn load_ca_pems() -> Vec<Vec<u8>> {
     pems
 }
 
-/// Fetches `http://{host}/ca.crt` from the server's HTTP/HTTPS mux during pairing, validates it as a
-/// PEM certificate, saves it under `config_dir()/trusted-cas/`, and reloads the shared TLS clients.
-async fn fetch_and_pin_remote_ca(state: &Arc<SharedAppState>, host: &str) -> bool {
-    if is_local_host(host) {
+/// idea-525 OPEN DECISION (owner/lead): a pairing with no CA fingerprint (host + 6-digit code typed by hand, a preset
+/// button, or a link from a server without a CA yet) still pins whatever `http://{host}/ca.crt` returns (trust on
+/// first use, the pre-525 behavior). Failing closed here would break that manual flow, which the setup page offers
+/// and test/lan-pair-choice.test.mjs exercises. Flip to `false` once the flow always carries a fingerprint.
+const ALLOW_LEGACY_UNPINNED_CA: bool = true;
+
+/// Shortest fingerprint prefix accepted: 8 bytes, the short form the PC's Pair dialog shows. Matches Android
+/// (src-tauri/android/VsTrust.kt `pin`) and the web client (src/remoteSession.ts `normalizeFp`).
+const MIN_CA_FP_HEX: usize = 16;
+
+#[derive(Debug, PartialEq, Eq)]
+enum CaPinError {
+    /// No fingerprint came with the pairing.
+    Missing,
+    /// The fingerprint the user supplied is not 16-64 hex digits.
+    InvalidFingerprint,
+    /// The body is not exactly one well-formed PEM certificate.
+    Malformed,
+    /// The certificate's SHA-256 does not match the paired fingerprint.
+    Mismatch,
+}
+
+/// `AB:CD:…` / `abcd…` / `ab cd-…` -> lowercase hex; None unless 16-64 hex digits.
+fn normalize_ca_fp(input: &str) -> Option<String> {
+    let t: String = input
+        .trim()
+        .chars()
+        .filter(|c| !matches!(*c, ':' | '-') && !c.is_whitespace())
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if (MIN_CA_FP_HEX..=64).contains(&t.len()) && t.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(t)
+    } else {
+        None
+    }
+}
+
+/// Constant-time equality for equal-length inputs (the lengths themselves are public: the fingerprint prefix length).
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
         return false;
+    }
+    let diff = a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y));
+    std::hint::black_box(diff) == 0
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect()
+}
+
+/// Exactly one PEM `CERTIFICATE` block whose DER parses as an X.509 trust anchor, returned as DER. Any parse error,
+/// zero certs, or a second cert is malformed: a bundle could smuggle an extra CA in behind a matching first one, and
+/// bytes that aren't a certificate would break build_http_and_ws_clients on the next reload.
+fn parse_single_cert_der(pem: &[u8]) -> Result<Vec<u8>, CaPinError> {
+    let mut reader = BufReader::new(pem);
+    let mut out: Option<Vec<u8>> = None;
+    for cert in rustls_pemfile::certs(&mut reader) {
+        let der = cert.map_err(|_| CaPinError::Malformed)?;
+        if out.is_some() {
+            return Err(CaPinError::Malformed);
+        }
+        out = Some(der.to_vec());
+    }
+    let der = out.ok_or(CaPinError::Malformed)?;
+    rustls::RootCertStore::empty()
+        .add(rustls::pki_types::CertificateDer::from(der.clone()))
+        .map_err(|_| CaPinError::Malformed)?;
+    Ok(der)
+}
+
+/// The CA check desktop pairing shares with Android: the fetched body must be one PEM certificate whose SHA-256 (over
+/// the DER) starts with the paired fingerprint (16-64 hex), compared in constant time. Returns the DER on success.
+/// `None` (no fingerprint) is refused here; the legacy caller decides separately (see ALLOW_LEGACY_UNPINNED_CA).
+fn verify_ca_pem(pem: &[u8], expected_fp: Option<&str>) -> Result<Vec<u8>, CaPinError> {
+    let want = match expected_fp {
+        None => return Err(CaPinError::Missing),
+        Some(fp) => normalize_ca_fp(fp).ok_or(CaPinError::InvalidFingerprint)?,
+    };
+    let der = parse_single_cert_der(pem)?;
+    let got = sha256_hex(&der);
+    if !ct_eq(&got.as_bytes()[..want.len()], want.as_bytes()) {
+        return Err(CaPinError::Mismatch);
+    }
+    Ok(der)
+}
+
+/// Canonical PEM for one DER cert, so only the verified certificate is ever written to `trusted-cas/`.
+fn der_to_pem(der: &[u8]) -> String {
+    use base64::Engine as _;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(der);
+    let mut pem = String::from("-----BEGIN CERTIFICATE-----\n");
+    for chunk in b64.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+        pem.push('\n');
+    }
+    pem.push_str("-----END CERTIFICATE-----\n");
+    pem
+}
+
+/// A client for the pair request after a fingerprint-verified pin: trusts ONLY that CA (no public roots, no other
+/// pinned CA), so the one-time code can't be sent to a MITM holding some other trusted CA.
+fn pinned_pair_client(ca_der: &[u8]) -> Result<reqwest::Client, String> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let mut roots = rustls::RootCertStore::empty();
+    roots
+        .add(rustls::pki_types::CertificateDer::from(ca_der.to_vec()))
+        .map_err(|e| format!("pinned CA rejected: {}", e))?;
+    let tls = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    reqwest::Client::builder()
+        .use_preconfigured_tls(tls)
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_millis(1500))
+        .build()
+        .map_err(|e| format!("reqwest build err: {}", e))
+}
+
+#[derive(Debug)]
+enum CaFetchError {
+    Unreachable(String),
+    Pin(CaPinError),
+    Save,
+}
+
+/// Fetches `http://{host}/ca.crt` from the server's HTTP/HTTPS mux during pairing. The channel is unauthenticated, so
+/// with a pairing fingerprint the body must match it (verify_ca_pem); without one, ALLOW_LEGACY_UNPINNED_CA decides.
+/// Saves only the verified certificate under `config_dir()/trusted-cas/`, reloads the shared TLS clients, and returns
+/// the CA's DER.
+async fn fetch_and_pin_remote_ca(
+    state: &Arc<SharedAppState>,
+    host: &str,
+    expected_fp: Option<&str>,
+) -> Result<Vec<u8>, CaFetchError> {
+    if is_local_host(host) {
+        return Err(CaFetchError::Unreachable("local host".into()));
+    }
+    if expected_fp.is_none() && !ALLOW_LEGACY_UNPINNED_CA {
+        return Err(CaFetchError::Pin(CaPinError::Missing));
     }
     let url = format!("http://{}/ca.crt", host);
     let resp = match state
@@ -777,23 +915,18 @@ async fn fetch_and_pin_remote_ca(state: &Arc<SharedAppState>, host: &str) -> boo
         .await
     {
         Ok(r) if r.status().is_success() => r,
-        _ => return false,
+        Ok(r) => return Err(CaFetchError::Unreachable(format!("{}: HTTP {} for /ca.crt", host, r.status()))),
+        Err(e) => return Err(CaFetchError::Unreachable(format!("{}: {}", host, e))),
     };
     let bytes = match resp.bytes().await {
         Ok(b) if !b.is_empty() && b.len() <= 64 * 1024 => b.to_vec(),
-        _ => return false,
+        _ => return Err(CaFetchError::Pin(CaPinError::Malformed)),
     };
-    let mut reader = BufReader::new(bytes.as_slice());
-    let mut valid_cert = false;
-    for cert in rustls_pemfile::certs(&mut reader) {
-        if cert.is_ok() {
-            valid_cert = true;
-            break;
-        }
+    let der = match expected_fp {
+        Some(_) => verify_ca_pem(&bytes, expected_fp),
+        None => parse_single_cert_der(&bytes), // legacy TOFU, gated above
     }
-    if !valid_cert {
-        return false;
-    }
+    .map_err(CaFetchError::Pin)?;
     let safe_name: String = host
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
@@ -801,12 +934,12 @@ async fn fetch_and_pin_remote_ca(state: &Arc<SharedAppState>, host: &str) -> boo
     let dir = trusted_cas_dir();
     if fs::create_dir_all(&dir).is_ok() {
         let file = dir.join(format!("{}.crt", safe_name));
-        if fs::write(&file, &bytes).is_ok() {
+        if fs::write(&file, der_to_pem(&der)).is_ok() {
             state.reload_tls();
-            return true;
+            return Ok(der);
         }
     }
-    false
+    Err(CaFetchError::Save)
 }
 
 fn build_http_and_ws_clients() -> Result<(reqwest::Client, Connector), String> {
@@ -853,6 +986,9 @@ struct PairSubmission {
     server_host: String,
     #[serde(default)]
     code: String,
+    /// CA SHA-256 (16-64 hex) from the pairing link's `fp=` or typed from the PC's Pair dialog (idea-525).
+    #[serde(default)]
+    fp: String,
 }
 
 fn extract_cookie_token(headers: &reqwest::header::HeaderMap, cookie_name: &str) -> Option<String> {
@@ -1207,6 +1343,7 @@ async fn handle_desktop_pair(
                 match pair.0.as_ref() {
                     "serverHost" => sub.server_host = pair.1.into_owned(),
                     "code" => sub.code = pair.1.into_owned(),
+                    "fp" => sub.fp = pair.1.into_owned(),
                     _ => {}
                 }
             }
@@ -1216,6 +1353,7 @@ async fn handle_desktop_pair(
 
     let mut raw_host = submission.server_host.trim().to_string();
     let mut raw_code = submission.code.trim().to_string();
+    let mut raw_fp = submission.fp.trim().to_string();
 
     // If user pasted a full https://.../pair?code=... URL into either field, extract both!
     for candidate in [&submission.code, &submission.server_host] {
@@ -1231,6 +1369,8 @@ async fn handle_desktop_pair(
                 for (k, v) in parsed.query_pairs() {
                     if k == "code" && !v.is_empty() {
                         raw_code = v.into_owned();
+                    } else if k == "fp" && !v.is_empty() && raw_fp.is_empty() {
+                        raw_fp = v.into_owned();
                     }
                 }
             }
@@ -1338,10 +1478,57 @@ async fn handle_desktop_pair(
     push_unique(&mut try_hosts, DEFAULT_MESHNET_HOST.to_string());
     push_unique(&mut try_hosts, DEFAULT_MESHNET_IP_HOST.to_string());
 
+    // idea-525: the pairing link's CA fingerprint authenticates /ca.crt (fetched over plain http). A malformed one is
+    // refused outright rather than silently treated as absent.
+    let expected_fp: Option<String> = if raw_fp.is_empty() {
+        None
+    } else {
+        match normalize_ca_fp(&raw_fp) {
+            Some(fp) => Some(fp),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({
+                        "ok": false,
+                        "error": "The CA fingerprint must be 16-64 hex characters. Copy the full pairing link, or the fingerprint shown in Pair a device on your server PC."
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
     let mut last_conn_err = String::new();
+    // First host whose /ca.crt failed the fingerprint check. Later candidates are still tried (the fallback hosts are
+    // guesses and may be another PC), but the code is never sent to a host that failed.
+    let mut mismatch_host: Option<String> = None;
     for host in &try_hosts {
         // Auto-fetch and pin the server's Root CA (`http://{host}/ca.crt`) before the HTTPS pair request.
-        let _ = fetch_and_pin_remote_ca(&state, host).await;
+        let pinned = fetch_and_pin_remote_ca(&state, host, expected_fp.as_deref()).await;
+        // With a fingerprint, the code goes only to a host whose CA verified, over a client that trusts only that CA.
+        // Without one (legacy, ALLOW_LEGACY_UNPINNED_CA), the shared client and trust store are used as before.
+        let pair_client = match (&expected_fp, pinned) {
+            (None, _) => state.client(),
+            (Some(_), Ok(der)) => match pinned_pair_client(&der) {
+                Ok(c) => c,
+                Err(e) => {
+                    last_conn_err = format!("{}: {}", host, e);
+                    continue;
+                }
+            },
+            (Some(_), Err(CaFetchError::Pin(CaPinError::Mismatch))) => {
+                mismatch_host.get_or_insert_with(|| host.clone());
+                continue;
+            }
+            (Some(_), Err(e)) => {
+                last_conn_err = match e {
+                    CaFetchError::Unreachable(m) => m,
+                    CaFetchError::Pin(_) => format!("{}: /ca.crt is not a single valid certificate", host),
+                    CaFetchError::Save => format!("{}: could not save the verified CA", host),
+                };
+                continue;
+            }
+        };
 
         let mut pair_url = match url::Url::parse(&format!("https://{}/pair", host)) {
             Ok(u) => u,
@@ -1355,8 +1542,7 @@ async fn handle_desktop_pair(
             .append_pair("code", &clean_code)
             .append_pair("name", "Windows · VibeSquad App");
 
-        match state
-            .client()
+        match pair_client
             .get(pair_url.as_str())
             .header("User-Agent", concat!("VibeSquad-Desktop/", env!("CARGO_PKG_VERSION"), " (Windows)"))
             .timeout(Duration::from_millis(2500))
@@ -1410,6 +1596,20 @@ async fn handle_desktop_pair(
                 last_conn_err = format!("{}: {}", host, e);
             }
         }
+    }
+
+    if let Some(bad) = mismatch_host {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "ok": false,
+                "error": format!(
+                    "Security check failed: {} presented a certificate authority whose SHA-256 fingerprint does not match your pairing link. This is not the PC that made the link, or the connection is being intercepted. Nothing was trusted and the pairing code was not sent to it.",
+                    bad
+                )
+            })),
+        )
+            .into_response();
     }
 
     (
@@ -4079,5 +4279,143 @@ mod tests {
         for html in [&mode_html, &pair_html, &unreachable_html, &reconnect_html] {
             assert!(html.contains("data-testid=\"desktop-check-update-btn\""), "missing desktop-check-update-btn");
         }
+    }
+}
+
+/// idea-525: desktop pairing verifies the fetched CA against the pairing fingerprint, like Android's VsTrust.pin.
+/// Fixtures: throwaway self-signed P-256 certs made with openssl; the fingerprints were computed independently with
+/// `openssl x509 -outform DER | sha256sum`, not by the code under test.
+#[cfg(test)]
+mod ca_pin_tests {
+    use super::*;
+
+    const CA_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIBoTCCAUegAwIBAgIUEhyTcAThKyaEOiMse1vLdUiY6NowCgYIKoZIzj0EAwIw
+JTEjMCEGA1UEAwwaVmliZVNxdWFkIFRlc3QgQ0EgaWRlYS01MjUwIBcNMjYxMTIz
+MjE1MTU4WhgPMjEyNjEwMzAyMTUxNThaMCUxIzAhBgNVBAMMGlZpYmVTcXVhZCBU
+ZXN0IENBIGlkZWEtNTI1MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEURHvnJp3
+6dCiM2ueg3QktpHYdLRUQpYvIV18t8C9+SsV2UVMZBaOzOhGwSA7lRNcS9hmbtX3
+RQ3l5DSRrfeKC6NTMFEwHQYDVR0OBBYEFPCRA/T9get5PEGl5X9ROsFoIdJPMB8G
+A1UdIwQYMBaAFPCRA/T9get5PEGl5X9ROsFoIdJPMA8GA1UdEwEB/wQFMAMBAf8w
+CgYIKoZIzj0EAwIDSAAwRQIgT3LUcwLOTAMLzmjeQRiYUKT4/mh+4AlM4hCIXs1p
+8AQCIQDgVOhla8iHlYrWNL2y3umbk38tXx1iKfNyoo8MunaP2g==
+-----END CERTIFICATE-----
+";
+    const CA_FP: &str = "1fde58a3eda467f9e457288330a67eb68f00a1a2c82fa3ef1df1f31dd95bf3d3";
+
+    const ATTACKER_PEM: &str = "-----BEGIN CERTIFICATE-----
+MIIBhDCCASmgAwIBAgIUdDOn7tAtM6lajODEzP6QTPokBtowCgYIKoZIzj0EAwIw
+FjEUMBIGA1UEAwwLQXR0YWNrZXIgQ0EwIBcNMjYxMTIzMjE1MTU4WhgPMjEyNjEw
+MzAyMTUxNThaMBYxFDASBgNVBAMMC0F0dGFja2VyIENBMFkwEwYHKoZIzj0CAQYI
+KoZIzj0DAQcDQgAENIpzK9VJyDF0ou/UJp3Ndw7FBCb6P2jQbl4s8FIRlqhswwbW
+LKy7Ysgk2hXalfX2Y8jz6jDXrLAXrWpLPqjlXKNTMFEwHQYDVR0OBBYEFP4jMGKP
+wh8p1nC3zkmILR+aVIh5MB8GA1UdIwQYMBaAFP4jMGKPwh8p1nC3zkmILR+aVIh5
+MA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIhANgqaoNNydLbk4hG
+RQxrhPZv/63EXw/CHBb7PHzh17nBAiEA9+ZN0sfdH3Hyfg8BEDsmjW6ysrLbg1Ae
+nG0dzSgf1FU=
+-----END CERTIFICATE-----
+";
+    const ATTACKER_FP: &str = "d2ee6d2ce78ab1234ec27548eb207e9b951cfc4a338b973e4060c2f5fc6cc795";
+
+    fn colon_upper(hex: &str) -> String {
+        hex.as_bytes()
+            .chunks(2)
+            .map(|p| std::str::from_utf8(p).unwrap().to_ascii_uppercase())
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+
+    #[test]
+    fn matching_fingerprint_passes_in_every_accepted_form() {
+        let der = verify_ca_pem(CA_PEM.as_bytes(), Some(CA_FP)).expect("full lowercase fp");
+        assert_eq!(sha256_hex(&der), CA_FP);
+        // The server's caFingerprint().full form (AB:CD:…) and the dialog's 8-byte short prefix.
+        assert!(verify_ca_pem(CA_PEM.as_bytes(), Some(colon_upper(CA_FP).as_str())).is_ok());
+        assert!(verify_ca_pem(CA_PEM.as_bytes(), Some(&CA_FP[..16])).is_ok());
+        assert!(verify_ca_pem(CA_PEM.as_bytes(), Some(colon_upper(&CA_FP[..16]).as_str())).is_ok());
+    }
+
+    #[test]
+    fn mismatched_fingerprint_is_refused() {
+        // A network attacker substitutes their own CA for the PC's.
+        assert_eq!(verify_ca_pem(ATTACKER_PEM.as_bytes(), Some(CA_FP)), Err(CaPinError::Mismatch));
+        assert_eq!(verify_ca_pem(CA_PEM.as_bytes(), Some(ATTACKER_FP)), Err(CaPinError::Mismatch));
+        // One flipped hex digit, at the start and at the end.
+        let mut first = CA_FP.to_string();
+        first.replace_range(0..1, "0");
+        assert_eq!(verify_ca_pem(CA_PEM.as_bytes(), Some(first.as_str())), Err(CaPinError::Mismatch));
+        let mut last = CA_FP.to_string();
+        last.replace_range(63..64, "4");
+        assert_eq!(verify_ca_pem(CA_PEM.as_bytes(), Some(last.as_str())), Err(CaPinError::Mismatch));
+    }
+
+    #[test]
+    fn missing_fingerprint_is_refused_by_the_verifier() {
+        assert_eq!(verify_ca_pem(CA_PEM.as_bytes(), None), Err(CaPinError::Missing));
+        assert_eq!(normalize_ca_fp(""), None);
+    }
+
+    #[test]
+    fn invalid_fingerprint_is_refused_not_treated_as_missing() {
+        let too_long = format!("{}0", CA_FP);
+        for bad in [&CA_FP[..15], "zz11223344556677", too_long.as_str(), "   "] {
+            assert_eq!(verify_ca_pem(CA_PEM.as_bytes(), Some(bad)), Err(CaPinError::InvalidFingerprint), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn malformed_pem_is_refused() {
+        let body = CA_PEM.lines().filter(|l| !l.starts_with("-----")).collect::<Vec<_>>().join("\n");
+        let no_end = CA_PEM.replace("-----END CERTIFICATE-----\n", "");
+        let bad_b64 = CA_PEM.replacen("MIIBoTCC", "MIIB!!CC", 1);
+        let not_a_cert = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n".to_string();
+        let key_only = "-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n".to_string();
+        let bundle = format!("{}{}", CA_PEM, ATTACKER_PEM);
+        for (name, pem) in [
+            ("empty", String::new()),
+            ("garbage", "not a certificate".to_string()),
+            ("bare base64", body),
+            ("no END line", no_end),
+            ("bad base64", bad_b64),
+            ("DER is not a certificate", not_a_cert),
+            ("private key only", key_only),
+            ("two-cert bundle", bundle),
+        ] {
+            assert_eq!(verify_ca_pem(pem.as_bytes(), Some(CA_FP)), Err(CaPinError::Malformed), "{name}");
+            // The legacy (no-fingerprint) path refuses the same inputs.
+            assert_eq!(parse_single_cert_der(pem.as_bytes()), Err(CaPinError::Malformed), "{name} (legacy)");
+        }
+    }
+
+    #[test]
+    fn only_the_verified_certificate_is_written_back() {
+        let der = verify_ca_pem(CA_PEM.as_bytes(), Some(CA_FP)).unwrap();
+        let pem = der_to_pem(&der);
+        assert_eq!(parse_single_cert_der(pem.as_bytes()).unwrap(), der);
+        assert!(reqwest::Certificate::from_pem(pem.as_bytes()).is_ok());
+    }
+
+    #[test]
+    fn pinned_pair_client_builds_from_the_verified_ca() {
+        let der = verify_ca_pem(CA_PEM.as_bytes(), Some(CA_FP)).unwrap();
+        assert!(pinned_pair_client(&der).is_ok());
+        assert!(pinned_pair_client(b"not der").is_err());
+    }
+
+    #[test]
+    fn ct_eq_compares_whole_slices() {
+        assert!(ct_eq(b"abcd", b"abcd"));
+        assert!(!ct_eq(b"abcd", b"abce"));
+        assert!(!ct_eq(b"abcd", b"abc"));
+        assert!(ct_eq(b"", b""));
+    }
+
+    #[test]
+    fn pairing_link_fp_matches_the_rust_normalizer() {
+        // server/auth.mjs pairFpQuery(): `&fp=<64 lowercase hex>`.
+        let link = format!("https://10.0.0.5:4180/pair?code=123456&fp={}", CA_FP);
+        let u = url::Url::parse(&link).unwrap();
+        let fp = u.query_pairs().find(|(k, _)| k == "fp").map(|(_, v)| v.into_owned()).unwrap();
+        assert_eq!(normalize_ca_fp(&fp).as_deref(), Some(CA_FP));
     }
 }
