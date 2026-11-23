@@ -2774,3 +2774,48 @@ test(
   }),
 );
 const timeOfFired = (sb, id) => Date.parse(JSON.parse(readFileSync(join(sb.home, "watches.json"), "utf8")).sets.find((s) => s.id === id).firedAt);
+
+test("idea-575: closed sets past 2h are pruned on any mutation; open and recently fired sets are kept; file round-trips", () => {
+  const sb = sandbox();
+  try {
+    const old = addWatch({ owner: "o", items: [{ kind: "agent", ref: "a-old" }] }, { home: sb.home, now: T0 }).id;
+    const fresh = addWatch({ owner: "o", items: [{ kind: "agent", ref: "a-fresh" }] }, { home: sb.home, now: T0 }).id;
+    const open = addWatch({ owner: "o", items: [{ kind: "agent", ref: "a-open" }] }, { home: sb.home, now: T0 }).id;
+    const file = watchesPath({ home: sb.home });
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    const by = (id) => doc.sets.find((s) => s.id === id);
+    by(old).firedAt = iso(T0 + 1 * MIN);
+    by(old).pings = [{ key: "complete", attemptedAt: iso(T0 + 2 * MIN) }];
+    by(fresh).firedAt = iso(T0 + 3 * 60 * MIN - 5 * MIN); // fired 5 min before "now"
+    by(fresh).pings = [{ key: "complete", attemptedAt: iso(T0 + 3 * 60 * MIN - 4 * MIN) }];
+    writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+    // Any mutation (here a new add) at T0+3h prunes the 3h-old done set only.
+    const now = T0 + 3 * 60 * MIN;
+    const extra = addWatch({ owner: "o", items: [{ kind: "agent", ref: "a-x" }] }, { home: sb.home, now }).id;
+    const ids = JSON.parse(readFileSync(file, "utf8")).sets.map((s) => s.id);
+    assert.deepEqual(ids, [fresh, open, extra]);
+    assert.equal(listWatches({ all: true }, { home: sb.home }).length, 3, "file round-trips and still lists");
+  } finally {
+    sb.cleanup();
+  }
+});
+
+test("idea-575: start() prunes a closed set past retention and logs one metric line", async () => {
+  const sb = sandbox();
+  try {
+    const clock = { t: T0 };
+    const id = addWatch({ owner: "o", items: [{ kind: "agent", ref: "a-old" }] }, { home: sb.home, now: T0 }).id;
+    const file = watchesPath({ home: sb.home });
+    const doc = JSON.parse(readFileSync(file, "utf8"));
+    doc.sets[0].firedAt = iso(T0 - 3 * 60 * MIN);
+    doc.sets[0].pings = [{ key: "complete", attemptedAt: iso(T0 - 3 * 60 * MIN) }];
+    writeFileSync(file, JSON.stringify(doc, null, 2) + "\n");
+    const logs = [];
+    const { engine } = engineFor(sb, { clock, log: (m) => logs.push(m) });
+    await wait(100);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).sets.some((s) => s.id === id), false, "pruned on load");
+    assert.equal(logs.filter((m) => /pruned 1 closed/.test(m)).length, 1, `one metric line: ${logs}`);
+  } finally {
+    sb.cleanup();
+  }
+});

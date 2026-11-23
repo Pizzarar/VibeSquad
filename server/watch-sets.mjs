@@ -30,8 +30,13 @@ export const DEFAULT_ESCALATE_MIN = 25;
 export const IDLE_NUDGE_TEXT = "You went idle without a report. Commit + push your branch, run your tests in the FOREGROUND, then report.";
 export const SUITE_RESULT_FILE = "vibesquad-npm-test-last.json";
 export const SUITE_LOCK_FILE = "vibesquad-npm-test.lock";
-/** Fired / cancelled sets whose pings are all attempted are dropped from the file after this long. */
-export const PRUNE_AFTER_MS = 24 * 60 * 60_000;
+/**
+ * Fired / cancelled sets whose pings are all attempted are dropped from the file after this long (idea-575: was 24h, which kept
+ * ~400 sets / 3MB that every locked mutation re-parsed). Readers of closed sets: onLogEntry's late-digest coverage reads firedAt
+ * for COVER_AFTER_FIRE_MS (10 min; fireCovers), holdingSets reads firedAt/cancelledAt of the entry's sets, and `vs watch list --all` is history only.
+ * 2h is far past the coverage window.
+ */
+export const PRUNE_AFTER_MS = 2 * 60 * 60_000;
 /** A fired ping whose text is over this many chars is merged by a Pre-check - Flash worker instead of sent raw (block W4). */
 export const DIGEST_MERGE_MAX = 1500;
 const REPORT_CAP = 400; // per item in a ping; W4 merges long texts
@@ -91,10 +96,11 @@ function readDoc(file) {
 }
 
 /** The locked body shared by mutateDoc / mutateDocAsync: read, fn, and an atomic write only when fn changed the doc. */
-const docMutation = (file, fn) => (lock) => {
+const docMutation = (file, fn, now = Date.now()) => (lock) => {
   const doc = readDoc(file);
   const before = JSON.stringify(doc);
   const out = fn(doc);
+  prune(doc, now); // idea-575: opportunistic, inside the lock we already hold
   if (JSON.stringify(doc) !== before) {
     lock.assertOwned(); // a reaped (stale) holder must not commit over a newer writer's file (idea-114 L4)
     writeFileAtomic(file, JSON.stringify(doc, null, 2) + "\n");
@@ -103,23 +109,34 @@ const docMutation = (file, fn) => (lock) => {
 };
 
 /** Locked read-modify-write, sync (blocks while waiting): CLI / tests. Returns fn's value. */
-function mutateDoc(file, fn) {
+function mutateDoc(file, fn, now) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  return withFileLockSync(file, docMutation(file, fn));
+  return withFileLockSync(file, docMutation(file, fn, now));
 }
 
 /** mutateDoc for the server process: waits for the lock without blocking the event loop (idea-227). Resolves to fn's value. */
-function mutateDocAsync(file, fn) {
+function mutateDocAsync(file, fn, now) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  return withFileLock(file, docMutation(file, fn));
+  return withFileLock(file, docMutation(file, fn, now));
 }
 
+/** Open sets are never prunable (no firedAt / cancelledAt); a fired set with an unattempted ping is kept until delivered. */
+const keepSet = (s, now) => {
+  const closedAt = timeOf(s.firedAt ?? s.cancelledAt);
+  if (!Number.isFinite(closedAt) || now - closedAt < PRUNE_AFTER_MS) return true;
+  return (s.pings ?? []).some((p) => !p.attemptedAt) && !s.cancelledAt;
+};
+let pruneLog = () => {};
+
+/** Drop closed sets past retention; logs one metric line per prune. Returns the pruned count. */
 function prune(doc, now) {
-  doc.sets = doc.sets.filter((s) => {
-    const closedAt = timeOf(s.firedAt ?? s.cancelledAt);
-    if (!Number.isFinite(closedAt) || now - closedAt < PRUNE_AFTER_MS) return true;
-    return (s.pings ?? []).some((p) => !p.attemptedAt) && !s.cancelledAt;
-  });
+  const kept = doc.sets.filter((s) => keepSet(s, now));
+  const n = doc.sets.length - kept.length;
+  if (n) {
+    doc.sets = kept;
+    pruneLog(`watch registry pruned ${n} closed set(s), ${kept.length} kept`);
+  }
+  return n;
 }
 
 function normalizeItem(raw) {
@@ -157,21 +174,20 @@ function newWatchSet({ owner, team, lane, items, stallMin = DEFAULT_STALL_MIN, e
 }
 
 const pushSet = (set, now) => (doc) => {
-  prune(doc, now);
   doc.sets.push(set);
 };
 
 /** Register a watch set (sync; CLI / tests). `opts.home` / `opts.now` are for tests. Returns `{id}`. */
 export function addWatch(spec, { home, now = Date.now() } = {}) {
   const set = newWatchSet(spec, now);
-  mutateDoc(watchesPath({ home }), pushSet(set, now));
+  mutateDoc(watchesPath({ home }), pushSet(set, now), now);
   return { id: set.id };
 }
 
 /** addWatch for the server process (MCP `watch`): never blocks the event loop on the lock. Resolves to `{id}`. */
 export async function addWatchAsync(spec, { home, now = Date.now() } = {}) {
   const set = newWatchSet(spec, now);
-  await mutateDocAsync(watchesPath({ home }), pushSet(set, now));
+  await mutateDocAsync(watchesPath({ home }), pushSet(set, now), now);
   return { id: set.id };
 }
 
@@ -189,12 +205,12 @@ export function listWatches({ owner, team, all } = {}, { home } = {}) {
  * returns false the set is left untouched and `{ok:false, refused:true}` comes back. No predicate = the caller already authorized.
  */
 export function cancelWatch(id, callerId, { home, now = Date.now(), allow } = {}) {
-  return mutateDoc(watchesPath({ home }), cancelSet(id, callerId, now, allow));
+  return mutateDoc(watchesPath({ home }), cancelSet(id, callerId, now, allow), now);
 }
 
 /** cancelWatch for the server process (MCP `watch`): never blocks the event loop on the lock. */
 export function cancelWatchAsync(id, callerId, { home, now = Date.now(), allow } = {}) {
-  return mutateDocAsync(watchesPath({ home }), cancelSet(id, callerId, now, allow));
+  return mutateDocAsync(watchesPath({ home }), cancelSet(id, callerId, now, allow), now);
 }
 
 function cancelSet(id, callerId, now, allow) {
@@ -244,12 +260,12 @@ function reownSets({ from, to, ids, reason } = {}, now) {
  * successor owns (and may cancel) what its retired predecessor armed. `ids` limits it to those sets. Returns `{reowned: ids}`.
  */
 export function reownWatches(spec, { home, now = Date.now() } = {}) {
-  return mutateDoc(watchesPath({ home }), reownSets(spec, now));
+  return mutateDoc(watchesPath({ home }), reownSets(spec, now), now);
 }
 
 /** reownWatches for the server process (lead handoff, the delivery fallback): never blocks the event loop on the lock. */
 export function reownWatchesAsync(spec, { home, now = Date.now() } = {}) {
-  return mutateDocAsync(watchesPath({ home }), reownSets(spec, now));
+  return mutateDocAsync(watchesPath({ home }), reownSets(spec, now), now);
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +605,8 @@ export function createWatchEngine({
     }
   };
   const startedAt = now();
+  pruneLog = log;
+  const mutate = (fn) => mutateDocAsync(file, fn, now());
   let cache = emptyDoc();
   let cacheStamp = "";
   const agents = new Map(); // id -> { status, statusSince, lost, resumable, archived, attention, lastEventAt, turnStartedAt, labels }
@@ -911,9 +929,8 @@ export function createWatchEngine({
         for (const s of dry) stepSet(s, ctx);
         if (JSON.stringify(dry) !== before) {
           try {
-            await mutateDocAsync(file, (doc) => {
+            await mutate((doc) => {
               for (const s of doc.sets) stepSet(s, ctx);
-              prune(doc, ctx.now);
             });
           } catch (e) {
             log(`watch registry write failed: ${e?.message ?? e}`);
@@ -942,7 +959,7 @@ export function createWatchEngine({
       if (isAsleep(set.team)) continue; // B11a: unclaimed, so the nudge still goes after a wake
       let claimed = false;
       try {
-        await mutateDocAsync(file, (doc) => {
+        await mutate((doc) => {
           const s = doc.sets.find((x) => x.id === set.id);
           const it = s?.items.find((x) => x.kind === item.kind && x.ref === item.ref);
           if (!s || !it || !isOpen(s) || it.nudgeSentAt) return;
@@ -1017,7 +1034,7 @@ export function createWatchEngine({
     const want = new Set(keys ?? []);
     if (!want.size) return;
     try {
-      await mutateDocAsync(file, (doc) => {
+      await mutate((doc) => {
         for (const set of doc.sets) for (const ping of set.pings ?? []) if (want.has(pingKeyOf(set, ping))) fn(ping);
       });
     } catch (e) {
@@ -1030,7 +1047,7 @@ export function createWatchEngine({
   /** W4: mark a set as having had its one Flash merge spawned, so later over-long pings on it fall back instead of spawning again. */
   async function markDigestSpawned(setId) {
     try {
-      await mutateDocAsync(file, (doc) => {
+      await mutate((doc) => {
         const s = doc.sets.find((x) => x.id === setId);
         if (s && !s.digestSpawnedAt) s.digestSpawnedAt = iso(now());
       });
@@ -1048,7 +1065,7 @@ export function createWatchEngine({
   async function reown(setId, from, to, reason = "delivery fallback") {
     let out = { reowned: [] };
     try {
-      out = await mutateDocAsync(file, reownSets({ from, to, ids: [setId], reason }, now()));
+      out = await mutate(reownSets({ from, to, ids: [setId], reason }, now()));
     } catch (e) {
       log(`watch ${setId} re-own ${from} -> ${to} failed: ${e?.message ?? e}`);
     }
@@ -1086,6 +1103,11 @@ export function createWatchEngine({
 
   /** Startup: load the registry and recover the reports filed while the server was down (scanLogs skips history). */
   function start() {
+    // idea-575: prune on load. Only take the lock when the cached file has something past retention.
+    const t0 = now();
+    if (reload().sets.some((s) => !keepSet(s, t0))) {
+      mutate(() => {}).catch((e) => log(`watch registry prune failed: ${e?.message ?? e}`)); // docMutation prunes + writes
+    }
     const open = openSets();
     if (!open.length) return;
     const since = Math.min(...open.map((s) => timeOf(s.createdAt)).filter(Number.isFinite));
