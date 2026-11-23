@@ -3340,6 +3340,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const bootSize = yield* bootSizesSteps(home, { since, until });
   yield;
 
+  const limitRows = readLimits(home);
   const result = {
     squad, squads, autonomy,
     note: "Cost is summed from turn_done.costUsd; token counts come from adapter usage events and are 0 for logs that have none.",
@@ -3350,8 +3351,8 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byLane: by("lane"),
     byDay: byDayFinal,
     rows,
-    limits: withPoolAgents(readLimits(home), agents),
-    quotaAlerts: activeQuotaAlerts(readLimits(home), home, { now: now() }),
+    limits: withPoolAgents(limitRows, agents),
+    quotaAlerts: activeQuotaAlerts(limitRows, home, { now: now() }),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
       // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)
       const gs = byProfile.filter((p) => p.role === r.role && p.successRate !== null);
@@ -3544,6 +3545,8 @@ export async function handleProvidersApi(req, res, { sendJson, readBody, home, u
     }
     if (sub === "models") return sendJson(res, 200, await getModels(url.searchParams.get("provider") ?? "", opts));
     if (sub === "modes") return sendJson(res, 200, await getModes(url.searchParams.get("provider") ?? "", opts));
+    // Light route for the banner poll: limits.jsonl + the alert state only, no usage fold.
+    if (sub === "quota-alerts") return sendJson(res, 200, { quotaAlerts: activeQuotaAlerts(readLimits(home), home) });
     if (sub === "usage") return sendJson(res, 200, await getUsageAsync({ home, since: url.searchParams.get("since") || undefined, until: url.searchParams.get("until") || undefined, squad: url.searchParams.get("squad") || undefined, git: probeOpts.git, usageReview }));
     return sendJson(res, 404, { error: "not found" });
   } catch (err) {

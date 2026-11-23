@@ -97,7 +97,7 @@ export async function checkQuotaAlerts({ home, readLimits, push, pushEnabled = (
 }
 
 /** Cheap interval watcher: only reads limits.jsonl when its mtime/size changed; one check in flight at a time. */
-export function startQuotaAlertWatcher({ home, intervalMs = 30_000, ...deps } = {}) {
+export function startQuotaAlertWatcher({ home, intervalMs = 30_000, stat = (f) => fs.statSync(f), setIntervalFn = setInterval, clearIntervalFn = clearInterval, ...deps } = {}) {
   const dir = home || vibesquadHome();
   const file = path.join(dir, "runner", "limits.jsonl");
   let sig = null, busy = false, timer = null;
@@ -106,15 +106,15 @@ export function startQuotaAlertWatcher({ home, intervalMs = 30_000, ...deps } = 
     busy = true;
     try {
       let s = null;
-      try { const st = fs.statSync(file); s = `${st.mtimeMs}:${st.size}`; } catch { s = null; }
+      try { const st = stat(file); s = `${st.mtimeMs}:${st.size}`; } catch { s = null; }
       if (s === null || s === sig) return;
       await checkQuotaAlerts({ home: dir, ...deps });
       sig = s;
     } catch (e) { deps.log?.(`quota-alert check failed: ${e?.message ?? e}`); }
     finally { busy = false; }
   };
-  timer = setInterval(() => void tick(), intervalMs);
+  timer = setIntervalFn(() => void tick(), intervalMs);
   timer.unref?.();
   void tick();
-  return { tick, stop() { clearInterval(timer); } };
+  return { tick, stop() { clearIntervalFn(timer); } };
 }

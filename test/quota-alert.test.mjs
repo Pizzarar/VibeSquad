@@ -88,3 +88,44 @@ test("activeQuotaAlerts: fired + still >=98 + before resetsAt, payload shape", a
   assert.deepEqual(activeQuotaAlerts([{ ...r.sample, usedPct: 90 }], r.home, { now: T }), []);
   assert.deepEqual(activeQuotaAlerts([r.sample], r.home, { now: Date.parse(R1) + 1 }), []);
 });
+
+test("watcher: mtime/size short-circuit, no overlap while busy, stop() clears the timer", async () => {
+  const { startQuotaAlertWatcher } = await import("../server/quota-alert.mjs");
+  let st = { mtimeMs: 1, size: 10 };
+  let reads = 0, cleared = null, release;
+  const gate = new Promise((r) => { release = r; });
+  let block = false;
+  const handle = {};
+  const w = startQuotaAlertWatcher({
+    home: "/nonexistent-vs-home", stat: () => st, setIntervalFn: () => handle, clearIntervalFn: (t) => { cleared = t; },
+    readLimits: () => { reads++; return []; }, push: async () => {}, runVs: async () => ({ ok: true }),
+    now: () => T, pushEnabled: () => true,
+  });
+  await w.tick(); await w.tick();
+  assert.equal(reads, 1, "unchanged signature skips the read");
+  st = { mtimeMs: 2, size: 20 };
+  block = true;
+  // second watcher-style overlap: a blocked check must not be re-entered
+  const w2 = startQuotaAlertWatcher({
+    home: "/nonexistent-vs-home", stat: () => st, setIntervalFn: () => handle, clearIntervalFn: () => {},
+    readLimits: () => { reads++; return [{ provider: "claude", window: "weekly", usedPct: 99, resetsAt: R1 }]; },
+    push: async () => { await gate; }, runVs: async () => ({ ok: true }), now: () => T, pushEnabled: () => true,
+  });
+  const before = reads;
+  const p1 = w2.tick(); const p2 = w2.tick();
+  await p2;
+  release(); await p1;
+  assert.ok(reads - before <= 1, "overlapping tick did not run a second check");
+  w.stop();
+  assert.equal(cleared, handle);
+  void block;
+});
+
+test("quota-alerts route: light payload, no usage fold", async () => {
+  const { handleProvidersApi } = await import("../server/providers-catalog.mjs");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "vs-quota-"));
+  let out;
+  await handleProvidersApi({ method: "GET", url: "/__vibesquad/providers/quota-alerts" }, {}, { home, sendJson: (_r, code, data) => { out = { code, data }; } });
+  assert.equal(out.code, 200);
+  assert.deepEqual(out.data, { quotaAlerts: [] });
+});
