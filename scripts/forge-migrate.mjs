@@ -104,7 +104,9 @@ const TAIL = `(?:[\\\\/]+[^${STOP}\\\\/]*)*`;
 const LEAD = "(?<![A-Za-z0-9_/\\\\?])";
 const AFTER_ROOT = `(?=[\\\\/${STOP}]|$)`;
 // After a match: the same token goes on with a backslash (`My Game\x`, `Demo(1)\x`) -> a half conversion, refuse it.
-const HALF = /^(?:[(),;:[\]{}]|[ \t](?![A-Za-z]:))[^\s"'`<>|]*\\/;
+// A token that starts a new drive path before its backslash (`log.md project=C:\...`, `a.md (C:\...`) is a second
+// path, not a continuation: no refusal (the real log shape behind the M1 regression, 1799 hits).
+const HALF = /^(?:[(),;:[\]{}]|[ \t])(?:(?![A-Za-z]:[\\/])[^\s"'`<>|])*\\/;
 
 /**
  * Builds the ordered path map. `opts` are parsed args. Returns { rules, source, whole, roots }: `source` matches a

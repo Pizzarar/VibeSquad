@@ -278,6 +278,14 @@ describe("review R1 fixes", () => {
       assert.deepEqual([r.text, r.count, r.half], [s, 0, 1], s);
     }
     assert.equal(rewriteText(`${W}\\projects\\Demo\\a.md:39 and (${W}\\projects\\Demo\\b.md)`, map).text, "/home/forge/projects/Demo/a.md:39 and (/home/forge/projects/Demo/b.md)");
+    // M1 regression (real log shape): `<path> key=<second drive path>` is two paths, both convert.
+    const twoPaths = `runtime=${W}\\AppData\\Local\\VibeSquad\\runtime\\docs\\b.md project=${W}\\projects\\Demo\\docs\\b.md\n- x (${W}\\projects\\Demo\\a.md (C:/Users/someone/projects/Demo/c.md)`;
+    const tp = rewriteText(twoPaths, map);
+    assert.deepEqual([tp.text, tp.count, tp.half], ["runtime=/home/forge/.vibesquad/runtime/docs/b.md project=/home/forge/projects/Demo/docs/b.md\n- x (/home/forge/projects/Demo/a.md (/home/forge/projects/Demo/c.md)", 4, 0]);
+    const tj = rewriteJsonText(JSON.stringify({ msg: twoPaths }), map);
+    assert.deepEqual([tj.count, tj.half], [4, 0]);
+    // ...but a real continuation after a second path's key is still refused.
+    assert.equal(rewriteText(`${W}\\projects\\My Game\\x project=${W}\\projects\\Demo`, map).half, 1);
     assert.equal(rewriteString(`${W}\\projects\\My Game\\x (copy).md`, map).text, "/home/forge/projects/My Game/x (copy).md");
     const j = rewriteJsonText(JSON.stringify({ a: `see ${W}\\projects\\My Game\\x`, b: `${W}\\projects\\My Game\\x` }), map);
     assert.deepEqual(JSON.parse(j.text), { a: `see ${W}\\projects\\My Game\\x`, b: "/home/forge/projects/My Game/x" });
