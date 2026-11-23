@@ -537,4 +537,5 @@ test("usa-45: limitIsStale / limitSampledText key off checkedAt with a 2h thresh
   assert.equal(limitIsStale(null, now), false);
   assert.equal(limitSampledText("2026-11-23T09:00:00.000Z", now), "sampled 3h 0m ago");
   assert.equal(limitSampledText(undefined, now), "");
+  assert.equal(limitSampledText("2026-11-23T12:00:30.000Z", now), "sampled 0m ago");
 });

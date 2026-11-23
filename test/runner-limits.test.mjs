@@ -250,3 +250,21 @@ test('usa-45: readLimits falls back to the latest `at` when there is no sidecar'
   rmSync(path.join(home, 'runner', 'limits-checked.json'));
   assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString());
 });
+
+test('usa-45: readLimits survives a bogus numeric sidecar value and never reports checkedAt older than at', async () => {
+  const { readLimits } = await import('../server/providers-catalog.mjs');
+  const { writeFileSync } = await import('node:fs');
+  const home = tmp();
+  const f = path.join(home, 'runner', 'limits.jsonl');
+  const s = new LimitStore(f);
+  const t0 = Date.parse('2026-11-23T10:00:00.000Z');
+  s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0);
+  const sc = path.join(home, 'runner', 'limits-checked.json');
+  writeFileSync(sc, JSON.stringify({ 'claude|weekly': 1e20 }));
+  assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString(), 'out-of-range number falls back to at');
+  writeFileSync(sc, JSON.stringify({ 'claude|weekly': new Date(t0 - 3600_000).toISOString() }));
+  assert.equal(readLimits(home)[0].checkedAt, new Date(t0).toISOString(), 'older sidecar clamped to at');
+  writeFileSync(sc, '[]');
+  s.record({ provider: 'claude', window: 'weekly', usedPct: 10, resetsAt: '2026-11-27T00:00:00.000Z' }, t0 + 1000);
+  assert.deepEqual(Object.keys(JSON.parse(readFileSync(sc, 'utf8'))), ['claude|weekly'], 'array sidecar replaced by an object');
+});

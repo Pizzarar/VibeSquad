@@ -174,7 +174,7 @@ export function limitIsStale(checkedAt: string | null | undefined, now: number):
 export function limitSampledText(checkedAt: string | null | undefined, now: number): string {
   const t = checkedAt ? Date.parse(checkedAt) : NaN;
   if (!Number.isFinite(t)) return "";
-  return `sampled ${relTime(t, now)}`;
+  return `sampled ${relTime(Math.min(t, now), now)}`;
 }
 
 /** Human duration from ms: `42m`, `3.1h`, `1.2d`, or `—` for missing/negative. */

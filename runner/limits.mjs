@@ -61,10 +61,10 @@ function writeChecked(file, key, checkedAt) {
   const sidecar = checkedPath(file);
   let map = {};
   try { map = JSON.parse(readFileSync(sidecar, 'utf8')); } catch { map = {}; }
-  if (typeof map !== 'object' || map === null) map = {};
+  if (typeof map !== 'object' || map === null || Array.isArray(map)) map = {};
   map[key] = checkedAt;
   mkdirSync(path.dirname(sidecar), { recursive: true });
-  const tmp = `${sidecar}.tmp`;
+  const tmp = `${sidecar}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(map));
   renameSync(tmp, sidecar);
 }
