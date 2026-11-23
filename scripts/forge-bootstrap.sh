@@ -130,22 +130,42 @@ if command -v nordvpn >/dev/null 2>&1; then
 else
   log "WARNING: nordvpn CLI not found; install NordVPN, log in and enable Meshnet."
 fi
-# 'nordvpn meshnet peer list' starts with a "Local Peer:" block (Hostname / IP address); read only that block.
-local_peer_field() {
-  nordvpn meshnet peer list 2>/dev/null | awk -v key="$1" '
-    /^[[:space:]]*Local Peer/ {inlocal=1; next}
-    /^[[:space:]]*External Peer/ {inlocal=0}
-    inlocal && index(tolower($0), tolower(key) ":") {sub(/^[^:]*:[[:space:]]*/, ""); gsub(/[[:space:]]+$/, ""); print; exit}'
+# 'nordvpn meshnet peer list' prints a "This device:" block (Nickname / Hostname / IP ...), then a blank line and
+# peer sections ("Local Peers:", "External Peers:"). Read ONLY the This-device block: a peer's hostname must never be picked up.
+# Labels match case-insensitively; $1 is an ERE of acceptable labels (the IP label is "IP:" or, on other CLI versions, "IP address:").
+this_device_field() {
+  nordvpn meshnet peer list 2>/dev/null | awk -v keys="$1" '
+    BEGIN {keys = tolower(keys)}
+    /^[[:space:]]*This device/ {indev=1; next}
+    indev && (/^[[:space:]]*$/ || /^[[:space:]]*[A-Za-z][A-Za-z ]*:[[:space:]]*$/) {exit}
+    indev {
+      line = $0; sub(/^[[:space:]]+/, "", line)
+      i = index(line, ":"); if (i == 0) next
+      label = tolower(substr(line, 1, i - 1)); gsub(/[[:space:]]+$/, "", label)
+      if (label ~ ("^(" keys ")$")) {
+        v = substr(line, i + 1); gsub(/^[[:space:]]+|[[:space:]]+$/, "", v)
+        if (v != "") {print v; exit}
+      }
+    }'
 }
-if [ -z "$MESHNET_IP" ] && command -v nordvpn >/dev/null 2>&1; then
-  MESHNET_IP="$(local_peer_field "IP address" || true)"
+THIS_IP=""
+NORDLYNX_IP=""
+if command -v nordvpn >/dev/null 2>&1; then
+  THIS_IP="$(this_device_field "ip|ip address" || true)"
 fi
-if [ -z "$MESHNET_IP" ] && command -v ip >/dev/null 2>&1; then
+if command -v ip >/dev/null 2>&1; then
   # same interface the server falls back to (server/auth.mjs detectMeshnetIp)
-  MESHNET_IP="$(ip -4 -o addr show dev nordlynx 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
+  NORDLYNX_IP="$(ip -4 -o addr show dev nordlynx 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1 || true)"
+fi
+if [ -z "$MESHNET_IP" ]; then
+  if [ -n "$THIS_IP" ] && [ -n "$NORDLYNX_IP" ] && [ "$THIS_IP" != "$NORDLYNX_IP" ]; then
+    log "WARNING: Meshnet IP from 'nordvpn meshnet peer list' (This device) differs from the nordlynx interface; using nordlynx."
+  fi
+  MESHNET_IP="${NORDLYNX_IP:-$THIS_IP}"
 fi
 if [ -z "$MESHNET_HOST" ] && command -v nordvpn >/dev/null 2>&1; then
-  MESHNET_HOST="$(local_peer_field "Hostname" || true)"
+  MESHNET_HOST="$(this_device_field "hostname" || true)"
+  [ -n "$MESHNET_HOST" ] || log "WARNING: no 'This device' Hostname in 'nordvpn meshnet peer list'; leaving the Meshnet host empty."
 fi
 if [ -z "$MESHNET_IP" ] || [ -z "$MESHNET_HOST" ]; then
   log "WARNING: Meshnet ip/host not detected (enable Meshnet and log in, then re-run, or pass --meshnet-ip/--meshnet-host)."
