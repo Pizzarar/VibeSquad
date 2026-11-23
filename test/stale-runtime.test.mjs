@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { computeStale, getStale, packagedStamp, readBuildStamp, resetStaleCache, staleWarning } from "../server/stale-runtime.mjs";
+import { computeStale, getStale, packagedStamp, readBuildStamp, readRefSha, resetStaleCache, staleWarning } from "../server/stale-runtime.mjs";
 
 const tmpDirs = [];
 test.after(() => { for (const d of tmpDirs) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
@@ -39,6 +39,14 @@ test("packaged stamp has no repo path; a repo-less stamp reads fine and is never
   assert.equal(readBuildStamp(rootDir).commit, "aaaaaaa1111");
   assert.equal(readBuildStamp(rootDir).repo, undefined);
   assert.equal(computeStale({ rootDir, git: () => { throw new Error("must not run git"); }, exists: () => true }), null);
+});
+
+test("computeStale compares against refs/heads/master, not HEAD (idea-377 M1)", () => {
+  const rootDir = runtimeWith({ commit: "aaaaaaa1111", repo: "/r" });
+  const calls = [];
+  const git = (_repo, args) => { calls.push(args); return args[0] === "rev-parse" ? "bbbbbbb2222" : "46"; };
+  assert.deepEqual(computeStale({ rootDir, git, exists: () => true }), { built: "aaaaaaa", head: "bbbbbbb", behind: 46 });
+  assert.deepEqual(calls[0], ["rev-parse", "master"]);
 });
 
 test("getStale caches for a minute and staleWarning reads the published file", () => {
@@ -93,4 +101,52 @@ test("peekStale drops a cached value once a sync rewrote the build stamp (idea-2
   assert.equal(peekStale(rootDir).behind, 2);
   writeFileSync(join(rootDir, "build-stamp.json"), JSON.stringify({ commit: "bbbbbbb2222", repo: "/r" }));
   assert.equal(peekStale(rootDir), null);
+});
+
+test("readRefSha resolves a ref from packed-refs", () => {
+  const sha = "c".repeat(40);
+  const gitDir = tmp();
+  writeFileSync(join(gitDir, "packed-refs"), `# pack-refs with: peeled fully-peeled sorted \n${sha} refs/heads/master\n`);
+  assert.equal(readRefSha(gitDir, "refs/heads/master"), sha);
+});
+
+test("readRefSha returns null for a missing ref", () => {
+  const gitDir = tmp();
+  writeFileSync(join(gitDir, "packed-refs"), `# pack-refs with: peeled fully-peeled sorted \n${"d".repeat(40)} refs/heads/other\n`);
+  assert.equal(readRefSha(gitDir, "refs/heads/master"), null);
+});
+
+test("readRefSha follows a linked worktree .git file and commondir", () => {
+  const sha = "e".repeat(40);
+  const mainGit = tmp();
+  mkdirSync(join(mainGit, "refs", "heads"), { recursive: true });
+  writeFileSync(join(mainGit, "refs", "heads", "master"), `${sha}\n`);
+  const wtGit = join(mainGit, "worktrees", "wt");
+  mkdirSync(wtGit, { recursive: true });
+  writeFileSync(join(wtGit, "commondir"), "../..\n");
+  writeFileSync(join(wtGit, "HEAD"), "ref: refs/heads/master\n");
+  const wtRoot = tmp();
+  writeFileSync(join(wtRoot, ".git"), `gitdir: ${wtGit}\n`);
+  assert.equal(readRefSha(wtRoot, "refs/heads/master"), sha);
+});
+
+test("staleWarning suppresses once refs/heads/master moves (reset --keep dropped the named head, idea-377)", () => {
+  const A = "a".repeat(40);
+  const B = "b".repeat(40);
+  const gitDir = tmp();
+  mkdirSync(join(gitDir, "refs", "heads"), { recursive: true });
+  writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/master\n");
+  writeFileSync(join(gitDir, "refs", "heads", "master"), `${B}\n`);
+
+  const home = tmp();
+  const env = { VIBESQUAD_HOME: home };
+  writeFileSync(join(home, "stale.json"), JSON.stringify({ stale: { built: A.slice(0, 7), head: B.slice(0, 7), behind: 1 }, master: B, repo: gitDir }));
+
+  // While master is B, the warning names B.
+  assert.match(staleWarning(env), /1 commit behind/);
+  assert.match(staleWarning(env), new RegExp(B.slice(0, 7)));
+
+  // reset --keep back to A: master moves to A, so the warning must not name the dropped B.
+  writeFileSync(join(gitDir, "refs", "heads", "master"), `${A}\n`);
+  assert.equal(staleWarning(env), null);
 });

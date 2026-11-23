@@ -13,8 +13,13 @@ import { Runner, providerFamily, turnCapsFromEnv, parkGraceFromEnv, DEFAULT_TURN
 import { createClaudeAdapter } from '../runner/adapters/claude.mjs';
 
 const dirs = [];
-after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
+const runners = [];
+after(() => {
+  for (const r of runners) r.closeRosterWatch?.(); // before the dirs go: a watched dir is busy on Windows (idea-571)
+  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+});
 const tmp = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-perturn-')); dirs.push(d); return d; };
+const newRunner = (opts) => { const r = new Runner(opts); runners.push(r); return r; };
 const tick = (ms = 25) => new Promise((r) => setTimeout(r, ms));
 
 // Fake claude children. A turn only ends when the test calls finish(child), so "running" is observable.
@@ -40,7 +45,7 @@ function fakeSpawn() {
 }
 const setup = (opts = {}) => {
   const spawnImpl = fakeSpawn();
-  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, maxLive: 16, parkGraceMs: 0, turnCaps: { claude: 6 }, ...opts });
+  const runner = newRunner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, maxLive: 16, parkGraceMs: 0, turnCaps: { claude: 6 }, ...opts });
   return { runner, spawnImpl };
 };
 // fakeSpawn, but every `user` message the claude adapter writes to child stdin is captured in order.
@@ -132,7 +137,7 @@ test('a family cap does not block another family', async () => {
   const claudeAdapter = createClaudeAdapter({ spawnImpl, mcp: false });
   const sent = [];
   const other = { canPark: true, start({ emit }) { emit('status', { status: 'idle' }); return { send(t) { sent.push(t); emit('status', { status: 'running' }); }, cancel() {}, kill() {} }; } };
-  const runner = new Runner({ dir: tmp(), adapters: { claude: claudeAdapter, codex: other }, turnCaps: { claude: 1, other: 1 }, parkGraceMs: 60_000 });
+  const runner = newRunner({ dir: tmp(), adapters: { claude: claudeAdapter, codex: other }, turnCaps: { claude: 1, other: 1 }, parkGraceMs: 60_000 });
   const a = mk(runner, { prompt: 'a' });
   const b = mk(runner, { prompt: 'b' });
   const c = runner.create({ provider: 'codex', cwd: os.tmpdir(), prompt: 'c' });
@@ -187,7 +192,7 @@ test('an agent with a pending permission is not parked; a quick follow-up inside
   const events = [];
   let em;
   const adapter = { canPark: true, start({ emit }) { em = emit; return { send() { emit('status', { status: 'running' }); }, cancel() {}, kill() { events.push('kill'); } }; } };
-  const runner = new Runner({ dir: tmp(), adapters: { fake: adapter }, parkGraceMs: 40 });
+  const runner = newRunner({ dir: tmp(), adapters: { fake: adapter }, parkGraceMs: 40 });
   const id = runner.create({ provider: 'fake', cwd: os.tmpdir(), prompt: 'x' });
   em('session', { sessionId: 's' });
   em('permission', { phase: 'request', id: 'p1', toolName: 'Bash' });
@@ -218,7 +223,7 @@ test('review: a failed queued create leaves an exited agent with the error; a fa
   let failNext = false;
   const inner = createClaudeAdapter({ spawnImpl, mcp: false });
   const adapter = { canPark: true, start: (o) => { if (failNext) { failNext = false; throw new Error('spawn boom'); } return inner.start(o); } };
-  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
+  const runner = newRunner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
   const a = mk(runner, { prompt: 'one' });
   await tick();
   const b = mk(runner, { prompt: 'queued create' });
@@ -272,7 +277,7 @@ test('review: a crash mid-turn and a start failure both free the turn slot', asy
   let failNext = false;
   const inner = createClaudeAdapter({ spawnImpl, mcp: false });
   const adapter = { canPark: true, start: (o) => { if (failNext) { failNext = false; throw new Error('boom'); } return inner.start(o); } };
-  const runner = new Runner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
+  const runner = newRunner({ dir: tmp(), adapters: { claude: adapter }, turnCaps: { claude: 1 }, parkGraceMs: 0 });
   const a = mk(runner, { prompt: 'x' });
   await tick();
   assert.equal(running(runner), 1);
@@ -424,7 +429,7 @@ test('over-cap owner budget is +2 per family: a 3rd owner send queues first in l
 
 test('two queued owner sends to one agent coalesce into one turn with both texts', async () => {
   const spawnImpl = captureSpawn();
-  const runner = new Runner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, maxLive: 16, parkGraceMs: 0, turnCaps: { claude: 6 } });
+  const runner = newRunner({ dir: tmp(), adapters: { claude: createClaudeAdapter({ spawnImpl, mcp: false }) }, maxLive: 16, parkGraceMs: 0, turnCaps: { claude: 6 } });
   const ids = Array.from({ length: 6 }, () => mk(runner));
   await tick();
   ids.forEach((id) => runner.send(id, 'go'));

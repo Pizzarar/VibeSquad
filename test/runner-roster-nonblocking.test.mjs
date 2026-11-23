@@ -11,8 +11,13 @@ import { createServer } from '../runner/server.mjs';
 // idea-471: the vs-nb- homes are scratch dirs in %TEMP% that were never removed. Collect and remove them after the file
 // runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY on a just-closed server).
 const homes = [];
+const runners = [];
+const track = (r) => { runners.push(r); return r; };
 const mkHome = () => { const d = mkdtempSync(path.join(os.tmpdir(), 'vs-nb-')); homes.push(d); return d; };
-test.after(() => { for (const d of homes) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} } });
+test.after(() => {
+  for (const r of runners) r.closeRosterWatch?.(); // before the dirs go: a watched dir is busy on Windows (idea-571)
+  for (const d of homes) { try { rmSync(d, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }); } catch {} }
+});
 
 const N = 1500;
 const fake = { start: () => ({ send() {}, cancel() {}, kill() {}, interrupt() {} }) };
@@ -27,7 +32,7 @@ function seed(dir) {
 
 test('statusAllAsync matches statusAll', async () => {
   const home = mkHome();
-  const r = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fake }, maxLive: 5 });
+  const r = track(new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fake }, maxLive: 5 }));
   seed(path.join(home, 'agents'));
   const { ids, agents: a } = await r.statusAllAsync(1);
   assert.deepEqual(a, r.statusAll());
@@ -39,7 +44,7 @@ test('statusAllAsync matches statusAll', async () => {
 test('POST /agents answers fast while GET /agents?full=1 scans a large cold roster', async () => {
   const home = mkHome();
   const dir = path.join(home, 'agents');
-  const r = new Runner({ dir, adapters: { claude: fake }, maxLive: 5 });
+  const r = track(new Runner({ dir, adapters: { claude: fake }, maxLive: 5 }));
   seed(dir);
   const srv = createServer(r, { token: 't' });
   await new Promise((ok) => srv.listen(0, '127.0.0.1', ok));
@@ -63,7 +68,7 @@ test('POST /agents answers fast while GET /agents?full=1 scans a large cold rost
 
 test('concurrent scans share one pass; an agent created mid-scan is in both ids and agents', async () => {
   const home = mkHome();
-  const r = new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fake }, maxLive: 5 });
+  const r = track(new Runner({ dir: path.join(home, 'agents'), adapters: { claude: fake }, maxLive: 5 }));
   seed(path.join(home, 'agents'));
   const p1 = r.statusAllAsync(1);
   assert.equal(r.statusAllAsync(1), p1, 'second caller joins the in-flight scan');
