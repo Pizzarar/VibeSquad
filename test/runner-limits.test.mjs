@@ -143,7 +143,9 @@ test('runAgyUsage: spawns `agy -p /usage` without a shell and resolves stdout', 
 
 test('runAgyUsage: timeout kills the child tree and rejects; spawn error rejects', async () => {
   const hung = fakeAgy();
-  await assert.rejects(runAgyUsage({ spawnImpl: hung.spawnImpl, timeoutMs: 20 }), /timed out/);
+  // runAgyUsage unrefs its timeout timer; hold the loop open so a lone pending timer cannot end the test process (Linux has no other handle).
+  const keepAlive = setInterval(() => {}, 1000);
+  try { await assert.rejects(runAgyUsage({ spawnImpl: hung.spawnImpl, timeoutMs: 20 }), /timed out/); } finally { clearInterval(keepAlive); }
   assert.equal(hung.calls[0].child.killed, 1);
   const bad = fakeAgy({ onSpawn: (c) => setImmediate(() => c.emit('error', new Error('ENOENT'))) });
   await assert.rejects(runAgyUsage({ spawnImpl: bad.spawnImpl }), /ENOENT/);
