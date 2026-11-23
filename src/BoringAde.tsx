@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { OPEN_USAGE_EVENT } from "./usageHelpers";
 import { useNowTick } from "./useNowTick";
 import { AgentDrawer } from "./AgentDrawer";
 import { BoringContextPanel } from "./BoringContextPanel";
@@ -385,6 +386,11 @@ type Props = {
 
 export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin, onSpinUpPin, onSpinUpOverlord, overlordBusy = false, onAddBuddy, onNewSquad, onSettings, onSuccessor, children, banners }: Props) {
   const [mode, setMode] = useState<Mode>("project");
+  useEffect(() => {
+    const open = () => setMode("usage");
+    window.addEventListener(OPEN_USAGE_EVENT, open);
+    return () => window.removeEventListener(OPEN_USAGE_EVENT, open);
+  }, []);
   const [selectedLaneId, setSelectedLaneId] = useState<string | null>(null);
   const [selectedRole, setSelectedRole] = useState<Role>("brainstorm");
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);

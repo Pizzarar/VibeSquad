@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { pruneDismissed, quotaAlertKey, quotaAlertText, QUOTA_DISMISS_KEY, QUOTA_ALERTS_URL, visibleQuotaAlerts, type QuotaAlert } from "./usageHelpers";
+import { pruneDismissed, requestOpenUsage, quotaAlertKey, quotaAlertText, QUOTA_DISMISS_KEY, QUOTA_ALERTS_URL, visibleQuotaAlerts, type QuotaAlert } from "./usageHelpers";
 import "./QuotaAlertBanner.css";
 
 const POLL_MS = 60_000;
@@ -8,7 +8,7 @@ const readDismissed = (): string[] => {
 };
 
 /** usa-48: red banner per active quota alert (usage payload `quotaAlerts`). App-level; polls lightly and tolerates failures. */
-export function QuotaAlertBanner({ onOpenUsage, testAlerts }: { onOpenUsage: () => void; testAlerts?: QuotaAlert[] }) {
+export function QuotaAlertBanner({ canOpenUsage = true, testAlerts }: { canOpenUsage?: boolean; testAlerts?: QuotaAlert[] }) {
   const [alerts, setAlerts] = useState<QuotaAlert[]>(testAlerts ?? []);
   const [dismissed, setDismissed] = useState<string[]>(readDismissed);
   const [now, setNow] = useState(() => Date.now());
@@ -40,7 +40,7 @@ export function QuotaAlertBanner({ onOpenUsage, testAlerts }: { onOpenUsage: () 
       {shown.map((a) => (
         <div key={quotaAlertKey(a)} className="quota-alert" role="alert" data-testid="quota-alert" data-provider={a.provider} data-window={a.window}>
           <span className="quota-alert-text">{quotaAlertText(a, now)}</span>
-          <button type="button" className="quota-alert-open" data-testid="quota-alert-open" onClick={onOpenUsage}>Open Usage</button>
+          {canOpenUsage && <button type="button" className="quota-alert-open" data-testid="quota-alert-open" onClick={requestOpenUsage}>Open Usage</button>}
           <button type="button" className="quota-alert-dismiss" data-testid="quota-alert-dismiss" aria-label={`Dismiss ${a.provider} ${a.window} quota alert`} onClick={() => dismiss(a)}>✕</button>
         </div>
       ))}

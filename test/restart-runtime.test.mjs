@@ -4,12 +4,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createServer as createRunnerServer } from "../runner/server.mjs";
 import { Runner } from "../runner/runner.mjs";
-import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid, detectSystemd, inUnitCgroup, systemdUnitName, systemctlUser, healthHeldTruth } from "../scripts/restart-runtime.mjs";
+import { parseArgs, bootDefault, restartRuntime, httpCall, drainTtlMs, procInfo, readLiveServerPid, detectSystemd, inUnitCgroup, systemdUnitName, systemctlUser, systemctlUserAsync, realSystemd, healthHeldTruth } from "../scripts/restart-runtime.mjs";
 
 // idea-471: the vs-rs- runner scratch dirs are created inline and never removed by the Runner. Collect and remove them
 // after the file runs, even when a test fails (rmSync recursive+force with maxRetries covers Windows EBUSY).
@@ -2201,17 +2201,45 @@ test("systemd R: unit started but its server never answers -> unit stopped, deta
   } finally { await w.cleanup(); }
 });
 
-test("systemd R: systemctl stop fails -> SIGTERM instead, then systemctl start", async () => {
+test("systemd 666 L1: systemctl stop fails while the unit still runs the server (or show fails too) -> abort: no SIGTERM/SIGKILL, no start, one server", async () => {
+  for (const showFailsAtStop of [false, true]) {
+    const w = await world();
+    try {
+      const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+      const ctl = sd.ctl;
+      let shows = 0;
+      sd.ctl = (args) => {
+        if (args[0] === "stop") { sd.calls.push(args.join(" ")); return { status: 1, stdout: "", stderr: "Access denied" }; }
+        if (args[0] === "show" && showFailsAtStop && ++shows > 1) { sd.calls.push(args.join(" ")); return { status: 1, stdout: "", stderr: "Failed to connect to bus" }; }
+        return ctl(args);
+      };
+      const oldServer = w.serverPid();
+      const r = await sysRun(w, sd);
+      assert.equal(r.ok, false, `showFailsAtStop=${showFailsAtStop}`);
+      assert.match(r.errors.join("\n"), /server stop: systemctl --user stop vibesquad\.service failed \(Access denied\).*MainPID.*Restart= would start it again.*nothing was signalled.*still up \(pid \d+, under vibesquad\.service\)/);
+      assert.ok(r.steps.some((s) => s.step === "SYSTEMCTL STOP FAILED, not signalling the unit MainPID" && /Access denied/.test(s.error)), r.steps.map((s) => s.step).join(" | "));
+      assert.ok(!w.calls.includes(`term ${oldServer}`), "no SIGTERM of the unit MainPID");
+      assert.deepEqual(w.hardKills.filter((p) => p === oldServer), [], "no SIGKILL of the unit MainPID");
+      assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service"], "no systemctl start");
+      assert.ok(!w.spawned.includes("server"), "no detached server");
+      assert.ok(w.alive.has(oldServer), "the unit's server is left running: one server");
+      assert.equal(existsSync(path.join(w.configDir, "server.restarting")), false, "marker cleared");
+    } finally { await w.cleanup(); }
+  }
+});
+
+test("systemd 666 L1: systemctl stop exits nonzero but the stop took effect (unit inactive, pid gone) -> go on: systemctl start, no SIGTERM", async () => {
   const w = await world();
   try {
     const sd = fakeSystemd(w, { active: true, mainIsServer: true });
     const ctl = sd.ctl;
-    sd.ctl = (args) => (args[0] === "stop" ? (sd.calls.push(args.join(" ")), { status: 1, stdout: "", stderr: "Access denied" }) : ctl(args));
+    sd.ctl = (args) => (args[0] === "stop" ? (ctl(args), { status: 1, stdout: "", stderr: "Job for vibesquad.service canceled." }) : ctl(args));
     const oldServer = w.serverPid();
     const r = await sysRun(w, sd);
     assert.equal(r.ok, true, JSON.stringify(r.errors));
-    assert.ok(r.steps.some((s) => s.step === "systemctl stop failed, SIGTERM instead" && /Access denied/.test(s.error)));
-    assert.ok(w.calls.includes(`term ${oldServer}`));
+    assert.ok(r.steps.some((s) => s.step === "server stop via systemd (systemctl reported a failure, unit now inactive)" && /inactive\/dead, MainPID 0/.test(s.state)));
+    assert.ok(!w.calls.includes(`term ${oldServer}`));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service", "start vibesquad.service"]);
     assert.equal(r.relaunch.mode, "systemd");
   } finally { await w.cleanup(); }
 });
@@ -2431,19 +2459,14 @@ test("systemd R1 L: unit WorkingDirectory differs from the runtime dir and Envir
   } finally { await w.cleanup(); }
 });
 
-test("systemd R1: the server is back on its own before the start (Restart= after a failed systemctl stop) -> already-up, no systemctl start, unit checked", async () => {
+test("systemd R1: the server is back on its own before the start (the unit started again by someone else after our stop) -> already-up, no systemctl start, unit checked", async () => {
   const w = await world({ serverBootsRunner: false });
   try {
     const sd = fakeSystemd(w, { active: true, mainIsServer: true });
     const ctl = sd.ctl;
-    sd.ctl = (args) => (args[0] === "stop" ? (sd.calls.push(args.join(" ")), { status: 1, stdout: "", stderr: "Access denied" }) : ctl(args));
-    const d = w.deps;
-    const old = w.serverPid();
-    const depsOver = {
-      // serve.mjs exits nonzero on SIGTERM and Restart=on-failure brings the unit's server straight back
-      termGracefully: (pid) => { d.termGracefully(pid); if (pid === old) { sd.st.mainPid = w.bootServer(); sd.st.active = true; } },
-      httpCall: async (url, o) => { if (w.booting) await w.booting; return httpCall(url, o); },
-    };
+    // idea-666 L1: a failed stop now aborts, so already-up comes from another start of the unit right after our stop
+    sd.ctl = (args) => { const out = ctl(args); if (args[0] === "stop") { sd.st.mainPid = w.bootServer(); sd.st.active = true; } return out; };
+    const depsOver = { httpCall: async (url, o) => { if (w.booting) await w.booting; return httpCall(url, o); } };
     const r = await sysRun(w, sd, { runnerBootMs: 300 }, [], depsOver);
     assert.equal(r.ok, true, JSON.stringify(r.errors));
     assert.ok(r.steps.some((s) => s.step === "server already up, not starting another"));
@@ -2471,6 +2494,149 @@ test("systemd R1: systemctl start times out (status null) -> unit stopped (cance
     assert.equal(r.relaunch.fallback.unitStop, "ok");
     assert.equal(r.warnings.length, 1);
   } finally { await w.cleanup(); }
+});
+
+test("systemd 666 L2: systemctl start returns no status but the unit did start -> unit server kept (no stop, no detached fallback), warned", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    sd.ctl = (args) => (args[0] === "start" ? (ctl(args), { status: null, stdout: "", stderr: "timed out after 150s" }) : ctl(args));
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service", "start vibesquad.service"], "the started unit is not stopped");
+    assert.deepEqual(w.spawned, [], "no detached server");
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.equal(r.relaunch.fallback, undefined);
+    assert.match(r.relaunch.startNoStatus.kept, /^unit active, MainPID \d+$/);
+    assert.equal(r.relaunch.after.mainIsListener, true);
+    assert.equal(r.warnings.length, 1, r.warnings.join("\n"));
+    assert.match(r.warnings[0], /systemctl --user start vibesquad\.service returned no status \(timed out after 150s\), but unit active.*kept the unit server, no detached fallback/);
+    assert.ok(r.steps.some((s) => s.step === "server started via systemd" && s.startStatus === null));
+  } finally { await w.cleanup(); }
+});
+
+test("systemd 666 L2: systemctl start returns no status, show fails, but a server answers /api/health -> kept as the unit start (listener adopted), no second server", async () => {
+  const w = await world({ serverBootsRunner: false });
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    let started = false;
+    sd.ctl = (args) => {
+      if (args[0] === "start") { sd.calls.push(args.join(" ")); w.bootServer(); started = true; return { status: null, stdout: "", stderr: "killed by SIGTERM" }; }
+      if (args[0] === "show" && started) { sd.calls.push(args.join(" ")); return { status: 1, stdout: "", stderr: "Failed to connect to bus" }; }
+      return ctl(args);
+    };
+    const depsOver = { httpCall: async (url, o) => { if (w.booting) await w.booting; return httpCall(url, o); } };
+    const r = await sysRun(w, sd, { runnerBootMs: 300 }, [], depsOver);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(sd.calls.filter((c) => !c.startsWith("show")), ["stop vibesquad.service", "start vibesquad.service"]);
+    assert.deepEqual(w.spawned.filter((x) => x === "server"), [], "no detached server");
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.match(r.relaunch.startNoStatus.kept, /server answers \/api\/health on port \d+ \(systemctl --user show vibesquad: Failed to connect to bus\)/);
+    assert.ok(r.steps.some((s) => s.step === "server started via systemd" && s.pid === w.serverPid()), "the listener is the tracked server pid");
+    assert.equal(readFileSync(path.join(w.configDir, "server.pid"), "utf8"), String(w.serverPid()));
+    assert.match(r.relaunch.after.error, /Failed to connect to bus/);
+  } finally { await w.cleanup(); }
+});
+
+test("systemd 666 L2: systemctl start returns no status and a NON-serve.mjs process answers /api/health -> not adopted, warned; the fallback refuses the taken port: abort, no second server", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    let started = false;
+    sd.ctl = (args) => {
+      if (args[0] === "start") { sd.calls.push(args.join(" ")); started = true; w.alive.add(8888); return { status: null, stdout: "", stderr: "timed out after 150s" }; }
+      if (args[0] === "show" && started) { sd.calls.push(args.join(" ")); return { status: 1, stdout: "", stderr: "Failed to connect to bus" }; }
+      return ctl(args);
+    };
+    const d = w.deps;
+    const depsOver = {
+      // a foreign process (pid 8888, not serve.mjs) took the port and answers /api/health with 200
+      httpCall: async (url, o) => (started && /\/api\/health$/.test(url) ? { status: 200, body: { ok: true } } : httpCall(url, o)),
+      listenerPid: (port) => (w.alive.has(8888) ? 8888 : d.listenerPid(port)),
+      procInfo: (pid) => (pid === 8888 ? (w.alive.has(8888) ? { pid, ppid: 1, cmd: "python3 -m http.server" } : null) : d.procInfo(pid)),
+      termGracefully: (pid) => { if (pid === 8888) throw new Error("the foreign listener must never be signalled"); d.termGracefully(pid); },
+    };
+    const r = await sysRun(w, sd, {}, [], depsOver);
+    assert.equal(r.ok, false);
+    assert.ok(r.warnings.some((x) => /returned no status \(timed out after 150s\) and port \d+ answers \/api\/health, but .*8888.*not adopted as the unit server/.test(x)), r.warnings.join("\n"));
+    assert.match(r.errors.join("\n"), /server start: systemctl --user start vibesquad\.service failed; .*8888.*port \d+ is taken, no fallback possible/);
+    assert.notEqual(r.relaunch.mode, "systemd", "the foreign listener is not recorded as the unit start");
+    assert.equal(r.relaunch.startNoStatus, undefined);
+    assert.deepEqual(w.spawned.filter((x) => x === "server"), [], "no detached server");
+    assert.ok(w.alive.has(8888), "the foreign listener is left alone");
+    assert.ok(!existsSync(path.join(w.configDir, "server.pid")) || readFileSync(path.join(w.configDir, "server.pid"), "utf8") !== "8888", "8888 never written as server.pid");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd 666 nit: stop/start go through ctlAsync (off the event loop) with the marker refreshed right before and after each call", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    const marker = path.join(w.configDir, "server.restarting");
+    const ageAt = () => (existsSync(marker) ? Date.now() - statSync(marker).mtimeMs : null);
+    const syncLong = []; const asyncCalls = []; const agesIn = []; const agesAfter = [];
+    // Age the marker by 200s (past the desktop's 120s window) before every show and at the end of every long call (it blocked
+    // that long); the long call must start, and the next show must see, a fresh marker.
+    const age = () => { if (existsSync(marker)) { const old = new Date(Date.now() - 200000); utimesSync(marker, old, old); } };
+    let checkNext = false;
+    sd.ctl = (args) => {
+      if (args[0] !== "show") syncLong.push(args.join(" "));
+      if (args[0] === "show") { if (checkNext) { agesAfter.push(ageAt()); checkNext = false; } age(); }
+      return ctl(args);
+    };
+    sd.ctlAsync = async (args) => {
+      asyncCalls.push(args.join(" "));
+      agesIn.push(ageAt());
+      await new Promise((res) => setTimeout(res, 5)); // the event loop keeps running while systemctl blocks
+      const out = ctl(args);
+      age(); checkNext = true;
+      return out;
+    };
+    const r = await sysRun(w, sd);
+    assert.equal(r.ok, true, JSON.stringify(r.errors));
+    assert.deepEqual(asyncCalls, ["stop vibesquad.service", "start vibesquad.service"]);
+    assert.deepEqual(syncLong, [], "no stop/start through the blocking ctl");
+    assert.equal(agesIn.length, 2);
+    for (const a of agesIn) assert.ok(a != null && a < 5000, `marker fresh when the call starts (age ${a} ms)`);
+    assert.ok(agesAfter.length >= 1);
+    for (const a of agesAfter) assert.ok(a != null && a < 5000, `marker fresh right after the call (age ${a} ms)`);
+    assert.equal(r.relaunch.mode, "systemd");
+    assert.equal(typeof realSystemd({}).ctlAsync, "function", "the CLI wiring has the async path");
+  } finally { await w.cleanup(); }
+});
+
+test("systemd 666 nit: systemctlUserAsync: async, agent env stripped, user bus defaulted, timeout and spawn errors -> status null", async () => {
+  const { EventEmitter } = await import("node:events");
+  const fakeChild = () => { const c = new EventEmitter(); c.stdout = new EventEmitter(); c.stderr = new EventEmitter(); c.killed = []; c.kill = (sig) => { c.killed.push(sig); }; return c; };
+  let seen = null; let child = null;
+  const p = systemctlUserAsync(["stop", "vibesquad.service"], { env: { VS_AGENT_ID: "rn-x", VS_AGENT_TOKEN: "t", HOME: "/h" }, uid: 1000, spawnFn: (cmd, args, o) => { seen = { cmd, args, env: o.env }; child = fakeChild(); return child; } });
+  assert.ok(p instanceof Promise);
+  let settled = false; p.then(() => { settled = true; });
+  await new Promise((res) => setImmediate(res));
+  assert.equal(settled, false, "pending until systemctl exits: the caller's event loop is free meanwhile");
+  child.stdout.emit("data", "out\n"); child.stderr.emit("data", " warn \n"); child.emit("close", 0, null);
+  assert.deepEqual(await p, { status: 0, stdout: "out\n", stderr: "warn" });
+  assert.equal(seen.cmd, "systemctl");
+  assert.deepEqual(seen.args, ["--user", "stop", "vibesquad.service"]);
+  assert.equal(seen.env.VS_AGENT_ID, undefined);
+  assert.equal(seen.env.VS_AGENT_TOKEN, undefined);
+  assert.equal(seen.env.XDG_RUNTIME_DIR, "/run/user/1000");
+  let hung = null;
+  const t = await systemctlUserAsync(["start", "x.service"], { env: {}, uid: null, timeoutMs: 20, spawnFn: () => (hung = fakeChild()) });
+  assert.equal(t.status, null);
+  assert.match(t.stderr, /timed out after 0s/);
+  assert.deepEqual(hung.killed, ["SIGTERM"]);
+  const k = systemctlUserAsync(["start", "x.service"], { env: {}, spawnFn: () => (child = fakeChild()) });
+  child.emit("close", null, "SIGKILL");
+  assert.deepEqual(await k, { status: null, stdout: "", stderr: "killed by SIGKILL" });
+  const e = systemctlUserAsync(["start", "x.service"], { env: {}, spawnFn: () => (child = fakeChild()) });
+  child.emit("error", new Error("spawn systemctl ENOENT"));
+  assert.deepEqual(await e, { status: null, stdout: "", stderr: "spawn systemctl ENOENT" });
+  assert.deepEqual(await systemctlUserAsync(["x"], { env: {}, spawnFn: () => { throw new Error("EPERM"); } }), { status: null, stdout: "", stderr: "EPERM" });
 });
 
 test("systemd R1 helpers: KillMode gate (unset = control-group), refuse only for the MainPID, Linux only, ENOENT quiet", () => {

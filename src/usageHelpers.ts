@@ -9,6 +9,7 @@ export type LimitRow = {
   resetsAt: string | null;
   source?: string;
   at?: string;
+  checkedAt?: string | null;
   burnPctPerHour: number;
   etaToCap: string | null;
   poolAgents?: { count: number; agentIds: string[]; text: string };
@@ -156,6 +157,24 @@ function dayTime(ms: number): string {
 export function etaText(l: LimitRow): string {
   if (l.etaToCap) return `hits cap ~${dayTime(Date.parse(l.etaToCap))}`;
   return l.burnPctPerHour > 0 ? "won't cap before reset" : "idle · no burn";
+}
+
+// ---- usa-45: limit sample age (last *check*, not last *change*)
+
+/** A limit sample is "stale" when the last check is more than this long ago. */
+export const LIMIT_STALE_MS = 2 * 3600_000;
+
+/** True when the last check is older than LIMIT_STALE_MS. Missing checkedAt is never stale (no signal to judge). */
+export function limitIsStale(checkedAt: string | null | undefined, now: number): boolean {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN;
+  return Number.isFinite(t) && now - t > LIMIT_STALE_MS;
+}
+
+/** "sampled Xh ago" line from the last check time; "" when unknown. */
+export function limitSampledText(checkedAt: string | null | undefined, now: number): string {
+  const t = checkedAt ? Date.parse(checkedAt) : NaN;
+  if (!Number.isFinite(t)) return "";
+  return `sampled ${relTime(Math.min(t, now - 1), now)}`;
 }
 
 /** Human duration from ms: `42m`, `3.1h`, `1.2d`, or `—` for missing/negative. */
@@ -907,4 +926,11 @@ export function quotaAlertText(a: QuotaAlert, now: number): string {
   const d = Math.floor(mins / 1440), h = Math.floor((mins % 1440) / 60), m = mins % 60;
   const rel = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
   return `${label}: ${left}% left. Resets in ${rel}. Spend a reset now?`;
+}
+
+/** usa-48: in-app "open Usage" request (banner button + ?focus=usage cold start). No page reload. */
+export const OPEN_USAGE_EVENT = "vs:open-usage";
+export const usageFocusRequested = (search: string): boolean => new URLSearchParams(search).get("focus") === "usage";
+export function requestOpenUsage(): void {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(OPEN_USAGE_EVENT));
 }

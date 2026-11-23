@@ -547,3 +547,27 @@ test("quota alerts: text + prune", () => {
   assert.equal(quotaAlertText({ provider: "claude", window: "weekly", usedPct: 99.6, resetsAt: null }, now), "Claude weekly: 0% left. Spend a reset now?");
   assert.deepEqual(pruneDismissed(["claude|weekly|2026-11-20T00:00:00Z", "claude|weekly|2026-11-26T00:00:00Z"], now), ["claude|weekly|2026-11-26T00:00:00Z"]);
 });
+test("usa-45: limitIsStale / limitSampledText key off checkedAt with a 2h threshold", async () => {
+  const { limitIsStale, limitSampledText } = await import("../src/usageHelpers.ts");
+  const now = Date.parse("2026-11-23T12:00:00.000Z");
+  assert.equal(limitIsStale("2026-11-23T10:30:00.000Z", now), false);
+  assert.equal(limitIsStale("2026-11-23T09:59:00.000Z", now), true);
+  assert.equal(limitIsStale(null, now), false);
+  assert.equal(limitSampledText("2026-11-23T09:00:00.000Z", now), "sampled 3h 0m ago");
+  assert.equal(limitSampledText(undefined, now), "");
+  assert.equal(limitSampledText("2026-11-23T12:00:30.000Z", now), "sampled 0m ago");
+});
+
+import { usageFocusRequested, requestOpenUsage, OPEN_USAGE_EVENT } from "../src/usageHelpers.ts";
+test("usa-48: ?focus=usage detection + open-usage event", () => {
+  assert.equal(usageFocusRequested("?focus=usage"), true);
+  assert.equal(usageFocusRequested("?agent=x&focus=usage"), true);
+  assert.equal(usageFocusRequested("?focus=needs-you"), false);
+  assert.equal(usageFocusRequested(""), false);
+  let n = 0;
+  globalThis.window = new EventTarget();
+  globalThis.window.addEventListener(OPEN_USAGE_EVENT, () => n++);
+  requestOpenUsage();
+  assert.equal(n, 1);
+  delete globalThis.window;
+});

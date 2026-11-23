@@ -3,7 +3,9 @@
 Method: `command -v` on forge for ~40 tools; scanned the 8 Squad repos for manifests, CI workflows, Python imports, spec runners; `apt-cache policy` on Ubuntu 26.04 for candidates.
 
 ## Present on forge
-python3 3.14.4, node/npm, gh, jq, rg, git.
+python3 3.14.4, node/npm, gh, jq, rg, git. Provider CLIs: claude, opencode, antigravity-cli `agy` 1.5.15 (`~/.local/bin/agy`, logged in).
+Gemini/agy agents work after the 2026-11-23 21:47Z runner restart (e.g. Review-Gemini rn-322300fcfc9d ran to completion). Before
+that they hung in `initializing`: the runner had started before the agy install+login at 15:02Z (idea-646). Login order: RUNBOOK B1 step 4.
 
 ## Owner: one apt line (sudo) — DONE 2026-11-23 ~21:48Z (all 17 packages `ii`, dpkg --audit clean)
 ```bash
@@ -30,7 +32,7 @@ If `lua54` import fails (Debian lupa may build against a different Lua): `python
 - **Not gaps (stay on dev pp by decision 11-21):** dotnet, JDK/Android SDK, Rust/Tauri, signing, Windows exports, Blender, ComfyUI, RedFrontier `tools/*.ps1` server scripts (run on Windows / over SSH).
 - None of the repos uses git-lfs (no `filter=lfs` in .gitattributes) or ffmpeg/ImageMagick in tools.
 - Squadz: docs only, no tooling.
-- **git identity**: forge has no `user.name`/`user.email` (commit fails "Author identity unknown"). Lanes pass `-c user.name=... -c user.email=<noreply>` per commit until the owner sets a global identity.
+- **git identity**: DONE 2026-11-23. Global `user.name`/`user.email` set on forge to the same GitHub noreply identity the dev pp uses; drop the per-commit `-c` overrides.
 
 ## Godot user-local install (idea-638, 2026-11-23)
 Two binaries: ForgeWirk (feature "4.7") and SportsBallBattles (CI pin 4.7.2-stable) share 4.7.2; EFI uses 4.8-dev7. No unversioned `godot`.

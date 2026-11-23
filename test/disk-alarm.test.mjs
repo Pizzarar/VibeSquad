@@ -125,6 +125,39 @@ test("enabled startDiskAlarm ticks at start and stop() clears the interval", asy
   assert.equal(called, n);
 });
 
+test("stop() makes an in-flight tick a no-op before it calls stat", async () => {
+  let openGate;
+  const gate = new Promise((resolve) => { openGate = resolve; });
+  let stats = 0;
+  const h = startDiskAlarm({
+    env: {}, tickMs: 60_000, platform: "linux",
+    targets: ["/data"],
+    // The start tick parks here after stop() has a chance to land: it must not go on to stat.
+    volumeKey: async () => { await gate; return "dev:1"; },
+    stat: async () => { stats++; return { free: 900, total: 1000 }; },
+    log: async () => {},
+  });
+  h.stop(); // the start tick is already in flight, waiting on the gate
+  openGate();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(stats, 0);
+});
+
+test("tick() after stop() is a no-op", async () => {
+  let stats = 0;
+  const h = startDiskAlarm({
+    env: {}, tickMs: 60_000, platform: "linux", targets: ["/data"],
+    volumeKey: async () => "dev:1",
+    stat: async () => { stats++; return { free: 900, total: 1000 }; },
+    log: async () => {},
+  });
+  await new Promise((r) => setTimeout(r, 0));
+  const before = stats;
+  h.stop();
+  assert.deepEqual(await h.tick(), []);
+  assert.equal(stats, before);
+});
+
 test("off win32 a volume is its device id: dev:<id>, shared by paths on one device, from the nearest existing ancestor", async () => {
   const probe = async (p) => {
     if (p === "/mnt/a" || p === "/mnt/a/sub") return { dev: 7 };

@@ -18,6 +18,9 @@ Placeholders: `<forge mesh ip>` (the forge's Meshnet IPv4), `<forge mesh host>` 
    `--meshnet-ip` / `--meshnet-host`. Run it after Meshnet is on so detection works; it only warns if Meshnet is off.
 4. Provider logins, as the VS user (credentials live in that user's home): `claude`, `agy`, `opencode`, `gh auth login`.
    The unit PATH includes `~/.local/bin` and the npm global prefix (R6); confirm each CLI resolves there.
+   Do every install + login **before** the VS start (step 6). A runner started before a CLI was installed or logged in keeps
+   failing for that provider: after C2, Gemini (agy) agents hung in `initializing` until the next runner restart, while a manual
+   `agy` ACP initialize worked (idea-646). If you install or log in a CLI later, ask the hub Overlord for a drained runner restart.
    Linux installs (verified 2026-11-22): agy: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (installs `~/.local/bin/agy`, read from https://antigravity.google/docs/getting-started?tab=cli); opencode: `npm install -g @opencode/cli` (read from https://opencode.ai/docs/).
 5. Forge SSH key for the dev pp bridge: `ssh-keygen -t ed25519 -C forge`, keep `~/.ssh/id_ed25519.pub` for the dev pp step below.
 6. Start: `scripts/forge-bootstrap.sh --start` (or `systemctl --user enable --now vibesquad`).

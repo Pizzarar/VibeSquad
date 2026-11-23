@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, limitTooltip, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
+import { costCellText, filterProfilesByKind, parseProfileKind, PROFILE_KIND_FILTERS, PROFILE_KIND_KEY, type ProfileKindFilter, profileModelLabel, profileKindLabel, mergedCoverageNote, medP90Text, readyPillText, readyTimeSummary, readyTimeTiles, autonomySummary, autonomyTiles, squadLabel, USAGE_SQUAD_KEY, usageExportMdUrl, usageUrl, validSquad, efficiencySummary, rolesSummary, usageOpenKey, bugInboxCards, buildProfiles, buildRows, COHORT_METRICS, cohortValueText, deltaText, deltaTrend, dur, etaText, filterInbox, providerLabel, successText, successTooltip, floorSegments, inboxBucket, inboxCounts, inboxIdLabel, inboxFrom, inboxStatusLabel, INBOX_FILTERS, laneSummary, limitIsStale, limitSampledText, limitTooltip, lowCostCoverage, profileSummary, sortWorkflows, speedupText, tokText, usdText, foldRoles, pctText, relTime, sortProfiles, sortRows, stormText, leadLongTurnRows, usageReviewStatus, USAGE_REVIEW_INTERVALS, USAGE_REVIEW_LABELS, withUsageReview, workflowSummary, workIdlePct, type InboxFilter, type LimitRow, type SortKey, type UsageData, type UsageReview } from "./usageHelpers";
 import { AngelBezel } from "./AngelBezel";
 import { usePref } from "./prefs";
 import type { PinHandler } from "./PinGrid";
@@ -148,11 +148,15 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
   const level = used >= 90 ? "hot" : used >= 70 ? "warn" : "ok";
   const resetMs = l.resetsAt ? Date.parse(l.resetsAt) : null;
   const estimate = l.source === "estimate";
+  const checked = l.checkedAt ?? l.at;
+  const stale = limitIsStale(checked, now);
+  const sampled = limitSampledText(checked, now);
   return (
-    <div className={`usage-limit usage-${level}`} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
+    <div className={`usage-limit usage-${level}${stale ? " usage-limit-stale" : ""}`} data-stale={stale ? "true" : undefined} data-testid="usage-limit-card" data-provider={l.provider} data-window={l.window}>
       <div className="usage-limit-head">
         <span className="usage-limit-name" title={limitTooltip(l)}>{providerLabel(l.provider)}</span>
         <span className="usage-limit-win">{WINDOW_LABEL[l.window] ?? l.window}</span>
+        {stale && <span className="usage-stale-tag" title="Last limit check was over 2h ago">stale</span>}
         {estimate && <span className="usage-estimate" title="Local estimate from our own token counts, not a provider-reported number">estimate</span>}
       </div>
       {l.poolAgents && <div className="usage-limit-pool small muted">{l.poolAgents.text}</div>}
@@ -164,6 +168,7 @@ function LimitCard({ l, now }: { l: LimitRow; now: number }) {
         <span title={resetMs ? new Date(resetMs).toLocaleString() : undefined}>{resetMs ? `resets ${relTime(resetMs, now)}` : "reset unknown"}</span>
         <span>{l.burnPctPerHour > 0 ? `burn ${l.burnPctPerHour}%/h` : "burn 0%/h"}</span>
       </div>
+      {sampled && <div className="usage-limit-sampled small muted" data-testid="usage-limit-sampled" title={checked ? new Date(checked).toLocaleString() : undefined}>{sampled}</div>}
       <div className={`usage-eta small${l.etaToCap ? " usage-eta-warn" : ""}`}>{etaText(l)}</div>
     </div>
   );
