@@ -73,6 +73,16 @@ jobs (desktop build/sign, Windows EFI exports by Release Desk): the forge agent 
 no second runner. Fallback only if SSH stdio is flaky in B3: a dev pp runner. Headless Godot on the forge (GNU `timeout`,
 `--headless --path <proj>`) is EFI-side (R17).
 
+**The bridge is LAN-only.** Both machines must be on the home LAN. Do not point `devpc` at the dev pp's Tailscale address: NordVPN Meshnet on the dev pp also uses `100.64.0.0/10`, so forge -> dev pp SSH over Tailscale IPv4 hangs. Working setup, in the forge's `~/.ssh/config`:
+
+```
+Host devpc
+    HostName <devpc-lan-ip>
+    User <devpc-user>
+```
+
+(`<devpc-lan-ip>` is the dev pp's LAN address, ideally a DHCP reservation; `<devpc-user>` is its Windows user.) Off-LAN option: Tailscale IPv6 address of the dev pp (UNTESTED).
+
 ## Rollback notes (C3)
 
 - After cutover only the dev pp STANDBY copy (the stopped server instance + its ~/.vibesquad standby copy) is retired after 2 weeks clean; the Windows install/run/release path stays first-class (C3 retires only that standby copy).
