@@ -12,12 +12,13 @@ Placeholders: `forge.example.ts.net` (MagicDNS name), `devpc` (the dev pp's SSH 
    `git clone <repo-url> ~/projects/VibeSquad && cd ~/projects/VibeSquad && npm ci`
 2. Tailscale: install per the Tailscale docs, then `sudo systemctl enable --now tailscaled` and `sudo tailscale up`. Enable MagicDNS in the tailnet admin console. Owner step: Machines -> the forge machine -> Disable key expiry, so a reboot/expiry does not log it out.
 3. Bootstrap (idempotent, safe to re-run). Preview first with `scripts/forge-bootstrap.sh --dry-run`, then run
-   `scripts/forge-bootstrap.sh`. It installs node LTS, git, gh, ripgrep, openssl and chromium; writes the systemd user unit;
-   enables linger; sets `fs.inotify.max_user_watches=524288` (R13); masks sleep/suspend/hibernate (R12); sets lid close to ignore via `/etc/systemd/logind.conf.d/forge-lid.conf` so the laptop forge runs lid-closed; puts `TMPDIR` on disk
+   `scripts/forge-bootstrap.sh`. It installs node 24 (`--node-major N` to change; an existing older node, e.g. a node-22 forge, is upgraded by re-running `scripts/forge-bootstrap.sh --node-major 24`, because it installs whenever the installed major is below the requested one), git, gh, ripgrep, openssl and chromium; writes the systemd user unit;
+   enables linger; writes the unit but does **not** start it unless you pass `--start` (step 6 starts it); sets `fs.inotify.max_user_watches=524288` (R13); masks sleep/suspend/hibernate (R12); sets lid close to ignore via `/etc/systemd/logind.conf.d/forge-lid.conf` so the laptop forge runs lid-closed; puts `TMPDIR` on disk
    and out of systemd-tmpfiles cleanup (R15). The tailnet IP and MagicDNS name are detected from `tailscale`; override with
    `--meshnet-ip` / `--meshnet-host`. Run it after `tailscale up` so detection works.
 4. Provider logins, as the VS user (credentials live in that user's home): `claude`, `agy`, `opencode`, `gh auth login`.
    The unit PATH includes `~/.local/bin` and the npm global prefix (R6); confirm each CLI resolves there.
+   Linux installs (verified 2026-11-22): agy: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (installs `~/.local/bin/agy`, read from https://antigravity.google/docs/getting-started?tab=cli); opencode: `npm install -g @opencode/cli` (read from https://opencode.ai/docs/).
 5. Forge SSH key for the dev pp bridge: `ssh-keygen -t ed25519 -C forge`, keep `~/.ssh/id_ed25519.pub` for the dev pp step below.
 6. Start: `scripts/forge-bootstrap.sh --start` (or `systemctl --user enable --now vibesquad`).
    Shadow VS (stage B) uses a **fresh** `VIBESQUAD_HOME` (`~/.vibesquad`); do not copy state from the dev pp until C2.
