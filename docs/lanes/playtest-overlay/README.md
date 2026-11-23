@@ -53,7 +53,9 @@ When the VS server runs on a remote host (forge) and the game runs on the dev PC
   A device that holds a full-owner token (paired with an old owner code) shows "Full owner token: re-pair with a Playtest code" in the dock.
   Token and CA override paths must be absolute, outside the project folder, and not a network share (UNC); anything else is refused.
   Settings and API: `godot/addons/vs_playtest/README.md`.
-- **Bridge for agents on forge.** Agents reach the debug bridge as a stdio MCP server over SSH: `ssh devpc npx godot-mcp-runtime@4.0.1`. The bridge itself stays on loopback on the dev PC and no new port is opened. Set `GODOT_PATH` to the real console `.exe` in the dev PC's environment, as above.
+- **Bridge for agents on forge.** Agents reach the debug bridge as a stdio MCP server over SSH. The bridge itself stays on loopback on the dev PC and no new port is opened. Set `GODOT_PATH` and `GODOT_MCP_DISABLE_ELICITATION=true` inline in the ssh remote command (the dev PC's environment is not read), then `npx -y`:
+  `ssh devpc 'set "GODOT_PATH=<Godot console .exe>" && set "GODOT_MCP_DISABLE_ELICITATION=true" && npx -y godot-mcp-runtime@4.0.1'`
+  `GODOT_PATH` is the console `.exe`, not the `.cmd` shim, and one exe per invocation (the version is fixed per run). The canonical command and the per-project engine versions are in `docs/lanes/forge-host/RUNBOOK.md` ("Godot and Windows-only jobs: SSH stdio bridge").
 - **Version pin.** npm `godot-mcp-runtime@4.0.1` is tag `v4.0.1` (`ad386b91`). Our pinned commit `3b8a4f31` is the next commit after it and only changes CI/docs files (`.github/workflows/publish.yml`, `CONTRIBUTING.md`, release-notes script and its test), so the npm 4.0.1 package has the same runtime code. Always pin the exact version; never `@latest`.
 - **SSH setup** (OpenSSH server on the dev PC, forge key, the `devpc` host alias) is in `docs/PLAN_FORGE_CUTOVER.md` stage B (owned by `@forge-host`).
 
