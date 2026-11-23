@@ -12,11 +12,12 @@ import {
   createRestartRequest,
   createRestartRequestLoop,
   formatRequestStatus,
+  heldListFromHealth,
   readRestartRequest,
   stepRequest,
   UNPROBED_ASK_GRACE_MS,
 } from "../server/restart-request.mjs";
-import { drainedLogRefusal, laneHolders } from "../server/restart-coord.mjs";
+import { drainedLogRefusal, heldShells, laneHolders } from "../server/restart-coord.mjs";
 
 const dirs = [];
 after(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -43,7 +44,7 @@ function writeResult(home, startMs, rec) {
   const at = new Date(startMs).toISOString();
   writeFileSync(path.join(home, `restart-${at.replace(/[:.]/g, "-")}.json`), JSON.stringify({ startedAt: at, finishedAt: at, dryRun: false, errors: [], ...rec }));
 }
-function world(home, { agents = [OVE, BUG, UI], held = null, heldList = null } = {}) {
+function world(home, { agents = [OVE, BUG, UI], held = null, heldList = null, listAgentsWithArchived = undefined } = {}) {
   const w = { now: T0, agents, held, calls: [], fires: 0 };
   w.loop = () => createRestartRequestLoop({
     home,
@@ -51,6 +52,7 @@ function world(home, { agents = [OVE, BUG, UI], held = null, heldList = null } =
     now: () => w.now,
     listAgents: async () => w.agents,
     heldList: heldList ?? (async () => w.held),
+    ...(listAgentsWithArchived !== undefined ? { listAgentsWithArchived } : {}),
     runVs: async (args) => { w.calls.push(args); return { ok: true }; },
     fire: async () => { w.fires++; return { ok: true }; },
   });
@@ -117,6 +119,21 @@ test("idea-402 fail safe: an unreadable held list auto-drains nobody (every lead
   const BW = ag("rn-bw", "bug-chaser", "worker");
   assert.deepEqual(autoDrainVerdicts(L, { ids: ["rn-bw"], work: { "rn-bw": [] } }, [OVE, BUG, BW], TEAMS), { "rn-bug": { ok: false, ids: ["rn-bw"], unprobedOnly: true } });
   assert.deepEqual(autoDrainVerdicts(L, { ids: ["rn-w1"], work: SUITE }, [OVE, BUG, UI, W1], TEAMS), { "rn-bug": { ok: true } }, "another lane's suite does not hold this lead");
+  // idea-604: no heldWork map (or no entry for the holder) is "shells unknown", never unprobed: the ask is not held off.
+  assert.deepEqual(autoDrainVerdicts(L, { ids: ["rn-bw"], work: null }, [OVE, BUG, BW], TEAMS), { "rn-bug": { ok: false, ids: ["rn-bw"], unprobedOnly: false } });
+  assert.deepEqual(autoDrainVerdicts(L, { ids: ["rn-bw"], work: {} }, [OVE, BUG, BW], TEAMS), { "rn-bug": { ok: false, ids: ["rn-bw"], unprobedOnly: false } });
+});
+
+test("idea-604: heldShells is the one held reading shared by the restart request and the vs restart deferral", () => {
+  assert.equal(heldShells(null), null);
+  assert.equal(heldShells({ work: {} }), null, "no id list: unknown");
+  assert.deepEqual(heldShells({ ids: [], work: {} }), { shells: [], unprobed: [], unprobedOnly: false });
+  assert.deepEqual(heldShells({ ids: ["a"], work: { a: [] } }), { shells: [], unprobed: ["a"], unprobedOnly: true });
+  assert.deepEqual(heldShells({ ids: ["a", "b"], work: { a: [], b: [{ pid: 1, cmd: "npm test" }] } }), { shells: ["b"], unprobed: ["a"], unprobedOnly: false });
+  assert.deepEqual(heldShells({ ids: ["a"], work: null }), { shells: ["a"], unprobed: [], unprobedOnly: false }, "no work map: held");
+  assert.deepEqual(heldShells({ ids: ["a"], work: {} }), { shells: ["a"], unprobed: [], unprobedOnly: false }, "no entry: held");
+  assert.deepEqual(heldShells({ ids: ["a"], work: { a: "x" } }), { shells: ["a"], unprobed: [], unprobedOnly: false }, "malformed entry: held");
+  assert.deepEqual(heldShells({ ids: ["a", "b"], work: { a: [], b: [] } }, ["b"]), { shells: [], unprobed: ["b"], unprobedOnly: true }, "limited to `of`");
 });
 
 test("idea-402: laneHolders is the drainedLogRefusal check as data (one primitive for self-report and auto-drain)", () => {
@@ -247,4 +264,57 @@ test("idea-604: a lane whose only holder has no shell listed yet is not asked at
   w3.now += MIN;
   await l3.tick();
   assert.deepEqual(w3.sends().map((c) => c[1]), ["rn-ui"], "restart-done only, no ask");
+});
+
+// Bug36 M1: a held shell whose owner is in no agent list (spawned since the list, or the archived list failed) is of unknown
+// lane. laneHolders would read it as nobody's, so every lead (its own lane's included) would be auto-drained and the
+// request fire at once. Fail closed: no verdicts, every lead asked.
+test("Bug36 M1: a held id missing from the agent list auto-drains nobody", async () => {
+  const NEW = ag("rn-new", "ui", "worker");
+  const SHELL = { "rn-new": [{ pid: 777, cmd: "npm test" }] };
+  assert.equal(autoDrainVerdicts([{ leadId: "rn-bug", team: "vibesquad", lane: "bug-chaser" }], { ids: ["rn-new"], work: SHELL }, [OVE, BUG, UI], TEAMS), null);
+  for (const listAgentsWithArchived of [null, async () => { throw new Error("runner busy"); }, async () => [OVE, BUG, UI]]) {
+    const home = tmp();
+    const w = world(home, { held: { ids: ["rn-new"], work: SHELL }, listAgentsWithArchived });
+    request(home);
+    const r = await w.loop().tick();
+    assert.equal(r.state, "draining", String(listAgentsWithArchived));
+    assert.equal(w.fires, 0, "nothing fired");
+    const req = readRestartRequest(home);
+    assert.deepEqual(req.drained, {}, "nobody auto-drained");
+    assert.deepEqual(w.sends().map((c) => c[1]).sort(), ["rn-bug", "rn-ui"], "every lead asked");
+  }
+  // The archived list resolves the holder: verdicts apply again (only its own lane's lead is asked).
+  const home = tmp();
+  const w = world(home, { held: { ids: ["rn-new"], work: SHELL }, listAgentsWithArchived: async () => [OVE, BUG, UI, { ...NEW, archivedAt: null }] });
+  request(home);
+  await w.loop().tick();
+  assert.deepEqual(w.sends().map((c) => c[1]), ["rn-ui"]);
+  assert.ok(readRestartRequest(home).asked["rn-bug"].auto);
+});
+
+// Bug36 L1: an auto drain stands only on THIS tick's ok verdict for that lead, not on "some verdicts exist".
+test("Bug36 L1: an auto-drained lead without an ok verdict this tick keeps the request from firing", () => {
+  const L = [{ leadId: "rn-bug", team: "vibesquad", lane: "bug-chaser" }];
+  const at = new Date(T0).toISOString();
+  const autoReq = () => ({ id: "rr-x", tip: TIP, requestedBy: "rn-ove", createdAt: at, deadline: new Date(T0 + 30 * MIN).toISOString(), state: "draining", drainingAt: at,
+    asked: { "rn-bug": { team: "vibesquad", lane: "bug-chaser", title: null, askedAt: at, quiet: true, auto: at } }, drained: { "rn-bug": at }, gone: {} });
+  const step = (verdicts) => { const req = autoReq(); const actions = stepRequest(req, { now: T0 + MIN, leads: L, held: { byLead: {} }, verdicts }); return { req, actions }; };
+  for (const verdicts of [{ "rn-bug": { ok: false, ids: ["rn-c"], unprobedOnly: true } }, {}, { "rn-other": { ok: true } }]) {
+    const { req, actions } = step(verdicts);
+    assert.equal(req.state, "draining", JSON.stringify(verdicts));
+    assert.ok(!actions.some((a) => a.kind === "fire"), JSON.stringify(verdicts));
+  }
+  assert.notEqual(step({ "rn-bug": { ok: true } }).req.state, "draining", "an ok verdict this tick lets it go on");
+});
+
+// Bug36 L2: the loop's /health reader rejects what restart-runtime healthHeldTruth rejects.
+test("Bug36 L2: heldListFromHealth rejects a held count the ids do not match", () => {
+  assert.equal(heldListFromHealth({ held: 2, heldAgents: [] }), null, "count without ids: unknown, never clean");
+  assert.equal(heldListFromHealth({ held: 1, heldAgents: ["a", "b"] }), null);
+  assert.equal(heldListFromHealth({ running: 0 }), null, "no held list");
+  assert.equal(heldListFromHealth(null), null);
+  assert.deepEqual(heldListFromHealth({ held: 1, heldAgents: ["a"], heldWork: { a: [] } }), { ids: ["a"], work: { a: [] } });
+  assert.deepEqual(heldListFromHealth({ heldAgents: ["a"] }), { ids: ["a"], work: null }, "no held count: ids stand, unreported heldWork stays null");
+  assert.deepEqual(heldListFromHealth({ held: 0, heldAgents: [], heldWork: [] }), { ids: [], work: null }, "a non-object heldWork is unreported");
 });

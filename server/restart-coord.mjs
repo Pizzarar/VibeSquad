@@ -185,6 +185,24 @@ export function laneHolders(callerId, { held, agents, teams = loadTeamsRegistry(
   return { ids: [...blockers] };
 }
 
+/**
+ * idea-604: the one reading of what a runner held list ({ ids, work }: /health heldAgents + heldWork) holds, shared by the
+ * restart request (autoDrainVerdicts) and the `vs restart` deferral (scripts/restart-runtime.mjs settle-and-repoll), so the
+ * two never disagree on "held". Per holder (`of`, default every held id): `shells` = real held work (work[id] lists shells),
+ * `unprobed` = listed only until its first after-turn probe (work[id] is an empty list; the probe lands within the park
+ * grace + one snapshot, seconds). Fail safe: a holder with no work entry, or a list with no work map (a runner too old to
+ * report heldWork), counts as shells: unknown is held, never "unprobed". null when the held list itself is unknown.
+ * Returns { shells, unprobed, unprobedOnly } (unprobedOnly: at least one holder and every one unprobed).
+ */
+export function heldShells(held, of = null) {
+  if (!held || !Array.isArray(held.ids)) return null;
+  const work = held.work && typeof held.work === "object" && !Array.isArray(held.work) ? held.work : null;
+  const shells = [];
+  const unprobed = [];
+  for (const id of (Array.isArray(of) ? of : held.ids).map(String)) (work && Array.isArray(work[id]) && !work[id].length ? unprobed : shells).push(id);
+  return { shells, unprobed, unprobedOnly: unprobed.length > 0 && !shells.length };
+}
+
 /** The ask a restarter sends a holder lead (no double quotes or backticks: it pastes into `vs send <id> "..."` in any shell). */
 export function drainAskText(lead, at) {
   const holders = lead.heldAgents.map((id) => { const w = workLine(lead.heldWork, id); return w ? `${id} (${w})` : id; }).join(", ");

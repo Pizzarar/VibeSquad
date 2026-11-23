@@ -30,7 +30,7 @@ import { runtimeDir as runtimeDirOf } from "./runtime-dir.mjs";
 import { writeFileAtomic } from "./brief-write.mjs";
 import { execOffLoop } from "./git-spawn.mjs";
 import { linesFromEndSync } from "./log-tail.mjs";
-import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, holderLeads, laneHolders } from "./restart-coord.mjs";
+import { DONE_TEXT, DRAINED_TEXT, DRAIN_LOG_SLACK_MS, doneText, heldCmdRedacted, heldShells, holderLeads, laneHolders } from "./restart-coord.mjs";
 import { redactHostPathTokens } from "./redact-host-paths.mjs";
 import { asleepTeamIds, isLiveAgent, loadTeamsRegistry, readTeamsConfig, resolveAgentIdentity, resolveLeadWinner, whoCandidate } from "./identity.mjs";
 import { toAgent } from "./backend/runner-backend.mjs";
@@ -225,18 +225,33 @@ export function liveLeads(agents, teams = loadTeamsRegistry()) {
 export const UNPROBED_ASK_GRACE_MS = 60_000;
 
 /**
+ * The runner's /health body as the loop's held list { ids, work }, or null (unknown: nobody auto-drained). idea-604: an
+ * unreported heldWork stays null (not {}), so heldShells reads it as "shells unknown", never as unprobed. Bug36 L2: a
+ * held count the ids do not match is inconsistent and unknown (same rule as restart-runtime healthHeldTruth).
+ */
+export function heldListFromHealth(h) {
+  if (!h || typeof h !== "object" || !Array.isArray(h.heldAgents)) return null;
+  if (h.held !== undefined && h.held !== h.heldAgents.length) return null;
+  return { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" && !Array.isArray(h.heldWork) ? h.heldWork : null };
+}
+
+/**
  * idea-402: per live lead, may the server record its drain now? { ok: true } | { ok: false, ids, unprobedOnly } where
- * unprobedOnly = every holder has no shell listed yet (/health heldWork empty for it). null = no verdicts (held list or
- * agent list unknown): nobody is auto-drained. `held` is the runner's raw { ids, work }.
+ * unprobedOnly = every holder has no shell listed yet (restart-coord heldShells, the same reading `vs restart` defers on;
+ * no work map or no entry for a holder reads as shells). null = no verdicts (held list or agent list unknown): nobody is
+ * auto-drained. `held` is the runner's raw { ids, work } (work null when the runner did not report heldWork).
  */
 export function autoDrainVerdicts(leads, held, agents, teams = loadTeamsRegistry()) {
   if (!Array.isArray(leads) || !held || !Array.isArray(held.ids) || !Array.isArray(agents)) return null;
-  const work = held.work && typeof held.work === "object" ? held.work : {};
+  // Bug36 M1: a held id with no record in `agents` (spawned since the list, or the archived list failed) is a shell of
+  // unknown lane: laneHolders would read it as nobody's and auto-drain its own lead. Fail closed: no verdicts at all.
+  const known = new Set(agents.map((a) => String((a && typeof a === "object" && a.meta && !a.labels ? toAgent(a) : a)?.id ?? "")));
+  if (held.ids.some((id) => !known.has(String(id)))) return null;
   const out = {};
   for (const l of leads) {
     const b = laneHolders(l.leadId, { held, agents, teams, callerTeam: l.team, callerLane: l.lane });
     if (b.refusal) continue; // unknown for this lead: asked
-    out[l.leadId] = b.ids.length ? { ok: false, ids: b.ids, unprobedOnly: b.ids.every((id) => !(work[id]?.length)) } : { ok: true };
+    out[l.leadId] = b.ids.length ? { ok: false, ids: b.ids, unprobedOnly: heldShells(held, b.ids).unprobedOnly } : { ok: true };
   }
   return out;
 }
@@ -459,7 +474,9 @@ export function stepRequest(req, { now = Date.now(), leads = null, drained = nul
     const pend = pendingLeads(req);
     // idea-402: a server-recorded (auto) drain only stands on THIS tick's held list: with it unknown now, the request waits
     // (the deadline still fires as before). Self-reported drains keep their existing behavior.
-    const autoStale = !v && Object.entries(req.asked).some(([id, a]) => a.auto && req.drained[id] && !req.gone[id]);
+    // Bug36 L1: per lead, not just "some verdicts": an auto drain whose lead has no ok verdict on this tick (unknown, or a
+    // holder laneHolders counts but heldByLead does not, e.g. a vs.parent child) does not let the request fire.
+    const autoStale = Object.entries(req.asked).some(([id, a]) => a.auto && req.drained[id] && !req.gone[id] && !v?.[id]?.ok);
     if (!pend.length && !autoStale) {
       req.state = "ready";
       req.readyAt = at;
@@ -888,10 +905,7 @@ export async function startRestartRequestLoop({ home, log = (l) => console.warn(
     log,
     listAgents: () => backend.listAgents(),
     listAgentsWithArchived: () => backend.listAgents({ filter: { includeArchived: true } }),
-    heldList: async () => {
-      const h = await backend.rc.request("GET", "/health", undefined, { restartWait: false });
-      return Array.isArray(h?.heldAgents) ? { ids: h.heldAgents, work: h.heldWork && typeof h.heldWork === "object" ? h.heldWork : {} } : null;
-    },
+    heldList: async () => heldListFromHealth(await backend.rc.request("GET", "/health", undefined, { restartWait: false })),
     drain: {
       set: (req) => backend.rc.request("POST", "/drain/request", requestDrainBody(req), { restartWait: false }),
       clear: (id) => backend.rc.request("DELETE", "/drain/request", { id }, { restartWait: false }),
