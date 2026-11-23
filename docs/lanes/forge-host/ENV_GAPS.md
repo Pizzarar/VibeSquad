@@ -62,3 +62,5 @@ Smoke: `git archive HEAD` export of each repo into a temp dir (live checkouts ha
 Runner follow-ups (repo-side, not this lane): EFI `run_godot.sh` GODOT_BIN + coreutils timeout = idea-635; SBB default `GODOT=godot` -> idea-639; ForgeWirk runner -> idea-640.
 
 **2026-11-23 ~22:00Z:** apt line installed (pip 25.1.1, venv, zip, lua5.4 etc. present). RF lupa follow-up: Ubuntu pip is PEP 668 externally-managed, so use the venv path (`python3 -m venv ~/.venvs/rf && ~/.venvs/rf/bin/pip install 'lupa>=2.8'`), not `pip --user`; then remove the hand-unpacked `~/.local/.../lupa`.
+
+**2026-11-23 ~22:00Z — RF lupa CLOSED:** `~/.venvs/rf` has pip lupa 2.8 (Lua 5.4); the hand-unpacked `~/.local` copy is removed; specs pass in the venv (25 specs / 449 pass / 0 fail). RF invocation: `~/.venvs/rf/bin/python tools/run-specs.py` (auto re-exec queued at RF @core as idea-699).
