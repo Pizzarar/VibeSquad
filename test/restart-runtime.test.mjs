@@ -2540,6 +2540,37 @@ test("systemd 666 L2: systemctl start returns no status, show fails, but a serve
   } finally { await w.cleanup(); }
 });
 
+test("systemd 666 L2: systemctl start returns no status and a NON-serve.mjs process answers /api/health -> not adopted, warned; the fallback refuses the taken port: abort, no second server", async () => {
+  const w = await world();
+  try {
+    const sd = fakeSystemd(w, { active: true, mainIsServer: true });
+    const ctl = sd.ctl;
+    let started = false;
+    sd.ctl = (args) => {
+      if (args[0] === "start") { sd.calls.push(args.join(" ")); started = true; w.alive.add(8888); return { status: null, stdout: "", stderr: "timed out after 150s" }; }
+      if (args[0] === "show" && started) { sd.calls.push(args.join(" ")); return { status: 1, stdout: "", stderr: "Failed to connect to bus" }; }
+      return ctl(args);
+    };
+    const d = w.deps;
+    const depsOver = {
+      // a foreign process (pid 8888, not serve.mjs) took the port and answers /api/health with 200
+      httpCall: async (url, o) => (started && /\/api\/health$/.test(url) ? { status: 200, body: { ok: true } } : httpCall(url, o)),
+      listenerPid: (port) => (w.alive.has(8888) ? 8888 : d.listenerPid(port)),
+      procInfo: (pid) => (pid === 8888 ? (w.alive.has(8888) ? { pid, ppid: 1, cmd: "python3 -m http.server" } : null) : d.procInfo(pid)),
+      termGracefully: (pid) => { if (pid === 8888) throw new Error("the foreign listener must never be signalled"); d.termGracefully(pid); },
+    };
+    const r = await sysRun(w, sd, {}, [], depsOver);
+    assert.equal(r.ok, false);
+    assert.ok(r.warnings.some((x) => /returned no status \(timed out after 150s\) and port \d+ answers \/api\/health, but .*8888.*not adopted as the unit server/.test(x)), r.warnings.join("\n"));
+    assert.match(r.errors.join("\n"), /server start: systemctl --user start vibesquad\.service failed; .*8888.*port \d+ is taken, no fallback possible/);
+    assert.notEqual(r.relaunch.mode, "systemd", "the foreign listener is not recorded as the unit start");
+    assert.equal(r.relaunch.startNoStatus, undefined);
+    assert.deepEqual(w.spawned.filter((x) => x === "server"), [], "no detached server");
+    assert.ok(w.alive.has(8888), "the foreign listener is left alone");
+    assert.ok(!existsSync(path.join(w.configDir, "server.pid")) || readFileSync(path.join(w.configDir, "server.pid"), "utf8") !== "8888", "8888 never written as server.pid");
+  } finally { await w.cleanup(); }
+});
+
 test("systemd 666 nit: stop/start go through ctlAsync (off the event loop) with the marker refreshed right before and after each call", async () => {
   const w = await world();
   try {

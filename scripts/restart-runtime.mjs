@@ -1188,8 +1188,15 @@ export async function restartRuntime(opts, deps = {}, env = process.env, log = (
         const st = now.ok ? now.props.ActiveState : null;
         if (now.ok && ['active', 'activating', 'reloading'].includes(st) && pid) keptAfterNull = `unit ${st}, MainPID ${pid}`;
         else if (await healthy()) {
-          if (!(pid && d.pidAlive(pid))) pid = d.listenerPid(det.port) ?? null;
-          keptAfterNull = `server answers /api/health on port ${det.port} (${now.ok ? `unit ${st}` : now.error})`;
+          // Only a serve.mjs listener is kept (the identity check preflight, the stop and freePortForFallback make). Anything
+          // else answering on the port is not adopted: the start counts as failed and freePortForFallback, seeing a foreign
+          // listener, aborts before any detached launch, so this path can never add a second server.
+          const lp = d.listenerPid(det.port) ?? null;
+          const li = lp != null ? d.procInfo(lp) : null;
+          if (lp != null && li && /serve\.mjs/.test(li.cmd ?? '')) {
+            if (!(pid && d.pidAlive(pid))) pid = lp;
+            keptAfterNull = `server answers /api/health on port ${det.port} (${now.ok ? `unit ${st}` : now.error})`;
+          } else warn(`systemctl --user start ${sysd.unit}.service returned no status (${r.stderr || 'no exit code'}) and port ${det.port} answers /api/health, but ${lp == null ? 'its listener pid is unknown' : notServeMsg(lp, li)}: not adopted as the unit server; treating the start as failed`);
         }
       }
       if (r.status === 0 || keptAfterNull) {
