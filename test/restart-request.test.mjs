@@ -810,3 +810,61 @@ test("idea-674: a queued request with no valid windowAt aborts on its first step
   assert.equal(q.state, "queued");
   assert.deepEqual(q.asked, {});
 });
+
+// ---- idea-674 RW2: the CLI (--urgent / --reason, output, help) -----------------------------------------------------------
+
+test("idea-674 RW2: vs restart request queues by default and prints the window; --urgent drains now; --reason without --urgent errors", async () => {
+  const { parseArgs, commandRestart } = await import("../cli/vs.mjs");
+  const f = parseArgs(["restart", "request", TIP, "--urgent", "--reason", "security fix"]);
+  assert.equal(f.urgent, true);
+  assert.equal(f.reason, "security fix");
+  const home = tmp();
+  const env = { VIBESQUAD_HOME: home };
+  const opts = (extra = {}) => ({ teams: TEAMS, env, hasOwnerProof: () => true, now: () => T0, ...extra });
+  const cap = async (fn) => {
+    const out = []; const err = [];
+    const o = process.stdout.write; const e = process.stderr.write;
+    process.stdout.write = (s) => { out.push(String(s)); return true; };
+    process.stderr.write = (s) => { err.push(String(s)); return true; };
+    try { await fn(); } finally { process.stdout.write = o; process.stderr.write = e; }
+    return { out: out.join(""), err: err.join("") };
+  };
+  await assert.rejects(commandRestartRequest({ _: ["request", TIP], reason: "why" }, opts()), /--reason is only for --urgent/);
+  await assert.rejects(commandRestartRequest({ _: ["request", TIP], urgent: true, reason: "  " }, opts()), /--reason needs text/);
+  assert.equal(readRestartRequest(home), null, "a refused --reason records nothing");
+
+  let r = await cap(() => commandRestartRequest({ _: ["request", TIP], needs: "server-restart" }, opts()));
+  assert.match(r.out, /rr-\S+ queued \(tip abc1234def, needs server-restart\) for the restart window 2026-11-19T13:00:00\.000Z \(in 3h 00m\)\. Nothing happens before then: no lead is asked/);
+  assert.match(r.out, /--urgent --reason "<why>"/);
+  r = await cap(() => commandRestartRequest({ _: ["request", "fff0000aaa"], needs: "build" }, opts()));
+  assert.match(r.out, /updated: folded into the queued request \(tip fff0000aaa, needs server-restart,build\) .* Batched tips: abc1234def, fff0000aaa\./);
+  r = await cap(() => commandRestartRequest({ _: ["status"] }, opts()));
+  assert.match(r.out, /: queued \(tip fff0000aaa.*window 2026-11-19T13:00:00\.000Z \(in 3h 00m\)/);
+  assert.match(r.out, /batched tips: abc1234def, fff0000aaa/);
+  // A manual vs restart while queued warns that the window still fires.
+  r = await cap(() => commandRestart({}, { env, teams: TEAMS, hasOwnerProof: () => true, drainGuard: () => ({ pending: [] }), heldList: async () => null, spawnFn: () => 4321, confirmStart: null }));
+  assert.match(r.err, /is queued for the restart window 2026-11-19T13:00:00\.000Z; this manual restart goes ahead now, and the window will still drain/);
+
+  r = await cap(() => commandRestartRequest({ _: ["request", "abc9999"], urgent: true, reason: "server broken" }, opts()));
+  assert.match(r.out, /URGENT: promoted the queued request \(window 2026-11-19T13:00:00\.000Z\) to drain NOW \(tip abc9999, needs server-restart,build, deadline 2026-11-19T10:30:00\.000Z, reason: server broken\)/);
+  const req = readRestartRequest(home);
+  assert.deepEqual([req.state, req.urgent, req.urgentReason], ["requested", true, "server broken"]);
+  await assert.rejects(commandRestartRequest({ _: ["request", TIP] }, opts()), /still requested/, "non-urgent during an open drain: refused as before");
+
+  const h2 = tmp();
+  r = await cap(() => commandRestartRequest({ _: ["request", TIP], urgent: true }, opts({ env: { VIBESQUAD_HOME: h2, VS_RESTART_WINDOWS: "nope" } })));
+  assert.match(r.out, /URGENT: draining NOW \(tip abc1234def, deadline 2026-11-19T10:30:00\.000Z\)/);
+  assert.match(r.err, /VS_RESTART_WINDOWS="nope" is not a comma list of HH:MM UTC times; using the default windows 13:00, 21:00Z/);
+
+  const h3 = tmp();
+  await cap(() => commandRestartRequest({ _: ["request", TIP] }, opts({ env: { VIBESQUAD_HOME: h3, VS_RESTART_WINDOWS: "10:30" } })));
+  assert.equal(readRestartRequest(h3).windowAt, "2026-11-19T10:30:00.000Z", "VS_RESTART_WINDOWS steers the window");
+  r = await cap(() => commandRestartRequest({ _: ["abort"] }, opts({ env: { VIBESQUAD_HOME: h3 } })));
+  assert.match(r.out, /aborted; no lead had been asked yet, so none is messaged/);
+});
+
+test("idea-674 RW2: vs --help documents --urgent/--reason and the windows", () => {
+  const src = readFileSync(new URL("../cli/vs.mjs", import.meta.url), "utf8");
+  assert.match(src, /vs restart request <tip> \[--deadline <min, default 30>\] \[--needs <Live-Needs tokens>\] \[--team-only\] \[--urgent \[--reason "<why>"\]\]/);
+  assert.match(src, /QUEUED for the next fixed UTC window \(13:00Z \/ 21:00Z; VS_RESTART_WINDOWS/);
+});

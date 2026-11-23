@@ -46,6 +46,10 @@ test("lead pack routes server restarts to the Overlord/@bug; only the Overlord p
   assert.match(LEAD_FALLBACK_PACK, /Hand server restarts, post-merge runtime syncs and cross-lane tree blockers/);
   assert.match(LEAD_FALLBACK_PACK, /vs inbox add --lane bug-chaser/);
   assert.match(HUB_LEAD_RULES, /restart the VibeSquad server only when a merged change needs it, log `vs log metric/);
+  // idea-674: non-urgent restarts batch into the fixed windows; --urgent only for security / broken server / all-lanes blocker.
+  assert.match(HUB_LEAD_RULES, /non-urgent request is queued for the next fixed UTC window \(13:00Z \/ 21:00Z\)/);
+  assert.match(HUB_LEAD_RULES, /`--urgent --reason "<why>"` only for a security fix, a broken server, or a blocker for all lanes/);
+  assert.doesNotMatch(LEAD_FALLBACK_PACK, /--urgent/, "only the Overlord requests restarts");
 });
 
 test("useDraft persists composer drafts per agent in localStorage", () => {
