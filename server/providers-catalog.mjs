@@ -2,6 +2,7 @@
 // /__vibesquad/providers[/models|/modes|/usage|/settings]. Shapes match what src/paseoProviders.ts got from the
 // Paseo daemon ({providers:[{provider,available,error}]}, {models:[{id,label,...}]}, {modes:[...]}).
 // Probing: `<cli> --version` on the resolved executable, no shell, cached with a TTL. No background timers.
+import { activeQuotaAlerts } from "./quota-alert.mjs";
 import { execFile, execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, rmSync, mkdtempSync, writeFileSync, statSync } from "node:fs";
@@ -3350,6 +3351,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     byDay: byDayFinal,
     rows,
     limits: withPoolAgents(readLimits(home), agents),
+    quotaAlerts: activeQuotaAlerts(readLimits(home), home, { now: now() }),
     byRole: [...roleMap.values()].map(withAvg).sort((a, b) => ROLE_ORDER.indexOf(a.role) - ROLE_ORDER.indexOf(b.role)).map((r) => {
       // pool the role's profile groups on the one basis that applies (implementer first-try over merged units, else reviewer PASS lines)
       const gs = byProfile.filter((p) => p.role === r.role && p.successRate !== null);
