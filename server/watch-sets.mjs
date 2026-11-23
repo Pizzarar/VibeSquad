@@ -45,10 +45,15 @@ const BACKFILL_TAIL_BYTES = 4 * 1024 * 1024;
 const ANY_SUITE = new Set(["", "*", "any", "suite", "npm-test"]);
 /** Same shape as agent-duties' VERDICT_RE: "PASS: …", "FAIL: …", "UNVERIFIED (digest failed): FAIL …", plus a `VERDICT:` prefix or bold. */
 const VERDICT_RE = new RegExp(`^\\s*(?:UNVERIFIED\\b.*?:\\s*)?${VERDICT_PREFIX_SRC}(?:PASS|FAIL)\\b`);
-/** idea-351: a set that completed this recently still covers a late digest PASS/done for its agents (the digest race). */
+/**
+ * idea-351/idea-366: a set that completed this recently still covers a late digest PASS/done for its agents (the digest race).
+ * Coverage is tied to the reported work, not just time (fireCovers): only an item that ended `done` in the fired set, and only while
+ * its agent has not started a new turn since the fire. So a fix round or a stalled item's real report is never swallowed; the
+ * window is only the backstop for a missed runner event (no turnStartedAt), which is why it stays at 10 min for slow digests.
+ */
 export const COVER_AFTER_FIRE_MS = 600_000;
 /** Same set as agent-duties' FAIL_RE (`\b(?:FAIL(?:ED)?|NO-VERDICT)\b`): a NO-VERDICT reviewer report is not a covered PASS. */
-const FAIL_RE = new RegExp(`^\\s*(?:UNVERIFIED\\b.*?:\\s*)?${VERDICT_PREFIX_SRC}(?:FAIL|NO-VERDICT)\\b`);
+const FAIL_RE = /\b(?:FAIL(?:ED)?|NO-VERDICT)\b/;
 const MANAGER_ROLES = new Set(["lead", "brainstorm", "buddy", "overlord"]);
 
 const vsHome = (home) => path.resolve(home || process.env.VIBESQUAD_HOME || path.join(os.homedir(), ".vibesquad"));
@@ -699,6 +704,13 @@ export function createWatchEngine({
     }
   }
 
+  /** idea-366: a fired set's ping already delivered `item`'s report: it ended `done` and its agent started no new turn since the fire. */
+  function fireCovers(set, item) {
+    if (item.state !== "done") return false; // a stalled/failed item's real report has not been delivered yet
+    const started = agents.get(item.ref)?.turnStartedAt;
+    return !(Number.isFinite(started) && started > timeOf(set.firedAt));
+  }
+
   /**
    * A team-log entry (scanLogs). Records `done` / `blocker` entries that name a watched agent and returns the ids of the open
    * sets that take it over: the plugin holds it back from the normal per-event wake to the set's owner (one ping, not N).
@@ -712,11 +724,13 @@ export function createWatchEngine({
       const taken = [];
       const nowMs = now();
       const recentlyFired = (set) => set.firedAt && !set.cancelledAt && nowMs - timeOf(set.firedAt) <= COVER_AFTER_FIRE_MS;
+      // A fired set only takes an entry that fireCovers() says is the already-delivered report of a done item.
+      const hitsOf = (set) => set.items.filter((i) => i.kind === "agent" && ids.includes(i.ref) && (!set.firedAt || fireCovers(set, i)));
       const coverable = entry.type === "done" && !FAIL_RE.test(String(entry.text ?? ""));
       for (const set of reload().sets.filter((x) => isOpen(x) || (coverable && recentlyFired(x)))) {
         if (Number.isFinite(ts) && ts < timeOf(set.createdAt)) continue;
         if (entry.agent === set.owner) continue; // the owner's own entries never wake it anyway
-        const hit = set.items.filter((i) => i.kind === "agent" && ids.includes(i.ref));
+        const hit = hitsOf(set);
         if (!hit.length) continue;
         if (entry.type === "blocker" && hit.every((i) => i.stallFiredAt)) continue;
         taken.push(set.id);
@@ -775,6 +789,7 @@ export function createWatchEngine({
       const ids = refsOf(entry);
       for (const item of set.items) {
         if (item.kind !== "agent" || !ids.includes(item.ref)) continue;
+        if (set.firedAt && !fireCovers(set, item)) continue;
         // idea-351: a non-manager's done naming a watched agent (a digest whose label is unknown, a late PASS) is covered by the set's
         // ping even when it is not that item's counted report; a manager's entry and any FAIL still wake the owner.
         if ((await reportCounts(entry, item.ref)) || (coverable && (await authorKind(String(entry.agent ?? ""))) !== "manager")) {

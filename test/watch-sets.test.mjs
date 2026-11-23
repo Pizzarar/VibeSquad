@@ -2681,3 +2681,70 @@ test("idea-572: isCancelled re-reads the registry only when the file changed, an
     sb.cleanup();
   }
 });
+
+test(
+  "idea-366 H1a: a fix-round [done] after the agent started a NEW turn (post-fire) is not swallowed by the fired watch",
+  withPluginEnv(async (sb) => {
+    const { h, clock } = await firedWatchHarness(sb);
+    try {
+      clock.t += 2 * MIN;
+      h.watch.onRunnerEvent({ kind: "turn_started", agentId: "w-1" }); // the lead re-prompts the worker without a new watch
+      h.watch.onRunnerEvent(agentEv("w-1", "running"));
+      clock.t += MIN;
+      writeLog(sb, [{ ts: iso(clock.t), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w1 fix round", refs: ["w-1"] }]);
+      h.scanLogs(false);
+      await wait(250);
+      assert.equal(relaysTo(h, "lead-1").length, 1, "the second-turn PASS wakes: " + JSON.stringify(h.sent));
+    } finally {
+      h.stop();
+    }
+  }),
+);
+
+test(
+  "idea-366 H1b: a stalled item's real [done] after its set closed (sibling done) is not swallowed; the done sibling's late digest is",
+  withPluginEnv(async (sb) => {
+    const agents = new Map([["lead-1", mk("lead-1", "lead")], ["w-1", { ...mk("w-1", "worker"), status: "running" }], ["w-2", { ...mk("w-2", "worker"), status: "closed" }]]);
+    let w1Final = false;
+    const clock = { t: Date.now() };
+    const { id } = addWatch({ owner: "lead-1", team: "vibesquad", lane: "vibesquad", items: [{ kind: "agent", ref: "w-1" }, { kind: "agent", ref: "w-2" }] }, { home: sb.home, now: clock.t });
+    const h = await pluginHarness(sb, agents, {
+      timelineFor: (aid) => (aid === "w-1" && w1Final ? [{ item: { type: "assistant_message", text: "PASS: w1 shipped" } }] : []),
+      watchSets: { now: () => clock.t },
+    });
+    try {
+      for (const w of ["w-1", "w-2"]) {
+        h.watch.onRunnerEvent({ kind: "turn_started", agentId: w });
+        h.watch.onRunnerEvent(agentEv(w, "running"));
+      }
+      clock.t += MIN;
+      h.watch.onRunnerEvent(agentEv("w-2", "closed")); // w-2 stalls (exited) before reporting: its stall ping goes first
+      await h.watch.tick();
+      await wait(250);
+      clock.t += MIN;
+      w1Final = true;
+      agents.get("w-1").status = "idle";
+      h.watch.onRunnerEvent(agentEv("w-1", "idle")); // then w-1 finishes: the set closes with w-2 still stalled
+      h.watch.onRunnerEvent({ kind: "turn_ended", agentId: "w-1" });
+      clock.t += MIN;
+      await h.watch.tick();
+      await wait(250);
+      const set = h.watch.get(id);
+      assert.ok(set.firedAt, "set closed: " + JSON.stringify(set.items));
+      assert.equal(set.items.find((i) => i.ref === "w-2").state, "stalled");
+      const before = relaysTo(h, "lead-1").length;
+      clock.t += MIN;
+      writeLog(sb, [
+        { ts: iso(clock.t), agent: "dig-2", lane: "vibesquad", type: "done", text: "PASS 0/0/0 abc: w2 real report", refs: ["w-2"] },
+        { ts: iso(clock.t + 1), agent: "dig-1", lane: "vibesquad", type: "done", text: "PASS 0/0/0 def: w1 late digest", refs: ["w-1"] },
+      ]);
+      h.scanLogs(false);
+      await wait(250);
+      const relays = relaysTo(h, "lead-1").slice(before).map((s) => s.text).join("\n");
+      assert.match(relays, /w2 real report/, "the stalled item's report wakes: " + JSON.stringify(h.sent));
+      assert.doesNotMatch(relays, /w1 late digest/, "the done item's late digest stays covered");
+    } finally {
+      h.stop();
+    }
+  }),
+);
