@@ -19,14 +19,13 @@ const WF_TO_ARM = { sonnet: EXP6_ARMS["implement - sonnet"], dsp: EXP6_ARMS["wor
 // asking for the Sonnet implementer resolves to the winner. Set by hand, never parsed from verdict text: the D3 guard
 // (re-read >=2026-12-07) reverts by setting this to "sonnet" (requests then keep their profile) or "" (no default at all).
 export const EXP6_WINNER = "dsp";
-// Spawn names that mean "the normal implementer" -> the winner-arm name to use instead. Old names (and the `Worker` alias,
-// which resolves to Implement - Sonnet) swap to the old DSP profile; the P5c role name swaps to its role twin.
+// Spawn names that mean "the normal implementer" -> the winner-arm name to use instead: only the profile EXP6 measured
+// (`Implement - Sonnet`) and the `Worker` alias that resolves to it. No role names (D1b, Buddy fix-forward): the
+// `implement` role also carries the legacy Planner/Spec/Senior Reasoning names (LEGACY_PROFILE_ROLES), and EXP6 never
+// measured planning, so a role-name `implement` spawn and every planning/spec profile keep today's route.
 const DEFAULT_SOURCES = {
   "implement - sonnet": { wf: "sonnet", to: { dsp: "Work Order - DSP" } },
   worker: { wf: "sonnet", to: { dsp: "Work Order - DSP" } },
-  // The `implement` role also takes the legacy Planner/Spec/Senior Reasoning names (LEGACY_PROFILE_ROLES), but only the
-  // role NAME is a source here: a role-name planning spawn lands on Work Order unless it sets labels.wf or ab=pin.
-  implement: { wf: "sonnet", to: { dsp: "Work Order" } },
 };
 // Provider families whose cap blocks a swap to that arm. A deepseek cap is keyed "deepseek" (`vs cap set deepseek`)
 // while the DSP profile runs on provider "opencode": both count (idea-703: the A/B swap ignored a deepseek cap).

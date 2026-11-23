@@ -121,13 +121,15 @@ test("verdict probe: reads the given home, case-insensitive, cached by mtime+siz
 // ---- D1 (PLAN_EXP6_DSP_DEFAULT): post-verdict default -> EXP6_WINNER; caps checked at the swap (idea-703) ----
 const closed = (extra = {}) => base({ verdictProbe: async () => true, ...extra });
 
-test("D1 closed: normal Implement - Sonnet / Worker alias / implement role -> DSP; DSP request untouched", async () => {
+test("D1 closed: normal Implement - Sonnet / Worker alias -> DSP; DSP request untouched", async () => {
   assert.equal(EXP6_WINNER, "dsp");
   const r = await decideArm(closed());
   assert.deepEqual([r.mode, r.arm, r.requestedArm, r.swapped, r.profile], ["default", "dsp", "sonnet", true, "Work Order - DSP"]);
   assert.equal((await decideArm(closed({ stakes: "normal" }))).profile, "Work Order - DSP");
   assert.equal((await decideArm(closed({ profile: "Worker" }))).profile, "Work Order - DSP");
-  assert.equal((await decideArm(closed({ profile: "implement" }))).profile, "Work Order");
+  // D1b: role names are not default sources; the role keeps today's resolveRoute result.
+  assert.equal(await decideArm(closed({ profile: "implement" })), null);
+  assert.equal(await decideArm(closed({ profile: "Implement" })), null);
   assert.equal(await decideArm(closed({ profile: "Work Order - DSP" })), null);
   // End date passed (no verdict) closes it the same way.
   assert.equal((await decideArm(base({ endIso: "2026-11-22T00:00:00Z" }))).profile, "Work Order - DSP");
@@ -249,8 +251,8 @@ test("spawn_worker after verdict: corrupt cap file keeps Implement - Sonnet on c
   assert.equal(res.ab.capped, true);
 });
 
-test("spawn_worker after verdict: Worker alias -> Work Order - DSP, implement role -> Work Order role (opencode)", async () => {
-  for (const [asked, label] of [["Worker", "Work Order - DSP"], ["implement", "Work Order"], ["Implement", "Work Order"]]) {
+test("spawn_worker after verdict: Worker alias -> Work Order - DSP (opencode)", async () => {
+  for (const [asked, label] of [["Worker", "Work Order - DSP"]]) {
     const logs = [];
     const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
     const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
@@ -270,4 +272,67 @@ test("spawn_worker: a throwing writeLog never fails the spawn", async () => {
     assert.equal(creates[0].labels.profile, "Work Order - DSP");
     assert.equal(res.ab.swapped, true);
   }
+});
+
+// ---- D1b (Buddy fix-forward): planner/spec stay on the requested profile; role name `implement` is not swapped ----
+const PLANNING = [
+  { name: "Planner - Sonnet", role: "worker", provider: "claude", model: "claude-sonnet-5-5", modeId: "auto", thinkingOptionId: "medium" },
+  { name: "Spec - Opus", role: "worker", provider: "claude", model: "claude-opus-5-5", modeId: "auto", thinkingOptionId: "medium" },
+  { name: "Senior Reasoning - DSP", role: "worker", provider: "opencode", model: "deepseek/deepseek-v4-pro", modeId: "build", thinkingOptionId: "high" },
+];
+
+test("D1b decideArm: closed + normal Planner - Sonnet / Spec - Opus / Senior Reasoning - DSP -> no swap", async () => {
+  for (const { name } of PLANNING) {
+    assert.equal(await decideArm(closed({ profile: name })), null, name);
+    assert.equal(await decideArm(closed({ profile: name, stakes: "normal" })), null, name);
+  }
+});
+
+test("D1b spawn_worker: closed + normal planning/spec profiles keep the requested profile, no metric", async () => {
+  for (const p of PLANNING) {
+    const logs = [];
+    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" }, loadProfiles: async () => [...USER_PROFILES, ...PLANNING] });
+    const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: p.name, stakes: "normal" });
+    assert.equal(creates[0].labels.profile, p.name);
+    assert.equal(creates[0].config.provider, p.provider, p.name);
+    assert.equal(creates[0].config.model, p.model, p.name);
+    assert.equal(res.ab, undefined, p.name);
+    assert.equal(logs.length, 0, p.name);
+  }
+});
+
+test("D1b spawn_worker: closed + role name implement/Implement keeps today's route (Implement role on claude), no swap", async () => {
+  for (const asked of ["implement", "Implement"]) {
+    const logs = [];
+    const { ctx, creates } = ctxWith([], logs, { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
+    assert.equal(creates[0].labels.profile, "Implement", asked);
+    assert.equal(creates[0].config.provider, "claude", asked);
+    assert.equal(creates[0].config.model, "claude-sonnet-5-5", asked);
+    assert.equal(res.ab, undefined, asked);
+    assert.equal(logs.length, 0, asked);
+  }
+});
+
+test("D1b spawn_worker: Implement - Sonnet and Worker still -> DSP; capped deepseek keeps Sonnet for both", async () => {
+  for (const asked of ["Implement - Sonnet", "Worker"]) {
+    const { ctx, creates } = ctxWith([], [], { env: { VIBESQUAD_HOME: closedHome(), VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const res = await callTool(ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
+    assert.deepEqual([creates[0].labels.profile, creates[0].config.provider, res.ab.swapped], ["Work Order - DSP", "opencode", true], asked);
+    const capHome = closedHome({ deepseek: { reason: "cli cap", updatedAt: new Date().toISOString() } });
+    const c2 = ctxWith([], [], { env: { VIBESQUAD_HOME: capHome, VS_EXP6_END: "2999-01-01T00:00:00Z" } });
+    const r2 = await callTool(c2.ctx, "spawn_worker", { title: "t", prompt: "go", profile: asked, stakes: "normal" });
+    assert.deepEqual([c2.creates[0].labels.profile, c2.creates[0].config.provider, r2.ab.swapped, r2.ab.capped], ["Implement - Sonnet", "claude", false, true], asked);
+  }
+});
+
+test("D1b open experiment: alternation unchanged for the arms; role name and planning profiles never alternate", async () => {
+  const skew = async () => [ag("sonnet"), ag("sonnet"), ag("sonnet"), ag("dsp")];
+  const r = await decideArm(base({ listAgents: skew }));
+  assert.deepEqual([r.mode, r.arm, r.swapped, r.profile, r.counts], ["ab", "dsp", true, "Work Order - DSP", { sonnet: 3, dsp: 1 }]);
+  const r2 = await decideArm(base({ profile: "Work Order - DSP", listAgents: async () => [ag("dsp"), ag("dsp"), ag("sonnet")] }));
+  assert.deepEqual([r2.arm, r2.swapped, r2.profile], ["sonnet", true, "Implement - Sonnet"]);
+  const tie = await decideArm(base({ listAgents: async () => [ag("sonnet"), ag("dsp")] }));
+  assert.deepEqual([tie.arm, tie.swapped], ["sonnet", false]);
+  for (const profile of ["implement", "Worker", ...PLANNING.map((p) => p.name)]) assert.equal(await decideArm(base({ profile, listAgents: skew })), null, profile);
 });
