@@ -1,0 +1,24 @@
+{
+  "laneId": "playtest-overlay",
+  "updatedAt": "2026-11-22T00:34:13.386Z",
+  "units": [
+    {
+      "id": "pto-owner-playtest-role",
+      "goal": "Least-privilege owner-playtest device role (report/thread only) replacing the full-owner token held by the Godot addon (PLAN_V1 accepted risk)",
+      "files": [],
+      "doneCheck": "",
+      "status": "todo"
+    },
+    {
+      "id": "pto-b2b-lows",
+      "goal": "B2b review lows (pto-b2b-r1.md): L1 refuse override paths inside project root/UNC; L2 CA double-read TOCTOU; L3 temp-write error check + unpredictable temp name; L4 README step order",
+      "files": [
+        "godot/addons/vs_playtest/token.gd",
+        "godot/addons/vs_playtest/transport.gd",
+        "docs/lanes/playtest-overlay/README.md"
+      ],
+      "doneCheck": "",
+      "status": "todo"
+    }
+  ]
+}
