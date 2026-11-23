@@ -378,20 +378,28 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   // idea-440: the server alternates EXP6 arms per lane (stakes=normal implementer spawns only; wf/ab=pin opt out).
   let ab = null;
   let pickedProfile = profileName;
-  if (profileName) {
+  // An explicit provider/model is the caller's choice: no pick. VS_STAKES is not forwarded by this tool, so only args stakes count.
+  if (profileName && !given.provider && !given.model) {
     const stakesNow = clean(args.labels?.stakes) || clean(args.stakes);
-    const abLane = clean(args.labels?.lane) || clean(ctx.identity.lane);
+    // Same precedence the spawn stamps below (identity wins over a caller label).
+    const abLane = clean(ctx.identity.lane) || clean(args.labels?.lane);
+    const abTeam = clean(ctx.identity.team) || clean(args.labels?.team);
     ab = await decideArm({
-      profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane,
+      profile: profileName, stakes: stakesNow, asLead: clean(args.labels?.role).toLowerCase() === LEAD_ROLE, labels: args.labels ?? {}, lane: abLane, team: abTeam,
       endIso: ctx.env?.VS_EXP6_END,
-      verdictProbe: () => readPerfectionVerdict({ team: clean(ctx.identity.team) || "vibesquad" }),
+      verdictProbe: () => readPerfectionVerdict({ home: ctx.env?.VIBESQUAD_HOME }),
       listAgents: async () => entriesOf(await ctx.withBackend({ lane: abLane }, (b) => (b.fetchAgents ?? b.listAgents).call(b, { filter: { includeArchived: true } }))).map((e) => e?.agent ?? e),
     });
     if (ab?.swapped) pickedProfile = ab.profile;
   }
   if (profileName) {
     const profiles = await ctx.loadProfiles();
-    const hit = await ctx.resolveProfile(pickedProfile, profiles, { stakes: clean(args.labels?.stakes) || clean(args.stakes) });
+    const stk = { stakes: clean(args.labels?.stakes) || clean(args.stakes) };
+    let hit = await ctx.resolveProfile(pickedProfile, profiles, stk);
+    if (!hit && ab?.swapped) { // fail open: the swapped-to profile is not installed, keep the requested one
+      hit = await ctx.resolveProfile(profileName, profiles, stk);
+      ab = { ...ab, arm: ab.requestedArm, swapped: false, failOpen: true };
+    }
     if (!hit) {
       const known = profiles.map((p) => p.name).join(", ");
       throw new Error(`unknown profile "${profileName}". Known: ${known}`);
@@ -482,7 +490,6 @@ async function spawnWorkerOnce(ctx, args = {}, lease = { key: "" }) {
   if (callerAgentId(ctx)) labels["vs.parent"] = callerAgentId(ctx); // the verified caller (or the claimed id under the fallback)
   delete labels.ord; // ordinals are assigned by the squad, never by a spawn arg
   labels.job = clean(labels.job) || title;
-  if (ab?.swapped) labels.wf = ab.arm; // the stamp matches the swapped profile; the hook keeps a caller wf
   // Which of model/thinking came from the profile rather than the caller: the before.agent.create hook must not read those as an explicit override of the stakes ladder.
   delete labels["vs.profile-derived"];
   const derived = [!given.model && model ? "model" : "", !givenThinking && thinkingOptionId ? "thinking" : ""].filter(Boolean);

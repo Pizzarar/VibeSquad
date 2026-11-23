@@ -391,7 +391,7 @@ test('vs spawn --stakes parses and the stakes value reaches the spawn request (i
   const runnerBackend = fakeBackend('rn');
   const ctx = fakeCtx({ runnerBackend, paseoBackend: fakeBackend('ps') });
   const spawned = await runAgentVerb('spawn', { _: [], title: 'CLI job', profile: 'Implement - Sonnet', prompt: 'do x', stakes: 'mechanical' }, ctx);
-  assert.deepEqual({ ...spawned, ab: undefined }, { id: 'rn-new', title: 'CLI job', ab: undefined });
+  assert.deepEqual(spawned, { id: 'rn-new', title: 'CLI job' }); // mechanical is never EXP6-picked: no ab
   assert.equal(runnerBackend.calls[0][1].labels.stakes, 'mechanical');
   await assert.rejects(runAgentVerb('spawn', { _: [], title: 't', profile: 'Implement - Sonnet', prompt: 'p', stakes: 'bogus' }, ctx), /unknown stakes/);
 });
