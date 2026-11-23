@@ -88,6 +88,28 @@ export async function armedWatchOwners(baseHome) {
   return new Set((doc.sets ?? []).filter((s) => !s.firedAt && !s.cancelledAt).map((s) => s.owner));
 }
 
+/** idea-569: true when the plan the brief names is done: lane log has `done` + pass for it, or the plan file's status says COMPLETE. */
+export async function planIsComplete({ teamId, laneId, brief, root, baseHome }) {
+  // The ACTIVE plan is the LAST docs/PLAN_*.md the brief names (newer plans are appended); an older done plan must not hide a new open one.
+  const named = String(brief ?? "").match(/(?:^|[^\w./-])docs\/PLAN_[\w.-]+?\.md(?![\w-]|\.\w)/gi) ?? [];
+  const plan = named.length ? named[named.length - 1].replace(/^[^d]*/i, "") : "";
+  if (!plan) return false;
+  const text = await tailText(join(homeOf(baseHome), "logs", `${seg(teamId)}--${seg(laneId)}.jsonl`));
+  for (const line of text.split(/\r?\n/)) {
+    if (!line) continue;
+    try {
+      const e = JSON.parse(line);
+      if (e.type === "done" && e.pass === true && String(e.plan ?? "").toLowerCase() === plan.toLowerCase()) return true;
+    } catch {}
+  }
+  try {
+    const head = (await readFile(join(root, plan), "utf8")).slice(0, 2000);
+    return /^[ \t]*(?:[-*>#]+[ \t]*)?(?:\*\*|__)?[Ss]tatus(?:\*\*|__)?[ \t]*[:—–-]+[ \t]*(?:\*\*|__)?[ \t]*COMPLETE\b/m.test(head);
+  } catch {
+    return false;
+  }
+}
+
 /** Open work in priority order: TASKS.json live units, then plan blocks not PASS in the brief.
  * Inbox cards are triage items, not lane work, EXCEPT a plain new card (status "parked", no parkedAt marker)
  * and an "accepted" card (Review L1: accepted is actionable), which still count. An explicitly parked card
@@ -108,7 +130,11 @@ export async function laneOpenWork({ teamId, laneId, rootDir, baseHome }) {
     items.push(`${c.id} ${String(c.title ?? c.text ?? "").slice(0, 80)}`.trim());
   }
   try {
-    items.push(...openPlanBlocks(await readFile(join(root, "docs", "brainstorm", `${laneId}.md`), "utf8")));
+    const brief = await readFile(join(root, "docs", "brainstorm", `${laneId}.md`), "utf8");
+    // idea-569: a plan that is finished (done plan=<path> PASS in the lane log, or the plan file says COMPLETE) has no open blocks,
+    // so a stale non-PASS block line in the brief must not keep kicking/escalating a lane. A logged owner hold has no structured
+    // form yet (decision entries are free text); the done-plan signal is the only one honoured.
+    if (!(await planIsComplete({ teamId, laneId, brief, root, baseHome }))) items.push(...openPlanBlocks(brief));
   } catch {}
   return items;
 }

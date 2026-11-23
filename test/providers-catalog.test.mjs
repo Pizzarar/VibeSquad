@@ -3335,3 +3335,54 @@ test('usage review T2: timeoutMs defaults to 180s, normalizes, persists, and plu
   assert.ok(lines.some((l) => /usage-review: opus ok ms=12 timeoutMs=90000/.test(l)), lines.join('|'));
   assert.ok(lines.some((l) => /usage-review: gemini failed ms=90001 /.test(l)), lines.join('|'));
 });
+
+test('idea-655: environment stops (missing lupa, GPU golden mismatch) are BLOCKED and excluded from successRate; a real FAIL stays FAIL', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+  const mk = (id, text) => writeAgent(home, id, [
+    { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } },
+    { ts: T0 + 100, type: 'output', text },
+    { ts: T0 + 200, type: 'turn_done' },
+  ]);
+  mk('rn-pass', '**PASS** all green.\nDone.');
+  mk('rn-fail', 'Verdict: FAIL (1H: lupa import bug in script)');
+  mk('rn-fail-plain', 'Verdict: FAIL\n- 1H issue found.');
+  mk('rn-nolupa', 'Verdict: FAIL, no lupa installed here');
+  mk('rn-golden', 'Overall: FAIL (GPU golden mismatch, 58/60 diffs)');
+  const u = getUsage({ home, git: noGit });
+  const p = byProfileOf(u, 'Review - Gemini');
+  assert.equal(p.runs, 5);
+  assert.equal(p.passCount, 1);
+  assert.equal(p.blockedCount, 2, 'only the two environment stops are BLOCKED');
+  assert.equal(p.successRate, 0.333, '1 pass / (5 runs - 2 blocked); the real FAILs still count');
+});
+
+test('idea-655 review: all-blocked is no-signal; byRole excludes blocked; narrow lupa; BLOCKED latches across verdict-less follow-ups', () => {
+  const home = tmp();
+  clearUsageCache();
+  const T0 = Date.UTC(2026, 10, 8, 12);
+  const created = { ts: T0, type: 'created', provider: 'antigravity-cli', model: 'gemini-4-argon', meta: { lane: 'usage', role: 'worker', profile: 'Review - Gemini' } };
+  const mk = (id, text) => writeAgent(home, id, [created, { ts: T0 + 100, type: 'output', text }, { ts: T0 + 200, type: 'turn_done' }]);
+  mk('b1', 'FAIL: ModuleNotFoundError: No module named lupa');
+  mk('b2', 'Overall: FAIL (GPU golden mismatch, 58/60 diffs)');
+  mk('f1', 'Verdict: FAIL (the lupa binding is missing a null check)'); // real review FAIL mentioning lupa + missing
+  writeAgent(home, 'b3', [created,
+    { ts: T0 + 100, type: 'output', text: 'FAIL: No module named lupa\n' },
+    { ts: T0 + 150, type: 'input', text: 'continue' },
+    { ts: T0 + 200, type: 'output', text: 'Still waiting on the dependency.\n' },
+    { ts: T0 + 300, type: 'turn_done' }]);
+  let u = getUsage({ home, git: noGit });
+  let p = byProfileOf(u, 'Review - Gemini');
+  assert.equal(p.runs, 4);
+  assert.equal(p.blockedCount, 3, 'b1, b2, and b3 (latched across the verdict-less follow-up); the lupa/missing review FAIL f1 stays FAIL');
+  assert.equal(p.successRate, 0, '0 pass / (4 - 3 blocked)');
+  assert.equal(u.byRole.find((r) => r.role === 'worker').successRate, 0, 'byRole denominator excludes blocked');
+  // all-blocked: no signal
+  const home2 = tmp();
+  clearUsageCache();
+  fs.writeFileSync(path.join(v2Dir(home2), 'only.jsonl'), [created, { ts: T0 + 100, type: 'output', text: 'FAIL: No module named lupa' }, { ts: T0 + 200, type: 'turn_done' }].map((e, i) => ev({ seq: i, ...e })).join(''));
+  u = getUsage({ home: home2, git: noGit });
+  p = byProfileOf(u, 'Review - Gemini');
+  assert.deepEqual([p.successRate, p.successBasis], [null, 'no-signal']);
+});

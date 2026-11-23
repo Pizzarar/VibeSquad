@@ -510,7 +510,10 @@ function foldEvent(st, ev) {
   } else if (ev.type === "input") {
     st.curTools = undefined; // usa-40 R1 M3: tools belong to the turn that follows its prompt
     if (st.msgVerdict === "PASS") st.priorPass = true;
-    else if (st.msgVerdict === "FAIL") st.priorPass = false;
+    else if (st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED") st.priorPass = false;
+    // L4: an env-stop BLOCKED survives follow-up turns that carry no verdict line; any PASS/FAIL verdict clears it.
+    if (st.msgVerdict === "BLOCKED") st.priorBlocked = true;
+    else if (st.msgVerdict === "PASS" || st.msgVerdict === "FAIL") st.priorBlocked = false;
     if (!st.inputSeen) { st.inputSeen = true; foldAssignedUnits(st, ev.text); } // usa-44: the work order is the first input
     st.firstLine = ""; // a new prompt starts a new assistant message; echoed prompt text never counts
     st.firstLineDone = false;
@@ -535,7 +538,7 @@ function foldEvent(st, ev) {
     if (typeof ev.text === "string") {
       foldOutputLines(st, ev.text);
       st.msgVerdict = messageVerdict(st);
-      st.pass = st.msgVerdict === "FAIL" ? false : (st.priorPass || st.msgVerdict === "PASS");
+      st.pass = st.msgVerdict === "FAIL" || st.msgVerdict === "BLOCKED" ? false : (st.priorPass || st.msgVerdict === "PASS");
     }
   } else if (ev.type === "tool") {
     if (st.role === "lead" && ev.phase === "call" && st.turns + 1 > LEAD_LONG_TURN_MIN) (st.curTools ??= []).push({ name: ev.name, input: ev.input });
@@ -674,10 +677,13 @@ function foldOutputLines(st, chunk) {
   }
 }
 
+/** idea-655: environment stops (missing lupa dependency, GPU golden mismatch) on a FAIL line are BLOCKED. Narrow on purpose. */
+const ENV_STOP_RE = /(?:No module named ['"]?lupa|(?:ModuleNotFound|Import)Error[^\n]{0,40}\blupa|\blupa(?:\s+(?:module|package))?\s+(?:is\s+)?(?:not installed|not found|missing|unavailable)\b|\b(?:no|missing)\s+lupa\s+(?:module|package|dependency|installed)\b|\bGPU golden(?:s)?\s+(?:mismatch|diff)|\bgolden(?:s)?\s+(?:mismatch|diff)[^\n]{0,30}\bGPU)/i;
+
 /** Verdict on a single line: any uppercase \bFAIL\b wins over PASS; uppercase PASS/FAIL only with word boundaries (ignores "passes"/"passed"). */
 function lineVerdict(line) {
   if (!line || typeof line !== "string") return null;
-  if (/\bFAIL\b/.test(line)) return "FAIL";
+  if (/\bFAIL\b/.test(line)) return ENV_STOP_RE.test(line) ? "BLOCKED" : "FAIL"; // idea-655: an environment stop is BLOCKED, not FAIL
   if (VERDICT_LINE_PASS_RE.test(line) && /\bPASS\b/.test(line)) return "PASS";
   return null;
 }
@@ -687,6 +693,7 @@ function messageVerdict(st) {
   const lastLine = st.curLine.trim() && !/^\s*⚠/.test(st.curLine) ? st.curLine.trim() : st.lastLine;
   const lastV = lineVerdict(lastLine);
   if (firstV === "FAIL" || lastV === "FAIL") return "FAIL";
+  if (firstV === "BLOCKED" || lastV === "BLOCKED") return "BLOCKED";
   if (firstV === "PASS" || lastV === "PASS") return "PASS";
   return null;
 }
@@ -1323,6 +1330,7 @@ function agentV2(st, agentId) {
     inputTokens: stats.inputTokens,
     outputTokens: stats.outputTokens,
     pass: !!st.pass,
+    blocked: !st.pass && (st.msgVerdict === "BLOCKED" || (st.msgVerdict === null && !!st.priorBlocked)),
     workingMs,
     idleMs: Math.max(0, spanMs - workingMs),
     exited: !!st.exited,
@@ -3148,7 +3156,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   // (vs.handoff-from only marks a carrier, nothing records acceptance or plan completion), so they report null / no-signal.
   const roleSuccess = (g) => {
     const rate = (n, d) => Math.round((n / d) * 1000) / 1000;
-    if (g.jobKind === "reviewer") return g.runs ? { successRate: rate(g.passCount, g.runs), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
+    if (g.jobKind === "reviewer") return g.runs - g.blockedCount > 0 ? { successRate: rate(g.passCount, g.runs - g.blockedCount), successBasis: "reviewer-pass-lines" } : { successRate: null, successBasis: "no-signal" };
     if (g.jobKind === "implementer") return g.mergedUnits ? { successRate: rate(g.firstTryCount, g.mergedUnits), successBasis: "implementer-first-try-pass" } : { successRate: null, successBasis: "no-signal" };
     return { successRate: null, successBasis: "no-signal" };
   };
@@ -3158,7 +3166,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
   const profileKey = (a) => `${a.provider}|${baseModel(a.model)}|${a.stakes}|${a.jobKind}`;
   const profileMap = new Map();
   for (const a of agents) {
-    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
+    const g = getOrSet(profileMap, profileKey(a), () => ({ provider: a.provider, model: baseModel(a.model), stakes: a.stakes, jobKind: a.jobKind, profile: `${baseModel(a.model)} · ${a.stakes} (${a.jobKind})`, role: a.role, runs: 0, turns: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, workingMs: 0, idleMs: 0, passCount: 0, blockedCount: 0, loopCount: 0, errorCount: 0, mergedUnits: 0, firstTryCount: 0, reviewRounds: 0, unitCycleSum: 0, unitCycleCount: 0, fixAfterMergeCount: 0, reviewedUnits: 0, reviewedReviewRounds: 0, reviewedFixAfterMergeCount: 0 }));
     g.runs += 1;
     g.turns += a.turns;
     g.inputTokens += a.inputTokens;
@@ -3167,6 +3175,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
     g.workingMs += a.workingMs;
     g.idleMs += a.idleMs;
     if (a.pass) g.passCount += 1;
+    if (a.blocked) g.blockedCount += 1;
     if (a.loop) g.loopCount += 1;
     g.errorCount += a.errors ?? 0;
   }
@@ -3204,7 +3213,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       tokensPerRun: g.runs ? Math.round((g.inputTokens + g.outputTokens) / g.runs) : 0,
       inputTokens: g.inputTokens, outputTokens: g.outputTokens, costUsd: g.costUsd,
       workingMs: g.workingMs, idleMs: g.idleMs,
-      passCount: g.passCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
+      passCount: g.passCount, blockedCount: g.blockedCount, passRate: g.runs ? Math.round((g.passCount / g.runs) * 1000) / 1000 : 0,
       ...roleSuccess(g),
       loopCount: g.loopCount,
       errorCount: g.errorCount,
@@ -3347,7 +3356,7 @@ function* usageSteps({ home, since, until, git, laneCodes, usageReview, squad: s
       const basis = gs.find((p) => p.successBasis === "implementer-first-try-pass") ? "implementer-first-try-pass" : gs[0]?.successBasis;
       const use = gs.filter((p) => p.successBasis === basis);
       const num = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.firstTryCount, 0) : use.reduce((t, p) => t + p.passCount, 0);
-      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.mergedUnits, 0) : use.reduce((t, p) => t + p.runs, 0);
+      const den = basis === "implementer-first-try-pass" ? use.reduce((t, p) => t + p.mergedUnits, 0) : use.reduce((t, p) => t + p.runs - (p.blockedCount ?? 0), 0);
       return { ...r, successRate: den ? Math.round((num / den) * 1000) / 1000 : null, successBasis: den ? basis : "no-signal" };
     }),
     lanes: lanes.map((l) => ({ ...l, ...(laneV2.get(l.lane) ?? {}) })),
