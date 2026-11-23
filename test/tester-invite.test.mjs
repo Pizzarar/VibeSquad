@@ -53,6 +53,8 @@ describe("phonePairLogic tester helpers", () => {
     assert.equal(logic.formatDeviceRoleBadge({ role: "bug-tester", allowedTeams: ["efi"] }), "TESTER · efi");
     assert.equal(logic.formatDeviceRoleBadge({ role: "bug-tester", allowedTeams: ["efi", "vs"] }), "TESTER · efi, vs");
     assert.equal(logic.formatDeviceRoleBadge({ role: "owner", allowedTeams: null }), null);
+    assert.equal(logic.formatDeviceRoleBadge({ role: "owner-playtest", allowedTeams: null }), "PLAYTEST");
+    assert.deepEqual(logic.buildPairStartBody("owner-playtest", ["efi"]), { role: "owner-playtest", allowedTeams: null });
     assert.equal(logic.formatDeviceRoleBadge({}), null);
     assert.equal(logic.formatDeviceRoleBadge(null), null);
   });

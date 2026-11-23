@@ -10,11 +10,11 @@ export type PhoneDevice = {
   mintedByDeviceId: string | null;
   current?: boolean;
   /** E6a: owner (default / older servers) or bug-tester scoped to allowedTeams. */
-  role?: "owner" | "bug-tester";
+  role?: "owner" | "bug-tester" | "owner-playtest";
   allowedTeams?: string[] | null;
 };
 
-export type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number; role?: "owner" | "bug-tester"; allowedTeams?: string[] | null };
+export type PendingPair = { pendingId: string; name: string; ip: string; createdAt: string; expiresInMs: number; role?: "owner" | "bug-tester" | "owner-playtest"; allowedTeams?: string[] | null };
 
 /** Every device whose minting chain leads back to `id` (not `id` itself). Cycle-safe; order = list order. */
 export function descendantsOf(devices: PhoneDevice[], id: string): PhoneDevice[] {
@@ -67,7 +67,7 @@ export function mintedByLabel(devices: PhoneDevice[], d: PhoneDevice): string | 
 
 // E6c (docs/PLAN_E6_TESTER_ROLES.md): scoped alpha-tester invites. Pure so test/tester-invite.test.mjs can run them directly.
 
-export type DeviceRole = "owner" | "bug-tester";
+export type DeviceRole = "owner" | "bug-tester" | "owner-playtest";
 
 /** Role fields E6a adds to every device / pending-ticket record (older servers omit them = owner). */
 export type RoleScoped = { role?: DeviceRole | string | null; allowedTeams?: string[] | null };
@@ -81,13 +81,15 @@ export function defaultTesterTeams(teams: Array<{ id: string }>, activeTeamId?: 
 
 /** "TESTER · efi, vs" for a bug-tester device or ticket; null for owners (no badge). */
 export function formatDeviceRoleBadge(dev: RoleScoped | null | undefined): string | null {
+  if (dev?.role === "owner-playtest") return "PLAYTEST";
   if (!dev || dev.role !== "bug-tester") return null;
   const teams = Array.isArray(dev.allowedTeams) ? dev.allowedTeams.filter((t) => typeof t === "string" && t) : [];
   return teams.length ? `TESTER · ${teams.join(", ")}` : "TESTER";
 }
 
 /** JSON body for POST /__vibesquad/pair/start. A tester invite must name at least one Squad (throws otherwise). */
-export function buildPairStartBody(role: DeviceRole, allowedTeams: string[] = []): { role: DeviceRole; allowedTeams?: string[] } {
+export function buildPairStartBody(role: DeviceRole, allowedTeams: string[] = []): { role: DeviceRole; allowedTeams?: string[] | null } {
+  if (role === "owner-playtest") return { role, allowedTeams: null };
   if (role !== "bug-tester") return { role: "owner" };
   const teams = [...new Set(allowedTeams.filter((t) => typeof t === "string" && t.trim()))];
   if (!teams.length) throw new Error("Pick at least one Squad for an Alpha Tester invite.");
