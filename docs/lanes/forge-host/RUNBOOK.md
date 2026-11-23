@@ -152,7 +152,62 @@ Placeholders: `<u>` = Windows user, `<forge-user>` = forge user, `<forge-host>` 
    junction on `--to` or under its allowlisted entries is refused, and every write is checked (junctions resolved) to
    land outside `--from`. JSON that does not parse, JSONL lines that do not parse and non-UTF-8 text are copied
    verbatim and reported.
-5. Start the forge unit; leads and Buddies restart fresh from their briefs (C2).
+5. **Clone the repos, then carry the untracked docs** (`scripts/forge-docs-sync.mjs`; `forge-migrate.mjs --sync-docs`
+   and `--verify-briefs` dispatch to it). Lane briefs `docs/brainstorm/<lane>.md`, `docs/lanes/<lane>/{SPEC.md,TASKS.json}`
+   and plans are gitignored or untracked, so a fresh clone has none and fresh Buddies and leads start without a brief.
+   - Pre-check on the dev pp (read-only): `node scripts/forge-docs-sync.mjs --verify-briefs --teams C:\Users\<u>\.vibesquad\teams.json --projects-root C:\Users\<u>\projects`.
+     A brief missing here is missing on the forge too: write it (lane Buddy) or accept the gap before going on.
+   - Clone every project repo on the forge into `~/projects/<P>` under the folder name teams.json uses. Linux is
+     case-sensitive: if the dev pp folder differs only in case from the teams.json name, clone under the teams.json name
+     and add `--as <dev pp folder>=<teams.json name>` below.
+   - From the dev pp, dry run, then the copy (over ssh to `<user>@<forge mesh host>`, BatchMode, key auth):
+     ```
+     node scripts/forge-docs-sync.mjs --sync-docs --from-projects C:\Users\<u>\projects --to <user>@<forge mesh host>:~/projects --dry-run
+     node scripts/forge-docs-sync.mjs --sync-docs --from-projects C:\Users\<u>\projects --to <user>@<forge mesh host>:~/projects
+     ```
+     Per main checkout (`.git` is a folder) it takes `git ls-files --others -z -- docs` (untracked, ignored included),
+     skips `node_modules`, `.godot`, `.import`, `dist`, `build` and files over 200 MB (listed), copies every eligible
+     file into a local staging dir (printed; never deleted), then per repo over ssh: `git ls-files -s` (tracked paths),
+     `sha256sum` of what already exists, one `tar -x -k` stream of the new files and a `sha256sum` check against the
+     local hashes. A path the forge clone tracks is never written; an existing file that differs is kept and listed as
+     CONFLICT; an identical one counts as `same`. A repo not cloned on the forge is listed and skipped. Re-running is
+     safe (everything already there is `same`). The dev pp checkouts are only read. Exit 1 on any error.
+   - **Done-check** on the forge (read-only): every lane in teams.json except `removed` ones and hidden helper lanes
+     (Bug Runner / Perfection, warned only) has `<project dir>/docs/brainstorm/<lane>.md`, the project dir resolved as
+     the server does (lane paths, then team paths, under `~/projects`; fallback `~/projects/VibeSquad`). Missing
+     `docs/lanes/<lane>/` dirs are warnings. Must exit 0:
+     ```
+     node scripts/forge-docs-sync.mjs --verify-briefs --teams ~/.vibesquad/teams.json --projects-root ~/projects
+     ```
+6. Start the forge unit; leads and Buddies restart fresh from their briefs (C2).
+
+## C4 backup review schedule (right after C2)
+
+The dev pp backup zip and bundles live on the forge (C4) until the owner says delete. Right after C2, on the forge,
+create a **one-shot** VS schedule that reminds the owner about them in about 14 days. The agent it starts only reads
+and reports; it never deletes. Loopback calls use the owner's local token (`x-vibesquad-token`, `~/.vibesquad/local-token`);
+`POST /__vibesquad/schedules` goes to `server/schedules.mjs` `create()`. Do **not** add `runOnCreate`: it fires the
+schedule at once (`server/schedules.mjs:344-345`) and, with `maxRuns: 1`, that would be its only run. The cron names a
+fixed day and month, so it next fires about 14 days out; `maxRuns: 1` ends it after that run.
+
+```
+ssh <user>@<forge mesh host>
+D=$(date -d '+14 days' +%-d); M=$(date -d '+14 days' +%-m); TZN=$(timedatectl show -p Timezone --value)
+curl -fsS -X POST "http://127.0.0.1:<port>/__vibesquad/schedules" \
+  -H "x-vibesquad-token: $(cat ~/.vibesquad/local-token)" -H 'content-type: application/json' --data-binary @- <<EOF
+{
+  "name": "Forge backup review (C4)",
+  "cadence": { "type": "cron", "expression": "0 10 $D $M *", "timezone": "$TZN" },
+  "maxRuns": 1,
+  "target": { "type": "new-agent", "config": { "provider": "claude", "model": "claude-sonnet-5-5", "modeId": "auto", "thinkingOptionId": "low", "cwd": "/home/<user>/projects/VibeSquad" } },
+  "prompt": "Forge backup review (C4). READ-ONLY: never delete, move, rename or modify any file. For every vibesquad-home-* archive and vibesquad-bundles-* folder under <backup dir>, report its full path, size (du -sh) and age in days (from its mtime). Then (1) run: vs log blocker 'needs-you: review forge backup: delete? <one line: paths, sizes, ages>'; (2) send the same line to the forge-host lane Buddy (vs who brainstorm --lane forge-host) and ask it to run: vs log needs-you \"review forge backup: delete?\". A schedule agent is a worker and the team log refuses needs-you from workers, so the Buddy logs it. Finish with the same report as your final message."
+}
+EOF
+```
+
+Check it (one entry, `maxRuns: 1`, `runCount: 0`, `nextRunAt` about 14 days out):
+`curl -fsS "http://127.0.0.1:<port>/__vibesquad/schedules" -H "x-vibesquad-token: $(cat ~/.vibesquad/local-token)"`.
+`<backup dir>` is where C4 put the zip and bundles on the forge; `<port>` defaults to 4180.
 
 ## Rollback notes (C3)
 

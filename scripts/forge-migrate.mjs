@@ -67,6 +67,7 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveManagedWorktreeRoot } from "../server/team-worktrees.mjs";
+import { main as docsSyncMain } from "./forge-docs-sync.mjs"; // C2 --sync-docs / --verify-briefs live there
 
 export const ALLOWLIST = [
   "teams.json", "teams", "inbox.json", "lessons.jsonl", "profiles.json", "settings.json", "stakes-ladder.json",
@@ -1107,6 +1108,7 @@ const USAGE = `usage:
 --win-projects defaults to <home>/projects. Never deletes owner data. See the header of this file and docs/lanes/forge-host/RUNBOOK.md (C2 migrate).`;
 
 export function main(argv = process.argv.slice(2), log = console.log, err = console.error, { now = new Date() } = {}) {
+  if (argv.includes("--sync-docs") || argv.includes("--verify-briefs")) return docsSyncMain(argv, log, err);
   let args;
   try { args = parseArgs(argv); } catch (e) { err(`${e.message}\n${USAGE}`); return 2; }
   if (args.help) { log(USAGE); return 0; }
