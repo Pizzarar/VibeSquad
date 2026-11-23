@@ -60,7 +60,7 @@ function world(home, { agents = [OVE, BUG, UI], held = null, heldList = null, li
   w.logs = () => w.calls.filter((c) => c[0] === "log").map((c) => c[2]);
   return w;
 }
-const request = (home, extra = {}) => createRestartRequest(home, { tip: TIP, requestedBy: "rn-ove", team: "vibesquad", lane: "vibesquad", needs: "server-restart", now: T0, ...extra });
+const request = (home, extra = {}) => createRestartRequest(home, { tip: TIP, requestedBy: "rn-ove", team: "vibesquad", lane: "vibesquad", needs: "server-restart", urgent: true, now: T0, ...extra }); // idea-674: the immediate path (non-urgent queues for a window)
 
 test("idea-402: leads whose lanes hold nothing are auto-drained, never prompted, and not woken by restart-done", async () => {
   const home = tmp();
@@ -317,4 +317,42 @@ test("Bug36 L2: heldListFromHealth rejects a held count the ids do not match", (
   assert.deepEqual(heldListFromHealth({ held: 1, heldAgents: ["a"], heldWork: { a: [] } }), { ids: ["a"], work: { a: [] } });
   assert.deepEqual(heldListFromHealth({ heldAgents: ["a"] }), { ids: ["a"], work: null }, "no held count: ids stand, unreported heldWork stays null");
   assert.deepEqual(heldListFromHealth({ held: 0, heldAgents: [], heldWork: [] }), { ids: [], work: null }, "a non-object heldWork is unreported");
+});
+
+test("idea-674 x idea-402/604: a queued request gets no auto-drain, no hold-off and no ask before windowAt; both act from the window on", async () => {
+  const home = tmp();
+  // rn-bug's lane holds nothing (would auto-drain), rn-ui's only holder is unprobed (would get a 60s ask hold-off).
+  const w = world(home, { agents: [OVE, BUG, UI, W1], held: { ids: ["rn-w1"], work: { "rn-w1": [] } } });
+  let listed = 0;
+  let heldReads = 0;
+  const loop = createRestartRequestLoop({
+    home, teams: () => TEAMS, now: () => w.now,
+    listAgents: async () => { listed++; return w.agents; },
+    heldList: async () => { heldReads++; return w.held; },
+    runVs: async (args) => { w.calls.push(args); return { ok: true }; },
+    fire: async () => { w.fires++; return { ok: true }; },
+  });
+  const q = request(home, { urgent: false });
+  assert.equal(q.state, "queued");
+  const win = Date.parse(q.windowAt);
+  assert.equal(q.windowAt, "2026-11-19T13:00:00.000Z");
+  for (const t of [T0, T0 + 30 * MIN, win - 1]) {
+    w.now = t;
+    assert.equal((await loop.tick()).state, "queued");
+  }
+  let req = readRestartRequest(home);
+  assert.deepEqual([req.asked, req.drained], [{}, {}], "no auto-drain and no held-off ask recorded before the window");
+  assert.equal(req.held, null, "no held list kept while queued");
+  assert.deepEqual([w.calls.length, w.fires, listed, heldReads], [0, 0, 0, 0], "no ask, log, fire, agent list or held list before windowAt");
+  w.now = win;
+  assert.equal((await loop.tick()).state, "draining");
+  req = readRestartRequest(home);
+  assert.ok(req.asked["rn-bug"].auto && req.asked["rn-bug"].quiet && req.drained["rn-bug"], "402 auto-drain acts at the window");
+  assert.ok(req.asked["rn-ui"].holdoff && !req.drained["rn-ui"], "604 hold-off starts at the window");
+  assert.equal(w.sends().length, 0, "neither is prompted");
+  assert.ok(w.logs().some((t) => /window 2026-11-19T13:00:00\.000Z open: draining for abc1234def/.test(t)), w.logs().join("\n"));
+  w.held = { ids: [], work: {} };
+  w.now = win + MIN;
+  assert.equal((await loop.tick()).state, "firing", "a clean first probe auto-drains rn-ui: fires without one ask");
+  assert.equal(w.sends().length, 0);
 });
