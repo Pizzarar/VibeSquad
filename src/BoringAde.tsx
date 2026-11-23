@@ -600,16 +600,6 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     }
   };
 
-  const surrealMotif = (
-    <svg className="boring-surreal-motif" aria-hidden="true" viewBox="0 0 200 80" preserveAspectRatio="xMidYMid slice">
-      <circle cx="100" cy="46" r="26" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <ellipse cx="100" cy="46" rx="14" ry="8" fill="none" stroke="currentColor" strokeWidth="1.2" />
-      <circle cx="100" cy="46" r="3.5" fill="currentColor" />
-      <line x1="0" y1="58" x2="200" y2="58" stroke="currentColor" strokeWidth="1" />
-      <line x1="30" y1="66" x2="170" y2="66" stroke="currentColor" strokeWidth="0.8" />
-    </svg>
-  );
-
   // One stable key per start: the Bugs lane may be created mid-flight (pin goes null -> set), which must not drop busy/error.
   const startKeyFor = (pin: Pin | null) => (selectedLaneId === "_bugs" ? "_bugs" : pin ? `${pin.squad?.id}/${pin.lane.id}` : null);
   const runStart = (laneKey: string, start: () => Promise<string | null>) => {
@@ -648,7 +638,6 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
     const spec = emptySpec();
     return (
       <div className="boring-empty-card" data-testid="boring-empty-card">
-        {surrealMotif}
         <p>{spec.text}</p>
         <button type="button" className="boring-primary-cta" data-testid="boring-empty-cta" disabled={spec.disabled} onClick={() => void spec.run()}>
           {spec.cta}
@@ -849,6 +838,8 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   const partition = partitionViews(allViews, folders, stat);
   const awakeViews = filterAwakeViews(allViews, folders);
   const activeAsleep = view ? isViewAsleep(view, folders) : false;
+  // B13b: the living sky reacts to Squad state; an asleep project is always idle.
+  const squadState: "idle" | "busy" = view && !activeAsleep && (view.running ?? 0) > 0 ? "busy" : "idle";
   const renderProject = (v: TeamView) => {
     const active = v.team.id === activeTeamId;
     const open = projectIsOpen(v.team.id);
@@ -882,7 +873,7 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
   };
 
   return (
-    <div className="boring-app" data-testid="boring-app">
+    <div className="boring-app" data-testid="boring-app" data-squad-state={squadState}>
       {removingPin && <RemoveTeamDialog pin={removingPin.pin} displayName={removingPin.name} noun="lane" returnTo={removingPin.returnTo} onClose={() => setRemovingPin(null)} />}
       <aside className="boring-sidebar" data-testid="boring-sidebar">
         <div className="boring-sidebar-head" data-testid="boring-sidebar-head">
@@ -937,6 +928,11 @@ export function BoringApp({ views, folders = [], view, onSelectSquad, onOpenPin,
         </div>
       </aside>
       <main className="boring-main" data-testid="boring-main">
+        <div className="boring-sky" data-testid="boring-sky" aria-hidden="true">
+          <i className="boring-sky-dusk" />
+          <i className="boring-sky-glow" />
+          <i className="boring-sky-grain" />
+        </div>
         {banners}
         <header className="boring-topbar" data-testid="boring-topbar">
           <nav className="boring-topbar-title boring-breadcrumb" data-testid="boring-breadcrumb" aria-label="Breadcrumb">

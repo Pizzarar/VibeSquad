@@ -547,7 +547,7 @@ test("B4: Normal/Psycho labels, first-launch picker wiring and B2r2 CSS", () => 
   assert.match(css, /--t-body: 15px; --lh-body: 24px/);
   assert.match(css, /\.drawer-head select,[\s\S]*min-height: 36px/);
   assert.match(css, /--accent: var\(--cyan\)/);
-  assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replace("@media (prefers-reduced-motion: reduce)", ""), /@media/);
+  assert.doesNotMatch(css.replace("@media (pointer: coarse)", "").replaceAll("@media (prefers-reduced-motion: reduce)", ""), /@media/);
   assert.match(fr, /var\(--bg-card, var\(--panel-hi, #181e2b\)\)/);
   assert.match(css, /\.role-tag[\s\S]*\.btn\.warn \{ border-image: none/);
   assert.match(css, /\.drawer-head \.drawer-title \{ font-size: var\(--t-title\) !important/);
@@ -635,9 +635,9 @@ test("B6: dock parity, project tree, trinity card, Cards|Map, sunset tokens", ()
   assert.doesNotMatch(ade, /BORING_OVERVIEW_LAYOUT_KEY|boring-lane-map|boring-layout-/);
   assert.match(ade, /data-testid="boring-lane-table"/);
   // B6d
-  assert.doesNotMatch(css, /--boring-sunset|--boring-wash|radial-gradient/);
+  assert.doesNotMatch(css, /--boring-sunset|--boring-wash/);
   assert.match(css, /\.boring-main \{ background: var\(--surface-0\)/);
-  assert.match(ade, /className="boring-surreal-motif"/);
+  assert.doesNotMatch(ade, /boring-surreal-motif/); // B13b: the living sky replaces it
 });
 
 test("D2: Overview lane table CSS is scoped to Normal mode; map CSS is gone", () => {
@@ -701,7 +701,7 @@ test("D1: type + colour tokens, no vw type, flat canvas, measure and row density
   for (const [t, v] of [["caption", "11px"], ["small", "12px"], ["ui", "13px"], ["body", "15px"], ["mono", "13px"], ["title", "17px"], ["page", "20px"]]) assert.ok(css.includes(`--t-${t}: ${v}`), t);
   assert.ok(!css.includes("font-size: clamp("), "no clamp()/vw font sizes");
   for (const t of ["--surface-0", "--surface-1", "--surface-2", "--surface-3", "--surface-sunken", "--border-strong", "--text-1", "--text-2", "--text-3", "--focus", "--st-run", "--st-attn", "--st-err", "--st-done", "--st-ok"]) assert.ok(css.includes(t + ":"), t);
-  assert.ok(css.includes("--surface-0: #f6f4f9; --surface-1: #ffffff"), "neutral light surfaces");
+  assert.ok(css.includes("--surface-0: #f7f6f3; --surface-1: #ffffff"), "neutral light surfaces");
   assert.ok(css.includes("--measure-col: 880px") && css.includes("--measure-prose: 760px"));
   assert.ok(css.includes("--row-h: 32px"));
   assert.ok(css.includes("@media (pointer: coarse) { html[data-vibe=\"boring\"] { --row-h: 40px; } }"));
@@ -1645,7 +1645,7 @@ test("Shift+click on an agent opener opens it in the right pane; a plain click d
 
 test("split CSS: grid panes, no width media queries, only new rules; no state literals in the new classNames", () => {
   const css = readFileSync(resolve(import.meta.dirname, "..", "src", "boring.css"), "utf8");
-  const sect = css.slice(css.indexOf("idea-257: optional 2-pane split"));
+  const sect = css.slice(css.indexOf("idea-257: optional 2-pane split"), css.indexOf("B13b: state-reactive")); // B13 tail has its own reduced-motion media
   assert.match(sect, /\.boring-chat-split \{[^}]*display: grid; grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\)/);
   for (const c of [".boring-pane ", ".boring-pane-active", ".boring-split-empty"]) assert.ok(sect.includes(c), c);
   assert.ok(!/@media/.test(sect));
@@ -2189,4 +2189,22 @@ test("B10: expanded project is a container card (.open, --surface-1, 14px); coll
   const flat = css.match(/^html\[data-vibe="boring"\] \.boring-project-block \{([^}]*)\}/m);
   assert.ok(flat && !/background|border|padding(?!-inline)/.test(flat[1]), "collapsed stays flat (R10-1: only the 9px inline inset that matches the open card)");
   assert.ok(!/!important/.test(rule[0]));
+});
+
+test("B13: self-hosted fonts, graphite tokens and the state-reactive living sky", async () => {
+  const { readFileSync, existsSync } = await import("node:fs");
+  const css = readFileSync("src/boring.css", "utf8");
+  const ade = readFileSync("src/BoringAde.tsx", "utf8");
+  for (const f of ["plus-jakarta-sans-latin.woff2", "ibm-plex-mono-400.woff2", "ibm-plex-mono-500.woff2", "OFL-Plus-Jakarta-Sans.txt", "OFL-IBM-Plex-Mono.txt"]) assert.ok(existsSync("public/fonts/" + f), f);
+  assert.match(css, /@font-face[^}]*url\("\/fonts\/plus-jakarta-sans-latin\.woff2"\)/);
+  assert.match(css, /@font-face[^}]*url\("\/fonts\/ibm-plex-mono-500\.woff2"\)/);
+  assert.match(css, /--sans: "Plus Jakarta Sans"/);
+  assert.match(css, /--surface-0: #121218/);
+  assert.ok(!/fonts\.googleapis|fonts\.gstatic/.test(css + readFileSync("index.html", "utf8")));
+  assert.match(ade, /!activeAsleep && \(view\.running \?\? 0\) > 0 \? "busy" : "idle"/);
+  assert.match(ade, /data-squad-state=\{squadState\}/);
+  assert.match(ade, /data-testid="boring-sky"/);
+  assert.match(css, /\[data-squad-state="busy"\] \.boring-sky-glow \{ opacity: 0\.55/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{ html\[data-vibe="boring"\] \.boring-sky i/);
+  assert.match(readFileSync("CREDITS.md", "utf8"), /Plus Jakarta Sans[\s\S]*Tokotype[\s\S]*IBM Plex Mono/);
 });
