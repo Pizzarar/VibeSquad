@@ -353,6 +353,7 @@ test("backupBrief never files an empty lane under vibesquad", () => {
     writeFileSync(f, "x");
     const dest = backupBrief("---", f);
     // judge the path under the fixture dir only: os.tmpdir() itself may contain "vibesquad" (TMPDIR=~/.cache/vibesquad-tmp, idea-709)
+    assert.ok(dest.startsWith(dir), "dest is under the fixture dir");
     const rel = dest.slice(dir.length);
     assert.ok(rel.includes("_unnamed") && !rel.toLowerCase().includes("vibesquad"));
   } finally {

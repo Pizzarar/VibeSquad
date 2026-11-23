@@ -718,10 +718,25 @@ test("R3.4: readable lead title is '<Lane> · Lead N' (hub stays Overlord)", asy
 });
 
 test("matchPathInRegistry matches whole path segments, not substrings (idea-709)", async () => {
-  const { matchPathInRegistry } = await import("../server/identity.mjs");
-  const teams = [{ id: "t", name: "T", paths: [], lanes: [{ id: "l", paths: ["vibesquad"] }] }];
-  assert.equal(matchPathInRegistry("/home/u/.cache/vibesquad-tmp/x", teams), null);
-  assert.equal(matchPathInRegistry("/home/u/myvibesquad/x", teams), null);
-  assert.equal(matchPathInRegistry("/home/u/projects/VibeSquad/x", teams)?.lane.id, "l");
-  assert.equal(matchPathInRegistry("/home/u/projects/vibesquad", teams)?.lane.id, "l");
+  const server = await import("../server/identity.mjs");
+  const ts = await import("../src/identity.ts");
+  const mk = (lp, tp = []) => [{ id: "t", name: "T", paths: tp, lanes: [{ id: "l", paths: lp }] }];
+  for (const m of [server.matchPathInRegistry, ts.matchPathInRegistry]) {
+    const hit = (cwd, lp, tp) => m(cwd, mk(lp, tp))?.lane.id === "l";
+    assert.equal(hit("/home/u/.cache/vibesquad-tmp/x", ["vibesquad"]), false, "tmp under vibesquad-tmp");
+    assert.equal(hit("/home/u/myvibesquad/x", ["vibesquad"]), false);
+    assert.equal(hit("/home/u/.vibesquad/worktrees/other/unit", ["vibesquad"]), false, ".vibesquad is not vibesquad");
+    assert.equal(hit("/home/u/.vibesquad/worktrees/VibeSquad/unit-x", ["vibesquad"]), true, "sanctuary repo segment");
+    assert.equal(hit("/home/u/projects/VibeSquad/x", ["vibesquad"]), true);
+    assert.equal(hit("/home/u/projects/vibesquad", ["vibesquad/"]), true, "trailing slash on pattern");
+    assert.equal(hit("C:\\Users\\u\\Projects\\VibeSquad\\src", ["vibesquad"]), true, "windows backslashes");
+    assert.equal(hit("C:\\Users\\u\\Projects\\VibeSquad\\src", ["c:\\users\\u\\projects\\vibesquad"]), true, "drive-letter absolute");
+    assert.equal(hit("D:\\mirror\\C:\\Users", ["c:\\users"]), false, "absolute anchors at start");
+    assert.equal(hit("/home/u/projects/VibeSquad/x", ["/home/u/projects/VibeSquad"]), true, "absolute");
+    assert.equal(hit("/tmp/mirror/home/u/projects/vibesquad/x", ["/home/u/projects/VibeSquad"]), false, "absolute mid-string");
+    assert.equal(hit("/home/u/projects/VibeSquadX", ["/home/u/projects/VibeSquad"]), false, "absolute end boundary");
+    assert.equal(hit("/home/u/apps/web/x", ["apps/web"]), true, "multi-segment relative");
+    assert.equal(m("/home/u/.cache/vibesquad-tmp/x", mk([], ["vibesquad"])), null, "team path too");
+    assert.equal(m("/home/u/VibeSquad/x", mk([], ["vibesquad"]))?.lane.id, "l", "single-lane team path");
+  }
 });

@@ -376,12 +376,17 @@ export function resolveWorktreeRootPath(startDir) {
   return null;
 }
 
-/** `pat` occurs in `norm` as whole path segment(s): "vibesquad" matches ".../vibesquad/x" but not ".../.cache/vibesquad-tmp/x" (idea-709). */
-function pathHasSegments(norm, pat) {
+/**
+ * `pat` occurs in `norm` as whole path segment(s) (both already lowercased, "/"-separated): "vibesquad" matches ".../vibesquad/x"
+ * but not ".../.cache/vibesquad-tmp/x". An absolute pattern ("/x" or "c:/x") anchors at the start of `norm`. Mirrored in
+ * server/identity.mjs and src/identity.ts; keep them identical (idea-709).
+ */
+export function pathHasSegments(norm, pat) {
   const p = pat.replace(/\/+$/, "");
   if (!p) return false;
-  for (let i = norm.indexOf(p); i !== -1; i = norm.indexOf(p, i + 1)) {
-    const before = i === 0 || p.startsWith("/") || norm[i - 1] === "/";
+  const absolute = p.startsWith("/") || /^[a-z]:\//.test(p);
+  for (let i = norm.indexOf(p); i !== -1; i = absolute ? -1 : norm.indexOf(p, i + 1)) {
+    const before = i === 0 || (!absolute && norm[i - 1] === "/");
     const after = i + p.length === norm.length || norm[i + p.length] === "/";
     if (before && after) return true;
   }
