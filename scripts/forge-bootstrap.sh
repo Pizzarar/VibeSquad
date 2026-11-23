@@ -11,7 +11,7 @@ MESHNET_IP=""
 MESHNET_HOST=""
 TMP_DIR="${HOME}/.vibesquad/tmp"
 UNIT_NAME="vibesquad"
-NODE_MAJOR=22
+NODE_MAJOR=24
 START_UNIT=0
 
 usage() {
@@ -23,7 +23,7 @@ Usage: scripts/forge-bootstrap.sh [options]
   --meshnet-host NAME  MagicDNS name, e.g. forge.example.ts.net (default: detected via 'tailscale status --json')
   --no-lan             do not set VIBESQUAD_LAN=1 (loopback only)
   --tmpdir DIR         TMPDIR for the unit, on the real disk (default: \$HOME/.vibesquad/tmp)
-  --node-major N       NodeSource LTS major to install when node is missing/old (default 22)
+  --node-major N       NodeSource LTS major to install when node is missing/old (default 24, matches the dev PC)
   --start              enable --now the unit after writing it
   --dry-run            print actions, change nothing
   -h, --help
@@ -197,4 +197,5 @@ if [ "$START_UNIT" = 1 ]; then
   run systemctl --user enable --now "${UNIT_NAME}.service"
 fi
 
-log "done. Next: sudo systemctl enable --now tailscaled; sudo tailscale up (and disable key expiry for this machine in the Tailscale admin console); provider logins; see docs/lanes/forge-host/RUNBOOK.md"
+if [ "$START_UNIT" = 1 ]; then NEXT_START=""; else NEXT_START="systemctl --user enable --now vibesquad (or re-run with --start; the unit is written but NOT started without it); "; fi
+log "done. Next: ${NEXT_START}sudo systemctl enable --now tailscaled; sudo tailscale up (and disable key expiry for this machine in the Tailscale admin console); provider logins; see docs/lanes/forge-host/RUNBOOK.md"

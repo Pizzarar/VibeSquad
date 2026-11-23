@@ -18,7 +18,10 @@ VibeSquad. You bring your own account.
 **Read this first.** The official page says free individual access and Google AI Pro / Ultra (Google One) moved to
 the **Antigravity CLI** on June 18, 2026, and that Gemini CLI is for Code Assist Standard / Enterprise licences.
 If you have no paid Google licence or API key, pick [opencode](opencode.md) instead. The Antigravity CLI install
-command: UNVERIFIED (the official page links a blog post but gives no command).
+commands (verified: 2026-11-22, read from https://antigravity.google/docs/getting-started?tab=cli):
+- Windows PowerShell: `irm https://antigravity.google/cli/install.ps1 | iex` (binary in `C:\Users\<username>\AppData\Local\agy\bin`)
+- macOS / Linux: `curl -fsSL https://antigravity.google/cli/install.sh | bash` (binary `~/.local/bin/agy`)
+- Check with `agy --version`.
 
 ## Install (Windows)
 Needs `node` (core module). The official page says Node.js 20.0.0 or newer, and Windows 11 24H2 or newer.
