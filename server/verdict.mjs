@@ -19,9 +19,19 @@ const BOLD = "(?:\\*\\*|__)?";
 export const VERDICT_PREFIX_SRC = `${BOLD}[ \\t]*(?:VERDICT[ \\t]*:[ \\t]*${BOLD}[ \\t]*)?`;
 /** A hex sha (`[0-9a-f]{7,40}`), bounded so it is not a prefix of a longer alphanumeric run. */
 const SHA_SRC = "[0-9a-f]{7,40}(?![0-9a-zA-Z])";
-/** A docs target in the sha slot (idea-382): `docs:<path>` or a bare repo-relative path ending in `.md` (no whitespace or bold `*`). */
-const DOCS_SRC = "(?:docs:[^\\s*]+|[^\\s*]+\\.md)";
-const VERDICT_CORE = "(PASS|FAIL)[ \\t]+(\\d+\\/\\d+\\/\\d+|[HhMmLl])[ \\t]+(" + SHA_SRC + "|" + DOCS_SRC + ")";
+/** A single repo-relative path segment (idea-382): starts and ends with `[A-Za-z0-9]`, with `[A-Za-z0-9._-]` in between.
+ * Rejects `.`/`..` segments, a leading `/`, a drive letter or scheme (`:` is not in the class), and a trailing `_`/`.`/`-`. */
+const PATH_SEG = "[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?";
+const REPO_PATH = PATH_SEG + "(?:/" + PATH_SEG + ")*";
+/** A docs target in the sha slot (idea-382): an optional `docs:` prefix + a repo-relative path ending in `.md`
+ * (e.g. `docs:docs/lanes/perfection/EXP3.md`, or bare `EXP3.md` / `docs/lanes/x/SPEC.md`). Both forms end in `.md`
+ * so a truncated token like `docs:my file.md` never parses. DOCS_SRC is tried before SHA_SRC so a 7-40-hex-stem
+ * `.md` file (e.g. `deadbeef.md`) is a docs target, not a sha. */
+const DOCS_SRC = "(?:docs:)?" + REPO_PATH + "\\.md";
+/** The docs token must not run on into an extension (`foo.mdx`), a scheme/drive (`://`), or a path tail (`/`).
+ * Bold markers (`__`/`**`) after the token are left in place, not swallowed. */
+const DOCS_BOUNDARY = "(?![A-Za-z0-9.:/])";
+const VERDICT_CORE = "(PASS|FAIL)[ \\t]+(\\d+\\/\\d+\\/\\d+|[HhMmLl])[ \\t]+(" + DOCS_SRC + DOCS_BOUNDARY + "|" + SHA_SRC + ")";
 const VERDICT_LINE_SRC = `^[ \\t]*${VERDICT_PREFIX_SRC}${VERDICT_CORE}`;
 /** A verdict line anywhere in a message (multiline): the core at the start of a line, tolerating a `VERDICT:` prefix and bold. */
 export const VERDICT_LINE_RE = new RegExp(VERDICT_LINE_SRC, "m");
@@ -56,9 +66,10 @@ export function parseVerdictLine(line) {
 }
 
 /** idea-382: true when a parsed verdict token is a docs target (`docs:<path>` or a repo-relative `*.md` path),
- * not a hex sha. The merge gate's stale-hash check must skip these (a docs review has no commit to match). */
+ * not a hex sha. Same shape as DOCS_SRC, anchored to the whole token. */
+const DOCS_TARGET_RE = new RegExp("^(?:docs:)?" + REPO_PATH + "\\.md$");
 export function isDocsTarget(token) {
-  return /^(?:docs:[^\s*]+|[^\s*]+\.md)$/.test(String(token ?? ""));
+  return DOCS_TARGET_RE.test(String(token ?? ""));
 }
 
 /** idea-300: stamp ` reviewer=<profile>` right after the `PASS|FAIL H/M/L <hash>` prefix of a verdict line. The gate still
@@ -184,8 +195,14 @@ export function evaluateVerdictGate({ agent, lastMessage, tip, branch = "" }) {
   const pass = verdicts.find((x) => x.verdict.verdict === "PASS");
   if (!pass) return out(GATE_EXIT.noVerdict, "no verdict line: the reviewer's message has no `PASS|FAIL H/M/L <hash>` line");
   const v = pass.verdict;
-  // idea-382: a docs target names a file, not a commit, so there is nothing to match against the branch tip.
+  // idea-382: a docs target names a file, not a commit. It only passes when nothing is being gated (no tip, no branch);
+  // when a tip/branch is supplied (a code merge), a docs target cannot gate it -> stale hash.
   if (isDocsTarget(v.hash)) {
+    const tipText = String(tip ?? "").trim();
+    const branchText = String(branch ?? "").trim();
+    if (tipText || branchText) {
+      return out(GATE_EXIT.staleHash, `docs target can't gate a code branch: reviewed ${v.hash}, ${branchText || "branch"} needs a commit hash`, pass.line);
+    }
     return out(GATE_EXIT.pass, `PASS on ${v.hash} (docs target: no commit to gate)`, pass.line);
   }
   const t = String(tip ?? "").trim().toLowerCase();
