@@ -83,6 +83,37 @@ Host devpc
 
 (`<devpc-lan-ip>` is the dev pp's LAN address, ideally a DHCP reservation; `<devpc-user>` is its Windows user.)
 
+## C2 migrate (`scripts/forge-migrate.mjs`)
+
+Run only after C1 (drained, dev pp VS stopped) and the owner's C go-signal. The script never deletes anything in any mode,
+and only reads the source home (it stays the C3 rollback). Placeholders: `<u>` = Windows user, `<forge-user>` = forge user.
+
+1. **Unpushed report** (dev pp, read-only: no fetch, prune or index refresh). Walks the worktree sanctuary
+   (`%LOCALAPPDATA%\VibeSquad\worktrees`, `<root>/<repo>/<unit>`) and lists worktrees whose HEAD has commits on no remote,
+   or a dirty tree. The last line is a JSON summary; `safeToDelete` is true only with 0 unpushed, 0 dirty and 0 errors.
+   The owner OKs deleting the sanctuary only when that list is empty or accepted.
+   `node scripts/forge-migrate.mjs --unpushed-report [--sanctuary <dir>] [--json]`
+2. **Backup** (dev pp): `node scripts/forge-migrate.mjs --from C:\Users\<u>\.vibesquad --backup D:\<backup-dir>`
+   writes `vibesquad-home-<timestamp>.zip` (Windows tar.exe; `.tar.gz` on POSIX) of the full home. Lock files, sockets and
+   links are skipped and listed. Add `--dry-run` to see the file count and skips first.
+3. **Dry run**, then the copy. Allowlist only: `teams.json`, `teams/`, `inbox.json`, `lessons.jsonl`, `profiles.json`,
+   `settings.json`, `stakes-ladder.json`, `schedules.json`, `capped-providers.json`, `brief-history/`, `reports/`.
+   Everything else is printed as "left behind" with its size (runner/, logs, stamps, `*.bak*`, ...); the forge's own
+   `tls/`, `devices.json`, `host-id`, `local-token`, `daemon-password`, `vapid.json` are never copied.
+   ```
+   node scripts/forge-migrate.mjs --from <copy of C:\Users\<u>\.vibesquad> --to <staging or ~/.vibesquad> \
+     --win-user <u> --forge-home /home/<forge-user> --dry-run
+   ```
+   The dry run writes nothing and prints per-file rewrite counts plus UNMAPPED drive-letter paths (top 50 by count).
+   Path map (case-insensitive, `\`, `/` and JSON-escaped `\\`): `C:\Users\<u>\projects\<P>` -> `<projects-root>/<P>`
+   (`--projects-root`, default `<forge-home>/projects`); `%LOCALAPPDATA%\VibeSquad\worktrees` -> `--worktrees-root`
+   (default `~/.vibesquad/worktrees`); `%LOCALAPPDATA%\VibeSquad\runtime` -> `~/.vibesquad/runtime`;
+   `C:\Users\<u>\.vibesquad` -> `--vs-home-root` (default `<forge-home>/.vibesquad`). Other `C:` paths stay as they are
+   and show in the UNMAPPED list. Drop `--dry-run` to copy. A non-empty `--to` is refused unless `--force`, which
+   overwrites the allowlisted files only and keeps everything else there (the forge's identity and CA).
+   JSON that does not parse, JSONL lines that do not parse and non-UTF-8 text are copied verbatim and reported.
+4. Start the forge unit; leads and Buddies restart fresh from their briefs (C2).
+
 ## Rollback notes (C3)
 
 - After cutover only the dev pp STANDBY copy (the stopped server instance + its ~/.vibesquad standby copy) is retired after 2 weeks clean; the Windows install/run/release path stays first-class (C3 retires only that standby copy).
