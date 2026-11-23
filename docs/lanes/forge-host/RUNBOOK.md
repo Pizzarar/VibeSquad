@@ -238,3 +238,19 @@ Check it (one entry, `maxRuns: 1`, `runCount: 0`, `nextRunAt` about 14 days out)
 
 The interim workaround (`LOCALAPPDATA=$HOME/.local/share` and `apt install lsof`) is not needed once A1 (runtime dir) and A3
 (listener lookup) are on master, and is not part of this setup.
+
+## TMPDIR + WorkingDirectory (R4)
+
+- The unit's `TMPDIR` defaults to `$HOME/.cache/vibesquad-tmp` (real disk, excluded from systemd-tmpfiles, R15), no longer
+  `~/.vibesquad/tmp`. Every agent inherits it, and `server/test-guard.mjs` (`isForbiddenRealHome`) treats anything under
+  the real `~/.vibesquad` as forbidden under a test runner, so test temp homes there made `restart-resume-safe` and
+  `runner-restart-wait` fail. `forge-bootstrap.sh` refuses a `--tmpdir` under `~/.vibesquad`.
+- `WorkingDirectory` is the synced runtime dir (`~/.vibesquad/runtime`, `--runtime-dir`), not `--repo`; before the first sync it
+  falls back to `--repo` with a warning, so re-run the script after the first `vs restart`.
+- Live unit (already bootstrapped): add a drop-in, then `systemctl --user daemon-reload` and restart on a quiet moment:
+  `~/.config/systemd/user/vibesquad.service.d/tmpdir.conf` containing
+  ```
+  [Service]
+  Environment=TMPDIR=%h/.cache/vibesquad-tmp
+  ```
+  (and `mkdir -p ~/.cache/vibesquad-tmp`). The old `~/.vibesquad/tmp` stays in the tmpfiles exclusion until the unit is switched.
